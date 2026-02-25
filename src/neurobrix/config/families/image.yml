@@ -1,0 +1,57 @@
+# Family-level constants for image generation models
+# NeuroBrix ZERO HARDCODE: All image family models share these defaults
+
+output_processing:
+  layout: "CHW"              # Channel-Height-Width ordering (PyTorch standard)
+  channel_axis: 1            # Channels at dimension 1 (after batch)
+  batch_axis: 0              # Batch at dimension 0
+  valid_channels: [1, 3, 4]  # Grayscale (1), RGB (3), RGBA (4)
+  bit_depth: 8               # 8-bit output (0-255)
+  output_range: [-1.0, 1.0]  # Model output range before normalization
+
+# =============================================================================
+# DIFFUSION-BASED IMAGE GENERATION (PixArt, SDXL, Flux, etc.)
+# =============================================================================
+diffusion:
+  defaults:
+    num_inference_steps: 20    # Default denoising steps
+    guidance_scale: 7.5        # Default CFG scale
+    cfg_threshold: 1.0         # Enable CFG when guidance_scale > this value
+    negative_prompt: ""        # Empty is allowed (user choice)
+
+  # Trace-time defaults
+  trace:
+    stimulus:
+      num_inference_steps: 2   # Minimum steps for graph capture
+
+# =============================================================================
+# AUTOREGRESSIVE IMAGE GENERATION (Janus, LlamaGen, etc.)
+# Uses LLM-style token-by-token generation, not diffusion
+# =============================================================================
+autoregressive:
+  defaults:
+    temperature: 1.0           # Sampling temperature (1.0 = diverse)
+    top_p: 1.0                 # Nucleus sampling (1.0 = disabled)
+    top_k: 0                   # Top-k sampling (0 = disabled)
+    cfg_weight: 5.0            # Classifier-free guidance weight
+
+  # VQ (Vector Quantized) tokenizer settings
+  vq:
+    patch_size: 16             # VQ patch size (pixels per token)
+    codebook_size: 16384       # Number of visual tokens
+
+  # Inherits LLM architecture constants for RoPE, attention, etc.
+  # See config/families/llm.yml for rope.base, attention.head_dim, etc.
+
+# =============================================================================
+# SHARED DEFAULTS (apply to both diffusion and autoregressive)
+# =============================================================================
+defaults:
+  height: 1024               # Default output height
+  width: 1024                # Default output width
+
+# Trace-time defaults (for graph capture)
+trace:
+  dtype: float32             # Default trace dtype for GPU
+  stimulus:
+    prompt: "trace stimulus"

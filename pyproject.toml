@@ -1,0 +1,54 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "neurobrix"
+version = "0.1.0a1"
+description = "Universal Deep Learning Inference Engine — execute any AI model without model-specific code"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+authors = [
+    { name = "Neural Networks Holding LTD", email = "contact@neurobrix.es" }
+]
+keywords = [
+    "deep-learning", "inference", "pytorch", "triton", "neural-networks",
+    "llm", "diffusion", "onnx-alternative", "model-serving", "gpu",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Operating System :: POSIX :: Linux",
+]
+dependencies = [
+    "safetensors>=0.4.0",
+    "numpy>=1.24.0",
+    "pyyaml>=6.0",
+    "requests>=2.28.0",
+    "tqdm>=4.65.0",
+]
+
+[project.optional-dependencies]
+cuda = ["triton>=2.1.0"]
+dev = ["pytest>=7.0.0", "ruff>=0.1.0"]
+
+[project.urls]
+Homepage = "https://github.com/NeuroBrix/neurobrix"
+Repository = "https://github.com/NeuroBrix/neurobrix"
+Issues = "https://github.com/NeuroBrix/neurobrix/issues"
+Documentation = "https://github.com/NeuroBrix/neurobrix#readme"
+
+[project.scripts]
+neurobrix = "neurobrix.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/neurobrix"]

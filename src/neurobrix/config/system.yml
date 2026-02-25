@@ -1,0 +1,58 @@
+# NeuroBrix System Configuration
+# ZERO HARDCODE: All constants are embedded variables
+
+# Memory unit conversions
+memory:
+  bytes_per_kb: 1024
+  bytes_per_mb: 1048576   # 1024 * 1024
+  bytes_per_gb: 1073741824  # 1024 * 1024 * 1024
+
+# Prism solver defaults
+prism:
+  safety_margin: 0.95  # 95% of GPU memory usable (tight for large models)
+  default_seq_len: 4096
+
+  # Fine-Grained Pipeline (FGP) settings
+  fgp:
+    utilization_target: 0.85  # Use 85% of GPU memory for FGP
+    max_blocks_per_stage: 7   # Max transformer blocks per GPU (7 for 32GB, ~4 for 16GB)
+
+  # Default values for model analysis (used when not specified in profile)
+  defaults:
+    batch_size: 2   # CFG batching (positive + negative prompts)
+    patch_size: 2   # Standard DiT/Sana patch size
+
+# Dtype sizes (bytes per element)
+dtype_bytes:
+  float16: 2
+  bfloat16: 2
+  float32: 4
+  float64: 8
+  int8: 1
+  int16: 2
+  int32: 4
+  int64: 8
+
+# Numerical Stability
+precision: {}
+
+# High-Performance I/O Configuration
+# ENTERPRISE: Parallel loading + Pinned Memory DMA
+io:
+  # Number of parallel workers for disk I/O (ThreadPoolExecutor)
+  # Optimal: 8 for NVMe, 4 for SATA SSD, 2 for HDD
+  num_workers: 8
+
+  # Use pinned memory for PCIe DMA transfers
+  # Enables 16GB/s transfer vs ~8GB/s CPU copy
+  use_pinned_memory: true
+
+  # Prefetch next component while current executes
+  # Overlaps I/O with GPU compute
+  enable_prefetch: true
+
+  # Number of components to prefetch ahead
+  prefetch_queue_size: 2
+
+  # Log performance metrics
+  log_performance: true

@@ -1,0 +1,36 @@
+# Hardware Profile: NVIDIA V100 32GB
+# Created manually from GPU spec sheet
+# Purpose: Single V100 with 32GB memory
+
+id: v100-32g-2
+vendor: nvidia
+
+summary:
+  total_gpus: 1
+  total_vram_gb: 32
+  topology: "single"
+
+devices:
+  - index: 2
+    brand: nvidia
+    model: "Tesla V100-SXM2-32GB"
+    memory_mb: 32510
+    compute_capability: "7.0"
+    supports_dtypes: ["float32", "float16"]
+    architecture: volta
+    pcie_version: "3.0"
+interconnect:
+  groups:
+    - index: none
+      members: none
+      type: none      
+      tech: none
+      bandwidth_gbps: none
+pcie_fallback:
+  version: "3.0"               # Dominant PCIe version in system
+  lanes: 16                    # x16 slots
+  bandwidth_gbps: 32           # PCIe 4.0 x16 bidirectional
+notes: |
+  NVIDIA V100 with 32GB HBM2 memory.
+  No bfloat16 hardware support (Volta architecture).
+  Recommended for inference and small training jobs.

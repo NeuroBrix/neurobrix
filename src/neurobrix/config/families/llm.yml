@@ -1,0 +1,68 @@
+# Family-level constants for LLM (text generation) models
+# NeuroBrix ZERO HARDCODE: All LLM family models share these defaults
+
+output_processing:
+  layout: "sequence"         # [batch, sequence, vocab] for logits
+  batch_axis: 0              # Batch at dimension 0
+  sequence_axis: 1           # Sequence at dimension 1
+  vocab_axis: -1             # Vocabulary/logits at last dimension
+
+defaults:
+  max_new_tokens: 512        # Maximum generation length
+  temperature: 0.7           # Sampling temperature
+  top_p: 0.9                 # Nucleus sampling threshold
+  top_k: 50                  # Top-k sampling
+  repetition_penalty: 1.0    # Penalty for token repetition
+
+# Architecture constants - ZERO HARDCODE
+# These are universal defaults; model-specific values come from component config
+architecture:
+  # Rotary Position Embedding (RoPE) defaults
+  rope:
+    base: 10000.0            # Standard RoPE base (Llama, DeepSeek, Janus, etc.)
+    scaling_type: null       # null | "linear" | "dynamic" | "yarn"
+    scaling_factor: 1.0      # Scaling factor for extended context
+
+  # Attention defaults
+  attention:
+    type: "sdpa"             # sdpa | flash_attention
+    head_dim: 128            # Common head dimension
+    num_kv_heads: null       # null = same as num_heads (MHA), else GQA/MQA
+
+# Trace-time defaults for LLM graph capture (Phase B)
+# ZERO HARDCODE: These control graph tracing behavior
+trace:
+  enable_graph_trace: true   # Activate Phase B tracing for LLMs (no bypass)
+  dtype: float32             # Default trace dtype for GPU
+  stimulus:
+    # CRITICAL: trace_seq_len must NOT match any model dimension constant!
+    # Collision-prone values: 64 (head_dim), 128 (nope_head_dim), 512 (kv_lora_rank)
+    # Using 96 avoids collisions with powers-of-2 dimensions common in transformers.
+    trace_seq_len: 96        # Sequence length for graph capture (collision-safe)
+    batch_size: 1            # Batch size for tracing
+    max_new_tokens: 1        # Minimum tokens for graph capture
+  attention_implementation: "sdpa"    # Force SDPA for graph capture (required for KV cache interception)
+  prefer_native_transformers: true   # Skip trust_remote_code when model_type is in native transformers registry
+  symbolic_shapes:
+    batch: "s0"              # Batch dimension symbol
+    seq_len: "s1"            # Sequence length symbol
+    kv_cache_len: "s_kv"     # KV cache length symbol (grows during generation)
+
+# KV Cache runtime configuration
+kv_cache:
+  enabled: true              # Enable KV caching during inference
+  strategy: "dynamic"        # dynamic | static_padded
+  injection_op: "aten::scaled_dot_product_attention"  # Op to intercept for cache injection
+
+# MoE (Mixture of Experts) support - auto-detected from model config
+moe:
+  enabled: false             # Override per model (deepseek-moe, mixtral, etc.)
+  top_k: 6                   # Number of experts selected per token
+  num_experts: 64            # Total number of experts
+  routing_type: "top_k"      # top_k | expert_choice
+
+# Execution configuration
+execution:
+  flow_type: "autoregressive_generation"
+  use_graph_executor: true   # Force GraphExecutor instead of UniversalLMExecutor
+  compiled_mode: true        # Use CompiledSequenceV2 for zero-overhead execution

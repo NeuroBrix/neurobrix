@@ -1,0 +1,28 @@
+# Family-level constants for video generation models
+# NeuroBrix ZERO HARDCODE: All video family models share these defaults
+
+output_processing:
+  layout: "TCHW"             # Time-Channel-Height-Width ordering
+  time_axis: 1               # Temporal dimension at position 1
+  channel_axis: 2            # Channels at dimension 2
+  batch_axis: 0              # Batch at dimension 0
+  valid_channels: [3]        # RGB video (no alpha typically)
+  bit_depth: 8               # 8-bit output per channel
+  fps: 24                    # Default frame rate
+  output_range: [-1.0, 1.0]  # Model output range
+
+defaults:
+  num_inference_steps: 50    # Video models balance quality/speed
+  guidance_scale: 7.5        # Similar to image
+  height: 512                # Video often uses lower resolution
+  width: 512                 # than image for memory reasons
+  num_frames: 16             # Default number of frames
+  negative_prompt: ""        # Empty is allowed
+
+# Trace-time defaults (for graph capture)
+trace:
+  dtype: float16             # Default trace dtype for GPU
+  stimulus:
+    prompt: "trace stimulus"
+    num_inference_steps: 2   # Minimum steps for graph capture
+    num_frames: 4            # Minimum frames for temporal graph capture
