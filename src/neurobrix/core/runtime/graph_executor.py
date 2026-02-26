@@ -1081,7 +1081,7 @@ class GraphExecutor:
             # Load to CPU first to avoid device mismatch when CUDA_VISIBLE_DEVICES
             # remaps GPU indices (e.g., traced on cuda:3 but running with only cuda:0 visible)
             buffer = io.BytesIO(base64.b64decode(b64_data))
-            tensor = torch.load(buffer, map_location='cpu', weights_only=False)
+            tensor = torch.load(buffer, map_location='cpu', weights_only=True)
             tensor = tensor.to(self.device)
 
             if tensor.is_floating_point() and tensor.dtype != self.dtype:

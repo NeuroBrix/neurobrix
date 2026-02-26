@@ -129,8 +129,10 @@ class NBXCache:
 
             def extract_member(member: str) -> int:
                 """Extract a single member and return its size."""
-                # Ensure parent directories exist
+                # Security: validate against path traversal
                 member_path = cache_path / member
+                if not str(member_path.resolve()).startswith(str(cache_path.resolve())):
+                    raise ValueError(f"Security: path traversal detected in archive member: {member}")
                 if member.endswith('/'):
                     member_path.mkdir(parents=True, exist_ok=True)
                     return 0
