@@ -79,7 +79,7 @@ neurobrix chat [options]
 | `/new` | Start a new conversation (clears KV cache) |
 | `/context` | Show token usage and cache state |
 | `/status` | Show engine status and memory |
-| `/quit` | Exit chat |
+| `/quit` (or `/exit`, `/q`) | Exit chat |
 
 ### stop
 
@@ -151,7 +151,7 @@ neurobrix hub [options]
 
 | Flag | Description |
 |------|-------------|
-| `--category` | Filter by category: `IMAGE`, `LLM`, `VIDEO`, `AUDIO` |
+| `--category` | Filter by category: `IMAGE`, `LLM`, `VIDEO`, `AUDIO`, `SPEECH`, `UPSCALER` (case-insensitive) |
 | `--search` | Search by model name |
 
 ### import
@@ -166,6 +166,7 @@ neurobrix import <org/name> [options]
 |------|-------------|
 | `--force` | Re-download even if already installed |
 | `--no-keep` | Delete .nbx archive after extraction (saves disk space) |
+| `--registry` | Custom registry URL (default: neurobrix.es) |
 
 Example:
 ```bash
@@ -250,6 +251,8 @@ neurobrix validate <path.nbx> [options]
 |------|-------------|
 | `--level` | Validation depth: `structure`, `schema`, `coherence`, `deep` |
 | `--strict` | Treat warnings as errors |
+| `--json` | Output results as JSON |
+| `--verbose` / `-v` | Show detailed validation info |
 
 ---
 

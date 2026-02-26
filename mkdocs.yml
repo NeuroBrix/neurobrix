@@ -1,0 +1,120 @@
+site_name: NeuroBrix Documentation
+site_url: https://neurobrix.github.io/neurobrix
+site_description: Universal Deep Learning Inference Engine — execute any AI model without model-specific code
+site_author: Neural Networks Holding LTD
+repo_url: https://github.com/NeuroBrix/neurobrix
+repo_name: NeuroBrix/neurobrix
+edit_uri: edit/main/docs/
+
+copyright: Copyright &copy; 2025-2026 Neural Networks Holding LTD
+
+theme:
+  name: material
+  logo: assets/logo.svg
+  favicon: assets/logo.svg
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: blue
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: blue
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - content.code.copy
+    - content.code.annotate
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - navigation.indexes
+    - search.highlight
+    - search.suggest
+    - toc.follow
+  icon:
+    repo: fontawesome/brands/github
+
+plugins:
+  - search
+  - section-index
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+          options:
+            show_source: false
+            show_root_heading: true
+            show_root_full_path: false
+            heading_level: 3
+            members_order: source
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            docstring_style: google
+  - gen-files:
+      scripts:
+        - scripts/gen_ref_pages.py
+  - literate-nav:
+      nav_file: SUMMARY.md
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - tables
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+      toc_depth: 3
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - getting-started/index.md
+    - Installation: getting-started/installation.md
+    - Quick Start: getting-started/quickstart.md
+    - Model Hub: getting-started/hub.md
+  - User Guide:
+    - guide/index.md
+    - Serving Models: guide/serving.md
+    - Single-Shot Inference: guide/inference.md
+    - Hardware Profiles: guide/hardware.md
+  - Architecture:
+    - architecture/index.md
+    - Runtime Engine: architecture/runtime.md
+    - NBX Format: architecture/nbx-format.md
+    - ZERO Principles: architecture/zero-principles.md
+  - CLI Reference: reference/cli.md
+  - API Reference: reference/api/
+  - Community:
+    - community/index.md
+    - Contributing: community/contributing.md
+    - Hardware Integration: community/hardware-integration.md
+    - Model Registry: community/model-registry.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/NeuroBrix/neurobrix
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/neurobrix/
+  version:
+    provider: mike

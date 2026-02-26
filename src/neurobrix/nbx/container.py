@@ -496,7 +496,7 @@ class NBXContainer:
             # Skip component-level files (handled by _load_components_from_cache)
             if rel_path.startswith("components/"):
                 parts = rel_path.split("/")
-                if len(parts) == 3 and parts[2] in ("config.json", "detection.json", "graph.json"):
+                if len(parts) == 3 and parts[2] in ("config.json", "graph.json"):
                     continue
             # Load auxiliary files
             with open(file_path, "rb") as f:
@@ -706,13 +706,11 @@ class NBXContainer:
         """
         Get a component by name.
 
-        ZERO HARDCODE: Use this to get input_spec instead of hardcoding shapes.
-
         Args:
             name: Component name (e.g., "transformer", "vae")
 
         Returns:
-            ComponentData with detection info and input_spec
+            ComponentData for the requested component
         """
         if name not in self._components:
             raise KeyError(f"Component not found: {name}. Available: {list(self._components.keys())}")
@@ -720,33 +718,12 @@ class NBXContainer:
 
     def get_neural_components(self) -> List[ComponentData]:
         """
-        Get all neural components (those with graph.json).
+        Get all neural components (those with graph.json or weights).
 
         Returns:
             List of ComponentData for neural components
         """
         return [c for c in self._components.values() if c.is_neural]
-
-    def get_input_spec(self, comp_name: str) -> Dict[str, Any]:
-        """
-        Get input_spec for a component from detection.json.
-
-        ZERO HARDCODE: Use this instead of hardcoding shapes/dtypes!
-
-        Args:
-            comp_name: Component name
-
-        Returns:
-            input_spec dict with "inputs", "dynamic_axes", etc.
-
-        Example:
-            input_spec = container.get_input_spec("transformer")
-            hidden_shape = input_spec["inputs"]["hidden_states"]["shape"]
-            hidden_dtype = input_spec["inputs"]["hidden_states"]["dtype"]
-        """
-        if comp_name not in self._components:
-            raise KeyError(f"Component not found: {comp_name}")
-        return self._components[comp_name].input_spec
 
     def list_components(self) -> List[str]:
         """List all component names."""
