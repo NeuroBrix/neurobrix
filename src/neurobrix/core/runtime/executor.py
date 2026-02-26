@@ -232,7 +232,24 @@ class RuntimeExecutor:
             )
         family_defaults = get_family_defaults(family)
 
+        # Cascade generation-type-specific defaults (e.g. image.yml diffusion.defaults)
+        # Detect generation type from manifest or topology flow type
+        generation_type = self.pkg.manifest.get("generation_type")
+        if generation_type is None:
+            flow_type = self.pkg.topology.get("flow", {}).get("type", "")
+            if flow_type == "iterative_process":
+                generation_type = "diffusion"
+            elif flow_type == "autoregressive":
+                generation_type = "autoregressive"
+
         merged_defaults = dict(family_defaults)
+        if generation_type:
+            try:
+                family_cfg = get_family_config(family)
+                gen_defaults = family_cfg.get(generation_type, {}).get("defaults", {})
+                merged_defaults.update(gen_defaults)
+            except FileNotFoundError:
+                pass
         merged_defaults.update(self.pkg.defaults)
 
         for key, value in inputs.items():
@@ -261,6 +278,15 @@ class RuntimeExecutor:
         # Inject user inputs
         for name, value in inputs.items():
             self.variable_resolver.set(name, value)
+
+        # Inject generation-type defaults as global.* variables (fallback if not user-set)
+        # e.g. num_inference_steps from image.yml diffusion.defaults → global.num_inference_steps
+        _global_default_keys = ("num_inference_steps", "guidance_scale", "height", "width",
+                                "temperature", "top_p", "top_k", "cfg_weight", "negative_prompt")
+        for key in _global_default_keys:
+            global_key = f"global.{key}"
+            if global_key not in self.variable_resolver.resolved and key in merged_defaults:
+                self.variable_resolver.set(global_key, merged_defaults[key])
 
         # Register component handlers
         for comp_name, executor in self.executors.items():
