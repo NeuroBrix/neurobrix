@@ -31,6 +31,7 @@ The compiled mode pre-compiles the entire execution graph at load time into a **
 - **CompiledOp**: Frozen dataclass with pre-resolved function pointers and slot indices
 - **DtypeEngine**: Implements PyTorch AMP autocast rules for numerical stability
 - **Dead tensor analysis**: Liveness tracking to free memory during execution
+- **Symbolic dimensions**: SymbolArg/ProductArg support for dynamic shapes (batch size, sequence length) resolved at runtime
 
 ```
 Legacy path: ~15,000 dict lookups per transformer step
@@ -48,16 +49,17 @@ Prism analyzes the model's memory footprint against your hardware profile and se
 Prism applies a scoring cascade — if the best strategy doesn't fit, it tries the next:
 
 ```
-single_gpu (score: 1000)
+single_gpu (1000)
   → single_gpu_lifecycle (900)
-    → pp_nvlink (795)
-      → pp_pcie (790)
-        → fgp_nvlink (695)
-          → fgp_pcie (690)
-            → tp (600)
-              → pp_lazy (500)
-                → lazy_sequential (200)
-                  → zero3 (1)
+    → pp_nvlink (800)
+      → tp (780)
+        → fgp_nvlink (750)
+          → pp_pcie (700)
+            → fgp_pcie (650)
+              → pp_lazy_nvlink (500)
+                → pp_lazy_pcie (400)
+                  → lazy_sequential (300)
+                    → zero3 (100)
 ```
 
 ### Strategy Descriptions
@@ -135,10 +137,17 @@ The DtypeEngine implements PyTorch AMP autocast rules for numerical stability:
 | Category | Behavior | Example Ops |
 |----------|----------|-------------|
 | **FP32 ops** | Always upcast to fp32 | `pow`, `rsqrt`, `softmax`, `sum`, `mean`, `layer_norm` |
-| **FP16 ops** | Run in compute dtype (fp16) | `mm`, `bmm`, `conv2d`, `linear` |
+| **FP16 ops** | Run in compute dtype (fp16) | `mm`, `conv2d`, `linear` |
 | **Promote ops** | Promote to highest input dtype | `add`, `mul`, `cat` |
+| **Overflow protect** | Post-compute clamp for fp16 | `add`, `sub` (residual accumulation) |
 
 **Why this matters**: Without AMP, RMSNorm's `pow → mean → rsqrt` chain overflows in fp16 (rsqrt(Inf) = 0 → all zeros). With AMP, pow upcasts to fp32 and the chain stays stable.
+
+**Special cases**:
+
+- `bmm` is classified as FP32 (not FP16) — intentional deviation from PyTorch for T5-XXL stability
+- `polar` and `view_as_complex` are FP32 — protects RoPE complex number computations (DeepSeek, Llama)
+- Overflow protection on `add`/`sub` clamps fp16 results to ±65504 to prevent Inf → NaN propagation in deep residual chains
 
 ---
 

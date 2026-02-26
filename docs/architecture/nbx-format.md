@@ -28,11 +28,14 @@ model.nbx (ZIP archive)
 │
 ├── components/
 │   ├── transformer/
-│   │   ├── graph.json             # TensorDAG (~80 ATen ops)
-│   │   ├── runtime.json           # Component attributes
+│   │   ├── graph.json             # TensorDAG (ATen ops with shapes/dtypes)
+│   │   ├── runtime.json           # Component attributes (channels, extents)
+│   │   ├── profile.json           # Component config (backbone type, trace values)
+│   │   ├── config.json            # Original model config
+│   │   ├── weights_index.json     # Maps tensor names → shard files
 │   │   └── weights/
-│   │       ├── shard_0000.safetensors
-│   │       └── shard_0001.safetensors
+│   │       ├── shard_000.safetensors
+│   │       └── shard_001.safetensors
 │   ├── vae/
 │   │   └── ...
 │   └── text_encoder/
@@ -56,10 +59,33 @@ Execution flow definition. Describes the order of component execution, loop stru
 ### graph.json (per component)
 
 The computation graph as a TensorDAG — a directed acyclic graph of ATen operations. Each node has:
-- `op_uid`: Unique identifier
+- `op_uid`: Unique identifier (e.g., `aten.unsqueeze::0`)
 - `op_type`: ATen operation (e.g., `aten::mm`, `aten::scaled_dot_product_attention`)
-- `input_uids`: References to input tensors
-- `attributes`: Operation parameters
+- `input_tensor_ids`: References to input tensors
+- `output_tensor_ids`: References to output tensors
+- `input_shapes` / `output_shapes`: Tensor dimensions (may include symbolic expressions)
+- `input_dtypes` / `output_dtypes`: Data types per tensor
+- `device`: Target device at trace time
+- `attributes`: Operation-specific parameters
+- `parent_module`: Original module path (for debugging)
+
+### profile.json (per component)
+
+Component configuration and trace-time metadata:
+- `backbone_type`: Architecture type (e.g., `unet`, `dit`, `decoder`)
+- `config`: Original model parameters
+- `globals`: Trace-time global values
+
+### runtime.json (per component)
+
+Component attributes used by the runtime for memory allocation:
+- `state_channels`, `state_extent_0`, `state_extent_1`: State tensor dimensions
+- `attention_head_dim`: Attention configuration
+- `interface`: Input/output specifications
+
+### weights_index.json (per component)
+
+Maps weight tensor names to their shard files, enabling partial loading.
 
 ### defaults.json
 
