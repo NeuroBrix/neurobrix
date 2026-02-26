@@ -4,6 +4,7 @@ neurobrix import/list/remove/clean/hub — Registry and model management command
 All commands that manage ~/.neurobrix/store/ and ~/.neurobrix/cache/.
 """
 
+import os
 import sys
 import json
 
@@ -136,6 +137,10 @@ def cmd_import(args):
     if zipfile.is_zipfile(store_path):
         cache_path.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(store_path, 'r') as zf:
+            for member in zf.namelist():
+                member_resolved = os.path.realpath(os.path.join(cache_path, member))
+                if not member_resolved.startswith(os.path.realpath(str(cache_path)) + os.sep) and member_resolved != os.path.realpath(str(cache_path)):
+                    raise ValueError(f"Security: path traversal detected in archive member: {member}")
             zf.extractall(cache_path)
         print(f"   Extracted: {cache_path}")
     else:

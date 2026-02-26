@@ -425,15 +425,34 @@ class SymbolicShapeResolver:
         for symbol_id, value in self._runtime_values.items():
             resolved_expr = resolved_expr.replace(symbol_id, str(value))
 
-        # Safe evaluation (only arithmetic)
+        # Safe evaluation (only arithmetic via AST)
         try:
-            # Only allow safe operations
-            allowed = set("0123456789+-*/() ")
-            if not all(c in allowed for c in resolved_expr):
+            import ast
+            import operator
+            allowed_chars = set("0123456789+-*/() ")
+            if not all(c in allowed_chars for c in resolved_expr):
                 raise ShapeResolutionError(
                     f"Unsafe expression: {expr} -> {resolved_expr}"
                 )
-            result = eval(resolved_expr)
+            if len(resolved_expr) > 256:
+                raise ShapeResolutionError(
+                    f"Expression too long ({len(resolved_expr)} chars): {expr}"
+                )
+            _safe_ops = {
+                ast.Add: operator.add, ast.Sub: operator.sub,
+                ast.Mult: operator.mul, ast.FloorDiv: operator.floordiv,
+                ast.Div: operator.truediv, ast.USub: operator.neg,
+            }
+            def _safe_eval(node):
+                if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+                    return node.value
+                if isinstance(node, ast.BinOp) and type(node.op) in _safe_ops:
+                    return _safe_ops[type(node.op)](_safe_eval(node.left), _safe_eval(node.right))
+                if isinstance(node, ast.UnaryOp) and type(node.op) in _safe_ops:
+                    return _safe_ops[type(node.op)](_safe_eval(node.operand))
+                raise ShapeResolutionError(f"Unsafe AST node: {ast.dump(node)}")
+            tree = ast.parse(resolved_expr, mode='eval')
+            result = _safe_eval(tree.body)
             return int(result)
         except Exception as e:
             raise ShapeResolutionError(
