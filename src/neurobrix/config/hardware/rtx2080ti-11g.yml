@@ -1,0 +1,38 @@
+# Hardware Profile: NVIDIA RTX 2080 Ti 11GB
+# Created manually from GPU spec sheet
+# Purpose: Single RTX 2080 Ti with 11GB memory
+
+id: rtx2080ti-11g
+vendor: nvidia
+preferred_dtype: "float16"  # RTX 2080 Ti: fp16 only, no bfloat16 support (Turing)
+
+summary:
+  total_gpus: 1
+  total_vram_gb: 11
+  topology: "single"
+
+devices:
+  - index: 0
+    brand: nvidia
+    model: "NVIDIA GeForce RTX 2080 Ti"
+    memory_mb: 11264
+    compute_capability: "7.5"
+    supports_dtypes: ["float32", "float16"]
+    architecture: turing
+    pcie_version: "3.0"
+interconnect:
+  groups:
+    - index: none
+      members: none
+      type: none
+      tech: none
+      bandwidth_gbps: none
+pcie_fallback:
+  version: "3.0"               # Dominant PCIe version in system
+  lanes: 16                    # x16 slots
+  bandwidth_gbps: 32           # PCIe 3.0 x16 bidirectional
+notes: |
+  NVIDIA RTX 2080 Ti with 11GB GDDR6 memory.
+  No bfloat16 hardware support (Turing architecture).
+  First-gen RT cores, Turing Tensor Cores with FP16, INT8, INT4.
+  616 GB/s memory bandwidth. Flagship consumer Turing GPU.

@@ -1,0 +1,38 @@
+# Hardware Profile: NVIDIA RTX 3090 24GB
+# Created manually from GPU spec sheet
+# Purpose: Single RTX 3090 with 24GB memory
+
+id: rtx3090-24g
+vendor: nvidia
+preferred_dtype: "bfloat16"  # RTX 3090: Ampere with bf16 tensor core support
+
+summary:
+  total_gpus: 1
+  total_vram_gb: 24
+  topology: "single"
+
+devices:
+  - index: 0
+    brand: nvidia
+    model: "NVIDIA GeForce RTX 3090"
+    memory_mb: 24576
+    compute_capability: "8.6"
+    supports_dtypes: ["float32", "float16", "bfloat16"]
+    architecture: ampere
+    pcie_version: "4.0"
+interconnect:
+  groups:
+    - index: none
+      members: none
+      type: none
+      tech: none
+      bandwidth_gbps: none
+pcie_fallback:
+  version: "4.0"               # Dominant PCIe version in system
+  lanes: 16                    # x16 slots
+  bandwidth_gbps: 64           # PCIe 4.0 x16 bidirectional
+notes: |
+  NVIDIA RTX 3090 with 24GB GDDR6X memory.
+  Full bfloat16 hardware support (Ampere architecture).
+  Second-gen RT cores, third-gen Tensor Cores.
+  936 GB/s memory bandwidth. Flagship consumer Ampere GPU.
