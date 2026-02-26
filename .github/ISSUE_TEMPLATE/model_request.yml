@@ -1,0 +1,71 @@
+name: Model Request
+description: Request a new model for the NeuroBrix Hub
+title: "[Model]: "
+labels: ["model-request"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Want a model added to the NeuroBrix Hub? Tell us about it below.
+        See our [Model Registry Program](https://github.com/NeuroBrix/neurobrix/blob/main/docs/MODEL_REGISTRY.md) for details.
+
+  - type: input
+    id: model_name
+    attributes:
+      label: Model Name
+      placeholder: "e.g., SDXL-Turbo"
+    validations:
+      required: true
+
+  - type: input
+    id: organization
+    attributes:
+      label: Organization / Author
+      placeholder: "e.g., Stability AI"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: family
+    attributes:
+      label: Model Family
+      options:
+        - Image Generation
+        - Large Language Model (LLM)
+        - Audio (Speech-to-Text / Text-to-Speech)
+        - Video Generation
+        - Multimodal
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: source
+    attributes:
+      label: Source Link
+      description: "Hugging Face, GitHub, paper, or official page"
+      placeholder: "https://huggingface.co/..."
+    validations:
+      required: true
+
+  - type: input
+    id: parameters
+    attributes:
+      label: Model Size
+      description: "Number of parameters or approximate weight file size"
+      placeholder: "e.g., 7B parameters / ~14 GB"
+
+  - type: textarea
+    id: reason
+    attributes:
+      label: Why This Model?
+      description: "Why is this model important to add? What use cases does it serve?"
+    validations:
+      required: true
+
+  - type: input
+    id: license
+    attributes:
+      label: License
+      description: "The model's license (Apache 2.0, MIT, custom, etc.)"
+      placeholder: "e.g., Apache 2.0"

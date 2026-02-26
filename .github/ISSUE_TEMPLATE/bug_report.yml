@@ -1,0 +1,107 @@
+name: Bug Report
+description: Report a bug in NeuroBrix
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting a bug. Please fill out the information below to help us investigate.
+
+  - type: input
+    id: version
+    attributes:
+      label: NeuroBrix Version
+      description: "Run `neurobrix info` and paste the version"
+      placeholder: "e.g., 0.1.0a4"
+    validations:
+      required: true
+
+  - type: input
+    id: hardware
+    attributes:
+      label: Hardware Profile
+      description: "The hardware profile used (e.g., v100-32g)"
+      placeholder: "e.g., v100-32g"
+    validations:
+      required: true
+
+  - type: input
+    id: model
+    attributes:
+      label: Model Name
+      description: "The model you were running"
+      placeholder: "e.g., sana/1600m-1024"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: family
+    attributes:
+      label: Model Family
+      options:
+        - Image Generation
+        - Large Language Model
+        - Audio
+        - Video
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: command
+    attributes:
+      label: Command Used
+      options:
+        - neurobrix run
+        - neurobrix serve
+        - neurobrix chat
+        - neurobrix import
+        - neurobrix hub
+        - neurobrix validate
+        - neurobrix inspect
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: "A clear description of what happened"
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: "Step-by-step instructions to reproduce the issue"
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: "What you expected to happen"
+    validations:
+      required: true
+
+  - type: textarea
+    id: traceback
+    attributes:
+      label: Error Traceback
+      description: "Full error output (paste between the backticks)"
+      render: shell
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: "Output of `neurobrix info --system`"
+      render: shell

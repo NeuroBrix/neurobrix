@@ -1,0 +1,56 @@
+name: Feature Request
+description: Suggest a new feature or improvement
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for suggesting a feature. Please describe your idea below.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: "Which part of NeuroBrix does this affect?"
+      options:
+        - Core Runtime / Executor
+        - Prism Solver (hardware allocation)
+        - CLI Commands
+        - Serving Daemon
+        - NBX Container Format
+        - Triton Kernels
+        - Hub / Model Registry
+        - Documentation
+        - Hardware Support
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Statement
+      description: "What problem does this feature solve? What's missing today?"
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: "How would you like this to work?"
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: "Any other approaches you've thought about?"
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: "Links, screenshots, references, or anything else"
