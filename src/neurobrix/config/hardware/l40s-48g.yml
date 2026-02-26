@@ -1,0 +1,38 @@
+# Hardware Profile: NVIDIA L40S 48GB
+# Created manually from GPU spec sheet
+# Purpose: Single L40S with 48GB memory
+
+id: l40s-48g
+vendor: nvidia
+preferred_dtype: "bfloat16"  # L40S: Ada Lovelace with full bf16 support
+
+summary:
+  total_gpus: 1
+  total_vram_gb: 48
+  topology: "single"
+
+devices:
+  - index: 0
+    brand: nvidia
+    model: "NVIDIA L40S"
+    memory_mb: 49152
+    compute_capability: "8.9"
+    supports_dtypes: ["float32", "float16", "bfloat16"]
+    architecture: ada
+    pcie_version: "4.0"
+interconnect:
+  groups:
+    - index: none
+      members: none
+      type: none
+      tech: none
+      bandwidth_gbps: none
+pcie_fallback:
+  version: "4.0"               # Dominant PCIe version in system
+  lanes: 16                    # x16 slots
+  bandwidth_gbps: 64           # PCIe 4.0 x16 bidirectional
+notes: |
+  NVIDIA L40S with 48GB GDDR6 memory.
+  Full bfloat16 hardware support (Ada Lovelace architecture).
+  Fourth-gen Tensor Cores with FP8, TF32, FP16, BF16, INT8.
+  864 GB/s memory bandwidth. Datacenter universal GPU for inference.

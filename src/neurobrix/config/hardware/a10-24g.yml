@@ -1,0 +1,38 @@
+# Hardware Profile: NVIDIA A10 24GB
+# Created manually from GPU spec sheet
+# Purpose: Single A10 with 24GB memory
+
+id: a10-24g
+vendor: nvidia
+preferred_dtype: "bfloat16"  # A10: Ampere datacenter with bf16 support
+
+summary:
+  total_gpus: 1
+  total_vram_gb: 24
+  topology: "single"
+
+devices:
+  - index: 0
+    brand: nvidia
+    model: "NVIDIA A10"
+    memory_mb: 24576
+    compute_capability: "8.6"
+    supports_dtypes: ["float32", "float16", "bfloat16"]
+    architecture: ampere
+    pcie_version: "4.0"
+interconnect:
+  groups:
+    - index: none
+      members: none
+      type: none
+      tech: none
+      bandwidth_gbps: none
+pcie_fallback:
+  version: "4.0"               # Dominant PCIe version in system
+  lanes: 16                    # x16 slots
+  bandwidth_gbps: 64           # PCIe 4.0 x16 bidirectional
+notes: |
+  NVIDIA A10 with 24GB GDDR6 memory.
+  Full bfloat16 hardware support (Ampere architecture).
+  Third-gen Tensor Cores with TF32, FP16, BF16, INT8.
+  600 GB/s memory bandwidth. Cost-effective datacenter inference GPU.

@@ -1,0 +1,38 @@
+# Hardware Profile: NVIDIA RTX 3060 12GB
+# Created manually from GPU spec sheet
+# Purpose: Single RTX 3060 with 12GB memory
+
+id: rtx3060-12g
+vendor: nvidia
+preferred_dtype: "bfloat16"  # RTX 3060: Ampere with bf16 tensor core support
+
+summary:
+  total_gpus: 1
+  total_vram_gb: 12
+  topology: "single"
+
+devices:
+  - index: 0
+    brand: nvidia
+    model: "NVIDIA GeForce RTX 3060"
+    memory_mb: 12288
+    compute_capability: "8.6"
+    supports_dtypes: ["float32", "float16", "bfloat16"]
+    architecture: ampere
+    pcie_version: "4.0"
+interconnect:
+  groups:
+    - index: none
+      members: none
+      type: none
+      tech: none
+      bandwidth_gbps: none
+pcie_fallback:
+  version: "4.0"               # Dominant PCIe version in system
+  lanes: 16                    # x16 slots
+  bandwidth_gbps: 64           # PCIe 4.0 x16 bidirectional
+notes: |
+  NVIDIA RTX 3060 with 12GB GDDR6 memory.
+  Full bfloat16 hardware support (Ampere architecture).
+  Second-gen RT cores, third-gen Tensor Cores.
+  360 GB/s memory bandwidth. Entry-level Ampere with generous 12GB VRAM.

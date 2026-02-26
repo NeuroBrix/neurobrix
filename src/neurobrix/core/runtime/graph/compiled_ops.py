@@ -419,9 +419,12 @@ class CompiledOpResolver:
                          "_scaled_dot_product_flash_attention"):
             def efficient_attention(q, k, v, attn_bias=None, compute_lse=False,
                                    dropout_p=0.0, is_causal=False, scale=None, *args):
-                q = q.contiguous()
-                k = k.contiguous()
-                v = v.contiguous()
+                if not q.is_contiguous():
+                    q = q.contiguous()
+                if not k.is_contiguous():
+                    k = k.contiguous()
+                if not v.is_contiguous():
+                    v = v.contiguous()
                 attn_bias = _cast_attn_mask(attn_bias, q)
                 output = F.scaled_dot_product_attention(
                     q, k, v,
