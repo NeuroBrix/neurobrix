@@ -59,7 +59,7 @@ For more information: https://github.com/neurobrix/neurobrix
         description='Run inference using Prism ExecutionPlan + NBX Engine. Family is read from manifest.'
     )
     run_parser.add_argument('--model', required=True, help='Model name (e.g., "Flex.1-alpha")')
-    run_parser.add_argument('--hardware', required=True, help='Hardware profile ID (e.g., "c4140-v100x4-nvlink")')
+    run_parser.add_argument('--hardware', default=None, help='Hardware profile ID (e.g., "v100-32g"). Auto-detected if omitted.')
     run_parser.add_argument('--prompt', required=True, help='Text prompt for generation')
     run_parser.add_argument('--steps', type=int, default=None, help='Number of inference steps')
     run_parser.add_argument('--cfg', type=float, default=None, help='Guidance scale')
@@ -72,7 +72,7 @@ For more information: https://github.com/neurobrix/neurobrix
                             help='Repetition penalty (1.0 = none, 1.1-1.5 recommended)')
     run_parser.add_argument('--set', action='append', metavar='KEY=VALUE',
                             help='Set arbitrary runtime variable (e.g., --set global.cfg=7.5)')
-    run_parser.add_argument('--seq_aten', action='store_true',
+    run_parser.add_argument('--sequential', action='store_true',
                             help='Fallback: Sequential PyTorch ATen execution (for debugging)')
     run_parser.add_argument('--triton', action='store_true',
                             help='R&D: Python loop with custom Triton kernels (experimental)')
@@ -210,12 +210,12 @@ Examples:
         """
     )
     serve_parser.add_argument('--model', required=True, help='Model name')
-    serve_parser.add_argument('--hardware', required=True, help='Hardware profile ID')
+    serve_parser.add_argument('--hardware', default=None, help='Hardware profile ID. Auto-detected if omitted.')
     serve_parser.add_argument('--timeout', type=int, default=1800,
                               help='Idle timeout in seconds (default: 1800)')
     serve_parser.add_argument('--foreground', action='store_true',
                               help='Run in foreground (block terminal, for debugging)')
-    serve_parser.add_argument('--seq_aten', action='store_true',
+    serve_parser.add_argument('--sequential', action='store_true',
                               help='Use sequential ATen execution')
     serve_parser.add_argument('--triton', action='store_true',
                               help='Use Triton kernels')

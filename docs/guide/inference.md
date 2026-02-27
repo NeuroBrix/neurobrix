@@ -54,7 +54,7 @@ neurobrix run --model ... --hardware ... --prompt "..." \
   --set global.num_inference_steps=50
 
 # Execution modes
-neurobrix run ... --seq_aten     # Debug mode (native ATen)
+neurobrix run ... --sequential   # Debug mode (native ATen)
 neurobrix run ... --triton       # Custom Triton kernels
 ```
 

@@ -1,38 +1,32 @@
 # Hardware Profile: NVIDIA A100 80GB SXM
-# Created manually from GPU spec sheet
-# Purpose: Single A100 with 80GB memory
+# Single A100 with 80GB HBM2e memory
 
 id: a100-80g
 vendor: nvidia
-preferred_dtype: "bfloat16"  # A100 tensor cores: bf16 natively supported, preferred for stability
-
+preferred_dtype: bfloat16
 summary:
   total_gpus: 1
   total_vram_gb: 80
-  topology: "single"
-
+  topology: Single-GPU
 devices:
-  - index: 0
-    brand: nvidia
-    model: "NVIDIA A100-SXM4-80GB"
-    memory_mb: 81920
-    compute_capability: "8.0"
-    supports_dtypes: ["float32", "float16", "bfloat16"]
-    architecture: ampere
-    pcie_version: "4.0"
+- index: 0
+  brand: nvidia
+  model: NVIDIA A100-SXM4-80GB
+  memory_mb: 81920
+  compute_capability: '8.0'
+  supports_dtypes:
+  - float32
+  - float16
+  - bfloat16
+  architecture: ampere
+  pcie_version: '4.0'
 interconnect:
-  groups:
-    - index: none
-      members: none
-      type: none
-      tech: none
-      bandwidth_gbps: none
+  groups: []
 pcie_fallback:
-  version: "4.0"               # Dominant PCIe version in system
-  lanes: 16                    # x16 slots
-  bandwidth_gbps: 64           # PCIe 4.0 x16 bidirectional
+  version: '4.0'
+  lanes: 16
+  bandwidth_gbps: 64
 notes: |
   NVIDIA A100 with 80GB HBM2e memory.
   Full bfloat16 hardware support (Ampere architecture).
-  Third-gen Tensor Cores with TF32, FP16, BF16, INT8, INT4.
   Highest memory capacity A100 variant for large model inference.

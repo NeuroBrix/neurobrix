@@ -50,7 +50,7 @@ neurobrix serve --model <name> --hardware <profile> [options]
 | `--hardware` | Hardware profile ID (required) | — |
 | `--timeout` | Idle timeout in seconds | 1800 |
 | `--foreground` | Run in foreground (for debugging) | false |
-| `--seq_aten` | Use native ATen dispatch | false |
+| `--sequential` | Use native ATen dispatch | false |
 | `--triton` | Use Triton kernels | false |
 
 Example:
@@ -117,7 +117,7 @@ neurobrix run --model <name> --hardware <profile> --prompt <text> [options]
 | `--repetition-penalty` | Repetition penalty (LLM) |
 | `--chat` / `--no-chat` | Force chat template on/off |
 | `--set KEY=VALUE` | Override any runtime variable |
-| `--seq_aten` | Use native ATen dispatch (debug) |
+| `--sequential` | Use native ATen dispatch (debug) |
 | `--triton` | Use Triton kernels (experimental) |
 
 Examples:

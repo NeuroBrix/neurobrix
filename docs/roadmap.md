@@ -64,8 +64,10 @@ When you run a model, NeuroBrix:
 NeuroBrix automatically determines the best execution strategy for your hardware:
 
 - **Single GPU** — Standard execution with intelligent memory management
-- **Pipeline Parallelism** — Distributes model layers across multiple GPUs (NVLink or PCIe)
-- **Tensor Parallelism** — Splits individual operations across GPUs for massive models
+- **Pipeline Parallel** — Per-layer sequential fill across GPUs (like Accelerate `device_map="auto"`)
+- **Component Placement** — Distributes whole components (text_encoder, transformer, vae) across GPUs
+- **Block Scatter** — Block-level distribution across GPUs for very large components
+- **Weight Sharding** — Weight-file round-robin distribution across GPUs
 - **CPU Offload** — DeepSpeed-style offloading when GPU memory is insufficient
 
 You describe your hardware once in a YAML profile, and NeuroBrix handles the rest.
