@@ -303,6 +303,9 @@ See **[CONTRIBUTING.md](https://github.com/NeuroBrix/neurobrix/blob/main/CONTRIB
 
 ## License
 
-Apache License 2.0 — Copyright 2025 Hocine Benkelaya [Neural Networks Holding LTD](https://neurobrix.es)
+Apache License 2.0 — Copyright 2025 Hocine Benkelaya
+
+NeuroBrix is developed by [**WizWorks OÜ**](https://wizworks.io), a property of [**Neural Networks Holding LTD**](https://neuralnetworkholding.com).
+
 
 See [LICENSE](LICENSE) for the full text.
