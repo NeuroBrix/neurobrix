@@ -1,39 +1,33 @@
 # Hardware Profile: NVIDIA H100 80GB SXM
-# Created manually from GPU spec sheet
-# Purpose: Single H100 with 80GB memory
+# Single H100 with 80GB HBM3 memory
 
 id: h100-80g
 vendor: nvidia
-preferred_dtype: "bfloat16"  # H100 tensor cores: bf16 with 2x throughput vs A100
-
+preferred_dtype: bfloat16
 summary:
   total_gpus: 1
   total_vram_gb: 80
-  topology: "single"
-
+  topology: Single-GPU
 devices:
-  - index: 0
-    brand: nvidia
-    model: "NVIDIA H100-SXM5-80GB"
-    memory_mb: 81920
-    compute_capability: "9.0"
-    supports_dtypes: ["float32", "float16", "bfloat16"]
-    architecture: hopper
-    pcie_version: "5.0"
+- index: 0
+  brand: nvidia
+  model: NVIDIA H100-SXM5-80GB
+  memory_mb: 81920
+  compute_capability: '9.0'
+  supports_dtypes:
+  - float32
+  - float16
+  - bfloat16
+  architecture: hopper
+  pcie_version: '5.0'
 interconnect:
-  groups:
-    - index: none
-      members: none
-      type: none
-      tech: none
-      bandwidth_gbps: none
+  groups: []
 pcie_fallback:
-  version: "5.0"               # Dominant PCIe version in system
-  lanes: 16                    # x16 slots
-  bandwidth_gbps: 128          # PCIe 5.0 x16 bidirectional
+  version: '5.0'
+  lanes: 16
+  bandwidth_gbps: 128
 notes: |
   NVIDIA H100 with 80GB HBM3 memory.
   Full bfloat16 hardware support (Hopper architecture).
   Fourth-gen Tensor Cores with FP8, TF32, FP16, BF16, INT8.
-  Transformer Engine with automatic mixed precision.
   3.35 TB/s memory bandwidth. Flagship datacenter GPU.

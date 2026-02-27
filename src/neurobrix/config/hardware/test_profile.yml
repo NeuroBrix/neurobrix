@@ -1,12 +1,26 @@
-# Hardware Profile: Test Volta
+# Hardware Profile: Test Volta (unit testing only)
+
 id: test-volta
 vendor: test_vendor
-
+preferred_dtype: float16
+summary:
+  total_gpus: 1
+  total_vram_gb: 16
+  topology: Single-GPU
 devices:
-  - index: 0
-    model: "Mock V100"
-    memory_mb: 16000
-    compute_capability: "7.0"
-    supports_dtypes: ["float32", "float16"]
-    architecture: volta
-
+- index: 0
+  brand: nvidia
+  model: Mock V100
+  memory_mb: 16000
+  compute_capability: '7.0'
+  supports_dtypes:
+  - float32
+  - float16
+  architecture: volta
+  pcie_version: '3.0'
+interconnect:
+  groups: []
+pcie_fallback:
+  version: '3.0'
+  lanes: 16
+  bandwidth_gbps: 32

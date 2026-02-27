@@ -24,15 +24,16 @@ NeuroBrix uses hardware profiles to automatically determine execution strategies
 The Prism solver uses a **recursive cascade strategy**:
 
 ```
-single_gpu → lifecycle → pipeline → fgp → tp → pp_lazy → lazy_sequential → zero3
+single_gpu → lifecycle → pipeline_parallel → component_placement → block_scatter → weight_sharding → component_placement_lazy → lazy_sequential → zero3
 ```
 
 1. **Single GPU**: Fits everything on one GPU? Done.
 2. **Lifecycle**: Load/unload transient components (vision encoder, etc.)
-3. **Pipeline**: Split components across GPUs sequentially
-4. **FGP** (Fine-Grained Pipeline): Split blocks within components across GPUs
-5. **TP** (Tensor Parallel): Shard individual tensors across GPUs
-6. **Zero3**: CPU offloading with on-demand GPU transfer
+3. **Pipeline Parallel**: Per-layer sequential fill across GPUs (like Accelerate)
+4. **Component Placement**: Whole components on different GPUs
+5. **Block Scatter**: Block-level best-fit distribution across GPUs
+6. **Weight Sharding**: Weight-file round-robin across GPUs
+7. **Zero3**: CPU offloading with on-demand GPU transfer
 
 The solver picks the **highest-throughput** strategy that fits in memory.
 

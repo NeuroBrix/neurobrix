@@ -26,7 +26,7 @@ def cmd_serve(args):
         sys.exit(1)
 
     # Determine execution mode
-    if getattr(args, 'seq_aten', False):
+    if getattr(args, 'sequential', False):
         mode = "native"
     elif getattr(args, 'triton', False):
         mode = "triton"
@@ -36,15 +36,32 @@ def cmd_serve(args):
     timeout = getattr(args, 'timeout', 1800) or 1800
     foreground = getattr(args, 'foreground', False)
 
+    # Resolve hardware: explicit profile or auto-detect
+    hardware_id = args.hardware
+    if not hardware_id:
+        # CRITICAL: Cannot import neurobrix.core.prism before os.fork() —
+        # prism/__init__.py imports the solver which initializes the CUDA driver,
+        # making fork() + CUDA impossible in the child daemon process.
+        # Load autodetect.py directly, bypassing the prism package __init__.
+        import importlib.util
+        _spec = importlib.util.spec_from_file_location(
+            "autodetect",
+            str(__import__("pathlib").Path(__file__).parent.parent.parent
+                / "core" / "prism" / "autodetect.py"),
+        )
+        _mod = importlib.util.module_from_spec(_spec)
+        _spec.loader.exec_module(_mod)
+        hardware_id = _mod.get_or_create_default_profile()  # Returns "default"
+
     print(f"[Serve] Starting NeuroBrix Serving Daemon")
     print(f"[Serve] Model: {args.model}")
-    print(f"[Serve] Hardware: {args.hardware}")
+    print(f"[Serve] Hardware: {hardware_id if args.hardware else 'auto-detect'}")
     print(f"[Serve] Mode: {mode}")
     print(f"[Serve] Idle timeout: {timeout}s")
 
     daemon = ServingDaemon(
         model_name=args.model,
-        hardware_id=args.hardware,
+        hardware_id=hardware_id,
         mode=mode,
         idle_timeout=float(timeout),
     )

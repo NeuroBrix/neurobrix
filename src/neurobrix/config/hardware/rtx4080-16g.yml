@@ -1,38 +1,32 @@
 # Hardware Profile: NVIDIA RTX 4080 16GB
-# Created manually from GPU spec sheet
-# Purpose: Single RTX 4080 with 16GB memory
+# Single RTX 4080 with 16GB GDDR6X memory
 
 id: rtx4080-16g
 vendor: nvidia
-preferred_dtype: "bfloat16"  # RTX 4080: Ada Lovelace with full bf16 support
-
+preferred_dtype: bfloat16
 summary:
   total_gpus: 1
   total_vram_gb: 16
-  topology: "single"
-
+  topology: Single-GPU
 devices:
-  - index: 0
-    brand: nvidia
-    model: "NVIDIA GeForce RTX 4080"
-    memory_mb: 16384
-    compute_capability: "8.9"
-    supports_dtypes: ["float32", "float16", "bfloat16"]
-    architecture: ada
-    pcie_version: "4.0"
+- index: 0
+  brand: nvidia
+  model: NVIDIA GeForce RTX 4080
+  memory_mb: 16384
+  compute_capability: '8.9'
+  supports_dtypes:
+  - float32
+  - float16
+  - bfloat16
+  architecture: ada
+  pcie_version: '4.0'
 interconnect:
-  groups:
-    - index: none
-      members: none
-      type: none
-      tech: none
-      bandwidth_gbps: none
+  groups: []
 pcie_fallback:
-  version: "4.0"               # Dominant PCIe version in system
-  lanes: 16                    # x16 slots
-  bandwidth_gbps: 64           # PCIe 4.0 x16 bidirectional
+  version: '4.0'
+  lanes: 16
+  bandwidth_gbps: 64
 notes: |
   NVIDIA RTX 4080 with 16GB GDDR6X memory.
   Full bfloat16 hardware support (Ada Lovelace architecture).
-  Third-gen RT cores, fourth-gen Tensor Cores with FP8.
   717 GB/s memory bandwidth. High-end consumer Ada GPU.

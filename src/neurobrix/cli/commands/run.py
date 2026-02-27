@@ -98,6 +98,7 @@ def cmd_run(args):
     import torch
     from neurobrix.nbx import NBXContainer
     from neurobrix.core.prism import PrismSolver, load_profile, InputConfig
+    from neurobrix.core.prism.autodetect import get_or_create_default_profile
     from neurobrix.core.runtime.loader import NBXRuntimeLoader
     from neurobrix.core.runtime.executor import RuntimeExecutor
     from neurobrix.core.config import get_output_processing
@@ -117,7 +118,7 @@ def cmd_run(args):
     print(f"NeuroBrix Run v{__version__}")
     print("=" * 70)
     print(f"Model: {args.model}")
-    print(f"Hardware: {args.hardware}")
+    print(f"Hardware: {args.hardware or 'auto-detect'}")
     prompt_display = f"{args.prompt[:50]}..." if len(args.prompt) > 50 else args.prompt
     print(f"Prompt: {prompt_display}")
     print("=" * 70)
@@ -149,7 +150,11 @@ def cmd_run(args):
 
     # 2. Prism Allocation
     print("\n[2/4] Solving hardware allocation...")
-    hw_profile = load_profile(args.hardware)
+    if args.hardware:
+        hw_profile = load_profile(args.hardware)
+    else:
+        hardware_id = get_or_create_default_profile()
+        hw_profile = load_profile(hardware_id)
     print(f"   Profile: {hw_profile.id} ({hw_profile.total_vram_gb:.1f} GB)")
 
     # Build InputConfig for activation profiling
@@ -239,7 +244,7 @@ def cmd_run(args):
     print(f"   Total inputs: {len(inputs)}")
 
     # 5. Determine Execution Engine Mode
-    if args.seq_aten:
+    if args.sequential:
         execution_mode = "native"
     elif args.triton:
         execution_mode = "triton"

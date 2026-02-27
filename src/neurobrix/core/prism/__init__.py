@@ -26,6 +26,7 @@ from .structure import (
     Zero3Config,
 )
 from .loader import load_profile, list_available_profiles
+from .autodetect import load_default_profile, get_or_create_default_profile, detect_hardware
 from .solver import (
     # Main solver
     PrismSolver,
@@ -87,6 +88,10 @@ __all__ = [
     # Loader
     "load_profile",
     "list_available_profiles",
+    # Auto-detection
+    "load_default_profile",
+    "get_or_create_default_profile",
+    "detect_hardware",
     # Solver
     "PrismSolver",
     "ComponentMemory",

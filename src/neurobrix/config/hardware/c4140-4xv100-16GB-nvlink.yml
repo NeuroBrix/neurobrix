@@ -1,66 +1,69 @@
-# Hardware Profile: Dell C4140 Heterogeneous
-# ID: c4140-4xv100-16GB-nvlink
-# Spec: 4x V100 16GB (Total 64GB) in NVLink Mesh
+# Hardware Profile: Dell C4140 — 4x V100 16GB NVLink Mesh
+# 4x V100 16GB (Total 64GB) in full NVLink mesh
 
 id: c4140-4xv100-16GB-nvlink
 vendor: dell
-preferred_dtype: "float16"  # V100 tensor cores: fp16 is 2x throughput vs fp32
-
-
-
+preferred_dtype: float16
 summary:
   total_gpus: 4
   total_vram_gb: 64
-  topology: "Multi-GPU"
-
+  topology: Multi-GPU
 devices:
-  - index: 0
-    brand: nvidia
-    model: "Tesla V100-SXM2-16GB"
-    memory_mb: 16160
-    compute_capability: "7.0"
-    supports_dtypes: ["float32", "float16"]
-    architecture: volta
-    pcie_version: "3.0"
-  - index: 1
-    brand: nvidia
-    model: "Tesla V100-SXM2-16GB"
-    memory_mb: 16160
-    compute_capability: "7.0"
-    supports_dtypes: ["float32", "float16"]
-    architecture: volta
-    pcie_version: "3.0"
-  - index: 2
-    brand: nvidia
-    model: "Tesla V100-SXM2-16GB"
-    memory_mb: 16160
-    compute_capability: "7.0"
-    supports_dtypes: ["float32", "float16"]
-    architecture: volta
-    pcie_version: "3.0"
-  - index: 3
-    brand: nvidia
-    model: "Tesla V100-SXM2-16GB"
-    memory_mb: 16160
-    compute_capability: "7.0"
-    supports_dtypes: ["float32", "float16"]
-    architecture: volta
-    pcie_version: "3.0"
+- index: 0
+  brand: nvidia
+  model: Tesla V100-SXM2-16GB
+  memory_mb: 16160
+  compute_capability: '7.0'
+  supports_dtypes:
+  - float32
+  - float16
+  architecture: volta
+  pcie_version: '3.0'
+- index: 1
+  brand: nvidia
+  model: Tesla V100-SXM2-16GB
+  memory_mb: 16160
+  compute_capability: '7.0'
+  supports_dtypes:
+  - float32
+  - float16
+  architecture: volta
+  pcie_version: '3.0'
+- index: 2
+  brand: nvidia
+  model: Tesla V100-SXM2-16GB
+  memory_mb: 16160
+  compute_capability: '7.0'
+  supports_dtypes:
+  - float32
+  - float16
+  architecture: volta
+  pcie_version: '3.0'
+- index: 3
+  brand: nvidia
+  model: Tesla V100-SXM2-16GB
+  memory_mb: 16160
+  compute_capability: '7.0'
+  supports_dtypes:
+  - float32
+  - float16
+  architecture: volta
+  pcie_version: '3.0'
 interconnect:
   groups:
-    - index: 0
-      members: [0, 1, 2, 3] #related to devices: index: x
-      type: full_mesh       #nvlink_p2p in case of only 2 gpus can connect to each other
-      tech: nvlink
-      bandwidth_gbps: 300
+  - index: 0
+    members:
+    - 0
+    - 1
+    - 2
+    - 3
+    type: full_mesh
+    tech: nvlink
+    bandwidth_gbps: 300
 pcie_fallback:
-  version: "3.0"               # Dominant PCIe version in system
-  lanes: 16                    # x16 slots
-  bandwidth_gbps: 32           # PCIe 4.0 x16 bidirectional
+  version: '3.0'
+  lanes: 16
+  bandwidth_gbps: 32
 notes: |
-  Dell C4140 Server 2 CPU 40 Cores
-  2 x NVIDIA V100 with 16GB HBM2 memory + 2 x NVIDIA V100 with 32GB HBM2 memory.
+  Dell C4140 Server with 4x V100 16GB in NVLink full mesh.
   No bfloat16 hardware support (Volta architecture).
-  Recommended for inference and small training jobs.
-  interconnect param will support all availible tech of gpus
-  NVLink, AMD Infinity Fabric, Intel XeLink/CXL, cross-vendor émergent (ex. : NVIDIA-Intel pour NVLink dans Xeon). Sans interconnect high-BW

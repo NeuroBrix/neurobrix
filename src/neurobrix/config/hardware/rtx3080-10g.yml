@@ -1,38 +1,32 @@
 # Hardware Profile: NVIDIA RTX 3080 10GB
-# Created manually from GPU spec sheet
-# Purpose: Single RTX 3080 with 10GB memory
+# Single RTX 3080 with 10GB GDDR6X memory
 
 id: rtx3080-10g
 vendor: nvidia
-preferred_dtype: "bfloat16"  # RTX 3080: Ampere with bf16 tensor core support
-
+preferred_dtype: bfloat16
 summary:
   total_gpus: 1
   total_vram_gb: 10
-  topology: "single"
-
+  topology: Single-GPU
 devices:
-  - index: 0
-    brand: nvidia
-    model: "NVIDIA GeForce RTX 3080"
-    memory_mb: 10240
-    compute_capability: "8.6"
-    supports_dtypes: ["float32", "float16", "bfloat16"]
-    architecture: ampere
-    pcie_version: "4.0"
+- index: 0
+  brand: nvidia
+  model: NVIDIA GeForce RTX 3080
+  memory_mb: 10240
+  compute_capability: '8.6'
+  supports_dtypes:
+  - float32
+  - float16
+  - bfloat16
+  architecture: ampere
+  pcie_version: '4.0'
 interconnect:
-  groups:
-    - index: none
-      members: none
-      type: none
-      tech: none
-      bandwidth_gbps: none
+  groups: []
 pcie_fallback:
-  version: "4.0"               # Dominant PCIe version in system
-  lanes: 16                    # x16 slots
-  bandwidth_gbps: 64           # PCIe 4.0 x16 bidirectional
+  version: '4.0'
+  lanes: 16
+  bandwidth_gbps: 64
 notes: |
   NVIDIA RTX 3080 with 10GB GDDR6X memory.
   Full bfloat16 hardware support (Ampere architecture).
-  Second-gen RT cores, third-gen Tensor Cores.
   760 GB/s memory bandwidth. Popular consumer Ampere GPU.

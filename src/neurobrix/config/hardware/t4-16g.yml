@@ -1,38 +1,31 @@
 # Hardware Profile: NVIDIA T4 16GB
-# Created manually from GPU spec sheet
-# Purpose: Single T4 with 16GB memory
+# Single T4 with 16GB GDDR6 memory
 
 id: t4-16g
 vendor: nvidia
-preferred_dtype: "float16"  # T4 tensor cores: fp16 only, no bfloat16 support (Turing)
-
+preferred_dtype: float16
 summary:
   total_gpus: 1
   total_vram_gb: 16
-  topology: "single"
-
+  topology: Single-GPU
 devices:
-  - index: 0
-    brand: nvidia
-    model: "NVIDIA Tesla T4"
-    memory_mb: 16384
-    compute_capability: "7.5"
-    supports_dtypes: ["float32", "float16"]
-    architecture: turing
-    pcie_version: "3.0"
+- index: 0
+  brand: nvidia
+  model: NVIDIA Tesla T4
+  memory_mb: 16384
+  compute_capability: '7.5'
+  supports_dtypes:
+  - float32
+  - float16
+  architecture: turing
+  pcie_version: '3.0'
 interconnect:
-  groups:
-    - index: none
-      members: none
-      type: none
-      tech: none
-      bandwidth_gbps: none
+  groups: []
 pcie_fallback:
-  version: "3.0"               # Dominant PCIe version in system
-  lanes: 16                    # x16 slots
-  bandwidth_gbps: 32           # PCIe 3.0 x16 bidirectional
+  version: '3.0'
+  lanes: 16
+  bandwidth_gbps: 32
 notes: |
   NVIDIA T4 with 16GB GDDR6 memory.
   No bfloat16 hardware support (Turing architecture).
-  Turing Tensor Cores with FP16, INT8, INT4.
   320 GB/s memory bandwidth. 70W TDP low-power inference GPU.
