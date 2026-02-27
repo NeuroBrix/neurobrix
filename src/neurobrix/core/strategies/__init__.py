@@ -5,7 +5,7 @@ Strategy classes that handle component execution based on Prism allocation decis
 The executor delegates to these classes — NO placement decisions in executor.
 
 Strategy Hierarchy (granularity):
-  Single GPU  →  Pipeline (component-level)  →  FGP (block-level)  →  TP (tensor-level)
+  Single GPU → Component Placement → Pipeline Parallel (layer) → Block Scatter → Weight Sharding
 
 Every strategy listed here is a first-class citizen — NeuroBrix is universal
 and must handle any hardware combination. Prism scores ALL strategies and
@@ -13,24 +13,24 @@ selects the best viable one for the given hardware profile.
 
 Strategies:
 - SingleGPUStrategy: All components on one GPU
-- PipelineStrategy: Components distributed across GPUs (PP)
-- PipelineLazyStrategy: PP with lazy weight swap between phases
-- FGPStrategy: Block-level distribution across GPUs (FGP)
-- TensorParallelStrategy: Single component sharded across GPUs (TP)
+- ComponentPlacementStrategy: Whole components distributed across GPUs
+- ComponentPlacementLazyStrategy: Component placement with lazy weight swap
+- PipelineParallelStrategy: Per-layer sequential fill across GPUs (like Accelerate)
+- BlockScatterStrategy: Block-level best-fit distribution across GPUs
+- WeightShardingStrategy: Weight-file-level round-robin across GPUs
 - LazySequentialStrategy: One component at a time on largest GPU
 - Zero3Strategy: CPU offload with GPU compute streaming
 """
 
 from .base import ExecutionStrategy, StrategyContext
 from .single_gpu import SingleGPUStrategy
-from .pipeline import PipelineStrategy, PipelineLazyStrategy
-from .fgp import FGPStrategy, FGPNVLinkStrategy, FGPPCIeStrategy
-from .tensor_parallel import TensorParallelStrategy
+from .component_placement import ComponentPlacementStrategy, ComponentPlacementLazyStrategy
+from .pipeline_parallel import PipelineParallelStrategy
+from .block_scatter import BlockScatterStrategy
+from .weight_sharding import WeightShardingStrategy
 from .zero3 import Zero3Strategy
 
 # LazySequentialStrategy: load/unload components one at a time on the largest GPU.
-# The solver allows GPU over-commitment because peak = max(single component),
-# not sum(all components). Uses SingleGPU mechanics but with explicit unload.
 LazySequentialStrategy = SingleGPUStrategy
 
 
@@ -49,18 +49,18 @@ STRATEGY_REGISTRY = {
     "single_gpu": SingleGPUStrategy,
     "single_gpu_lifecycle": SingleGPUStrategy,
 
-    # === Pipeline Parallel (component-level distribution) ===
-    "pp_nvlink": PipelineStrategy,
-    "pp_pcie": PipelineStrategy,
-    "pp_lazy_nvlink": PipelineLazyStrategy,
-    "pp_lazy_pcie": PipelineLazyStrategy,
+    # === Component Placement (whole-component distribution) ===
+    "component_placement": ComponentPlacementStrategy,
+    "component_placement_lazy": ComponentPlacementLazyStrategy,
 
-    # === Fine-Grained Pipeline (block-level distribution) ===
-    "fgp_nvlink": FGPNVLinkStrategy,
-    "fgp_pcie": FGPPCIeStrategy,
+    # === Pipeline Parallel (per-layer sequential fill) ===
+    "pipeline_parallel": PipelineParallelStrategy,
 
-    # === Tensor Parallel (tensor-level sharding) ===
-    "tp": TensorParallelStrategy,
+    # === Block Scatter (block-level best-fit distribution) ===
+    "block_scatter": BlockScatterStrategy,
+
+    # === Weight Sharding (weight-file round-robin) ===
+    "weight_sharding": WeightShardingStrategy,
 
     # === Sequential / Offload ===
     "lazy_sequential": LazySequentialStrategy,
@@ -71,13 +71,6 @@ STRATEGY_REGISTRY = {
 def get_strategy(strategy_name: str, context: StrategyContext) -> ExecutionStrategy:
     """
     Get strategy instance based on Prism's decision.
-
-    Args:
-        strategy_name: Strategy name from Prism execution plan
-        context: Shared context with allocations, executors, etc.
-
-    Returns:
-        ExecutionStrategy instance
 
     ZERO FALLBACK: Crash if unknown strategy
     """
@@ -95,12 +88,11 @@ __all__ = [
     "ExecutionStrategy",
     "StrategyContext",
     "SingleGPUStrategy",
-    "PipelineStrategy",
-    "PipelineLazyStrategy",
-    "FGPStrategy",
-    "FGPNVLinkStrategy",
-    "FGPPCIeStrategy",
-    "TensorParallelStrategy",
+    "ComponentPlacementStrategy",
+    "ComponentPlacementLazyStrategy",
+    "PipelineParallelStrategy",
+    "BlockScatterStrategy",
+    "WeightShardingStrategy",
     "LazySequentialStrategy",
     "Zero3Strategy",
     "get_strategy",

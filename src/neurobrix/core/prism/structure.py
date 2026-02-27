@@ -60,10 +60,11 @@ class AllocationStrategy(Enum):
     citizen — NeuroBrix is universal and must handle any hardware combination.
 
     === Granularity Hierarchy ===
-    Single GPU  →  Pipeline (component-level)  →  FGP (block-level)  →  TP (tensor-level)
+    Single GPU → Component Placement → Pipeline Parallel (layer) → Block Scatter → Weight Sharding
 
-    === Interconnect Variants ===
-    Each multi-GPU strategy has NVLink (high-bandwidth P2P) and PCIe variants.
+    === Interconnect ===
+    Scoring uses bandwidth_gbps (continuous value), NOT technology name.
+    No _nvlink/_pcie suffixes — interconnect speed is a scoring factor, not a strategy variant.
 
     === Memory Modes ===
     Eager: weights stay in VRAM permanently (fast serving)
@@ -75,24 +76,28 @@ class AllocationStrategy(Enum):
     SINGLE_GPU = "single_gpu"                       # All components on 1 GPU
     SINGLE_GPU_LIFECYCLE = "single_gpu_lifecycle"   # Persistent + transient classification on 1 GPU
 
-    # === Pipeline Parallel — component-level distribution ===
-    # Each component executes on its assigned GPU. Activations transfer between GPUs.
-    PP_NVLINK = "pp_nvlink"                         # Component pipeline with NVLink transfers
-    PP_PCIE = "pp_pcie"                             # Component pipeline with PCIe transfers
-    PP_LAZY_NVLINK = "pp_lazy_nvlink"               # PP + lazy weight swap between phases, NVLink
-    PP_LAZY_PCIE = "pp_lazy_pcie"                   # PP + lazy weight swap between phases, PCIe
+    # === Component Placement — whole-component distribution ===
+    # Each component (text_encoder, transformer, vae) on its assigned GPU.
+    # Activations transfer between GPUs at component boundaries.
+    COMPONENT_PLACEMENT = "component_placement"
+    COMPONENT_PLACEMENT_LAZY = "component_placement_lazy"  # + lazy weight swap between phases
 
-    # === Fine-Grained Pipeline — block-level distribution ===
-    # Individual transformer blocks distributed across GPUs.
+    # === Pipeline Parallel — per-layer sequential fill ===
+    # Layers distributed sequentially across GPUs (like Accelerate device_map="auto").
+    # Layers 0..N on GPU0, N+1..M on GPU1, etc. Only N-1 boundary crossings for N GPUs.
+    # Needed when a component exceeds single GPU but layers are sequential.
+    PIPELINE_PARALLEL = "pipeline_parallel"
+
+    # === Block Scatter — block-level best-fit distribution ===
+    # Individual transformer blocks distributed across GPUs using best-fit-decreasing.
+    # Blocks can land on any GPU (not necessarily sequential).
     # Needed when a single component exceeds any single GPU's VRAM.
-    # Activations transfer via P2P (NVLink or PCIe) at block boundaries.
-    FGP_NVLINK = "fgp_nvlink"                       # Block-level pipeline, NVLink P2P
-    FGP_PCIE = "fgp_pcie"                           # Block-level pipeline, PCIe P2P
+    BLOCK_SCATTER = "block_scatter"
 
-    # === Tensor Parallel — tensor-level sharding ===
-    # Single component sharded across GPUs at weight level.
-    # Weight columns/rows distributed, all_reduce at sync points.
-    TP = "tp"
+    # === Weight Sharding — weight-file-level round-robin ===
+    # Single component's weight files distributed across GPUs.
+    # CompiledSequence handles cross-device execution with automatic device alignment.
+    WEIGHT_SHARDING = "weight_sharding"
 
     # === Sequential / Offload ===
     LAZY_SEQUENTIAL = "lazy_sequential"             # One component at a time on largest GPU
@@ -113,52 +118,50 @@ class AllocationStrategy(Enum):
         )
 
     @property
-    def is_nvlink(self) -> bool:
-        """True if strategy uses NVLink high-bandwidth interconnect."""
-        return "nvlink" in self.value
-
-    @property
     def granularity(self) -> str:
-        """Distribution granularity: 'single', 'component', 'block', 'tensor'."""
+        """Distribution granularity: 'single', 'component', 'layer', 'block', 'weight_file'."""
         if self in (AllocationStrategy.SINGLE_GPU, AllocationStrategy.SINGLE_GPU_LIFECYCLE,
                     AllocationStrategy.LAZY_SEQUENTIAL, AllocationStrategy.ZERO3):
             return "single"
-        if self in (AllocationStrategy.PP_NVLINK, AllocationStrategy.PP_PCIE,
-                    AllocationStrategy.PP_LAZY_NVLINK, AllocationStrategy.PP_LAZY_PCIE):
+        if self in (AllocationStrategy.COMPONENT_PLACEMENT,
+                    AllocationStrategy.COMPONENT_PLACEMENT_LAZY):
             return "component"
-        if self in (AllocationStrategy.FGP_NVLINK, AllocationStrategy.FGP_PCIE):
+        if self == AllocationStrategy.PIPELINE_PARALLEL:
+            return "layer"
+        if self == AllocationStrategy.BLOCK_SCATTER:
             return "block"
-        if self == AllocationStrategy.TP:
-            return "tensor"
+        if self == AllocationStrategy.WEIGHT_SHARDING:
+            return "weight_file"
         return "unknown"
 
-    def is_pipeline_parallel(self) -> bool:
-        """Check if this is a PP strategy (component-level distribution)."""
+    def is_component_placement(self) -> bool:
+        """Check if this is a component placement strategy."""
         return self in (
-            AllocationStrategy.PP_NVLINK,
-            AllocationStrategy.PP_PCIE,
-            AllocationStrategy.PP_LAZY_NVLINK,
-            AllocationStrategy.PP_LAZY_PCIE,
+            AllocationStrategy.COMPONENT_PLACEMENT,
+            AllocationStrategy.COMPONENT_PLACEMENT_LAZY,
         )
 
-    def is_fgp(self) -> bool:
-        """Check if this is an FGP strategy (block-level distribution)."""
-        return self in (AllocationStrategy.FGP_NVLINK, AllocationStrategy.FGP_PCIE)
+    def is_pipeline_parallel(self) -> bool:
+        """Check if this is a pipeline parallel strategy (per-layer sequential fill)."""
+        return self == AllocationStrategy.PIPELINE_PARALLEL
 
-    def is_tp(self) -> bool:
-        """Check if this is a TP strategy (tensor-level sharding)."""
-        return self == AllocationStrategy.TP
+    def is_block_scatter(self) -> bool:
+        """Check if this is a block scatter strategy."""
+        return self == AllocationStrategy.BLOCK_SCATTER
+
+    def is_weight_sharding(self) -> bool:
+        """Check if this is a weight sharding strategy."""
+        return self == AllocationStrategy.WEIGHT_SHARDING
 
 
 # Eager strategies: weights stay in VRAM permanently
 _EAGER_STRATEGIES = frozenset({
     AllocationStrategy.SINGLE_GPU,
     AllocationStrategy.SINGLE_GPU_LIFECYCLE,
-    AllocationStrategy.PP_NVLINK,
-    AllocationStrategy.PP_PCIE,
-    AllocationStrategy.FGP_NVLINK,
-    AllocationStrategy.FGP_PCIE,
-    AllocationStrategy.TP,
+    AllocationStrategy.COMPONENT_PLACEMENT,
+    AllocationStrategy.PIPELINE_PARALLEL,
+    AllocationStrategy.BLOCK_SCATTER,
+    AllocationStrategy.WEIGHT_SHARDING,
 })
 
 
@@ -390,13 +393,29 @@ class PrismProfile:
         return [d.get_device_string() for d in self.devices]
 
     def has_fast_interconnect(self) -> bool:
-        """Check if profile has any fast interconnect (NVLink, xGMI, etc.)."""
+        """Check if profile has fast interconnect (any technology exceeding PCIe bandwidth)."""
+        # Technology-agnostic: any group with bandwidth > PCIe 4.0 x16 (64 Gbps) is "fast"
+        FAST_THRESHOLD_GBPS = 64.0
         if self.topology.groups:
-            return any(
-                g.tech in (InterconnectTech.NVLINK, InterconnectTech.XGMI)
-                for g in self.topology.groups
-            )
+            return any(g.internal_bandwidth_gbps > FAST_THRESHOLD_GBPS for g in self.topology.groups)
         return False
+
+    def get_min_pairwise_bandwidth(self, device_indices: Optional[List[int]] = None) -> float:
+        """Get minimum bandwidth between any pair of devices (Gbps).
+
+        If device_indices is None, considers all devices.
+        Returns the bottleneck bandwidth — the slowest link in the set.
+        """
+        if device_indices is None:
+            device_indices = [d.index for d in self.devices]
+        if len(device_indices) <= 1:
+            return float('inf')
+        min_bw = float('inf')
+        for i in range(len(device_indices)):
+            for j in range(i + 1, len(device_indices)):
+                bw = self.topology.get_bandwidth(device_indices[i], device_indices[j])
+                min_bw = min(min_bw, bw)
+        return min_bw
 
 
 # =============================================================================

@@ -19,6 +19,8 @@ ZERO SEMANTIC: No model/family knowledge. Only tensor dtype math.
 import torch
 from typing import Callable, Optional, Dict, Any, FrozenSet
 
+from neurobrix.core.dtype.config import parse_dtype, strip_aten_prefix
+
 
 # Max representable value per dtype (for overflow clamping before downcast)
 _DTYPE_MAX = {
@@ -206,20 +208,6 @@ def _safe_downcast(tensor: torch.Tensor, target_dtype: torch.dtype) -> torch.Ten
     return tensor.to(target_dtype)
 
 
-# Dtype string to torch.dtype mapping
-# Supports both "torch.float32" (from attrs.kwargs) and "float32" (from output_dtypes)
-_DTYPE_MAP = {
-    "torch.float32": torch.float32, "float32": torch.float32,
-    "torch.float16": torch.float16, "float16": torch.float16,
-    "torch.bfloat16": torch.bfloat16, "bfloat16": torch.bfloat16,
-    "torch.float64": torch.float64, "float64": torch.float64,
-    "torch.int32": torch.int32, "int32": torch.int32,
-    "torch.int64": torch.int64, "int64": torch.int64,
-    "torch.int16": torch.int16, "int16": torch.int16,
-    "torch.int8": torch.int8, "int8": torch.int8,
-    "torch.uint8": torch.uint8, "uint8": torch.uint8,
-    "torch.bool": torch.bool, "bool": torch.bool,
-}
 
 
 class DtypeEngine:
@@ -257,7 +245,7 @@ class DtypeEngine:
         4. AMP Promote ops: promote to widest input dtype
         5. Everything else: pass through unchanged
         """
-        op_name = op_type[6:] if op_type.startswith("aten::") else op_type
+        op_name = strip_aten_prefix(op_type)
 
         # _to_copy always handled (required for dtype conversion)
         if op_type == "aten::_to_copy":
@@ -457,7 +445,7 @@ class DtypeEngine:
         """
         output_dtypes = attrs.get("output_dtypes", [])
         target_dtype_str = output_dtypes[0] if output_dtypes else None
-        target_dtype = _DTYPE_MAP.get(target_dtype_str) if target_dtype_str else None
+        target_dtype = parse_dtype(target_dtype_str) if target_dtype_str else None
 
         # Prism override: remap fp16/bf16 targets, NEVER fp32
         if target_dtype in (torch.float16, torch.bfloat16):
@@ -498,3 +486,91 @@ class DtypeEngine:
                 return inp.to(dtype)
             return inp
         return to_copy_passthrough
+
+    # ========================================================================
+    # RUNTIME AMP — for native/triton mode (per-call, not pre-compiled)
+    # ========================================================================
+
+    def amp_cast_inputs(self, op_type: str, args: list) -> list:
+        """
+        Apply AMP input casting for a single op call at runtime.
+
+        Used by native (--sequential) and triton (--triton) modes where ops
+        are dispatched dynamically rather than pre-compiled.
+
+        Returns new args list with AMP casting applied. Does NOT wrap the
+        function — just transforms inputs.
+        """
+        if self.compute_dtype not in (torch.float16, torch.bfloat16):
+            return args
+
+        op_name = strip_aten_prefix(op_type)
+
+        if op_name in AMP_FP32_OPS:
+            new_args = [
+                a.float().contiguous()
+                if isinstance(a, torch.Tensor) and a.is_floating_point()
+                and a.dtype != torch.float32
+                else (a.contiguous() if isinstance(a, torch.Tensor)
+                      and not a.is_contiguous() else a)
+                for a in args
+            ]
+            # _softmax/_log_softmax: disable half_to_float when input is now fp32
+            # Signature: _softmax(input, dim, half_to_float)
+            if op_name in ("_softmax", "_log_softmax") and len(new_args) >= 3:
+                new_args[2] = False
+            return new_args
+
+        if op_name in AMP_FP16_OPS:
+            return [
+                _safe_downcast(a, self.compute_dtype)
+                if isinstance(a, torch.Tensor) and a.is_floating_point()
+                and a.dtype != self.compute_dtype
+                else a
+                for a in args
+            ]
+
+        if op_name in AMP_PROMOTE_OPS:
+            max_size = 0
+            max_dtype = None
+            for a in args:
+                if isinstance(a, torch.Tensor) and a.is_floating_point():
+                    if a.element_size() > max_size:
+                        max_size = a.element_size()
+                        max_dtype = a.dtype
+            if max_dtype is not None and max_size > 2:
+                return [
+                    a.to(max_dtype)
+                    if isinstance(a, torch.Tensor) and a.is_floating_point()
+                    and a.dtype != max_dtype
+                    else a
+                    for a in args
+                ]
+
+        return args
+
+    def amp_cast_result(self, op_type: str, result: Any) -> Any:
+        """
+        Apply AMP output processing for a single op call at runtime.
+
+        Handles overflow protection for add/sub in fp16 and inf clamping
+        for fp16 matmul outputs.
+        """
+        if self.compute_dtype not in (torch.float16, torch.bfloat16):
+            return result
+
+        op_name = strip_aten_prefix(op_type)
+
+        # Overflow protection for fp16 add/sub (residual accumulation)
+        if op_name in AMP_OVERFLOW_PROTECT_OPS:
+            if isinstance(result, torch.Tensor) and result.dtype == torch.float16:
+                result = result.clamp(-65504.0, 65504.0)
+
+        # Inf clamping for fp16 matmul outputs
+        if op_name in AMP_FP16_OPS:
+            if (self.compute_dtype == torch.float16
+                    and isinstance(result, torch.Tensor)
+                    and result.dtype == torch.float16):
+                result = result.clamp(-65504.0, 65504.0)
+
+        return result

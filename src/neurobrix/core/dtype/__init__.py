@@ -25,6 +25,8 @@ from neurobrix.core.dtype.config import (
     get_torch_dtype,
     dtype_to_str,
     architecture_supports_dtype,
+    parse_dtype,
+    strip_aten_prefix,
 )
 
 # Converter - safe conversion functions
@@ -48,6 +50,8 @@ __all__ = [
     "get_torch_dtype",
     "dtype_to_str",
     "architecture_supports_dtype",
+    "parse_dtype",
+    "strip_aten_prefix",
     # Converter
     "safe_dtype_convert",
     "safe_dtype_convert_dict",

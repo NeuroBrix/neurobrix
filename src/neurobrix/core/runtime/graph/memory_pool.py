@@ -143,25 +143,9 @@ class LivenessAnalyzer:
 
     def _resolve_dtype(self, tdata: Dict[str, Any]) -> torch.dtype:
         """Resolve tensor dtype from metadata."""
+        from neurobrix.core.dtype.config import parse_dtype
         dtype_str = tdata.get("dtype", "float32")
-
-        dtype_map = {
-            "float32": torch.float32,
-            "float16": torch.float16,
-            "bfloat16": torch.bfloat16,
-            "int64": torch.int64,
-            "int32": torch.int32,
-            "int16": torch.int16,
-            "int8": torch.int8,
-            "bool": torch.bool,
-            "torch.float32": torch.float32,
-            "torch.float16": torch.float16,
-            "torch.bfloat16": torch.bfloat16,
-            "torch.int64": torch.int64,
-            "torch.int32": torch.int32,
-        }
-
-        return dtype_map.get(dtype_str, torch.float32)
+        return parse_dtype(dtype_str)
 
     def get_dead_tensors_at(self, op_idx: int) -> List[str]:
         """Get tensors that become dead (can be freed) after this op."""
