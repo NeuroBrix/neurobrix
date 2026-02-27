@@ -3,6 +3,8 @@ import torch.nn.functional as F
 import logging
 from typing import List, Any, Dict, Optional, Callable
 
+from neurobrix.core.dtype.config import parse_dtype
+
 logger = logging.getLogger(__name__)
 
 
@@ -36,27 +38,15 @@ class NativeATenDispatcher:
     Used to validate graph topology and weights when Triton kernels are suspect.
     """
 
-    # Dtype string to torch.dtype mapping (SOURCE OF TRUTH)
-    DTYPE_MAP = {
-        "torch.float32": torch.float32,
-        "torch.float16": torch.float16,
-        "torch.bfloat16": torch.bfloat16,
-        "torch.float64": torch.float64,
-        "torch.int32": torch.int32,
-        "torch.int64": torch.int64,
-        "torch.int16": torch.int16,
-        "torch.int8": torch.int8,
-        "torch.uint8": torch.uint8,
-        "torch.bool": torch.bool,
-        "torch.complex64": torch.complex64,
-        "torch.complex128": torch.complex128,
-    }
+    # No local DTYPE_MAP — uses neurobrix.core.dtype.config.parse_dtype()
 
-    def __init__(self, device: Optional[str] = None):
+    def __init__(self, device: Optional[str] = None, compute_dtype: Optional[torch.dtype] = None):
         # Cache for resolved operations
         self._op_cache = {}
         # Runtime device from Prism - overrides hardcoded graph devices
         self._runtime_device = device
+        # Prism compute dtype - remaps graph dtype (e.g., bf16→fp16 on V100)
+        self._compute_dtype = compute_dtype
 
     def _resolve_attr_value(self, attr_value: Any) -> Any:
         """
@@ -77,9 +67,9 @@ class NativeATenDispatcher:
         value = attr_value.get("value")
 
         if attr_type == "dtype":
-            # Resolve dtype string to torch.dtype
+            # Resolve dtype string to torch.dtype with Prism remap
             if isinstance(value, str):
-                return self.DTYPE_MAP.get(value, torch.float32)
+                return parse_dtype(value, compute_dtype=self._compute_dtype)
             return value
 
         elif attr_type == "device":
@@ -134,8 +124,8 @@ class NativeATenDispatcher:
                 elif value == "torch.sparse_coo":
                     return torch.sparse_coo
                 # Dtype strings
-                elif value in self.DTYPE_MAP:
-                    return self.DTYPE_MAP[value]
+                elif value.startswith("torch."):
+                    return parse_dtype(value)
             return value
 
         # Unknown type - return as-is
@@ -323,16 +313,6 @@ class NativeATenDispatcher:
                     if fixed:
                         inputs[1] = new_size
 
-        # [STABILITY LAYER] Prevent Inf/NaN in sensitive operations
-        if base_name == "rsqrt":
-            if isinstance(inputs[0], torch.Tensor):
-                # Clamp to avoid division by zero - use smaller epsilon for precision
-                inputs[0] = torch.clamp(inputs[0], min=1e-10)
-        elif base_name in ("div", "true_divide"):
-            # Check if divisor is a tensor and has near-zero values
-            if len(inputs) > 1 and isinstance(inputs[1], torch.Tensor):
-                pass
-
         try:
             # 2. Find the operator
             op_fn = self._resolve_op(base_name)
@@ -390,13 +370,7 @@ class NativeATenDispatcher:
                 result = op_fn(*inputs, **kwargs)
             else:
                 result = op_fn(*inputs)
-            
-            # [STABILITY LAYER] Handle NaN — inf values are handled by where/select ops in the graph
-            if isinstance(result, torch.Tensor) and result.is_floating_point():
-                # Only fill NaN with zeros (not inf - let where() handle it)
-                if torch.isnan(result).any():
-                    result = torch.nan_to_num(result, nan=0.0)
-            
+
             return result
 
         except Exception as e:

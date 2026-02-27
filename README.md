@@ -200,9 +200,10 @@ The **Prism solver** analyzes the model's memory footprint against your hardware
 |----------|-------------|
 | `single_gpu` | Model fits entirely in one GPU |
 | `single_gpu_lifecycle` | Components loaded/unloaded sequentially on one GPU |
-| `pp_nvlink` / `pp_pcie` | Pipeline parallelism across multiple GPUs |
-| `fgp_nvlink` / `fgp_pcie` | Fine-grained parallelism (MoE expert distribution) |
-| `tp` | Tensor parallelism |
+| `component_placement` | Whole components on different GPUs |
+| `pipeline_parallel` | Per-layer sequential fill across GPUs |
+| `block_scatter` | Block-level distribution across GPUs |
+| `weight_sharding` | Weight-file distribution across GPUs |
 | `lazy_sequential` | Stream components through limited VRAM |
 | `zero3` | CPU offload with GPU compute |
 

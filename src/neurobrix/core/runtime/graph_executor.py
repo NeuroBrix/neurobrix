@@ -609,9 +609,9 @@ class GraphExecutor:
         self._component_name = self._dag.get("component_name")
 
         # Extract graph dtype for DtypeEngine
-        graph_dtype_str = self._dag.get("torch_dtype", "").replace("torch.", "")
-        _gdtype_map = {"float16": torch.float16, "float32": torch.float32, "bfloat16": torch.bfloat16}
-        self._graph_dtype = _gdtype_map.get(graph_dtype_str)
+        from neurobrix.core.dtype.config import parse_dtype as _cfg_parse_dtype
+        graph_dtype_str = self._dag.get("torch_dtype", "")
+        self._graph_dtype = _cfg_parse_dtype(graph_dtype_str) if graph_dtype_str else None
 
         # DtypeEngine: single entry point for all dtype decisions
         from neurobrix.core.dtype.engine import DtypeEngine
@@ -624,6 +624,15 @@ class GraphExecutor:
 
         # Fix SDPA double-scaling from PyTorch's decomposition + pattern reassembly
         self._normalize_sdpa_scaling()
+
+        # MoE Fusion Pass: detect and fuse MoE expert subgraphs BEFORE any execution.
+        # CRITICAL: This runs for ALL modes (compiled, native, triton).
+        # Without fusion, MoE models use hardcoded trace-time routing indices → garbage output.
+        from .graph.moe_fusion import detect_and_fuse_moe
+        self._dag = detect_and_fuse_moe(
+            self._dag, self.family,
+            norm_topk_prob=getattr(self, '_moe_norm_topk_prob', True)
+        )
 
         # Pre-compile dispatch table for Triton mode
         # Only needed for Triton mode — native mode bypasses classification entirely
@@ -765,14 +774,7 @@ class GraphExecutor:
         NOTE: CompiledSequence is 100% AUTONOMOUS - no dependency on NativeATenDispatcher.
         All op resolution is handled by CompiledOpResolver internally.
         """
-        # MoE Fusion Pass: detect and fuse MoE expert subgraphs before compilation
-        from .graph.moe_fusion import detect_and_fuse_moe
-        assert self._dag is not None
-        self._dag = detect_and_fuse_moe(
-            self._dag, self.family,
-            norm_topk_prob=getattr(self, '_moe_norm_topk_prob', True)
-        )
-
+        # MoE fusion already applied in _init_from_dag() (runs for ALL modes).
         # Create and compile the CompiledSequence (100% autonomous)
         self._compiled_seq = CompiledSequence(
             dag=self._dag,
@@ -833,6 +835,9 @@ class GraphExecutor:
             else:
                 # Pass self.dtype (from Prism, embedded from hardware profile)
                 self._weights = loader.load_component(component, self.device, self.dtype)
+
+        # Weights changed — force rebind on next _execute_compiled_graph
+        self._weights_bound = False
 
         # Reload graph-embedded constants (RoPE cos/sin, inv_freq, etc.)
         # These are NOT in safetensors — they exist only in graph.json as base64 data.
@@ -1036,20 +1041,6 @@ class GraphExecutor:
         tensors = self._dag.get("tensors", {})
         const_count = 0
         computable_count = 0
-
-        # Dtype map for graph dtype strings
-        dtype_map = {
-            "float32": torch.float32,
-            "float16": torch.float16,
-            "bfloat16": torch.bfloat16,
-            "float64": torch.float64,
-            "int32": torch.int32,
-            "int64": torch.int64,
-            "int16": torch.int16,
-            "int8": torch.int8,
-            "uint8": torch.uint8,
-            "bool": torch.bool,
-        }
 
         for tid, tdata in tensors.items():
             # Check for computable buffers FIRST
@@ -1298,7 +1289,7 @@ class GraphExecutor:
         - GPU-Util: 60-80% → 90-95% (GPU stays busy)
 
         THIS IS THE ZERO-OVERHEAD HOT PATH:
-        1. Bind weights (once at load)
+        1. Bind weights (once at load — cached after first call)
         2. Bind inputs (per inference)
         3. Run compiled closures (zero overhead)
         4. Gather outputs
@@ -1308,27 +1299,23 @@ class GraphExecutor:
         if self._compiled_seq is None or self._interceptors_dirty:
             self._compile_execution_sequence()
             self._interceptors_dirty = False
+            self._weights_bound = False  # Force rebind after recompile
+
+        assert self._dag is not None
+        tensors = self._dag.get("tensors", {})
 
         # Reconcile weight key names with graph param names.
-        # Tracer and importer may produce different prefix hierarchies
-        # (e.g., model.language_model.X vs language_model.model.X).
-        # Suffix matching resolves this once at load time.
         self._reconcile_weight_keys()
 
         # Bind weights to arena slots (uses tensor IDs from DAG)
-        # Tensor IDs use prefixes: param::weight_name or buffer::buffer_name
-        # The _weights dict uses just the weight_name as key
         weight_map = {}
-        assert self._dag is not None
-        tensors = self._dag.get("tensors", {})
-        for tid, tdata in tensors.items():
-            # Check by tensor_id prefix (NeuroBrix convention)
+        for tid in tensors:
             if tid.startswith("param::"):
-                weight_name = tid[7:]  # Strip "param::"
+                weight_name = tid[7:]
                 if weight_name in self._weights:
                     weight_map[tid] = self._weights[weight_name]
             elif tid.startswith("buffer::"):
-                buffer_name = tid[8:]  # Strip "buffer::"
+                buffer_name = tid[8:]
                 if buffer_name in self._weights:
                     weight_map[tid] = self._weights[buffer_name]
 
@@ -1336,8 +1323,10 @@ class GraphExecutor:
         self._compiled_seq.bind_weights(weight_map)
 
         # FGP: Derive per-op device from weight tensor placement
-        # For single-device components, this is a no-op (sets _is_multi_device=False)
-        self._compiled_seq.compute_op_devices()
+        # Only run once — device layout is static after load_weights.
+        if not getattr(self, '_devices_computed', False):
+            self._compiled_seq.compute_op_devices()
+            self._devices_computed = True
 
         # Bind inputs to arena slots
         # Input tensor IDs use prefix: input::input_name
@@ -1621,8 +1610,15 @@ class GraphExecutor:
             metadata_attrs["_output_shape"] = output_shapes[0]
         metadata_attrs["_device"] = self.device
 
-        # Execute
-        result = execute_metadata_op(op_type, inputs, metadata_attrs)
+        # DtypeEngine intercept: _to_copy needs Prism override + complex protection
+        if op_type == "aten::_to_copy" and inputs:
+            to_copy_attrs = dict(attrs)
+            if "output_dtypes" in op_data:
+                to_copy_attrs["output_dtypes"] = op_data["output_dtypes"]
+            to_copy_fn = self._dtype_engine.compile_op(op_type, None, to_copy_attrs)
+            result = to_copy_fn(inputs[0])
+        else:
+            result = execute_metadata_op(op_type, inputs, metadata_attrs)
 
         # Store outputs
         self._store_op_outputs(op_uid, op_data, result)
@@ -1631,8 +1627,8 @@ class GraphExecutor:
         """
         Execute compute op via Kernel Adapter.
 
-        The adapter handles ALL ATen -> Kernel translation.
-        Executor is purely mechanical.
+        Uses DtypeEngine AMP rules for numerical stability before dispatching
+        to Triton kernels. The adapter handles ATen -> Kernel translation.
 
         Delegates to: kernels/adapter.py
         """
@@ -1646,6 +1642,9 @@ class GraphExecutor:
 
         # Normalize inputs (Contiguity + Device)
         inputs = self._resolver.normalize_inputs(inputs)
+
+        # AMP: Cast inputs per DtypeEngine rules (fp32 for pow/rsqrt/softmax, etc.)
+        inputs = self._dtype_engine.amp_cast_inputs(op_type, inputs)
 
         # Also normalize tensors in kwargs
         assert self._resolver is not None
@@ -1662,6 +1661,9 @@ class GraphExecutor:
         # Execute via KernelAdapter
         result = self._kernel_adapter.launch(op_type, inputs, full_attrs)
 
+        # AMP: Post-process result (overflow protection, inf clamping)
+        result = self._dtype_engine.amp_cast_result(op_type, result)
+
         # Store outputs
         self._store_op_outputs(op_uid, op_data, result)
 
@@ -1669,14 +1671,26 @@ class GraphExecutor:
         """
         Execute compute op via native PyTorch ATen kernels (bypass Triton).
 
-        Used in native mode for validation and debugging.
+        Uses DtypeEngine AMP rules for numerical stability (fp32 upcast for
+        pow/rsqrt/softmax, overflow protection for fp16 add/sub, etc.).
 
         Delegates to: core/runtime/sequential_dispatcher.py
         """
         from neurobrix.core.runtime.graph.sequential_dispatcher import NativeATenDispatcher
 
         if self._sequential_dispatcher is None:
-            self._sequential_dispatcher = NativeATenDispatcher(device=self.device)
+            self._sequential_dispatcher = NativeATenDispatcher(device=self.device, compute_dtype=self.dtype)
+
+        # FUSED MoE OP: Execute via custom handler (bypasses TensorResolver)
+        # Must be checked BEFORE resolve_args — fused op's args list contains 192+
+        # expert weight tensor IDs that the standard resolver can't handle.
+        if op_type == "custom::moe_fused":
+            result = self._execute_moe_fused_native(op_data)
+            self._store_op_outputs(op_uid, op_data, result)
+            # Defragment CUDA memory after MoE expert loop — the 64-expert iteration
+            # creates many small allocations that fragment the caching allocator.
+            torch.cuda.empty_cache()
+            return
 
         attrs = op_data.get("attributes", {})
         attrs = dict(attrs)  # Copy to avoid mutating source
@@ -1688,17 +1702,155 @@ class GraphExecutor:
         resolved_inputs = self._resolver.resolve_args(op_uid, attrs, op_type, op_data)
         normalized_inputs = self._resolver.normalize_inputs(resolved_inputs)
 
+        # AMP: Cast inputs per DtypeEngine rules (fp32 for pow/rsqrt/softmax, etc.)
+        normalized_inputs = self._dtype_engine.amp_cast_inputs(op_type, normalized_inputs)
+
         # Check for op interceptor (e.g., KV cache SDPA interceptor)
         if op_type in self._op_interceptors:
             # Resolve kwargs for interceptor
             resolved_kwargs = self._resolver.resolve_kwargs(op_uid, attrs, op_type, op_data)
             result = self._op_interceptors[op_type](*normalized_inputs, **resolved_kwargs)
+        elif op_type == "aten::_to_copy":
+            # DtypeEngine handles _to_copy with Prism override and complex protection
+            # Include output_dtypes from op_data (graph captures dtype conversions there)
+            to_copy_attrs = dict(attrs)
+            if "output_dtypes" in op_data:
+                to_copy_attrs["output_dtypes"] = op_data["output_dtypes"]
+            to_copy_fn = self._dtype_engine.compile_op(op_type, None, to_copy_attrs)
+            result = to_copy_fn(normalized_inputs[0]) if normalized_inputs else None
         else:
             # Execute via PyTorch native
             result = self._sequential_dispatcher.dispatch(op_type, normalized_inputs, attrs)
 
+        # AMP: Post-process result (overflow protection, inf clamping)
+        result = self._dtype_engine.amp_cast_result(op_type, result)
+
         # Store outputs
         self._store_op_outputs(op_uid, op_data, result)
+
+    def _execute_moe_fused_native(self, op_data: Dict[str, Any]) -> torch.Tensor:
+        """
+        Execute fused MoE op in native mode.
+
+        Same logic as compiled_sequence.py's moe_fused_dispatch, but reads
+        tensors from _ctx.tensor_store instead of arena slots.
+
+        The fused op replaces ~893 individual ops per MoE layer with dynamic
+        routing + expert FFN + scatter-add. Without this, native mode uses
+        hardcoded trace-time routing indices → garbage output.
+        """
+        import torch.nn.functional as F
+
+        assert self._ctx is not None
+        attrs = op_data.get("attributes", {})
+
+        gate_scores_tid = attrs["gate_scores_tid"]
+        hidden_states_tid = attrs["hidden_states_tid"]
+        gate_weight_ids = attrs["expert_gate_weight_ids"]
+        up_weight_ids = attrs["expert_up_weight_ids"]
+        down_weight_ids = attrs["expert_down_weight_ids"]
+        top_k = attrs["top_k"]
+        num_experts = attrs["num_experts"]
+        norm_topk_prob = attrs.get("norm_topk_prob", True)
+
+        # Read tensors from store (activations are already resolved by prior ops)
+        store = self._ctx.tensor_store
+        hidden_states = store.get(hidden_states_tid)
+        gate_scores = store.get(gate_scores_tid)
+
+        if hidden_states is None:
+            raise RuntimeError(
+                f"MoE fused native: hidden_states is None (tid={hidden_states_tid})"
+            )
+
+        # Pre-resolve all expert weight tensors into store (they may not have been
+        # resolved yet since the original ops that referenced them were removed by fusion)
+        tensors_meta = self._ctx.tensors_metadata
+        weights = self._ctx.weights
+        for wid_list in (gate_weight_ids, up_weight_ids, down_weight_ids):
+            for wid in wid_list:
+                if wid not in store:
+                    wname = tensors_meta.get(wid, {}).get("weight_name")
+                    if wname and wname in weights:
+                        store[wid] = weights[wname]
+
+        # Handle 3D tensors [batch, seq, dim] → flatten to 2D [batch*seq, dim]
+        orig_shape = hidden_states.shape
+        if hidden_states.dim() == 3:
+            hidden_states = hidden_states.reshape(-1, hidden_states.size(-1))
+        if gate_scores.dim() == 3:
+            gate_scores = gate_scores.reshape(-1, gate_scores.size(-1))
+
+        # Resolve weight dtype from first expert
+        w_dtype = store.get(gate_weight_ids[0]).dtype
+        if hidden_states.dtype != w_dtype:
+            hidden_states = hidden_states.to(w_dtype)
+
+        # ROUTING IN FP32 (same as compiled path)
+        gate_scores = gate_scores.float()
+        _compute_dev = hidden_states.device
+        if gate_scores.device != _compute_dev:
+            gate_scores = gate_scores.to(_compute_dev)
+
+        # Dynamic routing (replaces hardcoded topk+sort+bincount+slice)
+        scores, indices = gate_scores.topk(top_k, dim=-1)
+        if norm_topk_prob:
+            scores = scores / scores.sum(dim=-1, keepdim=True)
+
+        flat_indices = indices.flatten()
+        sorted_expert_ids, perm = flat_indices.sort()
+        token_ids = perm // top_k
+
+        counts = torch.bincount(sorted_expert_ids, minlength=num_experts)
+        boundaries = torch.cumsum(counts, dim=0)
+        boundaries_cpu = boundaries.tolist()
+
+        output = torch.zeros_like(hidden_states)
+        start = 0
+
+        for expert_id in range(num_experts):
+            end = boundaries_cpu[expert_id]
+            if start == end:
+                start = end
+                continue
+
+            expert_token_ids = token_ids[start:end]
+            expert_input = hidden_states[expert_token_ids]
+
+            # Load expert weights from tensor store
+            gate_w = store.get(gate_weight_ids[expert_id])
+            up_w = store.get(up_weight_ids[expert_id])
+            down_w = store.get(down_weight_ids[expert_id])
+
+            # Multi-device alignment
+            _dev = hidden_states.device
+            if gate_w.device != _dev:
+                gate_w = gate_w.to(_dev)
+            if up_w.device != _dev:
+                up_w = up_w.to(_dev)
+            if down_w.device != _dev:
+                down_w = down_w.to(_dev)
+            if expert_input.device != _dev:
+                expert_input = expert_input.to(_dev)
+            if expert_token_ids.device != _dev:
+                expert_token_ids = expert_token_ids.to(_dev)
+
+            # SwiGLU FFN
+            gate = F.silu(expert_input @ gate_w.t())
+            up = expert_input @ up_w.t()
+            expert_out = (gate * up) @ down_w.t()
+
+            # Weighted scatter-add
+            expert_scores = scores.flatten()[perm[start:end]].unsqueeze(-1).to(w_dtype)
+            output.index_add_(0, expert_token_ids, expert_out * expert_scores)
+
+            start = end
+
+        # Restore original shape if input was 3D
+        if len(orig_shape) == 3:
+            output = output.reshape(orig_shape)
+
+        return output
 
     def _store_op_outputs(
         self,
@@ -1980,6 +2132,7 @@ class GraphExecutor:
         MemoryManager.cleanup_context(self._ctx)
         MemoryManager.unload_weights(self._weights)
         self._weights_loaded = False
+        self._weights_bound = False
 
     def cleanup(self) -> None:
         """

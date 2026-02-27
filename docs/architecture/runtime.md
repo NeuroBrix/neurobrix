@@ -20,7 +20,7 @@ The runtime has **zero domain knowledge**. It does not know what an "image", "to
 | Mode | Flag | Implementation | Use Case |
 |------|------|----------------|----------|
 | **Compiled** | (default) | CompiledSequence + DtypeEngine AMP | Production (80-95% GPU utilization) |
-| **Native** | `--seq_aten` | Sequential ATen dispatcher | Debugging |
+| **Native** | `--sequential` | Sequential ATen dispatcher | Debugging |
 | **Triton** | `--triton` | Custom Triton kernels | R&D / benchmarking |
 
 ### Compiled Mode (Default)
@@ -51,16 +51,16 @@ Prism applies a scoring cascade — if the best strategy doesn't fit, it tries t
 ```
 single_gpu (1000)
   → single_gpu_lifecycle (900)
-    → pp_nvlink (800)
-      → tp (780)
-        → fgp_nvlink (750)
-          → pp_pcie (700)
-            → fgp_pcie (650)
-              → pp_lazy_nvlink (500)
-                → pp_lazy_pcie (400)
-                  → lazy_sequential (300)
-                    → zero3 (100)
+    → pipeline_parallel (850)
+      → component_placement (750)
+        → block_scatter (700)
+          → weight_sharding (680)
+            → component_placement_lazy (400)
+              → lazy_sequential (300)
+                → zero3 (100)
 ```
+
+Scores are bandwidth-adjusted: interconnect speed (Gbps) and boundary count affect the final score.
 
 ### Strategy Descriptions
 
@@ -68,10 +68,11 @@ single_gpu (1000)
 |----------|-------------|
 | `single_gpu` | All components on one GPU |
 | `single_gpu_lifecycle` | Components loaded/unloaded sequentially on one GPU |
-| `pp_nvlink` / `pp_pcie` | Pipeline parallelism across GPUs |
-| `fgp_nvlink` / `fgp_pcie` | Fine-grained parallelism for MoE models (expert distribution) |
-| `tp` | Tensor parallelism across GPUs |
-| `pp_lazy_nvlink` / `pp_lazy_pcie` | Pipeline parallelism with lazy weight loading |
+| `component_placement` | Whole components on different GPUs |
+| `pipeline_parallel` | Per-layer sequential fill across GPUs (like Accelerate) |
+| `block_scatter` | Block-level best-fit distribution across GPUs |
+| `weight_sharding` | Weight-file round-robin across GPUs |
+| `component_placement_lazy` | Component placement with lazy weight swap |
 | `lazy_sequential` | Stream components through limited VRAM |
 | `zero3` | CPU offload with GPU compute |
 
@@ -90,6 +91,8 @@ Hardware profile (supports_dtypes: ["float32", "float16"])
   → DtypeEngine applies AMP rules per operation
   → WeightLoader converts weights at load time
 ```
+
+**Single source of truth**: All dtype string parsing, torch.dtype conversion, and Prism bf16↔fp16 remapping lives in `core/dtype/config.py` (`parse_dtype()`, `DTYPE_MAP`). No runtime file has its own dtype mapping.
 
 ### Heterogeneous GPU Support
 

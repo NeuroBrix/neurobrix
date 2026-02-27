@@ -20,9 +20,19 @@ Based on:
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union, TYPE_CHECKING
+import os
 import torch
 
+from neurobrix.core.dtype.config import parse_dtype as _cfg_parse_dtype, DTYPE_MAP as _DTYPE_MAP
 from .compiled_ops import CompiledOpResolver
+
+# ============================================================================
+# DEBUG FLAGS — read once at import time, not per-step
+# ============================================================================
+_TRACE_NAN = os.environ.get("NBX_TRACE_NAN", "0") == "1"
+_NAN_GUARD = os.environ.get("NBX_NAN_GUARD", "0") == "1"
+_NAN_GUARD_VERBOSE = os.environ.get("NBX_NAN_GUARD_VERBOSE", "0") == "1"
+_TRACE_ZEROS = os.environ.get("NBX_TRACE_ZEROS", "0") == "1"
 
 
 # ============================================================================
@@ -181,6 +191,7 @@ class CompiledOp:
     output_slots: Tuple[int, ...]            # Support multi-output ops (split, chunk)
     kill_slots: Tuple[int, ...] = ()         # Slots to free after execution (Dead Tensor Analysis)
     weight_input_slots: Tuple[int, ...] = () # Weight/buffer slots consumed by this op (for FGP device derivation)
+    all_input_slots: Tuple[int, ...] = ()    # ALL input slots (weights + activations) for cross-device detection
     device: Optional[torch.device] = None     # torch.device derived from weight placement (set by compute_op_devices)
     needs_transfer: bool = False              # True only for ops at GPU boundary (set by compute_op_devices)
 
@@ -252,9 +263,8 @@ class CompiledSequence:
         self.dtype = dtype
 
         # Extract graph's traced dtype for AMP policy decision
-        graph_dtype_str = dag.get("torch_dtype", "").replace("torch.", "")
-        graph_dtype_map = {"float16": torch.float16, "float32": torch.float32, "bfloat16": torch.bfloat16}
-        graph_dtype = graph_dtype_map.get(graph_dtype_str)
+        graph_dtype_str = dag.get("torch_dtype", "")
+        graph_dtype = _cfg_parse_dtype(graph_dtype_str) if graph_dtype_str else None
 
         # 100% Autonomous op resolution - no sequential_dispatcher dependency
         self.op_resolver = CompiledOpResolver(device, dtype, graph_dtype=graph_dtype)
@@ -1171,9 +1181,10 @@ class CompiledSequence:
         args_resolver = self._make_args_resolver(compiled_args)
         kwargs_resolver = self._make_kwargs_resolver(compiled_kwargs)
 
-        # Extract weight input slots for FGP device derivation
+        # Extract input slots for device derivation and cross-device detection
+        all_input_slots = self._extract_input_slots_from_dag(op_data)
         weight_slots = []
-        for slot_idx in self._extract_input_slots_from_dag(op_data):
+        for slot_idx in all_input_slots:
             tid = self._slot_to_tensor_id.get(slot_idx)
             if tid and (tid.startswith("param::") or tid.startswith("buffer::")):
                 weight_slots.append(slot_idx)
@@ -1187,6 +1198,7 @@ class CompiledSequence:
             output_slots=tuple(output_slots),
             kill_slots=kill_slots,
             weight_input_slots=tuple(weight_slots),
+            all_input_slots=tuple(all_input_slots),
         )
 
     # ========================================================================
@@ -1391,6 +1403,9 @@ class CompiledSequence:
         def func_wrapper(arena: TensorArena) -> torch.Tensor:
             return moe_fused_dispatch(arena)
 
+        # All input slots: gate_scores + hidden_states + all expert weights
+        moe_all_input_slots = [_gate_scores_slot, _hidden_states_slot] + list(all_weight_slots)
+
         return CompiledOp(
             op_uid=op_uid,
             op_type="custom::moe_fused",
@@ -1400,6 +1415,7 @@ class CompiledSequence:
             output_slots=tuple(output_slots),
             kill_slots=kill_slots,
             weight_input_slots=tuple(all_weight_slots),
+            all_input_slots=tuple(moe_all_input_slots),
         )
 
     # ========================================================================
@@ -1703,39 +1719,12 @@ class CompiledSequence:
         return arg
 
     def _parse_dtype(self, dtype_str: str) -> torch.dtype:
-        """Parse dtype string to torch.dtype.
+        """Parse dtype string to torch.dtype with Prism remap.
 
-        Handles both formats:
-        - "float32" (bare name)
-        - "torch.float32" (with torch. prefix from graph.json)
-
-        Remaps bf16→runtime dtype when hardware doesn't support bf16
-        (e.g., V100 traces bf16 models but runs in fp16).
+        Delegates to neurobrix.core.dtype.config.parse_dtype (single source of truth).
+        Handles "torch." prefix and bf16↔fp16 remap automatically.
         """
-        # Strip "torch." prefix if present (graph.json stores as "torch.bool")
-        if dtype_str.startswith("torch."):
-            dtype_str = dtype_str[6:]  # Remove "torch." prefix
-
-        dtype_map = {
-            "float32": torch.float32,
-            "float16": torch.float16,
-            "bfloat16": torch.bfloat16,
-            "int64": torch.int64,
-            "int32": torch.int32,
-            "int16": torch.int16,
-            "int8": torch.int8,
-            "bool": torch.bool,
-            "uint8": torch.uint8,
-        }
-        parsed = dtype_map.get(dtype_str, torch.float32)
-
-        # Remap bf16 to runtime dtype when hardware doesn't support bf16.
-        # Factory ops (zeros, full, etc.) have traced bf16 dtype baked in.
-        # Without remapping, they create bf16 tensors on fp16 hardware → dtype mismatch.
-        if parsed == torch.bfloat16 and self.dtype == torch.float16:
-            return torch.float16
-
-        return parsed
+        return _cfg_parse_dtype(dtype_str, compute_dtype=self.dtype)
 
     def _parse_memory_format(self, fmt_str: Optional[str]) -> Any:
         """Parse memory format string to torch memory format."""
@@ -1776,9 +1765,6 @@ class CompiledSequence:
         # Do NOT allocate for regular weight slots that weren't provided — zero3
         # block-by-block execution provides partial weight sets intentionally.
         tensors_meta = self.dag.get("tensors", {})
-        dtype_map = {"float16": torch.float16, "float32": torch.float32,
-                      "bfloat16": torch.bfloat16, "int64": torch.int64,
-                      "int32": torch.int32, "bool": torch.bool}
         for tensor_id in self._weight_tensor_ids:
             slot = self._tensor_id_to_slot[tensor_id]
             if self._arena[slot] is not None:
@@ -1790,7 +1776,7 @@ class CompiledSequence:
             # will be skipped or fail explicitly (ZERO FALLBACK)
             if shape == [0] or "constant_" in tensor_id:
                 dtype_str = meta.get("dtype", "float32")
-                t_dtype = dtype_map.get(dtype_str, torch.float32)
+                t_dtype = _DTYPE_MAP.get(dtype_str, torch.float32)
                 self._arena[slot] = torch.empty(shape, dtype=t_dtype, device=self.device)
 
     def compute_op_devices(self) -> None:
@@ -1873,28 +1859,35 @@ class CompiledSequence:
             for s in op.output_slots:
                 slot_device[s] = target
 
-        # Phase 4: Mark the FIRST weighted op after each device transition.
-        # The real boundary is where the activation (non-weight input) crosses GPUs.
-        # We detect this by tracking the "current activation device" through execution order.
-        # NOTE: current_activation_device starts as None — the FIRST weighted op is always
-        # marked needs_transfer because runtime inputs may be on any device.
+        # Phase 4: Comprehensive cross-device detection using all_input_slots.
+        # Track which device each slot's tensor lives on, then mark ANY op
+        # (weighted or weightless) that has inputs from multiple devices.
+        # This catches residual connections that cross device boundaries.
         current_activation_device = None
         for op in self._ops:
             if op.device is not None:
                 if current_activation_device is None:
-                    # First weighted op: inputs may be on any device, mark for alignment
                     op.needs_transfer = True
                 elif op.device != current_activation_device:
                     op.needs_transfer = True
                 current_activation_device = op.device
-                # Update output slots
-                for s in op.output_slots:
-                    slot_device[s] = op.device
             else:
-                # Weightless op: outputs stay on current activation device
-                if current_activation_device is not None:
-                    for s in op.output_slots:
-                        slot_device[s] = current_activation_device
+                # Weightless op: inherit current activation device
+                op.device = current_activation_device
+
+            # Check ALL input slots for cross-device inputs (catches residuals)
+            if op.all_input_slots and current_activation_device is not None:
+                for s in op.all_input_slots:
+                    src_dev = slot_device.get(s)
+                    if src_dev is not None and src_dev != current_activation_device:
+                        op.needs_transfer = True
+                        break
+
+            # Record output device for downstream ops
+            out_dev = op.device or current_activation_device
+            if out_dev is not None:
+                for s in op.output_slots:
+                    slot_device[s] = out_dev
 
     def bind_inputs(self, inputs: Dict[str, torch.Tensor]) -> None:
         """Bind input tensors to arena slots."""
@@ -1954,15 +1947,10 @@ class CompiledSequence:
 
     def _run_inner(self, arena, debug: bool = False) -> None:
         """Inner loop extracted for inference_mode wrapping."""
-        import os
-        trace_nan = os.environ.get("NBX_TRACE_NAN", "0") == "1"
-        # NaN-guard is OFF by default (engine.py inf-fix handles matmul overflow)
-        # Enable with NBX_NAN_GUARD=1 for debugging (expensive: 2.5x slower)
-        nan_guard = os.environ.get("NBX_NAN_GUARD", "0") == "1"
-        # Verbose NaN-guard logging (silent by default)
-        nan_guard_verbose = os.environ.get("NBX_NAN_GUARD_VERBOSE", "0") == "1"
-        # One-time zero-trace: find first op that produces all-zero from non-zero input
-        trace_zeros = os.environ.get("NBX_TRACE_ZEROS", "0") == "1"
+        trace_nan = _TRACE_NAN
+        nan_guard = _NAN_GUARD
+        nan_guard_verbose = _NAN_GUARD_VERBOSE
+        trace_zeros = _TRACE_ZEROS
 
         if self._is_multi_device:
             self._run_inner_multi_device(arena, debug)
@@ -2257,7 +2245,7 @@ class CompiledSequence:
             print(f"  Total NaN values replaced: {total_nans}")
             print(f"{'='*60}")
 
-    def _run_inner_multi_device(self, arena, _debug: bool = False) -> None:
+    def _run_inner_multi_device(self, arena, _debug: bool = False) -> None:  # noqa: ARG002
         """
         FGP multi-device hot loop with cross-device activation transfer.
 
@@ -2291,31 +2279,6 @@ class CompiledSequence:
                 if op.device is not None and op.device.type == "cuda" and op.device.index != _current_device_idx:
                     torch.cuda.set_device(op.device)
                     _current_device_idx = op.device.index
-
-                # Light device check: move misaligned tensor args (handles FGP cross-device ops)
-                # Target = op.device (from weights) or first CUDA tensor arg
-                # Rule: CUDA always wins over CPU — compute happens on GPU
-                _target = op.device
-                if _target is not None and _target.type == "cpu":
-                    # Weight on CPU (zero3 sub-component) — find CUDA arg for compute
-                    for a in args:
-                        if isinstance(a, torch.Tensor) and a.device.type == "cuda":
-                            _target = a.device
-                            break
-                elif _target is None:
-                    for a in args:
-                        if isinstance(a, torch.Tensor) and a.device.type == "cuda":
-                            _target = a.device
-                            break
-                if _target is not None:
-                    for _i, a in enumerate(args):
-                        if isinstance(a, torch.Tensor) and a.device != _target:
-                            args = list(args)
-                            args[_i] = a.to(_target)
-                            for _j in range(_i + 1, len(args)):
-                                if isinstance(args[_j], torch.Tensor) and args[_j].device != _target:
-                                    args[_j] = args[_j].to(_target)
-                            break
 
                 try:
                     result = op.func(*args, **kwargs)
@@ -2370,28 +2333,21 @@ class CompiledSequence:
                             if target is not None:
                                 break
 
-                needs_sync = False
-                source_devices = set()
                 if target is not None:
                     new_args = []
                     for a in args:
                         if isinstance(a, torch.Tensor) and a.device != target:
-                            source_devices.add(a.device)
                             new_args.append(a.to(target))
-                            needs_sync = True
                         elif isinstance(a, (list, tuple)):
                             moved = []
                             any_moved = False
                             for item in a:
                                 if isinstance(item, torch.Tensor) and item.device != target:
-                                    source_devices.add(item.device)
                                     moved.append(item.to(target))
                                     any_moved = True
                                 else:
                                     moved.append(item)
                             new_args.append(type(a)(moved) if any_moved else a)
-                            if any_moved:
-                                needs_sync = True
                         else:
                             new_args.append(a)
                     args = new_args
@@ -2399,9 +2355,7 @@ class CompiledSequence:
                         new_kwargs = {}
                         for k, v in kwargs.items():
                             if isinstance(v, torch.Tensor) and v.device != target:
-                                source_devices.add(v.device)
                                 new_kwargs[k] = v.to(target)
-                                needs_sync = True
                             else:
                                 new_kwargs[k] = v
                         kwargs = new_kwargs
@@ -2409,15 +2363,6 @@ class CompiledSequence:
                 if target is not None and target.type == "cuda" and target.index != _current_device_idx:
                     torch.cuda.set_device(target)
                     _current_device_idx = target.index
-
-                # CUDA event sync for cross-device transfers
-                if needs_sync and source_devices and target is not None and target.type == "cuda":
-                    target_stream = torch.cuda.current_stream(target)
-                    for src_dev in source_devices:
-                        if src_dev.type == "cuda":
-                            event = torch.cuda.Event()
-                            event.record(torch.cuda.current_stream(src_dev))
-                            target_stream.wait_event(event)  # type: ignore[arg-type]
 
                 try:
                     result = op.func(*args, **kwargs)

@@ -420,10 +420,14 @@ class PrismSolver:
         Solve optimal allocation with Best-Fit-Decreasing.
 
         Strategies tried in order:
-        1. single_gpu - All on largest GPU (lazy loading)
-        2. pp_nvlink/pp_pcie - Pipeline parallel
-        3. fgp_nvlink/fgp_pcie - Fine-grained pipeline (block sharding)
-        4. tp - Tensor parallel
+        1. single_gpu - All on largest GPU
+        2. component_placement - Whole components on different GPUs
+        3. pipeline_parallel - Per-layer sequential fill (like Accelerate)
+        4. block_scatter - Block-level best-fit distribution
+        5. weight_sharding - Weight-file round-robin
+        6. component_placement_lazy - Component placement with lazy swap
+        7. lazy_sequential - One component at a time
+        8. zero3 - CPU offload
         """
         self._serve_mode = serve_mode
 
@@ -473,10 +477,11 @@ class PrismSolver:
         strategies = [
             ("single_gpu", self._try_single_gpu),
             ("single_gpu_lifecycle", self._try_single_gpu_lifecycle),
-            ("pp_nvlink" if profile.has_fast_interconnect() else "pp_pcie", self._try_pipeline),
-            ("fgp_nvlink" if profile.has_fast_interconnect() else "fgp_pcie", self._try_fgp),
-            ("tp", self._try_tp),
-            ("pp_lazy_nvlink" if profile.has_fast_interconnect() else "pp_lazy_pcie", self._try_pp_lazy),
+            ("component_placement", self._try_component_placement),
+            ("pipeline_parallel", self._try_pipeline_parallel),
+            ("block_scatter", self._try_block_scatter),
+            ("weight_sharding", self._try_weight_sharding),
+            ("component_placement_lazy", self._try_component_placement_lazy),
             ("lazy_sequential", self._try_lazy_sequential),
             ("zero3", self._try_zero3),
         ]
@@ -526,7 +531,7 @@ class PrismSolver:
                 else:
                     total_capacity = sum(int(d.capacity_mb * 1024 * 1024) for d in strat_devices)
 
-                if "zero3" in strat_name:
+                if strat_name == "zero3":
                     total_allocated = sum(m.activation_bytes + m.overhead_bytes
                                          for m in component_memory.values())
                 elif strat_name == "single_gpu_lifecycle":
@@ -983,10 +988,10 @@ class PrismSolver:
 
         return allocations, fresh
 
-    def _try_pipeline(
+    def _try_component_placement(
         self, sorted_comps, comp_mem, devices, shard_sizes, profile, container
     ) -> Optional[Tuple[Dict, List[DeviceState]]]:
-        """Distribute components across GPUs (pipeline parallel)."""
+        """Distribute whole components across GPUs."""
         if len(devices) < 2:
             return None
 
@@ -1022,10 +1027,10 @@ class PrismSolver:
 
         return allocations, fresh
 
-    def _try_fgp(
+    def _try_block_scatter(
         self, sorted_comps, comp_mem, devices, shard_sizes, profile, container
     ) -> Optional[Tuple[Dict, List[DeviceState]]]:
-        """Fine-grained pipeline: spread transformer blocks across GPUs."""
+        """Block scatter: spread transformer blocks across GPUs using best-fit-decreasing."""
         if len(devices) < 2:
             return None
 
@@ -1120,18 +1125,121 @@ class PrismSolver:
 
         return allocations, fresh
 
-    def _try_tp(
+    def _try_pipeline_parallel(
         self, sorted_comps, comp_mem, devices, shard_sizes, profile, container
     ) -> Optional[Tuple[Dict, List[DeviceState]]]:
-        """Tensor parallel: shard weights across GPUs.
+        """Pipeline parallel: per-layer sequential fill across GPUs.
 
-        TP distributes weight columns/rows across GPUs. No DAG rewrite needed:
-        - Prism generates tp_shard_plan (which weight slices go where)
-        - WeightLoader loads slices directly to assigned GPUs
-        - CompiledSequence handles multi-device execution with all_reduce at sync points
-        - Graph metadata (shapes, parent_module) provides all info for sharding
+        Like Accelerate device_map="auto": layers 0..N on GPU0, N+1..M on GPU1, etc.
+        Only N-1 boundary crossings for N GPUs. Greedy sequential fill — each layer
+        goes to the current GPU until it's full, then moves to the next.
 
-        Weight files distributed via shard_map across TP GPUs.
+        This is the optimal strategy for large LLMs across multiple GPUs with
+        fast interconnect, producing minimal cross-device transfers.
+        """
+        if len(devices) < 2:
+            return None
+
+        # Find components that need splitting (too large for single GPU)
+        capacity_threshold = devices[0].capacity_mb * 0.80
+        needs_split = [(n, m) for n, m in sorted_comps if m.weight_mb + m.activation_mb > capacity_threshold]
+
+        if not needs_split:
+            return None
+
+        fgp_target = PRISM_DEFAULTS.get("fgp_utilization_target", 0.92)
+        fresh = [
+            DeviceState(
+                device_string=d.device_string,
+                capacity_mb=d.capacity_mb * fgp_target,
+                used_mb=0.0, components=[], spec=d.spec
+            )
+            for d in devices
+        ]
+
+        allocations = {}
+        current_dev_idx = 0
+
+        for comp_name, mem in needs_split:
+            blocks = self._parse_blocks(container, comp_name)
+            if not blocks['blocks']:
+                return None
+
+            model_dtype = None
+            for comp in container.get_neural_components():
+                if comp.name == comp_name:
+                    model_dtype = comp.get_dominant_dtype()
+                    break
+            model_dtype = model_dtype or "bfloat16"
+
+            n_blocks = len(blocks['blocks'])
+            act_per_block = mem.activation_mb / n_blocks
+
+            shard_map = {}
+
+            # Allocate non-block weights on current device
+            if blocks['non_block_mb'] > 0:
+                while current_dev_idx < len(fresh):
+                    dev = fresh[current_dev_idx]
+                    real_size = dev.get_real_block_size(blocks['non_block_mb'], model_dtype) * 1.05
+                    if dev.can_fit(real_size):
+                        dev.used_mb += real_size
+                        dev.components.append(f"{comp_name}.non_block")
+                        for key in blocks['non_block_keys']:
+                            shard_map[key] = dev.device_string
+                        break
+                    current_dev_idx += 1
+                if current_dev_idx >= len(fresh):
+                    return None
+
+            # SEQUENTIAL FILL: layers go to current GPU until full, then next GPU
+            for block_num in sorted(blocks['blocks'].keys()):
+                block_keys = blocks['blocks'][block_num]
+                base_block = blocks['block_sizes'][block_num]
+                real_block = fresh[0].get_real_block_size(base_block, model_dtype)
+                total_block = (real_block + act_per_block) * 1.05
+
+                # Try current GPU first (sequential fill)
+                while current_dev_idx < len(fresh):
+                    dev = fresh[current_dev_idx]
+                    if dev.can_fit(total_block):
+                        dev.used_mb += total_block
+                        dev.components.append(f"{comp_name}.block.{block_num}")
+                        for key in block_keys:
+                            shard_map[key] = dev.device_string
+                        break
+                    # Current GPU full — move to next
+                    current_dev_idx += 1
+                else:
+                    # No GPU can fit this block
+                    return None
+
+            devices_used = set(shard_map.values())
+            allocations[comp_name] = (f"fgp:{','.join(sorted(devices_used))}", shard_map)
+
+        # Allocate regular components on remaining capacity
+        regular = sorted(
+            [(n, m) for n, m in sorted_comps if n not in allocations],
+            key=lambda x: x[1].weight_mb + x[1].activation_mb
+        )
+
+        for comp_name, mem in regular:
+            required = mem.weight_mb + mem.activation_mb
+            target = next((d for d in fresh if d.can_fit(required)), None)
+            if target is None:
+                return None
+            target.allocate(comp_name, required)
+            shard_map = {s: target.device_string for s in shard_sizes.get(comp_name, {})}
+            allocations[comp_name] = (target.device_string, shard_map)
+
+        return allocations, fresh
+
+    def _try_weight_sharding(
+        self, sorted_comps, comp_mem, devices, shard_sizes, profile, container
+    ) -> Optional[Tuple[Dict, List[DeviceState]]]:
+        """Weight sharding: distribute weight files across GPUs (round-robin).
+
+        Weight files distributed via shard_map across GPUs.
         CompiledSequence multi-device path handles cross-device execution
         with automatic device alignment at op boundaries.
         """
@@ -1461,17 +1569,20 @@ class PrismSolver:
 
         Factors:
         - Base score by strategy type (single_gpu best, zero3 worst)
-        - Transfer penalty weighted by interconnect bandwidth
+        - Transfer penalty weighted by interconnect bandwidth (Gbps value, not technology)
+        - Boundary count penalty (fewer boundaries = better)
+        - Topology completeness (partial interconnection = lower score)
         - Lazy loading overhead penalty
         - CPU streaming penalty for zero3
         """
         BASE_SCORES = {
             "single_gpu": 1000,
             "single_gpu_lifecycle": 900,
-            "pp_nvlink": 800, "pp_pcie": 700,
-            "fgp_nvlink": 750, "fgp_pcie": 650,
-            "tp": 780,
-            "pp_lazy_nvlink": 500, "pp_lazy_pcie": 400,
+            "component_placement": 750,
+            "pipeline_parallel": 850,       # Best multi-GPU: fewest boundaries
+            "block_scatter": 700,
+            "weight_sharding": 680,         # Many cross-device copies per op
+            "component_placement_lazy": 400,
             "lazy_sequential": 300,
             "zero3": 100,
         }
@@ -1481,23 +1592,53 @@ class PrismSolver:
         device_strings = set()
         for alloc in allocations.values():
             dev_str = alloc[0] if isinstance(alloc, tuple) else alloc
-            # Strip zero3: prefix
-            if dev_str.startswith("zero3:"):
-                dev_str = dev_str[6:]
-            if dev_str.startswith("cuda:"):
-                device_strings.add(dev_str)
+            for prefix in ("zero3:", "fgp:", "tp:"):
+                if dev_str.startswith(prefix):
+                    dev_str = dev_str[len(prefix):]
+                    break
+            for d in dev_str.split(","):
+                d = d.strip()
+                if d.startswith("cuda:") or d.startswith("hip:") or d.startswith("xpu:"):
+                    device_strings.add(d)
 
         n_devices = len(device_strings)
 
-        # Transfer penalty: each cross-device hop costs, weighted by bandwidth
+        # Bandwidth-weighted transfer penalty
         if n_devices > 1 and profile.topology:
-            topology = profile.topology
             device_indices = sorted(int(d.split(':')[-1]) for d in device_strings)
-            for i in range(len(device_indices) - 1):
-                bw = topology.get_bandwidth(device_indices[i], device_indices[i + 1])
-                # NVLink ~300 Gbps -> small penalty; PCIe ~32 Gbps -> big penalty
-                transfer_penalty = 50.0 * (32.0 / max(bw, 1.0))
-                score -= transfer_penalty
+
+            # Get minimum pairwise bandwidth (bottleneck)
+            min_bw = profile.get_min_pairwise_bandwidth(device_indices)
+
+            # Topology completeness: if not all devices are interconnected via fast link,
+            # strategies needing all GPUs should be penalized
+            all_connected = profile.topology.devices_have_fast_interconnect(device_indices)
+
+            # Boundary count estimation by strategy type
+            if strategy_name == "pipeline_parallel":
+                # PP per-layer: only N-1 boundaries for N GPUs (sequential fill)
+                n_boundaries = n_devices - 1
+            elif strategy_name == "component_placement":
+                # Component placement: ~n_components boundaries
+                n_boundaries = len(allocations)
+            elif strategy_name == "block_scatter":
+                # Block scatter: many boundaries (blocks scattered across GPUs)
+                # Estimate: each block boundary is a potential cross-device transfer
+                n_boundaries = n_devices * 5  # Rough estimate
+            elif strategy_name == "weight_sharding":
+                # Weight sharding: many cross-device copies per forward pass
+                n_boundaries = n_devices * 20  # Very high penalty
+            else:
+                n_boundaries = n_devices
+
+            # Transfer penalty: inversely proportional to bandwidth
+            # Reference: PCIe 4.0 x16 = 32 Gbps, NVLink 3.0 = 300 Gbps
+            transfer_penalty = n_boundaries * 15.0 * (32.0 / max(min_bw, 1.0))
+            score -= transfer_penalty
+
+            # Partial topology penalty: if not all devices interconnected, penalize heavily
+            if not all_connected:
+                score -= 200.0
 
         # Lazy loading penalty: each component load/unload adds latency
         if "lazy" in strategy_name:
@@ -1505,20 +1646,21 @@ class PrismSolver:
             score -= 20.0 * n_components
 
         # Zero3: CPU->GPU streaming is always slowest
-        if "zero3" in strategy_name:
+        if strategy_name == "zero3":
             score -= 200.0
 
         return max(score, 1.0)
 
     # =========================================================================
-    # NEW STRATEGIES: PP_LAZY, ZERO3
+    # LAZY / OFFLOAD STRATEGIES
     # =========================================================================
 
-    def _try_pp_lazy(
+    def _try_component_placement_lazy(
         self, sorted_comps, comp_mem, devices, shard_sizes, profile, container
     ) -> Optional[Tuple[Dict, List[DeviceState]]]:
         """
-        Pipeline-Lazy hybrid: distribute component GROUPS across N GPUs.
+        Component placement with lazy weight swap between phases.
+        Distribute component GROUPS across N GPUs.
         Each GPU lazily loads/unloads its assigned components.
         Peak per GPU = max(component in group), not sum(all in group).
         """
@@ -1830,10 +1972,11 @@ class PrismSolver:
 
             if device_str.startswith("fgp:"):
                 device_list = device_str[4:].split(",")
-                comp_strategy = "fgp_nvlink" if profile.has_fast_interconnect() else "fgp_pcie"
+                # fgp: prefix is used by both pipeline_parallel and block_scatter
+                comp_strategy = strategy if strategy in ("pipeline_parallel", "block_scatter") else "block_scatter"
             elif device_str.startswith("tp:"):
                 device_list = device_str[3:].split(",")
-                comp_strategy = "tp"
+                comp_strategy = "weight_sharding"
             elif device_str.startswith("zero3:"):
                 # CPU offload with GPU compute — device is the GPU, weights on CPU
                 gpu_device = device_str[6:]
@@ -1902,7 +2045,7 @@ class PrismSolver:
         dev_info = "\n".join(f"  {d.device_string}: {d.capacity_mb:.0f}MB" for d in devices)
         raise RuntimeError(
             f"ZERO FALLBACK: No strategy can fit this model.\n\n"
-            f"Strategies tried: single_gpu, pipeline, fgp, tp - ALL FAILED\n\n"
+            f"Strategies tried: single_gpu, component_placement, pipeline_parallel, block_scatter, weight_sharding - ALL FAILED\n\n"
             f"Components:\n{comp_info}\n\n"
             f"Total required: {total_req:.0f}MB\n\n"
             f"GPUs:\n{dev_info}\n\n"

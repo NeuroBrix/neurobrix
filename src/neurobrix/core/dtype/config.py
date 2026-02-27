@@ -11,7 +11,7 @@ ZERO HARDCODE: All dtype-related constants defined here.
 """
 
 import torch
-from typing import Dict
+from typing import Dict, Optional
 
 
 # ============================================================================
@@ -77,6 +77,57 @@ def get_torch_dtype(dtype_str: str) -> torch.dtype:
         torch.dtype (defaults to float32 if unknown)
     """
     return DTYPE_MAP.get(dtype_str, torch.float32)
+
+
+def parse_dtype(dtype_str: str, compute_dtype: Optional[torch.dtype] = None) -> torch.dtype:
+    """
+    Parse dtype string to torch.dtype with optional Prism remap.
+
+    Handles both "float16" and "torch.float16" formats.
+    When compute_dtype is provided, remaps half-precision dtypes:
+    bf16→fp16 when Prism wants fp16 (and vice versa).
+
+    This is the SINGLE implementation of dtype parsing + Prism remap.
+    All runtime code must use this instead of inline dicts or ad-hoc remaps.
+
+    Args:
+        dtype_str: Dtype string ("float16", "torch.float16", etc.)
+        compute_dtype: Prism compute dtype for half-precision remap (optional)
+
+    Returns:
+        Resolved torch.dtype
+    """
+    # Strip "torch." prefix
+    clean = dtype_str[6:] if dtype_str.startswith("torch.") else dtype_str
+    parsed = DTYPE_MAP.get(clean, torch.float32)
+
+    # Prism remap: bf16↔fp16 when hardware wants a different half-precision
+    if compute_dtype is not None:
+        if parsed == torch.bfloat16 and compute_dtype == torch.float16:
+            return torch.float16
+        if parsed == torch.float16 and compute_dtype == torch.bfloat16:
+            return torch.bfloat16
+
+    return parsed
+
+
+def strip_aten_prefix(op_type: str) -> str:
+    """
+    Strip 'aten::' prefix and variant suffix from op_type string.
+
+    "aten::_softmax" → "_softmax"
+    "aten::mm"       → "mm"
+    "custom::rms_norm" → "rms_norm"
+
+    SINGLE implementation — all runtime code must use this.
+    """
+    # Strip namespace prefix (aten::, custom::, etc.)
+    if "::" in op_type:
+        op_name = op_type.split("::", 1)[1]
+    else:
+        op_name = op_type
+    # Strip variant suffix (.default, .int, etc.)
+    return op_name.split(".")[0]
 
 
 def dtype_to_str(dtype: torch.dtype) -> str:

@@ -209,9 +209,17 @@ def _fuse_one_moe_layer(
         liveness_args.append({"type": "tensor", "tensor_id": expert_weight_ids["up"][i]})
         liveness_args.append({"type": "tensor", "tensor_id": expert_weight_ids["down"][i]})
 
+    # input_tensor_ids for native mode liveness tracking (_compute_last_use scans this)
+    all_input_tids = [hidden_states_tid, gate_scores_tid]
+    for i in range(num_experts):
+        all_input_tids.append(expert_weight_ids["gate"][i])
+        all_input_tids.append(expert_weight_ids["up"][i])
+        all_input_tids.append(expert_weight_ids["down"][i])
+
     fused_op = {
         "op_type": "custom::moe_fused",
         "output_tensor_ids": [last_scatter_tid],
+        "input_tensor_ids": all_input_tids,
         "output_shapes": tensors.get(last_scatter_tid, {}).get("shape", []),
         "attributes": {
             "args": liveness_args,

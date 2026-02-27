@@ -16,6 +16,8 @@ ZERO FALLBACK: Missing tensors raise explicit errors.
 import torch
 from typing import Dict, List, Any, Optional, TYPE_CHECKING
 
+from neurobrix.core.dtype.config import parse_dtype as _parse_dtype
+
 if TYPE_CHECKING:
     from .execution_context import ExecutionContext
 
@@ -172,16 +174,29 @@ class TensorResolver:
         if needs_cache_update:
             self._ctx.tensor_store[tensor_id] = tensor
 
-        # 3. Convert to graph-specified dtype (TEMPORARY - not cached)
-        # Weights stay fp32 in memory, converted to fp16 only for this op
+        # 3. Dtype alignment
+        # Prism compute_dtype (e.g., fp16) overrides graph dtype (e.g., bf16).
+        # Convert fp32 weights down to compute_dtype, but NEVER convert compute_dtype
+        # tensors to a different half-precision format (bf16→fp16 or vice versa).
         if tensor.is_floating_point():
-            tensor_info = self._ctx.tensors_metadata.get(tensor_id, {})
-            graph_dtype_str = tensor_info.get("dtype")
-            if graph_dtype_str:
-                target_dtype = self.parse_dtype(graph_dtype_str)
-                if target_dtype and tensor.dtype != target_dtype:
-                    # Temporary conversion - NOT cached
-                    tensor = tensor.to(target_dtype)
+            prism_dtype = self._ctx.dtype
+            if prism_dtype is not None:
+                # If tensor is in graph's half-precision but Prism wants different half,
+                # convert to Prism dtype
+                if (tensor.dtype in (torch.float16, torch.bfloat16)
+                        and tensor.dtype != prism_dtype
+                        and prism_dtype in (torch.float16, torch.bfloat16)):
+                    tensor = tensor.to(prism_dtype)
+                # If tensor is fp32 and graph wants half-precision, convert to Prism dtype
+                elif tensor.dtype == torch.float32:
+                    tensor_info = self._ctx.tensors_metadata.get(tensor_id, {})
+                    graph_dtype_str = tensor_info.get("dtype")
+                    if graph_dtype_str:
+                        target_dtype = self.parse_dtype(graph_dtype_str)
+                        if target_dtype and target_dtype in (torch.float16, torch.bfloat16):
+                            tensor = tensor.to(prism_dtype)
+                        elif target_dtype and target_dtype != tensor.dtype:
+                            tensor = tensor.to(target_dtype)
 
         return tensor
 
@@ -309,24 +324,15 @@ class TensorResolver:
         """
         Parse dtype string to torch.dtype.
 
+        Delegates to neurobrix.core.dtype.config.parse_dtype (single source of truth).
+
         Args:
             dtype_str: Dtype string (e.g., "float16", "float32")
 
         Returns:
-            torch.dtype or None if unknown
+            torch.dtype (defaults to float32 if unknown)
         """
-        mapping = {
-            "float32": torch.float32,
-            "float16": torch.float16,
-            "bfloat16": torch.bfloat16,
-            "float64": torch.float64,
-            "int32": torch.int32,
-            "int64": torch.int64,
-            "int16": torch.int16,
-            "int8": torch.int8,
-            "bool": torch.bool,
-        }
-        return mapping.get(dtype_str)
+        return _parse_dtype(dtype_str)
 
     def _resolve_arg_info(
         self,
@@ -359,13 +365,7 @@ class TensorResolver:
             return self.resolve_normalized(tid)
 
         elif arg_type == "scalar":
-            val = arg_info.get("value")
-            if isinstance(val, float):
-                if val < -1e30:
-                    val = -1e9
-                elif val > 1e30:
-                    val = 1e9
-            return val
+            return arg_info.get("value")
 
         elif arg_type == "symbol":
             # Symbolic scalar value (e.g., seq_len for arange)
@@ -455,7 +455,8 @@ class TensorResolver:
 
         elif arg_type == "dtype":
             dtype_str = arg_info.get("value", "torch.float32")
-            return self.parse_dtype(dtype_str.replace("torch.", ""))
+            # Single source of truth: parse_dtype handles "torch." prefix + Prism remap
+            return _parse_dtype(dtype_str, compute_dtype=self._ctx.dtype)
 
         elif arg_type == "device":
             return torch.device(arg_info.get("value", "cpu"))

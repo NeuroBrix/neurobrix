@@ -53,18 +53,18 @@ class ExecutorFactory:
         "single_gpu": "graph",
         "single_gpu_lifecycle": "graph",
 
-        # === Pipeline Parallel (component-level) ===
-        "pp_nvlink": "graph",
-        "pp_pcie": "graph",
-        "pp_lazy_nvlink": "graph",
-        "pp_lazy_pcie": "graph",
+        # === Component Placement (whole-component distribution) ===
+        "component_placement": "graph",
+        "component_placement_lazy": "graph",
 
-        # === Fine-Grained Pipeline (block-level) ===
-        "fgp_nvlink": "graph",
-        "fgp_pcie": "graph",
+        # === Pipeline Parallel (per-layer sequential fill) ===
+        "pipeline_parallel": "graph",
 
-        # === Tensor Parallel (tensor-level) ===
-        "tp": "graph",
+        # === Block Scatter (block-level best-fit distribution) ===
+        "block_scatter": "graph",
+
+        # === Weight Sharding (weight-file round-robin) ===
+        "weight_sharding": "graph",
 
         # === Sequential / Offload ===
         "lazy_sequential": "graph",
@@ -191,7 +191,7 @@ class ExecutorFactory:
         # Handle solver.py ComponentAllocation legacy (uses sharded bool + devices)
         if hasattr(allocation, "sharded"):
             if allocation.sharded:
-                return "pp_pcie"
+                return "component_placement"
             elif allocation.devices == ["cpu"]:
                 return "zero3"
             else:
@@ -273,19 +273,14 @@ class ExecutorFactory:
             return dtype_val
 
         # String to dtype
-        dtype_map = {
-            "float32": torch.float32,
-            "float16": torch.float16,
-            "bfloat16": torch.bfloat16,
-        }
-
-        if dtype_val not in dtype_map:
+        from neurobrix.core.dtype.config import DTYPE_MAP
+        if dtype_val not in DTYPE_MAP:
             raise RuntimeError(
                 f"ZERO FALLBACK: Unknown dtype '{dtype_val}' for '{component}'.\n"
-                f"Supported: {list(dtype_map.keys())}"
+                f"Supported: {list(DTYPE_MAP.keys())}"
             )
 
-        return dtype_map[dtype_val]
+        return DTYPE_MAP[dtype_val]
 
     @classmethod
     def _extract_family(cls, nbx_path: str) -> str:
