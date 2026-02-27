@@ -303,6 +303,6 @@ See **[CONTRIBUTING.md](https://github.com/NeuroBrix/neurobrix/blob/main/CONTRIB
 
 ## License
 
-Apache License 2.0 — Copyright 2025 [Neural Networks Holding LTD](https://neurobrix.es)
+Apache License 2.0 — Copyright 2025 Hocine Benkelaya [Neural Networks Holding LTD](https://neurobrix.es)
 
 See [LICENSE](LICENSE) for the full text.
