@@ -25,6 +25,7 @@ from .structure import (
     TensorParallelIntent,
     Zero3Config,
 )
+from .cpu_config import CPUConfig, apply_cpu_config
 from .loader import load_profile, list_available_profiles
 from .autodetect import load_default_profile, get_or_create_default_profile, detect_hardware
 from .solver import (
@@ -85,6 +86,9 @@ __all__ = [
     "Zero3Config",
     "ComponentAllocation",
     "ExecutionPlan",
+    # CPU Config
+    "CPUConfig",
+    "apply_cpu_config",
     # Loader
     "load_profile",
     "list_available_profiles",

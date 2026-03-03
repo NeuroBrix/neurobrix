@@ -41,20 +41,24 @@ PYTHONPATH=src python -m neurobrix <command> [options]
 Start the serving daemon. Loads model weights into VRAM once and keeps them warm for instant inference.
 
 ```bash
-neurobrix serve --model <name> --hardware <profile> [options]
+neurobrix serve --model <name> [--hardware <profile>] [options]
 ```
 
 | Flag | Description | Default |
 |------|-------------|---------|
 | `--model` | Model name (required) | — |
-| `--hardware` | Hardware profile ID (required) | — |
+| `--hardware` | Hardware profile ID (optional — auto-detects if omitted) | auto-detect |
 | `--timeout` | Idle timeout in seconds | 1800 |
 | `--foreground` | Run in foreground (for debugging) | false |
 | `--sequential` | Use native ATen dispatch | false |
 | `--triton` | Use Triton kernels | false |
 
-Example:
+Examples:
 ```bash
+# Auto-detect hardware
+neurobrix serve --model deepseek-moe-16b-chat
+
+# Target a specific hardware profile
 neurobrix serve --model deepseek-moe-16b-chat --hardware c4140-4xv100-custom-nvlink
 ```
 
@@ -100,13 +104,13 @@ Uses a graceful shutdown sequence: socket request → SIGTERM → SIGKILL (escal
 Execute a model once. Loads weights, runs inference, saves output, then unloads.
 
 ```bash
-neurobrix run --model <name> --hardware <profile> --prompt <text> [options]
+neurobrix run --model <name> --prompt <text> [--hardware <profile>] [options]
 ```
 
 | Flag | Description |
 |------|-------------|
 | `--model` | Model name (required) |
-| `--hardware` | Hardware profile ID (required) |
+| `--hardware` | Hardware profile ID (optional — auto-detects if omitted) |
 | `--prompt` | Input text (required) |
 | `--steps` | Number of inference steps (diffusion) |
 | `--cfg` | Classifier-free guidance scale |
@@ -122,16 +126,16 @@ neurobrix run --model <name> --hardware <profile> --prompt <text> [options]
 
 Examples:
 ```bash
-# Image generation
-neurobrix run --model PixArt-Sigma-XL-2-1024-MS --hardware v100-32g \
+# Image generation (auto-detect hardware)
+neurobrix run --model PixArt-Sigma-XL-2-1024-MS \
     --prompt "a sunset over mountains" --steps 20
 
-# Text generation
+# Text generation with specific hardware
 neurobrix run --model deepseek-moe-16b-chat --hardware c4140-4xv100-custom-nvlink \
     --prompt "Explain quantum computing" --temperature 0.7
 
 # Override runtime variables
-neurobrix run --model 1600m-1024 --hardware v100-32g \
+neurobrix run --model 1600m-1024 \
     --prompt "A cat" --set global.guidance_scale=7.5
 ```
 
@@ -274,6 +278,8 @@ neurobrix validate <path.nbx> [options]
 
 ## Hardware Profiles
 
+When `--hardware` is omitted, NeuroBrix auto-detects your system (GPUs, CPU, RAM, interconnects) and creates a `default.yml` profile. Use `--hardware` to target a specific subset of your machine.
+
 | Profile | GPUs | VRAM | Interconnect |
 |---------|------|------|--------------|
 | `v100-16g` | 1x V100 16GB | 16 GB | — |
@@ -284,7 +290,7 @@ neurobrix validate <path.nbx> [options]
 | `c4140-4xv100-16GB-nvlink` | 4x V100 16GB | 64 GB | NVLink 300 GB/s |
 | `c4140-4xv100-custom-nvlink` | 4x V100 (mixed) | 96 GB | NVLink 300 GB/s |
 
-Custom profiles can be added as YAML files in the hardware configuration directory.
+NeuroBrix also runs on CPU-only machines — see [Hardware Profiles](../guide/hardware.md) and [Writing Hardware Profiles](../guide/hardware-profiles.md) for details.
 
 ---
 

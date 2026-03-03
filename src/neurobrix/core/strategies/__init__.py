@@ -28,10 +28,8 @@ from .component_placement import ComponentPlacementStrategy, ComponentPlacementL
 from .pipeline_parallel import PipelineParallelStrategy
 from .block_scatter import BlockScatterStrategy
 from .weight_sharding import WeightShardingStrategy
+from .lazy_sequential import LazySequentialStrategy
 from .zero3 import Zero3Strategy
-
-# LazySequentialStrategy: load/unload components one at a time on the largest GPU.
-LazySequentialStrategy = SingleGPUStrategy
 
 
 # =============================================================================

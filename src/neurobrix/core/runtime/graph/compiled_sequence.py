@@ -239,6 +239,7 @@ class CompiledSequence:
         '_op_interceptors',  # Op interceptors for KV cache (maps op_type -> interceptor)
         '_seq_dependent_constants',  # Constants with trace-time seq_len dim: [(slot, axis, sym_id, trace_val)]
         '_seq_constant_originals',  # Original full-size constants: {slot: tensor} — never narrowed
+        '_pretranspose_weights',  # Weight tensor IDs that need .t().contiguous() at bind time
     )
 
     def __init__(
@@ -302,6 +303,9 @@ class CompiledSequence:
 
         # Op interceptors for KV cache injection (maps op_type -> interceptor callable)
         self._op_interceptors: Dict[str, Callable] = {}
+
+        # Weight tensor IDs that need pre-transposition (set by _eliminate_weight_transpose_ops)
+        self._pretranspose_weights: set = set()
 
         # Seq-dependent constants: RoPE cos/sin with trace-time seq_len dimension.
         # Populated at compile time, sliced at runtime after symbol binding.
@@ -372,6 +376,10 @@ class CompiledSequence:
         # Phase -1: Eliminate aten::detach ops (identity at inference time — no autograd)
         # DeepSeek: 19,428 detach out of 44,634 total ops (43%)
         self._eliminate_detach_ops(tensors, ops_metadata, execution_order)
+
+        # Phase -0.5: Eliminate aten::t on weight tensors (pre-transpose at bind time)
+        # Removes ~5K ops/token for LLMs (weight.t() before every mm)
+        self._eliminate_weight_transpose_ops(tensors, ops_metadata, execution_order)
 
         # Phase 0: Promote trace-time seq_len constants to symbolic references
         # UNIVERSAL: Works for all LLMs, safe for diffusion models, collision-checked
@@ -534,6 +542,131 @@ class CompiledSequence:
 
         # Remove detach ops from execution_order
         new_order = [uid for uid in execution_order if uid not in detach_uids]
+        execution_order.clear()
+        execution_order.extend(new_order)
+
+    def _eliminate_weight_transpose_ops(
+        self,
+        tensors: Dict[str, Any],
+        ops_metadata: Dict[str, Any],
+        execution_order: List[str],
+    ) -> None:
+        """
+        Remove aten::t ops on weight tensors by pre-transposing at bind time.
+
+        Pattern: param::weight → aten::t → aten::mm
+        After:   param::weight (pre-transposed) → aten::mm
+
+        Same rewire logic as _eliminate_detach_ops. The weight tensor gets
+        transposed in bind_weights() using self._pretranspose_weights set.
+
+        Impact: Eliminates ~5K ops/token for LLMs (each weight.t() before mm).
+        """
+        rewire: Dict[str, str] = {}
+        transpose_uids: set = set()
+        pretranspose_tids: set = set()
+
+        for op_uid in execution_order:
+            op_data = ops_metadata.get(op_uid)
+            if op_data is None:
+                continue
+            if op_data.get("op_type") != "aten::t":
+                continue
+
+            # aten::t has exactly 1 input tensor and 1 output tensor
+            attrs = op_data.get("attributes", {})
+            args = attrs.get("args", [])
+            in_tid = None
+            for arg in args:
+                if isinstance(arg, dict) and arg.get("type") == "tensor":
+                    in_tid = arg.get("tensor_id")
+                    break
+            if in_tid is None:
+                input_tids = op_data.get("input_tensor_ids", [])
+                if input_tids:
+                    in_tid = input_tids[0]
+
+            out_tids = op_data.get("output_tensor_ids", [])
+            if in_tid is None or not out_tids:
+                continue
+
+            # Only eliminate if input is a weight tensor (param:: or buffer::)
+            # Chase rewire chains first
+            root_tid = in_tid
+            while root_tid in rewire:
+                root_tid = rewire[root_tid]
+
+            if not (root_tid.startswith("param::") or root_tid.startswith("buffer::")):
+                continue
+
+            out_tid = out_tids[0]
+            rewire[out_tid] = root_tid
+            transpose_uids.add(op_uid)
+            pretranspose_tids.add(root_tid)
+
+        if not transpose_uids:
+            return
+
+        # Store set of weight tensor IDs that need pre-transposition
+        self._pretranspose_weights = pretranspose_tids
+
+        # Update tensor metadata shape: consumers expect the transposed shape
+        for tid in pretranspose_tids:
+            meta = tensors.get(tid, {})
+            shape = meta.get("shape", [])
+            if len(shape) == 2:
+                meta["shape"] = [shape[1], shape[0]]
+
+        # Reuse the same rewire logic as detach elimination
+        def _rewire_arg(arg: Any) -> Any:
+            if not isinstance(arg, dict):
+                return arg
+            arg_type = arg.get("type")
+            if arg_type == "tensor":
+                tid = arg.get("tensor_id")
+                if tid in rewire:
+                    arg = dict(arg)
+                    arg["tensor_id"] = rewire[tid]
+            elif arg_type == "tensor_tuple":
+                tids = arg.get("tensor_ids", [])
+                new_tids = [rewire.get(t, t) for t in tids]
+                if new_tids != tids:
+                    arg = dict(arg)
+                    arg["tensor_ids"] = new_tids
+            elif arg_type == "list":
+                items = arg.get("value", [])
+                new_items = [_rewire_arg(item) for item in items]
+                arg = dict(arg)
+                arg["value"] = new_items
+            return arg
+
+        for op_uid in execution_order:
+            if op_uid in transpose_uids:
+                continue
+            op_data = ops_metadata.get(op_uid)
+            if op_data is None:
+                continue
+
+            attrs = op_data.get("attributes", {})
+            args = attrs.get("args", [])
+            new_args = [_rewire_arg(a) for a in args]
+            if new_args != args:
+                attrs["args"] = new_args
+
+            kwargs = attrs.get("kwargs", {})
+            if kwargs:
+                new_kwargs = {k: _rewire_arg(v) for k, v in kwargs.items()}
+                if new_kwargs != kwargs:
+                    attrs["kwargs"] = new_kwargs
+
+            input_tids = op_data.get("input_tensor_ids", [])
+            if input_tids:
+                new_input_tids = [rewire.get(t, t) for t in input_tids]
+                if new_input_tids != input_tids:
+                    op_data["input_tensor_ids"] = new_input_tids
+
+        # Remove transpose ops from execution_order
+        new_order = [uid for uid in execution_order if uid not in transpose_uids]
         execution_order.clear()
         execution_order.extend(new_order)
 
@@ -1758,6 +1891,10 @@ class CompiledSequence:
         for tensor_id, tensor in weights.items():
             slot = self._tensor_id_to_slot.get(tensor_id)
             if slot is not None:
+                # Pre-transpose weights that had their aten::t ops eliminated.
+                # Use .t() view (no copy) — BLAS handles transposed strides natively.
+                if tensor_id in self._pretranspose_weights and tensor.ndim == 2:
+                    tensor = tensor.t()
                 self._arena[slot] = tensor
 
         # Pre-populate constant weight slots not provided by weight loader.
@@ -2337,13 +2474,16 @@ class CompiledSequence:
                     new_args = []
                     for a in args:
                         if isinstance(a, torch.Tensor) and a.device != target:
-                            new_args.append(a.to(target))
+                            # Pinned CPU→GPU: use non_blocking DMA (~2x faster)
+                            nb = a.is_pinned() and target.type == "cuda"
+                            new_args.append(a.to(target, non_blocking=nb))
                         elif isinstance(a, (list, tuple)):
                             moved = []
                             any_moved = False
                             for item in a:
                                 if isinstance(item, torch.Tensor) and item.device != target:
-                                    moved.append(item.to(target))
+                                    nb = item.is_pinned() and target.type == "cuda"
+                                    moved.append(item.to(target, non_blocking=nb))
                                     any_moved = True
                                 else:
                                     moved.append(item)
@@ -2355,7 +2495,19 @@ class CompiledSequence:
                         new_kwargs = {}
                         for k, v in kwargs.items():
                             if isinstance(v, torch.Tensor) and v.device != target:
-                                new_kwargs[k] = v.to(target)
+                                nb = v.is_pinned() and target.type == "cuda"
+                                new_kwargs[k] = v.to(target, non_blocking=nb)
+                            elif isinstance(v, (list, tuple)):
+                                moved = []
+                                any_moved = False
+                                for item in v:
+                                    if isinstance(item, torch.Tensor) and item.device != target:
+                                        nb = item.is_pinned() and target.type == "cuda"
+                                        moved.append(item.to(target, non_blocking=nb))
+                                        any_moved = True
+                                    else:
+                                        moved.append(item)
+                                new_kwargs[k] = type(v)(moved) if any_moved else v
                             else:
                                 new_kwargs[k] = v
                         kwargs = new_kwargs

@@ -21,7 +21,7 @@ This downloads the `.nbx` container from the NeuroBrix Hub and extracts it to th
 Serve mode loads weights into VRAM once and keeps them resident for fast repeated inference:
 
 ```bash
-neurobrix serve --model 1600m-1024 --hardware v100-32g
+neurobrix serve --model 1600m-1024
 ```
 
 Then generate:
@@ -36,12 +36,18 @@ Stop when done:
 neurobrix stop
 ```
 
+!!! tip "Targeting specific hardware"
+    By default, NeuroBrix auto-detects your full machine. To target a specific GPU profile:
+    ```bash
+    neurobrix serve --model 1600m-1024 --hardware v100-32g
+    ```
+
 ## 3. Single-Shot Mode
 
 For one-off inference without a persistent daemon:
 
 ```bash
-neurobrix run --model 1600m-1024 --hardware v100-32g --prompt "A mountain lake at sunset"
+neurobrix run --model 1600m-1024 --prompt "A mountain lake at sunset"
 ```
 
 !!! note
@@ -52,7 +58,7 @@ neurobrix run --model 1600m-1024 --hardware v100-32g --prompt "A mountain lake a
 For language models, use the interactive chat:
 
 ```bash
-neurobrix serve --model deepseek-moe-16b-chat --hardware v100-32g
+neurobrix serve --model deepseek-moe-16b-chat
 neurobrix chat
 ```
 
@@ -62,8 +68,19 @@ DeepSeek: The capital of France is Paris...
 You: /quit
 ```
 
+## 5. CPU-Only Machines
+
+No GPU? NeuroBrix works on CPU too. Auto-detection handles it automatically:
+
+```bash
+neurobrix serve --model TinyLlama-1.1B-Chat-v1.0
+neurobrix chat
+```
+
+CPU inference is slower than GPU, but small models like TinyLlama run well. Great for development, testing, and edge deployment.
+
 ## What Happened?
 
 1. `neurobrix import` downloaded a `.nbx` container — a self-contained archive with the model's graph, weights, and topology
-2. `neurobrix serve` loaded the model using the **Prism solver**, which automatically determined the best execution strategy for your hardware
+2. `neurobrix serve` detected your hardware and loaded the model using the **Prism solver**, which automatically determined the best execution strategy
 3. `neurobrix run` executed the graph — the runtime has zero knowledge of what kind of model it is; it only sees tensors and operations

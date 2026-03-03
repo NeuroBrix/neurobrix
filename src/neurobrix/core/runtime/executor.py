@@ -620,8 +620,9 @@ class RuntimeExecutor:
             if self._is_tp_component(comp_name):
                 assert self.strategy is not None, "strategy must be initialized for TP components"
                 output = self.strategy.execute_component(comp_name, phase, comp_inputs)
-            elif self._is_zero3_subcomponent(comp_name):
-                output = self._execute_zero3_subcomponent(comp_name, comp_inputs)
+            elif self._is_zero3_component(comp_name) and self.strategy is not None:
+                # Zero3 components: delegate to strategy for pinned memory + GPU transfer
+                output = self.strategy.execute_component(comp_name, phase, comp_inputs)
             else:
                 output = executor.run(comp_inputs)
 
@@ -645,33 +646,17 @@ class RuntimeExecutor:
 
         return False
 
-    def _is_zero3_subcomponent(self, comp_name: str) -> bool:
-        """Check if component has zero3 sub-strategy (within lazy_sequential)."""
+    def _is_zero3_component(self, comp_name: str) -> bool:
+        """Check if component has zero3 strategy (plan-level or per-component)."""
+        # Plan-level zero3
+        if self._strategy_name == "zero3":
+            return True
+        # Per-component zero3 (within lazy_sequential)
         if hasattr(self.plan, 'components'):
             alloc = self.plan.components.get(comp_name)
             if alloc:
                 return getattr(alloc, 'strategy', '') == 'zero3'
         return False
-
-    def _execute_zero3_subcomponent(self, comp_name: str, comp_inputs: Dict[str, Any]) -> Any:
-        """Execute a zero3 sub-component: weights on CPU, compute on GPU.
-
-        Weights stay on CPU in the arena. The compiled sequence multi-device
-        path handles per-op CPU→GPU transfer at execution time. This avoids
-        loading all weights to GPU at once (which would OOM).
-        """
-        import torch
-        executor = self.executors[comp_name]
-        exec_device = str(executor.device)
-
-        # Move inputs to execution device
-        for k, v in comp_inputs.items():
-            if isinstance(v, torch.Tensor) and str(v.device) != exec_device:
-                comp_inputs[k] = v.to(exec_device)
-
-        # Execute normally — weights are on CPU, compiled sequence handles
-        # per-op device alignment via _run_inner_multi_device
-        return executor.run(comp_inputs)
 
     # ========== VAE TILING HELPERS ==========
 

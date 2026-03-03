@@ -104,6 +104,16 @@ class InferenceEngine:
         solver = PrismSolver()
         self._plan = solver.solve_smart(self._container, hw_profile, input_config, serve_mode=True)
 
+        # 3b. Apply CPU optimizations from hardware profile
+        if hw_profile.cpu:
+            from neurobrix.core.prism.cpu_config import apply_cpu_config
+            apply_cpu_config(
+                cpu=hw_profile.cpu,
+                strategy=self._plan.strategy,
+                device_count=hw_profile.device_count,
+                preferred_dtype=hw_profile.preferred_dtype,
+            )
+
         # 4. Determine warm serving compatibility
         # loading_mode is set by Prism solver based on strategy type:
         #   eager = weights stay in VRAM (single_gpu, pp, fgp, tp)
