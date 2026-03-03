@@ -18,8 +18,8 @@ pip install neurobrix
 # Import a model from the hub
 neurobrix import sana/1600m-1024
 
-# Start serving
-neurobrix serve --model 1600m-1024 --hardware v100-32g
+# Start serving (auto-detects your hardware)
+neurobrix serve --model 1600m-1024
 
 # Generate
 neurobrix run --prompt "A photograph of a mountain lake at sunset"

@@ -187,6 +187,7 @@ class ExecutionPlan:
     component_memory: Dict[str, ComponentMemory]
     loading_mode: str = "lazy"
     kv_cache_plan: Optional[KVCachePlan] = None
+    cpu_ram_mb: int = 0  # CPU RAM budget for offload strategies
 
     @property
     def primary_device(self) -> str:
@@ -1041,10 +1042,13 @@ class PrismSolver:
             return None
 
         fgp_target = PRISM_DEFAULTS.get("fgp_utilization_target", 0.92)
+        # Use full device capacity (already has 0.95 safety margin from _prepare_devices).
+        # fgp_target is applied as per-block inflation, not capacity reduction.
+        packing_overhead = 1.0 / fgp_target  # ~1.087x per-block inflation
         fresh = [
             DeviceState(
                 device_string=d.device_string,
-                capacity_mb=d.capacity_mb * fgp_target,
+                capacity_mb=d.capacity_mb,
                 used_mb=0.0, components=[], spec=d.spec
             )
             for d in devices
@@ -1075,7 +1079,7 @@ class PrismSolver:
             if blocks['non_block_mb'] > 0:
                 while current_dev_idx < len(fresh):
                     dev = fresh[current_dev_idx]
-                    real_size = dev.get_real_block_size(blocks['non_block_mb'], model_dtype) * 1.05
+                    real_size = dev.get_real_block_size(blocks['non_block_mb'], model_dtype) * packing_overhead
                     if dev.can_fit(real_size):
                         dev.used_mb += real_size
                         dev.components.append(f"{comp_name}.non_block")
@@ -1091,7 +1095,7 @@ class PrismSolver:
                 block_keys = blocks['blocks'][block_num]
                 base_block = blocks['block_sizes'][block_num]
                 real_block = fresh[0].get_real_block_size(base_block, model_dtype)
-                total_block = (real_block + act_per_block) * 1.05
+                total_block = (real_block + act_per_block) * packing_overhead
 
                 # Find GPU with most free space that can fit this block
                 candidates = [d for d in fresh if d.can_fit(total_block)]
@@ -1148,10 +1152,13 @@ class PrismSolver:
             return None
 
         fgp_target = PRISM_DEFAULTS.get("fgp_utilization_target", 0.92)
+        # Use full device capacity (already has 0.95 safety margin from _prepare_devices).
+        # fgp_target is applied as per-block inflation, not capacity reduction.
+        packing_overhead = 1.0 / fgp_target  # ~1.087x per-block inflation
         fresh = [
             DeviceState(
                 device_string=d.device_string,
-                capacity_mb=d.capacity_mb * fgp_target,
+                capacity_mb=d.capacity_mb,
                 used_mb=0.0, components=[], spec=d.spec
             )
             for d in devices
@@ -1181,7 +1188,7 @@ class PrismSolver:
             if blocks['non_block_mb'] > 0:
                 while current_dev_idx < len(fresh):
                     dev = fresh[current_dev_idx]
-                    real_size = dev.get_real_block_size(blocks['non_block_mb'], model_dtype) * 1.05
+                    real_size = dev.get_real_block_size(blocks['non_block_mb'], model_dtype) * packing_overhead
                     if dev.can_fit(real_size):
                         dev.used_mb += real_size
                         dev.components.append(f"{comp_name}.non_block")
@@ -1197,7 +1204,7 @@ class PrismSolver:
                 block_keys = blocks['blocks'][block_num]
                 base_block = blocks['block_sizes'][block_num]
                 real_block = fresh[0].get_real_block_size(base_block, model_dtype)
-                total_block = (real_block + act_per_block) * 1.05
+                total_block = (real_block + act_per_block) * packing_overhead
 
                 # Try current GPU first (sequential fill)
                 while current_dev_idx < len(fresh):
@@ -1719,7 +1726,8 @@ class PrismSolver:
         """
         ZeRO-3 CPU offload: weights on CPU pinned memory, GPU for compute only.
         Peak GPU = activations only (weights streamed block-by-block).
-        Succeeds if at least 1 GPU can hold the largest activation footprint.
+        Succeeds if at least 1 GPU can hold the largest activation footprint
+        AND CPU has enough RAM to hold all weights.
         """
         if not devices:
             return None
@@ -1727,6 +1735,14 @@ class PrismSolver:
         fresh = self._fresh_devices(devices)
         largest = max(fresh, key=lambda d: d.capacity_mb)
         allocations = {}
+
+        # Validate CPU RAM budget: weights must fit in 70% of RAM
+        # (reserve 30% for OS, activations, PyTorch overhead)
+        if profile.cpu and profile.cpu.ram_mb > 0:
+            total_weight_mb = sum(mem.weight_mb for _, mem in sorted_comps)
+            available_ram_mb = profile.cpu.ram_mb * 0.7
+            if total_weight_mb > available_ram_mb:
+                return None
 
         for comp_name, mem in sorted_comps:
             # Zero3: only activations need GPU memory
@@ -2029,6 +2045,7 @@ class PrismSolver:
             strategy=strategy,
             component_memory=comp_mem,
             loading_mode=loading_mode,
+            cpu_ram_mb=profile.cpu.ram_mb if profile.cpu else 0,
         )
 
     # =========================================================================

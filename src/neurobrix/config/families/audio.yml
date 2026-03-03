@@ -1,4 +1,4 @@
-# Family-level constants for audio generation models
+# Family-level constants for audio models (STT + TTS)
 # NeuroBrix ZERO HARDCODE: All audio family models share these defaults
 
 output_processing:
@@ -6,17 +6,9 @@ output_processing:
   channel_axis: -1           # Channels at last dimension
   batch_axis: 0              # Batch at dimension 0
   bit_depth: 16              # 16-bit audio (CD quality)
-  sample_rate: 44100         # Standard audio sample rate
+  sample_rate: 16000         # 16kHz standard for STT (TTS models override per-model)
   output_range: [-1.0, 1.0]  # Normalized audio range
 
 defaults:
-  num_inference_steps: 100   # Audio models often need more steps
-  guidance_scale: 3.0        # Typical audio guidance scale
-  duration_seconds: 10.0     # Default audio duration
-  negative_prompt: ""        # Empty is allowed
-
-# Trace-time defaults (for graph capture)
-trace:
-  dtype: float32             # Audio often needs float32 for precision
-  stimulus:
-    num_inference_steps: 2   # Minimum steps for graph capture
+  temperature: 0.0           # Greedy decoding default for STT
+  max_tokens: 448            # Whisper default max generation length

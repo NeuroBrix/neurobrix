@@ -182,6 +182,16 @@ def cmd_run(args):
     solver = PrismSolver()
     execution_plan = solver.solve_smart(container, hw_profile, input_config)
 
+    # Apply CPU optimizations from hardware profile
+    if hw_profile.cpu:
+        from neurobrix.core.prism.cpu_config import apply_cpu_config
+        apply_cpu_config(
+            cpu=hw_profile.cpu,
+            strategy=execution_plan.strategy,
+            device_count=hw_profile.device_count,
+            preferred_dtype=hw_profile.preferred_dtype,
+        )
+
     print(f"   Strategy: {execution_plan.strategy}")
     for comp_name, alloc in execution_plan.components.items():
         print(f"   {comp_name} → {alloc.device}")
