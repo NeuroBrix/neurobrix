@@ -5,15 +5,16 @@ Single-shot mode runs one inference request and exits. Useful for scripting and 
 ## Basic Usage
 
 ```bash
-neurobrix run --model <name> --hardware <profile> --prompt "<text>"
+neurobrix run --model <name> --prompt "<text>"
 ```
+
+NeuroBrix auto-detects your hardware. To target a specific profile, add `--hardware <profile>`.
 
 ## Image Generation
 
 ```bash
 neurobrix run \
   --model PixArt-Sigma-XL-2-1024-MS \
-  --hardware v100-32g \
   --prompt "A cyberpunk city at night" \
   --steps 20
 ```
@@ -34,7 +35,6 @@ neurobrix run \
 ```bash
 neurobrix run \
   --model deepseek-moe-16b-chat \
-  --hardware v100-32g \
   --prompt "Explain quantum computing in simple terms"
 ```
 
@@ -49,9 +49,12 @@ neurobrix run \
 
 ```bash
 # Override any model default
-neurobrix run --model ... --hardware ... --prompt "..." \
+neurobrix run --model ... --prompt "..." \
   --set global.guidance_scale=7.5 \
   --set global.num_inference_steps=50
+
+# Target specific hardware (optional)
+neurobrix run --model ... --hardware v100-32g --prompt "..."
 
 # Execution modes
 neurobrix run ... --sequential   # Debug mode (native ATen)

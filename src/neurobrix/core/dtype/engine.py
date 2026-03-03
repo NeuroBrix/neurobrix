@@ -22,11 +22,6 @@ from typing import Callable, Optional, Dict, Any, FrozenSet
 from neurobrix.core.dtype.config import parse_dtype, strip_aten_prefix
 
 
-# Max representable value per dtype (for overflow clamping before downcast)
-_DTYPE_MAX = {
-    torch.float16: 65504.0,
-    # bf16 has same exponent range as fp32, no clamping needed
-}
 
 
 def configure_fp16_matmul_precision():
@@ -59,21 +54,14 @@ configure_fp16_matmul_precision()
 #   - AT_FORALL_LOWER_PRECISION_FP:       97% match (30/32 ops)
 #   - AT_FORALL_PROMOTE:                 100% match (all 11 ops)
 #
-# DEVIATIONS from PyTorch (intentional):
-#   1. bmm: PyTorch=FP16, Ours=FP32.
-#      Reason: T5-XXL decomposed attention (no 1/sqrt(d_k) scaling)
-#      overflows fp16 → Inf → NaN. Affects Flex/PixArt text_encoders (48
-#      bmm each). Sana bmm inputs are already fp32 → wrapper is a no-op.
-#      DeepSeek/Janus/Qwen3 bmm at seq_len=1 → negligible cost. ~1ms/step.
-#   2. SDPA ops: PyTorch=FP16, Ours=Excluded.
+# DEVIATIONS from PyTorch:
+#   1. SDPA ops: PyTorch=FP16, Ours=Excluded.
 #      Reason: compiled_ops._make_attention() calls F.sdpa directly.
 #      DtypeEngine must not double-wrap SDPA inputs.
 #
 # EXTENSIONS beyond PyTorch:
 #   - polar, view_as_complex → FP32 (complex32 doesn't exist on CUDA)
 #   - native_group_norm → FP32 (extra safety, covers native dispatch)
-#   - AMP_OVERFLOW_PROTECT_OPS → add/sub post-compute clamp for fp16
-#   - _upcast_matmul was planned but removed (see note near line 190)
 #
 # HARDWARE COMPATIBILITY:
 #   - V100 (sm_70): fp16 compute, AMP for bf16 graphs
@@ -127,15 +115,6 @@ AMP_FP32_OPS: FrozenSet[str] = frozenset({
     # Norm variants
     "linalg_vector_norm", "linalg_matrix_norm",
 
-    # --- DEVIATION: bmm (PyTorch classifies as LOWER_PRECISION_FP / fp16) ---
-    # We force fp32 for T5-XXL decomposed attention stability.
-    # T5 has no 1/sqrt(d_k) scaling → Q@K^T scores overflow fp16 (>65504).
-    # Impact audit (8 models):
-    #   T5 text_encoders (Flex/PixArt): 48 bmm each — PROTECTED from NaN
-    #   Sana transformer: 40 bmm — graph casts to fp32 first, wrapper is no-op
-    #   DeepSeek/Janus/Qwen3: 56-97 bmm — seq_len=1 at decode, ~0.01ms cost
-    "bmm",
-    # NOTE: add/sub are NOT here. See AMP_OVERFLOW_PROTECT_OPS below.
 })
 
 # Ops that should run in compute_dtype (fp16/bf16) for performance.
@@ -145,9 +124,9 @@ AMP_FP16_OPS: FrozenSet[str] = frozenset({
     # Convolutions (PyTorch 100% match)
     "_convolution", "conv1d", "conv2d", "conv3d", "conv_tbc", "convolution",
     "conv_transpose1d", "conv_transpose2d", "conv_transpose3d",
-    # Matrix multiply (PyTorch 100% match, except bmm — see AMP_FP32_OPS)
+    # Matrix multiply (PyTorch 100% match)
     "addmm", "addmv", "addr", "matmul", "einsum",
-    "mm", "mv", "addbmm", "baddbmm",
+    "mm", "mv", "bmm", "addbmm", "baddbmm",
     "linalg_vecdot", "linear", "chain_matmul", "linalg_multi_dot",
     # RNN cells (PyTorch 100% match)
     "_thnn_fused_lstm_cell", "_thnn_fused_gru_cell",
@@ -167,45 +146,6 @@ AMP_PROMOTE_OPS: FrozenSet[str] = frozenset({
     "tensordot", "scatter_add",
 })
 
-
-# EXTENSION: Overflow protection for fp16 residual accumulation.
-# NOT in PyTorch autocast — unique to NeuroBrix inference engine.
-#
-# Unlike AMP_FP32_OPS (which upcast inputs and keep output in fp32, altering
-# the precision chain), these ops run at native dtype and only intervene when
-# overflow actually occurs: clamp Inf→±65504 AFTER computation.
-#
-# Why not just put add/sub in AMP_FP32_OPS?
-# Because AMP_FP32_OPS changes the OUTPUT dtype to fp32, altering the entire
-# downstream precision chain. For models that DON'T overflow (Janus, DeepSeek,
-# Sana), this would force unnecessary fp32 computation in subsequent ops.
-#
-# Concrete case: T5-XXL (Flex text_encoder_2) residual accumulation across 24
-# encoder layers reaches ±65504 (fp16 max) by layer ~20. The next residual add
-# overflows → Inf → rms_norm(Inf) → NaN. Clamping at 65504 preserves the
-# direction (post-rms_norm normalization is correct) while preventing NaN.
-#
-# Cost: ~0.01ms per op (GPU-only clamp, no sync). All hardware.
-AMP_OVERFLOW_PROTECT_OPS: FrozenSet[str] = frozenset({
-    "add", "sub",
-})
-
-
-# NOTE: _MATMUL_OPS and _upcast_matmul were removed (Feb 2026 audit).
-# The feature (fp32 upcast for bf16→fp16 matmul on V100) was planned but never
-# wired into compile_op(). All 8 models pass regression tests without matmul
-# upcast. If bf16→fp16 matmul precision becomes an issue for future models,
-# implement in compile_op() with _MATMUL_OPS check.
-
-
-def _safe_downcast(tensor: torch.Tensor, target_dtype: torch.dtype) -> torch.Tensor:
-    """Cast tensor to target_dtype with overflow clamping if needed."""
-    if not tensor.is_floating_point():
-        return tensor
-    max_val = _DTYPE_MAX.get(target_dtype)
-    if max_val is not None and tensor.dtype != target_dtype:
-        tensor = tensor.clamp(-max_val, max_val)
-    return tensor.to(target_dtype)
 
 
 
@@ -241,7 +181,7 @@ class DtypeEngine:
         Priority:
         1. _to_copy: always handled (dtype remapping)
         2. AMP FP32 ops: upcast inputs to fp32
-        3. AMP FP16 ops: cast inputs to compute_dtype + inf-fix
+        3. AMP FP16 ops: cast inputs to compute_dtype
         4. AMP Promote ops: promote to widest input dtype
         5. Everything else: pass through unchanged
         """
@@ -268,9 +208,6 @@ class DtypeEngine:
 
             if op_name in AMP_PROMOTE_OPS:
                 return self._make_promote_wrapper(func)
-
-            if op_name in AMP_OVERFLOW_PROTECT_OPS:
-                return self._make_overflow_protect_wrapper(func)
 
         return func
 
@@ -334,27 +271,17 @@ class DtypeEngine:
 
         Matches PyTorch autocast behavior for ops in AT_FORALL_LOWER_PRECISION_FP.
         These are compute-heavy ops (matmul, conv) that benefit from half-precision.
-
-        For fp16 compute_dtype, applies overflow clamp to handle fp16 limits.
-        Uses GPU-only clamp (no sync) instead of isinf().any() check.
         """
         assert self.compute_dtype is not None  # Guaranteed by caller check
         compute: torch.dtype = self.compute_dtype
-        needs_inf_fix = (compute == torch.float16)
 
         def lower_precision_func(*args, **kwargs):
             new_args = tuple(
-                _safe_downcast(a, compute) if isinstance(a, torch.Tensor) and a.is_floating_point()
-                    and a.dtype != compute
+                a.to(compute) if isinstance(a, torch.Tensor) and a.is_floating_point() and a.dtype != compute
                 else a
                 for a in args
             )
-            result = func(*new_args, **kwargs)
-            if needs_inf_fix and isinstance(result, torch.Tensor) and result.dtype == torch.float16:
-                # GPU-only clamp: no sync (replaces isinf().any() which forced GPU→CPU sync)
-                # Clamps ±inf to ±65504 while preserving NaN for error detection
-                result = result.clamp(-65504.0, 65504.0)
-            return result
+            return func(*new_args, **kwargs)
         return lower_precision_func
 
     def _make_promote_wrapper(self, func: Callable) -> Callable:
@@ -385,27 +312,6 @@ class DtypeEngine:
             return func(*args, **kwargs)
         return promote_func
 
-    def _make_overflow_protect_wrapper(self, func: Callable) -> Callable:
-        """
-        Overflow protection: clamp Inf→fp16_max AFTER computation.
-
-        Unlike AMP_FP32 (which upcasts and keeps output in fp32, altering the
-        entire downstream precision chain), this wrapper preserves the native
-        dtype. It only intervenes when overflow actually occurs (Inf in fp16).
-
-        This prevents the chain: fp16 add overflow → Inf → rms_norm(Inf) → NaN,
-        which kills T5-XXL after ~20 layers of residual accumulation.
-
-        Uses GPU-only clamp (no sync) — negligible cost (~0.01ms per op).
-        """
-        def overflow_safe(*args, **kwargs):
-            result = func(*args, **kwargs)
-            if isinstance(result, torch.Tensor) and result.dtype == torch.float16:
-                # GPU-only clamp: no sync (replaces isinf().any() which forced GPU→CPU sync)
-                result = result.clamp(-65504.0, 65504.0)
-            return result
-        return overflow_safe
-
     # ========================================================================
     # CONSTANT CONVERSION
     # ========================================================================
@@ -428,7 +334,7 @@ class DtypeEngine:
         # Only convert if the constant matches graph_dtype
         if self.graph_dtype is not None and tensor.dtype != self.graph_dtype:
             return tensor  # Intentional different-precision constant
-        return _safe_downcast(tensor, self.compute_dtype)
+        return tensor.to(self.compute_dtype)
 
     # ========================================================================
     # INTERNAL — _to_copy compilation
@@ -458,11 +364,12 @@ class DtypeEngine:
                     return None
                 if not isinstance(inp, torch.Tensor):
                     return inp
+                # Skip if already correct dtype
+                if inp.dtype == target_dtype:
+                    return inp
                 # NEVER cast complex → real (discards imaginary part, corrupts RoPE)
                 if inp.is_complex() and not target_dtype.is_complex:
                     return inp
-                if inp.is_floating_point() and target_dtype in (torch.float16, torch.bfloat16):
-                    return _safe_downcast(inp, target_dtype)
                 return inp.to(target_dtype)
             return to_copy_with_dtype
 
@@ -478,11 +385,12 @@ class DtypeEngine:
                 # Same rule: only remap fp16/bf16, never fp32
                 if prism_dtype is not None and dtype in (torch.float16, torch.bfloat16) and dtype != prism_dtype:
                     dtype = prism_dtype
+                # Skip if already correct dtype
+                if inp.dtype == dtype:
+                    return inp
                 # NEVER cast complex → real (discards imaginary part, corrupts RoPE)
                 if inp.is_complex() and not dtype.is_complex:
                     return inp
-                if inp.is_floating_point() and dtype in (torch.float16, torch.bfloat16):
-                    return _safe_downcast(inp, dtype)
                 return inp.to(dtype)
             return inp
         return to_copy_passthrough
@@ -523,7 +431,7 @@ class DtypeEngine:
 
         if op_name in AMP_FP16_OPS:
             return [
-                _safe_downcast(a, self.compute_dtype)
+                a.to(self.compute_dtype)
                 if isinstance(a, torch.Tensor) and a.is_floating_point()
                 and a.dtype != self.compute_dtype
                 else a
@@ -553,24 +461,7 @@ class DtypeEngine:
         """
         Apply AMP output processing for a single op call at runtime.
 
-        Handles overflow protection for add/sub in fp16 and inf clamping
-        for fp16 matmul outputs.
+        Standard PyTorch AMP does no output clamping. This method is a no-op
+        but kept for API compatibility with native/triton mode callers.
         """
-        if self.compute_dtype not in (torch.float16, torch.bfloat16):
-            return result
-
-        op_name = strip_aten_prefix(op_type)
-
-        # Overflow protection for fp16 add/sub (residual accumulation)
-        if op_name in AMP_OVERFLOW_PROTECT_OPS:
-            if isinstance(result, torch.Tensor) and result.dtype == torch.float16:
-                result = result.clamp(-65504.0, 65504.0)
-
-        # Inf clamping for fp16 matmul outputs
-        if op_name in AMP_FP16_OPS:
-            if (self.compute_dtype == torch.float16
-                    and isinstance(result, torch.Tensor)
-                    and result.dtype == torch.float16):
-                result = result.clamp(-65504.0, 65504.0)
-
         return result

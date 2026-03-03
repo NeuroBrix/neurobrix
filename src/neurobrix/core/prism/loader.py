@@ -19,6 +19,7 @@ from neurobrix.core.prism.structure import (
     InterconnectTech,
     InterconnectType,
 )
+from neurobrix.core.prism.cpu_config import CPUConfig
 
 # Project Root Resolution
 PROJECT_ROOT = Path(__file__).parent.parent.parent
@@ -241,11 +242,17 @@ def load_profile(hardware_id: str) -> PrismProfile:
     # Parse Interconnect Topology
     topology = _parse_interconnect(data)
 
+    # Parse CPU section
+    cpu_config = None
+    cpu_data = data.get("cpu")
+    if cpu_data:
+        cpu_config = CPUConfig.from_yaml_dict(cpu_data)
+
     return PrismProfile(
         id=data["id"],
         vendor=data.get("vendor", "unknown"),
         devices=devices,
         topology=topology,
-        cpu_memory_gb=data.get("cpu_memory_gb", 0.0),
+        cpu=cpu_config,
         preferred_dtype=data.get("preferred_dtype", None),
     )

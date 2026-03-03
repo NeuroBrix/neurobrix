@@ -8,7 +8,10 @@ VENDORLESS: nvidia/amd/intel → cuda/hip/xpu device strings
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Dict, Optional, Set
+from typing import List, Dict, Optional, Set, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from neurobrix.core.prism.cpu_config import CPUConfig
 
 
 # =============================================================================
@@ -350,8 +353,15 @@ class PrismProfile:
     vendor: str
     devices: List[DeviceSpec]
     topology: InterconnectTopology = field(default_factory=InterconnectTopology)
-    cpu_memory_gb: float = 0.0  # For CPU offload strategies
+    cpu: Optional["CPUConfig"] = None  # CPU config from hardware profile
     preferred_dtype: Optional[str] = None  # Override dtype for memory efficiency
+
+    @property
+    def cpu_memory_gb(self) -> float:
+        """CPU RAM in GB. Backward compat for code reading cpu_memory_gb."""
+        if self.cpu is None:
+            return 0.0
+        return self.cpu.ram_gb
 
     @property
     def total_vram_mb(self) -> int:
