@@ -59,15 +59,18 @@ configure_fp16_matmul_precision()
 #      Reason: compiled_ops._make_attention() calls F.sdpa directly.
 #      DtypeEngine must not double-wrap SDPA inputs.
 #
+# EXTENSIONS beyond standard autocast:
 # EXTENSIONS beyond PyTorch:
 #   - polar, view_as_complex → FP32 (complex32 doesn't exist on CUDA)
 #   - native_group_norm → FP32 (extra safety, covers native dispatch)
 #
-# HARDWARE COMPATIBILITY:
-#   - V100 (sm_70): fp16 compute, AMP for bf16 graphs
-#   - A100 (sm_80): bf16/fp16, TF32 auto-enabled for fp32 ops
-#   - H100 (sm_90): bf16/fp16, TF32 auto-enabled, FlashAttn v2
-#   - All consumer GPUs (RTX 30xx/40xx): bf16/fp16, compatible
+# HARDWARE-DYNAMIC PROTECTION:
+#   - bf16 hardware (A100, H100, RTX 30xx/40xx): ZERO output protection.
+#     bf16 has fp32 exponent range (±3.4e38). Overflow impossible.
+#     All wrappers are pure input-cast only — zero Python overhead.
+#   - fp16 hardware (V100): TARGETED fp32 upcast on FP16_PRECISION_OPS
+#     only (bmm, div, addmm). All other ops get clean input-cast wrappers.
+#     fp32 preserves tiny epsilons and prevents accumulation overflow.
 # ============================================================================
 
 # Ops that MUST run in float32 for numerical stability.
@@ -146,6 +149,33 @@ AMP_PROMOTE_OPS: FrozenSet[str] = frozenset({
     "tensordot", "scatter_add",
 })
 
+# ============================================================================
+# FP16-ONLY PROTECTION SETS
+#
+# These apply ONLY on fp16 hardware (V100). bf16 has fp32 exponent range
+# (±3.4e38) — overflow/underflow impossible, any protection is pure overhead.
+# ============================================================================
+
+# Ops that need fp32 on fp16 hardware for numerical correctness.
+# bf16 has fp32 exponent range — none of these issues arise.
+#
+# mm: matmul accumulation over inner_dim (e.g. 2240) with values ±35 × ±10
+#   produces sums exceeding fp16 max (65504). Clamping output ±Inf doesn't
+#   work — clamped values (±65504) cascade through residual adds (±30K + ±65504
+#   > 65504) creating Inf/NaN in subsequent layers. fp32 output flows through
+#   the residual chain (add promotes to fp32 when one input is fp32), keeping
+#   the transformer backbone in fp32 until the next fp16 op normalizes.
+# bmm: linear attention K^T@V accumulates to ±65504 in fp16, saturating
+#   the normalizer to zero → downstream div produces NaN. fp32 output
+#   flows through slice/add(eps)/div chain preserving tiny epsilons (1e-15).
+# div: linear attention normalizer with epsilon 1e-15 rounds to 0 in fp16
+#   (min representable ~6e-8). fp32 preserves the epsilon → no div-by-zero.
+# addmm: fused bias + matmul with same fp16 accumulation risk as bmm.
+#
+# Fix: upcast to fp32 (same as AMP FP32 wrapper). Downstream FP16 ops
+# (matmul, conv) bring the chain back to compute_dtype.
+FP16_PRECISION_OPS: FrozenSet[str] = frozenset({"mm", "bmm", "div", "addmm"})
+
 
 
 
@@ -166,9 +196,11 @@ class DtypeEngine:
     - FP16 ops output compute_dtype → brings the chain back to half-precision
     """
 
-    def __init__(self, compute_dtype: Optional[torch.dtype], graph_dtype: Optional[torch.dtype] = None):
+    def __init__(self, compute_dtype: Optional[torch.dtype], graph_dtype: Optional[torch.dtype] = None,
+                 amp_enabled: bool = True):
         self.compute_dtype = compute_dtype
         self.graph_dtype = graph_dtype
+        self.amp_enabled = amp_enabled
 
     # ========================================================================
     # PUBLIC API
@@ -193,6 +225,14 @@ class DtypeEngine:
 
         assert func is not None, f"ZERO FALLBACK: func cannot be None for op {op_name}"
 
+        # AMP disabled: skip all autocast wrapping. Used for diffusion components
+        # (transformer, VAE) which are designed for pure half-precision execution.
+        # These pipelines (Sana, PixArt, FLUX) run entirely in fp16/bf16 without
+        # autocast — AMP precision oscillation (fp32↔fp16 at every layer) creates
+        # spatially-structured quantization noise that CFG amplifies into grid lines.
+        if not self.amp_enabled:
+            return func
+
         # AMP rules only apply when compute_dtype is half-precision
         if self.compute_dtype in (torch.float16, torch.bfloat16):
             if op_name in AMP_FP32_OPS:
@@ -204,10 +244,19 @@ class DtypeEngine:
                 return self._make_fp32_wrapper(func)
 
             if op_name in AMP_FP16_OPS:
+                # fp16 hardware: certain FP16 ops need fp32 for numerical safety.
+                # bf16 hardware: all FP16 ops run clean (bf16 range = fp32 range).
+                if self.compute_dtype == torch.float16 and op_name in FP16_PRECISION_OPS:
+                    return self._make_fp32_wrapper(func)
                 return self._make_lower_precision_wrapper(func)
 
             if op_name in AMP_PROMOTE_OPS:
                 return self._make_promote_wrapper(func)
+
+            # fp16 hardware: non-AMP ops that also need fp32 precision.
+            # e.g. div with epsilon 1e-15 (rounds to 0 in fp16 → division by zero).
+            if self.compute_dtype == torch.float16 and op_name in FP16_PRECISION_OPS:
+                return self._make_fp32_wrapper(func)
 
         return func
 
@@ -271,6 +320,7 @@ class DtypeEngine:
 
         Matches PyTorch autocast behavior for ops in AT_FORALL_LOWER_PRECISION_FP.
         These are compute-heavy ops (matmul, conv) that benefit from half-precision.
+        Pure input casting — no output clamping (standard PyTorch AMP).
         """
         assert self.compute_dtype is not None  # Guaranteed by caller check
         compute: torch.dtype = self.compute_dtype

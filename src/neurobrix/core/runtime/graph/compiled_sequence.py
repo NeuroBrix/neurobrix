@@ -126,6 +126,26 @@ class ProductArg:
     trace_value: int
 
 
+@dataclass(frozen=True)
+class ExprArg:
+    """
+    Symbolic expression that resolves at runtime via SymbolicShapeResolver.
+
+    Handles arbitrary expression trees from SymInt.to_json():
+    - floordiv: (s1 + pad) // stride + 1
+    - add/sub/mul/mod/neg: nested expressions
+
+    Used for spatial dimensions in view/reshape ops that are derived from
+    input spatial dims through conv chains.
+
+    Fields:
+        expr_dict: Raw expression dict from graph.json (evaluated recursively)
+        trace_value: Value at trace time (fallback when symbols not bound)
+    """
+    expr_dict: dict
+    trace_value: int
+
+
 # ============================================================================
 # TENSOR ARENA WITH __slots__ FOR MAXIMUM SPEED
 # ============================================================================
@@ -247,6 +267,7 @@ class CompiledSequence:
         dag: Dict[str, Any],
         device: torch.device,
         dtype: torch.dtype,
+        amp_enabled: bool = True,
     ):
         """
         Initialize CompiledSequence.
@@ -258,6 +279,9 @@ class CompiledSequence:
             dag: The TensorDAG dict from graph.json
             device: The target device (e.g., torch.device("cuda:0"))
             dtype: The target dtype (e.g., torch.float16)
+            amp_enabled: Whether to apply AMP autocast rules.
+                        False for diffusion components (transformer, VAE) which
+                        are designed for pure fp16/bf16 execution.
         """
         self.dag = dag
         self.device = device
@@ -268,7 +292,8 @@ class CompiledSequence:
         graph_dtype = _cfg_parse_dtype(graph_dtype_str) if graph_dtype_str else None
 
         # 100% Autonomous op resolution - no sequential_dispatcher dependency
-        self.op_resolver = CompiledOpResolver(device, dtype, graph_dtype=graph_dtype)
+        self.op_resolver = CompiledOpResolver(device, dtype, graph_dtype=graph_dtype,
+                                              amp_enabled=amp_enabled)
 
         # Compilation outputs
         self._ops: List[CompiledOp] = []
@@ -566,6 +591,15 @@ class CompiledSequence:
         transpose_uids: set = set()
         pretranspose_tids: set = set()
 
+        # Collect expert weight IDs from moe_fused ops — must NOT be pre-transposed
+        # because moe_fused_dispatch() calls .t() on them at runtime.
+        moe_weight_ids: set = set()
+        for op_data in ops_metadata.values():
+            if op_data.get("op_type") == "custom::moe_fused":
+                attrs = op_data.get("attributes", {})
+                for key in ("expert_gate_weight_ids", "expert_up_weight_ids", "expert_down_weight_ids"):
+                    moe_weight_ids.update(attrs.get(key, []))
+
         for op_uid in execution_order:
             op_data = ops_metadata.get(op_uid)
             if op_data is None:
@@ -597,6 +631,10 @@ class CompiledSequence:
                 root_tid = rewire[root_tid]
 
             if not (root_tid.startswith("param::") or root_tid.startswith("buffer::")):
+                continue
+
+            # Skip MoE expert weights — moe_fused_dispatch() transposes them at runtime
+            if root_tid in moe_weight_ids:
                 continue
 
             out_tid = out_tids[0]
@@ -1585,6 +1623,10 @@ class CompiledSequence:
                 # Dynamic product resolution
                 prod_resolver = self._make_product_resolver(arg.factors, arg.trace_value)
                 resolvers.append(prod_resolver)
+            elif isinstance(arg, ExprArg):
+                # Dynamic expression resolution (spatial dims from conv chains)
+                expr_resolver = self._make_expr_resolver(arg.expr_dict, arg.trace_value)
+                resolvers.append(expr_resolver)
             elif isinstance(arg, ListArg):
                 # Recursively create resolver for list items
                 item_resolver = self._make_list_resolver(arg.items)
@@ -1628,6 +1670,9 @@ class CompiledSequence:
                 # Dynamic product resolution
                 prod_resolver = self._make_product_resolver(arg.factors, arg.trace_value)
                 resolvers.append(prod_resolver)
+            elif isinstance(arg, ExprArg):
+                expr_resolver = self._make_expr_resolver(arg.expr_dict, arg.trace_value)
+                resolvers.append(expr_resolver)
             elif isinstance(arg, ListArg):
                 item_resolver = self._make_list_resolver(arg.items)
                 resolvers.append(item_resolver)
@@ -1660,6 +1705,9 @@ class CompiledSequence:
                 # Dynamic product resolution
                 prod_resolver = self._make_product_resolver(item.factors, item.trace_value)
                 item_resolvers.append(prod_resolver)
+            elif isinstance(item, ExprArg):
+                expr_resolver = self._make_expr_resolver(item.expr_dict, item.trace_value)
+                item_resolvers.append(expr_resolver)
             elif isinstance(item, ListArg):
                 # Nested list - recursive
                 nested_resolver = self._make_list_resolver(item.items)
@@ -1722,6 +1770,32 @@ class CompiledSequence:
                 return result
             return trace_value  # Fallback for graphs without resolver
         return resolve_product
+
+    def _make_expr_resolver(self, expr_dict: dict, trace_value: int) -> Callable[[TensorArena], int]:
+        """
+        Generate closure for dynamic expression resolution.
+
+        Handles arbitrary SymInt expression trees (floordiv, add, sub, mul, etc.)
+        by delegating to SymbolicShapeResolver._resolve_symint_dict() at runtime.
+
+        Used for spatial dimensions derived from conv chains:
+        e.g., (s1 + 2*pad - dilation*(k-1) - 1) // stride + 1
+
+        Args:
+            expr_dict: Expression dict from SymInt.to_json()
+            trace_value: Fallback value if symbols cannot be resolved
+
+        Returns:
+            Closure that evaluates expression at runtime
+        """
+        def resolve_expr(_arena: TensorArena) -> int:
+            if self._shape_resolver is not None:
+                try:
+                    return self._shape_resolver._resolve_symint_dict(expr_dict)
+                except Exception:
+                    return trace_value
+            return trace_value  # Fallback for graphs without resolver
+        return resolve_expr
 
     # ========================================================================
     # ARG COMPILATION (compile time only)
@@ -1806,6 +1880,11 @@ class CompiledSequence:
                         # Concrete integer
                         compiled_factors.append(f)
                 return ProductArg(factors=tuple(compiled_factors), trace_value=trace_value)
+
+            # Expression types from SymInt.to_json() — spatial dim expressions
+            if arg_type in ("floordiv", "add", "sub", "mul", "mod", "neg"):
+                trace = arg.get("trace", arg.get("trace_value", 0))
+                return ExprArg(expr_dict=arg, trace_value=trace)
 
             if arg_type in ("int", "float", "bool", "none"):
                 return ScalarArg(arg.get("value"))
@@ -2020,8 +2099,11 @@ class CompiledSequence:
                         op.needs_transfer = True
                         break
 
-            # Record output device for downstream ops
-            out_dev = op.device or current_activation_device
+            # Record output device for downstream ops.
+            # Tensor-creation ops (arange, scalar_tensor) may run before any
+            # weighted op sets current_activation_device. Default to self.device
+            # so downstream cross-device detection catches mismatches.
+            out_dev = op.device or current_activation_device or self.device
             if out_dev is not None:
                 for s in op.output_slots:
                     slot_device[s] = out_dev
@@ -2401,6 +2483,13 @@ class CompiledSequence:
         for op in self._ops:
             args = op.args_resolver(arena)
             kwargs = op.kwargs_resolver(arena)
+
+            # Fix device kwargs for multi-device execution.
+            # _compile_arg bakes in self.device for ALL device kwargs, but in
+            # FGP mode tensor-creation ops (arange, scalar_tensor, full) must
+            # create tensors on op.device (from compute_op_devices placement).
+            if kwargs and 'device' in kwargs and op.device is not None:
+                kwargs['device'] = op.device
 
             # NOP propagation for deactivated MoE expert paths
             if args and args[0] is None:

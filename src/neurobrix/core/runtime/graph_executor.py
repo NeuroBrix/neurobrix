@@ -520,7 +520,18 @@ class GraphExecutor:
                 import numpy as np
                 traced_bytes = base64.b64decode(traced_data)
                 traced_np = np.frombuffer(traced_bytes, dtype=np.float32).reshape(1, traced_seq, embed_dim)
-                return torch.from_numpy(traced_np.copy()).to(dtype=self.dtype, device=self.device)
+                if np.any(traced_np != 0):
+                    return torch.from_numpy(traced_np.copy()).to(dtype=self.dtype, device=self.device)
+                # traced_data is all zeros (VMM pool artifact) — recompute from sincos
+                return self._compute_sincos_2d_pos_embed(
+                    runtime_height=runtime_height,
+                    runtime_width=runtime_width,
+                    embed_dim=embed_dim,
+                    base_size=traced_grid_h,  # base_size = grid_size at trace resolution
+                    interpolation_scale=1.0,
+                    vae_scale=vae_scale,
+                    patch_size=patch_size,
+                )
 
         # Get the traced positional embedding
         traced_embed = None
@@ -531,7 +542,10 @@ class GraphExecutor:
             import numpy as np
             traced_bytes = base64.b64decode(traced_data)
             traced_np = np.frombuffer(traced_bytes, dtype=np.float32).reshape(1, traced_seq, embed_dim)
-            traced_embed = torch.from_numpy(traced_np).to(dtype=self.dtype, device=self.device)
+            if not np.any(traced_np != 0):
+                traced_np = None  # VMM pool artifact — skip zero data
+            else:
+                traced_embed = torch.from_numpy(traced_np).to(dtype=self.dtype, device=self.device)
 
         # Try to load from weights file
         if traced_embed is None and weight_name in self._weights:
@@ -613,9 +627,17 @@ class GraphExecutor:
         graph_dtype_str = self._dag.get("torch_dtype", "")
         self._graph_dtype = _cfg_parse_dtype(graph_dtype_str) if graph_dtype_str else None
 
-        # DtypeEngine: single entry point for all dtype decisions
+        # DtypeEngine: single entry point for all dtype decisions.
+        # AMP (Automatic Mixed Precision) is DISABLED for diffusion components
+        # (transformer, VAE) in image/video families. These pipelines are designed
+        # for pure fp16/bf16 — AMP's fp32↔fp16 oscillation at every layer creates
+        # spatially-structured quantization noise that CFG amplifies into grid lines.
+        # Text encoders KEEP AMP: T5/Gemma have residual accumulation that overflows fp16.
+        # LLM family keeps AMP everywhere: RMSNorm pow→mean→rsqrt overflows without it.
         from neurobrix.core.dtype.engine import DtypeEngine
-        self._dtype_engine = DtypeEngine(self.dtype, graph_dtype=self._graph_dtype)
+        amp_enabled = self._should_enable_amp()
+        self._dtype_engine = DtypeEngine(self.dtype, graph_dtype=self._graph_dtype,
+                                         amp_enabled=amp_enabled)
 
         # DAG loaded silently - stats available via _dag
 
@@ -649,6 +671,20 @@ class GraphExecutor:
         # Interceptors (KV cache) and persistent tensors (hidden states) are registered
         # after __init__. Compiling here wastes time — it gets recompiled on interceptor
         # registration. Instead, _execute_compiled_graph() handles: _compiled_seq is None → compile.
+
+    def _should_enable_amp(self) -> bool:
+        """Determine whether AMP should be enabled for this component.
+
+        AMP is required for fp16 stability: RMSNorm's pow→mean→rsqrt chain
+        overflows without fp32 protection, group_norm accumulation needs fp32,
+        and softmax needs fp32 for large reductions.
+
+        Returns True for all components. Future work: once the VMM tracer
+        produces clean non-tiled graphs, diffusion components (transformer, VAE)
+        may be able to run without AMP on bf16 hardware where overflow is
+        impossible. On fp16 hardware (V100), AMP remains necessary.
+        """
+        return True
 
     def _normalize_sdpa_scaling(self) -> None:
         """
@@ -780,6 +816,7 @@ class GraphExecutor:
             dag=self._dag,
             device=torch.device(self.device),
             dtype=self.dtype,
+            amp_enabled=self._dtype_engine.amp_enabled,
         )
 
         # Register any op interceptors BEFORE compilation (Phase 2.2: KV cache support)

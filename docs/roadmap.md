@@ -82,7 +82,6 @@ You describe your hardware once in a YAML profile, and NeuroBrix handles the res
 - PixArt-Alpha (multiple resolutions)
 - PixArt-Sigma XL 1024
 - Sana 1024px and 4K
-- FLUX.1-dev
 
 **Large Language Models**
 - DeepSeek-MoE-16B-Chat
@@ -110,7 +109,6 @@ You describe your hardware once in a YAML profile, and NeuroBrix handles the res
 **Additional Image Models**
 - Stable Diffusion XL
 - Stable Diffusion 3
-- FLUX.1-schnell
 
 ---
 
