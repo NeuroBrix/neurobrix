@@ -114,7 +114,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Universal model registry — single source of truth for all model configs
-- Transformers vendor isolation: each model traces with its exact version
+- Per-model transformers version pinning for reproducible compilation
 
 ### Changed
 - ZERO FALLBACK enforced: removed all silent config defaults
