@@ -7,12 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+- VAETilingStrategy (`core/components/vae_tiling.py`) — replaced by universal TilingEngine
+
 ### Changed
 - DtypeEngine simplified to standard PyTorch AMP — removed custom overflow protection (add/sub clamping), _safe_downcast clamping, matmul output inf clamp, and bmm FP32 override
 - bmm moved from AMP_FP32_OPS to AMP_FP16_OPS (matches PyTorch classification)
 - amp_cast_result() is now a no-op (standard PyTorch AMP does no output clamping)
 
 ### Added
+- Symbolic spatial dims in forge tracer — view/reshape ops now serialize SymInt expression trees (floordiv, add, sub, mul) instead of hardcoded literal ints, enabling compiled graphs to run at any spatial resolution
+- ExprArg in CompiledSequence — runtime resolves symbolic expressions via SymbolicShapeResolver for view/reshape spatial dims
+- Forge shape propagation: `_slice` rule — sliced dimensions become concrete (fixed architecture constants like patch size) instead of propagating input spatial symbols unchanged
+- Universal TilingEngine — replaces Sana-specific VAETilingStrategy with data-driven per-component tiling (accumulate-and-divide blending, parameters from graph.json + profile.json)
 - Forge tracer: audio family support — 5 models at 100% trace (Whisper, Whisper V3 Turbo, Voxtral, Orpheus, Granite Speech)
 - Forge tracer: universal .pth/native model loading — non-HuggingFace models (fish-speech, Kokoro) load via native constructors
 - Forge tracer: Conformer/Linear encoder stimulus detection alongside Conv1d (Whisper)
@@ -20,6 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Forge registry: audio model entries (dual_ar, kokoro, vibevoice, chatterbox) with loader configs
 
 ### Fixed
+- Fix grid artifacts in diffusion VAE output — forge tracer was calling `enable_tiling()` on all VAEs during tracing, baking tile-boundary ops into graph (18,971 ops instead of 737). Disabled tiling during tracing; runtime TilingEngine handles tiling externally when needed
+- Fix VMM pool OOM not triggering recovery — VMM raises RuntimeError ("not allocated yet"), not OutOfMemoryError. OOM recovery now catches both, enabling Sana 4K VAE trace at reduced resolution
+- Fix builder vae_scale_factor for AutoencoderDC — added fallback to `encoder_block_out_channels`/`decoder_block_out_channels` when `block_out_channels` is absent
+- Fix symbolic injection trace-value validation — `_inject_symbolic_view_shapes` now verifies symbolic dim's trace value matches the literal being replaced, preventing wrong symbol assignment (e.g., input height s1=128 replacing patch size 16)
+- Fix missing `_slice` shape propagation rule — `aten::slice` fell through to `_fallback` (identity), causing input spatial symbols (s1=128) to propagate unchanged through slice ops that reduce to fixed sizes (16), corrupting all downstream view/reshape symbolic dims (3666 wrong dims in Sana 4K VAE)
+- Fix h==w symbol overwrite in forge shape tracker — when height and width have same trace value, second symbol no longer overwrites first in reverse lookup
 - Fix Forge VMM pool destruction before unified tracing — transformers models (TinyLlama, Qwen3) crashed with "CUDA error: invalid argument" because pool was destroyed after Phase A
 - Fix Forge bf16 safety scan using wrong GPU — scan used `inventory.find_largest_gpu()` instead of VMM primary device, causing CUDA errors and false fp32 fallback for FLUX transformer
 - Fix Forge bf16 scan CPU fallback — generic exceptions now fall back to CPU scan instead of immediately failing to fp32 (prevented FLUX transformer from loading as fp16)

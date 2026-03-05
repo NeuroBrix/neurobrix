@@ -58,7 +58,7 @@ For more information: https://github.com/neurobrix/neurobrix
         help='Run inference using NBX Engine',
         description='Run inference using Prism ExecutionPlan + NBX Engine. Family is read from manifest.'
     )
-    run_parser.add_argument('--model', required=True, help='Model name (e.g., "Flex.1-alpha")')
+    run_parser.add_argument('--model', default=None, help='Model name (auto-detected from running daemon if omitted)')
     run_parser.add_argument('--hardware', default=None, help='Hardware profile ID (e.g., "v100-32g"). Auto-detected if omitted.')
     run_parser.add_argument('--prompt', required=True, help='Text prompt for generation')
     run_parser.add_argument('--steps', type=int, default=None, help='Number of inference steps')

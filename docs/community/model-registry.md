@@ -103,7 +103,6 @@ Contact [enterprise@neurobrix.es](mailto:enterprise@neurobrix.es) for enterprise
 | Model | Organization | Size |
 |-------|-------------|------|
 | Flex.1-alpha | Ostris | 24.5 GB |
-| FLUX.2-dev | Black Forest Labs | 105.1 GB |
 | Sana 1600M (4K + Multilingual) | Sana | 12.1 GB |
 | PixArt-Sigma-XL | PixArt | 20.3 GB |
 | Janus-Pro-7B | DeepSeek AI | 13.8 GB |

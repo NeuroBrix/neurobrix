@@ -180,7 +180,7 @@ class TextProcessor:
         Tokenize prompt for diffusion models (iterative_process flow).
 
         Applies model-specific preprocessing:
-        - Chat template formatting for chat-based text encoders (FLUX.2/Mistral)
+        - Chat template formatting for chat-based text encoders (e.g. Mistral)
         - CHI prefix for Sana
         - Basic tokenization for other models
 
@@ -268,18 +268,23 @@ class TextProcessor:
             suffix = "_" + encoder_name.split("text_encoder_")[1]
         tokenizer_name = f"tokenizer{suffix}"
 
-        # Get max_length (DATA-DRIVEN)
-        tokenizer_vals = self._topology.get("extracted_values", {}).get(tokenizer_name, {})
-        neg_max_length = tokenizer_vals.get("max_sequence_length")
+        # Get max_length from graph input shape (DATA-DRIVEN).
+        # CRITICAL: Use the text_encoder graph's input_ids shape, NOT max_sequence_length.
+        # max_sequence_length is the POST-finalization output length (e.g. 300 for Sana),
+        # but the graph was traced with longer inputs (e.g. 506 for Sana with CHI prefix).
+        # Tokenizing to the wrong length causes shape mismatch → NaN cascade.
+        text_encoder_shapes = (
+            self._topology.get("components", {})
+            .get(encoder_name, {})
+            .get("shapes", {})
+        )
+        neg_max_length = None
+        if "input_ids" in text_encoder_shapes:
+            neg_max_length = text_encoder_shapes["input_ids"][1]
 
         if neg_max_length is None:
-            text_encoder_shapes = (
-                self._topology.get("components", {})
-                .get(encoder_name, {})
-                .get("shapes", {})
-            )
-            if "input_ids" in text_encoder_shapes:
-                neg_max_length = text_encoder_shapes["input_ids"][1]
+            tokenizer_vals = self._topology.get("extracted_values", {}).get(tokenizer_name, {})
+            neg_max_length = tokenizer_vals.get("max_sequence_length")
 
         if neg_max_length is None:
             raise RuntimeError(

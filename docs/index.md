@@ -39,7 +39,7 @@ neurobrix run --prompt "A photograph of a mountain lake at sunset"
 
 | Family | Models | Status |
 |--------|--------|--------|
-| **Image** | PixArt-Sigma, Sana, FLUX, Janus-Pro | Production |
+| **Image** | PixArt-Sigma, Sana, Flex.1, Janus-Pro | Production |
 | **LLM** | DeepSeek-MoE, Qwen3 | Production |
 | **Audio** | Whisper | In progress |
 | **Video** | CogVideoX | In progress |

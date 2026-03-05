@@ -28,7 +28,6 @@ neurobrix hub --search sana
 | Model | Org | Description |
 |-------|-----|-------------|
 | Flex.1-alpha | ostris | Flexible image generation |
-| FLUX.2-dev | FLUX | High-quality diffusion |
 | Sana_1600M_4Kpx_BF16 | sana | 4K resolution, 1.6B params |
 | Sana_1600M_1024px_MultiLing | sana | Multilingual, 1024px |
 | PixArt-Sigma-XL-2-1024-MS | pixart | Multi-subject generation |

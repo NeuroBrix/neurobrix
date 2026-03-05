@@ -27,6 +27,26 @@ def _cast_attn_mask(mask, query):
     return mask
 
 
+def _align_qkv_dtypes(q, k, v):
+    """Align Q/K/V dtypes for SDPA. Required when upstream AMP ops produce mixed dtypes.
+
+    On fp16 hardware, FP16_PRECISION_OPS (bmm) upcast to fp32. If Q or K flows
+    through bmm but V doesn't, SDPA receives mixed fp32/fp16 → crash.
+    Cast all to the narrowest common dtype (prefer compute_dtype for performance).
+    """
+    if q.dtype == k.dtype == v.dtype:
+        return q, k, v
+    # Use the narrowest dtype (fp16/bf16 preferred over fp32 for SDPA performance)
+    target = min((q.dtype, k.dtype, v.dtype), key=lambda d: torch.tensor([], dtype=d).element_size())
+    if q.dtype != target:
+        q = q.to(target)
+    if k.dtype != target:
+        k = k.to(target)
+    if v.dtype != target:
+        v = v.to(target)
+    return q, k, v
+
+
 def _safe_is_causal(val: Any) -> bool:
     """Convert is_causal to Python bool. Handles tensor, int, bool, and float args.
 
@@ -77,14 +97,15 @@ class CompiledOpResolver:
     No dependency on NativeATenDispatcher.
     """
 
-    def __init__(self, device: torch.device, dtype: torch.dtype, graph_dtype: Optional[torch.dtype] = None):
+    def __init__(self, device: torch.device, dtype: torch.dtype, graph_dtype: Optional[torch.dtype] = None,
+                 amp_enabled: bool = True):
         self.device = device
         self.dtype = dtype
         self._op_cache: Dict[str, Callable] = {}
 
         # DtypeEngine: single entry point for all dtype decisions
         from neurobrix.core.dtype.engine import DtypeEngine
-        self.dtype_engine = DtypeEngine(dtype, graph_dtype=graph_dtype)
+        self.dtype_engine = DtypeEngine(dtype, graph_dtype=graph_dtype, amp_enabled=amp_enabled)
 
     # ========================================================================
     # PUBLIC API
@@ -401,6 +422,7 @@ class CompiledOpResolver:
 
         if base_name == "_scaled_dot_product_flash_attention_for_cpu":
             def flash_cpu_attention(q, k, v, dropout_p=0.0, is_causal=False, **kwargs):
+                q, k, v = _align_qkv_dtypes(q, k, v)
                 scale = kwargs.get("scale", None)
                 attn_mask = _cast_attn_mask(kwargs.get("attn_mask", None), q)
                 output = F.scaled_dot_product_attention(
@@ -419,6 +441,7 @@ class CompiledOpResolver:
                          "_scaled_dot_product_flash_attention"):
             def efficient_attention(q, k, v, attn_bias=None, compute_lse=False,
                                    dropout_p=0.0, is_causal=False, scale=None, *args):
+                q, k, v = _align_qkv_dtypes(q, k, v)
                 if not q.is_contiguous():
                     q = q.contiguous()
                 if not k.is_contiguous():
@@ -442,6 +465,7 @@ class CompiledOpResolver:
 
         # Standard SDPA — handles pattern-reassembled ops + native SDPA
         def standard_attention(q, k, v, *args, **kwargs):
+            q, k, v = _align_qkv_dtypes(q, k, v)
             # K may be transposed [B,H,D,S] from pattern reassembly — fix to [B,H,S,D]
             if k.ndim == 4 and q.ndim == 4 and k.shape[-2] != q.shape[-2]:
                 k = k.transpose(-2, -1)
