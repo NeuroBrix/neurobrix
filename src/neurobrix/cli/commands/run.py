@@ -103,6 +103,22 @@ def cmd_run(args):
     from neurobrix.core.runtime.executor import RuntimeExecutor
     from neurobrix.core.config import get_output_processing
 
+    # Auto-detect model from running daemon if --model omitted
+    if args.model is None:
+        from neurobrix.serving.client import DaemonClient
+        if DaemonClient.is_running():
+            try:
+                client = DaemonClient()
+                client.connect()
+                status = client.status()
+                args.model = status.get("model")
+                client.close()
+            except Exception:
+                pass
+        if args.model is None:
+            print("ERROR: --model is required when no daemon is running.")
+            sys.exit(1)
+
     # Warm path: if daemon is running with same model, use it
     if _try_warm_path(args):
         sys.exit(0)

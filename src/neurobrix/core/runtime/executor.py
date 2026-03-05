@@ -30,7 +30,7 @@ from neurobrix.core.runtime.resolution.input_resolver import InputResolver
 from neurobrix.core.runtime.resolution.input_synthesizer import InputSynthesizer
 from neurobrix.core.runtime.resolution.output_extractor import OutputExtractor
 from neurobrix.core.cfg.engine import CFGEngine
-from neurobrix.core.components.vae_tiling import VAETilingStrategy
+from neurobrix.core.module.tiling_engine import TilingEngine
 
 
 class RuntimeExecutor:
@@ -77,8 +77,8 @@ class RuntimeExecutor:
         self._output_extractor: Optional[OutputExtractor] = None
         # Note: CFGEngine is created in _create_flow_handler where FlowContext is available
 
-        # VAE Tiling Strategy - DATA-DRIVEN from topology.json
-        self._vae_tiling: Optional[VAETilingStrategy] = None
+        # Universal tiling — DATA-DRIVEN per component from graph.json + profile.json
+        self._component_tiling: Dict[str, TilingEngine] = {}
 
         # Setup flag — allows InferenceEngine to call setup() once, then execute() many times
         self._is_setup = False
@@ -102,6 +102,10 @@ class RuntimeExecutor:
         """DATA-DRIVEN flow type detection from topology.flow.type."""
         flow = self.pkg.topology.get("flow", {})
         if flow and "type" in flow:
+            # Check generation.type for encoder-decoder override
+            gen_type = flow.get("generation", {}).get("type", "")
+            if gen_type == "encoder_decoder_audio":
+                return "encoder_decoder_audio"
             return flow["type"]
 
         raise RuntimeError(
@@ -115,6 +119,9 @@ class RuntimeExecutor:
         index: Dict[str, Dict[str, List[str]]] = {}
         connections = self.pkg.topology.get("connections", [])
 
+        # Known component names for multi-dot resolution (e.g., "model.encoder")
+        known_components = set(self.pkg.topology.get("components", {}).keys())
+
         for conn in connections:
             from_port = conn.get("from", "")
             to_port = conn.get("to", "")
@@ -122,7 +129,8 @@ class RuntimeExecutor:
             if not to_port or "." not in to_port:
                 continue
 
-            to_comp, to_input = to_port.split(".", 1)
+            # Match against known component names to handle dots in names
+            to_comp, to_input = self._split_port(to_port, known_components)
 
             if to_comp not in index:
                 index[to_comp] = {}
@@ -161,6 +169,21 @@ class RuntimeExecutor:
                     )
 
         return index
+
+    @staticmethod
+    def _split_port(port: str, known_components: set):
+        """Split a connection port into (component_name, input/output_name).
+
+        Handles multi-dot component names (e.g., "model.encoder.output_0")
+        by matching against known component names longest-first.
+        """
+        # Try known components longest-first
+        for comp in sorted(known_components, key=len, reverse=True):
+            if port.startswith(comp + "."):
+                return comp, port[len(comp) + 1:]
+        # Fallback: split on first dot
+        parts = port.split(".", 1)
+        return parts[0], parts[1] if len(parts) > 1 else ""
 
     def setup(self) -> None:
         """
@@ -318,14 +341,19 @@ class RuntimeExecutor:
             variable_resolver=self.variable_resolver
         )
 
-        # VAE Tiling - DATA-DRIVEN from VAE graph and profile
-        # Read trace size from graph, compression from profile - no hardcoding
-        try:
-            self._vae_tiling = VAETilingStrategy.from_model_cache(self.pkg.cache_path)
-        except (FileNotFoundError, ValueError) as e:
-            # Model doesn't have VAE or tiling not applicable
-            logger.debug(f"VAE tiling not available: {e}")
-            self._vae_tiling = None
+        # Universal tiling — DATA-DRIVEN per component
+        self._component_tiling = {}
+        components_dir = self.pkg.cache_path / "components"
+        for comp_name in self.pkg.topology.get("components", {}):
+            try:
+                engine = TilingEngine.from_component_config(
+                    graph_path=components_dir / comp_name / "graph.json",
+                    profile_path=components_dir / comp_name / "profile.json",
+                )
+                if engine is not None:
+                    self._component_tiling[comp_name] = engine
+            except (FileNotFoundError, ValueError) as e:
+                logger.debug(f"Tiling not available for {comp_name}: {e}")
 
         # Note: CFGEngine is created in _create_flow_handler where FlowContext is available
 
@@ -376,10 +404,19 @@ class RuntimeExecutor:
                 input_synthesizer=self._input_synthesizer,
                 output_extractor=self._output_extractor
             )
+        elif flow_type == "encoder_decoder_audio":
+            from neurobrix.core.flow.encoder_decoder_audio import EncoderDecoderAudioHandler
+            return EncoderDecoderAudioHandler(
+                ctx=ctx,
+                execute_component_fn=self._execute_component,
+                resolve_inputs_fn=self._input_resolver.resolve_component_inputs,
+                ensure_weights_fn=self._ensure_weights_loaded,
+                unload_weights_fn=self._unload_component_weights,
+            )
 
         raise RuntimeError(
             f"ZERO FALLBACK: Unsupported flow type '{flow_type}'.\n"
-            f"Supported: iterative_process, static_graph, forward_pass, autoregressive_generation"
+            f"Supported: iterative_process, static_graph, forward_pass, autoregressive_generation, encoder_decoder_audio"
         )
 
     # ========== SETUP METHODS ==========
@@ -467,9 +504,12 @@ class RuntimeExecutor:
         """Instantiate Neural Executors via Factory."""
         topology_components = self.pkg.topology.get("components", {})
 
+        # Non-neural component types that never need executors
+        NON_NEURAL_TYPES = {"module", "scheduler"}
+
         for comp_name, comp_info in topology_components.items():
             comp_type = comp_info.get("type", "")
-            if comp_type not in ("neural", "neural_component"):
+            if comp_type in NON_NEURAL_TYPES:
                 continue
 
             if comp_name in self.modules:
@@ -594,26 +634,24 @@ class RuntimeExecutor:
         comp_inputs = self._input_synthesizer.synthesize_missing_inputs(comp_name, comp_inputs)
         comp_inputs = self._input_synthesizer.apply_shape_transforms(comp_name, comp_inputs)
 
-        # Execute: Check for VAE tiling first, then TP, then normal
+        # Execute: Check for tiling first, then TP, then normal
         output = None
 
-        # VAE TILING: For post_loop VAE decode with large latents
-        # DATA-DRIVEN: Tiles at trace_latent_size with overlapping + blending
-        if phase == "post_loop" and comp_name == "vae" and self._vae_tiling:
-            latent = self._find_latent_input(comp_inputs)
-            if latent is not None and self._vae_tiling.should_tile(latent):
-                # Find input name from comp_inputs (usually 'z' for VAE)
-                input_name = next(iter(comp_inputs.keys()), 'z')
+        # UNIVERSAL TILING: Any component with a TilingEngine gets tiled
+        # when its spatial input exceeds trace size
+        tiling = self._component_tiling.get(comp_name)
+        if tiling is not None:
+            spatial_input = self._find_spatial_input(comp_inputs)
+            if spatial_input is not None and tiling.should_tile(spatial_input):
+                input_name = next(iter(comp_inputs.keys()))
 
-                # Create decode function that uses the NeuroBrix graph executor
-                def decode_tile(tile):
+                def execute_tile(tile):
                     result = executor.run({input_name: tile})
                     if isinstance(result, dict):
                         result = next(iter(result.values()))
                     return result
 
-                # Tiled decode with overlapping + blending
-                output = self._vae_tiling.tiled_decode(latent, decode_tile)
+                output = tiling.tiled_execute(spatial_input, execute_tile)
 
         # Standard execution if tiling didn't happen
         if output is None:
@@ -658,25 +696,13 @@ class RuntimeExecutor:
                 return getattr(alloc, 'strategy', '') == 'zero3'
         return False
 
-    # ========== VAE TILING HELPERS ==========
+    # ========== TILING HELPERS ==========
 
-    def _find_latent_input(self, comp_inputs: Dict[str, Any]) -> Optional[torch.Tensor]:
-        """Find the latent tensor in component inputs for VAE tiling."""
-        # DEBT: These keys could come from topology.json inputs spec
-        # For now, common VAE input names + fallback to any 4D tensor
-        latent_keys = ["z", "latent", "latents", "sample", "hidden_states", "arg_0"]
-
-        for key in latent_keys:
-            if key in comp_inputs:
-                value = comp_inputs[key]
-                if isinstance(value, torch.Tensor) and value.dim() == 4:
-                    return value
-
-        # Search for any 4D tensor
-        for key, value in comp_inputs.items():
+    def _find_spatial_input(self, comp_inputs: Dict[str, Any]) -> Optional[torch.Tensor]:
+        """Find the first 4D spatial tensor in component inputs for tiling."""
+        for value in comp_inputs.values():
             if isinstance(value, torch.Tensor) and value.dim() == 4:
                 return value
-
         return None
 
     # ========== WEIGHT MANAGEMENT ==========

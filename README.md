@@ -147,7 +147,6 @@ All models are hosted on the [NeuroBrix Hub](https://neurobrix.es/models) and ca
 | Model | Size | Highlights |
 |-------|-----:|------------|
 | [**Flex.1-alpha**](https://neurobrix.es/models) | 24.5 GB | 8B parameter rectified flow transformer |
-| [**FLUX.2-dev**](https://neurobrix.es/models) | 105.1 GB | 32B parameter text-to-image |
 | [**Sana_1600M_4Kpx_BF16**](https://neurobrix.es/models) | 12.1 GB | Efficient 4K image synthesis |
 | [**Sana_1600M_1024px_MultiLing**](https://neurobrix.es/models) | 12.1 GB | Multilingual 1024px, runs on laptop GPUs |
 | [**PixArt-Sigma-XL-2-1024-MS**](https://neurobrix.es/models) | 20.3 GB | Diffusion Transformer, 4K capable |
