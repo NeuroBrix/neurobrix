@@ -102,11 +102,12 @@ class RuntimeExecutor:
         """DATA-DRIVEN flow type detection from topology.flow.type."""
         flow = self.pkg.topology.get("flow", {})
         if flow and "type" in flow:
-            # Check generation.type for encoder-decoder override
+            flow_type = flow["type"]
+            # Legacy compatibility: forward_pass + generation.type override
             gen_type = flow.get("generation", {}).get("type", "")
             if gen_type == "encoder_decoder_audio":
-                return "encoder_decoder_audio"
-            return flow["type"]
+                return "audio"
+            return flow_type
 
         raise RuntimeError(
             "ZERO FALLBACK: Cannot detect flow_type from topology.\n"
@@ -404,9 +405,18 @@ class RuntimeExecutor:
                 input_synthesizer=self._input_synthesizer,
                 output_extractor=self._output_extractor
             )
-        elif flow_type == "encoder_decoder_audio":
-            from neurobrix.core.flow.encoder_decoder_audio import EncoderDecoderAudioHandler
-            return EncoderDecoderAudioHandler(
+        elif flow_type == "audio":
+            from neurobrix.core.flow.audio import AudioEngine
+            return AudioEngine(
+                ctx=ctx,
+                execute_component_fn=self._execute_component,
+                resolve_inputs_fn=self._input_resolver.resolve_component_inputs,
+                ensure_weights_fn=self._ensure_weights_loaded,
+                unload_weights_fn=self._unload_component_weights,
+            )
+        elif flow_type == "rnnt":
+            from neurobrix.core.flow.rnnt import RNNTEngine
+            return RNNTEngine(
                 ctx=ctx,
                 execute_component_fn=self._execute_component,
                 resolve_inputs_fn=self._input_resolver.resolve_component_inputs,
@@ -416,7 +426,8 @@ class RuntimeExecutor:
 
         raise RuntimeError(
             f"ZERO FALLBACK: Unsupported flow type '{flow_type}'.\n"
-            f"Supported: iterative_process, static_graph, forward_pass, autoregressive_generation, encoder_decoder_audio"
+            f"Supported: iterative_process, static_graph, forward_pass, "
+            f"autoregressive_generation, audio, rnnt"
         )
 
     # ========== SETUP METHODS ==========

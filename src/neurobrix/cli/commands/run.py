@@ -57,14 +57,18 @@ def _try_warm_path(args) -> bool:
     if args.seed is not None:
         kwargs["seed"] = args.seed
 
-    # For non-LLM: pass output_path so daemon saves the file
+    # Audio models: pass audio_path to daemon
+    if getattr(args, 'audio', None):
+        kwargs["audio_path"] = args.audio
+
+    # For non-LLM non-audio: pass output_path so daemon saves the file
     family = status.get("family")
-    if family != "llm":
+    if family not in ("llm", "audio"):
         output_path = args.output or f"output_{args.model}.png"
         kwargs["output_path"] = output_path
 
     try:
-        result = client.generate(prompt=args.prompt, **kwargs)
+        result = client.generate(prompt=args.prompt or "", **kwargs)
         client.close()
     except RuntimeError as e:
         print(f"[Run] Daemon error: {e}")
@@ -81,6 +85,17 @@ def _try_warm_path(args) -> bool:
         print(f"\n[Output] Generated {tokens} tokens in {total_s}s")
         if text:
             print(f"\n{text}")
+    elif family == "audio":
+        # Audio STT: transcription text
+        transcription = result.get("transcription")
+        if transcription:
+            print(f"\n[Transcription] {transcription}")
+        # Audio TTS: waveform saved
+        saved_path = result.get("output_path")
+        if saved_path:
+            print(f"\n{'='*70}")
+            print(f"SAVED: {saved_path}")
+            print(f"{'='*70}")
     else:
         saved_path = result.get("output_path")
         if saved_path:
@@ -135,8 +150,11 @@ def cmd_run(args):
     print("=" * 70)
     print(f"Model: {args.model}")
     print(f"Hardware: {args.hardware or 'auto-detect'}")
-    prompt_display = f"{args.prompt[:50]}..." if len(args.prompt) > 50 else args.prompt
-    print(f"Prompt: {prompt_display}")
+    if args.prompt:
+        prompt_display = f"{args.prompt[:50]}..." if len(args.prompt) > 50 else args.prompt
+        print(f"Prompt: {prompt_display}")
+    if getattr(args, 'audio', None):
+        print(f"Audio: {args.audio}")
     print("=" * 70)
 
     # 1. Load NBX Container
@@ -144,21 +162,25 @@ def cmd_run(args):
     container = NBXContainer.load(str(nbx_path))
 
     # DATA-DRIVEN: Validate input modality before proceeding
-    # Image-to-image models (super-resolution, upscaling) require an input image, not a text prompt
     manifest = container.get_manifest() or {}
+    family = manifest.get("family")
     input_modality = manifest.get("input_modality", "text")
+
+    # Image-to-image models (super-resolution, upscaling)
     if input_modality == "image":
         model_name = manifest.get("model_name", args.model)
-        print(f"\n{'='*70}")
-        print(f"ERROR: Input modality mismatch for '{model_name}'")
-        print(f"{'='*70}")
-        print(f"\n  This model is an IMAGE-TO-IMAGE model (e.g., super-resolution, upscaling).")
-        print(f"  It requires an input image to process, not a text prompt.")
-        print(f"\n  You provided: --prompt \"{args.prompt}\"")
-        print(f"  Expected:     --input-image <path/to/image.png>")
-        print(f"\n  Image-to-image inference is not yet supported in NeuroBrix CLI.")
-        print(f"  This model cannot be used with text-to-image generation.\n")
-        print(f"{'='*70}")
+        print(f"\nERROR: '{model_name}' is an image-to-image model requiring --input-image.")
+        print(f"Image-to-image inference is not yet supported.")
+        sys.exit(1)
+
+    # Audio family input validation
+    if family == "audio":
+        audio_arg = getattr(args, 'audio', None)
+        if not audio_arg and not args.prompt:
+            print("ERROR: Audio model requires --audio <file> (STT) or --prompt <text> (TTS)")
+            sys.exit(1)
+    elif not args.prompt:
+        print("ERROR: --prompt is required for this model family.")
         sys.exit(1)
 
     neural_components = container.get_neural_components()
@@ -220,9 +242,11 @@ def cmd_run(args):
     # 4. Build Universal Inputs Dictionary
     print("\n[4/4] Preparing inputs...")
 
-    inputs = {
-        "global.prompt": args.prompt,
-    }
+    inputs = {}
+    if args.prompt:
+        inputs["global.prompt"] = args.prompt
+    if getattr(args, 'audio', None):
+        inputs["global.audio_path"] = args.audio
 
     if args.steps is not None:
         inputs["global.num_inference_steps"] = args.steps
@@ -299,7 +323,7 @@ def cmd_run(args):
     # 6a. Print timing summary
     print(f"\n[Timing] Total execution: {t_exec_total:.2f}s")
 
-    # 6. Find and Save Output - FAMILY-DRIVEN
+    # 7. Find and Save Output - FAMILY-DRIVEN
     family = pkg.manifest.get("family")
     if family is None:
         raise RuntimeError(
@@ -357,7 +381,40 @@ def cmd_run(args):
         sys.exit(0)
 
     # =========================================================================
-    # Image/Video/Audio Family: Tensor Output
+    # Audio Family: Transcription (STT) or Waveform (TTS)
+    # =========================================================================
+    if family == "audio":
+        # STT: text transcription
+        transcription = outputs.get("global.transcription")
+        if transcription:
+            print(f"\n[Transcription]")
+            print(f"\n{transcription}")
+            if args.output:
+                with open(args.output, 'w') as f:
+                    f.write(transcription)
+                print(f"\nSaved to: {args.output}")
+            sys.exit(0)
+
+        # TTS: waveform tensor
+        waveform = outputs.get("global.output_audio")
+        if waveform is not None:
+            output_path = args.output or f"output_{args.model}.wav"
+            from neurobrix.core.module.audio.output_processor import AudioOutputProcessor
+            from neurobrix.core.config import get_output_processing
+            audio_cfg = get_output_processing("audio")
+            sample_rate = pkg.defaults.get("sample_rate", audio_cfg.get("sample_rate", 16000))
+            AudioOutputProcessor.save_waveform(waveform, output_path, sample_rate)
+            print(f"\n{'='*70}")
+            print(f"SAVED: {output_path}")
+            print(f"{'='*70}")
+            sys.exit(0)
+
+        print(f"\n[WARNING] Audio model produced no transcription or waveform output")
+        print(f"Available: {list(outputs.keys())}")
+        sys.exit(1)
+
+    # =========================================================================
+    # Image/Video Family: Tensor Output
     # =========================================================================
     output_path = args.output or f"output_{args.model}.png"
 

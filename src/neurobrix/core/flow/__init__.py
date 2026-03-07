@@ -28,7 +28,7 @@ from .iterative_process import IterativeProcessHandler
 from .static_graph import StaticGraphHandler
 from .forward_pass import ForwardPassHandler
 from .autoregressive import AutoregressiveHandler
-from .encoder_decoder_audio import EncoderDecoderAudioHandler
+from .audio import AudioEngine
 
 __all__ = [
     "FlowContext",
@@ -40,5 +40,5 @@ __all__ = [
     "StaticGraphHandler",
     "ForwardPassHandler",
     "AutoregressiveHandler",
-    "EncoderDecoderAudioHandler",
+    "AudioEngine",
 ]
