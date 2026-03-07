@@ -109,6 +109,9 @@ class NBXRuntimeLoader:
                     break
 
             if not found:
+                # Non-functional modules (e.g. figures, docs) have no config — skip silently
+                if mod_def.get("type") == "generic":
+                    continue
                 raise RuntimeError(
                     f"Module '{mod_name}' declared in manifest but no config found. "
                     f"Expected at: {config_path or mod_path + '*config*.json'}"

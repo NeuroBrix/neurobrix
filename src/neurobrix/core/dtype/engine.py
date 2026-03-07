@@ -86,8 +86,9 @@ AMP_FP32_OPS: FrozenSet[str] = frozenset({
     "pow",
     # Activation
     "softplus",
-    # Normalization (PyTorch: layer_norm, native_layer_norm, group_norm)
+    # Normalization (PyTorch: layer_norm, native_layer_norm, group_norm, batch_norm)
     "layer_norm", "native_layer_norm", "group_norm", "native_group_norm",
+    "batch_norm", "native_batch_norm", "cudnn_batch_norm", "instance_norm",
     # Norms
     "frobenius_norm", "nuclear_norm", "cosine_similarity",
     # Loss functions (rare in inference, included for correctness)

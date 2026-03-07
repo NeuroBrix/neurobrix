@@ -141,6 +141,12 @@ class SymbolicShapeResolver:
             self._bound = True
             return
 
+        # Clear stale values — critical for AR loops where input shapes change
+        # between iterations (e.g. seq_len grows from 1→2→3...).
+        # Without clearing, old symbol values persist even when the source
+        # input is no longer present, causing view/reshape to use wrong dims.
+        self._runtime_values.clear()
+
         # For each symbol, find its source and bind
         for symbol_id, symbol_info in self._symbols.items():
             source = symbol_info.get("source", "")
