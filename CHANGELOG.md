@@ -9,18 +9,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 - VAETilingStrategy (`core/components/vae_tiling.py`) — replaced by universal TilingEngine
+- EncoderDecoderAudioHandler (`core/flow/encoder_decoder_audio.py`) — replaced by universal AudioEngine
+- Whisper-specific AudioProcessor (`core/module/audio/processor.py`) — replaced by AudioInputProcessor
+- NBX builder no longer converts weight dtype — preserves vendor-original dtype faithfully
 
 ### Changed
 - DtypeEngine simplified to standard PyTorch AMP — removed custom overflow protection (add/sub clamping), _safe_downcast clamping, matmul output inf clamp, and bmm FP32 override
 - bmm moved from AMP_FP32_OPS to AMP_FP16_OPS (matches PyTorch classification)
 - amp_cast_result() is now a no-op (standard PyTorch AMP does no output clamping)
+- Symbolic shape system: view/reshape ops use algebraic propagation to determine which dims are symbolic (prevents head_dim=128 aliasing with seq_len=128)
+- CompiledSequence runtime promotion respects algebraic symbolization for view/reshape ops
+
+### Fixed
+- Symbolic shape aliasing: head_dim and seq_len no longer confused when they have the same value
+- Shape propagation unflatten: recovers symbolic sub-dims when splitting a symbolic dimension
+- DtypeEngine: added batch_norm, native_batch_norm, cudnn_batch_norm, instance_norm to AMP FP32 ops — Conformer models with BatchNorm now work correctly in fp16
 
 ### Added
-- Symbolic spatial dims in compiled graphs — view/reshape ops now use expression trees instead of hardcoded literals, enabling execution at any spatial resolution
+- Symbolic spatial dims in compiled graphs — view/reshape ops use expression trees for multi-resolution support
 - ExprArg in CompiledSequence — runtime resolves symbolic expressions for view/reshape spatial dims
-- Universal TilingEngine — replaces Sana-specific VAETilingStrategy with data-driven per-component tiling (accumulate-and-divide blending, parameters from graph.json + profile.json)
-- Audio family support — encoder-decoder flow, audio processor module
-- DtypeEngine `amp_enabled` parameter wired through full compilation chain (GraphExecutor → CompiledSequence → CompiledOpResolver → DtypeEngine)
+- Universal TilingEngine — data-driven per-component tiling with accumulate-and-divide blending
+- Universal AudioEngine — data-driven flow handler for all audio models (STT/TTS)
+- RNNT transducer flow (`core/flow/rnnt.py`) — frame-by-frame greedy TDT decode with NeMo-compatible mel preprocessing
+- NeMo .nemo archive support — auto-extraction and weight conversion
+- `detect_vendor_dtype()` — discovers actual weight dtype from safetensors, .pth, .ckpt, or .nemo
+- AudioInputProcessor — routes audio preprocessing by topology (mel_spectrogram, raw_waveform, conformer)
+- AudioOutputProcessor — token decode (STT) and waveform save (TTS)
+- CLI `--audio` argument for speech-to-text input
+- Serving daemon audio support
+- DtypeEngine `amp_enabled` wired through full compilation chain
+- Data-driven audio preprocessing from graph.json input shapes
+- Delta feature extraction for Conformer models
+- LLM-style text tokenization for TTS/audio models
+- .pth, .nemo, .ckpt → safetensors weight conversion in NBX build
+
+### Fixed
+- Fix symbolic shape rebinding in AR loops — `bind_from_inputs()` now clears `_runtime_values` before rebinding, preventing stale seq_len from persisting across autoregressive iterations
+- Fix view/reshape dimension collision when trace-time seq_len equals head_dim/2 — view fallback now tries all positions and prefers the one matching the input tensor's actual dimension, preventing batch dim corruption (Voxtral bmm crash)
+- Fix input tensor detection in `_get_component_input_shape()` — match by `input_name` field and `input::` prefix in addition to `type="input"` (fixes granite-speech, canary-qwen preprocessing)
+- Fix preprocessing auto-correction from graph input shape — detects mel_spectrogram vs conformer from [B, mel, frames] vs [B, frames, feat] layout when topology specifies wrong type
+- Fix frame padding/truncation for encoders with non-symbolic position encoding — pad or truncate audio features to match trace-time frame count for Conformer/NeMo relative PE
+- Fix tokenizer encode compatibility for TTS models — fallback to manual tensor wrapping when tokenizer lacks `return_tensors` support (orpheus-3b)
+- AudioEngine AR loop: forced_decoder_ids now applied during generation (not pre-filled), fixing language detection for whisper-large
+- AudioEngine AR loop: max_tokens now treated as total sequence length limit (prevents position embedding overflow)
+- Audio topology: flow.audio schema with stages built from component architecture patterns
+- Audio connections: stage-aware routing for audio flows
+- Preprocessing detection: reads mel bins and feature dimensions from model config
 
 ### Fixed
 - Fix grid artifacts in diffusion VAE output (Sana 1K/4K, PixArt Sigma, PixArt Alpha) — regenerated clean model graphs, runtime TilingEngine handles tiling externally when needed

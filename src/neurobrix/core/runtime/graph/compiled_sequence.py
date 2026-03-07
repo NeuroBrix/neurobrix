@@ -922,32 +922,47 @@ class CompiledSequence:
                         args[1] = size_list
 
             # aten::view / aten::reshape / aten::_unsafe_view
-            # Shape args may contain seq_len — promote matching elements
+            # Shape args may contain seq_len — promote matching elements.
+            # SKIP if the tracer already did algebraic symbolization (shape list
+            # has symbol refs). The tracer's algebraic propagation is authoritative:
+            # it derives symbolic dims from input shapes, so concrete values in the
+            # shape list were intentionally left concrete (e.g., head_dim=128 that
+            # happens to match trace_seq_len=128 but is NOT dynamic).
             elif op_type in ("aten::view", "aten::reshape", "aten::_unsafe_view") and len(args) >= 2:
                 shape_arg = args[1]
                 is_wrapped = isinstance(shape_arg, dict) and shape_arg.get("type") == "list"
                 shape_items = shape_arg.get("value", []) if is_wrapped else shape_arg
                 if isinstance(shape_items, (list, tuple)):
-                    shape_list = list(shape_items)
-                    changed = False
-                    for i, elem in enumerate(shape_list):
-                        if isinstance(elem, dict):
-                            result = _try_promote_scalar(elem)
-                            if result:
-                                shape_list[i] = result
-                                promoted += 1
-                                changed = True
-                        elif isinstance(elem, int):
-                            result = _try_promote_raw_int(elem)
-                            if result:
-                                shape_list[i] = result
-                                promoted += 1
-                                changed = True
-                    if changed:
-                        if is_wrapped:
-                            args[1] = {"type": "list", "value": shape_list}
-                        else:
-                            args[1] = shape_list
+                    # Check if tracer already symbolized this op (has symbol refs)
+                    has_tracer_symbols = any(
+                        isinstance(elem, dict) and elem.get("type") == "symbol"
+                        for elem in shape_items
+                    )
+                    if has_tracer_symbols:
+                        pass  # Tracer's algebraic symbolization is authoritative
+                    else:
+                        # Legacy graph without algebraic symbolization — fall back
+                        # to brute-force promotion (collision check still applies)
+                        shape_list = list(shape_items)
+                        changed = False
+                        for i, elem in enumerate(shape_list):
+                            if isinstance(elem, dict):
+                                result = _try_promote_scalar(elem)
+                                if result:
+                                    shape_list[i] = result
+                                    promoted += 1
+                                    changed = True
+                            elif isinstance(elem, int):
+                                result = _try_promote_raw_int(elem)
+                                if result:
+                                    shape_list[i] = result
+                                    promoted += 1
+                                    changed = True
+                        if changed:
+                            if is_wrapped:
+                                args[1] = {"type": "list", "value": shape_list}
+                            else:
+                                args[1] = shape_list
 
     def _identify_seq_dependent_constants(self, tensors: Dict[str, Any]) -> None:
         """

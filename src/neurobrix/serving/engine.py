@@ -135,7 +135,8 @@ class InferenceEngine:
         self._executor.setup()
 
         # 7. Pre-warm weights for warm strategies (load into VRAM now, not on R1)
-        if self._warm_serving:
+        # Audio models skip warmup — require real audio file, can't meaningfully warm up
+        if self._warm_serving and self._family != "audio":
             warmup_inputs = {"global.prompt": "warmup", "global.max_tokens": 1}
             if self._family == "llm":
                 warmup_inputs["global.chat_mode"] = True
@@ -149,7 +150,7 @@ class InferenceEngine:
         if not self._warm_serving:
             print(f"[NeuroBrix] Cold serving — weights reload per request, setup/context persists")
 
-    def generate(self, prompt: str, **kwargs) -> Dict[str, Any]:
+    def generate(self, prompt: str = "", **kwargs) -> Dict[str, Any]:
         """
         Single-shot generation. Reused executor, fresh variable resolution.
 
@@ -159,7 +160,11 @@ class InferenceEngine:
             raise RuntimeError("ZERO FALLBACK: Engine not loaded. Call load() first.")
 
         # Build inputs dict (same structure as cmd_run)
-        inputs = {"global.prompt": prompt}
+        inputs = {}
+        if prompt:
+            inputs["global.prompt"] = prompt
+        if "audio_path" in kwargs and kwargs["audio_path"]:
+            inputs["global.audio_path"] = kwargs.pop("audio_path")
         if "steps" in kwargs and kwargs["steps"] is not None:
             inputs["global.num_inference_steps"] = kwargs["steps"]
         if "height" in kwargs and kwargs["height"] is not None:
@@ -199,6 +204,8 @@ class InferenceEngine:
 
         if self._family == "llm":
             result.update(self._extract_llm_output(outputs))
+        elif self._family == "audio":
+            result.update(self._extract_audio_output(outputs))
         else:
             result["outputs"] = outputs
 
@@ -362,6 +369,24 @@ class InferenceEngine:
         Save non-LLM output (image/audio/video) to file. Returns saved path.
         Replicates cold-path logic from run.py.
         """
+        # Audio family: save waveform or transcription
+        if self._family == "audio":
+            waveform = outputs.get("waveform") or outputs.get("global.output_audio")
+            if waveform is not None:
+                from neurobrix.core.module.audio.output_processor import AudioOutputProcessor
+                from neurobrix.core.config import get_output_processing
+                audio_cfg = get_output_processing("audio")
+                sample_rate = self._pkg.defaults.get("sample_rate", audio_cfg.get("sample_rate", 16000)) if self._pkg else 16000
+                if not output_path.endswith(".wav"):
+                    output_path = output_path.rsplit(".", 1)[0] + ".wav"
+                AudioOutputProcessor.save_waveform(waveform, output_path, sample_rate)
+                return output_path
+            transcription = outputs.get("transcription") or outputs.get("global.transcription")
+            if transcription:
+                with open(output_path, 'w') as f:
+                    f.write(str(transcription))
+                return output_path
+
         import numpy as np
         from PIL import Image
         from neurobrix.core.config import get_output_processing
@@ -406,6 +431,17 @@ class InferenceEngine:
 
         Image.fromarray(img_np).save(output_path)
         return output_path
+
+    def _extract_audio_output(self, outputs: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract audio output: transcription (STT) or waveform (TTS)."""
+        result = {}
+        transcription = outputs.get("global.transcription")
+        if transcription:
+            result["transcription"] = transcription
+        waveform = outputs.get("global.output_audio")
+        if waveform is not None:
+            result["waveform"] = waveform
+        return result
 
     def _extract_llm_output(self, outputs: Dict[str, Any]) -> Dict[str, Any]:
         """Extract text from LLM generation outputs."""

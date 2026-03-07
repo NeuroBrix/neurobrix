@@ -597,15 +597,28 @@ class CompiledOpResolver:
                 except RuntimeError:
                     # Numel mismatch: tensor has trace-time dims, shape has runtime dims.
                     # Try each position as -1 to find the symbolic (changed) dimension.
+                    # When multiple positions work, prefer the one whose inferred dim
+                    # matches the input tensor's actual dimension at that axis.
+                    # This prevents symbolic dimension collisions (e.g., head_dim/2 == trace seq_len)
+                    # from corrupting batch or other structural dimensions.
                     if len(shape) >= 2:
+                        candidates = []
                         for i in range(len(shape)):
                             trial = list(shape)
                             trial[i] = -1
                             try:
                                 result = tensor.reshape(trial)
-                                return result
+                                candidates.append((i, result))
                             except RuntimeError:
                                 continue
+                        if candidates:
+                            if len(candidates) == 1:
+                                return candidates[0][1]
+                            # Prefer position where inferred dim matches input tensor's actual dim
+                            for idx, result in candidates:
+                                if idx < tensor.ndim and result.shape[idx] == tensor.shape[idx]:
+                                    return result
+                            return candidates[0][1]
                     raise
         return view_or_reshape
 
