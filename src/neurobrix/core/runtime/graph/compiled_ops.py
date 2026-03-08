@@ -479,7 +479,14 @@ class CompiledOpResolver:
                 attn_mask = args[0]
                 seq_q, seq_k = q.shape[2], k.shape[2]
                 if attn_mask.shape[-2] > seq_q or attn_mask.shape[-1] > seq_k:
+                    # Mask larger than Q/K: trim to match
                     attn_mask = attn_mask[..., :seq_q, :seq_k].contiguous()
+                elif attn_mask.shape[-2] < seq_q or attn_mask.shape[-1] < seq_k:
+                    # Mask smaller than Q/K: trace-time constant mask that doesn't
+                    # cover runtime seq_len. If it's a causal mask (lower-triangular
+                    # with -inf above diagonal), use is_causal=True instead.
+                    is_causal = True
+                    attn_mask = None
 
             if attn_mask is not None:
                 attn_mask = _cast_attn_mask(attn_mask, q)

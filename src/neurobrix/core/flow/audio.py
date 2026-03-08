@@ -178,6 +178,15 @@ class AudioEngine(FlowHandler):
         short_key = variable.split(".")[-1] if "." in variable else variable
         self.ctx.variable_resolver.resolved[short_key] = features
 
+        # Bind audio length for models that need it (NeMo Conformer, etc.)
+        # The actual audio length (before padding) is the feature frame count
+        actual_frames = features.shape[-1] if preprocessing in ("mel_spectrogram", "nemo_mel") else features.shape[1]
+        length_tensor = torch.tensor([actual_frames], dtype=torch.long, device=features.device)
+        self.ctx.variable_resolver.resolved["global.audio_signal_length"] = length_tensor
+        self.ctx.variable_resolver.resolved["audio_signal_length"] = length_tensor
+        self.ctx.variable_resolver.resolved["global.length"] = length_tensor
+        self.ctx.variable_resolver.resolved["length"] = length_tensor
+
     def _preprocess_text_input(self, input_config: Dict) -> None:
         """Tokenize text prompt for TTS/LLM-audio models."""
         prompt = self.ctx.variable_resolver.resolved.get("global.prompt")
@@ -186,6 +195,11 @@ class AudioEngine(FlowHandler):
                 "ZERO FALLBACK: TTS model requires global.prompt.\n"
                 "Use --prompt <text> to provide text input."
             )
+
+        # Apply TTS prompt template if configured (DATA-DRIVEN from defaults.json)
+        tts_template = self.ctx.pkg.defaults.get("tts_prompt_template")
+        if tts_template and "{text}" in tts_template:
+            prompt = tts_template.format(text=prompt)
 
         tokenizer = self.ctx.modules.get("tokenizer")
         if tokenizer is None:
@@ -204,11 +218,13 @@ class AudioEngine(FlowHandler):
 
         if tokenization == "llm":
             # LLM-style: direct encode (Orpheus, Voxtral TTS, etc.)
+            # Use add_special_tokens=False when template already includes BOS
+            add_special = tts_template is None
             try:
-                input_ids = tokenizer.encode(prompt, return_tensors="pt")
+                input_ids = tokenizer.encode(prompt, return_tensors="pt",
+                                             add_special_tokens=add_special)
             except TypeError:
-                # Custom tokenizer without return_tensors support
-                ids = tokenizer.encode(prompt)
+                ids = tokenizer.encode(prompt, add_special_tokens=add_special)
                 input_ids = torch.tensor([ids], dtype=torch.long)
             if isinstance(input_ids, list):
                 input_ids = torch.tensor([input_ids], dtype=torch.long)
@@ -468,12 +484,40 @@ class AudioEngine(FlowHandler):
         print(f"   [Output] Transcription: {text[:100]}{'...' if len(text) > 100 else ''}")
 
     def _postprocess_audio_output(self, output_config: Dict) -> None:
-        """Store waveform output for TTS."""
+        """Process TTS output: decode audio tokens or store raw waveform."""
         variable = output_config.get("variable", "global.output_audio")
-        # The final stage's output tensor is the waveform
-        # It's already in the variable resolver from stage execution
+        device = self.ctx.primary_device
+
+        # Check if output is audio token IDs (Orpheus/SNAC) or raw waveform
+        generated_ids = self.ctx.variable_resolver.resolved.get("global.generated_token_ids")
+        if generated_ids and isinstance(generated_ids, list):
+            audio_count = sum(1 for t in generated_ids if 128266 <= t < 156940)
+            print(f"   [TTS] Tokens: {len(generated_ids)}, audio: {audio_count}, range: [{min(generated_ids)}, {max(generated_ids)}]")
+        if generated_ids and isinstance(generated_ids, list) and len(generated_ids) > 0:
+            # Token-based TTS: decode tokens → waveform via codec
+            vocab_size = self.ctx.pkg.defaults.get("vocab_size",
+                         self._get_extracted_value("vocab_size", 156940))
+            # Orpheus audio tokens start after text vocab (128266 for Orpheus)
+            # Detection: if max token > 128000, it's likely Orpheus-style
+            max_token = max(generated_ids) if generated_ids else 0
+            if max_token > 128000:
+                from neurobrix.core.module.audio.output_processor import AudioOutputProcessor
+                waveform = AudioOutputProcessor.decode_snac_tokens(
+                    generated_ids,
+                    vocab_size=vocab_size,
+                    device=device,
+                )
+                if waveform.numel() > 1:
+                    self.ctx.variable_resolver.resolved[variable] = waveform
+                    # Save to file
+                    model_name = self.ctx.pkg.manifest.get("model_name", "model")
+                    output_path = f"output_{model_name}.wav"
+                    AudioOutputProcessor.save_waveform(waveform, output_path, sample_rate=24000)
+                    print(f"\n{'='*70}\nSAVED: {output_path}\n{'='*70}")
+                    return
+
+        # Fallback: look for raw waveform tensor in variable resolver
         if variable not in self.ctx.variable_resolver.resolved:
-            # Try to find any tensor output from the last stage
             for key, val in self.ctx.variable_resolver.resolved.items():
                 if isinstance(val, torch.Tensor) and val.dim() >= 1:
                     self.ctx.variable_resolver.resolved[variable] = val
@@ -504,13 +548,27 @@ class AudioEngine(FlowHandler):
         return None
 
     def _get_embed_weight(self, comp_name: str) -> Optional[torch.Tensor]:
-        """Get embedding weight for weight-tied logits or text→embedding conversion."""
+        """Get embedding weight for weight-tied logits or text→embedding conversion.
+
+        Search order:
+        1. Inside the LLM component's weights (standard HF models)
+        2. Separate embed_tokens component (NeMo SpeechLM models)
+        """
+        # 1. Check inside the LLM component
         executor = self.ctx.executors.get(comp_name)
-        if executor is None:
-            return None
-        for key in executor._weights:
-            if "embed_tokens" in key or "token_embed" in key:
-                return executor._weights[key]
+        if executor is not None:
+            for key in executor._weights:
+                if "embed_tokens" in key or "token_embed" in key:
+                    return executor._weights[key]
+
+        # 2. Check separate embed_tokens component
+        embed_executor = self.ctx.executors.get("embed_tokens")
+        if embed_executor is not None:
+            self._ensure_weights_loaded("embed_tokens")
+            for key in embed_executor._weights:
+                if "weight" in key or "embed" in key:
+                    return embed_executor._weights[key]
+
         return None
 
     def _component_has_input(self, comp_name: str, input_name: str) -> bool:
@@ -530,11 +588,34 @@ class AudioEngine(FlowHandler):
         self, hidden_states: torch.Tensor, embed_weight: Optional[torch.Tensor],
         logits_source: str,
     ) -> torch.Tensor:
-        """Compute logits from hidden states."""
+        """Compute logits from hidden states.
+
+        logits_source values:
+          "self"              — output tensor IS logits (graph includes lm_head)
+          "embed_weight_tied" — matmul(hidden, embed_tokens.T) for weight-tied models
+          "lm_head"           — execute separate lm_head component on hidden states
+        """
         last_hidden = hidden_states[:, -1:, :]
+
+        if logits_source == "lm_head" and "lm_head" in self.ctx.executors:
+            # Separate lm_head component: extract weight and matmul directly
+            # lm_head is typically a single Linear (no bias): logits = hidden @ weight.T
+            self._ensure_weights_loaded("lm_head")
+            executor = self.ctx.executors["lm_head"]
+            lm_weight = None
+            for key, tensor in executor._weights.items():
+                if tensor is not None and tensor.ndim == 2:
+                    lm_weight = tensor
+                    break
+            if lm_weight is not None:
+                w = lm_weight.to(dtype=last_hidden.dtype)
+                return torch.matmul(last_hidden, w.T)
+            return last_hidden
+
         if logits_source == "embed_weight_tied" and embed_weight is not None:
             w = embed_weight.to(dtype=last_hidden.dtype)
             return torch.matmul(last_hidden, w.T)
+
         # logits_source == "self": output IS logits
         return last_hidden
 
