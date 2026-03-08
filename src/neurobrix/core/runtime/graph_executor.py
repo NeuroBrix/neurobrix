@@ -956,7 +956,15 @@ class GraphExecutor:
                 remapped[wk] = self._weights[wk]
                 continue
 
-            parts = wk.split('.')
+            # Strip LoRA wrapper tokens before suffix matching
+            # PEFT wraps layers: base_model.model.X.base_layer.weight → X.weight
+            wk_clean = wk.replace('.base_layer.', '.').replace('base_model.model.', '')
+            if wk_clean != wk and wk_clean in graph_params:
+                remapped[wk_clean] = self._weights[wk]
+                reconciled += 1
+                continue
+
+            parts = wk_clean.split('.')
             matched_param = None
             for i in range(len(parts)):
                 suffix = '.'.join(parts[i:])

@@ -48,6 +48,8 @@ class AudioInputProcessor:
         """
         if preprocessing_type == "mel_spectrogram":
             return MelSpectrogramExtractor.extract(audio_path, model_path, device, dtype, input_shape)
+        elif preprocessing_type == "nemo_mel":
+            return NemoMelExtractor.extract(audio_path, model_path, device, dtype, input_shape)
         elif preprocessing_type == "raw_waveform":
             return RawWaveformLoader.load(audio_path, model_path, device, dtype, input_shape)
         elif preprocessing_type == "conformer":
@@ -60,7 +62,7 @@ class AudioInputProcessor:
         else:
             raise RuntimeError(
                 f"ZERO FALLBACK: Unknown audio preprocessing type '{preprocessing_type}'.\n"
-                f"Supported: mel_spectrogram, raw_waveform, conformer, none"
+                f"Supported: mel_spectrogram, nemo_mel, raw_waveform, conformer, none"
             )
 
 
@@ -310,3 +312,97 @@ class ConformerFeatureExtractor:
                 features = torch.from_numpy(log_mel.T).unsqueeze(0)  # [1, frames, base_mels]
 
         return features.to(device=device, dtype=dtype)
+
+
+class NemoMelExtractor:
+    """
+    NeMo-compatible mel spectrogram for Conformer/RNNT models.
+
+    Differs from Whisper: n_fft=512, per-feature normalize, dither, pre-emphasis.
+    All params DATA-DRIVEN from model config files.
+    """
+
+    @staticmethod
+    def extract(
+        audio_path: str,
+        model_path: Path,
+        device: torch.device,
+        dtype: torch.dtype,
+        input_shape: Optional[Tuple[int, ...]] = None,
+    ) -> torch.Tensor:
+        """Extract NeMo-style mel features. Returns [1, n_mels, frames]."""
+        import json
+
+        # Defaults (NeMo standard)
+        n_mels, n_fft, win_length, hop_length = 80, 512, 400, 160
+        target_sr, dither, preemph = 16000, 1e-5, 0.97
+
+        # Read from model_config.yaml (NeMo RNNT)
+        yaml_path = model_path / "model_config.yaml"
+        if yaml_path.exists():
+            try:
+                import yaml
+                with open(yaml_path) as f:
+                    pp = yaml.safe_load(f).get("preprocessor", {})
+                target_sr = pp.get("sample_rate", target_sr)
+                n_fft = pp.get("n_fft", n_fft)
+                n_mels = pp.get("features", n_mels)
+                dither = pp.get("dither", dither)
+                win_length = int(pp.get("window_size", 0.025) * target_sr)
+                hop_length = int(pp.get("window_stride", 0.01) * target_sr)
+            except Exception:
+                pass
+
+        # Read from config.json (NeMo SpeechLM — perception.preprocessor)
+        cfg_path = model_path / "config.json"
+        if cfg_path.exists():
+            try:
+                with open(cfg_path) as f:
+                    pp = json.load(f).get("perception", {}).get("preprocessor", {})
+                if pp:
+                    target_sr = pp.get("sample_rate", target_sr)
+                    n_fft = pp.get("n_fft", n_fft)
+                    n_mels = pp.get("features", n_mels)
+                    dither = pp.get("dither", dither)
+                    win_length = int(pp.get("window_size", 0.025) * target_sr)
+                    hop_length = int(pp.get("window_stride", 0.01) * target_sr)
+            except Exception:
+                pass
+
+        # Override n_mels from graph if available
+        if input_shape and len(input_shape) >= 3 and input_shape[1] in (40, 64, 80, 128):
+            n_mels = input_shape[1]
+
+        audio, _ = _load_audio(audio_path, target_sr=target_sr)
+        waveform = torch.from_numpy(audio).to(device=device, dtype=torch.float32)
+
+        # Pre-emphasis: y[n] = x[n] - 0.97*x[n-1]
+        if preemph > 0:
+            waveform = torch.cat([waveform[:1], waveform[1:] - preemph * waveform[:-1]])
+
+        # Dither
+        if dither > 0:
+            waveform = waveform + dither * torch.randn_like(waveform)
+
+        # STFT → power spectrum → mel filterbank → log → per-feature normalize
+        window = torch.hann_window(win_length, device=device)
+        stft = torch.stft(
+            waveform, n_fft=n_fft, hop_length=hop_length, win_length=win_length,
+            window=window, return_complex=True, center=True, pad_mode="reflect",
+        )
+        power = stft.abs().pow(2)  # [n_fft//2+1, frames]
+
+        import torchaudio
+        mel_fb = torchaudio.functional.melscale_fbanks(
+            n_freqs=n_fft // 2 + 1, f_min=0.0, f_max=target_sr / 2.0,
+            n_mels=n_mels, sample_rate=target_sr,
+        ).to(device=device)
+
+        mel = torch.log((power.T @ mel_fb).clamp(min=1e-5))  # [frames, n_mels]
+
+        # Per-feature normalization
+        mean = mel.mean(dim=0, keepdim=True)
+        std = mel.std(dim=0, keepdim=True).clamp(min=1e-5)
+        mel = (mel - mean) / std
+
+        return mel.T.unsqueeze(0).to(dtype=dtype)  # [1, n_mels, frames]
