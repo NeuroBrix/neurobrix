@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Symbolic shape aliasing: value-based symbol lookup disabled for shape lists — symbols propagate through algebraic rules only, preventing head_dim/seq_len confusion
+- Shape propagation _reduce (mean) rule handles dim as list, not just int
+- SDPA: detect undersized causal mask from trace time and use is_causal=True
+- LoRA weight matching: strip base_layer/base_model PEFT wrapper tokens before suffix matching
+
+### Added
+- lm_head component execution in audio flow for TTS models with separate lm_head (Orpheus)
+- NeMo mel spectrogram preprocessing (n_fft=512, per-feature normalize, dither, preemphasis)
+- SNAC codec decode for Orpheus TTS audio token output (24kHz waveform)
+- Symbolic shape injection for expand/repeat ops (algebraic propagation from shape tracker)
+
 ### Removed
 - VAETilingStrategy (`core/components/vae_tiling.py`) — replaced by universal TilingEngine
 - EncoderDecoderAudioHandler (`core/flow/encoder_decoder_audio.py`) — replaced by universal AudioEngine
