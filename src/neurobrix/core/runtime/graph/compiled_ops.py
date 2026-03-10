@@ -194,6 +194,22 @@ class CompiledOpResolver:
         if op_name in ("view", "_unsafe_view"):
             return self._make_view_reshape()
 
+        # pack_padded_sequence: PyTorch requires lengths on CPU
+        if op_name == "_pack_padded_sequence":
+            return self._make_pack_padded_sequence()
+
+        # set: used by pack_padded_sequence internals — storage manipulation
+        if op_name == "set":
+            return self._make_set()
+
+        # _local_scalar_dense: tensor.item() — returns the scalar value
+        if op_name == "_local_scalar_dense":
+            return self._make_local_scalar_dense()
+
+        # cuDNN RNN: LSTM/GRU — requires all tensors same dtype
+        if op_name == "_cudnn_rnn":
+            return self._make_cudnn_rnn()
+
         # Standard ops - resolve via PyTorch
         return self._get_standard_op(op_name)
 
@@ -628,6 +644,59 @@ class CompiledOpResolver:
                             return candidates[0][1]
                     raise
         return view_or_reshape
+
+    def _make_pack_padded_sequence(self) -> Callable:
+        """pack_padded_sequence requires lengths on CPU — PyTorch hard requirement."""
+        aten_op = torch.ops.aten._pack_padded_sequence
+        def pack_padded(inp, lengths, batch_first=False):
+            return aten_op(inp, lengths.cpu(), batch_first)
+        return pack_padded
+
+    def _make_set(self) -> Callable:
+        """aten::set — storage manipulation used by pack/unpack padded sequence.
+
+        The traced graph captures set(tensor, storage, ...) but the storage
+        was serialized as a string. In compiled mode, the tensor data is already
+        correct from the preceding op — return self unchanged.
+        """
+        def set_wrapper(self_tensor, *args):
+            return self_tensor
+        return set_wrapper
+
+    def _make_local_scalar_dense(self) -> Callable:
+        """aten::_local_scalar_dense — converts tensor to Python scalar (tensor.item())."""
+        def local_scalar_dense(inp):
+            return inp.item()
+        return local_scalar_dense
+
+    def _make_cudnn_rnn(self) -> Callable:
+        """cuDNN RNN requires all input + parameter tensors to have matching dtype.
+
+        AMP may produce fp32 output from layer_norm while weights are fp16.
+        Cast input to match parameter dtype (RNN is fast enough in fp16).
+        """
+        aten_op = torch.ops.aten._cudnn_rnn
+        def cudnn_rnn_wrapper(*args, **kwargs):
+            # args: input, weight[], weight_stride0, weight_buf, hx, cx, mode, ...
+            inp = args[0]
+            weight_list = args[1]
+            # Find the parameter dtype from weight list
+            param_dtype = None
+            if isinstance(weight_list, (list, tuple)) and weight_list:
+                for w in weight_list:
+                    if isinstance(w, torch.Tensor):
+                        param_dtype = w.dtype
+                        break
+            if param_dtype is not None and inp.dtype != param_dtype:
+                args = list(args)
+                args[0] = inp.to(param_dtype)
+                # Also cast hidden states (hx, cx) if present
+                for idx in (4, 5):
+                    if idx < len(args) and isinstance(args[idx], torch.Tensor):
+                        args[idx] = args[idx].to(param_dtype)
+                args = tuple(args)
+            return aten_op(*args, **kwargs)
+        return cudnn_rnn_wrapper
 
     def _get_standard_op(self, op_name: str) -> Callable:
         """
