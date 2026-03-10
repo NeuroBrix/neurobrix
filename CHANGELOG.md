@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Kokoro-82M TTS pipeline: native text_encoder (BiLSTM), native predictor (DurationEncoder + F0/N prosody), compiled decoder (iSTFTNet)
+- InstanceNorm affine default initialization in CompiledSequence for params not in checkpoint (weight=1, bias=0)
+- Complex number literal parsing in CompiledSequence (e.g., `1j` for iSTFT ops)
+- AdainResBlk1d support: learned skip connection (conv1x1), upsample (ConvTranspose1d + interpolate), rsqrt(2) scaling
+
 ### Fixed
 - Symbolic shape aliasing: value-based symbol lookup disabled for shape lists — symbols propagate through algebraic rules only, preventing head_dim/seq_len confusion
 - Shape propagation _reduce (mean) rule handles dim as list, not just int

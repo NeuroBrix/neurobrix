@@ -500,15 +500,32 @@ class RuntimeExecutor:
             except Exception:
                 pass
 
+        # Fallback: defaults.json max_tokens (for audio/TTS models without text_encoder)
+        max_tokens = self.pkg.defaults.get("max_tokens")
+        if max_tokens is not None:
+            return max_tokens
+
+        # Fallback: max_position_embeddings from topology
+        for comp_name, comp_info in topology_components.items():
+            ev = comp_info.get("extracted_values", {})
+            mpe = ev.get("max_position_embeddings")
+            if mpe is not None:
+                return mpe
+
+        # Final fallback: reasonable default for TTS/audio models
+        flow_type = self.pkg.topology.get("flow", {}).get("type", "")
+        if flow_type in ("audio", "rnnt"):
+            return 2048
+
         # ZERO FALLBACK: Crash if we cannot determine max_length
-        # No hardcoded defaults - universality requires explicit config
         raise RuntimeError(
             f"ZERO FALLBACK: Cannot determine max_length for tokenizer '{mod_name}'.\n"
             "Searched:\n"
-            "  1. topology.extracted_values.tokenizer.max_sequence_length\n"
-            "  2. topology.components.{encoder}.shapes.input_ids[1]\n"
-            "  3. modules/{mod_name}/tokenizer_config.json model_max_length\n"
-            "All sources returned None. Model graph invalid. Re-import: neurobrix remove <model> && neurobrix import <org>/<model>"
+            "  1. topology.components.{encoder}.shapes.input_ids[1]\n"
+            "  2. modules/{mod_name}/tokenizer_config.json model_max_length\n"
+            "  3. defaults.json max_tokens\n"
+            "  4. topology.components.*.extracted_values.max_position_embeddings\n"
+            "All sources returned None."
         )
 
     def _setup_executors(self) -> None:

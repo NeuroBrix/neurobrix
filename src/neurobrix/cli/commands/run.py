@@ -402,7 +402,8 @@ def cmd_run(args):
             from neurobrix.core.module.audio.output_processor import AudioOutputProcessor
             from neurobrix.core.config import get_output_processing
             audio_cfg = get_output_processing("audio")
-            sample_rate = pkg.defaults.get("sample_rate", audio_cfg.get("sample_rate", 16000))
+            flow_sr = pkg.topology.get("flow", {}).get("audio", {}).get("sample_rate")
+            sample_rate = flow_sr or pkg.defaults.get("sample_rate", audio_cfg.get("sample_rate", 24000))
             AudioOutputProcessor.save_waveform(waveform, output_path, sample_rate)
             print(f"\n{'='*70}")
             print(f"SAVED: {output_path}")
