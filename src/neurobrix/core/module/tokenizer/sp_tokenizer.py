@@ -1199,10 +1199,136 @@ class HFTokenizer:
         return self._tokenizer.get_vocab_size()
 
 
+class TiktokenTokenizer:
+    """
+    Tiktoken tokenizer for fish-speech / OpenAudio models.
+
+    Loads *.tiktoken file with optional special_tokens.json.
+    Provides same interface as SPTokenizer/HFTokenizer.
+    """
+
+    def __init__(self, tiktoken_path: Path, tokenizer_dir: Path,
+                 config: Optional[dict] = None):
+        config = config or {}
+        self.max_length = config.get("model_max_length", 2048)
+
+        # Load special tokens
+        special_tokens = {}
+        st_path = tokenizer_dir / "special_tokens.json"
+        if st_path.exists():
+            with open(st_path) as f:
+                special_tokens = json.load(f)
+
+        # Try tiktoken library first
+        try:
+            import tiktoken
+            # Load BPE ranks from .tiktoken file
+            with open(tiktoken_path, "rb") as f:
+                contents = f.read()
+            import base64
+            bpe_ranks = {}
+            for line in contents.splitlines():
+                if line:
+                    parts = line.split()
+                    if len(parts) == 2:
+                        token = base64.b64decode(parts[0])
+                        rank = int(parts[1])
+                        bpe_ranks[token] = rank
+            # Build special token mapping
+            special_token_map = {}
+            for token_name, token_info in special_tokens.items():
+                if isinstance(token_info, dict):
+                    content = token_info.get("content", token_name)
+                    token_id = token_info.get("id")
+                    if token_id is not None:
+                        special_token_map[content] = token_id
+                elif isinstance(token_info, int):
+                    special_token_map[token_name] = token_info
+
+            self._enc = tiktoken.Encoding(
+                name="fish_speech",
+                pat_str=r"""(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+""",
+                mergeable_ranks=bpe_ranks,
+                special_tokens=special_token_map,
+            )
+            self._use_tiktoken = True
+        except (ImportError, Exception):
+            # Fallback: basic tokenization
+            self._enc = None
+            self._use_tiktoken = False
+            self._vocab = {}
+            # Build vocab from tiktoken file
+            import base64
+            with open(tiktoken_path, "rb") as f:
+                for line in f:
+                    parts = line.strip().split()
+                    if len(parts) == 2:
+                        try:
+                            token = base64.b64decode(parts[0]).decode("utf-8", errors="replace")
+                            rank = int(parts[1])
+                            self._vocab[token] = rank
+                        except Exception:
+                            pass
+
+        # Store special tokens for encode/decode
+        self._special_tokens = special_tokens
+        self._bos_id = None
+        self._eos_id = None
+        self._pad_id = 0
+        for name, info in special_tokens.items():
+            tid = info.get("id") if isinstance(info, dict) else info
+            if "bos" in name.lower() or "begin" in name.lower():
+                self._bos_id = tid
+            elif "eos" in name.lower() or "end" in name.lower():
+                self._eos_id = tid
+            elif "pad" in name.lower():
+                self._pad_id = tid
+
+    def encode(self, text: str, add_special_tokens: bool = True,
+               return_tensors: Optional[str] = None, **kwargs) -> Any:
+        if self._use_tiktoken and self._enc is not None:
+            ids = self._enc.encode(text, allowed_special="all")
+        else:
+            # Byte-level fallback
+            ids = list(text.encode("utf-8"))
+
+        if add_special_tokens and self._bos_id is not None:
+            ids = [self._bos_id] + ids
+
+        if return_tensors == "pt":
+            import torch
+            return torch.tensor([ids], dtype=torch.long)
+        return ids
+
+    def decode(self, ids: List[int], skip_special_tokens: bool = True) -> str:
+        if self._use_tiktoken and self._enc is not None:
+            if skip_special_tokens:
+                special_ids = set()
+                for _name, info in self._special_tokens.items():
+                    tid = info.get("id") if isinstance(info, dict) else info
+                    if tid is not None:
+                        special_ids.add(tid)
+                ids = [i for i in ids if i not in special_ids]
+            return self._enc.decode(ids)
+        return "".join(chr(i) if 32 <= i < 127 else "?" for i in ids)
+
+    @property
+    def eos_token_id(self) -> Optional[int]:
+        return self._eos_id
+
+    @property
+    def bos_token_id(self) -> Optional[int]:
+        return self._bos_id
+
+    @property
+    def pad_token_id(self) -> int:
+        return self._pad_id
+
+
 def load_tokenizer_from_path(
     tokenizer_dir: Path,
     max_length: Optional[int] = None,
-) -> "SPTokenizer | BPETokenizer | HFTokenizer":
+) -> "SPTokenizer | BPETokenizer | HFTokenizer | TiktokenTokenizer":
     """
     Load tokenizer from directory - DATA-DRIVEN TYPE DETECTION.
 
@@ -1278,11 +1404,18 @@ def load_tokenizer_from_path(
 
         return BPETokenizer(vocab, merges, config)
 
+    # Priority 4: Tiktoken (*.tiktoken + special_tokens.json)
+    # Used by fish-speech / OpenAudio models
+    tiktoken_files = list(tokenizer_dir.glob("*.tiktoken"))
+    if tiktoken_files:
+        return TiktokenTokenizer(tiktoken_files[0], tokenizer_dir, config)
+
     # No valid format found
     available = [f.name for f in tokenizer_dir.iterdir()] if tokenizer_dir.exists() else []
     raise RuntimeError(
         f"ZERO FALLBACK: No tokenizer format detected.\n"
-        f"Expected: *.model (SentencePiece) OR merges.txt+vocab.json (BPE) OR tokenizer.json (HF Fast)\n"
+        f"Expected: *.model (SentencePiece) OR merges.txt+vocab.json (BPE) "
+        f"OR tokenizer.json (HF Fast) OR *.tiktoken\n"
         f"Directory: {tokenizer_dir}\n"
         f"Available files: {available}"
     )

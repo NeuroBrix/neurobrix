@@ -406,6 +406,11 @@ class CompiledSequence:
         # Removes ~5K ops/token for LLMs (weight.t() before every mm)
         self._eliminate_weight_transpose_ops(tensors, ops_metadata, execution_order)
 
+        # Phase -0.25: Symbolize data-dependent op attributes
+        # Detects pad→view windowing patterns and replaces concrete pad/shape
+        # values with symbolic expressions for runtime resolution.
+        self._symbolize_data_dependent_attrs(tensors, ops_metadata)
+
         # Phase 0: Promote trace-time seq_len constants to symbolic references
         # UNIVERSAL: Works for all LLMs, safe for diffusion models, collision-checked
         self._promote_seq_len_scalars_to_symbolic(tensors, ops_metadata)
@@ -1388,6 +1393,185 @@ class CompiledSequence:
         )
 
     # ========================================================================
+    # DATA-DEPENDENT ATTRIBUTE SYMBOLIZATION (Pre-Compilation Pass)
+    # ========================================================================
+
+    def _symbolize_data_dependent_attrs(
+        self,
+        tensors: Dict[str, Any],
+        ops: Dict[str, Any],
+    ) -> None:
+        """
+        Pre-compilation pass: detect ops with data-dependent attributes and
+        replace concrete values with symbolic expressions.
+
+        Pattern detected: constant_pad_nd → view/reshape (pad-to-multiple windowing).
+        - Pad amount becomes: (divisor - input_sym % divisor) % divisor
+        - View num_windows becomes: (input_sym + divisor - 1) // divisor
+
+        Modifies ops IN PLACE before compilation.
+        """
+        for op_uid, op_data in ops.items():
+            op_type = op_data.get("op_type", "")
+            if op_type != "aten::constant_pad_nd":
+                continue
+
+            attrs = op_data.get("attributes", {})
+            pad = attrs.get("pad", [])
+            if not pad:
+                continue
+
+            # Get input tensor symbolic shape
+            input_tids = op_data.get("input_tensor_ids", [])
+            if not input_tids:
+                continue
+            input_sym = tensors.get(input_tids[0], {}).get("symbolic_shape", {})
+            input_dims = input_sym.get("dims", []) if isinstance(input_sym, dict) else []
+            input_concrete = input_sym.get("concrete", []) if isinstance(input_sym, dict) else []
+            ndim = len(input_concrete)
+            if not ndim:
+                continue
+
+            # Find padded dims with symbolic input
+            n_padded = len(pad) // 2
+            symbolic_pads = []  # (pad_pair_idx, dim_idx, pad_total, input_dim_expr)
+            for i in range(n_padded):
+                left = pad[2 * i] if isinstance(pad[2 * i], int) else 0
+                right = pad[2 * i + 1] if isinstance(pad[2 * i + 1], int) else 0
+                total = left + right
+                if total == 0:
+                    continue
+                dim_idx = ndim - 1 - i  # PyTorch pad order: last dim first
+                if dim_idx < 0 or dim_idx >= len(input_dims):
+                    continue
+                in_dim = input_dims[dim_idx]
+                is_sym = isinstance(in_dim, dict) and in_dim.get("type") in (
+                    "symbol", "add", "mul", "sub", "floordiv"
+                )
+                if is_sym:
+                    symbolic_pads.append((i, dim_idx, total, in_dim))
+
+            if not symbolic_pads:
+                continue
+
+            # Find downstream view/reshape to extract divisor
+            output_tids = op_data.get("output_tensor_ids", [])
+            if not output_tids:
+                continue
+            out_tid = output_tids[0]
+
+            view_op_uid = None
+            divisor = None
+            for uid2, op2 in ops.items():
+                if op2.get("op_type", "") not in (
+                    "aten::view", "aten::reshape", "aten::_unsafe_view"
+                ):
+                    continue
+                if out_tid not in op2.get("input_tensor_ids", []):
+                    continue
+                # Found downstream view
+                view_op_uid = uid2
+                view_shape = op2.get("attributes", {}).get(
+                    "shape", op2.get("attributes", {}).get("size", [])
+                )
+                out_shapes = op2.get("output_shapes", [[]])
+                for _pi, dim_idx, _pt, _in_dim in symbolic_pads:
+                    if out_shapes and len(out_shapes[0]) > ndim:
+                        # View expanded ndim → window_size is concrete dim after split
+                        if dim_idx + 1 < len(view_shape):
+                            c = view_shape[dim_idx + 1]
+                            if isinstance(c, int) and c > 1:
+                                divisor = c
+                    elif out_shapes and len(out_shapes[0]) == ndim:
+                        if dim_idx < len(view_shape):
+                            c = view_shape[dim_idx]
+                            padded = input_concrete[dim_idx] + _pt
+                            if isinstance(c, int) and c > 1 and padded % c == 0:
+                                divisor = c
+                break
+
+            if divisor is None:
+                continue
+
+            # ── FIX PAD OP ──────────────────────────────────────────────
+            new_pad = list(pad)
+            for pad_pair_idx, dim_idx, pad_total, in_dim in symbolic_pads:
+                in_conc = input_concrete[dim_idx]
+                # pad = (divisor - input_sym % divisor) % divisor
+                inner_mod = {
+                    "type": "mod", "left": in_dim,
+                    "right": divisor, "trace": in_conc % divisor,
+                }
+                sub_expr = {
+                    "type": "sub", "left": divisor,
+                    "right": inner_mod, "trace": divisor - (in_conc % divisor),
+                }
+                pad_expr = {
+                    "type": "mod", "left": sub_expr,
+                    "right": divisor, "trace": pad_total,
+                }
+                new_pad[2 * pad_pair_idx + 1] = pad_expr
+
+            # Update pad in attrs + args list
+            new_attrs = dict(attrs)
+            new_attrs["pad"] = new_pad
+            new_args = list(new_attrs.get("args", []))
+            for i, arg in enumerate(new_args):
+                if isinstance(arg, dict) and arg.get("type") == "list":
+                    orig = arg.get("value", [])
+                    if orig == pad:
+                        new_args[i] = {"type": "list", "value": new_pad}
+                        break
+            new_attrs["args"] = new_args
+            op_data["attributes"] = new_attrs
+
+            # ── FIX VIEW OP ─────────────────────────────────────────────
+            if view_op_uid is not None:
+                view_data = ops[view_op_uid]
+                view_attrs = dict(view_data.get("attributes", {}))
+                for shape_key in ("shape", "size"):
+                    if shape_key in view_attrs:
+                        old_shape = list(view_attrs[shape_key])
+                        for _pi, dim_idx, _pt, in_dim in symbolic_pads:
+                            # num_windows = ceil(input_sym / divisor)
+                            #             = (input_sym + divisor - 1) // divisor
+                            in_conc = input_concrete[dim_idx]
+                            ceil_expr = {
+                                "type": "floordiv",
+                                "left": {
+                                    "type": "add", "left": in_dim,
+                                    "right": divisor - 1,
+                                    "trace": in_conc + divisor - 1,
+                                },
+                                "right": divisor,
+                                "trace": (in_conc + divisor - 1) // divisor,
+                            }
+                            # In view: batch*seq merged → find the num_windows slot
+                            if len(old_shape) > ndim:
+                                # View expanded (e.g. 3D→3D with dim split)
+                                # First unmatched dim = num_windows
+                                for vi in range(len(old_shape)):
+                                    if isinstance(old_shape[vi], int) and vi < dim_idx:
+                                        old_shape[vi] = ceil_expr
+                                        break
+                            elif len(old_shape) == ndim:
+                                if dim_idx < len(old_shape):
+                                    old_shape[dim_idx] = ceil_expr
+                        view_attrs[shape_key] = old_shape
+                        break
+                # Also update args list
+                view_args = list(view_attrs.get("args", []))
+                for i, arg in enumerate(view_args):
+                    if isinstance(arg, dict) and arg.get("type") == "list":
+                        orig = arg.get("value", [])
+                        new_shape = view_attrs.get("shape", view_attrs.get("size"))
+                        if new_shape and len(orig) == len(new_shape):
+                            view_args[i] = {"type": "list", "value": new_shape}
+                            break
+                view_attrs["args"] = view_args
+                view_data["attributes"] = view_attrs
+
+    # ========================================================================
     # FUSED MoE COMPILATION
     # ========================================================================
 
@@ -1926,6 +2110,12 @@ class CompiledSequence:
                         parsed_dtype = self._parse_dtype(value.replace("torch.", ""))
                         if parsed_dtype is not None:
                             return DtypeArg(parsed_dtype)
+                    # Complex number literals (e.g., "1j", "0.5j", "-1j")
+                    if value.endswith("j"):
+                        try:
+                            return ScalarArg(complex(value))
+                        except ValueError:
+                            pass
                 # Fall through to return as scalar
                 return ScalarArg(value)
 
@@ -2002,13 +2192,22 @@ class CompiledSequence:
                 continue
             meta = tensors_meta.get(tensor_id, {})
             shape = meta.get("shape", [0])
-            # Only allocate for empty-state constants (e.g., KV cache init tensors)
-            # Regular weights that weren't provided stay None — ops that need them
-            # will be skipped or fail explicitly (ZERO FALLBACK)
+            dtype_str = meta.get("dtype", "float32")
+            t_dtype = _DTYPE_MAP.get(dtype_str, torch.float32)
+            # Empty-state constants (e.g., KV cache init tensors)
             if shape == [0] or "constant_" in tensor_id:
-                dtype_str = meta.get("dtype", "float32")
-                t_dtype = _DTYPE_MAP.get(dtype_str, torch.float32)
                 self._arena[slot] = torch.empty(shape, dtype=t_dtype, device=self.device)
+            # InstanceNorm/BatchNorm affine params not saved in checkpoint.
+            # These have default initialization: weight=ones, bias=zeros.
+            # Common pattern: InstanceNorm1d(affine=True) params captured
+            # during tracing but excluded from .pth state_dict.
+            elif not meta.get("weight_key") and ".norm." in tensor_id:
+                resolved_shape = [s if isinstance(s, int) else s.get("trace_value", 1)
+                                  for s in shape] if isinstance(shape, list) else shape
+                if tensor_id.endswith(".weight"):
+                    self._arena[slot] = torch.ones(resolved_shape, dtype=t_dtype, device=self.device)
+                elif tensor_id.endswith(".bias"):
+                    self._arena[slot] = torch.zeros(resolved_shape, dtype=t_dtype, device=self.device)
 
     def compute_op_devices(self) -> None:
         """
