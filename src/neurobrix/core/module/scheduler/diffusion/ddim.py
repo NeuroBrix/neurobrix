@@ -14,7 +14,7 @@ import torch
 from typing import Dict, Any, Union, Optional
 
 from ..base import DiffusionSchedulerBase, PredictionType
-from ..config import SchedulerConfig
+from ..config import DDIMSchedulerConfig
 from ..utils.noise_schedules import get_beta_schedule, betas_to_alphas
 from ..utils.timestep_utils import get_timesteps
 from ..utils.helpers import init_step_index, threshold_sample
@@ -36,8 +36,8 @@ class DDIMScheduler(DiffusionSchedulerBase):
 
         ZERO FALLBACK: Required keys must be in config.
         """
-        # ZERO FALLBACK validation
-        validated = SchedulerConfig.validate(config, "DDIMScheduler")
+        # ZERO FALLBACK validation (DDIM-specific — no DPM++ keys required)
+        validated = DDIMSchedulerConfig.validate(config, "DDIMScheduler")
 
         # REQUIRED values - guaranteed present after validation
         self.num_train_timesteps = validated["num_train_timesteps"]

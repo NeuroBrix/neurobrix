@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- VibeVoice-1.5B TTS pipeline: LM forward + DDPM diffusion (20-step DDIM, cosine schedule, v_prediction) + native acoustic decoder (ConvNext1d)
+- DDIMSchedulerConfig: separate config validation for DDIM/DDPM schedulers (no DPM++-specific keys required)
+- Neurobrix auto-commit hook: source changes auto-committed on each edit
+
+### Changed
+- Audio flow ZERO FALLBACK enforcement: direction, preprocessing, max_tokens, temperature, eos_token_id, decoder_start_token_id, latent_shape, decoder shapes, sample_rate all crash if missing
+- Audio flow ZERO HARDCODE cleanup: replaced all hardcoded dtypes (float32/bfloat16) with data-driven compute dtype, voicepack dims from tensor shape, LayerNorm dim from weight shape
+- Audio flow ZERO SEMANTIC cleanup: component routing by topology native_subtype field instead of component name matching, audio output type from defaults instead of token range detection, sample_rate from topology/defaults instead of hardcoded 24000
 - Kokoro-82M TTS pipeline: native text_encoder (BiLSTM), native predictor (DurationEncoder + F0/N prosody), compiled decoder (iSTFTNet)
 - InstanceNorm affine default initialization in CompiledSequence for params not in checkpoint (weight=1, bias=0)
 - Complex number literal parsing in CompiledSequence (e.g., `1j` for iSTFT ops)

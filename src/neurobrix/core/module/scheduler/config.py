@@ -118,6 +118,64 @@ class SchedulerConfig:
         return config[key]
 
 
+class DDIMSchedulerConfig:
+    """Config validation for DDIM/DDPM schedulers.
+
+    DDIM only needs core diffusion parameters — NOT DPM++-specific keys
+    like algorithm_type, solver_type, solver_order which are meaningless
+    for basic denoising diffusion.
+    """
+
+    REQUIRED_KEYS: Set[str] = {
+        "num_train_timesteps",
+        "beta_schedule",
+        "prediction_type",
+    }
+
+    # Safe defaults: paper constants or values unused by cosine schedule
+    OPTIONAL_SAFE_DEFAULTS: Dict[str, Any] = {
+        # Timestep spacing — "leading" is the standard DDPM/DDIM default
+        "timestep_spacing": "leading",
+        # Beta bounds — DDPM paper defaults, ignored by cosine schedule
+        "beta_start": 0.0001,
+        "beta_end": 0.02,
+        # Feature toggles (False = disabled)
+        "thresholding": False,
+        "sample_max_value": 1.0,
+        "dynamic_thresholding_ratio": 0.995,
+        "steps_offset": 0,
+        "clip_sample": True,
+        "clip_sample_range": 1.0,
+        "eta": 0.0,
+    }
+
+    @classmethod
+    def validate(cls, config: Dict[str, Any], scheduler_type: str = "unknown") -> Dict[str, Any]:
+        """Validate DDIM scheduler config."""
+        clean_config = {k: v for k, v in config.items() if not k.startswith("_")}
+
+        missing = cls.REQUIRED_KEYS - set(clean_config.keys())
+        if missing:
+            available = sorted(clean_config.keys())
+            raise SchedulerConfigError(
+                f"\n{'='*70}\n"
+                f"ZERO FALLBACK VIOLATION: DDIM scheduler config incomplete\n"
+                f"{'='*70}\n"
+                f"Scheduler type: {scheduler_type}\n"
+                f"Missing REQUIRED keys: {sorted(missing)}\n"
+                f"Available keys: {available}\n"
+                f"\n"
+                f"These values MUST be embedded in the NBX container.\n"
+                f"{'='*70}"
+            )
+
+        for key, default in cls.OPTIONAL_SAFE_DEFAULTS.items():
+            if key not in clean_config:
+                clean_config[key] = default
+
+        return clean_config
+
+
 class FlowSchedulerConfig:
     """Config validation for flow matching schedulers (Flux, SD3)."""
 
