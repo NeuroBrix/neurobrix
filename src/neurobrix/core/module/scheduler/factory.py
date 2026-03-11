@@ -42,10 +42,12 @@ class SchedulerFactory:
         "dpm++_2m_karras": ("diffusion.dpm_solver_pp", "DPMSolverPPScheduler"),
 
         # =========================================================================
-        # DDIM family
+        # DDIM family (also handles DDPM — DDIM generalizes DDPM with eta parameter)
         # =========================================================================
         "DDIMScheduler": ("diffusion.ddim", "DDIMScheduler"),
         "ddim": ("diffusion.ddim", "DDIMScheduler"),
+        "DDPMScheduler": ("diffusion.ddim", "DDIMScheduler"),
+        "ddpm": ("diffusion.ddim", "DDIMScheduler"),
 
         # =========================================================================
         # Euler family

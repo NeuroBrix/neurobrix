@@ -58,7 +58,11 @@ class AudioEngine(FlowHandler):
                 "Re-build the model with updated topology schema."
             )
 
-        direction = audio_config.get("direction", "stt")
+        direction = audio_config.get("direction")
+        if direction is None:
+            raise RuntimeError(
+                "ZERO FALLBACK: topology.flow.audio.direction is required ('stt' or 'tts')."
+            )
         stages = audio_config.get("stages", [])
         if not stages:
             raise RuntimeError(
@@ -87,10 +91,14 @@ class AudioEngine(FlowHandler):
                 self._execute_autoregressive_stage(stage, audio_config)
             elif execution == "native_kokoro":
                 self._execute_native_kokoro_stage(stage, audio_config)
+            elif execution == "diffusion":
+                self._execute_diffusion_stage(stage, audio_config)
+            elif execution == "native_acoustic_decoder":
+                self._execute_native_acoustic_decoder(stage, audio_config)
             else:
                 raise RuntimeError(
                     f"ZERO FALLBACK: Unknown execution type '{execution}' "
-                    f"for stage '{comp_name}'. Expected: forward, autoregressive, native_kokoro"
+                    f"for stage '{comp_name}'. Expected: forward, autoregressive, native_kokoro, diffusion, native_acoustic_decoder"
                 )
 
         # ── Step 3: Output postprocessing ──
@@ -121,7 +129,12 @@ class AudioEngine(FlowHandler):
                 "Use --audio <path> to provide an audio file."
             )
 
-        preprocessing = input_config.get("preprocessing", "mel_spectrogram")
+        preprocessing = input_config.get("preprocessing")
+        if preprocessing is None:
+            raise RuntimeError(
+                "ZERO FALLBACK: topology.flow.audio.input.preprocessing is required.\n"
+                "Types: mel_spectrogram, nemo_mel, conformer, raw_waveform, dac_codec, text_only"
+            )
         variable = input_config.get("variable", "global.input_features")
         device = torch.device(self.ctx.primary_device)
         dtype = self._get_compute_dtype()
@@ -149,7 +162,7 @@ class AudioEngine(FlowHandler):
         features = AudioInputProcessor.process(
             preprocessing_type=preprocessing,
             audio_path=str(audio_path),
-            model_path=self._find_snapshot_path(),
+            model_path=self._find_model_config_path(),
             device=device,
             dtype=dtype,
             input_shape=input_shape,
@@ -313,7 +326,7 @@ class AudioEngine(FlowHandler):
         # Step 3: Pad/truncate to graph's expected length
         # Get expected length from first component's input shape
         first_stage = self.ctx.pkg.topology.get("flow", {}).get("audio", {}).get("stages", [])
-        max_len = 64  # default
+        max_len = None
         if first_stage:
             first_comp = first_stage[0].get("component", "")
             executor = self.ctx.executors.get(first_comp)
@@ -324,6 +337,12 @@ class AudioEngine(FlowHandler):
                         if len(shape) >= 2:
                             max_len = shape[1]
                         break
+
+        if max_len is None:
+            raise RuntimeError(
+                "ZERO FALLBACK: Cannot determine input_ids length from first stage graph.\n"
+                "Expected a graph input named 'input_ids', 'input', or 'inp' with a 2D shape."
+            )
 
         actual_len = len(ids)
         if len(ids) > max_len:
@@ -362,9 +381,9 @@ class AudioEngine(FlowHandler):
         # TTS pipelines may have optional stages (e.g., voice cloning reference
         # encoder expects audio waveform tensor — skipped in text-only mode
         # where only string prompt is available).
+        has_tensor_input = False
         comp_connections = self.ctx.connections_index.get(comp_name, {})
         if comp_connections:
-            has_tensor_input = False
             for _input_name, sources in comp_connections.items():
                 for src in sources:
                     val = self.ctx.variable_resolver.resolved.get(src)
@@ -373,9 +392,25 @@ class AudioEngine(FlowHandler):
                         break
                 if has_tensor_input:
                     break
-            if not has_tensor_input:
-                print(f"   [{comp_name}] Skipped (no tensor inputs available)")
-                return
+        else:
+            # No connections defined: check if graph inputs can be resolved
+            # from variable resolver (input_name or global.input_name)
+            executor = self.ctx.executors.get(comp_name)
+            dag = getattr(executor, '_dag', None) if executor else None
+            if dag:
+                for _tid, spec in dag.get("tensors", {}).items():
+                    iname = spec.get("input_name")
+                    if iname:
+                        for key in [iname, f"global.{iname}", f"{comp_name}.{iname}"]:
+                            val = self.ctx.variable_resolver.resolved.get(key)
+                            if isinstance(val, torch.Tensor):
+                                has_tensor_input = True
+                                break
+                    if has_tensor_input:
+                        break
+        if not has_tensor_input:
+            print(f"   [{comp_name}] Skipped (no tensor inputs available)")
+            return
 
         print(f"   [{comp_name}] Running forward pass...")
         start = time.perf_counter()
@@ -394,18 +429,233 @@ class AudioEngine(FlowHandler):
             gc.collect()
             torch.cuda.empty_cache()
 
+    def _execute_diffusion_stage(self, stage: Dict, audio_config: Dict) -> None:
+        """Execute a diffusion denoising stage (VibeVoice prediction_head).
+
+        Runs an iterative denoising loop using a scheduler module.
+        Condition comes from a previously-executed component's output.
+        Reuses existing scheduler infrastructure (DDIM/DPM++ from scheduler factory).
+
+        Stage config expects:
+            diffusion.num_inference_steps: int (default from defaults.json)
+            diffusion.condition_from: str (component name for condition tensor)
+            diffusion.latent_shape: [T, D] (noise shape, from graph input)
+        """
+        comp_name = stage["component"]
+        device = self.ctx.primary_device
+        defaults = self.ctx.pkg.defaults
+
+        print(f"   [{comp_name}] Running diffusion denoising...")
+        start = time.perf_counter()
+        self._ensure_weights_loaded(comp_name)
+
+        # ── Get diffusion config (ALL values from defaults.json, ZERO FALLBACK) ──
+        diffusion_cfg = stage.get("diffusion", {})
+        num_steps = diffusion_cfg.get("num_inference_steps",
+                    defaults.get("ddpm_num_inference_steps"))
+        if num_steps is None:
+            raise RuntimeError(
+                "ZERO FALLBACK: ddpm_num_inference_steps missing from defaults.json.\n"
+                "Builder must extract from model's diffusion config."
+            )
+
+        # ── Get or create scheduler ──
+        scheduler = self.ctx.modules.get("scheduler")
+        if scheduler is None:
+            from neurobrix.core.module.scheduler.factory import SchedulerFactory
+            sched_config = defaults.get("scheduler_config", {})
+            # All scheduler params MUST be in defaults.json
+            for key, default_key in [
+                ("_class_name", "scheduler_type"),
+                ("num_train_timesteps", "ddpm_num_steps"),
+                ("prediction_type", "prediction_type"),
+                ("beta_schedule", "ddpm_beta_schedule"),
+            ]:
+                if key not in sched_config:
+                    val = defaults.get(default_key)
+                    if val is None:
+                        raise RuntimeError(
+                            f"ZERO FALLBACK: '{default_key}' missing from defaults.json.\n"
+                            f"Builder must extract diffusion scheduler config from model."
+                        )
+                    sched_config[key] = val
+            scheduler = SchedulerFactory.create(sched_config)
+
+        scheduler.set_timesteps(num_steps, device=torch.device(device))
+
+        # ── Determine latent shape from graph input ──
+        executor = self.ctx.executors[comp_name]
+        dag = getattr(executor, '_dag', None)
+        latent_shape = None
+        condition_input_name = None
+        noisy_input_name = None
+        if dag:
+            for _tid, spec in dag.get("tensors", {}).items():
+                iname = spec.get("input_name")
+                if iname and "noisy" in iname:
+                    noisy_input_name = iname
+                    latent_shape = spec.get("shape", [])
+                elif iname and "condition" in iname:
+                    condition_input_name = iname
+
+        if latent_shape is None:
+            raise RuntimeError(
+                f"ZERO FALLBACK: Cannot determine latent shape from {comp_name} graph.\n"
+                f"Expected a graph input with 'noisy' in its name."
+            )
+
+        # Resolve symbolic dims to concrete values
+        concrete_shape = []
+        for s in latent_shape:
+            if isinstance(s, dict):
+                tv = s.get("trace_value")
+                if tv is None:
+                    raise RuntimeError(
+                        f"ZERO FALLBACK: Symbolic dim in {comp_name} graph has no trace_value."
+                    )
+                concrete_shape.append(tv)
+            elif isinstance(s, int):
+                concrete_shape.append(s)
+            else:
+                raise RuntimeError(
+                    f"ZERO FALLBACK: Unexpected dim type {type(s)} in {comp_name} graph."
+                )
+
+        # ── Get condition tensor from previous stage output ──
+        condition_from = diffusion_cfg.get("condition_from")
+        if condition_from is None:
+            raise RuntimeError(
+                "ZERO FALLBACK: Diffusion stage requires 'condition_from' in topology.\n"
+                "Specifies which component provides the conditioning tensor."
+            )
+        condition = self._get_component_output(condition_from)
+        if condition is None:
+            raise RuntimeError(
+                f"ZERO FALLBACK: Condition source '{condition_from}' produced no output."
+            )
+
+        # Reshape condition to match graph expectation [1, T, hidden]
+        if condition is not None and condition.dim() == 2:
+            condition = condition.unsqueeze(0)
+        # Ensure condition sequence length matches latent sequence length
+        if condition is not None and len(concrete_shape) == 3:
+            target_seq = concrete_shape[1]
+            if condition.shape[1] != target_seq:
+                if condition.shape[1] > target_seq:
+                    condition = condition[:, :target_seq, :]
+                else:
+                    pad = torch.zeros(
+                        condition.shape[0], target_seq - condition.shape[1], condition.shape[2],
+                        device=condition.device, dtype=condition.dtype
+                    )
+                    condition = torch.cat([condition, pad], dim=1)
+
+        # ── Initialize noise ──
+        dtype = self._get_compute_dtype()
+        noisy = torch.randn(concrete_shape, device=device, dtype=dtype)
+
+        # ── Bind condition to variable resolver ──
+        if condition is not None and condition_input_name:
+            self.ctx.variable_resolver.resolved[f"{comp_name}.{condition_input_name}"] = condition.to(device, dtype=dtype)
+            self.ctx.variable_resolver.resolved[condition_input_name] = condition.to(device, dtype=dtype)
+
+        # ── Denoising loop ──
+        # Call executor.run() directly with all inputs — _execute_component only
+        # resolves from topology connections (condition) but noisy_images and
+        # timesteps are runtime-generated per step.
+        executor = self.ctx.executors[comp_name]
+        print(f"   [{comp_name}] Diffusion: {num_steps} steps, latent {concrete_shape}")
+        for step_idx, t in enumerate(scheduler.timesteps):
+            if isinstance(t, torch.Tensor) and t.dim() == 0:
+                t_input = t.unsqueeze(0).to(device)
+            else:
+                t_input = torch.tensor([t], device=device, dtype=torch.long)
+
+            # Scale model input (identity for DDIM)
+            scaled_noisy = scheduler.scale_model_input(noisy, t)
+
+            # Build complete inputs dict for this step
+            comp_inputs = {}
+            if noisy_input_name:
+                comp_inputs[noisy_input_name] = scaled_noisy
+            comp_inputs["timesteps"] = t_input
+            if condition is not None and condition_input_name:
+                comp_inputs[condition_input_name] = condition.to(device, dtype=dtype)
+
+            # Execute prediction head directly
+            output = executor.run(comp_inputs)
+
+            # Extract model output
+            if isinstance(output, dict):
+                model_output = next(iter(output.values()))
+            elif isinstance(output, torch.Tensor):
+                model_output = output
+            else:
+                model_output = self._get_component_output(comp_name)
+            if model_output is None:
+                raise RuntimeError(
+                    f"ZERO FALLBACK: Diffusion stage '{comp_name}' produced no output."
+                )
+
+            # Scheduler step
+            step_result = scheduler.step(model_output, t, noisy)
+            if isinstance(step_result, dict):
+                noisy = step_result["prev_sample"]
+            else:
+                noisy = step_result.prev_sample
+
+        # ── Apply speech scaling (VibeVoice-specific, DATA-DRIVEN from defaults) ──
+        speech_scaling = defaults.get("speech_scaling_factor")
+        speech_bias = defaults.get("speech_bias_factor")
+        if speech_scaling is not None and speech_bias is not None:
+            noisy = noisy / speech_scaling - speech_bias
+
+        # ── Store denoised output ──
+        self.ctx.variable_resolver.resolved[f"{comp_name}.output_0"] = noisy
+        self.ctx.variable_resolver.resolved["global.denoised_latent"] = noisy
+
+        elapsed = (time.perf_counter() - start) * 1000
+        print(f"   [{comp_name}] Diffusion done in {elapsed:.0f}ms")
+
+        if not self.ctx.persistent_mode:
+            self._unload_component_weights(comp_name)
+            gc.collect()
+            torch.cuda.empty_cache()
+
     def _execute_autoregressive_stage(self, stage: Dict, audio_config: Dict) -> None:
         """Execute an autoregressive generation stage (decoder, LM)."""
         comp_name = stage["component"]
         device = self.ctx.primary_device
         defaults = self.ctx.pkg.defaults
 
-        max_tokens = defaults.get("max_tokens", 448)
-        temperature = defaults.get("temperature", 0.0)
+        max_tokens = defaults.get("max_tokens")
+        if max_tokens is None:
+            raise RuntimeError(
+                "ZERO FALLBACK: max_tokens missing from defaults.json.\n"
+                "Builder must set max_tokens from model's generation_config."
+            )
+        temperature = defaults.get("temperature")
+        if temperature is None:
+            raise RuntimeError(
+                "ZERO FALLBACK: temperature missing from defaults.json.\n"
+                "Builder must set temperature from model's generation_config."
+            )
 
-        # Get special tokens from topology extracted_values (DATA-DRIVEN)
-        eos_token_id = self._get_extracted_value("eos_token_id", 50257)
-        decoder_start_token_id = self._get_extracted_value("decoder_start_token_id", 50258)
+        # Get special tokens (DATA-DRIVEN from defaults.json)
+        eos_token_id = defaults.get("eos_token_id")
+        if eos_token_id is None:
+            eos_token_id = self._get_extracted_value("eos_token_id")
+        if eos_token_id is None:
+            raise RuntimeError(
+                "ZERO FALLBACK: eos_token_id missing from defaults.json.\n"
+                "Builder must extract eos_token_id from model config."
+            )
+        decoder_start_token_id = defaults.get("decoder_start_token_id")
+        if decoder_start_token_id is None:
+            decoder_start_token_id = self._get_extracted_value("decoder_start_token_id")
+        if decoder_start_token_id is None:
+            # Not all models need decoder_start_token_id (only encoder-decoder like Whisper)
+            decoder_start_token_id = eos_token_id
 
         # Detect architecture: does the graph take inputs_embeds or input_ids?
         uses_inputs_embeds = self._component_has_input(comp_name, "inputs_embeds")
@@ -625,10 +875,14 @@ class AudioEngine(FlowHandler):
             idx = min(phoneme_count, voicepack.shape[0] - 1)
             ref_s = voicepack[idx]
         else:
-            ref_s = voicepack.reshape(-1, 256)[0:1]
+            vp_dim = voicepack.shape[-1]
+            ref_s = voicepack.reshape(-1, vp_dim)[0:1]
 
-        style_dec = ref_s[:, :128]
-        style_pred = ref_s[:, 128:]
+        # Split voicepack: first half = decoder style, second half = predictor style
+        # Dimension comes from the voicepack tensor shape itself (DATA-DRIVEN)
+        split_at = ref_s.shape[-1] // 2
+        style_dec = ref_s[:, :split_at]
+        style_pred = ref_s[:, split_at:]
 
         for key in ["global.decoder_style", "decoder_style"]:
             self.ctx.variable_resolver.resolved[key] = style_dec
@@ -646,25 +900,33 @@ class AudioEngine(FlowHandler):
         """
         comp_name = stage["component"]
 
-        if "text_encoder" in comp_name:
+        # Sub-dispatch by topology field, NOT by component name string
+        native_subtype = stage.get("native_subtype", "predictor")
+        if native_subtype == "text_encoder":
             self._execute_native_text_encoder(comp_name)
             return
 
         device = self.ctx.primary_device
-        dtype = torch.float32
+        dtype = self._get_compute_dtype()
 
         print(f"   [{comp_name}] Running native Kokoro predictor...")
         start = time.perf_counter()
 
-        # Get inputs from previous stages
-        bert_enc_out = self._get_component_output("bert_encoder")
+        # Get inputs from previous stages (DATA-DRIVEN from topology inputs_from)
+        inputs_from = stage.get("inputs_from", [])
+        if len(inputs_from) < 2:
+            raise RuntimeError(
+                f"ZERO FALLBACK: native_kokoro predictor requires 'inputs_from' "
+                f"with 2 component names in topology stage config."
+            )
+        bert_enc_out = self._get_component_output(inputs_from[0])
         if bert_enc_out is None:
-            raise RuntimeError("ZERO FALLBACK: bert_encoder output not found.")
+            raise RuntimeError(f"ZERO FALLBACK: {inputs_from[0]} output not found.")
         d_en = bert_enc_out.transpose(-1, -2).to(device=device, dtype=dtype)  # [B, 512, T]
 
-        text_enc_out = self._get_component_output("text_encoder")
+        text_enc_out = self._get_component_output(inputs_from[1])
         if text_enc_out is None:
-            raise RuntimeError("ZERO FALLBACK: text_encoder output not found.")
+            raise RuntimeError(f"ZERO FALLBACK: {inputs_from[1]} output not found.")
         t_en = text_enc_out.to(device=device, dtype=dtype)  # [B, 512, T]
 
         style_pred = self.ctx.variable_resolver.resolved.get("global.predictor_style")
@@ -795,14 +1057,17 @@ class AudioEngine(FlowHandler):
             torch.cuda.empty_cache()
 
     def _execute_native_text_encoder(self, comp_name: str) -> None:
-        """Native execution for Kokoro text_encoder: embedding → CNN → BiLSTM.
+        """Native execution for text_encoder: embedding → CNN → BiLSTM.
 
         cuDNN RNN internal ops can't be replayed through CompiledSequence
         (pack_padded_sequence/aten::set/cuDNN weight buffer ops).
         Extract weights and run natively using torch.nn modules.
+
+        TODO: Fix CompiledSequence to handle aten::lstm or retrace without
+        pack_padded_sequence so this can run as a compiled forward pass.
         """
         device = self.ctx.primary_device
-        dtype = torch.float32
+        dtype = self._get_compute_dtype()
 
         print(f"   [{comp_name}] Running native text encoder...")
         start = time.perf_counter()
@@ -842,8 +1107,8 @@ class AudioEngine(FlowHandler):
                 # LayerNorm over last dim (channel dim after transpose)
                 gamma = w[f"cnn.{i}.1.gamma"].to(device=device, dtype=dtype)
                 beta = w[f"cnn.{i}.1.beta"].to(device=device, dtype=dtype)
-                x_t = x.transpose(1, 2)  # [B, seq, 512]
-                x_t = torch.nn.functional.layer_norm(x_t, [512], gamma, beta)
+                x_t = x.transpose(1, 2)  # [B, seq, C]
+                x_t = torch.nn.functional.layer_norm(x_t, [gamma.shape[0]], gamma, beta)
                 x = x_t.transpose(1, 2)  # [B, 512, seq]
 
             # BiLSTM with pack_padded_sequence
@@ -1078,25 +1343,212 @@ class AudioEngine(FlowHandler):
     def _get_kokoro_decoder_shapes(self) -> Dict[str, int]:
         """Read decoder input shapes from graph for exact target dimensions."""
         executor = self.ctx.executors.get("decoder")
-        result = {"asr_frames": 128, "f0_len": 256, "n_len": 256}
         if executor is None:
-            return result
+            raise RuntimeError(
+                "ZERO FALLBACK: 'decoder' component not found in executors.\n"
+                "Required to determine target shapes for predictor output."
+            )
         dag = getattr(executor, '_dag', None)
         if dag is None:
-            return result
+            raise RuntimeError(
+                "ZERO FALLBACK: 'decoder' component has no DAG.\n"
+                "Cannot determine target shapes for predictor output."
+            )
+
+        result: Dict[str, int] = {}
+        shape_map = {"asr": ("asr_frames", 2), "F0_curve": ("f0_len", 1), "N": ("n_len", 1)}
         for spec in dag.get("tensors", {}).values():
             name = spec.get("input_name", "")
-            shape = spec.get("shape", [])
-            if name == "asr" and len(shape) >= 3:
-                val = shape[2]
-                result["asr_frames"] = val if isinstance(val, int) else val.get("trace_value", 128)
-            elif name == "F0_curve" and len(shape) >= 2:
-                val = shape[1]
-                result["f0_len"] = val if isinstance(val, int) else val.get("trace_value", 256)
-            elif name == "N" and len(shape) >= 2:
-                val = shape[1]
-                result["n_len"] = val if isinstance(val, int) else val.get("trace_value", 256)
+            if name in shape_map:
+                key, dim_idx = shape_map[name]
+                shape = spec.get("shape", [])
+                if len(shape) > dim_idx:
+                    val = shape[dim_idx]
+                    if isinstance(val, int):
+                        result[key] = val
+                    elif isinstance(val, dict) and "trace_value" in val:
+                        result[key] = val["trace_value"]
+                    else:
+                        raise RuntimeError(
+                            f"ZERO FALLBACK: Cannot resolve shape dim for '{name}' in decoder graph."
+                        )
+
+        for required in ("asr_frames", "f0_len", "n_len"):
+            if required not in result:
+                raise RuntimeError(
+                    f"ZERO FALLBACK: '{required}' shape not found in decoder graph inputs."
+                )
         return result
+
+    # ─────────────────────────────────────────────────────────────
+    # Native acoustic decoder (VibeVoice)
+    # ─────────────────────────────────────────────────────────────
+
+    def _execute_native_acoustic_decoder(self, stage: Dict, audio_config: Dict) -> None:
+        """Run acoustic tokenizer decoder natively.
+
+        The traced graph covers the full encode+decode path (waveform→waveform),
+        but TTS only needs the decoder (latent→waveform). Extract decoder weights
+        and run the ConvNext1d architecture natively.
+
+        Architecture params (decoder_depths, decoder_upsampling_ratios) read from
+        defaults.json — set by builder from model's config.json.
+
+        TODO: Retrace only the decoder portion as a separate component so this
+        can run through CompiledSequence as a standard forward pass.
+        """
+        comp_name = stage["component"]
+        device = self.ctx.primary_device
+        dtype = self._get_compute_dtype()
+
+        # Get denoised latent from diffusion stage
+        latent = self.ctx.variable_resolver.resolved.get("global.denoised_latent")
+        if latent is None:
+            raise RuntimeError(
+                "ZERO FALLBACK: native_acoustic_decoder requires global.denoised_latent "
+                "from a preceding diffusion stage."
+            )
+
+        print(f"   [{comp_name}] Running native acoustic decoder...")
+        start = time.perf_counter()
+
+        self._ensure_weights_loaded(comp_name)
+        w = self.ctx.executors[comp_name]._weights
+
+        # Diffusion outputs [B, T, latent_dim=64], decoder expects [B, C=64, T]
+        x = latent.to(device=device, dtype=dtype)
+        if x.shape[1] != 64 or (x.dim() == 3 and x.shape[2] == 64 and x.shape[1] != 64):
+            x = x.transpose(1, 2)
+
+        # Decoder config (DATA-DRIVEN from defaults.json)
+        defaults = self.ctx.pkg.defaults
+        upsample_strides = defaults.get("decoder_upsampling_ratios")
+        stage_depths = defaults.get("decoder_depths")
+        if upsample_strides is None or stage_depths is None:
+            raise RuntimeError(
+                "ZERO FALLBACK: decoder_upsampling_ratios and decoder_depths "
+                "missing from defaults.json.\n"
+                "Builder must extract from model's config.json."
+            )
+
+        with torch.inference_mode():
+            # ── Stem: CausalConv1d(64→2048, k=7) ──
+            x = self._vv_causal_conv1d(x, w,
+                "decoder.upsample_layers.0.0.conv.conv", kernel_size=7)
+
+            # ── Stem stage: 8 ConvNext blocks at 2048 ──
+            for blk in range(stage_depths[0]):
+                x = self._vv_convnext_block(x, w, f"decoder.stages.0.{blk}")
+
+            # ── Upsample stages 1-5 (ConvTranspose1d) ──
+            for i, stride in enumerate(upsample_strides[:5]):
+                kernel_size = stride * 2
+                x = self._vv_causal_conv_transpose1d(
+                    x, w, f"decoder.upsample_layers.{i+1}.0.convtr.convtr",
+                    stride=stride, kernel_size=kernel_size)
+                for blk in range(stage_depths[i + 1]):
+                    x = self._vv_convnext_block(x, w, f"decoder.stages.{i+1}.{blk}")
+
+            # ── Last upsample (conv_layers.0, stride=2) ──
+            x = self._vv_causal_conv_transpose1d(
+                x, w, "decoder.conv_layers.0.convtr.convtr",
+                stride=upsample_strides[5], kernel_size=upsample_strides[5] * 2)
+            for blk in range(stage_depths[6]):
+                x = self._vv_convnext_block(x, w, f"decoder.stages.6.{blk}")
+
+            # ── Head: CausalConv1d(32→1, k=7) ──
+            x = self._vv_causal_conv1d(x, w, "decoder.head.conv.conv", kernel_size=7)
+
+        elapsed = (time.perf_counter() - start) * 1000
+        print(f"   [{comp_name}] Decoder done in {elapsed:.0f}ms  output={x.shape}")
+
+        # Store waveform output
+        self.ctx.variable_resolver.resolved[f"{comp_name}.output_0"] = x
+        self.ctx.variable_resolver.resolved["global.output_audio"] = x
+
+        if not self.ctx.persistent_mode:
+            self._unload_component_weights(comp_name)
+            gc.collect()
+            torch.cuda.empty_cache()
+
+    def _vv_causal_conv1d(
+        self, x: torch.Tensor, w: Dict, prefix: str,
+        kernel_size: int = 7, stride: int = 1, groups: int = 1,
+    ) -> torch.Tensor:
+        """CausalConv1d: left-pad then Conv1d."""
+        weight = w[f"{prefix}.weight"].to(device=x.device, dtype=x.dtype)
+        bias = w.get(f"{prefix}.bias")
+        if bias is not None:
+            bias = bias.to(device=x.device, dtype=x.dtype)
+        causal_pad = (kernel_size - 1) - (stride - 1)
+        if causal_pad > 0:
+            x = torch.nn.functional.pad(x, (causal_pad, 0))
+        return torch.nn.functional.conv1d(x, weight, bias, stride=stride, groups=groups)
+
+    def _vv_causal_conv_transpose1d(
+        self, x: torch.Tensor, w: Dict, prefix: str,
+        stride: int, kernel_size: int,
+    ) -> torch.Tensor:
+        """CausalConvTranspose1d: ConvTranspose1d then trim right padding."""
+        weight = w[f"{prefix}.weight"].to(device=x.device, dtype=x.dtype)
+        bias = w.get(f"{prefix}.bias")
+        if bias is not None:
+            bias = bias.to(device=x.device, dtype=x.dtype)
+        x = torch.nn.functional.conv_transpose1d(x, weight, bias, stride=stride)
+        padding_total = kernel_size - stride
+        if padding_total > 0:
+            x = x[..., :-padding_total]
+        return x
+
+    def _vv_convnext_block(
+        self, x: torch.Tensor, w: Dict, prefix: str,
+    ) -> torch.Tensor:
+        """ConvNext1d block: mixer path (norm→depthwise_conv→gamma) + FFN path.
+
+        Matches VibeVoiceAcousticTokenizerConvNext1dLayer exactly:
+          mixer: residual + gamma * causal_depthwise_conv(rms_norm(x))
+          ffn:   residual + ffn_gamma * linear2(gelu(linear1(ffn_norm(x))))
+        """
+        dev, dt = x.device, x.dtype
+
+        def get(name):
+            return w[f"{prefix}.{name}"].to(device=dev, dtype=dt)
+
+        # ── Mixer path ──
+        residual = x
+        channels = x.shape[1]
+        # RMSNorm over last dim: transpose [B,C,T]→[B,T,C], norm, transpose back
+        h = self._vv_rms_norm(x.transpose(1, 2), get("norm.weight")).transpose(1, 2)
+        # Depthwise causal conv (groups=channels, kernel derived from weight)
+        mixer_w = get("mixer.conv.conv.conv.weight")
+        mixer_b = get("mixer.conv.conv.conv.bias")
+        causal_pad = mixer_w.shape[2] - 1
+        h = torch.nn.functional.pad(h, (causal_pad, 0))
+        h = torch.nn.functional.conv1d(h, mixer_w, mixer_b, groups=channels)
+        h = h * get("gamma").unsqueeze(-1)
+        x = residual + h
+
+        # ── FFN path ──
+        residual = x
+        h = self._vv_rms_norm(x.transpose(1, 2), get("ffn_norm.weight"))
+        # Linear1 → GELU → Linear2  (operates on [B,T,C])
+        h = torch.nn.functional.linear(h, get("ffn.linear1.weight"), get("ffn.linear1.bias"))
+        h = torch.nn.functional.gelu(h)
+        h = torch.nn.functional.linear(h, get("ffn.linear2.weight"), get("ffn.linear2.bias"))
+        h = h.transpose(1, 2)  # back to [B,C,T]
+        h = h * get("ffn_gamma").unsqueeze(-1)
+        x = residual + h
+
+        return x
+
+    def _vv_rms_norm(
+        self, x: torch.Tensor, weight: torch.Tensor, eps: float = 1e-5,
+    ) -> torch.Tensor:
+        """RMSNorm: x * rsqrt(mean(x²) + eps) * weight."""
+        x_float = x.float()
+        variance = x_float.pow(2).mean(-1, keepdim=True)
+        x_normed = x_float * torch.rsqrt(variance + eps)
+        return weight * x_normed.to(x.dtype)
 
     # ─────────────────────────────────────────────────────────────
     # Output postprocessing
@@ -1134,33 +1586,42 @@ class AudioEngine(FlowHandler):
         variable = output_config.get("variable", "global.output_audio")
         device = self.ctx.primary_device
 
-        # Check if output is audio token IDs (Orpheus/SNAC) or raw waveform
+        # Check if output is audio token IDs or raw waveform
+        # Detection is DATA-DRIVEN: defaults.json audio_output_type and audio_token_start
+        defaults = self.ctx.pkg.defaults
+        audio_output_type = defaults.get("audio_output_type")
         generated_ids = self.ctx.variable_resolver.resolved.get("global.generated_token_ids")
-        if generated_ids and isinstance(generated_ids, list):
-            audio_count = sum(1 for t in generated_ids if 128266 <= t < 156940)
-            print(f"   [TTS] Tokens: {len(generated_ids)}, audio: {audio_count}, range: [{min(generated_ids)}, {max(generated_ids)}]")
-        if generated_ids and isinstance(generated_ids, list) and len(generated_ids) > 0:
-            # Token-based TTS: decode tokens → waveform via codec
-            vocab_size = self.ctx.pkg.defaults.get("vocab_size",
-                         self._get_extracted_value("vocab_size", 156940))
-            # Orpheus audio tokens start after text vocab (128266 for Orpheus)
-            # Detection: if max token > 128000, it's likely Orpheus-style
-            max_token = max(generated_ids) if generated_ids else 0
-            if max_token > 128000:
-                from neurobrix.core.module.audio.output_processor import AudioOutputProcessor
-                waveform = AudioOutputProcessor.decode_snac_tokens(
-                    generated_ids,
-                    vocab_size=vocab_size,
-                    device=device,
+
+        if audio_output_type == "snac_tokens" and generated_ids and isinstance(generated_ids, list):
+            audio_token_start = defaults.get("audio_token_start")
+            if audio_token_start is None:
+                raise RuntimeError(
+                    "ZERO FALLBACK: audio_token_start missing from defaults.json.\n"
+                    "Required for SNAC token decoding."
                 )
-                if waveform.numel() > 1:
-                    self.ctx.variable_resolver.resolved[variable] = waveform
-                    # Save to file
-                    model_name = self.ctx.pkg.manifest.get("model_name", "model")
-                    output_path = f"output_{model_name}.wav"
-                    AudioOutputProcessor.save_waveform(waveform, output_path, sample_rate=24000)
-                    print(f"\n{'='*70}\nSAVED: {output_path}\n{'='*70}")
-                    return
+            vocab_size = defaults.get("vocab_size")
+            if vocab_size is None:
+                vocab_size = self._get_extracted_value("vocab_size")
+            if vocab_size is None:
+                raise RuntimeError(
+                    "ZERO FALLBACK: vocab_size missing from defaults.json.\n"
+                    "Required for SNAC token decoding."
+                )
+            audio_count = sum(1 for t in generated_ids if t >= audio_token_start)
+            print(f"   [TTS] Tokens: {len(generated_ids)}, audio: {audio_count}")
+
+            from neurobrix.core.module.audio.output_processor import AudioOutputProcessor
+            waveform = AudioOutputProcessor.decode_snac_tokens(
+                generated_ids, vocab_size=vocab_size, device=device,
+            )
+            if waveform.numel() > 1:
+                self.ctx.variable_resolver.resolved[variable] = waveform
+                model_name = self.ctx.pkg.manifest.get("model_name", "model")
+                sample_rate = self._get_sample_rate()
+                output_path = f"output_{model_name}.wav"
+                AudioOutputProcessor.save_waveform(waveform, output_path, sample_rate=sample_rate)
+                print(f"\n{'='*70}\nSAVED: {output_path}\n{'='*70}")
+                return
 
         # Raw waveform: find output tensor from last stage (Kokoro, VibeVoice, etc.)
         waveform = None
@@ -1180,9 +1641,7 @@ class AudioEngine(FlowHandler):
         if waveform is not None:
             self.ctx.variable_resolver.resolved[variable] = waveform
             model_name = self.ctx.pkg.manifest.get("model_name", "model")
-            flow = self.ctx.pkg.topology.get("flow", {})
-            sample_rate = flow.get("audio", {}).get("sample_rate",
-                          self.ctx.pkg.defaults.get("sample_rate", 24000))
+            sample_rate = self._get_sample_rate()
             output_path = f"output_{model_name}.wav"
             from neurobrix.core.module.audio.output_processor import AudioOutputProcessor
             AudioOutputProcessor.save_waveform(waveform, output_path, sample_rate=sample_rate)
@@ -1301,42 +1760,51 @@ class AudioEngine(FlowHandler):
                 return self._get_component_output(prev_comp)
         return None
 
-    def _get_extracted_value(self, key: str, default: Any = None) -> Any:
-        """Get a value from topology extracted_values."""
+    def _get_extracted_value(self, key: str) -> Any:
+        """Get a value from topology extracted_values or defaults. Returns None if missing."""
         extracted = self.ctx.pkg.topology.get("extracted_values", {})
         for section in extracted.values():
             if isinstance(section, dict) and key in section:
                 return section[key]
-        # Also check generation_config in defaults
-        return self.ctx.pkg.defaults.get(key, default)
+        return self.ctx.pkg.defaults.get(key)
 
     def _get_forced_decoder_ids(self) -> List:
-        """Get forced decoder IDs from generation config in snapshot."""
-        snapshot_path = self._find_snapshot_path()
-        gen_config_path = snapshot_path / "generation_config.json"
-        if gen_config_path.exists():
-            import json
-            with open(gen_config_path) as f:
-                gen = json.load(f)
-            forced = gen.get("forced_decoder_ids", [])
-            if forced:
-                return [(pos, tid) for pos, tid in forced]
+        """Get forced decoder IDs from defaults.json (set by builder)."""
+        forced = self.ctx.pkg.defaults.get("forced_decoder_ids", [])
+        if forced:
+            return [(pos, tid) for pos, tid in forced]
         return []
 
-    def _find_snapshot_path(self) -> Path:
-        """Find the HF snapshot path for preprocessor/generation config."""
-        model_name = self.ctx.pkg.manifest.get("model_name", "")
-        snapshot_path = Path(f"/home/mlops/hf_snapshots/{model_name}")
-        if snapshot_path.exists():
-            return snapshot_path
-
-        nbx_path = Path(self.ctx.nbx_path_str)
-        if (nbx_path / "modules" / "tokenizer").exists():
-            return nbx_path / "modules" / "tokenizer"
-
+    def _get_sample_rate(self) -> int:
+        """Get sample rate from topology or defaults. ZERO FALLBACK."""
+        flow = self.ctx.pkg.topology.get("flow", {})
+        sr = flow.get("audio", {}).get("sample_rate")
+        if sr is not None:
+            return sr
+        sr = self.ctx.pkg.defaults.get("sample_rate")
+        if sr is not None:
+            return sr
         raise RuntimeError(
-            f"ZERO FALLBACK: Cannot find snapshot path for {model_name}. "
-            f"Expected at {snapshot_path}"
+            "ZERO FALLBACK: sample_rate missing from both topology.flow.audio "
+            "and defaults.json."
+        )
+
+    def _find_model_config_path(self) -> Path:
+        """Find model config path from NBX container, then snapshot."""
+        nbx_path = Path(self.ctx.nbx_path_str)
+        # 1. NBX container modules/tokenizer (has preprocessor_config.json)
+        for subdir in ["modules/tokenizer", "modules/processor"]:
+            candidate = nbx_path / subdir
+            if candidate.exists():
+                return candidate
+        # 2. Component path from topology (first component with a path)
+        for comp_info in self.ctx.pkg.topology.get("components", {}).values():
+            comp_path = comp_info.get("path")
+            if comp_path and Path(comp_path).exists():
+                return Path(comp_path)
+        raise RuntimeError(
+            "ZERO FALLBACK: Cannot find model config path.\n"
+            "Expected modules/tokenizer in NBX container or component path in topology."
         )
 
     def _get_component_input_shape(self, comp_name: Optional[str]) -> Optional[Tuple[int, ...]]:
