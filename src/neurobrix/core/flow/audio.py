@@ -728,6 +728,7 @@ class AudioEngine(FlowHandler):
         self, comp_name: str, embed_weight: Optional[torch.Tensor],
         max_tokens: int, temperature: float,
         eos_token_id: int, decoder_start_token_id: int, logits_source: str,
+        repetition_penalty: float = 1.0,
     ) -> None:
         """Autoregressive decode for encoder-decoder models (Whisper).
         Graph takes input_ids + cross-attention from encoder output."""
