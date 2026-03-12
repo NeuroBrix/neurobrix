@@ -700,15 +700,19 @@ class AudioEngine(FlowHandler):
                         if tied_name not in executor._weights and f"param::{tied_name}" in tensors:
                             executor._weights[tied_name] = embed_weight
 
+        repetition_penalty = defaults.get("repetition_penalty", 1.0)
+
         if uses_inputs_embeds:
             self._run_audio_llm_autoregressive(
                 comp_name, stage, audio_config, embed_weight,
                 max_tokens, temperature, eos_token_id, logits_source,
+                repetition_penalty=repetition_penalty,
             )
         else:
             self._run_encoder_decoder_autoregressive(
                 comp_name, embed_weight, max_tokens, temperature,
                 eos_token_id, decoder_start_token_id, logits_source,
+                repetition_penalty=repetition_penalty,
             )
 
         elapsed = (time.perf_counter() - start) * 1000
