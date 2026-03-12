@@ -1838,6 +1838,106 @@ class AudioEngine(FlowHandler):
     # Helpers
     # ─────────────────────────────────────────────────────────────
 
+    def _try_chunked_forward(self, comp_name: str) -> bool:
+        """Run chunked forward if input seq_len exceeds graph's trace-time seq_len.
+
+        Used for codec.decoder: graph expects [1, 1024, 64] but input may be [1, 1024, T_gen].
+        Chunks input into 64-frame blocks, runs each, concatenates waveform output.
+        Returns True if chunking was performed.
+        """
+        executor = self.ctx.executors.get(comp_name)
+        if executor is None:
+            return False
+
+        dag = getattr(executor, '_dag', None)
+        if dag is None:
+            return False
+
+        # Find graph input spec
+        graph_input_name = None
+        graph_seq_len = None
+        for _tid, spec in dag.get("tensors", {}).items():
+            iname = spec.get("input_name")
+            if iname:
+                shape = spec.get("shape", [])
+                if len(shape) == 3:
+                    graph_seq_len = shape[2]
+                    if isinstance(graph_seq_len, dict):
+                        graph_seq_len = graph_seq_len.get("trace_value", graph_seq_len)
+                    graph_input_name = iname
+                break
+
+        if graph_input_name is None or not isinstance(graph_seq_len, int):
+            return False
+
+        # Find the actual input tensor
+        resolved = self.ctx.variable_resolver.resolved
+        actual_input = None
+        for key in [f"global.{graph_input_name}", graph_input_name]:
+            val = resolved.get(key)
+            if isinstance(val, torch.Tensor) and val.dim() == 3:
+                actual_input = val
+                break
+
+        # Also check connections
+        if actual_input is None:
+            connections = self.ctx.pkg.topology.get("connections", [])
+            for conn in connections:
+                target = conn.get("to", "")
+                if target == f"{comp_name}.{graph_input_name}":
+                    src_key = conn.get("from", "")
+                    val = resolved.get(src_key)
+                    if isinstance(val, torch.Tensor) and val.dim() == 3:
+                        actual_input = val
+                        break
+
+        if actual_input is None:
+            return False
+
+        actual_seq = actual_input.shape[2]
+        if actual_seq <= graph_seq_len:
+            return False  # Fits in single pass, no chunking needed
+
+        # Chunk and execute
+        print(f"   [{comp_name}] Chunked: {actual_seq} frames → {graph_seq_len}-frame blocks")
+        waveform_chunks = []
+
+        for chunk_start in range(0, actual_seq, graph_seq_len):
+            chunk_end = min(chunk_start + graph_seq_len, actual_seq)
+            chunk = actual_input[:, :, chunk_start:chunk_end]
+
+            # Pad last chunk if needed
+            if chunk.shape[2] < graph_seq_len:
+                pad_size = graph_seq_len - chunk.shape[2]
+                chunk = torch.nn.functional.pad(chunk, (0, pad_size))
+
+            comp_inputs = {graph_input_name: chunk}
+            output = executor.run(comp_inputs)
+
+            if isinstance(output, dict):
+                out_tensor = next(iter(output.values()))
+            elif isinstance(output, torch.Tensor):
+                out_tensor = output
+            else:
+                out_tensor = self._get_component_output(comp_name)
+
+            if out_tensor is not None:
+                # If last chunk was padded, trim proportionally
+                if chunk_end - chunk_start < graph_seq_len and out_tensor.dim() >= 2:
+                    ratio = (chunk_end - chunk_start) / graph_seq_len
+                    trim_len = int(out_tensor.shape[-1] * ratio)
+                    out_tensor = out_tensor[..., :trim_len]
+                waveform_chunks.append(out_tensor)
+
+        if waveform_chunks:
+            full_output = torch.cat(waveform_chunks, dim=-1)
+            # Store as component output
+            self.ctx.variable_resolver.resolved[f"{comp_name}.output_0"] = full_output
+            self.ctx.variable_resolver.resolved["global.output_audio"] = full_output
+            print(f"   [{comp_name}] Waveform: {list(full_output.shape)}")
+
+        return True
+
     def _reshape_output_for_connections(self, comp_name: str) -> None:
         """Reshape component output if downstream stage expects different feature dim.
 
