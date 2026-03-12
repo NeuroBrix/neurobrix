@@ -1384,7 +1384,7 @@ class TekkenTokenizer:
 def load_tokenizer_from_path(
     tokenizer_dir: Path,
     max_length: Optional[int] = None,
-) -> "SPTokenizer | BPETokenizer | HFTokenizer | TiktokenTokenizer":
+) -> "SPTokenizer | BPETokenizer | HFTokenizer | TiktokenTokenizer | TekkenTokenizer":
     """
     Load tokenizer from directory - DATA-DRIVEN TYPE DETECTION.
 
