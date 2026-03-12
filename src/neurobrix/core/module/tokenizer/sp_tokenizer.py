@@ -1325,6 +1325,62 @@ class TiktokenTokenizer:
         return self._pad_id
 
 
+class TekkenTokenizer:
+    """
+    Mistral Tekken tokenizer (tekken.json format).
+
+    Uses mistral_common for native Tekken tokenization.
+    Provides same interface as SPTokenizer/HFTokenizer.
+    """
+
+    def __init__(self, tekken_path: Path, config: Optional[dict] = None):
+        config = config or {}
+        self.max_length = config.get("model_max_length", 2048)
+
+        from mistral_common.tokens.tokenizers.mistral import MistralTokenizer
+        self._tok = MistralTokenizer.from_file(str(tekken_path))
+        self._inner = self._tok.instruct_tokenizer.tokenizer
+
+        # Extract special token IDs from tekken.json
+        with open(tekken_path) as f:
+            tekken_data = json.load(f)
+        self._special_tokens = {}
+        for st in tekken_data.get("special_tokens", []):
+            rank = st.get("rank")
+            token_str = st.get("token_str", "")
+            self._special_tokens[token_str] = rank
+
+        self._bos_id = self._special_tokens.get("<s>", 1)
+        self._eos_id = self._special_tokens.get("</s>", 2)
+        self._pad_id = self._special_tokens.get("<pad>", 0)
+
+    def encode(self, text: str, add_special_tokens: bool = True,
+               return_tensors: Optional[str] = None, **kwargs) -> Any:
+        ids = self._inner.encode(text, bos=add_special_tokens, eos=False)
+        if return_tensors == "pt":
+            import torch
+            return torch.tensor([ids], dtype=torch.long)
+        return ids
+
+    def decode(self, ids: List[int], skip_special_tokens: bool = True) -> str:
+        if skip_special_tokens:
+            special_ids = set(self._special_tokens.values())
+            ids = [i for i in ids if i not in special_ids]
+        return self._inner.decode(ids)
+
+    @property
+    def eos_token_id(self) -> Optional[int]:
+        return self._eos_id
+
+    @property
+    def bos_token_id(self) -> Optional[int]:
+        return self._bos_id
+
+    @property
+    def pad_token_id(self) -> int:
+        return self._pad_id
+
+
 def load_tokenizer_from_path(
     tokenizer_dir: Path,
     max_length: Optional[int] = None,
