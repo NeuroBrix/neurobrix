@@ -835,7 +835,11 @@ class AudioEngine(FlowHandler):
                 break
 
             logits = self._compute_logits(output, embed_weight, logits_source)
-            next_token = self._sample_token(logits, temperature)
+            next_token = self._sample_token(
+                logits, temperature,
+                generated_ids=generated_ids,
+                repetition_penalty=repetition_penalty,
+            )
             generated_ids.append(next_token)
 
             if next_token == eos_token_id:
