@@ -20,6 +20,7 @@ from neurobrix.core.module.tokenizer.sp_tokenizer import (
     SPTokenizer,
     BPETokenizer,
     HFTokenizer,
+    TekkenTokenizer,
     load_tokenizer_from_path,
     load_tokenizer_from_nbx,
 )
