@@ -34,6 +34,7 @@ __all__ = [
     "SPTokenizer",
     "BPETokenizer",
     "HFTokenizer",
+    "TekkenTokenizer",
     # Factory and wrapper
     "TokenizerWrapper",
     "TokenizerFactory",
