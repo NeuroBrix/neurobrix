@@ -1977,7 +1977,7 @@ class AudioEngine(FlowHandler):
         repetition_penalty: float = 1.0,
     ) -> int:
         """Sample next token from logits with optional repetition penalty."""
-        last_logits = logits[:, -1, :]
+        last_logits = logits[:, -1, :].clone()
 
         # Apply repetition penalty
         if repetition_penalty != 1.0 and generated_ids:
