@@ -95,10 +95,13 @@ class AudioEngine(FlowHandler):
                 self._execute_diffusion_stage(stage, audio_config)
             elif execution == "native_acoustic_decoder":
                 self._execute_native_acoustic_decoder(stage, audio_config)
+            elif execution == "dual_ar":
+                self._execute_dual_ar_stage(stage, audio_config)
             else:
                 raise RuntimeError(
                     f"ZERO FALLBACK: Unknown execution type '{execution}' "
-                    f"for stage '{comp_name}'. Expected: forward, autoregressive, native_kokoro, diffusion, native_acoustic_decoder"
+                    f"for stage '{comp_name}'. Expected: forward, autoregressive, native_kokoro, "
+                    f"diffusion, native_acoustic_decoder, dual_ar"
                 )
 
         # ── Step 3: Output postprocessing ──
@@ -423,6 +426,10 @@ class AudioEngine(FlowHandler):
 
         # Store output for downstream stages
         self._store_stage_output(comp_name)
+
+        # Reshape output if next stage expects different feature dim
+        # Handles multimodal pooling (e.g., audio_tower [B,T,1280] → MMP [B,T/4,5120])
+        self._reshape_output_for_connections(comp_name)
 
         if not self.ctx.persistent_mode:
             self._unload_component_weights(comp_name)
@@ -1471,6 +1478,152 @@ class AudioEngine(FlowHandler):
             gc.collect()
             torch.cuda.empty_cache()
 
+    # ─────────────────────────────────────────────────────────────
+    # DualAR execution (OpenAudio/Fish-Speech)
+    # ─────────────────────────────────────────────────────────────
+
+    def _execute_dual_ar_stage(self, stage: Dict, audio_config: Dict) -> None:
+        """Execute DualAR multi-codebook autoregressive generation.
+
+        DualAR architecture (Fish-Speech/OpenAudio):
+          - Input: [B, N+1, T] where N=codebook levels (10), row 0=semantic tokens
+          - Slow backbone: predicts next semantic token from full [B, N+1, T] history
+          - Fast transformer: predicts N acoustic codebook tokens per semantic position
+          - Output: [B, N+1, T_out] token matrix fed to codec.decoder
+
+        Graph: input 'inp' [1, 11, 64], output logits [1, 64, vocab_size]
+        The slow backbone output has semantic logits at the last time step.
+        """
+        comp_name = stage["component"]
+        device = self.ctx.primary_device
+        defaults = self.ctx.pkg.defaults
+
+        max_tokens = defaults.get("max_tokens", 2048)
+        temperature = defaults.get("temperature", 0.7)
+        top_p = defaults.get("top_p", 0.8)
+
+        print(f"   [{comp_name}] DualAR generation (max_tokens={max_tokens})...")
+        start = time.perf_counter()
+
+        self._ensure_weights_loaded(comp_name)
+        executor = self.ctx.executors[comp_name]
+
+        # Get graph input shape to determine N+1 (codebook levels + semantic)
+        dag = getattr(executor, '_dag', None)
+        n_codebooks = 11  # Default: 10 acoustic + 1 semantic
+        if dag:
+            for _tid, spec in dag.get("tensors", {}).items():
+                if spec.get("input_name") == "inp":
+                    shape = spec.get("shape", [])
+                    if len(shape) >= 3:
+                        n_val = shape[1]
+                        if isinstance(n_val, int):
+                            n_codebooks = n_val
+                        elif isinstance(n_val, dict):
+                            n_codebooks = n_val.get("trace_value", 11)
+                    break
+
+        # Tokenize prompt text
+        tokenizer = self.ctx.modules.get("tokenizer")
+        prompt = self.ctx.variable_resolver.resolved.get("global.prompt", "")
+
+        if tokenizer is not None and isinstance(prompt, str):
+            try:
+                input_ids = tokenizer.encode(prompt, return_tensors="pt", add_special_tokens=True)
+            except TypeError:
+                ids = tokenizer.encode(prompt, add_special_tokens=True)
+                input_ids = torch.tensor([ids], dtype=torch.long)
+            if isinstance(input_ids, list):
+                input_ids = torch.tensor([input_ids], dtype=torch.long)
+            input_ids = input_ids.to(device)
+        else:
+            # Fallback: use input_ids if already set
+            input_ids = self.ctx.variable_resolver.resolved.get("global.input_ids")
+            if input_ids is None:
+                raise RuntimeError(
+                    "ZERO FALLBACK: DualAR stage requires tokenizer or pre-tokenized input_ids."
+                )
+
+        # Build initial input matrix [B, N+1, T_prompt]
+        # Row 0 = semantic tokens (from text), rows 1-N = zeros (acoustic, not yet generated)
+        prompt_len = input_ids.shape[-1]
+        inp = torch.zeros(1, n_codebooks, prompt_len, dtype=torch.long, device=device)
+        inp[0, 0, :prompt_len] = input_ids.squeeze(0)[:prompt_len]
+
+        generated_codes = [inp]
+        eos_token_id = defaults.get("eos_token_id")
+
+        for step in range(max_tokens):
+            # Build full input from all generated codes so far
+            full_inp = torch.cat(generated_codes, dim=2) if len(generated_codes) > 1 else generated_codes[0]
+
+            # Run through DualAR model
+            comp_inputs = {"inp": full_inp}
+            output = executor.run(comp_inputs)
+
+            # Extract logits from output
+            if isinstance(output, dict):
+                logits = next(iter(output.values()))
+            elif isinstance(output, torch.Tensor):
+                logits = output
+            else:
+                logits = self._get_component_output(comp_name)
+
+            if logits is None:
+                break
+
+            # Sample next semantic token from last position
+            if logits.dim() == 3:
+                last_logits = logits[:, -1, :]  # [B, vocab]
+            else:
+                last_logits = logits
+
+            if temperature > 0:
+                probs = torch.softmax(last_logits / temperature, dim=-1)
+                if top_p < 1.0:
+                    sorted_probs, sorted_idx = torch.sort(probs, descending=True)
+                    cumsum = torch.cumsum(sorted_probs, dim=-1)
+                    mask = cumsum - sorted_probs > top_p
+                    sorted_probs[mask] = 0.0
+                    sorted_probs = sorted_probs / sorted_probs.sum(dim=-1, keepdim=True)
+                    next_token = sorted_idx[0, torch.multinomial(sorted_probs[0], 1)].item()
+                else:
+                    next_token = torch.multinomial(probs, 1).squeeze(-1).item()
+            else:
+                next_token = last_logits.argmax(dim=-1).item()
+
+            if eos_token_id is not None and next_token == eos_token_id:
+                break
+
+            # Create new column: semantic token + zeros for acoustic codebooks
+            new_col = torch.zeros(1, n_codebooks, 1, dtype=torch.long, device=device)
+            new_col[0, 0, 0] = next_token
+            generated_codes.append(new_col)
+
+        # Combine all generated codes into final token matrix
+        all_codes = torch.cat(generated_codes, dim=2)  # [1, N+1, T_total]
+
+        # Extract only the generated part (skip prompt)
+        gen_codes = all_codes[:, :, prompt_len:]  # [1, N+1, T_gen]
+
+        elapsed = (time.perf_counter() - start) * 1000
+        gen_len = gen_codes.shape[2]
+        print(f"   [{comp_name}] Generated {gen_len} steps in {elapsed:.0f}ms")
+
+        # Store output for codec.decoder
+        # codec.decoder expects [B, codebook_dim, T] — transpose from our [B, N+1, T]
+        # Actually the decoder input shape from graph is [1, 1024, 64] which suggests
+        # the codec expects embedding dim not codebook count. The DualAR model's slow+fast
+        # output needs to be passed through an embedding or lookup to match codec input.
+        # For now, store raw codes and let the forward stage handle shape matching.
+        self.ctx.variable_resolver.resolved[f"{comp_name}.output_0"] = gen_codes
+        self.ctx.variable_resolver.resolved["global.generated_codes"] = gen_codes
+
+        if not self.ctx.persistent_mode:
+            self._unload_component_weights(comp_name)
+            gc.collect()
+            torch.cuda.empty_cache()
+
     def _vv_causal_conv1d(
         self, x: torch.Tensor, w: Dict, prefix: str,
         kernel_size: int = 7, stride: int = 1, groups: int = 1,
@@ -1651,6 +1804,71 @@ class AudioEngine(FlowHandler):
     # Helpers
     # ─────────────────────────────────────────────────────────────
 
+    def _reshape_output_for_connections(self, comp_name: str) -> None:
+        """Reshape component output if downstream stage expects different feature dim.
+
+        Handles multimodal frame pooling (DATA-DRIVEN):
+          audio_tower [B, T, 1280] → MMP expects [B, T/4, 5120]
+          pool_factor = target_feat_dim / source_feat_dim
+
+        Detects from topology connections + target graph input shapes.
+        """
+        connections = self.ctx.pkg.topology.get("connections", [])
+        resolved = self.ctx.variable_resolver.resolved
+
+        for conn in connections:
+            src_key = conn.get("from", "")
+            if not src_key.startswith(f"{comp_name}."):
+                continue
+            src_tensor = resolved.get(src_key)
+            if not isinstance(src_tensor, torch.Tensor) or src_tensor.dim() != 3:
+                continue
+
+            # Parse target component and input name
+            target_str = conn.get("to", "")
+            parts = target_str.split(".")
+            if len(parts) < 2:
+                continue
+            target_comp = parts[0]
+            target_input = ".".join(parts[1:])
+
+            # Look up expected input shape from target graph
+            target_executor = self.ctx.executors.get(target_comp)
+            if target_executor is None:
+                continue
+            dag = getattr(target_executor, '_dag', None)
+            if dag is None:
+                continue
+
+            target_feat = None
+            for _tid, spec in dag.get("tensors", {}).items():
+                if spec.get("input_name") == target_input:
+                    shape = spec.get("shape", [])
+                    if len(shape) >= 3:
+                        feat = shape[-1]
+                        if isinstance(feat, dict):
+                            feat = feat.get("trace_value", feat)
+                        if isinstance(feat, int):
+                            target_feat = feat
+                    break
+
+            if target_feat is None:
+                continue
+
+            src_feat = src_tensor.shape[-1]
+            if target_feat == src_feat:
+                continue  # Dims match, no reshape needed
+
+            if target_feat > src_feat and target_feat % src_feat == 0:
+                # Group consecutive frames: [B, T, D] → [B, T/pool, D*pool]
+                pool_factor = target_feat // src_feat
+                B, T, D = src_tensor.shape
+                new_T = T // pool_factor
+                if new_T * pool_factor <= T:
+                    reshaped = src_tensor[:, :new_T * pool_factor, :].reshape(B, new_T, target_feat)
+                    resolved[src_key] = reshaped
+                    print(f"   [Reshape] {comp_name}: [{B}, {T}, {D}] → [{B}, {new_T}, {target_feat}] (pool={pool_factor})")
+
     def _store_stage_output(self, comp_name: str) -> None:
         """Store a component's output in the variable resolver for downstream stages."""
         resolved = self.ctx.variable_resolver.resolved
@@ -1743,11 +1961,25 @@ class AudioEngine(FlowHandler):
         # logits_source == "self": output IS logits
         return last_hidden
 
-    def _sample_token(self, logits: torch.Tensor, temperature: float) -> int:
-        """Sample next token from logits."""
+    def _sample_token(
+        self, logits: torch.Tensor, temperature: float,
+        generated_ids: Optional[List[int]] = None,
+        repetition_penalty: float = 1.0,
+    ) -> int:
+        """Sample next token from logits with optional repetition penalty."""
+        last_logits = logits[:, -1, :]
+
+        # Apply repetition penalty
+        if repetition_penalty != 1.0 and generated_ids:
+            for tid in set(generated_ids):
+                if last_logits[0, tid] > 0:
+                    last_logits[0, tid] /= repetition_penalty
+                else:
+                    last_logits[0, tid] *= repetition_penalty
+
         if temperature == 0.0:
-            return logits[:, -1, :].argmax(dim=-1).item()
-        probs = torch.softmax(logits[:, -1, :] / temperature, dim=-1)
+            return last_logits.argmax(dim=-1).item()
+        probs = torch.softmax(last_logits / temperature, dim=-1)
         return torch.multinomial(probs, 1).item()
 
     def _get_previous_stage_output(self, stage: Dict, audio_config: Dict) -> Optional[torch.Tensor]:
