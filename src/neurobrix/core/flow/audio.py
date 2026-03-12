@@ -769,6 +769,7 @@ class AudioEngine(FlowHandler):
         embed_weight: Optional[torch.Tensor],
         max_tokens: int, temperature: float,
         eos_token_id: int, logits_source: str,
+        repetition_penalty: float = 1.0,
     ) -> None:
         """Autoregressive decode for audio-LLM models (Voxtral, Granite Speech).
 
