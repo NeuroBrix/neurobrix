@@ -109,6 +109,15 @@ class NBXRuntimeLoader:
                     break
 
             if not found:
+                # Tokenizers detect type from available files (tekken.json, *.model, etc.)
+                # They don't need a *config*.json — just the directory path
+                if mod_def.get("type") == "tokenizer" and mod_dir.exists():
+                    modules[mod_name] = {
+                        "type": "tokenizer",
+                        "path": mod_path,
+                        "config": {}
+                    }
+                    continue
                 # Non-functional modules (e.g. figures, docs) have no config — skip silently
                 if mod_def.get("type") == "generic":
                     continue
