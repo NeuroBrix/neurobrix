@@ -1410,12 +1410,17 @@ def load_tokenizer_from_path(
     if tiktoken_files:
         return TiktokenTokenizer(tiktoken_files[0], tokenizer_dir, config)
 
+    # Priority 5: Tekken (tekken.json) — Mistral tokenizer format
+    tekken_path = tokenizer_dir / "tekken.json"
+    if tekken_path.exists():
+        return TekkenTokenizer(tekken_path, config)
+
     # No valid format found
     available = [f.name for f in tokenizer_dir.iterdir()] if tokenizer_dir.exists() else []
     raise RuntimeError(
         f"ZERO FALLBACK: No tokenizer format detected.\n"
         f"Expected: *.model (SentencePiece) OR merges.txt+vocab.json (BPE) "
-        f"OR tokenizer.json (HF Fast) OR *.tiktoken\n"
+        f"OR tokenizer.json (HF Fast) OR *.tiktoken OR tekken.json\n"
         f"Directory: {tokenizer_dir}\n"
         f"Available files: {available}"
     )
