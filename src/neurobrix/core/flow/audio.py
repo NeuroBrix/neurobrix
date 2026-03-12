@@ -1493,16 +1493,16 @@ class AudioEngine(FlowHandler):
     # ─────────────────────────────────────────────────────────────
 
     def _execute_dual_ar_stage(self, stage: Dict, audio_config: Dict) -> None:
-        """Execute DualAR multi-codebook autoregressive generation.
+        """Execute DualAR semantic token generation + embedding lookup.
 
         DualAR architecture (Fish-Speech/OpenAudio):
-          - Input: [B, N+1, T] where N=codebook levels (10), row 0=semantic tokens
-          - Slow backbone: predicts next semantic token from full [B, N+1, T] history
-          - Fast transformer: predicts N acoustic codebook tokens per semantic position
-          - Output: [B, N+1, T_out] token matrix fed to codec.decoder
+          - Slow backbone: [B, N+1, T] → logits [B, T, vocab_size]
+          - Generates semantic tokens (row 0), acoustic codebooks left as zeros
+          - Embeds semantic tokens via embeddings.weight → [B, 1024, T]
+          - codec.decoder converts embeddings → waveform
 
-        Graph: input 'inp' [1, 11, 64], output logits [1, 64, vocab_size]
-        The slow backbone output has semantic logits at the last time step.
+        Graph: input 'inp' [1, 11, 64], final output [1, 64, vocab_size]
+        codec.decoder expects: [1, 1024, 64] float32
         """
         comp_name = stage["component"]
         device = self.ctx.primary_device
@@ -1518,26 +1518,26 @@ class AudioEngine(FlowHandler):
         self._ensure_weights_loaded(comp_name)
         executor = self.ctx.executors[comp_name]
 
-        # Get graph input shape to determine N+1 (codebook levels + semantic)
+        # Get graph input shape to determine N+1 and trace_seq_len
         dag = getattr(executor, '_dag', None)
-        n_codebooks = 11  # Default: 10 acoustic + 1 semantic
+        n_codebooks = 11
+        trace_seq_len = 64
         if dag:
             for _tid, spec in dag.get("tensors", {}).items():
                 if spec.get("input_name") == "inp":
                     shape = spec.get("shape", [])
                     if len(shape) >= 3:
                         n_val = shape[1]
-                        if isinstance(n_val, int):
-                            n_codebooks = n_val
-                        elif isinstance(n_val, dict):
-                            n_codebooks = n_val.get("trace_value", 11)
+                        n_codebooks = n_val if isinstance(n_val, int) else 11
+                        t_val = shape[2]
+                        trace_seq_len = t_val if isinstance(t_val, int) else 64
                     break
 
         # Tokenize prompt text
         tokenizer = self.ctx.modules.get("tokenizer")
         prompt = self.ctx.variable_resolver.resolved.get("global.prompt", "")
 
-        if tokenizer is not None and isinstance(prompt, str):
+        if tokenizer is not None and isinstance(prompt, str) and prompt:
             try:
                 input_ids = tokenizer.encode(prompt, return_tensors="pt", add_special_tokens=True)
             except TypeError:
@@ -1547,7 +1547,6 @@ class AudioEngine(FlowHandler):
                 input_ids = torch.tensor([input_ids], dtype=torch.long)
             input_ids = input_ids.to(device)
         else:
-            # Fallback: use input_ids if already set
             input_ids = self.ctx.variable_resolver.resolved.get("global.input_ids")
             if input_ids is None:
                 raise RuntimeError(
@@ -1555,23 +1554,33 @@ class AudioEngine(FlowHandler):
                 )
 
         # Build initial input matrix [B, N+1, T_prompt]
-        # Row 0 = semantic tokens (from text), rows 1-N = zeros (acoustic, not yet generated)
         prompt_len = input_ids.shape[-1]
         inp = torch.zeros(1, n_codebooks, prompt_len, dtype=torch.long, device=device)
         inp[0, 0, :prompt_len] = input_ids.squeeze(0)[:prompt_len]
 
-        generated_codes = [inp]
+        # Generate semantic tokens autoregressively
+        generated_semantic = []
         eos_token_id = defaults.get("eos_token_id")
 
         for step in range(max_tokens):
-            # Build full input from all generated codes so far
-            full_inp = torch.cat(generated_codes, dim=2) if len(generated_codes) > 1 else generated_codes[0]
+            # Pad/truncate input to trace_seq_len for CompiledSequence
+            cur_len = prompt_len + len(generated_semantic)
+            if cur_len <= trace_seq_len:
+                padded = torch.zeros(1, n_codebooks, trace_seq_len, dtype=torch.long, device=device)
+                padded[0, 0, :prompt_len] = input_ids.squeeze(0)[:prompt_len]
+                for i, tok in enumerate(generated_semantic):
+                    padded[0, 0, prompt_len + i] = tok
+            else:
+                # Sliding window: use last trace_seq_len tokens
+                all_semantic = list(input_ids.squeeze(0).tolist()[:prompt_len]) + generated_semantic
+                window = all_semantic[-trace_seq_len:]
+                padded = torch.zeros(1, n_codebooks, trace_seq_len, dtype=torch.long, device=device)
+                for i, tok in enumerate(window):
+                    padded[0, 0, i] = tok
 
-            # Run through DualAR model
-            comp_inputs = {"inp": full_inp}
+            comp_inputs = {"inp": padded}
             output = executor.run(comp_inputs)
 
-            # Extract logits from output
             if isinstance(output, dict):
                 logits = next(iter(output.values()))
             elif isinstance(output, torch.Tensor):
@@ -1582,11 +1591,12 @@ class AudioEngine(FlowHandler):
             if logits is None:
                 break
 
-            # Sample next semantic token from last position
+            # Get logits at the position of the last real token
+            pos = min(cur_len - 1, trace_seq_len - 1)
             if logits.dim() == 3:
-                last_logits = logits[:, -1, :]  # [B, vocab]
+                last_logits = logits[:, pos, :].clone()
             else:
-                last_logits = logits
+                last_logits = logits.clone()
 
             if temperature > 0:
                 probs = torch.softmax(last_logits / temperature, dim=-1)
@@ -1605,29 +1615,39 @@ class AudioEngine(FlowHandler):
             if eos_token_id is not None and next_token == eos_token_id:
                 break
 
-            # Create new column: semantic token + zeros for acoustic codebooks
-            new_col = torch.zeros(1, n_codebooks, 1, dtype=torch.long, device=device)
-            new_col[0, 0, 0] = next_token
-            generated_codes.append(new_col)
-
-        # Combine all generated codes into final token matrix
-        all_codes = torch.cat(generated_codes, dim=2)  # [1, N+1, T_total]
-
-        # Extract only the generated part (skip prompt)
-        gen_codes = all_codes[:, :, prompt_len:]  # [1, N+1, T_gen]
+            generated_semantic.append(next_token)
 
         elapsed = (time.perf_counter() - start) * 1000
-        gen_len = gen_codes.shape[2]
-        print(f"   [{comp_name}] Generated {gen_len} steps in {elapsed:.0f}ms")
+        gen_len = len(generated_semantic)
+        print(f"   [{comp_name}] Generated {gen_len} semantic tokens in {elapsed:.0f}ms")
 
-        # Store output for codec.decoder
-        # codec.decoder expects [B, codebook_dim, T] — transpose from our [B, N+1, T]
-        # Actually the decoder input shape from graph is [1, 1024, 64] which suggests
-        # the codec expects embedding dim not codebook count. The DualAR model's slow+fast
-        # output needs to be passed through an embedding or lookup to match codec input.
-        # For now, store raw codes and let the forward stage handle shape matching.
-        self.ctx.variable_resolver.resolved[f"{comp_name}.output_0"] = gen_codes
-        self.ctx.variable_resolver.resolved["global.generated_codes"] = gen_codes
+        # Embed semantic tokens → [1, 1024, T_gen] for codec.decoder
+        # Uses the model's embeddings.weight [vocab_size, 1024]
+        embed_weight = None
+        if hasattr(executor, '_weights'):
+            for wname, wtensor in executor._weights.items():
+                if 'embeddings.weight' in wname and 'codebook' not in wname:
+                    embed_weight = wtensor
+                    break
+
+        if embed_weight is None:
+            raise RuntimeError(
+                "ZERO FALLBACK: DualAR model must have embeddings.weight for token→embedding lookup."
+            )
+
+        token_ids = torch.tensor(generated_semantic, dtype=torch.long, device=device)
+        with torch.no_grad():
+            token_embeds = torch.nn.functional.embedding(token_ids, embed_weight)  # [T_gen, 1024]
+
+        # Transpose to [1, 1024, T_gen] (codec.decoder expects channels-first)
+        codec_input = token_embeds.unsqueeze(0).transpose(1, 2)  # [1, 1024, T_gen]
+
+        print(f"   [{comp_name}] Embedded → {list(codec_input.shape)} for codec.decoder")
+
+        # Store for downstream codec.decoder (will be chunked in forward stage)
+        self.ctx.variable_resolver.resolved[f"{comp_name}.output_0"] = codec_input
+        self.ctx.variable_resolver.resolved["global.generated_codes"] = token_ids
+        self.ctx.variable_resolver.resolved["global.generated_token_ids"] = generated_semantic
 
         if not self.ctx.persistent_mode:
             self._unload_component_weights(comp_name)
