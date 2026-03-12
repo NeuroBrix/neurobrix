@@ -419,7 +419,11 @@ class AudioEngine(FlowHandler):
         start = time.perf_counter()
 
         self._ensure_weights_loaded(comp_name)
-        self._execute_component(comp_name, "forward", None)
+
+        # Check if input needs chunking (e.g., codec.decoder expects fixed seq_len)
+        chunked = self._try_chunked_forward(comp_name)
+        if not chunked:
+            self._execute_component(comp_name, "forward", None)
 
         elapsed = (time.perf_counter() - start) * 1000
         print(f"   [{comp_name}] Done in {elapsed:.0f}ms")
