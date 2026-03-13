@@ -639,7 +639,7 @@ class AutoregressiveHandler(FlowHandler):
                 "num_layers": extracted.get("num_hidden_layers") or extracted.get("num_layers"),
                 "num_heads": extracted.get("num_attention_heads") or extracted.get("num_heads"),
                 "hidden_size": extracted.get("hidden_size"),
-                "num_kv_heads": extracted.get("num_key_value_heads"),
+                "num_kv_heads": extracted.get("num_key_value_heads") or extracted.get("num_kv_heads"),
                 "head_dim": extracted.get("head_dim"),
                 "max_position_embeddings": extracted.get("max_position_embeddings"),
             }
