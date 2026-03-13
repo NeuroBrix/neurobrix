@@ -6,6 +6,11 @@ Provides execution flow handlers for different model architectures:
 - StaticGraphHandler: Single-pass models
 - ForwardPassHandler: Sequential transformer models
 - AutoregressiveHandler: Token-by-token generation (LLM)
+- EncoderDecoderEngine: Encoder-decoder cross-attention (Whisper)
+- AudioLLMEngine: Audio-conditioned LLM (Voxtral, Granite, Canary)
+- DualAREngine: Fish-Speech DualAR generation
+- AudioEngine: Multi-stage audio pipeline (Kokoro, VibeVoice, Chatterbox)
+- RNNTEngine: RNNT transducer (Parakeet)
 
 Usage:
     from neurobrix.core.flow import FlowContext, get_flow_handler
@@ -29,6 +34,9 @@ from .static_graph import StaticGraphHandler
 from .forward_pass import ForwardPassHandler
 from .autoregressive import AutoregressiveHandler
 from .audio import AudioEngine
+from .encoder_decoder import EncoderDecoderEngine
+from .audio_llm import AudioLLMEngine
+from .dual_ar import DualAREngine
 
 __all__ = [
     "FlowContext",
@@ -41,4 +49,7 @@ __all__ = [
     "ForwardPassHandler",
     "AutoregressiveHandler",
     "AudioEngine",
+    "EncoderDecoderEngine",
+    "AudioLLMEngine",
+    "DualAREngine",
 ]
