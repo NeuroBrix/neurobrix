@@ -207,6 +207,9 @@ class AudioLLMEngine(FlowHandler):
             )
             generated_ids.append(next_token)
 
+            if step < 5:
+                print(f"   [DEBUG] step={step} token={next_token} logits_shape={logits.shape} output_shape={output.shape}")
+
             if next_token == eos_token_id:
                 break
 
