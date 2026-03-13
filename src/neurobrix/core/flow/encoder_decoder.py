@@ -138,29 +138,13 @@ class EncoderDecoderEngine(FlowHandler):
             self.ctx.variable_resolver.resolved["global.input_ids"] = input_ids
             self.ctx.variable_resolver.resolved["input_ids"] = input_ids
 
-            # Debug: check what inputs the decoder will get
-            if step == 1:
-                resolver = self.ctx.variable_resolver
-                enc_key = f"{enc_name}.output_0"
-                has_enc = enc_key in resolver.resolved
-                if has_enc:
-                    enc_t = resolver.resolved[enc_key]
-                    print(f"   [{dec_name}] encoder output available: {enc_t.shape}")
-                else:
-                    print(f"   [{dec_name}] WARNING: encoder output NOT in resolved vars!")
-                    print(f"   [{dec_name}] Available keys: {[k for k in resolver.resolved if 'encoder' in k.lower() or 'model' in k.lower()]}")
-
             self._execute_component(dec_name, "forward", None)
 
             decoder_output = self._get_component_output(dec_name)
             if decoder_output is None:
-                print(f"   [{dec_name}] Step {step}: No output!")
                 break
 
             logits = self._compute_logits(decoder_output, embed_weight, logits_source)
-            if step <= 3:
-                print(f"   [{dec_name}] Step {step}: hidden={decoder_output.shape}, logits={logits.shape}, "
-                      f"top5={logits[0,-1].topk(5).indices.tolist()}")
 
             current_pos = len(generated_ids)
             if current_pos in forced_map and forced_map[current_pos] is not None:
