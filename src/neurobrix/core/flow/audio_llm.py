@@ -127,7 +127,6 @@ class AudioLLMEngine(FlowHandler):
                     for tied_name in ("head.weight", "model.token_embed.weight"):
                         if tied_name not in executor._weights and f"param::{tied_name}" in tensors:
                             executor._weights[tied_name] = embed_weight
-                            print(f"   [INJECT] {tied_name} → {embed_weight.shape}")
 
         # Get audio embeddings from last forward stage
         audio_embeds = self._get_last_forward_output(forward_stages)
