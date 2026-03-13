@@ -240,6 +240,11 @@ class AudioEngine(FlowHandler):
                 )
                 for k in ["language_model", "model", "lm_head"]
             )
+            # Also detect autoregressive stages — they use LLM-style tokenization
+            if not has_lm:
+                flow = self.ctx.pkg.topology.get("flow", {})
+                stages = flow.get("audio", {}).get("stages", [])
+                has_lm = any(s.get("execution") == "autoregressive" for s in stages)
             tokenization = "llm" if has_lm else "diffusion"
 
         device = self.ctx.primary_device
