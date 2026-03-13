@@ -144,9 +144,13 @@ class EncoderDecoderEngine(FlowHandler):
 
             decoder_output = self._get_component_output(dec_name)
             if decoder_output is None:
+                print(f"   [{dec_name}] Step {step}: No output!")
                 break
 
             logits = self._compute_logits(decoder_output, embed_weight, logits_source)
+            if step <= 3:
+                print(f"   [{dec_name}] Step {step}: hidden={decoder_output.shape}, logits={logits.shape}, "
+                      f"top5={logits[0,-1].topk(5).indices.tolist()}")
 
             current_pos = len(generated_ids)
             if current_pos in forced_map and forced_map[current_pos] is not None:
