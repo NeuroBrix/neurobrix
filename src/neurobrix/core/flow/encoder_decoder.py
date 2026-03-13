@@ -88,6 +88,8 @@ class EncoderDecoderEngine(FlowHandler):
         encoder_output = self._get_component_output(enc_name)
         if encoder_output is not None:
             self.ctx.variable_resolver.resolved[f"{enc_name}.output_0"] = encoder_output
+            print(f"   [{enc_name}] Output: {encoder_output.shape}, "
+                  f"range [{encoder_output.min().item():.4f}, {encoder_output.max().item():.4f}]")
 
         if not self.ctx.persistent_mode:
             self._unload_component_weights(enc_name)
