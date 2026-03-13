@@ -226,9 +226,14 @@ def get_sample_rate(ctx: FlowContext) -> int:
 
 
 def find_model_config_path(ctx: FlowContext) -> Path:
-    """Find model config path from NBX container."""
+    """Find model config path from NBX container.
+
+    Prioritizes modules/processor (has preprocessor_config.json for audio models)
+    over modules/tokenizer.
+    """
     nbx_path = Path(ctx.nbx_path_str)
-    for subdir in ["modules/tokenizer", "modules/processor"]:
+    # Processor first (has preprocessor_config.json for mel extraction)
+    for subdir in ["modules/processor", "modules/tokenizer"]:
         candidate = nbx_path / subdir
         if candidate.exists():
             return candidate
