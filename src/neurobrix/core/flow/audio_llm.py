@@ -115,7 +115,23 @@ class AudioLLMEngine(FlowHandler):
         repetition_penalty = defaults.get("repetition_penalty", 1.0)
 
         self._ensure_weights_loaded(lm_name)
+
+        # DEBUG: check embed_tokens executor state
+        _dbg_embed = self.ctx.executors.get("embed_tokens")
+        if _dbg_embed is not None:
+            self._ensure_weights_loaded("embed_tokens")
+            print(f"   [DEBUG] embed_tokens weights: {list(_dbg_embed._weights.keys())}")
+            for _k, _v in _dbg_embed._weights.items():
+                print(f"   [DEBUG]   {_k}: shape={_v.shape}, dtype={_v.dtype}")
+        else:
+            print(f"   [DEBUG] embed_tokens: NOT IN EXECUTORS")
+        _dbg_llm = self.ctx.executors.get(lm_name)
+        if _dbg_llm is not None:
+            _emb_keys = [k for k in _dbg_llm._weights if "embed" in k or "token" in k]
+            print(f"   [DEBUG] {lm_name} embed/token keys: {_emb_keys}")
+
         embed_weight = self._get_embed_weight(lm_name)
+        print(f"   [DEBUG] embed_weight: {embed_weight.shape if embed_weight is not None else 'None'}")
 
         # Inject embed weight for weight-tied models
         if embed_weight is not None:
