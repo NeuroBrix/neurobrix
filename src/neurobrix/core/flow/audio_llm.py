@@ -232,17 +232,21 @@ class AudioLLMEngine(FlowHandler):
         return None
 
     def _get_embed_weight(self, comp_name: str) -> Optional[torch.Tensor]:
+        # 1. Check inside the LLM component
         executor = self.ctx.executors.get(comp_name)
         if executor is not None:
             for key in executor._weights:
                 if "embed_tokens" in key or "token_embed" in key:
                     return executor._weights[key]
+        # 2. Check separate embed_tokens component
         embed_executor = self.ctx.executors.get("embed_tokens")
         if embed_executor is not None:
             self._ensure_weights_loaded("embed_tokens")
             for key in embed_executor._weights:
-                if "weight" in key or "embed" in key:
-                    return embed_executor._weights[key]
+                if key == "weight" or "embed" in key:
+                    w = embed_executor._weights[key]
+                    if w.ndim == 2 and w.shape[0] > w.shape[1]:
+                        return w
         return None
 
     def _compute_logits(
