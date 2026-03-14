@@ -280,6 +280,7 @@ class DualAREngine(FlowHandler):
                 pad_size = graph_seq_len - chunk.shape[2]
                 chunk = torch.nn.functional.pad(chunk, (0, pad_size))
 
+            print(f"     chunk [{chunk_start}:{chunk_end}] shape={list(chunk.shape)} dtype={chunk.dtype}")
             output = executor.run({graph_input_name: chunk})
 
             if isinstance(output, dict):
