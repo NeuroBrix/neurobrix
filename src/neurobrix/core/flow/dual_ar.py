@@ -167,6 +167,11 @@ class DualAREngine(FlowHandler):
             raise RuntimeError("ZERO FALLBACK: DualAR model must have embed.weight.")
 
         token_ids = torch.tensor(generated_semantic, dtype=torch.long, device=device)
+        max_id = token_ids.max().item()
+        print(f"   [{comp_name}] Token range: 0..{max_id}, embed vocab: {embed_weight.shape[0]}")
+        if max_id >= embed_weight.shape[0]:
+            print(f"   [{comp_name}] WARNING: token {max_id} >= vocab {embed_weight.shape[0]}, clamping")
+            token_ids = token_ids.clamp(0, embed_weight.shape[0] - 1)
         with torch.no_grad():
             token_embeds = torch.nn.functional.embedding(token_ids, embed_weight)
 
