@@ -151,15 +151,20 @@ class DualAREngine(FlowHandler):
         print(f"   [{comp_name}] Generated {len(generated_semantic)} semantic tokens in {elapsed:.0f}ms")
 
         # ── Step 3: Embed semantic tokens → codec input ──
+        # Find the main text embedding (largest vocab, excludes codebook/fast)
         embed_weight = None
         if hasattr(executor, '_weights'):
+            best_vocab = 0
             for wname, wtensor in executor._weights.items():
-                if 'embeddings.weight' in wname and 'codebook' not in wname:
-                    embed_weight = wtensor
-                    break
+                if 'embed' in wname and wname.endswith('.weight'):
+                    if 'codebook' in wname or 'fast' in wname:
+                        continue
+                    if wtensor.shape[0] > best_vocab:
+                        best_vocab = wtensor.shape[0]
+                        embed_weight = wtensor
 
         if embed_weight is None:
-            raise RuntimeError("ZERO FALLBACK: DualAR model must have embeddings.weight.")
+            raise RuntimeError("ZERO FALLBACK: DualAR model must have embed.weight.")
 
         token_ids = torch.tensor(generated_semantic, dtype=torch.long, device=device)
         with torch.no_grad():
