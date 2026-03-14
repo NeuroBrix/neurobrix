@@ -199,9 +199,9 @@ class DualAREngine(FlowHandler):
             codec_start = time.perf_counter()
             self._ensure_weights_loaded(codec_name)
 
-            # Try chunked forward if input exceeds trace-time seq_len
-            if not self._try_chunked_forward(codec_name):
-                self._execute_component(codec_name, "forward", None)
+            # Run codec.decoder forward
+            # DAC decoder has ConvTranspose + residual blocks — chunking breaks residuals
+            self._execute_component(codec_name, "forward", None)
 
             codec_elapsed = (time.perf_counter() - codec_start) * 1000
             print(f"   [{codec_name}] Done in {codec_elapsed:.0f}ms")
