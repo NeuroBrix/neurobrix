@@ -316,6 +316,14 @@ class TextStrategy(GenerationStrategy):
         ctx.variable_resolver.resolved["global.output_tokens"] = generated_tokens
         ctx.variable_resolver.resolved["output_tokens"] = generated_tokens
 
+        # SNAC audio post-processing for TTS models (Orpheus)
+        audio_output_type = ctx.pkg.defaults.get("audio_output_type")
+        if audio_output_type == "snac_tokens":
+            generated_ids = generated_tokens.tolist() if hasattr(generated_tokens, 'tolist') else list(generated_tokens)
+            ctx.variable_resolver.resolved["global.generated_token_ids"] = generated_ids
+            from .audio_utils import postprocess_audio_output
+            postprocess_audio_output(ctx)
+
 
 class ImageStrategy(GenerationStrategy):
     """Strategy for VQ image generation (Janus, LlamaGen, etc.)."""
