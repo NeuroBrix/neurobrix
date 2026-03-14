@@ -268,7 +268,8 @@ class DualAREngine(FlowHandler):
         if actual_seq <= graph_seq_len:
             return False
 
-        print(f"   [{comp_name}] Chunked: {actual_seq} frames → {graph_seq_len}-frame blocks")
+        print(f"   [{comp_name}] Chunked: {actual_seq} frames → {graph_seq_len}-frame blocks"
+              f" (actual_input shape={list(actual_input.shape)})")
         waveform_chunks = []
 
         for chunk_start in range(0, actual_seq, graph_seq_len):
