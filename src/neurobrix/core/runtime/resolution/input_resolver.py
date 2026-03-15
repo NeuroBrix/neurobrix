@@ -32,7 +32,8 @@ class InputResolver:
         variable_resolver: 'VariableResolver',
         connections_index: Dict[str, Dict[str, List[str]]],
         topology: Dict[str, Any],
-        loop_id: str
+        loop_id: str,
+        executors: Dict[str, Any] = None,
     ):
         """
         Initialize input resolver.
@@ -42,11 +43,13 @@ class InputResolver:
             connections_index: Pre-indexed connections {comp: {input: [sources]}}
             topology: Full topology dict for loop definitions
             loop_id: Current loop identifier for timestep resolution
+            executors: Component executors (for graph-input fallback resolution)
         """
         self._variable_resolver = variable_resolver
         self._connections_index = connections_index
         self._topology = topology
         self._loop_id = loop_id
+        self._executors = executors or {}
 
     def resolve_component_inputs(self, comp_name: str) -> Dict[str, Any]:
         """
