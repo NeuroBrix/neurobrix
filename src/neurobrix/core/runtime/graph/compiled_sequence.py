@@ -1706,9 +1706,11 @@ class CompiledSequence:
                         new_shape[i] = expr_map[dim_val]
                         changed = True
                         injected += 1
-                    elif input_shape:
+                    elif input_shape and dim_val not in input_shape:
                         # Dim-merge detection: dim_val = expr_val * constant
                         # E.g., 15 = 5 * 3 where 5 is symbolic and 3 is from input
+                        # Safety: skip if dim_val appears in input_shape (passthrough,
+                        # not a merge — e.g., window_size=15 passing through unchanged)
                         for expr_val, expr_dict in expr_map.items():
                             if dim_val % expr_val == 0:
                                 quotient = dim_val // expr_val
