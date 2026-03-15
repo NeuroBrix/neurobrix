@@ -183,11 +183,19 @@ class AudioLLMEngine(FlowHandler):
 
             logits = self._compute_logits(output, embed_weight, logits_source)
             from .audio_utils import sample_token
+            # Debug: show top logits for first 3 steps
+            if step < 3:
+                _probs = torch.softmax(logits[:, -1, :].float(), dim=-1)
+                _tv, _ti = torch.topk(_probs, 5)
+                print(f"   [DBG step={step}] top5_ids={_ti[0].tolist()} probs={[f'{v:.4f}' for v in _tv[0].tolist()]}")
+                print(f"   [DBG step={step}] logits shape={logits.shape} output shape={output.shape if output is not None else None}")
             next_token = sample_token(
                 logits, temperature,
                 generated_ids=generated_ids,
                 repetition_penalty=repetition_penalty,
             )
+            if step < 3:
+                print(f"   [DBG step={step}] selected token={next_token}")
             generated_ids.append(next_token)
 
             if next_token == eos_token_id:
