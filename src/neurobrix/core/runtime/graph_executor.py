@@ -1387,7 +1387,8 @@ class GraphExecutor:
                 input_name = tid[7:]  # Strip "input::"
                 value = None
 
-                # Check flat key first, then try dotted path navigation
+                # Check flat key first (handles dotted names like ref_dict.prompt_token),
+                # then try nested dict navigation for actual nested inputs
                 if input_name in self._ctx.inputs:
                     value = self._ctx.inputs[input_name]
                 elif "." in input_name:
@@ -1403,8 +1404,6 @@ class GraphExecutor:
                             break
                     if not found:
                         value = None
-                elif input_name in self._ctx.inputs:
-                    value = self._ctx.inputs[input_name]
 
                 # Apply Prism dtype + device conversion (same logic as sequential mode)
                 if isinstance(value, torch.Tensor):
