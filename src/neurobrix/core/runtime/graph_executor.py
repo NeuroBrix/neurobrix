@@ -1387,8 +1387,11 @@ class GraphExecutor:
                 input_name = tid[7:]  # Strip "input::"
                 value = None
 
-                # Handle dotted paths for nested dicts (e.g., "added_cond_kwargs.resolution")
-                if "." in input_name:
+                # Check flat key first, then try dotted path navigation
+                if input_name in self._ctx.inputs:
+                    value = self._ctx.inputs[input_name]
+                elif "." in input_name:
+                    # Handle dotted paths for nested dicts (e.g., "added_cond_kwargs.resolution")
                     parts = input_name.split(".")
                     value = self._ctx.inputs
                     found = True
