@@ -450,11 +450,20 @@ class RuntimeExecutor:
                 ensure_weights_fn=self._ensure_weights_loaded,
                 unload_weights_fn=self._unload_component_weights,
             )
+        elif flow_type == "tts_llm":
+            from neurobrix.core.flow.tts_llm import TTSLLMEngine
+            return TTSLLMEngine(
+                ctx=ctx,
+                execute_component_fn=self._execute_component,
+                resolve_inputs_fn=self._input_resolver.resolve_component_inputs,
+                ensure_weights_fn=self._ensure_weights_loaded,
+                unload_weights_fn=self._unload_component_weights,
+            )
 
         raise RuntimeError(
             f"ZERO FALLBACK: Unsupported flow type '{flow_type}'.\n"
             f"Supported: iterative_process, static_graph, forward_pass, "
-            f"autoregressive_generation, audio, rnnt, encoder_decoder, audio_llm, dual_ar"
+            f"autoregressive_generation, audio, rnnt, encoder_decoder, audio_llm, dual_ar, tts_llm"
         )
 
     # ========== SETUP METHODS ==========
