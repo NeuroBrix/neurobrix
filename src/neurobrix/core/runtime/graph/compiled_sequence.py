@@ -1692,13 +1692,38 @@ class CompiledSequence:
                 if has_expr:
                     continue
 
+                # Get input shape for dim-merge product detection
+                input_shapes = op_data.get("input_shapes", [[]])
+                input_shape = input_shapes[0] if input_shapes else []
+
                 changed = False
                 new_shape = list(old_shape)
                 for i, dim_val in enumerate(old_shape):
-                    if isinstance(dim_val, int) and dim_val > 1 and dim_val in expr_map:
+                    if not isinstance(dim_val, int) or dim_val <= 1:
+                        continue
+                    if dim_val in expr_map:
+                        # Direct match
                         new_shape[i] = expr_map[dim_val]
                         changed = True
                         injected += 1
+                    elif input_shape:
+                        # Dim-merge detection: dim_val = expr_val * constant
+                        # E.g., 15 = 5 * 3 where 5 is symbolic and 3 is from input
+                        for expr_val, expr_dict in expr_map.items():
+                            if dim_val % expr_val == 0:
+                                quotient = dim_val // expr_val
+                                if quotient > 1 and quotient in input_shape:
+                                    # Create product expression
+                                    product_expr = {
+                                        "type": "mul",
+                                        "left": expr_dict,
+                                        "right": quotient,
+                                        "trace": dim_val,
+                                    }
+                                    new_shape[i] = product_expr
+                                    changed = True
+                                    injected += 1
+                                    break
 
                 if changed:
                     new_attrs = dict(attrs)
