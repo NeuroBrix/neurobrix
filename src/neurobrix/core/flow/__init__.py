@@ -9,8 +9,9 @@ Provides execution flow handlers for different model architectures:
 - EncoderDecoderEngine: Encoder-decoder cross-attention (Whisper)
 - AudioLLMEngine: Audio-conditioned LLM (Voxtral, Granite, Canary)
 - DualAREngine: Fish-Speech DualAR generation
-- AudioEngine: Multi-stage audio pipeline (Kokoro, VibeVoice, Chatterbox)
+- AudioEngine: Multi-stage audio pipeline (Kokoro, VibeVoice)
 - RNNTEngine: RNNT transducer (Parakeet)
+- TTSLLMEngine: Speech LM TTS (Chatterbox)
 
 Usage:
     from neurobrix.core.flow import FlowContext, get_flow_handler
