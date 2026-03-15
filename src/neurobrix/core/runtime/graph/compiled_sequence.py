@@ -1578,6 +1578,143 @@ class CompiledSequence:
                 view_data["attributes"] = view_attrs
 
     # ========================================================================
+    # CROSS-BRANCH SYMBOLIC EXPRESSION PROPAGATION
+    # ========================================================================
+
+    def _propagate_cross_branch_expressions(
+        self,
+        tensors: Dict[str, Any],
+        ops: Dict[str, Any],
+    ) -> None:
+        """
+        Pre-compilation pass: inject symbolic expressions into ops that have
+        hardcoded dims derived from a different data-flow branch.
+
+        Problem: In windowed attention (CFormer), Q and K/V flow through
+        separate branches. The K/V branch goes through a view that creates
+        [num_windows, window_size, D] with symbolic num_windows. The Q branch
+        uses expand([num_windows, ...]) to broadcast — but the tracer captures
+        num_windows as a concrete int since it comes from Python code, not from
+        the Q tensor's shape.
+
+        Fix: Collect all symbolic expressions from tensor symbolic_shape fields.
+        For expand broadcast dims and view/reshape dims that match a known
+        expression's trace_value, inject the expression dict so ExprArg handles
+        it at runtime.
+
+        Safety: Only injects when trace_value maps to exactly ONE expression
+        (avoids ambiguity). Only targets expand broadcast dims (input_dim=1)
+        and view/reshape dims that merge/split symbolic dimensions.
+        """
+        # Step 1: Collect symbolic expressions from tensor symbolic_shapes
+        # Build map: trace_value → expression_dict (only unique values)
+        expr_map: Dict[int, Any] = {}  # trace_value → expression dict
+        ambiguous: set = set()  # trace_values with multiple expressions
+
+        for _tid, tdata in tensors.items():
+            sym_shape = tdata.get("symbolic_shape", {})
+            dims = sym_shape.get("dims", []) if isinstance(sym_shape, dict) else []
+            for dim in dims:
+                if not isinstance(dim, dict):
+                    continue
+                dim_type = dim.get("type", "")
+                if dim_type not in ("floordiv", "add", "sub", "mul", "mod", "neg", "symbol"):
+                    continue
+                # Skip bare symbols — those are handled by _promote_seq_len_scalars
+                if dim_type == "symbol":
+                    continue
+                trace_val = dim.get("trace", dim.get("trace_value"))
+                if not isinstance(trace_val, int) or trace_val <= 1:
+                    continue
+                if trace_val in ambiguous:
+                    continue
+                if trace_val in expr_map:
+                    # Check if it's the same expression (same dict structure)
+                    if expr_map[trace_val] != dim:
+                        ambiguous.add(trace_val)
+                        del expr_map[trace_val]
+                else:
+                    expr_map[trace_val] = dim
+
+        if not expr_map:
+            return
+
+        injected = 0
+
+        # Step 2: Inject into expand/view/reshape/_unsafe_view ops
+        for _op_uid, op_data in ops.items():
+            op_type = op_data.get("op_type", "")
+            attrs = op_data.get("attributes", {})
+            args = attrs.get("args", [])
+
+            if op_type == "aten::expand" and len(args) >= 2:
+                # Expand: check broadcast dims (input_dim=1 → target_dim=N)
+                size_arg = args[1]
+                if not isinstance(size_arg, dict) or size_arg.get("type") != "list":
+                    continue
+                size_list = size_arg.get("value", [])
+                input_shapes = op_data.get("input_shapes", [[]])
+                if not input_shapes:
+                    continue
+                input_shape = input_shapes[0]
+
+                changed = False
+                new_size = list(size_list)
+                for i, (target, actual) in enumerate(zip(size_list, input_shape)):
+                    if (isinstance(target, int) and actual == 1
+                            and target > 1 and target in expr_map):
+                        new_size[i] = expr_map[target]
+                        changed = True
+                        injected += 1
+
+                if changed:
+                    new_args = list(args)
+                    new_args[1] = {"type": "list", "value": new_size}
+                    new_attrs = dict(attrs)
+                    new_attrs["args"] = new_args
+                    if "size" in new_attrs:
+                        new_attrs["size"] = new_size
+                    op_data["attributes"] = new_attrs
+
+            elif op_type in ("aten::view", "aten::reshape", "aten::_unsafe_view"):
+                # View/reshape: check for hardcoded dims matching expressions
+                shape_key = "shape" if "shape" in attrs else "size" if "size" in attrs else None
+                if shape_key is None:
+                    continue
+                old_shape = attrs[shape_key]
+                if not isinstance(old_shape, list):
+                    continue
+
+                # Skip if already fully symbolized
+                has_expr = any(isinstance(s, dict) and s.get("type") in
+                              ("floordiv", "add", "sub", "mul", "mod", "neg")
+                              for s in old_shape)
+                if has_expr:
+                    continue
+
+                changed = False
+                new_shape = list(old_shape)
+                for i, dim_val in enumerate(old_shape):
+                    if isinstance(dim_val, int) and dim_val > 1 and dim_val in expr_map:
+                        new_shape[i] = expr_map[dim_val]
+                        changed = True
+                        injected += 1
+
+                if changed:
+                    new_attrs = dict(attrs)
+                    new_attrs[shape_key] = new_shape
+                    # Also update args list
+                    new_args = list(new_attrs.get("args", []))
+                    for ai, arg in enumerate(new_args):
+                        if isinstance(arg, dict) and arg.get("type") == "list":
+                            orig = arg.get("value", [])
+                            if len(orig) == len(new_shape):
+                                new_args[ai] = {"type": "list", "value": new_shape}
+                                break
+                    new_attrs["args"] = new_args
+                    op_data["attributes"] = new_attrs
+
+    # ========================================================================
     # FUSED MoE COMPILATION
     # ========================================================================
 
