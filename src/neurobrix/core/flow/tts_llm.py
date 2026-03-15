@@ -294,6 +294,25 @@ class TTSLLMEngine(FlowHandler):
                 self.ctx.variable_resolver.resolved["speech_token_lens"] = speech_len
                 self.ctx.variable_resolver.resolved[f"{voc_name}.speech_token_lens"] = speech_len
 
+                # Bind reference audio inputs for vocoder (required by graph)
+                # Read graph inputs to discover required ref_dict fields
+                voc_executor = self.ctx.executors.get(voc_name)
+                if voc_executor is not None:
+                    voc_dag = getattr(voc_executor, '_dag', None)
+                    if voc_dag:
+                        for _tid, tspec in voc_dag.get("tensors", {}).items():
+                            iname = tspec.get("input_name")
+                            if not iname or not iname.startswith("ref_dict."):
+                                continue
+                            # Only provide dummy if not already resolved
+                            if iname in self.ctx.variable_resolver.resolved:
+                                continue
+                            shape = tspec.get("shape", [1])
+                            dtype_str = tspec.get("dtype", "float32")
+                            t_dtype = torch.int64 if "int" in dtype_str else torch.float32
+                            dummy = torch.zeros(shape, dtype=t_dtype, device=device)
+                            self.ctx.variable_resolver.resolved[iname] = dummy
+
                 self._execute_component(voc_name, "forward", None)
 
                 # Get audio output
