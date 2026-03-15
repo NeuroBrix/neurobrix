@@ -38,6 +38,7 @@ from .audio import AudioEngine
 from .encoder_decoder import EncoderDecoderEngine
 from .audio_llm import AudioLLMEngine
 from .dual_ar import DualAREngine
+from .tts_llm import TTSLLMEngine
 
 __all__ = [
     "FlowContext",
@@ -53,4 +54,5 @@ __all__ = [
     "EncoderDecoderEngine",
     "AudioLLMEngine",
     "DualAREngine",
+    "TTSLLMEngine",
 ]
