@@ -328,7 +328,8 @@ class RuntimeExecutor:
             variable_resolver=self.variable_resolver,
             connections_index=self._connections_index,
             topology=self.pkg.topology,
-            loop_id=self._loop_id
+            loop_id=self._loop_id,
+            executors=self.executors,
         )
 
         self._input_synthesizer = InputSynthesizer(
