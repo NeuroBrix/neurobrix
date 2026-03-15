@@ -587,6 +587,100 @@ class CompiledSequence:
         execution_order.clear()
         execution_order.extend(new_order)
 
+    def _reconcile_stale_tensor_refs(
+        self,
+        tensors: Dict[str, Any],
+        ops_metadata: Dict[str, Any],
+        execution_order: List[str],
+    ) -> None:
+        """
+        Fix stale tensor_ids in attributes that reference non-existent tensors.
+
+        The tracer may capture detach/clone wrappers in attributes.args but omit
+        the corresponding ops from the graph. This leaves dangling references in
+        tensor_tuple args (e.g., aten.detach::0::out_0 for KV cache init).
+
+        Fix: build a rewire map from input_tensor_ids (which the tracer resolves
+        correctly) and apply to any attribute tensor_ids not found in the tensor map.
+        """
+        # Collect all valid tensor_ids
+        valid_tids = set(tensors.keys())
+
+        # Build rewire map for stale references
+        rewire: Dict[str, str] = {}
+
+        for op_uid in execution_order:
+            op_data = ops_metadata.get(op_uid)
+            if op_data is None:
+                continue
+            input_tids = op_data.get("input_tensor_ids", [])
+            attrs = op_data.get("attributes", {})
+            args = attrs.get("args", [])
+
+            # Collect all tensor_ids from attributes
+            attr_tids = []
+            for arg in args:
+                if not isinstance(arg, dict):
+                    continue
+                if arg.get("type") == "tensor":
+                    tid = arg.get("tensor_id")
+                    if tid:
+                        attr_tids.append(tid)
+                elif arg.get("type") == "tensor_tuple":
+                    for tid in arg.get("tensor_ids", []):
+                        attr_tids.append(tid)
+
+            # Find stale references and map to input_tensor_ids
+            for tid in attr_tids:
+                if tid not in valid_tids and tid not in rewire:
+                    # Try to find the correct tensor in input_tensor_ids
+                    # by matching position or by finding the one that IS valid
+                    for candidate in input_tids:
+                        if candidate in valid_tids and candidate not in rewire.values():
+                            rewire[tid] = candidate
+                            break
+
+        if not rewire:
+            return
+
+        # Apply rewire to attributes
+        def _rewire_arg(arg: Any) -> Any:
+            if not isinstance(arg, dict):
+                return arg
+            arg_type = arg.get("type")
+            if arg_type == "tensor":
+                tid = arg.get("tensor_id")
+                if tid in rewire:
+                    arg = dict(arg)
+                    arg["tensor_id"] = rewire[tid]
+            elif arg_type == "tensor_tuple":
+                tids = arg.get("tensor_ids", [])
+                new_tids = [rewire.get(t, t) for t in tids]
+                if new_tids != tids:
+                    arg = dict(arg)
+                    arg["tensor_ids"] = new_tids
+            elif arg_type == "list":
+                items = arg.get("value", [])
+                new_items = [_rewire_arg(item) for item in items]
+                arg = dict(arg)
+                arg["value"] = new_items
+            return arg
+
+        for op_uid in execution_order:
+            op_data = ops_metadata.get(op_uid)
+            if op_data is None:
+                continue
+            attrs = op_data.get("attributes", {})
+            args = attrs.get("args", [])
+            new_args = [_rewire_arg(a) for a in args]
+            if new_args != args:
+                attrs["args"] = new_args
+            kwargs = attrs.get("kwargs", {})
+            if kwargs:
+                new_kwargs = {k: _rewire_arg(v) for k, v in kwargs.items()}
+                if new_kwargs != kwargs:
+                    attrs["kwargs"] = new_kwargs
+
     def _eliminate_weight_transpose_ops(
         self,
         tensors: Dict[str, Any],
