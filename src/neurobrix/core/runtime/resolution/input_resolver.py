@@ -81,7 +81,8 @@ class InputResolver:
                 return resolved
 
         # FALLBACK: If no connections, try to resolve from variable_resolver.resolved
-        # This handles cases where tokenization stores input_ids/attention_mask
+        # This handles cases where tokenization stores input_ids/attention_mask,
+        # or flow handlers set inputs directly (tts_llm, audio_llm, etc.)
         comp_info = self._topology.get("components", {}).get(comp_name, {})
         interface_inputs = comp_info.get("interface", {}).get("inputs", [])
 
@@ -95,6 +96,28 @@ class InputResolver:
                         break
             if resolved:
                 return resolved
+
+        # FALLBACK 2: Check graph inputs against variable resolver.
+        # Flow handlers (tts_llm, audio_llm) set inputs directly in the resolver.
+        # Look up the component's graph input names and resolve them.
+        if hasattr(self, '_executors'):
+            executor = self._executors.get(comp_name)
+        else:
+            executor = None
+        if executor is not None:
+            dag = getattr(executor, '_dag', None)
+            if dag:
+                resolved = {}
+                for _tid, spec in dag.get("tensors", {}).items():
+                    input_name = spec.get("input_name")
+                    if input_name:
+                        for key in [input_name, f"global.{input_name}",
+                                    f"{comp_name}.{input_name}"]:
+                            if key in self._variable_resolver.resolved:
+                                resolved[input_name] = self._variable_resolver.resolved[key]
+                                break
+                if resolved:
+                    return resolved
 
         # Component has no declared inputs - may use global defaults
         return {}
