@@ -550,7 +550,7 @@ class RuntimeExecutor:
 
         # Final fallback: reasonable default for TTS/audio models
         flow_type = self.pkg.topology.get("flow", {}).get("type", "")
-        if flow_type in ("audio", "rnnt", "encoder_decoder", "audio_llm", "dual_ar"):
+        if flow_type in ("audio", "rnnt", "encoder_decoder", "audio_llm", "dual_ar", "tts_llm"):
             return 2048
 
         # ZERO FALLBACK: Crash if we cannot determine max_length
