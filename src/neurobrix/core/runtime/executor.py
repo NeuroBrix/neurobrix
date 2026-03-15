@@ -141,10 +141,12 @@ class RuntimeExecutor:
             index[to_comp][to_input].append(from_port)
 
         # Forward pass inference for models without connections
+        # Skip for flow types that manage their own data routing
         if not connections:
             flow = self.pkg.topology.get("flow", {})
+            flow_type = flow.get("type", "")
             order = flow.get("order", [])
-            if order:
+            if order and flow_type not in ("tts_llm",):
                 for i in range(len(order) - 1):
                     from_comp = order[i]
                     to_comp = order[i + 1]
