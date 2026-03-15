@@ -402,6 +402,12 @@ class CompiledSequence:
         # DeepSeek: 19,428 detach out of 44,634 total ops (43%)
         self._eliminate_detach_ops(tensors, ops_metadata, execution_order)
 
+        # Phase -0.9: Reconcile stale tensor_ids in attributes
+        # Tracer may capture detach wrappers in attributes.args but omit detach ops
+        # from the graph (e.g., Chatterbox KV cache init). This fixes references to
+        # non-existent tensors by mapping from input_tensor_ids.
+        self._reconcile_stale_tensor_refs(tensors, ops_metadata, execution_order)
+
         # Phase -0.5: Eliminate aten::t on weight tensors (pre-transpose at bind time)
         # Removes ~5K ops/token for LLMs (weight.t() before every mm)
         self._eliminate_weight_transpose_ops(tensors, ops_metadata, execution_order)
