@@ -107,14 +107,14 @@ class TTSLLMEngine(FlowHandler):
             raise RuntimeError("ZERO FALLBACK: TTS model requires tokenizer module.")
 
         # Tokenize with special tokens (model expects BOT/EOT markers)
-        try:
-            input_ids = tokenizer.encode(prompt, return_tensors="pt", add_special_tokens=True)
-        except TypeError:
-            ids = tokenizer.encode(prompt, add_special_tokens=True)
-            input_ids = torch.tensor([ids], dtype=torch.long)
-        if isinstance(input_ids, list):
-            input_ids = torch.tensor([input_ids], dtype=torch.long)
-        input_ids = input_ids.to(device)
+        # NeuroBrix tokenizers pad by default — disable padding for TTS input
+        ids = tokenizer.encode(prompt, padding=False, add_special_tokens=True)
+        if isinstance(ids, torch.Tensor):
+            input_ids = ids.to(device)
+            if input_ids.dim() == 1:
+                input_ids = input_ids.unsqueeze(0)
+        else:
+            input_ids = torch.tensor([ids], dtype=torch.long, device=device)
 
         self.ctx.variable_resolver.resolved["global.input_ids"] = input_ids
         self.ctx.variable_resolver.resolved["input_ids"] = input_ids
