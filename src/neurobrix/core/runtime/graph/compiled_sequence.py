@@ -1714,6 +1714,34 @@ class CompiledSequence:
                     new_attrs["args"] = new_args
                     op_data["attributes"] = new_attrs
 
+            elif op_type in ("aten::ones", "aten::zeros", "aten::full",
+                             "aten::empty", "aten::ones_like", "aten::zeros_like"):
+                # Creation ops: size list may contain hardcoded symbolic values
+                # E.g., ones([5, 15]) for windowed attention mask
+                if not args:
+                    continue
+                size_arg = args[0]
+                if not isinstance(size_arg, dict) or size_arg.get("type") != "list":
+                    continue
+                size_list = size_arg.get("value", [])
+
+                changed = False
+                new_size = list(size_list)
+                for i, dim_val in enumerate(size_list):
+                    if isinstance(dim_val, int) and dim_val > 1 and dim_val in expr_map:
+                        new_size[i] = expr_map[dim_val]
+                        changed = True
+                        injected += 1
+
+                if changed:
+                    new_args = list(args)
+                    new_args[0] = {"type": "list", "value": new_size}
+                    new_attrs = dict(attrs)
+                    new_attrs["args"] = new_args
+                    if "size" in new_attrs:
+                        new_attrs["size"] = new_size
+                    op_data["attributes"] = new_attrs
+
     # ========================================================================
     # FUSED MoE COMPILATION
     # ========================================================================
