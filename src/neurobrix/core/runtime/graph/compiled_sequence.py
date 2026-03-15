@@ -411,6 +411,12 @@ class CompiledSequence:
         # values with symbolic expressions for runtime resolution.
         self._symbolize_data_dependent_attrs(tensors, ops_metadata)
 
+        # Phase -0.1: Propagate symbolic expressions across branches
+        # Handles expand broadcast dims and view/reshape dims that depend on
+        # symbolic values from a different data-flow branch (e.g., CFormer
+        # windowed attention where Q branch expands to match KV window count).
+        self._propagate_cross_branch_expressions(tensors, ops_metadata)
+
         # Phase 0: Promote trace-time seq_len constants to symbolic references
         # UNIVERSAL: Works for all LLMs, safe for diffusion models, collision-checked
         self._promote_seq_len_scalars_to_symbolic(tensors, ops_metadata)
