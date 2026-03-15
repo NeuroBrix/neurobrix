@@ -462,7 +462,7 @@ class TTSLLMEngine(FlowHandler):
             logits = sorted_logits.scatter(1, sorted_indices, sorted_logits)
 
         probs = torch.softmax(logits, dim=-1)
-        next_token = torch.multinomial(probs, num_samples=1).item()
+        next_token = int(torch.multinomial(probs, num_samples=1).item())
         return next_token
 
     def _save_audio(self, audio_tensor: torch.Tensor, sample_rate: int) -> None:
