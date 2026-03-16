@@ -308,35 +308,37 @@ class TTSLLMEngine(FlowHandler):
                 start = time.perf_counter()
                 self._ensure_weights_loaded(voc_name)
 
-                # Bind speech tokens and lengths for vocoder
-                speech_len = torch.tensor([len(generated_ids)], dtype=torch.long, device=device)
-                self.ctx.variable_resolver.resolved[f"{voc_name}.speech_tokens"] = speech_tokens
-                self.ctx.variable_resolver.resolved["speech_token_lens"] = speech_len
-                self.ctx.variable_resolver.resolved[f"{voc_name}.speech_token_lens"] = speech_len
-
-                # Bind reference audio inputs for vocoder (required by graph)
-                # Read graph inputs to discover required ref_dict fields
+                # Build comp_inputs directly from graph DAG — bypass input resolver
+                # because topology connections wrongly map t3_cfg output to ALL s3gen inputs.
+                speech_len = torch.tensor([len(speech_ids)], dtype=torch.long, device=device)
                 voc_executor = self.ctx.executors.get(voc_name)
+                comp_inputs: Dict[str, Any] = {}
                 if voc_executor is not None:
                     voc_dag = getattr(voc_executor, '_dag', None)
                     if voc_dag:
                         for _tid, tspec in voc_dag.get("tensors", {}).items():
                             iname = tspec.get("input_name")
-                            if not iname or not iname.startswith("ref_dict."):
+                            if not iname:
                                 continue
-                            # Only provide dummy if not already resolved
-                            if iname in self.ctx.variable_resolver.resolved:
-                                continue
-                            shape = tspec.get("shape", [1])
-                            dtype_str = tspec.get("dtype", "float32")
-                            t_dtype = torch.int64 if "int" in dtype_str else torch.float32
-                            dummy = torch.zeros(shape, dtype=t_dtype, device=device)
-                            self.ctx.variable_resolver.resolved[iname] = dummy
+                            if iname == "speech_tokens":
+                                comp_inputs[iname] = speech_tokens
+                            elif iname == "speech_token_lens":
+                                comp_inputs[iname] = speech_len
+                            else:
+                                # Dummy inputs for ref_dict fields and others
+                                shape = tspec.get("shape", [1])
+                                dtype_str = tspec.get("dtype", "float32")
+                                t_dtype = torch.int64 if "int" in dtype_str else torch.float32
+                                comp_inputs[iname] = torch.zeros(shape, dtype=t_dtype, device=device)
 
-                self._execute_component(voc_name, "forward", None)
+                output = voc_executor.run(comp_inputs)
 
-                # Get audio output
-                audio_output = self._get_component_output(voc_name)
+                # Extract audio from output
+                audio_output = None
+                if isinstance(output, dict):
+                    audio_output = next(iter(output.values())) if output else None
+                elif isinstance(output, torch.Tensor):
+                    audio_output = output
                 elapsed = (time.perf_counter() - start) * 1000
                 print(f"   [{voc_name}] Done in {elapsed:.0f}ms")
 
