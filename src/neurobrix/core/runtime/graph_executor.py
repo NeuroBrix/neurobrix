@@ -1238,18 +1238,44 @@ class GraphExecutor:
             # Compiled ops may reference _sum_sA_sB synthetic symbols
             # created by _promote_seq_len_scalars_to_symbolic.
             symbols = self._dag.get("symbolic_context", {}).get("symbols", {})
+            tensors_meta = self._dag.get("tensors", {})
             seq_syms = []
             for sid, info in symbols.items():
                 tv = info.get("trace_value")
                 if info.get("name") == "seq_len" and tv is not None:
                     seq_syms.append((sid, int(tv)))
+
+            # Bind implicit input dimension symbols (auto-detected during compilation)
+            # These are input tensor dims without explicit symbols in symbolic_context
+            implicit_syms: list = []
+            for tid, tdata in tensors_meta.items():
+                if not tid.startswith("input::"):
+                    continue
+                input_name = tdata.get("input_name")
+                shape = tdata.get("shape", [])
+                for dim_idx, dim_val in enumerate(shape):
+                    if not isinstance(dim_val, int) or dim_val <= 1:
+                        continue
+                    implicit_id = f"_implicit_{tid.replace('::', '_')}_{dim_idx}"
+                    # Resolve actual runtime dimension
+                    actual_val = dim_val
+                    if input_name and input_name in tensor_inputs:
+                        t = tensor_inputs[input_name]
+                        if isinstance(t, torch.Tensor) and dim_idx < t.ndim:
+                            actual_val = t.shape[dim_idx]
+                    self._shape_resolver._runtime_values[implicit_id] = actual_val
+                    implicit_syms.append((implicit_id, dim_val))
+
+            # Compute combined symbols: named seq_len + named/implicit pairs
+            all_seq = seq_syms + implicit_syms
             for i, (sid_a, tv_a) in enumerate(seq_syms):
-                for sid_b, tv_b in seq_syms[i+1:]:
-                    if tv_a != tv_b:
-                        sum_id = f"_sum_{sid_a}_{sid_b}"
-                        val_a = bound.get(sid_a, tv_a)
-                        val_b = bound.get(sid_b, tv_b)
-                        self._shape_resolver._runtime_values[sum_id] = val_a + val_b
+                for sid_b, tv_b in all_seq:
+                    if sid_a == sid_b or tv_a == tv_b:
+                        continue
+                    sum_id = f"_sum_{sid_a}_{sid_b}"
+                    val_a = bound.get(sid_a, tv_a)
+                    val_b = self._shape_resolver._runtime_values.get(sid_b, tv_b)
+                    self._shape_resolver._runtime_values[sum_id] = val_a + val_b
 
             if bound:
                 self._last_symbols = bound  # Store for CFG batch inference
