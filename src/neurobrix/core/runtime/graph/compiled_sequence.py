@@ -260,6 +260,7 @@ class CompiledSequence:
         '_seq_dependent_constants',  # Constants with trace-time seq_len dim: [(slot, axis, sym_id, trace_val)]
         '_seq_constant_originals',  # Original full-size constants: {slot: tensor} — never narrowed
         '_pretranspose_weights',  # Weight tensor IDs that need .t().contiguous() at bind time
+        '_affine_symbols',  # Affine expressions: {derived_id: (base_sym, mul, offset)}
     )
 
     def __init__(
