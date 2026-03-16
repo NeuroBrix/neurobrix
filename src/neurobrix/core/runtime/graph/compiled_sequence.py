@@ -961,7 +961,9 @@ class CompiledSequence:
 
         self._affine_symbols = {}  # {derived_id: (base_sym, mul, offset)}
         matched_vals = set(safe_symbols.values())
-        base_syms = list(safe_symbols.items())
+        # Sort by trace_value DESCENDING so combined symbols (larger values)
+        # match first with smaller multipliers — e.g., 92 = 2*46 not 4*23
+        base_syms = sorted(safe_symbols.items(), key=lambda x: -x[1])
         for V in sorted(all_scalar_vals):
             if V in matched_vals or V in weight_dims:
                 continue
