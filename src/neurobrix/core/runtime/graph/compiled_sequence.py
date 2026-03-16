@@ -952,7 +952,7 @@ class CompiledSequence:
                         elif isinstance(_elem, int) and _elem > 1:
                             all_scalar_vals.add(_elem)
 
-        self._affine_symbols: Dict[str, tuple] = {}  # {derived_id: (base_sym, mul, offset)}
+        self._affine_symbols = {}  # {derived_id: (base_sym, mul, offset)}
         matched_vals = set(safe_symbols.values())
         base_syms = list(safe_symbols.items())
         for V in sorted(all_scalar_vals):
