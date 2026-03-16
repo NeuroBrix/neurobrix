@@ -974,13 +974,20 @@ class CompiledSequence:
                     args[3] = result
                     promoted += 1
 
-            # aten::arange(end, ...) — promote end (index 0)
-            # Used for RoPE freq computation, position indices
+            # aten::arange — promote end argument
+            # arange(end) has end at index 0
+            # arange(start, end) has start at index 0, end at index 1
             elif op_type == "aten::arange" and len(args) >= 1:
                 result = _try_promote_scalar(args[0])
                 if result:
                     args[0] = result
                     promoted += 1
+                elif len(args) >= 2:
+                    # arange(start, end) — try promoting end at index 1
+                    result = _try_promote_scalar(args[1])
+                    if result:
+                        args[1] = result
+                        promoted += 1
 
             # aten::full / aten::zeros / aten::ones / aten::new_zeros / aten::new_ones
             # Shape args contain seq_len — promote matching elements in shape list
