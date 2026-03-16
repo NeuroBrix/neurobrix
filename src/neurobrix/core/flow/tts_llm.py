@@ -269,9 +269,29 @@ class TTSLLMEngine(FlowHandler):
         elapsed = (time.perf_counter() - start) * 1000
         print(f"   [{lm_name}] Generated {len(generated_ids)} speech tokens in {elapsed:.0f}ms")
 
-        # Store generated speech tokens
-        self.ctx.variable_resolver.resolved["global.generated_token_ids"] = generated_ids
-        speech_tokens = torch.tensor([generated_ids], dtype=torch.long, device=device)
+        # Store generated speech tokens, filtering out special tokens (>= vocoder vocab_size)
+        # T3 generates tokens in [0, speech_vocab) + special tokens (start/stop speech).
+        # The vocoder embedding only covers [0, vocab_size), so strip special tokens.
+        vocoder_vocab_size = defaults.get("vocoder_vocab_size")
+        if vocoder_vocab_size is None and vocoder_stage is not None:
+            # Detect from vocoder graph's embedding weight shape
+            voc_exec = self.ctx.executors.get(vocoder_stage["component"])
+            if voc_exec is not None:
+                voc_dag = getattr(voc_exec, '_dag', None)
+                if voc_dag:
+                    for _tid, tspec in voc_dag.get("tensors", {}).items():
+                        wname = tspec.get("weight_name", "")
+                        if "embedding" in wname and tspec.get("shape"):
+                            vocoder_vocab_size = tspec["shape"][0]
+                            break
+
+        speech_ids = [t for t in generated_ids if vocoder_vocab_size is None or t < vocoder_vocab_size]
+        if len(speech_ids) < len(generated_ids):
+            print(f"   [{lm_name}] Filtered {len(generated_ids) - len(speech_ids)} special tokens "
+                  f"(vocab_size={vocoder_vocab_size})")
+
+        self.ctx.variable_resolver.resolved["global.generated_token_ids"] = speech_ids
+        speech_tokens = torch.tensor([speech_ids], dtype=torch.long, device=device)
         self.ctx.variable_resolver.resolved["global.speech_tokens"] = speech_tokens
         self.ctx.variable_resolver.resolved["speech_tokens"] = speech_tokens
 
