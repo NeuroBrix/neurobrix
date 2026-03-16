@@ -1074,10 +1074,47 @@ class CompiledSequence:
                         full_size = table_shape[dim_arg]
                         args[3] = {"type": "scalar", "value": full_size}
                 else:
+                    # Try standard promotion for end index
                     result = _try_promote_scalar(args[3])
                     if result:
                         args[3] = result
                         promoted += 1
+                    else:
+                        # Detect centered-window-slice on weight tensors:
+                        # Relative position bias embeds are sliced as
+                        # weight[center-seq+1 : center+seq] where center=weight_dim//2
+                        _start_v = args[2].get("value") if isinstance(args[2], dict) else (args[2] if isinstance(args[2], int) else None)
+                        _end_v = args[3].get("value") if isinstance(args[3], dict) else (args[3] if isinstance(args[3], int) else None)
+                        if isinstance(_start_v, int) and isinstance(_end_v, int) and input_tids:
+                            _weight_shape = tensors.get(input_tids[0], {}).get("shape", [])
+                            _dim_v = args[1].get("value") if isinstance(args[1], dict) else (args[1] if isinstance(args[1], int) else None)
+                            if isinstance(_dim_v, int) and _dim_v < len(_weight_shape):
+                                _wdim = _weight_shape[_dim_v]
+                                _center = (_start_v + _end_v) // 2
+                                _expected_center = (_wdim - 1) // 2
+                                if abs(_center - _expected_center) <= 1:
+                                    _half_window = _end_v - _center
+                                    # Find matching combined/seq symbol
+                                    for _sym_id, _tv in safe_symbols.items():
+                                        if _tv == _half_window:
+                                            # end = center + symbol → expr: add(const, symbol)
+                                            args[3] = {
+                                                "type": "expression",
+                                                "op": "add",
+                                                "left": {"type": "const", "value": _center},
+                                                "right": {"type": "symbol", "id": _sym_id, "trace": _tv},
+                                                "trace": _end_v,
+                                            }
+                                            # start = center + 1 - symbol → expr: sub(const, symbol)
+                                            args[2] = {
+                                                "type": "expression",
+                                                "op": "sub",
+                                                "left": {"type": "const", "value": _center + 1},
+                                                "right": {"type": "symbol", "id": _sym_id, "trace": _tv},
+                                                "trace": _start_v,
+                                            }
+                                            promoted += 2
+                                            break
 
             # aten::narrow(tensor, dim, start, length) — promote length (index 3)
             elif op_type == "aten::narrow" and len(args) >= 4:
