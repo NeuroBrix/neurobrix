@@ -925,6 +925,52 @@ class CompiledSequence:
         if not safe_symbols:
             return  # All seq_len trace values collide with weight dims
 
+        # Infer AFFINE expressions: V = multiplier * base_symbol + offset
+        # Vocoder models (s3gen, etc.) have derived dimensions through conv chains,
+        # Toeplitz constructions, and upsampling that create values like:
+        #   2*seq, 2*seq-1, 2*seq-6, 4*seq, etc.
+        # Collect all scalar values from op args, then try to express each as
+        # a linear function of a known safe_symbol.
+        all_scalar_vals: set = set()
+        for _op_uid, _op_data in ops_metadata.items():
+            _attrs = _op_data.get("attributes", {})
+            _args = _attrs.get("args", [])
+            for _a in _args:
+                if isinstance(_a, dict) and _a.get("type") == "scalar":
+                    _v = _a.get("value")
+                    if isinstance(_v, int) and _v > 1:
+                        all_scalar_vals.add(_v)
+                elif isinstance(_a, (list, tuple)):
+                    for _elem in _a:
+                        if isinstance(_elem, dict) and _elem.get("type") == "scalar":
+                            _ev = _elem.get("value")
+                            if isinstance(_ev, int) and _ev > 1:
+                                all_scalar_vals.add(_ev)
+                        elif isinstance(_elem, int) and _elem > 1:
+                            all_scalar_vals.add(_elem)
+
+        self._affine_symbols: Dict[str, tuple] = {}  # {derived_id: (base_sym, mul, offset)}
+        matched_vals = set(safe_symbols.values())
+        base_syms = list(safe_symbols.items())
+        for V in sorted(all_scalar_vals):
+            if V in matched_vals or V in weight_dims:
+                continue
+            for sym_id, S in base_syms:
+                if S <= 0:
+                    continue
+                for mul in range(2, 9):
+                    offset = V - mul * S
+                    if abs(offset) <= 10:
+                        derived_id = f"_aff_{sym_id}_x{mul}_o{offset}"
+                        if derived_id not in safe_symbols:
+                            safe_symbols[derived_id] = V
+                            self._affine_symbols[derived_id] = (sym_id, mul, offset)
+                            matched_vals.add(V)
+                        break
+                else:
+                    continue
+                break
+
         # Promote scalar args in shape-manipulating ops to symbolic references
         promoted = 0
 
