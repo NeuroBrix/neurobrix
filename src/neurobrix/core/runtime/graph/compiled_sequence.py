@@ -323,6 +323,9 @@ class CompiledSequence:
         # FGP: Multi-device flag (set by compute_op_devices after bind_weights)
         self._is_multi_device = False
 
+        # Affine symbol expressions: {derived_id: (base_sym, mul, offset)}
+        self._affine_symbols = {}
+
         # Persistent tensor IDs: protected from liveness GC (e.g., hidden states for LLM)
         self._persistent_tensor_ids: set = set()
 
