@@ -1099,16 +1099,14 @@ class CompiledSequence:
                                         if _tv == _half_window:
                                             # end = center + symbol → expr: add(const, symbol)
                                             args[3] = {
-                                                "type": "expression",
-                                                "op": "add",
+                                                "type": "add",
                                                 "left": {"type": "const", "value": _center},
                                                 "right": {"type": "symbol", "id": _sym_id, "trace": _tv},
                                                 "trace": _end_v,
                                             }
                                             # start = center + 1 - symbol → expr: sub(const, symbol)
                                             args[2] = {
-                                                "type": "expression",
-                                                "op": "sub",
+                                                "type": "sub",
                                                 "left": {"type": "const", "value": _center + 1},
                                                 "right": {"type": "symbol", "id": _sym_id, "trace": _tv},
                                                 "trace": _start_v,
