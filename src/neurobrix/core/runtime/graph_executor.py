@@ -1277,6 +1277,17 @@ class GraphExecutor:
                     val_b = self._shape_resolver._runtime_values.get(sid_b, tv_b)
                     self._shape_resolver._runtime_values[sum_id] = val_a + val_b
 
+            # Bind AFFINE symbols: V = mul * base + offset
+            # These are derived from base/combined symbols by the compiled_sequence's
+            # _promote_seq_len_scalars_to_symbolic (e.g., 2*sum for Toeplitz, 2*sum-6 for trimmed mel).
+            if self._compiled_seq is not None and hasattr(self._compiled_seq, '_affine_symbols'):
+                for derived_id, (base_sym, mul, offset) in self._compiled_seq._affine_symbols.items():
+                    base_val = self._shape_resolver._runtime_values.get(base_sym)
+                    if base_val is None:
+                        base_val = bound.get(base_sym)
+                    if base_val is not None:
+                        self._shape_resolver._runtime_values[derived_id] = mul * base_val + offset
+
             if bound:
                 self._last_symbols = bound  # Store for CFG batch inference
 
