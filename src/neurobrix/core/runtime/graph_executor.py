@@ -1270,7 +1270,7 @@ class GraphExecutor:
             all_seq = seq_syms + implicit_syms
             for i, (sid_a, tv_a) in enumerate(seq_syms):
                 for sid_b, tv_b in all_seq:
-                    if sid_a == sid_b or tv_a == tv_b:
+                    if sid_a == sid_b:
                         continue
                     sum_id = f"_sum_{sid_a}_{sid_b}"
                     val_a = bound.get(sid_a, tv_a)
