@@ -979,11 +979,20 @@ class CompiledSequence:
             if not isinstance(arg, dict) or arg.get("type") != "scalar":
                 return None
             val = arg.get("value")
-            if not isinstance(val, int):
+            if not isinstance(val, int) or val in weight_dims:
                 return None
+            # Exact match first (offset 0), then offset ±1
+            for sym_id, trace_val in safe_symbols.items():
+                if val == trace_val:
+                    return {
+                        "type": "symbol",
+                        "symbol_id": sym_id,
+                        "trace_value": val,
+                        "offset": 0,
+                    }
             for sym_id, trace_val in safe_symbols.items():
                 offset = val - trace_val
-                if 0 <= offset <= 1:
+                if -1 <= offset <= 1 and offset != 0:
                     return {
                         "type": "symbol",
                         "symbol_id": sym_id,
@@ -994,11 +1003,19 @@ class CompiledSequence:
 
         def _try_promote_raw_int(val) -> Optional[dict]:
             """Try to promote a raw int value (not wrapped in dict) to symbolic."""
-            if not isinstance(val, int):
+            if not isinstance(val, int) or val in weight_dims:
                 return None
             for sym_id, trace_val in safe_symbols.items():
+                if val == trace_val:
+                    return {
+                        "type": "symbol",
+                        "symbol_id": sym_id,
+                        "trace_value": val,
+                        "offset": 0,
+                    }
+            for sym_id, trace_val in safe_symbols.items():
                 offset = val - trace_val
-                if 0 <= offset <= 1:
+                if -1 <= offset <= 1 and offset != 0:
                     return {
                         "type": "symbol",
                         "symbol_id": sym_id,
