@@ -880,16 +880,46 @@ class CompiledSequence:
             if trace_val not in weight_dims:
                 safe_symbols[sym_id] = trace_val
 
+        # Auto-detect implicit seq_len symbols from input tensor dimensions.
+        # When a graph has one seq_len symbol (e.g., s1=128 for speech_tokens)
+        # but another input has a variable-length dim (e.g., prompt_token dim_1=50)
+        # that the tracer didn't assign a symbol to, detect it by looking for
+        # input dims that, when combined with existing seq_len symbols, produce
+        # values used in creation ops (arange, zeros, etc.).
+        input_seq_dims: Dict[str, int] = {}  # implicit_sid → trace_value
+        for tid, tdata in tensors.items():
+            if not tid.startswith("input::"):
+                continue
+            shape = tdata.get("shape", [])
+            source_prefix = tid
+            for dim_idx, dim_val in enumerate(shape):
+                if not isinstance(dim_val, int) or dim_val <= 1:
+                    continue
+                # Check if this dim already has a symbol
+                dim_source = f"{source_prefix}::dim_{dim_idx}"
+                already_tracked = any(
+                    info.get("source") == dim_source
+                    and info.get("name") == "seq_len"
+                    for info in symbols.values()
+                )
+                if not already_tracked and dim_val not in weight_dims:
+                    implicit_id = f"_implicit_{tid.replace('::', '_')}_{dim_idx}"
+                    input_seq_dims[implicit_id] = dim_val
+
         # Also detect COMBINED seq_len values (sums of pairs).
         # FLUX-style models concatenate img+txt tokens, producing shapes like
         # 768 = 256(img) + 512(txt). The tracer captures these as concrete values.
+        # Include implicit input dims in the combination search.
+        all_seq_dims = list(seq_len_symbols.items()) + list(input_seq_dims.items())
         seq_len_list = list(seq_len_symbols.items())
-        for i, (sid_a, tv_a) in enumerate(seq_len_list):
-            for sid_b, tv_b in seq_len_list[i+1:]:
-                if tv_a != tv_b:
-                    sum_trace = tv_a + tv_b
-                    if sum_trace not in weight_dims:
-                        sum_id = f"_sum_{sid_a}_{sid_b}"
+        for sid_a, tv_a in seq_len_list:
+            for sid_b, tv_b in all_seq_dims:
+                if sid_a == sid_b or tv_a == tv_b:
+                    continue
+                sum_trace = tv_a + tv_b
+                if sum_trace not in weight_dims:
+                    sum_id = f"_sum_{sid_a}_{sid_b}"
+                    if sum_id not in safe_symbols:
                         safe_symbols[sum_id] = sum_trace
 
         if not safe_symbols:
