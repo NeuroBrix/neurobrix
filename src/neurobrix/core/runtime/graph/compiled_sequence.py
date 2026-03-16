@@ -910,16 +910,22 @@ class CompiledSequence:
                     implicit_id = f"_implicit_{tid.replace('::', '_')}_{dim_idx}"
                     input_seq_dims[implicit_id] = dim_val
 
-        # Also detect COMBINED seq_len values (sums of pairs).
+        # When tracer didn't assign explicit seq_len symbols (e.g., vocoder
+        # components), promote implicit input dims to safe_symbols.
+        # The weight_dims guard already filters out fixed-size dims.
+        for implicit_id, tv in input_seq_dims.items():
+            if implicit_id not in safe_symbols:
+                safe_symbols[implicit_id] = tv
+
+        # Detect COMBINED seq_len values (sums of pairs).
         # FLUX-style models concatenate img+txt tokens, producing shapes like
         # 768 = 256(img) + 512(txt). The tracer captures these as concrete values.
-        # Include implicit input dims in the combination search.
-        all_seq_dims = list(seq_len_symbols.items()) + list(input_seq_dims.items())
-        seq_len_list = list(seq_len_symbols.items())
-        for sid_a, tv_a in seq_len_list:
-            for sid_b, tv_b in all_seq_dims:
-                if sid_a == sid_b:
-                    continue
+        # Search ALL safe_symbols (explicit + implicit) for combinations.
+        all_sym_list = list(safe_symbols.items())
+        for i, (sid_a, tv_a) in enumerate(all_sym_list):
+            for j, (sid_b, tv_b) in enumerate(all_sym_list):
+                if i >= j:
+                    continue  # avoid self-pairs and duplicates
                 sum_trace = tv_a + tv_b
                 if sum_trace not in weight_dims:
                     sum_id = f"_sum_{sid_a}_{sid_b}"
