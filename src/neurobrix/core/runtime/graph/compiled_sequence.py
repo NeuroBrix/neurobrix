@@ -981,6 +981,13 @@ class CompiledSequence:
                     continue
                 break
 
+        # DEBUG: Print affine detection results
+        import sys
+        print(f"[DEBUG AFFINE] safe_symbols: {safe_symbols}", file=sys.stderr, flush=True)
+        print(f"[DEBUG AFFINE] affine_symbols: {self._affine_symbols}", file=sys.stderr, flush=True)
+        print(f"[DEBUG AFFINE] weight_dims sample (first 20): {sorted(weight_dims)[:20]}", file=sys.stderr, flush=True)
+        print(f"[DEBUG AFFINE] scalar_vals: {sorted(all_scalar_vals)}", file=sys.stderr, flush=True)
+
         # Promote scalar args in shape-manipulating ops to symbolic references
         promoted = 0
 
