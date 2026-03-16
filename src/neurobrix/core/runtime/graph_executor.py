@@ -1266,14 +1266,14 @@ class GraphExecutor:
                     self._shape_resolver._runtime_values[implicit_id] = actual_val
                     implicit_syms.append((implicit_id, dim_val))
 
-            # Compute combined symbols: named seq_len + named/implicit pairs
+            # Compute combined symbols: ALL pairs (explicit + implicit)
             all_seq = seq_syms + implicit_syms
-            for i, (sid_a, tv_a) in enumerate(seq_syms):
-                for sid_b, tv_b in all_seq:
-                    if sid_a == sid_b:
-                        continue
+            for i, (sid_a, tv_a) in enumerate(all_seq):
+                for j, (sid_b, tv_b) in enumerate(all_seq):
+                    if i >= j:
+                        continue  # avoid self-pairs and duplicates
                     sum_id = f"_sum_{sid_a}_{sid_b}"
-                    val_a = bound.get(sid_a, tv_a)
+                    val_a = self._shape_resolver._runtime_values.get(sid_a, bound.get(sid_a, tv_a))
                     val_b = self._shape_resolver._runtime_values.get(sid_b, tv_b)
                     self._shape_resolver._runtime_values[sum_id] = val_a + val_b
 
