@@ -291,30 +291,6 @@ class TTSLLMEngine(FlowHandler):
                   f"(vocab_size={vocoder_vocab_size})")
 
         self.ctx.variable_resolver.resolved["global.generated_token_ids"] = speech_ids
-
-        # Determine trace-time speech_tokens size from vocoder graph input shape
-        trace_speech_len = None
-        if vocoder_stage is not None:
-            voc_exec = self.ctx.executors.get(vocoder_stage["component"])
-            if voc_exec is not None:
-                voc_dag = getattr(voc_exec, '_dag', None)
-                if voc_dag:
-                    for _tid, tspec in voc_dag.get("tensors", {}).items():
-                        if tspec.get("input_name") == "speech_tokens":
-                            trace_speech_len = tspec.get("shape", [1, 128])[1]
-                            break
-
-        # Pad/truncate speech tokens to match trace-time vocoder input size
-        # s3gen uses speech_token_lens for actual length, so padding is safe
-        if trace_speech_len is not None and len(speech_ids) != trace_speech_len:
-            actual_len = len(speech_ids)
-            if actual_len > trace_speech_len:
-                speech_ids = speech_ids[:trace_speech_len]
-                print(f"   [vocoder] Truncated speech tokens: {actual_len} → {trace_speech_len}")
-            else:
-                speech_ids = speech_ids + [0] * (trace_speech_len - actual_len)
-                print(f"   [vocoder] Padded speech tokens: {actual_len} → {trace_speech_len}")
-
         speech_tokens = torch.tensor([speech_ids], dtype=torch.long, device=device)
         self.ctx.variable_resolver.resolved["global.speech_tokens"] = speech_tokens
         self.ctx.variable_resolver.resolved["speech_tokens"] = speech_tokens
