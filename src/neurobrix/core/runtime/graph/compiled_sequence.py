@@ -914,7 +914,7 @@ class CompiledSequence:
         seq_len_list = list(seq_len_symbols.items())
         for sid_a, tv_a in seq_len_list:
             for sid_b, tv_b in all_seq_dims:
-                if sid_a == sid_b or tv_a == tv_b:
+                if sid_a == sid_b:
                     continue
                 sum_trace = tv_a + tv_b
                 if sum_trace not in weight_dims:
