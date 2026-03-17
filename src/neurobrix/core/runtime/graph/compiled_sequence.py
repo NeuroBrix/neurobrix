@@ -942,6 +942,16 @@ class CompiledSequence:
         # Collect all scalar values from op args, then try to express each as
         # a linear function of a known safe_symbol.
         all_scalar_vals: set = set()
+
+        def _collect_scalars_from_list(items):
+            for _elem in items:
+                if isinstance(_elem, dict) and _elem.get("type") == "scalar":
+                    _ev = _elem.get("value")
+                    if isinstance(_ev, int) and _ev > 1:
+                        all_scalar_vals.add(_ev)
+                elif isinstance(_elem, int) and _elem > 1:
+                    all_scalar_vals.add(_elem)
+
         for _op_uid, _op_data in ops_metadata.items():
             _attrs = _op_data.get("attributes", {})
             _args = _attrs.get("args", [])
@@ -950,14 +960,10 @@ class CompiledSequence:
                     _v = _a.get("value")
                     if isinstance(_v, int) and _v > 1:
                         all_scalar_vals.add(_v)
+                elif isinstance(_a, dict) and _a.get("type") == "list":
+                    _collect_scalars_from_list(_a.get("value", []))
                 elif isinstance(_a, (list, tuple)):
-                    for _elem in _a:
-                        if isinstance(_elem, dict) and _elem.get("type") == "scalar":
-                            _ev = _elem.get("value")
-                            if isinstance(_ev, int) and _ev > 1:
-                                all_scalar_vals.add(_ev)
-                        elif isinstance(_elem, int) and _elem > 1:
-                            all_scalar_vals.add(_elem)
+                    _collect_scalars_from_list(_a)
 
         self._affine_symbols = {}  # {derived_id: (base_sym, mul, offset)}
         matched_vals = set(safe_symbols.values())
