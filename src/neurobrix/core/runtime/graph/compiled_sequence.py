@@ -1049,10 +1049,14 @@ class CompiledSequence:
                     }
             return None
 
+        _debug_zeros_count = 0
         for op_uid, op_data in ops_metadata.items():
             op_type = op_data.get("op_type", "")
             attrs = op_data.get("attributes", {})
             args = attrs.get("args", [])
+            if op_type == "aten::zeros" and "::12" in op_uid:
+                import sys
+                print(f"[DEBUG ZEROS] {op_uid}: args_before={args}", file=sys.stderr, flush=True)
 
             # aten::slice(tensor, dim, start, end) — promote end (index 3)
             # For RoPE table slices: pre-computed cos/sin tables are indexed
