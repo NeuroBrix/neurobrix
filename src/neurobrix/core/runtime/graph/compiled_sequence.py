@@ -1170,11 +1170,16 @@ class CompiledSequence:
                                     promoted += 1
                                     changed = True
                         if changed:
-                            args[shape_idx] = shape_list
+                            if _is_list_dict:
+                                args[shape_idx] = {"type": "list", "value": shape_list}
+                            else:
+                                args[shape_idx] = shape_list
 
             # aten::expand(tensor, size) — promote seq_len in size list
             elif op_type == "aten::expand" and len(args) >= 2:
                 size_arg = args[1]
+                _is_list_dict_exp = isinstance(size_arg, dict) and size_arg.get("type") == "list"
+                size_arg = size_arg.get("value", []) if _is_list_dict_exp else size_arg
                 if isinstance(size_arg, (list, tuple)):
                     size_list = list(size_arg)
                     changed = False
