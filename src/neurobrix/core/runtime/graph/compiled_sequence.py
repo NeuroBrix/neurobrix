@@ -1197,7 +1197,10 @@ class CompiledSequence:
                                 promoted += 1
                                 changed = True
                     if changed:
-                        args[1] = size_list
+                        if _is_list_dict_exp:
+                            args[1] = {"type": "list", "value": size_list}
+                        else:
+                            args[1] = size_list
 
             # aten::view / aten::reshape / aten::_unsafe_view
             # Shape args may contain seq_len — promote matching elements.
