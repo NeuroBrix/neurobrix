@@ -449,10 +449,12 @@ class IterativeProcessHandler(FlowHandler):
             from neurobrix.core.validators import TensorValidator
             current_state = self.ctx.variable_resolver.get(state_key)
             if current_state is not None and isinstance(current_state, torch.Tensor):
+                # Image: 4D [B, C, H, W], Video: 5D [B, C, T, H, W]
+                expected = 5 if current_state.dim() == 5 else 4
                 TensorValidator.validate_latent_shape(
                     tensor=current_state,
                     component_name="pre_vae",
-                    expected_dims=4  # [B, C, H, W]
+                    expected_dims=expected
                 )
 
         # Execute post-loop components
