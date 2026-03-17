@@ -2611,15 +2611,7 @@ class CompiledSequence:
 
             try:
                 # Call function directly
-                # TEMP DEBUG: log shapes for s3gen view_as/zeros/copy issue
-                if op.op_uid in ("aten.zeros::20", "aten.copy::0", "aten.slice::107", "aten.slice::106", "aten.to::31"):
-                    print(f"  [DEBUG {op.op_uid}] args={[a.shape if isinstance(a, torch.Tensor) else a for a in args]}")
-                    if kwargs:
-                        print(f"  [DEBUG {op.op_uid}] kwargs keys={list(kwargs.keys())}")
                 result = op.func(*args, **kwargs)
-                if op.op_uid in ("aten.zeros::20", "aten.copy::0", "aten.slice::107", "aten.slice::106", "aten.to::31"):
-                    if isinstance(result, torch.Tensor):
-                        print(f"  [DEBUG {op.op_uid}] result: shape={result.shape}")
             except Exception as e:
                 # ============================================================
                 # NOP PROPAGATION for dynamic MoE routing
