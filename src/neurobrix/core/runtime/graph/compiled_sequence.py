@@ -260,7 +260,6 @@ class CompiledSequence:
         '_seq_dependent_constants',  # Constants with trace-time seq_len dim: [(slot, axis, sym_id, trace_val)]
         '_seq_constant_originals',  # Original full-size constants: {slot: tensor} — never narrowed
         '_pretranspose_weights',  # Weight tensor IDs that need .t().contiguous() at bind time
-        '_affine_symbols',  # Affine expressions: {derived_id: (base_sym, mul, offset)}
     )
 
     def __init__(
@@ -323,9 +322,6 @@ class CompiledSequence:
 
         # FGP: Multi-device flag (set by compute_op_devices after bind_weights)
         self._is_multi_device = False
-
-        # Affine symbol expressions: {derived_id: (base_sym, mul, offset)}
-        self._affine_symbols = {}
 
         # Persistent tensor IDs: protected from liveness GC (e.g., hidden states for LLM)
         self._persistent_tensor_ids: set = set()
@@ -405,12 +401,6 @@ class CompiledSequence:
         # Phase -1: Eliminate aten::detach ops (identity at inference time — no autograd)
         # DeepSeek: 19,428 detach out of 44,634 total ops (43%)
         self._eliminate_detach_ops(tensors, ops_metadata, execution_order)
-
-        # Phase -0.9: Reconcile stale tensor_ids in attributes
-        # Tracer may capture detach wrappers in attributes.args but omit detach ops
-        # from the graph (e.g., Chatterbox KV cache init). This fixes references to
-        # non-existent tensors by mapping from input_tensor_ids.
-        self._reconcile_stale_tensor_refs(tensors, ops_metadata, execution_order)
 
         # Phase -0.5: Eliminate aten::t on weight tensors (pre-transpose at bind time)
         # Removes ~5K ops/token for LLMs (weight.t() before every mm)
@@ -590,100 +580,6 @@ class CompiledSequence:
         new_order = [uid for uid in execution_order if uid not in detach_uids]
         execution_order.clear()
         execution_order.extend(new_order)
-
-    def _reconcile_stale_tensor_refs(
-        self,
-        tensors: Dict[str, Any],
-        ops_metadata: Dict[str, Any],
-        execution_order: List[str],
-    ) -> None:
-        """
-        Fix stale tensor_ids in attributes that reference non-existent tensors.
-
-        The tracer may capture detach/clone wrappers in attributes.args but omit
-        the corresponding ops from the graph. This leaves dangling references in
-        tensor_tuple args (e.g., aten.detach::0::out_0 for KV cache init).
-
-        Fix: build a rewire map from input_tensor_ids (which the tracer resolves
-        correctly) and apply to any attribute tensor_ids not found in the tensor map.
-        """
-        # Collect all valid tensor_ids
-        valid_tids = set(tensors.keys())
-
-        # Build rewire map for stale references
-        rewire: Dict[str, str] = {}
-
-        for op_uid in execution_order:
-            op_data = ops_metadata.get(op_uid)
-            if op_data is None:
-                continue
-            input_tids = op_data.get("input_tensor_ids", [])
-            attrs = op_data.get("attributes", {})
-            args = attrs.get("args", [])
-
-            # Collect all tensor_ids from attributes
-            attr_tids = []
-            for arg in args:
-                if not isinstance(arg, dict):
-                    continue
-                if arg.get("type") == "tensor":
-                    tid = arg.get("tensor_id")
-                    if tid:
-                        attr_tids.append(tid)
-                elif arg.get("type") == "tensor_tuple":
-                    for tid in arg.get("tensor_ids", []):
-                        attr_tids.append(tid)
-
-            # Find stale references and map to input_tensor_ids
-            for tid in attr_tids:
-                if tid not in valid_tids and tid not in rewire:
-                    # Try to find the correct tensor in input_tensor_ids
-                    # by matching position or by finding the one that IS valid
-                    for candidate in input_tids:
-                        if candidate in valid_tids and candidate not in rewire.values():
-                            rewire[tid] = candidate
-                            break
-
-        if not rewire:
-            return
-
-        # Apply rewire to attributes
-        def _rewire_arg(arg: Any) -> Any:
-            if not isinstance(arg, dict):
-                return arg
-            arg_type = arg.get("type")
-            if arg_type == "tensor":
-                tid = arg.get("tensor_id")
-                if tid in rewire:
-                    arg = dict(arg)
-                    arg["tensor_id"] = rewire[tid]
-            elif arg_type == "tensor_tuple":
-                tids = arg.get("tensor_ids", [])
-                new_tids = [rewire.get(t, t) for t in tids]
-                if new_tids != tids:
-                    arg = dict(arg)
-                    arg["tensor_ids"] = new_tids
-            elif arg_type == "list":
-                items = arg.get("value", [])
-                new_items = [_rewire_arg(item) for item in items]
-                arg = dict(arg)
-                arg["value"] = new_items
-            return arg
-
-        for op_uid in execution_order:
-            op_data = ops_metadata.get(op_uid)
-            if op_data is None:
-                continue
-            attrs = op_data.get("attributes", {})
-            args = attrs.get("args", [])
-            new_args = [_rewire_arg(a) for a in args]
-            if new_args != args:
-                attrs["args"] = new_args
-            kwargs = attrs.get("kwargs", {})
-            if kwargs:
-                new_kwargs = {k: _rewire_arg(v) for k, v in kwargs.items()}
-                if new_kwargs != kwargs:
-                    attrs["kwargs"] = new_kwargs
 
     def _eliminate_weight_transpose_ops(
         self,
@@ -884,117 +780,20 @@ class CompiledSequence:
             if trace_val not in weight_dims:
                 safe_symbols[sym_id] = trace_val
 
-        # Auto-detect implicit seq_len symbols from input tensor dimensions.
-        # When a graph has one seq_len symbol (e.g., s1=128 for speech_tokens)
-        # but another input has a variable-length dim (e.g., prompt_token dim_1=50)
-        # that the tracer didn't assign a symbol to, detect it by looking for
-        # input dims that, when combined with existing seq_len symbols, produce
-        # values used in creation ops (arange, zeros, etc.).
-        input_seq_dims: Dict[str, int] = {}  # implicit_sid → trace_value
-        for tid, tdata in tensors.items():
-            if not tid.startswith("input::"):
-                continue
-            shape = tdata.get("shape", [])
-            source_prefix = tid
-            for dim_idx, dim_val in enumerate(shape):
-                if not isinstance(dim_val, int) or dim_val <= 1:
-                    continue
-                # Check if this dim already has a symbol
-                dim_source = f"{source_prefix}::dim_{dim_idx}"
-                already_tracked = any(
-                    info.get("source") == dim_source
-                    and info.get("name") == "seq_len"
-                    for info in symbols.values()
-                )
-                if not already_tracked and dim_val not in weight_dims:
-                    implicit_id = f"_implicit_{tid.replace('::', '_')}_{dim_idx}"
-                    input_seq_dims[implicit_id] = dim_val
-
-        # When tracer didn't assign explicit seq_len symbols (e.g., vocoder
-        # components), promote implicit input dims to safe_symbols.
-        # The weight_dims guard already filters out fixed-size dims.
-        for implicit_id, tv in input_seq_dims.items():
-            if implicit_id not in safe_symbols:
-                safe_symbols[implicit_id] = tv
-
-        # Detect COMBINED seq_len values (sums of pairs).
+        # Also detect COMBINED seq_len values (sums of pairs).
         # FLUX-style models concatenate img+txt tokens, producing shapes like
         # 768 = 256(img) + 512(txt). The tracer captures these as concrete values.
-        # Search ALL safe_symbols (explicit + implicit) for combinations.
-        all_sym_list = list(safe_symbols.items())
-        for i, (sid_a, tv_a) in enumerate(all_sym_list):
-            for j, (sid_b, tv_b) in enumerate(all_sym_list):
-                if i >= j:
-                    continue  # avoid self-pairs and duplicates
-                sum_trace = tv_a + tv_b
-                if sum_trace not in weight_dims:
-                    sum_id = f"_sum_{sid_a}_{sid_b}"
-                    if sum_id not in safe_symbols:
+        seq_len_list = list(seq_len_symbols.items())
+        for i, (sid_a, tv_a) in enumerate(seq_len_list):
+            for sid_b, tv_b in seq_len_list[i+1:]:
+                if tv_a != tv_b:
+                    sum_trace = tv_a + tv_b
+                    if sum_trace not in weight_dims:
+                        sum_id = f"_sum_{sid_a}_{sid_b}"
                         safe_symbols[sum_id] = sum_trace
 
         if not safe_symbols:
             return  # All seq_len trace values collide with weight dims
-
-        # Infer AFFINE expressions: V = multiplier * base_symbol + offset
-        # Vocoder models (s3gen, etc.) have derived dimensions through conv chains,
-        # Toeplitz constructions, and upsampling that create values like:
-        #   2*seq, 2*seq-1, 2*seq-6, 4*seq, etc.
-        # Collect all scalar values from op args, then try to express each as
-        # a linear function of a known safe_symbol.
-        all_scalar_vals: set = set()
-
-        def _collect_scalars_from_list(items):
-            for _elem in items:
-                if isinstance(_elem, dict) and _elem.get("type") == "scalar":
-                    _ev = _elem.get("value")
-                    if isinstance(_ev, int) and _ev > 1:
-                        all_scalar_vals.add(_ev)
-                elif isinstance(_elem, int) and _elem > 1:
-                    all_scalar_vals.add(_elem)
-
-        for _op_uid, _op_data in ops_metadata.items():
-            _attrs = _op_data.get("attributes", {})
-            _args = _attrs.get("args", [])
-            for _a in _args:
-                if isinstance(_a, dict) and _a.get("type") == "scalar":
-                    _v = _a.get("value")
-                    if isinstance(_v, int) and _v > 1:
-                        all_scalar_vals.add(_v)
-                elif isinstance(_a, dict) and _a.get("type") == "list":
-                    _collect_scalars_from_list(_a.get("value", []))
-                elif isinstance(_a, (list, tuple)):
-                    _collect_scalars_from_list(_a)
-
-        self._affine_symbols = {}  # {derived_id: (base_sym, mul, offset)}
-        matched_vals = set(safe_symbols.values())
-        # Sort by trace_value DESCENDING so combined symbols (larger values)
-        # match first with smaller multipliers — e.g., 92 = 2*46 not 4*23
-        base_syms = sorted(safe_symbols.items(), key=lambda x: -x[1])
-        for V in sorted(all_scalar_vals):
-            if V in matched_vals or V in weight_dims:
-                continue
-            for sym_id, S in base_syms:
-                if S <= 0:
-                    continue
-                for mul in range(2, 9):
-                    offset = V - mul * S
-                    if abs(offset) <= 10:
-                        derived_id = f"_aff_{sym_id}_x{mul}_o{offset}"
-                        if derived_id not in safe_symbols:
-                            safe_symbols[derived_id] = V
-                            self._affine_symbols[derived_id] = (sym_id, mul, offset)
-                            matched_vals.add(V)
-                        break
-                else:
-                    continue
-                break
-
-        # DEBUG: Print affine detection results
-        import sys
-        print(f"[DEBUG AFFINE] safe_symbols: {safe_symbols}", file=sys.stderr, flush=True)
-        print(f"[DEBUG AFFINE] affine_symbols: {self._affine_symbols}", file=sys.stderr, flush=True)
-        print(f"[DEBUG AFFINE] weight_dims sample (first 20): {sorted(weight_dims)[:20]}", file=sys.stderr, flush=True)
-        print(f"[DEBUG AFFINE] scalar_vals: {sorted(all_scalar_vals)}", file=sys.stderr, flush=True)
 
         # Promote scalar args in shape-manipulating ops to symbolic references
         promoted = 0
@@ -1004,20 +803,11 @@ class CompiledSequence:
             if not isinstance(arg, dict) or arg.get("type") != "scalar":
                 return None
             val = arg.get("value")
-            if not isinstance(val, int) or val in weight_dims:
+            if not isinstance(val, int):
                 return None
-            # Exact match first (offset 0), then offset ±1
-            for sym_id, trace_val in safe_symbols.items():
-                if val == trace_val:
-                    return {
-                        "type": "symbol",
-                        "symbol_id": sym_id,
-                        "trace_value": val,
-                        "offset": 0,
-                    }
             for sym_id, trace_val in safe_symbols.items():
                 offset = val - trace_val
-                if -1 <= offset <= 1 and offset != 0:
+                if 0 <= offset <= 1:
                     return {
                         "type": "symbol",
                         "symbol_id": sym_id,
@@ -1028,19 +818,11 @@ class CompiledSequence:
 
         def _try_promote_raw_int(val) -> Optional[dict]:
             """Try to promote a raw int value (not wrapped in dict) to symbolic."""
-            if not isinstance(val, int) or val in weight_dims:
+            if not isinstance(val, int):
                 return None
             for sym_id, trace_val in safe_symbols.items():
-                if val == trace_val:
-                    return {
-                        "type": "symbol",
-                        "symbol_id": sym_id,
-                        "trace_value": val,
-                        "offset": 0,
-                    }
-            for sym_id, trace_val in safe_symbols.items():
                 offset = val - trace_val
-                if -1 <= offset <= 1 and offset != 0:
+                if 0 <= offset <= 1:
                     return {
                         "type": "symbol",
                         "symbol_id": sym_id,
@@ -1049,14 +831,10 @@ class CompiledSequence:
                     }
             return None
 
-        _debug_zeros_count = 0
         for op_uid, op_data in ops_metadata.items():
             op_type = op_data.get("op_type", "")
             attrs = op_data.get("attributes", {})
             args = attrs.get("args", [])
-            if op_type == "aten::zeros" and "::12" in op_uid:
-                import sys
-                print(f"[DEBUG ZEROS] {op_uid}: args_before={args}", file=sys.stderr, flush=True)
 
             # aten::slice(tensor, dim, start, end) — promote end (index 3)
             # For RoPE table slices: pre-computed cos/sin tables are indexed
@@ -1084,45 +862,10 @@ class CompiledSequence:
                         full_size = table_shape[dim_arg]
                         args[3] = {"type": "scalar", "value": full_size}
                 else:
-                    # Try standard promotion for end index
                     result = _try_promote_scalar(args[3])
                     if result:
                         args[3] = result
                         promoted += 1
-                    else:
-                        # Detect centered-window-slice on weight tensors:
-                        # Relative position bias embeds are sliced as
-                        # weight[center-seq+1 : center+seq] where center=weight_dim//2
-                        _start_v = args[2].get("value") if isinstance(args[2], dict) else (args[2] if isinstance(args[2], int) else None)
-                        _end_v = args[3].get("value") if isinstance(args[3], dict) else (args[3] if isinstance(args[3], int) else None)
-                        if isinstance(_start_v, int) and isinstance(_end_v, int) and input_tids:
-                            _weight_shape = tensors.get(input_tids[0], {}).get("shape", [])
-                            _dim_v = args[1].get("value") if isinstance(args[1], dict) else (args[1] if isinstance(args[1], int) else None)
-                            if isinstance(_dim_v, int) and _dim_v < len(_weight_shape):
-                                _wdim = _weight_shape[_dim_v]
-                                _center = (_start_v + _end_v) // 2
-                                _expected_center = (_wdim - 1) // 2
-                                if abs(_center - _expected_center) <= 1:
-                                    _half_window = _end_v - _center
-                                    # Find matching combined/seq symbol
-                                    for _sym_id, _tv in safe_symbols.items():
-                                        if _tv == _half_window:
-                                            # end = center + symbol → expr: add(const, symbol)
-                                            args[3] = {
-                                                "type": "add",
-                                                "left": {"type": "const", "value": _center},
-                                                "right": {"type": "symbol", "id": _sym_id, "trace": _tv},
-                                                "trace": _end_v,
-                                            }
-                                            # start = center + 1 - symbol → expr: sub(const, symbol)
-                                            args[2] = {
-                                                "type": "sub",
-                                                "left": {"type": "const", "value": _center + 1},
-                                                "right": {"type": "symbol", "id": _sym_id, "trace": _tv},
-                                                "trace": _start_v,
-                                            }
-                                            promoted += 2
-                                            break
 
             # aten::narrow(tensor, dim, start, length) — promote length (index 3)
             elif op_type == "aten::narrow" and len(args) >= 4:
@@ -1131,20 +874,13 @@ class CompiledSequence:
                     args[3] = result
                     promoted += 1
 
-            # aten::arange — promote end argument
-            # arange(end) has end at index 0
-            # arange(start, end) has start at index 0, end at index 1
+            # aten::arange(end, ...) — promote end (index 0)
+            # Used for RoPE freq computation, position indices
             elif op_type == "aten::arange" and len(args) >= 1:
                 result = _try_promote_scalar(args[0])
                 if result:
                     args[0] = result
                     promoted += 1
-                elif len(args) >= 2:
-                    # arange(start, end) — try promoting end at index 1
-                    result = _try_promote_scalar(args[1])
-                    if result:
-                        args[1] = result
-                        promoted += 1
 
             # aten::full / aten::zeros / aten::ones / aten::new_zeros / aten::new_ones
             # Shape args contain seq_len — promote matching elements in shape list
@@ -1155,10 +891,8 @@ class CompiledSequence:
                 shape_idx = 1 if op_type.startswith("aten::new_") else 0
                 if len(args) > shape_idx:
                     shape_arg = args[shape_idx]
-                    _is_list_dict = isinstance(shape_arg, dict) and shape_arg.get("type") == "list"
-                    _shape_items = shape_arg.get("value", []) if _is_list_dict else shape_arg
-                    if isinstance(_shape_items, (list, tuple)):
-                        shape_list = list(_shape_items)
+                    if isinstance(shape_arg, (list, tuple)):
+                        shape_list = list(shape_arg)
                         changed = False
                         for i, elem in enumerate(shape_list):
                             if isinstance(elem, dict):
@@ -1174,19 +908,11 @@ class CompiledSequence:
                                     promoted += 1
                                     changed = True
                         if changed:
-                            if _is_list_dict:
-                                args[shape_idx] = {"type": "list", "value": shape_list}
-                            else:
-                                args[shape_idx] = shape_list
-                        if "::12" in op_uid:
-                            import sys
-                            print(f"[DEBUG ZEROS] {op_uid}: changed={changed}, args_after={args}", file=sys.stderr, flush=True)
+                            args[shape_idx] = shape_list
 
             # aten::expand(tensor, size) — promote seq_len in size list
             elif op_type == "aten::expand" and len(args) >= 2:
                 size_arg = args[1]
-                _is_list_dict_exp = isinstance(size_arg, dict) and size_arg.get("type") == "list"
-                size_arg = size_arg.get("value", []) if _is_list_dict_exp else size_arg
                 if isinstance(size_arg, (list, tuple)):
                     size_list = list(size_arg)
                     changed = False
@@ -1204,10 +930,7 @@ class CompiledSequence:
                                 promoted += 1
                                 changed = True
                     if changed:
-                        if _is_list_dict_exp:
-                            args[1] = {"type": "list", "value": size_list}
-                        else:
-                            args[1] = size_list
+                        args[1] = size_list
 
             # aten::view / aten::reshape / aten::_unsafe_view
             # Shape args may contain seq_len — promote matching elements.
@@ -2874,6 +2597,11 @@ class CompiledSequence:
 
             try:
                 # Call function directly
+                # TEMP DEBUG: log shapes for s3gen view_as issue
+                if op.op_uid == "aten.view_as::0" or (op.op_type == "aten::view_as" and op_idx < 100):
+                    tensor_args = [a for a in args if isinstance(a, torch.Tensor)]
+                    for ti, ta in enumerate(tensor_args):
+                        print(f"  [DEBUG view_as] arg[{ti}]: shape={ta.shape}, stride={ta.stride()}, contiguous={ta.is_contiguous()}")
                 result = op.func(*args, **kwargs)
             except Exception as e:
                 # ============================================================
