@@ -1151,8 +1151,10 @@ class CompiledSequence:
                 shape_idx = 1 if op_type.startswith("aten::new_") else 0
                 if len(args) > shape_idx:
                     shape_arg = args[shape_idx]
-                    if isinstance(shape_arg, (list, tuple)):
-                        shape_list = list(shape_arg)
+                    _is_list_dict = isinstance(shape_arg, dict) and shape_arg.get("type") == "list"
+                    _shape_items = shape_arg.get("value", []) if _is_list_dict else shape_arg
+                    if isinstance(_shape_items, (list, tuple)):
+                        shape_list = list(_shape_items)
                         changed = False
                         for i, elem in enumerate(shape_list):
                             if isinstance(elem, dict):
