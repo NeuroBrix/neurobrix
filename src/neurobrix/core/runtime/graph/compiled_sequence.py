@@ -780,6 +780,20 @@ class CompiledSequence:
             if trace_val not in weight_dims:
                 safe_symbols[sym_id] = trace_val
 
+        # Skip promotion for trace_values shared by multiple seq_len symbols.
+        # When s1, s3, s6 all have trace_value=23 (e.g., traced with trace_seq_len=23
+        # for all inputs), we can't determine which symbol a concrete "23" refers to.
+        # Promoting to the wrong symbol causes runtime shape mismatches.
+        trace_val_counts: Dict[int, int] = {}
+        for _sid, tv in safe_symbols.items():
+            trace_val_counts[tv] = trace_val_counts.get(tv, 0) + 1
+        ambiguous_vals = {tv for tv, count in trace_val_counts.items() if count > 1}
+        if ambiguous_vals:
+            safe_symbols = {
+                sid: tv for sid, tv in safe_symbols.items()
+                if tv not in ambiguous_vals
+            }
+
         # Also detect COMBINED seq_len values (sums of pairs).
         # FLUX-style models concatenate img+txt tokens, producing shapes like
         # 768 = 256(img) + 512(txt). The tracer captures these as concrete values.
