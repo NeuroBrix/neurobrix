@@ -1178,6 +1178,9 @@ class CompiledSequence:
                                 args[shape_idx] = {"type": "list", "value": shape_list}
                             else:
                                 args[shape_idx] = shape_list
+                        if "::12" in op_uid:
+                            import sys
+                            print(f"[DEBUG ZEROS] {op_uid}: changed={changed}, args_after={args}", file=sys.stderr, flush=True)
 
             # aten::expand(tensor, size) — promote seq_len in size list
             elif op_type == "aten::expand" and len(args) >= 2:
