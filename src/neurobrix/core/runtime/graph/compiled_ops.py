@@ -210,6 +210,15 @@ class CompiledOpResolver:
         if op_name == "_cudnn_rnn":
             return self._make_cudnn_rnn()
 
+        # copy: The tracer captures in-place copy_ as "copy". The runtime MUST
+        # use copy_ (in-place) to preserve view aliasing: when copy_ writes into
+        # a view, the parent tensor is modified. The non-in-place copy creates a
+        # new tensor, leaving the parent untouched — breaking patterns like
+        # apply_rotary_emb where empty_like + slice-views + copy_ + permute
+        # rely on the buffer being filled through its views.
+        if op_name == "copy":
+            return torch.ops.aten.copy_
+
         # Standard ops - resolve via PyTorch
         return self._get_standard_op(op_name)
 
