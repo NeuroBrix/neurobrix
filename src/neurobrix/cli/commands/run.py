@@ -64,7 +64,10 @@ def _try_warm_path(args) -> bool:
     # For non-LLM non-audio: pass output_path so daemon saves the file
     family = status.get("family")
     if family not in ("llm", "audio"):
-        output_path = args.output or f"output_{args.model}.png"
+        from neurobrix.core.config import get_output_processing
+        _output_cfg = get_output_processing(family)
+        _default_ext = _output_cfg.get("output_format", "png")
+        output_path = args.output or f"output_{args.model}.{_default_ext}"
         kwargs["output_path"] = output_path
 
     try:
