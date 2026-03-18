@@ -417,8 +417,6 @@ def cmd_run(args):
     # =========================================================================
     # Image/Video Family: Tensor Output
     # =========================================================================
-    output_path = args.output or f"output_{args.model}.png"
-
     final_output = executor.get_final_output(outputs)
     if final_output is None:
         final_comp = executor.get_final_component()
@@ -433,7 +431,6 @@ def cmd_run(args):
     if output_range is None:
         output_cfg = get_output_processing(family)
         output_range = output_cfg.get("output_range", [-1.0, 1.0])
-    min_val, max_val = output_range
 
     output_cfg = get_output_processing(family)
     batch_axis = output_cfg.get("batch_axis", 0)
@@ -442,28 +439,66 @@ def cmd_run(args):
     bit_depth = output_cfg.get("bit_depth", 8)
     layout = output_cfg.get("layout", "CHW")
 
-    img = torch.select(final_output, batch_axis, 0).cpu().float()
-
     from neurobrix.core.module.output_processor import OutputProcessor
     processor = OutputProcessor.from_package(pkg)
-    img = processor.process(img, output_range)
 
-    img = img.clamp(0, 1)
+    # Remove batch dimension
+    tensor = torch.select(final_output, batch_axis, 0).cpu().float()
+    tensor = processor.process(tensor, output_range)
+    tensor = tensor.clamp(0, 1)
 
-    if layout == "CHW" and img.dim() == 3:
-        actual_channel_axis = channel_axis - 1 if batch_axis < channel_axis else channel_axis
-        if img.shape[actual_channel_axis] in valid_channels:
-            img = img.permute(1, 2, 0)
-
-    from PIL import Image
     import numpy as np
 
+    # ── VIDEO OUTPUT (4D: TCHW or CTHW) ──
+    if family == "video" and tensor.dim() == 4:
+        output_path = args.output or f"output_{args.model}.mp4"
+        if not output_path.endswith(".mp4"):
+            output_path = output_path.rsplit(".", 1)[0] + ".mp4"
+
+        fps = output_cfg.get("fps", 24)
+        fps = pkg.defaults.get("fps", fps)
+
+        # Normalize to [T, H, W, C] for cv2
+        if layout == "TCHW":
+            # [T, C, H, W] → [T, H, W, C]
+            frames = tensor.permute(0, 2, 3, 1).numpy()
+        else:
+            # [C, T, H, W] → [T, H, W, C]
+            frames = tensor.permute(1, 2, 3, 0).numpy()
+
+        frames_uint8 = (frames * 255).astype(np.uint8)
+        T, H, W, C = frames_uint8.shape
+
+        import cv2
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        writer = cv2.VideoWriter(output_path, fourcc, fps, (W, H))
+        for i in range(T):
+            # cv2 expects BGR
+            frame_bgr = cv2.cvtColor(frames_uint8[i], cv2.COLOR_RGB2BGR) if C == 3 else frames_uint8[i]
+            writer.write(frame_bgr)
+        writer.release()
+
+        print(f"\n{'='*70}")
+        print(f"SAVED: {output_path} ({T} frames, {W}x{H}, {fps} fps)")
+        print(f"{'='*70}")
+        return 0
+
+    # ── IMAGE OUTPUT (3D: CHW) ──
+    output_path = args.output or f"output_{args.model}.png"
+
+    if layout == "CHW" and tensor.dim() == 3:
+        actual_channel_axis = channel_axis - 1 if batch_axis < channel_axis else channel_axis
+        if tensor.shape[actual_channel_axis] in valid_channels:
+            tensor = tensor.permute(1, 2, 0)
+
+    from PIL import Image
+
     if bit_depth == 8:
-        img_np = (img.numpy() * 255).astype(np.uint8)
+        img_np = (tensor.numpy() * 255).astype(np.uint8)
     elif bit_depth == 16:
-        img_np = (img.numpy() * 65535).astype(np.uint16)
+        img_np = (tensor.numpy() * 65535).astype(np.uint16)
     else:
-        img_np = (img.numpy() * 255).astype(np.uint8)
+        img_np = (tensor.numpy() * 255).astype(np.uint8)
 
     if img_np.shape[-1] == 1:
         img_np = img_np.squeeze(-1)
