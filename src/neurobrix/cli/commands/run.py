@@ -449,9 +449,12 @@ def cmd_run(args):
 
     import numpy as np
 
+    # Default output path uses family's output_format
+    default_ext = output_cfg.get("output_format", "png")
+    output_path = args.output or f"output_{args.model}.{default_ext}"
+
     # ── VIDEO OUTPUT (4D: TCHW or CTHW) ──
     if family == "video" and tensor.dim() == 4:
-        output_path = args.output or f"output_{args.model}.mp4"
         if not output_path.endswith(".mp4"):
             output_path = output_path.rsplit(".", 1)[0] + ".mp4"
 
