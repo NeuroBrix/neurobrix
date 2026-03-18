@@ -159,7 +159,7 @@ def cmd_import(args):
     print("=" * 70)
     print(f"Model: {org}/{name}")
     print(f"Cache: {cache_path}")
-    print(f"\nRun with: neurobrix run --model {name} --hardware <profile> --prompt \"...\"")
+    print(f"\nRun with: neurobrix run --model {name} --prompt \"...\"")
 
 
 def cmd_list(args):
