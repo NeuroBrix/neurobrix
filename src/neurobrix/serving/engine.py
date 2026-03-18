@@ -421,9 +421,14 @@ class InferenceEngine:
             fps = output_cfg.get("fps", 24)
             fps = self._pkg.defaults.get("fps", fps) if self._pkg else fps
 
-            if layout == "TCHW":
+            if layout == "CTHW":
+                # [C, T, H, W] → [T, H, W, C]
+                frames = tensor.permute(1, 2, 3, 0).numpy()
+            elif layout == "TCHW":
+                # [T, C, H, W] → [T, H, W, C]
                 frames = tensor.permute(0, 2, 3, 1).numpy()
             else:
+                # Fallback: assume CTHW (diffusers standard)
                 frames = tensor.permute(1, 2, 3, 0).numpy()
 
             frames_uint8 = (frames * 255).astype(np.uint8)
