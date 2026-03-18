@@ -23,7 +23,7 @@ def cmd_chat(args):
     if not DaemonClient.is_running():
         print("[Chat] No daemon running.")
         print("[Chat] Start one first:")
-        print("  neurobrix serve --model <name> --hardware <profile>")
+        print("  neurobrix serve --model <name>")
         sys.exit(1)
 
     # Connect
