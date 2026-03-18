@@ -388,7 +388,6 @@ class InferenceEngine:
                 return output_path
 
         import numpy as np
-        from PIL import Image
         from neurobrix.core.config import get_output_processing
         from neurobrix.core.module.output_processor import OutputProcessor
 
@@ -408,23 +407,51 @@ class InferenceEngine:
         channel_axis = output_cfg.get("channel_axis", 1)
         bit_depth = output_cfg.get("bit_depth", 8)
 
-        img = torch.select(final_output, batch_axis, 0).cpu().float()
+        tensor = torch.select(final_output, batch_axis, 0).cpu().float()
 
         processor = OutputProcessor.from_package(self._pkg)
-        img = processor.process(img, output_range)
-        img = img.clamp(0, 1)
+        tensor = processor.process(tensor, output_range)
+        tensor = tensor.clamp(0, 1)
 
-        if layout == "CHW" and img.dim() == 3:
+        # ── VIDEO OUTPUT (4D: TCHW or CTHW) ──
+        if self._family == "video" and tensor.dim() == 4:
+            if not output_path.endswith(".mp4"):
+                output_path = output_path.rsplit(".", 1)[0] + ".mp4"
+
+            fps = output_cfg.get("fps", 24)
+            fps = self._pkg.defaults.get("fps", fps) if self._pkg else fps
+
+            if layout == "TCHW":
+                frames = tensor.permute(0, 2, 3, 1).numpy()
+            else:
+                frames = tensor.permute(1, 2, 3, 0).numpy()
+
+            frames_uint8 = (frames * 255).astype(np.uint8)
+            T, H, W, C = frames_uint8.shape
+
+            import cv2
+            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+            writer = cv2.VideoWriter(output_path, fourcc, fps, (W, H))
+            for i in range(T):
+                frame_bgr = cv2.cvtColor(frames_uint8[i], cv2.COLOR_RGB2BGR) if C == 3 else frames_uint8[i]
+                writer.write(frame_bgr)
+            writer.release()
+            return output_path
+
+        # ── IMAGE OUTPUT (3D: CHW) ──
+        from PIL import Image
+
+        if layout == "CHW" and tensor.dim() == 3:
             actual_channel_axis = channel_axis - 1 if batch_axis < channel_axis else channel_axis
-            if img.shape[actual_channel_axis] in valid_channels:
-                img = img.permute(1, 2, 0)
+            if tensor.shape[actual_channel_axis] in valid_channels:
+                tensor = tensor.permute(1, 2, 0)
 
         if bit_depth == 8:
-            img_np = (img.numpy() * 255).astype(np.uint8)
+            img_np = (tensor.numpy() * 255).astype(np.uint8)
         elif bit_depth == 16:
-            img_np = (img.numpy() * 65535).astype(np.uint16)
+            img_np = (tensor.numpy() * 65535).astype(np.uint16)
         else:
-            img_np = (img.numpy() * 255).astype(np.uint8)
+            img_np = (tensor.numpy() * 255).astype(np.uint8)
 
         if img_np.shape[-1] == 1:
             img_np = img_np.squeeze(-1)
