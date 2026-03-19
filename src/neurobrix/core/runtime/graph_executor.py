@@ -33,7 +33,6 @@ from pathlib import Path
 from typing import Callable, Dict, List, Any, Optional, Union, TYPE_CHECKING
 
 from neurobrix.kernels.classification import OpExecution, get_execution_type
-from neurobrix.kernels.adapter import KernelAdapter
 
 if TYPE_CHECKING:
     from neurobrix.core.components.base import ComponentHandler
@@ -140,8 +139,9 @@ class GraphExecutor:
         self._ctx: Optional[ExecutionContext] = None
         self._resolver: Optional[TensorResolver] = None
 
-        # Initialize kernel adapter
-        self._kernel_adapter = KernelAdapter(family, vendor, arch, device, dtype=dtype)
+        # Kernel adapter — lazy-initialized only for triton mode
+        self._kernel_adapter = None
+        self._kernel_adapter_args = (family, vendor, arch, device, dtype)
 
         # Runtime resolution for pos_embed scaling
         self._runtime_height = None
@@ -1705,7 +1705,11 @@ class GraphExecutor:
         if "kwargs" in full_attrs:
             full_attrs["kwargs"] = resolved_kwargs
 
-        # Execute via KernelAdapter
+        # Execute via KernelAdapter (lazy-init on first triton dispatch)
+        if self._kernel_adapter is None:
+            from neurobrix.kernels.adapter import KernelAdapter
+            family, vendor, arch, device, dtype = self._kernel_adapter_args
+            self._kernel_adapter = KernelAdapter(family, vendor, arch, device, dtype=dtype)
         result = self._kernel_adapter.launch(op_type, inputs, full_attrs)
 
         # AMP: Post-process result (overflow protection, inf clamping)
