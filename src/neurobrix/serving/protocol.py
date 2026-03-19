@@ -1,23 +1,41 @@
 """
-NeuroBrix Serving Protocol — Length-prefixed JSON-RPC over Unix socket.
+NeuroBrix Serving Protocol — Length-prefixed JSON-RPC over IPC.
 
 Wire format: [4 bytes: uint32 big-endian message length][JSON payload]
+
+IPC transport:
+  - Unix/macOS: AF_UNIX domain socket (zero network overhead)
+  - Windows: AF_INET TCP on localhost:19384 (cross-platform)
 
 ZERO HARDCODE: No HTTP, no REST, no gRPC.
 Same-machine IPC only — minimal overhead for GPU-bound workloads.
 """
 
+import sys
 import json
 import struct
 import socket
 from typing import Any, Dict, Optional
 from pathlib import Path
 
+# Platform detection
+IS_WINDOWS = sys.platform == "win32"
+
 # Daemon file locations
 DAEMON_DIR = Path.home() / ".neurobrix"
-SOCKET_PATH = DAEMON_DIR / "daemon.sock"
 PID_PATH = DAEMON_DIR / "daemon.pid"
 LOG_PATH = DAEMON_DIR / "daemon.log"
+
+# IPC transport — platform-adaptive
+if IS_WINDOWS:
+    IPC_PORT = 19384
+    IPC_ADDRESS = ("127.0.0.1", IPC_PORT)
+    IPC_FAMILY = socket.AF_INET
+    SOCKET_PATH = None  # No Unix socket on Windows
+else:
+    SOCKET_PATH = DAEMON_DIR / "daemon.sock"
+    IPC_ADDRESS = str(SOCKET_PATH)
+    IPC_FAMILY = socket.AF_UNIX
 
 # Protocol constants
 HEADER_SIZE = 4  # uint32 big-endian

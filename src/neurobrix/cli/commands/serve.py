@@ -70,17 +70,17 @@ def cmd_serve(args):
 
 
 def cmd_stop(args):
-    """Stop the serving daemon with escalation: socket → SIGTERM → SIGKILL."""
+    """Stop the serving daemon with escalation: socket → SIGTERM → force kill."""
     import os
     import signal
     import time
     from neurobrix.serving.client import DaemonClient
-    from neurobrix.serving.protocol import SOCKET_PATH, PID_PATH
+    from neurobrix.serving.protocol import SOCKET_PATH, PID_PATH, IS_WINDOWS
 
     if not DaemonClient.is_running():
         print("[Stop] No daemon running.")
         # Clean up stale files
-        if SOCKET_PATH.exists():
+        if SOCKET_PATH is not None and SOCKET_PATH.exists():
             SOCKET_PATH.unlink()
         if PID_PATH.exists():
             PID_PATH.unlink()
@@ -129,22 +129,39 @@ def cmd_stop(args):
                 return
             time.sleep(0.2)
 
-    # Step 3: SIGKILL (force)
+    # Step 3: Force kill (platform-adaptive)
     if pid is not None and DaemonClient.is_running():
-        print("[Stop] Daemon unresponsive — sending SIGKILL...")
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+        if IS_WINDOWS:
+            # Windows: no SIGKILL — use taskkill /F (force terminate)
+            import subprocess
+            print("[Stop] Daemon unresponsive — force terminating...")
+            try:
+                subprocess.run(
+                    ["taskkill", "/F", "/PID", str(pid)],
+                    capture_output=True,
+                )
+            except FileNotFoundError:
+                # taskkill not found — try TerminateProcess via os.kill
+                os.kill(pid, signal.SIGTERM)
+        else:
+            # Unix/macOS: SIGKILL
+            print("[Stop] Daemon unresponsive — sending SIGKILL...")
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
-        # Wait briefly for kernel to reap
+        # Wait briefly for OS to reap
         time.sleep(0.5)
 
-    # Clean up files (daemon can't clean up after SIGKILL)
+    # Clean up files (daemon can't clean up after force kill)
     _cleanup_daemon_files(SOCKET_PATH, PID_PATH)
 
     if DaemonClient.is_running():
-        print(f"[Stop] WARNING: Daemon still alive after SIGKILL. Manual kill required: kill -9 {pid}")
+        if IS_WINDOWS:
+            print(f"[Stop] WARNING: Daemon still alive. Manual kill required: taskkill /F /PID {pid}")
+        else:
+            print(f"[Stop] WARNING: Daemon still alive after SIGKILL. Manual kill required: kill -9 {pid}")
         sys.exit(1)
     else:
         print("[Stop] Daemon stopped.")
@@ -154,7 +171,7 @@ def _cleanup_daemon_files(socket_path, pid_path):
     """Remove daemon socket and PID files."""
     for p in (socket_path, pid_path):
         try:
-            if p.exists():
+            if p is not None and p.exists():
                 p.unlink()
         except OSError:
             pass
