@@ -492,41 +492,45 @@ class RNNTEngine(FlowHandler):
         raise RuntimeError(f"ZERO FALLBACK: No output found for {comp_name}")
 
     def _decode_tokens(self, tokens: List[int]) -> str:
-        """Decode token IDs to text using sentencepiece tokenizer."""
-        # Try to find tokenizer in the NBX cache
-        nbx_path = Path(self.ctx.nbx_path_str)
-        snapshot_path = self._find_snapshot_path()
+        """Decode token IDs to text using sentencepiece tokenizer from NBX cache."""
+        cache_path = self.ctx.pkg.cache_path
 
-        # Look for sentencepiece model
-        sp_paths = list(snapshot_path.glob("*tokenizer.model")) if snapshot_path else []
-        if not sp_paths:
-            sp_paths = list(nbx_path.glob("*tokenizer.model"))
-
-        if sp_paths:
+        # Look for sentencepiece model in NBX cache
+        sp_path = self._find_tokenizer_model()
+        if sp_path is not None:
             try:
                 import sentencepiece as spm
                 sp = spm.SentencePieceProcessor()
-                sp.Load(str(sp_paths[0]))
+                sp.Load(str(sp_path))
                 return sp.DecodeIds(tokens)
             except ImportError:
                 pass
 
-        # Fallback: try vocab.txt
-        vocab_paths = list(snapshot_path.glob("*vocab.txt")) if snapshot_path else []
-        if not vocab_paths:
-            vocab_paths = list(nbx_path.glob("*vocab.txt"))
+        # Fallback: try vocab.txt in NBX cache
+        if cache_path is not None:
+            vocab_paths = list(cache_path.rglob("*vocab.txt"))
+            if vocab_paths:
+                with open(vocab_paths[0]) as f:
+                    vocab = [line.strip() for line in f]
+                chars = [vocab[t] if t < len(vocab) else f"<{t}>" for t in tokens]
+                return "".join(chars).replace("▁", " ").strip()
 
-        if vocab_paths:
-            with open(vocab_paths[0]) as f:
-                vocab = [line.strip() for line in f]
-            chars = [vocab[t] if t < len(vocab) else f"<{t}>" for t in tokens]
-            return "".join(chars).replace("▁", " ").strip()
+        # ZERO FALLBACK: tokenizer missing from NBX container
+        raise RuntimeError(
+            "ZERO FALLBACK: No sentencepiece tokenizer.model or vocab.txt in NBX cache.\n"
+            "The model needs to be rebuilt with the tokenizer included.\n"
+            "Run: forge build --overwrite"
+        )
 
-        # Last resort: return raw token IDs
-        return str(tokens)
+    def _find_tokenizer_model(self) -> Optional[Path]:
+        """Find sentencepiece tokenizer.model in NBX cache.
 
-    def _find_snapshot_path(self) -> Optional[Path]:
-        """Find the original snapshot path for tokenizer access."""
-        model_name = self.ctx.pkg.manifest.get("model_name", "")
-        snapshot = Path(f"/home/mlops/hf_snapshots/{model_name}")
-        return snapshot if snapshot.exists() else None
+        ZERO FALLBACK: Runtime ONLY reads from NBX cache.
+        If the tokenizer is missing, the forge builder needs to include it.
+        """
+        cache_path = self.ctx.pkg.cache_path
+        if cache_path is None:
+            return None
+        # Search NBX cache for sentencepiece model files
+        sp_paths = list(cache_path.rglob("*.model"))
+        return sp_paths[0] if sp_paths else None
