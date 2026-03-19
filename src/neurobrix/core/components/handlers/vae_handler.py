@@ -50,10 +50,12 @@ class VAEComponentHandler(ComponentHandler):
 
     def transform_inputs(self, inputs: Dict[str, Any], phase: str) -> Dict[str, Any]:
         """
-        Apply scaling_factor before VAE decode in post_loop phase.
+        Apply latent denormalization and scaling_factor before VAE decode.
 
-        The scaling_factor is read from profile.json, not hardcoded.
-        This scales the latents by 1/scaling_factor before VAE decoding.
+        Two data-driven steps (from profile.json):
+        1. Per-channel denormalization: latents = latents / latents_std + latents_mean
+           (only if latents_mean/latents_std exist in profile config)
+        2. Scaling: latents = latents / scaling_factor
 
         Args:
             inputs: Input dictionary
@@ -65,21 +67,35 @@ class VAEComponentHandler(ComponentHandler):
         if phase != "post_loop":
             return inputs
 
-        # Find the latent tensor key
+        # Find the latent tensor key (4D or 5D for video)
         latent_key = self._find_latent_key(inputs)
         if not latent_key:
             return inputs
 
-        # Get scaling_factor from config (DATA-DRIVEN)
-        scaling_factor = self.config.scaling_factor
-        if scaling_factor is None or scaling_factor == 0:
+        latent = inputs[latent_key]
+        if not isinstance(latent, torch.Tensor):
             return inputs
 
-        # Apply scaling: latents / scaling_factor
-        latent = inputs[latent_key]
-        if isinstance(latent, torch.Tensor):
-            inputs[latent_key] = latent / scaling_factor
+        # Step 1: Per-channel latent denormalization (DATA-DRIVEN)
+        # Some VAEs (LTX2Video, etc.) train with normalized latent space.
+        # The pipeline must denormalize before decoding.
+        latents_mean = self.config.get("latents_mean")
+        latents_std = self.config.get("latents_std")
+        if latents_mean is not None and latents_std is not None:
+            mean_t = torch.tensor(latents_mean, device=latent.device, dtype=latent.dtype)
+            std_t = torch.tensor(latents_std, device=latent.device, dtype=latent.dtype)
+            # Reshape for broadcasting: [1, C, 1, 1] for 4D, [1, C, 1, 1, 1] for 5D
+            view_shape = [1, -1] + [1] * (latent.dim() - 2)
+            mean_t = mean_t.view(*view_shape)
+            std_inv = (1.0 / std_t).view(*view_shape)
+            latent = latent / std_inv + mean_t
 
+        # Step 2: scaling_factor (DATA-DRIVEN)
+        scaling_factor = self.config.scaling_factor
+        if scaling_factor is not None and scaling_factor != 0 and scaling_factor != 1.0:
+            latent = latent / scaling_factor
+
+        inputs[latent_key] = latent
         return inputs
 
     def get_latent_scale(self) -> int:
