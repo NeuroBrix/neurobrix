@@ -5,9 +5,29 @@ NeuroBrix - NVIDIA Common - Zero Wrapper Architecture
 """
 
 import torch
-import triton
-import triton.language as tl
 import numpy as np
+
+# Triton is optional — only available on Linux with NVIDIA GPUs
+# Imported lazily when triton kernels are actually launched (--triton mode)
+triton = None
+tl = None
+
+
+def _ensure_triton():
+    """Lazy-load triton on first use. Only needed for --triton mode."""
+    global triton, tl
+    if triton is None:
+        try:
+            import triton as _triton
+            import triton.language as _tl
+            triton = _triton
+            tl = _tl
+        except ImportError:
+            raise ImportError(
+                "Triton is required for --triton mode but is not installed. "
+                "Triton is only available on Linux. "
+                "Use default compiled mode instead (no --triton flag)."
+            )
 import json
 import zipfile
 import os
@@ -253,6 +273,9 @@ class KernelAdapter:
     """
 
     def __init__(self, family: str, vendor: str, arch: str, device: str, topology: Optional[Dict] = None, dtype: Optional[torch.dtype] = None, graph_dtype: Optional[torch.dtype] = None):
+        # Triton must be available to use KernelAdapter
+        _ensure_triton()
+
         self.family = family
         self.vendor = vendor
         self.arch = arch

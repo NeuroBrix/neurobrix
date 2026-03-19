@@ -19,12 +19,23 @@ Usage:
     result = kernel(a, b, alpha=1.0)
 """
 
-from .adapter import KernelAdapter
-from .registry import register_kernel, KERNEL_REGISTRY, KernelMeta, list_kernels
-from .resolver import get_kernel, run_op
 from .classification import OpExecution, get_execution_type, ATEN_CLASSIFICATION
 from .mapping import get_kernel_op_name, ATEN_TO_KERNEL
 from .metadata_ops import execute_metadata_op
+
+
+def __getattr__(name):
+    """Lazy-load Triton-dependent modules only when accessed."""
+    if name == "KernelAdapter":
+        from .adapter import KernelAdapter
+        return KernelAdapter
+    if name in ("register_kernel", "KERNEL_REGISTRY", "KernelMeta", "list_kernels"):
+        from . import registry
+        return getattr(registry, name)
+    if name in ("get_kernel", "run_op"):
+        from . import resolver
+        return getattr(resolver, name)
+    raise AttributeError(f"module 'neurobrix.kernels' has no attribute {name!r}")
 
 __all__ = [
     # Adapter (primary entry point)
