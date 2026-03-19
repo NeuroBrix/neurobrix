@@ -189,7 +189,7 @@ class NBXContainer:
         if source.is_dir():
             # Already extracted - scan filesystem
             for shard_file in source.rglob("*.safetensors"):
-                rel_path = str(shard_file.relative_to(source))
+                rel_path = shard_file.relative_to(source).as_posix()
                 parts = rel_path.split('/')
                 # Format: components/transformer/weights/shard_XXX.safetensors
                 if len(parts) >= 3 and parts[0] == 'components':
@@ -479,14 +479,14 @@ class NBXContainer:
                         comp_name = comp_dir.name
                         container._weight_paths[comp_name] = []
                         for weight_file in weights_dir.glob("*.safetensors"):
-                            rel_path = str(weight_file.relative_to(cache_path))
+                            rel_path = weight_file.relative_to(cache_path).as_posix()
                             container._weight_paths[comp_name].append(rel_path)
 
         # Load auxiliary files (tokenizer vocab, etc.) from cache
         for file_path in cache_path.rglob("*"):
             if not file_path.is_file():
                 continue
-            rel_path = str(file_path.relative_to(cache_path))
+            rel_path = file_path.relative_to(cache_path).as_posix()
             # Skip weights (lazy loaded by executor)
             if ".safetensors" in rel_path:
                 continue
@@ -684,7 +684,7 @@ class NBXContainer:
         weight_paths = []
         if weights_dir.exists():
             for weight_file in weights_dir.glob("*.safetensors"):
-                rel_path = str(weight_file.relative_to(cache_path))
+                rel_path = weight_file.relative_to(cache_path).as_posix()
                 weight_paths.append(rel_path)
 
         # Create ComponentData
