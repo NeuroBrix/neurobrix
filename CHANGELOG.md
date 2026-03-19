@@ -8,11 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- SANA-Video 720p support (1/10 video models): 1280x704, 81 frames, 16fps video generation
+- Per-channel latent denormalization in VAE handler for models with `latents_mean`/`latents_std` buffers (LTX2Video)
+
+### Fixed
+- Video output green screen on QuickTime: replaced mp4v (MPEG-4 Part 2) codec with H.264 via ffmpeg/libx264
+- SANA-Video VAE producing posterized output: missing pre-decode latent denormalization (`latents / std + mean`)
+- `aten::copy` using non-in-place semantics in CompiledSequence, breaking view aliasing in RoPE patterns — caused all-NaN transformer output and green screen video
+- Chatterbox s3gen vocoder symbolic dimension recovery: item() breaks symbolic propagation, registry-driven post-trace recovery restores expressions for all derived dims
+- Ambiguous seq_len symbol promotion in CompiledSequence: skip promotion when multiple symbols share the same trace_value to prevent wrong symbol binding
+- OpenAudio-S1 codec decoder producing incorrect output due to missing snake activation compute
+- OpenAudio-S1 end-to-end TTS pipeline now working (DualAR backbone → codec decoder → WAV)
+
+### Added
+- `encoder_decoder` flow handler: Whisper-style encoder → cross-attention autoregressive decoder
+- `audio_llm` flow handler: Audio-conditioned LLM (Voxtral, Granite Speech, Canary-Qwen)
+- `dual_ar` flow handler: Fish-Speech DualAR semantic token generation
+- `audio_utils.py`: Shared audio preprocessing/postprocessing utilities
 - VibeVoice-1.5B TTS pipeline: LM forward + DDPM diffusion (20-step DDIM, cosine schedule, v_prediction) + native acoustic decoder (ConvNext1d)
 - DDIMSchedulerConfig: separate config validation for DDIM/DDPM schedulers (no DPM++-specific keys required)
 - Neurobrix auto-commit hook: source changes auto-committed on each edit
 
 ### Changed
+- Audio flow decomposition: monolithic audio.py split into encoder_decoder, audio_llm, dual_ar, audio (pipeline) — each named after vendor execution pattern
+- Orpheus uses autoregressive_generation flow (it IS a Llama-3 LLM, not a custom audio flow)
 - Audio flow ZERO FALLBACK enforcement: direction, preprocessing, max_tokens, temperature, eos_token_id, decoder_start_token_id, latent_shape, decoder shapes, sample_rate all crash if missing
 - Audio flow ZERO HARDCODE cleanup: replaced all hardcoded dtypes (float32/bfloat16) with data-driven compute dtype, voicepack dims from tensor shape, LayerNorm dim from weight shape
 - Audio flow ZERO SEMANTIC cleanup: component routing by topology native_subtype field instead of component name matching, audio output type from defaults instead of token range detection, sample_rate from topology/defaults instead of hardcoded 24000
