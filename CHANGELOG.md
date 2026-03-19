@@ -7,8 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.0-alpha.9] - 2026-03-19
-
 ## [0.1.0-alpha.8] - 2026-03-19
 
 ### Added
@@ -214,8 +212,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - NeuroBrix registry at neurobrix.es
 - Support for 9 models: Sana, PixArt-Alpha, PixArt-Sigma, FLUX.2-dev, Flex.1-alpha, Janus-Pro-7B, DeepSeek-MoE-16B, Qwen3-30B-A3B, TinyLlama-1.1B
 
-[Unreleased]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a9...HEAD
-[0.1.0-alpha.9]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a8...v0.1.0a9
+[Unreleased]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a8...HEAD
 [0.1.0-alpha.8]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a7...v0.1.0a8
 [0.1.0-alpha.7]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a6...v0.1.0a7
 [0.1.0-alpha.6]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a4...v0.1.0a6
