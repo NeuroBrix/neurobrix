@@ -434,13 +434,7 @@ class InferenceEngine:
             frames_uint8 = (frames * 255).astype(np.uint8)
             T, H, W, C = frames_uint8.shape
 
-            import cv2
-            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-            writer = cv2.VideoWriter(output_path, fourcc, fps, (W, H))
-            for i in range(T):
-                frame_bgr = cv2.cvtColor(frames_uint8[i], cv2.COLOR_RGB2BGR) if C == 3 else frames_uint8[i]
-                writer.write(frame_bgr)
-            writer.release()
+            _write_video_h264(output_path, frames_uint8, fps)
             return output_path
 
         # ── IMAGE OUTPUT (3D: CHW) ──
