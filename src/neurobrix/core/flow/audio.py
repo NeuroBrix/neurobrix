@@ -2161,7 +2161,7 @@ class AudioEngine(FlowHandler):
         )
 
     def _find_model_config_path(self) -> Path:
-        """Find model config path from NBX container, then snapshot."""
+        """Find model config path from NBX container."""
         nbx_path = Path(self.ctx.nbx_path_str)
         # 1. NBX container modules/tokenizer (has preprocessor_config.json)
         for subdir in ["modules/tokenizer", "modules/processor"]:

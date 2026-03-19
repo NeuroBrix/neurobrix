@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.11] - 2026-03-19
+
+### Fixed
+- Windows path separator bug: weight loader and NBX container used `str(path)` which gives backslashes on Windows — replaced with `.as_posix()` for cross-platform path matching
+- Runtime reaching outside NBX cache for tokenizer files — removed hardcoded dev paths, engine now reads exclusively from `~/.neurobrix/cache/`
+- TTS output hardcoded to absolute Linux path — now writes to current working directory
+
 ## [0.1.0-alpha.10] - 2026-03-19
 
 ### Fixed
@@ -219,7 +226,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - NeuroBrix registry at neurobrix.es
 - Support for 9 models: Sana, PixArt-Alpha, PixArt-Sigma, FLUX.2-dev, Flex.1-alpha, Janus-Pro-7B, DeepSeek-MoE-16B, Qwen3-30B-A3B, TinyLlama-1.1B
 
-[Unreleased]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a10...HEAD
+[Unreleased]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a11...HEAD
+[0.1.0-alpha.11]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a10...v0.1.0a11
 [0.1.0-alpha.10]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a9...v0.1.0a10
 [0.1.0-alpha.9]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a7...v0.1.0a9
 [0.1.0-alpha.7]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a6...v0.1.0a7

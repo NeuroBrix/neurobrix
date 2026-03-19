@@ -122,7 +122,7 @@ class WeightLoader:
             self._cache_path = self.nbx_path
             self.use_cache = True
             self._file_list_cache = [
-                str(f.relative_to(self.nbx_path))
+                f.relative_to(self.nbx_path).as_posix()
                 for f in self.nbx_path.rglob("*")
                 if f.is_file()
             ]
@@ -157,8 +157,9 @@ class WeightLoader:
         if self._file_list_cache is None:
             if self.use_cache and self._cache_path:
                 # Get file list from cache directory
+                # Normalize to forward slashes (ZIP convention) for cross-platform matching
                 self._file_list_cache = [
-                    str(f.relative_to(self._cache_path))
+                    f.relative_to(self._cache_path).as_posix()
                     for f in self._cache_path.rglob("*")
                     if f.is_file()
                 ]

@@ -520,7 +520,7 @@ class TTSLLMEngine(FlowHandler):
         if max_val > 0:
             audio_np = audio_np / max_val
 
-        output_path = Path("/home/mlops/NeuroBrix_System/output_chatterbox.wav")
+        output_path = Path.cwd() / "output_chatterbox.wav"
         try:
             import soundfile as sf
             sf.write(str(output_path), audio_np, sample_rate)
