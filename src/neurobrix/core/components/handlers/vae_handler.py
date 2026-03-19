@@ -129,7 +129,7 @@ class VAEComponentHandler(ComponentHandler):
         """
         Find the latent tensor key in inputs.
 
-        Searches for common latent input names.
+        Searches for common latent input names. Supports 4D (image) and 5D (video).
 
         Args:
             inputs: Input dictionary
@@ -143,12 +143,12 @@ class VAEComponentHandler(ComponentHandler):
         for key in latent_keys:
             if key in inputs:
                 value = inputs[key]
-                if isinstance(value, torch.Tensor) and value.dim() == 4:
+                if isinstance(value, torch.Tensor) and value.dim() in (4, 5):
                     return key
 
-        # Search for any 4D tensor
+        # Search for any 4D/5D tensor
         for key, value in inputs.items():
-            if isinstance(value, torch.Tensor) and value.dim() == 4:
+            if isinstance(value, torch.Tensor) and value.dim() in (4, 5):
                 return key
 
         return None
