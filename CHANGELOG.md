@@ -7,136 +7,112 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.7] - 2026-03-19
+
 ### Added
-- SANA-Video 720p support (1/10 video models): 1280x704, 81 frames, 16fps video generation
+- SANA-Video 720p support (1/10 video models): 1280×704, 81 frames, 16fps video generation
 - Per-channel latent denormalization in VAE handler for models with `latents_mean`/`latents_std` buffers (LTX2Video)
 
 ### Fixed
 - Video output green screen on QuickTime: replaced mp4v (MPEG-4 Part 2) codec with H.264 via ffmpeg/libx264
 - SANA-Video VAE producing posterized output: missing pre-decode latent denormalization (`latents / std + mean`)
-- `aten::copy` using non-in-place semantics in CompiledSequence, breaking view aliasing in RoPE patterns — caused all-NaN transformer output and green screen video
-- Chatterbox s3gen vocoder symbolic dimension recovery: item() breaks symbolic propagation, registry-driven post-trace recovery restores expressions for all derived dims
+- `aten::copy` using non-in-place semantics in CompiledSequence, breaking view aliasing in RoPE patterns — caused all-NaN transformer output
 - Ambiguous seq_len symbol promotion in CompiledSequence: skip promotion when multiple symbols share the same trace_value to prevent wrong symbol binding
-- OpenAudio-S1 codec decoder producing incorrect output due to missing snake activation compute
-- OpenAudio-S1 end-to-end TTS pipeline now working (DualAR backbone → codec decoder → WAV)
+- NBX build missing per-channel VAE normalization buffers for diffusers video models
+
+## [0.1.0-alpha.6] - 2026-03-19
 
 ### Added
+- **Audio family: all 11/11 models working** — Whisper, Whisper V3 Turbo, Parakeet, Orpheus, Canary-Qwen, Kokoro-82M, VibeVoice-1.5B, Voxtral, OpenAudio-S1, Granite Speech, Chatterbox
 - `encoder_decoder` flow handler: Whisper-style encoder → cross-attention autoregressive decoder
-- `audio_llm` flow handler: Audio-conditioned LLM (Voxtral, Granite Speech, Canary-Qwen)
-- `dual_ar` flow handler: Fish-Speech DualAR semantic token generation
-- `audio_utils.py`: Shared audio preprocessing/postprocessing utilities
+- `audio_llm` flow handler: audio-conditioned LLM (Voxtral, Granite Speech, Canary-Qwen)
+- `dual_ar` flow handler: DualAR semantic token generation (OpenAudio-S1)
+- `rnnt` flow handler: frame-by-frame greedy TDT decode with NeMo-compatible mel preprocessing (Parakeet)
+- `tts_llm` flow handler: text → LM → DDPM diffusion → acoustic decoder (VibeVoice)
+- `audio_utils.py`: shared audio preprocessing/postprocessing utilities
+- Universal AudioEngine — data-driven flow handler for all audio models (STT/TTS)
+- AudioInputProcessor — routes audio preprocessing by topology (mel_spectrogram, raw_waveform, conformer)
+- AudioOutputProcessor — token decode (STT) and waveform save (TTS)
 - VibeVoice-1.5B TTS pipeline: LM forward + DDPM diffusion (20-step DDIM, cosine schedule, v_prediction) + native acoustic decoder (ConvNext1d)
-- DDIMSchedulerConfig: separate config validation for DDIM/DDPM schedulers (no DPM++-specific keys required)
-- Neurobrix auto-commit hook: source changes auto-committed on each edit
+- Kokoro-82M TTS pipeline: native text_encoder (BiLSTM), predictor (DurationEncoder + F0/N prosody), compiled decoder (iSTFTNet)
+- DDIMSchedulerConfig: separate config validation for DDIM/DDPM schedulers
+- NeMo .nemo archive support — auto-extraction and weight conversion
+- NeMo mel spectrogram preprocessing (n_fft=512, per-feature normalize, dither, preemphasis)
+- SNAC codec decode for Orpheus TTS audio token output (24kHz waveform)
+- Delta feature extraction for Conformer models
+- LLM-style text tokenization for TTS/audio models
+- CLI `--audio` argument for speech-to-text input
+- Serving daemon audio support
+- lm_head component execution in audio flow for TTS models with separate lm_head (Orpheus)
+- Universal hardware auto-detection — `--hardware` flag is now optional
+- OS-first detection: Linux, macOS, Windows support
+- CPU detection (model, cores, threads, RAM, ISA features) + CPU-only machine support
+- GPU detection for 10 vendors: NVIDIA, AMD, Intel, Apple, Tenstorrent, Moore Threads, Biren, Iluvatar, Hygon DCU, Cambricon
+- Universal TilingEngine — data-driven per-component tiling with accumulate-and-divide blending
+- Symbolic spatial dims in compiled graphs — view/reshape ops use expression trees for multi-resolution
+- ExprArg in CompiledSequence — runtime resolves symbolic expressions for view/reshape spatial dims
+- `detect_vendor_dtype()` — discovers actual weight dtype from safetensors, .pth, .ckpt, or .nemo
+- .pth, .nemo, .ckpt → safetensors weight conversion in NBX build
+- DtypeEngine `amp_enabled` wired through full compilation chain
+- Data-driven audio preprocessing from graph.json input shapes
+- Proper `LazySequentialStrategy` with mixed per-component strategies
+- `Zero3Strategy` with pinned CPU weights and non-blocking DMA for per-op transfers
+- Symbolic shape injection for expand/repeat ops (algebraic propagation from shape tracker)
 
 ### Changed
 - Audio flow decomposition: monolithic audio.py split into encoder_decoder, audio_llm, dual_ar, audio (pipeline) — each named after vendor execution pattern
 - Orpheus uses autoregressive_generation flow (it IS a Llama-3 LLM, not a custom audio flow)
 - Audio flow ZERO FALLBACK enforcement: direction, preprocessing, max_tokens, temperature, eos_token_id, decoder_start_token_id, latent_shape, decoder shapes, sample_rate all crash if missing
-- Audio flow ZERO HARDCODE cleanup: replaced all hardcoded dtypes (float32/bfloat16) with data-driven compute dtype, voicepack dims from tensor shape, LayerNorm dim from weight shape
-- Audio flow ZERO SEMANTIC cleanup: component routing by topology native_subtype field instead of component name matching, audio output type from defaults instead of token range detection, sample_rate from topology/defaults instead of hardcoded 24000
-- Kokoro-82M TTS pipeline: native text_encoder (BiLSTM), native predictor (DurationEncoder + F0/N prosody), compiled decoder (iSTFTNet)
+- Audio flow ZERO HARDCODE cleanup: replaced all hardcoded dtypes (float32/bfloat16) with data-driven compute dtype
+- Audio flow ZERO SEMANTIC cleanup: component routing by topology native_subtype instead of component name matching
+- DtypeEngine simplified to standard PyTorch AMP — removed custom overflow protection (add/sub clamping, _safe_downcast, matmul output inf clamp)
+- CompiledSequence runtime promotion respects algebraic symbolization for view/reshape ops
 - InstanceNorm affine default initialization in CompiledSequence for params not in checkpoint (weight=1, bias=0)
 - Complex number literal parsing in CompiledSequence (e.g., `1j` for iSTFT ops)
 - AdainResBlk1d support: learned skip connection (conv1x1), upsample (ConvTranspose1d + interpolate), rsqrt(2) scaling
-
-### Fixed
-- Symbolic shape aliasing: value-based symbol lookup disabled for shape lists — symbols propagate through algebraic rules only, preventing head_dim/seq_len confusion
-- Shape propagation _reduce (mean) rule handles dim as list, not just int
-- SDPA: detect undersized causal mask from trace time and use is_causal=True
-- LoRA weight matching: strip base_layer/base_model PEFT wrapper tokens before suffix matching
-
-### Added
-- lm_head component execution in audio flow for TTS models with separate lm_head (Orpheus)
-- NeMo mel spectrogram preprocessing (n_fft=512, per-feature normalize, dither, preemphasis)
-- SNAC codec decode for Orpheus TTS audio token output (24kHz waveform)
-- Symbolic shape injection for expand/repeat ops (algebraic propagation from shape tracker)
-
-### Removed
-- VAETilingStrategy (`core/components/vae_tiling.py`) — replaced by universal TilingEngine
-- EncoderDecoderAudioHandler (`core/flow/encoder_decoder_audio.py`) — replaced by universal AudioEngine
-- Whisper-specific AudioProcessor (`core/module/audio/processor.py`) — replaced by AudioInputProcessor
-- NBX builder no longer converts weight dtype — preserves vendor-original dtype faithfully
-
-### Changed
-- DtypeEngine simplified to standard PyTorch AMP — removed custom overflow protection (add/sub clamping), _safe_downcast clamping, matmul output inf clamp, and bmm FP32 override
-- bmm moved from AMP_FP32_OPS to AMP_FP16_OPS (matches PyTorch classification)
-- amp_cast_result() is now a no-op (standard PyTorch AMP does no output clamping)
-- Symbolic shape system: view/reshape ops use algebraic propagation to determine which dims are symbolic (prevents head_dim=128 aliasing with seq_len=128)
-- CompiledSequence runtime promotion respects algebraic symbolization for view/reshape ops
-
-### Fixed
-- Symbolic shape aliasing: head_dim and seq_len no longer confused when they have the same value
-- Shape propagation unflatten: recovers symbolic sub-dims when splitting a symbolic dimension
-- DtypeEngine: added batch_norm, native_batch_norm, cudnn_batch_norm, instance_norm to AMP FP32 ops — Conformer models with BatchNorm now work correctly in fp16
-
-### Added
-- Symbolic spatial dims in compiled graphs — view/reshape ops use expression trees for multi-resolution support
-- ExprArg in CompiledSequence — runtime resolves symbolic expressions for view/reshape spatial dims
-- Universal TilingEngine — data-driven per-component tiling with accumulate-and-divide blending
-- Universal AudioEngine — data-driven flow handler for all audio models (STT/TTS)
-- RNNT transducer flow (`core/flow/rnnt.py`) — frame-by-frame greedy TDT decode with NeMo-compatible mel preprocessing
-- NeMo .nemo archive support — auto-extraction and weight conversion
-- `detect_vendor_dtype()` — discovers actual weight dtype from safetensors, .pth, .ckpt, or .nemo
-- AudioInputProcessor — routes audio preprocessing by topology (mel_spectrogram, raw_waveform, conformer)
-- AudioOutputProcessor — token decode (STT) and waveform save (TTS)
-- CLI `--audio` argument for speech-to-text input
-- Serving daemon audio support
-- DtypeEngine `amp_enabled` wired through full compilation chain
-- Data-driven audio preprocessing from graph.json input shapes
-- Delta feature extraction for Conformer models
-- LLM-style text tokenization for TTS/audio models
-- .pth, .nemo, .ckpt → safetensors weight conversion in NBX build
-
-### Fixed
-- Fix symbolic shape rebinding in AR loops — `bind_from_inputs()` now clears `_runtime_values` before rebinding, preventing stale seq_len from persisting across autoregressive iterations
-- Fix view/reshape dimension collision when trace-time seq_len equals head_dim/2 — view fallback now tries all positions and prefers the one matching the input tensor's actual dimension, preventing batch dim corruption (Voxtral bmm crash)
-- Fix input tensor detection in `_get_component_input_shape()` — match by `input_name` field and `input::` prefix in addition to `type="input"` (fixes granite-speech, canary-qwen preprocessing)
-- Fix preprocessing auto-correction from graph input shape — detects mel_spectrogram vs conformer from [B, mel, frames] vs [B, frames, feat] layout when topology specifies wrong type
-- Fix frame padding/truncation for encoders with non-symbolic position encoding — pad or truncate audio features to match trace-time frame count for Conformer/NeMo relative PE
-- Fix tokenizer encode compatibility for TTS models — fallback to manual tensor wrapping when tokenizer lacks `return_tensors` support (orpheus-3b)
-- AudioEngine AR loop: forced_decoder_ids now applied during generation (not pre-filled), fixing language detection for whisper-large
-- AudioEngine AR loop: max_tokens now treated as total sequence length limit (prevents position embedding overflow)
-- Audio topology: flow.audio schema with stages built from component architecture patterns
-- Audio connections: stage-aware routing for audio flows
-- Preprocessing detection: reads mel bins and feature dimensions from model config
-
-### Fixed
-- Fix grid artifacts in diffusion VAE output (Sana 1K/4K, PixArt Sigma, PixArt Alpha) — regenerated clean model graphs, runtime TilingEngine handles tiling externally when needed
-- Fix vae_scale_factor computation for AutoencoderDC — added fallback to `encoder_block_out_channels`/`decoder_block_out_channels` when `block_out_channels` is absent
-- Regenerate clean graphs for all 9 image models (PixArt-XL, PixArt-Sigma, Sana 1024/4K, Janus-Pro-7B, Flex.1-alpha, FLUX.2-dev, Qwen3-30B-A3B)
-- Fix Prism double-capacity reduction in pipeline_parallel and block_scatter strategies — `fgp_target` was applied to already-reduced device capacities (0.95 × 0.92 = 0.874x), causing large models like Qwen3-30B to incorrectly fall back to zero3
-- Fix SDPA multi-device crash in lazy_sequential — kwargs containing list/tuple tensors (attn_bias) were not moved to target device during cross-GPU transfers
-- Eliminate redundant DtypeEngine clamp/copy operations — skip clamp when source dtype matches target, skip output clamp when no input downcast occurred, skip _to_copy when dtype already correct
-- Eliminate weight transpose ops at compile time — pre-transpose weight tensors in bind_weights, removing ~5K aten::t ops per token from the hot loop
-
-### Added
-- Universal hardware auto-detection — `--hardware` flag is now optional
-- OS-first detection architecture: Linux, macOS, and Windows support
-- CPU detection in hardware profiles (model, cores, threads, RAM, instruction set features)
-- CPU-only machine support for laptops, VMs, and edge devices without GPU
-- GPU detection for 10 vendors: NVIDIA, AMD, Intel, Apple, Tenstorrent, Moore Threads, Biren, Iluvatar, Hygon DCU, Cambricon
-- Data-driven CPU optimization: thread pinning, DNNL ISA selection, dtype validation from profile
-- CPU RAM budget validation for zero3/lazy_sequential offload strategies
-- Smart `pin_memory` decision based on available RAM vs weight size
-- Proper `LazySequentialStrategy` with mixed per-component strategies (no longer a `SingleGPUStrategy` alias)
-- `Zero3Strategy` now pins CPU weights and uses non-blocking DMA for per-op transfers
-- Dedicated hardware profiles documentation with full YAML field reference
-
-### Changed
 - Hardware profiles standardized to clean block-style YAML format
 - `PrismProfile.cpu` is now a `CPUConfig` dataclass (replaces `cpu_memory_gb: float`)
 - `ExecutionPlan` carries `cpu_ram_mb` for runtime offload decisions
 - CompiledSequence multi-device transfers use `non_blocking=True` for pinned CPU tensors
-- All docs updated to reflect `--hardware` as optional
-
-### Removed
-- Dead `Zero3Executor` block-level code (incompatible with CompiledSequence pre-compiled ops)
-- `_execute_zero3_subcomponent()` bypass in executor (replaced by strategy dispatch)
 
 ### Fixed
+- OpenAudio-S1 codec decoder producing incorrect output due to missing snake activation compute
+- OpenAudio-S1 end-to-end TTS pipeline now working (DualAR backbone → codec decoder → WAV)
+- Chatterbox s3gen vocoder symbolic dimension recovery: item() breaks symbolic propagation, registry-driven post-trace recovery restores expressions
+- Symbolic shape aliasing: value-based symbol lookup disabled for shape lists — symbols propagate through algebraic rules only, preventing head_dim/seq_len confusion
+- Shape propagation _reduce (mean) rule handles dim as list, not just int
+- SDPA: detect undersized causal mask from trace time and use is_causal=True
+- LoRA weight matching: strip base_layer/base_model PEFT wrapper tokens before suffix matching
+- Fix symbolic shape rebinding in AR loops — `bind_from_inputs()` clears `_runtime_values` before rebinding
+- Fix view/reshape dimension collision when trace-time seq_len equals head_dim/2 — prevents batch dim corruption (Voxtral bmm crash)
+- Fix input tensor detection in `_get_component_input_shape()` — match by `input_name` field and `input::` prefix
+- Fix preprocessing auto-correction from graph input shape — detects mel_spectrogram vs conformer from layout
+- Fix frame padding/truncation for encoders with non-symbolic position encoding
+- Fix tokenizer encode compatibility for TTS models — fallback to manual tensor wrapping (orpheus-3b)
+- AudioEngine AR loop: forced_decoder_ids applied during generation, fixing language detection for whisper-large
+- AudioEngine AR loop: max_tokens treated as total sequence length limit (prevents position embedding overflow)
+- Fix grid artifacts in diffusion VAE output (Sana 1K/4K, PixArt Sigma/Alpha) — clean model graphs + runtime TilingEngine
+- Fix vae_scale_factor computation for AutoencoderDC — fallback to encoder/decoder_block_out_channels
+- Fix Prism double-capacity reduction in pipeline_parallel and block_scatter strategies
+- Fix SDPA multi-device crash in lazy_sequential — kwargs with list/tuple tensors not moved to target device
+- Eliminate redundant DtypeEngine clamp/copy operations
+- Eliminate weight transpose ops at compile time — pre-transpose in bind_weights
+- DtypeEngine: added batch_norm, instance_norm to AMP FP32 ops — Conformer models work in fp16
 - CUDA fork error when running `neurobrix serve` without `--hardware`
 - NVLink bandwidth calculation (300 GB/s correct, was 100 GB/s)
+
+### Removed
+- VAETilingStrategy — replaced by universal TilingEngine
+- EncoderDecoderAudioHandler — replaced by universal AudioEngine
+- Whisper-specific AudioProcessor — replaced by AudioInputProcessor
+- NBX builder no longer converts weight dtype — preserves vendor-original dtype faithfully
+- Dead `Zero3Executor` block-level code
+- `_execute_zero3_subcomponent()` bypass in executor
+
+## [0.1.0-alpha.5] - 2026-03-10
+
+### Added
+- Neurobrix auto-commit hook: source changes auto-committed on each edit
 
 ## [0.1.0-alpha.4] - 2026-02-26
 
@@ -219,7 +195,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - NeuroBrix registry at neurobrix.es
 - Support for 9 models: Sana, PixArt-Alpha, PixArt-Sigma, FLUX.2-dev, Flex.1-alpha, Janus-Pro-7B, DeepSeek-MoE-16B, Qwen3-30B-A3B, TinyLlama-1.1B
 
-[Unreleased]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a4...HEAD
+[Unreleased]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a7...HEAD
+[0.1.0-alpha.7]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a6...v0.1.0a7
+[0.1.0-alpha.6]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a5...v0.1.0a6
+[0.1.0-alpha.5]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a4...v0.1.0a5
 [0.1.0-alpha.4]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a3...v0.1.0a4
 [0.1.0-alpha.3]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a2...v0.1.0a3
 [0.1.0-alpha.2]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a1...v0.1.0a2
