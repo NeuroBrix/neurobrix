@@ -2,14 +2,15 @@
 # NeuroBrix ZERO HARDCODE: All video family models share these defaults
 
 output_processing:
-  layout: "TCHW"             # Time-Channel-Height-Width ordering
-  time_axis: 1               # Temporal dimension at position 1
-  channel_axis: 2            # Channels at dimension 2
+  layout: "CTHW"             # Channel-Time-Height-Width (diffusers standard: [B,C,T,H,W])
+  channel_axis: 1            # Channels at dimension 1 (after batch)
+  time_axis: 2               # Temporal dimension at position 2
   batch_axis: 0              # Batch at dimension 0
   valid_channels: [3]        # RGB video (no alpha typically)
   bit_depth: 8               # 8-bit output per channel
   fps: 24                    # Default frame rate
   output_range: [-1.0, 1.0]  # Model output range
+  output_format: "mp4"       # Default output file format
 
 defaults:
   num_inference_steps: 50    # Video models balance quality/speed

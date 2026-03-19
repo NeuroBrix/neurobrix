@@ -425,9 +425,12 @@ class IterativeProcessHandler(FlowHandler):
         if not post_loop:
             return
 
-        # Release loop component weights
-        for comp_name in loop_components:
-            self._unload_component(comp_name)
+        # Release loop + pre_loop component weights to free VRAM for VAE
+        # Force-unload even in eager mode — within a single request, non-active
+        # components must yield memory. They reload on the next request.
+        pre_loop = self.ctx.pkg.topology.get("flow", {}).get("pre_loop", [])
+        for comp_name in list(loop_components) + pre_loop:
+            self._unload_component(comp_name, force=True)
 
         # Get state variable for validation
         loop_def = self.ctx.pkg.topology.get("flow", {}).get("loop", {})
@@ -465,21 +468,20 @@ class IterativeProcessHandler(FlowHandler):
         for comp_name in post_loop:
             self._unload_component(comp_name)
 
-    def _unload_component(self, comp_name: str) -> None:
+    def _unload_component(self, comp_name: str, force: bool = False) -> None:
         """
         Unload component weights and clear memory.
 
-        Respects loading_mode from Prism plan:
-        - "eager": Skip unload (weights stay in memory)
-        - "lazy": Actually unload weights
+        Args:
+            comp_name: Component to unload
+            force: If True, unload even in eager mode (used by post_loop
+                   to free VRAM for VAE — weights reload on next request)
         """
-        # Check loading_mode from Prism plan (DATA-DRIVEN)
-        loading_mode = getattr(self.ctx.plan, 'loading_mode', 'lazy')
-        if loading_mode == "eager":
-            # Skip unload in eager mode - weights stay in memory
-            return
+        if not force:
+            loading_mode = getattr(self.ctx.plan, 'loading_mode', 'lazy')
+            if loading_mode == "eager":
+                return
 
-        # Lazy mode: actually unload
         executor = self.ctx.executors.get(comp_name)
         if executor:
             executor.unload_weights()
