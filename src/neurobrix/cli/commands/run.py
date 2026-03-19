@@ -18,6 +18,32 @@ from neurobrix import __version__
 from neurobrix.cli.utils import find_model
 
 
+def _write_video_h264(output_path: str, frames_uint8, fps: float):
+    """Write video as H.264/mp4 using ffmpeg (QuickTime/browser compatible)."""
+    import subprocess
+    import imageio_ffmpeg
+    T, H, W, C = frames_uint8.shape
+    ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+    cmd = [
+        ffmpeg_exe, "-y",
+        "-f", "rawvideo",
+        "-vcodec", "rawvideo",
+        "-s", f"{W}x{H}",
+        "-pix_fmt", "rgb24",
+        "-r", str(fps),
+        "-i", "-",
+        "-vcodec", "libx264",
+        "-pix_fmt", "yuv420p",
+        "-crf", "18",
+        "-preset", "medium",
+        output_path,
+    ]
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    proc.stdin.write(frames_uint8.tobytes())
+    proc.stdin.close()
+    proc.wait()
+
+
 def _try_warm_path(args) -> bool:
     """Attempt warm-path execution via running daemon. Returns True if handled."""
     from neurobrix.serving.client import DaemonClient
