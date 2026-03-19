@@ -17,7 +17,6 @@ Functions:
 - load_tokenizer_from_nbx: Load tokenizer from NBX container
 """
 
-import sentencepiece as spm
 from typing import List, Optional, Dict, Any, TYPE_CHECKING
 from io import BytesIO
 from pathlib import Path
@@ -51,6 +50,7 @@ class SPTokenizer:
         Raises:
             RuntimeError: If required config values are missing
         """
+        import sentencepiece as spm
         self._sp = spm.SentencePieceProcessor()
 
         # SentencePiece requires file path, use temp file
