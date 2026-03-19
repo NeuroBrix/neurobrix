@@ -1,8 +1,12 @@
 """
-DaemonClient — Connect to running ServingDaemon via Unix socket.
+DaemonClient — Connect to running ServingDaemon via IPC.
 
 Provides static is_running() check and request/response helpers.
 Used by CLI commands (chat, run warm-path) to communicate with daemon.
+
+IPC transport:
+  - Unix/macOS: AF_UNIX domain socket
+  - Windows: AF_INET TCP on localhost:19384
 """
 
 import os
@@ -11,6 +15,7 @@ from typing import Any, Dict, Optional
 
 from neurobrix.serving.protocol import (
     SOCKET_PATH, PID_PATH,
+    IPC_FAMILY, IPC_ADDRESS, IS_WINDOWS,
     send_message, recv_message,
     make_request,
 )
@@ -18,7 +23,7 @@ from neurobrix.serving.protocol import (
 
 class DaemonClient:
     """
-    Client for communicating with ServingDaemon over Unix socket.
+    Client for communicating with ServingDaemon over IPC socket.
 
     Usage:
         if DaemonClient.is_running():
@@ -33,8 +38,12 @@ class DaemonClient:
 
     @staticmethod
     def is_running() -> bool:
-        """Check if daemon is alive: PID file exists, process running, socket exists."""
-        if not PID_PATH.exists() or not SOCKET_PATH.exists():
+        """Check if daemon is alive: PID file exists and process running."""
+        if not PID_PATH.exists():
+            return False
+
+        # Unix: also check socket file exists
+        if not IS_WINDOWS and (SOCKET_PATH is None or not SOCKET_PATH.exists()):
             return False
 
         try:
@@ -56,22 +65,35 @@ class DaemonClient:
 
     def connect(self) -> None:
         """Connect to daemon socket."""
-        if not SOCKET_PATH.exists():
-            raise RuntimeError(
-                "ZERO FALLBACK: Daemon socket not found. "
-                "Start daemon first: neurobrix serve --model <name> --hardware <profile>"
-            )
-
-        self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        try:
-            self._sock.connect(str(SOCKET_PATH))
-        except ConnectionRefusedError:
-            self._sock.close()
-            self._sock = None
-            raise RuntimeError(
-                "ZERO FALLBACK: Daemon socket exists but connection refused. "
-                "Daemon may have crashed. Check with: neurobrix serve"
-            )
+        if IS_WINDOWS:
+            # TCP: try connecting to localhost port
+            self._sock = socket.socket(IPC_FAMILY, socket.SOCK_STREAM)
+            try:
+                self._sock.connect(IPC_ADDRESS)
+            except (ConnectionRefusedError, OSError):
+                self._sock.close()
+                self._sock = None
+                raise RuntimeError(
+                    "ZERO FALLBACK: Cannot connect to daemon on localhost:19384. "
+                    "Start daemon first: neurobrix serve --model <name>"
+                )
+        else:
+            # Unix domain socket
+            if SOCKET_PATH is None or not SOCKET_PATH.exists():
+                raise RuntimeError(
+                    "ZERO FALLBACK: Daemon socket not found. "
+                    "Start daemon first: neurobrix serve --model <name>"
+                )
+            self._sock = socket.socket(IPC_FAMILY, socket.SOCK_STREAM)
+            try:
+                self._sock.connect(str(SOCKET_PATH))
+            except ConnectionRefusedError:
+                self._sock.close()
+                self._sock = None
+                raise RuntimeError(
+                    "ZERO FALLBACK: Daemon socket exists but connection refused. "
+                    "Daemon may have crashed. Check with: neurobrix serve"
+                )
 
     def close(self) -> None:
         """Close connection."""

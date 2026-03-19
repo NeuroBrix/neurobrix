@@ -1,11 +1,14 @@
 """
 ServingDaemon — Long-lived process that holds the InferenceEngine.
 
-Listens on Unix domain socket for JSON-RPC requests.
+Listens on IPC socket for JSON-RPC requests.
 Single-user, single-connection for V1.
 
-Supports background daemonization: fork to background, parent waits
-for ready signal, prints status, exits. Single terminal workflow:
+Supports background daemonization:
+  - Unix/macOS: fork to background, parent waits for ready signal
+  - Windows: subprocess.Popen with CREATE_NEW_PROCESS_GROUP
+
+Single terminal workflow:
     neurobrix serve → neurobrix chat → neurobrix stop
 
 ZERO HARDCODE: Model name and hardware profile from CLI args.
@@ -21,6 +24,7 @@ from typing import Any, Dict, Optional
 from neurobrix.serving.engine import InferenceEngine
 from neurobrix.serving.protocol import (
     SOCKET_PATH, PID_PATH, LOG_PATH, DAEMON_DIR,
+    IPC_FAMILY, IPC_ADDRESS, IS_WINDOWS,
     send_message, recv_message,
     make_response,
 )
@@ -50,18 +54,89 @@ class ServingDaemon:
         Load model and start serving.
 
         If foreground=True, runs in current process (blocks terminal).
-        If foreground=False (default), forks to background and signals parent when ready.
+        If foreground=False (default):
+          - Unix/macOS: fork to background, parent waits for ready signal
+          - Windows: subprocess.Popen with CREATE_NEW_PROCESS_GROUP
         """
         if not foreground:
-            self._daemonize()
-            # After _daemonize(), we are in the child process
-            # stdout/stderr redirected to LOG_PATH
+            if IS_WINDOWS:
+                self._daemonize_windows()
+                return  # Parent returns after spawning child
+            else:
+                self._daemonize_unix()
+                # After _daemonize_unix(), we are in the child process
+                # stdout/stderr redirected to LOG_PATH
 
         self._start_serving()
 
-    def _daemonize(self) -> None:
+    def _daemonize_windows(self) -> None:
         """
-        Fork to background. Parent waits for ready signal, then exits.
+        Windows background daemon: spawn a detached subprocess running
+        'neurobrix serve --foreground' with stdout/stderr → LOG_PATH.
+        Parent polls a ready-file until the child signals ready or fails.
+        """
+        import subprocess
+        import time
+
+        DAEMON_DIR.mkdir(parents=True, exist_ok=True)
+        ready_path = DAEMON_DIR / "daemon.ready"
+        if ready_path.exists():
+            ready_path.unlink()
+
+        # Build the command to re-execute ourselves in foreground mode
+        cmd = [
+            sys.executable, "-m", "neurobrix", "serve",
+            "--model", self._engine.model_name,
+            "--foreground",
+        ]
+
+        log_file = open(str(LOG_PATH), "w")
+
+        # CREATE_NEW_PROCESS_GROUP detaches from parent's console signals
+        CREATE_NEW_PROCESS_GROUP = 0x00000200
+        DETACHED_PROCESS = 0x00000008
+        proc = subprocess.Popen(
+            cmd,
+            stdout=log_file,
+            stderr=log_file,
+            stdin=subprocess.DEVNULL,
+            creationflags=CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS,
+        )
+
+        print(f"[Serve] Loading model in background (PID {proc.pid})...")
+        print(f"[Serve] Log: {LOG_PATH}")
+
+        # Poll for ready signal (PID file written by child after model load)
+        deadline = time.time() + 300  # 5 min max for model loading
+        while time.time() < deadline:
+            # Check if child died
+            ret = proc.poll()
+            if ret is not None:
+                print(f"[Serve] Daemon process exited with code {ret}. Check {LOG_PATH}")
+                sys.exit(1)
+
+            # Check for ready signal
+            if ready_path.exists():
+                msg = ready_path.read_text().strip()
+                ready_path.unlink()
+                if msg.startswith("ready:"):
+                    info = msg[6:].strip()
+                    print(f"[Serve] {info}")
+                    print(f"[Serve] Use 'neurobrix chat' to connect")
+                    print(f"[Serve] Use 'neurobrix stop' to shutdown")
+                    return
+                elif msg.startswith("error:"):
+                    print(f"[Serve] Failed: {msg[6:].strip()}")
+                    sys.exit(1)
+
+            time.sleep(0.5)
+
+        print(f"[Serve] Timed out waiting for daemon. Check {LOG_PATH}")
+        sys.exit(1)
+
+    def _daemonize_unix(self) -> None:
+        """
+        Unix/macOS: fork to background. Parent waits for ready signal, then exits.
         Child continues execution with stdout/stderr → LOG_PATH.
 
         Uses a pipe for clean ready signaling (no polling).
@@ -123,7 +198,15 @@ class ServingDaemon:
 
     def _signal_ready(self, message: str) -> None:
         """Signal parent process that daemon is ready (or failed)."""
-        if self._ready_fd is not None:
+        if IS_WINDOWS:
+            # Windows: write ready signal to a file (parent polls)
+            ready_path = DAEMON_DIR / "daemon.ready"
+            try:
+                ready_path.write_text(message)
+            except OSError:
+                pass
+        elif self._ready_fd is not None:
+            # Unix: write to pipe fd
             try:
                 os.write(self._ready_fd, message.encode())
                 os.close(self._ready_fd)
@@ -140,8 +223,8 @@ class ServingDaemon:
         # Ensure daemon directory exists
         DAEMON_DIR.mkdir(parents=True, exist_ok=True)
 
-        # Clean stale socket
-        if SOCKET_PATH.exists():
+        # Clean stale socket (Unix only — TCP has no file)
+        if SOCKET_PATH is not None and SOCKET_PATH.exists():
             SOCKET_PATH.unlink()
 
         # Write PID
@@ -151,9 +234,14 @@ class ServingDaemon:
             # Load model (weights to VRAM)
             self._engine.load()
 
-            # Bind socket
-            self._server_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            self._server_socket.bind(str(SOCKET_PATH))
+            # Bind socket — platform-adaptive
+            self._server_socket = socket.socket(IPC_FAMILY, socket.SOCK_STREAM)
+            if IS_WINDOWS:
+                # Allow port reuse on Windows (prevents "address already in use" after crash)
+                self._server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                self._server_socket.bind(IPC_ADDRESS)
+            else:
+                self._server_socket.bind(str(SOCKET_PATH))
             self._server_socket.listen(1)
             self._server_socket.settimeout(self._idle_timeout)
 
@@ -165,7 +253,8 @@ class ServingDaemon:
             )
             self._signal_ready(ready_msg)
 
-            print(f"\n[Daemon] Listening on {SOCKET_PATH}")
+            listen_addr = IPC_ADDRESS if IS_WINDOWS else SOCKET_PATH
+            print(f"\n[Daemon] Listening on {listen_addr}")
             print(f"[Daemon] Idle timeout: {self._idle_timeout}s")
 
             self._running = True
@@ -288,7 +377,8 @@ class ServingDaemon:
             except Exception:
                 pass
 
-        if SOCKET_PATH.exists():
+        # Unix socket file cleanup (TCP has no file to unlink)
+        if SOCKET_PATH is not None and SOCKET_PATH.exists():
             try:
                 SOCKET_PATH.unlink()
             except Exception:
