@@ -59,16 +59,48 @@ Other tools solve one piece of the puzzle. NeuroBrix solves the whole puzzle.
 
 ## Installation
 
+### Step 1: Install PyTorch with CUDA
+
+NeuroBrix requires **PyTorch with CUDA support**. The default `torch` package on PyPI is **CPU-only** and will not work with GPU inference. You must install the CUDA-enabled version from PyTorch's own package index:
+
+```bash
+# For CUDA 12.4 (RTX 30xx, 40xx, A100, H100)
+pip install torch --index-url https://download.pytorch.org/whl/cu124
+
+# For CUDA 12.1
+pip install torch --index-url https://download.pytorch.org/whl/cu121
+
+# For CUDA 11.8 (older GPUs like V100)
+pip install torch --index-url https://download.pytorch.org/whl/cu118
+```
+
+> **Why is this needed?** PyTorch CUDA wheels are ~2.5 GB and platform-specific, so they are hosted on PyTorch's own servers, not on PyPI. If you skip this step and install NeuroBrix directly, pip will pull the CPU-only `torch` from PyPI, and you will get: `AssertionError: Torch not compiled with CUDA enabled`.
+
+Verify CUDA is available:
+```bash
+python -c "import torch; print(torch.cuda.is_available())"  # Should print: True
+```
+
+### Step 2: Install NeuroBrix
+
 ```bash
 pip install neurobrix
 ```
 
-With Triton kernel acceleration:
+With Triton kernel acceleration (Linux only):
 ```bash
-pip install neurobrix[cuda]
+pip install neurobrix[triton]
 ```
 
-**Requirements:** Python 3.10+ / PyTorch 2.0+ with CUDA / NVIDIA GPU
+### Platform Support
+
+| Platform | GPU Support | Notes |
+|----------|-------------|-------|
+| **Linux** | CUDA, Triton kernels | Full support, recommended for production |
+| **Windows** | CUDA | Fully supported since v0.1.0a9. Triton not available on Windows |
+| **macOS** | CPU only | MPS/Metal support planned |
+
+**Requirements:** Python 3.10+ / PyTorch 2.1+ with CUDA / NVIDIA GPU
 
 ---
 
@@ -252,8 +284,6 @@ NeuroBrix is in active development. The engine is real, the models run, and the 
 
 **Coming next:**
 
-- **Video generation** — CogVideoX and beyond
-- **Audio / TTS / STT** — Whisper, voice synthesis
 - **Vision-Language Models** — multimodal understanding at scale
 - **Upscalers** — super-resolution models
 - **3D generation** — mesh and NeRF models
