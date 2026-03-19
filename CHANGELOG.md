@@ -109,11 +109,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dead `Zero3Executor` block-level code
 - `_execute_zero3_subcomponent()` bypass in executor
 
-## [0.1.0-alpha.5] - 2026-03-10
-
-### Added
-- Neurobrix auto-commit hook: source changes auto-committed on each edit
-
 ## [0.1.0-alpha.4] - 2026-02-26
 
 ### Added
@@ -197,8 +192,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [Unreleased]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a7...HEAD
 [0.1.0-alpha.7]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a6...v0.1.0a7
-[0.1.0-alpha.6]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a5...v0.1.0a6
-[0.1.0-alpha.5]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a4...v0.1.0a5
+[0.1.0-alpha.6]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a4...v0.1.0a6
 [0.1.0-alpha.4]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a3...v0.1.0a4
 [0.1.0-alpha.3]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a2...v0.1.0a3
 [0.1.0-alpha.2]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a1...v0.1.0a2
