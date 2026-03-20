@@ -39,9 +39,7 @@ def _write_video_h264(output_path: str, frames_uint8, fps: float):
         output_path,
     ]
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    proc.stdin.write(frames_uint8.tobytes())
-    proc.stdin.close()
-    proc.wait()
+    proc.communicate(input=frames_uint8.tobytes())
 
 
 def _try_warm_path(args) -> bool:
