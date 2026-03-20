@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.12] - 2026-03-20
+
+### Fixed
+- Windows: `os.kill(pid, 0)` crash — replaced with `ctypes.windll.kernel32.OpenProcess()` for daemon process check
+- Windows: `signal.SIGTERM` handler registration crash — guarded with `hasattr(signal, 'SIGTERM')`
+- Windows: ffmpeg video pipe deadlock — replaced manual `stdin.write()`/`close()`/`wait()` with `communicate()`
+
 ## [0.1.0-alpha.11] - 2026-03-19
 
 ### Fixed
@@ -226,7 +233,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - NeuroBrix registry at neurobrix.es
 - Support for 9 models: Sana, PixArt-Alpha, PixArt-Sigma, FLUX.2-dev, Flex.1-alpha, Janus-Pro-7B, DeepSeek-MoE-16B, Qwen3-30B-A3B, TinyLlama-1.1B
 
-[Unreleased]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a11...HEAD
+[Unreleased]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a12...HEAD
+[0.1.0-alpha.12]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a11...v0.1.0a12
 [0.1.0-alpha.11]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a10...v0.1.0a11
 [0.1.0-alpha.10]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a9...v0.1.0a10
 [0.1.0-alpha.9]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a7...v0.1.0a9

@@ -112,12 +112,16 @@ def cmd_stop(args):
                 return
             time.sleep(0.2)
 
-    # Step 2: SIGTERM (3s timeout)
+    # Step 2: Graceful termination (3s timeout)
     if pid is not None:
-        print("[Stop] Sending SIGTERM...")
+        print("[Stop] Sending termination signal...")
         try:
-            os.kill(pid, signal.SIGTERM)
-        except ProcessLookupError:
+            if IS_WINDOWS:
+                # Windows: SIGTERM via os.kill calls TerminateProcess
+                os.kill(pid, signal.SIGTERM)
+            else:
+                os.kill(pid, signal.SIGTERM)
+        except (ProcessLookupError, OSError):
             _cleanup_daemon_files(SOCKET_PATH, PID_PATH)
             print("[Stop] Daemon already exited.")
             return
@@ -131,21 +135,14 @@ def cmd_stop(args):
 
     # Step 3: Force kill (platform-adaptive)
     if pid is not None and DaemonClient.is_running():
+        import subprocess as _sp
+        print("[Stop] Daemon unresponsive — force terminating...")
         if IS_WINDOWS:
-            # Windows: no SIGKILL — use taskkill /F (force terminate)
-            import subprocess
-            print("[Stop] Daemon unresponsive — force terminating...")
             try:
-                subprocess.run(
-                    ["taskkill", "/F", "/PID", str(pid)],
-                    capture_output=True,
-                )
+                _sp.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
             except FileNotFoundError:
-                # taskkill not found — try TerminateProcess via os.kill
                 os.kill(pid, signal.SIGTERM)
         else:
-            # Unix/macOS: SIGKILL
-            print("[Stop] Daemon unresponsive — sending SIGKILL...")
             try:
                 os.kill(pid, signal.SIGKILL)
             except ProcessLookupError:

@@ -216,9 +216,10 @@ class ServingDaemon:
 
     def _start_serving(self) -> None:
         """Load model, bind socket, enter serve loop."""
-        # Signal handling
-        signal.signal(signal.SIGTERM, self._handle_signal)
+        # Signal handling (SIGINT works on all platforms, SIGTERM on Unix only)
         signal.signal(signal.SIGINT, self._handle_signal)
+        if hasattr(signal, 'SIGTERM'):
+            signal.signal(signal.SIGTERM, self._handle_signal)
 
         # Ensure daemon directory exists
         DAEMON_DIR.mkdir(parents=True, exist_ok=True)
