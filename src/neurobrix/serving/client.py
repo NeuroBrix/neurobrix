@@ -48,9 +48,20 @@ class DaemonClient:
 
         try:
             pid = int(PID_PATH.read_text().strip())
-            os.kill(pid, 0)  # Signal 0 = check if process exists
-            return True
-        except (ValueError, ProcessLookupError, PermissionError):
+            if IS_WINDOWS:
+                # Windows: use ctypes to check if process exists
+                import ctypes
+                kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+                PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+                handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+                if handle:
+                    kernel32.CloseHandle(handle)
+                    return True
+                return False
+            else:
+                os.kill(pid, 0)  # Unix: signal 0 = check if process exists
+                return True
+        except (ValueError, ProcessLookupError, PermissionError, OSError):
             return False
 
     @staticmethod
