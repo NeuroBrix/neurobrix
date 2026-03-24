@@ -65,12 +65,24 @@ def cmd_import(args):
     file_size = int(model_data.get("fileSize", 0))
     category = model_data.get("category", "unknown")
     description = model_data.get("description", "")
+    license_id = model_data.get("license", "unknown")
 
     print(f"   Category: {category}")
     if description:
         print(f"   Description: {description[:80]}")
     if file_size > 0:
         print(f"   Size: {format_size(file_size)}")
+    print(f"   License: {license_id}")
+
+    # License acceptance check
+    if license_id and license_id != "unknown":
+        from neurobrix.cli.licenses import is_accepted, prompt_license_acceptance
+
+        if not is_accepted(name):
+            vendor = model_data.get("org", org)
+            accepted = prompt_license_acceptance(name, license_id, vendor=vendor)
+            if not accepted:
+                sys.exit(1)
 
     # 2. Get signed download URL
     print(f"\n[2/4] Getting download URL...")
@@ -214,8 +226,10 @@ def cmd_list(args):
                     with open(manifest_path) as f:
                         manifest = json.load(f)
                     family = manifest.get("family", "?")
+                    license_id = manifest.get("license", "")
                 except (json.JSONDecodeError, OSError):
                     family = "?"
+                    license_id = ""
 
                 total_size = sum(
                     f.stat().st_size for f in model_dir.rglob("*") if f.is_file()
@@ -229,6 +243,7 @@ def cmd_list(args):
                     "family": family,
                     "size": total_size,
                     "store": has_store,
+                    "license": license_id,
                 })
 
     # Also show store-only entries (downloaded but not extracted)
@@ -245,11 +260,12 @@ def cmd_list(args):
         return
 
     if models:
-        print(f"\n{'MODEL':<35} {'FAMILY':<10} {'SIZE':>10} {'STORE':>8}")
-        print("-" * 66)
+        print(f"\n{'MODEL':<35} {'FAMILY':<10} {'SIZE':>10} {'LICENSE':>16} {'STORE':>8}")
+        print("-" * 82)
         for m in models:
             store_str = ".nbx" if m["store"] else "-"
-            print(f"{m['name']:<35} {m['family']:<10} {format_size(m['size']):>10} {store_str:>8}")
+            lic = m.get("license", "") or "-"
+            print(f"{m['name']:<35} {m['family']:<10} {format_size(m['size']):>10} {lic:>16} {store_str:>8}")
         print(f"\nInstalled: {len(models)} model(s)")
 
     if store_only:
@@ -462,18 +478,19 @@ def cmd_hub(args):
                 installed.add(d.name)
 
     # Display
-    print(f"\n{'MODEL':<30} {'CATEGORY':<10} {'SIZE':>10} {'DOWNLOADS':>10}  STATUS")
-    print("-" * 82)
+    print(f"\n{'MODEL':<30} {'CATEGORY':<10} {'SIZE':>10} {'LICENSE':>16} {'DL':>6}  STATUS")
+    print("-" * 90)
 
     for rm in remote_models:
         slug = rm.get("slug", f"{rm.get('org', '?')}/{rm.get('name', '?')}")
         category = rm.get("category", "?")
         file_size = int(rm.get("fileSize", 0))
         downloads = rm.get("downloadCount", 0)
+        lic = rm.get("license", "-") or "-"
         name = rm.get("name", slug.split("/")[-1])
         status = "installed" if name in installed else ""
 
-        print(f"{slug:<30} {category:<10} {format_size(file_size):>10} {downloads:>10}  {status}")
+        print(f"{slug:<30} {category:<10} {format_size(file_size):>10} {lic:>16} {downloads:>6}  {status}")
 
     print(f"\nTotal: {total_count} model(s) on registry")
 
