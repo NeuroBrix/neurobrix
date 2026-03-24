@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.16] - 2026-03-24
+
+### Added
+- License system for model distribution — license acceptance flow in `neurobrix import`
+- License display in `neurobrix list` and `neurobrix hub` commands
+- License metadata stored in NBX manifest.json (data-driven from model registry)
+
+### Fixed
+- Fix Sana 4K model crash at non-native resolutions caused by incorrect symbolic dimension binding in timestep embedding
+
 ## [0.1.0-alpha.14] - 2026-03-24
 
 ### Fixed
@@ -266,7 +276,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - NeuroBrix registry at neurobrix.es
 - Support for 9 models: Sana, PixArt-Alpha, PixArt-Sigma, FLUX.2-dev, Flex.1-alpha, Janus-Pro-7B, DeepSeek-MoE-16B, Qwen3-30B-A3B, TinyLlama-1.1B
 
-[Unreleased]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a14...HEAD
+[Unreleased]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a16...HEAD
+[0.1.0-alpha.16]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a15...v0.1.0a16
 [0.1.0-alpha.14]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a13...v0.1.0a14
 [0.1.0-alpha.13]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a12...v0.1.0a13
 [0.1.0-alpha.12]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a11...v0.1.0a12

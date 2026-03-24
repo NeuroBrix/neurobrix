@@ -502,7 +502,7 @@ The NeuroBrix Hub hosts pre-built `.nbx` packages for convenience. These package
 
 Copyright 2025-2026 Hocine Benkelaya
 
-NeuroBrix is developed by [**WizWorks OÜ**](https://wizworks.io), a property of [**Neural Networks Holding LTD**](https://neuralnetworkholding.com).
+NeuroBrix is managed by [**WizWorks OÜ**](https://wizworks.io), a property of [**Neural Networks Holding LTD**](https://neuralnetworkholding.com).
 
 The Apache 2.0 license covers the NeuroBrix engine, CLI, runtime, and NBX format tooling. **It does not cover the model weights** executed by the engine — those are governed by their respective licenses as listed in the [Supported Models](#supported-models) section.
 
