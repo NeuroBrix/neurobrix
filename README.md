@@ -130,6 +130,98 @@ neurobrix stop
 
 ---
 
+## Usage by Model Family
+
+Each model family uses different CLI flags and defaults. Hardware is always auto-detected.
+
+### Image Generation
+
+```bash
+neurobrix run --model Sana_1600M_4Kpx_BF16 \
+    --prompt "A sunset over mountains" \
+    --steps 20 --cfg 5.0 --seed 42 \
+    --height 1024 --width 1024 \
+    --output sunset.png
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--prompt` | Text description of the image to generate | Required |
+| `--steps` | Number of diffusion steps (more = higher quality, slower) | Model-dependent (20-50) |
+| `--cfg` | Classifier-free guidance scale (higher = closer to prompt) | Model-dependent (4.5-7.5) |
+| `--height` / `--width` | Output resolution in pixels | Model-dependent (1024-4096) |
+| `--seed` | Random seed for reproducible results | Random |
+| `--output` | Output file path | `output.png` |
+
+### Large Language Models
+
+```bash
+# Single-shot
+neurobrix run --model deepseek-moe-16b-chat \
+    --prompt "Explain quantum computing in simple terms" \
+    --temperature 0.7 --max-tokens 512 \
+    --output response.txt
+
+# Interactive chat (requires serve mode)
+neurobrix serve --model deepseek-moe-16b-chat
+neurobrix chat --temperature 0.7
+neurobrix stop
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--prompt` | Input text or question | Required |
+| `--temperature` | Sampling randomness (0 = deterministic, 1 = creative) | Model-dependent (0.6-1.0) |
+| `--max-tokens` | Maximum tokens to generate | Model-dependent (512-32768) |
+| `--repetition-penalty` | Penalize repeated tokens (1.0 = off) | 1.0 |
+| `--output` | Save response to file | stdout |
+
+### Audio — Speech-to-Text (STT)
+
+```bash
+neurobrix run --model whisper-large --audio recording.wav
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--audio` | Path to audio file (WAV, FLAC, MP3) | Required |
+| `--output` | Save transcription to file | stdout |
+
+> **Note:** STT models use `--audio`, not `--prompt`. Temperature defaults to 0.0 (greedy decoding) for accurate transcription.
+
+### Audio — Text-to-Speech (TTS)
+
+```bash
+neurobrix run --model Kokoro-82M \
+    --prompt "Hello, welcome to NeuroBrix!" \
+    --output speech.wav
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--prompt` | Text to synthesize into speech | Required |
+| `--temperature` | Sampling variation (lower = more consistent) | Model-dependent (0.6) |
+| `--output` | Output audio file path | `output.wav` |
+
+### Video Generation
+
+```bash
+neurobrix run --model SANA-Video_2B_720p \
+    --prompt "A cat playing piano" \
+    --steps 30 --cfg 5.0 --seed 42 \
+    --output video.mp4
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--prompt` | Text description of the video to generate | Required |
+| `--steps` | Number of diffusion steps | Model-dependent (20-50) |
+| `--cfg` | Guidance scale | Model-dependent (5.0) |
+| `--seed` | Random seed | Random |
+| `--output` | Output file path | `output.mp4` |
+
+---
+
 ## NeuroBrix Hub & Model Management
 
 Models are hosted on the **[NeuroBrix Hub](https://neurobrix.es/models)** and managed locally through a two-tier storage system:
