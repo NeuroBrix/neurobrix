@@ -806,6 +806,36 @@ class CompiledSequence:
                         sum_id = f"_sum_{sid_a}_{sid_b}"
                         safe_symbols[sum_id] = sum_trace
 
+        # Pre-computed RoPE table fix (runs regardless of safe_symbols).
+        # TinyLlama-style models have cos_cached[2048,64] sliced to [trace_seq_len, 64]
+        # at trace time. The slice end must be replaced with the full table size so the
+        # table is always available for absolute position indexing during decode.
+        for op_uid, op_data in ops_metadata.items():
+            op_type = op_data.get("op_type", "")
+            if op_type != "aten::slice":
+                continue
+            attrs = op_data.get("attributes", {})
+            args = attrs.get("args", [])
+            if len(args) < 4:
+                continue
+            input_tids = op_data.get("input_tensor_ids", [])
+            if not input_tids:
+                continue
+            first_input = input_tids[0]
+            if not isinstance(first_input, str) or not first_input.startswith("param::"):
+                continue
+            wname = first_input[7:]
+            if not any(k in wname for k in ("cos_cached", "sin_cached", "cos_cache", "sin_cache")):
+                continue
+            # This is a RoPE table slice — replace end with full table size
+            table_shape = tensors.get(first_input, {}).get("shape", [])
+            dim_arg = args[1] if isinstance(args[1], int) else (
+                args[1].get("value") if isinstance(args[1], dict) else 0
+            )
+            if isinstance(dim_arg, int) and dim_arg < len(table_shape):
+                full_size = table_shape[dim_arg]
+                args[3] = {"type": "scalar", "value": full_size}
+
         if not safe_symbols:
             return  # All seq_len trace values collide with weight dims
 
@@ -851,35 +881,13 @@ class CompiledSequence:
             args = attrs.get("args", [])
 
             # aten::slice(tensor, dim, start, end) — promote end (index 3)
-            # For RoPE table slices: pre-computed cos/sin tables are indexed
-            # by absolute position_ids, not by seq_len. Promoting their end to
-            # symbolic seq_len would truncate the table during decode (seq_len=1).
-            # Instead, set end to the full table size so the slice is a no-op
-            # and the full table is always available for absolute position indexing.
+            # RoPE table slices already handled above (before safe_symbols check).
+            # Only promote non-RoPE slices here.
             if op_type == "aten::slice" and len(args) >= 4:
-                _is_rope_table = False
-                input_tids = op_data.get("input_tensor_ids", [])
-                if input_tids:
-                    first_input = input_tids[0]
-                    if isinstance(first_input, str) and first_input.startswith("param::"):
-                        wname = first_input[7:]  # Strip "param::"
-                        if any(k in wname for k in ("cos_cached", "sin_cached",
-                                                     "cos_cache", "sin_cache")):
-                            _is_rope_table = True
-                if _is_rope_table:
-                    # Replace end with full table size → slice becomes identity
-                    table_shape = tensors.get(input_tids[0], {}).get("shape", [])
-                    dim_arg = args[1] if isinstance(args[1], int) else (
-                        args[1].get("value") if isinstance(args[1], dict) else 0
-                    )
-                    if isinstance(dim_arg, int) and dim_arg < len(table_shape):
-                        full_size = table_shape[dim_arg]
-                        args[3] = {"type": "scalar", "value": full_size}
-                else:
-                    result = _try_promote_scalar(args[3])
-                    if result:
-                        args[3] = result
-                        promoted += 1
+                result = _try_promote_scalar(args[3])
+                if result:
+                    args[3] = result
+                    promoted += 1
 
             # aten::narrow(tensor, dim, start, length) — promote length (index 3)
             elif op_type == "aten::narrow" and len(args) >= 4:

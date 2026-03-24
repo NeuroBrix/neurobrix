@@ -197,10 +197,48 @@ class RuntimeExecutor:
         """
         if self._is_setup:
             return
+        self._optimize_cpu_threading()
         self._setup_modules()
         self._setup_executors()
         self._init_strategy()
         self._is_setup = True
+
+    def _optimize_cpu_threading(self) -> None:
+        """Auto-configure CPU thread count for optimal performance.
+
+        When running on CPU (no GPU or zero3 offload), thread count
+        matters significantly. Set OMP_NUM_THREADS to physical cores
+        if not already set by the user.
+        """
+        import os
+        # Only set if user hasn't explicitly configured
+        if os.environ.get("OMP_NUM_THREADS"):
+            return
+
+        import torch
+        # Check if we're running CPU-only or zero3
+        strategy = getattr(self.plan, 'strategy', '') if self.plan else ''
+        is_cpu_mode = strategy == "zero3" or not torch.cuda.is_available()
+
+        if is_cpu_mode:
+            physical_cores = os.cpu_count()
+            if physical_cores:
+                # Use physical cores (not hyperthreads) for compute
+                # Hyperthreads hurt BLAS performance
+                optimal = max(1, physical_cores // 2)
+                os.environ["OMP_NUM_THREADS"] = str(optimal)
+                torch.set_num_threads(optimal)
+
+                # Check for BLAS library
+                blas_info = torch.__config__.show()
+                has_mkl = "mkl" in blas_info.lower()
+                has_openblas = "openblas" in blas_info.lower()
+                if not has_mkl and not has_openblas:
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        "CPU mode: No MKL or OpenBLAS detected. "
+                        "Install torch with MKL for 2-4x faster CPU inference."
+                    )
 
     def execute(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
         """

@@ -475,8 +475,14 @@ class IterativeProcessHandler(FlowHandler):
         Args:
             comp_name: Component to unload
             force: If True, unload even in eager mode (used by post_loop
-                   to free VRAM for VAE — weights reload on next request)
+                   to free VRAM for VAE — weights reload on next request).
+                   Skipped when persistent_mode is True (serve mode): Prism
+                   verified all components fit, keep weights for next request.
         """
+        # Serve mode: never unload — keep all weights resident for near-zero latency
+        if self.ctx.persistent_mode:
+            return
+
         if not force:
             loading_mode = getattr(self.ctx.plan, 'loading_mode', 'lazy')
             if loading_mode == "eager":

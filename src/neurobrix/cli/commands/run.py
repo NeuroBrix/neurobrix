@@ -13,6 +13,7 @@ ZERO HARDCODE: Defaults cascade from CLI > runtime/defaults.json > family config
 import sys
 import json
 import time
+from pathlib import Path
 
 from neurobrix import __version__
 from neurobrix.cli.utils import find_model
@@ -92,7 +93,8 @@ def _try_warm_path(args) -> bool:
         _output_cfg = get_output_processing(family)
         _default_ext = _output_cfg.get("output_format", "png")
         output_path = args.output or f"output_{args.model}.{_default_ext}"
-        kwargs["output_path"] = output_path
+        # Resolve to absolute path so daemon saves in client's cwd, not daemon's
+        kwargs["output_path"] = str(Path(output_path).resolve())
 
     try:
         result = client.generate(prompt=args.prompt or "", **kwargs)
@@ -164,6 +166,18 @@ def cmd_run(args):
     # Warm path: if daemon is running with same model, use it
     if _try_warm_path(args):
         sys.exit(0)
+
+    # GUARD: If daemon is running but warm path failed, refuse cold path.
+    # Cold run + daemon = double GPU allocation = OOM. One task at a time.
+    from neurobrix.serving.client import DaemonClient
+    if DaemonClient.is_running():
+        daemon_pid = DaemonClient.get_pid()
+        print(f"ERROR: A serving daemon is already running (PID {daemon_pid}).")
+        print(f"NeuroBrix runs one task at a time — the daemon is using the GPUs.")
+        print(f"Either:")
+        print(f"  1. Use the daemon:  neurobrix run --model {args.model} --prompt '...'")
+        print(f"  2. Stop it first:   neurobrix stop")
+        sys.exit(1)
 
     # DATA-DRIVEN: Find model by scanning all family directories
     try:

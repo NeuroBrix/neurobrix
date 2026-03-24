@@ -41,6 +41,7 @@ class KVCacheConfig:
     v_head_dim: int
     max_cache_len: int
     dtype: torch.dtype
+    initial_cache_len: int = 0  # Initial buffer size (0 = allocate at max, on-demand growth)
 
     @property
     def head_dim(self) -> int:
@@ -50,19 +51,23 @@ class KVCacheConfig:
 
 class KVCacheLayer:
     """
-    Pre-allocated KV cache buffer for a single transformer layer.
+    On-demand growing KV cache buffer for a single transformer layer.
 
     DESIGN:
-    - Static buffer allocation: Avoids repeated mallocs
+    - Start small, grow when needed — don't waste VRAM on unused capacity
     - Indexed writes: O(1) update instead of O(n) concat
     - View-based returns: Support symbolic shapes
+    - Growth policy: double buffer size when 80% full, up to ceiling
 
-    Storage format: K: [batch, num_kv_heads, max_cache_len, k_head_dim], V: [..., v_head_dim]
+    Storage format: K: [batch, num_kv_heads, buffer_len, k_head_dim], V: [..., v_head_dim]
     """
 
     __slots__ = ('device', 'dtype', 'k_buffer', 'v_buffer', 'current_len',
-                 'max_len', 'num_kv_heads', 'k_head_dim', 'v_head_dim', 'batch_size',
-                 '_dtype_verified')
+                 '_buffer_len', 'max_len', 'num_kv_heads', 'k_head_dim', 'v_head_dim',
+                 'batch_size', '_dtype_verified', '_growth_threshold')
+
+    # Growth threshold: grow when buffer is this fraction full
+    _GROWTH_RATIO = 0.80
 
     def __init__(
         self,
@@ -72,19 +77,21 @@ class KVCacheLayer:
         num_kv_heads: int,
         k_head_dim: int,
         v_head_dim: int,
-        batch_size: int = 1
+        batch_size: int = 1,
+        initial_len: int = 0,
     ):
         """
-        Initialize pre-allocated buffers on the specified device.
+        Initialize KV cache buffers on the specified device.
 
         Args:
             device: Device where this layer's attention runs
             dtype: Data type for cache tensors
-            max_len: Maximum sequence length to cache
+            max_len: Maximum sequence length ceiling (Prism budget)
             num_kv_heads: Number of key-value heads
             k_head_dim: Dimension per K head
             v_head_dim: Dimension per V head
             batch_size: Batch size (can be expanded later if needed)
+            initial_len: Initial buffer capacity. 0 = allocate at max_len (legacy).
         """
         self.device = device
         self.dtype = dtype
@@ -94,11 +101,19 @@ class KVCacheLayer:
         self.v_head_dim = v_head_dim
         self.batch_size = batch_size
         self.current_len = 0
-        self._dtype_verified = False  # Skip per-token dtype check after first match
+        self._dtype_verified = False
 
-        # Pre-allocate buffers: K and V may have different head dims
-        k_shape = (batch_size, num_kv_heads, max_len, k_head_dim)
-        v_shape = (batch_size, num_kv_heads, max_len, v_head_dim)
+        # Buffer starts at initial_len. 0 means legacy: allocate full max_len.
+        if initial_len > 0 and initial_len < max_len:
+            self._buffer_len = initial_len
+        else:
+            self._buffer_len = max_len
+
+        self._growth_threshold = int(self._buffer_len * self._GROWTH_RATIO)
+
+        # Allocate initial buffers
+        k_shape = (batch_size, num_kv_heads, self._buffer_len, k_head_dim)
+        v_shape = (batch_size, num_kv_heads, self._buffer_len, v_head_dim)
         self.k_buffer = torch.zeros(k_shape, dtype=dtype, device=device)
         self.v_buffer = torch.zeros(v_shape, dtype=dtype, device=device)
 
@@ -106,6 +121,7 @@ class KVCacheLayer:
         """
         Write new K/V to buffer and return view of cached values.
 
+        If buffer is near capacity, grows automatically (up to max_len ceiling).
         ZERO COPY: Indexed write directly into pre-allocated buffer.
         SYMBOLIC SHAPE: Returns view buffer[:, :, :current_len, :]
 
@@ -132,13 +148,15 @@ class KVCacheLayer:
                 v = v.to(self.dtype)
             self._dtype_verified = True
 
-        # Check capacity
+        # Check if growth needed before writing
         end_pos = self.current_len + new_len
-        if end_pos > self.max_len:
-            raise RuntimeError(
-                f"KV cache overflow: current_len={self.current_len}, new_len={new_len}, "
-                f"max_len={self.max_len}. Increase max_position_embeddings in lm_config."
-            )
+        if end_pos > self._buffer_len:
+            if end_pos > self.max_len:
+                raise RuntimeError(
+                    f"KV cache overflow: current_len={self.current_len}, new_len={new_len}, "
+                    f"max_len={self.max_len}. Prism VRAM budget exceeded."
+                )
+            self._grow_buffer(end_pos)
 
         # Indexed write: buffer[..., start:end, :] = new_values
         self.k_buffer[:batch_size, :, self.current_len:end_pos, :] = k
@@ -147,12 +165,49 @@ class KVCacheLayer:
         # Update position
         self.current_len = end_pos
 
+        # Proactive growth: if we're past threshold, grow ahead of time
+        # so next update doesn't need to grow mid-compute
+        if self.current_len >= self._growth_threshold and self._buffer_len < self.max_len:
+            self._grow_buffer(self.current_len)
+
         # Return VIEW (not copy) of cached values - supports symbolic shapes
-        # View is contiguous because buffer is contiguous and we slice on dim 2
         k_cached = self.k_buffer[:batch_size, :, :self.current_len, :]
         v_cached = self.v_buffer[:batch_size, :, :self.current_len, :]
 
         return k_cached, v_cached
+
+    def _grow_buffer(self, min_required: int) -> None:
+        """
+        Grow buffer capacity. Double current size, capped at max_len.
+
+        Args:
+            min_required: Minimum capacity needed after growth
+        """
+        # Double current buffer, at least min_required, at most max_len
+        new_len = min(max(self._buffer_len * 2, min_required), self.max_len)
+        if new_len <= self._buffer_len:
+            return
+
+        # Allocate new buffers
+        new_k = torch.zeros(
+            (self.batch_size, self.num_kv_heads, new_len, self.k_head_dim),
+            dtype=self.dtype, device=self.device
+        )
+        new_v = torch.zeros(
+            (self.batch_size, self.num_kv_heads, new_len, self.v_head_dim),
+            dtype=self.dtype, device=self.device
+        )
+
+        # Copy existing cached data
+        if self.current_len > 0:
+            new_k[:, :, :self.current_len, :] = self.k_buffer[:, :, :self.current_len, :]
+            new_v[:, :, :self.current_len, :] = self.v_buffer[:, :, :self.current_len, :]
+
+        # Swap buffers (old buffers freed by GC)
+        self.k_buffer = new_k
+        self.v_buffer = new_v
+        self._buffer_len = new_len
+        self._growth_threshold = int(new_len * self._GROWTH_RATIO)
 
     def _expand_batch(self, new_batch_size: int) -> None:
         """Expand buffer batch dimension if CFG or other batching is enabled."""
@@ -161,11 +216,11 @@ class KVCacheLayer:
 
         # Create new larger buffers (K and V may have different head dims)
         new_k = torch.zeros(
-            (new_batch_size, self.num_kv_heads, self.max_len, self.k_head_dim),
+            (new_batch_size, self.num_kv_heads, self._buffer_len, self.k_head_dim),
             dtype=self.dtype, device=self.device
         )
         new_v = torch.zeros(
-            (new_batch_size, self.num_kv_heads, self.max_len, self.v_head_dim),
+            (new_batch_size, self.num_kv_heads, self._buffer_len, self.v_head_dim),
             dtype=self.dtype, device=self.device
         )
 
@@ -182,7 +237,7 @@ class KVCacheLayer:
         self.batch_size = new_batch_size
 
     def clear(self) -> None:
-        """Reset cache for new sequence (keeps buffers allocated)."""
+        """Reset cache for new sequence (keeps buffers allocated at current size)."""
         self.current_len = 0
         self._dtype_verified = False
 
@@ -251,7 +306,8 @@ class DistributedKVCache:
                 num_kv_heads=self.config.num_kv_heads,
                 k_head_dim=self.config.k_head_dim,
                 v_head_dim=self.config.v_head_dim,
-                batch_size=batch_size
+                batch_size=batch_size,
+                initial_len=self.config.initial_cache_len,
             )
 
         # Update cache and get full K/V

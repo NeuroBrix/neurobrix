@@ -75,6 +75,7 @@ class StateCacheFactory:
                 v_head_dim=kv_plan.v_head_dim,
                 max_cache_len=kv_plan.max_cache_len,
                 dtype=kv_plan.dtype,
+                initial_cache_len=getattr(kv_plan, 'initial_cache_len', 0),
             )
             wrapper = KVCacheAttentionWrapper(config)
             return wrapper
