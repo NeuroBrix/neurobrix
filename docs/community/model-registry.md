@@ -27,8 +27,8 @@ We invite AI model developers, research labs, and organizations to publish their
 |--------|----------|--------|
 | **Image Generation** | Diffusion transformers, VQ-based generators, rectified flow models | Available |
 | **Large Language Models** | Autoregressive transformers, Mixture-of-Experts | Available |
-| **Audio** | Speech-to-text, text-to-speech | Roadmap |
-| **Video** | Video generation, video understanding | Roadmap |
+| **Audio** | Speech-to-text (Whisper, Parakeet, Canary, Voxtral), text-to-speech (Orpheus, Kokoro, VibeVoice, OpenAudio, Chatterbox) | Available |
+| **Video** | Video generation (SANA-Video) | Available |
 | **Multimodal** | Vision-language, any-to-any | Roadmap |
 
 ---
@@ -66,7 +66,7 @@ To trace and publish your model, we need:
 
 **For:** Open-source models with permissive licenses
 
-- Submit a [Model Request](https://github.com/NeuroBrix/neurobrix/issues/new?template=model_request.yml) on GitHub
+- Submit a Model Request at [models@neurobrix.es](mailto:models@neurobrix.es) or via [GitLab Issues](https://gitlab.com/neurobrix/neurobrix/-/issues)
 - Our team evaluates and traces the model
 - Published on the Hub with full attribution
 - Community priority queue
@@ -98,21 +98,47 @@ Contact [enterprise@neurobrix.es](mailto:enterprise@neurobrix.es) for enterprise
 
 ## Current Hub Catalog
 
+All models are the work of their respective authors and subject to their original licenses. Users must review each model's license before use.
+
 ### Image Generation
 
-| Model | Organization | Size |
-|-------|-------------|------|
-| Flex.1-alpha | Ostris | 24.5 GB |
-| Sana 1600M (4K + Multilingual) | Sana | 12.1 GB |
-| PixArt-Sigma-XL | PixArt | 20.3 GB |
-| Janus-Pro-7B | DeepSeek AI | 13.8 GB |
+| Model | Author | License |
+|-------|--------|---------|
+| [Flex.1-alpha](https://huggingface.co/ostris/Flex.1-alpha) | Ostris | [Apache 2.0](https://huggingface.co/ostris/Flex.1-alpha/blob/main/LICENSE) |
+| [Sana 1600M](https://huggingface.co/Efficient-Large-Model/Sana_1600M_4Kpx_BF16) | NVIDIA / MIT | [Apache 2.0](https://huggingface.co/Efficient-Large-Model/Sana_1600M_4Kpx_BF16/blob/main/LICENSE) |
+| [PixArt-Sigma-XL](https://huggingface.co/PixArt-alpha/PixArt-Sigma-XL-2-1024-MS) | PixArt | [OpenRAIL++](https://huggingface.co/PixArt-alpha/PixArt-Sigma-XL-2-1024-MS/blob/main/LICENSE) |
+| [Janus-Pro-7B](https://huggingface.co/deepseek-ai/Janus-Pro-7B) | DeepSeek | [MIT](https://huggingface.co/deepseek-ai/Janus-Pro-7B/blob/main/LICENSE) |
+
+### Video Generation
+
+| Model | Author | License |
+|-------|--------|---------|
+| [SANA-Video 2B](https://huggingface.co/Efficient-Large-Model/SANA-Video_2B_720p) | NVIDIA / MIT | [Apache 2.0](https://huggingface.co/Efficient-Large-Model/SANA-Video_2B_720p/blob/main/LICENSE) |
+
+### Audio (11 models)
+
+| Model | Author | License | Type |
+|-------|--------|---------|------|
+| [Whisper Large](https://huggingface.co/openai/whisper-large) | OpenAI | [MIT](https://huggingface.co/openai/whisper-large/blob/main/LICENSE) | STT |
+| [Whisper Large V3 Turbo](https://huggingface.co/openai/whisper-large-v3-turbo) | OpenAI | [MIT](https://huggingface.co/openai/whisper-large-v3-turbo/blob/main/LICENSE) | STT |
+| [Parakeet TDT 1.1B](https://huggingface.co/nvidia/parakeet-tdt-1.1b) | NVIDIA | [CC-BY-4.0](https://huggingface.co/nvidia/parakeet-tdt-1.1b) | STT |
+| [Canary-Qwen 2.5B](https://huggingface.co/nvidia/canary-qwen-2.5b) | NVIDIA | [CC-BY-4.0](https://huggingface.co/nvidia/canary-qwen-2.5b) | STT |
+| [Voxtral Mini 3B](https://huggingface.co/mistralai/Voxtral-Mini-3B-2507) | Mistral AI | [Apache 2.0](https://huggingface.co/mistralai/Voxtral-Mini-3B-2507/blob/main/LICENSE) | STT |
+| [Orpheus 3B](https://huggingface.co/canopylabs/orpheus-3b-0.1-ft) | Canopy Labs | [Apache 2.0](https://huggingface.co/canopylabs/orpheus-3b-0.1-ft) | TTS |
+| [Kokoro 82M](https://huggingface.co/hexgrad/Kokoro-82M) | Hexgrad | [Apache 2.0](https://huggingface.co/hexgrad/Kokoro-82M) | TTS |
+| [VibeVoice 1.5B](https://huggingface.co/WillHeld/VibeVoice-1.5B) | Will Held | [Apache 2.0](https://huggingface.co/WillHeld/VibeVoice-1.5B) | TTS |
+| [OpenAudio S1 Mini](https://huggingface.co/FishAudio/OpenAudio-S1-Mini) | Fish Audio | [CC-BY-NC-SA-4.0](https://huggingface.co/FishAudio/OpenAudio-S1-Mini) | TTS |
+| [Chatterbox](https://huggingface.co/resemble-ai/chatterbox) | Resemble AI | [MIT](https://huggingface.co/resemble-ai/chatterbox) | TTS |
 
 ### Large Language Models
 
-| Model | Organization | Size |
-|-------|-------------|------|
-| DeepSeek-MoE-16B-Chat | DeepSeek AI | 30.6 GB |
-| Qwen3-30B-A3B | Qwen | 57.1 GB |
+| Model | Author | License |
+|-------|--------|---------|
+| [DeepSeek-MoE-16B](https://huggingface.co/deepseek-ai/deepseek-moe-16b-chat) | DeepSeek | [MIT](https://huggingface.co/deepseek-ai/deepseek-moe-16b-chat/blob/main/LICENSE) |
+| [Qwen3-30B-A3B-Thinking](https://huggingface.co/Qwen/Qwen3-30B-A3B) | Alibaba / Qwen | [Apache 2.0](https://huggingface.co/Qwen/Qwen3-30B-A3B/blob/main/LICENSE) |
+| [TinyLlama 1.1B](https://huggingface.co/TinyLlama/TinyLlama-1.1B-Chat-v1.0) | TinyLlama | [Apache 2.0](https://huggingface.co/TinyLlama/TinyLlama-1.1B-Chat-v1.0/blob/main/LICENSE) |
+
+> **Non-commercial:** OpenAudio S1 Mini uses CC-BY-NC-SA-4.0 — non-commercial use only.
 
 Browse the full catalog: [neurobrix.es/models](https://neurobrix.es/models)
 
@@ -141,7 +167,7 @@ Browse the full catalog: [neurobrix.es/models](https://neurobrix.es/models)
 **Model Registry Program**
 Email: [models@neurobrix.es](mailto:models@neurobrix.es)
 Web: [neurobrix.es/models](https://neurobrix.es/models)
-GitHub: [github.com/NeuroBrix/neurobrix/issues](https://github.com/NeuroBrix/neurobrix/issues)
+GitLab: [gitlab.com/neurobrix/neurobrix/-/issues](https://gitlab.com/neurobrix/neurobrix/-/issues)
 
 ---
 
