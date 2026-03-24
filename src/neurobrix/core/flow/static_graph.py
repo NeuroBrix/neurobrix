@@ -68,7 +68,9 @@ class StaticGraphHandler(FlowHandler):
         return self.ctx.variable_resolver.resolve_all()
 
     def _unload_component(self, comp_name: str) -> None:
-        """Unload component weights and clear memory."""
+        """Unload component weights and clear memory (skip in serve mode)."""
+        if self.ctx.persistent_mode:
+            return
         executor = self.ctx.executors.get(comp_name)
         if executor:
             executor.unload_weights()

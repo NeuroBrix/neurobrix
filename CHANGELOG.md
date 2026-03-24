@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.13] - 2026-03-24
+
+### Added
+- Prism hot/cold budget split — serve mode computes sum(all_weights) + max(activations), run mode uses max(single_component)
+- KV cache on-demand growth — buffers start small and double when 80% full, up to Prism ceiling
+- Zero3 layer-wise pipelining — dual CUDA streams prefetch next block's weights during compute
+- Lifecycle classification for all families (diffusion, audio) — not just LLM/image_vq
+- CPU-only auto-threading — OMP_NUM_THREADS set to physical cores, BLAS detection warning
+- Daemon guard in cold run path — refuses to start if serve daemon is already running, prevents double GPU allocation
+- GitLab mirror — dual-push to GitHub and GitLab for all repos
+
+### Changed
+- Prism scoring system uses actual hardware profile data (PCIe bandwidth, CPU cores) instead of hardcoded penalties
+- Block scatter and weight sharding strategies prefer NVLink-connected GPUs when available
+- Serve mode boosts eager strategies in scoring (user wants near-zero latency)
+- Zero3 penalty scales with PCIe bandwidth and CPU core count from profile
+- Version string now reads from pyproject.toml at runtime — single source of truth, no more stale `__init__.py`
+- README updated with model license attribution, HuggingFace links, and responsible use disclaimer
+
+### Fixed
+- MoE norm_topk_prob timing bug — fusion defaulted to True, breaking DeepSeek MoE (needs False). `set_moe_config()` now patches DAG attributes before compilation
+- Serve mode weight persistence for forward_pass and static_graph flows — weights now stay in VRAM
+- Diffusion serve mode force-unload — persistent mode skips unload, keeping all weights for next request
+- Prism single_gpu budget calculation — correctly accounts for all-resident weights in serve mode
+- Serve mode graceful degradation — falls back to cold mode with warning instead of crashing when VRAM insufficient
+- Missing `Path` import in run.py warm path — image/video/audio warm runs crashed
+
 ## [0.1.0-alpha.12] - 2026-03-20
 
 ### Fixed
@@ -233,7 +260,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - NeuroBrix registry at neurobrix.es
 - Support for 9 models: Sana, PixArt-Alpha, PixArt-Sigma, FLUX.2-dev, Flex.1-alpha, Janus-Pro-7B, DeepSeek-MoE-16B, Qwen3-30B-A3B, TinyLlama-1.1B
 
-[Unreleased]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a12...HEAD
+[Unreleased]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a13...HEAD
+[0.1.0-alpha.13]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a12...v0.1.0a13
 [0.1.0-alpha.12]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a11...v0.1.0a12
 [0.1.0-alpha.11]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a10...v0.1.0a11
 [0.1.0-alpha.10]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a9...v0.1.0a10

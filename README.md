@@ -98,24 +98,24 @@ pip install neurobrix
 
 ```bash
 # Import a model from the hub
-neurobrix import sana/1600m-1024 --no-keep
+neurobrix import Vendor/Model_Name --no-keep
 
 # Generate an image (hardware auto-detected)
-neurobrix run --model Sana_1600M_1024px_MultiLing \
+neurobrix run --model Model_Name \
     --prompt "A sunset over mountains" --steps 20
 
 # Or serve for instant repeat inference
-neurobrix serve --model Sana_1600M_1024px_MultiLing
+neurobrix serve --model Model_Name
 neurobrix run --prompt "A robot painting on canvas" --output robot.png
 neurobrix stop
 ```
 
-### Serve Mode (Recommended)
+### Serve Mode (Hot Run Mode , Recommended)
 
 Loads weights into VRAM once and keeps the model warm. Every subsequent request runs with zero startup overhead.
 
 ```bash
-neurobrix serve --model Sana_1600M_1024px_MultiLing
+neurobrix serve --model Model_Name
 
 # Image generation (instant — model already loaded)
 neurobrix run --prompt "A cat in a hat" --output cat.png
@@ -152,13 +152,13 @@ neurobrix hub --category VIDEO
 neurobrix hub --search sana
 
 # Import a model (downloads .nbx → extracts to cache)
-neurobrix import sana/1600m-1024
+neurobrix import vendor/model_name
 
 # Import and delete the .nbx archive to save disk space
 neurobrix import pixart/sigma-xl-1024 --no-keep
 
 # Force re-import (overwrites existing)
-neurobrix import sana/1600m-1024 --force
+neurobrix import Vendor/Model_Name --force
 ```
 
 ### List & Manage
@@ -174,10 +174,10 @@ neurobrix list --store
 neurobrix info --models
 
 # Remove a model from cache
-neurobrix remove Sana_1600M_1024px_MultiLing
+neurobrix remove Model_Name
 
 # Remove from both store and cache
-neurobrix remove Sana_1600M_1024px_MultiLing --all
+neurobrix remove Model_Name --all
 
 # Clean everything — free all disk space
 neurobrix clean --all -y
@@ -186,14 +186,14 @@ neurobrix clean --all -y
 ### How It Works
 
 ```
-neurobrix import sana/1600m-1024 --no-keep
+neurobrix import Vendor/Model_Name --no-keep
   │
   ├─ 1. Download .nbx from neurobrix.es → ~/.neurobrix/store/
-  ├─ 2. Extract to ~/.neurobrix/cache/Sana_1600M_1024px_MultiLing/
+  ├─ 2. Extract to ~/.neurobrix/cache/Model_Name/
   ├─ 3. Validate manifest, components, weights
   └─ 4. Delete .nbx from store (--no-keep)
 
-neurobrix run --model Sana_1600M_1024px_MultiLing --prompt "..."
+neurobrix run --model Model_Name --prompt "..."
   │
   └─ Reads directly from cache — zero extraction overhead
 ```
@@ -202,50 +202,48 @@ neurobrix run --model Sana_1600M_1024px_MultiLing --prompt "..."
 
 ## Supported Models
 
-All models are hosted on the [NeuroBrix Hub](https://neurobrix.es/models).
+NeuroBrix is a **runtime engine** — it executes models but does **not train or create** them. All models listed below are the work of their respective authors and are subject to their original licenses. **Users must review and accept each model's license before use.**
 
 ### Image Generation
 
-| Model | Size | Resolution |
-|-------|-----:|-----------|
-| **Sana_1600M_1024px_MultiLing** | 12 GB | 1024px, multilingual |
-| **Sana_1600M_4Kpx_BF16** | 12 GB | 4096px ultra-high resolution |
-| **PixArt-Sigma-XL-2-1024-MS** | 20 GB | Diffusion Transformer |
-| **PixArt-XL-2-1024-MS** | 20 GB | Diffusion Transformer |
-| **Flex.1-alpha** | 24 GB | Rectified flow transformer |
-| **Janus-Pro-7B** | 14 GB | Multimodal understand + VQ generation |
+| Model | Author | License | Size |
+|-------|--------|---------|-----:|
+| [Sana 1600M 4K](https://huggingface.co/Efficient-Large-Model/Sana_1600M_4Kpx_BF16) | NVIDIA / MIT | [Apache 2.0](https://huggingface.co/Efficient-Large-Model/Sana_1600M_4Kpx_BF16/blob/main/LICENSE) | 12 GB |
+| [PixArt-Sigma-XL-2-1024-MS](https://huggingface.co/PixArt-alpha/PixArt-Sigma-XL-2-1024-MS) | PixArt | [OpenRAIL++](https://huggingface.co/PixArt-alpha/PixArt-Sigma-XL-2-1024-MS/blob/main/LICENSE) | 20 GB |
+| [PixArt-XL-2-1024-MS](https://huggingface.co/PixArt-alpha/PixArt-XL-2-1024-MS) | PixArt | [OpenRAIL++](https://huggingface.co/PixArt-alpha/PixArt-XL-2-1024-MS/blob/main/LICENSE) | 20 GB |
+| [Flex.1-alpha](https://huggingface.co/ostris/Flex.1-alpha) | Ostris | [Apache 2.0](https://huggingface.co/ostris/Flex.1-alpha/blob/main/LICENSE) | 24 GB |
+| [Janus-Pro-7B](https://huggingface.co/deepseek-ai/Janus-Pro-7B) | DeepSeek | [MIT](https://huggingface.co/deepseek-ai/Janus-Pro-7B/blob/main/LICENSE) | 14 GB |
 
 ### Video Generation
 
-| Model | Size | Resolution |
-|-------|-----:|-----------|
-| **SANA-Video_2B_720p** | 17 GB | 1280x704, 81 frames, 16fps |
+| Model | Author | License | Size |
+|-------|--------|---------|-----:|
+| [SANA-Video 2B 720p](https://huggingface.co/Efficient-Large-Model/SANA-Video_2B_720p) | NVIDIA / MIT | [Apache 2.0](https://huggingface.co/Efficient-Large-Model/SANA-Video_2B_720p/blob/main/LICENSE) | 17 GB |
 
 ### Audio (Speech-to-Text + Text-to-Speech)
 
-| Model | Size | Type |
-|-------|-----:|------|
-| **Whisper Large** | 6 GB | STT — multilingual transcription |
-| **Whisper Large V3 Turbo** | 3 GB | STT — fast multilingual |
-| **Parakeet TDT 1.1B** | 4 GB | STT — NeMo transducer |
-| **Canary-Qwen 2.5B** | 10 GB | STT — multilingual, multi-task |
-| **Granite Speech 3.3-8B** | 17 GB | STT — audio-conditioned LLM |
-| **Voxtral Mini 3B** | 7 GB | STT — multimodal audio LLM |
-| **Orpheus 3B** | 7 GB | TTS — expressive speech synthesis |
-| **Kokoro 82M** | 0.3 GB | TTS — lightweight, fast |
-| **VibeVoice 1.5B** | 6 GB | TTS — diffusion-based acoustic model |
-| **OpenAudio S1 Mini** | 2 GB | TTS — DualAR codec generation |
-| **Chatterbox** | 1 GB | TTS — conversational speech |
+| Model | Author | License | Size | Type |
+|-------|--------|---------|-----:|------|
+| [Whisper Large](https://huggingface.co/openai/whisper-large) | OpenAI | [MIT](https://huggingface.co/openai/whisper-large/blob/main/LICENSE) | 6 GB | STT |
+| [Whisper Large V3 Turbo](https://huggingface.co/openai/whisper-large-v3-turbo) | OpenAI | [MIT](https://huggingface.co/openai/whisper-large-v3-turbo/blob/main/LICENSE) | 3 GB | STT |
+| [Parakeet TDT 1.1B](https://huggingface.co/nvidia/parakeet-tdt-1.1b) | NVIDIA | [CC-BY-4.0](https://huggingface.co/nvidia/parakeet-tdt-1.1b) | 4 GB | STT |
+| [Canary-Qwen 2.5B](https://huggingface.co/nvidia/canary-qwen-2.5b) | NVIDIA | [CC-BY-4.0](https://huggingface.co/nvidia/canary-qwen-2.5b) | 10 GB | STT |
+| [Voxtral Mini 3B](https://huggingface.co/mistralai/Voxtral-Mini-3B-2507) | Mistral AI | [Apache 2.0](https://huggingface.co/mistralai/Voxtral-Mini-3B-2507/blob/main/LICENSE) | 7 GB | STT |
+| [Orpheus 3B](https://huggingface.co/canopylabs/orpheus-3b-0.1-ft) | Canopy Labs | [Apache 2.0](https://huggingface.co/canopylabs/orpheus-3b-0.1-ft) | 7 GB | TTS |
+| [Kokoro 82M](https://huggingface.co/hexgrad/Kokoro-82M) | Hexgrad | [Apache 2.0](https://huggingface.co/hexgrad/Kokoro-82M) | 0.3 GB | TTS |
+| [VibeVoice 1.5B](https://huggingface.co/WillHeld/VibeVoice-1.5B) | Will Held | [Apache 2.0](https://huggingface.co/WillHeld/VibeVoice-1.5B) | 6 GB | TTS |
+| [OpenAudio S1 Mini](https://huggingface.co/FishAudio/OpenAudio-S1-Mini) | Fish Audio | [CC-BY-NC-SA-4.0](https://huggingface.co/FishAudio/OpenAudio-S1-Mini) | 2 GB | TTS |
+| [Chatterbox](https://huggingface.co/resemble-ai/chatterbox) | Resemble AI | [MIT](https://huggingface.co/resemble-ai/chatterbox) | 1 GB | TTS |
 
 ### Large Language Models
 
-| Model | Size | Highlights |
-|-------|-----:|-----------|
-| **DeepSeek-MoE-16B** | 31 GB | 64-expert Mixture-of-Experts |
-| **Qwen3-30B-A3B-Thinking** | 57 GB | 30B total / 3B active, reasoning |
-| **TinyLlama 1.1B** | 4 GB | Compact, fast inference |
+| Model | Author | License | Size |
+|-------|--------|---------|-----:|
+| [DeepSeek-MoE-16B](https://huggingface.co/deepseek-ai/deepseek-moe-16b-chat) | DeepSeek | [MIT](https://huggingface.co/deepseek-ai/deepseek-moe-16b-chat/blob/main/LICENSE) | 31 GB |
+| [Qwen3-30B-A3B-Thinking](https://huggingface.co/Qwen/Qwen3-30B-A3B) | Alibaba / Qwen | [Apache 2.0](https://huggingface.co/Qwen/Qwen3-30B-A3B/blob/main/LICENSE) | 57 GB |
+| [TinyLlama 1.1B](https://huggingface.co/TinyLlama/TinyLlama-1.1B-Chat-v1.0) | TinyLlama | [Apache 2.0](https://huggingface.co/TinyLlama/TinyLlama-1.1B-Chat-v1.0/blob/main/LICENSE) | 4 GB |
 
-Browse the full catalog: **[neurobrix.es/models](https://neurobrix.es/models)**
+> **Non-commercial models:** OpenAudio S1 Mini uses [CC-BY-NC-SA-4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) — non-commercial use only. Check each model's license before commercial deployment.
 
 ---
 
@@ -373,10 +371,34 @@ See **[CONTRIBUTING.md](https://github.com/NeuroBrix/neurobrix/blob/main/CONTRIB
 
 ---
 
+## Model Licenses & Responsible Use
+
+**NeuroBrix is an inference engine — it does not create, train, or own any AI model.**
+
+All models listed in this repository are the intellectual property of their respective authors. NeuroBrix converts published model weights into the `.nbx` container format for efficient execution. The original model licenses remain in full effect.
+
+**User responsibilities:**
+
+- **Review the license** of each model before downloading or using it
+- **Non-commercial models** (e.g., CC-BY-NC-SA-4.0) may not be used for commercial purposes
+- **Gated models** on Hugging Face require explicit license acceptance before access
+- **Redistribution** of model weights is governed by each model's license, not by NeuroBrix's license
+- **You are solely responsible** for ensuring your use complies with the applicable model license
+
+**NeuroBrix Hub (neurobrix.es):**
+
+The NeuroBrix Hub hosts pre-built `.nbx` packages for convenience. These packages contain model weights in their original precision, repackaged in the NBX container format. All models on the hub are sourced from publicly available releases with permissive or open licenses. If you are a model author and believe your work is hosted in violation of your license terms, please contact us at legal@neurobrix.es for immediate removal.
+
+---
+
 ## License
 
-Apache License 2.0 — Copyright 2025-2026 Hocine Benkelaya
+**NeuroBrix Engine** — Apache License 2.0
+
+Copyright 2025-2026 Hocine Benkelaya
 
 NeuroBrix is developed by [**WizWorks OÜ**](https://wizworks.io), a property of [**Neural Networks Holding LTD**](https://neuralnetworkholding.com).
+
+The Apache 2.0 license covers the NeuroBrix engine, CLI, runtime, and NBX format tooling. **It does not cover the model weights** executed by the engine — those are governed by their respective licenses as listed in the [Supported Models](#supported-models) section.
 
 See [LICENSE](LICENSE) for the full text.
