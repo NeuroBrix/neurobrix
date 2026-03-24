@@ -190,7 +190,7 @@ class EncoderDecoderEngine(FlowHandler):
         executor = self.ctx.executors.get(comp_name)
         if executor is not None:
             for key in executor._weights:
-                if "embed_tokens" in key or "token_embed" in key:
+                if "token_embed" in key or "embed" in key:  # NeuroTax standard
                     return executor._weights[key]
         return None
 
