@@ -186,12 +186,26 @@ class EncoderDecoderEngine(FlowHandler):
         return None
 
     def _get_embed_weight(self, comp_name: str) -> Optional[torch.Tensor]:
-        """Get embedding weight for weight-tied logits."""
+        """Get TOKEN embedding weight for weight-tied logits.
+
+        NeuroTax standard: token_embed.weight (token embeddings).
+        Must NOT match embed_positions.weight (positional embeddings)
+        which has a different shape and purpose.
+        """
         executor = self.ctx.executors.get(comp_name)
         if executor is not None:
+            # Priority: exact token_embed match first
             for key in executor._weights:
-                if "token_embed" in key or "embed" in key:  # NeuroTax standard
+                if "token_embed" in key:
                     return executor._weights[key]
+            # Fallback: largest 2D embed weight (vocab_size > pos_table)
+            best = None
+            for key in executor._weights:
+                if "embed" in key and executor._weights[key].ndim == 2:
+                    w = executor._weights[key]
+                    if best is None or w.shape[0] > best.shape[0]:
+                        best = w
+            return best
         return None
 
     def _compute_logits(
