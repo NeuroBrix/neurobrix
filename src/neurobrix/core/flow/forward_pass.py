@@ -93,10 +93,11 @@ class ForwardPassHandler(FlowHandler):
                     continue
                 raise
 
-            # Unload weights
-            self._unload_component_weights(comp_name)
-            gc.collect()
-            torch.cuda.empty_cache()
+            # Unload weights (skip in serve mode — keep resident for next request)
+            if not self.ctx.persistent_mode:
+                self._unload_component_weights(comp_name)
+                gc.collect()
+                torch.cuda.empty_cache()
         return self.ctx.variable_resolver.resolve_all()
 
     def _preprocess_inputs(self) -> None:
