@@ -37,12 +37,14 @@ neurobrix run --prompt "A photograph of a mountain lake at sunset"
 
 ## Supported Model Families
 
-| Family | Models | Status |
-|--------|--------|--------|
-| **Image** | PixArt-Sigma, Sana, Flex.1, Janus-Pro | Production |
-| **LLM** | DeepSeek-MoE, Qwen3 | Production |
-| **Audio** | Whisper | In progress |
-| **Video** | CogVideoX | In progress |
+| Family | Models | Count | Status |
+|--------|--------|------:|--------|
+| **Image** | PixArt, Sana, Flex.1, Janus-Pro | 6 | Production |
+| **LLM** | DeepSeek-MoE, Qwen3, TinyLlama | 3 | Production |
+| **Audio** | Whisper, Parakeet, Canary-Qwen, Voxtral, Orpheus, Kokoro, VibeVoice, OpenAudio, Chatterbox | 11 | Production |
+| **Video** | SANA-Video | 1 | Production |
+
+All models are the work of their respective authors. See the [Model Hub](getting-started/hub.md) for license details.
 
 ## Quick Links
 
