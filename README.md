@@ -12,8 +12,8 @@
 <p align="center">
   <a href="https://pypi.org/project/neurobrix/"><img src="https://img.shields.io/pypi/v/neurobrix?include_prereleases&color=blue" alt="PyPI"/></a>
   <a href="https://pypi.org/project/neurobrix/"><img src="https://img.shields.io/pypi/pyversions/neurobrix?include_prereleases" alt="Python 3.10 | 3.11 | 3.12"/></a>
-  <a href="https://github.com/NeuroBrix/neurobrix/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License"/></a>
-  <a href="https://github.com/NeuroBrix/neurobrix/stargazers"><img src="https://img.shields.io/github/stars/NeuroBrix/neurobrix?style=social" alt="GitHub Stars"/></a>
+  <a href="https://gitlab.com/neurobrix/neurobrix/-/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License"/></a>
+  <a href="https://gitlab.com/neurobrix/neurobrix"><img src="https://img.shields.io/badge/GitLab-neurobrix-FC6D26?logo=gitlab&logoColor=white" alt="GitLab"/></a>
   <a href="https://neurobrix.es/models"><img src="https://img.shields.io/badge/hub-neurobrix.es-orange" alt="NeuroBrix Hub"/></a>
 </p>
 
@@ -21,8 +21,9 @@
   <a href="https://neurobrix.es/models">Hub</a> &nbsp;|&nbsp;
   <a href="https://neurobrix.es/docs">Docs</a> &nbsp;|&nbsp;
   <a href="https://pypi.org/project/neurobrix/">PyPI</a> &nbsp;|&nbsp;
+  <a href="https://gitlab.com/neurobrix/neurobrix">GitLab</a> &nbsp;|&nbsp;
   <a href="#roadmap">Roadmap</a> &nbsp;|&nbsp;
-  <a href="https://github.com/NeuroBrix/neurobrix/blob/main/CONTRIBUTING.md">Contributing</a>
+  <a href="https://gitlab.com/neurobrix/neurobrix/-/blob/main/CONTRIBUTING.md">Contributing</a>
 </p>
 
 ---
@@ -208,42 +209,44 @@ NeuroBrix is a **runtime engine** — it executes models but does **not train or
 
 | Model | Author | License | Size |
 |-------|--------|---------|-----:|
-| [Sana 1600M 4K](https://huggingface.co/Efficient-Large-Model/Sana_1600M_4Kpx_BF16) | NVIDIA / MIT | [Apache 2.0](https://huggingface.co/Efficient-Large-Model/Sana_1600M_4Kpx_BF16/blob/main/LICENSE) | 12 GB |
-| [PixArt-Sigma-XL-2-1024-MS](https://huggingface.co/PixArt-alpha/PixArt-Sigma-XL-2-1024-MS) | PixArt | [OpenRAIL++](https://huggingface.co/PixArt-alpha/PixArt-Sigma-XL-2-1024-MS/blob/main/LICENSE) | 20 GB |
-| [PixArt-XL-2-1024-MS](https://huggingface.co/PixArt-alpha/PixArt-XL-2-1024-MS) | PixArt | [OpenRAIL++](https://huggingface.co/PixArt-alpha/PixArt-XL-2-1024-MS/blob/main/LICENSE) | 20 GB |
-| [Flex.1-alpha](https://huggingface.co/ostris/Flex.1-alpha) | Ostris | [Apache 2.0](https://huggingface.co/ostris/Flex.1-alpha/blob/main/LICENSE) | 24 GB |
-| [Janus-Pro-7B](https://huggingface.co/deepseek-ai/Janus-Pro-7B) | DeepSeek | [MIT](https://huggingface.co/deepseek-ai/Janus-Pro-7B/blob/main/LICENSE) | 14 GB |
+| Sana 1600M 4K | NVIDIA / MIT | Apache 2.0 | 12 GB |
+| PixArt-Sigma-XL-2-1024-MS | PixArt | OpenRAIL++ | 20 GB |
+| PixArt-XL-2-1024-MS | PixArt | OpenRAIL++ | 20 GB |
+| Flex.1-alpha | Ostris | Apache 2.0 | 24 GB |
+| Janus-Pro-7B | DeepSeek | MIT | 14 GB |
 
 ### Video Generation
 
 | Model | Author | License | Size |
 |-------|--------|---------|-----:|
-| [SANA-Video 2B 720p](https://huggingface.co/Efficient-Large-Model/SANA-Video_2B_720p) | NVIDIA / MIT | [Apache 2.0](https://huggingface.co/Efficient-Large-Model/SANA-Video_2B_720p/blob/main/LICENSE) | 17 GB |
+| SANA-Video 2B 720p | NVIDIA / MIT | Apache 2.0 | 17 GB |
 
 ### Audio (Speech-to-Text + Text-to-Speech)
 
 | Model | Author | License | Size | Type |
 |-------|--------|---------|-----:|------|
-| [Whisper Large](https://huggingface.co/openai/whisper-large) | OpenAI | [MIT](https://huggingface.co/openai/whisper-large/blob/main/LICENSE) | 6 GB | STT |
-| [Whisper Large V3 Turbo](https://huggingface.co/openai/whisper-large-v3-turbo) | OpenAI | [MIT](https://huggingface.co/openai/whisper-large-v3-turbo/blob/main/LICENSE) | 3 GB | STT |
-| [Parakeet TDT 1.1B](https://huggingface.co/nvidia/parakeet-tdt-1.1b) | NVIDIA | [CC-BY-4.0](https://huggingface.co/nvidia/parakeet-tdt-1.1b) | 4 GB | STT |
-| [Canary-Qwen 2.5B](https://huggingface.co/nvidia/canary-qwen-2.5b) | NVIDIA | [CC-BY-4.0](https://huggingface.co/nvidia/canary-qwen-2.5b) | 10 GB | STT |
-| [Voxtral Mini 3B](https://huggingface.co/mistralai/Voxtral-Mini-3B-2507) | Mistral AI | [Apache 2.0](https://huggingface.co/mistralai/Voxtral-Mini-3B-2507/blob/main/LICENSE) | 7 GB | STT |
-| [Orpheus 3B](https://huggingface.co/canopylabs/orpheus-3b-0.1-ft) | Canopy Labs | [Apache 2.0](https://huggingface.co/canopylabs/orpheus-3b-0.1-ft) | 7 GB | TTS |
-| [Kokoro 82M](https://huggingface.co/hexgrad/Kokoro-82M) | Hexgrad | [Apache 2.0](https://huggingface.co/hexgrad/Kokoro-82M) | 0.3 GB | TTS |
-| [VibeVoice 1.5B](https://huggingface.co/WillHeld/VibeVoice-1.5B) | Will Held | [Apache 2.0](https://huggingface.co/WillHeld/VibeVoice-1.5B) | 6 GB | TTS |
-| [OpenAudio S1 Mini](https://huggingface.co/FishAudio/OpenAudio-S1-Mini) | Fish Audio | [CC-BY-NC-SA-4.0](https://huggingface.co/FishAudio/OpenAudio-S1-Mini) | 2 GB | TTS |
-| [Chatterbox](https://huggingface.co/resemble-ai/chatterbox) | Resemble AI | [MIT](https://huggingface.co/resemble-ai/chatterbox) | 1 GB | TTS |
+| Whisper Large | OpenAI | MIT | 6 GB | STT |
+| Whisper Large V3 Turbo | OpenAI | MIT | 3 GB | STT |
+| Parakeet TDT 1.1B | NVIDIA | CC-BY-4.0 | 4 GB | STT |
+| Canary-Qwen 2.5B | NVIDIA | CC-BY-4.0 | 10 GB | STT |
+| Voxtral Mini 3B | Mistral AI | Apache 2.0 | 7 GB | STT |
+| Orpheus 3B | Canopy Labs | Apache 2.0 | 7 GB | TTS |
+| Kokoro 82M | Hexgrad | Apache 2.0 | 0.3 GB | TTS |
+| VibeVoice 1.5B | Will Held | Apache 2.0 | 6 GB | TTS |
+| OpenAudio S1 Mini | Fish Audio | CC-BY-NC-SA-4.0 | 2 GB | TTS |
+| Chatterbox | Resemble AI | MIT | 1 GB | TTS |
 
 ### Large Language Models
 
 | Model | Author | License | Size |
 |-------|--------|---------|-----:|
-| [DeepSeek-MoE-16B](https://huggingface.co/deepseek-ai/deepseek-moe-16b-chat) | DeepSeek | [MIT](https://huggingface.co/deepseek-ai/deepseek-moe-16b-chat/blob/main/LICENSE) | 31 GB |
-| [Qwen3-30B-A3B-Thinking](https://huggingface.co/Qwen/Qwen3-30B-A3B) | Alibaba / Qwen | [Apache 2.0](https://huggingface.co/Qwen/Qwen3-30B-A3B/blob/main/LICENSE) | 57 GB |
-| [TinyLlama 1.1B](https://huggingface.co/TinyLlama/TinyLlama-1.1B-Chat-v1.0) | TinyLlama | [Apache 2.0](https://huggingface.co/TinyLlama/TinyLlama-1.1B-Chat-v1.0/blob/main/LICENSE) | 4 GB |
+| DeepSeek-MoE-16B | DeepSeek | MIT | 31 GB |
+| Qwen3-30B-A3B-Thinking | Alibaba / Qwen | Apache 2.0 | 57 GB |
+| TinyLlama 1.1B | TinyLlama | Apache 2.0 | 4 GB |
 
-> **Non-commercial models:** OpenAudio S1 Mini uses [CC-BY-NC-SA-4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) — non-commercial use only. Check each model's license before commercial deployment.
+> **Non-commercial:** OpenAudio S1 Mini uses CC-BY-NC-SA-4.0 — non-commercial use only. Check each model's license on the [NeuroBrix Hub](https://neurobrix.es/models) before commercial deployment.
+
+Browse the full catalog and license details: **[neurobrix.es/models](https://neurobrix.es/models)**
 
 ---
 
@@ -253,12 +256,30 @@ NeuroBrix introduces `.nbx` — a **universal container format for AI models**. 
 
 ```
 model.nbx (self-contained archive)
-  ├── graph.json         Complete computation graph (TensorDAG)
-  ├── topology.json      Execution flow and component connections
-  ├── manifest.json      Component metadata
-  ├── defaults.json      Runtime parameters
-  └── weights/           Parameters in safetensors format
+  ├── manifest.json              Model metadata and component list
+  ├── topology.json              Execution flow and component connections
+  ├── runtime/
+  │   ├── defaults.json          Generation parameters, model config
+  │   └── variables.json         Runtime tensor allocation rules
+  ├── components/
+  │   ├── text_encoder/          Text conditioning (CLIP, T5, etc.)
+  │   │   ├── graph.json         Computation graph (TensorDAG)
+  │   │   ├── profile.json       Component config
+  │   │   └── weights/           Safetensors shards
+  │   ├── transformer/           Core model (DiT, UNet, decoder, etc.)
+  │   │   ├── graph.json
+  │   │   ├── profile.json
+  │   │   └── weights/
+  │   ├── vae/                   Image/video decoder (diffusion models)
+  │   │   ├── graph.json
+  │   │   ├── profile.json
+  │   │   └── weights/
+  │   └── ...                    Any number of components per model
+  └── modules/
+      └── tokenizer/             Tokenizer files
 ```
+
+The component structure adapts to each model: diffusion models have text_encoder + transformer + vae, LLMs have model + lm_head, audio models have encoder + decoder, etc.
 
 **What makes NBX different:**
 
@@ -295,14 +316,6 @@ You describe your hardware. NeuroBrix figures out the rest. Hardware is auto-det
 ```
 
 The runtime compiles the entire execution graph at load time into a **CompiledSequence** — a zero-overhead execution path with pre-resolved tensor slots, automatic mixed precision, direct SDPA calls, and integer-indexed memory arena. No dict lookups per step. No interpretation overhead.
-
-### ZERO Principles
-
-| Principle | What It Means |
-|-----------|---------------|
-| **ZERO HARDCODE** | All values derived from the NBX container. Nothing hardcoded in the engine. |
-| **ZERO FALLBACK** | System crashes explicitly if data is missing. No silent defaults. |
-| **ZERO SEMANTIC** | Runtime has no domain knowledge. Only tensors and execution plans. |
 
 ---
 
@@ -367,7 +380,7 @@ neurobrix validate <model.nbx> [--level deep] [--strict]
 
 NeuroBrix is open source under the Apache 2.0 license. Contributions are welcome.
 
-See **[CONTRIBUTING.md](https://github.com/NeuroBrix/neurobrix/blob/main/CONTRIBUTING.md)** for guidelines.
+See **[CONTRIBUTING.md](https://gitlab.com/neurobrix/neurobrix/-/blob/main/CONTRIBUTING.md)** for guidelines.
 
 ---
 
