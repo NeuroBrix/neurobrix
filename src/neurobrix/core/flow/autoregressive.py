@@ -281,10 +281,14 @@ class GenerationStrategy(ABC):
 
 
 class TextStrategy(GenerationStrategy):
-    """Strategy for pure text LLM generation (DeepSeek, Llama, etc.)."""
+    """Strategy for pure text LLM generation (DeepSeek, Llama, etc.).
 
-    def __init__(self, lm_head_weight: torch.Tensor, session: GraphLMSession):
-        self._lm_head_weight = lm_head_weight
+    DATA-DRIVEN: logits computed by running lm_head graph executor.
+    The lm_head graph has symbolic seq_len — accepts any sequence length.
+    """
+
+    def __init__(self, lm_head_executor, session: GraphLMSession):
+        self._lm_head_executor = lm_head_executor
         self._session = session
 
     def create_generator(self, defaults: Dict, resolver: Any):
@@ -293,13 +297,8 @@ class TextStrategy(GenerationStrategy):
         return AutoregressiveGenerator(config)
 
     def get_logits(self, last_hidden: torch.Tensor, step_idx: int) -> torch.Tensor:
-        # logits = F.linear(hidden_states, lm_head_weight)
-        h = last_hidden
-        if h.device != self._lm_head_weight.device:
-            h = h.to(self._lm_head_weight.device)
-        if h.dtype != self._lm_head_weight.dtype:
-            h = h.to(self._lm_head_weight.dtype)
-        return F.linear(h, self._lm_head_weight)
+        outputs = self._lm_head_executor.run({"input": last_hidden})
+        return outputs["output"]
 
     def embed_token(self, next_token: torch.Tensor, step_idx: int) -> torch.Tensor:
         # No-op for text: the graph handles embedding internally via aten::embedding.
@@ -744,18 +743,22 @@ class AutoregressiveHandler(FlowHandler):
                     dtype = getattr(torch, dtype_val, torch.float32)
 
         if gen_type == "autoregressive_text":
-            # Load lm_head weight
+            # DATA-DRIVEN: use lm_head graph executor for logits
             if "lm_head" not in self.ctx.pkg.topology.get("components", {}):
                 raise RuntimeError("ZERO FALLBACK: lm_head component not found for text generation.")
 
-            lm_head_device = device
-            if hasattr(self.ctx.plan, 'get_allocation'):
-                lm_head_alloc = self.ctx.plan.get_allocation("lm_head")
-                if lm_head_alloc and hasattr(lm_head_alloc, 'device'):
-                    lm_head_device = str(lm_head_alloc.device)
+            self._ensure_weights_loaded("lm_head")
+            lm_head_executor = self.ctx.executors.get("lm_head")
+            if lm_head_executor is None:
+                raise RuntimeError("ZERO FALLBACK: lm_head executor not created.")
 
-            lm_head_weight = self._load_lm_head_weight(lm_head_device, dtype)
-            return TextStrategy(lm_head_weight, session)
+            # lm_head is a trivial Linear (4 ops). Disable AMP — logits are
+            # scores, not activations. fp32 upcast would allocate vocab_size×hidden
+            # (800MB+) for no quality benefit and cause OOM on memory-tight GPUs.
+            if hasattr(lm_head_executor, '_dtype_engine'):
+                lm_head_executor._dtype_engine.amp_enabled = False
+
+            return TextStrategy(lm_head_executor, session)
 
         elif gen_type == "autoregressive_image":
             # Get component executors
@@ -869,23 +872,6 @@ class AutoregressiveHandler(FlowHandler):
             input_ids = input_ids_cond
 
         return input_ids
-
-    def _load_lm_head_weight(self, device: str, dtype: torch.dtype) -> torch.Tensor:
-        """Load lm_head weight for text LLM logits computation."""
-        from neurobrix.core.io import WeightLoader
-
-        loader = WeightLoader(str(self.ctx.pkg.root_path))
-        weights = loader.load_component("lm_head", device, dtype)
-        loader.close()
-
-        lm_head_weight = weights.get("lm_head.weight") or weights.get("weight")
-        if lm_head_weight is None:
-            raise RuntimeError(
-                f"ZERO FALLBACK: lm_head.weight not found.\n"
-                f"Available keys: {list(weights.keys())}"
-            )
-
-        return lm_head_weight
 
     def _unload_non_lm_weights(self, gen_info: Dict) -> None:
         """Unload component weights after generation."""
