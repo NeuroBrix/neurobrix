@@ -293,8 +293,19 @@ class GraphExecutor:
         pass
 
     def set_moe_config(self, norm_topk_prob: bool = True) -> None:
-        """Set MoE routing configuration from lm_config."""
+        """Set MoE routing configuration from lm_config.
+
+        TIMING FIX: MoE fusion runs in __init__ (before this is called) and
+        bakes norm_topk_prob into fused op attributes. We patch the DAG so
+        that CompiledSequence reads the correct value when it compiles later.
+        """
         self._moe_norm_topk_prob = norm_topk_prob
+
+        # Patch fused op attributes in the DAG (fusion already ran with default=True)
+        if self._dag:
+            for _uid, op in self._dag.get("ops", {}).items():
+                if op.get("op_type") == "custom::moe_fused":
+                    op.setdefault("attributes", {})["norm_topk_prob"] = norm_topk_prob
 
     def set_runtime_resolution(self, height: int, width: int) -> None:
         """
