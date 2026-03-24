@@ -2150,21 +2150,19 @@ class GraphExecutor:
         return summary
 
     def get_embed_tokens(self) -> "Optional[torch.Tensor]":
-        """Get embedding weight tensor for token embedding (LLMs)."""
-        embed_patterns = [
-            "model.embed_tokens.weight",
-            "embed_tokens.weight",
-            "model.token_embed.weight",
-            "token_embed.weight",
-            "word_embeddings.weight",
-            "wte.weight",
-            "embedding.weight",
-        ]
-        for pattern in embed_patterns:
+        """Get embedding weight tensor for token embedding (LLMs).
+
+        NeuroTax standard names: token_embed.weight, embed.weight
+        Some models prefix with 'model.': model.token_embed.weight
+        """
+        # Try exact NeuroTax names first
+        for pattern in ("token_embed.weight", "model.token_embed.weight",
+                        "embed.weight", "weight"):
             if pattern in self._weights:
                 return self._weights[pattern]
+        # Fallback: find any 2D weight with 'embed' in key (NeuroTax standard)
         for key, weight in self._weights.items():
-            if ("embed_tokens" in key or "token_embed" in key) and weight.dim() == 2:
+            if "embed" in key and weight.dim() == 2:
                 return weight
         return None
 
