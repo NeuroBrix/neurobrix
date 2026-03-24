@@ -440,10 +440,10 @@ class RNNTEngine(FlowHandler):
     def _extract_joint_weights(self) -> Dict[str, Any]:
         """Extract joint network weights from GraphExecutor.
 
-        NeMo RNNT joint weight names:
+        NeuroTax standard names in NBX:
           enc.weight: [D_joint, D_enc]    enc.bias: [D_joint]
           pred.weight: [D_joint, D_dec]   pred.bias: [D_joint]
-          joint_net.2.weight: [V, D_joint]  joint_net.2.bias: [V]
+          joint.2.weight: [V, D_joint]    joint.2.bias: [V]
         """
         executor = self.ctx.executors["joint"]
         w = executor._weights
@@ -452,18 +452,17 @@ class RNNTEngine(FlowHandler):
         for key, tensor in w.items():
             if tensor is None:
                 continue
-            k = key.lower()
-            if k.endswith("enc.weight"):
+            if key.endswith("enc.weight"):
                 result["enc_weight"] = tensor
-            elif k.endswith("enc.bias"):
+            elif key.endswith("enc.bias"):
                 result["enc_bias"] = tensor
-            elif k.endswith("pred.weight"):
+            elif key.endswith("pred.weight"):
                 result["dec_weight"] = tensor
-            elif k.endswith("pred.bias"):
+            elif key.endswith("pred.bias"):
                 result["dec_bias"] = tensor
-            elif "joint_net" in k and "weight" in k:
+            elif key.endswith("joint.2.weight"):
                 result["out_weight"] = tensor
-            elif "joint_net" in k and "bias" in k:
+            elif key.endswith("joint.2.bias"):
                 result["out_bias"] = tensor
 
         required = ["enc_weight", "enc_bias", "dec_weight", "dec_bias", "out_weight", "out_bias"]

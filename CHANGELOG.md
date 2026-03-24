@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha.14] - 2026-03-24
+
+### Fixed
+- Fix weight key matching in RNNT, encoder-decoder, and audio flow handlers after model rebuild
+- Parakeet TDT speech recognition now works correctly with freshly built containers
+
 ## [0.1.0-alpha.13] - 2026-03-24
 
 ### Added
@@ -260,7 +266,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - NeuroBrix registry at neurobrix.es
 - Support for 9 models: Sana, PixArt-Alpha, PixArt-Sigma, FLUX.2-dev, Flex.1-alpha, Janus-Pro-7B, DeepSeek-MoE-16B, Qwen3-30B-A3B, TinyLlama-1.1B
 
-[Unreleased]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a13...HEAD
+[Unreleased]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a14...HEAD
+[0.1.0-alpha.14]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a13...v0.1.0a14
 [0.1.0-alpha.13]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a12...v0.1.0a13
 [0.1.0-alpha.12]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a11...v0.1.0a12
 [0.1.0-alpha.11]: https://github.com/Benkelaya/NeuroBrix/compare/v0.1.0a10...v0.1.0a11

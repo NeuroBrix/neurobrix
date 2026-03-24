@@ -70,7 +70,7 @@ class GraphLMSession:
         device = self.executor.device
         if hasattr(self.executor, '_weights') and self.executor._weights:
             for weight_key, weight_tensor in self.executor._weights.items():
-                if 'embed' in weight_key.lower():
+                if 'embed' in weight_key:  # NeuroTax: token_embed.weight, embed.weight
                     device = weight_tensor.device
                     break
             else:
