@@ -97,14 +97,15 @@ class ComponentMemory:
 @dataclass
 class KVCachePlan:
     """KV cache allocation computed by Prism. Runtime MUST use these values."""
-    max_cache_len: int          # Max tokens cacheable (Prism-computed trade-off)
+    max_cache_len: int          # Max tokens cacheable — ceiling (Prism VRAM budget)
     num_layers: int
     num_kv_heads: int
     k_head_dim: int             # K head dimension (qk_nope + qk_rope for MLA, else head_dim)
     v_head_dim: int             # V head dimension (v_head_dim for MLA, else head_dim)
     dtype: torch.dtype          # Cache dtype (may differ from weight dtype)
-    memory_bytes: int           # Total KV cache memory budget
+    memory_bytes: int           # Total KV cache memory budget (at max_cache_len)
     per_token_bytes: int        # Memory per cached token (for runtime info)
+    initial_cache_len: int = 0  # Initial buffer size (0 = allocate at max_cache_len)
 
     @property
     def head_dim(self) -> int:
@@ -420,6 +421,10 @@ class PrismSolver:
         """
         Solve optimal allocation with Best-Fit-Decreasing.
 
+        In serve mode: tries hot budget first (all weights resident). If no strategy
+        fits hot mode, falls back to cold budget and warns the user that the daemon
+        will run in cold mode (weights swap per phase, not near-zero latency).
+
         Strategies tried in order:
         1. single_gpu - All on largest GPU
         2. component_placement - Whole components on different GPUs
@@ -431,6 +436,7 @@ class PrismSolver:
         8. zero3 - CPU offload
         """
         self._serve_mode = serve_mode
+        self._serve_cold_fallback = False  # Track if serve degraded to cold
 
         neural_components = container.get_neural_components()
         if not neural_components:
@@ -492,10 +498,27 @@ class PrismSolver:
             strategies, sorted_components, component_memory, devices, shard_sizes, profile, container
         )
 
+        # Serve mode fallback: if hot mode failed, retry with cold budget
+        # User chose serve but hardware can't keep all weights resident →
+        # degrade gracefully to cold mode instead of crashing
+        if not candidates and serve_mode:
+            import logging
+            logging.getLogger(__name__).warning(
+                "[Prism] Serve mode: hot budget doesn't fit — falling back to cold mode.\n"
+                "The daemon will load/unload weights per request (not near-zero latency).\n"
+                "For hot serve, use a GPU with more VRAM or a multi-GPU setup."
+            )
+            self._serve_mode = False  # Retry with cold budgets
+            self._serve_cold_fallback = True
+            devices = self._prepare_devices(profile)
+            candidates = self._evaluate_all_strategies(
+                strategies, sorted_components, component_memory, devices, shard_sizes, profile, container
+            )
+            self._serve_mode = serve_mode  # Restore for KV cache sizing
+
         # FP32 fallback for BF16 models
         if not candidates:
             if self._try_fp32_fallback(container, profile):
-                # Retrying with FP32 fallback
                 target_dtype_str = "float32"
                 component_memory = self._compute_memory(container, neural_components, input_config, target_dtype_str)
                 sorted_components = sorted(component_memory.items(), key=lambda x: -x[1].total_bytes)
@@ -536,19 +559,33 @@ class PrismSolver:
                     total_allocated = sum(m.activation_bytes + m.overhead_bytes
                                          for m in component_memory.values())
                 elif strat_name == "single_gpu_lifecycle":
-                    persistent, _ = self._classify_lifecycle(container)
-                    total_allocated = sum(
-                        m.total_bytes for name, m in component_memory.items()
+                    persistent, transient = self._classify_lifecycle(container)
+                    # Persistent: all weights resident + peak activation
+                    persistent_weights = sum(
+                        m.weight_bytes for name, m in component_memory.items()
                         if name in persistent
                     )
+                    persistent_max_act = max(
+                        (m.activation_bytes for name, m in component_memory.items() if name in persistent),
+                        default=0
+                    )
+                    # Transient: max one at a time (weight + activation)
+                    max_transient = max(
+                        (m.total_bytes for name, m in component_memory.items() if name in transient),
+                        default=0
+                    )
+                    total_allocated = persistent_weights + persistent_max_act + max_transient
                 elif strat_name == "single_gpu":
-                    # Lazy: peak = max one component. Eager: all resident.
-                    total_model = sum(m.total_bytes for m in component_memory.values())
-                    largest_cap_bytes = int(max(d.capacity_mb for d in strat_devices) * 0.90 * 1024 * 1024)
-                    if total_model <= largest_cap_bytes:
-                        total_allocated = total_model  # eager
+                    # Hot/cold budget must match _try_single_gpu's decision
+                    serve_mode = getattr(self, '_serve_mode', False)
+                    if serve_mode:
+                        # Hot: all weights resident + peak activations
+                        total_weights = sum(m.weight_bytes for m in component_memory.values())
+                        max_act = max((m.activation_bytes for m in component_memory.values()), default=0)
+                        total_allocated = total_weights + max_act
                     else:
-                        total_allocated = max(m.total_bytes for m in component_memory.values())  # lazy
+                        # Cold: peak of one component at a time
+                        total_allocated = max(m.total_bytes for m in component_memory.values())
                 else:
                     total_allocated = sum(m.total_bytes for m in component_memory.values())
 
@@ -790,6 +827,14 @@ class PrismSolver:
 
         memory_bytes = max_cache_len * per_token_bytes
 
+        # Initial buffer: start small, grow on demand up to max_cache_len
+        # Run mode: allocate at max right away (single-shot, known size)
+        # Serve mode: start at max_tokens + margin, grow as user generates longer
+        if getattr(self, '_serve_mode', False) and max_tokens:
+            initial_len = min(max_tokens + prompt_margin, max_cache_len)
+        else:
+            initial_len = 0  # 0 = allocate at max_cache_len (legacy behavior for run)
+
         return KVCachePlan(
             max_cache_len=max_cache_len,
             num_layers=int(num_layers),
@@ -799,6 +844,7 @@ class PrismSolver:
             dtype=target_dtype,
             memory_bytes=memory_bytes,
             per_token_bytes=per_token_bytes,
+            initial_cache_len=initial_len,
         )
 
     def _apply_attention_correction(
@@ -888,20 +934,32 @@ class PrismSolver:
     def _try_single_gpu(
         self, sorted_comps, comp_mem, devices, shard_sizes, profile, container
     ) -> Optional[Tuple[Dict, List[DeviceState]]]:
-        """All components on largest GPU (lazy loading - peak = max component)."""
+        """All components on largest GPU.
+
+        Budget depends on serve_mode:
+        - Hot (serve): sum(all_weights) + max(activations) — all weights resident
+        - Cold (run): max(component_weights + component_activations) — one at a time
+        """
         if not devices:
             return None
 
         largest = devices[0]
+        serve_mode = getattr(self, '_serve_mode', False)
 
-        # Peak = max single component
-        peaks = [(n, m.weight_mb + m.activation_mb) for n, m in sorted_comps]
-        max_name, max_peak = max(peaks, key=lambda x: x[1])
+        if serve_mode:
+            # Hot mode: all weights resident + peak activation of any single component
+            total_weights_mb = sum(m.weight_mb for _, m in sorted_comps)
+            max_activation_mb = max((m.activation_mb for _, m in sorted_comps), default=0)
+            total_required = total_weights_mb + max_activation_mb
+        else:
+            # Cold mode: only one component in VRAM at a time
+            peaks = [(n, m.weight_mb + m.activation_mb) for n, m in sorted_comps]
+            _, max_peak = max(peaks, key=lambda x: x[1])
+            total_required = max_peak
 
         needs_kv = getattr(self, '_needs_kv_cache', False)
         overhead_pct = 0.0 if needs_kv else 0.05
-        overhead = max_peak * overhead_pct
-        total_required = max_peak + overhead
+        total_required += total_required * overhead_pct
 
         if total_required > largest.capacity_mb:
             return None
@@ -919,33 +977,68 @@ class PrismSolver:
     def _classify_lifecycle(self, container) -> Tuple[set, set]:
         """Classify components as persistent (loop-resident) or transient (used once).
 
-        For autoregressive models:
-        - Persistent: language_model + gen_head + gen_embed + gen_aligner (called every token)
-        - Transient: everything else (vision_model, gen_vision_model, aligner)
+        Lifecycle classification per family:
 
-        Source: topology.json flow.generation config.
+        LLM / image_vq (autoregressive):
+        - Persistent: language_model + gen_head + gen_embed + gen_aligner (every token)
+        - Transient: vision_model, gen_vision_model, aligner (used once)
+
+        Diffusion (iterative_process):
+        - Persistent: transformer/dit (called N times in denoising loop)
+        - Transient: text_encoder(s), VAE (used once per request)
+
+        Audio (encoder-decoder / transducer):
+        - Persistent: decoder, predictor, joiner (autoregressive / streaming)
+        - Transient: encoder (used once per utterance)
+
+        Source: topology.json flow config.
         """
         topology_path = container.cache_path / "topology.json" if container.cache_path else None
-        gen_config = {}
+        flow_config = {}
         if topology_path and topology_path.exists():
             with open(topology_path) as f:
-                gen_config = json.load(f).get("flow", {}).get("generation", {})
+                topo = json.load(f)
+                flow_config = topo.get("flow", {})
 
+        manifest = container.get_manifest() or {}
+        all_comps = set(manifest.get("components", {}).keys())
+        category = getattr(self, '_model_category', 'diffusion')
         persistent = set()
-        for key in ("lm_component", "head_component", "embed_component", "aligner_component"):
-            comp = gen_config.get(key)
-            if comp:
-                persistent.add(comp)
 
-        # Fallback by name convention
-        if not persistent:
-            manifest = container.get_manifest() or {}
-            for name in manifest.get("components", {}):
-                if name in ("language_model", "model", "llm") or \
-                   (name.startswith("gen_") and name != "gen_vision_model"):
+        if category in ("llm", "image_vq"):
+            # Autoregressive: generation loop components are persistent
+            gen_config = flow_config.get("generation", {})
+            for key in ("lm_component", "head_component", "embed_component", "aligner_component"):
+                comp = gen_config.get(key)
+                if comp:
+                    persistent.add(comp)
+            # Fallback by name convention
+            if not persistent:
+                for name in all_comps:
+                    if name in ("language_model", "model", "llm") or \
+                       (name.startswith("gen_") and name != "gen_vision_model"):
+                        persistent.add(name)
+
+        elif category == "diffusion":
+            # Diffusion: loop components (transformer/dit) are persistent
+            loop_comps = flow_config.get("loop", {}).get("components", [])
+            persistent.update(loop_comps)
+            # Fallback by name convention
+            if not persistent:
+                for name in all_comps:
+                    if any(k in name.lower() for k in ("transformer", "dit", "unet", "diffusion")):
+                        persistent.add(name)
+
+        else:
+            # Audio: decoder/predictor/joiner are persistent (autoregressive output)
+            for name in all_comps:
+                if any(k in name.lower() for k in ("decoder", "predictor", "joiner", "language_model")):
                     persistent.add(name)
 
-        all_comps = set((container.get_manifest() or {}).get("components", {}).keys())
+        # If no classification succeeded, treat all as persistent (safe default)
+        if not persistent:
+            persistent = all_comps
+
         return persistent, all_comps - persistent
 
     def _try_single_gpu_lifecycle(
@@ -953,13 +1046,10 @@ class PrismSolver:
     ) -> Optional[Tuple[Dict, List[DeviceState]]]:
         """Lifecycle-aware single GPU: persistent components loaded together, transient on-demand.
 
-        Peak = sum(all persistent) + max(one transient at a time).
-        Only for LLM/image_vq models — diffusion uses _try_single_gpu.
+        Peak = sum(all persistent weights + max persistent activation) + max(one transient at a time).
+        Works for ALL families — _classify_lifecycle handles per-family classification.
         """
         if not devices:
-            return None
-        category = getattr(self, '_model_category', 'diffusion')
-        if category == "diffusion":
             return None
 
         largest = devices[0]
@@ -1090,24 +1180,45 @@ class PrismSolver:
                 if current_dev_idx >= len(fresh):
                     return None
 
-            # Allocate blocks - best-fit across ALL GPUs (not monotonic)
+            # Allocate blocks - best-fit across GPUs with topology preference
+            last_dev = None
             for block_num in sorted(blocks['blocks'].keys()):
                 block_keys = blocks['blocks'][block_num]
                 base_block = blocks['block_sizes'][block_num]
                 real_block = fresh[0].get_real_block_size(base_block, model_dtype)
                 total_block = (real_block + act_per_block) * packing_overhead
 
-                # Find GPU with most free space that can fit this block
-                candidates = [d for d in fresh if d.can_fit(total_block)]
-                if not candidates:
+                # Find GPUs that can fit this block
+                fit_devs = [d for d in fresh if d.can_fit(total_block)]
+                if not fit_devs:
                     return None
 
-                # Prefer NVLink-connected GPUs, then most free space
-                target = max(candidates, key=lambda d: d.free_mb)
+                # Topology-aware: prefer same group as last block (minimize cross-device transfers)
+                target = None
+                if last_dev is not None and profile.topology:
+                    last_idx = self._get_device_index(last_dev.device_string)
+                    same_group = []
+                    other = []
+                    for d in fit_devs:
+                        d_idx = self._get_device_index(d.device_string)
+                        if d_idx == last_idx or profile.topology.devices_have_fast_interconnect([last_idx, d_idx]):
+                            same_group.append(d)
+                        else:
+                            other.append(d)
+                    # Prefer: same device (free space) > same NVLink group > any device
+                    if same_group:
+                        target = max(same_group, key=lambda d: d.free_mb)
+                    elif other:
+                        target = max(other, key=lambda d: d.free_mb)
+
+                if target is None:
+                    target = max(fit_devs, key=lambda d: d.free_mb)
+
                 target.used_mb += total_block
                 target.components.append(f"{comp_name}.block.{block_num}")
                 for key in block_keys:
                     shard_map[key] = target.device_string
+                last_dev = target
 
             devices_used = set(shard_map.values())
             allocations[comp_name] = (f"fgp:{','.join(sorted(devices_used))}", shard_map)
@@ -1297,7 +1408,20 @@ class PrismSolver:
 
             required = (mem.weight_mb * available[0].get_cost_multiplier(model_dtype)) + mem.activation_mb
 
-            tp_gpus = available[:n_gpus]
+            # Prefer NVLink-connected GPUs for TP (minimize cross-device transfer cost)
+            if n_gpus <= len(available) and profile.topology:
+                # Try to find n_gpus devices that are all fast-interconnected
+                best_group = None
+                for start in range(len(available) - n_gpus + 1):
+                    group = available[start:start + n_gpus]
+                    indices = [self._get_device_index(g.device_string) for g in group]
+                    if profile.topology.devices_have_fast_interconnect(indices):
+                        best_group = group
+                        break
+                tp_gpus = best_group if best_group else available[:n_gpus]
+            else:
+                tp_gpus = available[:n_gpus]
+
             per_gpu = required / n_gpus
 
             for gpu in tp_gpus:
@@ -1576,19 +1700,20 @@ class PrismSolver:
 
         Factors:
         - Base score by strategy type (single_gpu best, zero3 worst)
-        - Transfer penalty weighted by interconnect bandwidth (Gbps value, not technology)
+        - Transfer penalty weighted by actual interconnect bandwidth from profile
         - Boundary count penalty (fewer boundaries = better)
         - Topology completeness (partial interconnection = lower score)
+        - Serve mode: eager strategies get boost (user wants near-zero latency)
+        - Zero3: penalty scales with PCIe bandwidth + CPU cores from profile
         - Lazy loading overhead penalty
-        - CPU streaming penalty for zero3
         """
         BASE_SCORES = {
             "single_gpu": 1000,
             "single_gpu_lifecycle": 900,
+            "pipeline_parallel": 850,
             "component_placement": 750,
-            "pipeline_parallel": 850,       # Best multi-GPU: fewest boundaries
             "block_scatter": 700,
-            "weight_sharding": 680,         # Many cross-device copies per op
+            "weight_sharding": 680,
             "component_placement_lazy": 400,
             "lazy_sequential": 300,
             "zero3": 100,
@@ -1610,51 +1735,73 @@ class PrismSolver:
 
         n_devices = len(device_strings)
 
-        # Bandwidth-weighted transfer penalty
+        # Bandwidth reference from profile (not hardcoded)
+        ref_bw = profile.topology.default_bandwidth_gbps if profile.topology else 32.0
+
+        # Bandwidth-weighted transfer penalty for multi-GPU strategies
         if n_devices > 1 and profile.topology:
             device_indices = sorted(int(d.split(':')[-1]) for d in device_strings)
 
             # Get minimum pairwise bandwidth (bottleneck)
             min_bw = profile.get_min_pairwise_bandwidth(device_indices)
 
-            # Topology completeness: if not all devices are interconnected via fast link,
-            # strategies needing all GPUs should be penalized
+            # Topology completeness
             all_connected = profile.topology.devices_have_fast_interconnect(device_indices)
 
             # Boundary count estimation by strategy type
             if strategy_name == "pipeline_parallel":
-                # PP per-layer: only N-1 boundaries for N GPUs (sequential fill)
-                n_boundaries = n_devices - 1
+                n_boundaries = n_devices - 1  # Sequential: N-1 crossings
             elif strategy_name == "component_placement":
-                # Component placement: ~n_components boundaries
                 n_boundaries = len(allocations)
             elif strategy_name == "block_scatter":
-                # Block scatter: many boundaries (blocks scattered across GPUs)
-                # Estimate: each block boundary is a potential cross-device transfer
-                n_boundaries = n_devices * 5  # Rough estimate
+                # Count actual cross-device boundaries from allocation
+                dev_sequence = []
+                for alloc in allocations.values():
+                    dev = alloc[0] if isinstance(alloc, tuple) else alloc
+                    if dev.startswith("fgp:"):
+                        dev_sequence.extend(dev[4:].split(","))
+                n_boundaries = max(len(set(dev_sequence)) - 1, n_devices)
             elif strategy_name == "weight_sharding":
-                # Weight sharding: many cross-device copies per forward pass
-                n_boundaries = n_devices * 20  # Very high penalty
+                n_boundaries = n_devices * 20  # Many copies per forward pass
             else:
                 n_boundaries = n_devices
 
-            # Transfer penalty: inversely proportional to bandwidth
-            # Reference: PCIe 4.0 x16 = 32 Gbps, NVLink 3.0 = 300 Gbps
-            transfer_penalty = n_boundaries * 15.0 * (32.0 / max(min_bw, 1.0))
+            # Transfer penalty: inversely proportional to actual bandwidth
+            transfer_penalty = n_boundaries * 15.0 * (ref_bw / max(min_bw, 1.0))
             score -= transfer_penalty
 
-            # Partial topology penalty: if not all devices interconnected, penalize heavily
+            # Partial topology penalty
             if not all_connected:
                 score -= 200.0
+
+        # Serve mode: eager strategies are much more valuable (near-zero latency)
+        serve_mode = getattr(self, '_serve_mode', False)
+        if serve_mode:
+            from neurobrix.core.prism.structure import AllocationStrategy
+            eager_values = {s.value for s in AllocationStrategy if s.is_eager}
+            if strategy_name in eager_values:
+                score += 100.0  # Boost eager strategies in serve mode
+            else:
+                score -= 50.0   # Penalize lazy strategies in serve mode
+
+        # Zero3: penalty scales with actual PCIe bandwidth and CPU capability
+        if strategy_name == "zero3":
+            # Base penalty adjusted by PCIe bandwidth
+            # Fast PCIe (Gen5 64GB/s) = less penalty, slow (Gen3 16GB/s) = more penalty
+            pcie_factor = ref_bw / 32.0  # Normalize to Gen4 baseline
+            base_zero3_penalty = 200.0 / max(pcie_factor, 0.5)  # Better PCIe = less penalty
+
+            # CPU cores adjustment: more cores = faster CPU-side compute
+            cpu_cores = profile.cpu.cores if profile.cpu else 4
+            core_factor = min(cpu_cores / 16.0, 2.0)  # Normalize to 16-core baseline, cap at 2x
+            base_zero3_penalty /= max(core_factor, 0.5)  # More cores = less penalty
+
+            score -= base_zero3_penalty
 
         # Lazy loading penalty: each component load/unload adds latency
         if "lazy" in strategy_name:
             n_components = len(allocations)
             score -= 20.0 * n_components
-
-        # Zero3: CPU->GPU streaming is always slowest
-        if strategy_name == "zero3":
-            score -= 200.0
 
         return max(score, 1.0)
 
@@ -2015,19 +2162,24 @@ class PrismSolver:
             )
             total_mb += mem.total_mb
 
-        # Determine loading mode — strategy-driven
-        # Eager: weights stay in VRAM permanently (fast serving)
-        # Lazy: weights swap in/out per execution phase (large models)
-        # Source of truth: AllocationStrategy.is_eager in structure.py
+        # Determine loading mode — strategy + serve_mode driven
+        # Eager: weights stay in VRAM permanently (fast serving, near-zero latency)
+        # Lazy: weights swap in/out per execution phase (large models, cold run)
+        #
+        # Serve cold fallback: user asked for serve (hot) but VRAM can't hold all
+        # weights → force lazy mode. The daemon still works, just not near-zero latency.
         from neurobrix.core.prism.structure import AllocationStrategy
         _EAGER_VALUES = {s.value for s in AllocationStrategy if s.is_eager}
         _LAZY_VALUES = {s.value for s in AllocationStrategy if not s.is_eager}
-        if strategy in _EAGER_VALUES:
+
+        if getattr(self, '_serve_cold_fallback', False):
+            # Serve mode degraded to cold: force lazy even if strategy is eager-capable
+            loading_mode = "lazy"
+        elif strategy in _EAGER_VALUES:
             loading_mode = "eager"
         elif strategy in _LAZY_VALUES:
             loading_mode = "lazy"
         else:
-            # Unknown strategy — check if model fits in VRAM
             total_gpu_mb = sum(d.capacity_mb for d in devices if d.device_string.startswith("cuda"))
             loading_mode = "eager" if total_mb <= total_gpu_mb * 0.90 else "lazy"
 
