@@ -1635,13 +1635,13 @@ class AudioEngine(FlowHandler):
         embed_weight = None
         if hasattr(executor, '_weights'):
             for wname, wtensor in executor._weights.items():
-                if 'embeddings.weight' in wname and 'codebook' not in wname:
+                if wname == 'embed.weight':  # NeuroTax: main text embedding
                     embed_weight = wtensor
                     break
 
         if embed_weight is None:
             raise RuntimeError(
-                "ZERO FALLBACK: DualAR model must have embeddings.weight for token→embedding lookup."
+                "ZERO FALLBACK: DualAR model must have embed.weight for token→embedding lookup."
             )
 
         token_ids = torch.tensor(generated_semantic, dtype=torch.long, device=device)
@@ -2039,7 +2039,7 @@ class AudioEngine(FlowHandler):
         executor = self.ctx.executors.get(comp_name)
         if executor is not None:
             for key in executor._weights:
-                if "embed_tokens" in key or "token_embed" in key:
+                if "token_embed" in key or "embed" in key:  # NeuroTax standard
                     return executor._weights[key]
 
         # 2. Check separate embed_tokens component
