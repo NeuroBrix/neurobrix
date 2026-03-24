@@ -292,7 +292,7 @@ def get_embed_weight(ctx: FlowContext, comp_name: str) -> Optional[torch.Tensor]
     executor = ctx.executors.get(comp_name)
     if executor is not None:
         for key in executor._weights:
-            if "embed_tokens" in key or "token_embed" in key:
+            if "token_embed" in key or "embed" in key:  # NeuroTax standard
                 return executor._weights[key]
     embed_executor = ctx.executors.get("embed_tokens")
     if embed_executor is not None:
