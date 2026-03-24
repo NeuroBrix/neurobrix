@@ -572,20 +572,20 @@ class KVCacheAttentionWrapper:
         the index correctly selects row 0 of a table containing RoPE values
         for the absolute position.
 
-        Only float aranges are shifted (RoPE). Integer aranges (MoE routing
-        via topk/sort/bincount) pass through unmodified.
+        Float aranges (RoPE) AND integer aranges (position_ids for encoder-decoder
+        models like Whisper V3 Turbo) are shifted. This is safe because MoE routing
+        aranges live in the model component, not the decoder — the KV cache wrapper
+        only intercepts ops in the decoder component where aranges are positional.
         """
         if self._is_prefill:
             return torch.arange(*args, **kwargs)
 
         cache_len = self._position_offset
         if cache_len > 0 and len(args) >= 1 and isinstance(args[0], (int, float)):
-            dtype = kwargs.get('dtype', None)
-            if dtype in (torch.float32, torch.float64, torch.bfloat16, torch.float16):
-                end = args[0]
-                # Shift start to cache_len: arange(end) → arange(cache_len, cache_len + end)
-                # Output size unchanged (end elements), symbolic shapes preserved
-                return torch.arange(cache_len, cache_len + end, **kwargs)
+            end = args[0]
+            # Shift start to cache_len: arange(end) → arange(cache_len, cache_len + end)
+            # Output size unchanged (end elements), symbolic shapes preserved
+            return torch.arange(cache_len, cache_len + end, **kwargs)
 
         return torch.arange(*args, **kwargs)
 
