@@ -752,6 +752,10 @@ class AutoregressiveHandler(FlowHandler):
             if lm_head_executor is None:
                 raise RuntimeError("ZERO FALLBACK: lm_head executor not created.")
 
+            # Propagate persistent mode — lm_head must survive cleanup between requests
+            if self.ctx.persistent_mode and hasattr(lm_head_executor, '_persistent'):
+                lm_head_executor._persistent = True
+
             # lm_head is a trivial Linear (4 ops). Disable AMP — logits are
             # scores, not activations. fp32 upcast would allocate vocab_size×hidden
             # (800MB+) for no quality benefit and cause OOM on memory-tight GPUs.
