@@ -10,7 +10,7 @@ NeuroBrix is developed and maintained by **WizWorks OÜ**, a property of **Neura
 
 ### Report Bugs
 
-Found something broken? Open a [Bug Report](https://github.com/NeuroBrix/neurobrix/issues/new?template=bug_report.yml) with:
+Found something broken? Open a [Bug Report](https://gitlab.com/neurobrix/Neurobrix/-/issues/new) with:
 
 - NeuroBrix version (`neurobrix info`)
 - Hardware profile used
@@ -20,7 +20,7 @@ Found something broken? Open a [Bug Report](https://github.com/NeuroBrix/neurobr
 
 ### Request Features
 
-Have an idea? Open a [Feature Request](https://github.com/NeuroBrix/neurobrix/issues/new?template=feature_request.yml) describing:
+Have an idea? Open a [Feature Request](https://gitlab.com/neurobrix/Neurobrix/-/issues/new) describing:
 
 - The problem you're solving
 - Your proposed solution
@@ -28,7 +28,7 @@ Have an idea? Open a [Feature Request](https://github.com/NeuroBrix/neurobrix/is
 
 ### Request Model Support
 
-Want a specific model in the NeuroBrix Hub? Open a [Model Request](https://github.com/NeuroBrix/neurobrix/issues/new?template=model_request.yml) with:
+Want a specific model in the NeuroBrix Hub? Open a [Model Request](https://gitlab.com/neurobrix/Neurobrix/-/issues/new) with:
 
 - Model name and source (Hugging Face link, paper, etc.)
 - Model family (image, LLM, audio, video)
@@ -63,7 +63,7 @@ We welcome contributions across the entire stack:
 ### Clone and Install
 
 ```bash
-git clone https://github.com/NeuroBrix/neurobrix.git
+git clone https://gitlab.com/neurobrix/Neurobrix.git
 cd neurobrix
 pip install -e ".[dev]"
 ```
@@ -200,8 +200,8 @@ Place it in `config/hardware/` and submit a PR.
 
 ## Community
 
-- **Issues:** [github.com/NeuroBrix/neurobrix/issues](https://github.com/NeuroBrix/neurobrix/issues)
-- **Discussions:** [github.com/NeuroBrix/neurobrix/discussions](https://github.com/NeuroBrix/neurobrix/discussions)
+- **Issues:** [gitlab.com/neurobrix/Neurobrix/-/issues](https://gitlab.com/neurobrix/Neurobrix/-/issues)
+- **Discussions:** [gitlab.com/neurobrix/Neurobrix/-/issues](https://gitlab.com/neurobrix/Neurobrix/-/issues)
 - **Email:** [contributors@neurobrix.es](mailto:contributors@neurobrix.es)
 
 ---
