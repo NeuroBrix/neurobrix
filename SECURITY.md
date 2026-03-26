@@ -2,7 +2,7 @@
 
 ## Reporting a Vulnerability
 
-**Do not open public GitHub issues for security vulnerabilities.**
+**Do not open public GitLab issues for security vulnerabilities.**
 
 If you discover a security vulnerability in NeuroBrix, please report it responsibly by emailing:
 
