@@ -64,6 +64,11 @@ LICENSE_INFO = {
         "url": "https://huggingface.co/THUDM/CogVideoX-2b/blob/main/LICENSE",
         "gated": True,
     },
+    "nvidia-open-model-license": {
+        "name": "NVIDIA Open Model License",
+        "url": "https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/",
+        "gated": False,
+    },
 }
 
 

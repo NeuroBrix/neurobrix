@@ -24,7 +24,7 @@ NeuroBrix is committed to providing a welcoming and respectful environment for e
 
 ## Scope
 
-This Code of Conduct applies to all project spaces including GitHub issues, pull requests, discussions, and any public or private communication related to NeuroBrix.
+This Code of Conduct applies to all project spaces including GitLab issues, merge requests, discussions, and any public or private communication related to NeuroBrix.
 
 ## Enforcement
 

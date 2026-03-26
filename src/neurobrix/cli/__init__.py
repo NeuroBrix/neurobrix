@@ -34,7 +34,7 @@ Examples:
   # Inspect a .nbx file
   neurobrix inspect ~/.neurobrix/cache/Flex.1-alpha/model.nbx
 
-For more information: https://github.com/neurobrix/neurobrix
+For more information: https://gitlab.com/neurobrix/Neurobrix
         """
     )
 
@@ -261,6 +261,15 @@ Slash commands (inside chat):
     )
 
     # ========================================
+    # DOCTOR command
+    # ========================================
+    subparsers.add_parser(
+        'doctor',
+        help='Diagnose installation issues (PATH, etc.)',
+        description='Check that neurobrix is correctly installed and on PATH.',
+    )
+
+    # ========================================
     # VALIDATE command
     # ========================================
     validate_parser = subparsers.add_parser(
@@ -330,6 +339,9 @@ def main():
         elif args.command == 'validate':
             from neurobrix.cli.commands.validate import cmd_validate
             cmd_validate(args)
+        elif args.command == 'doctor':
+            from neurobrix.cli._path_helper import print_path_diagnostics
+            print_path_diagnostics()
         else:
             parser.print_help()
             sys.exit(1)
