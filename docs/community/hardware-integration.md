@@ -120,7 +120,7 @@ NeuroBrix currently supports NVIDIA GPUs via PyTorch + CUDA + Triton:
 **Hardware Integration Program**
 Email: [partners@neurobrix.es](mailto:partners@neurobrix.es)
 Web: [neurobrix.es](https://neurobrix.es)
-GitHub: [github.com/NeuroBrix](https://github.com/NeuroBrix)
+GitLab: [gitlab.com/neurobrix](https://gitlab.com/neurobrix)
 
 ---
 
