@@ -36,17 +36,29 @@ publish-pypi:
   script:
     - pip install twine requests
     - |
-      # Exchange GitLab OIDC token for short-lived PyPI upload token
-      PYPI_UPLOAD_TOKEN=$(python3 -c "
-      import requests, os, json
-      resp = requests.post(
-          'https://pypi.org/_/oidc/mint-token',
-          json={'token': os.environ['PYPI_ID_TOKEN']}
-      )
-      resp.raise_for_status()
-      print(resp.json()['token'])
-      ")
-      TWINE_USERNAME=__token__ TWINE_PASSWORD="$PYPI_UPLOAD_TOKEN" twine upload dist/*
+      # Try OIDC trusted publishing first, fall back to PYPI_TOKEN
+      python3 -c "
+      import requests, os, sys, json
+      try:
+          resp = requests.post(
+              'https://pypi.org/_/oidc/mint-token',
+              json={'token': os.environ.get('PYPI_ID_TOKEN', '')}
+          )
+          resp.raise_for_status()
+          token = resp.json()['token']
+          print('OIDC: obtained short-lived upload token', file=sys.stderr)
+      except Exception as e:
+          print(f'OIDC failed ({e}), trying PYPI_TOKEN fallback', file=sys.stderr)
+          token = os.environ.get('PYPI_TOKEN', '')
+          if not token:
+              print('ERROR: No PYPI_TOKEN fallback set', file=sys.stderr)
+              sys.exit(1)
+          print('Fallback: using PYPI_TOKEN', file=sys.stderr)
+      with open('.pypi_token', 'w') as f:
+          f.write(token)
+      "
+      TWINE_USERNAME=__token__ TWINE_PASSWORD=$(cat .pypi_token) twine upload dist/*
+      rm -f .pypi_token
 
 # ============================================
 # GitLab Pages — docs deploy on main push
