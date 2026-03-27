@@ -160,6 +160,10 @@ def validate_dtype_isa(cpu: CPUConfig, preferred_dtype: Optional[str]) -> None:
     if preferred_dtype is None:
         return
 
+    # ARM (Apple Silicon, Jetson) has native fp16/bf16 via NEON — skip x86 ISA checks
+    if cpu.architecture in ("arm64", "aarch64"):
+        return
+
     requirements = _DTYPE_ISA_REQUIREMENTS.get(preferred_dtype)
     if requirements is None:
         return  # float32 always works
