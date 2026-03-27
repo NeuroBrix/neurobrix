@@ -648,8 +648,10 @@ class GraphExecutor:
         # LLM family keeps AMP everywhere: RMSNorm pow→mean→rsqrt overflows without it.
         from neurobrix.core.dtype.engine import DtypeEngine
         amp_enabled = self._should_enable_amp()
+        force_uniform = str(self.device).startswith("mps")
         self._dtype_engine = DtypeEngine(self.dtype, graph_dtype=self._graph_dtype,
-                                         amp_enabled=amp_enabled)
+                                         amp_enabled=amp_enabled,
+                                         force_uniform_dtype=force_uniform)
 
         # DAG loaded silently - stats available via _dag
 
@@ -832,6 +834,7 @@ class GraphExecutor:
             device=torch.device(self.device),
             dtype=self.dtype,
             amp_enabled=self._dtype_engine.amp_enabled,
+            force_uniform_dtype=self._dtype_engine.force_uniform_dtype,
         )
 
         # Register any op interceptors BEFORE compilation (Phase 2.2: KV cache support)
@@ -1136,7 +1139,12 @@ class GraphExecutor:
             tensor = tensor.to(self.device)
 
             if tensor.is_floating_point() and tensor.dtype != self.dtype:
-                tensor = self._dtype_engine.convert_constant(tensor)
+                if str(self.device).startswith("mps"):
+                    # MPS: force ALL float constants to compute_dtype.
+                    # Metal cannot handle mixed-dtype ops (add/mm of f32+bf16 crashes).
+                    tensor = tensor.to(self.dtype)
+                else:
+                    tensor = self._dtype_engine.convert_constant(tensor)
 
             # Store by weight_name (same as regular weights)
             weight_name = tdata.get("weight_name")
