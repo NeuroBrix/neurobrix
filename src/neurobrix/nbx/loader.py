@@ -56,13 +56,13 @@ class FastNBXLoader:
         data = loader.load_all()
     """
 
-    def __init__(self, nbx_path: Path, device: str = "cuda:0"):
+    def __init__(self, nbx_path: Path, device: str = "cpu"):  # Default CPU — Prism always provides actual device
         """
         Initialize fast loader.
 
         Args:
             nbx_path: Path to .nbx file
-            device: Target device for weight loading (e.g., "cuda:0")
+            device: Target device for weight loading (e.g., "cuda:0", "mps:0", "cpu")
         """
         self.nbx_path = Path(nbx_path)
         self.device = device
@@ -295,7 +295,7 @@ class FastNBXLoader:
         return [d.name for d in components_dir.iterdir() if d.is_dir()]
 
 
-def fast_load_nbx(nbx_path: str, device: str = "cuda:0") -> Dict[str, Any]:
+def fast_load_nbx(nbx_path: str, device: str = "cpu") -> Dict[str, Any]:
     """
     Convenience function for fast NBX loading.
 
@@ -313,7 +313,7 @@ def fast_load_nbx(nbx_path: str, device: str = "cuda:0") -> Dict[str, Any]:
 def fast_load_weights(
     nbx_path: str,
     component: str,
-    device: str = "cuda:0",
+    device: str = "cpu",
     dtype: Optional[torch.dtype] = None,
 ) -> Dict[str, torch.Tensor]:
     """

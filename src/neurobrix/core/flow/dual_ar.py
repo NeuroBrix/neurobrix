@@ -186,7 +186,7 @@ class DualAREngine(FlowHandler):
         if not self.ctx.persistent_mode:
             self._unload_component_weights(comp_name)
             gc.collect()
-            torch.cuda.empty_cache()
+            device_empty_cache(self.ctx.primary_device)
 
         # ── Step 4: Codec decoder (forward stages) ──
         for stage in stages[1:]:
@@ -209,7 +209,7 @@ class DualAREngine(FlowHandler):
             if not self.ctx.persistent_mode:
                 self._unload_component_weights(codec_name)
                 gc.collect()
-                torch.cuda.empty_cache()
+                device_empty_cache(self.ctx.primary_device)
 
         # ── Step 5: Output waveform ──
         from .audio_utils import postprocess_audio_output

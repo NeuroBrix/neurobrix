@@ -7,6 +7,7 @@ ZERO SEMANTIC: No model knowledge. All config from topology/defaults.
 """
 
 import torch
+from neurobrix.core.device_utils import device_multinomial
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -329,8 +330,8 @@ def sample_token(
         mask = cumsum - sorted_probs > top_p
         sorted_probs[mask] = 0.0
         sorted_probs = sorted_probs / sorted_probs.sum(dim=-1, keepdim=True)
-        next_token = sorted_idx[0, torch.multinomial(sorted_probs[0], 1)].item()
+        next_token = sorted_idx[0, device_multinomial(sorted_probs[0], 1)].item()
     else:
-        next_token = torch.multinomial(probs, 1).squeeze(-1).item()
+        next_token = device_multinomial(probs, 1).squeeze(-1).item()
 
     return next_token

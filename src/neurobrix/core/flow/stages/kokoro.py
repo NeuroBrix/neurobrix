@@ -180,7 +180,7 @@ def execute_native_kokoro(engine, stage: Dict, audio_config: Dict) -> None:
     if not engine.ctx.persistent_mode:
         engine._unload_component_weights(comp_name)
         gc.collect()
-        torch.cuda.empty_cache()
+        device_empty_cache(engine.ctx.primary_device)
 
 
 def preprocess_phonemizer_input(engine, prompt: str, phoneme_vocab: Dict) -> None:

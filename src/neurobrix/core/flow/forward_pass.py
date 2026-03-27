@@ -97,7 +97,7 @@ class ForwardPassHandler(FlowHandler):
             if not self.ctx.persistent_mode:
                 self._unload_component_weights(comp_name)
                 gc.collect()
-                torch.cuda.empty_cache()
+                device_empty_cache(self.ctx.primary_device)
         return self.ctx.variable_resolver.resolve_all()
 
     def _preprocess_inputs(self) -> None:
