@@ -28,7 +28,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dependencies updated: added `pydantic`, `packaging`, `torchaudio`, `snac`, `phonemizer`, `imageio-ffmpeg`, `transformers`, `mistral-common`, `tiktoken` — all families work out of the box
 - bf16 dtype support gated by Apple chip generation (M2+ with macOS 14+)
 
+### Removed
+- `licenses.py` — hardcoded license classifications deleted. Hub is the single source of truth.
+
 ### Fixed
+- License gating desync between CLI and hub — CLI now reads `gated`/`licenseName`/`licenseUrl` from hub API
 - SNAC audio decoder had silent `except ImportError` fallback returning zeros — now crashes explicitly
 - `python -m neurobrix` shows PATH hint when CLI not on PATH
 
