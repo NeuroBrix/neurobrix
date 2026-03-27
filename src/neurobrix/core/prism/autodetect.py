@@ -84,7 +84,7 @@ _PREFERRED_DTYPE = {
     # Intel
     "ponte_vecchio": "bfloat16", "flex": "float16",
     "alchemist": "float16", "battlemage": "float16", "xe": "float16",
-    # Apple
+    # Apple (M1=fp16, M2+=bf16 — refined below by chip generation)
     "apple_silicon": "float16",
     # Others
     "wormhole": "float16", "grayskull": "float16", "blackhole": "bfloat16",
@@ -240,6 +240,9 @@ def detect_hardware() -> Dict[str, Any]:
     if devices:
         arch = devices[0].get("architecture", "unknown")
         preferred_dtype = _PREFERRED_DTYPE.get(arch, "float16")
+        # Apple M2+: prefer bf16 (same exponent range as fp32, no overflow)
+        if arch == "apple_silicon" and "bfloat16" in devices[0].get("supports_dtypes", []):
+            preferred_dtype = "bfloat16"
     else:
         # CPU-only: derive from CPU features
         preferred_dtype = _cpu_preferred_dtype(cpu)
