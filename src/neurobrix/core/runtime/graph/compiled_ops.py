@@ -98,14 +98,15 @@ class CompiledOpResolver:
     """
 
     def __init__(self, device: torch.device, dtype: torch.dtype, graph_dtype: Optional[torch.dtype] = None,
-                 amp_enabled: bool = True):
+                 amp_enabled: bool = True, force_uniform_dtype: bool = False):
         self.device = device
         self.dtype = dtype
         self._op_cache: Dict[str, Callable] = {}
 
         # DtypeEngine: single entry point for all dtype decisions
         from neurobrix.core.dtype.engine import DtypeEngine
-        self.dtype_engine = DtypeEngine(dtype, graph_dtype=graph_dtype, amp_enabled=amp_enabled)
+        self.dtype_engine = DtypeEngine(dtype, graph_dtype=graph_dtype, amp_enabled=amp_enabled,
+                                        force_uniform_dtype=force_uniform_dtype)
 
     # ========================================================================
     # PUBLIC API
