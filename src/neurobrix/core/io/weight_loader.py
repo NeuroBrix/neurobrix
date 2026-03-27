@@ -885,9 +885,13 @@ class WeightLoader:
         if dtype is not None:
             weights = self._convert_weights_dtype(weights, dtype)
 
-        # Step 3: Non-blocking DMA to GPU (caller handles sync)
+        # Step 3: Transfer to GPU
         if is_cuda:
+            # CUDA/HIP: pinned memory DMA (~2x faster than regular .to())
             weights = self._transfer_with_pinned_memory(weights, device)
+        elif device != "cpu":
+            # MPS/XPU: direct .to() transfer (no pinned DMA — unified memory)
+            weights = {k: v.to(device) for k, v in weights.items()}
 
         return weights
 
