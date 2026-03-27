@@ -268,6 +268,7 @@ class CompiledSequence:
         device: torch.device,
         dtype: torch.dtype,
         amp_enabled: bool = True,
+        force_uniform_dtype: bool = False,
     ):
         """
         Initialize CompiledSequence.
@@ -280,8 +281,7 @@ class CompiledSequence:
             device: The target device (e.g., torch.device("cuda:0"))
             dtype: The target dtype (e.g., torch.float16)
             amp_enabled: Whether to apply AMP autocast rules.
-                        False for diffusion components (transformer, VAE) which
-                        are designed for pure fp16/bf16 execution.
+            force_uniform_dtype: MPS — force all tensors to compute_dtype (no mixed dtype).
         """
         self.dag = dag
         self.device = device
@@ -293,7 +293,8 @@ class CompiledSequence:
 
         # 100% Autonomous op resolution - no sequential_dispatcher dependency
         self.op_resolver = CompiledOpResolver(device, dtype, graph_dtype=graph_dtype,
-                                              amp_enabled=amp_enabled)
+                                              amp_enabled=amp_enabled,
+                                              force_uniform_dtype=force_uniform_dtype)
 
         # Compilation outputs
         self._ops: List[CompiledOp] = []
