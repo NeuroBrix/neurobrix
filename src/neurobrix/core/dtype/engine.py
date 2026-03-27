@@ -198,10 +198,13 @@ class DtypeEngine:
     """
 
     def __init__(self, compute_dtype: Optional[torch.dtype], graph_dtype: Optional[torch.dtype] = None,
-                 amp_enabled: bool = True):
+                 amp_enabled: bool = True, force_uniform_dtype: bool = False):
         self.compute_dtype = compute_dtype
         self.graph_dtype = graph_dtype
         self.amp_enabled = amp_enabled
+        # MPS: Metal cannot mix dtypes in any op. ALL tensors must be compute_dtype.
+        # _to_copy fp32 targets remapped to compute_dtype, constants forced to match.
+        self.force_uniform_dtype = force_uniform_dtype
 
     # ========================================================================
     # PUBLIC API
@@ -404,9 +407,14 @@ class DtypeEngine:
         target_dtype_str = output_dtypes[0] if output_dtypes else None
         target_dtype = parse_dtype(target_dtype_str) if target_dtype_str else None
 
-        # Prism override: remap fp16/bf16 targets, NEVER fp32
+        # Prism override: remap half-precision targets to compute_dtype
         if target_dtype in (torch.float16, torch.bfloat16):
             if self.compute_dtype is not None and target_dtype != self.compute_dtype:
+                target_dtype = self.compute_dtype
+
+        # MPS: force ALL float targets to compute_dtype (Metal can't mix dtypes)
+        if self.force_uniform_dtype and target_dtype == torch.float32:
+            if self.compute_dtype is not None:
                 target_dtype = self.compute_dtype
 
         if target_dtype is not None:
