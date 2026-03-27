@@ -41,8 +41,12 @@ def _parse_brand(brand_str: str) -> DeviceBrand:
         "amd": DeviceBrand.AMD,
         "intel": DeviceBrand.INTEL,
         "tenstorrent": DeviceBrand.TENSTORRENT,
+        "apple": DeviceBrand.APPLE,
     }
-    return brand_map.get(brand_str.lower(), DeviceBrand.NVIDIA)
+    brand = brand_map.get(brand_str.lower())
+    if brand is None:
+        raise RuntimeError(f"ZERO FALLBACK: Unknown GPU brand '{brand_str}' in hardware profile")
+    return brand
 
 
 def _parse_interconnect_tech(tech_str: str) -> InterconnectTech:
