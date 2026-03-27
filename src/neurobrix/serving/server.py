@@ -59,8 +59,9 @@ class ServingDaemon:
           - Windows: subprocess.Popen with CREATE_NEW_PROCESS_GROUP
         """
         if not foreground:
-            if IS_WINDOWS:
-                self._daemonize_windows()
+            if IS_WINDOWS or sys.platform == "darwin":
+                # Windows + macOS: spawn subprocess (fork+setsid breaks Metal GPU on macOS)
+                self._daemonize_subprocess()
                 return  # Parent returns after spawning child
             else:
                 self._daemonize_unix()
@@ -69,11 +70,13 @@ class ServingDaemon:
 
         self._start_serving()
 
-    def _daemonize_windows(self) -> None:
+    def _daemonize_subprocess(self) -> None:
         """
-        Windows background daemon: spawn a detached subprocess running
-        'neurobrix serve --foreground' with stdout/stderr → LOG_PATH.
-        Parent polls a ready-file until the child signals ready or fails.
+        Spawn background daemon via subprocess (Windows + macOS).
+
+        On macOS, os.fork() + os.setsid() breaks Metal GPU access
+        (MTLCompilerService is per-session). Subprocess preserves the GPU context.
+        On Windows, subprocess is the only option (no os.fork).
         """
         import subprocess
         import time
@@ -92,30 +95,33 @@ class ServingDaemon:
 
         log_file = open(str(LOG_PATH), "w")
 
-        # CREATE_NEW_PROCESS_GROUP detaches from parent's console signals
-        CREATE_NEW_PROCESS_GROUP = 0x00000200
-        DETACHED_PROCESS = 0x00000008
-        proc = subprocess.Popen(
-            cmd,
-            stdout=log_file,
-            stderr=log_file,
-            stdin=subprocess.DEVNULL,
-            creationflags=CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS,
-        )
+        popen_kwargs = {
+            "stdout": log_file,
+            "stderr": log_file,
+            "stdin": subprocess.DEVNULL,
+        }
+
+        if IS_WINDOWS:
+            CREATE_NEW_PROCESS_GROUP = 0x00000200
+            DETACHED_PROCESS = 0x00000008
+            popen_kwargs["creationflags"] = CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS
+        else:
+            # macOS/Linux: start_new_session detaches without breaking GPU
+            popen_kwargs["start_new_session"] = True
+
+        proc = subprocess.Popen(cmd, **popen_kwargs)
 
         print(f"[Serve] Loading model in background (PID {proc.pid})...")
         print(f"[Serve] Log: {LOG_PATH}")
 
-        # Poll for ready signal (PID file written by child after model load)
+        # Poll for ready signal (file written by child after model load)
         deadline = time.time() + 300  # 5 min max for model loading
         while time.time() < deadline:
-            # Check if child died
             ret = proc.poll()
             if ret is not None:
                 print(f"[Serve] Daemon process exited with code {ret}. Check {LOG_PATH}")
                 sys.exit(1)
 
-            # Check for ready signal
             if ready_path.exists():
                 msg = ready_path.read_text().strip()
                 ready_path.unlink()
@@ -198,8 +204,8 @@ class ServingDaemon:
 
     def _signal_ready(self, message: str) -> None:
         """Signal parent process that daemon is ready (or failed)."""
-        if IS_WINDOWS:
-            # Windows: write ready signal to a file (parent polls)
+        if IS_WINDOWS or sys.platform == "darwin":
+            # Windows + macOS: write ready signal to a file (parent polls)
             ready_path = DAEMON_DIR / "daemon.ready"
             try:
                 ready_path.write_text(message)
