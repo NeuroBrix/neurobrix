@@ -522,7 +522,9 @@ class WeightLoader:
 
         # Collect unique devices + determine default device for non-block weights
         devices = set(shard_map.values())
-        default_device = sorted(devices)[0] if devices else "cuda:0"
+        if not devices:
+            raise RuntimeError("ZERO FALLBACK: shard_map has no devices — Prism allocation missing")
+        default_device = sorted(devices)[0]
 
         # ── Phase 1: Pre-read metadata to classify files ──
         # Build {file → {key → device}} map and classify as direct/mixed/unknown

@@ -239,7 +239,7 @@ class GraphLMSession:
 
         if not is_persistent:
             gc.collect()
-            torch.cuda.empty_cache()
+            device_empty_cache(self.ctx.primary_device)
 
     def _embed_from_ids(self, input_ids: torch.Tensor) -> torch.Tensor:
         """Embed token IDs via executor's embed_tokens weight."""
@@ -890,7 +890,7 @@ class AutoregressiveHandler(FlowHandler):
                 self._unload_component_weights(comp_name)
 
         gc.collect()
-        torch.cuda.empty_cache()
+        device_empty_cache(self.ctx.primary_device)
 
     def _graph_lm_prefill(self, input_ids: torch.Tensor) -> torch.Tensor:
         """Delegate to active session. Required by runtime-guard hook."""

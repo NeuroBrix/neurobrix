@@ -22,6 +22,7 @@ ZERO HARDCODE: All parameters from NBX container.
 import gc
 import time
 import torch
+from neurobrix.core.device_utils import device_multinomial
 import torch.nn.functional as F
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -139,7 +140,7 @@ class TTSLLMEngine(FlowHandler):
                     if not self.ctx.persistent_mode:
                         self._unload_component_weights(comp_name)
                         gc.collect()
-                        torch.cuda.empty_cache()
+                        device_empty_cache(self.ctx.primary_device)
                 else:
                     print(f"   [{comp_name}] Skipped (no reference audio)")
 
@@ -298,7 +299,7 @@ class TTSLLMEngine(FlowHandler):
         if not self.ctx.persistent_mode:
             self._unload_component_weights(lm_name)
             gc.collect()
-            torch.cuda.empty_cache()
+            device_empty_cache(self.ctx.primary_device)
 
         # ── Step 4: Vocoder (speech tokens → audio) ──
         if vocoder_stage is not None:
@@ -352,7 +353,7 @@ class TTSLLMEngine(FlowHandler):
                 if not self.ctx.persistent_mode:
                     self._unload_component_weights(voc_name)
                     gc.collect()
-                    torch.cuda.empty_cache()
+                    device_empty_cache(self.ctx.primary_device)
 
         return self.ctx.variable_resolver.resolve_all()
 
@@ -503,7 +504,7 @@ class TTSLLMEngine(FlowHandler):
             logits = sorted_logits.scatter(1, sorted_indices, sorted_logits)
 
         probs = torch.softmax(logits, dim=-1)
-        next_token = int(torch.multinomial(probs, num_samples=1).item())
+        next_token = int(device_multinomial(probs, num_samples=1).item())
         return next_token
 
     def _save_audio(self, audio_tensor: torch.Tensor, sample_rate: int) -> None:

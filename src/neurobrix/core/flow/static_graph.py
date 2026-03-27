@@ -75,4 +75,4 @@ class StaticGraphHandler(FlowHandler):
         if executor:
             executor.unload_weights()
         gc.collect()
-        torch.cuda.empty_cache()
+        device_empty_cache(self.ctx.primary_device)

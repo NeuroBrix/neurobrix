@@ -14,6 +14,7 @@ ZERO FALLBACK: Missing metadata raises explicit errors.
 """
 
 import torch
+from neurobrix.core.device_utils import device_empty_cache
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple, Optional, Any, Set
@@ -218,7 +219,7 @@ class MemoryPool:
     def clear(self) -> None:
         """Clear all pooled buffers."""
         self._pool.clear()
-        torch.cuda.empty_cache()
+        device_empty_cache(self._device)
 
     def stats(self) -> Dict[str, int | float]:
         """Get pool statistics."""

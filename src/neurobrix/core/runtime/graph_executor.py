@@ -32,6 +32,7 @@ import os
 from pathlib import Path
 from typing import Callable, Dict, List, Any, Optional, Union, TYPE_CHECKING
 
+from neurobrix.core.device_utils import device_empty_cache
 from neurobrix.kernels.classification import OpExecution, get_execution_type
 
 if TYPE_CHECKING:
@@ -1751,7 +1752,7 @@ class GraphExecutor:
             self._store_op_outputs(op_uid, op_data, result)
             # Defragment CUDA memory after MoE expert loop — the 64-expert iteration
             # creates many small allocations that fragment the caching allocator.
-            torch.cuda.empty_cache()
+            device_empty_cache(self.device)
             return
 
         attrs = op_data.get("attributes", {})

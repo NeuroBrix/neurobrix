@@ -24,6 +24,7 @@ class DeviceBrand(Enum):
     AMD = "amd"
     INTEL = "intel"
     TENSTORRENT = "tenstorrent"
+    APPLE = "apple"
 
     def to_device_prefix(self) -> str:
         """Convert brand to PyTorch device prefix."""
@@ -32,6 +33,7 @@ class DeviceBrand(Enum):
             DeviceBrand.AMD: "hip",
             DeviceBrand.INTEL: "xpu",
             DeviceBrand.TENSTORRENT: "tt",
+            DeviceBrand.APPLE: "mps",
         }
         return mapping[self]
 
@@ -196,6 +198,7 @@ class DeviceSpec:
         - AMD -> hip:X
         - INTEL -> xpu:X
         - TENSTORRENT -> tt:X
+        - APPLE -> mps:X
         """
         return f"{self.brand.to_device_prefix()}:{self.index}"
 

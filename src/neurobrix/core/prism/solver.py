@@ -481,17 +481,26 @@ class PrismSolver:
         total_vram = sum(d.capacity_mb for d in devices)
 
         # Step 4: Try ALL strategies and pick best by score
-        strategies = [
-            ("single_gpu", self._try_single_gpu),
-            ("single_gpu_lifecycle", self._try_single_gpu_lifecycle),
-            ("component_placement", self._try_component_placement),
-            ("pipeline_parallel", self._try_pipeline_parallel),
-            ("block_scatter", self._try_block_scatter),
-            ("weight_sharding", self._try_weight_sharding),
-            ("component_placement_lazy", self._try_component_placement_lazy),
-            ("lazy_sequential", self._try_lazy_sequential),
-            ("zero3", self._try_zero3),
-        ]
+        # Single-GPU shortcut: skip multi-GPU strategies (Apple Silicon, single NVIDIA, etc.)
+        if len(devices) == 1:
+            strategies = [
+                ("single_gpu", self._try_single_gpu),
+                ("single_gpu_lifecycle", self._try_single_gpu_lifecycle),
+                ("lazy_sequential", self._try_lazy_sequential),
+                ("zero3", self._try_zero3),
+            ]
+        else:
+            strategies = [
+                ("single_gpu", self._try_single_gpu),
+                ("single_gpu_lifecycle", self._try_single_gpu_lifecycle),
+                ("component_placement", self._try_component_placement),
+                ("pipeline_parallel", self._try_pipeline_parallel),
+                ("block_scatter", self._try_block_scatter),
+                ("weight_sharding", self._try_weight_sharding),
+                ("component_placement_lazy", self._try_component_placement_lazy),
+                ("lazy_sequential", self._try_lazy_sequential),
+                ("zero3", self._try_zero3),
+            ]
 
         shard_sizes = container.get_shard_sizes()
         candidates = self._evaluate_all_strategies(

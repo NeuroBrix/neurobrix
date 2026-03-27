@@ -13,6 +13,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Dict, Any, Optional, List, TYPE_CHECKING
 import torch
+from neurobrix.core.device_utils import device_sync
 
 if TYPE_CHECKING:
     from neurobrix.core.runtime.graph_executor import GraphExecutor
@@ -261,6 +262,5 @@ class ExecutionStrategy(ABC):
         return result
 
     def synchronize_device(self, device: str) -> None:
-        """Synchronize CUDA device (wait for async operations)."""
-        if device.startswith("cuda"):
-            torch.cuda.synchronize(torch.device(device))
+        """Synchronize device (wait for async operations)."""
+        device_sync(device)

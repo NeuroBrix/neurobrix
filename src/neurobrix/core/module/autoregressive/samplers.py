@@ -130,7 +130,7 @@ class TemperatureSampler(SamplerBase):
         """Sample from temperature-scaled distribution."""
         processed = self.process_logits(logits, **kwargs)
         probs = torch.softmax(processed, dim=-1)
-        return torch.multinomial(probs, num_samples=1)
+        return device_multinomial(probs, num_samples=1)
 
     @classmethod
     def from_config(cls, config: Dict[str, Any]) -> "TemperatureSampler":
@@ -175,7 +175,7 @@ class TopKSampler(SamplerBase):
         """Sample from top-k filtered distribution."""
         processed = self.process_logits(logits, **kwargs)
         probs = torch.softmax(processed, dim=-1)
-        return torch.multinomial(probs, num_samples=1)
+        return device_multinomial(probs, num_samples=1)
 
     @classmethod
     def from_config(cls, config: Dict[str, Any]) -> "TopKSampler":
@@ -242,7 +242,7 @@ class TopPSampler(SamplerBase):
         """Sample from nucleus-filtered distribution."""
         processed = self.process_logits(logits, **kwargs)
         probs = torch.softmax(processed, dim=-1)
-        return torch.multinomial(probs, num_samples=1)
+        return device_multinomial(probs, num_samples=1)
 
     @classmethod
     def from_config(cls, config: Dict[str, Any]) -> "TopPSampler":
@@ -296,7 +296,7 @@ class RepetitionPenaltySampler(SamplerBase):
         """Sample with repetition penalty applied."""
         processed = self.process_logits(logits, input_ids=input_ids, **kwargs)
         probs = torch.softmax(processed, dim=-1)
-        return torch.multinomial(probs, num_samples=1)
+        return device_multinomial(probs, num_samples=1)
 
     @classmethod
     def from_config(cls, config: Dict[str, Any]) -> "RepetitionPenaltySampler":
@@ -381,7 +381,7 @@ class CombinedSampler(SamplerBase):
         if self.temperature <= 0:
             result = probs.argmax(dim=-1, keepdim=True)
         else:
-            result = torch.multinomial(probs, num_samples=1)
+            result = device_multinomial(probs, num_samples=1)
         return result
 
     @classmethod

@@ -15,6 +15,7 @@ import torch
 from typing import Any, Dict, List, Optional, Callable
 
 from neurobrix.core.runtime.debug import DEBUG
+from neurobrix.core.device_utils import device_empty_cache
 from .base import FlowHandler, FlowContext, register_flow
 
 
@@ -492,7 +493,7 @@ class IterativeProcessHandler(FlowHandler):
         if executor:
             executor.unload_weights()
         gc.collect()
-        torch.cuda.empty_cache()
+        device_empty_cache(self.ctx.primary_device)
 
     def _is_loop_component(self, comp_name: str) -> bool:
         """Check if component is in the main loop."""
