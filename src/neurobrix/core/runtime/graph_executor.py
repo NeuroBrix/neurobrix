@@ -691,11 +691,14 @@ class GraphExecutor:
         overflows without fp32 protection, group_norm accumulation needs fp32,
         and softmax needs fp32 for large reductions.
 
-        Returns True for all components. Future work: once the VMM tracer
-        produces clean non-tiled graphs, diffusion components (transformer, VAE)
-        may be able to run without AMP on bf16 hardware where overflow is
-        impossible. On fp16 hardware (V100), AMP remains necessary.
+        DISABLED on MPS with bf16: MPS cannot handle mixed-dtype operations
+        (e.g. add(f16, f32) crashes with 'mps.add requires same element type').
+        bf16 has fp32 exponent range — overflow is impossible, so AMP is unnecessary.
+        fp16 on MPS (M1) still needs AMP but will hit the same mixed-dtype issue —
+        that's a known MPS limitation we can't fix without upstream PyTorch changes.
         """
+        if self.dtype == torch.bfloat16 and str(self.device).startswith("mps"):
+            return False
         return True
 
     def _normalize_sdpa_scaling(self) -> None:
