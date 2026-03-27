@@ -68,7 +68,7 @@ class RNNTEngine(FlowHandler):
         if not self.ctx.persistent_mode:
             self._unload_component_weights("encoder")
             gc.collect()
-            torch.cuda.empty_cache()
+            device_empty_cache(self.ctx.primary_device)
 
         # Step 3: RNNT greedy decode
         start = time.perf_counter()
@@ -84,7 +84,7 @@ class RNNTEngine(FlowHandler):
             self._unload_component_weights("decoder")
             self._unload_component_weights("joint")
             gc.collect()
-            torch.cuda.empty_cache()
+            device_empty_cache(self.ctx.primary_device)
 
         # Step 4: Decode tokens to text
         self.ctx.variable_resolver.resolved["global.generated_token_ids"] = tokens

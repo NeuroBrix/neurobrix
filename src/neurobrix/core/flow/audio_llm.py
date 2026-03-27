@@ -95,7 +95,7 @@ class AudioLLMEngine(FlowHandler):
             if not self.ctx.persistent_mode:
                 self._unload_component_weights(comp_name)
                 gc.collect()
-                torch.cuda.empty_cache()
+                device_empty_cache(self.ctx.primary_device)
 
         # ── Step 3: Autoregressive LLM decode with audio embeddings ──
         lm_name = ar_stage["component"]
@@ -207,7 +207,7 @@ class AudioLLMEngine(FlowHandler):
         if not self.ctx.persistent_mode:
             self._unload_component_weights(lm_name)
             gc.collect()
-            torch.cuda.empty_cache()
+            device_empty_cache(self.ctx.primary_device)
 
         # ── Step 4: Decode tokens to text ──
         postprocess_text_output(self.ctx)

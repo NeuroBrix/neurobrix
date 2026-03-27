@@ -1092,6 +1092,8 @@ def _parse_system_profiler() -> List[Dict[str, Any]]:
             # Apple Silicon: unified memory — get from sysctl
             mem_mb = _detect_apple_memory_mb()
             dtypes = ["float32", "float16"]
+            if _apple_supports_bf16(name):
+                dtypes.append("bfloat16")
             pcie_ver = "N/A"
         elif "amd" in vendor_str or "ati" in vendor_str:
             brand = "amd"
@@ -1540,15 +1542,24 @@ def _detect_torch_fallback() -> Tuple[List[Dict[str, Any]], str]:
 
     # Apple MPS
     if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+        chip_name = _detect_apple_chip()
+        memory_mb = _detect_apple_memory_mb()
+
+        # bf16 support: M2+ chips with macOS 14+ (Sonoma)
+        supports_dtypes = ["float32", "float16"]
+        if _apple_supports_bf16(chip_name):
+            supports_dtypes.append("bfloat16")
+
         devices = [{
             "index": 0,
             "brand": "apple",
-            "model": _detect_apple_chip(),
-            "memory_mb": _detect_apple_memory_mb(),
-            "compute_capability": "0.0",
-            "supports_dtypes": ["float32", "float16"],
+            "model": chip_name,
+            "memory_mb": memory_mb,
+            "compute_capability": "N/A",
+            "supports_dtypes": supports_dtypes,
             "architecture": "apple_silicon",
             "pcie_version": "N/A",
+            "unified_memory": True,
         }]
         return devices, "apple"
 
@@ -1966,6 +1977,104 @@ def _detect_pcie_version_sysfs(pci_addr: str) -> str:
     except Exception:
         pass
     return "3.0"
+
+
+def _apple_supports_bf16(chip_name: str) -> bool:
+    """
+    Check if Apple Silicon chip supports bfloat16.
+
+    bf16 requires M2 or later AND macOS 14+ (Sonoma).
+    M1 family does NOT support bf16 in hardware.
+    """
+    import platform
+    gen = _apple_chip_generation(chip_name)
+    if gen < 2:
+        return False
+
+    # Check macOS version (need 14+ for bf16)
+    try:
+        mac_ver = platform.mac_ver()[0]  # e.g., "14.2.1"
+        major = int(mac_ver.split('.')[0])
+        return major >= 14
+    except (ValueError, IndexError):
+        return False
+
+
+def _apple_chip_generation(chip_name: str) -> int:
+    """
+    Extract Apple Silicon generation number from chip name.
+
+    "Apple M1 Max" → 1, "Apple M4 Pro" → 4, "Apple M5" → 5
+    Returns 0 if not recognized.
+    """
+    import re
+    m = re.search(r'\bm(\d+)', chip_name.lower())
+    return int(m.group(1)) if m else 0
+
+
+# Apple Silicon GPU specifications — from Apple official specs.
+# Key: chip variant → (gpu_cores, memory_bandwidth_gbps, max_memory_gb)
+# Sources: apple.com/newsroom, en.wikipedia.org/wiki/Apple_silicon
+_APPLE_SILICON_SPECS = {
+    # M1 family (2020-2021)
+    "m1":           (8,   68.25, 16),
+    "m1 pro":       (16,  200,   32),
+    "m1 max":       (32,  400,   64),
+    "m1 ultra":     (64,  800,   128),
+    # M2 family (2022-2023)
+    "m2":           (10,  100,   24),
+    "m2 pro":       (19,  200,   32),
+    "m2 max":       (38,  400,   96),
+    "m2 ultra":     (76,  800,   192),
+    # M3 family (2023-2024)
+    "m3":           (10,  100,   24),
+    "m3 pro":       (18,  150,   36),
+    "m3 max":       (40,  400,   128),
+    "m3 ultra":     (80,  800,   512),
+    # M4 family (2024-2025)
+    "m4":           (10,  120,   32),
+    "m4 pro":       (20,  273,   64),
+    "m4 max":       (40,  546,   128),
+    "m4 ultra":     (80,  819,   256),
+    # M5 family (2025-2026)
+    "m5":           (10,  154,   32),
+    "m5 pro":       (20,  307,   64),
+    "m5 max":       (40,  614,   128),
+    "m5 ultra":     (80,  921,   256),
+}
+
+
+def _lookup_apple_gpu_cores(chip_name: str) -> int:
+    """Get GPU core count from chip name. Returns 8 as safe default."""
+    key = _normalize_apple_chip_name(chip_name)
+    if key in _APPLE_SILICON_SPECS:
+        return _APPLE_SILICON_SPECS[key][0]
+    return 8
+
+
+def _lookup_apple_bandwidth(chip_name: str) -> float:
+    """Get memory bandwidth in GB/s from chip name. Returns 100.0 as default."""
+    key = _normalize_apple_chip_name(chip_name)
+    if key in _APPLE_SILICON_SPECS:
+        return _APPLE_SILICON_SPECS[key][1]
+    return 100.0
+
+
+def _normalize_apple_chip_name(chip_name: str) -> str:
+    """
+    Normalize chip name for lookup.
+
+    "Apple M4 Max 40-core GPU" → "m4 max"
+    "Apple M2" → "m2"
+    """
+    import re
+    name = chip_name.lower()
+    m = re.search(r'm(\d+)\s*(ultra|max|pro)?', name)
+    if not m:
+        return ""
+    gen = m.group(1)
+    variant = m.group(2) or ""
+    return f"m{gen} {variant}".strip()
 
 
 def _detect_apple_chip() -> str:

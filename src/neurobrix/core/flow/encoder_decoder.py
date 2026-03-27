@@ -12,6 +12,7 @@ ZERO HARDCODE: All parameters from NBX container.
 import gc
 import time
 import torch
+from neurobrix.core.device_utils import device_multinomial
 from typing import Any, Callable, Dict, List, Optional
 
 from .base import FlowHandler, FlowContext, register_flow
@@ -92,7 +93,7 @@ class EncoderDecoderEngine(FlowHandler):
         if not self.ctx.persistent_mode:
             self._unload_component_weights(enc_name)
             gc.collect()
-            torch.cuda.empty_cache()
+            device_empty_cache(self.ctx.primary_device)
 
         # ── Step 3: Autoregressive decode with cross-attention ──
         max_tokens = defaults.get("max_tokens")
@@ -168,7 +169,7 @@ class EncoderDecoderEngine(FlowHandler):
         if not self.ctx.persistent_mode:
             self._unload_component_weights(dec_name)
             gc.collect()
-            torch.cuda.empty_cache()
+            device_empty_cache(self.ctx.primary_device)
 
         # ── Step 4: Decode tokens to text ──
         postprocess_text_output(self.ctx)
@@ -248,4 +249,4 @@ class EncoderDecoderEngine(FlowHandler):
         if temperature == 0.0:
             return last_logits.argmax(dim=-1).item()
         probs = torch.softmax(last_logits / temperature, dim=-1)
-        return torch.multinomial(probs, 1).item()
+        return device_multinomial(probs, 1).item()

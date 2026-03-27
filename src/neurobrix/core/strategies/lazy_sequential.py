@@ -13,6 +13,7 @@ ZERO HARDCODE: Loading mode from Prism plan.
 
 import logging
 import torch
+from neurobrix.core.device_utils import device_empty_cache
 from typing import Dict, Optional, Any, Set
 
 from .base import ExecutionStrategy, StrategyContext
@@ -136,5 +137,4 @@ class LazySequentialStrategy(ExecutionStrategy):
         """Release all resources."""
         self._loaded_components.clear()
         self._pinned_components.clear()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        device_empty_cache(self.exec_device)
