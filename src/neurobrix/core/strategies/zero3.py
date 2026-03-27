@@ -15,6 +15,7 @@ VENDORLESS: Uses device strings from Prism (cuda/hip/xpu).
 import logging
 import re
 import torch
+from neurobrix.core.device_utils import device_empty_cache
 from collections import defaultdict
 from typing import Dict, List, Optional, Any, Set
 
@@ -62,11 +63,14 @@ class Zero3Strategy(ExecutionStrategy):
             else:
                 continue
 
-            if device_str and device_str.startswith(("cuda", "hip", "xpu")):
+            if device_str and device_str.startswith(("cuda", "hip", "xpu", "mps")):
                 return device_str
 
+        # Auto-detect best available GPU
         if torch.cuda.is_available():
             return "cuda:0"
+        if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            return "mps:0"
         return "cpu"
 
     def _init_transfer_stream(self) -> None:
@@ -272,8 +276,7 @@ class Zero3Strategy(ExecutionStrategy):
         self._block_groups.pop(component_name, None)
         self._gpu_weight_cache.clear()
 
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        device_empty_cache(self.exec_device)
 
     def cleanup(self) -> None:
         """Release all resources including transfer stream."""
@@ -282,5 +285,4 @@ class Zero3Strategy(ExecutionStrategy):
         self._block_groups.clear()
         self._gpu_weight_cache.clear()
         self._transfer_stream = None
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        device_empty_cache(self.exec_device)

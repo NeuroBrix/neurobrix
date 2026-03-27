@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Apple Silicon (MPS) support — M1 through M5 Ultra, unified memory, auto-detection
+- `DeviceBrand.APPLE` with `"mps"` device prefix in Prism hardware abstraction
+- Apple Silicon chip database (20 variants: M1-M5 base/Pro/Max/Ultra with GPU cores, bandwidth, memory)
+- `device_utils.py` — unified device abstraction (`device_sync`, `device_empty_cache`, `device_seed`, `device_memory_stats`, `device_multinomial`)
+- No-silent-fallback guardrail hook (blocks `PYTORCH_ENABLE_MPS_FALLBACK` and try/except device swallowing)
+- Single-GPU strategy shortcut in Prism solver (skips multi-GPU cascade for 1-device hardware)
+- `neurobrix doctor` command with OS-specific PATH fix instructions
+- GitLab CI/CD pipeline for PyPI publishing (OIDC trusted publisher + API token fallback)
+
+### Changed
+- All `torch.cuda.empty_cache()` calls replaced with device-agnostic `device_empty_cache()` (26 call sites across flow handlers, strategies, graph executor, serving engine)
+- All `torch.cuda.synchronize()` for timing replaced with `device_sync()` (serving engine, strategy base)
+- All `torch.cuda.manual_seed_all()` replaced with `device_seed()` (serving engine)
+- VRAM reporting in serving engine uses `device_memory_stats()` (supports CUDA + MPS)
+- `torch.multinomial` replaced with `device_multinomial()` — CPU round-trip on MPS (9 call sites)
+- Removed hardcoded `"cuda:0"` defaults from loaders and strategies — crash explicitly if Prism provides no device
+- All repository URLs migrated from GitHub to GitLab (`gitlab.com/neurobrix/Neurobrix`)
+- Dependencies updated: added `pydantic`, `packaging`, `torchaudio`, `snac`, `phonemizer`, `imageio-ffmpeg`, `transformers`, `mistral-common`, `tiktoken` — all families work out of the box
+- bf16 dtype support gated by Apple chip generation (M2+ with macOS 14+)
+
+### Fixed
+- SNAC audio decoder had silent `except ImportError` fallback returning zeros — now crashes explicitly
+- `python -m neurobrix` shows PATH hint when CLI not on PATH
+
 ## [0.1.0] - 2026-03-26
 
 First stable release of NeuroBrix — universal deep learning inference engine.

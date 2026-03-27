@@ -14,6 +14,7 @@ import gc
 from typing import Dict, Optional, Any
 
 import torch
+from neurobrix.core.device_utils import device_empty_cache, device_sync, device_memory_stats
 
 
 class MemoryManager:
@@ -52,10 +53,10 @@ class MemoryManager:
         # Step 2: Force garbage collection
         gc.collect()
 
-        # Step 3: Clear CUDA cache if requested and available
-        if clear_cuda_cache and torch.cuda.is_available():
-            torch.cuda.synchronize()
-            torch.cuda.empty_cache()
+        # Step 3: Clear device cache if requested
+        if clear_cuda_cache:
+            device_sync()
+            device_empty_cache()
 
     @staticmethod
     def cleanup_context(
@@ -103,8 +104,8 @@ class MemoryManager:
 
         # Single GC and cache clear at the end
         gc.collect()
-        if clear_cuda_cache and torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        if clear_cuda_cache:
+            device_empty_cache()
 
     @staticmethod
     def get_memory_stats(device: Optional[str] = None) -> Dict[str, float]:
@@ -117,24 +118,7 @@ class MemoryManager:
         Returns:
             Dict with allocated_mb, reserved_mb, free_mb
         """
-        if not torch.cuda.is_available():
-            return {"allocated_mb": 0.0, "reserved_mb": 0.0, "free_mb": 0.0}
-
-        device_idx = 0
-        if device and ":" in device:
-            device_idx = int(device.split(":")[1])
-
-        allocated = torch.cuda.memory_allocated(device_idx) / (1024 * 1024)
-        reserved = torch.cuda.memory_reserved(device_idx) / (1024 * 1024)
-        total = torch.cuda.get_device_properties(device_idx).total_memory / (1024 * 1024)
-        free = total - reserved
-
-        return {
-            "allocated_mb": allocated,
-            "reserved_mb": reserved,
-            "free_mb": free,
-            "total_mb": total,
-        }
+        return device_memory_stats(device)
 
 
 # Convenience functions (for simpler imports)

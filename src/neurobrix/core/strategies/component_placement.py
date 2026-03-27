@@ -18,6 +18,7 @@ Key features:
 
 from typing import Dict, Any, Optional, Set
 import torch
+from neurobrix.core.device_utils import device_empty_cache
 
 from .base import ExecutionStrategy, StrategyContext
 
@@ -153,4 +154,4 @@ class ComponentPlacementLazyStrategy(ComponentPlacementStrategy):
         for comp_name in list(self._phase_loaded):
             self.unload_weights(comp_name)
         self._phase_loaded.clear()
-        torch.cuda.empty_cache()
+        device_empty_cache(device)

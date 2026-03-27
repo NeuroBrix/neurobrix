@@ -208,7 +208,7 @@ def execute_diffusion_stage(engine, stage: Dict, audio_config: Dict) -> None:
     if not engine.ctx.persistent_mode:
         engine._unload_component_weights(comp_name)
         gc.collect()
-        torch.cuda.empty_cache()
+        device_empty_cache(engine.ctx.primary_device)
 
 
 def execute_native_acoustic_decoder(engine, stage: Dict, audio_config: Dict) -> None:
@@ -296,7 +296,7 @@ def execute_native_acoustic_decoder(engine, stage: Dict, audio_config: Dict) -> 
     if not engine.ctx.persistent_mode:
         engine._unload_component_weights(comp_name)
         gc.collect()
-        torch.cuda.empty_cache()
+        device_empty_cache(engine.ctx.primary_device)
 
 
 # ─────────────────────────────────────────────────────────────
