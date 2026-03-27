@@ -132,9 +132,7 @@ class InferenceEngine:
         self._plan = solver.solve_smart(self._container, hw_profile, input_config, serve_mode=True)
 
         # 3b. Resolve primary device from plan
-        if self._plan.allocations:
-            first_alloc = next(iter(self._plan.allocations.values()))
-            self._device = first_alloc.device if hasattr(first_alloc, 'device') else None
+        self._device = self._plan.primary_device
 
         # 3c. Apply CPU optimizations from hardware profile
         if hw_profile.cpu:
