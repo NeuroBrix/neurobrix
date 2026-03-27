@@ -66,28 +66,55 @@ def cmd_import(args):
     category = model_data.get("category", "unknown")
     description = model_data.get("description", "")
     license_id = model_data.get("license", "unknown")
+    license_name = model_data.get("licenseName", license_id)
+    license_url = model_data.get("licenseUrl", "")
+    is_gated = model_data.get("gated", False)
 
     print(f"   Category: {category}")
     if description:
         print(f"   Description: {description[:80]}")
     if file_size > 0:
         print(f"   Size: {format_size(file_size)}")
-    print(f"   License: {license_id}")
+    print(f"   License: {license_name}")
 
-    # License acceptance check
-    if license_id and license_id != "unknown":
-        from neurobrix.cli.licenses import is_accepted, prompt_license_acceptance
+    # License acceptance — hub is the source of truth
+    if is_gated and not _is_license_accepted(name):
+        print(f"\n{'=' * 70}")
+        print("LICENSE NOTICE")
+        print("=" * 70)
+        print(f"   Vendor: {org}")
+        print(f"   License: {license_name}")
+        if license_url:
+            full_url = license_url if license_url.startswith("http") else f"{registry}{license_url}"
+            print(f"   Full text: {full_url}")
+        print()
+        print("   This model is distributed under the license above.")
+        print("   NeuroBrix does not modify the original license terms.")
+        print("   You are responsible for complying with the license.")
+        print()
+        print("   THIS LICENSE REQUIRES EXPLICIT ACCEPTANCE.")
+        print("=" * 70)
 
-        if not is_accepted(name):
-            vendor = model_data.get("org", org)
-            accepted = prompt_license_acceptance(name, license_id, vendor=vendor)
-            if not accepted:
-                sys.exit(1)
+        try:
+            reply = input("\n   Accept license terms? [yes/No]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print("\n   Declined.")
+            sys.exit(1)
+
+        if reply != "yes":
+            print("   License declined. Download cancelled.")
+            sys.exit(1)
+
+        _record_license_acceptance(name, license_id)
+        print("   License accepted.\n")
 
     # 2. Get signed download URL
     print(f"\n[2/4] Getting download URL...")
     try:
-        resp = requests.get(f"{registry}/api/models/{org}/{name}/download", timeout=10)
+        headers = {}
+        if is_gated:
+            headers["X-License-Accepted"] = "true"
+        resp = requests.get(f"{registry}/api/models/{org}/{name}/download", headers=headers, timeout=10)
         resp.raise_for_status()
         download_info = resp.json()
     except requests.HTTPError as e:
@@ -498,3 +525,42 @@ def cmd_hub(args):
         print(f"Installed locally: {len(installed)}")
 
     print(f"\nInstall: neurobrix import <org>/<model>")
+
+
+# ============================================================================
+# LICENSE ACCEPTANCE CACHE
+# ============================================================================
+# Stored in ~/.neurobrix/license_acceptances.json
+# Hub is the source of truth for gating. This file only records user consent.
+
+from pathlib import Path
+from datetime import datetime, timezone
+
+_ACCEPTANCES_FILE = Path.home() / ".neurobrix" / "license_acceptances.json"
+
+
+def _is_license_accepted(model_name: str) -> bool:
+    """Check if user has already accepted the license for this model."""
+    if not _ACCEPTANCES_FILE.exists():
+        return False
+    try:
+        data = json.loads(_ACCEPTANCES_FILE.read_text())
+        return model_name in data
+    except (json.JSONDecodeError, OSError):
+        return False
+
+
+def _record_license_acceptance(model_name: str, license_id: str) -> None:
+    """Record license acceptance locally so user isn't asked again."""
+    _ACCEPTANCES_FILE.parent.mkdir(parents=True, exist_ok=True)
+    data = {}
+    if _ACCEPTANCES_FILE.exists():
+        try:
+            data = json.loads(_ACCEPTANCES_FILE.read_text())
+        except (json.JSONDecodeError, OSError):
+            data = {}
+    data[model_name] = {
+        "license": license_id,
+        "accepted_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _ACCEPTANCES_FILE.write_text(json.dumps(data, indent=2))
