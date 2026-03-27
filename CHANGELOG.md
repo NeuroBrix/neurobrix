@@ -39,6 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - macOS daemon used `os.fork()` + `os.setsid()` which breaks Metal GPU access (MTLCompilerService is per-session). Now uses `subprocess.Popen` like Windows.
 - False `avx2` ISA warning on Apple Silicon — ARM chips use NEON, not x86 ISA. Skip check for arm64.
 - Apple M2+ now prefers bf16 (not fp16) — bf16 has fp32 exponent range, prevents overflow in matmul/conv accumulation that caused blurry image output
+- Disable AMP on MPS with bf16 — MPS crashes on mixed-dtype ops (`add(f16, f32)`). bf16 doesn't need AMP overflow protection anyway (fp32 exponent range).
 - SNAC audio decoder had silent `except ImportError` fallback returning zeros — now crashes explicitly
 - `python -m neurobrix` shows PATH hint when CLI not on PATH
 
