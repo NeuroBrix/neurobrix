@@ -15,6 +15,7 @@ ARCHITECTURE:
 
 from typing import Dict, Any, Optional, List, Set
 import torch
+from neurobrix.core.device_utils import device_empty_cache
 
 from .base import ExecutionStrategy, StrategyContext
 
@@ -55,7 +56,9 @@ class BlockScatterStrategy(ExecutionStrategy):
                 if isinstance(device_str, str):
                     self.component_devices[comp_name] = [device_str]
 
-        self.primary_device = self.devices[0] if self.devices else "cuda:0"
+        if not self.devices:
+            raise RuntimeError("ZERO FALLBACK: No devices assigned by Prism for block scatter")
+        self.primary_device = self.devices[0]
         self._loaded_components: Set[str] = set()
 
     def is_fgp_component(self, component_name: str) -> bool:
@@ -155,7 +158,7 @@ class BlockScatterStrategy(ExecutionStrategy):
                 self._loaded_components.discard(component_name)
                 for device in devices:
                     self.synchronize_device(device)
-                torch.cuda.empty_cache()
+                device_empty_cache(device)
 
     def get_embedding_device(self, component_name: str) -> str:
         """Get device where embedding layer is located."""

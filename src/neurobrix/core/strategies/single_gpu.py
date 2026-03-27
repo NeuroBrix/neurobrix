@@ -33,7 +33,9 @@ class SingleGPUStrategy(ExecutionStrategy):
 
         # Validate: all components should be on same device
         devices = context.get_all_devices()
-        self.device = devices[0] if devices else "cuda:0"
+        if not devices:
+            raise RuntimeError("ZERO FALLBACK: No devices assigned by Prism")
+        self.device = devices[0]
 
         # Loading mode from Prism plan (DATA-DRIVEN)
         # "eager" = load all weights upfront and keep in memory

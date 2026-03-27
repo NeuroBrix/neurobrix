@@ -98,16 +98,8 @@ class AudioOutputProcessor:
         codes_1_t = torch.tensor(codes_1, dtype=torch.long, device=device).unsqueeze(0)
         codes_2_t = torch.tensor(codes_2, dtype=torch.long, device=device).unsqueeze(0)
 
-        try:
-            import snac
-            snac_model = snac.SNAC.from_pretrained("hubertsiuzdak/snac_24khz").to(device).eval()
-            with torch.inference_mode():
-                audio = snac_model.decode([codes_0_t, codes_1_t, codes_2_t])
-            return audio  # [1, 1, samples] at 24kHz
-        except ImportError:
-            print("   [WARN] SNAC not installed — cannot decode audio tokens")
-            print("   Install with: pip install snac")
-            return torch.zeros(1, 1, 1)
-        except Exception as e:
-            print(f"   [WARN] SNAC decode failed: {e}")
-            return torch.zeros(1, 1, 1)
+        import snac
+        snac_model = snac.SNAC.from_pretrained("hubertsiuzdak/snac_24khz").to(device).eval()
+        with torch.inference_mode():
+            audio = snac_model.decode([codes_0_t, codes_1_t, codes_2_t])
+        return audio  # [1, 1, samples] at 24kHz

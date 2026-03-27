@@ -17,6 +17,7 @@ ZERO HARDCODE: All config from NBX container + Prism hardware profile.
 import time
 import json
 import torch
+from neurobrix.core.device_utils import device_empty_cache, device_sync, device_seed, device_memory_stats
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -78,6 +79,7 @@ class InferenceEngine:
         self._session = None       # ConversationSession (LLM only)
         self._is_loaded = False
         self._warm_serving = False  # True if strategy supports persistent weights
+        self._device = None        # Primary device string (set during load)
 
     def load(self) -> None:
         """
@@ -129,7 +131,12 @@ class InferenceEngine:
         solver = PrismSolver()
         self._plan = solver.solve_smart(self._container, hw_profile, input_config, serve_mode=True)
 
-        # 3b. Apply CPU optimizations from hardware profile
+        # 3b. Resolve primary device from plan
+        if self._plan.allocations:
+            first_alloc = next(iter(self._plan.allocations.values()))
+            self._device = first_alloc.device if hasattr(first_alloc, 'device') else None
+
+        # 3c. Apply CPU optimizations from hardware profile
         if hw_profile.cpu:
             from neurobrix.core.prism.cpu_config import apply_cpu_config
             apply_cpu_config(
@@ -209,19 +216,15 @@ class InferenceEngine:
         if "seed" in kwargs and kwargs["seed"] is not None:
             seed = kwargs["seed"]
             inputs["global.seed"] = seed
-            torch.manual_seed(seed)
-            if torch.cuda.is_available():
-                torch.cuda.manual_seed_all(seed)
+            device_seed(self._device, seed)
 
         # Execute
         t_start = time.time()
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
+        device_sync(self._device)
 
         outputs = self._executor.execute(inputs)
 
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
+        device_sync(self._device)
         t_total = time.time() - t_start
 
         # Build result
@@ -260,19 +263,15 @@ class InferenceEngine:
         if "seed" in kwargs and kwargs["seed"] is not None:
             seed = kwargs["seed"]
             inputs["global.seed"] = seed
-            torch.manual_seed(seed)
-            if torch.cuda.is_available():
-                torch.cuda.manual_seed_all(seed)
+            device_seed(self._device, seed)
 
         # Execute
         t_start = time.time()
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
+        device_sync(self._device)
 
         outputs = self._executor.execute(inputs)
 
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
+        device_sync(self._device)
         t_total = time.time() - t_start
 
         result = {"timing": {"total_s": round(t_total, 3)}, "family": self._family}
@@ -351,8 +350,7 @@ class InferenceEngine:
             for name in list(self._executor.executors.keys()):
                 self._executor._unload_component_weights(name)
 
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        device_empty_cache(self._device)
 
         self._is_loaded = False
 
@@ -370,11 +368,10 @@ class InferenceEngine:
         if self._plan is not None:
             status["strategy"] = self._plan.strategy
 
-        if self._is_loaded and torch.cuda.is_available():
-            vram_used = 0
-            for i in range(torch.cuda.device_count()):
-                vram_used += torch.cuda.memory_allocated(i)
-            status["vram_used_gb"] = round(vram_used / 1024**3, 2)
+        if self._is_loaded and self._device:
+            stats = device_memory_stats(self._device)
+            if stats["allocated_mb"] > 0:
+                status["vram_used_gb"] = round(stats["allocated_mb"] / 1024, 2)
 
         if self._session is not None:
             status["context"] = self._session.get_context_info()
