@@ -1229,16 +1229,24 @@ class GraphExecutor:
         for input_name, val in inputs.items():
             if isinstance(val, torch.Tensor):
                 # Convert to expected dtype from graph
-                expected_dtype = dtype_resolver.get_input_dtype(input_name)
-                if expected_dtype is not None and val.dtype != expected_dtype:
-                    val = val.to(expected_dtype)
+                if self._dtype_engine.force_uniform_dtype and val.is_floating_point():
+                    # MPS: force ALL float inputs to compute_dtype (no mixed dtype)
+                    if self.dtype is not None and val.dtype != self.dtype:
+                        val = val.to(self.dtype)
+                else:
+                    expected_dtype = dtype_resolver.get_input_dtype(input_name)
+                    if expected_dtype is not None and val.dtype != expected_dtype:
+                        val = val.to(expected_dtype)
                 ctx.inputs[input_name] = val.to(self.device)
             elif isinstance(val, dict):
                 # Handle dictionary inputs (e.g. added_cond_kwargs)
-                ctx.inputs[input_name] = {
-                    k: v.to(self.device) if isinstance(v, torch.Tensor) else v
-                    for k, v in val.items()
-                }
+                def _move_val(v):
+                    if isinstance(v, torch.Tensor):
+                        if self._dtype_engine.force_uniform_dtype and v.is_floating_point() and self.dtype is not None:
+                            v = v.to(self.dtype)
+                        return v.to(self.device)
+                    return v
+                ctx.inputs[input_name] = {k: _move_val(v) for k, v in val.items()}
             else:
                 ctx.inputs[input_name] = val
 
