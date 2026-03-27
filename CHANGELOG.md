@@ -33,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - License gating desync between CLI and hub — CLI now reads `gated`/`licenseName`/`licenseUrl` from hub API
+- Serving engine crash on `ExecutionPlan.allocations` — use `primary_device` property
 - SNAC audio decoder had silent `except ImportError` fallback returning zeros — now crashes explicitly
 - `python -m neurobrix` shows PATH hint when CLI not on PATH
 
