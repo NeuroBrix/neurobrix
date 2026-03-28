@@ -198,13 +198,10 @@ class DtypeEngine:
     """
 
     def __init__(self, compute_dtype: Optional[torch.dtype], graph_dtype: Optional[torch.dtype] = None,
-                 amp_enabled: bool = True, force_uniform_dtype: bool = False):
+                 amp_enabled: bool = True):
         self.compute_dtype = compute_dtype
         self.graph_dtype = graph_dtype
         self.amp_enabled = amp_enabled
-        # MPS: Metal cannot mix dtypes in any op. ALL tensors must be compute_dtype.
-        # _to_copy fp32 targets remapped to compute_dtype, constants forced to match.
-        self.force_uniform_dtype = force_uniform_dtype
 
     # ========================================================================
     # PUBLIC API
@@ -229,13 +226,8 @@ class DtypeEngine:
 
         assert func is not None, f"ZERO FALLBACK: func cannot be None for op {op_name}"
 
-        # AMP disabled: skip autocast wrapping (no fp32 upcasting).
-        # BUT on MPS (force_uniform_dtype): must still cast stray fp32 inputs to
-        # compute_dtype. Metal crashes on ANY mixed-dtype op. Without this wrapper,
-        # ops like native_layer_norm output fp32 → next addmm gets (fp32, bf16) → crash.
+        # AMP disabled: skip all autocast wrapping (no fp32 upcasting).
         if not self.amp_enabled:
-            if self.force_uniform_dtype and self.compute_dtype is not None:
-                return self._make_uniform_dtype_wrapper(func)
             return func
 
         # AMP rules only apply when compute_dtype is half-precision
@@ -268,42 +260,6 @@ class DtypeEngine:
     # ========================================================================
     # AMP WRAPPERS
     # ========================================================================
-
-    def _make_uniform_dtype_wrapper(self, func: Callable) -> Callable:
-        """
-        MPS uniform-dtype wrapper: cast ALL float tensor inputs to compute_dtype.
-
-        Metal requires identical dtype across all operands. This wrapper ensures
-        no fp32 tensors leak into bf16 ops (or vice versa). Applied when AMP is
-        off but force_uniform_dtype is on.
-
-        Unlike AMP wrappers, this does NOT upcast to fp32. It casts everything
-        DOWN to compute_dtype. Safe because bf16 has fp32 exponent range.
-        """
-        target = self.compute_dtype
-        def uniform_wrapper(*args, **kwargs):
-            new_args = []
-            for a in args:
-                if isinstance(a, torch.Tensor) and a.is_floating_point() and a.dtype != target:
-                    new_args.append(a.to(target))
-                elif isinstance(a, (list, tuple)):
-                    new_items = []
-                    for item in a:
-                        if isinstance(item, torch.Tensor) and item.is_floating_point() and item.dtype != target:
-                            new_items.append(item.to(target))
-                        else:
-                            new_items.append(item)
-                    new_args.append(type(a)(new_items))
-                else:
-                    new_args.append(a)
-            new_kwargs = {}
-            for k, v in kwargs.items():
-                if isinstance(v, torch.Tensor) and v.is_floating_point() and v.dtype != target:
-                    new_kwargs[k] = v.to(target)
-                else:
-                    new_kwargs[k] = v
-            return func(*new_args, **new_kwargs)
-        return uniform_wrapper
 
     def _make_safe_softmax(self, func: Callable) -> Callable:
         """
@@ -449,10 +405,9 @@ class DtypeEngine:
             if self.compute_dtype is not None and target_dtype != self.compute_dtype:
                 target_dtype = self.compute_dtype
 
-        # MPS: force ALL float targets to compute_dtype (Metal can't mix dtypes)
-        if self.force_uniform_dtype and target_dtype == torch.float32:
-            if self.compute_dtype is not None:
-                target_dtype = self.compute_dtype
+        # MPS: fp32 targets are safe — fp32 flows through single-input FP32 ops
+        # (pow, mean, rsqrt). Multi-input ops (addmm, mm) are in AMP_FP16_OPS
+        # and cast inputs to compute_dtype via _make_lower_precision_wrapper.
 
         if target_dtype is not None:
             def to_copy_with_dtype(inp, **_kwargs):
