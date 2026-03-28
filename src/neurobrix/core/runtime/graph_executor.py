@@ -648,10 +648,8 @@ class GraphExecutor:
         # LLM family keeps AMP everywhere: RMSNorm pow→mean→rsqrt overflows without it.
         from neurobrix.core.dtype.engine import DtypeEngine
         amp_enabled = self._should_enable_amp()
-        force_uniform = str(self.device).startswith("mps")
         self._dtype_engine = DtypeEngine(self.dtype, graph_dtype=self._graph_dtype,
-                                         amp_enabled=amp_enabled,
-                                         force_uniform_dtype=force_uniform)
+                                         amp_enabled=amp_enabled)
 
         # DAG loaded silently - stats available via _dag
 
@@ -689,18 +687,14 @@ class GraphExecutor:
     def _should_enable_amp(self) -> bool:
         """Determine whether AMP should be enabled for this component.
 
-        AMP is required for fp16 stability: RMSNorm's pow→mean→rsqrt chain
-        overflows without fp32 protection, group_norm accumulation needs fp32,
-        and softmax needs fp32 for large reductions.
+        AMP is required for precision: RMSNorm's pow→mean→rsqrt chain,
+        group_norm accumulation, and softmax all need fp32 compute.
 
-        DISABLED on MPS with bf16: MPS cannot handle mixed-dtype operations
-        (e.g. add(f16, f32) crashes with 'mps.add requires same element type').
-        bf16 has fp32 exponent range — overflow is impossible, so AMP is unnecessary.
-        fp16 on MPS (M1) still needs AMP but will hit the same mixed-dtype issue —
-        that's a known MPS limitation we can't fix without upstream PyTorch changes.
+        MPS: AMP stays ON (same rules as CUDA). Mixed-dtype safety at op
+        boundaries is handled by FP16 ops (_make_lower_precision_wrapper)
+        which cast inputs to compute_dtype. fp32 only flows through
+        single-input ops (pow, mean, rsqrt) where no dtype mismatch occurs.
         """
-        if self.dtype == torch.bfloat16 and str(self.device).startswith("mps"):
-            return False
         return True
 
     def _normalize_sdpa_scaling(self) -> None:
@@ -834,7 +828,6 @@ class GraphExecutor:
             device=torch.device(self.device),
             dtype=self.dtype,
             amp_enabled=self._dtype_engine.amp_enabled,
-            force_uniform_dtype=self._dtype_engine.force_uniform_dtype,
         )
 
         # Register any op interceptors BEFORE compilation (Phase 2.2: KV cache support)
@@ -1139,12 +1132,7 @@ class GraphExecutor:
             tensor = tensor.to(self.device)
 
             if tensor.is_floating_point() and tensor.dtype != self.dtype:
-                if str(self.device).startswith("mps"):
-                    # MPS: force ALL float constants to compute_dtype.
-                    # Metal cannot handle mixed-dtype ops (add/mm of f32+bf16 crashes).
-                    tensor = tensor.to(self.dtype)
-                else:
-                    tensor = self._dtype_engine.convert_constant(tensor)
+                tensor = self._dtype_engine.convert_constant(tensor)
 
             # Store by weight_name (same as regular weights)
             weight_name = tdata.get("weight_name")
@@ -1229,24 +1217,16 @@ class GraphExecutor:
         for input_name, val in inputs.items():
             if isinstance(val, torch.Tensor):
                 # Convert to expected dtype from graph
-                if self._dtype_engine.force_uniform_dtype and val.is_floating_point():
-                    # MPS: force ALL float inputs to compute_dtype (no mixed dtype)
-                    if self.dtype is not None and val.dtype != self.dtype:
-                        val = val.to(self.dtype)
-                else:
-                    expected_dtype = dtype_resolver.get_input_dtype(input_name)
-                    if expected_dtype is not None and val.dtype != expected_dtype:
-                        val = val.to(expected_dtype)
+                expected_dtype = dtype_resolver.get_input_dtype(input_name)
+                if expected_dtype is not None and val.dtype != expected_dtype:
+                    val = val.to(expected_dtype)
                 ctx.inputs[input_name] = val.to(self.device)
             elif isinstance(val, dict):
                 # Handle dictionary inputs (e.g. added_cond_kwargs)
-                def _move_val(v):
-                    if isinstance(v, torch.Tensor):
-                        if self._dtype_engine.force_uniform_dtype and v.is_floating_point() and self.dtype is not None:
-                            v = v.to(self.dtype)
-                        return v.to(self.device)
-                    return v
-                ctx.inputs[input_name] = {k: _move_val(v) for k, v in val.items()}
+                ctx.inputs[input_name] = {
+                    k: v.to(self.device) if isinstance(v, torch.Tensor) else v
+                    for k, v in val.items()
+                }
             else:
                 ctx.inputs[input_name] = val
 
