@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://gitlab.com/neurobrix/neurobrix/-/raw/main/assets/logo_NeuroBrix.png" alt="NeuroBrix Logo" width="120"/>
+  <img src="https://gitlab.com/neurobrix/neurobrix/-/raw/main/assets/logo_NeuroBrix.png" alt="NeuroBrix Logo" width="300"/>
 </p>
 
 <h1 align="center">NeuroBrix</h1>
