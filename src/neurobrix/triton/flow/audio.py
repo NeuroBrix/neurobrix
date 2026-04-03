@@ -1,0 +1,435 @@
+"""Triton AudioEngine — zero torch orchestrator for audio flows.
+
+Ported from core/flow/audio.py. Dispatches stage execution to
+model-specific handlers. All tensor ops via NBXTensor + kernel wrappers.
+
+Audio preprocessing (mel spectrogram, FFT) is a boundary operation:
+it uses the AudioInputProcessor which internally uses torch/torchaudio.
+Output is converted to NBXTensor at the boundary.
+
+No torch imports in this file.
+"""
+
+import gc
+import time
+import numpy as np
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator
+
+
+class TritonAudioEngine:
+    """
+    Triton-mode audio flow orchestrator.
+
+    Reads flow.audio from topology.json and executes stages mechanically:
+    1. Input preprocessing (audio->features or text->tokens)
+    2. Stage execution (forward, native_kokoro, diffusion, native_acoustic_decoder)
+    3. Output postprocessing (tokens->text or waveform->file)
+    """
+
+    def __init__(
+        self,
+        ctx,
+        execute_component_fn: Callable,
+        resolve_inputs_fn: Callable,
+        ensure_weights_fn: Callable,
+        unload_weights_fn: Callable,
+    ):
+        self.ctx = ctx
+        self._execute_component = execute_component_fn
+        self._resolve_component_inputs = resolve_inputs_fn
+        self._ensure_weights_loaded = ensure_weights_fn
+        self._unload_component_weights = unload_weights_fn
+
+    def execute(self) -> Dict[str, Any]:
+        """Execute the audio pipeline from topology.json flow.audio."""
+        flow = self.ctx.pkg.topology.get("flow", {})
+        audio_config = flow.get("audio")
+        if audio_config is None:
+            raise RuntimeError(
+                "ZERO FALLBACK: Audio flow requires topology.flow.audio section.\n"
+                "Re-build the model with updated topology schema."
+            )
+
+        direction = audio_config.get("direction")
+        if direction is None:
+            raise RuntimeError(
+                "ZERO FALLBACK: topology.flow.audio.direction is required ('stt' or 'tts')."
+            )
+        stages = audio_config.get("stages", [])
+        if not stages:
+            raise RuntimeError(
+                "ZERO FALLBACK: topology.flow.audio.stages is empty.\n"
+                "At least one stage is required."
+            )
+
+        # -- Step 1: Input preprocessing --
+        input_config = audio_config.get("input", {})
+        self._preprocess_input(input_config, direction, stages)
+
+        # -- Step 2: Execute stages in order --
+        for stage in stages:
+            comp_name = stage["component"]
+            execution = stage.get("execution", "forward")
+
+            if comp_name not in self.ctx.executors:
+                raise RuntimeError(
+                    f"ZERO FALLBACK: Stage component '{comp_name}' not found in executors.\n"
+                    f"Available: {list(self.ctx.executors.keys())}"
+                )
+
+            if execution == "forward":
+                self._execute_forward_stage(stage)
+            elif execution == "native_kokoro":
+                from neurobrix.core.flow.stages.kokoro import execute_native_kokoro
+                execute_native_kokoro(self, stage, audio_config)
+            elif execution == "diffusion":
+                from neurobrix.core.flow.stages.vibevoice import execute_diffusion_stage
+                execute_diffusion_stage(self, stage, audio_config)
+            elif execution == "native_acoustic_decoder":
+                from neurobrix.core.flow.stages.vibevoice import execute_native_acoustic_decoder
+                execute_native_acoustic_decoder(self, stage, audio_config)
+            else:
+                raise RuntimeError(
+                    f"ZERO FALLBACK: Unknown execution type '{execution}' "
+                    f"for stage '{comp_name}'. Expected: forward, native_kokoro, "
+                    f"diffusion, native_acoustic_decoder"
+                )
+
+        # -- Step 3: Output postprocessing --
+        output_config = audio_config.get("output", {})
+        self._postprocess_output(output_config, direction)
+
+        return self.ctx.variable_resolver.resolve_all()
+
+    # -----------------------------------------------------------------
+    # Input preprocessing
+    # -----------------------------------------------------------------
+
+    def _preprocess_input(self, input_config: Dict, direction: str, stages: List) -> None:
+        """Preprocess input based on modality and preprocessing type."""
+        modality = input_config.get("modality", "audio" if direction == "stt" else "text")
+
+        if modality == "audio":
+            self._preprocess_audio_input(input_config, stages)
+        elif modality == "text":
+            self._preprocess_text_input(input_config)
+
+    def _preprocess_audio_input(self, input_config: Dict, stages: List) -> None:
+        """Load audio file and extract features.
+
+        Audio preprocessing (mel spectrogram, FFT) is a BOUNDARY operation.
+        AudioInputProcessor uses torch/torchaudio internally. The output
+        torch.Tensor is converted to NBXTensor at the boundary.
+        """
+        audio_path = self.ctx.variable_resolver.resolved.get("global.audio_path")
+        if audio_path is None:
+            raise RuntimeError(
+                "ZERO FALLBACK: Audio model requires global.audio_path.\n"
+                "Use --audio <path> to provide an audio file."
+            )
+
+        preprocessing = input_config.get("preprocessing")
+        if preprocessing is None:
+            raise RuntimeError(
+                "ZERO FALLBACK: topology.flow.audio.input.preprocessing is required.\n"
+                "Types: mel_spectrogram, nemo_mel, conformer, raw_waveform, dac_codec, text_only"
+            )
+        variable = input_config.get("variable", "global.input_features")
+
+        # Read expected input shape from first stage's graph (DATA-DRIVEN)
+        first_comp = stages[0]["component"] if stages else None
+        input_shape = _get_component_input_shape(self.ctx, first_comp)
+
+        # Auto-correct preprocessing type from graph input shape
+        if input_shape and len(input_shape) >= 3:
+            dim1, dim2 = input_shape[1], input_shape[2]
+            if preprocessing == "raw_waveform":
+                if dim1 in (40, 64, 80, 128) and dim2 > dim1:
+                    preprocessing = "mel_spectrogram"
+                elif dim2 in (40, 64, 80, 128, 160, 256) and dim1 > dim2:
+                    preprocessing = "conformer"
+
+        print(f"   [Audio] Loading: {audio_path}")
+        if input_shape:
+            print(f"   [Audio] Expected input shape: {input_shape}")
+
+        # BOUNDARY: AudioInputProcessor uses torch internally.
+        # We import it, run it, then convert the output to NBXTensor.
+        from neurobrix.core.module.audio.input_processor import AudioInputProcessor
+        import torch as _torch_boundary
+
+        device = _torch_boundary.device(self.ctx.primary_device)
+        dtype_str = self.ctx.pkg.manifest.get("dtype", "float16")
+        dtype = {"float16": _torch_boundary.float16, "bfloat16": _torch_boundary.bfloat16,
+                 "float32": _torch_boundary.float32}.get(dtype_str, _torch_boundary.float16)
+
+        features = AudioInputProcessor.process(
+            preprocessing_type=preprocessing,
+            audio_path=str(audio_path),
+            model_path=str(_find_model_config_path(self.ctx)),
+            device=device,
+            dtype=dtype,
+            input_shape=input_shape,
+        )
+
+        # Pad/truncate to match trace-time dimensions
+        if input_shape and len(input_shape) == len(features.shape) and len(input_shape) >= 3:
+            for dim_idx in range(1, len(input_shape)):
+                trace_size = input_shape[dim_idx]
+                actual_size = features.shape[dim_idx]
+                if actual_size != trace_size:
+                    if actual_size > trace_size:
+                        slices = [slice(None)] * len(features.shape)
+                        slices[dim_idx] = slice(None, trace_size)
+                        features = features[tuple(slices)]
+                    else:
+                        pad_shape = list(features.shape)
+                        pad_shape[dim_idx] = trace_size - actual_size
+                        pad = _torch_boundary.zeros(pad_shape, device=features.device, dtype=features.dtype)
+                        features = _torch_boundary.cat([features, pad], dim=dim_idx)
+
+        print(f"   [Audio] Features: {features.shape} ({preprocessing})")
+
+        # BOUNDARY: convert torch tensor to NBXTensor
+        features_nbx = _torch_to_nbx(features)
+
+        # Bind to variable resolver
+        self.ctx.variable_resolver.resolved[variable] = features_nbx
+        short_key = variable.split(".")[-1] if "." in variable else variable
+        self.ctx.variable_resolver.resolved[short_key] = features_nbx
+
+        # Bind audio length
+        actual_frames = features.shape[-1] if preprocessing in ("mel_spectrogram", "nemo_mel") else features.shape[1]
+        length_np = np.array([actual_frames], dtype=np.int64)
+        length_tensor = NBXTensor.from_numpy(length_np)
+        for key in ["global.audio_signal_length", "audio_signal_length", "global.length", "length"]:
+            self.ctx.variable_resolver.resolved[key] = length_tensor
+
+    def _preprocess_text_input(self, input_config: Dict) -> None:
+        """Tokenize text prompt for TTS/LLM-audio models."""
+        prompt = self.ctx.variable_resolver.resolved.get("global.prompt")
+        if prompt is None:
+            raise RuntimeError(
+                "ZERO FALLBACK: TTS model requires global.prompt.\n"
+                "Use --prompt <text> to provide text input."
+            )
+
+        tts_template = self.ctx.pkg.defaults.get("tts_prompt_template")
+        if tts_template and "{text}" in tts_template:
+            prompt = tts_template.format(text=prompt)
+
+        tokenizer = self.ctx.modules.get("tokenizer")
+
+        # Phonemizer path
+        phoneme_vocab = self.ctx.pkg.defaults.get("phoneme_vocab")
+        if tokenizer is None and phoneme_vocab:
+            from neurobrix.core.flow.stages.kokoro import preprocess_phonemizer_input
+            preprocess_phonemizer_input(self, prompt, phoneme_vocab)
+            return
+
+        if tokenizer is None:
+            raise RuntimeError("ZERO FALLBACK: TTS model requires tokenizer module.")
+
+        # Detect tokenization style
+        tokenization = input_config.get("tokenization", "auto")
+        if tokenization == "auto":
+            has_lm = any(
+                k in self.ctx.executors or any(
+                    ek.endswith(f".{k}") or ek == k for ek in self.ctx.executors
+                )
+                for k in ["language_model", "model", "lm_head"]
+            )
+            if not has_lm:
+                flow = self.ctx.pkg.topology.get("flow", {})
+                audio_stages = flow.get("audio", {}).get("stages", [])
+                has_lm = any(s.get("execution") == "autoregressive" for s in audio_stages)
+            tokenization = "llm" if has_lm else "diffusion"
+
+        device = self.ctx.primary_device
+
+        if tokenization == "llm":
+            add_special = tts_template is None
+            try:
+                ids = tokenizer.encode(prompt, add_special_tokens=add_special)
+            except TypeError:
+                ids = tokenizer.encode(prompt)
+            if not isinstance(ids, list):
+                ids = list(ids)
+            input_ids_np = np.array([ids], dtype=np.int64)
+            input_ids = NBXTensor.from_numpy(input_ids_np)
+            attention_mask_np = np.ones_like(input_ids_np)
+            attention_mask = NBXTensor.from_numpy(attention_mask_np)
+        else:
+            from neurobrix.core.module.text.processor import TextProcessor
+            tp = TextProcessor(
+                tokenizer=tokenizer,
+                defaults=self.ctx.pkg.defaults,
+                topology=self.ctx.pkg.topology,
+                variable_resolver=self.ctx.variable_resolver,
+            )
+            input_ids_torch, attention_mask_torch = tp.tokenize_for_diffusion(prompt, device)
+            input_ids = _torch_to_nbx(input_ids_torch)
+            attention_mask = _torch_to_nbx(attention_mask_torch) if attention_mask_torch is not None else None
+
+        self.ctx.variable_resolver.resolved["global.input_ids"] = input_ids
+        self.ctx.variable_resolver.resolved["input_ids"] = input_ids
+        if attention_mask is not None:
+            self.ctx.variable_resolver.resolved["global.attention_mask"] = attention_mask
+            self.ctx.variable_resolver.resolved["attention_mask"] = attention_mask
+
+    # -----------------------------------------------------------------
+    # Stage execution
+    # -----------------------------------------------------------------
+
+    def _execute_forward_stage(self, stage: Dict) -> None:
+        """Execute a single forward-pass stage."""
+        comp_name = stage["component"]
+
+        # Check if required inputs are available AND are tensors
+        has_tensor_input = False
+        comp_connections = self.ctx.connections_index.get(comp_name, {})
+        if comp_connections:
+            for _input_name, sources in comp_connections.items():
+                for src in sources:
+                    val = self.ctx.variable_resolver.resolved.get(src)
+                    if isinstance(val, (NBXTensor,)) or _is_tensor(val):
+                        has_tensor_input = True
+                        break
+                if has_tensor_input:
+                    break
+        else:
+            executor = self.ctx.executors.get(comp_name)
+            dag = getattr(executor, '_dag', None) if executor else None
+            if dag:
+                for _tid, spec in dag.get("tensors", {}).items():
+                    iname = spec.get("input_name")
+                    if iname:
+                        for key in [iname, f"global.{iname}", f"{comp_name}.{iname}"]:
+                            val = self.ctx.variable_resolver.resolved.get(key)
+                            if isinstance(val, (NBXTensor,)) or _is_tensor(val):
+                                has_tensor_input = True
+                                break
+                    if has_tensor_input:
+                        break
+        if not has_tensor_input:
+            print(f"   [{comp_name}] Skipped (no tensor inputs available)")
+            return
+
+        print(f"   [{comp_name}] Running forward pass...")
+        start = time.perf_counter()
+
+        self._ensure_weights_loaded(comp_name)
+        self._execute_component(comp_name, "forward", None)
+
+        elapsed = (time.perf_counter() - start) * 1000
+        print(f"   [{comp_name}] Done in {elapsed:.0f}ms")
+
+        if not self.ctx.persistent_mode:
+            self._unload_component_weights(comp_name)
+            gc.collect()
+
+    # -----------------------------------------------------------------
+    # Output postprocessing
+    # -----------------------------------------------------------------
+
+    def _postprocess_output(self, output_config: Dict, direction: str) -> None:
+        """Postprocess output based on modality."""
+        modality = output_config.get("modality", "text" if direction == "stt" else "audio")
+
+        if modality == "text":
+            self._postprocess_text_output(output_config)
+        elif modality == "audio":
+            self._postprocess_audio_output(output_config)
+
+    def _postprocess_text_output(self, output_config: Dict) -> None:
+        """Decode generated token IDs to text (STT)."""
+        generated_ids = self.ctx.variable_resolver.resolved.get("global.generated_token_ids")
+        if generated_ids is None:
+            return
+
+        tokenizer = self.ctx.modules.get("tokenizer")
+        if tokenizer is not None:
+            from neurobrix.core.module.audio.output_processor import AudioOutputProcessor
+            text = AudioOutputProcessor.decode_tokens(generated_ids, tokenizer)
+        else:
+            text = str(generated_ids)
+
+        variable = output_config.get("variable", "global.transcription")
+        self.ctx.variable_resolver.resolved[variable] = text
+        self.ctx.variable_resolver.resolved["global.transcription"] = text
+        print(f"   [Output] Transcription: {text[:100]}{'...' if len(text) > 100 else ''}")
+
+    def _postprocess_audio_output(self, output_config: Dict) -> None:
+        """Process TTS output: decode audio tokens or store raw waveform."""
+        # Delegate to shared audio_utils (these work with both torch and NBXTensor)
+        from neurobrix.core.flow.audio_utils import postprocess_audio_output
+        postprocess_audio_output(self.ctx)
+
+
+# -----------------------------------------------------------------
+# Module-level helpers (no torch imports)
+# -----------------------------------------------------------------
+
+def _is_tensor(val) -> bool:
+    """Check if val is any tensor type (NBXTensor or torch.Tensor)."""
+    if isinstance(val, NBXTensor):
+        return True
+    return hasattr(val, 'shape') and hasattr(val, 'dtype') and hasattr(val, 'device')
+
+
+def _torch_to_nbx(tensor) -> NBXTensor:
+    """Convert torch.Tensor to NBXTensor at the boundary.
+
+    This is the ONLY place torch is used — at the preprocessing boundary.
+    """
+    if isinstance(tensor, NBXTensor):
+        return tensor
+    arr = tensor.detach().cpu().numpy()
+    return NBXTensor.from_numpy(arr)
+
+
+def _get_component_input_shape(ctx, comp_name) -> Optional[Tuple[int, ...]]:
+    """Read first input tensor shape from component's graph (DATA-DRIVEN)."""
+    if comp_name is None:
+        return None
+    executor = ctx.executors.get(comp_name)
+    if executor is None:
+        return None
+    dag = getattr(executor, '_dag', None)
+    if dag is None:
+        return None
+    for tid, spec in dag.get("tensors", {}).items():
+        is_input = (
+            spec.get("type") == "input"
+            or spec.get("input_name") is not None
+            or tid.startswith("input::")
+        )
+        if is_input:
+            shape = spec.get("shape", [])
+            resolved = []
+            for dim in shape:
+                if isinstance(dim, dict):
+                    resolved.append(dim.get("trace_value", dim.get("trace", 0)))
+                elif isinstance(dim, int):
+                    resolved.append(dim)
+                else:
+                    resolved.append(0)
+            return tuple(resolved)
+    return None
+
+
+def _find_model_config_path(ctx) -> Path:
+    """Find model config path from NBX container."""
+    nbx_path = Path(ctx.nbx_path_str)
+    for subdir in ["modules/processor", "modules/tokenizer"]:
+        candidate = nbx_path / subdir
+        if candidate.exists():
+            return candidate
+    for comp_info in ctx.pkg.topology.get("components", {}).values():
+        comp_path = comp_info.get("path")
+        if comp_path and Path(comp_path).exists():
+            return Path(comp_path)
+    raise RuntimeError("ZERO FALLBACK: Cannot find model config path.")
