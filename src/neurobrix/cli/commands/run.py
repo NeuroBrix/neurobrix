@@ -337,8 +337,22 @@ def cmd_run(args):
     # 5. Determine Execution Engine Mode
     if args.sequential:
         execution_mode = "native"
-    elif args.triton:
-        execution_mode = "triton"
+    elif args.triton or getattr(args, 'triton_sequential', False):
+        # Triton mode: validate hardware compatibility
+        if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            print("\n[ERROR] --triton mode is not compatible with Apple Metal GPUs.")
+            print("   Metal/MPS backend does not support Triton kernels.")
+            print("   This will be supported in a future version of NeuroBrix.")
+            print("   Use default mode (without --triton) for Metal GPU inference.")
+            return
+        if not torch.cuda.is_available():
+            import os
+            os.environ.setdefault("TRITON_CPU_BACKEND", "1")
+            print("   [Triton] No GPU detected — using Triton CPU backend (experimental)")
+        if getattr(args, 'triton_sequential', False):
+            execution_mode = "triton_sequential"
+        else:
+            execution_mode = "triton"
     else:
         execution_mode = "compiled"
 
@@ -384,13 +398,14 @@ def cmd_run(args):
             print(f"Available: {list(outputs.keys())}")
             sys.exit(1)
 
-        print(f"\n[Output] Generated {output_tokens.shape[-1]} tokens")
+        num_tokens = len(output_tokens) if isinstance(output_tokens, list) else output_tokens.shape[-1]
+        print(f"\n[Output] Generated {num_tokens} tokens")
 
         generated_text = None
         if "tokenizer" in executor.modules:
             tokenizer = executor.modules["tokenizer"]
             if hasattr(tokenizer, 'decode'):
-                token_ids = output_tokens.flatten().tolist()
+                token_ids = output_tokens if isinstance(output_tokens, list) else (output_tokens if isinstance(output_tokens, list) else output_tokens.flatten().tolist())
                 generated_text = tokenizer.decode(token_ids, skip_special_tokens=True)
 
         if args.output:
@@ -402,7 +417,7 @@ def cmd_run(args):
                     "choices": [{
                         "message": {
                             "role": "assistant",
-                            "content": generated_text or str(output_tokens.flatten().tolist()),
+                            "content": generated_text or str((output_tokens if isinstance(output_tokens, list) else output_tokens.flatten().tolist())),
                         },
                         "finish_reason": "stop",
                     }],
@@ -411,13 +426,13 @@ def cmd_run(args):
                     json_mod.dump(result, f, indent=2, ensure_ascii=False)
             else:
                 with open(output_path, 'w') as f:
-                    f.write(generated_text if generated_text else str(output_tokens.flatten().tolist()))
+                    f.write(generated_text if generated_text else str((output_tokens if isinstance(output_tokens, list) else output_tokens.flatten().tolist())))
             print(f"\n[Success] Output saved to: {output_path}")
         else:
             if generated_text:
                 print(f"\n{generated_text}")
             else:
-                print(f"\n{output_tokens.flatten().tolist()}")
+                print(f"\n{(output_tokens if isinstance(output_tokens, list) else output_tokens.flatten().tolist())}")
 
         sys.exit(0)
 
