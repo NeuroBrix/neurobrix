@@ -8,7 +8,7 @@ Architecture (decomposed):
 - ExecutionContext: Shared state for a single run()
 - TensorResolver: Tensor resolution from DAG to live tensors
 - Op dispatch delegated to kernels/ infrastructure:
-  - kernels/adapter.py: KernelAdapter.launch() for Triton
+  - kernels/dispatch.py: Triton kernel dispatch (--triton mode)
   - kernels/metadata_ops.py: execute_metadata_op() for PyTorch native
   - core/runtime/graph/sequential_dispatcher.py: NativeATenDispatcher for ATen ops
 
@@ -140,10 +140,6 @@ class GraphExecutor:
         self._ctx: Optional[ExecutionContext] = None
         self._resolver: Optional[TensorResolver] = None
 
-        # Kernel adapter — lazy-initialized only for triton mode
-        self._kernel_adapter = None
-        self._kernel_adapter_args = (family, vendor, arch, device, dtype)
-
         # Runtime resolution for pos_embed scaling
         self._runtime_height = None
         self._runtime_width = None
@@ -157,7 +153,7 @@ class GraphExecutor:
 
         # Pre-compiled dispatch table: op_uid -> OpExecution type
         # Computed once in _init_from_dag(), avoids per-op get_execution_type() calls
-        self._exec_type_map: Dict[str, Optional[OpExecution]] = {}
+        # _exec_type_map removed — old triton dispatch path eliminated
 
         # Memory pooling - DISABLED (PyTorch's internal caching allocator is optimal)
         self._use_memory_pool = False
@@ -670,7 +666,7 @@ class GraphExecutor:
 
         # Pre-compile dispatch table for Triton mode
         # Only needed for Triton mode — native mode bypasses classification entirely
-        self._precompile_dispatch_table()
+        # _precompile_dispatch_table removed — old triton dispatch path eliminated
 
         # DtypeEngine handles mixed precision at the op level.
         # No DAG rewriting needed — graph annotations stay as-is (from trace).
@@ -828,6 +824,7 @@ class GraphExecutor:
             device=torch.device(self.device),
             dtype=self.dtype,
             amp_enabled=self._dtype_engine.amp_enabled,
+            use_triton=(self.mode == "triton"),
         )
 
         # Register any op interceptors BEFORE compilation (Phase 2.2: KV cache support)
@@ -1033,48 +1030,6 @@ class GraphExecutor:
         if reconciled > 0:
             self._weights = remapped
 
-    def _precompile_dispatch_table(self) -> None:
-        """Pre-compile dispatch table for Triton mode.
-
-        This optimization pre-computes the OpExecution type for each op in the DAG
-        during graph loading, avoiding repeated get_execution_type() calls during
-        the execution loop.
-
-        Benefits:
-        - ~10% performance improvement in Triton mode (removes dict lookup per op)
-        - Early detection of unknown ops (fails at load time, not runtime)
-        - Zero cost for native mode (skipped entirely)
-
-        The table maps: op_uid -> OpExecution (TRITON or METADATA)
-        Unknown ops are stored as None and will raise ZERO FALLBACK at runtime.
-        """
-        self._exec_type_map = {}
-
-        # Skip for native mode - classification not used
-        if self.mode == "native":
-            return
-
-        assert self._dag is not None
-        ops = self._dag.get("ops", {})
-        triton_count = 0
-        metadata_count = 0
-        unknown_ops = []
-
-        for op_uid, op_data in ops.items():
-            op_type = op_data.get("op_type", "")
-            try:
-                exec_type = get_execution_type(op_type)
-                self._exec_type_map[op_uid] = exec_type
-                if exec_type == OpExecution.TRITON:
-                    triton_count += 1
-                else:
-                    metadata_count += 1
-            except KeyError:
-                # Store None to trigger ZERO FALLBACK at runtime
-                self._exec_type_map[op_uid] = None
-                unknown_ops.append((op_uid, op_type))
-
-
     def _load_constants_from_graph(self) -> None:
         """
         Load constant tensors embedded in graph.json.
@@ -1145,39 +1100,271 @@ class GraphExecutor:
     # Execution: run() and helpers
     # =========================================================================
 
-    def run(self, inputs: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    def run(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
         """
         Execute DAG mechanically.
 
-        For each op in execution_order:
-        1. Read op_data DIRECTLY from self._dag["ops"][op_uid]
-        2. Gather input tensors via TensorResolver
-        3. Dispatch to kernel based on op_type
-        4. Store output tensors via ExecutionContext
-
-        NO interpretation. NO reconstruction.
+        For triton mode with NBXTensor inputs, bypasses torch.inference_mode
+        and handles inputs directly. For native/compiled mode, uses torch path.
 
         Args:
-            inputs: Named input tensors (model inputs)
+            inputs: Named input tensors (model inputs). Can be torch.Tensor or NBXTensor.
 
         Returns:
             Output tensors
         """
-        # CRITICAL: inference_mode disables autograd completely
-        # Without this, PyTorch keeps ALL tensors for potential backward pass
+        # TRITON MODES: direct NBXTensor path — no torch wrapping
+        if self.mode in ("triton", "triton_sequential"):
+            return self._run_triton(inputs)
+
+        # NATIVE/COMPILED MODE: torch path
         with torch.inference_mode():
-            # Phase 1: Prepare execution context
             self._ctx = self._prepare_execution(inputs)
             self._resolver = TensorResolver(self._ctx)
-
-            # Phase 2: Execute all ops
             stats = self._execute_all_ops()
-
-            # Phase 3: Gather outputs
             outputs = self._gather_outputs()
-
             self._last_stats = stats
             return outputs
+
+    def _run_triton(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute via triton path with NBXTensor inputs. Zero torch.
+
+        Supports both compiled (--triton) and sequential (--triton-sequential).
+        Compiled: TritonSequence (arena + closures, fast).
+        Sequential: TritonSequentialDispatcher (dict lookup per op, debuggable).
+        """
+        import time as _time
+        from neurobrix.kernels.nbx_tensor import NBXTensor, parse_dtype, DeviceAllocator
+
+        start = _time.perf_counter()
+        if isinstance(self.device, str):
+            device_idx = int(self.device.split(':')[1]) if ':' in self.device else 0
+        elif hasattr(self.device, 'index') and isinstance(self.device.index, int):
+            device_idx = self.device.index
+        else:
+            device_idx = 0
+
+        DeviceAllocator.set_device(device_idx)
+        DeviceAllocator.ensure_triton_device(device_idx)
+
+        # Build input map: name → NBXTensor (keyed by tensor ID)
+        input_map = {}
+        tensors_meta = self._dag.get("tensors", {})
+        for tid in tensors_meta:
+            if not tid.startswith("input::"):
+                continue
+            input_name = tid[7:]
+            value = inputs.get(input_name)
+            if value is None:
+                continue
+            if isinstance(value, NBXTensor):
+                input_map[tid] = value
+            elif hasattr(value, 'data_ptr'):
+                didx = value.device.index if isinstance(getattr(value.device, 'index', None), int) else device_idx
+                input_map[tid] = NBXTensor.from_raw(
+                    value.data_ptr(), tuple(value.shape),
+                    parse_dtype(str(value.dtype)), 'cuda',
+                    owns_data=False, device_idx=didx, base=value)
+
+        if self.mode == "triton_sequential":
+            raw_outputs, num_ops = self._run_triton_sequential(
+                input_map, device_idx)
+        else:
+            raw_outputs, num_ops = self._run_triton_compiled(
+                input_map, device_idx)
+
+        # Map tensor IDs to semantic output names
+        outputs = {}
+        for tid, tensor in raw_outputs.items():
+            info = tensors_meta.get(tid, {})
+            name = info.get("output_name", tid)
+            outputs[name] = tensor
+
+        elapsed = (_time.perf_counter() - start) * 1000
+        self._last_stats = ExecutionStats(
+            total_ops=num_ops, triton_ops=num_ops, total_time_ms=elapsed)
+        return outputs
+
+    def _run_triton_compiled(self, input_map: dict, device_idx: int):
+        """Execute via TritonSequence (arena + closures)."""
+        self._ensure_triton_compiled(device_idx)
+        self._triton_seq.bind_inputs(input_map)
+        self._triton_seq.bind_symbols(input_map)
+        self._triton_seq.run()
+        return self._triton_seq.gather_outputs(), self._triton_seq.num_ops
+
+    def _run_triton_sequential(self, input_map: dict, device_idx: int):
+        """Execute via TritonSequentialDispatcher (op-by-op, debuggable)."""
+        from neurobrix.triton.sequential import TritonSequentialDispatcher
+        from neurobrix.triton.symbols import SymbolResolver
+        from neurobrix.kernels.nbx_tensor import NBXTensor, parse_dtype
+
+        compute_dtype_str = str(self.dtype).replace('torch.', '') if hasattr(self.dtype, '__str__') else 'float16'
+        dispatcher = TritonSequentialDispatcher(
+            device_idx=device_idx, compute_dtype=parse_dtype(compute_dtype_str))
+
+        tensors = self._dag.get("tensors", {})
+        ops_meta = self._dag.get("ops", {})
+        exec_order = self._dag.get("execution_order", [])
+
+        # Symbol resolver for symbolic shapes
+        sym_ctx = self._dag.get("symbolic_context", {})
+        sym_resolver = SymbolResolver(sym_ctx) if sym_ctx else None
+        if sym_resolver:
+            sym_resolver.bind_from_inputs(input_map,
+                                          self._dag.get("input_tensor_ids", []),
+                                          tensors)
+
+        # Tensor store: maps tensor_id → NBXTensor
+        store: Dict[str, Any] = {}
+
+        # Load weights into store
+        for tid, tdata in tensors.items():
+            if tid.startswith("param::") or tid.startswith("buffer::"):
+                wname = tdata.get("weight_name", "")
+                if wname in self._weights:
+                    w_tensor = self._weights[wname]
+                    if not w_tensor.is_cuda:
+                        w_tensor = w_tensor.to(torch.device(f"cuda:{device_idx}"))
+                    if not isinstance(w_tensor, NBXTensor):
+                        didx = w_tensor.device.index if isinstance(getattr(w_tensor.device, 'index', None), int) else device_idx
+                        store[tid] = NBXTensor.from_raw(
+                            w_tensor.data_ptr(), tuple(w_tensor.shape),
+                            parse_dtype(str(w_tensor.dtype)), 'cuda',
+                            owns_data=False, device_idx=didx, base=w_tensor)
+                    else:
+                        store[tid] = w_tensor
+
+        # Load inputs into store
+        for tid, tensor in input_map.items():
+            store[tid] = tensor
+
+        # Execute ops sequentially
+        num_ops = 0
+        for op_uid in exec_order:
+            op_data = ops_meta.get(op_uid)
+            if op_data is None:
+                continue
+
+            op_type = op_data.get("op_type", "")
+            attrs = op_data.get("attributes", {})
+            output_tids = op_data.get("output_tensor_ids", [])
+
+            # Resolve args from store
+            raw_args = attrs.get("args", [])
+            resolved_args = []
+            for arg in raw_args:
+                resolved_args.append(
+                    self._resolve_sequential_arg(arg, store, sym_resolver, dispatcher))
+
+            # Dispatch
+            result = dispatcher.dispatch(op_type, resolved_args, attrs)
+
+            # Store outputs
+            if isinstance(result, tuple):
+                for i, tid in enumerate(output_tids):
+                    store[tid] = result[i] if i < len(result) else None
+            else:
+                if output_tids:
+                    store[output_tids[0]] = result
+
+            num_ops += 1
+
+        # Gather outputs
+        output_tids = self._dag.get("output_tensor_ids", [])
+        outputs = {}
+        for tid in output_tids:
+            if tid in store and store[tid] is not None:
+                outputs[tid] = store[tid]
+
+        return outputs, num_ops
+
+    def _resolve_sequential_arg(self, arg, store, sym_resolver, dispatcher):
+        """Resolve a single arg for sequential mode."""
+        if isinstance(arg, dict):
+            atype = arg.get("type")
+            if atype in ("tensor", "tensor_ref"):
+                tid = arg.get("tensor_id")
+                return store.get(tid)
+            if atype == "tensor_tuple":
+                return [store.get(tid) for tid in arg.get("tensor_ids", [])]
+            if atype == "symbol":
+                sid = arg.get("symbol_id") or arg.get("id")
+                if sym_resolver and sid:
+                    v = sym_resolver.get(sid)
+                    if v > 0:
+                        return v + arg.get("offset", 0)
+                return arg.get("trace_value", arg.get("trace", 0))
+            if atype in ("mul", "add", "sub", "floordiv", "mod", "neg", "product"):
+                if sym_resolver:
+                    try:
+                        return sym_resolver.resolve(arg)
+                    except Exception:
+                        pass
+                return arg.get("trace", arg.get("trace_value", 0))
+            if atype == "list":
+                items = arg.get("value", [])
+                return [self._resolve_sequential_arg(item, store, sym_resolver, dispatcher)
+                        for item in items]
+            return dispatcher.resolve_attr(arg)
+        if isinstance(arg, (list, tuple)):
+            return [self._resolve_sequential_arg(item, store, sym_resolver, dispatcher)
+                    for item in arg]
+        return arg
+
+    def register_triton_interceptors(self, interceptors: Dict[str, Any]):
+        """Store interceptors to apply when triton sequence is compiled."""
+        if not hasattr(self, '_pending_triton_interceptors'):
+            self._pending_triton_interceptors = {}
+        self._pending_triton_interceptors.update(interceptors)
+        # Apply immediately if already compiled
+        if hasattr(self, '_triton_seq') and self._triton_seq is not None:
+            for op_type, func in interceptors.items():
+                self._triton_seq.register_op_interceptor(op_type, func)
+
+    def _ensure_triton_compiled(self, device_idx: int):
+        """Compile triton sequence and bind weights (once)."""
+        if hasattr(self, '_triton_seq') and self._triton_seq is not None:
+            return
+
+        from neurobrix.triton.sequence import TritonSequence
+        from neurobrix.kernels.nbx_tensor import NBXTensor, parse_dtype, DeviceAllocator
+
+        DeviceAllocator.set_device(device_idx)
+        DeviceAllocator.ensure_triton_device(device_idx)
+
+        compute_dtype_str = str(self.dtype).replace('torch.', '') if hasattr(self.dtype, '__str__') else 'float16'
+        self._triton_seq = TritonSequence(
+            self._dag, device_idx=device_idx,
+            compute_dtype=parse_dtype(compute_dtype_str))
+        self._triton_seq.compile()
+
+        # Convert weights (torch.Tensor → NBXTensor at boundary)
+        # Constants from graph may be on CPU — move to GPU first.
+        # Remap bf16→fp16 (or vice versa) based on Prism compute_dtype.
+        # RoPE constants are stored in graph as bf16 but V100 needs fp16.
+        target_torch_dtype = self.dtype  # Prism-determined compute dtype
+        all_weights = {}
+        for wname, tensor in self._weights.items():
+            if not tensor.is_cuda:
+                tensor = tensor.to(torch.device(f"cuda:{device_idx}"))
+            # Remap bf16↔fp16 to match hardware
+            if tensor.dtype == torch.bfloat16 and target_torch_dtype == torch.float16:
+                tensor = tensor.to(torch.float16)
+            elif tensor.dtype == torch.float16 and target_torch_dtype == torch.bfloat16:
+                tensor = tensor.to(torch.bfloat16)
+            self._weights[wname] = tensor
+            didx = tensor.device.index if hasattr(tensor.device, 'index') and tensor.device.index is not None else device_idx
+            all_weights[wname] = NBXTensor.from_raw(
+                tensor.data_ptr(), tuple(tensor.shape),
+                parse_dtype(str(tensor.dtype)), 'cuda',
+                owns_data=False, device_idx=didx, base=tensor)
+        self._triton_seq.bind_weights(all_weights)
+
+        # Apply pending interceptors (registered before compilation)
+        if hasattr(self, '_pending_triton_interceptors'):
+            for op_type, func in self._pending_triton_interceptors.items():
+                self._triton_seq.register_op_interceptor(op_type, func)
 
     def _prepare_execution(self, inputs: Dict[str, Any]) -> ExecutionContext:
         """
@@ -1265,7 +1452,143 @@ class GraphExecutor:
             if bound:
                 self._last_symbols = bound  # Store for CFG batch inference
 
+            # Sequential mode: adapt seq-dependent constant weights.
+            # constant_T_* tensors (RoPE cos/sin) have trace_seq_len in their shape.
+            # Slice to match actual runtime seq_len to prevent index out of bounds.
+            # Compiled mode does this in update_seq_dependent_constants().
+            if self.mode in ("native", "triton_sequential"):
+                # Sequential modes: patch ops that reference trace_seq_len in shape args
+                self._patch_seq_len_in_ops(bound)
+
         return ctx
+
+    def _patch_seq_len_in_ops(self, bound_symbols: Dict[str, int]) -> None:
+        """Replace trace-time seq_len values with runtime values in op attributes.
+
+        The compiled path does this via _promote_seq_len_scalars_to_symbolic + ExprArg.
+        For sequential mode, we patch from SAVED ORIGINALS each call (AR-safe).
+
+        Targets: ones/zeros/full/new_zeros/new_ones (shape args),
+                 expand (size arg), slice (end arg), arange (end arg).
+        """
+        import copy
+
+        assert self._dag is not None
+        symbolic_context = self._dag.get("symbolic_context", {})
+        symbols = symbolic_context.get("symbols", {})
+
+        # Build trace_val → runtime_val map for seq_len symbols
+        seq_trace_vals = set()
+        runtime_map = {}  # trace_value → runtime_value
+        for sym_id, sym_info in symbols.items():
+            if sym_info.get("name") != "seq_len":
+                continue
+            trace_val = sym_info.get("trace_value")
+            runtime_val = bound_symbols.get(sym_id)
+            if trace_val is not None and runtime_val is not None:
+                seq_trace_vals.add(trace_val)
+                runtime_map[trace_val] = runtime_val
+
+        if not seq_trace_vals:
+            return
+
+        # Save original args on first call (AR loop will re-patch each step)
+        if not hasattr(self, '_original_op_args'):
+            self._original_op_args = {}
+            ops = self._dag.get("ops", {})
+            for op_uid, op_data in ops.items():
+                attrs = op_data.get("attributes", {})
+                args = attrs.get("args", [])
+                if args:
+                    self._original_op_args[op_uid] = copy.deepcopy(args)
+
+        # Restore originals then apply current runtime values
+        ops = self._dag.get("ops", {})
+        for op_uid, op_data in ops.items():
+            if op_uid not in self._original_op_args:
+                continue
+
+            op_type = op_data.get("op_type", "")
+            attrs = op_data.get("attributes", {})
+
+            # Restore from saved original
+            original_args = copy.deepcopy(self._original_op_args[op_uid])
+            attrs["args"] = original_args
+            args = original_args
+            bare = op_type.replace("aten::", "")
+
+            def _replace_in_list(vals):
+                for i, v in enumerate(vals):
+                    if isinstance(v, int) and v in runtime_map:
+                        vals[i] = runtime_map[v]
+
+            # ones/zeros/full/new_zeros/new_ones
+            if bare in ("ones", "zeros", "full", "new_zeros", "new_ones"):
+                shape_idx = 1 if bare.startswith("new_") else 0
+                if len(args) > shape_idx:
+                    arg = args[shape_idx]
+                    if isinstance(arg, dict) and arg.get("type") == "list":
+                        _replace_in_list(arg.get("value", []))
+
+            # expand
+            elif bare == "expand" and len(args) >= 2:
+                arg = args[1]
+                if isinstance(arg, dict) and arg.get("type") == "list":
+                    _replace_in_list(arg.get("value", []))
+
+            # slice
+            elif bare == "slice" and len(args) >= 4:
+                arg = args[3]
+                if isinstance(arg, dict) and arg.get("type") == "scalar":
+                    v = arg.get("value")
+                    if isinstance(v, int) and v in runtime_map:
+                        arg["value"] = runtime_map[v]
+
+            # arange
+            elif bare == "arange":
+                for idx in range(min(len(args), 2)):
+                    arg = args[idx]
+                    if isinstance(arg, dict):
+                        for key in ("value", "trace_value"):
+                            v = arg.get(key)
+                            if isinstance(v, int) and v in runtime_map:
+                                arg[key] = runtime_map[v]
+
+    def _adapt_seq_dependent_weights(self, bound_symbols: Dict[str, int]) -> None:
+        """Slice constant_T_* weights to match runtime seq_len.
+
+        RoPE cos/sin tables are captured at trace_seq_len. If runtime seq_len
+        differs, we must slice (shorter) or the pre-computed tables (longer).
+        This is the sequential equivalent of CompiledSequence.update_seq_dependent_constants().
+        """
+        assert self._dag is not None
+        symbolic_context = self._dag.get("symbolic_context", {})
+        symbols = symbolic_context.get("symbols", {})
+
+        # Find seq_len symbol and its trace/runtime values
+        for sym_id, sym_info in symbols.items():
+            if sym_info.get("name") != "seq_len":
+                continue
+            trace_val = sym_info.get("trace_value")
+            runtime_val = bound_symbols.get(sym_id)
+            if trace_val is None or runtime_val is None or runtime_val == trace_val:
+                continue
+
+            # Scan weights for constant_T_* tensors with trace_seq_len in shape
+            tensors_meta = self._dag.get("tensors", {})
+            for wname, weight in list(self._weights.items()):
+                if not wname.startswith("constant_T_"):
+                    continue
+                for axis, dim in enumerate(weight.shape):
+                    if dim == trace_val:
+                        if runtime_val < trace_val:
+                            # Slice down
+                            slices = [slice(None)] * weight.ndim
+                            slices[axis] = slice(0, runtime_val)
+                            self._weights[wname] = weight[tuple(slices)]
+                        # If runtime > trace, the table is too small — keep full table
+                        # (downstream ops will handle via modular indexing)
+                        break
 
     def _execute_all_ops(self) -> ExecutionStats:
         """
@@ -1274,15 +1597,22 @@ class GraphExecutor:
         Execution modes:
         - "compiled": Pre-compiled execution sequence (DEFAULT, zero-overhead)
         - "native": Pure PyTorch ATen ops (debug/compatibility)
-        - "triton": Python loop + Triton kernels (R&D mode)
+        - "triton_sequential": Op-by-op Triton dispatch (debug)
+
+        Note: "triton" mode is handled by run() → _run_triton() and never
+        reaches this method.
 
         Returns:
             ExecutionStats with timing and counts
         """
-        # COMPILED MODE: Execute via pre-compiled metadata (Fast Native Mode)
-        # Uses existing TensorResolver but with pre-compiled loop metadata
+        # COMPILED MODE (default): uses CompiledSequence with PyTorch ops
         if self.mode == "compiled":
             return self._execute_compiled_graph()
+
+        # TRITON SEQUENTIAL MODE: Each op runs one by one via TritonSequentialDispatcher.
+        # DtypeEngine AMP applied. Used for debugging/validating individual Triton kernels.
+        if self.mode == "triton_sequential":
+            return self._execute_triton_sequential()
 
         # Compute last use of each tensor for memory management
         last_use_tid = self._compute_last_use()
@@ -1544,26 +1874,12 @@ class GraphExecutor:
             self._execute_native_op(op_uid, op_data, op_type)
             return OpExecution.METADATA
 
-        # TRITON MODE: Use pre-compiled dispatch table
-        # Falls back to runtime lookup if op not in table (e.g., graph loaded via dict)
-        exec_type = self._exec_type_map.get(op_uid)
-        if exec_type is None:
-            # Not in pre-compiled table - try runtime lookup
-            try:
-                exec_type = get_execution_type(op_type)
-            except KeyError:
-                raise RuntimeError(
-                    f"ZERO FALLBACK: Unknown ATen op '{op_type}'.\n"
-                    f"Op UID: {op_uid}\n"
-                    f"Add to kernels/classification.py ATEN_CLASSIFICATION dict."
-                )
-
-        if exec_type == OpExecution.METADATA:
-            self._execute_metadata_op(op_uid, op_data)
-        else:  # TRITON
-            self._execute_triton_op(op_uid, op_data)
-
-        return exec_type
+        # All other modes (compiled, triton) go through their own execution paths
+        # and never reach _dispatch_op. If we get here with an unexpected mode, crash.
+        raise RuntimeError(
+            f"ZERO FALLBACK: _dispatch_op called with unexpected mode '{self.mode}'. "
+            f"Expected 'native' (sequential dispatches set mode='native' temporarily)."
+        )
 
     def _check_nan_inf(self, op_uid: str, op_type: str, exec_type: OpExecution) -> None:
         """
@@ -1681,53 +1997,45 @@ class GraphExecutor:
         # Store outputs
         self._store_op_outputs(op_uid, op_data, result)
 
-    def _execute_triton_op(self, op_uid: str, op_data: Dict[str, Any]) -> None:
+    def _execute_triton_sequential(self) -> 'ExecutionStats':
         """
-        Execute compute op via Kernel Adapter.
+        Execute ALL ops sequentially using Triton kernels for compute ops.
 
-        Uses DtypeEngine AMP rules for numerical stability before dispatching
-        to Triton kernels. The adapter handles ATen -> Kernel translation.
+        Uses TritonSequentialDispatcher which extends NativeATenDispatcher:
+        - Reuses ALL argument processing (SDPA, multi-resolution, expand fixes)
+        - Overrides _resolve_op to route compute ops to Triton kernels
+        - Metadata ops (view, reshape, etc.) still use PyTorch
 
-        Delegates to: kernels/adapter.py
+        This is the stabilization path for --triton mode.
+        Once correct, compiled triton mode will follow.
         """
-        op_type = op_data["op_type"]
-        attrs = op_data.get("attributes", {})
+        from neurobrix.core.runtime.graph.sequential_dispatcher import TritonSequentialDispatcher
 
-        # Resolve inputs via TensorResolver
-        assert self._resolver is not None
-        inputs = self._resolver.resolve_args(op_uid, attrs, op_type, op_data)
-        resolved_kwargs = self._resolver.resolve_kwargs(op_uid, attrs, op_type, op_data)
+        if self._sequential_dispatcher is None or not isinstance(
+            self._sequential_dispatcher, TritonSequentialDispatcher
+        ):
+            self._sequential_dispatcher = TritonSequentialDispatcher(
+                device=self.device, compute_dtype=self.dtype
+            )
 
-        # Normalize inputs (Contiguity + Device)
-        inputs = self._resolver.normalize_inputs(inputs)
-
-        # AMP: Cast inputs per DtypeEngine rules (fp32 for pow/rsqrt/softmax, etc.)
-        inputs = self._dtype_engine.amp_cast_inputs(op_type, inputs)
-
-        # Also normalize tensors in kwargs
-        assert self._resolver is not None
-        for k, v in resolved_kwargs.items():
-            if isinstance(v, torch.Tensor):
-                normalized_v = self._resolver.normalize_inputs([v])
-                resolved_kwargs[k] = normalized_v[0]
-
-        # Merge resolved kwargs into attrs for adapter
-        full_attrs = dict(attrs)
-        if "kwargs" in full_attrs:
-            full_attrs["kwargs"] = resolved_kwargs
-
-        # Execute via KernelAdapter (lazy-init on first triton dispatch)
-        if self._kernel_adapter is None:
-            from neurobrix.kernels.adapter import KernelAdapter
-            family, vendor, arch, device, dtype = self._kernel_adapter_args
-            self._kernel_adapter = KernelAdapter(family, vendor, arch, device, dtype=dtype)
-        result = self._kernel_adapter.launch(op_type, inputs, full_attrs)
-
-        # AMP: Post-process result (overflow protection, inf clamping)
-        result = self._dtype_engine.amp_cast_result(op_type, result)
-
-        # Store outputs
-        self._store_op_outputs(op_uid, op_data, result)
+        # Reuse the NATIVE sequential execution loop — it already handles:
+        # - Tensor resolution via _resolver
+        # - Op dispatch via _dispatch_op → _execute_native_op
+        # - Memory management via _cleanup_finished_tensors
+        # - Error handling via _handle_op_error
+        #
+        # The ONLY difference: _sequential_dispatcher is now TritonSequentialDispatcher
+        # which routes compute ops to Triton kernels via _resolve_op override.
+        #
+        # Temporarily set mode to "native" so _dispatch_op uses the sequential path,
+        # then restore. This avoids duplicating the entire execution loop.
+        saved_mode = self.mode
+        self.mode = "native"
+        try:
+            result = self._execute_all_ops()
+        finally:
+            self.mode = saved_mode
+        return result
 
     def _execute_native_op(self, op_uid: str, op_data: Dict[str, Any], op_type: str) -> None:
         """

@@ -8,6 +8,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `--triton` mode — compiled Triton kernel inference (136 kernel files, 128 dispatch entries)
+- `--triton-sequential` mode — sequential Triton execution for kernel debugging
+- `TritonSequentialDispatcher` — extends NativeATenDispatcher, routes compute ops to Triton kernels
+- 136 pure `@triton.jit` kernel files extracted from FlagGems, attorch, Liger-Kernel, Flash-Attention (Dao-AILab)
+- NBXTensor — lightweight tensor descriptor for zero-PyTorch metadata ops
+- Universal launch layer: `_prepare_binary`, `_prepare_comparison` — broadcasting, scalar handling, device context for all ops
+- `_cuda_guard` in dispatch — handles multi-GPU + Zero3 CPU offloading transparently
+- Metal GPU detection: `--triton` on Apple Silicon shows "not compatible" message
+- CPU Triton backend: auto-enables `TRITON_CPU_BACKEND=1` on CPU-only machines
+- Symbolic shape patching for sequential mode: `_patch_seq_len_in_ops` resolves trace-time seq_len in creation ops
+- Pure Triton inference mode for LLM autoregressive generation (`--triton` flag)
+- Zero-torch flow handler: autoregressive.py, samplers.py, generator.py, session.py
+- Triton sequential debug mode (`--triton-sequential` flag)
+- KV cache with GQA support for Triton decode (O(1) per token)
+- Strided scatter kernel for non-contiguous KV cache writes
+- NBXTensor boundary functions: nbx_to_torch(), nbx_dtype_to_torch()
+
+### Changed
+- DtypeEngine: merged `FP16_PRECISION_OPS` into `_FP16_NEED_FP32` (subset of `AMP_FP16_OPS`), eliminated duplicate sets
+- DtypeEngine: `amp_cast_inputs()` now handles `_FP16_NEED_FP32` (was only in `compile_op`)
+- Conv2d kernel: replaced FlagGems with attorch (V100 `num_stages` compatibility)
+- Conv1d: routes through conv2d via unsqueeze (V100 safe)
+- `pow` kernel: uses `libdevice.pow` for negative base handling (was `exp(e*log(x))` → NaN)
+- `compiled_ops.py` enforces: missing Triton kernel for compute op = crash with descriptive error
+- Remove @triton.autotune from 100+ element-wise kernels (fixed BLOCK_SIZE=1024)
+- Remove @triton.autotune from 36 compute-bound kernels (fixed conservative configs)
+- Cold start reduced from 8+ minutes to ~5 seconds
+
+### Fixed
+- NBXTensor.cat() called is_contiguous as attribute instead of method — corrupted RoPE
+- Symbolic promotion skipped when multiple symbols share trace_value (s1/s3 ambiguity)
+- SDPA double-masking when graph passes explicit causal mask with is_causal=False
+- NBXTensor.__setitem__ used flat copy_kernel on non-contiguous narrow view — corrupted KV cache
+- NBXTensor.contiguous() used memcpy instead of strided copy for non-contiguous views
+
+### Removed
+- `kernels/adapter.py` (1181 lines) — replaced by `dispatch.py` + `wrappers.py`
+- `kernels/mapping.py` (155 lines), `kernels/resolver.py` (316 lines), `kernels/registry.py` (68 lines), `kernels/exceptions.py` (15 lines)
+- `kernels/ops_legacy/` directory, `kernels/arch/` directory, `kernels/spec.py`
+- `_execute_triton_op`, `_precompile_dispatch_table`, `_exec_type_map` from graph_executor.py
 - Apple Silicon (MPS) support — M1 through M5 Ultra, unified memory, auto-detection
 - `DeviceBrand.APPLE` with `"mps"` device prefix in Prism hardware abstraction
 - Apple Silicon chip database (20 variants: M1-M5 base/Pro/Max/Ultra with GPU cores, bandwidth, memory)

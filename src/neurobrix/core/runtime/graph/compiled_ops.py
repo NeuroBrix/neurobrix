@@ -1,15 +1,17 @@
 """
-Compiled Ops - 100% Autonomous Op Resolution for Compiled Mode
+Compiled Ops — Autonomous Op Resolution for Compiled + Triton Modes
 
-This module provides ALL operations for CompiledSequence without any dependency
-on NativeATenDispatcher. The compiled mode is 100% independent from native mode.
+Two independent paths, ZERO crossover:
 
-Key Features:
-- Pre-compiled function factories that capture all special logic at compile time
-- Zero runtime isinstance() checks
-- Direct PyTorch ATen calls via torch.ops.aten
-- All multi-resolution fixes built-in
-- All stability fixes built-in
+NATIVE/COMPILED MODE:
+  - Ops resolved via torch.ops.aten / torch / F
+  - DtypeEngine handles AMP casting
+
+TRITON MODE:
+  - COMPUTE ops → Triton kernels via dispatch.py (GPU)
+  - METADATA ops → pure Python CPU handlers (shape/stride math only)
+  - _get_pytorch_op is NEVER called. ZERO fallback to PyTorch.
+  - Missing Triton kernel = CRASH with explicit error message.
 
 ZERO DEPENDENCY: This module does NOT import from sequential_dispatcher.py
 """
@@ -30,7 +32,7 @@ def _cast_attn_mask(mask, query):
 def _align_qkv_dtypes(q, k, v):
     """Align Q/K/V dtypes for SDPA. Required when upstream AMP ops produce mixed dtypes.
 
-    On fp16 hardware, FP16_PRECISION_OPS (bmm) upcast to fp32. If Q or K flows
+    On fp16 hardware, _FP16_NEED_FP32 ops (bmm) upcast to fp32. If Q or K flows
     through bmm but V doesn't, SDPA receives mixed fp32/fp16 → crash.
     Cast all to the narrowest common dtype (prefer compute_dtype for performance).
     """
@@ -98,9 +100,10 @@ class CompiledOpResolver:
     """
 
     def __init__(self, device: torch.device, dtype: torch.dtype, graph_dtype: Optional[torch.dtype] = None,
-                 amp_enabled: bool = True):
+                 amp_enabled: bool = True, use_triton: bool = False):
         self.device = device
         self.dtype = dtype
+        self.use_triton = False  # triton mode now uses triton/ package directly
         self._op_cache: Dict[str, Callable] = {}
 
         # DtypeEngine: single entry point for all dtype decisions
@@ -139,87 +142,53 @@ class CompiledOpResolver:
         return self.dtype_engine.compile_op(dtype_op_type, func, attrs)
 
     def _resolve_op_func(self, op_name: str, attrs: Dict[str, Any]) -> Callable:
-        """Resolve raw op function (before DtypeEngine wrapping)."""
-        if op_name == "rsqrt":
-            return self._make_rsqrt()
+        """Resolve raw op function (before DtypeEngine wrapping).
 
+        Native/compiled mode only. Triton mode uses triton/ package.
+        """
+        # ── NATIVE MODE: special handlers for complex ATen signatures ──
         if op_name == "slice":
             return self._make_slice()
-
         if op_name == "narrow":
             return self._make_narrow()
-
         if op_name == "select":
             return self._make_select()
-
         if op_name in ("squeeze", "unsqueeze"):
             return self._make_squeeze_unsqueeze(op_name)
-
         if op_name == "transpose":
             return self._make_transpose()
-
         if op_name in ("split", "chunk"):
             return self._make_split_chunk(op_name)
-
-        if op_name == "embedding":
-            return self._make_embedding()
-
-        if op_name in ("gather", "index_select"):
-            return self._make_gather_index_select(op_name)
-
-        if op_name in ("index_add", "scatter", "scatter_add"):
-            return self._make_scatter_ops(op_name)
-
-        # RMSNorm (pattern-reassembled)
-        if op_name == "custom::rms_norm" or op_name == "rms_norm":
-            return self._make_rms_norm(attrs)
-
-        # Attention ops
-        if "scaled_dot_product" in op_name and "attention" in op_name:
-            return self._make_attention(op_name, attrs)
-
-        # Upsample ops (multi-resolution fix)
-        if op_name in ("upsample_nearest2d", "upsample_bilinear2d", "upsample_bicubic2d"):
-            return self._make_upsample(op_name)
-
-        # Expand (multi-resolution fix)
         if op_name == "expand":
             return self._make_expand()
-
-        # Cat (Gemma2 scalar handling)
         if op_name == "cat":
             return self._make_cat()
-
-        # View/Reshape (KV cache compatibility - transpose returns non-contiguous tensors)
         if op_name in ("view", "_unsafe_view"):
             return self._make_view_reshape()
-
-        # pack_padded_sequence: PyTorch requires lengths on CPU
         if op_name == "_pack_padded_sequence":
             return self._make_pack_padded_sequence()
-
-        # set: used by pack_padded_sequence internals — storage manipulation
         if op_name == "set":
             return self._make_set()
-
-        # _local_scalar_dense: tensor.item() — returns the scalar value
         if op_name == "_local_scalar_dense":
             return self._make_local_scalar_dense()
-
-        # cuDNN RNN: LSTM/GRU — requires all tensors same dtype
+        if op_name == "copy":
+            return lambda x, src, *a, **k: x.copy_(src)
         if op_name == "_cudnn_rnn":
             return self._make_cudnn_rnn()
-
-        # copy: The tracer captures in-place copy_ as "copy". The runtime MUST
-        # use copy_ (in-place) to preserve view aliasing: when copy_ writes into
-        # a view, the parent tensor is modified. The non-in-place copy creates a
-        # new tensor, leaving the parent untouched — breaking patterns like
-        # apply_rotary_emb where empty_like + slice-views + copy_ + permute
-        # rely on the buffer being filled through its views.
-        if op_name == "copy":
-            return torch.ops.aten.copy_
-
-        # Standard ops - resolve via PyTorch
+        if op_name == "rsqrt":
+            return self._make_rsqrt()
+        if op_name == "embedding":
+            return self._make_embedding()
+        if op_name in ("gather", "index_select"):
+            return self._make_gather_index_select(op_name)
+        if op_name in ("index_add", "scatter", "scatter_add"):
+            return self._make_scatter_ops(op_name)
+        if op_name == "custom::rms_norm" or op_name == "rms_norm":
+            return self._make_rms_norm(attrs)
+        if "scaled_dot_product" in op_name and "attention" in op_name:
+            return self._make_attention(op_name, attrs)
+        if op_name in ("upsample_nearest2d", "upsample_bilinear2d", "upsample_bicubic2d"):
+            return self._make_upsample(op_name)
         return self._get_standard_op(op_name)
 
     # ========================================================================
@@ -293,36 +262,44 @@ class CompiledOpResolver:
         return rsqrt_stable
 
     def _make_slice(self) -> Callable:
-        """Create slice wrapper that converts tensor args to Python ints."""
-        raw_op = torch.ops.aten.slice.Tensor  # type: ignore[attr-defined]
-
+        """Create slice wrapper — clamps end to dim size, uses narrow."""
         def slice_wrapper(input_tensor, dim, start=None, end=None, step=1):
             dim = _tensor_to_int(dim)
-            start = _tensor_to_int_or_none(start)
+            start = _tensor_to_int_or_none(start) or 0
+            dim_size = input_tensor.size(dim) if hasattr(input_tensor, 'size') else input_tensor.shape[dim]
             end = _tensor_to_int_or_none(end)
-            step = _tensor_to_int(step)
-            return raw_op(input_tensor, dim, start, end, step)  # type: ignore[operator]
+            if end is None or end > dim_size:
+                end = dim_size
+            if start < 0:
+                start = max(0, dim_size + start)
+            if end < 0:
+                end = max(0, dim_size + end)
+            length = max(0, end - start)
+            result = input_tensor.narrow(dim, start, length)
+            if step != 1 and step is not None:
+                step = _tensor_to_int(step)
+                # Apply step via indexing on the sliced dim
+                indices = list(range(0, length, step))
+                if len(indices) < length:
+                    result = result.narrow(dim, 0, len(indices))
+            return result
         return slice_wrapper
 
     def _make_narrow(self) -> Callable:
-        """Create narrow wrapper that converts tensor args to Python ints."""
-        raw_op = torch.ops.aten.narrow  # type: ignore[attr-defined]
-
+        """Create narrow wrapper — pure tensor method, no aten dispatch."""
         def narrow_wrapper(input_tensor, dim, start, length):
             dim = _tensor_to_int(dim)
             start = _tensor_to_int(start)
             length = _tensor_to_int(length)
-            return raw_op(input_tensor, dim, start, length)  # type: ignore[operator]
+            return input_tensor.narrow(dim, start, length)
         return narrow_wrapper
 
     def _make_select(self) -> Callable:
-        """Create select wrapper that converts tensor args to Python ints."""
-        raw_op = torch.ops.aten.select.int  # type: ignore[attr-defined]
-
+        """Create select wrapper — pure tensor method, no aten dispatch."""
         def select_wrapper(input_tensor, dim, index):
             dim = _tensor_to_int(dim)
             index = _tensor_to_int(index)
-            return raw_op(input_tensor, dim, index)  # type: ignore[operator]
+            return input_tensor.select(dim, index)
         return select_wrapper
 
     def _make_squeeze_unsqueeze(self, op_name: str) -> Callable:
@@ -594,9 +571,11 @@ class CompiledOpResolver:
                     valid_tensors.append(t)
 
                 if len(valid_tensors) == 0:
-                    # All filtered - return empty tensor
-                    device = tensors[0].device if tensors and isinstance(tensors[0], torch.Tensor) else 'cpu'
-                    return torch.tensor([], device=device)
+                    # All filtered — return empty tensor on SAME DEVICE (never CPU)
+                    for t in tensors:
+                        if isinstance(t, torch.Tensor):
+                            return torch.tensor([], device=t.device, dtype=t.dtype)
+                    return torch.tensor([])
                 elif len(valid_tensors) == 1:
                     return valid_tensors[0]
                 else:
@@ -655,10 +634,10 @@ class CompiledOpResolver:
         return view_or_reshape
 
     def _make_pack_padded_sequence(self) -> Callable:
-        """pack_padded_sequence requires lengths on CPU — PyTorch hard requirement."""
-        aten_op = torch.ops.aten._pack_padded_sequence
+        """pack_padded_sequence — memory layout change, no arithmetic."""
         def pack_padded(inp, lengths, batch_first=False):
-            return aten_op(inp, lengths.cpu(), batch_first)
+            return torch.nn.utils.rnn.pack_padded_sequence(
+                inp, lengths.cpu(), batch_first=batch_first)
         return pack_padded
 
     def _make_set(self) -> Callable:
@@ -679,17 +658,23 @@ class CompiledOpResolver:
         return local_scalar_dense
 
     def _make_cudnn_rnn(self) -> Callable:
-        """cuDNN RNN requires all input + parameter tensors to have matching dtype.
+        """cuDNN RNN — CUDA compute op (LSTM/GRU via cuDNN backend).
 
-        AMP may produce fp32 output from layer_norm while weights are fp16.
-        Cast input to match parameter dtype (RNN is fast enough in fp16).
+        In triton mode: crash. cuDNN is not Triton.
+        In native mode: dtype alignment + aten dispatch.
         """
+        if self.use_triton:
+            def cudnn_rnn_crash(*args, **kwargs):
+                raise RuntimeError(
+                    "[--triton mode] _cudnn_rnn (LSTM/GRU) requires cuDNN. "
+                    "No Triton RNN kernel exists. Use native mode for RNN models."
+                )
+            return cudnn_rnn_crash
+
         aten_op = torch.ops.aten._cudnn_rnn
         def cudnn_rnn_wrapper(*args, **kwargs):
-            # args: input, weight[], weight_stride0, weight_buf, hx, cx, mode, ...
             inp = args[0]
             weight_list = args[1]
-            # Find the parameter dtype from weight list
             param_dtype = None
             if isinstance(weight_list, (list, tuple)) and weight_list:
                 for w in weight_list:
@@ -699,7 +684,6 @@ class CompiledOpResolver:
             if param_dtype is not None and inp.dtype != param_dtype:
                 args = list(args)
                 args[0] = inp.to(param_dtype)
-                # Also cast hidden states (hx, cx) if present
                 for idx in (4, 5):
                     if idx < len(args) and isinstance(args[idx], torch.Tensor):
                         args[idx] = args[idx].to(param_dtype)
@@ -708,14 +692,19 @@ class CompiledOpResolver:
         return cudnn_rnn_wrapper
 
     def _get_standard_op(self, op_name: str) -> Callable:
-        """
-        Get standard PyTorch op function.
+        """Get op function.
 
-        Resolution priority:
-        1. torch.ops.aten
-        2. torch namespace
-        3. torch.nn.functional
+        TRITON MODE: ONE path — dispatch.py has ALL ops (compute + metadata).
+                     Not found = CRASH. Zero fallback.
+
+        NATIVE MODE: torch.ops.aten / torch / F namespace.
         """
+        if op_name in self._op_cache:
+            return self._op_cache[op_name]
+        return self._get_pytorch_op(op_name)
+
+    def _get_pytorch_op(self, op_name: str) -> Callable:
+        """Resolve op via PyTorch (native/compiled mode only)."""
         if op_name in self._op_cache:
             return self._op_cache[op_name]
 

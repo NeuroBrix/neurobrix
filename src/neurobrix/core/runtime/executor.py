@@ -436,6 +436,17 @@ class RuntimeExecutor:
                 unload_weights_fn=self._unload_component_weights
             )
         elif flow_type == "autoregressive_generation":
+            if ctx.mode in ("triton", "triton_sequential"):
+                from neurobrix.triton.autoregressive import TritonAutoregressiveHandler
+                return TritonAutoregressiveHandler(
+                    ctx=ctx,
+                    execute_component_fn=self._execute_component,
+                    ensure_weights_fn=self._ensure_weights_loaded,
+                    unload_weights_fn=self._unload_component_weights,
+                    input_resolver=self._input_resolver,
+                    input_synthesizer=self._input_synthesizer,
+                    output_extractor=self._output_extractor
+                )
             from neurobrix.core.flow.autoregressive import AutoregressiveHandler
             return AutoregressiveHandler(
                 ctx=ctx,

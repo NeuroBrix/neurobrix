@@ -268,6 +268,7 @@ class CompiledSequence:
         device: torch.device,
         dtype: torch.dtype,
         amp_enabled: bool = True,
+        use_triton: bool = False,
     ):
         """
         Initialize CompiledSequence.
@@ -280,10 +281,12 @@ class CompiledSequence:
             device: The target device (e.g., torch.device("cuda:0"))
             dtype: The target dtype (e.g., torch.float16)
             amp_enabled: Whether to apply AMP autocast rules.
+            use_triton: Use Triton kernels instead of PyTorch native ops.
         """
         self.dag = dag
         self.device = device
         self.dtype = dtype
+        # use_triton parameter kept for backward compat but triton mode uses triton/ package
 
         # Extract graph's traced dtype for AMP policy decision
         graph_dtype_str = dag.get("torch_dtype", "")
@@ -291,7 +294,8 @@ class CompiledSequence:
 
         # 100% Autonomous op resolution - no sequential_dispatcher dependency
         self.op_resolver = CompiledOpResolver(device, dtype, graph_dtype=graph_dtype,
-                                              amp_enabled=amp_enabled)
+                                              amp_enabled=amp_enabled,
+                                              use_triton=use_triton)
 
         # Compilation outputs
         self._ops: List[CompiledOp] = []
@@ -2415,17 +2419,13 @@ class CompiledSequence:
             # Empty-state constants (e.g., KV cache init tensors)
             if shape == [0] or "constant_" in tensor_id:
                 self._arena[slot] = torch.empty(shape, dtype=t_dtype, device=self.device)
-            # InstanceNorm/BatchNorm affine params not saved in checkpoint.
-            # These have default initialization: weight=ones, bias=zeros.
-            # Common pattern: InstanceNorm1d(affine=True) params captured
-            # during tracing but excluded from .pth state_dict.
             elif not meta.get("weight_key") and ".norm." in tensor_id:
                 resolved_shape = [s if isinstance(s, int) else s.get("trace_value", 1)
                                   for s in shape] if isinstance(shape, list) else shape
                 if tensor_id.endswith(".weight"):
                     self._arena[slot] = torch.ones(resolved_shape, dtype=t_dtype, device=self.device)
                 elif tensor_id.endswith(".bias"):
-                    self._arena[slot] = torch.zeros(resolved_shape, dtype=t_dtype, device=self.device)
+                        self._arena[slot] = torch.zeros(resolved_shape, dtype=t_dtype, device=self.device)
 
     def compute_op_devices(self) -> None:
         """
@@ -2454,8 +2454,9 @@ class CompiledSequence:
             for ws in op.weight_input_slots:
                 tensor = arena[ws]
                 if tensor is not None and hasattr(tensor, 'device'):
-                    op.device = tensor.device
-                    devices_seen.add(str(tensor.device))
+                    dev = tensor.device
+                    op.device = dev
+                    devices_seen.add(str(dev))
                     break
 
         # Multi-device if weights span >1 device, OR if any weight is on a
@@ -2603,6 +2604,7 @@ class CompiledSequence:
         nan_guard_verbose = _NAN_GUARD_VERBOSE
         trace_zeros = _TRACE_ZEROS
 
+        # Set CUDA device to match component placement
         if self._is_multi_device:
             self._run_inner_multi_device(arena, debug)
             return
@@ -2619,6 +2621,14 @@ class CompiledSequence:
                 # Call function directly
                 result = op.func(*args, **kwargs)
             except Exception as e:
+                # DEBUG: catch CPU tensor errors in triton mode
+                if "cpu tensor" in str(e).lower() or "Pointer argument" in str(e):
+                    import sys
+                    print(f"[TRITON-DEBUG] CPU tensor at op {op.op_uid} ({op.op_type})", file=sys.stderr)
+                    for ai, a in enumerate(args):
+                        if isinstance(a, torch.Tensor):
+                            print(f"  arg[{ai}]: device={a.device} dtype={a.dtype} shape={list(a.shape)}", file=sys.stderr)
+                    raise
                 # ============================================================
                 # NOP PROPAGATION for dynamic MoE routing
                 # When an expert is deactivated, unbind produces fewer outputs
@@ -2910,8 +2920,8 @@ class CompiledSequence:
         fine-grained sync: record on source, wait on target.
         """
         import torch
-        _current_device_idx = torch.cuda.current_device()
-
+        _current_device_idx = self.device.index if self.device.index is not None else 0
+        torch.cuda.set_device(_current_device_idx)
         for op in self._ops:
             args = op.args_resolver(arena)
             kwargs = op.kwargs_resolver(arena)
@@ -2937,7 +2947,7 @@ class CompiledSequence:
                 if op.device is not None and op.device.type == "cuda" and op.device.index != _current_device_idx:
                     torch.cuda.set_device(op.device)
                     _current_device_idx = op.device.index
-
+                    # Triton mode: also set CUDA runtime device (Triton uses runtime, not PyTorch)
                 try:
                     result = op.func(*args, **kwargs)
                 except Exception as e:
