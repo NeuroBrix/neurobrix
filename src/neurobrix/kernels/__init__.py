@@ -1,60 +1,27 @@
 """
-NeuroBrix Kernel System - Enterprise Grade.
+NeuroBrix Kernel System.
 
 Architecture:
-- adapter.py: Universal ATen → Kernel translation (ENTRY POINT)
-- registry.py: @register_kernel decorator
-- resolver.py: Family/Vendor/Tier cascade resolution
-- ops/: Pure Triton kernels (ZERO wrappers)
+- dispatch.py: aten_op → Triton kernel wrapper (--triton mode)
+- wrappers.py: PyTorch wrappers for Triton kernels
+- ops/: Pure @triton.jit kernels (ZERO import torch)
+- classification.py: Op classification (TRITON vs METADATA)
+- metadata_ops.py: Shape/view ops (PyTorch native)
 
 Usage:
-    from kernels import KernelAdapter, get_kernel
-
-    # Via adapter (recommended for graph execution)
-    adapter = KernelAdapter(family="image", vendor="nvidia", arch="volta", device="cuda:0")
-    result = adapter.launch("aten::add", [a, b], {"alpha": 1.0})
-
-    # Direct kernel access
-    kernel = get_kernel("add", family="image", vendor="nvidia", arch="volta")
-    result = kernel(a, b, alpha=1.0)
+    from neurobrix.kernels.dispatch import dispatch
+    kernel = dispatch("aten::relu")  # Returns Triton wrapper or None
 """
 
 from .classification import OpExecution, get_execution_type, ATEN_CLASSIFICATION
-from .mapping import get_kernel_op_name, ATEN_TO_KERNEL
 from .metadata_ops import execute_metadata_op
 
 
-def __getattr__(name):
-    """Lazy-load Triton-dependent modules only when accessed."""
-    if name == "KernelAdapter":
-        from .adapter import KernelAdapter
-        return KernelAdapter
-    if name in ("register_kernel", "KERNEL_REGISTRY", "KernelMeta", "list_kernels"):
-        from . import registry
-        return getattr(registry, name)
-    if name in ("get_kernel", "run_op"):
-        from . import resolver
-        return getattr(resolver, name)
-    raise AttributeError(f"module 'neurobrix.kernels' has no attribute {name!r}")
-
 __all__ = [
-    # Adapter (primary entry point)
-    "KernelAdapter",
-    # Registry
-    "register_kernel",
-    "KERNEL_REGISTRY",
-    "KernelMeta",
-    "list_kernels",
-    # Resolver
-    "get_kernel",
-    "run_op",
     # Classification
     "OpExecution",
     "get_execution_type",
     "ATEN_CLASSIFICATION",
-    # Mapping
-    "get_kernel_op_name",
-    "ATEN_TO_KERNEL",
     # Metadata ops
     "execute_metadata_op",
 ]
