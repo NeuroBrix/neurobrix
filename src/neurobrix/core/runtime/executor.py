@@ -406,13 +406,22 @@ class RuntimeExecutor:
         assert self._input_synthesizer is not None, "input_synthesizer must be initialized"
 
         if flow_type == "iterative_process":
-            from neurobrix.core.flow.iterative_process import IterativeProcessHandler
             # Create CFGEngine from topology (DATA-DRIVEN detection)
             cfg_engine = CFGEngine.from_topology(
                 ctx=ctx,
                 execute_component_fn=self._execute_component,
                 extract_primary_output_fn=self._output_extractor.extract_primary_output
             )
+            if ctx.mode in ("triton", "triton_sequential"):
+                from neurobrix.triton.flow.iterative_process import TritonIterativeProcessHandler
+                return TritonIterativeProcessHandler(
+                    ctx=ctx,
+                    execute_component_fn=self._execute_component,
+                    extract_primary_output_fn=self._output_extractor.extract_primary_output,
+                    cfg_engine=cfg_engine,
+                    output_extractor=self._output_extractor
+                )
+            from neurobrix.core.flow.iterative_process import IterativeProcessHandler
             return IterativeProcessHandler(
                 ctx=ctx,
                 execute_component_fn=self._execute_component,
@@ -421,12 +430,27 @@ class RuntimeExecutor:
                 output_extractor=self._output_extractor
             )
         elif flow_type == "static_graph":
+            if ctx.mode in ("triton", "triton_sequential"):
+                from neurobrix.triton.flow.static_graph import TritonStaticGraphHandler
+                return TritonStaticGraphHandler(
+                    ctx=ctx,
+                    execute_component_fn=self._execute_component
+                )
             from neurobrix.core.flow.static_graph import StaticGraphHandler
             return StaticGraphHandler(
                 ctx=ctx,
                 execute_component_fn=self._execute_component
             )
         elif flow_type == "forward_pass":
+            if ctx.mode in ("triton", "triton_sequential"):
+                from neurobrix.triton.flow.forward_pass import TritonForwardPassHandler
+                return TritonForwardPassHandler(
+                    ctx=ctx,
+                    execute_component_fn=self._execute_component,
+                    resolve_inputs_fn=self._input_resolver.resolve_component_inputs,
+                    ensure_weights_fn=self._ensure_weights_loaded,
+                    unload_weights_fn=self._unload_component_weights
+                )
             from neurobrix.core.flow.forward_pass import ForwardPassHandler
             return ForwardPassHandler(
                 ctx=ctx,
@@ -437,7 +461,7 @@ class RuntimeExecutor:
             )
         elif flow_type == "autoregressive_generation":
             if ctx.mode in ("triton", "triton_sequential"):
-                from neurobrix.triton.autoregressive import TritonAutoregressiveHandler
+                from neurobrix.triton.flow.autoregressive import TritonAutoregressiveHandler
                 return TritonAutoregressiveHandler(
                     ctx=ctx,
                     execute_component_fn=self._execute_component,
@@ -458,6 +482,15 @@ class RuntimeExecutor:
                 output_extractor=self._output_extractor
             )
         elif flow_type == "audio":
+            if ctx.mode in ("triton", "triton_sequential"):
+                from neurobrix.triton.flow.audio import TritonAudioEngine
+                return TritonAudioEngine(
+                    ctx=ctx,
+                    execute_component_fn=self._execute_component,
+                    resolve_inputs_fn=self._input_resolver.resolve_component_inputs,
+                    ensure_weights_fn=self._ensure_weights_loaded,
+                    unload_weights_fn=self._unload_component_weights,
+                )
             from neurobrix.core.flow.audio import AudioEngine
             return AudioEngine(
                 ctx=ctx,
@@ -467,6 +500,15 @@ class RuntimeExecutor:
                 unload_weights_fn=self._unload_component_weights,
             )
         elif flow_type == "rnnt":
+            if ctx.mode in ("triton", "triton_sequential"):
+                from neurobrix.triton.flow.rnnt import TritonRNNTEngine
+                return TritonRNNTEngine(
+                    ctx=ctx,
+                    execute_component_fn=self._execute_component,
+                    resolve_inputs_fn=self._input_resolver.resolve_component_inputs,
+                    ensure_weights_fn=self._ensure_weights_loaded,
+                    unload_weights_fn=self._unload_component_weights,
+                )
             from neurobrix.core.flow.rnnt import RNNTEngine
             return RNNTEngine(
                 ctx=ctx,
@@ -476,6 +518,15 @@ class RuntimeExecutor:
                 unload_weights_fn=self._unload_component_weights,
             )
         elif flow_type == "encoder_decoder":
+            if ctx.mode in ("triton", "triton_sequential"):
+                from neurobrix.triton.flow.encoder_decoder import TritonEncoderDecoderEngine
+                return TritonEncoderDecoderEngine(
+                    ctx=ctx,
+                    execute_component_fn=self._execute_component,
+                    resolve_inputs_fn=self._input_resolver.resolve_component_inputs,
+                    ensure_weights_fn=self._ensure_weights_loaded,
+                    unload_weights_fn=self._unload_component_weights,
+                )
             from neurobrix.core.flow.encoder_decoder import EncoderDecoderEngine
             return EncoderDecoderEngine(
                 ctx=ctx,
@@ -494,6 +545,15 @@ class RuntimeExecutor:
                 unload_weights_fn=self._unload_component_weights,
             )
         elif flow_type == "dual_ar":
+            if ctx.mode in ("triton", "triton_sequential"):
+                from neurobrix.triton.flow.dual_ar import TritonDualAREngine
+                return TritonDualAREngine(
+                    ctx=ctx,
+                    execute_component_fn=self._execute_component,
+                    resolve_inputs_fn=self._input_resolver.resolve_component_inputs,
+                    ensure_weights_fn=self._ensure_weights_loaded,
+                    unload_weights_fn=self._unload_component_weights,
+                )
             from neurobrix.core.flow.dual_ar import DualAREngine
             return DualAREngine(
                 ctx=ctx,
@@ -503,6 +563,15 @@ class RuntimeExecutor:
                 unload_weights_fn=self._unload_component_weights,
             )
         elif flow_type == "tts_llm":
+            if ctx.mode in ("triton", "triton_sequential"):
+                from neurobrix.triton.flow.tts_llm import TritonTTSLLMEngine
+                return TritonTTSLLMEngine(
+                    ctx=ctx,
+                    execute_component_fn=self._execute_component,
+                    resolve_inputs_fn=self._input_resolver.resolve_component_inputs,
+                    ensure_weights_fn=self._ensure_weights_loaded,
+                    unload_weights_fn=self._unload_component_weights,
+                )
             from neurobrix.core.flow.tts_llm import TTSLLMEngine
             return TTSLLMEngine(
                 ctx=ctx,

@@ -823,7 +823,9 @@ class TritonSequence:
                         f"Failed at {op.op_uid} ({op.op_type}): {e}") from e
 
             # Store outputs
-            if len(op.output_slots) == 1:
+            if not op.output_slots:
+                pass  # Op has no outputs (e.g., inplace ops)
+            elif len(op.output_slots) == 1:
                 arena[op.output_slots[0]] = result
             elif isinstance(result, tuple):
                 for i, s in enumerate(op.output_slots):
