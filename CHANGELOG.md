@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-04-03
+
 ### Added
 - `--triton` mode — compiled Triton kernel inference (136 kernel files, 128 dispatch entries)
 - `--triton-sequential` mode — sequential Triton execution for kernel debugging
