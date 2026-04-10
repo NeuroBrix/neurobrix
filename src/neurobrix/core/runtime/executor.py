@@ -406,13 +406,14 @@ class RuntimeExecutor:
         assert self._input_synthesizer is not None, "input_synthesizer must be initialized"
 
         if flow_type == "iterative_process":
-            # Create CFGEngine from topology (DATA-DRIVEN detection)
-            cfg_engine = CFGEngine.from_topology(
-                ctx=ctx,
-                execute_component_fn=self._execute_component,
-                extract_primary_output_fn=self._output_extractor.extract_primary_output
-            )
             if ctx.mode in ("triton", "triton_sequential"):
+                # Triton mode: use TritonCFGEngine (zero torch dependency)
+                from neurobrix.triton.cfg.engine import TritonCFGEngine
+                cfg_engine = TritonCFGEngine.from_topology(
+                    ctx=ctx,
+                    execute_component_fn=self._execute_component,
+                    extract_primary_output_fn=self._output_extractor.extract_primary_output
+                )
                 from neurobrix.triton.flow.iterative_process import TritonIterativeProcessHandler
                 return TritonIterativeProcessHandler(
                     ctx=ctx,
@@ -421,6 +422,12 @@ class RuntimeExecutor:
                     cfg_engine=cfg_engine,
                     output_extractor=self._output_extractor
                 )
+            # Native mode: use CFGEngine (torch-based)
+            cfg_engine = CFGEngine.from_topology(
+                ctx=ctx,
+                execute_component_fn=self._execute_component,
+                extract_primary_output_fn=self._output_extractor.extract_primary_output
+            )
             from neurobrix.core.flow.iterative_process import IterativeProcessHandler
             return IterativeProcessHandler(
                 ctx=ctx,
@@ -1124,6 +1131,17 @@ class RuntimeExecutor:
         Returns:
             Final tensor output, or None if not found
         """
+        def _is_tensor(v):
+            return isinstance(v, torch.Tensor) or hasattr(v, 'data_ptr')
+
+        def _to_torch(v):
+            if isinstance(v, torch.Tensor):
+                return v
+            if hasattr(v, 'data_ptr'):
+                from neurobrix.kernels.nbx_tensor import nbx_to_torch
+                return nbx_to_torch(v)
+            return v
+
         # Try known output keys (order: AR image → diffusion → generic)
         for key in [
             "output_image",               # Autoregressive image (Janus, LlamaGen)
@@ -1132,8 +1150,8 @@ class RuntimeExecutor:
             "decoder.last_output",         # Generic decoder
             "final_output",                # Generic fallback
         ]:
-            if key in outputs and isinstance(outputs[key], torch.Tensor):
-                return outputs[key]
+            if key in outputs and _is_tensor(outputs[key]):
+                return _to_torch(outputs[key])
 
         # Get post_loop component from topology
         flow = self.pkg.topology.get("flow", {})
@@ -1141,13 +1159,13 @@ class RuntimeExecutor:
         if post_loop:
             final_comp = post_loop[-1]
             for key in [f"{final_comp}.last_output", f"{final_comp}.output_0"]:
-                if key in outputs and isinstance(outputs[key], torch.Tensor):
-                    return outputs[key]
+                if key in outputs and _is_tensor(outputs[key]):
+                    return _to_torch(outputs[key])
 
         # Fallback: find first tensor in outputs
         for key, value in outputs.items():
-            if isinstance(value, torch.Tensor) and value.dim() >= 3:
-                return value
+            if _is_tensor(value) and (value.dim() if hasattr(value, 'dim') else value.ndim) >= 3:
+                return _to_torch(value)
 
         return None
 

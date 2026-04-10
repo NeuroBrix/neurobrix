@@ -36,7 +36,7 @@ class ComponentAllocation:
     """Allocation plan for a single component."""
     name: str
     devices: List[str]
-    dtype: torch.dtype
+    dtype: str
     memory_mb: float
     architecture: str
     vendor: str
@@ -102,7 +102,7 @@ class KVCachePlan:
     num_kv_heads: int
     k_head_dim: int             # K head dimension (qk_nope + qk_rope for MLA, else head_dim)
     v_head_dim: int             # V head dimension (v_head_dim for MLA, else head_dim)
-    dtype: torch.dtype          # Cache dtype (may differ from weight dtype)
+    dtype: str                   # Cache dtype string (may differ from weight dtype)
     memory_bytes: int           # Total KV cache memory budget (at max_cache_len)
     per_token_bytes: int        # Memory per cached token (for runtime info)
     initial_cache_len: int = 0  # Initial buffer size (0 = allocate at max_cache_len)
@@ -182,7 +182,7 @@ class DeviceState:
 class ExecutionPlan:
     """Complete execution plan with component allocations."""
     components: Dict[str, ComponentAllocation]
-    target_dtype: torch.dtype
+    target_dtype: str
     total_memory_mb: float
     strategy: str
     component_memory: Dict[str, ComponentMemory]
@@ -196,7 +196,7 @@ class ExecutionPlan:
 
     @property
     def dtype(self) -> str:
-        return str(self.target_dtype).split('.')[-1]
+        return self.target_dtype
 
     def get_allocation(self, component_name: str) -> Optional[ComponentAllocation]:
         return self.components.get(component_name)
@@ -209,20 +209,19 @@ class ExecutionPlan:
         return self.component_memory.get(component_name)
 
     def to_dict(self, hardware_profile: str = "unknown") -> Dict[str, Any]:
-        dtype_str = lambda dt: str(dt).split('.')[-1]
         return {
             "version": "0.1.0",
             "created_at": datetime.now().isoformat(),
             "hardware_profile": hardware_profile,
             "strategy": self.strategy,
             "loading_mode": self.loading_mode,
-            "target_dtype": dtype_str(self.target_dtype),
+            "target_dtype": self.target_dtype,
             "total_memory_mb": self.total_memory_mb,
             "components": {
                 name: {
                     "devices": alloc.devices,
                     "primary_device": alloc.device,
-                    "dtype": dtype_str(alloc.dtype),
+                    "dtype": alloc.dtype,
                     "memory_mb": alloc.memory_mb,
                     "architecture": alloc.architecture,
                     "vendor": alloc.vendor,
@@ -248,7 +247,7 @@ class ExecutionPlan:
                 "num_kv_heads": self.kv_cache_plan.num_kv_heads,
                 "k_head_dim": self.kv_cache_plan.k_head_dim,
                 "v_head_dim": self.kv_cache_plan.v_head_dim,
-                "dtype": dtype_str(self.kv_cache_plan.dtype),
+                "dtype": self.kv_cache_plan.dtype,
                 "memory_mb": self.kv_cache_plan.memory_mb,
                 "per_token_bytes": self.kv_cache_plan.per_token_bytes,
             } if self.kv_cache_plan else None,
@@ -265,13 +264,11 @@ class ExecutionPlan:
         with open(plan_path, 'r') as f:
             data = json.load(f)
 
-        dtype_map = {"float32": torch.float32, "float16": torch.float16, "bfloat16": torch.bfloat16}
-
         components = {
             name: ComponentAllocation(
                 name=name,
                 devices=comp["devices"],
-                dtype=dtype_map.get(comp["dtype"], torch.float32),
+                dtype=comp.get("dtype", "float32"),
                 memory_mb=comp["memory_mb"],
                 architecture=comp.get("architecture", ""),
                 vendor=comp.get("vendor", ""),
@@ -303,14 +300,14 @@ class ExecutionPlan:
                 num_kv_heads=kv_data["num_kv_heads"],
                 k_head_dim=kv_data.get("k_head_dim") or kv_data["head_dim"],
                 v_head_dim=kv_data.get("v_head_dim") or kv_data["head_dim"],
-                dtype=dtype_map.get(kv_data.get("dtype", "float16"), torch.float16),
+                dtype=kv_data.get("dtype", "float16"),
                 memory_bytes=int(kv_data.get("memory_mb", 0) * 1024 * 1024),
                 per_token_bytes=kv_data.get("per_token_bytes", 0),
             )
 
         return cls(
             components=components,
-            target_dtype=dtype_map.get(data.get("target_dtype", "float32"), torch.float32),
+            target_dtype=data.get("target_dtype", "float32"),
             total_memory_mb=data.get("total_memory_mb", 0.0),
             strategy=data.get("strategy", "unknown"),
             component_memory=component_memory,
@@ -778,7 +775,7 @@ class PrismSolver:
         return cache_len * per_token_bytes
 
     def _compute_kv_cache_plan(
-        self, container, target_dtype: torch.dtype, remaining_vram_bytes: int
+        self, container, target_dtype: str, remaining_vram_bytes: int
     ) -> Optional[KVCachePlan]:
         """
         Compute KV cache allocation from lm_config. ZERO FALLBACK.
@@ -805,7 +802,7 @@ class PrismSolver:
         v_head_dim_val: int = lm_config.get("v_head_dim", head_dim)
         max_pos: int = lm_config.get("max_position_embeddings") or 0
 
-        dtype_bytes = 2 if target_dtype in (torch.float16, torch.bfloat16) else 4
+        dtype_bytes = 2 if target_dtype in ("float16", "bfloat16") else 4
         per_token_bytes: int = num_layers * num_kv_heads * (k_head_dim + v_head_dim_val) * dtype_bytes
 
         # Prism decides max_cache_len from remaining VRAM budget
@@ -2067,10 +2064,8 @@ class PrismSolver:
     # DTYPE RESOLUTION
     # =========================================================================
 
-    def _resolve_dtype(self, container: "NBXContainer", profile: PrismProfile) -> torch.dtype:
+    def _resolve_dtype(self, container: "NBXContainer", profile: PrismProfile) -> str:
         """Resolve target dtype. bf16 → fp16 if weights fit in range, else fp32."""
-        dtype_map = {"bfloat16": torch.bfloat16, "float16": torch.float16, "float32": torch.float32}
-
         # Find model's dominant dtype
         dtypes = {}
         for comp in container.get_neural_components():
@@ -2080,40 +2075,39 @@ class PrismSolver:
 
         # Priority: hardware preferred > model native > fallback
         if profile.preferred_dtype and profile.devices_support_dtype(profile.preferred_dtype):
-            return dtype_map.get(profile.preferred_dtype, torch.float32)
+            return profile.preferred_dtype
 
         if profile.devices_support_dtype(requested):
-            return dtype_map.get(requested, torch.float32)
+            return requested
 
         if requested == "bfloat16":
             if profile.devices_support_dtype("float16") and self._scan_bf16_fp16_safety(container):
-                return torch.float16
-            return torch.float32
+                return "float16"
+            return "float32"
         elif requested == "float16":
-            return torch.float32
+            return "float32"
 
-        return torch.float32
+        return "float32"
 
-    def _resolve_component_dtypes(self, components, profile: PrismProfile, container: "Optional[NBXContainer]" = None) -> Dict[str, torch.dtype]:
-        """Resolve dtype per component."""
-        dtype_map = {"bfloat16": torch.bfloat16, "float16": torch.float16, "float32": torch.float32}
+    def _resolve_component_dtypes(self, components, profile: PrismProfile, container: "Optional[NBXContainer]" = None) -> Dict[str, str]:
+        """Resolve dtype per component. Returns dtype strings."""
         result = {}
 
         for comp in components:
             native = comp.get_dominant_dtype()
             if profile.preferred_dtype and profile.devices_support_dtype(profile.preferred_dtype):
-                resolved = dtype_map.get(profile.preferred_dtype, torch.float32)
+                resolved = profile.preferred_dtype
             elif profile.devices_support_dtype(native):
-                resolved = dtype_map.get(native, torch.float32)
+                resolved = native
             elif native == "bfloat16":
                 if container is not None and profile.devices_support_dtype("float16") and self._scan_bf16_fp16_safety(container):
-                    resolved = torch.float16
+                    resolved = "float16"
                 else:
-                    resolved = torch.float32
+                    resolved = "float32"
             elif native == "float16":
-                resolved = torch.float32
+                resolved = "float32"
             else:
-                resolved = torch.float32
+                resolved = "float32"
             result[comp.name] = resolved
 
         return result
@@ -2161,7 +2155,7 @@ class PrismSolver:
             components[comp_name] = ComponentAllocation(
                 name=comp_name,
                 devices=device_list,
-                dtype=comp_dtypes.get(comp_name, torch.float32),
+                dtype=comp_dtypes.get(comp_name, "float32"),
                 memory_mb=mem.total_mb,
                 architecture=arch,
                 vendor=vendor,
@@ -2193,10 +2187,10 @@ class PrismSolver:
             loading_mode = "eager" if total_mb <= total_gpu_mb * 0.90 else "lazy"
 
         # Determine primary dtype
-        primary_dtype = torch.float16
+        primary_dtype = "float16"
         for dt in comp_dtypes.values():
-            if dt == torch.float32:
-                primary_dtype = torch.float32
+            if dt == "float32":
+                primary_dtype = "float32"
                 break
 
         return ExecutionPlan(
@@ -2214,7 +2208,7 @@ class PrismSolver:
     # =========================================================================
 
     def _empty_plan(self, profile: PrismProfile) -> ExecutionPlan:
-        return ExecutionPlan({}, torch.float32, 0.0, "empty", {}, "lazy")
+        return ExecutionPlan({}, "float32", 0.0, "empty", {}, "lazy")
 
     def _fail_error(self, sorted_comps, devices):
         total_req = sum(m.total_mb for _, m in sorted_comps)

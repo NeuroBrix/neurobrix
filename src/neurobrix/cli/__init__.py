@@ -76,7 +76,11 @@ For more information: https://gitlab.com/neurobrix/Neurobrix
     run_parser.add_argument('--sequential', action='store_true',
                             help='Fallback: Sequential PyTorch ATen execution (for debugging)')
     run_parser.add_argument('--triton', action='store_true',
-                            help='R&D: Python loop with custom Triton kernels (experimental)')
+                            help='Triton kernels: compiled execution with Triton ops (experimental)')
+    run_parser.add_argument('--triton-sequential', action='store_true', dest='triton_sequential',
+                            help='Triton kernels: sequential execution for debugging (experimental)')
+    run_parser.add_argument('--max-tokens', type=int, default=None, dest='max_tokens',
+                            help='Maximum number of tokens to generate (LLM only)')
 
     chat_group = run_parser.add_mutually_exclusive_group()
     chat_group.add_argument('--chat', action='store_true', default=None, dest='chat_mode',
@@ -219,7 +223,9 @@ Examples:
     serve_parser.add_argument('--sequential', action='store_true',
                               help='Use sequential ATen execution')
     serve_parser.add_argument('--triton', action='store_true',
-                              help='Use Triton kernels')
+                              help='Use Triton kernels (compiled)')
+    serve_parser.add_argument('--triton-sequential', action='store_true', dest='triton_sequential',
+                              help='Use Triton kernels (sequential, debug)')
 
     # ========================================
     # CHAT command

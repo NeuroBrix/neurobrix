@@ -444,6 +444,7 @@ def _build_op_map() -> Dict[str, Callable]:
         "mm": w.mm,
         "bmm": w.bmm,
         "addmm": w.addmm,
+        "matmul": w.matmul_wrapper,
 
         # --- Embedding ---
         "embedding": w.embedding,
@@ -489,6 +490,7 @@ def _build_op_map() -> Dict[str, Callable]:
         "scatter_add": w.scatter_add_wrapper,
         "scatter_reduce": w.scatter_reduce_wrapper,
         "index_add": w.index_add_wrapper,
+        "bincount": w.bincount_wrapper,
 
         # --- Triangular ---
         "triu": w.triu_wrapper,
@@ -595,6 +597,9 @@ def _build_op_map() -> Dict[str, Callable]:
         "scaled_dot_product_attention": w.scaled_dot_product_attention_wrapper,
         "_scaled_dot_product_attention": w.scaled_dot_product_attention_wrapper,
         "_scaled_dot_product_flash_attention": w.scaled_dot_product_attention_wrapper,
+        "_scaled_dot_product_efficient_attention": w.scaled_dot_product_attention_wrapper,
+        "_scaled_dot_product_cudnn_attention": w.scaled_dot_product_attention_wrapper,
+        "_scaled_dot_product_flash_attention_for_cpu": w.scaled_dot_product_attention_wrapper,
         "complex": w.complex_wrapper,
         "fold": w.fold_wrapper,
         "unfold_backward": w.unfold_backward_wrapper,
@@ -650,6 +655,12 @@ def _build_op_map() -> Dict[str, Callable]:
         "int": lambda x: x.int(),
         "long": lambda x: x.long(),
 
+        # Math rounding ops — proper Triton kernels
+        "floor": w.floor_wrapper,
+        "ceil": w.ceil_wrapper,
+        "round": w.round_wrapper,
+        "trunc": w.trunc_wrapper,
+
         # Scalar
         "item": _meta_select_item,
         "_local_scalar_dense": _meta_select_item,
@@ -677,7 +688,9 @@ def _build_op_map() -> Dict[str, Callable]:
         "index_put_": lambda x, indices, values, acc=False: x,  # TODO
 
         # Split/chunk (use narrow internally)
-        "split": lambda x, size, dim=0: x.unbind(dim) if isinstance(size, int) and size == 1 else (x,),
+        "split": lambda x, size, dim=0: tuple(x.narrow(dim, i * size, size) for i in range(x.shape[dim] // size)),
+        "split_with_sizes": lambda x, sizes, dim=0: tuple(
+            x.narrow(dim, sum(sizes[:i]), s) for i, s in enumerate(sizes)),
         "chunk": lambda x, chunks, dim=0: x.unbind(dim) if chunks == x.size(dim) else (x,),
         "tensor_split": lambda x, sections, dim=0: (x,),
 

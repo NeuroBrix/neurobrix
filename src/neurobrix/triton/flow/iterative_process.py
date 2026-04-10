@@ -14,9 +14,32 @@ Handles diffusion models with denoising loop:
 import gc
 from typing import Any, Callable, Dict, List, Optional
 
-from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype
+from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, parse_dtype
 from neurobrix.core.runtime.debug import DEBUG
 from neurobrix.core.flow.base import FlowContext
+from neurobrix.triton.cfg import TritonCFGEngine
+
+
+def _to_nbx(tensor, device_idx: int = 0) -> NBXTensor:
+    """Convert torch.Tensor to NBXTensor at the boundary.
+
+    CPU tensors: numpy → from_numpy (H2D via cudaMemcpy, zero torch).
+    CUDA tensors: from_raw (pointer wrap, zero copy).
+    """
+    if isinstance(tensor, NBXTensor):
+        return tensor
+    if hasattr(tensor, 'data_ptr'):
+        if hasattr(tensor, 'is_cuda') and not tensor.is_cuda:
+            # CPU → CUDA via numpy path (zero torch)
+            DeviceAllocator.set_device(device_idx)
+            arr = tensor.detach().numpy()
+            return NBXTensor.from_numpy(arr)
+        didx = tensor.device.index if hasattr(tensor.device, 'index') and tensor.device.index is not None else device_idx
+        return NBXTensor.from_raw(
+            tensor.data_ptr(), tuple(tensor.shape),
+            parse_dtype(str(tensor.dtype)), 'cuda',
+            owns_data=False, device_idx=didx, base=tensor)
+    return tensor
 
 
 class TritonIterativeProcessHandler:
@@ -41,7 +64,7 @@ class TritonIterativeProcessHandler:
         ctx: FlowContext,
         execute_component_fn: Callable[[str, str, Optional[NBXTensor]], Any],
         extract_primary_output_fn: Callable[[str, Any], Any],
-        cfg_engine: Optional[Any] = None,
+        cfg_engine: Optional[TritonCFGEngine] = None,
         output_extractor: Optional[Any] = None
     ):
         """
@@ -51,7 +74,7 @@ class TritonIterativeProcessHandler:
             ctx: FlowContext with all shared state
             execute_component_fn: Function to execute a component
             extract_primary_output_fn: Function to extract primary output
-            cfg_engine: Optional CFGEngine for classifier-free guidance
+            cfg_engine: Optional TritonCFGEngine for classifier-free guidance
             output_extractor: Optional OutputExtractor for encoder lookups
         """
         self.ctx = ctx
@@ -60,6 +83,11 @@ class TritonIterativeProcessHandler:
         self._cfg_engine = cfg_engine
         self._output_extractor = output_extractor
         self._packing_info = None
+
+    def _resolve_as_nbx(self, key: str):
+        """Get value from variable_resolver, converting torch.Tensor → NBXTensor."""
+        val = self.ctx.variable_resolver.get(key)
+        return _to_nbx(val) if val is not None else None
 
     def execute(self) -> Dict[str, Any]:
         """
@@ -132,11 +160,11 @@ class TritonIterativeProcessHandler:
                     candidate = f"{comp_name}.{suffix}"
                     if candidate in self.ctx.variable_resolver.resolved:
                         hidden_key = candidate
-                        hidden_state = self.ctx.variable_resolver.resolved[candidate]
+                        hidden_state = _to_nbx(self.ctx.variable_resolver.resolved[candidate])
                         break
                 if hidden_state is not None and hidden_key is not None:
                     tokenizer_vals = self.ctx.pkg.topology.get("extracted_values", {}).get("tokenizer", {})
-                    pos_mask = self.ctx.variable_resolver.get("global.attention_mask")
+                    pos_mask = self._resolve_as_nbx("global.attention_mask")
 
                     finalized = handler.finalize_embeddings(
                         hidden_state=hidden_state,
@@ -223,7 +251,7 @@ class TritonIterativeProcessHandler:
         # Save original inputs AND positive embeddings (per-encoder variables)
         orig_input_ids = self.ctx.variable_resolver.get(input_ids_var)
         orig_attention_mask = self.ctx.variable_resolver.get(attention_mask_var)
-        pos_hidden_state = self.ctx.variable_resolver.get(f"{text_encoder_name}.last_hidden_state")
+        pos_hidden_state = self._resolve_as_nbx(f"{text_encoder_name}.last_hidden_state")
 
         # Set negative inputs temporarily
         self.ctx.variable_resolver.set(input_ids_var, neg_input_ids)
@@ -233,7 +261,7 @@ class TritonIterativeProcessHandler:
         self._execute_component(text_encoder_name, "cfg_negative", None)
 
         # Get negative embedding
-        neg_hidden_state = self.ctx.variable_resolver.get(f"{text_encoder_name}.last_hidden_state")
+        neg_hidden_state = self._resolve_as_nbx(f"{text_encoder_name}.last_hidden_state")
 
         # --- PURIFICATION: Finalize embeddings via Handler ---
         executor = self.ctx.executors.get(text_encoder_name)
@@ -289,7 +317,7 @@ class TritonIterativeProcessHandler:
             raise RuntimeError(
                 "ZERO FALLBACK: 'state_variable' not defined in topology.flow.loop."
             )
-        current_state = self.ctx.variable_resolver.get(state_key)
+        current_state = self._resolve_as_nbx(state_key)
 
         # DATA-DRIVEN: Detect if Flux-style packing is needed
         packing_shape = self._detect_packing(components)
@@ -345,8 +373,11 @@ class TritonIterativeProcessHandler:
                 if DEBUG and step_idx == 0:
                     self._audit_component_inputs(comp_name)
 
-                # Scale model input
-                scaled_state = driver.scale_model_input(current_state, timestep)
+                # Scale model input — scheduler is native PyTorch
+                from neurobrix.kernels.nbx_tensor import nbx_to_torch
+                cs_for_scale = nbx_to_torch(current_state) if isinstance(current_state, NBXTensor) else current_state
+                scaled_state = driver.scale_model_input(cs_for_scale, timestep)
+                scaled_state = _to_nbx(scaled_state)
                 self.ctx.variable_resolver.set(state_key, scaled_state)
 
                 # Get timestep scale for component
@@ -398,12 +429,16 @@ class TritonIterativeProcessHandler:
                     if DEBUG:
                         self._print_step_diagnostics(step_idx, timestep, model_output, current_state)
 
-                    # Driver step
-                    step_result = driver.step(model_output, timestep, current_state)
+                    # Driver step — scheduler is native PyTorch, convert at boundary
+                    from neurobrix.kernels.nbx_tensor import nbx_to_torch
+                    mo_torch = nbx_to_torch(model_output) if isinstance(model_output, NBXTensor) else model_output
+                    cs_torch = nbx_to_torch(current_state) if isinstance(current_state, NBXTensor) else current_state
+                    step_result = driver.step(mo_torch, timestep, cs_torch)
                     if isinstance(step_result, dict):
-                        current_state = step_result["prev_sample"]
+                        prev = step_result["prev_sample"]
                     else:
-                        current_state = step_result.prev_sample
+                        prev = step_result.prev_sample
+                    current_state = _to_nbx(prev)
 
                     self.ctx.variable_resolver.set(state_key, current_state)
 
@@ -431,7 +466,7 @@ class TritonIterativeProcessHandler:
 
         # Unpack latents if packing was used (Flux-style)
         if state_key and self._packing_info is not None:
-            current_state = self.ctx.variable_resolver.get(state_key)
+            current_state = self._resolve_as_nbx(state_key)
             if current_state is not None and isinstance(current_state, NBXTensor) and current_state.dim() == 3:
                 pi = self._packing_info
                 assert pi is not None  # Type guard for pyright
@@ -442,7 +477,7 @@ class TritonIterativeProcessHandler:
 
         # ZERO FALLBACK: Validate latent shape before VAE
         if state_key:
-            current_state = self.ctx.variable_resolver.get(state_key)
+            current_state = self._resolve_as_nbx(state_key)
             if current_state is not None and isinstance(current_state, NBXTensor):
                 # Image: 4D [B, C, H, W], Video: 5D [B, C, T, H, W]
                 expected = 5 if current_state.dim() == 5 else 4

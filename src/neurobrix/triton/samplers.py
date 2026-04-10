@@ -6,10 +6,36 @@ All tensor ops use NBXTensor + Triton kernel wrappers from kernels/.
 Implements: greedy, temperature, top-k, top-p, repetition penalty, combined.
 """
 
+import ctypes as _ctypes
 from typing import Any, Dict, Optional
 
-from neurobrix.kernels.nbx_tensor import NBXTensor
+import numpy as np
+
+from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator
 from neurobrix.kernels import wrappers as w
+
+
+def _cpu_sort(tensor: NBXTensor, descending: bool = False):
+    """Sort via CPU numpy. For top-p sampling (once per token, ~1ms)."""
+    n = tensor.numel()
+    elem_size = 2 if tensor._dtype in (NBXDtype.float16, NBXDtype.bfloat16) else 4
+    buf = (_ctypes.c_char * (n * elem_size))()
+    DeviceAllocator.memcpy(_ctypes.addressof(buf), tensor.data_ptr(),
+                           n * elem_size, kind=2)  # D2H
+
+    np_dt = np.float16 if tensor._dtype == NBXDtype.float16 else np.float32
+    arr = np.frombuffer(buf, dtype=np_dt).reshape(tensor.shape).copy()
+
+    if descending:
+        indices = np.argsort(-arr, axis=-1, kind='stable')
+    else:
+        indices = np.argsort(arr, axis=-1, kind='stable')
+    sorted_arr = np.take_along_axis(arr, indices, axis=-1)
+
+    DeviceAllocator.set_device(tensor._device_idx)
+    sorted_t = NBXTensor.from_numpy(np.ascontiguousarray(sorted_arr))
+    indices_t = NBXTensor.from_numpy(indices.astype(np.int64))
+    return sorted_t, indices_t
 
 
 # =============================================================================
@@ -201,9 +227,9 @@ class CombinedSampler:
             kth = values.select(-1, top_k - 1).unsqueeze(-1)
             logits = w.masked_fill(logits, w.lt(logits, kth), float('-inf'))
 
-        # 4. Top-p filtering
+        # 4. Top-p filtering (sort via CPU for portability — ~1ms per token)
         if self.top_p < 1.0:
-            sorted_logits, sorted_indices = w.sort_wrapper(logits, dim=-1, descending=True)
+            sorted_logits, sorted_indices = _cpu_sort(logits, descending=True)
             sorted_probs = w.softmax(sorted_logits, dim=-1)
             cum_probs = w.cumsum_wrapper(sorted_probs, dim=-1)
             sorted_mask = w.gt(cum_probs, self.top_p)

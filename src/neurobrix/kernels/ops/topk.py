@@ -23,14 +23,14 @@ except ImportError:
 
 # --- Dtype limit constants (inline, no torch) ---
 
-_MIN_FLOAT32_VAL: tl.constexpr = -3.4028235e+38
-_MAX_FLOAT32_VAL: tl.constexpr = 3.4028235e+38
-_MIN_FLOAT16_VAL: tl.constexpr = -65504.0
-_MAX_FLOAT16_VAL: tl.constexpr = 65504.0
-_MIN_BFLOAT16_VAL: tl.constexpr = -3.3895314e+38
-_MAX_BFLOAT16_VAL: tl.constexpr = 3.3895314e+38
-_MIN_INT32_VAL: tl.constexpr = -2147483648
-_MAX_INT32_VAL: tl.constexpr = 2147483647
+_MIN_FLOAT32_VAL = tl.constexpr(-3.4028235e+38)
+_MAX_FLOAT32_VAL = tl.constexpr(3.4028235e+38)
+_MIN_FLOAT16_VAL = tl.constexpr(-65504.0)
+_MAX_FLOAT16_VAL = tl.constexpr(65504.0)
+_MIN_BFLOAT16_VAL = tl.constexpr(-3.3895314e+38)
+_MAX_BFLOAT16_VAL = tl.constexpr(3.3895314e+38)
+_MIN_INT32_VAL = tl.constexpr(-2147483648)
+_MAX_INT32_VAL = tl.constexpr(2147483647)
 
 
 @triton.jit
@@ -38,21 +38,12 @@ def _get_finfo_val(
     dtype,
     return_max,
 ):
-    if dtype is tl.float32:
-        if return_max:
-            return _MAX_FLOAT32_VAL
-        else:
-            return _MIN_FLOAT32_VAL
-    elif dtype is tl.float16:
-        if return_max:
-            return _MAX_FLOAT16_VAL
-        else:
-            return _MIN_FLOAT16_VAL
-    elif dtype is tl.bfloat16:
-        if return_max:
-            return _MAX_BFLOAT16_VAL
-        else:
-            return _MIN_BFLOAT16_VAL
+    # Return fp32 limits as literals — the kernel upcasts to fp32 internally.
+    # Using Python float literals avoids constexpr/fp64 type mismatch.
+    if return_max:
+        return 3.4028235e+38
+    else:
+        return -3.4028235e+38
 
 
 # --- Stage 1: per-chunk top-k ---
@@ -95,17 +86,10 @@ def topk_stage1_kernel(
         tl.store(index_ptr + k_idx, chunk_select_idx + chunk_offset)
 
         if DESCENDING:
-            x_val = tl.where(
-                cols == chunk_select_idx,
-                _get_finfo_val(tl.float32, return_max=False),
-                x_val,
-            )
+            mask_v = tl.full(x_val.shape, float('-inf'), dtype=tl.float32)
         else:
-            x_val = tl.where(
-                cols == chunk_select_idx,
-                _get_finfo_val(tl.float32, return_max=True),
-                x_val,
-            )
+            mask_v = tl.full(x_val.shape, float('inf'), dtype=tl.float32)
+        x_val = tl.where(cols == chunk_select_idx, mask_v, x_val)
 
 
 # --- Bitonic sort helpers ---

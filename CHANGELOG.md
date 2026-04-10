@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Refactor dtype to string everywhere above engine boundary — Prism, factory, and shared code use dtype strings ("float16", "bfloat16"), engines convert internally
+
+### Removed
+- Eliminate `str(self.dtype).replace('torch.', '')` hacks from graph_executor and triton flow
+
 ## [0.1.2] - 2026-04-03
 
 ### Added
