@@ -8,6 +8,7 @@ Handles models without iteration - single pass through all components.
 """
 
 import gc
+from neurobrix.core.device_utils import device_empty_cache
 import torch
 from typing import Any, Callable, Dict, Optional
 

@@ -11,7 +11,7 @@ Dependencies: triton, NBXTensor. Used exclusively by dispatch.py.
 
 import triton
 
-from .nbx_tensor import NBXTensor, NBXDtype, _broadcast_shapes
+from .nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, _broadcast_shapes
 
 # === Activations ===
 
@@ -75,6 +75,11 @@ from .ops.softmax import softmax_forward_kernel
 
 from .ops.matmul import matmul_kernel, addmm_kernel
 
+# === Fused MoE ===
+
+from .ops.fused_moe import fused_moe_kernel, silu_and_mul_kernel
+from .ops.dtype_convert import bf16_to_fp16_kernel
+
 # === Embedding ===
 
 from .ops.embedding import embedding_kernel
@@ -121,6 +126,7 @@ from .ops.isinf import isinf_forward_kernel
 from .ops.isnan import isnan_forward_kernel
 from .ops.nan_to_num import nan_to_num_forward_kernel
 from .ops.threshold import threshold_forward_kernel
+from .ops.floor import floor_forward_kernel, ceil_forward_kernel, round_forward_kernel, trunc_forward_kernel
 
 # === Phase 4: Remaining kernels ===
 
@@ -261,14 +267,52 @@ def _ensure_cuda(t):
 
 
 def _set_device(t):
-    """Ensure CUDA device context matches tensor device.
+    """Ensure GPU context matches tensor device for Triton kernel launch.
 
-    Triton JIT reads torch.cuda.current_device() internally.
-    Reference: triton-lang/triton#2925
+    Called before every Triton kernel in wrappers. ALWAYS calls
+    ensure_triton_device — Triton's internal state needs the device
+    context set before each kernel launch, even on single-device systems.
     """
     if hasattr(t, '_device_idx'):
-        from .nbx_tensor import DeviceAllocator
         DeviceAllocator.ensure_triton_device(t._device_idx)
+
+
+def _transfer_to_device(tensor, target_device_idx: int):
+    """Transfer NBXTensor to a different GPU via cudaMemcpy D2D."""
+    if not hasattr(tensor, '_device_idx') or tensor._device_idx == target_device_idx:
+        return tensor
+    src = tensor.contiguous()
+    dst = NBXTensor.empty(src._shape, src._dtype, f"cuda:{target_device_idx}")
+    DeviceAllocator.memcpy(dst.data_ptr(), src.data_ptr(), src._nbytes, kind=3)
+    return dst
+
+
+# Dtype promotion order: wider dtype wins.
+# Maps (dtype_a, dtype_b) → result dtype following PyTorch semantics.
+_DTYPE_PRIORITY = {
+    NBXDtype.bool_: 0,
+    NBXDtype.uint8: 1,
+    NBXDtype.int8: 2,
+    NBXDtype.int16: 3,
+    NBXDtype.int32: 4,
+    NBXDtype.int64: 5,
+    NBXDtype.float16: 6,
+    NBXDtype.bfloat16: 6,
+    NBXDtype.float32: 7,
+    NBXDtype.float64: 8,
+    NBXDtype.complex64: 9,
+    NBXDtype.complex128: 10,
+}
+
+
+def _wider_dtype(a_dtype, b_dtype):
+    """Return the wider of two NBXDtype values for binary op promotion."""
+    if a_dtype == b_dtype:
+        return a_dtype
+    pa, pb = _DTYPE_PRIORITY.get(a_dtype, 7), _DTYPE_PRIORITY.get(b_dtype, 7)
+    if pa >= pb:
+        return a_dtype
+    return b_dtype
 
 
 def _prepare_unary(x):
@@ -281,19 +325,44 @@ def _prepare_unary(x):
 def _prepare_binary(a, b):
     """Prepare two tensors for a binary element-wise kernel.
 
-    Handles scalar detection, broadcasting, contiguity.
+    UNIVERSAL CONTRACT:
+      - Scalar position normalized: tensor ALWAYS in `a`, scalar ALWAYS in `b`
+      - Dtype aligned: both upcast to wider dtype
+      - Device aligned: both on same GPU
+      - Shape broadcast: expanded to common shape
+      - Contiguous: both made contiguous before kernel launch
+
     Returns: (a, b_or_scalar, output, n_elements, device_ctx, is_scalar)
+    When is_scalar=True: a is tensor, b is Python scalar (int/float/bool).
     """
+    # --- Scalar path: normalize so tensor=a, scalar=b ---
     if _is_scalar(b):
         a = a.contiguous()
+        _set_device(a)
         output = NBXTensor.empty_like(a)
         return a, _to_scalar(b), output, a.numel(), None, True
 
     if _is_scalar(a):
+        # Swap: tensor goes to `a`, scalar goes to `b`
         b = b.contiguous()
+        _set_device(b)
         output = NBXTensor.empty_like(b)
-        return _to_scalar(a), b, output, b.numel(), None, True
+        return b, _to_scalar(a), output, b.numel(), None, True
 
+    # --- Two-tensor path ---
+
+    # 1) Align dtypes (upcast to wider)
+    common_dtype = _wider_dtype(a._dtype, b._dtype)
+    if a._dtype != common_dtype:
+        a = a.to(common_dtype)
+    if b._dtype != common_dtype:
+        b = b.to(common_dtype)
+
+    # 2) Align devices
+    if hasattr(a, '_device_idx') and hasattr(b, '_device_idx') and a._device_idx != b._device_idx:
+        b = _transfer_to_device(b, a._device_idx)
+
+    # 3) Broadcast shapes
     if a.shape != b.shape:
         out_shape = _broadcast_shapes(a.shape, b.shape)
         a = a.expand(out_shape).contiguous()
@@ -302,17 +371,44 @@ def _prepare_binary(a, b):
         a = a.contiguous()
         b = b.contiguous()
 
+    _set_device(a)
     output = NBXTensor.empty_like(a)
     return a, b, output, a.numel(), None, False
 
 
 def _prepare_comparison(a, b):
-    """Prepare two tensors for a comparison kernel (output is bool)."""
+    """Prepare two tensors for a comparison kernel (output is bool).
+
+    Same guards as _prepare_binary (dtype align, device align, broadcast,
+    contiguous) but output tensor is always bool dtype.
+
+    CONTRACT: when is_scalar=True, tensor is in `a`, scalar is in `b`.
+    """
     if _is_scalar(b):
         a = a.contiguous()
-        output = NBXTensor.empty(a.shape, NBXDtype.bool_)
+        _set_device(a)
+        output = NBXTensor.empty(a.shape, NBXDtype.bool_, device=a.device)
         return a, _to_scalar(b), output, a.numel(), None, True
 
+    if _is_scalar(a):
+        # Swap: tensor goes to `a`, scalar goes to `b`
+        b = b.contiguous()
+        _set_device(b)
+        output = NBXTensor.empty(b.shape, NBXDtype.bool_, device=b.device)
+        return b, _to_scalar(a), output, b.numel(), None, True
+
+    # Align dtypes for comparison (both must be same type for the kernel)
+    common_dtype = _wider_dtype(a._dtype, b._dtype)
+    if a._dtype != common_dtype:
+        a = a.to(common_dtype)
+    if b._dtype != common_dtype:
+        b = b.to(common_dtype)
+
+    # Align devices
+    if hasattr(a, '_device_idx') and hasattr(b, '_device_idx') and a._device_idx != b._device_idx:
+        b = _transfer_to_device(b, a._device_idx)
+
+    # Broadcast
     if a.shape != b.shape:
         out_shape = _broadcast_shapes(a.shape, b.shape)
         a = a.expand(out_shape).contiguous()
@@ -321,7 +417,8 @@ def _prepare_comparison(a, b):
         a = a.contiguous()
         b = b.contiguous()
 
-    output = NBXTensor.empty(a.shape, NBXDtype.bool_)
+    _set_device(a)
+    output = NBXTensor.empty(a.shape, NBXDtype.bool_, device=a.device)
     return a, b, output, a.numel(), None, False
 
 
@@ -505,6 +602,34 @@ def erf(x) :
     return output
 
 
+def floor_wrapper(x):
+    x = x.contiguous()
+    output = NBXTensor.empty_like(x)
+    floor_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    return output
+
+
+def ceil_wrapper(x):
+    x = x.contiguous()
+    output = NBXTensor.empty_like(x)
+    ceil_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    return output
+
+
+def round_wrapper(x):
+    x = x.contiguous()
+    output = NBXTensor.empty_like(x)
+    round_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    return output
+
+
+def trunc_wrapper(x):
+    x = x.contiguous()
+    output = NBXTensor.empty_like(x)
+    trunc_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    return output
+
+
 def copy_to(x, dtype: object) :
     x = x.contiguous()
     output = NBXTensor.empty_like(x, dtype=dtype)
@@ -528,6 +653,7 @@ def add(a, b, alpha: float = 1.0) :
 def mul(a, b) :
     a, b, output, n, dev_ctx, scalar = _prepare_binary(a, b)
     if scalar:
+        # Contract: tensor is always `a`, scalar is always `b`
         mul_scalar_kernel[_1d_grid(n)](a, output, n, float(b), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     else:
         mul_forward_kernel[_1d_grid(n)](a, b, output, n, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
@@ -789,6 +915,9 @@ def mm(a, b) :
     Kernel accumulates in fp32 (hardware). Output matches input dtype.
     DtypeEngine handles fp16/bf16 overflow protection externally."""
     a, b = _ensure_cuda(a).contiguous(), _ensure_cuda(b).contiguous()
+    # Multi-device: align b to a's device
+    if hasattr(a, '_device_idx') and hasattr(b, '_device_idx') and a._device_idx != b._device_idx:
+        b = _transfer_to_device(b, a._device_idx)
     M, K = a.shape
     K2, N = b.shape
     assert K == K2, f"Incompatible dimensions: {K} vs {K2}"
@@ -814,6 +943,8 @@ def bmm(a, b) :
     Kernel accumulates in fp32 (hardware). Output matches input dtype.
     DtypeEngine handles overflow protection externally."""
     a, b = _ensure_cuda(a).contiguous(), _ensure_cuda(b).contiguous()
+    if hasattr(a, '_device_idx') and hasattr(b, '_device_idx') and a._device_idx != b._device_idx:
+        b = _transfer_to_device(b, a._device_idx)
     B, M, K = a.shape
     B2, K2, N = b.shape
     assert B == B2 and K == K2
@@ -832,6 +963,35 @@ def bmm(a, b) :
             num_warps=4, num_stages=2,
         )
     return c
+
+
+def matmul_wrapper(a, b):
+    """General matmul dispatcher: routes to mm, bmm, or mv based on input dims.
+
+    Matches torch.matmul semantics:
+    - 2D × 2D → mm
+    - 3D × 3D → bmm
+    - 2D × 1D → mv
+    - ND × 2D → reshape to batched mm
+    """
+    if a.ndim == 2 and b.ndim == 2:
+        return mm(a, b)
+    if a.ndim == 3 and b.ndim == 3:
+        return bmm(a, b)
+    if a.ndim == 2 and b.ndim == 1:
+        return mv_wrapper(a, b)
+    if a.ndim >= 3 and b.ndim == 2:
+        # Batched: reshape a to (batch, M, K), mm each, reshape back
+        orig_shape = a.shape
+        M, K = orig_shape[-2], orig_shape[-1]
+        batch = a.numel() // (M * K)
+        a_3d = a.contiguous().view(batch, M, K)
+        result = bmm(a_3d, b.unsqueeze(0).expand(batch, K, b.shape[1]))
+        return result.view(*orig_shape[:-1], b.shape[1])
+    if a.ndim >= 3 and b.ndim >= 3:
+        # General batched matmul
+        return bmm(a.contiguous(), b.contiguous())
+    raise RuntimeError(f"matmul: unsupported shapes {a.shape} × {b.shape}")
 
 
 def addmm(bias, a, b,
@@ -860,6 +1020,122 @@ def addmm(bias, a, b,
 
 
 # ===========================================================================
+# FUSED MOE WRAPPER
+# ===========================================================================
+
+# Block sizes for fused MoE kernel (tuned for decode batch=1)
+_MOE_BM = 16
+_MOE_BN = 64
+_MOE_BK = 32
+_MOE_GROUP = 8
+
+
+def invoke_fused_moe(
+    hidden_states,            # NBXTensor [M, K] — activations
+    weight_base,              # NBXTensor — any expert weight (base pointer)
+    expert_offsets,           # NBXTensor [E] int64 — element offsets from base
+    output,                   # NBXTensor [M * top_k, N] — pre-allocated output
+    topk_weights,             # NBXTensor [M * top_k] — flat routing scores
+    sorted_token_ids,         # NBXTensor [num_tokens_post_padded] — sorted indices
+    expert_ids,               # NBXTensor [num_blocks] — expert per BLOCK_M group
+    num_tokens_post_padded,   # NBXTensor [1] — total sorted entries
+    N, K,                     # output dim, reduction dim
+    stride_bk, stride_bn,    # weight strides (shared by all experts)
+    top_k,                    # int
+    mul_routed_weight=False,  # apply routing weights in kernel
+    topk_divide=True,        # True: A indexed by token (//top_k), False: A indexed by flat routing index
+):
+    """Launch fused MoE grouped GEMM kernel (zero-copy).
+
+    One kernel launch handles ALL experts. Expert weights accessed via
+    offset table — zero extra GPU memory.
+
+    topk_divide: True for gate/up passes (A=hidden_states, indexed by token),
+                 False for down pass (A=activated, indexed by flat routing index).
+    """
+    M = hidden_states.shape[0]
+    num_valid_tokens = M * top_k
+    EM = sorted_token_ids.shape[0]
+
+    # Optimize for small batch: skip padding blocks
+    if M < _MOE_BM:
+        EM = min(EM, M * top_k * _MOE_BM)
+
+    grid = (triton.cdiv(EM, _MOE_BM) * triton.cdiv(N, _MOE_BN),)
+    _set_device(hidden_states)
+
+    fused_moe_kernel[grid](
+        hidden_states, weight_base, expert_offsets, output,
+        topk_weights,
+        sorted_token_ids, expert_ids, num_tokens_post_padded,
+        N, K, EM, num_valid_tokens,
+        hidden_states.stride(0), hidden_states.stride(1),
+        stride_bk, stride_bn,
+        output.stride(0), output.stride(1),
+        BLOCK_SIZE_M=_MOE_BM, BLOCK_SIZE_N=_MOE_BN, BLOCK_SIZE_K=_MOE_BK,
+        GROUP_SIZE_M=_MOE_GROUP,
+        MUL_ROUTED_WEIGHT=mul_routed_weight,
+        top_k=top_k,
+        compute_type=hidden_states.dtype,
+        TOPK_DIVIDE=topk_divide,
+        num_warps=4, num_stages=2,
+    )
+
+
+def invoke_silu_and_mul(input_tensor, M, N):
+    """Launch fused SwiGLU kernel: silu(input[:, :N]) * input[:, N:2*N].
+
+    Args:
+        input_tensor: NBXTensor [M, 2*N]
+        M: number of rows
+        N: output columns (half of input columns)
+
+    Returns:
+        NBXTensor [M, N]
+    """
+    output = NBXTensor.empty((M, N), dtype=input_tensor._dtype,
+                             device=f"cuda:{input_tensor._device_idx}")
+    BLOCK_M = 16
+    BLOCK_N = min(triton.next_power_of_2(N), 1024)
+
+    grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
+    _set_device(input_tensor)
+
+    silu_and_mul_kernel[grid](
+        input_tensor, output,
+        M, N,
+        input_tensor.stride(0), input_tensor.stride(1),
+        output.stride(0), output.stride(1),
+        BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
+        num_warps=4,
+    )
+    return output
+
+
+# ===========================================================================
+# DTYPE CONVERSION WRAPPER
+# ===========================================================================
+
+def bf16_to_fp16_gpu(src: NBXTensor) -> NBXTensor:
+    """Convert bf16 (stored as uint16) → fp16 on GPU. Zero CPU work.
+
+    Args:
+        src: NBXTensor with dtype uint16 containing raw bf16 bits
+
+    Returns:
+        NBXTensor with dtype float16, same shape
+    """
+    N = src.numel()
+    dst = NBXTensor.empty(src._shape, NBXDtype.float16,
+                          device=f"cuda:{src._device_idx}")
+    BLOCK = 1024
+    grid = (triton.cdiv(N, BLOCK),)
+    _set_device(src)
+    bf16_to_fp16_kernel[grid](src, dst, N, BLOCK=BLOCK, num_warps=4)
+    return dst
+
+
+# ===========================================================================
 # EMBEDDING WRAPPER
 # ===========================================================================
 
@@ -877,7 +1153,6 @@ def embedding(weight, indices, padding_idx=-1, **kwargs) :
     if hasattr(indices, '_device_idx') and hasattr(weight, '_device_idx') and indices._device_idx != weight._device_idx:
         # Cross-device: copy indices to weight's device
         new_indices = NBXTensor.empty(indices._shape, indices._dtype, dev)
-        from .nbx_tensor import DeviceAllocator
         DeviceAllocator.memcpy(new_indices.data_ptr(), indices.data_ptr(), indices._nbytes)
         indices = new_indices
     output = NBXTensor.empty((*indices.shape, N), dtype=weight.nbx_dtype if hasattr(weight, 'nbx_dtype') else weight.dtype, device=dev)
@@ -1024,13 +1299,11 @@ def glu_wrapper(x, dim: int = -1, act_func: str = 'sigmoid') :
 # ===========================================================================
 
 def le(a, b) :
-    a = a.contiguous()
-    output = NBXTensor.empty(a.shape, dtype=NBXDtype.bool_, device=a.device)
-    if isinstance(b, NBXTensor):
-        b = b.contiguous()
-        le_forward_kernel[_1d_grid(a.numel())](a, b, output, a.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    a, b, output, n, dev_ctx, scalar = _prepare_comparison(a, b)
+    if scalar:
+        le_scalar_kernel[_1d_grid(n)](a, output, n, float(b), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     else:
-        le_scalar_kernel[_1d_grid(a.numel())](a, output, a.numel(), float(b), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        le_forward_kernel[_1d_grid(n)](a, b, output, n, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
 
@@ -1351,7 +1624,7 @@ def conv2d_wrapper(
     )
 
     if bias is not None:
-        output += bias.view(1, -1, 1, 1)
+        output = add(output, bias.view(1, -1, 1, 1))
 
     return output
 
@@ -2366,6 +2639,24 @@ def index_add_wrapper(x, dim: int, index,
 
 
 # ---------------------------------------------------------------------------
+# Bincount — small histogram for MoE routing
+# ---------------------------------------------------------------------------
+
+def bincount_wrapper(x, minlength: int = 0):
+    """Bincount via CPU numpy (input is small 1D int tensor from MoE routing)."""
+    import numpy as np
+    import ctypes as _ctypes
+    # D2H transfer (small: num_tokens * top_k ints)
+    n = x.numel()
+    buf = (_ctypes.c_int64 * n)()
+    DeviceAllocator.memcpy(_ctypes.addressof(buf), x.data_ptr(), n * 8, kind=2)
+    arr = np.frombuffer(buf, dtype=np.int64)
+    counts = np.bincount(arr, minlength=minlength).astype(np.int64)
+    DeviceAllocator.set_device(x._device_idx)
+    return NBXTensor.from_numpy(counts)
+
+
+# ---------------------------------------------------------------------------
 # Avg Pool 2D
 # ---------------------------------------------------------------------------
 
@@ -2522,11 +2813,13 @@ def sort_wrapper(x, dim: int = -1,
     # Allocate all buffers
     global_hist = NBXTensor.zeros((m, n_passes, num_bins), device=x.device, dtype=NBXDtype.int32)
 
+    TILE_R = 8
+
     # Stage 1: compute global histogram
     radix_sort_histogram_kernel[(m * grid_n,)](
         x.contiguous(), global_hist,
-        n, m, k_bits, n_passes, num_bins,
-        CTA_TILE, TILE_N)
+        n_passes, m, n, tiles_per_cta,
+        TILE_N, TILE_R, k_bits, descending)
 
     # Exclusive prefix sum on histogram (use our cumsum kernel)
     # cumsum along last dim, then subtract self → exclusive prefix sum
@@ -2546,7 +2839,6 @@ def sort_wrapper(x, dim: int = -1,
     arr_out = NBXTensor.empty_like(arr_in)
     indices_out = NBXTensor.empty_like(indices_in)
 
-    TILE_R = 8
     grid_r = triton.cdiv(num_bins, TILE_R)
     SWEEP_TILE = 2048
     sweep_grid_n = triton.cdiv(n, SWEEP_TILE)
@@ -2558,8 +2850,8 @@ def sort_wrapper(x, dim: int = -1,
         radix_sort_sweep_kernel[(m * sweep_grid_n, grid_r)](
             arr_in, indices_in, arr_out, indices_out,
             ex_cumsum, status,
-            n, m, i * k_bits, k_bits, num_bins,
-            SWEEP_TILE, TILE_R, descending)
+            n_passes, i, i * k_bits, m, n, n,
+            SWEEP_TILE, TILE_R, k_bits, descending)
         arr_in, arr_out = arr_out, arr_in
         indices_in, indices_out = indices_out, indices_in
 
@@ -2702,7 +2994,7 @@ def conv_depthwise2d_wrapper(x, weight, bias=None,
         BLOCK_X=_BILINEAR_BX, BLOCK_Y=_BILINEAR_BY,
         num_warps=4)
     if bias is not None:
-        output += bias.view(1, -1, 1, 1)
+        output = add(output, bias.view(1, -1, 1, 1))
     return output
 
 
@@ -2831,6 +3123,13 @@ def topk_wrapper(x, k: int, dim: int = -1,
         dim = dim + x.ndim
     assert dim == x.ndim - 1, "topk currently supports last dim only"
 
+    # Kernel uses _get_finfo_val which handles fp16/bf16/fp32.
+    # Cast fp32→fp16 for the kernel (it upcasts to fp32 internally anyway),
+    # then cast output values back.
+    input_dtype = x._dtype
+    if input_dtype == NBXDtype.float32:
+        x = x.to(NBXDtype.float16)
+
     descending = largest
     topk_n = x.shape[dim]
     batch_size = x.numel() // topk_n
@@ -2865,6 +3164,10 @@ def topk_wrapper(x, k: int, dim: int = -1,
     topk_stage2_kernel[batch_size,](
         s2_vals, s2_idxs, s1_vals, s1_idxs,
         dim, k, stage2_n, BLOCK, descending)
+
+    # Cast values back to original dtype if we downcast for the kernel
+    if input_dtype == NBXDtype.float32:
+        s2_vals = s2_vals.to(NBXDtype.float32)
 
     return s2_vals, s2_idxs
 
@@ -3418,16 +3721,17 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     if hasattr(dropout_p, 'item'):
         dropout_p = float(dropout_p.item()) if hasattr(dropout_p, 'numel') and dropout_p.numel() == 1 else float(dropout_p)
 
-    # The graph may pass is_causal=False with an explicit causal mask
-    # (tril pattern with -inf above diagonal). The Flash Attention kernel
-    # handles causal masking more accurately via IS_CAUSAL=True.
-    # Drop the mask and use the kernel's built-in causal masking instead.
-    if attn_mask is not None:
-        # Check if mask is a causal pattern (2D with -inf above diagonal)
-        if attn_mask.ndim == 2:
+    # When is_causal=True, the kernel handles causal masking internally.
+    # Drop the explicit mask to avoid double-masking.
+    # For 2D square masks: check if it's a causal tril pattern before
+    # overriding. Non-causal 2D masks (e.g., attention masks in diffusion
+    # models) must be preserved.
+    if is_causal and attn_mask is not None:
+        attn_mask = None
+    elif attn_mask is not None and attn_mask.ndim == 2:
+        # Square 2D mask with seqlen_q == seqlen_k → likely causal tril
+        if attn_mask.shape[0] == attn_mask.shape[1] == seqlen_q:
             is_causal = True
-            attn_mask = None
-        elif is_causal:
             attn_mask = None
 
     # Default scale
@@ -3464,15 +3768,27 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
         if bias.ndim == 2:
             bias_type = "vector"
         else:
+            # 3D or 4D bias — pass as matrix.
+            # For 4D (batch, heads, q, k): kernel reads via strides.
+            # stride(0)=heads*q*k, stride(1)=q*k, stride(2)=k
             bias_type = "matrix"
     else:
         bias = q  # dummy, not used
         bias_type = "none"
 
-    # Block sizes — from Dao-AILab defaults
+    # Block sizes — adapted from Dao-AILab defaults.
+    # Reduce BLOCK_M for large headdim to stay within shared memory limits.
+    # V100 has 96KB shared memory. With headdim=256: 128×256×2×3 = 192KB > 96KB.
     BLOCK_HEADDIM = max(triton.next_power_of_2(headdim), 16)
-    BLOCK_M = 128
-    BLOCK_N = 64
+    if BLOCK_HEADDIM >= 256:
+        BLOCK_M = 32
+        BLOCK_N = 32
+    elif BLOCK_HEADDIM >= 128:
+        BLOCK_M = 64
+        BLOCK_N = 64
+    else:
+        BLOCK_M = 128
+        BLOCK_N = 64
 
     grid = (triton.cdiv(seqlen_q, BLOCK_M), batch * nheads)
 
@@ -3486,9 +3802,9 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
         q.stride(0), q.stride(1), q.stride(2),
         k.stride(0), k.stride(1), k.stride(2),
         v.stride(0), v.stride(1), v.stride(2),
-        bias.stride(0) if has_bias and bias.ndim >= 3 else 0,
-        bias.stride(1) if has_bias and bias.ndim >= 3 else 0,
-        bias.stride(2) if has_bias and bias.ndim >= 3 else 0,
+        bias.stride(0) if has_bias and bias.ndim == 4 else (bias.stride(0) if has_bias and bias.ndim == 3 else 0),
+        bias.stride(1) if has_bias and bias.ndim == 4 else 0,
+        bias.stride(-2) if has_bias and bias.ndim >= 3 else 0,
         o.stride(0), o.stride(1), o.stride(2),
         nheads, seqlen_q, seqlen_k, seqlen_q_rounded, headdim,
         seqlen_q // 32, seqlen_k // 32,  # cache keys

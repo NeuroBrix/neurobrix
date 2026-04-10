@@ -23,6 +23,8 @@ from typing import Callable, Dict, List, Optional, Tuple
 import torch
 import torch.nn.functional as F
 
+from neurobrix.core.dtype.config import get_torch_dtype
+
 
 @dataclass
 class KVCacheConfig:
@@ -40,7 +42,7 @@ class KVCacheConfig:
     k_head_dim: int
     v_head_dim: int
     max_cache_len: int
-    dtype: torch.dtype
+    dtype: str                  # Dtype string — converted to torch.dtype at allocation boundaries
     initial_cache_len: int = 0  # Initial buffer size (0 = allocate at max, on-demand growth)
 
     @property
@@ -102,6 +104,7 @@ class KVCacheLayer:
         self.batch_size = batch_size
         self.current_len = 0
         self._dtype_verified = False
+        # Detect triton mode from input types at first update
 
         # Buffer starts at initial_len. 0 means legacy: allocate full max_len.
         if initial_len > 0 and initial_len < max_len:
@@ -111,11 +114,16 @@ class KVCacheLayer:
 
         self._growth_threshold = int(self._buffer_len * self._GROWTH_RATIO)
 
-        # Allocate initial buffers
+        # Allocate initial buffers (deferred if initial_len is 0 — lazy allocation)
         k_shape = (batch_size, num_kv_heads, self._buffer_len, k_head_dim)
         v_shape = (batch_size, num_kv_heads, self._buffer_len, v_head_dim)
-        self.k_buffer = torch.zeros(k_shape, dtype=dtype, device=device)
-        self.v_buffer = torch.zeros(v_shape, dtype=dtype, device=device)
+        self.k_buffer = self._alloc_zeros(k_shape)
+        self.v_buffer = self._alloc_zeros(v_shape)
+
+
+    def _alloc_zeros(self, shape):
+        """Allocate zero-filled buffer. mode-specific allocation."""
+        return torch.zeros(shape, dtype=self.dtype, device=self.device)
 
     def update(self, k: torch.Tensor, v: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -189,21 +197,17 @@ class KVCacheLayer:
             return
 
         # Allocate new buffers
-        new_k = torch.zeros(
-            (self.batch_size, self.num_kv_heads, new_len, self.k_head_dim),
-            dtype=self.dtype, device=self.device
-        )
-        new_v = torch.zeros(
-            (self.batch_size, self.num_kv_heads, new_len, self.v_head_dim),
-            dtype=self.dtype, device=self.device
-        )
+        new_k = self._alloc_zeros(
+            (self.batch_size, self.num_kv_heads, new_len, self.k_head_dim))
+        new_v = self._alloc_zeros(
+            (self.batch_size, self.num_kv_heads, new_len, self.v_head_dim))
 
         # Copy existing cached data
         if self.current_len > 0:
             new_k[:, :, :self.current_len, :] = self.k_buffer[:, :, :self.current_len, :]
             new_v[:, :, :self.current_len, :] = self.v_buffer[:, :, :self.current_len, :]
 
-        # Swap buffers (old buffers freed by GC)
+        # Swap buffers
         self.k_buffer = new_k
         self.v_buffer = new_v
         self._buffer_len = new_len
@@ -215,14 +219,10 @@ class KVCacheLayer:
             return
 
         # Create new larger buffers (K and V may have different head dims)
-        new_k = torch.zeros(
-            (new_batch_size, self.num_kv_heads, self._buffer_len, self.k_head_dim),
-            dtype=self.dtype, device=self.device
-        )
-        new_v = torch.zeros(
-            (new_batch_size, self.num_kv_heads, self._buffer_len, self.v_head_dim),
-            dtype=self.dtype, device=self.device
-        )
+        new_k = self._alloc_zeros(
+            (new_batch_size, self.num_kv_heads, self._buffer_len, self.k_head_dim))
+        new_v = self._alloc_zeros(
+            (new_batch_size, self.num_kv_heads, self._buffer_len, self.v_head_dim))
 
         # Copy existing data
         if self.current_len > 0:
@@ -299,9 +299,9 @@ class DistributedKVCache:
             device = k.device
             batch_size = k.shape[0]
 
-            self._layers[layer_idx] = KVCacheLayer(
+            layer = KVCacheLayer(
                 device=device,
-                dtype=self.config.dtype,
+                dtype=get_torch_dtype(self.config.dtype),
                 max_len=self.config.max_cache_len,
                 num_kv_heads=self.config.num_kv_heads,
                 k_head_dim=self.config.k_head_dim,
@@ -309,6 +309,7 @@ class DistributedKVCache:
                 batch_size=batch_size,
                 initial_len=self.config.initial_cache_len,
             )
+            self._layers[layer_idx] = layer
 
         # Update cache and get full K/V
         k_full, v_full = self._layers[layer_idx].update(k, v)
@@ -518,8 +519,8 @@ class KVCacheAttentionWrapper:
         if attn_mask is not None and attn_mask.dim() == 4 and attn_mask.shape[-1] < kv_len:
             attn_mask = attn_mask.expand(-1, -1, -1, kv_len).contiguous()
 
-        # Call PyTorch's SDPA with full cached context.
-        # DtypeEngine handles dtype. No manual upcast.
+        # Call SDPA with full cached context.
+        # Triton mode: Dao-AILab Flash Attention kernel. Native: PyTorch F.sdpa.
         return F.scaled_dot_product_attention(
             q, k_full, v_full,
             attn_mask=attn_mask,
@@ -784,7 +785,7 @@ class KVCacheAttentionWrapper:
 def create_kv_wrapper_from_config(
     lm_config: Dict,
     device: str,  # Ignored - kept for API compatibility
-    dtype: torch.dtype
+    dtype,  # accepts str or torch.dtype
 ) -> KVCacheAttentionWrapper:
     """
     Factory function to create KVCacheAttentionWrapper from lm_config.
@@ -830,13 +831,15 @@ def create_kv_wrapper_from_config(
             "ZERO FALLBACK: max_position_embeddings missing from lm_config.\n"
             "Cannot allocate KV cache without knowing sequence length limit."
         )
+    from neurobrix.core.dtype.config import dtype_to_str
+    dtype_str = dtype_to_str(dtype) if isinstance(dtype, torch.dtype) else dtype
     config = KVCacheConfig(
         num_layers=num_layers,
         num_kv_heads=num_kv_heads,
         k_head_dim=k_head_dim,
         v_head_dim=v_head_dim_val,
         max_cache_len=max_cache_len,
-        dtype=dtype
+        dtype=dtype_str
     )
 
     return KVCacheAttentionWrapper(config, num_heads=num_heads)

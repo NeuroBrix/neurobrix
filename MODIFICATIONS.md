@@ -5,6 +5,23 @@ Track all code changes for regression tracing. When something breaks, check this
 
 ---
 
+## Session: April 8, 2026 — Dtype String Refactor (Prism → Runtime)
+
+### MOD-100: Dtype string everywhere — eliminate torch.dtype from shared code
+- **Modified:** `src/neurobrix/core/prism/solver.py` — `ComponentAllocation.dtype`, `KVCachePlan.dtype`, `ExecutionPlan.target_dtype` changed from `torch.dtype` to `str`. `_resolve_dtype()` and `_resolve_component_dtypes()` return strings. `_build_plan()`, `_compute_kv_cache_plan()`, `to_dict()`, `load()` updated. `_empty_plan()` uses `"float32"` not `torch.float32`.
+- **Modified:** `src/neurobrix/core/prism/common/dtype_resolver.py` — `DtypeResolver.resolve()` and `resolve_dtype()` return `str` instead of `torch.dtype`. Removed `import torch`.
+- **Modified:** `src/neurobrix/core/runtime/factory.py` — `_extract_dtype()` simplified: returns `allocation.dtype` directly (always string). Removed torch conversion logic.
+- **Modified:** `src/neurobrix/core/runtime/graph_executor.py` — `self.dtype` is now string. Added `get_torch_dtype(self.dtype)` at native boundaries: DtypeEngine init, CompiledSequence init, WeightLoader, pos_embed, constant loading, input dtype conversion, NativeATenDispatcher. Eliminated all 4 `str(self.dtype).replace('torch.', '')` hacks.
+- **Modified:** `src/neurobrix/core/runtime/graph/kv_cache_wrapper.py` — `KVCacheConfig.dtype` changed to `str`. Added `get_torch_dtype()` at KVCacheLayer allocation. Legacy `create_kv_wrapper_from_config` handles both `str` and `torch.dtype`.
+- **Modified:** `src/neurobrix/triton/flow/autoregressive.py` — Removed `str(kv_plan.dtype).replace('torch.', '')` hack, now uses `parse_dtype(kv_plan.dtype)` directly.
+- **Modified:** `src/neurobrix/core/flow/autoregressive.py` — Simplified `alloc.dtype` usage: always string, use `get_torch_dtype()`.
+- **Modified:** `src/neurobrix/core/flow/tts_llm.py` — Same: `get_torch_dtype(alloc.dtype)`.
+- **What:** Dtype is STRING ("float16", "bfloat16", "float32") everywhere above the engine boundary. DtypeEngine converts string → torch.dtype once in __init__. TritonDtypeEngine converts string → NBXDtype once. No torch.dtype in Prism, factory, or shared code paths.
+- **Why:** Eliminates torch dependency from Prism/factory/shared code. Triton mode no longer needs torch just for dtype. Removes 4 fragile `str().replace('torch.', '')` hacks.
+- **Validated:** TinyLlama native compiled, --triton, --triton-sequential — all pass.
+
+---
+
 ## Session: April 1, 2026 — Pure Triton LLM Inference (Zero-Torch Autoregressive)
 
 ### MOD-085: Zero-torch LLM flow handler + token generation

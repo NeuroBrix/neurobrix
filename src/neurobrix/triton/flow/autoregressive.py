@@ -190,7 +190,9 @@ class TritonAutoregressiveHandler:
 
         device_idx = self._parse_device_idx()
 
-        # Ensure weights are loaded (via native path — weights are torch.Tensor in memory)
+        # Load weights via lifecycle (same as native mode).
+        # In triton mode, load_weights() routes to _load_weights_triton
+        # which loads as NBXTensor directly. Same lifecycle, different format.
         self._ensure_weights_loaded(lm_name)
 
         # Get executor from context
@@ -226,7 +228,10 @@ class TritonAutoregressiveHandler:
             graph_inputs.append(name)
 
         uses_embeds = "inputs_embeds" in graph_inputs
-        uses_abs_pos = dag.get("uses_absolute_position", False)
+        # All LLMs with position_ids input use absolute positions (RoPE, learnable).
+        # Default True when graph has position_ids — the graph field is optional.
+        uses_abs_pos = dag.get("uses_absolute_position",
+                               "position_ids" in graph_inputs)
 
         # Detect SDPA ops in graph
         sdpa_types = {
@@ -238,14 +243,15 @@ class TritonAutoregressiveHandler:
         has_sdpa = any(op.get("op_type") in sdpa_types for op in graph_ops.values())
 
         # Create KV cache from Prism plan (data-driven, zero hardcode)
+        # KV cache only for compiled mode — sequential uses O(n) fallback
         kv_interceptor = None
-        if has_sdpa:
+        if has_sdpa and self.ctx.mode == "triton":
             from neurobrix.triton.kv_cache import TritonKVCache, TritonAttentionInterceptor
 
             kv_plan = getattr(self.ctx.plan, 'kv_cache_plan', None)
             if kv_plan is not None:
                 # Prism path — uses precomputed budget
-                cache_dtype = parse_dtype(str(kv_plan.dtype).replace('torch.', ''))
+                cache_dtype = parse_dtype(kv_plan.dtype)
                 kv_cache = TritonKVCache(
                     num_layers=kv_plan.num_layers,
                     num_kv_heads=kv_plan.num_kv_heads,

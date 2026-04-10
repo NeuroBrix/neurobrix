@@ -16,6 +16,7 @@ from neurobrix.core.device_utils import device_multinomial
 from typing import Any, Callable, Dict, List, Optional
 
 from .base import FlowHandler, FlowContext, register_flow
+from neurobrix.core.device_utils import device_empty_cache
 
 
 @register_flow("encoder_decoder")

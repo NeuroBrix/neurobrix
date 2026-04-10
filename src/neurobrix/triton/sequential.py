@@ -103,11 +103,12 @@ class TritonSequentialDispatcher:
         clean = op_type.replace("aten::", "").replace("custom::", "")
         base = clean.split(".")[0]
 
-        # Custom ops
+        # Custom ops — apply AMP wrapping
         if op_type == "custom::rms_norm":
-            return w.rms_norm(*inputs)
+            func = self._dtype_engine.wrap_op("rms_norm", w.rms_norm)
+            return func(*inputs)
 
-        # SDPA variants → unified wrapper
+        # SDPA variants → unified wrapper (AMP wrapping via the wrapper itself)
         if "scaled_dot_product" in base and "attention" in base:
             return self._dispatch_sdpa(base, inputs, attributes)
 

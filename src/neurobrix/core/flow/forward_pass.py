@@ -8,6 +8,7 @@ Handles non-iterative models like encoders, decoders, multimodal models.
 """
 
 import gc
+from neurobrix.core.device_utils import device_empty_cache
 import torch
 from typing import Any, Callable, Dict, Optional
 

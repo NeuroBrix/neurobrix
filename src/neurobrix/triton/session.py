@@ -121,15 +121,21 @@ class TritonLMSession:
 
     def _decode_step_full_context(self, new_token_ids: NBXTensor) -> NBXTensor:
         """O(n) decode: concatenate all tokens and re-run full context."""
+        DeviceAllocator.ensure_triton_device(self.device_idx)
         if new_token_ids.ndim == 1:
             new_token_ids = new_token_ids.unsqueeze(0)
+        # Ensure token is on the correct device (may be on wrong GPU after lm_head run)
+        if hasattr(new_token_ids, '_device_idx') and new_token_ids._device_idx != self.device_idx:
+            dst = NBXTensor.empty(new_token_ids._shape, new_token_ids._dtype,
+                                  f"cuda:{self.device_idx}")
+            DeviceAllocator.memcpy(dst.data_ptr(), new_token_ids.data_ptr(),
+                                   new_token_ids._nbytes)
+            new_token_ids = dst
         self._accumulated_ids = NBXTensor.cat(
             [self._accumulated_ids, new_token_ids], dim=1)
 
         seq_len = self._accumulated_ids.shape[1]
         batch_size = self._accumulated_ids.shape[0]
-
-        DeviceAllocator.set_device(self.device_idx)
         pos_np = np.arange(seq_len, dtype=np.int64).reshape(1, seq_len)
         if batch_size > 1:
             pos_np = np.tile(pos_np, (batch_size, 1))

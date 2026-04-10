@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from neurobrix.core.module.autoregressive.generator import AutoregressiveGenerator
 
 from .base import FlowHandler, FlowContext, register_flow
+from neurobrix.core.device_utils import device_empty_cache
 
 _SENTINEL = object()
 
@@ -227,6 +228,7 @@ class GraphLMSession:
         and per-request intermediates are cleared.
         """
         is_persistent = getattr(self.executor, '_persistent', False) if self.executor else False
+        device = getattr(self.executor, 'device', 'cuda') if self.executor else 'cuda'
 
         if self.executor is not None:
             self.executor.cleanup()  # Respects _persistent flag internally
@@ -239,7 +241,7 @@ class GraphLMSession:
 
         if not is_persistent:
             gc.collect()
-            device_empty_cache(self.ctx.primary_device)
+            device_empty_cache(device)
 
     def _embed_from_ids(self, input_ids: torch.Tensor) -> torch.Tensor:
         """Embed token IDs via executor's embed_tokens weight."""
@@ -573,11 +575,8 @@ class AutoregressiveHandler(FlowHandler):
         if hasattr(self.ctx.plan, 'get_allocation'):
             comp_alloc = self.ctx.plan.get_allocation(lm_name)
             if comp_alloc and hasattr(comp_alloc, 'dtype'):
-                dtype_val = comp_alloc.dtype
-                if isinstance(dtype_val, torch.dtype):
-                    dtype = dtype_val
-                elif isinstance(dtype_val, str):
-                    dtype = getattr(torch, dtype_val, torch.float32)
+                from neurobrix.core.dtype.config import get_torch_dtype
+                dtype = get_torch_dtype(comp_alloc.dtype)
 
         # Get/create GraphExecutor
         cache_path = Path(self.ctx.pkg.cache_path)
@@ -736,11 +735,8 @@ class AutoregressiveHandler(FlowHandler):
         if hasattr(self.ctx.plan, 'get_allocation'):
             comp_alloc = self.ctx.plan.get_allocation(lm_name)
             if comp_alloc and hasattr(comp_alloc, 'dtype'):
-                dtype_val = comp_alloc.dtype
-                if isinstance(dtype_val, torch.dtype):
-                    dtype = dtype_val
-                elif isinstance(dtype_val, str):
-                    dtype = getattr(torch, dtype_val, torch.float32)
+                from neurobrix.core.dtype.config import get_torch_dtype
+                dtype = get_torch_dtype(comp_alloc.dtype)
 
         if gen_type == "autoregressive_text":
             # DATA-DRIVEN: use lm_head graph executor for logits
