@@ -71,7 +71,7 @@ pip install neurobrix[full]
 |----------|-------------|-------|
 | **Linux** | CUDA, Triton kernels | Full support, recommended for production |
 | **Windows** | CUDA | Fully supported since v0.1.0a9. Triton not available |
-| **macOS** | CPU only | MPS/Metal support planned |
+| **macOS** | Apple Silicon (MPS) | M1–M5 supported since v0.1.1. bf16 on M2+ |
 
 ## Verify Installation
 

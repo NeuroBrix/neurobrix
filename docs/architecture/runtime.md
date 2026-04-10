@@ -1,6 +1,6 @@
 # NeuroBrix Architecture
 
-> **Version**: 0.1.0 | **Status**: Production | **Last Update**: February 2026
+> **Version**: 0.1.2 | **Status**: Production | **Last Update**: April 2026
 
 ## Overview
 
@@ -21,7 +21,7 @@ The runtime has **zero domain knowledge**. It does not know what an "image", "to
 |------|------|----------------|----------|
 | **Compiled** | (default) | CompiledSequence + DtypeEngine AMP | Production (80-95% GPU utilization) |
 | **Native** | `--sequential` | Sequential ATen dispatcher | Debugging |
-| **Triton** | `--triton` | Custom Triton kernels | R&D / benchmarking |
+| **Triton** | `--triton` | TritonSequence (zero PyTorch) | Production — zero-torch inference |
 
 ### Compiled Mode (Default)
 
@@ -36,6 +36,29 @@ The compiled mode pre-compiles the entire execution graph at load time into a **
 ```
 Legacy path: ~15,000 dict lookups per transformer step
 Compiled path: 0 dict lookups (integer-indexed memory arena)
+```
+
+### Triton Mode (`--triton`)
+
+The Triton mode is a **complete zero-PyTorch inference engine**. No `torch.Tensor`, no `torch.cuda`, no PyTorch in the hot path.
+
+- **NBXTensor**: Lightweight tensor descriptor with ctypes GPU memory management (cudaMalloc/cudaMemcpy/cudaFree via driver API)
+- **TritonSequence**: Arena-based compiled execution — same architecture as CompiledSequence but with NBXTensor
+- **Triton kernels**: 136+ pure `@triton.jit` kernels for all compute ops (matmul, attention, layer_norm, etc.)
+- **KV cache**: Pre-allocated NBXTensor buffers with GQA support and SDPA interceptor
+- **Weight loading**: safetensors raw bytes → numpy → cudaMemcpy → NBXTensor (zero torch)
+- **AMP**: TritonDtypeEngine mirrors native DtypeEngine rules, adapted for Triton fp32 accumulators
+- **Decode optimization**: `skip_kills` skips arena cleanup during decode (intermediates reuse same-size slots every step)
+- **Multi-hardware**: DeviceAllocator dispatches to `libcudart.so` (NVIDIA) or `libamdhip64.so` (AMD) — auto-detected
+
+```
+triton/
+  sequence.py      — Compiled hot loop (arena + closures)
+  executor.py      — Full pipeline: load → compile → bind → run
+  kv_cache.py      — KV cache + SDPA interceptor
+  dtype.py         — TritonDtypeEngine (AMP rules)
+  weight_loader.py — safetensors → NBXTensor
+  flow/            — Zero-torch flow handlers (autoregressive, diffusion, audio, etc.)
 ```
 
 ---
@@ -204,15 +227,18 @@ Every neural network is a combination of these primitives. A transformer block =
 neurobrix/
   cli/                  Command-line interface
     commands/           run, serve, chat, hub, import, list, ...
-  core/                 Runtime engine
+  core/                 Runtime engine (native PyTorch mode)
     runtime/            Executor, graph engine, CompiledSequence
     prism/              Hardware solver and execution planning
-    flow/               Execution flows (iterative, autoregressive, forward)
+    flow/               Execution flows (iterative, autoregressive, forward, audio, tts)
     dtype/              Automatic mixed precision engine
     cfg/                Classifier-free guidance engine
     module/             Tokenizer, scheduler, KV cache, text processor
     io/                 Weight loading
-  kernels/              Triton GPU kernels
+  kernels/              Triton GPU kernels + NBXTensor + dispatch table
+  triton/               Zero-torch inference engine (--triton mode)
+    flow/               Zero-torch flow handlers
+    cfg/                Classifier-free guidance (zero-torch)
   nbx/                  .nbx container format
   serving/              Daemon server, client, session management
   config/               Hardware profiles, family configs
