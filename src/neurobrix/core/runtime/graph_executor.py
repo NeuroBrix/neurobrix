@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Any, Optional, Union, TYPE_CHECKING
 
 from neurobrix.core.device_utils import device_empty_cache
+from neurobrix.core.dtype.config import get_torch_dtype
 from neurobrix.kernels.classification import OpExecution, get_execution_type
 
 if TYPE_CHECKING:
@@ -461,7 +462,7 @@ class GraphExecutor:
         pos_embed = pos_embed[np.newaxis, :, :]
 
         # Convert to torch tensor with target dtype
-        pos_embed_tensor = torch.from_numpy(pos_embed).to(dtype=self.dtype, device=self.device)
+        pos_embed_tensor = torch.from_numpy(pos_embed).to(dtype=get_torch_dtype(self.dtype), device=self.device)
 
         return pos_embed_tensor
 
@@ -529,7 +530,7 @@ class GraphExecutor:
                 traced_bytes = base64.b64decode(traced_data)
                 traced_np = np.frombuffer(traced_bytes, dtype=np.float32).reshape(1, traced_seq, embed_dim)
                 if np.any(traced_np != 0):
-                    return torch.from_numpy(traced_np.copy()).to(dtype=self.dtype, device=self.device)
+                    return torch.from_numpy(traced_np.copy()).to(dtype=get_torch_dtype(self.dtype), device=self.device)
                 # traced_data is all zeros (VMM pool artifact) — recompute from sincos
                 return self._compute_sincos_2d_pos_embed(
                     runtime_height=runtime_height,
@@ -553,7 +554,7 @@ class GraphExecutor:
             if not np.any(traced_np != 0):
                 traced_np = None  # VMM pool artifact — skip zero data
             else:
-                traced_embed = torch.from_numpy(traced_np).to(dtype=self.dtype, device=self.device)
+                traced_embed = torch.from_numpy(traced_np).to(dtype=get_torch_dtype(self.dtype), device=self.device)
 
         # Try to load from weights file
         if traced_embed is None and weight_name in self._weights:
@@ -578,7 +579,7 @@ class GraphExecutor:
 
         # Reshape back to [1, seq, dim]
         scaled_embed = pos_2d_scaled.reshape(embed_dim, runtime_seq).transpose(0, 1).unsqueeze(0)
-        scaled_embed = scaled_embed.to(dtype=self.dtype)
+        scaled_embed = scaled_embed.to(dtype=get_torch_dtype(self.dtype))
 
         return scaled_embed
 
@@ -642,10 +643,13 @@ class GraphExecutor:
         # spatially-structured quantization noise that CFG amplifies into grid lines.
         # Text encoders KEEP AMP: T5/Gemma have residual accumulation that overflows fp16.
         # LLM family keeps AMP everywhere: RMSNorm pow→mean→rsqrt overflows without it.
-        from neurobrix.core.dtype.engine import DtypeEngine
-        amp_enabled = self._should_enable_amp()
-        self._dtype_engine = DtypeEngine(self.dtype, graph_dtype=self._graph_dtype,
-                                         amp_enabled=amp_enabled)
+        if self.mode not in ("triton", "triton_sequential"):
+            from neurobrix.core.dtype.engine import DtypeEngine
+            amp_enabled = self._should_enable_amp()
+            self._dtype_engine = DtypeEngine(get_torch_dtype(self.dtype), graph_dtype=self._graph_dtype,
+                                             amp_enabled=amp_enabled)
+        else:
+            self._dtype_engine = None  # Triton uses TritonDtypeEngine in sequence.py
 
         # DAG loaded silently - stats available via _dag
 
@@ -822,7 +826,7 @@ class GraphExecutor:
         self._compiled_seq = CompiledSequence(
             dag=self._dag,
             device=torch.device(self.device),
-            dtype=self.dtype,
+            dtype=get_torch_dtype(self.dtype),
             amp_enabled=self._dtype_engine.amp_enabled,
             use_triton=(self.mode == "triton"),
         )
@@ -867,19 +871,12 @@ class GraphExecutor:
         - Weights converted to self.dtype during load
 
         Uses shard_map from Prism for multi-GPU placement.
-        Also loads buffers from graph directory if available.
+        Same lifecycle for both native and triton — only tensor FORMAT differs.
         """
-        from neurobrix.core.io import WeightLoader
-
-        with WeightLoader(nbx_path) as loader:
-            if shard_map:
-                # Pass self.dtype (from Prism, embedded from hardware profile)
-                self._weights = loader.load_component_with_shard_map(
-                    component, shard_map, self.dtype
-                )
-            else:
-                # Pass self.dtype (from Prism, embedded from hardware profile)
-                self._weights = loader.load_component(component, self.device, self.dtype)
+        if self.mode in ("triton", "triton_sequential"):
+            self._load_weights_triton(nbx_path, component, shard_map)
+        else:
+            self._load_weights_native(nbx_path, component, shard_map)
 
         # Weights changed — force rebind on next _execute_compiled_graph
         self._weights_bound = False
@@ -888,6 +885,33 @@ class GraphExecutor:
         # These are NOT in safetensors — they exist only in graph.json as base64 data.
         # Must reload on every weight load since cleanup() clears _weights entirely.
         self._load_constants_from_graph()
+
+    def _load_weights_native(self, nbx_path, component, shard_map):
+        """Load weights as torch.Tensor (native mode)."""
+        from neurobrix.core.io import WeightLoader
+        torch_dtype = get_torch_dtype(self.dtype)
+        with WeightLoader(nbx_path) as loader:
+            if shard_map:
+                self._weights = loader.load_component_with_shard_map(
+                    component, shard_map, torch_dtype)
+            else:
+                self._weights = loader.load_component(
+                    component, self.device, torch_dtype)
+
+    def _load_weights_triton(self, nbx_path, component, shard_map):
+        """Load weights as NBXTensor (triton mode). Zero torch."""
+        from neurobrix.triton.weight_loader import load_component_weights
+        from neurobrix.kernels.nbx_tensor import parse_dtype, DeviceAllocator
+
+        device_idx = int(self.device.split(':')[1]) if ':' in str(self.device) else 0
+        compute_dtype = parse_dtype(self.dtype)
+
+        DeviceAllocator.set_device(device_idx)
+        DeviceAllocator.ensure_triton_device(device_idx)
+
+        self._weights = load_component_weights(
+            nbx_path, component, device_idx, compute_dtype,
+            shard_map=shard_map)
 
         # COMPUTABLE BUFFERS: Compute buffers at runtime resolution
         # This is the preferred approach for pos_embed and other resolution-dependent buffers.
@@ -1079,22 +1103,67 @@ class GraphExecutor:
                     f"Graph may be corrupted or was traced with old format."
                 )
 
-            # Decode from base64
-            # Load to CPU first to avoid device mismatch when CUDA_VISIBLE_DEVICES
-            # remaps GPU indices (e.g., traced on cuda:3 but running with only cuda:0 visible)
-            buffer = io.BytesIO(base64.b64decode(b64_data))
-            tensor = torch.load(buffer, map_location='cpu', weights_only=True)
-            tensor = tensor.to(self.device)
-
-            if tensor.is_floating_point() and tensor.dtype != self.dtype:
-                tensor = self._dtype_engine.convert_constant(tensor)
-
-            # Store by weight_name (same as regular weights)
             weight_name = tdata.get("weight_name")
-            if weight_name:
-                self._weights[weight_name] = tensor
-                const_count += 1
+            if not weight_name:
+                continue
 
+            if self.mode in ("triton", "triton_sequential"):
+                self._load_constant_triton(b64_data, weight_name, tdata)
+            else:
+                self._load_constant_native(b64_data, weight_name)
+            const_count += 1
+
+    def _load_constant_native(self, b64_data: str, weight_name: str):
+        """Load base64 constant via torch (native mode)."""
+        import base64, io
+        buffer = io.BytesIO(base64.b64decode(b64_data))
+        tensor = torch.load(buffer, map_location='cpu', weights_only=True)
+        tensor = tensor.to(self.device)
+        if tensor.is_floating_point() and tensor.dtype != get_torch_dtype(self.dtype):
+            tensor = self._dtype_engine.convert_constant(tensor)
+        self._weights[weight_name] = tensor
+
+    def _load_constant_triton(self, b64_data: str, weight_name: str,
+                               tdata: dict):
+        """Load base64 constant via ZIP parse + numpy (triton mode). Zero torch."""
+        import base64, io, zipfile
+        import numpy as np
+        from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, parse_dtype
+
+        shape = tuple(tdata.get("shape", []))
+        dtype_str = tdata.get("dtype", "float32").replace("torch.", "")
+        device_idx = int(self.device.split(':')[1]) if ':' in str(self.device) else 0
+        compute_dtype = parse_dtype(self.dtype)
+
+        # Extract raw bytes from torch.save ZIP archive
+        raw_zip = base64.b64decode(b64_data)
+        with zipfile.ZipFile(io.BytesIO(raw_zip)) as zf:
+            data_files = [n for n in zf.namelist()
+                          if n.startswith("archive/data/")]
+            if not data_files:
+                return
+            tensor_bytes = zf.read(data_files[0])
+
+        # Parse raw bytes based on dtype
+        if dtype_str == "bfloat16":
+            raw_u16 = np.frombuffer(tensor_bytes, dtype=np.uint16).reshape(shape)
+            if compute_dtype == NBXDtype.float16:
+                fp32 = np.zeros(raw_u16.shape, dtype=np.float32)
+                fp32.view(np.uint32).flat[:] = raw_u16.flat[:].astype(np.uint32) << 16
+                arr = np.ascontiguousarray(fp32.astype(np.float16))
+            else:
+                arr = np.ascontiguousarray(raw_u16)
+        else:
+            np_dt = {"float16": np.float16, "float32": np.float32,
+                     "float64": np.float64, "int32": np.int32,
+                     "int64": np.int64, "int8": np.int8,
+                     "uint8": np.uint8, "bool": np.bool_,
+                     }.get(dtype_str, np.float32)
+            arr = np.frombuffer(tensor_bytes, dtype=np_dt).reshape(shape)
+            arr = np.ascontiguousarray(arr)
+
+        DeviceAllocator.set_device(device_idx)
+        self._weights[weight_name] = NBXTensor.from_numpy(arr)
 
     # =========================================================================
     # Execution: run() and helpers
@@ -1190,7 +1259,14 @@ class GraphExecutor:
         self._ensure_triton_compiled(device_idx)
         self._triton_seq.bind_inputs(input_map)
         self._triton_seq.bind_symbols(input_map)
-        self._triton_seq.run()
+        self._triton_seq.update_seq_dependent_constants()
+
+        # Decode steps (seq_len==1) reuse same-size intermediates every step.
+        # Skip kill_slots to avoid cudaFree + sync overhead.
+        is_decode = any(
+            t.shape[1] == 1 for t in input_map.values()
+            if hasattr(t, 'shape') and len(t.shape) >= 2)
+        self._triton_seq.run(skip_kills=is_decode)
         return self._triton_seq.gather_outputs(), self._triton_seq.num_ops
 
     def _run_triton_sequential(self, input_map: dict, device_idx: int):
@@ -1199,9 +1275,8 @@ class GraphExecutor:
         from neurobrix.triton.symbols import SymbolResolver
         from neurobrix.kernels.nbx_tensor import NBXTensor, parse_dtype
 
-        compute_dtype_str = str(self.dtype).replace('torch.', '') if hasattr(self.dtype, '__str__') else 'float16'
         dispatcher = TritonSequentialDispatcher(
-            device_idx=device_idx, compute_dtype=parse_dtype(compute_dtype_str))
+            device_idx=device_idx, compute_dtype=parse_dtype(self.dtype))
 
         tensors = self._dag.get("tensors", {})
         ops_meta = self._dag.get("ops", {})
@@ -1215,25 +1290,22 @@ class GraphExecutor:
                                           self._dag.get("input_tensor_ids", []),
                                           tensors)
 
+        # Apply symbolic promotion (shared with compiled mode) so that
+        # ops like ones([23,23]) become ones([s1,s1]) → ones([actual_seq_len, actual_seq_len])
+        if not hasattr(self, '_seq_promotion_done'):
+            from neurobrix.triton.promotion import promote_seq_len_scalars
+            promote_seq_len_scalars(self._dag, tensors, ops_meta)
+            self._seq_promotion_done = True
+
         # Tensor store: maps tensor_id → NBXTensor
         store: Dict[str, Any] = {}
 
-        # Load weights into store
+        # Weights already loaded as NBXTensor by load_weights() via lifecycle
         for tid, tdata in tensors.items():
             if tid.startswith("param::") or tid.startswith("buffer::"):
                 wname = tdata.get("weight_name", "")
                 if wname in self._weights:
-                    w_tensor = self._weights[wname]
-                    if not w_tensor.is_cuda:
-                        w_tensor = w_tensor.to(torch.device(f"cuda:{device_idx}"))
-                    if not isinstance(w_tensor, NBXTensor):
-                        didx = w_tensor.device.index if isinstance(getattr(w_tensor.device, 'index', None), int) else device_idx
-                        store[tid] = NBXTensor.from_raw(
-                            w_tensor.data_ptr(), tuple(w_tensor.shape),
-                            parse_dtype(str(w_tensor.dtype)), 'cuda',
-                            owns_data=False, device_idx=didx, base=w_tensor)
-                    else:
-                        store[tid] = w_tensor
+                    store[tid] = self._weights[wname]
 
         # Load inputs into store
         for tid, tensor in input_map.items():
@@ -1249,6 +1321,17 @@ class GraphExecutor:
             op_type = op_data.get("op_type", "")
             attrs = op_data.get("attributes", {})
             output_tids = op_data.get("output_tensor_ids", [])
+
+            # MoE fused op — reads weights from store by tensor_id
+            if op_type == "custom::moe_fused":
+                result = self._execute_moe_fused_triton_sequential(attrs, store)
+                if isinstance(result, tuple):
+                    for i, tid in enumerate(output_tids):
+                        store[tid] = result[i] if i < len(result) else None
+                elif output_tids:
+                    store[output_tids[0]] = result
+                num_ops += 1
+                continue
 
             # Resolve args from store
             raw_args = attrs.get("args", [])
@@ -1312,6 +1395,27 @@ class GraphExecutor:
                     for item in arg]
         return arg
 
+    def _execute_moe_fused_triton_sequential(self, attrs: dict, store: dict):
+        """Execute MoE fused op in triton sequential mode — delegates to triton/moe.py."""
+        from neurobrix.triton.moe import execute_moe_fused
+
+        gate_weight_ids = attrs["expert_gate_weight_ids"]
+        up_weight_ids = attrs["expert_up_weight_ids"]
+        down_weight_ids = attrs["expert_down_weight_ids"]
+
+        cache_key = f"triton_seq_{attrs['gate_scores_tid']}"
+        return execute_moe_fused(
+            gate_scores=store.get(attrs["gate_scores_tid"]),
+            hidden_states=store.get(attrs["hidden_states_tid"]),
+            gate_weights=[store.get(wid) for wid in gate_weight_ids],
+            up_weights=[store.get(wid) for wid in up_weight_ids],
+            down_weights=[store.get(wid) for wid in down_weight_ids],
+            top_k=attrs["top_k"],
+            num_experts=attrs["num_experts"],
+            norm_topk_prob=attrs.get("norm_topk_prob", True),
+            cache_key=cache_key,
+        )
+
     def register_triton_interceptors(self, interceptors: Dict[str, Any]):
         """Store interceptors to apply when triton sequence is compiled."""
         if not hasattr(self, '_pending_triton_interceptors'):
@@ -1323,43 +1427,27 @@ class GraphExecutor:
                 self._triton_seq.register_op_interceptor(op_type, func)
 
     def _ensure_triton_compiled(self, device_idx: int):
-        """Compile triton sequence and bind weights (once)."""
+        """Compile triton sequence and bind weights (once).
+
+        Weights are already in self._weights as NBXTensor (loaded by
+        load_weights → _load_weights_triton). We just bind them.
+        """
         if hasattr(self, '_triton_seq') and self._triton_seq is not None:
             return
 
         from neurobrix.triton.sequence import TritonSequence
-        from neurobrix.kernels.nbx_tensor import NBXTensor, parse_dtype, DeviceAllocator
+        from neurobrix.kernels.nbx_tensor import parse_dtype, DeviceAllocator
 
         DeviceAllocator.set_device(device_idx)
         DeviceAllocator.ensure_triton_device(device_idx)
 
-        compute_dtype_str = str(self.dtype).replace('torch.', '') if hasattr(self.dtype, '__str__') else 'float16'
         self._triton_seq = TritonSequence(
             self._dag, device_idx=device_idx,
-            compute_dtype=parse_dtype(compute_dtype_str))
+            compute_dtype=parse_dtype(self.dtype))
         self._triton_seq.compile()
 
-        # Convert weights (torch.Tensor → NBXTensor at boundary)
-        # Constants from graph may be on CPU — move to GPU first.
-        # Remap bf16→fp16 (or vice versa) based on Prism compute_dtype.
-        # RoPE constants are stored in graph as bf16 but V100 needs fp16.
-        target_torch_dtype = self.dtype  # Prism-determined compute dtype
-        all_weights = {}
-        for wname, tensor in self._weights.items():
-            if not tensor.is_cuda:
-                tensor = tensor.to(torch.device(f"cuda:{device_idx}"))
-            # Remap bf16↔fp16 to match hardware
-            if tensor.dtype == torch.bfloat16 and target_torch_dtype == torch.float16:
-                tensor = tensor.to(torch.float16)
-            elif tensor.dtype == torch.float16 and target_torch_dtype == torch.bfloat16:
-                tensor = tensor.to(torch.bfloat16)
-            self._weights[wname] = tensor
-            didx = tensor.device.index if hasattr(tensor.device, 'index') and tensor.device.index is not None else device_idx
-            all_weights[wname] = NBXTensor.from_raw(
-                tensor.data_ptr(), tuple(tensor.shape),
-                parse_dtype(str(tensor.dtype)), 'cuda',
-                owns_data=False, device_idx=didx, base=tensor)
-        self._triton_seq.bind_weights(all_weights)
+        # Weights already loaded as NBXTensor by load_weights()
+        self._triton_seq.bind_weights(self._weights)
 
         # Apply pending interceptors (registered before compilation)
         if hasattr(self, '_pending_triton_interceptors'):
@@ -1387,7 +1475,7 @@ class GraphExecutor:
         ctx = ExecutionContext(
             dag=self._dag,
             device=self.device,
-            dtype=self.dtype,
+            dtype=get_torch_dtype(self.dtype),
             weights=self._weights,
             shape_resolver=self._shape_resolver,
             symbolic_shapes_enabled=self._symbolic_shapes_enabled,
@@ -1597,10 +1685,9 @@ class GraphExecutor:
         Execution modes:
         - "compiled": Pre-compiled execution sequence (DEFAULT, zero-overhead)
         - "native": Pure PyTorch ATen ops (debug/compatibility)
-        - "triton_sequential": Op-by-op Triton dispatch (debug)
 
-        Note: "triton" mode is handled by run() → _run_triton() and never
-        reaches this method.
+        Note: "triton" and "triton_sequential" modes are handled by
+        run() → _run_triton() and never reach this method.
 
         Returns:
             ExecutionStats with timing and counts
@@ -1608,11 +1695,6 @@ class GraphExecutor:
         # COMPILED MODE (default): uses CompiledSequence with PyTorch ops
         if self.mode == "compiled":
             return self._execute_compiled_graph()
-
-        # TRITON SEQUENTIAL MODE: Each op runs one by one via TritonSequentialDispatcher.
-        # DtypeEngine AMP applied. Used for debugging/validating individual Triton kernels.
-        if self.mode == "triton_sequential":
-            return self._execute_triton_sequential()
 
         # Compute last use of each tensor for memory management
         last_use_tid = self._compute_last_use()
@@ -1749,8 +1831,9 @@ class GraphExecutor:
                 # Apply Prism dtype + device conversion (same logic as sequential mode)
                 if isinstance(value, torch.Tensor):
                     # For floating-point tensors, convert to Prism dtype
-                    if value.dtype.is_floating_point and value.dtype != self.dtype:
-                        value = value.to(self.dtype)
+                    torch_dtype = get_torch_dtype(self.dtype)
+                    if value.dtype.is_floating_point and value.dtype != torch_dtype:
+                        value = value.to(torch_dtype)
                     # Move input to executor's device (critical for FGP/multi-device)
                     if str(value.device) != str(self.device):
                         value = value.to(self.device)
@@ -1997,45 +2080,6 @@ class GraphExecutor:
         # Store outputs
         self._store_op_outputs(op_uid, op_data, result)
 
-    def _execute_triton_sequential(self) -> 'ExecutionStats':
-        """
-        Execute ALL ops sequentially using Triton kernels for compute ops.
-
-        Uses TritonSequentialDispatcher which extends NativeATenDispatcher:
-        - Reuses ALL argument processing (SDPA, multi-resolution, expand fixes)
-        - Overrides _resolve_op to route compute ops to Triton kernels
-        - Metadata ops (view, reshape, etc.) still use PyTorch
-
-        This is the stabilization path for --triton mode.
-        Once correct, compiled triton mode will follow.
-        """
-        from neurobrix.core.runtime.graph.sequential_dispatcher import TritonSequentialDispatcher
-
-        if self._sequential_dispatcher is None or not isinstance(
-            self._sequential_dispatcher, TritonSequentialDispatcher
-        ):
-            self._sequential_dispatcher = TritonSequentialDispatcher(
-                device=self.device, compute_dtype=self.dtype
-            )
-
-        # Reuse the NATIVE sequential execution loop — it already handles:
-        # - Tensor resolution via _resolver
-        # - Op dispatch via _dispatch_op → _execute_native_op
-        # - Memory management via _cleanup_finished_tensors
-        # - Error handling via _handle_op_error
-        #
-        # The ONLY difference: _sequential_dispatcher is now TritonSequentialDispatcher
-        # which routes compute ops to Triton kernels via _resolve_op override.
-        #
-        # Temporarily set mode to "native" so _dispatch_op uses the sequential path,
-        # then restore. This avoids duplicating the entire execution loop.
-        saved_mode = self.mode
-        self.mode = "native"
-        try:
-            result = self._execute_all_ops()
-        finally:
-            self.mode = saved_mode
-        return result
 
     def _execute_native_op(self, op_uid: str, op_data: Dict[str, Any], op_type: str) -> None:
         """
@@ -2049,7 +2093,7 @@ class GraphExecutor:
         from neurobrix.core.runtime.graph.sequential_dispatcher import NativeATenDispatcher
 
         if self._sequential_dispatcher is None:
-            self._sequential_dispatcher = NativeATenDispatcher(device=self.device, compute_dtype=self.dtype)
+            self._sequential_dispatcher = NativeATenDispatcher(device=self.device, compute_dtype=get_torch_dtype(self.dtype))
 
         # FUSED MoE OP: Execute via custom handler (bypasses TensorResolver)
         # Must be checked BEFORE resolve_args — fused op's args list contains 192+

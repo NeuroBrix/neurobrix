@@ -244,6 +244,10 @@ class NativeATenDispatcher:
                 is_causal = inputs[6] if len(inputs) > 6 else False
                 scale = inputs[7] if len(inputs) > 7 else None
 
+                # Cast attention mask to query dtype (prevents "invalid dtype for bias" crash)
+                if attn_mask is not None and isinstance(attn_mask, torch.Tensor) and attn_mask.dtype != q.dtype:
+                    attn_mask = attn_mask.to(q.dtype)
+
                 output = F.scaled_dot_product_attention(
                     q, k, v,
                     attn_mask=attn_mask,
@@ -566,3 +570,10 @@ class NativeATenDispatcher:
         variance = x_fp32.pow(2).mean(-1, keepdim=True)
         x_normed = x_fp32 * torch.rsqrt(variance + epsilon)
         return x_normed.to(weight.dtype) * weight
+
+
+# ===========================================================================
+# TRITON SEQUENTIAL DISPATCHER
+#
+# Extends NativeATenDispatcher — reuses ALL argument processing, special
+# cases, multi-resolution fixes, SDPA handling, etc. Only overrides

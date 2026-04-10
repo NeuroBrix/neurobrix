@@ -68,7 +68,7 @@ configure_fp16_matmul_precision()
 #   - bf16 hardware (A100, H100, RTX 30xx/40xx): ZERO output protection.
 #     bf16 has fp32 exponent range (±3.4e38). Overflow impossible.
 #     All wrappers are pure input-cast only — zero Python overhead.
-#   - fp16 hardware (V100): TARGETED fp32 upcast on FP16_PRECISION_OPS
+#   - fp16 hardware (V100): TARGETED fp32 upcast on _FP16_NEED_FP32
 #     only (bmm, div, addmm). All other ops get clean input-cast wrappers.
 #     fp32 preserves tiny epsilons and prevents accumulation overflow.
 # ============================================================================
@@ -124,14 +124,26 @@ AMP_FP32_OPS: FrozenSet[str] = frozenset({
 # Ops that should run in compute_dtype (fp16/bf16) for performance.
 # From AT_FORALL_LOWER_PRECISION_FP.
 # Inputs are cast DOWN to compute_dtype; output stays in compute_dtype.
+#
+# EXCEPTION — FP16_NEED_FP32 subset (marked with [FP16→FP32]):
+# On fp16-ONLY hardware (V100), these ops need fp32 upcast to prevent overflow.
+# On bf16 hardware (A100/H100), bf16 exponent range = fp32, so they stay bf16.
+# The conditional logic is: if compute_dtype==fp16 AND op in FP16_NEED_FP32 → fp32.
+#
+# FP16_NEED_FP32 = {mm, bmm, div, addmm} because:
+#   mm/bmm/addmm: inner dim accumulation exceeds fp16 max (65504) → inf → NaN cascade
+#   div: epsilon 1e-15 rounds to 0 in fp16 (min ~6e-8) → division by zero
+#
 AMP_FP16_OPS: FrozenSet[str] = frozenset({
     # Convolutions (PyTorch 100% match)
     "_convolution", "conv1d", "conv2d", "conv3d", "conv_tbc", "convolution",
     "conv_transpose1d", "conv_transpose2d", "conv_transpose3d",
     # Matrix multiply (PyTorch 100% match)
+    # [FP16→FP32]: mm, bmm, addmm need fp32 on V100
     "addmm", "addmv", "addr", "matmul", "einsum",
     "mm", "mv", "bmm", "addbmm", "baddbmm",
     "linalg_vecdot", "linear", "chain_matmul", "linalg_multi_dot",
+    # [FP16→FP32]: div needs fp32 on V100 (epsilon underflow)
     # RNN cells (PyTorch 100% match)
     "_thnn_fused_lstm_cell", "_thnn_fused_gru_cell",
     "lstm_cell", "gru_cell", "rnn_tanh_cell", "rnn_relu_cell",
@@ -140,7 +152,14 @@ AMP_FP16_OPS: FrozenSet[str] = frozenset({
     # DtypeEngine must not double-wrap SDPA inputs.
     # Activation (PyTorch 100% match)
     "prelu",
+    # Division — not in PyTorch autocast, but fp16 epsilon underflow needs protection
+    "div",
 })
+
+# Subset of AMP_FP16_OPS that need fp32 on fp16-only hardware (V100).
+# On bf16 hardware, these stay in bf16 (bf16 exponent = fp32 exponent → no overflow).
+# NOT a separate concept — this is a conditional refinement of AMP_FP16_OPS.
+_FP16_NEED_FP32: FrozenSet[str] = frozenset({"mm", "bmm", "div", "addmm"})
 
 # Ops that promote to widest input type.
 # From AT_FORALL_PROMOTE. (PyTorch 100% match — all 11 ops)
@@ -149,33 +168,6 @@ AMP_PROMOTE_OPS: FrozenSet[str] = frozenset({
     "dot", "vdot", "grid_sampler", "index_put",
     "tensordot", "scatter_add",
 })
-
-# ============================================================================
-# FP16-ONLY PROTECTION SETS
-#
-# These apply ONLY on fp16 hardware (V100). bf16 has fp32 exponent range
-# (±3.4e38) — overflow/underflow impossible, any protection is pure overhead.
-# ============================================================================
-
-# Ops that need fp32 on fp16 hardware for numerical correctness.
-# bf16 has fp32 exponent range — none of these issues arise.
-#
-# mm: matmul accumulation over inner_dim (e.g. 2240) with values ±35 × ±10
-#   produces sums exceeding fp16 max (65504). Clamping output ±Inf doesn't
-#   work — clamped values (±65504) cascade through residual adds (±30K + ±65504
-#   > 65504) creating Inf/NaN in subsequent layers. fp32 output flows through
-#   the residual chain (add promotes to fp32 when one input is fp32), keeping
-#   the transformer backbone in fp32 until the next fp16 op normalizes.
-# bmm: linear attention K^T@V accumulates to ±65504 in fp16, saturating
-#   the normalizer to zero → downstream div produces NaN. fp32 output
-#   flows through slice/add(eps)/div chain preserving tiny epsilons (1e-15).
-# div: linear attention normalizer with epsilon 1e-15 rounds to 0 in fp16
-#   (min representable ~6e-8). fp32 preserves the epsilon → no div-by-zero.
-# addmm: fused bias + matmul with same fp16 accumulation risk as bmm.
-#
-# Fix: upcast to fp32 (same as AMP FP32 wrapper). Downstream FP16 ops
-# (matmul, conv) bring the chain back to compute_dtype.
-FP16_PRECISION_OPS: FrozenSet[str] = frozenset({"mm", "bmm", "div", "addmm"})
 
 
 
@@ -243,17 +235,12 @@ class DtypeEngine:
             if op_name in AMP_FP16_OPS:
                 # fp16 hardware: certain FP16 ops need fp32 for numerical safety.
                 # bf16 hardware: all FP16 ops run clean (bf16 range = fp32 range).
-                if self.compute_dtype == torch.float16 and op_name in FP16_PRECISION_OPS:
+                if self.compute_dtype == torch.float16 and op_name in _FP16_NEED_FP32:
                     return self._make_fp32_wrapper(func)
                 return self._make_lower_precision_wrapper(func)
 
             if op_name in AMP_PROMOTE_OPS:
                 return self._make_promote_wrapper(func)
-
-            # fp16 hardware: non-AMP ops that also need fp32 precision.
-            # e.g. div with epsilon 1e-15 (rounds to 0 in fp16 → division by zero).
-            if self.compute_dtype == torch.float16 and op_name in FP16_PRECISION_OPS:
-                return self._make_fp32_wrapper(func)
 
         return func
 
@@ -481,6 +468,17 @@ class DtypeEngine:
             return new_args
 
         if op_name in AMP_FP16_OPS:
+            # fp16 hardware: _FP16_NEED_FP32 (mm, bmm, div, addmm) need fp32
+            # to prevent overflow in fp16 accumulation. bf16 is safe (same exponent as fp32).
+            if self.compute_dtype == torch.float16 and op_name in _FP16_NEED_FP32:
+                return [
+                    a.float().contiguous()
+                    if isinstance(a, torch.Tensor) and a.is_floating_point()
+                    and a.dtype != torch.float32
+                    else (a.contiguous() if isinstance(a, torch.Tensor)
+                          and not a.is_contiguous() else a)
+                    for a in args
+                ]
             return [
                 a.to(self.compute_dtype)
                 if isinstance(a, torch.Tensor) and a.is_floating_point()

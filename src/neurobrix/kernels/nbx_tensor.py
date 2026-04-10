@@ -166,21 +166,47 @@ def _get_tl_dtype(nbx_dtype: NBXDtype):
 
 
 # ============================================================================
-# MEMORY ALLOCATOR — raw CUDA runtime via ctypes
+# GPU RUNTIME — hardware-agnostic via ctypes (CUDA/ROCm)
 # ============================================================================
+
+# Runtime API mapping per backend
+_GPU_BACKENDS = {
+    "cuda": {
+        "rt_libs": ["libcudart.so", "libcudart.so.12", "libcudart.so.11.0"],
+        "malloc": "cudaMalloc", "free": "cudaFree",
+        "memcpy": "cudaMemcpy", "memset": "cudaMemset",
+        "set_device": "cudaSetDevice", "get_device": "cudaGetDevice",
+        "sync": "cudaDeviceSynchronize",
+    },
+    "hip": {
+        "rt_libs": ["libamdhip64.so", "libamdhip64.so.5"],
+        "malloc": "hipMalloc", "free": "hipFree",
+        "memcpy": "hipMemcpy", "memset": "hipMemset",
+        "set_device": "hipSetDevice", "get_device": "hipGetDevice",
+        "sync": "hipDeviceSynchronize",
+    },
+}
+
 
 class DeviceAllocator:
 
     @staticmethod
     def set_device(device_id: int):
-        """Set current CUDA device for allocations. Multi-GPU support."""
-        _cuda_rt().cudaSetDevice(ctypes.c_int(device_id))
+        """Set current GPU device for allocations (runtime API only).
+
+        Uses only cudaSetDevice/hipSetDevice — does NOT touch the driver
+        context. The driver context is managed solely by ensure_triton_device
+        which is called just before Triton kernel launches.
+        """
+        rt = _gpu_runtime()
+        getattr(rt, _active_backend()["set_device"])(ctypes.c_int(device_id))
 
     @staticmethod
     def get_device() -> int:
-        """Get current CUDA device."""
+        """Get current GPU device."""
         dev = ctypes.c_int()
-        _cuda_rt().cudaGetDevice(ctypes.byref(dev))
+        rt = _gpu_runtime()
+        getattr(rt, _active_backend()["get_device"])(ctypes.byref(dev))
         return dev.value
 
     @staticmethod
@@ -188,50 +214,104 @@ class DeviceAllocator:
         if nbytes == 0:
             return 0
         ptr = ctypes.c_void_p()
-        ret = _cuda_rt().cudaMalloc(ctypes.byref(ptr), ctypes.c_size_t(nbytes))
+        rt = _gpu_runtime()
+        ret = getattr(rt, _active_backend()["malloc"])(
+            ctypes.byref(ptr), ctypes.c_size_t(nbytes))
         if ret != 0:
-            raise RuntimeError(f"cudaMalloc failed (error {ret}) for {nbytes} bytes")
+            raise RuntimeError(
+                f"GPU malloc failed (error {ret}) for {nbytes} bytes")
         return ptr.value or 0
 
     @staticmethod
     def free_cuda(ptr: int):
         if ptr:
-            _cuda_rt().cudaFree(ctypes.c_void_p(ptr))
+            rt = _gpu_runtime()
+            getattr(rt, _active_backend()["free"])(ctypes.c_void_p(ptr))
 
     @staticmethod
     def memset_cuda(ptr: int, value: int, nbytes: int):
         if nbytes > 0 and ptr:
-            _cuda_rt().cudaMemset(ctypes.c_void_p(ptr), ctypes.c_int(value),
-                                  ctypes.c_size_t(nbytes))
+            rt = _gpu_runtime()
+            getattr(rt, _active_backend()["memset"])(
+                ctypes.c_void_p(ptr), ctypes.c_int(value),
+                ctypes.c_size_t(nbytes))
 
     @staticmethod
     def memcpy(dst: int, src: int, nbytes: int, kind: int = 3):
         """Copy memory. kind: 0=H2H, 1=H2D, 2=D2H, 3=D2D."""
         if nbytes > 0:
-            _cuda_rt().cudaMemcpy(
+            rt = _gpu_runtime()
+            getattr(rt, _active_backend()["memcpy"])(
                 ctypes.c_void_p(dst), ctypes.c_void_p(src),
                 ctypes.c_size_t(nbytes), ctypes.c_int(kind))
 
     @staticmethod
-    def ensure_triton_device(device_idx: int):
-        """Set CUDA device for both runtime and Triton JIT context.
+    def sync_device():
+        """Synchronize current GPU device. Waits for all pending GPU ops."""
+        rt = _gpu_runtime()
+        backend = _active_backend()
+        sync_name = backend.get("sync")
+        if sync_name:
+            getattr(rt, sync_name)()
 
-        Triton JIT reads torch.cuda.current_device() internally.
-        Reference: triton-lang/triton#2925
+    @staticmethod
+    def ensure_triton_device(device_idx: int):
+        """Set GPU device for Triton JIT context. Zero torch. Universal.
+
+        Uses cudaSetDevice (runtime) + Triton's own driver API.
+        Does NOT call cuCtxSetCurrent — that conflicts with the runtime
+        context on multi-GPU systems.
         """
-        _cuda_rt().cudaSetDevice(ctypes.c_int(device_idx))
-        import torch
-        torch.cuda.set_device(device_idx)
+        # 1. Set runtime device (cudaSetDevice / hipSetDevice)
+        backend = _active_backend()
+        rt = _gpu_runtime()
+        getattr(rt, backend["set_device"])(ctypes.c_int(device_idx))
+        # 2. Tell Triton which device to target
+        import triton.runtime.driver
+        triton.runtime.driver.active.set_current_device(device_idx)
 
 
 @functools.lru_cache(maxsize=1)
-def _cuda_rt():
-    for name in ["libcudart.so", "libcudart.so.12", "libcudart.so.11.0"]:
+def _detect_gpu_backend() -> str:
+    """Detect GPU backend: 'cuda' or 'hip'."""
+    # Try Triton runtime first (most reliable)
+    try:
+        import triton.runtime.driver
+        backend = triton.runtime.driver.active.get_current_target().backend
+        if backend in ("cuda", "hip"):
+            return backend
+    except Exception:
+        pass
+    # Fallback: try loading CUDA runtime
+    for name in ("libcudart.so", "libcudart.so.12"):
+        try:
+            ctypes.cdll.LoadLibrary(name)
+            return "cuda"
+        except OSError:
+            continue
+    # Fallback: try HIP runtime
+    for name in ("libamdhip64.so", "libamdhip64.so.5"):
+        try:
+            ctypes.cdll.LoadLibrary(name)
+            return "hip"
+        except OSError:
+            continue
+    raise RuntimeError("No GPU runtime found (tried CUDA and ROCm/HIP)")
+
+
+def _active_backend() -> dict:
+    return _GPU_BACKENDS[_detect_gpu_backend()]
+
+
+@functools.lru_cache(maxsize=1)
+def _gpu_runtime():
+    backend = _active_backend()
+    for name in backend["rt_libs"]:
         try:
             return ctypes.cdll.LoadLibrary(name)
         except OSError:
             continue
-    raise RuntimeError("CUDA runtime not found.")
+    raise RuntimeError(f"GPU runtime not found for {_detect_gpu_backend()}")
 
 
 # ============================================================================
@@ -253,7 +333,6 @@ def _strided_copy(src: 'NBXTensor', dst: 'NBXTensor'):
 
     BLOCK = 1024
     grid = (triton.cdiv(n, BLOCK),)
-    DeviceAllocator.ensure_triton_device(src._device_idx)
     strided_copy_kernel[grid](
         src, dst, n,
         stride5[0], stride5[1], stride5[2], stride5[3], stride5[4],
@@ -277,7 +356,6 @@ def _strided_scatter(src: 'NBXTensor', dst: 'NBXTensor'):
 
     BLOCK = 1024
     grid = (triton.cdiv(n, BLOCK),)
-    DeviceAllocator.ensure_triton_device(dst._device_idx)
     strided_scatter_kernel[grid](
         src, dst, n,
         stride5[0], stride5[1], stride5[2], stride5[3], stride5[4],
@@ -494,6 +572,7 @@ class NBXTensor:
         nbytes = numel * dtype_size(nbx_dt)
         if nbytes == 0:
             return NBXTensor(0, shape, _contiguous_strides(shape), nbx_dt, dev_str, device_idx=dev_idx)
+
         # Multi-GPU: allocate on correct device
         cur = DeviceAllocator.get_device()
         if cur != dev_idx:
@@ -501,6 +580,7 @@ class NBXTensor:
         ptr = DeviceAllocator.malloc_cuda(nbytes)
         if cur != dev_idx:
             DeviceAllocator.set_device(cur)
+
         return NBXTensor(ptr, shape, _contiguous_strides(shape), nbx_dt, dev_str,
                          owns_data=True, device_idx=dev_idx)
 
@@ -536,10 +616,12 @@ class NBXTensor:
         arr_c = np.ascontiguousarray(arr)
         nbytes = arr_c.nbytes
         shape = arr_c.shape
+        dev_idx = DeviceAllocator.get_device()
         ptr = DeviceAllocator.malloc_cuda(nbytes)
         # H2D copy
         DeviceAllocator.memcpy(ptr, arr_c.ctypes.data, nbytes, kind=1)
-        return NBXTensor(ptr, shape, _contiguous_strides(shape), nbx_dt, 'cuda', owns_data=True)
+        return NBXTensor(ptr, shape, _contiguous_strides(shape), nbx_dt, 'cuda',
+                         owns_data=True, device_idx=dev_idx)
 
     @staticmethod
     def from_raw(ptr: int, shape: Tuple[int, ...], dtype: NBXDtype,
@@ -757,9 +839,19 @@ class NBXTensor:
 
         Handles the KV cache pattern: contiguous slice assignment.
         Uses strided_scatter_kernel when the destination view is non-contiguous.
+        Guards: dtype cast and device transfer before copy.
         """
         dst = self[key]
         if isinstance(value, NBXTensor):
+            # Dtype guard: cast source to destination dtype
+            if value._dtype != dst._dtype:
+                value = value.to(dst._dtype)
+            # Device guard: transfer source to destination device
+            if hasattr(value, '_device_idx') and hasattr(dst, '_device_idx') and value._device_idx != dst._device_idx:
+                src_contig = value.contiguous()
+                tmp = NBXTensor.empty(src_contig._shape, src_contig._dtype, f"cuda:{dst._device_idx}")
+                DeviceAllocator.memcpy(tmp.data_ptr(), src_contig.data_ptr(), src_contig._nbytes, kind=3)
+                value = tmp
             src = value.contiguous()
             if dst.is_contiguous() and src._nbytes == dst._nbytes:
                 DeviceAllocator.memcpy(dst.data_ptr(), src.data_ptr(), src._nbytes)
@@ -849,7 +941,6 @@ class NBXTensor:
         if target is None or target == self._dtype:
             return self
         # Cast via Triton copy kernel (tl.store auto-converts dtype)
-        DeviceAllocator.ensure_triton_device(self._device_idx)
         new = NBXTensor.empty(self._shape, target, f"cuda:{self._device_idx}")
         n = self._numel
         if n > 0:
@@ -904,12 +995,34 @@ class NBXTensor:
 
     @staticmethod
     def cat(tensors: list, dim: int = 0) -> 'NBXTensor':
-        if len(tensors) == 1:
-            return tensors[0]
+        # Filter out 0-dim scalars and empty tensors (Gemma2 attention pattern)
+        valid = [t for t in tensors if t.ndim > 0 and t._numel > 0]
+        if not valid:
+            return tensors[0] if tensors else NBXTensor.empty((0,), NBXDtype.float32, 'cuda')
+        if len(valid) == 1:
+            return valid[0]
+        tensors = valid
         dim = dim % tensors[0].ndim
+        # Align dtypes — cat_copy_kernel requires all inputs same type
+        target_dtype = tensors[0]._dtype
+        tensors = [t.to(target_dtype) if t._dtype != target_dtype else t for t in tensors]
+        # Align devices — all tensors must be on same GPU
+        target_dev = tensors[0]._device_idx
+        aligned = []
+        for t in tensors:
+            if hasattr(t, '_device_idx') and t._device_idx != target_dev:
+                src = t.contiguous()
+                dst = NBXTensor.empty(src._shape, src._dtype, f"cuda:{target_dev}")
+                DeviceAllocator.memcpy(dst.data_ptr(), src.data_ptr(), src._nbytes, kind=3)
+                aligned.append(dst)
+            else:
+                aligned.append(t)
+        tensors = aligned
         out_shape = list(tensors[0]._shape)
         out_shape[dim] = sum(t._shape[dim] for t in tensors)
-        out = NBXTensor.empty(tuple(out_shape), tensors[0]._dtype, tensors[0]._device)
+        # Allocate on same device as first input tensor
+        DeviceAllocator.set_device(tensors[0]._device_idx)
+        out = NBXTensor.empty(tuple(out_shape), target_dtype, tensors[0]._device)
 
         if dim == 0:
             # Simple case: concat on first dim → contiguous slices
@@ -925,8 +1038,6 @@ class NBXTensor:
             # General case: use cat_copy_kernel which handles dim offsets
             import triton
             from neurobrix.kernels.ops.cat_op import cat_copy_kernel_4
-            DeviceAllocator.ensure_triton_device(
-                tensors[0]._device_idx if hasattr(tensors[0], '_device_idx') else 0)
 
             dim_size_out = out_shape[dim]
             # Product of dims after cat dim
@@ -976,6 +1087,42 @@ class NBXTensor:
     # ========================================================================
     # REPR
     # ========================================================================
+
+    # ========================================================================
+    # PYTHON OPERATORS — delegate to kernel wrappers
+    # ========================================================================
+
+    def __add__(self, other):
+        from neurobrix.kernels.wrappers import add
+        return add(self, other)
+
+    def __radd__(self, other):
+        from neurobrix.kernels.wrappers import add
+        return add(other, self)
+
+    def __sub__(self, other):
+        from neurobrix.kernels.wrappers import sub
+        return sub(self, other)
+
+    def __rsub__(self, other):
+        from neurobrix.kernels.wrappers import rsub
+        return rsub(self, other)
+
+    def __mul__(self, other):
+        from neurobrix.kernels.wrappers import mul
+        return mul(self, other)
+
+    def __rmul__(self, other):
+        from neurobrix.kernels.wrappers import mul
+        return mul(other, self)
+
+    def __truediv__(self, other):
+        from neurobrix.kernels.wrappers import div
+        return div(self, other)
+
+    def __neg__(self):
+        from neurobrix.kernels.wrappers import neg
+        return neg(self)
 
     def __repr__(self) -> str:
         return (f"NBXTensor(shape={self._shape}, dtype={self._dtype.name}, "

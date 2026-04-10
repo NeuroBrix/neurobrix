@@ -20,6 +20,7 @@ ZERO HARDCODE: All parameters from NBX container.
 """
 
 import gc
+from neurobrix.core.device_utils import device_empty_cache
 import time
 import torch
 from neurobrix.core.device_utils import device_multinomial
@@ -361,12 +362,13 @@ class TTSLLMEngine(FlowHandler):
 
     def _get_compute_dtype(self) -> torch.dtype:
         """Get compute dtype from Prism plan."""
+        from neurobrix.core.dtype.config import get_torch_dtype
         if self.ctx.plan and hasattr(self.ctx.plan, 'allocations'):
             for alloc in self.ctx.plan.allocations.values():
                 if hasattr(alloc, 'dtype') and alloc.dtype is not None:
-                    return alloc.dtype
+                    return get_torch_dtype(alloc.dtype)
         dtype_str = self.ctx.pkg.defaults.get("dtype", "float16")
-        return getattr(torch, dtype_str, torch.float16)
+        return get_torch_dtype(dtype_str)
 
     def _get_component_output(self, comp_name: str) -> Optional[torch.Tensor]:
         """Get component output from variable resolver."""

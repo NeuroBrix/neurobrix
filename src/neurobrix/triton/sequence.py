@@ -87,6 +87,10 @@ class CompiledOp:
     kwargs_resolver: Callable
     output_slots: Tuple[int, ...]
     kill_slots: Tuple[int, ...] = ()
+    weight_input_slots: Tuple[int, ...] = ()
+    all_input_slots: Tuple[int, ...] = ()
+    device_idx: Optional[int] = None
+    needs_transfer: bool = False
 
 
 # ============================================================================
@@ -124,6 +128,9 @@ class TritonSequence:
         self._compute_dtype = compute_dtype
         self._compiled = False
 
+        # Multi-device support (pipeline_parallel)
+        self._is_multi_device = False
+
         # Op interceptors: op_type → callable (for KV cache injection)
         self._op_interceptors: Dict[str, Callable] = {}
 
@@ -156,10 +163,9 @@ class TritonSequence:
         graph_output_ids = set(self.dag.get("output_tensor_ids", []))
 
         # Phase 0: Promote trace-time seq_len scalars to symbolic references.
-        # Ported from compiled_sequence._promote_seq_len_scalars_to_symbolic.
-        # Without this, ops like ones([23,23]) create fixed-size masks instead
-        # of dynamically-sized ones matching actual input seq_len.
-        self._promote_seq_len_scalars(tensors, ops_by_uid)
+        # Shared logic in triton/promotion.py — used by both compiled and sequential.
+        from .promotion import promote_seq_len_scalars
+        promote_seq_len_scalars(self.dag, tensors, ops_by_uid)
 
         # Phase 1: Categorize tensors and assign slots
         self._categorize_and_assign_slots(tensors, ops_by_uid, graph_output_ids)
@@ -185,6 +191,11 @@ class TritonSequence:
         # Phase 5: Allocate arena
         total_slots = len(self._tid_to_slot)
         self._arena = Arena(total_slots, self._num_weights, self._num_inputs)
+
+        # Phase 6: Identify seq-dependent constants (RoPE cos/sin buffers)
+        self._seq_dependent_constants = []
+        self._seq_constant_originals = {}
+        self._identify_seq_dependent_constants(tensors)
 
         self._compiled = True
 
@@ -499,6 +510,10 @@ class TritonSequence:
         attrs = op_data.get("attributes", {})
         output_tids = op_data.get("output_tensor_ids", [])
 
+        # MoE fused op — custom compilation with arena-based weight access
+        if op_type == "custom::moe_fused":
+            return self._compile_moe_fused_op(op_uid, op_data, kill_slots)
+
         # Check for registered interceptor (e.g., KV cache for SDPA)
         if op_type in self._op_interceptors:
             func = self._op_interceptors[op_type]
@@ -528,13 +543,195 @@ class TritonSequence:
                 self._tid_to_slot[tid] = s
             output_slots.append(self._tid_to_slot[tid])
 
+        # Extract input slots for cross-device tracking
+        all_slots = self._extract_all_input_slots(compiled_args, compiled_kwargs)
+        weight_slots = self._extract_weight_slots(op_data)
+
         return CompiledOp(
             op_uid=op_uid, op_type=op_type, func=func,
             args_resolver=args_resolver,
             kwargs_resolver=kwargs_resolver,
             output_slots=tuple(output_slots),
             kill_slots=kill_slots,
+            weight_input_slots=tuple(weight_slots),
+            all_input_slots=tuple(all_slots),
         )
+
+    def _compile_moe_fused_op(self, op_uid: str, op_data: dict,
+                              kill_slots: Tuple[int, ...]) -> CompiledOp:
+        """Compile fused MoE dispatch — delegates to triton/moe.py."""
+        from .moe import execute_moe_fused as _moe_exec
+
+        attrs = op_data.get("attributes", {})
+        output_tids = op_data.get("output_tensor_ids", [])
+
+        gate_scores_tid = attrs["gate_scores_tid"]
+        hidden_states_tid = attrs["hidden_states_tid"]
+        gate_weight_ids = attrs["expert_gate_weight_ids"]
+        up_weight_ids = attrs["expert_up_weight_ids"]
+        down_weight_ids = attrs["expert_down_weight_ids"]
+        top_k = attrs["top_k"]
+        num_experts = attrs["num_experts"]
+        norm_topk_prob = attrs.get("norm_topk_prob", True)
+
+        # Resolve arena slots (compile-time)
+        gate_scores_slot = self._tid_to_slot[gate_scores_tid]
+        hidden_states_slot = self._tid_to_slot[hidden_states_tid]
+
+        gate_w_slots = []
+        up_w_slots = []
+        down_w_slots = []
+        for i in range(num_experts):
+            gs = self._tid_to_slot.get(gate_weight_ids[i])
+            us = self._tid_to_slot.get(up_weight_ids[i])
+            ds = self._tid_to_slot.get(down_weight_ids[i])
+            if gs is None or us is None or ds is None:
+                raise RuntimeError(
+                    f"[MoE Triton] Missing weight slot for expert {i} in {op_uid}")
+            gate_w_slots.append(gs)
+            up_w_slots.append(us)
+            down_w_slots.append(ds)
+
+        # Freeze for closure
+        _gs_slot = gate_scores_slot
+        _hs_slot = hidden_states_slot
+        _gw = tuple(gate_w_slots)
+        _uw = tuple(up_w_slots)
+        _dw = tuple(down_w_slots)
+        _k = top_k
+        _ne = num_experts
+        _norm = norm_topk_prob
+
+        _cache_key = f"triton_compiled_{op_uid}"
+
+        def moe_fused_dispatch(arena):
+            return _moe_exec(
+                gate_scores=arena[_gs_slot],
+                hidden_states=arena[_hs_slot],
+                gate_weights=[arena[s] for s in _gw],
+                up_weights=[arena[s] for s in _uw],
+                down_weights=[arena[s] for s in _dw],
+                top_k=_k, num_experts=_ne, norm_topk_prob=_norm,
+                cache_key=_cache_key,
+            )
+
+        # Output slots
+        output_slots = []
+        for tid in output_tids:
+            if tid not in self._tid_to_slot:
+                s = len(self._tid_to_slot)
+                self._tid_to_slot[tid] = s
+            output_slots.append(self._tid_to_slot[tid])
+
+        def args_resolver(arena):
+            return [arena]
+
+        def kwargs_resolver(_arena):
+            return {}
+
+        def func_wrapper(arena):
+            return moe_fused_dispatch(arena)
+
+        return CompiledOp(
+            op_uid=op_uid, op_type="custom::moe_fused",
+            func=func_wrapper,
+            args_resolver=args_resolver,
+            kwargs_resolver=kwargs_resolver,
+            output_slots=tuple(output_slots),
+            kill_slots=kill_slots,
+            weight_input_slots=tuple(list(_gw) + list(_uw) + list(_dw)),
+            all_input_slots=tuple([_gs_slot, _hs_slot] + list(_gw) + list(_uw) + list(_dw)),
+        )
+
+    # ========================================================================
+    # ========================================================================
+    # INPUT SLOT EXTRACTION — for cross-device detection
+    # ========================================================================
+
+    def _extract_all_input_slots(self, compiled_args, compiled_kwargs):
+        """Extract all TensorSlot indices from compiled args."""
+        slots = []
+        def _scan(item):
+            if isinstance(item, TensorSlot):
+                slots.append(item.slot)
+            elif isinstance(item, ListArg):
+                for sub in item.items:
+                    _scan(sub)
+        for a in compiled_args:
+            _scan(a)
+        for v in compiled_kwargs.values():
+            _scan(v)
+        return slots
+
+    def _extract_weight_slots(self, op_data):
+        """Extract weight/buffer slots from op_data args."""
+        slots = []
+        raw_args = op_data.get("attributes", {}).get("args", [])
+        for arg in raw_args:
+            if isinstance(arg, dict) and arg.get("type") in ("tensor", "tensor_ref"):
+                tid = arg.get("tensor_id", "")
+                if tid.startswith("param::") or tid.startswith("buffer::"):
+                    slot = self._tid_to_slot.get(tid)
+                    if slot is not None:
+                        slots.append(slot)
+        return slots
+
+    # ========================================================================
+    # CROSS-DEVICE — ported from compiled_sequence.compute_op_devices
+    # ========================================================================
+
+    def compute_op_devices(self):
+        """Ported from compiled_sequence.py:2430. Sets op.device_idx and
+        op.needs_transfer from weight placement in the arena."""
+        arena = self._arena
+        devices_seen = set()
+
+        # Phase 1: assign device to weighted ops
+        for op in self._ops:
+            if not op.weight_input_slots:
+                continue
+            for ws in op.weight_input_slots:
+                tensor = arena[ws]
+                if tensor is not None and hasattr(tensor, '_device_idx'):
+                    op.device_idx = tensor._device_idx
+                    devices_seen.add(tensor._device_idx)
+                    break
+
+        devices_seen.add(self.device_idx)
+        self._is_multi_device = len(devices_seen) > 1
+        if not self._is_multi_device:
+            return
+
+        # Phase 2+4: propagate current_activation_device, flag needs_transfer
+        slot_device: Dict[int, int] = {}
+        for op in self._ops:
+            for ws in op.weight_input_slots:
+                tensor = arena[ws]
+                if tensor is not None and hasattr(tensor, '_device_idx'):
+                    slot_device[ws] = tensor._device_idx
+
+        current_activation_device = None
+        for op in self._ops:
+            if op.device_idx is not None:
+                if current_activation_device is None:
+                    op.needs_transfer = True
+                elif op.device_idx != current_activation_device:
+                    op.needs_transfer = True
+                current_activation_device = op.device_idx
+            else:
+                op.device_idx = current_activation_device
+
+            if op.all_input_slots and current_activation_device is not None:
+                for s in op.all_input_slots:
+                    src_dev = slot_device.get(s)
+                    if src_dev is not None and src_dev != current_activation_device:
+                        op.needs_transfer = True
+                        break
+
+            out_dev = op.device_idx or current_activation_device or self.device_idx
+            if out_dev is not None:
+                for s in op.output_slots:
+                    slot_device[s] = out_dev
 
     # ========================================================================
     # ARG COMPILATION — ported from compiled_sequence._compile_arg
@@ -774,13 +971,83 @@ class TritonSequence:
     # BIND / RUN / GATHER
     # ========================================================================
 
+    # ========================================================================
+    # SEQ-DEPENDENT CONSTANTS — ported from compiled_sequence
+    # ========================================================================
+
+    def _identify_seq_dependent_constants(self, tensors: dict):
+        """Tag constant_T_* tensors with a dim matching trace seq_len.
+
+        RoPE cos/sin are captured at trace time with shape [1, trace_seq_len, dim].
+        At runtime they must be narrowed to [1, runtime_seq_len, dim].
+        """
+        sym_ctx = self.dag.get("symbolic_context", {})
+        symbols = sym_ctx.get("symbols", {})
+
+        seq_info = {}
+        for sid, sinfo in symbols.items():
+            if sinfo.get("name") == "seq_len":
+                tv = sinfo.get("trace_value")
+                if tv is not None:
+                    seq_info[sid] = tv
+        if not seq_info:
+            return
+
+        sym_id, trace_seq_len = next(iter(seq_info.items()))
+
+        for tid in self._weight_ids:
+            tdata = tensors.get(tid, {})
+            wname = tdata.get("weight_name", "")
+            if not wname.startswith("constant_T_"):
+                continue
+            shape = tdata.get("shape", [])
+            for axis, dim in enumerate(shape):
+                if dim == trace_seq_len:
+                    slot = self._tid_to_slot.get(tid)
+                    if slot is not None:
+                        self._seq_dependent_constants.append(
+                            (slot, axis, sym_id, trace_seq_len))
+                    break
+
+    def update_seq_dependent_constants(self):
+        """Narrow seq-dependent constants to runtime seq_len.
+
+        Called after bind_symbols() so the symbol resolver has the actual value.
+        Always narrows from the ORIGINAL full-size constant, not a previous narrow.
+        """
+        if not self._seq_dependent_constants or self._symbol_resolver is None:
+            return
+
+        arena = self._arena
+        for slot, axis, sym_id, trace_val in self._seq_dependent_constants:
+            runtime_val = self._symbol_resolver.get(sym_id)
+            if runtime_val is None or runtime_val == trace_val:
+                # Restore original if previously narrowed
+                if slot in self._seq_constant_originals:
+                    arena[slot] = self._seq_constant_originals[slot]
+                continue
+
+            # Save original on first encounter
+            if slot not in self._seq_constant_originals:
+                current = arena[slot]
+                if current is not None:
+                    self._seq_constant_originals[slot] = current
+
+            original = self._seq_constant_originals.get(slot)
+            if original is None:
+                continue
+
+            if runtime_val <= original.shape[axis]:
+                arena[slot] = original.narrow(axis, 0, runtime_val)
+
     def bind_weights(self, weights: Dict[str, NBXTensor]):
-        """Bind weight tensors to arena slots."""
+        """Bind weight tensors to arena slots, then compute per-op devices."""
         for tid in self._weight_ids:
             tdata = self.dag.get("tensors", {}).get(tid, {})
             wname = tdata.get("weight_name", "")
             if wname in weights:
                 self._arena[self._tid_to_slot[tid]] = weights[wname]
+        self.compute_op_devices()
 
     def bind_inputs(self, inputs: Dict[str, NBXTensor]):
         """Bind input tensors to arena slots."""
@@ -795,11 +1062,60 @@ class TritonSequence:
             self._symbol_resolver.bind_from_inputs(
                 inputs, self._input_ids, self.dag.get("tensors", {}))
 
-    def run(self):
-        """Execute all ops. Zero overhead hot loop."""
+    def run(self, skip_kills: bool = False):
+        """Execute all ops. Zero overhead hot loop.
+
+        Args:
+            skip_kills: When True, skip kill_slots entirely (no cudaFree, no sync).
+                Decode steps reuse the same arena slots every step, so intermediates
+                are always overwritten before being read. No UAF possible.
+        """
         DeviceAllocator.ensure_triton_device(self.device_idx)
 
+        if self._is_multi_device:
+            self._run_multi_device(skip_kills)
+        else:
+            self._run_single_device(skip_kills)
+
+    def _run_single_device(self, skip_kills: bool = False):
+        """Single-device fast path — no device switching."""
         arena = self._arena
+
+        if skip_kills:
+            # Decode fast path: no kill_slots, no cudaFree, no sync.
+            # Arena slots are overwritten by output_slots before next read.
+            for op in self._ops:
+                args = op.args_resolver(arena)
+                kwargs = op.kwargs_resolver(arena)
+
+                if args and args[0] is None:
+                    bare = op.op_type.split("::")[-1]
+                    if bare in _ACCUMULATOR_OPS:
+                        result = args[0]
+                    else:
+                        for s in op.output_slots:
+                            arena[s] = None
+                        continue
+                else:
+                    try:
+                        result = op.func(*args, **kwargs)
+                    except Exception as e:
+                        raise RuntimeError(
+                            f"Failed at {op.op_uid} ({op.op_type}): {e}") from e
+
+                if not op.output_slots:
+                    pass
+                elif len(op.output_slots) == 1:
+                    arena[op.output_slots[0]] = result
+                elif isinstance(result, tuple):
+                    for i, s in enumerate(op.output_slots):
+                        arena[s] = result[i] if i < len(result) else None
+                else:
+                    arena[op.output_slots[0]] = result
+            return
+
+        # Prefill path: deferred kill_slots with sync at end.
+        _deferred = []
         for op in self._ops:
             args = op.args_resolver(arena)
             kwargs = op.kwargs_resolver(arena)
@@ -813,6 +1129,9 @@ class TritonSequence:
                     for s in op.output_slots:
                         arena[s] = None
                     for s in op.kill_slots:
+                        old = arena[s]
+                        if old is not None:
+                            _deferred.append(old)
                         arena[s] = None
                     continue
             else:
@@ -822,9 +1141,8 @@ class TritonSequence:
                     raise RuntimeError(
                         f"Failed at {op.op_uid} ({op.op_type}): {e}") from e
 
-            # Store outputs
             if not op.output_slots:
-                pass  # Op has no outputs (e.g., inplace ops)
+                pass
             elif len(op.output_slots) == 1:
                 arena[op.output_slots[0]] = result
             elif isinstance(result, tuple):
@@ -833,9 +1151,135 @@ class TritonSequence:
             else:
                 arena[op.output_slots[0]] = result
 
-            # Kill dead slots
             for s in op.kill_slots:
+                old = arena[s]
+                if old is not None:
+                    _deferred.append(old)
                 arena[s] = None
+
+        # All kernels submitted — sync GPU then release deferred tensors
+        if _deferred:
+            DeviceAllocator.sync_device()
+            _deferred.clear()
+
+    def _run_multi_device(self, skip_kills: bool = False):
+        """Multi-device hot loop. Ported from compiled_sequence._run_inner_multi_device.
+
+        - Fast path (99%+ ops): just switch device context if op.device_idx changed
+        - Slow path (needs_transfer ops): D2D memcpy inputs to target device
+        """
+        arena = self._arena
+        _current_dev = self.device_idx
+        _deferred = [] if not skip_kills else None
+
+        for op in self._ops:
+            args = op.args_resolver(arena)
+            kwargs = op.kwargs_resolver(arena)
+
+            # Fix device kwargs for creation ops on the right device
+            if kwargs and 'device' in kwargs and op.device_idx is not None:
+                kwargs['device'] = f"cuda:{op.device_idx}"
+
+            # NOP propagation
+            if args and args[0] is None:
+                for s in op.output_slots:
+                    arena[s] = None
+                if not skip_kills:
+                    for s in op.kill_slots:
+                        old = arena[s]
+                        if old is not None:
+                            _deferred.append(old)
+                        arena[s] = None
+                continue
+
+            # FAST PATH: no transfer needed
+            if not op.needs_transfer:
+                if op.device_idx is not None and op.device_idx != _current_dev:
+                    DeviceAllocator.set_device(op.device_idx)
+                    DeviceAllocator.ensure_triton_device(op.device_idx)
+                    _current_dev = op.device_idx
+                try:
+                    result = op.func(*args, **kwargs)
+                except Exception as e:
+                    raise RuntimeError(
+                        f"Failed at {op.op_uid} ({op.op_type}): {e}") from e
+            else:
+                # SLOW PATH: transfer inputs to target device
+                target = op.device_idx
+                if target is not None:
+                    args = self._transfer_args(args, target)
+                    if kwargs:
+                        kwargs = self._transfer_kwargs(kwargs, target)
+                if target is not None and target != _current_dev:
+                    DeviceAllocator.set_device(target)
+                    DeviceAllocator.ensure_triton_device(target)
+                    _current_dev = target
+                try:
+                    result = op.func(*args, **kwargs)
+                except Exception as e:
+                    raise RuntimeError(
+                        f"Failed at {op.op_uid} ({op.op_type}): {e}") from e
+
+            # Store outputs
+            if not op.output_slots:
+                pass
+            elif len(op.output_slots) == 1:
+                arena[op.output_slots[0]] = result
+            elif isinstance(result, tuple):
+                for i, s in enumerate(op.output_slots):
+                    arena[s] = result[i] if i < len(result) else None
+            else:
+                arena[op.output_slots[0]] = result
+
+            if not skip_kills:
+                for s in op.kill_slots:
+                    old = arena[s]
+                    if old is not None:
+                        _deferred.append(old)
+                    arena[s] = None
+
+        # All kernels submitted — sync GPU then release deferred tensors
+        if _deferred:
+            DeviceAllocator.sync_device()
+            _deferred.clear()
+
+    def _transfer_args(self, args, target_dev: int):
+        """Transfer NBXTensor args to target device via D2D memcpy."""
+        new_args = []
+        for a in args:
+            if isinstance(a, NBXTensor) and a._device_idx != target_dev:
+                new_args.append(self._transfer_tensor(a, target_dev))
+            elif isinstance(a, (list, tuple)):
+                moved = [
+                    self._transfer_tensor(item, target_dev)
+                    if isinstance(item, NBXTensor) and item._device_idx != target_dev
+                    else item
+                    for item in a
+                ]
+                new_args.append(type(a)(moved))
+            else:
+                new_args.append(a)
+        return new_args
+
+    def _transfer_kwargs(self, kwargs, target_dev: int):
+        """Transfer NBXTensor kwargs to target device."""
+        new_kw = {}
+        for k, v in kwargs.items():
+            if isinstance(v, NBXTensor) and v._device_idx != target_dev:
+                new_kw[k] = self._transfer_tensor(v, target_dev)
+            else:
+                new_kw[k] = v
+        return new_kw
+
+    def _transfer_tensor(self, tensor: NBXTensor, target_dev: int) -> NBXTensor:
+        """Copy NBXTensor to target device via D2D memcpy."""
+        DeviceAllocator.set_device(target_dev)
+        dst = NBXTensor.empty(tensor._shape, tensor._dtype,
+                              f"cuda:{target_dev}")
+        if tensor._nbytes > 0:
+            DeviceAllocator.memcpy(dst.data_ptr(), tensor.data_ptr(),
+                                   tensor._nbytes, kind=3)  # D2D
+        return dst
 
     def gather_outputs(self, output_ids: Optional[List[str]] = None) -> Dict[str, Any]:
         """Read output tensors from arena."""

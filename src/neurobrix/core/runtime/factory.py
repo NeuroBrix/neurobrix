@@ -128,7 +128,7 @@ class ExecutorFactory:
         architecture = cls._extract_architecture(allocation, component)
         vendor = cls._extract_vendor(allocation, component)
         device = cls._extract_device(allocation, component)
-        dtype = cls._extract_dtype(allocation, component)
+        dtype = cls._extract_dtype(allocation, component, mode)
 
         # All strategies now use GraphExecutor
         # Execution flow (PP, TP, Zero3) handled by strategies module
@@ -256,31 +256,18 @@ class ExecutorFactory:
         )
 
     @classmethod
-    def _extract_dtype(cls, allocation: "ComponentAllocation", component: str):
-        """Extract dtype from allocation. ZERO FALLBACK."""
-        import torch
+    def _extract_dtype(cls, allocation: "ComponentAllocation", component: str,
+                        mode: str = "compiled") -> str:
+        """Extract dtype from allocation. ZERO FALLBACK.
 
+        Returns dtype as string for ALL modes. Engines convert internally.
+        """
         if not hasattr(allocation, "dtype"):
             raise RuntimeError(
                 f"ZERO FALLBACK: No 'dtype' in allocation for '{component}'.\n"
                 f"Prism must provide dtype."
             )
-
-        dtype_val = allocation.dtype
-
-        # Already torch.dtype
-        if isinstance(dtype_val, torch.dtype):
-            return dtype_val
-
-        # String to dtype
-        from neurobrix.core.dtype.config import DTYPE_MAP
-        if dtype_val not in DTYPE_MAP:
-            raise RuntimeError(
-                f"ZERO FALLBACK: Unknown dtype '{dtype_val}' for '{component}'.\n"
-                f"Supported: {list(DTYPE_MAP.keys())}"
-            )
-
-        return DTYPE_MAP[dtype_val]
+        return allocation.dtype
 
     @classmethod
     def _extract_family(cls, nbx_path: str) -> str:

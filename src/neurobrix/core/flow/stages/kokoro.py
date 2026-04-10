@@ -8,6 +8,7 @@ so they can access ``engine.ctx``, executors, weight loaders, etc.
 """
 
 import gc
+from neurobrix.core.device_utils import device_empty_cache
 import time
 import torch
 from typing import Dict, List, Optional

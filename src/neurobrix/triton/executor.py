@@ -80,9 +80,18 @@ class TritonExecutor:
         # Bind symbols from input shapes
         self._sequence.bind_symbols(inputs)
 
+        # Narrow seq-dependent constants (RoPE cos/sin) to actual seq_len
+        self._sequence.update_seq_dependent_constants()
+
+        # Decode steps (seq_len==1) reuse same-size intermediates every step.
+        # Skip kill_slots to avoid cudaFree + sync overhead.
+        is_decode = any(
+            t.shape[1] == 1 for t in inputs.values()
+            if hasattr(t, 'shape') and len(t.shape) >= 2)
+
         # Execute
         DeviceAllocator.set_device(self.device_idx)
-        self._sequence.run()
+        self._sequence.run(skip_kills=is_decode)
 
         # Gather outputs
         return self._sequence.gather_outputs()

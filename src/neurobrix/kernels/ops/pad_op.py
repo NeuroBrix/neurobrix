@@ -40,11 +40,7 @@ def constant_pad_2d_kernel(
     # Check if within input bounds
     in_bounds = (ih >= 0) & (ih < in_h) & (iw >= 0) & (iw < in_w) & (nc < channels_times_batch)
 
-    # Compute input offset
-    n = nc // (x_stride_n // (x_stride_c if x_stride_c > 0 else 1)) if x_stride_c > 0 else nc
-    c = nc % (x_stride_n // (x_stride_c if x_stride_c > 0 else 1)) if x_stride_c > 0 else 0
-
-    # Simpler: use flat stride approach
+    # Flat stride approach: assumes contiguous input (wrapper ensures contiguous)
     inp_offset = nc * in_h * in_w + ih * in_w + iw
 
     val = tl.load(x_ptr + inp_offset, mask=mask & in_bounds, other=pad_value)

@@ -13,6 +13,7 @@ ZERO FALLBACK: Uses safe defaults for LLM sampling since they're user preference
 
 import torch
 from abc import ABC, abstractmethod
+from neurobrix.core.device_utils import device_multinomial
 from typing import Dict, Any, Optional, Set
 
 

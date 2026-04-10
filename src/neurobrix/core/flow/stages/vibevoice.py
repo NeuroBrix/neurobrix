@@ -8,6 +8,7 @@ All functions take the AudioEngine instance (``engine``) as first parameter.
 """
 
 import gc
+from neurobrix.core.device_utils import device_empty_cache
 import time
 import torch
 from typing import Dict, Optional

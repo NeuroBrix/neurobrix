@@ -45,7 +45,13 @@ AMP_FP16_OPS: FrozenSet[str] = frozenset({
     "linear", "prelu", "div",
 })
 
-_FP16_NEED_FP32: FrozenSet[str] = frozenset({"mm", "bmm", "div", "addmm"})
+# Triton kernels accumulate in fp32 internally (matmul_kernel line 43,
+# fused_moe_kernel line 106, flash_attention line 78). Unlike cuBLAS
+# (which needs allow_fp16_reduced_precision_reduction=False), Triton
+# kernels ALWAYS use fp32 accumulators. So mm/bmm/addmm don't need
+# input upcast to fp32 — fp16 in, fp32 accum, fp16 out.
+# Keeping div for epsilon underflow (1e-15 → 0 in fp16).
+_FP16_NEED_FP32: FrozenSet[str] = frozenset({"div"})
 
 AMP_PROMOTE_OPS: FrozenSet[str] = frozenset({
     "addcdiv", "addcmul", "atan2", "bilinear", "cross",

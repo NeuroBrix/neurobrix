@@ -15,6 +15,7 @@ ZERO HARDCODE: All parameters from NBX container.
 """
 
 import gc
+from neurobrix.core.device_utils import device_empty_cache
 import time
 import torch
 from pathlib import Path
