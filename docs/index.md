@@ -41,7 +41,7 @@ neurobrix run --prompt "A photograph of a mountain lake at sunset"
 |--------|--------|------:|--------|
 | **Image** | PixArt, Sana, Flex.1, Janus-Pro | 6 | Production |
 | **LLM** | DeepSeek-MoE, Qwen3, TinyLlama | 3 | Production |
-| **Audio** | Whisper, Parakeet, Canary-Qwen, Voxtral, Orpheus, Kokoro, VibeVoice, OpenAudio, Chatterbox | 11 | Production |
+| **Audio** | Whisper (x2), Parakeet, Canary-Qwen, Voxtral, Orpheus, Kokoro, VibeVoice, OpenAudio, Chatterbox | 10 | Production |
 | **Video** | SANA-Video | 1 | Production |
 
 All models are the work of their respective authors. See the [Model Hub](getting-started/hub.md) for license details.

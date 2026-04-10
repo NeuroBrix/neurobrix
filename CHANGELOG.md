@@ -7,8 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Triton compiled mode: `update_seq_dependent_constants()` — narrows RoPE cos/sin buffers to actual seq_len at runtime, fixing decode garbage
+- Triton decode optimization: `skip_kills` parameter — skip kill_slots during decode (intermediates reuse same-size arena slots), eliminates cudaFree + sync overhead
+- Deferred kill_slots with GPU sync at end of prefill — prevents use-after-free from async kernel reads
+- `DeviceAllocator.sync_device()` — GPU synchronization via driver API (cudaDeviceSynchronize / hipDeviceSynchronize)
+- New Triton modules: `moe.py` (fused MoE execution), `promotion.py` (symbolic promotion), `cfg/engine.py` (classifier-free guidance)
+- New kernels: `dtype_convert.py` (bf16→fp16 GPU conversion), `floor.py`, `fused_moe.py`
+- Weight loader bf16→fp16 GPU conversion via Triton kernel (zero CPU round-trip)
+
 ### Changed
 - Refactor dtype to string everywhere above engine boundary — Prism, factory, and shared code use dtype strings ("float16", "bfloat16"), engines convert internally
+- TritonDtypeEngine: remove mm/bmm/addmm from `_FP16_NEED_FP32` — Triton kernels accumulate in fp32 internally, upcast was causing fp16 overflow in KV cache
+- Default `uses_absolute_position=True` when graph has position_ids input — fixes decode position tracking for all LLMs
+
+### Fixed
+- Triton compiled decode producing garbage — missing `update_seq_dependent_constants()` call in TritonExecutor.run() and _run_triton_compiled()
+- Position IDs stuck at [[0]] during decode — absolute position default was False, should be True for any model with position_ids graph input
 
 ### Removed
 - Eliminate `str(self.dtype).replace('torch.', '')` hacks from graph_executor and triton flow
