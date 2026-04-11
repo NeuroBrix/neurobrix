@@ -24,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Triton compiled decode producing garbage — missing `update_seq_dependent_constants()` call in TritonExecutor.run() and _run_triton_compiled()
 - Position IDs stuck at [[0]] during decode — absolute position default was False, should be True for any model with position_ids graph input
+- Triton compiled RoPE `aten::slice(cos_cached, :seq_len) → aten::index(position_ids)` collapsed the cos/sin table to a single row at decode (seq_len=1), then read OOB when `position_ids = cache_len`. Fix in `triton/promotion.py` detects the pattern structurally from the DAG and pins the slice end to the full source dim. Model-agnostic, no hardcoded weight names. Restores TinyLlama triton compiled decode.
+- Triton `CombinedSampler` top-p filter missing the HuggingFace/PyTorch "shift mask right, keep top-1" step. On peaked distributions every token was masked → softmax NaN → multinomial returned 0. Visible on Qwen3 as alternating `"word! word!"` output with temperature 0.6.
+- Triton `_build_generator_config` CLI override lost valid falsy values (`temperature=0`, `top_k=0`) because of bare `or`. Now uses explicit `is not None` check.
+- Triton `TritonSequence._run_single_device` / `_run_multi_device` deferred list now captures output-slot overwrites in addition to kill_slots — keeps GPU memory alive until the async kernels have consumed it.
 
 ### Removed
 - Eliminate `str(self.dtype).replace('torch.', '')` hacks from graph_executor and triton flow

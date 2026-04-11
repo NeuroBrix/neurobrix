@@ -233,14 +233,30 @@ class CombinedSampler:
             sorted_probs = w.softmax(sorted_logits, dim=-1)
             cum_probs = w.cumsum_wrapper(sorted_probs, dim=-1)
             sorted_mask = w.gt(cum_probs, self.top_p)
+
+            # Shift mask right by 1 and zero out position 0 — guarantees
+            # the top-1 token is never masked (HuggingFace/PyTorch convention).
+            # Without this, a peaked distribution where probs[0] > top_p masks
+            # every token → softmax → NaN → sampler returns 0.
+            _shape = sorted_mask.shape
+            _n = sorted_mask.numel()
+            _mbuf = (_ctypes.c_char * _n)()
+            DeviceAllocator.memcpy(_ctypes.addressof(_mbuf),
+                                   sorted_mask.data_ptr(), _n, kind=2)  # D2H
+            _mask_np = np.frombuffer(_mbuf, dtype=np.bool_).reshape(_shape).copy()
+            _mask_np[..., 1:] = _mask_np[..., :-1]
+            _mask_np[..., 0] = False
+            DeviceAllocator.set_device(sorted_mask._device_idx)
+            sorted_mask = NBXTensor.from_numpy(np.ascontiguousarray(_mask_np))
+
             indices_to_remove = w.scatter_wrapper(
                 sorted_mask, -1, sorted_indices, sorted_mask)
             logits = w.masked_fill(logits, indices_to_remove, float('-inf'))
 
         # 5. Sample
-        probs = w.softmax(logits, dim=-1)
         if self.temperature <= 0:
             return w.argmax_wrapper(logits, dim=-1, keepdim=True)
+        probs = w.softmax(logits, dim=-1)
         return w.multinomial_wrapper(probs, num_samples=1)
 
 

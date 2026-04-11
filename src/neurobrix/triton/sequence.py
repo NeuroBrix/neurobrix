@@ -1078,44 +1078,16 @@ class TritonSequence:
             self._run_single_device(skip_kills)
 
     def _run_single_device(self, skip_kills: bool = False):
-        """Single-device fast path — no device switching."""
+        """Single-device fast path — no device switching.
+
+        Both output-slot overwrites and kill_slots defer their old tensors
+        to a single list, released after a sync at the end of the run.
+        Without this, NBXTensor.__del__ frees GPU memory while async kernels
+        may still be reading from it.
+        """
         arena = self._arena
-
-        if skip_kills:
-            # Decode fast path: no kill_slots, no cudaFree, no sync.
-            # Arena slots are overwritten by output_slots before next read.
-            for op in self._ops:
-                args = op.args_resolver(arena)
-                kwargs = op.kwargs_resolver(arena)
-
-                if args and args[0] is None:
-                    bare = op.op_type.split("::")[-1]
-                    if bare in _ACCUMULATOR_OPS:
-                        result = args[0]
-                    else:
-                        for s in op.output_slots:
-                            arena[s] = None
-                        continue
-                else:
-                    try:
-                        result = op.func(*args, **kwargs)
-                    except Exception as e:
-                        raise RuntimeError(
-                            f"Failed at {op.op_uid} ({op.op_type}): {e}") from e
-
-                if not op.output_slots:
-                    pass
-                elif len(op.output_slots) == 1:
-                    arena[op.output_slots[0]] = result
-                elif isinstance(result, tuple):
-                    for i, s in enumerate(op.output_slots):
-                        arena[s] = result[i] if i < len(result) else None
-                else:
-                    arena[op.output_slots[0]] = result
-            return
-
-        # Prefill path: deferred kill_slots with sync at end.
         _deferred = []
+
         for op in self._ops:
             args = op.args_resolver(arena)
             kwargs = op.kwargs_resolver(arena)
@@ -1127,12 +1099,16 @@ class TritonSequence:
                     result = args[0]
                 else:
                     for s in op.output_slots:
-                        arena[s] = None
-                    for s in op.kill_slots:
                         old = arena[s]
                         if old is not None:
                             _deferred.append(old)
                         arena[s] = None
+                    if not skip_kills:
+                        for s in op.kill_slots:
+                            old = arena[s]
+                            if old is not None:
+                                _deferred.append(old)
+                            arena[s] = None
                     continue
             else:
                 try:
@@ -1140,6 +1116,12 @@ class TritonSequence:
                 except Exception as e:
                     raise RuntimeError(
                         f"Failed at {op.op_uid} ({op.op_type}): {e}") from e
+
+            # Defer any tensors currently in the output slots before overwriting.
+            for s in op.output_slots:
+                old = arena[s]
+                if old is not None:
+                    _deferred.append(old)
 
             if not op.output_slots:
                 pass
@@ -1151,11 +1133,12 @@ class TritonSequence:
             else:
                 arena[op.output_slots[0]] = result
 
-            for s in op.kill_slots:
-                old = arena[s]
-                if old is not None:
-                    _deferred.append(old)
-                arena[s] = None
+            if not skip_kills:
+                for s in op.kill_slots:
+                    old = arena[s]
+                    if old is not None:
+                        _deferred.append(old)
+                    arena[s] = None
 
         # All kernels submitted — sync GPU then release deferred tensors
         if _deferred:
@@ -1167,10 +1150,13 @@ class TritonSequence:
 
         - Fast path (99%+ ops): just switch device context if op.device_idx changed
         - Slow path (needs_transfer ops): D2D memcpy inputs to target device
+
+        Both output-slot overwrites and kill_slots defer their old tensors
+        to a single list, released after a sync at the end of the run.
         """
         arena = self._arena
         _current_dev = self.device_idx
-        _deferred = [] if not skip_kills else None
+        _deferred = []
 
         for op in self._ops:
             args = op.args_resolver(arena)
@@ -1183,6 +1169,9 @@ class TritonSequence:
             # NOP propagation
             if args and args[0] is None:
                 for s in op.output_slots:
+                    old = arena[s]
+                    if old is not None:
+                        _deferred.append(old)
                     arena[s] = None
                 if not skip_kills:
                     for s in op.kill_slots:
@@ -1219,6 +1208,12 @@ class TritonSequence:
                 except Exception as e:
                     raise RuntimeError(
                         f"Failed at {op.op_uid} ({op.op_type}): {e}") from e
+
+            # Defer any tensors currently in the output slots before overwriting.
+            for s in op.output_slots:
+                old = arena[s]
+                if old is not None:
+                    _deferred.append(old)
 
             # Store outputs
             if not op.output_slots:

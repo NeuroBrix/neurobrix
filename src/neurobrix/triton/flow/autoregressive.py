@@ -30,13 +30,17 @@ def _build_generator_config(defaults: Dict, resolver: Any) -> Dict[str, Any]:
         "pad_token_id": defaults.get("pad_token_id"),
         "_class_name": "TritonGenerator",
     }
-    # Override from variable resolver if present
+    # Override from variable resolver if present.
+    # Use explicit `is not None` — bare `or` treats valid falsy values
+    # (temperature=0 for greedy, top_k=0 to disable) as missing.
     if resolver is not None:
         resolved = getattr(resolver, 'resolved', {})
         for key in ("max_tokens", "temperature", "top_p", "top_k"):
-            val = resolved.get(f"global.{key}") or resolved.get(key)
-            if val is not None:
-                config[key] = val
+            gkey = f"global.{key}"
+            if gkey in resolved and resolved[gkey] is not None:
+                config[key] = resolved[gkey]
+            elif key in resolved and resolved[key] is not None:
+                config[key] = resolved[key]
     return config
 
 
@@ -158,6 +162,11 @@ class TritonAutoregressiveHandler:
         else:
             raise RuntimeError("Tokenizer has no encode method.")
 
+        # BatchEncoding (transformers) returns dict-like with 'input_ids' key
+        if hasattr(token_ids, 'input_ids'):
+            token_ids = token_ids['input_ids']
+        elif isinstance(token_ids, dict) or (hasattr(token_ids, '__getitem__') and not isinstance(token_ids, list) and 'input_ids' in token_ids):
+            token_ids = token_ids['input_ids']
         if not isinstance(token_ids, list):
             token_ids = list(token_ids)
 
@@ -318,6 +327,9 @@ class TritonTextStrategy:
     def __init__(self, lm_head_executor, session: TritonLMSession):
         self._head = lm_head_executor
         self._session = session
+        # Cache lm_head device index for D2D transfer in get_logits
+        dev_str = getattr(lm_head_executor, 'device', 'cuda:0')
+        self._head_device_idx = int(dev_str.split(':')[-1]) if ':' in str(dev_str) else 0
 
     def create_generator(self, defaults: Dict, resolver) -> TritonGenerator:
         config = _build_generator_config(defaults, resolver)
@@ -326,6 +338,17 @@ class TritonTextStrategy:
     def get_logits(self, hidden: NBXTensor, step_idx: int) -> NBXTensor:
         """Run lm_head to get logits from last hidden state."""
         last_hidden = hidden.select(1, hidden.shape[1] - 1).unsqueeze(1)
+
+        # Transfer hidden to lm_head's device if different (pipeline parallel)
+        hidden_dev = getattr(last_hidden, '_device_idx', 0)
+        head_dev = self._head_device_idx
+        if hidden_dev != head_dev:
+            dst = NBXTensor.empty(last_hidden._shape, last_hidden._dtype,
+                                  f"cuda:{head_dev}")
+            DeviceAllocator.memcpy(dst.data_ptr(), last_hidden.data_ptr(),
+                                   last_hidden._nbytes)
+            last_hidden = dst
+
         outputs = self._head.run({"input": last_hidden})
         # Find the output tensor
         for key, val in outputs.items():
