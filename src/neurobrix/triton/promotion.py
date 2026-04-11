@@ -84,13 +84,61 @@ def promote_seq_len_scalars(dag: dict, tensors: dict, ops_meta: dict):
             return _promote_int(val)
         return None
 
+    # Detect RoPE-style slices: aten::slice on a weight/constant tensor whose
+    # output is consumed by aten::index with input::position_ids. Narrowing
+    # these to runtime seq_len breaks absolute position indexing in decode
+    # (the index reads OOB → garbage cos/sin → corrupts Q/K → NaN).
+    consumers: Dict[str, list] = {}
+    for _u, _op in ops_meta.items():
+        for _t in _op.get("input_tensor_ids", []):
+            consumers.setdefault(_t, []).append((_u, _op))
+
+    def _tensor_is_weightlike(tid: str) -> bool:
+        td = tensors.get(tid, {})
+        return bool(td.get("constant")) or bool(td.get("weight_name"))
+
+    def _consumed_by_pos_index(out_tid: str) -> bool:
+        for _cuid, _cop in consumers.get(out_tid, []):
+            if _cop.get("op_type") != "aten::index":
+                continue
+            if "input::position_ids" in _cop.get("input_tensor_ids", []):
+                return True
+        return False
+
+    rope_slice_full_size: Dict[str, int] = {}
+    for _uid, _op_data in ops_meta.items():
+        if _op_data.get("op_type") != "aten::slice":
+            continue
+        _ins = _op_data.get("input_tensor_ids", [])
+        if not _ins or not _tensor_is_weightlike(_ins[0]):
+            continue
+        _outs = _op_data.get("output_tensor_ids", [])
+        if not _outs or not _consumed_by_pos_index(_outs[0]):
+            continue
+        _a = _op_data.get("attributes", {}).get("args", [])
+        if len(_a) < 2:
+            continue
+        _dim_arg = _a[1]
+        _dim = _dim_arg.get("value") if isinstance(_dim_arg, dict) else _dim_arg
+        if not isinstance(_dim, int):
+            continue
+        _src_shape = tensors.get(_ins[0], {}).get("shape", [])
+        if 0 <= _dim < len(_src_shape) and isinstance(_src_shape[_dim], int):
+            rope_slice_full_size[_uid] = _src_shape[_dim]
+
     for op_uid, op_data in ops_meta.items():
         op_type = op_data.get("op_type", "")
         attrs = op_data.get("attributes", {})
         args = attrs.get("args", [])
 
         if op_type == "aten::slice" and len(args) >= 4:
-            if isinstance(args[3], dict):
+            # RoPE slice: set end to full source dim (static). This turns the
+            # narrow slice into effective identity so downstream aten::index
+            # with position_ids can read any row, not just [0:seq_len).
+            if op_uid in rope_slice_full_size:
+                args[3] = {"type": "scalar",
+                           "value": rope_slice_full_size[op_uid]}
+            elif isinstance(args[3], dict):
                 r = _promote_scalar_dict(args[3])
                 if r:
                     args[3] = r
