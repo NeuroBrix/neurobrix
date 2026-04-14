@@ -134,6 +134,10 @@ class TritonSequence:
         # Op interceptors: op_type → callable (for KV cache injection)
         self._op_interceptors: Dict[str, Callable] = {}
 
+        # Weight tensor IDs that need .t() at bind time (from
+        # _eliminate_weight_transpose_ops pass).
+        self._pretranspose_weights: set = set()
+
     def register_op_interceptor(self, op_type: str, interceptor: Callable):
         """Register an interceptor for a specific op type (e.g., SDPA for KV cache)."""
         self._op_interceptors[op_type] = interceptor
@@ -161,6 +165,17 @@ class TritonSequence:
 
         # Graph-declared outputs
         graph_output_ids = set(self.dag.get("output_tensor_ids", []))
+
+        # Phase -1: Eliminate aten::detach ops (identity at inference time).
+        # Mirrors CompiledSequence._eliminate_detach_ops. Heavy impact on
+        # models where the tracer captured a detach per parameter access
+        # (DeepSeek: 19,428/44,634 ops, T5: ~36%).
+        self._eliminate_detach_ops(tensors, ops_by_uid, exec_order)
+
+        # Phase -0.5: Eliminate aten::t on weight tensors (pre-transpose at
+        # bind time). Mirrors CompiledSequence._eliminate_weight_transpose_ops.
+        # Removes ~154 ops/step for TinyLlama (one `t` before every weight `mm`).
+        self._eliminate_weight_transpose_ops(tensors, ops_by_uid, exec_order)
 
         # Phase 0: Promote trace-time seq_len scalars to symbolic references.
         # Shared logic in triton/promotion.py — used by both compiled and sequential.
@@ -198,6 +213,238 @@ class TritonSequence:
         self._identify_seq_dependent_constants(tensors)
 
         self._compiled = True
+
+    # ========================================================================
+    # OP ELIMINATION — ported from compiled_sequence
+    # ========================================================================
+
+    @staticmethod
+    def _rewire_arg(arg: Any, rewire: Dict[str, str]) -> Any:
+        """Rewire tensor_id references in a single arg dict.
+
+        Handles type=tensor, type=tensor_tuple, and nested type=list.
+        Shared by _eliminate_detach_ops and _eliminate_weight_transpose_ops.
+        """
+        if not isinstance(arg, dict):
+            return arg
+        arg_type = arg.get("type")
+        if arg_type == "tensor":
+            tid = arg.get("tensor_id")
+            if tid in rewire:
+                arg = dict(arg)
+                arg["tensor_id"] = rewire[tid]
+        elif arg_type == "tensor_tuple":
+            tids = arg.get("tensor_ids", [])
+            new_tids = [rewire.get(t, t) for t in tids]
+            if new_tids != tids:
+                arg = dict(arg)
+                arg["tensor_ids"] = new_tids
+        elif arg_type == "list":
+            items = arg.get("value", [])
+            new_items = [TritonSequence._rewire_arg(item, rewire)
+                         for item in items]
+            arg = dict(arg)
+            arg["value"] = new_items
+        return arg
+
+    def _apply_rewire_to_remaining_ops(
+        self,
+        rewire: Dict[str, str],
+        dropped_uids: set,
+        ops_metadata: Dict[str, Any],
+        execution_order: List[str],
+    ) -> None:
+        """Apply rewire map to args/kwargs/input_tensor_ids of every op
+        not in dropped_uids, and remove dropped ops from execution_order.
+        """
+        for op_uid in execution_order:
+            if op_uid in dropped_uids:
+                continue
+            op_data = ops_metadata.get(op_uid)
+            if op_data is None:
+                continue
+
+            attrs = op_data.get("attributes", {})
+            args = attrs.get("args", [])
+            new_args = [self._rewire_arg(a, rewire) for a in args]
+            if new_args != args:
+                attrs["args"] = new_args
+
+            kwargs = attrs.get("kwargs", {})
+            if kwargs:
+                new_kwargs = {k: self._rewire_arg(v, rewire)
+                              for k, v in kwargs.items()}
+                if new_kwargs != kwargs:
+                    attrs["kwargs"] = new_kwargs
+
+            input_tids = op_data.get("input_tensor_ids", [])
+            if input_tids:
+                new_input_tids = [rewire.get(t, t) for t in input_tids]
+                if new_input_tids != input_tids:
+                    op_data["input_tensor_ids"] = new_input_tids
+
+        # Remove dropped ops from execution_order (in place).
+        new_order = [uid for uid in execution_order if uid not in dropped_uids]
+        execution_order.clear()
+        execution_order.extend(new_order)
+
+    def _eliminate_detach_ops(
+        self,
+        tensors: Dict[str, Any],
+        ops_metadata: Dict[str, Any],
+        execution_order: List[str],
+    ) -> None:
+        """Remove aten::detach ops — identity at inference time (no autograd).
+
+        Mirrors CompiledSequence._eliminate_detach_ops. Builds a rewire map
+        from detach output → detach input, chases rewire chains, rewrites
+        every remaining op's args/kwargs/input_tensor_ids, transfers the
+        is_output flag, and removes the detach ops from execution_order.
+        Universal: works for any family (LLM, diffusion, audio, video, SR).
+        """
+        rewire: Dict[str, str] = {}
+        detach_uids: set = set()
+
+        for op_uid in execution_order:
+            op_data = ops_metadata.get(op_uid)
+            if op_data is None:
+                continue
+            if op_data.get("op_type") != "aten::detach":
+                continue
+
+            attrs = op_data.get("attributes", {})
+            args = attrs.get("args", [])
+            in_tid = None
+            for arg in args:
+                if isinstance(arg, dict) and arg.get("type") == "tensor":
+                    in_tid = arg.get("tensor_id")
+                    break
+            if in_tid is None:
+                input_tids = op_data.get("input_tensor_ids", [])
+                if input_tids:
+                    in_tid = input_tids[0]
+
+            out_tids = op_data.get("output_tensor_ids", [])
+            if in_tid is None or not out_tids:
+                continue
+
+            out_tid = out_tids[0]
+
+            # Chase rewire chains (earlier detach may have rewired in_tid).
+            while in_tid in rewire:
+                in_tid = rewire[in_tid]
+
+            rewire[out_tid] = in_tid
+            detach_uids.add(op_uid)
+
+        if not detach_uids:
+            return
+
+        self._apply_rewire_to_remaining_ops(
+            rewire, detach_uids, ops_metadata, execution_order)
+
+        # Rewire DAG-level outputs.
+        dag_outputs = self.dag.get("output_tensor_ids", [])
+        if dag_outputs:
+            new_dag_outputs = [rewire.get(t, t) for t in dag_outputs]
+            if new_dag_outputs != dag_outputs:
+                self.dag["output_tensor_ids"] = new_dag_outputs
+
+        # Transfer is_output flag on tensor metadata.
+        for out_tid, in_tid in rewire.items():
+            out_meta = tensors.get(out_tid, {})
+            if out_meta.get("is_output") and in_tid in tensors:
+                tensors[in_tid]["is_output"] = True
+
+    def _eliminate_weight_transpose_ops(
+        self,
+        tensors: Dict[str, Any],
+        ops_metadata: Dict[str, Any],
+        execution_order: List[str],
+    ) -> None:
+        """Remove aten::t on weight tensors by pre-transposing at bind time.
+
+        Mirrors CompiledSequence._eliminate_weight_transpose_ops. For every
+        aten::t whose (rewire-chased) input is a param::/buffer:: tensor,
+        rewire the output to the root weight, record the weight id in
+        self._pretranspose_weights, and swap its shape metadata (dims 0↔1).
+        bind_weights() then calls .t() on those weights.
+
+        MoE expert weights consumed by custom::moe_fused are excluded —
+        moe_fused_dispatch() performs its own transpose at runtime.
+        Universal: applies to any family.
+        """
+        rewire: Dict[str, str] = {}
+        transpose_uids: set = set()
+        pretranspose_tids: set = set()
+
+        # Collect expert weight IDs from moe_fused ops.
+        moe_weight_ids: set = set()
+        for op_data in ops_metadata.values():
+            if op_data.get("op_type") == "custom::moe_fused":
+                attrs = op_data.get("attributes", {})
+                for key in ("expert_gate_weight_ids",
+                            "expert_up_weight_ids",
+                            "expert_down_weight_ids"):
+                    moe_weight_ids.update(attrs.get(key, []))
+
+        for op_uid in execution_order:
+            op_data = ops_metadata.get(op_uid)
+            if op_data is None:
+                continue
+            if op_data.get("op_type") != "aten::t":
+                continue
+
+            attrs = op_data.get("attributes", {})
+            args = attrs.get("args", [])
+            in_tid = None
+            for arg in args:
+                if isinstance(arg, dict) and arg.get("type") == "tensor":
+                    in_tid = arg.get("tensor_id")
+                    break
+            if in_tid is None:
+                input_tids = op_data.get("input_tensor_ids", [])
+                if input_tids:
+                    in_tid = input_tids[0]
+
+            out_tids = op_data.get("output_tensor_ids", [])
+            if in_tid is None or not out_tids:
+                continue
+
+            # Chase rewire chains (a prior detach-elim may have rewired in_tid
+            # onto the underlying weight).
+            root_tid = in_tid
+            while root_tid in rewire:
+                root_tid = rewire[root_tid]
+
+            # Only eliminate transposes on weight tensors.
+            if not (root_tid.startswith("param::")
+                    or root_tid.startswith("buffer::")):
+                continue
+
+            # Skip MoE expert weights — moe_fused_dispatch transposes at runtime.
+            if root_tid in moe_weight_ids:
+                continue
+
+            out_tid = out_tids[0]
+            rewire[out_tid] = root_tid
+            transpose_uids.add(op_uid)
+            pretranspose_tids.add(root_tid)
+
+        if not transpose_uids:
+            return
+
+        self._pretranspose_weights = pretranspose_tids
+
+        # Swap shape metadata: consumers expect the transposed shape.
+        for tid in pretranspose_tids:
+            meta = tensors.get(tid, {})
+            shape = meta.get("shape", [])
+            if len(shape) == 2:
+                meta["shape"] = [shape[1], shape[0]]
+
+        self._apply_rewire_to_remaining_ops(
+            rewire, transpose_uids, ops_metadata, execution_order)
 
     # ========================================================================
     # SYMBOLIC PROMOTION — ported from compiled_sequence
@@ -1046,7 +1293,12 @@ class TritonSequence:
             tdata = self.dag.get("tensors", {}).get(tid, {})
             wname = tdata.get("weight_name", "")
             if wname in weights:
-                self._arena[self._tid_to_slot[tid]] = weights[wname]
+                tensor = weights[wname]
+                # Pre-transpose weights whose aten::t was eliminated.
+                # .t() is a stride-only view (no copy) on NBXTensor.
+                if tid in self._pretranspose_weights and tensor.ndim == 2:
+                    tensor = tensor.t()
+                self._arena[self._tid_to_slot[tid]] = tensor
         self.compute_op_devices()
 
     def bind_inputs(self, inputs: Dict[str, NBXTensor]):
@@ -1077,6 +1329,80 @@ class TritonSequence:
         else:
             self._run_single_device(skip_kills)
 
+    def _maybe_dump_tid(self, op: 'CompiledOp', dump_path: str) -> None:
+        """TEMP diagnostic: dump op output tensor to JSON if its tid matches.
+
+        Gated by env var NBX_DUMP_TIDS_FILTER (optional comma-separated tid
+        substrings). Only first-pass dumps are kept per tid (first decode
+        step is enough for layer-by-layer comparison).
+        """
+        import os as _os_d, json as _json_d
+        if not hasattr(self, "_dump_seen"):
+            self._dump_seen = set()
+            self._dump_records = []
+        filter_env = _os_d.environ.get("NBX_DUMP_TIDS_FILTER", "")
+        filters = [f for f in filter_env.split(",") if f] if filter_env else []
+        # Invert slot → tid map lazily.
+        if not hasattr(self, "_slot_to_tid"):
+            self._slot_to_tid = {s: t for t, s in self._tid_to_slot.items()}
+        for out_slot in op.output_slots:
+            tid = self._slot_to_tid.get(out_slot, f"slot::{out_slot}")
+            # Match filter against tid OR op_uid (op_uid lets us select by op,
+            # e.g. all custom.rms_norm outputs across the network).
+            if filters and not any(f in tid or f in op.op_uid for f in filters):
+                continue
+            if tid in self._dump_seen:
+                continue
+            self._dump_seen.add(tid)
+            tensor = self._arena[out_slot] if self._arena else None
+            if tensor is None:
+                continue
+            # NBXTensor → first 10 floats + norm + shape
+            try:
+                from neurobrix.kernels.nbx_tensor import NBXDtype, DeviceAllocator
+                import ctypes as _ct
+                # Multi-device: switch to the tensor's device before D2H memcpy.
+                if hasattr(tensor, '_device_idx'):
+                    DeviceAllocator.set_device(tensor._device_idx)
+                flat = tensor
+                while flat.ndim > 1:
+                    flat = flat[0]
+                # Cast to fp32 for comparable dumps across engines.
+                if flat.dtype != NBXDtype.float32:
+                    flat = flat.to(NBXDtype.float32)
+                flat = flat.contiguous()
+                n = min(10, flat.numel())
+                buf = (_ct.c_float * n)()
+                DeviceAllocator.memcpy(_ct.addressof(buf), flat.data_ptr(),
+                                       n * 4, kind=2)
+                head = list(buf)
+                # L2 norm over the full (flattened) tensor.
+                full = tensor
+                if full.dtype != NBXDtype.float32:
+                    full = full.to(NBXDtype.float32)
+                full = full.contiguous()
+                N = full.numel()
+                fbuf = (_ct.c_float * N)()
+                DeviceAllocator.memcpy(_ct.addressof(fbuf), full.data_ptr(),
+                                       N * 4, kind=2)
+                vals = list(fbuf)
+                norm = (sum(v * v for v in vals)) ** 0.5
+                self._dump_records.append({
+                    "tid": tid,
+                    "op_uid": op.op_uid,
+                    "op_type": op.op_type,
+                    "shape": list(tensor.shape),
+                    "dtype": str(tensor.dtype),
+                    "head10": head,
+                    "l2_norm": norm,
+                })
+                with open(dump_path, "w") as f:
+                    _json_d.dump({"engine": "triton",
+                                  "records": self._dump_records}, f,
+                                 indent=1)
+            except Exception as e:
+                print(f"[NBX_DUMP_TIDS] failed on {tid}: {e}", flush=True)
+
     def _run_single_device(self, skip_kills: bool = False):
         """Single-device fast path — no device switching.
 
@@ -1087,6 +1413,28 @@ class TritonSequence:
         """
         arena = self._arena
         _deferred = []
+
+        # ===== TEMP PROFILING INSTRUMENTATION =====
+        import os, time as _time
+        _PROF = os.environ.get("NBX_TRITON_PROF") == "1"
+        if _PROF:
+            _MATMUL = {"aten::mm", "aten::bmm", "aten::addmm"}
+            _SDPA = {"aten::scaled_dot_product_attention"}
+            _META = {"aten::view", "aten::reshape", "aten::_unsafe_view",
+                     "aten::transpose", "aten::t", "aten::permute",
+                     "aten::unsqueeze", "aten::expand", "aten::contiguous",
+                     "aten::slice", "aten::select", "aten::cat", "aten::split",
+                     "aten::unbind", "aten::narrow", "aten::flatten",
+                     "aten::squeeze"}
+            _EMBED = {"aten::embedding", "aten::index"}
+            _timings = {"matmul": 0.0, "sdpa": 0.0, "elem": 0.0,
+                        "meta": 0.0, "embed": 0.0, "other": 0.0}
+            _counts = {"matmul": 0, "sdpa": 0, "elem": 0,
+                       "meta": 0, "embed": 0, "other": 0}
+            if not hasattr(self, "_prof_call_idx"):
+                self._prof_call_idx = 0
+            self._prof_call_idx += 1
+        # ===========================================
 
         for op in self._ops:
             args = op.args_resolver(arena)
@@ -1111,11 +1459,31 @@ class TritonSequence:
                             arena[s] = None
                     continue
             else:
+                if _PROF:
+                    DeviceAllocator.sync_device()
+                    _t0 = _time.perf_counter()
                 try:
                     result = op.func(*args, **kwargs)
                 except Exception as e:
                     raise RuntimeError(
                         f"Failed at {op.op_uid} ({op.op_type}): {e}") from e
+                if _PROF:
+                    DeviceAllocator.sync_device()
+                    _dt = _time.perf_counter() - _t0
+                    if op.op_type in _MATMUL:
+                        _cat = "matmul"
+                    elif op.op_type in _SDPA:
+                        _cat = "sdpa"
+                    elif op.op_type in _META:
+                        _cat = "meta"
+                    elif op.op_type in _EMBED:
+                        _cat = "embed"
+                    elif "::" in op.op_type:
+                        _cat = "elem"
+                    else:
+                        _cat = "other"
+                    _timings[_cat] += _dt
+                    _counts[_cat] += 1
 
             # Defer any tensors currently in the output slots before overwriting.
             for s in op.output_slots:
@@ -1133,6 +1501,13 @@ class TritonSequence:
             else:
                 arena[op.output_slots[0]] = result
 
+            # === TEMP TID DUMP: compare triton vs native per-op output ===
+            import os as _os_tid
+            _dump_tids_env = _os_tid.environ.get("NBX_DUMP_TIDS")
+            if _dump_tids_env and op.output_slots:
+                self._maybe_dump_tid(op, _dump_tids_env)
+            # =============================================================
+
             if not skip_kills:
                 for s in op.kill_slots:
                     old = arena[s]
@@ -1144,6 +1519,21 @@ class TritonSequence:
         if _deferred:
             DeviceAllocator.sync_device()
             _deferred.clear()
+
+        # ===== TEMP PROFILING REPORT =====
+        if _PROF:
+            _total = sum(_timings.values())
+            print(f"\n[NBX_TRITON_PROF] call #{self._prof_call_idx} "
+                  f"(skip_kills={skip_kills})")
+            for _cat in ["matmul", "sdpa", "meta", "elem", "embed", "other"]:
+                _pct = 100 * _timings[_cat] / _total if _total > 0 else 0
+                _avg = (1000 * _timings[_cat] / _counts[_cat]
+                        if _counts[_cat] > 0 else 0)
+                print(f"  {_cat:8s}: {_timings[_cat]*1000:8.1f}ms  "
+                      f"({_counts[_cat]:4d} ops, {_avg:.3f}ms/op, "
+                      f"{_pct:5.1f}%)")
+            print(f"  TOTAL:    {_total*1000:.1f}ms")
+        # ==================================
 
     def _run_multi_device(self, skip_kills: bool = False):
         """Multi-device hot loop. Ported from compiled_sequence._run_inner_multi_device.
@@ -1225,6 +1615,13 @@ class TritonSequence:
                     arena[s] = result[i] if i < len(result) else None
             else:
                 arena[op.output_slots[0]] = result
+
+            # === TEMP TID DUMP (multi-device branch) ===
+            import os as _os_tid_md
+            _dtids = _os_tid_md.environ.get("NBX_DUMP_TIDS")
+            if _dtids and op.output_slots:
+                self._maybe_dump_tid(op, _dtids)
+            # ===========================================
 
             if not skip_kills:
                 for s in op.kill_slots:

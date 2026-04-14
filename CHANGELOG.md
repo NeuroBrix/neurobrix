@@ -7,30 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-04-14
+
 ### Added
-- Triton compiled mode: `update_seq_dependent_constants()` — narrows RoPE cos/sin buffers to actual seq_len at runtime, fixing decode garbage
-- Triton decode optimization: `skip_kills` parameter — skip kill_slots during decode (intermediates reuse same-size arena slots), eliminates cudaFree + sync overhead
-- Deferred kill_slots with GPU sync at end of prefill — prevents use-after-free from async kernel reads
-- `DeviceAllocator.sync_device()` — GPU synchronization via driver API (cudaDeviceSynchronize / hipDeviceSynchronize)
-- New Triton modules: `moe.py` (fused MoE execution), `promotion.py` (symbolic promotion), `cfg/engine.py` (classifier-free guidance)
-- New kernels: `dtype_convert.py` (bf16→fp16 GPU conversion), `floor.py`, `fused_moe.py`
-- Weight loader bf16→fp16 GPU conversion via Triton kernel (zero CPU round-trip)
+- `--triton` mode: DeepSeek-MoE-16B now supported end-to-end (greedy output `" Hello! How can I help you today?"` on `"Hello"`, matching the native path semantically). Joins TinyLlama-1.1B and Qwen3-30B-A3B as fully working LLMs in the Triton runtime.
+- `--triton` decode speedups for LLMs across the board (V100 numbers, fp16):
+  - TinyLlama-1.1B: full decode step 443 → 160 ms (2.8× faster).
+  - Per-matmul on the decode hot path: 2.02 → 0.20 ms (10–18× depending on shape).
+  - Per-SDPA on decode with GQA: 1.58 → 0.94 ms (1.7×).
+- Decode-aware output precision for matrix multiplication: when running one token at a time, accumulation now lands in fp32, preventing silent overflow on very deep MoE stacks (Qwen3-30B observed crash → now stable). Prefill and image/video spatial matmuls keep their fp16 output — no memory regression on diffusion.
+- Decode-aware attention: short-query attention now uses a compact block size (no more 99% wasted compute when generating one token at a time). GQA models compute in place — K/V are no longer expanded to the Q head count in front of every attention call.
+- Triton profiling harness (opt-in, off by default):
+  - `NBX_TRITON_PROF=1` — per-category ms/op breakdown (matmul / sdpa / elem / meta / embed / other) for every run.
+  - `NBX_DUMP_TIDS=<path>` + `NBX_DUMP_TIDS_FILTER=<substrings>` — dump any op output as JSON for side-by-side native vs Triton numerical diff.
+  - `NBX_MOE_DIAG=1` — dump MoE routing intermediates on the first forward pass.
+- New benchmark: `benchmarks/profile_hf_deepseek.py` — reference timings against the HuggingFace + Accelerate device_map=auto baseline on the same hardware.
 
 ### Changed
-- Refactor dtype to string everywhere above engine boundary — Prism, factory, and shared code use dtype strings ("float16", "bfloat16"), engines convert internally
-- TritonDtypeEngine: remove mm/bmm/addmm from `_FP16_NEED_FP32` — Triton kernels accumulate in fp32 internally, upcast was causing fp16 overflow in KV cache
-- Default `uses_absolute_position=True` when graph has position_ids input — fixes decode position tracking for all LLMs
+- Triton dtype policy simplified: only `div` still forces an fp32 input upcast. Matmul ops (`mm`, `bmm`, `addmm`) now cooperate with the new decode-aware output precision instead of forcing every input to fp32 per call — removes a ~3.5 GB per-decode-step weight-copy cost that was silently capping throughput.
+- Triton graph-load pipeline is more permissive about trace-shaped vs declared-shaped buffers: models that ship position-indexed lookup tables sized from the trace sample (DeepSeek's per-block rotary cache is the reference case) now load instead of crashing on a shape mismatch.
+- Embedding wrapper accepts any scalar index dtype and casts internally. Fixes diffusion timestep → embedding paths (PixArt-Sigma and similar DiTs) that used to crash with a pointer/float type error.
 
 ### Fixed
-- Triton compiled decode producing garbage — missing `update_seq_dependent_constants()` call in TritonExecutor.run() and _run_triton_compiled()
-- Position IDs stuck at [[0]] during decode — absolute position default was False, should be True for any model with position_ids graph input
-- Triton compiled RoPE `aten::slice(cos_cached, :seq_len) → aten::index(position_ids)` collapsed the cos/sin table to a single row at decode (seq_len=1), then read OOB when `position_ids = cache_len`. Fix in `triton/promotion.py` detects the pattern structurally from the DAG and pins the slice end to the full source dim. Model-agnostic, no hardcoded weight names. Restores TinyLlama triton compiled decode.
-- Triton `CombinedSampler` top-p filter missing the HuggingFace/PyTorch "shift mask right, keep top-1" step. On peaked distributions every token was masked → softmax NaN → multinomial returned 0. Visible on Qwen3 as alternating `"word! word!"` output with temperature 0.6.
-- Triton `_build_generator_config` CLI override lost valid falsy values (`temperature=0`, `top_k=0`) because of bare `or`. Now uses explicit `is not None` check.
-- Triton `TritonSequence._run_single_device` / `_run_multi_device` deferred list now captures output-slot overwrites in addition to kill_slots — keeps GPU memory alive until the async kernels have consumed it.
+- DeepSeek-MoE-16B `--triton`: previously produced gibberish at decode (`"роко"` / `"!!!!!"`). The three root causes were all addressed in this release:
+  1. The model's MoE routing normalisation flag was silently ignored in Triton mode (defaulted to the Qwen3 convention), collapsing routed-expert magnitudes ~20×.
+  2. Top-k selection over a softmax with non-power-of-two k returned a corrupted tail — the fix skips a redundant sort stage when the input fits in a single chunk. Side effect: one fewer kernel launch per MoE layer for every model whose expert count fits in that chunk.
+  3. RoPE position indexing collapsed after the first decode step when cos/sin were recomputed per forward (DeepSeek's pattern). The runtime now pins the RoPE chain at its traced size so subsequent decode positions stay in-bounds.
+- Qwen3-30B-A3B `--triton` now runs noticeably faster at decode from the new attention block-size heuristic and the GQA-in-place kernel path.
+- TinyLlama-1.1B `--triton` decode is faster end-to-end (2.8× step time) and keeps the same output as before on greedy runs.
+- PixArt-Sigma `--triton` no longer crashes on the embedding kernel (timestep dtype) or on the first `aten::add` after the timestep path (computable buffers now enter the Triton runtime in the expected tensor type). Further progress is blocked by an SDPA VRAM allocation failure partway through the transformer on 16 GB V100s — tracked as a separate issue; the native path has an unrelated config bug on the same setup.
 
 ### Removed
-- Eliminate `str(self.dtype).replace('torch.', '')` hacks from graph_executor and triton flow
+- Per-attention-call GQA materialization (`unsqueeze → expand → reshape → contiguous` of K and V). Replaced by kernel-native stride indirection, active only when the model has GQA; non-GQA models are bit-identical to before.
 
 ## [0.1.2] - 2026-04-03
 

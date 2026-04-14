@@ -338,6 +338,27 @@ class GraphExecutor:
         if not hasattr(self, "_computable_specs") or not self._computable_specs:
             return
 
+        if not hasattr(self, "_maybe_to_nbx"):
+            # Bind helper once. In triton modes a computed-at-runtime buffer
+            # (e.g. sincos 2D pos embed, interpolated pos embed) must enter
+            # the runtime as an NBXTensor; otherwise downstream ops crash
+            # with `'Tensor' object has no attribute '_dtype'` (PixArt path).
+            def _maybe_to_nbx(t):
+                if self.mode not in ("triton", "triton_sequential"):
+                    return t
+                if not isinstance(t, torch.Tensor):
+                    return t
+                from neurobrix.kernels.nbx_tensor import (
+                    NBXTensor, DeviceAllocator)
+                import numpy as np
+                dev_idx = (int(self.device.split(':')[1])
+                           if isinstance(self.device, str) and ':' in self.device
+                           else 0)
+                DeviceAllocator.set_device(dev_idx)
+                arr = np.ascontiguousarray(t.detach().cpu().numpy())
+                return NBXTensor.from_numpy(arr)
+            self._maybe_to_nbx = _maybe_to_nbx
+
         if self._runtime_height is None or self._runtime_width is None:
             # No runtime resolution set - use traced constant (should already be loaded)
             return
@@ -374,7 +395,7 @@ class GraphExecutor:
                     vae_scale=vae_scale,
                     patch_size=patch_size,
                 )
-                self._weights[weight_name] = tensor
+                self._weights[weight_name] = self._maybe_to_nbx(tensor)
                 computed_count += 1
             elif method == "interpolate_learned_pos_embed":
                 # Bilinearly interpolate learned positional embeddings
@@ -388,7 +409,7 @@ class GraphExecutor:
                     traced_data=spec.get("traced_data"),  # Base64-encoded traced tensor
                     patch_size=params.get("patch_size", 2),  # Transformer patch size
                 )
-                self._weights[weight_name] = tensor
+                self._weights[weight_name] = self._maybe_to_nbx(tensor)
                 computed_count += 1
 
     def _compute_sincos_2d_pos_embed(
@@ -1143,6 +1164,50 @@ class GraphExecutor:
             if not data_files:
                 return
             tensor_bytes = zf.read(data_files[0])
+
+        # Shape vs bytes reconciliation. Some graphs declare the FULL shape
+        # of a seq-dependent buffer (e.g. DeepSeek RoPE cos/sin_cached:
+        # declared (max_position, head_dim) but bytes stored at (trace_seq_len,
+        # head_dim)). The native path gets the trace shape for free via
+        # torch.load's pickled metadata; we have to derive it from bytes.
+        # Find the dim to shrink so that the shape matches byte count.
+        dtype_bytes = {"float16": 2, "bfloat16": 2, "float32": 4,
+                       "float64": 8, "int32": 4, "int64": 8,
+                       "int8": 1, "uint8": 1, "bool": 1}.get(dtype_str, 4)
+        declared_elems = 1
+        for d in shape:
+            declared_elems *= d
+        actual_elems = len(tensor_bytes) // dtype_bytes
+        if shape and declared_elems != actual_elems and actual_elems > 0:
+            # Look up trace_seq_len from symbolic_context; if any dim, replaced
+            # by trace_seq_len, makes the element count match, use that.
+            dag = self._dag
+            if dag is None:
+                raise RuntimeError(
+                    f"Constant '{weight_name}': declared shape {shape} "
+                    f"({declared_elems} elems) but bytes hold {actual_elems} "
+                    f"elems and no symbolic_context to reconcile.")
+            sym_ctx = dag.get("symbolic_context", {})
+            trace_seq_len = None
+            for sid, sinfo in sym_ctx.get("symbols", {}).items():
+                if sinfo.get("name") == "seq_len":
+                    trace_seq_len = sinfo.get("trace_value")
+                    break
+            fixed = None
+            if trace_seq_len:
+                for axis in range(len(shape)):
+                    other = declared_elems // shape[axis] if shape[axis] else 0
+                    if other and other * trace_seq_len == actual_elems:
+                        fixed = list(shape)
+                        fixed[axis] = trace_seq_len
+                        break
+            if fixed is None:
+                raise RuntimeError(
+                    f"Constant '{weight_name}' declared shape {shape} "
+                    f"({declared_elems} elems) but bytes hold {actual_elems} "
+                    f"elems; no single dim swap with trace_seq_len="
+                    f"{trace_seq_len} reconciles.")
+            shape = tuple(fixed)
 
         # Parse raw bytes based on dtype
         if dtype_str == "bfloat16":
@@ -2167,6 +2232,10 @@ class GraphExecutor:
         num_experts = attrs["num_experts"]
         norm_topk_prob = attrs.get("norm_topk_prob", True)
 
+        # Note: _execute_moe_fused_native is the sequential fallback path.
+        # Compiled mode uses moe_fused_dispatch() in compiled_sequence.py.
+        def _dump_n(_label, _tensor): pass
+
         # Read tensors from store (activations are already resolved by prior ops)
         store = self._ctx.tensor_store
         hidden_states = store.get(hidden_states_tid)
@@ -2200,6 +2269,9 @@ class GraphExecutor:
         if hidden_states.dtype != w_dtype:
             hidden_states = hidden_states.to(w_dtype)
 
+        _dump_n("gate_scores_in", gate_scores)
+        _dump_n("hidden_states_in", hidden_states)
+
         # ROUTING IN FP32 (same as compiled path)
         gate_scores = gate_scores.float()
         _compute_dev = hidden_states.device
@@ -2208,10 +2280,14 @@ class GraphExecutor:
 
         # Dynamic routing (replaces hardcoded topk+sort+bincount+slice)
         scores, indices = gate_scores.topk(top_k, dim=-1)
+        _dump_n("topk_scores", scores)
+        _dump_n("topk_indices", indices)
         if norm_topk_prob:
             scores = scores / scores.sum(dim=-1, keepdim=True)
+            _dump_n("scores_norm", scores)
 
         flat_indices = indices.flatten()
+        _dump_n("flat_scores", scores.flatten())
         sorted_expert_ids, perm = flat_indices.sort()
         token_ids = perm // top_k
 
@@ -2260,6 +2336,7 @@ class GraphExecutor:
 
             start = end
 
+        _dump_n("result_final", output)
         # Restore original shape if input was 3D
         if len(orig_shape) == 3:
             output = output.reshape(orig_shape)
