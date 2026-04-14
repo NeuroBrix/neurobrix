@@ -8,7 +8,7 @@ import numpy as np
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
-from neurobrix.kernels.nbx_tensor import NBXTensor, DeviceAllocator
+from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator
 
 from .samplers import CombinedSampler, create_sampler
 
