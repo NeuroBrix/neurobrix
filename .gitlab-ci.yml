@@ -28,8 +28,15 @@ publish-pypi:
   stage: publish
   image: python:3.10-slim
   needs: [build-package]
+  # MANUAL ONLY. Never auto-publish on tag push — a tag can be created
+  # for a commit that still contains a secret and PyPI uploads are
+  # immutable (can't overwrite, yank leaves file downloadable). Operator
+  # reviews the build artefacts on GitLab and clicks the job manually
+  # once it's clean.
   rules:
     - if: $CI_COMMIT_TAG =~ /^v/
+      when: manual
+      allow_failure: true
   id_tokens:
     PYPI_ID_TOKEN:
       aud: pypi
