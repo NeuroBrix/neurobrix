@@ -32,56 +32,44 @@ _BLOCK_SIZE_M = 16
 
 
 # ============================================================================
-# OFFSET TABLE BUILDER — zero-copy, cached
+# POINTER TABLE BUILDER — zero-copy, cached
 # ============================================================================
 
-# Cache: cache_key → OffsetTables
-_offset_cache = {}
+_ptr_cache = {}
 
 
-class OffsetTables:
-    """Per-projection offset tables for zero-copy expert access.
+class PtrTables:
+    """Per-projection absolute pointer tables for zero-copy expert access.
 
-    Each table is [E] int64 on GPU: element offsets from a base pointer.
-    The fused kernel loads offset[expert_id] and jumps to that expert's
-    weight matrix in the arena. No copying.
+    Each table is [E] int64 on GPU: absolute data_ptr() of each expert.
+    The fused kernel loads ptrs[expert_id] and uses it directly as a pointer.
     """
-    __slots__ = ('gate_base', 'gate_offsets', 'gate_stride_bk', 'gate_stride_bn',
-                 'up_base', 'up_offsets', 'up_stride_bk', 'up_stride_bn',
-                 'down_base', 'down_offsets', 'down_stride_bk', 'down_stride_bn',
+    __slots__ = ('gate_ptrs', 'gate_stride_bk', 'gate_stride_bn',
+                 'up_ptrs', 'up_stride_bk', 'up_stride_bn',
+                 'down_ptrs', 'down_stride_bk', 'down_stride_bn',
                  'device_experts')
 
     def __init__(self):
-        # Per-device dicts: {device_idx: NBXTensor or int}
-        self.gate_base = {}       # base NBXTensor (smallest ptr expert)
-        self.gate_offsets = {}    # [E_local] int64 element offsets
-        self.gate_stride_bk = {}  # int — shared stride
-        self.gate_stride_bn = {}  # int — shared stride
-        self.up_base = {}
-        self.up_offsets = {}
+        self.gate_ptrs = {}       # {device → NBXTensor[E] int64}
+        self.gate_stride_bk = {}
+        self.gate_stride_bn = {}
+        self.up_ptrs = {}
         self.up_stride_bk = {}
         self.up_stride_bn = {}
-        self.down_base = {}
-        self.down_offsets = {}
+        self.down_ptrs = {}
         self.down_stride_bk = {}
         self.down_stride_bn = {}
-        self.device_experts = {}  # {device → [global_ids]}
+        self.device_experts = {}
 
 
-def _build_offset_tables(gate_weights, up_weights, down_weights):
-    """Build per-projection offset tables for zero-copy expert access.
+def _build_ptr_tables(gate_weights, up_weights, down_weights):
+    """Build per-projection absolute pointer tables.
 
-    For each projection (gate, up, down) on each device:
-    - Pick the expert with the smallest data_ptr as base
-    - Compute element offsets for all other experts relative to base
-    - Upload [E_local] int64 offset tensor to GPU
-
-    Total GPU allocation: 3 × E × 8 bytes per device (e.g., 3KB for 128 experts).
+    Stores each expert's data_ptr() as int64 in a GPU tensor. No offset math.
+    Total GPU allocation: 3 × E × 8 bytes per device (~3KB for 128 experts).
     """
     num_experts = len(gate_weights)
-    tables = OffsetTables()
-
-    # Group experts by device
+    tables = PtrTables()
     by_device = defaultdict(list)
     for i in range(num_experts):
         by_device[gate_weights[i]._device_idx].append(i)
@@ -90,40 +78,27 @@ def _build_offset_tables(gate_weights, up_weights, down_weights):
     for dev, expert_ids in by_device.items():
         DeviceAllocator.set_device(dev)
 
-        elem = dtype_size(gate_weights[expert_ids[0]]._dtype)
-
         def _build_proj(weights):
-            """Build offset table for one projection on this device.
-            Offsets in ELEMENTS from base expert's data_ptr.
-            """
-            ptrs = [(weights[eid].data_ptr(), eid) for eid in expert_ids]
-            min_ptr, min_eid = min(ptrs, key=lambda x: x[0])
-            base = weights[min_eid]
-            offs = np.array(
-                [(weights[eid].data_ptr() - min_ptr) // elem for eid in expert_ids],
-                dtype=np.int64,
-            )
-            # Strides: weight is [dim0, dim1] contiguous.
-            # Kernel accesses B[k, n] = weight[n, k] (transposed matmul).
-            # stride_bk = weight.stride(1) = 1  (K is innermost)
-            # stride_bn = weight.stride(0) = dim1  (N jumps by dim1 elements)
-            return base, NBXTensor.from_numpy(offs), base.stride(1), base.stride(0)
+            # Absolute pointers as int64
+            ptrs = np.array(
+                [weights[eid].data_ptr() for eid in expert_ids],
+                dtype=np.int64)
+            ptr_table = NBXTensor.from_numpy(ptrs)
+            base = weights[expert_ids[0]]
+            return ptr_table, base.stride(1), base.stride(0)
 
-        gb, go, gbk, gbn = _build_proj(gate_weights)
-        tables.gate_base[dev] = gb
-        tables.gate_offsets[dev] = go
+        gp, gbk, gbn = _build_proj(gate_weights)
+        tables.gate_ptrs[dev] = gp
         tables.gate_stride_bk[dev] = gbk
         tables.gate_stride_bn[dev] = gbn
 
-        ub, uo, ubk, ubn = _build_proj(up_weights)
-        tables.up_base[dev] = ub
-        tables.up_offsets[dev] = uo
+        up, ubk, ubn = _build_proj(up_weights)
+        tables.up_ptrs[dev] = up
         tables.up_stride_bk[dev] = ubk
         tables.up_stride_bn[dev] = ubn
 
-        db, do_, dbk, dbn = _build_proj(down_weights)
-        tables.down_base[dev] = db
-        tables.down_offsets[dev] = do_
+        dp, dbk, dbn = _build_proj(down_weights)
+        tables.down_ptrs[dev] = dp
         tables.down_stride_bk[dev] = dbk
         tables.down_stride_bn[dev] = dbn
 
@@ -264,32 +239,69 @@ def execute_moe_fused(
     M, K = hidden_states.shape
     N_gate = gate_weights[0].shape[0]  # intermediate_dim (gate/up are [intermediate, hidden])
 
+    # === TEMP DIAG: dump MoE intermediates ===
+    import os as _os_moe
+    _moe_diag = _os_moe.environ.get("NBX_MOE_DIAG")
+    _moe_diag_cache_key = cache_key
+    def _dump(label, tensor):
+        if not _moe_diag:
+            return
+        # Only dump for block.1 (first target)
+        if "block.1" not in _moe_diag_cache_key:
+            return
+        try:
+            import ctypes as _ct
+            from neurobrix.kernels.nbx_tensor import NBXDtype as _NBX
+            DeviceAllocator.set_device(tensor._device_idx)
+            full = tensor if tensor.dtype == _NBX.float32 else tensor.to(_NBX.float32)
+            full = full.contiguous()
+            n = full.numel()
+            buf = (_ct.c_float * n)()
+            DeviceAllocator.memcpy(_ct.addressof(buf), full.data_ptr(), n * 4, kind=2)
+            vals = list(buf)
+            head = vals[:10]
+            norm = (sum(v * v for v in vals)) ** 0.5
+            import sys as _sys
+            print(f"[MOE_DIAG] {label:20s} shape={list(tensor.shape)} "
+                  f"dtype={tensor.dtype} norm={norm:.4f} head10={[round(v,4) for v in head]}",
+                  file=_sys.stderr, flush=True)
+        except Exception as _e:
+            import sys as _sys
+            print(f"[MOE_DIAG] {label} failed: {_e}", file=_sys.stderr, flush=True)
+    _dump("gate_scores_in", gate_scores)
+    _dump("hidden_states_in", hidden_states)
+    # =========================================
+
     # ================================================================
     # STEP 1: Routing — topk + normalize
     # ================================================================
     gate_fp32 = gate_scores.to(NBXDtype.float32)
     scores, indices = w.topk_wrapper(gate_fp32, top_k, dim=-1)
+    _dump("topk_scores", scores)
+    _dump("topk_indices", indices)
+
     if norm_topk_prob:
         denom = w.sum_wrapper(scores, dim=-1, keepdim=True)
         scores = w.div(scores, denom)
+        _dump("scores_norm", scores)
 
 
     # Flatten routing for fused kernel
     flat_indices = indices.reshape(-1)                 # [M * top_k]
     flat_scores = scores.reshape(-1).to(w_dtype)       # [M * top_k]
+    _dump("flat_scores", flat_scores)
 
     # ================================================================
-    # STEP 2: Build offset tables (cached — zero-copy)
+    # STEP 2: Build pointer tables (cached — zero-copy)
     # ================================================================
-    # Use cache_key if provided, else derive from first gate weight ptr
     ck = cache_key if cache_key else f"moe_{gate_weights[0].data_ptr()}_{num_experts}"
-    if ck not in _offset_cache:
-        _offset_cache[ck] = _build_offset_tables(
+    if ck not in _ptr_cache:
+        _ptr_cache[ck] = _build_ptr_tables(
             gate_weights, up_weights, down_weights)
         DeviceAllocator.set_device(act_dev)
         DeviceAllocator.ensure_triton_device(act_dev)
 
-    tables = _offset_cache[ck]
+    tables = _ptr_cache[ck]
 
     # ================================================================
     # STEP 3: Align tokens by expert (sorting)
@@ -304,7 +316,6 @@ def execute_moe_fused(
 
     if all_same_device:
         dev = next(iter(tables.device_experts))
-
         if dev != act_dev:
             DeviceAllocator.set_device(dev)
             DeviceAllocator.ensure_triton_device(dev)
@@ -318,6 +329,7 @@ def execute_moe_fused(
             hidden_states, tables, dev, flat_scores,
             sorted_token_ids, expert_ids, num_tokens_post_padded,
             top_k, M, K, N_gate,
+            _diag_dump=_dump if _moe_diag else None,
         )
 
         if dev != act_dev:
@@ -336,6 +348,8 @@ def execute_moe_fused(
     if len(orig_shape) == 3:
         output = output.reshape(orig_shape)
 
+    pass
+
     DeviceAllocator.set_device(act_dev)
     DeviceAllocator.ensure_triton_device(act_dev)
 
@@ -350,61 +364,79 @@ def _fused_moe_pass(
     hidden_states, tables, dev, flat_scores,
     sorted_token_ids, expert_ids, num_tokens_post_padded,
     top_k, M, K, N_gate,
+    _diag_dump=None,
 ):
-    """Three fused GEMM passes + silu activation.
-
-    Pass 1 (gate): x[M, K] @ gate_w.T → gate_out[padded, N]
-    Pass 2 (up):   x[M, K] @ up_w.T   → up_out[padded, N]
-    Activation:    silu(gate_out) * up_out → activated[padded, N]
-    Pass 3 (down): activated[padded, N] @ down_w.T → out[padded, K] + routing weights
-    Reduce: sum across top_k → [M, K]
-    """
+    """Three fused GEMM passes + silu activation."""
     dt = hidden_states._dtype
     total_tokens = M * top_k
     padded = sorted_token_ids.shape[0]
 
+    # Diagnostic: dump the stride config being passed to the kernel for each
+    # projection. DeepSeek 1408/2048 layout vs Qwen3 1536/2048 — a wrong
+    # stride_bk/stride_bn swap would explain the 30× magnitude hit.
+    if _diag_dump is not None:
+        import sys as _sys
+        print(f"[MOE_DIAG] strides gate: bk={tables.gate_stride_bk[dev]} "
+              f"bn={tables.gate_stride_bn[dev]}", file=_sys.stderr, flush=True)
+        print(f"[MOE_DIAG] strides up:   bk={tables.up_stride_bk[dev]} "
+              f"bn={tables.up_stride_bn[dev]}", file=_sys.stderr, flush=True)
+        print(f"[MOE_DIAG] strides down: bk={tables.down_stride_bk[dev]} "
+              f"bn={tables.down_stride_bn[dev]}", file=_sys.stderr, flush=True)
+        print(f"[MOE_DIAG] sorted_token_ids.numel={sorted_token_ids.numel()} "
+              f"expert_ids.numel={expert_ids.numel()} M={M} top_k={top_k} "
+              f"N_gate={N_gate} K={K}", file=_sys.stderr, flush=True)
+
     gate_out = NBXTensor.zeros((padded, N_gate), dtype=dt, device=f"cuda:{dev}")
     w.invoke_fused_moe(
         hidden_states,
-        tables.gate_base[dev], tables.gate_offsets[dev],
+        tables.gate_ptrs[dev],
         gate_out, flat_scores,
         sorted_token_ids, expert_ids, num_tokens_post_padded,
         N_gate, K,
         tables.gate_stride_bk[dev], tables.gate_stride_bn[dev],
         top_k, mul_routed_weight=False,
     )
+    if _diag_dump is not None:
+        _diag_dump("gate_out", gate_out)
 
     up_out = NBXTensor.zeros((padded, N_gate), dtype=dt, device=f"cuda:{dev}")
     w.invoke_fused_moe(
         hidden_states,
-        tables.up_base[dev], tables.up_offsets[dev],
+        tables.up_ptrs[dev],
         up_out, flat_scores,
         sorted_token_ids, expert_ids, num_tokens_post_padded,
         N_gate, K,
         tables.up_stride_bk[dev], tables.up_stride_bn[dev],
         top_k, mul_routed_weight=False,
     )
+    if _diag_dump is not None:
+        _diag_dump("up_out", up_out)
 
     # SwiGLU: silu(gate) * up
     gate_silu = w.silu(gate_out)
     activated = w.mul(gate_silu, up_out)
+    if _diag_dump is not None:
+        _diag_dump("activated", activated)
 
-    # Down pass: TOPK_DIVIDE=False — A=activated indexed by flat routing index, not token.
+    # Down pass
     down_out = NBXTensor.zeros((padded, K), dtype=dt, device=f"cuda:{dev}")
     w.invoke_fused_moe(
         activated,
-        tables.down_base[dev], tables.down_offsets[dev],
+        tables.down_ptrs[dev],
         down_out, flat_scores,
         sorted_token_ids, expert_ids, num_tokens_post_padded,
         K, N_gate,
         tables.down_stride_bk[dev], tables.down_stride_bn[dev],
         top_k, mul_routed_weight=True, topk_divide=False,
     )
+    if _diag_dump is not None:
+        _diag_dump("down_out", down_out)
 
-    # Reduce across top_k: kernel scatters to positions [0..M*topk-1]
+    # Reduce across top_k
     result = down_out.narrow(0, 0, total_tokens).reshape(M, top_k, K)
-    result = w.sum_wrapper(result, dim=1)  # [M, K]
-
+    result = w.sum_wrapper(result, dim=1)
+    if _diag_dump is not None:
+        _diag_dump("result_final", result)
     return result
 
 
@@ -499,7 +531,7 @@ def _multi_device_fused_moe(
         gate_out = NBXTensor.zeros((local_padded, N_gate), dtype=dt, device=f"cuda:{dev}")
         w.invoke_fused_moe(
             h_local,
-            tables.gate_base[dev], tables.gate_offsets[dev],
+            tables.gate_ptrs[dev],
             gate_out, local_scores,
             sorted_tids, exp_ids, num_post_pad,
             N_gate, K,
@@ -510,7 +542,7 @@ def _multi_device_fused_moe(
         up_out = NBXTensor.zeros((local_padded, N_gate), dtype=dt, device=f"cuda:{dev}")
         w.invoke_fused_moe(
             h_local,
-            tables.up_base[dev], tables.up_offsets[dev],
+            tables.up_ptrs[dev],
             up_out, local_scores,
             sorted_tids, exp_ids, num_post_pad,
             N_gate, K,
@@ -526,7 +558,7 @@ def _multi_device_fused_moe(
         down_out = NBXTensor.zeros((local_padded, K), dtype=dt, device=f"cuda:{dev}")
         w.invoke_fused_moe(
             activated,
-            tables.down_base[dev], tables.down_offsets[dev],
+            tables.down_ptrs[dev],
             down_out, local_scores,
             sorted_tids, exp_ids, num_post_pad,
             K, N_gate,

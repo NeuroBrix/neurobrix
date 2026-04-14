@@ -45,11 +45,13 @@ AMP_FP16_OPS: FrozenSet[str] = frozenset({
     "linear", "prelu", "div",
 })
 
-# Triton kernels accumulate in fp32 internally (matmul_kernel line 43,
-# fused_moe_kernel line 106, flash_attention line 78). Unlike cuBLAS
-# (which needs allow_fp16_reduced_precision_reduction=False), Triton
-# kernels ALWAYS use fp32 accumulators. So mm/bmm/addmm don't need
-# input upcast to fp32 — fp16 in, fp32 accum, fp16 out.
+# Must stay identical to core/dtype/engine.py _FP16_NEED_FP32.
+# mm / bmm / addmm handle their own fp32 output internally (see wrappers.py):
+# the kernel accumulates in fp32 and is instructed to store into an fp32 output
+# buffer when inputs are half-precision. This keeps inputs in fp16 (zero copy,
+# pre-transpose intact, M<=4 mv routing stays valid) while avoiding the
+# fp32-accumulator→fp16-store overflow that broke Qwen3-30B on V100. So these
+# ops no longer need the wrapper's blanket input-upcast path.
 # Keeping div for epsilon underflow (1e-15 → 0 in fp16).
 _FP16_NEED_FP32: FrozenSet[str] = frozenset({"div"})
 

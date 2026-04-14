@@ -84,18 +84,24 @@ def promote_seq_len_scalars(dag: dict, tensors: dict, ops_meta: dict):
             return _promote_int(val)
         return None
 
-    # Detect RoPE-style slices: aten::slice on a weight/constant tensor whose
-    # output is consumed by aten::index with input::position_ids. Narrowing
-    # these to runtime seq_len breaks absolute position indexing in decode
-    # (the index reads OOB → garbage cos/sin → corrupts Q/K → NaN).
+    # Detect RoPE-style slices: aten::slice whose output is consumed by
+    # aten::index with input::position_ids. Narrowing these to runtime seq_len
+    # breaks absolute position indexing in decode (the index reads OOB →
+    # garbage cos/sin → corrupts Q/K → NaN).
+    #
+    # The source of the slice can be either:
+    #  - A constant/weight-like buffer (TinyLlama pattern — cos/sin_cached
+    #    registered as buffer).
+    #  - An intermediate produced by aten::cos / aten::sin over an inline
+    #    position-based computation (DeepSeek-MoE pattern — RoPE recomputed
+    #    per forward; source shape's seq dim equals trace_seq_len).
+    # In both cases, the slice's trace-time `end` argument is trace_seq_len
+    # and must stay pinned to the full source dim so position_ids > runtime
+    # seq_len can still index correctly.
     consumers: Dict[str, list] = {}
     for _u, _op in ops_meta.items():
         for _t in _op.get("input_tensor_ids", []):
             consumers.setdefault(_t, []).append((_u, _op))
-
-    def _tensor_is_weightlike(tid: str) -> bool:
-        td = tensors.get(tid, {})
-        return bool(td.get("constant")) or bool(td.get("weight_name"))
 
     def _consumed_by_pos_index(out_tid: str) -> bool:
         for _cuid, _cop in consumers.get(out_tid, []):
@@ -105,12 +111,21 @@ def promote_seq_len_scalars(dag: dict, tensors: dict, ops_meta: dict):
                 return True
         return False
 
+    # trace_seq_len values we might see as slice end
+    trace_seq_lens = set(seq_len_syms.values())
+
+    def _tensor_is_weightlike(tid: str) -> bool:
+        td = tensors.get(tid, {})
+        return bool(td.get("constant")) or bool(td.get("weight_name"))
+
     rope_slice_full_size: Dict[str, int] = {}
+    rope_seq_slice_inputs: set = set()  # intermediate-source rope slices
+    # feeding from a computed chain — backward-traced to pin the arange too.
     for _uid, _op_data in ops_meta.items():
         if _op_data.get("op_type") != "aten::slice":
             continue
         _ins = _op_data.get("input_tensor_ids", [])
-        if not _ins or not _tensor_is_weightlike(_ins[0]):
+        if not _ins:
             continue
         _outs = _op_data.get("output_tensor_ids", [])
         if not _outs or not _consumed_by_pos_index(_outs[0]):
@@ -123,8 +138,119 @@ def promote_seq_len_scalars(dag: dict, tensors: dict, ops_meta: dict):
         if not isinstance(_dim, int):
             continue
         _src_shape = tensors.get(_ins[0], {}).get("shape", [])
-        if 0 <= _dim < len(_src_shape) and isinstance(_src_shape[_dim], int):
-            rope_slice_full_size[_uid] = _src_shape[_dim]
+        if not (0 <= _dim < len(_src_shape)
+                and isinstance(_src_shape[_dim], int)):
+            continue
+        # A RoPE slice feeds position_ids-based indexing. Protect in two
+        # complementary cases:
+        #  (a) Source is a constant/weight buffer (TinyLlama pattern —
+        #      cos/sin_cached pre-registered at max_pos; slice trims to
+        #      runtime seq_len, index reads arbitrary positions).
+        #  (b) Source is an intermediate whose seq-axis dim equals
+        #      trace_seq_len (DeepSeek-MoE pattern — RoPE recomputed per
+        #      forward from arange(seq_len); the seq dim shrinks to
+        #      runtime seq_len without pinning).
+        # Either case: pin the slice end to the static source dim so the
+        # downstream index with position_ids stays in bounds during decode.
+        _is_weight = _tensor_is_weightlike(_ins[0])
+        _is_seq_dim = _src_shape[_dim] in trace_seq_lens
+        if not (_is_weight or _is_seq_dim):
+            continue
+        rope_slice_full_size[_uid] = _src_shape[_dim]
+        # Only case (b) needs backward-tracing to pin the generating arange
+        # + shape args on intermediate ops — case (a) uses a pre-loaded
+        # constant whose size never shrinks.
+        if _is_seq_dim and not _is_weight:
+            rope_seq_slice_inputs.add(_ins[0])
+
+    # Pin the aten::arange at the root of the RoPE chain. DeepSeek-MoE
+    # recomputes RoPE per forward via arange(seq_len) → mul(inv_freq) →
+    # cat → cos/sin → slice → index(position_ids). If arange shrinks to
+    # runtime seq_len=1 during decode, cos/sin become (1, head_dim) and
+    # position_ids > 0 read OOB → garbage RoPE → gibberish tokens from
+    # the second decode step onward. Pinning arange keeps the chain at
+    # trace_seq_len so positions up to trace_seq_len-1 index correctly.
+    # Backward-trace from each rope slice's input through transparent-shape
+    # ops (mul/add/sub/cos/sin/cat/view/reshape/unsqueeze/expand/outer/etc.)
+    # until the aten::arange that generated the axis.
+    _producer: Dict[str, str] = {}
+    for _u, _op in ops_meta.items():
+        for _out in _op.get("output_tensor_ids", []):
+            _producer[_out] = _u
+    rope_arange_uids: set = set()
+    # Also track every intermediate op in the RoPE chain — we need to
+    # un-promote their shape args (e.g. view([23, 1]) got promoted to
+    # view([s1, 1]) which shrinks to (1, 1) at decode and propagates).
+    rope_chain_op_uids: set = set()
+    _shape_passthrough = {
+        "aten::mul", "aten::add", "aten::sub", "aten::div", "aten::neg",
+        "aten::cos", "aten::sin", "aten::cat", "aten::view",
+        "aten::_unsafe_view", "aten::reshape", "aten::unsqueeze",
+        "aten::expand", "aten::expand_as", "aten::repeat", "aten::to",
+        "aten::_to_copy", "aten::contiguous", "aten::t", "aten::transpose",
+        "aten::outer",
+    }
+    for _start_tid in rope_seq_slice_inputs:
+        _stack = [_start_tid]
+        _visited: set = set()
+        while _stack:
+            _tid = _stack.pop()
+            if _tid in _visited:
+                continue
+            _visited.add(_tid)
+            _pu = _producer.get(_tid)
+            if _pu is None:
+                continue
+            _pop = ops_meta.get(_pu, {})
+            _pt = _pop.get("op_type", "")
+            if _pt == "aten::arange":
+                rope_arange_uids.add(_pu)
+                continue
+            if _pt in _shape_passthrough:
+                rope_chain_op_uids.add(_pu)
+                for _pi in _pop.get("input_tensor_ids", []):
+                    _ptid = tensors.get(_pi, {})
+                    # Skip weight/constant inputs — they don't carry seq_len
+                    if (_ptid.get("constant") or _ptid.get("weight_name")):
+                        continue
+                    _stack.append(_pi)
+
+    def _un_promote_rope_shape(arg):
+        """Replace any symbolic seq_len factor in a shape list with its
+        static trace_value. Used inside the RoPE chain only, to prevent
+        view/reshape/expand/cat shape args from shrinking at decode."""
+        if isinstance(arg, dict):
+            t = arg.get("type")
+            if t == "symbol":
+                tv = arg.get("trace_value")
+                if isinstance(tv, int):
+                    return {"type": "scalar", "value": tv}
+            elif t == "product":
+                # Resolve each factor, then collapse to a scalar if static.
+                factors = arg.get("factors", [])
+                new_factors = [_un_promote_rope_shape(f) for f in factors]
+                resolved = 1
+                all_static = True
+                for f in new_factors:
+                    if isinstance(f, dict) and f.get("type") == "scalar":
+                        resolved *= f["value"]
+                    elif isinstance(f, int):
+                        resolved *= f
+                    else:
+                        all_static = False
+                        break
+                if all_static:
+                    return {"type": "scalar", "value": resolved}
+                arg = dict(arg)
+                arg["factors"] = new_factors
+                return arg
+            elif t == "list":
+                items = arg.get("value", [])
+                new_items = [_un_promote_rope_shape(x) for x in items]
+                arg = dict(arg)
+                arg["value"] = new_items
+                return arg
+        return arg
 
     for op_uid, op_data in ops_meta.items():
         op_type = op_data.get("op_type", "")
@@ -144,7 +270,22 @@ def promote_seq_len_scalars(dag: dict, tensors: dict, ops_meta: dict):
                     args[3] = r
 
         elif op_type == "aten::arange" and len(args) >= 1:
-            if isinstance(args[0], dict):
+            # If this arange feeds the RoPE chain (cos/sin → slice → index
+            # with position_ids), pin it at trace_seq_len so RoPE cos/sin
+            # stay sized for absolute position indexing at decode. Without
+            # this, arange shrinks to runtime seq_len=1 → cos/sin become
+            # (1, head_dim) → position_ids > 0 read OOB.
+            # The tracer may have already replaced arg[0] with a {'type':
+            # 'symbol', 'symbol_id': 's1', 'trace_value': N} node — undo
+            # that back to a static scalar for RoPE aranges only.
+            if op_uid in rope_arange_uids:
+                a0 = args[0]
+                if isinstance(a0, dict) and a0.get("type") == "symbol":
+                    tv = a0.get("trace_value")
+                    if isinstance(tv, int):
+                        args[0] = {"type": "scalar", "value": tv}
+                # Plain-int args stay as-is.
+            elif isinstance(args[0], dict):
                 r = _promote_scalar_dict(args[0])
                 if r:
                     args[0] = r
@@ -227,3 +368,30 @@ def promote_seq_len_scalars(dag: dict, tensors: dict, ops_meta: dict):
                 r = _promote_scalar_dict(args[3])
                 if r:
                     args[3] = r
+
+    # Post-pass: un-promote symbolic seq_len factors inside shape args of
+    # RoPE-chain ops (view/reshape/expand/cat/…). The main promotion loop
+    # above turns `view([23, 1])` into `view([s1, 1])`; at decode with
+    # runtime seq_len=1 this shrinks the RoPE position basis to a single
+    # row and position_ids > 0 index OOB on the downstream cos/sin.
+    # Leaving these shape args at trace_seq_len keeps the chain sized for
+    # absolute position indexing during decode.
+    for _uid in rope_chain_op_uids:
+        _op_data = ops_meta.get(_uid)
+        if _op_data is None:
+            continue
+        _ot = _op_data.get("op_type", "")
+        _attrs = _op_data.get("attributes", {})
+        _args = _attrs.get("args", [])
+        if not _args:
+            continue
+        # view/reshape/_unsafe_view: arg[1] is the target shape list
+        if _ot in ("aten::view", "aten::_unsafe_view", "aten::reshape"):
+            if len(_args) >= 2:
+                _args[1] = _un_promote_rope_shape(_args[1])
+        # expand / expand_as: arg[1] is the target shape
+        elif _ot == "aten::expand" and len(_args) >= 2:
+            _args[1] = _un_promote_rope_shape(_args[1])
+        # repeat: arg[1] is the repeat-spec list
+        elif _ot == "aten::repeat" and len(_args) >= 2:
+            _args[1] = _un_promote_rope_shape(_args[1])

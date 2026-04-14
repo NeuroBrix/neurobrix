@@ -517,6 +517,20 @@ class AutoregressiveHandler(FlowHandler):
             for step_idx in generator:
 
                 logits = strategy.get_logits(hidden[:, -1:, :], step_idx)
+                _dump_path = os.environ.get("NBX_DUMP_LOGITS")
+                if _dump_path and step_idx == 0:
+                    import json as _json_dl
+                    flat = logits.detach().float().reshape(-1).cpu().tolist()
+                    idx_sorted = sorted(range(len(flat)),
+                                        key=lambda i: -flat[i])[:10]
+                    top10 = [(i, flat[i]) for i in idx_sorted]
+                    with open(_dump_path, 'w') as _f:
+                        _json_dl.dump({"engine": "native",
+                                       "vocab_size": len(flat),
+                                       "top10": top10,
+                                       "argmax": idx_sorted[0]}, _f)
+                    print(f"[NBX_DUMP_LOGITS] native dumped top10 "
+                          f"to {_dump_path}", flush=True)
                 next_token, is_done = generator.step(logits, step_idx)
 
                 if _debug_decode and step_idx < 15:

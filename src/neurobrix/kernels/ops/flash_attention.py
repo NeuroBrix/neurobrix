@@ -45,11 +45,15 @@ def flash_attention_forward_kernel(
     EVEN_HEADDIM: tl.constexpr,
     BLOCK_M: tl.constexpr,
     BLOCK_N: tl.constexpr,
+    GQA_GROUPS: tl.constexpr,
 ):
     start_m = tl.program_id(0)
     off_hb = tl.program_id(1)
     off_b = off_hb // nheads
     off_h = off_hb % nheads
+    # GQA: each Q head maps to K/V head (off_h // GQA_GROUPS). For plain MHA
+    # pass GQA_GROUPS=1 → off_h_kv == off_h, zero overhead.
+    off_h_kv = off_h // GQA_GROUPS
 
     offs_m = start_m * BLOCK_M + tl.arange(0, BLOCK_M)
     offs_n = tl.arange(0, BLOCK_N)
@@ -59,10 +63,10 @@ def flash_attention_forward_kernel(
         Q + off_b * stride_qb + off_h * stride_qh + (offs_m[:, None] * stride_qm + offs_d[None, :])
     )
     k_ptrs = (
-        K + off_b * stride_kb + off_h * stride_kh + (offs_n[:, None] * stride_kn + offs_d[None, :])
+        K + off_b * stride_kb + off_h_kv * stride_kh + (offs_n[:, None] * stride_kn + offs_d[None, :])
     )
     v_ptrs = (
-        V + off_b * stride_vb + off_h * stride_vh + (offs_n[:, None] * stride_vn + offs_d[None, :])
+        V + off_b * stride_vb + off_h_kv * stride_vh + (offs_n[:, None] * stride_vn + offs_d[None, :])
     )
     if BIAS_TYPE == "vector":
         b_ptrs = Bias + off_b * stride_bb + off_h * stride_bh + offs_n

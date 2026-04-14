@@ -910,11 +910,49 @@ def log_softmax(x, dim: int = -1) :
 # MATMUL WRAPPERS
 # ===========================================================================
 
+def _matmul_out_dtype(a, M: int = 1):
+    """Output dtype for mm/bmm/addmm/mv/addmv.
+
+    Kernels accumulate in fp32. The output store dtype depends on M:
+
+    - **M <= 4 (decode path)**: store fp32. Tiny tensors (1 row × N), the
+      doubled storage cost is negligible. Matters for deep MoE LLMs where
+      the fp32 accumulator can exceed fp16's 65504 range and the fp16 store
+      would saturate to ±Inf, cascading through residual adds (Qwen3-30B
+      case on V100). fp32 output flows through downstream ops via AMP
+      promote rules and gets re-cast at the next matmul input.
+
+    - **M > 4 (prefill / spatial path)**: store in input dtype. Large
+      tensors (e.g. PixArt-Sigma DiT: M=4096 spatial tokens × CFG batch=2
+      → fp32 doubles activation footprint and OOMs 16 GB V100 around layer
+      12-16). Prefill-magnitude activations stay within fp16 range because
+      a single forward pass doesn't accumulate the way an N-step decode
+      loop through 48 MoE layers does — each fp32 store is bounded by one
+      matmul, not chained over many.
+
+    Universal: bf16 inputs follow the same M-gated rule. fp32/int inputs
+    pass through unchanged.
+    """
+    dt = a.nbx_dtype if hasattr(a, 'nbx_dtype') else a.dtype
+    if dt in (NBXDtype.float16, NBXDtype.bfloat16) and M <= 4:
+        return NBXDtype.float32
+    return dt
+
+
 def mm(a, b) :
     """Matrix multiplication: C = A @ B.
     Kernel accumulates in fp32 (hardware). Output matches input dtype.
-    DtypeEngine handles fp16/bf16 overflow protection externally."""
-    a, b = _ensure_cuda(a).contiguous(), _ensure_cuda(b).contiguous()
+    DtypeEngine handles fp16/bf16 overflow protection externally.
+
+    Small-M fast path (M <= 4): route to mv_wrapper per-row. matmul_kernel
+    tiles on BLOCK_M=64 and wastes 63/64 threads when M=1 (decode). mv_kernel
+    parallelises on N only and is ~10–15× faster in that regime. Universal:
+    works for LLM decode (M=1), short-sequence audio, small-batch inference.
+    For M > 4, stays on matmul_kernel which is optimal for larger GEMM
+    (diffusion spatial mm with M in the thousands).
+    """
+    a = _ensure_cuda(a)
+    b = _ensure_cuda(b)
     # Multi-device: align b to a's device
     if hasattr(a, '_device_idx') and hasattr(b, '_device_idx') and a._device_idx != b._device_idx:
         b = _transfer_to_device(b, a._device_idx)
@@ -922,8 +960,45 @@ def mm(a, b) :
     K2, N = b.shape
     assert K == K2, f"Incompatible dimensions: {K} vs {K2}"
 
+    # === TEMP DIAGNOSTIC: record M,N,K per call ===
+    import os as _os
+    if _os.environ.get("NBX_MM_SHAPES") == "1":
+        import collections, atexit
+        if "_rec" not in mm.__dict__:
+            mm.__dict__["_rec"] = collections.Counter()
+            mm.__dict__["_call_idx"] = [0]
+
+            def _dump_shapes():
+                rec = mm.__dict__["_rec"]
+                print("\n[NBX_MM_SHAPES] unique (M,N,K) × count:")
+                for (m_, n_, k_), c in sorted(rec.items(),
+                                              key=lambda x: -x[1]):
+                    print(f"  M={m_:5d} N={n_:5d} K={k_:5d}  × {c}")
+                print(f"[NBX_MM_SHAPES] total calls: {sum(rec.values())}")
+            atexit.register(_dump_shapes)
+        mm.__dict__["_rec"][(M, N, K)] += 1
+    # ================================================
+
+    # Small-M GEMV path. Do NOT call b.contiguous() on the full weight:
+    # if b is a pre-transposed stride-view (from _eliminate_weight_transpose_ops),
+    # b.t() restores the original contiguous layout for free. Calling
+    # b.contiguous() first would copy the entire weight — defeating the point.
+    if M <= 4:
+        _set_device(a)
+        a = a.contiguous()
+        bt = b.t()  # (N, K); contiguous if b came from pre-transpose
+        dtype_out = _matmul_out_dtype(a, M)
+        dev_str = (f"cuda:{a._device_idx}" if hasattr(a, '_device_idx')
+                   else 'cuda')
+        c = NBXTensor.empty((M, N), device=dev_str, dtype=dtype_out)
+        for i in range(M):
+            c[i] = mv_wrapper(bt, a[i])
+        return c
+
+    a = a.contiguous()
+    b = b.contiguous()
     c = NBXTensor.empty((M, N), device=f"cuda:{a._device_idx}" if hasattr(a, '_device_idx') else 'cuda',
-                        dtype=a.nbx_dtype if hasattr(a, 'nbx_dtype') else a.dtype)
+                        dtype=_matmul_out_dtype(a, M))
     grid = (triton.cdiv(M, _MM_BM) * triton.cdiv(N, _MM_BN),)
     _set_device(a)
     matmul_kernel[grid](
@@ -941,15 +1016,35 @@ def mm(a, b) :
 def bmm(a, b) :
     """Batched matrix multiplication: C[i] = A[i] @ B[i].
     Kernel accumulates in fp32 (hardware). Output matches input dtype.
-    DtypeEngine handles overflow protection externally."""
-    a, b = _ensure_cuda(a).contiguous(), _ensure_cuda(b).contiguous()
+    DtypeEngine handles overflow protection externally.
+
+    Small-M fast path (M <= 4): per-batch mv loop. Applies to decode-path
+    bmm (attention Q@K.T with seq=1) and similar short-sequence patterns.
+    """
+    a = _ensure_cuda(a)
+    b = _ensure_cuda(b)
     if hasattr(a, '_device_idx') and hasattr(b, '_device_idx') and a._device_idx != b._device_idx:
         b = _transfer_to_device(b, a._device_idx)
     B, M, K = a.shape
     B2, K2, N = b.shape
     assert B == B2 and K == K2
 
-    c = NBXTensor.empty((B, M, N), device=a.device, dtype=a.dtype)
+    if M <= 4:
+        a = a.contiguous()
+        c = NBXTensor.empty((B, M, N), device=a.device,
+                            dtype=_matmul_out_dtype(a, M))
+        for bi in range(B):
+            bt = b[bi].t()
+            a_bi = a[bi]
+            c_bi = c[bi]
+            for i in range(M):
+                c_bi[i] = mv_wrapper(bt, a_bi[i])
+        return c
+
+    a = a.contiguous()
+    b = b.contiguous()
+    c = NBXTensor.empty((B, M, N), device=a.device,
+                        dtype=_matmul_out_dtype(a, M))
     grid = (triton.cdiv(M, _MM_BM) * triton.cdiv(N, _MM_BN),)
 
     for i in range(B):
@@ -998,13 +1093,41 @@ def addmm(bias, a, b,
           beta: float = 1.0, alpha: float = 1.0) :
     """C = beta * bias + alpha * (A @ B).
     Kernel accumulates in fp32 (hardware). Output matches input dtype.
-    DtypeEngine handles overflow protection externally."""
-    a, b, bias = _ensure_cuda(a).contiguous(), _ensure_cuda(b).contiguous(), _ensure_cuda(bias).contiguous()
+    DtypeEngine handles overflow protection externally.
+
+    Small-M fast path (M <= 4): per-row addmv. Bias is broadcast the same
+    way torch.addmm does: (N,), (1, N), or (M, N).
+    """
+    a = _ensure_cuda(a)
+    b = _ensure_cuda(b)
+    bias = _ensure_cuda(bias)
     M, K = a.shape
     K2, N = b.shape
     assert K == K2
 
-    c = NBXTensor.empty((M, N), device=a.device, dtype=a.dtype)
+    if M <= 4:
+        a = a.contiguous()
+        bias = bias.contiguous()
+        bt = b.t()
+        c = NBXTensor.empty((M, N), device=a.device,
+                            dtype=_matmul_out_dtype(a, M))
+        bias_per_row = (bias.ndim == 2 and bias.shape[0] == M)
+        if bias.ndim == 2 and bias.shape[0] == 1:
+            bias_shared = bias[0]
+        elif bias.ndim == 1:
+            bias_shared = bias
+        else:
+            bias_shared = None
+        for i in range(M):
+            br = bias[i] if bias_per_row else bias_shared
+            c[i] = addmv_wrapper(br, bt, a[i], beta=beta, alpha=alpha)
+        return c
+
+    a = a.contiguous()
+    b = b.contiguous()
+    bias = bias.contiguous()
+    c = NBXTensor.empty((M, N), device=a.device,
+                        dtype=_matmul_out_dtype(a, M))
     grid = (triton.cdiv(M, _MM_BM) * triton.cdiv(N, _MM_BN),)
     addmm_kernel[grid](
         a, b, bias, c,
@@ -1032,8 +1155,7 @@ _MOE_GROUP = 8
 
 def invoke_fused_moe(
     hidden_states,            # NBXTensor [M, K] — activations
-    weight_base,              # NBXTensor — any expert weight (base pointer)
-    expert_offsets,           # NBXTensor [E] int64 — element offsets from base
+    expert_ptrs,              # NBXTensor [E] int64 — absolute expert weight pointers
     output,                   # NBXTensor [M * top_k, N] — pre-allocated output
     topk_weights,             # NBXTensor [M * top_k] — flat routing scores
     sorted_token_ids,         # NBXTensor [num_tokens_post_padded] — sorted indices
@@ -1042,22 +1164,18 @@ def invoke_fused_moe(
     N, K,                     # output dim, reduction dim
     stride_bk, stride_bn,    # weight strides (shared by all experts)
     top_k,                    # int
-    mul_routed_weight=False,  # apply routing weights in kernel
-    topk_divide=True,        # True: A indexed by token (//top_k), False: A indexed by flat routing index
+    mul_routed_weight=False,
+    topk_divide=True,
 ):
-    """Launch fused MoE grouped GEMM kernel (zero-copy).
+    """Launch fused MoE grouped GEMM kernel (absolute pointer table).
 
-    One kernel launch handles ALL experts. Expert weights accessed via
-    offset table — zero extra GPU memory.
-
-    topk_divide: True for gate/up passes (A=hidden_states, indexed by token),
-                 False for down pass (A=activated, indexed by flat routing index).
+    One kernel launch handles ALL experts. Each expert's weight pointer is
+    stored as an absolute int64 in the table — no offset arithmetic.
     """
     M = hidden_states.shape[0]
     num_valid_tokens = M * top_k
     EM = sorted_token_ids.shape[0]
 
-    # Optimize for small batch: skip padding blocks
     if M < _MOE_BM:
         EM = min(EM, M * top_k * _MOE_BM)
 
@@ -1065,7 +1183,7 @@ def invoke_fused_moe(
     _set_device(hidden_states)
 
     fused_moe_kernel[grid](
-        hidden_states, weight_base, expert_offsets, output,
+        hidden_states, expert_ptrs, output,
         topk_weights,
         sorted_token_ids, expert_ids, num_tokens_post_padded,
         N, K, EM, num_valid_tokens,
@@ -1140,7 +1258,16 @@ def bf16_to_fp16_gpu(src: NBXTensor) -> NBXTensor:
 # ===========================================================================
 
 def embedding(weight, indices, padding_idx=-1, **kwargs) :
-    """Embedding lookup: output[i] = weight[indices[i]]."""
+    """Embedding lookup: output[i] = weight[indices[i]].
+
+    Indices must be integer. Diffusion timestep embeddings sometimes arrive
+    as fp32 (timestep is a scalar float in the scheduler); cast to int64 so
+    the Triton kernel's pointer arithmetic (`weight_ptr += row_idx * N`)
+    sees an integer operand.
+    """
+    if indices.dtype not in (NBXDtype.int64, NBXDtype.int32, NBXDtype.int16,
+                             NBXDtype.int8, NBXDtype.uint8, NBXDtype.bool_):
+        indices = indices.to(NBXDtype.int64)
     indices = indices.contiguous()
     weight = weight.contiguous()
     M = indices.numel()
@@ -2011,7 +2138,7 @@ def mv_wrapper(mat, vec) :
     """Matrix-vector multiply: out[i] = sum_j(mat[i, j] * vec[j])."""
     mat, vec = mat.contiguous(), vec.contiguous()
     N, M = mat.shape
-    out = NBXTensor.empty(N, device=mat.device, dtype=mat.dtype)
+    out = NBXTensor.empty(N, device=mat.device, dtype=_matmul_out_dtype(mat))
     grid = (triton.cdiv(N, _MV_BN),)
     mv_kernel[grid](
         mat, vec, out,
@@ -2223,7 +2350,7 @@ def addmv_wrapper(
     mat, vec = mat.contiguous(), vec.contiguous()
     input = input.contiguous()
     N, M = mat.shape
-    out = NBXTensor.empty(N, device=mat.device, dtype=mat.dtype)
+    out = NBXTensor.empty(N, device=mat.device, dtype=_matmul_out_dtype(mat))
     grid = (triton.cdiv(N, _MV_BN),)
     addmv_kernel[grid](
         mat, vec, input, out,
@@ -3148,13 +3275,30 @@ def topk_wrapper(x, k: int, dim: int = -1,
     s1_vals = NBXTensor.empty(batch_size * chunk_num * k, device=x.device, dtype=x.dtype)
     s1_idxs = NBXTensor.empty(batch_size * chunk_num * k, device=x.device, dtype=NBXDtype.int64)
 
-    # Stage 1: per-chunk top-k
+    # Stage 1: per-chunk top-k (iterative argmax → already sorted descending
+    # for largest=True).
     topk_stage1_kernel[batch_size, chunk_num](
         s1_vals, s1_idxs, x.contiguous(),
         k, topk_n, chunk_size, descending)
 
-    # Stage 2 buffers
     out_shape = x.shape[:-1] + (k,)
+
+    # Single-chunk fast path: stage 1 already produces the correct top-k in
+    # sorted order, so stage 2's bitonic merge is redundant. Skipping it also
+    # avoids a kernel bug where the BLOCK=next_pow2(k) padding corrupts the
+    # last entries for power-of-2-misaligned k (e.g. k=6 → BLOCK=8, with
+    # DeepSeek-MoE's 64-expert softmax the 2 pad slots leaked near-zero
+    # garbage into the real top-k, producing negative scores for slots 5–6
+    # and a 28× routed-MoE magnitude collapse). Also saves one kernel launch
+    # for every MoE model whose num_experts ≤ chunk_size.
+    if chunk_num == 1:
+        s1_vals = s1_vals.reshape(out_shape)
+        s1_idxs = s1_idxs.reshape(out_shape)
+        if input_dtype == NBXDtype.float32:
+            s1_vals = s1_vals.to(NBXDtype.float32)
+        return s1_vals, s1_idxs
+
+    # Stage 2 buffers
     s2_vals = NBXTensor.empty(out_shape, device=x.device, dtype=x.dtype)
     s2_idxs = NBXTensor.empty(out_shape, device=x.device, dtype=NBXDtype.int64)
 
@@ -3740,22 +3884,43 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     else:
         softmax_scale = float(scale) if not isinstance(scale, float) else scale
 
-    # GQA: repeat K/V heads to match Q heads
-    if nheads_k != nheads:
-        repeats = nheads // nheads_k
-        # Expand K and V: (b, nheads_k, s, d) → (b, nheads, s, d)
-        k = k.unsqueeze(2).expand(batch, nheads_k, repeats, seqlen_k, headdim)
-        k = k.reshape(batch, nheads, seqlen_k, headdim).contiguous()
-        v = v.unsqueeze(2).expand(batch, nheads_k, repeats, seqlen_k, headdim)
-        v = v.reshape(batch, nheads, seqlen_k, headdim).contiguous()
+    # GQA is handled inside the kernel via GQA_GROUPS — no materialization.
+    # off_h_kv = off_h // GQA_GROUPS picks the right K/V head for each Q head,
+    # so K/V keep their native (b, nheads_k, s, d) layout. For plain MHA
+    # (nheads == nheads_k), gqa_groups=1 and off_h_kv == off_h (zero cost).
+    # Avoids the per-call expand+reshape+contiguous that copied K and V in
+    # full every decode step (~7 MB/step on TinyLlama, >>100 MB at 2k ctx).
+    gqa_groups = nheads // nheads_k
+    assert nheads_k * gqa_groups == nheads, (
+        f"nheads ({nheads}) must be a multiple of nheads_k ({nheads_k})")
 
     q = q.contiguous()
     k = k.contiguous()
     v = v.contiguous()
 
-    # Output allocation
+    # Adaptive BLOCK_M (Phase 1): decode-path seqlen_q is typically 1–4. Using
+    # BLOCK_M=128 wastes >99% of the Q tile. 16 is the floor enforced by
+    # tl.dot (TensorCore tile minimum) — below that the kernel crashes.
+    # Block sizes — adapted from Dao-AILab defaults.
+    # Reduce BLOCK_M for large headdim to stay within shared memory limits.
+    # V100 has 96KB shared memory. With headdim=256: 128×256×2×3 = 192KB > 96KB.
+    BLOCK_HEADDIM = max(triton.next_power_of_2(headdim), 16)
+    if seqlen_q <= 16:
+        BLOCK_M = 16
+        BLOCK_N = 64 if BLOCK_HEADDIM < 128 else (64 if BLOCK_HEADDIM < 256 else 32)
+    elif BLOCK_HEADDIM >= 256:
+        BLOCK_M = 32
+        BLOCK_N = 32
+    elif BLOCK_HEADDIM >= 128:
+        BLOCK_M = 64
+        BLOCK_N = 64
+    else:
+        BLOCK_M = 128
+        BLOCK_N = 64
+
+    # Output allocation. seqlen_q_rounded must align with actual BLOCK_M.
     o = NBXTensor.empty_like(q)
-    seqlen_q_rounded = math.ceil(seqlen_q / 128) * 128
+    seqlen_q_rounded = math.ceil(seqlen_q / BLOCK_M) * BLOCK_M
     lse = NBXTensor.empty((batch, nheads, seqlen_q_rounded), dtype=NBXDtype.float32,
                           device=f"cuda:{q._device_idx}" if hasattr(q, '_device_idx') else 'cuda')
     tmp = NBXTensor.empty((batch, nheads, seqlen_q_rounded), dtype=NBXDtype.float32,
@@ -3775,20 +3940,6 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     else:
         bias = q  # dummy, not used
         bias_type = "none"
-
-    # Block sizes — adapted from Dao-AILab defaults.
-    # Reduce BLOCK_M for large headdim to stay within shared memory limits.
-    # V100 has 96KB shared memory. With headdim=256: 128×256×2×3 = 192KB > 96KB.
-    BLOCK_HEADDIM = max(triton.next_power_of_2(headdim), 16)
-    if BLOCK_HEADDIM >= 256:
-        BLOCK_M = 32
-        BLOCK_N = 32
-    elif BLOCK_HEADDIM >= 128:
-        BLOCK_M = 64
-        BLOCK_N = 64
-    else:
-        BLOCK_M = 128
-        BLOCK_N = 64
 
     grid = (triton.cdiv(seqlen_q, BLOCK_M), batch * nheads)
 
@@ -3813,6 +3964,7 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
         BLOCK_HEADDIM=BLOCK_HEADDIM,
         BLOCK_M=BLOCK_M,
         BLOCK_N=BLOCK_N,
+        GQA_GROUPS=gqa_groups,
     )
     return o
 

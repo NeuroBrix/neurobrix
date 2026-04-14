@@ -26,6 +26,11 @@ import torch
 from neurobrix.core.dtype.config import parse_dtype as _cfg_parse_dtype, DTYPE_MAP as _DTYPE_MAP
 from .compiled_ops import CompiledOpResolver
 
+# TEMP diagnostic state for _maybe_dump_tid_native (CompiledSequence has
+# __slots__, so per-instance dump state lives in this module-level dict
+# keyed by id(self)).
+_DUMP_STATE_NATIVE: Dict[int, Dict[str, Any]] = {}
+
 # ============================================================================
 # DEBUG FLAGS — read once at import time, not per-step
 # ============================================================================
@@ -1856,6 +1861,11 @@ class CompiledSequence:
         up_w_slots = tuple(up_w_slots)
         down_w_slots = tuple(down_w_slots)
 
+        # TEMP DIAG: identify block.1 from the first gate weight id
+        _moe_diag_block1 = ("block.1." in gate_weight_ids[0]
+                            and not any(f"block.1{d}." in gate_weight_ids[0]
+                                        for d in "0123456789"))
+
         # Allocate output slot
         output_slots = []
         for out_id in output_tensor_ids:
@@ -1902,6 +1912,8 @@ class CompiledSequence:
             if gate_scores.dim() == 3:
                 gate_scores = gate_scores.reshape(-1, gate_scores.size(-1))
 
+            def _dnat(_label, _tensor): pass
+
             # DTYPE CONTRACT: resolve weight dtype once, cache for all subsequent calls
             w_dtype = _cached_w_dtype[0]
             if w_dtype is None:
@@ -1923,10 +1935,15 @@ class CompiledSequence:
 
             # Dynamic routing in fp32 (replaces hardcoded topk+sort+bincount+slice)
             scores, indices = gate_scores.topk(_top_k, dim=-1)
+            _dnat("topk_scores", scores)
+            _dnat("topk_indices", indices)
+
             if _norm_topk_prob:
                 scores = scores / scores.sum(dim=-1, keepdim=True)
+                _dnat("scores_norm", scores)
 
             flat_indices = indices.flatten()
+            _dnat("flat_scores", scores.flatten())
             sorted_expert_ids, perm = flat_indices.sort()
             token_ids = perm // _top_k
 
@@ -1978,6 +1995,7 @@ class CompiledSequence:
 
                 start = end
 
+            _dnat("result_final", output)
             # Restore original shape if input was 3D
             if len(orig_shape) == 3:
                 output = output.reshape(orig_shape)
@@ -2597,6 +2615,51 @@ class CompiledSequence:
         with torch.inference_mode():
             self._run_inner(arena, debug)
 
+    def _maybe_dump_tid_native(self, op, out_slot: int, tensor) -> None:
+        """TEMP diagnostic: mirror of TritonSequence._maybe_dump_tid.
+        Gated by NBX_DUMP_TIDS=/path and NBX_DUMP_TIDS_FILTER=sub1,sub2.
+        Uses module-level state (CompiledSequence has __slots__).
+        """
+        import os as _os_d, json as _json_d
+        global _DUMP_STATE_NATIVE
+        try:
+            _DUMP_STATE_NATIVE
+        except NameError:
+            return
+        dump_path = _os_d.environ.get("NBX_DUMP_TIDS")
+        if not dump_path:
+            return
+        state = _DUMP_STATE_NATIVE.setdefault(id(self),
+            {"seen": set(), "records": [],
+             "slot_to_tid": {s: t for t, s in self._tensor_id_to_slot.items()}})
+        tid = state["slot_to_tid"].get(out_slot, f"slot::{out_slot}")
+        filters = [f for f in _os_d.environ.get(
+            "NBX_DUMP_TIDS_FILTER", "").split(",") if f]
+        # Match filter against tid OR op_uid (op_uid lets us select by op,
+        # e.g. all custom.rms_norm outputs across the network).
+        if filters and not any(f in tid or f in op.op_uid for f in filters):
+            return
+        if tid in state["seen"]:
+            return
+        state["seen"].add(tid)
+        try:
+            if not isinstance(tensor, torch.Tensor):
+                return
+            t32 = tensor.detach().float().contiguous()
+            flat = t32.reshape(-1)
+            head = flat[:10].cpu().tolist()
+            norm = float(flat.norm().item())
+            state["records"].append({
+                "tid": tid, "op_uid": op.op_uid, "op_type": op.op_type,
+                "shape": list(tensor.shape), "dtype": str(tensor.dtype),
+                "head10": head, "l2_norm": norm,
+            })
+            with open(dump_path, "w") as f:
+                _json_d.dump({"engine": "native",
+                              "records": state["records"]}, f, indent=1)
+        except Exception as e:
+            print(f"[NBX_DUMP_TIDS native] failed on {tid}: {e}", flush=True)
+
     def _run_inner(self, arena, debug: bool = False) -> None:
         """Inner loop extracted for inference_mode wrapping."""
         trace_nan = _TRACE_NAN
@@ -2754,6 +2817,11 @@ class CompiledSequence:
                 # NaN-GUARD for single tensor output (handled above)
                 # ================================================================
                 arena[slots[0]] = result
+                # === TEMP TID DUMP: compare native vs triton per-op output ===
+                import os as _os_d
+                if _os_d.environ.get("NBX_DUMP_TIDS"):
+                    self._maybe_dump_tid_native(op, slots[0], result)
+                # ==============================================================
             elif len(slots) > 1:
                 # ================================================================
                 # NaN-GUARD for TUPLE outputs (split, chunk, attention, etc.)
@@ -3081,6 +3149,11 @@ class CompiledSequence:
             slots = op.output_slots
             if len(slots) == 1:
                 arena[slots[0]] = result
+                # === TEMP TID DUMP (multi-device branch) ===
+                import os as _os_d2
+                if _os_d2.environ.get("NBX_DUMP_TIDS"):
+                    self._maybe_dump_tid_native(op, slots[0], result)
+                # ============================================
             elif len(slots) > 1:
                 result_len = len(result) if isinstance(result, (tuple, list)) else 0
                 for i, s in enumerate(slots):

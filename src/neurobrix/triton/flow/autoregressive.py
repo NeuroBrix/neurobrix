@@ -88,8 +88,41 @@ class TritonAutoregressiveHandler:
         hidden = session.prefill(input_ids, batch_size)
 
         # Decode loop
+        import os as _os_dl
+        _dump_path = _os_dl.environ.get("NBX_DUMP_LOGITS")
         for step_idx in generator:
             logits = strategy.get_logits(hidden, step_idx)
+            if _dump_path and step_idx == 0:
+                import json as _json_dl
+                # logits shape may be (B, V) or (B, S, V); flatten to (V,)
+                arr = logits
+                if hasattr(arr, '_shape'):
+                    flat = arr
+                    while flat.ndim > 1:
+                        flat = flat[0]
+                    # NBXTensor → numpy via to(fp32)
+                    from neurobrix.kernels.nbx_tensor import NBXDtype as _NBX
+                    flat = flat.to(_NBX.float32)
+                    n = flat.numel()
+                    import ctypes as _ct
+                    buf = (_ct.c_float * n)()
+                    from neurobrix.kernels.nbx_tensor import (
+                        DeviceAllocator as _DA)
+                    _DA.memcpy(_ct.addressof(buf), flat.data_ptr(),
+                               n * 4, kind=2)
+                    vals = list(buf)
+                else:
+                    import torch as _torch_dl
+                    vals = arr.detach().float().reshape(-1).cpu().tolist()
+                # top-10
+                idx_sorted = sorted(range(len(vals)), key=lambda i: -vals[i])[:10]
+                top10 = [(i, vals[i]) for i in idx_sorted]
+                with open(_dump_path, 'w') as _f:
+                    _json_dl.dump({"engine": "triton", "vocab_size": len(vals),
+                                   "top10": top10,
+                                   "argmax": idx_sorted[0]}, _f)
+                print(f"[NBX_DUMP_LOGITS] triton dumped top10 to {_dump_path}",
+                      flush=True)
             next_token, is_done = generator.step(logits, step_idx)
 
             if is_done:
@@ -212,6 +245,26 @@ class TritonAutoregressiveHandler:
 
         # Get LM config for KV cache setup
         lm_config = self.ctx.pkg.defaults.get("lm_config", {})
+
+        # MoE config — propagate norm_topk_prob to the executor BEFORE the
+        # TritonSequence compiles. Mirror of core/flow/autoregressive.py:667-676.
+        # Without this, detect_and_fuse_moe (run during executor.__init__ /
+        # load_graph_from_dict) used the default True and the fused op's attrs
+        # were never patched, so DeepSeek (norm_topk_prob=False) silently ran
+        # with True → expert contributions normalized incorrectly → gibberish
+        # output. top_k / num_experts are extracted from the trace by the
+        # fusion pass itself, so only norm_topk_prob needs propagating.
+        if lm_config:
+            num_experts = lm_config.get("num_experts")
+            if num_experts is not None and num_experts > 1:
+                norm_topk = lm_config.get("norm_topk_prob")
+                if norm_topk is None:
+                    raise RuntimeError(
+                        "ZERO FALLBACK: norm_topk_prob missing from lm_config "
+                        "for MoE model.\n"
+                        "Add to forge model_registry.yml: moe.norm_topk_prob")
+                executor.set_moe_config(norm_topk_prob=norm_topk)
+
         if not lm_config:
             extracted = self.ctx.pkg.topology.get("extracted_values", {}).get(lm_name, {})
             lm_config = {
