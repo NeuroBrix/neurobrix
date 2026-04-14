@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-04-14
+
+### Changed
+- DeepSeek benchmark script now requires `HF_TOKEN` to be provided via the shell environment or a gitignored `.env` file; no token is ever hardcoded. This replaces the previous version of the same file, which shipped with a hardcoded token — users who pulled `0.1.3` from the sdist should upgrade.
+- GitLab CI `publish-pypi` stage switched to `when: manual`. New version tags no longer trigger an automatic PyPI upload; an operator now reviews the build artefacts on GitLab and clicks the job explicitly.
+
+### Security
+- Rotate the credential that was shipped in the `neurobrix-0.1.3.tar.gz` sdist on PyPI (hardcoded HuggingFace access token in `benchmarks/profile_hf_deepseek.py`). The sdist has been yanked; `pip install neurobrix` now resolves to `0.1.4` by default. Users who installed `0.1.3` from the sdist (not the wheel — the wheel does not include benchmarks) should upgrade to `0.1.4`.
+
 ## [0.1.3] - 2026-04-14
 
 ### Added
