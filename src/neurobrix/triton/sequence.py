@@ -177,6 +177,24 @@ class TritonSequence:
         # Removes ~154 ops/step for TinyLlama (one `t` before every weight `mm`).
         self._eliminate_weight_transpose_ops(tensors, ops_by_uid, exec_order)
 
+        # Phase -0.4: Eliminate dead causal-mask chains (ones→tril→logical_not
+        # →where→SDPA.attn_mask). The triton flash kernel handles causality
+        # internally via IS_CAUSAL=True, so the whole chain is dead code.
+        # Removes ~132 ops/step for TinyLlama (6 ops × 22 layers).
+        self._eliminate_dead_causal_mask_ops(tensors, ops_by_uid, exec_order)
+
+        # Phase -0.3: Fuse SwiGLU (silu + mul) into custom::swiglu_fused.
+        # Collapses 2 elem ops → 1 kernel launch, and the fused kernel reads
+        # gate/up once each + writes output once (vs silu writing intermediate
+        # + mul reading/writing). Saves ~22 ops/step for Llama-style FFNs.
+        self._fuse_swiglu_ops(tensors, ops_by_uid, exec_order)
+
+        # Phase -0.2: Fuse HF-Llama rotate_half RoPE chains on Q+K into a
+        # single custom::rope_fused op backed by Liger's rope_forward_kernel.
+        # Collapses 14 ops per layer (slice×4, neg×2, cat×2, mul×4, add×2).
+        # Saves ~308 ops/step for TinyLlama (22 layers).
+        self._fuse_rope_ops(tensors, ops_by_uid, exec_order)
+
         # Phase 0: Promote trace-time seq_len scalars to symbolic references.
         # Shared logic in triton/promotion.py — used by both compiled and sequential.
         from .promotion import promote_seq_len_scalars
@@ -445,6 +463,592 @@ class TritonSequence:
 
         self._apply_rewire_to_remaining_ops(
             rewire, transpose_uids, ops_metadata, execution_order)
+
+    def _eliminate_dead_causal_mask_ops(
+        self,
+        tensors: Dict[str, Any],
+        ops_metadata: Dict[str, Any],
+        execution_order: List[str],
+    ) -> None:
+        """Eliminate dead causal-mask chains feeding SDPA attn_mask.
+
+        Pattern (per attention layer):
+            ones([N,N], bool) -> tril -> logical_not
+                -> where(cond, scalar_tensor(-inf), scalar_tensor(0.0))
+                -> SDPA as attn_mask
+
+        The triton flash_attention kernel handles causal masking internally
+        via IS_CAUSAL=True, so the entire chain is dead code. We detect
+        matching chains, rewrite each SDPA to set is_causal=True and drop
+        the mask argument, then remove the chain ops from execution_order.
+
+        Safety:
+        - Only fires when where->SDPA is the ONLY consumer of the where
+          output, AND the where's fill values are exactly -inf (True branch)
+          and 0.0 (False branch).
+        - scalar_tensor / ones / tril / logical_not ops are dropped only if
+          ALL their consumers are in the to-be-eliminated set. Shared
+          non-dead consumers keep the op alive.
+        - Universal: works for any LLM/audio/image model with this causal
+          bias pattern. Non-causal masks (diffusion cross-attn, arbitrary
+          where ops) never match because of the -inf/0.0 fill check and the
+          tril->logical_not->where topology requirement.
+        """
+        # Step 1: build producer + consumers index.
+        producer: Dict[str, str] = {}
+        consumers: Dict[str, List[str]] = {}
+        for op_uid in execution_order:
+            od = ops_metadata.get(op_uid)
+            if od is None:
+                continue
+            for t in od.get("output_tensor_ids", []):
+                producer[t] = op_uid
+            for t in od.get("input_tensor_ids", []):
+                consumers.setdefault(t, []).append(op_uid)
+
+        def _scalar_tensor_value(op_uid: str):
+            od = ops_metadata.get(op_uid) or {}
+            if od.get("op_type") != "aten::scalar_tensor":
+                return None
+            args = od.get("attributes", {}).get("args", [])
+            for a in args:
+                if isinstance(a, dict) and a.get("type") == "scalar":
+                    return a.get("value")
+            return None
+
+        # Step 2: for each SDPA, test mask chain and collect eliminable ops.
+        sdpa_rewrites: List[str] = []
+        mask_chain_candidates: set = set()
+
+        for op_uid in execution_order:
+            od = ops_metadata.get(op_uid)
+            if od is None:
+                continue
+            if od.get("op_type") != "aten::scaled_dot_product_attention":
+                continue
+            inputs = od.get("input_tensor_ids", [])
+            if len(inputs) < 4:
+                continue
+            mask_tid = inputs[3]
+            where_uid = producer.get(mask_tid)
+            if where_uid is None:
+                continue
+            where_op = ops_metadata.get(where_uid) or {}
+            if where_op.get("op_type") != "aten::where":
+                continue
+            # Where must not be consumed by anything else.
+            if consumers.get(mask_tid, []) != [op_uid]:
+                continue
+            w_inputs = where_op.get("input_tensor_ids", [])
+            if len(w_inputs) < 3:
+                continue
+            cond_tid, true_tid, false_tid = w_inputs[0], w_inputs[1], w_inputs[2]
+            true_v = _scalar_tensor_value(producer.get(true_tid, ""))
+            false_v = _scalar_tensor_value(producer.get(false_tid, ""))
+            # Classic causal bias: True → -inf, False → 0.0.
+            if not (true_v is not None and float(true_v) == float("-inf")):
+                continue
+            if not (false_v is not None and float(false_v) == 0.0):
+                continue
+            # Condition chain: where.cond <- logical_not <- tril <- ones(bool).
+            lnot_uid = producer.get(cond_tid)
+            lnot_op = ops_metadata.get(lnot_uid) if lnot_uid else None
+            if lnot_op is None or lnot_op.get("op_type") != "aten::logical_not":
+                continue
+            lnot_in = (lnot_op.get("input_tensor_ids") or [None])[0]
+            tril_uid = producer.get(lnot_in) if lnot_in else None
+            tril_op = ops_metadata.get(tril_uid) if tril_uid else None
+            if tril_op is None or tril_op.get("op_type") != "aten::tril":
+                continue
+            tril_in = (tril_op.get("input_tensor_ids") or [None])[0]
+            ones_uid = producer.get(tril_in) if tril_in else None
+            ones_op = ops_metadata.get(ones_uid) if ones_uid else None
+            if ones_op is None or ones_op.get("op_type") != "aten::ones":
+                continue
+
+            # This SDPA qualifies.
+            sdpa_rewrites.append(op_uid)
+            mask_chain_candidates.update([
+                where_uid, lnot_uid, tril_uid, ones_uid,
+                producer[true_tid], producer[false_tid],
+            ])
+
+        if not sdpa_rewrites:
+            return
+
+        # Step 3: rewrite SDPA ops first (drops mask from their inputs).
+        for op_uid in sdpa_rewrites:
+            od = ops_metadata[op_uid]
+            inputs = od.get("input_tensor_ids", [])
+            od["input_tensor_ids"] = list(inputs[:3])
+            attrs = od.setdefault("attributes", {})
+            args = attrs.get("args", [])
+            if args:
+                attrs["args"] = [a for a in args if not (
+                    isinstance(a, dict) and a.get("type") == "tensor"
+                    and a.get("tensor_id") == inputs[3])]
+            kwargs = attrs.setdefault("kwargs", {})
+            kwargs["is_causal"] = True
+
+        # Step 4: drop chain ops only if ALL their consumers are eliminated
+        # (or were the SDPA's dropped mask position, now removed).
+        # Recompute consumers after SDPA rewrite.
+        consumers2: Dict[str, List[str]] = {}
+        for op_uid in execution_order:
+            if op_uid in sdpa_rewrites:
+                od = ops_metadata[op_uid]
+            else:
+                od = ops_metadata.get(op_uid)
+                if od is None:
+                    continue
+            for t in od.get("input_tensor_ids", []):
+                consumers2.setdefault(t, []).append(op_uid)
+
+        to_drop: set = set()
+        # Iterate to a fixed point — dropping one op may free its inputs.
+        changed = True
+        while changed:
+            changed = False
+            for cand in list(mask_chain_candidates):
+                if cand in to_drop:
+                    continue
+                od = ops_metadata.get(cand)
+                if od is None:
+                    continue
+                out_tids = od.get("output_tensor_ids", [])
+                all_dead = True
+                for t in out_tids:
+                    for c in consumers2.get(t, []):
+                        if c not in to_drop:
+                            all_dead = False
+                            break
+                    if not all_dead:
+                        break
+                if all_dead:
+                    to_drop.add(cand)
+                    changed = True
+
+        if not to_drop:
+            return
+
+        # Remove dropped ops from execution_order.
+        new_order = [u for u in execution_order if u not in to_drop]
+        execution_order.clear()
+        execution_order.extend(new_order)
+
+    def _fuse_swiglu_ops(
+        self,
+        tensors: Dict[str, Any],
+        ops_metadata: Dict[str, Any],
+        execution_order: List[str],
+    ) -> None:
+        """Fuse aten::silu + aten::mul into custom::swiglu_fused.
+
+        Pattern (per FFN layer):
+            gate = ...                  # typically _unsafe_view / mm
+            up   = ...                  # typically _unsafe_view / mm
+            silu_out = silu(gate)
+            result   = mul(silu_out, up)
+
+        Replaced by a single custom::swiglu_fused op backed by
+        silu_mul_split_kernel (see kernels/wrappers.py:swiglu_fused_wrapper).
+
+        Safety:
+        - silu output must be consumed ONLY by one aten::mul
+        - that mul must have exactly 2 tensor inputs, one of which is the
+          silu output
+        - silu op is dropped only if its output has no other consumer
+        - universal: works for Llama-family (TinyLlama, Qwen, DeepSeek dense)
+          and any model with the silu(gate) * up SwiGLU pattern.
+        """
+        # Index producer + consumers.
+        producer: Dict[str, str] = {}
+        consumers: Dict[str, List[str]] = {}
+        for op_uid in execution_order:
+            od = ops_metadata.get(op_uid)
+            if od is None:
+                continue
+            for t in od.get("output_tensor_ids", []):
+                producer[t] = op_uid
+            for t in od.get("input_tensor_ids", []):
+                consumers.setdefault(t, []).append(op_uid)
+
+        to_drop: set = set()
+        new_ops: List[Tuple[str, str, Dict[str, Any]]] = []  # (silu_uid, new_uid, op_data)
+
+        fuse_idx = 0
+        for silu_uid in list(execution_order):
+            silu_op = ops_metadata.get(silu_uid)
+            if silu_op is None or silu_op.get("op_type") != "aten::silu":
+                continue
+            silu_outs = silu_op.get("output_tensor_ids", [])
+            if len(silu_outs) != 1:
+                continue
+            silu_out_tid = silu_outs[0]
+
+            # silu input (gate).
+            silu_ins = silu_op.get("input_tensor_ids", [])
+            if len(silu_ins) != 1:
+                continue
+            gate_tid = silu_ins[0]
+
+            # silu output must have exactly one consumer — an aten::mul.
+            cs = consumers.get(silu_out_tid, [])
+            if len(cs) != 1:
+                continue
+            mul_uid = cs[0]
+            mul_op = ops_metadata.get(mul_uid)
+            if mul_op is None or mul_op.get("op_type") != "aten::mul":
+                continue
+            mul_ins = mul_op.get("input_tensor_ids", [])
+            if len(mul_ins) != 2:
+                continue
+            if silu_out_tid not in mul_ins:
+                continue
+            up_tid = mul_ins[0] if mul_ins[1] == silu_out_tid else mul_ins[1]
+
+            # Output of the mul becomes output of the fused op.
+            mul_outs = mul_op.get("output_tensor_ids", [])
+            if len(mul_outs) != 1:
+                continue
+            fused_out_tid = mul_outs[0]
+
+            # Build fused op. Reuse mul's device/dtype + output tensor id.
+            new_uid = f"custom.swiglu_fused::{fuse_idx}"
+            fuse_idx += 1
+            fused_op: Dict[str, Any] = {
+                "op_uid": new_uid,
+                "op_type": "custom::swiglu_fused",
+                "input_tensor_ids": [gate_tid, up_tid],
+                "output_tensor_ids": [fused_out_tid],
+                "input_shapes": [
+                    tensors.get(gate_tid, {}).get("shape", []),
+                    tensors.get(up_tid, {}).get("shape", []),
+                ],
+                "output_shapes": [mul_op.get("output_shapes", [None])[0]],
+                "input_dtypes": [
+                    tensors.get(gate_tid, {}).get("dtype"),
+                    tensors.get(up_tid, {}).get("dtype"),
+                ],
+                "output_dtypes": mul_op.get("output_dtypes", []),
+                "device": mul_op.get("device") or silu_op.get("device"),
+                "attributes": {
+                    "args": [
+                        {"type": "tensor", "tensor_id": gate_tid},
+                        {"type": "tensor", "tensor_id": up_tid},
+                    ],
+                    "kwargs": {},
+                },
+            }
+
+            fused_op["_pair_mul_uid"] = mul_uid
+            to_drop.add(silu_uid)
+            to_drop.add(mul_uid)
+            new_ops.append((silu_uid, new_uid, fused_op))
+
+        if not new_ops:
+            return
+
+        # Register new ops in metadata.
+        for _, new_uid, fused_op in new_ops:
+            ops_metadata[new_uid] = fused_op
+
+        # Rebuild execution_order: drop the silu, replace the mul with the
+        # fused op. The mul is AFTER both gate and up are produced (silu
+        # position may be before up_mm completes), so scheduling the fused
+        # op at the mul's slot is safe.
+        mul_to_new: Dict[str, str] = {}
+        silu_drops: set = set()
+        for silu_uid, new_uid, fused_op in new_ops:
+            mul_to_new[fused_op["_pair_mul_uid"]] = new_uid
+            silu_drops.add(silu_uid)
+        new_order: List[str] = []
+        for uid in execution_order:
+            if uid in silu_drops:
+                continue
+            if uid in mul_to_new:
+                new_order.append(mul_to_new[uid])
+            else:
+                new_order.append(uid)
+        execution_order.clear()
+        execution_order.extend(new_order)
+
+    def _fuse_rope_ops(
+        self,
+        tensors: Dict[str, Any],
+        ops_metadata: Dict[str, Any],
+        execution_order: List[str],
+    ) -> None:
+        """Fuse HF-Llama rotate_half RoPE chains into custom::rope_fused.
+
+        Pattern per RoPE branch (applied separately to Q and K):
+
+            X = raw_tensor                              # [B, H, S, D] view
+            x_left  = slice(X, dim=-1, 0, D/2)
+            x_right = slice(X, dim=-1, D/2, D)
+            x_rot   = cat([neg(x_right), x_left], -1)
+            y = mul(X, cos_unsq) + mul(x_rot, sin_unsq)
+
+        Q and K branches share cos_unsq and sin_unsq (same layer). We pair
+        Q-side and K-side adds by matching (cos_producer, sin_producer),
+        then emit ONE custom::rope_fused op per pair consuming
+        (q_raw, k_raw, cos_unsq, sin_unsq) and producing (q_add_out, k_add_out).
+
+        Dropped per layer: 2×slice(Q) + 2×slice(K) + neg(Q) + neg(K) +
+        cat(Q) + cat(K) + 2×mul(Q) + 2×mul(K) + add(Q) + add(K) = 14 ops.
+        The downstream _to_copy dtype casts remain, consuming the fused op's
+        outputs.
+
+        Safety / universality:
+          * Each of the chain ops must have EXACTLY the fused op in its
+            consumer set (after pairing) — shared intermediates skip fusion.
+          * Only the canonical rotate_half topology matches. Any deviation
+            (interleaved RoPE, complex64 RoPE, ALiBi, NoPE) is left alone.
+          * Works for any HF-Llama family model (TinyLlama, Qwen, DeepSeek
+            dense, Mistral, Gemma, Phi) — the ATen fingerprint is identical.
+        """
+        producer: Dict[str, str] = {}
+        consumers: Dict[str, List[str]] = {}
+        for op_uid in execution_order:
+            od = ops_metadata.get(op_uid)
+            if od is None:
+                continue
+            for t in od.get("output_tensor_ids", []):
+                producer[t] = op_uid
+            for t in od.get("input_tensor_ids", []):
+                consumers.setdefault(t, []).append(op_uid)
+
+        def _op(uid):
+            return ops_metadata.get(uid) if uid else None
+
+        # Step 1: detect single-branch RoPE patterns.
+        # Returns a tuple of (chain_info_dict) or None.
+        def _detect_branch(add_uid: str):
+            add_op = _op(add_uid)
+            if add_op is None or add_op.get("op_type") != "aten::add":
+                return None
+            add_ins = add_op.get("input_tensor_ids", [])
+            if len(add_ins) != 2:
+                return None
+            mul_a_op = _op(producer.get(add_ins[0], ""))
+            mul_b_op = _op(producer.get(add_ins[1], ""))
+            if not (mul_a_op and mul_b_op):
+                return None
+            if mul_a_op.get("op_type") != "aten::mul":
+                return None
+            if mul_b_op.get("op_type") != "aten::mul":
+                return None
+            # Identify which side is X*cos vs x_rot*sin by finding the cat.
+            for x_mul_op, rot_mul_op in (
+                    (mul_a_op, mul_b_op), (mul_b_op, mul_a_op)):
+                rot_ins = rot_mul_op.get("input_tensor_ids", [])
+                if len(rot_ins) != 2:
+                    continue
+                # One of rot_ins is a cat output, the other is sin_unsq.
+                cat_side, sin_side = None, None
+                for tid in rot_ins:
+                    if _op(producer.get(tid, "")) and _op(producer[tid]).get("op_type") == "aten::cat":
+                        cat_side = tid
+                    else:
+                        sin_side = tid
+                if cat_side is None or sin_side is None:
+                    continue
+                cat_uid = producer[cat_side]
+                cat_op = _op(cat_uid)
+                cat_ins = cat_op.get("input_tensor_ids", [])
+                if len(cat_ins) != 2:
+                    continue
+                # First cat input must be neg(slice_right), second must be slice_left.
+                neg_op = _op(producer.get(cat_ins[0], ""))
+                left_slice_op = _op(producer.get(cat_ins[1], ""))
+                if not (neg_op and left_slice_op):
+                    continue
+                if neg_op.get("op_type") != "aten::neg":
+                    continue
+                if left_slice_op.get("op_type") != "aten::slice":
+                    continue
+                neg_in = (neg_op.get("input_tensor_ids") or [None])[0]
+                right_slice_op = _op(producer.get(neg_in, ""))
+                if right_slice_op is None or right_slice_op.get("op_type") != "aten::slice":
+                    continue
+                # Both slices must have the same X input (raw tensor).
+                x_from_right = (right_slice_op.get("input_tensor_ids") or [None])[0]
+                x_from_left = (left_slice_op.get("input_tensor_ids") or [None])[0]
+                if x_from_right is None or x_from_right != x_from_left:
+                    continue
+                # x_mul inputs: (X, cos_unsq).
+                x_mul_ins = x_mul_op.get("input_tensor_ids", [])
+                if len(x_mul_ins) != 2:
+                    continue
+                x_tid, cos_tid = None, None
+                for tid in x_mul_ins:
+                    if tid == x_from_right:
+                        x_tid = tid
+                    else:
+                        cos_tid = tid
+                if x_tid is None or cos_tid is None:
+                    continue
+                sin_tid = sin_side
+                # Collect chain uids to drop (if their outputs are SOLELY
+                # consumed within the chain).
+                chain_uids = {
+                    add_uid,
+                    producer[add_ins[0]], producer[add_ins[1]],  # two muls
+                    cat_uid,
+                    producer[neg_in],  # right slice
+                    producer[cat_ins[0]],  # neg
+                    producer[cat_ins[1]],  # left slice
+                }
+                return {
+                    "add_uid": add_uid,
+                    "x_tid": x_tid,
+                    "cos_tid": cos_tid,
+                    "sin_tid": sin_tid,
+                    "chain_uids": chain_uids,
+                    "add_out_tid": add_op.get("output_tensor_ids", [None])[0],
+                }
+            return None
+
+        # Step 2: collect all RoPE branches.
+        branches: List[Dict[str, Any]] = []
+        for op_uid in execution_order:
+            info = _detect_branch(op_uid)
+            if info is not None:
+                branches.append(info)
+
+        if not branches:
+            return
+
+        # Step 3: pair branches sharing the SAME (cos, sin) producer pair.
+        # Two branches with identical cos_tid and sin_tid → Q and K of one layer.
+        from collections import defaultdict
+        pair_map: Dict[Tuple[str, str], List[Dict[str, Any]]] = defaultdict(list)
+        for b in branches:
+            pair_map[(b["cos_tid"], b["sin_tid"])].append(b)
+
+        fuse_idx = 0
+        to_drop: set = set()
+        mul_to_new: Dict[str, str] = {}  # last chain op → fused op uid
+        new_ops_to_register: List[Tuple[str, Dict[str, Any]]] = []
+
+        for (cos_tid, sin_tid), group in pair_map.items():
+            if len(group) != 2:
+                # Unpaired (single branch or >2 sharing cos/sin) — skip.
+                continue
+            b_q, b_k = group
+
+            # Safety: every chain op's output must be consumed ONLY inside
+            # the chain (or by the fused replacement). Outputs that escape
+            # to other ops mean the intermediate is live elsewhere.
+            chain_all = b_q["chain_uids"] | b_k["chain_uids"]
+            chain_out_tids = set()
+            for cu in chain_all:
+                od = ops_metadata.get(cu)
+                if od is None:
+                    continue
+                for t in od.get("output_tensor_ids", []):
+                    chain_out_tids.add(t)
+            # The two add outputs are EXTERNALLY consumed (by _to_copy), so
+            # exempt them from the check. All other chain outputs must be
+            # consumed only by other chain ops.
+            exempt = {b_q["add_out_tid"], b_k["add_out_tid"]}
+            ok = True
+            for t in chain_out_tids:
+                if t in exempt:
+                    continue
+                for c in consumers.get(t, []):
+                    if c not in chain_all:
+                        ok = False
+                        break
+                if not ok:
+                    break
+            if not ok:
+                continue
+
+            # Sanity: Q.x_tid should correspond to the tensor with MORE
+            # heads than K.x_tid (GQA). Not a hard requirement for
+            # correctness — the kernel handles any (n_qh, n_kh) — but it
+            # disambiguates Q vs K for readable op ordering.
+            q_shape = tensors.get(b_q["x_tid"], {}).get("shape", [])
+            k_shape = tensors.get(b_k["x_tid"], {}).get("shape", [])
+            # If K has more heads than Q, swap so "Q" really is Q.
+            if (len(q_shape) >= 4 and len(k_shape) >= 4
+                    and isinstance(q_shape[1], int) and isinstance(k_shape[1], int)
+                    and q_shape[1] < k_shape[1]):
+                b_q, b_k = b_k, b_q
+                q_shape, k_shape = k_shape, q_shape
+
+            # Both adds are the "last" ops of their branches. Schedule the
+            # fused op at the position of the LATER of the two adds in
+            # execution_order — both x/cos/sin are guaranteed ready then.
+            idx_q_add = execution_order.index(b_q["add_uid"])
+            idx_k_add = execution_order.index(b_k["add_uid"])
+            later_add = (b_q["add_uid"] if idx_q_add > idx_k_add
+                         else b_k["add_uid"])
+
+            new_uid = f"custom.rope_fused::{fuse_idx}"
+            fuse_idx += 1
+            q_out_tid = b_q["add_out_tid"]
+            k_out_tid = b_k["add_out_tid"]
+
+            fused_op: Dict[str, Any] = {
+                "op_uid": new_uid,
+                "op_type": "custom::rope_fused",
+                "input_tensor_ids": [
+                    b_q["x_tid"], b_k["x_tid"], cos_tid, sin_tid],
+                "output_tensor_ids": [q_out_tid, k_out_tid],
+                "input_shapes": [
+                    tensors.get(b_q["x_tid"], {}).get("shape", []),
+                    tensors.get(b_k["x_tid"], {}).get("shape", []),
+                    tensors.get(cos_tid, {}).get("shape", []),
+                    tensors.get(sin_tid, {}).get("shape", []),
+                ],
+                "output_shapes": [
+                    tensors.get(q_out_tid, {}).get("shape", []),
+                    tensors.get(k_out_tid, {}).get("shape", []),
+                ],
+                "input_dtypes": [
+                    tensors.get(b_q["x_tid"], {}).get("dtype"),
+                    tensors.get(b_k["x_tid"], {}).get("dtype"),
+                    tensors.get(cos_tid, {}).get("dtype"),
+                    tensors.get(sin_tid, {}).get("dtype"),
+                ],
+                "output_dtypes": [
+                    tensors.get(q_out_tid, {}).get("dtype"),
+                    tensors.get(k_out_tid, {}).get("dtype"),
+                ],
+                "device": ops_metadata[b_q["add_uid"]].get("device"),
+                "attributes": {
+                    "args": [
+                        {"type": "tensor", "tensor_id": b_q["x_tid"]},
+                        {"type": "tensor", "tensor_id": b_k["x_tid"]},
+                        {"type": "tensor", "tensor_id": cos_tid},
+                        {"type": "tensor", "tensor_id": sin_tid},
+                    ],
+                    "kwargs": {},
+                },
+            }
+
+            to_drop.update(chain_all)
+            mul_to_new[later_add] = new_uid
+            new_ops_to_register.append((later_add, fused_op))
+
+        if not new_ops_to_register:
+            return
+
+        for _, fused_op in new_ops_to_register:
+            ops_metadata[fused_op["op_uid"]] = fused_op
+
+        new_order: List[str] = []
+        for uid in execution_order:
+            if uid in mul_to_new:
+                new_order.append(mul_to_new[uid])
+            elif uid in to_drop:
+                continue
+            else:
+                new_order.append(uid)
+        execution_order.clear()
+        execution_order.extend(new_order)
 
     # ========================================================================
     # SYMBOLIC PROMOTION — ported from compiled_sequence
@@ -1498,6 +2102,10 @@ class TritonSequence:
                         "meta": 0.0, "embed": 0.0, "other": 0.0}
             _counts = {"matmul": 0, "sdpa": 0, "elem": 0,
                        "meta": 0, "embed": 0, "other": 0}
+            # Per-op_type breakdown inside the `elem` bucket — lets us rank
+            # fusion targets ("what dominates element-wise time?").
+            _elem_timings: Dict[str, float] = {}
+            _elem_counts: Dict[str, int] = {}
             if not hasattr(self, "_prof_call_idx"):
                 self._prof_call_idx = 0
             self._prof_call_idx += 1
@@ -1551,6 +2159,9 @@ class TritonSequence:
                         _cat = "other"
                     _timings[_cat] += _dt
                     _counts[_cat] += 1
+                    if _cat == "elem":
+                        _elem_timings[op.op_type] = _elem_timings.get(op.op_type, 0.0) + _dt
+                        _elem_counts[op.op_type] = _elem_counts.get(op.op_type, 0) + 1
 
             # Defer any tensors currently in the output slots before overwriting.
             for s in op.output_slots:
@@ -1606,6 +2217,17 @@ class TritonSequence:
                       f"({_counts[_cat]:4d} ops, {_avg:.3f}ms/op, "
                       f"{_pct:5.1f}%)")
             print(f"  TOTAL:    {_total*1000:.1f}ms")
+            if _elem_timings:
+                _elem_total = sum(_elem_timings.values())
+                _sorted = sorted(_elem_timings.items(), key=lambda kv: kv[1], reverse=True)
+                print(f"  [elem breakdown — {len(_sorted)} distinct op_types, "
+                      f"{sum(_elem_counts.values())} total ops]")
+                for _op_type, _ms in _sorted[:20]:
+                    _n = _elem_counts[_op_type]
+                    _p = 100 * _ms / _elem_total if _elem_total > 0 else 0
+                    _avg = 1000 * _ms / _n if _n > 0 else 0
+                    print(f"    {_op_type:40s} {_ms*1000:7.2f}ms  "
+                          f"({_n:4d} ops, {_avg:.3f}ms/op, {_p:5.1f}% of elem)")
         # ==================================
 
     def _run_multi_device(self, skip_kills: bool = False):

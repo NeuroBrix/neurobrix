@@ -141,3 +141,37 @@ def silu_and_mul_kernel(
 
     out_ptrs = output_ptr + offs_m[:, None] * stride_om + offs_n[None, :] * stride_on
     tl.store(out_ptrs, result, mask=mask)
+
+
+@triton.jit
+def silu_mul_split_kernel(
+    gate_ptr, up_ptr, output_ptr,
+    M, N,
+    stride_gm, stride_gn,
+    stride_um, stride_un,
+    stride_om, stride_on,
+    BLOCK_M: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+):
+    """Fused SwiGLU with split gate/up tensors: output = silu(gate) * up.
+
+    Variant of silu_and_mul_kernel for the common case where gate and up
+    are produced as two separate tensors (no concat needed).
+    """
+    pid_m = tl.program_id(0)
+    pid_n = tl.program_id(1)
+    offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    mask = (offs_m[:, None] < M) & (offs_n[None, :] < N)
+
+    gate_ptrs = gate_ptr + offs_m[:, None] * stride_gm + offs_n[None, :] * stride_gn
+    up_ptrs = up_ptr + offs_m[:, None] * stride_um + offs_n[None, :] * stride_un
+
+    gate = tl.load(gate_ptrs, mask=mask, other=0.0).to(tl.float32)
+    up = tl.load(up_ptrs, mask=mask, other=0.0).to(tl.float32)
+
+    silu_gate = gate * tl.sigmoid(gate)
+    result = silu_gate * up
+
+    out_ptrs = output_ptr + offs_m[:, None] * stride_om + offs_n[None, :] * stride_on
+    tl.store(out_ptrs, result, mask=mask)

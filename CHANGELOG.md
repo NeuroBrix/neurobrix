@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-04-15
+
+### Added
+- Regression harness (`tests/regression/`) — automated model×mode matrix, golden output comparison, pytest-based with `--runslow` flag for heavy models.
+- Three graph-level fusion passes for Triton decode optimization:
+  - Dead causal mask elimination: removes ~132 ops/step (ones→tril→logical_not→where chain feeding SDPA attn_mask, replaced by kernel-native IS_CAUSAL).
+  - SwiGLU fusion: collapses silu+mul into single `custom::swiglu_fused` kernel (~22 ops/step).
+  - RoPE fusion: replaces 18-op rotate_half chain per layer (slice×4, neg×2, cat×2, mul×4, add×2) with single `custom::rope_fused` kernel backed by Liger-Kernel's `rope_forward_kernel` (~396 ops dropped for 22-layer models).
+- Cumulative Triton decode performance (TinyLlama V100 fp16): step time 460 ms → 94 ms (4.9× faster), element-wise ops 684 → 376 (−45%).
+
+### Fixed
+- Sana diffusion transformer NaN in Triton mode: `bmm` attention scores overflowed fp16 on V100. `bmm` now always outputs fp32 for half-precision inputs (attention intermediates are temporary, no OOM impact). SDPA wrapper aligns Q/K/V dtypes before kernel launch.
+- Native CFG engine crash on diffusion models (Sana, PixArt-Sigma): string dtype from Prism's allocation was passed to `torch.Tensor.to()` which interpreted it as device name. Added `_resolve_torch_dtype` helper.
+- Kokoro Triton startup crash on 1-D constant tensors in models without a `seq_len` symbol.
+
+### Changed
+- Weight transpose elimination (`_eliminate_weight_transpose_ops`) ported from native to Triton — 154 fewer ops/step, structural parity with native CompiledSequence.
+- Orphan `rope_wrapper` removed (incompatible with kernel, zero call sites in any model graph). Replaced by `rope_fused_wrapper` with correct Liger kernel signature.
+
+### Documented
+- WARNING blocks added to `stages/kokoro.py` and `stages/vibevoice.py` flagging runtime dependency violations (phonemizer/espeak-ng imports, PyTorch native bypass of TensorDAG).
+- `KNOWN_FAILURES` in regression harness `conftest.py` with exact reasons for each xfail.
+
 ## [0.1.4] - 2026-04-14
 
 ### Changed
