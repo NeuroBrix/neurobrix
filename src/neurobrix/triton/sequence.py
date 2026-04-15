@@ -1329,6 +1329,56 @@ class TritonSequence:
         else:
             self._run_single_device(skip_kills)
 
+    def _maybe_trace_nan(self, op: 'CompiledOp', arena) -> None:
+        """Scan op output(s) for Inf/NaN. Print the first offender on
+        stderr with its (op_uid, op_type, shape, dtype) so the caller
+        can localise the first op that introduced the NaN/Inf."""
+        if not hasattr(self, "_trace_nan_seen"):
+            self._trace_nan_seen = False
+        if self._trace_nan_seen:
+            return
+        import sys as _sys_tn
+        for s in op.output_slots:
+            t = arena[s] if arena else None
+            if t is None:
+                continue
+            try:
+                from neurobrix.kernels.nbx_tensor import NBXDtype, DeviceAllocator
+                import ctypes as _ct
+                full = t if t.dtype == NBXDtype.float32 else t.to(NBXDtype.float32)
+                full = full.contiguous()
+                DeviceAllocator.set_device(full._device_idx)
+                n = full.numel()
+                if n == 0:
+                    continue
+                buf = (_ct.c_float * n)()
+                DeviceAllocator.memcpy(_ct.addressof(buf), full.data_ptr(),
+                                       n * 4, kind=2)
+                import math as _math
+                has_nan = any(_math.isnan(v) for v in buf)
+                has_inf = any(_math.isinf(v) for v in buf)
+                if has_nan or has_inf:
+                    self._trace_nan_seen = True
+                    flag = "NaN" if has_nan else "Inf"
+                    # Input dtypes — useful to understand fp16 overflow
+                    inp_info = []
+                    for si in op.all_input_slots[:4]:
+                        ti = arena[si] if arena else None
+                        if ti is not None:
+                            inp_info.append(
+                                f"in{si}=<{ti.dtype}, shape={list(ti.shape)}>")
+                    print(
+                        f"[NBX_TRITON_TRACE_NAN] FIRST {flag} at "
+                        f"op_uid={op.op_uid} op_type={op.op_type} "
+                        f"out=<{t.dtype}, shape={list(t.shape)}> "
+                        f"{'; '.join(inp_info)}",
+                        file=_sys_tn.stderr, flush=True)
+                    return
+            except Exception as e:
+                print(f"[NBX_TRITON_TRACE_NAN] failed on {op.op_uid}: {e}",
+                      file=_sys_tn.stderr, flush=True)
+                return
+
     def _maybe_dump_tid(self, op: 'CompiledOp', dump_path: str) -> None:
         """TEMP diagnostic: dump op output tensor to JSON if its tid matches.
 
@@ -1387,7 +1437,7 @@ class TritonSequence:
                                        N * 4, kind=2)
                 vals = list(fbuf)
                 norm = (sum(v * v for v in vals)) ** 0.5
-                self._dump_records.append({
+                new_record = {
                     "tid": tid,
                     "op_uid": op.op_uid,
                     "op_type": op.op_type,
@@ -1395,11 +1445,28 @@ class TritonSequence:
                     "dtype": str(tensor.dtype),
                     "head10": head,
                     "l2_norm": norm,
-                })
+                }
+                self._dump_records.append(new_record)
+                # Merge with any records written by other pipeline stages
+                # (see the matching fix in compiled_sequence.py:
+                # per-instance state would otherwise overwrite the file
+                # with only the last component's records).
+                import os as _os_dj
+                existing = []
+                if _os_dj.path.exists(dump_path):
+                    try:
+                        with open(dump_path) as _rf:
+                            existing = _json_d.load(_rf).get("records", [])
+                    except Exception:
+                        existing = []
+                seen_keys = {(r.get("op_uid"), r.get("tid"))
+                             for r in existing}
+                key = (new_record["op_uid"], new_record["tid"])
+                if key not in seen_keys:
+                    existing.append(new_record)
                 with open(dump_path, "w") as f:
                     _json_d.dump({"engine": "triton",
-                                  "records": self._dump_records}, f,
-                                 indent=1)
+                                  "records": existing}, f, indent=1)
             except Exception as e:
                 print(f"[NBX_DUMP_TIDS] failed on {tid}: {e}", flush=True)
 
@@ -1500,6 +1567,12 @@ class TritonSequence:
                     arena[s] = result[i] if i < len(result) else None
             else:
                 arena[op.output_slots[0]] = result
+
+            # === TEMP NBX_TRITON_TRACE_NAN=1 : log first Inf/NaN op ===
+            import os as _os_tn
+            if _os_tn.environ.get("NBX_TRITON_TRACE_NAN") == "1" and op.output_slots:
+                self._maybe_trace_nan(op, arena)
+            # =============================================================
 
             # === TEMP TID DUMP: compare triton vs native per-op output ===
             import os as _os_tid
