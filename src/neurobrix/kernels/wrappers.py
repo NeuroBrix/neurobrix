@@ -77,7 +77,7 @@ from .ops.matmul import matmul_kernel, addmm_kernel
 
 # === Fused MoE ===
 
-from .ops.fused_moe import fused_moe_kernel, silu_and_mul_kernel
+from .ops.fused_moe import fused_moe_kernel, silu_and_mul_kernel, silu_mul_split_kernel
 from .ops.dtype_convert import bf16_to_fp16_kernel
 
 # === Embedding ===
@@ -1244,6 +1244,139 @@ def invoke_silu_and_mul(input_tensor, M, N):
         num_warps=4,
     )
     return output
+
+
+def swiglu_fused_wrapper(gate, up):
+    """Fused SwiGLU with split gate/up tensors: silu(gate) * up.
+
+    Used by the _fuse_swiglu_ops pass in TritonSequence to replace
+    aten::silu + aten::mul with a single kernel launch. Gate and up may
+    be N-D (typically [B, S, N]); we flatten everything but the last dim
+    for the 2-D kernel.
+
+    Args:
+        gate: NBXTensor [..., N]
+        up:   NBXTensor [..., N] (same shape as gate)
+
+    Returns:
+        NBXTensor same shape as gate.
+    """
+    # Align dtypes (matches the semantics of the pre-fusion aten::mul,
+    # which relied on PyTorch dtype promotion).
+    if gate.dtype != up.dtype:
+        _order = (NBXDtype.float32, NBXDtype.bfloat16, NBXDtype.float16)
+        widest = next(d for d in _order if d in (gate.dtype, up.dtype))
+        if gate.dtype != widest:
+            gate = gate.to(widest)
+        if up.dtype != widest:
+            up = up.to(widest)
+
+    gate_c = gate.contiguous()
+    up_c = up.contiguous()
+    orig_shape = gate_c.shape
+    N = orig_shape[-1]
+    M = 1
+    for d in orig_shape[:-1]:
+        M *= d
+
+    gate2d = gate_c.view(M, N)
+    up2d = up_c.view(M, N)
+    output = NBXTensor.empty((M, N), dtype=gate_c._dtype,
+                             device=f"cuda:{gate_c._device_idx}")
+
+    BLOCK_M = 16
+    BLOCK_N = min(triton.next_power_of_2(N), 1024)
+    grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
+    _set_device(gate_c)
+
+    silu_mul_split_kernel[grid](
+        gate2d, up2d, output,
+        M, N,
+        gate2d.stride(0), gate2d.stride(1),
+        up2d.stride(0), up2d.stride(1),
+        output.stride(0), output.stride(1),
+        BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N,
+        num_warps=4,
+    )
+    return output.view(*orig_shape)
+
+
+def rope_fused_wrapper(q_raw, k_raw, cos, sin):
+    """Fused RoPE (Liger-style rotate_half) — applies to Q and K in one launch.
+
+    Replaces the graph chain slice×4 + neg×2 + cat×2 + mul×4 + add×2 (plus
+    the per-side _to_copy done downstream) with a single call to
+    rope_forward_kernel (see kernels/ops/rope.py).
+
+    Inputs arrive in the HF-Llama layout, post-transpose:
+        q_raw : [B, H_q,  S, D]  (logical view; physical memory [B,S,H_q,D])
+        k_raw : [B, H_kv, S, D]  (logical view; physical memory [B,S,H_kv,D])
+        cos   : [1|B, 1, S, D]   (broadcast over heads; from unsqueeze)
+        sin   : [1|B, 1, S, D]
+
+    The kernel expects physical (B, S, H, D) layout with q/k row-stride =
+    H*D. Since transpose is a zero-copy stride permutation, we do the
+    inverse transpose+contiguous to materialise a fresh (B, S, H, D) buffer,
+    apply the kernel in-place on the fresh buffer, then view it back as
+    (B, H, S, D). The contiguous copy doubles as the arena-safety clone.
+    """
+    # Squeeze cos/sin broadcast dims: [1|B, 1, S, D] -> [1|B, S, D].
+    if cos.ndim == 4 and cos.shape[1] == 1:
+        cos = cos.view(cos.shape[0], cos.shape[2], cos.shape[3])
+    if sin.ndim == 4 and sin.shape[1] == 1:
+        sin = sin.view(sin.shape[0], sin.shape[2], sin.shape[3])
+
+    # Align cos/sin dtype with q/k (kernel computes in cos/sin dtype).
+    target_dt = q_raw.dtype
+    if cos.dtype != target_dt:
+        cos = cos.to(target_dt)
+    if sin.dtype != target_dt:
+        sin = sin.to(target_dt)
+    if k_raw.dtype != target_dt:
+        k_raw = k_raw.to(target_dt)
+
+    cos = cos.contiguous()
+    sin = sin.contiguous()
+
+    # Transpose back to (B, S, H, D) physical layout, then contiguous copy:
+    # the kernel writes in-place, and this copy is our arena-safe clone.
+    q_bshd = q_raw.transpose(1, 2).contiguous()
+    k_bshd = k_raw.transpose(1, 2).contiguous()
+
+    bs, sl, n_qh, hd = q_bshd.shape
+    _, _, n_kh, _ = k_bshd.shape
+    cos_bs = cos.shape[0]  # 1 (broadcast over batch) or bs
+
+    # Row stride = H*D for (B, S, H, D) contiguous layout.
+    q_row_stride = n_qh * hd
+    k_row_stride = n_kh * hd
+
+    pad_n_qh = triton.next_power_of_2(n_qh)
+    pad_n_kh = triton.next_power_of_2(n_kh)
+    pad_hd = triton.next_power_of_2(hd)
+    BLOCK_SIZE = max(pad_n_qh, pad_n_kh)
+
+    grid = (bs * sl,)
+    _set_device(q_bshd)
+
+    rope_forward_kernel[grid](
+        q_bshd, q_row_stride,
+        k_bshd, k_row_stride,
+        cos, cos.stride(-2),
+        sin, sin.stride(-2),
+        sl,
+        bs=bs, cos_bs=cos_bs,
+        n_qh=n_qh, n_kh=n_kh, hd=hd,
+        pad_n_qh=pad_n_qh, pad_n_kh=pad_n_kh, pad_hd=pad_hd,
+        BLOCK_SIZE=BLOCK_SIZE,
+        BACKWARD_PASS=False,
+        num_warps=4,
+    )
+
+    # View back as (B, H, S, D) to match the pre-fusion output layout.
+    q_out = q_bshd.transpose(1, 2)
+    k_out = k_bshd.transpose(1, 2)
+    return q_out, k_out
 
 
 # ===========================================================================
@@ -3002,30 +3135,8 @@ def sort_wrapper(x, dim: int = -1,
 
 
 # ===========================================================================
-# PHASE 5 — RoPE, spatial, RNG, remaining wrappers
+# PHASE 5 — spatial, RNG, remaining wrappers
 # ===========================================================================
-
-def rope_wrapper(q, k,
-                 cos, sin,
-                 position_ids=None) -> tuple:
-    """RoPE — Rotary Position Embedding (in-place on Q and K)."""
-    q = q.contiguous()
-    k = k.contiguous()
-    cos = cos.contiguous()
-    sin = sin.contiguous()
-    B, H, T, D = q.shape
-    n_elements = B * H * T * (D // 2)
-    grid = (triton.cdiv(n_elements, _EW_BLOCK),)
-    rope_forward_kernel[grid](
-        q, k, cos, sin,
-        q.stride(0), q.stride(1), q.stride(2), q.stride(3),
-        cos.stride(0), cos.stride(1),
-        B, H, T, D, D // 2, n_elements,
-        BACKWARD_PASS=False,
-        BLOCK_SIZE=_EW_BLOCK,
-    )
-    return q, k
-
 
 def pixel_shuffle_wrapper(x, upscale_factor: int) :
     """Pixel shuffle: [N,C*r*r,H,W] -> [N,C,H*r,W*r]."""
