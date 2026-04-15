@@ -910,7 +910,7 @@ def log_softmax(x, dim: int = -1) :
 # MATMUL WRAPPERS
 # ===========================================================================
 
-def _matmul_out_dtype(a, M: int = 1):
+def _matmul_out_dtype(a, M: int = 1, force_fp32: bool = False):
     """Output dtype for mm/bmm/addmm/mv/addmv.
 
     Kernels accumulate in fp32. The output store dtype depends on M:
@@ -934,7 +934,8 @@ def _matmul_out_dtype(a, M: int = 1):
     pass through unchanged.
     """
     dt = a.nbx_dtype if hasattr(a, 'nbx_dtype') else a.dtype
-    if dt in (NBXDtype.float16, NBXDtype.bfloat16) and M <= 4:
+    is_half = dt in (NBXDtype.float16, NBXDtype.bfloat16)
+    if is_half and (M <= 4 or force_fp32):
         return NBXDtype.float32
     return dt
 
@@ -1025,6 +1026,21 @@ def bmm(a, b) :
     b = _ensure_cuda(b)
     if hasattr(a, '_device_idx') and hasattr(b, '_device_idx') and a._device_idx != b._device_idx:
         b = _transfer_to_device(b, a._device_idx)
+
+    # Align dtypes. `bmm` below forces fp32 output for half-precision inputs
+    # (diffusion attention math overflows fp16 on V100), so a downstream
+    # bmm fed by that fp32 result + a fresh fp16 weight will present mixed
+    # dtypes to matmul_kernel / mv_wrapper, and tl.dot crashes with
+    # "Both operands must be same dtype". Promote the narrower side to the
+    # wider one up-front; no-op in the common same-dtype case.
+    if a.dtype != b.dtype:
+        _order = (NBXDtype.float32, NBXDtype.bfloat16, NBXDtype.float16)
+        widest = next(d for d in _order if d in (a.dtype, b.dtype))
+        if a.dtype != widest:
+            a = a.to(widest)
+        if b.dtype != widest:
+            b = b.to(widest)
+
     B, M, K = a.shape
     B2, K2, N = b.shape
     assert B == B2 and K == K2
@@ -1032,7 +1048,7 @@ def bmm(a, b) :
     if M <= 4:
         a = a.contiguous()
         c = NBXTensor.empty((B, M, N), device=a.device,
-                            dtype=_matmul_out_dtype(a, M))
+                            dtype=_matmul_out_dtype(a, M, force_fp32=True))
         for bi in range(B):
             bt = b[bi].t()
             a_bi = a[bi]
@@ -1044,7 +1060,7 @@ def bmm(a, b) :
     a = a.contiguous()
     b = b.contiguous()
     c = NBXTensor.empty((B, M, N), device=a.device,
-                        dtype=_matmul_out_dtype(a, M))
+                        dtype=_matmul_out_dtype(a, M, force_fp32=True))
     grid = (triton.cdiv(M, _MM_BM) * triton.cdiv(N, _MM_BN),)
 
     for i in range(B):
@@ -3897,6 +3913,14 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     q = q.contiguous()
     k = k.contiguous()
     v = v.contiguous()
+
+    # tl.dot on V100 TensorCores requires matching operand dtypes; our
+    # conditional fp32-output matmul (M<=4 decode) can leave q/k/v mixed
+    # (Sana diffusion hit fp32 Q vs fp16 K here). If they disagree, cast
+    # to fp32. For the common LLM case where all three match, this is a
+    # no-op — zero overhead.
+    if not (q.dtype == k.dtype == v.dtype):
+        q, k, v = q.to(NBXDtype.float32), k.to(NBXDtype.float32), v.to(NBXDtype.float32)
 
     # Adaptive BLOCK_M (Phase 1): decode-path seqlen_q is typically 1–4. Using
     # BLOCK_M=128 wastes >99% of the Q tile. 16 is the floor enforced by
