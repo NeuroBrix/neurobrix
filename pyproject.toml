@@ -81,4 +81,16 @@ packages = ["src/neurobrix"]
 exclude = ["src/neurobrix/kernels/triton_kernels_ref"]
 
 [tool.hatch.build.targets.sdist]
-exclude = ["src/neurobrix/kernels/triton_kernels_ref"]
+exclude = [
+    "src/neurobrix/kernels/triton_kernels_ref",
+    ".venv",
+    ".venv-*",
+    "venv",
+    "tests/regression",
+    ".env",
+    ".env.*",
+    "*.wav",
+    "*.flac",
+    "*.mp4",
+    "*.png",
+]
