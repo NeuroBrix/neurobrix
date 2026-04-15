@@ -2649,14 +2649,34 @@ class CompiledSequence:
             flat = t32.reshape(-1)
             head = flat[:10].cpu().tolist()
             norm = float(flat.norm().item())
-            state["records"].append({
+            new_record = {
                 "tid": tid, "op_uid": op.op_uid, "op_type": op.op_type,
                 "shape": list(tensor.shape), "dtype": str(tensor.dtype),
                 "head10": head, "l2_norm": norm,
-            })
+            }
+            state["records"].append(new_record)
+            # Merge across CompiledSequence instances: text_encoder,
+            # transformer, vae (diffusion pipeline) each have their own
+            # instance. Without a read-then-append, every instance would
+            # overwrite the file with its own per-instance records only,
+            # leaving just the last component in the JSON. Read existing
+            # records from disk, dedupe by (op_uid, tid, component-hint)
+            # using a tuple key, append the new one, write back.
+            import os as _os_dj
+            existing = []
+            if _os_dj.path.exists(dump_path):
+                try:
+                    with open(dump_path) as _rf:
+                        existing = _json_d.load(_rf).get("records", [])
+                except Exception:
+                    existing = []
+            seen_keys = {(r.get("op_uid"), r.get("tid")) for r in existing}
+            key = (new_record["op_uid"], new_record["tid"])
+            if key not in seen_keys:
+                existing.append(new_record)
             with open(dump_path, "w") as f:
-                _json_d.dump({"engine": "native",
-                              "records": state["records"]}, f, indent=1)
+                _json_d.dump({"engine": "native", "records": existing},
+                             f, indent=1)
         except Exception as e:
             print(f"[NBX_DUMP_TIDS native] failed on {tid}: {e}", flush=True)
 

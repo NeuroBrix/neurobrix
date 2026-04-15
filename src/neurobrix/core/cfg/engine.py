@@ -14,12 +14,32 @@ Interface:
 
 import torch
 from enum import Enum, auto
-from typing import Any, Callable, Dict, Optional, TYPE_CHECKING
+from typing import Any, Callable, Dict, Optional, TYPE_CHECKING, Union
 
 from neurobrix.core.runtime.debug import DEBUG
+from neurobrix.core.dtype.config import get_torch_dtype
 
 if TYPE_CHECKING:
     from neurobrix.core.flow.base import FlowContext
+
+
+def _resolve_torch_dtype(dt: Union[torch.dtype, str, Any]) -> torch.dtype:
+    """Coerce a dtype coming from Prism into a concrete `torch.dtype`.
+
+    After the 'dtype-as-string above engines' refactor, anything flowing
+    from Prism's component allocations is a plain string like
+    ``"float16"`` or ``"bfloat16"``. Tensor ops that rely on ``.to(dt)``
+    must resolve it first because ``torch.Tensor.to(str)`` treats the
+    argument as a *device name*, not a dtype — so ``t.to("float16")``
+    raises ``RuntimeError: Invalid device string: 'float16'``.
+    """
+    if isinstance(dt, torch.dtype):
+        return dt
+    if isinstance(dt, str):
+        return get_torch_dtype(dt.replace("torch.", ""))
+    # Fallback: anything else (NBXDtype, numpy dtype, etc.) gets stringified
+    # and re-parsed. Keeps the helper tolerant to future dtype carriers.
+    return get_torch_dtype(str(dt).replace("torch.", ""))
 
 
 class CFGMode(Enum):
@@ -152,7 +172,7 @@ class CFGEngine:
         current_state: torch.Tensor,
         timestep: torch.Tensor,
         guidance_scale: float,
-        encoder_dtype: torch.dtype,
+        encoder_dtype: Union[torch.dtype, str],
     ) -> Dict[str, torch.Tensor]:
         """Execute component with CFG (batched or sequential)."""
         if self._should_use_sequential_cfg(comp_name):
@@ -173,7 +193,7 @@ class CFGEngine:
         current_state: torch.Tensor,
         timestep: torch.Tensor,
         guidance_scale: float,
-        encoder_dtype: torch.dtype,
+        encoder_dtype: Union[torch.dtype, str],
     ) -> Dict[str, torch.Tensor]:
         """Batched CFG: [uncond, cond] in single batch=2 forward pass."""
         encoder_key = self._get_encoder_hidden_states_key()
@@ -233,7 +253,12 @@ class CFGEngine:
                 neg_mask = neg_mask.to(dtype=pos_mask.dtype)
             batched_mask = torch.cat([neg_mask, pos_mask], dim=0)
 
-        # Cast to encoder dtype
+        # Cast to encoder dtype. `encoder_dtype` is sourced from Prism's
+        # allocation, which after the dtype-as-string refactor can be either
+        # a torch.dtype or a str like "float16". torch.Tensor.to(str)
+        # interprets strings as *devices*, so we must resolve strings to
+        # torch.dtype first or we hit `Invalid device string: 'float16'`.
+        encoder_dtype = _resolve_torch_dtype(encoder_dtype)
         if batched_state.dtype != encoder_dtype:
             batched_state = batched_state.to(encoder_dtype)
 

@@ -7,6 +7,38 @@ All functions take the AudioEngine instance (``engine``) as first parameter
 so they can access ``engine.ctx``, executors, weight loaders, etc.
 """
 
+# ═══════════════════════════════════════════════════════════════════════
+#  WARNING — VIOLATIONS DU CONTRAT NEUROBRIX
+# ═══════════════════════════════════════════════════════════════════════
+#
+#  Ce fichier existe à titre TEMPORAIRE et enfreint deux principes
+#  structurants du moteur NeuroBrix :
+#
+#  1)  BYPASS DU TENSORDAG : du PyTorch natif est exécuté en dur ici
+#      (``torch.nn.LSTM``, ``torch.nn.functional.conv1d``, pack_padded_
+#      sequence, etc.) au lieu de passer par le TensorDAG compilé.
+#      NeuroBrix est un moteur d'inférence universel : *tout* graphe
+#      doit être exprimé en ATen + ops custom et exécuté par
+#      CompiledSequence / TritonSequence, jamais en Python pur.
+#
+#  2)  DÉPENDANCES EXTERNES AU RUNTIME : ``preprocess_phonemizer_input``
+#      importe ``kokoro``, ``phonemizer`` et invoque ``espeak-ng`` via
+#      ``subprocess``. Aucun moteur d'inférence ne doit dépendre de
+#      binaires système ou de bibliothèques tierces pendant l'inférence
+#      — le contrat est zéro dépendance externe.
+#
+#  RÉSOLUTION (côté forge, pas runtime) :
+#    - Tracer les LSTM et ``pack_padded_sequence`` dans le graphe (émettre
+#      ``aten::lstm`` / ``aten::rnn_relu`` / ``aten::pack_padded_sequence``
+#      dans le DAG, avec kernels Triton associés si nécessaire).
+#    - Intégrer la conversion texte → phonèmes dans le module
+#      ``modules/tokenizer/`` du ``.nbx`` (table de lookup embarquée ou
+#      petit réseau traçable). Supprimer tous les ``import kokoro /
+#      phonemizer`` et les appels ``subprocess`` de ce fichier.
+#
+#  Ce fichier sera retiré une fois le re-tracing forge effectué.
+# ═══════════════════════════════════════════════════════════════════════
+
 import gc
 from neurobrix.core.device_utils import device_empty_cache
 import time
