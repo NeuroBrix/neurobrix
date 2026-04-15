@@ -1194,6 +1194,8 @@ class GraphExecutor:
                     trace_seq_len = sinfo.get("trace_value")
                     break
             fixed = None
+            # Strategy A: a single dim swapped with trace_seq_len reconciles
+            # (DeepSeek per-block RoPE cache pattern).
             if trace_seq_len:
                 for axis in range(len(shape)):
                     other = declared_elems // shape[axis] if shape[axis] else 0
@@ -1201,6 +1203,15 @@ class GraphExecutor:
                         fixed = list(shape)
                         fixed[axis] = trace_seq_len
                         break
+            # Strategy B: 1-D constant where the bytes simply hold a few more
+            # (or fewer) elements than the declared shape — happens on TTS
+            # models like Kokoro whose graphs do not carry a seq_len symbol
+            # but where the tracer wrote a slightly off-by-one length on a
+            # 1-D table. Trust the bytes (mirrors what torch.load does on the
+            # native path; it ignores the JSON shape and uses the pickled
+            # tensor's metadata).
+            if fixed is None and len(shape) == 1:
+                fixed = [actual_elems]
             if fixed is None:
                 raise RuntimeError(
                     f"Constant '{weight_name}' declared shape {shape} "
