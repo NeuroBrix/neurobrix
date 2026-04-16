@@ -427,6 +427,7 @@ def _build_op_map() -> Dict[str, Callable]:
 
         # --- Normalization ---
         "native_layer_norm": w.native_layer_norm,
+        "layer_norm": w.native_layer_norm,
         "rms_norm": w.rms_norm,
         "swiglu_fused": w.swiglu_fused_wrapper,
         "rope_fused": w.rope_fused_wrapper,
@@ -447,6 +448,9 @@ def _build_op_map() -> Dict[str, Callable]:
         "bmm": w.bmm,
         "addmm": w.addmm,
         "matmul": w.matmul_wrapper,
+        "linear": w.linear_wrapper,
+        "isin": w.isin_wrapper,
+        "is_nonzero": w.is_nonzero_wrapper,
 
         # --- Embedding ---
         "embedding": w.embedding,

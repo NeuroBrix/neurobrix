@@ -180,17 +180,53 @@ class TritonAutoregressiveHandler:
             return 0
 
     def _tokenize(self, gen_info: Dict, device_idx: int) -> NBXTensor:
-        """Tokenize prompt → NBXTensor of token IDs."""
+        """Tokenize prompt → NBXTensor of token IDs.
+
+        Priority cascade mirrors native TextProcessor.tokenize:
+          1. SFT format (Janus-style image AR)   — defaults.sft_format set
+          2. HuggingFace chat_template            — LLM chat path
+          3. Basic encode                         — fallback
+
+        Image-AR models (gen_type == "autoregressive_image" or
+        family == "image") NEVER go through chat_template even when the
+        tokenizer exposes apply_chat_template — Janus's underlying
+        DeepSeek tokenizer has the method but no template configured.
+        """
         if "tokenizer" not in self.ctx.modules:
             raise RuntimeError("autoregressive_generation requires 'tokenizer' module.")
         tokenizer = self.ctx.modules["tokenizer"]
         prompt = self.ctx.variable_resolver.resolved.get("global.prompt", "")
+        defaults = self.ctx.pkg.defaults
+        gen_type = gen_info.get("type")
+        family = self.ctx.pkg.manifest.get("family")
+        is_image_ar = (gen_type == "autoregressive_image"
+                       or family == "image")
 
-        if hasattr(tokenizer, 'apply_chat_template'):
+        sft_format = defaults.get("sft_format")
+        special_token_ids = defaults.get("special_token_ids")
+
+        if (is_image_ar and sft_format and special_token_ids
+                and hasattr(tokenizer, "format_generation_prompt")):
+            # Priority 1: SFT format (Janus-style image AR). Only taken for
+            # image-AR models to avoid disturbing the LLM path.
+            token_ids = tokenizer.format_generation_prompt(
+                prompt=prompt,
+                sft_format=sft_format,
+                special_token_ids=special_token_ids,
+                is_unconditional=False,
+            )
+        elif (not is_image_ar
+              and hasattr(tokenizer, "apply_chat_template")):
+            # Priority 2: HF chat_template — preserves the long-standing
+            # Triton LLM path exactly (TinyLlama, Qwen3, DeepSeek-MoE).
+            # The is_image_ar exclusion prevents Janus's DeepSeek
+            # tokenizer (which exposes apply_chat_template but has no
+            # configured template) from crashing here.
             messages = [{"role": "user", "content": prompt}]
             token_ids = tokenizer.apply_chat_template(
                 messages, add_generation_prompt=True)
-        elif hasattr(tokenizer, 'encode'):
+        elif hasattr(tokenizer, "encode"):
+            # Priority 3: basic encode fallback.
             token_ids = tokenizer.encode(prompt)
         else:
             raise RuntimeError("Tokenizer has no encode method.")

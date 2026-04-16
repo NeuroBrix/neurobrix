@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Flow-aware CLI dispatch in regression harness: STT models now auto-dispatch `--audio`, TTS-with-reference models auto-dispatch reference audio. Unblocks whisper, parakeet, canary-qwen, Voxtral, granite-speech, Kokoro native in automated testing.
+- New kernel wrappers in Triton dispatch: `linear`, `isin`, `is_nonzero`, `layer_norm` alias. Enables chatterbox Triton LM stage and openaudio DualAR entry.
+- NBXTensor→numpy D2H helper (`_to_numpy`) for flow handlers that need host-side arrays without going through torch.
+
+### Fixed
+- Janus-Pro-7B Triton: autoregressive flow now family-aware, no longer tries to apply `chat_template` on image-generation models.
+- Zero-torch contract in `triton/flow/audio.py`: `_get_compute_dtype` now returns a string; torch conversion pushed to stage handlers (`core/flow/stages/`) where torch is accepted as boundary.
+
+### Changed
+- Stage handlers (`core/flow/stages/kokoro.py`, `vibevoice.py`): added `_coerce_torch_dtype` helper to accept both string (from Triton engine) and `torch.dtype` (from native engine).
+
 ## [0.1.5] - 2026-04-15
 
 ### Added

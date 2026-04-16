@@ -54,6 +54,23 @@ import torch
 from typing import Dict, Optional
 
 
+def _coerce_torch_dtype(dt) -> torch.dtype:
+    """Accept either torch.dtype (native engine) or string (Triton engine).
+
+    Triton engine returns dtype as a string to keep torch out of triton/.
+    Stage handlers here are torch-boundary by design, so we coerce here.
+    """
+    if isinstance(dt, torch.dtype):
+        return dt
+    if isinstance(dt, str):
+        return {
+            "float16": torch.float16,
+            "bfloat16": torch.bfloat16,
+            "float32": torch.float32,
+        }.get(dt, torch.float16)
+    return torch.float16
+
+
 # ─────────────────────────────────────────────────────────────
 # Public entry points (called from AudioEngine.execute)
 # ─────────────────────────────────────────────────────────────
@@ -180,7 +197,7 @@ def execute_diffusion_stage(engine, stage: Dict, audio_config: Dict) -> None:
                 condition = torch.cat([condition, pad], dim=1)
 
     # -- Initialize noise --
-    dtype = engine._get_compute_dtype()
+    dtype = _coerce_torch_dtype(engine._get_compute_dtype())
     noisy = torch.randn(concrete_shape, device=device, dtype=dtype)
 
     # -- Bind condition to variable resolver --
@@ -267,7 +284,7 @@ def execute_native_acoustic_decoder(engine, stage: Dict, audio_config: Dict) -> 
     """
     comp_name = stage["component"]
     device = engine.ctx.primary_device
-    dtype = engine._get_compute_dtype()
+    dtype = _coerce_torch_dtype(engine._get_compute_dtype())
 
     # Get denoised latent from diffusion stage
     latent = engine.ctx.variable_resolver.resolved.get("global.denoised_latent")

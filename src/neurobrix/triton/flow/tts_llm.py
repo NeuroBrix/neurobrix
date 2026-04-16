@@ -494,11 +494,37 @@ def _save_audio_np(audio_tensor, sample_rate: int) -> None:
 
 
 def _to_numpy(tensor) -> np.ndarray:
-    """Convert any tensor to numpy."""
+    """Convert any tensor to numpy.
+
+    For NBXTensor (Triton mode): upcasts fp16/bf16 to fp32 first (numpy
+    has no native bf16), then D2H memcpy into a host buffer, then wrap
+    as a numpy array. No torch import — this is the GPU→CPU boundary for
+    sparse aux-weight lookups done on host.
+    """
     if isinstance(tensor, np.ndarray):
         return tensor
     if isinstance(tensor, NBXTensor):
-        return tensor.numpy()
+        import ctypes
+        t = tensor.contiguous()
+        # numpy has no bf16; fp16 we keep but the callers always .astype
+        # later. Upcast bf16 to fp32 on-device before the D2H.
+        if t.dtype == NBXDtype.bfloat16:
+            t = t.to(NBXDtype.float32)
+        nb_dtype_to_np = {
+            NBXDtype.float32: np.float32,
+            NBXDtype.float16: np.float16,
+            NBXDtype.int32:   np.int32,
+            NBXDtype.int64:   np.int64,
+        }
+        np_dtype = nb_dtype_to_np.get(t.dtype)
+        if np_dtype is None:
+            # Unknown dtype — force fp32.
+            t = t.to(NBXDtype.float32)
+            np_dtype = np.float32
+        arr = np.empty(t.shape, dtype=np_dtype)
+        DeviceAllocator.memcpy(
+            arr.ctypes.data, t.data_ptr(), arr.nbytes, kind=2)
+        return arr
     if hasattr(tensor, 'detach'):
         return tensor.detach().cpu().numpy()
     return np.array(tensor)
