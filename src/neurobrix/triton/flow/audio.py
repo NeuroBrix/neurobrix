@@ -43,6 +43,16 @@ class TritonAudioEngine:
         self._ensure_weights_loaded = ensure_weights_fn
         self._unload_component_weights = unload_weights_fn
 
+    def _get_compute_dtype(self) -> str:
+        """Return compute dtype as a STRING (e.g. "float16", "bfloat16").
+
+        ZERO TORCH IN TRITON: this method MUST NOT import or return
+        torch.dtype. Stage handlers that need a torch.dtype (accepted
+        torch-boundary subroutines in core/flow/stages/) are responsible
+        for converting the string to torch.dtype themselves.
+        """
+        return self.ctx.pkg.manifest.get("dtype", "float16")
+
     def execute(self) -> Dict[str, Any]:
         """Execute the audio pipeline from topology.json flow.audio."""
         flow = self.ctx.pkg.topology.get("flow", {})
@@ -83,12 +93,21 @@ class TritonAudioEngine:
             if execution == "forward":
                 self._execute_forward_stage(stage)
             elif execution == "native_kokoro":
+                # VIOLATION TEMPORAIRE — ce handler natif utilise torch. Sera
+                # remplace par triton/flow/stages/ quand forge tracera ce
+                # modele. Ne pas ajouter d'autres imports core/flow/stages/ ici.
                 from neurobrix.core.flow.stages.kokoro import execute_native_kokoro
                 execute_native_kokoro(self, stage, audio_config)
             elif execution == "diffusion":
+                # VIOLATION TEMPORAIRE — ce handler natif utilise torch. Sera
+                # remplace par triton/flow/stages/ quand forge tracera ce
+                # modele. Ne pas ajouter d'autres imports core/flow/stages/ ici.
                 from neurobrix.core.flow.stages.vibevoice import execute_diffusion_stage
                 execute_diffusion_stage(self, stage, audio_config)
             elif execution == "native_acoustic_decoder":
+                # VIOLATION TEMPORAIRE — ce handler natif utilise torch. Sera
+                # remplace par triton/flow/stages/ quand forge tracera ce
+                # modele. Ne pas ajouter d'autres imports core/flow/stages/ ici.
                 from neurobrix.core.flow.stages.vibevoice import execute_native_acoustic_decoder
                 execute_native_acoustic_decoder(self, stage, audio_config)
             else:
@@ -226,6 +245,9 @@ class TritonAudioEngine:
         # Phonemizer path
         phoneme_vocab = self.ctx.pkg.defaults.get("phoneme_vocab")
         if tokenizer is None and phoneme_vocab:
+            # VIOLATION TEMPORAIRE — ce handler natif utilise torch. Sera
+            # remplace par triton/flow/stages/ quand forge tracera ce
+            # modele. Ne pas ajouter d'autres imports core/flow/stages/ ici.
             from neurobrix.core.flow.stages.kokoro import preprocess_phonemizer_input
             preprocess_phonemizer_input(self, prompt, phoneme_vocab)
             return
