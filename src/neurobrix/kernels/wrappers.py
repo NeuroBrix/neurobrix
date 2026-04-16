@@ -1105,6 +1105,90 @@ def matmul_wrapper(a, b):
     raise RuntimeError(f"matmul: unsupported shapes {a.shape} × {b.shape}")
 
 
+def isin_wrapper(elements, test_elements, *, invert: bool = False,
+                 assume_unique: bool = False):
+    """aten::isin — elementwise membership test.
+
+    elements      : NBXTensor (any int dtype), shape (...)
+    test_elements : NBXTensor (same dtype), shape (K,) typically small
+    returns       : NBXTensor bool, same shape as `elements`
+
+    Small-op fast path: D2H both, numpy.isin on host, H2D the bool mask.
+    Typical sizes in audio models are elements=(1, S<=2048), test_elements<=4K
+    — a handful of microseconds on CPU. No torch imports.
+    """
+    import numpy as np
+    elements_np = _nbx_to_numpy(elements.contiguous())
+    test_np = _nbx_to_numpy(test_elements.contiguous())
+    out_np = np.isin(elements_np, test_np,
+                     assume_unique=bool(assume_unique),
+                     invert=bool(invert))
+    # NBXTensor.from_numpy currently doesn't support bool dtype cleanly on
+    # every backend; stage through uint8, the callers (comparisons, masks)
+    # treat non-zero as True. If the consuming op demands bool, NBXDtype
+    # promotion handles it downstream.
+    out_u8 = out_np.astype(np.uint8)
+    return NBXTensor.from_numpy(out_u8)
+
+
+def _nbx_to_numpy(t):
+    """Generic NBXTensor → numpy (D2H). Zero torch."""
+    import numpy as np
+    nb_dtype_to_np = {
+        NBXDtype.float32: np.float32,
+        NBXDtype.float16: np.float16,
+        NBXDtype.int32:   np.int32,
+        NBXDtype.int64:   np.int64,
+    }
+    dt = t.dtype
+    if dt == NBXDtype.bfloat16:
+        t = t.to(NBXDtype.float32)
+        dt = NBXDtype.float32
+    np_dtype = nb_dtype_to_np.get(dt)
+    if np_dtype is None:
+        t = t.to(NBXDtype.float32)
+        np_dtype = np.float32
+    arr = np.empty(t.shape, dtype=np_dtype)
+    import ctypes as _ct  # noqa: F401 — force DeviceAllocator path
+    DeviceAllocator.memcpy(arr.ctypes.data, t.data_ptr(), arr.nbytes, kind=2)
+    return arr
+
+
+def is_nonzero_wrapper(x):
+    """aten::is_nonzero — returns the scalar truthiness of a 1-element tensor.
+
+    PyTorch's native impl returns a Python bool, but traced graphs feed
+    the output back through tensor ops, so we return a 0-d NBXTensor
+    (uint8) to match the graph's expected dtype surface.
+    """
+    import numpy as np
+    val = x.item()
+    return NBXTensor.from_numpy(np.array(bool(val), dtype=np.uint8))
+
+
+def linear_wrapper(input, weight, bias=None):
+    """aten::linear — y = input @ weight.T + bias.
+
+    Signature matches torch.nn.functional.linear:
+      input : (..., in_features)
+      weight: (out_features, in_features)   — NOT pre-transposed
+      bias  : (out_features,) | None
+      output: (..., out_features)
+
+    Routes through the existing mm / bmm / addmm primitives with an
+    implicit transpose on `weight`. No new kernel launches beyond what
+    these helpers already do.
+    """
+    w_t = weight.t()
+    if bias is None:
+        return matmul_wrapper(input, w_t)
+    # matmul then broadcast-add — matches torch's handling for ND inputs.
+    # For pure 2D we could use addmm directly, but matmul_wrapper already
+    # takes the mm path and `add` broadcasts cleanly.
+    out = matmul_wrapper(input, w_t)
+    return add(out, bias)
+
+
 def addmm(bias, a, b,
           beta: float = 1.0, alpha: float = 1.0) :
     """C = beta * bias + alpha * (A @ B).
