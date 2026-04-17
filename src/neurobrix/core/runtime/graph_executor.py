@@ -923,6 +923,7 @@ class GraphExecutor:
         """Load weights as NBXTensor (triton mode). Zero torch."""
         from neurobrix.triton.weight_loader import load_component_weights
         from neurobrix.kernels.nbx_tensor import parse_dtype, DeviceAllocator
+        from neurobrix.kernels import wrappers as _w
 
         device_idx = int(self.device.split(':')[1]) if ':' in str(self.device) else 0
         compute_dtype = parse_dtype(self.dtype)
@@ -930,9 +931,27 @@ class GraphExecutor:
         DeviceAllocator.set_device(device_idx)
         DeviceAllocator.ensure_triton_device(device_idx)
 
+        # Decide whether to bind-time upcast fp16 weights to fp32. Active
+        # only on pre-Ampere hardware (no native bf16) and only when the
+        # doubled fp32 footprint fits each device's weight budget. We
+        # reserve ~50% of device memory for activations, KV cache, and
+        # other transient buffers. If the model doesn't fit, the loader
+        # falls back silently and the kernel wrappers absorb the per-call
+        # upcast cost via the dtype alignment block.
+        hw_profile = _w.get_hardware_profile()
+        upcast = not _w.has_native_bf16()
+        per_device_budget: Optional[Dict[int, int]] = None
+        if upcast and hw_profile is not None and getattr(hw_profile, "devices", None):
+            per_device_budget = {
+                d.index: int(d.memory_mb * 1024 * 1024 * 0.5)
+                for d in hw_profile.devices
+            }
+
         self._weights = load_component_weights(
             nbx_path, component, device_idx, compute_dtype,
-            shard_map=shard_map)
+            shard_map=shard_map,
+            upcast_fp16_to_fp32=upcast,
+            per_device_vram_budget=per_device_budget)
 
         # COMPUTABLE BUFFERS: Compute buffers at runtime resolution
         # This is the preferred approach for pos_embed and other resolution-dependent buffers.
