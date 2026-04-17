@@ -35,28 +35,86 @@ class MemoryManager:
         """
         Unload weights and free GPU memory.
 
-        CRITICAL: Clear the dict first to release tensor references,
-        then run garbage collection, then clear CUDA cache.
+        CRITICAL: Sync every device that holds memory in this dict BEFORE
+        clearing references, then drop refs (which triggers ComponentArena
+        and NBXTensor finalizers that call cudaFree), then GC, then
+        empty_cache.
+
+        Why the pre-clear sync matters: ComponentArena.free() (triton path)
+        calls DeviceAllocator.free_cuda directly with no internal sync.
+        If a kernel issued by the executor is still in-flight on the
+        stream when we free its input/output buffer, the kernel reads
+        from freed memory → cudaErrorIllegalAddress (err 700) silently
+        corrupts the CUDA context. The next cudaMalloc on that context
+        fails with err 700, which our wrapper misreports as "GPU malloc
+        failed". The path is only exposed when unload actually runs
+        between phases (lifecycle / lazy strategies) — eager runs never
+        triggered it.
+
+        The previous implementation called device_sync() AFTER clear()
+        and without an explicit device argument, making it a global
+        no-op (device_sync(None) returns immediately, see
+        core/device_utils.py:27). device_empty_cache() was called the
+        same way and returns early on None as well (device_utils.py:43).
+        Both sync and cache flush are now per-device, driven by the
+        same enumerated set.
 
         Args:
             weights_dict: Dictionary of weight tensors to clear
-            clear_cuda_cache: Whether to call torch.cuda.empty_cache()
+            clear_cuda_cache: Whether to call empty_cache after clear
             log_prefix: Prefix for log messages
             verbose: Print debug messages
         """
         if verbose:
             print(f"{log_prefix} Unloading {len(weights_dict)} weight tensors")
 
-        # Step 1: Clear the dictionary (releases references)
+        # Step 1: collect every device holding memory in this dict, so we
+        # can sync each one before freeing. Multi-GPU safe.
+        # - "_arenas" key (triton path): Dict[int, ComponentArena] keyed
+        #   by device_idx. The arena owns the cudaMalloc'd block.
+        # - NBXTensor (triton path): exposes private _device_idx; its
+        #   public .device property returns self (a NBXTensor is its own
+        #   device context), so we MUST NOT call str(val.device) here.
+        # - torch.Tensor (native path): standard .device → torch.device.
+        devices_to_sync = set()
+        for key, val in weights_dict.items():
+            if key == "_arenas":
+                if isinstance(val, dict):
+                    for arena in val.values():
+                        idx = getattr(arena, "device_idx", None)
+                        if idx is not None:
+                            devices_to_sync.add(f"cuda:{idx}")
+            elif hasattr(val, "_device_idx"):
+                # NBXTensor: private attr is the source of truth
+                devices_to_sync.add(f"cuda:{val._device_idx}")
+            elif hasattr(val, "device") and hasattr(val.device, "type"):
+                # torch.Tensor: .device is a torch.device instance
+                dev = val.device
+                if dev.type in ("cuda", "mps"):
+                    devices_to_sync.add(str(dev))
+        for dev in devices_to_sync:
+            device_sync(dev)
+
+        # Step 2: drop references — ComponentArena.__del__ / NBXTensor
+        # finalizers run cudaFree here, but the kernels that touched
+        # this memory are now guaranteed to have completed.
         weights_dict.clear()
 
-        # Step 2: Force garbage collection
+        # Step 3: force garbage collection
         gc.collect()
 
-        # Step 3: Clear device cache if requested
+        # Step 4: per-device cache flush. device_empty_cache(None) is a
+        # no-op (core/device_utils.py:43) — same trap as device_sync. We
+        # reuse the set collected above so the flush targets exactly the
+        # devices we just touched. Empty set → nothing was allocated →
+        # nothing to flush, skip cleanly.
+        # Note: device strings are "cuda:N" here, coherent with NBXTensor's
+        # current cuda hardcode. Portability to ROCm/MPS will be addressed
+        # as a single coherent pass when NBXTensor factory methods are
+        # migrated — see NBXTensor debt.
         if clear_cuda_cache:
-            device_sync()
-            device_empty_cache()
+            for dev in devices_to_sync:
+                device_empty_cache(dev)
 
     @staticmethod
     def cleanup_context(

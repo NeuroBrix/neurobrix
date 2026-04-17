@@ -20,6 +20,43 @@ from neurobrix.core.flow.base import FlowContext
 from neurobrix.triton.cfg import TritonCFGEngine
 
 
+def _vram_probe(tag: str) -> None:
+    """Print free/total CUDA VRAM via cudaMemGetInfo. Includes the raw
+    cudaMalloc pool that NBXTensor uses (torch.cuda.memory_allocated would
+    miss it). Cheap — only fires when NBX_UNLOAD_DIAG=1."""
+    import ctypes as _ct
+    try:
+        _libname = "libcudart.so"
+        try:
+            _rt = _ct.CDLL(_libname)
+        except OSError:
+            for _v in (12, 11, 10):
+                try:
+                    _rt = _ct.CDLL(f"libcudart.so.{_v}")
+                    break
+                except OSError:
+                    continue
+            else:
+                print(f"[VRAM_PROBE {tag}] libcudart not found", flush=True)
+                return
+        _free = _ct.c_size_t(0)
+        _total = _ct.c_size_t(0)
+        _rt.cudaMemGetInfo(_ct.byref(_free), _ct.byref(_total))
+        _free_gb = _free.value / 1e9
+        _total_gb = _total.value / 1e9
+        _used_gb = _total_gb - _free_gb
+        try:
+            import torch as _torch
+            _torch_alloc_gb = _torch.cuda.memory_allocated() / 1e9
+        except Exception:
+            _torch_alloc_gb = -1.0
+        print(f"[VRAM_PROBE {tag}] used={_used_gb:.2f}GB free={_free_gb:.2f}GB "
+              f"total={_total_gb:.2f}GB torch_alloc={_torch_alloc_gb:.2f}GB",
+              flush=True)
+    except Exception as _e:
+        print(f"[VRAM_PROBE {tag}] failed: {_e}", flush=True)
+
+
 def _to_nbx(tensor, device_idx: int = 0) -> NBXTensor:
     """Convert torch.Tensor to NBXTensor at the boundary.
 
@@ -104,6 +141,32 @@ class TritonIterativeProcessHandler:
         # 0. Preprocess inputs (tokenization)
         self._preprocess_inputs()
 
+        # TEMP DIAG: report loading_mode + persistent_mode + VRAM at boundaries.
+        import os as _os_d
+        _UNLOAD_DIAG = _os_d.environ.get("NBX_UNLOAD_DIAG") == "1"
+        if _UNLOAD_DIAG:
+            _plan = self.ctx.plan
+            _lm = getattr(_plan, 'loading_mode', 'lazy')
+            _pm = bool(getattr(self.ctx, 'persistent_mode', False))
+            _strat = getattr(_plan, 'strategy', '?')
+            _tdt = getattr(_plan, 'target_dtype', '?')
+            print(f"[UNLOAD_DIAG] strategy={_strat!r} loading_mode={_lm!r} "
+                  f"target_dtype={_tdt!r} persistent_mode={_pm}",
+                  flush=True)
+            _cm = getattr(_plan, 'component_memory', {}) or {}
+            for _cn, _cmb in _cm.items():
+                _mb = getattr(_cmb, 'total_mb', None)
+                _dev = '?'
+                _a = _plan.components.get(_cn) if hasattr(_plan, 'components') else None
+                if _a is not None:
+                    _dev = getattr(_a, 'device', '?')
+                    _cdt = getattr(_a, 'dtype', '?')
+                else:
+                    _cdt = '?'
+                print(f"[UNLOAD_DIAG]   comp={_cn!r} device={_dev} "
+                      f"dtype={_cdt} prism_mb={_mb}", flush=True)
+            _vram_probe("entry_to_handler")
+
         flow = self.ctx.pkg.topology.get("flow", {})
 
         # CFG settings from engine (already resolved in from_topology)
@@ -114,12 +177,17 @@ class TritonIterativeProcessHandler:
         pre_loop = flow.get("pre_loop", [])
         self._execute_pre_loop(pre_loop, do_cfg)
 
+        if _UNLOAD_DIAG:
+            _vram_probe("after_pre_loop_returns")
+
         # 2. Main loop
         loop_def = flow.get("loop", {})
         driver_name = loop_def.get("driver")
         loop_components = loop_def.get("components", [])
 
         if driver_name and loop_components:
+            if _UNLOAD_DIAG:
+                _vram_probe("before_main_loop_first_call")
             self._execute_main_loop(driver_name, loop_components, do_cfg, guidance_scale)
 
         # 3. Post-loop execution
@@ -193,7 +261,13 @@ class TritonIterativeProcessHandler:
                             print(f"[AUDIT] {key}: shape={list(t.shape)} dtype={t.dtype}")
 
             # Unload weights immediately
+            import os as _os_d
+            _UNLOAD_DIAG = _os_d.environ.get("NBX_UNLOAD_DIAG") == "1"
+            if _UNLOAD_DIAG:
+                _vram_probe(f"before_unload[{comp_name}]")
             self._unload_component(comp_name)
+            if _UNLOAD_DIAG:
+                _vram_probe(f"after_unload[{comp_name}]")
 
     def _execute_negative_encoding(self, text_encoder_name: str) -> None:
         """
