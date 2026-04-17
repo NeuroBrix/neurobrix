@@ -953,6 +953,34 @@ class GraphExecutor:
             upcast_fp16_to_fp32=upcast,
             per_device_vram_budget=per_device_budget)
 
+        # TEMP DIAG: probe VRAM right after triton weight load commits the
+        # component's arena. Gate env NBX_UNLOAD_DIAG=1.
+        import os as _os_d
+        if _os_d.environ.get("NBX_UNLOAD_DIAG") == "1":
+            import ctypes as _ct
+            try:
+                try:
+                    _rt = _ct.CDLL("libcudart.so")
+                except OSError:
+                    _rt = None
+                    for _v in (12, 11, 10):
+                        try:
+                            _rt = _ct.CDLL(f"libcudart.so.{_v}")
+                            break
+                        except OSError:
+                            continue
+                if _rt is not None:
+                    _free = _ct.c_size_t(0); _total = _ct.c_size_t(0)
+                    _rt.cudaMemGetInfo(_ct.byref(_free), _ct.byref(_total))
+                    _used_gb = (_total.value - _free.value) / 1e9
+                    _free_gb = _free.value / 1e9
+                    print(f"[VRAM_PROBE after_load_weights_triton[{component}]] "
+                          f"used={_used_gb:.2f}GB free={_free_gb:.2f}GB "
+                          f"cuda:{device_idx}", flush=True)
+            except Exception as _e:
+                print(f"[VRAM_PROBE after_load_weights_triton[{component}]] "
+                      f"failed: {_e}", flush=True)
+
         # COMPUTABLE BUFFERS: Compute buffers at runtime resolution
         # This is the preferred approach for pos_embed and other resolution-dependent buffers.
         # The computation spec comes from graph.json (set during trace).
