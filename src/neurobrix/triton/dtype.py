@@ -82,6 +82,14 @@ def _get_nbx_dtype(a) -> NBXDtype:
 # TRITON DTYPE ENGINE
 # ============================================================================
 
+# Ops whose wrappers in kernels/wrappers.py self-manage dtype (activation
+# upcast on pre-Ampere + alignment widening) and consume the bind-time
+# fp32-upcast weights directly. The DtypeEngine's lower_precision wrap
+# would silently downcast fp32 weights back to fp16 on V100 and undo the
+# bind-time cache, so we must NOT wrap them on pre-Ampere hardware.
+_SELF_MANAGED_MATMUL_OPS: FrozenSet[str] = frozenset({"mm", "bmm", "addmm"})
+
+
 class TritonDtypeEngine:
     """AMP-driven dtype engine for triton mode. Zero torch dependency.
 
@@ -89,8 +97,14 @@ class TritonDtypeEngine:
     NBXDtype instead of torch.dtype.
     """
 
-    def __init__(self, compute_dtype: NBXDtype):
+    def __init__(self, compute_dtype: NBXDtype, has_native_bf16: bool = True):
         self.compute_dtype = compute_dtype
+        # On pre-Ampere (no native bf16) the weight loader upcasts fp16
+        # weights to fp32 at bind time. mm/bmm/addmm wrappers consume those
+        # fp32 weights directly and only upcast the activation per-call.
+        # Wrapping them in lower_precision here would silently re-downcast
+        # the weights to fp16, defeating the bind-time cache.
+        self.has_native_bf16 = has_native_bf16
 
     def wrap_op(self, op_name: str, func: Callable) -> Callable:
         """Wrap an op function with AMP casting rules.
@@ -112,6 +126,11 @@ class TritonDtypeEngine:
         if op_name in AMP_FP16_OPS:
             if self.compute_dtype == NBXDtype.float16 and op_name in _FP16_NEED_FP32:
                 return self._wrap_fp32(func)
+            # Pre-Ampere: mm/bmm/addmm self-manage dtype (see wrappers.py).
+            # Skip the wrap so the bind-time fp32 weight reaches the kernel.
+            if (not self.has_native_bf16
+                    and op_name in _SELF_MANAGED_MATMUL_OPS):
+                return func
             return self._wrap_lower_precision(func)
 
         if op_name in AMP_PROMOTE_OPS:

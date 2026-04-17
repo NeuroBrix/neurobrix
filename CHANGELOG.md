@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - NBXTensor→numpy D2H helper (`_to_numpy`) for flow handlers that need host-side arrays without going through torch.
 
 ### Fixed
+- Pre-Ampere LLM decode regression introduced by the wip fp16 overflow protection: weights now upcast to fp32 once at bind time (when VRAM permits) instead of on every matmul call. TinyLlama 1.1B `--triton` decode on V100 returns to the v0.1.5 baseline (matmul ~28 ms/step vs ~285 ms/step in the regressed wip). Models too large for fp32 weights (e.g. Qwen3-30B) fall back silently to per-call upcast.
 - Janus-Pro-7B Triton: autoregressive flow now family-aware, no longer tries to apply `chat_template` on image-generation models.
 - Zero-torch contract in `triton/flow/audio.py`: `_get_compute_dtype` now returns a string; torch conversion pushed to stage handlers (`core/flow/stages/`) where torch is accepted as boundary.
 

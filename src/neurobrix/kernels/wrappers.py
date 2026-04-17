@@ -221,6 +221,7 @@ _EW_WARPS = 4
 # all kernel wrappers behave identically to before this was introduced.
 # ---------------------------------------------------------------------------
 _NBX_HAS_NATIVE_BF16 = True
+_NBX_HW_PROFILE = None
 
 
 def set_hardware_profile(profile) -> None:
@@ -230,15 +231,28 @@ def set_hardware_profile(profile) -> None:
     points right before constructing RuntimeExecutor. Plumbs the
     hardware capability into a module-level flag so kernel wrappers
     can make dtype-safety decisions without carrying a profile through
-    every call site.
+    every call site. The full profile is also stashed so the weight
+    loader can query per-device VRAM when deciding whether to
+    bind-time upcast fp16 weights to fp32 on pre-Ampere hardware.
 
     Accepts any object with a `has_native_bf16` attribute (duck-typed
     so tests can pass a mock without importing the full Prism stack).
     """
-    global _NBX_HAS_NATIVE_BF16
+    global _NBX_HAS_NATIVE_BF16, _NBX_HW_PROFILE
     if profile is None:
         return
+    _NBX_HW_PROFILE = profile
     _NBX_HAS_NATIVE_BF16 = bool(getattr(profile, "has_native_bf16", True))
+
+
+def has_native_bf16() -> bool:
+    """Expose the cached hardware capability flag for non-kernel callers."""
+    return _NBX_HAS_NATIVE_BF16
+
+
+def get_hardware_profile():
+    """Return the PrismProfile stashed by set_hardware_profile, or None."""
+    return _NBX_HW_PROFILE
 
 
 def _1d_grid(n_elements):
@@ -1016,25 +1030,32 @@ def mm(a, b) :
     # (Volta/Turing/older), fp16 inputs whose upstream producers had large
     # magnitudes get saturated to ±Inf when a graph-level _to_copy cast
     # them back to fp16 — the next mm then propagates Inf through HMMA →
-    # NaN cascade. Mirror the native DtypeEngine AMP path: upcast fp16
-    # inputs to fp32 INSIDE the wrapper, compute fp32 × fp32, store fp32.
-    # Weight gets the same cast (one-time per shape — Triton caches).
-    # On bf16-capable hardware this whole branch is a no-op.
-    if not _NBX_HAS_NATIVE_BF16:
-        if a.dtype == NBXDtype.float16:
-            a = a.to(NBXDtype.float32)
-        if b.dtype == NBXDtype.float16:
-            b = b.to(NBXDtype.float32)
+    # NaN cascade. Mirror the native DtypeEngine AMP path: upcast the
+    # ACTIVATION to fp32. The weight is expected to be fp32 already when
+    # the loader has bind-time upcast it; if the loader kept it fp16
+    # (model too large for fp32), the dtype alignment block below handles
+    # the per-call cast as a fallback. On bf16-capable hardware this
+    # whole branch is a no-op.
+    # NBXTensor.dtype returns triton.language.dtype (for kernel dispatch);
+    # NBXTensor.nbx_dtype returns the NBXDtype enum used by these guards.
+    a_nbx = a.nbx_dtype
+    b_nbx = b.nbx_dtype
+    if not _NBX_HAS_NATIVE_BF16 and a_nbx == NBXDtype.float16:
+        a = a.to(NBXDtype.float32)
+        a_nbx = NBXDtype.float32
 
     # Dtype alignment: when upstream mm promoted output to fp32 (force_fp32
     # path from bmm or the M<=4 rule on bf16 hw), the next matmul could see
     # fp32 × bf16 which `tl.dot` refuses. Widen — no-op when both match.
-    if a.dtype != b.dtype:
+    # Also serves as the per-call fallback on pre-Ampere when the loader
+    # could not bind-time upcast the weight (e.g. Qwen3-30B in fp32 would
+    # exceed VRAM).
+    if a_nbx != b_nbx:
         _order = (NBXDtype.float32, NBXDtype.bfloat16, NBXDtype.float16)
-        widest = next(d for d in _order if d in (a.dtype, b.dtype))
-        if a.dtype != widest:
+        widest = next(d for d in _order if d in (a_nbx, b_nbx))
+        if a_nbx != widest:
             a = a.to(widest)
-        if b.dtype != widest:
+        if b_nbx != widest:
             b = b.to(widest)
 
     M, K = a.shape
@@ -1114,11 +1135,12 @@ def bmm(a, b) :
         b = _transfer_to_device(b, a._device_idx)
 
     # Hardware-gated fp16→fp32 input upcast — same rationale as mm().
-    if not _NBX_HAS_NATIVE_BF16:
-        if a.dtype == NBXDtype.float16:
-            a = a.to(NBXDtype.float32)
-        if b.dtype == NBXDtype.float16:
-            b = b.to(NBXDtype.float32)
+    # Use nbx_dtype for guard comparisons; .dtype returns triton.language.dtype.
+    a_nbx = a.nbx_dtype
+    b_nbx = b.nbx_dtype
+    if not _NBX_HAS_NATIVE_BF16 and a_nbx == NBXDtype.float16:
+        a = a.to(NBXDtype.float32)
+        a_nbx = NBXDtype.float32
 
     # Align dtypes. `bmm` below forces fp32 output for half-precision inputs
     # (diffusion attention math overflows fp16 on V100), so a downstream
@@ -1126,12 +1148,12 @@ def bmm(a, b) :
     # dtypes to matmul_kernel / mv_wrapper, and tl.dot crashes with
     # "Both operands must be same dtype". Promote the narrower side to the
     # wider one up-front; no-op in the common same-dtype case.
-    if a.dtype != b.dtype:
+    if a_nbx != b_nbx:
         _order = (NBXDtype.float32, NBXDtype.bfloat16, NBXDtype.float16)
-        widest = next(d for d in _order if d in (a.dtype, b.dtype))
-        if a.dtype != widest:
+        widest = next(d for d in _order if d in (a_nbx, b_nbx))
+        if a_nbx != widest:
             a = a.to(widest)
-        if b.dtype != widest:
+        if b_nbx != widest:
             b = b.to(widest)
 
     B, M, K = a.shape
@@ -1298,22 +1320,23 @@ def addmm(bias, a, b,
     bias = _ensure_cuda(bias)
 
     # Hardware-gated fp16→fp32 input upcast — same rationale as mm().
-    if not _NBX_HAS_NATIVE_BF16:
-        if a.dtype == NBXDtype.float16:
-            a = a.to(NBXDtype.float32)
-        if b.dtype == NBXDtype.float16:
-            b = b.to(NBXDtype.float32)
+    # Use nbx_dtype for guard comparisons; .dtype returns triton.language.dtype.
+    a_nbx = a.nbx_dtype
+    b_nbx = b.nbx_dtype
+    if not _NBX_HAS_NATIVE_BF16 and a_nbx == NBXDtype.float16:
+        a = a.to(NBXDtype.float32)
+        a_nbx = NBXDtype.float32
 
     # Dtype alignment (see mm() for rationale): fp32×fp16 crashes tl.dot.
-    if a.dtype != b.dtype:
+    if a_nbx != b_nbx:
         _order = (NBXDtype.float32, NBXDtype.bfloat16, NBXDtype.float16)
-        widest = next(d for d in _order if d in (a.dtype, b.dtype))
-        if a.dtype != widest:
+        widest = next(d for d in _order if d in (a_nbx, b_nbx))
+        if a_nbx != widest:
             a = a.to(widest)
-        if b.dtype != widest:
+        if b_nbx != widest:
             b = b.to(widest)
-    if bias.dtype != a.dtype:
-        bias = bias.to(a.dtype)
+    if bias.nbx_dtype != a.nbx_dtype:
+        bias = bias.to(a.nbx_dtype)
 
     M, K = a.shape
     K2, N = b.shape
