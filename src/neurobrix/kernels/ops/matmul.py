@@ -18,11 +18,18 @@ def matmul_kernel(
     stride_cm, stride_cn,
     BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
     GROUP_M: tl.constexpr,
+    IEEE_PRECISION: tl.constexpr = False,
 ):
     """C = A @ B where A is [M, K], B is [K, N], C is [M, N].
 
     Accumulates in fp32 for numerical stability.
     Output dtype determined by output pointer's dtype.
+
+    IEEE_PRECISION=True forces `tl.dot(input_precision="ieee")` — required
+    when fp32 inputs carry magnitudes > fp16_max on pre-Ampere GPUs,
+    because `tl.dot` otherwise lowers through fp16 HMMA tensor cores which
+    saturate the inputs to fp16 before the multiply. Set by the wrapper
+    when `not _NBX_HAS_NATIVE_BF16` and inputs were promoted to fp32.
     """
     pid = tl.program_id(0)
     num_pid_m = tl.cdiv(M, BLOCK_M)
@@ -44,7 +51,10 @@ def matmul_kernel(
     for k in range(0, tl.cdiv(K, BLOCK_K)):
         a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_K, other=0.0)
         b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_K, other=0.0)
-        accumulator += tl.dot(a, b)
+        if IEEE_PRECISION:
+            accumulator += tl.dot(a, b, input_precision="ieee")
+        else:
+            accumulator += tl.dot(a, b)
         a_ptrs += BLOCK_K * stride_ak
         b_ptrs += BLOCK_K * stride_bk
 
@@ -66,6 +76,7 @@ def addmm_kernel(
     alpha, beta,
     BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
     GROUP_M: tl.constexpr,
+    IEEE_PRECISION: tl.constexpr = False,
 ):
     """C = beta * bias + alpha * (A @ B) where bias is [N]."""
     pid = tl.program_id(0)
@@ -88,7 +99,10 @@ def addmm_kernel(
     for k in range(0, tl.cdiv(K, BLOCK_K)):
         a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_K, other=0.0)
         b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_K, other=0.0)
-        accumulator += tl.dot(a, b)
+        if IEEE_PRECISION:
+            accumulator += tl.dot(a, b, input_precision="ieee")
+        else:
+            accumulator += tl.dot(a, b)
         a_ptrs += BLOCK_K * stride_ak
         b_ptrs += BLOCK_K * stride_bk
 

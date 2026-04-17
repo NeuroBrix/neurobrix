@@ -156,6 +156,9 @@ class InferenceEngine:
         self._pkg = loader.load(str(nbx_path))
 
         # 6. Create RuntimeExecutor and run one-time setup
+        # Data-driven hardware capability surface for Triton kernel wrappers.
+        from neurobrix.kernels.wrappers import set_hardware_profile
+        set_hardware_profile(hw_profile)
         self._executor = RuntimeExecutor(self._pkg, self._plan, mode=self.mode)
 
         # Set persistent mode BEFORE setup/execute so GraphExecutors get the flag

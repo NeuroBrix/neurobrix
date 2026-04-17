@@ -205,6 +205,42 @@ _EW_BLOCK = 1024
 _EW_WARPS = 4
 
 
+# ---------------------------------------------------------------------------
+# Hardware capability surface — single source of truth for the Triton side.
+#
+# Default is True (modern hardware). The CLI / serving layer calls
+# set_hardware_profile(profile) once at executor construction to override
+# with the actual PrismProfile.has_native_bf16. Kernel wrappers then read
+# _NBX_HAS_NATIVE_BF16 for runtime dtype decisions (e.g. forcing fp32
+# output on fp16 mm/bmm/addmm when bf16 is unavailable).
+#
+# Rationale: NeuroBrix is universal-data-driven. The fp16 overflow
+# protection mirrors what the native DtypeEngine's AMP rules already do
+# on pre-Ampere GPUs — so it's an existing policy, not a V100 hardcode.
+# On Ampere+ (has_native_bf16=True) the protection path is a no-op and
+# all kernel wrappers behave identically to before this was introduced.
+# ---------------------------------------------------------------------------
+_NBX_HAS_NATIVE_BF16 = True
+
+
+def set_hardware_profile(profile) -> None:
+    """Configure Triton kernel wrappers from a PrismProfile.
+
+    Called once per process, typically by the CLI and serving entry
+    points right before constructing RuntimeExecutor. Plumbs the
+    hardware capability into a module-level flag so kernel wrappers
+    can make dtype-safety decisions without carrying a profile through
+    every call site.
+
+    Accepts any object with a `has_native_bf16` attribute (duck-typed
+    so tests can pass a mock without importing the full Prism stack).
+    """
+    global _NBX_HAS_NATIVE_BF16
+    if profile is None:
+        return
+    _NBX_HAS_NATIVE_BF16 = bool(getattr(profile, "has_native_bf16", True))
+
+
 def _1d_grid(n_elements):
     """Grid for element-wise (memory-bound) kernels. Fixed BLOCK_SIZE=1024."""
     return (triton.cdiv(n_elements, _EW_BLOCK),)
@@ -913,30 +949,48 @@ def log_softmax(x, dim: int = -1) :
 def _matmul_out_dtype(a, M: int = 1, force_fp32: bool = False):
     """Output dtype for mm/bmm/addmm/mv/addmv.
 
-    Kernels accumulate in fp32. The output store dtype depends on M:
+    Kernels accumulate in fp32. Three overlapping policies decide the
+    *store* dtype:
 
-    - **M <= 4 (decode path)**: store fp32. Tiny tensors (1 row × N), the
-      doubled storage cost is negligible. Matters for deep MoE LLMs where
-      the fp32 accumulator can exceed fp16's 65504 range and the fp16 store
-      would saturate to ±Inf, cascading through residual adds (Qwen3-30B
-      case on V100). fp32 output flows through downstream ops via AMP
-      promote rules and gets re-cast at the next matmul input.
+    1. **Hardware gate — fp16 on pre-Ampere (no native bf16)**: force
+       fp32 output unconditionally for fp16 inputs. Mirrors what the
+       native DtypeEngine AMP already does on V100/Turing — fp16
+       accumulation over K can exceed 65,504 even when per-element
+       magnitudes look reasonable, and the store saturates to ±Inf
+       which cascades through residual adds (openaudio DualAR
+       Apr-2026, Qwen3-30B earlier). On Ampere+ / any bf16-capable
+       card this path is a no-op and the legacy M-gated rule applies.
+       The flag comes from `PrismProfile.has_native_bf16` via
+       `set_hardware_profile()` — ZERO V100 hardcode, data-driven
+       hardware capability. See the NeuroBrix universal-engine rule
+       in CLAUDE.md §5.
 
-    - **M > 4 (prefill / spatial path)**: store in input dtype. Large
-      tensors (e.g. PixArt-Sigma DiT: M=4096 spatial tokens × CFG batch=2
-      → fp32 doubles activation footprint and OOMs 16 GB V100 around layer
-      12-16). Prefill-magnitude activations stay within fp16 range because
-      a single forward pass doesn't accumulate the way an N-step decode
-      loop through 48 MoE layers does — each fp32 store is bounded by one
-      matmul, not chained over many.
+    2. **M <= 4 (decode path)**: store fp32 even with bf16 inputs or
+       on bf16-capable hardware. Tiny tensors (1 row × N), negligible
+       memory cost, catches rare decode-loop drift.
 
-    Universal: bf16 inputs follow the same M-gated rule. fp32/int inputs
-    pass through unchanged.
+    3. **M > 4 (prefill / spatial path), bf16-capable hardware**:
+       store in input dtype. Keeps diffusion spatial mm (PixArt-Sigma
+       M=4096 × CFG=2) within VRAM budget. Prefill-magnitude
+       activations stay within the dtype range because a single
+       forward pass doesn't chain accumulations like a deep decode.
+
+    `force_fp32=True` overrides everything (used by bmm for diffusion
+    attention on all hardware).
     """
     dt = a.nbx_dtype if hasattr(a, 'nbx_dtype') else a.dtype
-    is_half = dt in (NBXDtype.float16, NBXDtype.bfloat16)
+    is_fp16 = (dt == NBXDtype.float16)
+    is_bf16 = (dt == NBXDtype.bfloat16)
+    is_half = is_fp16 or is_bf16
+
+    # (1) Hardware gate: fp16 on hardware without native bf16 gets fp32.
+    if is_fp16 and not _NBX_HAS_NATIVE_BF16:
+        return NBXDtype.float32
+
+    # (2) + (3) legacy M gate + force_fp32 escape hatch.
     if is_half and (M <= 4 or force_fp32):
         return NBXDtype.float32
+
     return dt
 
 
@@ -957,6 +1011,32 @@ def mm(a, b) :
     # Multi-device: align b to a's device
     if hasattr(a, '_device_idx') and hasattr(b, '_device_idx') and a._device_idx != b._device_idx:
         b = _transfer_to_device(b, a._device_idx)
+
+    # Hardware-gated fp16 overflow protection. On GPUs without native bf16
+    # (Volta/Turing/older), fp16 inputs whose upstream producers had large
+    # magnitudes get saturated to ±Inf when a graph-level _to_copy cast
+    # them back to fp16 — the next mm then propagates Inf through HMMA →
+    # NaN cascade. Mirror the native DtypeEngine AMP path: upcast fp16
+    # inputs to fp32 INSIDE the wrapper, compute fp32 × fp32, store fp32.
+    # Weight gets the same cast (one-time per shape — Triton caches).
+    # On bf16-capable hardware this whole branch is a no-op.
+    if not _NBX_HAS_NATIVE_BF16:
+        if a.dtype == NBXDtype.float16:
+            a = a.to(NBXDtype.float32)
+        if b.dtype == NBXDtype.float16:
+            b = b.to(NBXDtype.float32)
+
+    # Dtype alignment: when upstream mm promoted output to fp32 (force_fp32
+    # path from bmm or the M<=4 rule on bf16 hw), the next matmul could see
+    # fp32 × bf16 which `tl.dot` refuses. Widen — no-op when both match.
+    if a.dtype != b.dtype:
+        _order = (NBXDtype.float32, NBXDtype.bfloat16, NBXDtype.float16)
+        widest = next(d for d in _order if d in (a.dtype, b.dtype))
+        if a.dtype != widest:
+            a = a.to(widest)
+        if b.dtype != widest:
+            b = b.to(widest)
+
     M, K = a.shape
     K2, N = b.shape
     assert K == K2, f"Incompatible dimensions: {K} vs {K2}"
@@ -998,10 +1078,15 @@ def mm(a, b) :
 
     a = a.contiguous()
     b = b.contiguous()
+    out_dtype = _matmul_out_dtype(a, M)
     c = NBXTensor.empty((M, N), device=f"cuda:{a._device_idx}" if hasattr(a, '_device_idx') else 'cuda',
-                        dtype=_matmul_out_dtype(a, M))
+                        dtype=out_dtype)
     grid = (triton.cdiv(M, _MM_BM) * triton.cdiv(N, _MM_BN),)
     _set_device(a)
+    # IEEE mode: force strict fp32 tl.dot on pre-Ampere when we've promoted
+    # inputs to fp32 for overflow protection. Otherwise tl.dot silently
+    # casts fp32 → fp16 HMMA → saturates at ±65504 → NaN/Inf cascade.
+    ieee = (not _NBX_HAS_NATIVE_BF16) and (out_dtype == NBXDtype.float32)
     matmul_kernel[grid](
         a, b, c,
         M, N, K,
@@ -1009,6 +1094,7 @@ def mm(a, b) :
         b.stride(0), b.stride(1),
         c.stride(0), c.stride(1),
         BLOCK_M=_MM_BM, BLOCK_N=_MM_BN, BLOCK_K=_MM_BK, GROUP_M=_MM_GROUP,
+        IEEE_PRECISION=ieee,
         num_warps=4, num_stages=2,
     )
     return c
@@ -1026,6 +1112,13 @@ def bmm(a, b) :
     b = _ensure_cuda(b)
     if hasattr(a, '_device_idx') and hasattr(b, '_device_idx') and a._device_idx != b._device_idx:
         b = _transfer_to_device(b, a._device_idx)
+
+    # Hardware-gated fp16→fp32 input upcast — same rationale as mm().
+    if not _NBX_HAS_NATIVE_BF16:
+        if a.dtype == NBXDtype.float16:
+            a = a.to(NBXDtype.float32)
+        if b.dtype == NBXDtype.float16:
+            b = b.to(NBXDtype.float32)
 
     # Align dtypes. `bmm` below forces fp32 output for half-precision inputs
     # (diffusion attention math overflows fp16 on V100), so a downstream
@@ -1059,9 +1152,10 @@ def bmm(a, b) :
 
     a = a.contiguous()
     b = b.contiguous()
-    c = NBXTensor.empty((B, M, N), device=a.device,
-                        dtype=_matmul_out_dtype(a, M, force_fp32=True))
+    out_dtype = _matmul_out_dtype(a, M, force_fp32=True)
+    c = NBXTensor.empty((B, M, N), device=a.device, dtype=out_dtype)
     grid = (triton.cdiv(M, _MM_BM) * triton.cdiv(N, _MM_BN),)
+    ieee = (not _NBX_HAS_NATIVE_BF16) and (out_dtype == NBXDtype.float32)
 
     for i in range(B):
         matmul_kernel[grid](
@@ -1071,6 +1165,7 @@ def bmm(a, b) :
             b[i].stride(0), b[i].stride(1),
             c[i].stride(0), c[i].stride(1),
             BLOCK_M=_MM_BM, BLOCK_N=_MM_BN, BLOCK_K=_MM_BK, GROUP_M=_MM_GROUP,
+            IEEE_PRECISION=ieee,
             num_warps=4, num_stages=2,
         )
     return c
@@ -1201,6 +1296,25 @@ def addmm(bias, a, b,
     a = _ensure_cuda(a)
     b = _ensure_cuda(b)
     bias = _ensure_cuda(bias)
+
+    # Hardware-gated fp16→fp32 input upcast — same rationale as mm().
+    if not _NBX_HAS_NATIVE_BF16:
+        if a.dtype == NBXDtype.float16:
+            a = a.to(NBXDtype.float32)
+        if b.dtype == NBXDtype.float16:
+            b = b.to(NBXDtype.float32)
+
+    # Dtype alignment (see mm() for rationale): fp32×fp16 crashes tl.dot.
+    if a.dtype != b.dtype:
+        _order = (NBXDtype.float32, NBXDtype.bfloat16, NBXDtype.float16)
+        widest = next(d for d in _order if d in (a.dtype, b.dtype))
+        if a.dtype != widest:
+            a = a.to(widest)
+        if b.dtype != widest:
+            b = b.to(widest)
+    if bias.dtype != a.dtype:
+        bias = bias.to(a.dtype)
+
     M, K = a.shape
     K2, N = b.shape
     assert K == K2
@@ -1226,9 +1340,10 @@ def addmm(bias, a, b,
     a = a.contiguous()
     b = b.contiguous()
     bias = bias.contiguous()
-    c = NBXTensor.empty((M, N), device=a.device,
-                        dtype=_matmul_out_dtype(a, M))
+    out_dtype = _matmul_out_dtype(a, M)
+    c = NBXTensor.empty((M, N), device=a.device, dtype=out_dtype)
     grid = (triton.cdiv(M, _MM_BM) * triton.cdiv(N, _MM_BN),)
+    ieee = (not _NBX_HAS_NATIVE_BF16) and (out_dtype == NBXDtype.float32)
     addmm_kernel[grid](
         a, b, bias, c,
         M, N, K,
@@ -1237,6 +1352,7 @@ def addmm(bias, a, b,
         c.stride(0), c.stride(1),
         alpha, beta,
         BLOCK_M=_MM_BM, BLOCK_N=_MM_BN, BLOCK_K=_MM_BK, GROUP_M=_MM_GROUP,
+        IEEE_PRECISION=ieee,
         num_warps=4, num_stages=2,
     )
     return c

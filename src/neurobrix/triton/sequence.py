@@ -1964,7 +1964,6 @@ class TritonSequence:
                 if has_nan or has_inf:
                     self._trace_nan_seen = True
                     flag = "NaN" if has_nan else "Inf"
-                    # Input dtypes — useful to understand fp16 overflow
                     inp_info = []
                     for si in op.all_input_slots[:4]:
                         ti = arena[si] if arena else None
