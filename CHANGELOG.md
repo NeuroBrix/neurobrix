@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Hardware-gated fp16 overflow protection (WIP, architectural surface only)**: `PrismProfile.has_native_bf16` property data-driven from `devices_support_dtype("bfloat16")` (covers all vendors). `kernels/wrappers.set_hardware_profile()` propagates the flag into a module-level `_NBX_HAS_NATIVE_BF16` gate; on pre-Ampere hardware (no native bf16), `mm`/`bmm`/`addmm` upcast fp16 inputs and land output in fp32. Triton `matmul_kernel`/`addmm_kernel` gain `IEEE_PRECISION` constexpr to force `tl.dot(input_precision="ieee")` when inputs were promoted to fp32. **Known incomplete**: openaudio DualAR still crashes (upstream `_to_copy(fp32→fp16)` clamps to Inf before mm); perf of per-call weight upcast not yet measured; Ampere+ no-op path not yet mock-verified.
 - Flow-aware CLI dispatch in regression harness: STT models now auto-dispatch `--audio`, TTS-with-reference models auto-dispatch reference audio. Unblocks whisper, parakeet, canary-qwen, Voxtral, granite-speech, Kokoro native in automated testing.
 - New kernel wrappers in Triton dispatch: `linear`, `isin`, `is_nonzero`, `layer_norm` alias. Enables chatterbox Triton LM stage and openaudio DualAR entry.
 - NBXTensor→numpy D2H helper (`_to_numpy`) for flow handlers that need host-side arrays without going through torch.

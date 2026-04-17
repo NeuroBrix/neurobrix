@@ -361,6 +361,10 @@ def cmd_run(args):
     # 6. Execute
     print("\n[Execute] Running pipeline...")
     print(f"   Engine: {execution_mode.upper()}")
+    # Data-driven hardware capability surface for Triton kernel wrappers.
+    # Set once per process from the resolved PrismProfile.
+    from neurobrix.kernels.wrappers import set_hardware_profile
+    set_hardware_profile(hw_profile)
     executor = RuntimeExecutor(pkg, execution_plan, mode=execution_mode)
 
     try:
