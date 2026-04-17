@@ -392,6 +392,25 @@ class PrismProfile:
         """Check if ALL devices support a dtype."""
         return all(dtype in d.supports_dtypes for d in self.devices)
 
+    @property
+    def has_native_bf16(self) -> bool:
+        """True iff every device natively supports bfloat16.
+
+        Data-driven surface used by the Triton runtime to decide whether
+        fp16 ops need the fp32-output overflow protection (native's AMP
+        engine already does this unconditionally on pre-Ampere hardware).
+        On Ampere+ (SM 8.0+), H100, Blackwell, Ada, AMD CDNA3, Apple M2+,
+        Intel Ponte Vecchio — this is True and the protection path is a
+        no-op. On Volta / Turing / older AMD — False, fp16 mm/bmm/addmm
+        get fp32 output.
+
+        Edge case: empty device list returns False for safety — callers
+        would otherwise treat "no evidence" as "full capability".
+        """
+        if not self.devices:
+            return False
+        return self.devices_support_dtype("bfloat16")
+
     def get_supported_dtypes(self) -> Set[str]:
         """Get dtypes supported by ALL devices."""
         if not self.devices:
