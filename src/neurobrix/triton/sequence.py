@@ -124,7 +124,9 @@ class TritonSequence:
 
         # Engines
         self._symbol_resolver: Optional[SymbolResolver] = None
-        self._dtype_engine = TritonDtypeEngine(compute_dtype)
+        from neurobrix.kernels.wrappers import has_native_bf16 as _has_bf16
+        self._dtype_engine = TritonDtypeEngine(
+            compute_dtype, has_native_bf16=_has_bf16())
         self._compute_dtype = compute_dtype
         self._compiled = False
 

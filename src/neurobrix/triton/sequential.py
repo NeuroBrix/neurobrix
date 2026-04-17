@@ -29,7 +29,9 @@ class TritonSequentialDispatcher:
     def __init__(self, device_idx: int = 0, compute_dtype: NBXDtype = NBXDtype.float16):
         self.device_idx = device_idx
         self.compute_dtype = compute_dtype
-        self._dtype_engine = TritonDtypeEngine(compute_dtype)
+        from neurobrix.kernels.wrappers import has_native_bf16 as _has_bf16
+        self._dtype_engine = TritonDtypeEngine(
+            compute_dtype, has_native_bf16=_has_bf16())
         self._op_cache: Dict[str, Any] = {}
 
     def resolve_attr(self, attr: Any) -> Any:
