@@ -117,6 +117,20 @@ class Zero3Strategy(ExecutionStrategy):
     def _pin_cpu_weights(self, component_name: str, executor: Any) -> None:
         """Pin CPU weights in-place for non_blocking DMA.
 
+        Polymorphic on tensor type so both native (torch.Tensor) and
+        triton (NBXTensor) paths get pinned host memory — native uses
+        tensor.pin_memory(), triton uses NBXTensor.pin_host() which
+        wraps cudaMallocHost via DeviceAllocator. Zero torch imports
+        on the triton branch.
+
+        In the triton path, the weight_loader already allocates CPU
+        shards as pinned NBXTensors (see triton/weight_loader.py
+        _load_to_pinned_cpu). This method becomes a no-op for those —
+        pin_host() on an already-pinned tensor returns self. Kept for
+        robustness: any CPU weight that slips through unpinned (e.g.
+        from a custom loader, a test harness, or a future zero3
+        variant) gets promoted here.
+
         Pinned memory doubles effective PCIe throughput. Decision is
         data-driven from cpu_ram_mb in the Prism plan via
         should_pin_memory(); if CPU RAM is too small we skip and accept
@@ -125,11 +139,16 @@ class Zero3Strategy(ExecutionStrategy):
         weights = getattr(executor, '_weights', None)
         if not weights:
             return
-        total_mb = sum(
-            t.numel() * t.element_size()
-            for t in weights.values()
-            if isinstance(t, torch.Tensor) and t.device.type == "cpu"
-        ) / (1024 * 1024)
+
+        # Tally unpinned CPU bytes across both tensor flavors.
+        total_mb = 0.0
+        for t in weights.values():
+            if isinstance(t, torch.Tensor) and t.device.type == "cpu":
+                total_mb += t.numel() * t.element_size()
+            elif hasattr(t, '_device') and getattr(t, '_device', None) == 'cpu':
+                # NBXTensor CPU — element_size is a method on NBXTensor.
+                total_mb += t.numel() * t.element_size()
+        total_mb /= (1024 * 1024)
         if total_mb == 0:
             return
 
@@ -156,6 +175,11 @@ class Zero3Strategy(ExecutionStrategy):
             if isinstance(tensor, torch.Tensor) and tensor.device.type == "cpu":
                 if not tensor.is_pinned():
                     weights[name] = tensor.contiguous().pin_memory()
+                    pinned += 1
+            elif hasattr(tensor, '_device') and getattr(tensor, '_device', None) == 'cpu':
+                # NBXTensor CPU form — pin via cudaMallocHost.
+                if not getattr(tensor, '_pinned', False):
+                    weights[name] = tensor.pin_host()
                     pinned += 1
         if pinned:
             logger.info(
@@ -200,19 +224,36 @@ class Zero3Strategy(ExecutionStrategy):
         def pre_op_cb(op_idx: int, op: Any) -> None:
             if strategy._primed.get(component_name, False):
                 return
+            # Resolve the compiled sequence for this executor. The
+            # native path exposes it as `_compiled_seq` (torch.device
+            # expected); the triton path as `_triton_seq` (int device
+            # index expected). Both now implement the same priming API
+            # — just need to hand them the right device descriptor.
             compiled_seq = getattr(executor, '_compiled_seq', None)
-            if compiled_seq is None:
+            triton_seq = getattr(executor, '_triton_seq', None)
+            if compiled_seq is not None:
+                exec_dev_t = torch.device(strategy.exec_device)
+                n_flipped = compiled_seq.mark_cpu_weighted_ops_for_transfer(exec_dev_t)
+                compiled_seq.override_weightless_op_devices(exec_dev_t)
+                primed_on = f"compiled/{strategy.exec_device}"
+            elif triton_seq is not None:
+                if strategy.exec_device.startswith("cuda:"):
+                    dev_idx = int(strategy.exec_device.split(":", 1)[1])
+                else:
+                    dev_idx = 0
+                n_flipped = triton_seq.mark_cpu_weighted_ops_for_transfer(dev_idx)
+                triton_seq.override_weightless_op_devices(dev_idx)
+                primed_on = f"triton/{strategy.exec_device}"
+            else:
+                # Neither sequence built yet — skip priming, try again
+                # next op. This keeps the callback safe during the
+                # early bootstrap phase when executor.run is still
+                # populating its internal state.
                 return
-            exec_dev_t = torch.device(strategy.exec_device)
-            # Order matters: weighted ops need their device set from
-            # arena contents, which still reflects the CPU binding at
-            # install time. override_weightless then forces creation
-            # ops onto exec_dev.
-            n_flipped = compiled_seq.mark_cpu_weighted_ops_for_transfer(exec_dev_t)
-            compiled_seq.override_weightless_op_devices(exec_dev_t)
+
             logger.info(
                 f"[Zero3] {component_name}: primed slow-path for "
-                f"{n_flipped} CPU-weighted ops on {strategy.exec_device}"
+                f"{n_flipped} CPU-weighted ops on {primed_on}"
             )
             strategy._primed[component_name] = True
 

@@ -7,6 +7,7 @@ with NBXDtype and uses Arena + SymbolResolver for triton mode.
 Zero torch dependency in the hot loop.
 """
 
+import re
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -17,6 +18,14 @@ from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, p
 from .arena import Arena
 from .symbols import SymbolResolver
 from .dtype import TritonDtypeEngine
+
+
+# Same pattern as core/runtime/graph/compiled_sequence._BLOCK_RE and
+# triton/weight_loader._BLOCK_RE. Used by TritonSequence.get_op_blocks
+# to partition ops by transformer layer for zero3 pipelining and the
+# correctness slow-path priming.
+_BLOCK_RE = re.compile(
+    r'(?:blocks?|layers|model\.layers|encoder\.layers|decoder\.layers)\.(\d+)\.')
 
 
 # ============================================================================
@@ -139,6 +148,10 @@ class TritonSequence:
         # Weight tensor IDs that need .t() at bind time (from
         # _eliminate_weight_transpose_ops pass).
         self._pretranspose_weights: set = set()
+
+        # Cache for get_op_blocks — lazy populated on first call, safe
+        # because the compiled op list is immutable after compile().
+        self._op_blocks_cache: Optional[Dict[int, Dict[str, Any]]] = None
 
     def register_op_interceptor(self, op_type: str, interceptor: Callable):
         """Register an interceptor for a specific op type (e.g., SDPA for KV cache)."""
@@ -1535,9 +1548,20 @@ class TritonSequence:
 
     def compute_op_devices(self):
         """Ported from compiled_sequence.py:2430. Sets op.device_idx and
-        op.needs_transfer from weight placement in the arena."""
+        op.needs_transfer from weight placement in the arena.
+
+        Zero3 (CPU offload) interaction: CPU NBXTensors have
+        `_device_idx=0` (default placeholder) which matches cuda:0's
+        index, so a naive device_idx-only set-intersection would
+        classify everything as single-device and skip the multi-device
+        hot loop entirely — callback never fires, slow path never
+        kicks in. We also collect each tensor's `_device` type string
+        and force multi-device classification if any weight is on CPU
+        while the exec device is on CUDA (or vice versa).
+        """
         arena = self._arena
         devices_seen = set()
+        has_cpu_weight = False
 
         # Phase 1: assign device to weighted ops
         for op in self._ops:
@@ -1548,10 +1572,15 @@ class TritonSequence:
                 if tensor is not None and hasattr(tensor, '_device_idx'):
                     op.device_idx = tensor._device_idx
                     devices_seen.add(tensor._device_idx)
+                    if getattr(tensor, '_device', 'cuda') == 'cpu':
+                        has_cpu_weight = True
                     break
 
         devices_seen.add(self.device_idx)
-        self._is_multi_device = len(devices_seen) > 1
+        # Multi-device iff we have more than one distinct device idx OR
+        # at least one CPU-backed weight (the CPU/GPU split that zero3
+        # introduces is invisible to device_idx alone).
+        self._is_multi_device = len(devices_seen) > 1 or has_cpu_weight
         if not self._is_multi_device:
             return
 
@@ -1585,6 +1614,203 @@ class TritonSequence:
             if out_dev is not None:
                 for s in op.output_slots:
                     slot_device[s] = out_dev
+
+    # ========================================================================
+    # ZERO3 PARITY API — mirrors the methods added to CompiledSequence in
+    # commit ea90d66 so the correctness-only zero3 priming (and future
+    # pipelining) works in triton mode. Semantics are exactly equivalent
+    # on the observable side (arena slot swap, op.device / op.needs_transfer
+    # flag updates, block partition by transformer layer). Zero torch
+    # throughout — all manipulations go through NBXTensor.
+    # ========================================================================
+
+    def rebind_partial(self, partial_map: Dict[str, NBXTensor]) -> List[int]:
+        """Replace a subset of weights in the arena without touching the rest.
+
+        Mirror of CompiledSequence.rebind_partial. Used by zero3 to swap
+        weights between their CPU home and a freshly-allocated GPU copy
+        during block-wise execution. Honors the same _pretranspose_weights
+        contract as bind_weights — 2-D weights whose aten::t op was
+        eliminated at compile time get a .t() view before being placed in
+        the arena.
+
+        Args:
+            partial_map: tensor_id → NBXTensor. Tensor IDs not in
+                self._tid_to_slot are silently skipped.
+
+        Returns:
+            List of slot indices that were modified.
+        """
+        assert self._arena is not None, "compile() must be called before rebind_partial()"
+        modified: List[int] = []
+        for tensor_id, tensor in partial_map.items():
+            slot = self._tid_to_slot.get(tensor_id)
+            if slot is None:
+                continue
+            if tensor_id in self._pretranspose_weights and tensor.ndim == 2:
+                tensor = tensor.t()
+            self._arena[slot] = tensor
+            modified.append(slot)
+        return modified
+
+    def recompute_op_devices_for_slots(self, modified_slots: List[int]) -> None:
+        """Patch per-op device flags after a partial arena rebind.
+
+        Mirror of CompiledSequence.recompute_op_devices_for_slots.
+        Revisits only the ops that read the modified slots via their
+        weight_input_slots, rederives op.device_idx from the current
+        arena contents, and flips op.needs_transfer based on whether
+        the weight lives on the execution device.
+
+        In triton mode, CPU-backed weights (zero3) have _device='cpu'
+        and _device_idx=0 which is indistinguishable from "on cuda:0"
+        by device_idx alone, so we also check _device type. If the
+        weight is CPU we force op.device_idx to the exec device and
+        mark needs_transfer=True so the slow path does the H2D copy.
+        """
+        assert self._arena is not None, (
+            "compile() must be called before recompute_op_devices_for_slots()")
+        if not modified_slots:
+            return
+        arena = self._arena
+        touched = set(modified_slots)
+        exec_dev = self.device_idx
+        for op in self._ops:
+            if not op.weight_input_slots:
+                continue
+            if not any(ws in touched for ws in op.weight_input_slots):
+                continue
+            new_dev = None
+            is_cpu = False
+            for ws in op.weight_input_slots:
+                tensor = arena[ws]
+                if tensor is not None and hasattr(tensor, '_device_idx'):
+                    new_dev = tensor._device_idx
+                    # NBXTensor has explicit _device; we must not treat
+                    # a CPU tensor with _device_idx=0 as "on cuda:0".
+                    is_cpu = getattr(tensor, '_device', 'cuda') == 'cpu'
+                    break
+            if new_dev is not None:
+                if is_cpu:
+                    # Weight is CPU — compute on exec_dev, transfer
+                    # per-op via _run_multi_device's slow path.
+                    op.device_idx = exec_dev
+                    op.needs_transfer = True
+                else:
+                    op.device_idx = new_dev
+                    op.needs_transfer = (new_dev != exec_dev)
+
+    def override_weightless_op_devices(self, device_idx: int) -> None:
+        """Force op.device_idx = device_idx for every op without weight inputs.
+
+        Mirror of CompiledSequence.override_weightless_op_devices.
+        Tensor-creation ops (arange, scalar_tensor, full, attn-mask
+        casts) inherit device from the activation-device chain built by
+        compute_op_devices. For zero3 that chain is wrong — weighted
+        ops "live" on CPU in the device graph but compute must happen
+        on the exec GPU. This override sets the right device for
+        weightless ops directly.
+        """
+        assert self._arena is not None, (
+            "compile() must be called before override_weightless_op_devices()")
+        for op in self._ops:
+            if not op.weight_input_slots:
+                op.device_idx = device_idx
+                op.needs_transfer = False
+
+    def mark_cpu_weighted_ops_for_transfer(self, exec_device_idx: int) -> int:
+        """Zero3 correctness: flag every CPU-weighted op to go slow-path.
+
+        Mirror of CompiledSequence.mark_cpu_weighted_ops_for_transfer.
+        compute_op_devices's Phase 4 only marks the first weighted op
+        as needs_transfer=True (its scan was designed for FGP device
+        transitions). For zero3 every CPU-weighted op needs the slow
+        path so the per-op H2D transfer fires.
+
+        Returns the count of ops flipped.
+        """
+        assert self._arena is not None, (
+            "compile() must be called before mark_cpu_weighted_ops_for_transfer()")
+        flipped = 0
+        for op in self._ops:
+            if not op.weight_input_slots:
+                continue
+            for ws in op.weight_input_slots:
+                t = self._arena[ws]
+                # CPU NBXTensor — _device attribute is the truth source;
+                # _device_idx alone is ambiguous (CPU tensors report 0).
+                if t is not None and getattr(t, '_device', None) == 'cpu':
+                    op.device_idx = exec_device_idx
+                    op.needs_transfer = True
+                    flipped += 1
+                    break
+        return flipped
+
+    def get_op_blocks(self) -> Dict[int, Dict[str, Any]]:
+        """Group the compiled op list by transformer block.
+
+        Mirror of CompiledSequence.get_op_blocks. Uses _BLOCK_RE to
+        extract the block index from weight tensor names. Weightless
+        ops inherit the block of their predecessor. Non-block weights
+        (embeddings, final norm, lm_head) go into block -1.
+
+        Result is cached on self._op_blocks_cache — immutable after
+        compile().
+        """
+        cache = getattr(self, '_op_blocks_cache', None)
+        if cache is not None:
+            return cache
+
+        # Invert _tid_to_slot for fast slot → tid lookup.
+        slot_to_tid: Dict[int, str] = {
+            slot: tid for tid, slot in self._tid_to_slot.items()}
+
+        blocks: Dict[int, Dict[str, Any]] = {}
+        last_assigned: int = -1
+        for op_idx, op in enumerate(self._ops):
+            block_idx: Optional[int] = None
+            op_weight_tids: List[str] = []
+            for ws in op.weight_input_slots:
+                tid = slot_to_tid.get(ws)
+                if not tid:
+                    continue
+                op_weight_tids.append(tid)
+                if block_idx is None:
+                    if tid.startswith("param::"):
+                        name = tid[7:]
+                    elif tid.startswith("buffer::"):
+                        name = tid[8:]
+                    else:
+                        name = tid
+                    m = _BLOCK_RE.search(name)
+                    block_idx = int(m.group(1)) if m else -1
+
+            if block_idx is None:
+                block_idx = last_assigned
+
+            last_assigned = block_idx
+            entry = blocks.get(block_idx)
+            if entry is None:
+                entry = {
+                    'first_op': op_idx,
+                    'last_op': op_idx,
+                    'weight_tensor_ids': [],
+                }
+                blocks[block_idx] = entry
+            else:
+                entry['last_op'] = op_idx
+            if op_weight_tids:
+                entry['weight_tensor_ids'].extend(op_weight_tids)
+
+        # Dedupe weight_tensor_ids per block.
+        for entry in blocks.values():
+            seen: Dict[str, None] = {}
+            for tid in entry['weight_tensor_ids']:
+                seen.setdefault(tid, None)
+            entry['weight_tensor_ids'] = list(seen.keys())
+
+        self._op_blocks_cache = blocks
+        return blocks
 
     # ========================================================================
     # ARG COMPILATION — ported from compiled_sequence._compile_arg
@@ -1920,20 +2146,29 @@ class TritonSequence:
             self._symbol_resolver.bind_from_inputs(
                 inputs, self._input_ids, self.dag.get("tensors", {}))
 
-    def run(self, skip_kills: bool = False):
+    def run(self, skip_kills: bool = False,
+            pre_op_callback: Optional[Callable[[int, 'CompiledOp'], None]] = None):
         """Execute all ops. Zero overhead hot loop.
 
         Args:
             skip_kills: When True, skip kill_slots entirely (no cudaFree, no sync).
                 Decode steps reuse the same arena slots every step, so intermediates
                 are always overwritten before being read. No UAF possible.
+            pre_op_callback: Optional (op_idx, op) -> None hook invoked
+                before each op's args are resolved. Used by zero3 for
+                its first-tick priming (mark_cpu_weighted_ops_for_transfer
+                + override_weightless_op_devices) and by future block-
+                wise pipelining to rebind weights at block boundaries.
+                None → no overhead. Honored only by the multi-device
+                path; single-device skips (zero3 is always multi-device-
+                classified because CPU weights differ from the exec GPU).
         """
         DeviceAllocator.ensure_triton_device(self.device_idx)
 
         if self._is_multi_device:
-            self._run_multi_device(skip_kills)
+            self._run_multi_device(skip_kills, pre_op_callback)
         else:
-            self._run_single_device(skip_kills)
+            self._run_single_device(skip_kills, pre_op_callback)
 
     def _maybe_trace_nan(self, op: 'CompiledOp', arena) -> None:
         """Scan op output(s) for Inf/NaN. Print the first offender on
@@ -2075,13 +2310,18 @@ class TritonSequence:
             except Exception as e:
                 print(f"[NBX_DUMP_TIDS] failed on {tid}: {e}", flush=True)
 
-    def _run_single_device(self, skip_kills: bool = False):
+    def _run_single_device(self, skip_kills: bool = False,
+                            pre_op_callback: Optional[Callable[[int, 'CompiledOp'], None]] = None):
         """Single-device fast path — no device switching.
 
         Both output-slot overwrites and kill_slots defer their old tensors
         to a single list, released after a sync at the end of the run.
         Without this, NBXTensor.__del__ frees GPU memory while async kernels
         may still be reading from it.
+
+        pre_op_callback is accepted for signature parity with the multi-
+        device path but is not invoked here: zero3 is always classified
+        multi-device (CPU weights), so this branch never runs under zero3.
         """
         arena = self._arena
         _deferred = []
@@ -2116,7 +2356,7 @@ class TritonSequence:
             args = op.args_resolver(arena)
             kwargs = op.kwargs_resolver(arena)
 
-            # NOP propagation (deactivated MoE paths)
+            # NOP propagation (deactivated MoE paths).
             if args and args[0] is None:
                 bare = op.op_type.split("::")[-1]
                 if bare in _ACCUMULATOR_OPS:
@@ -2164,12 +2404,16 @@ class TritonSequence:
                         _elem_timings[op.op_type] = _elem_timings.get(op.op_type, 0.0) + _dt
                         _elem_counts[op.op_type] = _elem_counts.get(op.op_type, 0) + 1
 
-            # Defer any tensors currently in the output slots before overwriting.
+            # Defer old slot tensors before overwriting — cudaFree is
+            # synchronous so immediate release while a kernel may still
+            # be reading the memory would UAF. The deferred list is
+            # drained after a device sync at the end of run().
             for s in op.output_slots:
                 old = arena[s]
                 if old is not None:
                     _deferred.append(old)
 
+            # Store outputs
             if not op.output_slots:
                 pass
             elif len(op.output_slots) == 1:
@@ -2231,20 +2475,32 @@ class TritonSequence:
                           f"({_n:4d} ops, {_avg:.3f}ms/op, {_p:5.1f}% of elem)")
         # ==================================
 
-    def _run_multi_device(self, skip_kills: bool = False):
+    def _run_multi_device(self, skip_kills: bool = False,
+                            pre_op_callback: Optional[Callable[[int, 'CompiledOp'], None]] = None):
         """Multi-device hot loop. Ported from compiled_sequence._run_inner_multi_device.
 
         - Fast path (99%+ ops): just switch device context if op.device_idx changed
-        - Slow path (needs_transfer ops): D2D memcpy inputs to target device
+        - Slow path (needs_transfer ops): D2D memcpy inputs to target device.
+          For CPU-backed weight inputs (zero3), _transfer_tensor handles
+          H2D (kind=1) instead of D2D.
 
-        Both output-slot overwrites and kill_slots defer their old tensors
-        to a single list, released after a sync at the end of the run.
+        Uses cudaMalloc/cudaFree (sync) underneath, so both output-slot
+        overwrites and kill_slots batch their old tensors into a
+        `_deferred` list and drop them after a device sync at end of
+        run — releasing while a kernel is still reading would UAF.
+
+        pre_op_callback is invoked with (op_idx, op) BEFORE each op's
+        args are resolved. Used by zero3 for first-tick priming and by
+        block-wise pipelining (deferred) for boundary rebinds. Skipped
+        (no branch cost beyond the None check) when callback is None.
         """
         arena = self._arena
         _current_dev = self.device_idx
         _deferred = []
 
-        for op in self._ops:
+        for op_idx, op in enumerate(self._ops):
+            if pre_op_callback is not None:
+                pre_op_callback(op_idx, op)
             args = op.args_resolver(arena)
             kwargs = op.kwargs_resolver(arena)
 
@@ -2252,7 +2508,7 @@ class TritonSequence:
             if kwargs and 'device' in kwargs and op.device_idx is not None:
                 kwargs['device'] = f"cuda:{op.device_idx}"
 
-            # NOP propagation
+            # NOP propagation — deactivated MoE expert path returns None.
             if args and args[0] is None:
                 for s in op.output_slots:
                     old = arena[s]
@@ -2331,16 +2587,75 @@ class TritonSequence:
             DeviceAllocator.sync_device()
             _deferred.clear()
 
+
+    @staticmethod
+    def _needs_move(t: NBXTensor, target_dev: int) -> bool:
+        """Return True iff tensor must be transferred to land on cuda:target_dev.
+
+        Covers three cases:
+          1. Source is CPU → must H2D (even if _device_idx happens to be 0).
+          2. Source is on a different CUDA device → must D2D.
+          3. Source is on target CUDA device → no-op.
+        """
+        if getattr(t, '_device', 'cuda') == 'cpu':
+            return True
+        return t._device_idx != target_dev
+
+    @staticmethod
+    def _find_cuda_arg(args) -> 'Optional[int]':
+        """Return the device_idx of the first CUDA NBXTensor in args (scanning
+        nested lists/tuples one level deep), or None if args contains no
+        CUDA tensor.
+
+        Used by _transfer_args to mimic native's slow-path rule: only
+        promote CPU args if there's already a CUDA arg in the list. For
+        metadata ops (aten::t, view, reshape, permute) on a CPU weight
+        with no CUDA activation, this returns None → no promotion → the
+        op runs as a pure-Python NBXTensor view on the CPU weight, which
+        is correctness-equivalent to the native `cpu_weight.t()` path
+        and crucially avoids allocating a 3-MB GPU temp per call (which
+        is then retained by the view's _base chain in the arena,
+        growing residency by ~1.28 GB per transformer block — the
+        mechanism documented in LEAK_PINPOINT_REPORT.md).
+        """
+        for a in args:
+            if isinstance(a, NBXTensor) and getattr(a, '_device', 'cuda') == 'cuda':
+                return a._device_idx
+            if isinstance(a, (list, tuple)):
+                for item in a:
+                    if isinstance(item, NBXTensor) and getattr(item, '_device', 'cuda') == 'cuda':
+                        return item._device_idx
+        return None
+
     def _transfer_args(self, args, target_dev: int):
-        """Transfer NBXTensor args to target device via D2D memcpy."""
+        """Transfer NBXTensor args to target CUDA device.
+
+        Handles both cross-GPU (D2D) and CPU-offload (H2D via zero3).
+
+        Zero3 metadata-op preservation: if ALL NBXTensor args are CPU
+        (no CUDA tensor in the list), returns args unchanged instead
+        of promoting. Matches native compiled_sequence behavior — the
+        slow path only promotes CPU→GPU when compute on GPU is actually
+        required, not for metadata ops that return views. Without this,
+        every aten::t / aten::view / aten::permute on a CPU-resident
+        zero3 weight produces a fresh GPU copy that the arena's view
+        retains via _base chain, leaking block-sized residency per
+        forward pass.
+        """
+        # If no CUDA arg is present, there is no target to promote TO.
+        # Run the op on the CPU args as-is (metadata ops produce CPU
+        # views, which is exactly what native does).
+        if self._find_cuda_arg(args) is None:
+            return args
+
         new_args = []
         for a in args:
-            if isinstance(a, NBXTensor) and a._device_idx != target_dev:
+            if isinstance(a, NBXTensor) and self._needs_move(a, target_dev):
                 new_args.append(self._transfer_tensor(a, target_dev))
             elif isinstance(a, (list, tuple)):
                 moved = [
                     self._transfer_tensor(item, target_dev)
-                    if isinstance(item, NBXTensor) and item._device_idx != target_dev
+                    if isinstance(item, NBXTensor) and self._needs_move(item, target_dev)
                     else item
                     for item in a
                 ]
@@ -2350,23 +2665,35 @@ class TritonSequence:
         return new_args
 
     def _transfer_kwargs(self, kwargs, target_dev: int):
-        """Transfer NBXTensor kwargs to target device."""
+        """Transfer NBXTensor kwargs to target CUDA device."""
         new_kw = {}
         for k, v in kwargs.items():
-            if isinstance(v, NBXTensor) and v._device_idx != target_dev:
+            if isinstance(v, NBXTensor) and self._needs_move(v, target_dev):
                 new_kw[k] = self._transfer_tensor(v, target_dev)
             else:
                 new_kw[k] = v
         return new_kw
 
     def _transfer_tensor(self, tensor: NBXTensor, target_dev: int) -> NBXTensor:
-        """Copy NBXTensor to target device via D2D memcpy."""
+        """Copy NBXTensor to target CUDA device.
+
+        Picks the memcpy kind based on the source device:
+          - CPU source (zero3 offload): kind=1 (H2D)
+          - CUDA source (cross-GPU transfer): kind=3 (D2D)
+
+        Pinned host memory enables ~2× throughput on the H2D path, so
+        zero3 weights loaded via NBXTensor.empty_cpu(..., pinned=True)
+        naturally benefit from this path when the slow-path transfers
+        them.
+        """
         DeviceAllocator.set_device(target_dev)
         dst = NBXTensor.empty(tensor._shape, tensor._dtype,
                               f"cuda:{target_dev}")
         if tensor._nbytes > 0:
+            src_device = getattr(tensor, '_device', 'cuda')
+            kind = 1 if src_device == 'cpu' else 3
             DeviceAllocator.memcpy(dst.data_ptr(), tensor.data_ptr(),
-                                   tensor._nbytes, kind=3)  # D2D
+                                   tensor._nbytes, kind=kind)
         return dst
 
     def gather_outputs(self, output_ids: Optional[List[str]] = None) -> Dict[str, Any]:
