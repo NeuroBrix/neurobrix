@@ -225,6 +225,54 @@ def execute_moe_fused(
     if gate_scores._device_idx != act_dev:
         gate_scores = _xfer(gate_scores, act_dev)
 
+    # Zero3 CPU offload: expert weights may be on pinned host memory.
+    # They MUST be on act_dev before _build_ptr_tables runs because the
+    # pointer table caches raw data_ptrs — a CPU ptr in a GPU int64
+    # table dereferenced inside the kernel would crash or corrupt.
+    # This promotion re-creates GPU NBXTensors via to_cuda() which
+    # issues H2D cudaMemcpy. Expected to fire on every MoE op under
+    # zero3 (the CPU→GPU copy IS the zero3 slow path for MoE).
+    #
+    # Cache invalidation: if ANY weight is CPU, we bypass _ptr_cache
+    # entirely for this call and build a fresh table from the promoted
+    # tensors. Caching the table when weights were CPU would bake in
+    # GPU pointers that become stale on the NEXT call (when the CPU
+    # originals are re-promoted and land at different GPU addresses,
+    # or when future pipelining evicts the GPU copy). Under pure GPU
+    # multi-device setups the cache works normally and gives its usual
+    # ~3 KB-per-call saving; the zero3 path accepts the rebuild cost
+    # as the tradeoff for correct per-call placement.
+    #
+    # DEFERRED: A zero3-pipelining-aware cache will need to key on a
+    # version counter that the ratchet bumps on every eviction, so
+    # resident blocks keep a stable cache entry while evicted ones
+    # force a rebuild. See tests/scratch/zero3_leak_investigation/
+    # REPORT.md for the groundwork APIs.
+    any_cpu_weight = any(
+        getattr(w, '_device', 'cuda') == 'cpu'
+        for lst in (gate_weights, up_weights, down_weights)
+        for w in lst)
+    import os as _os_z3
+    _Z3_DIAG = _os_z3.environ.get("NBX_Z3_TRITON_DIAG") == "1"
+    if _Z3_DIAG and any_cpu_weight:
+        print(f"[Z3_MOE] {cache_key} pre-promote "
+              f"cuda_live={DeviceAllocator.memory_allocated(act_dev)/1e6:.1f}MB",
+              flush=True)
+    if any_cpu_weight:
+        gate_weights = [
+            w.to_cuda(act_dev) if getattr(w, '_device', 'cuda') == 'cpu' else w
+            for w in gate_weights]
+        up_weights = [
+            w.to_cuda(act_dev) if getattr(w, '_device', 'cuda') == 'cpu' else w
+            for w in up_weights]
+        down_weights = [
+            w.to_cuda(act_dev) if getattr(w, '_device', 'cuda') == 'cpu' else w
+            for w in down_weights]
+    if _Z3_DIAG and any_cpu_weight:
+        print(f"[Z3_MOE] {cache_key} post-promote "
+              f"cuda_live={DeviceAllocator.memory_allocated(act_dev)/1e6:.1f}MB",
+              flush=True)
+
     orig_shape = hidden_states.shape
     if hidden_states.ndim == 3:
         hidden_states = hidden_states.reshape(-1, hidden_states.shape[-1])
@@ -294,14 +342,22 @@ def execute_moe_fused(
     # ================================================================
     # STEP 2: Build pointer tables (cached — zero-copy)
     # ================================================================
+    # Under zero3 (any_cpu_weight=True above), we skip the cache: the
+    # promoted GPU tensors are freshly allocated per call, so cached
+    # pointers would dangle after this call returns. See comment at
+    # STEP 0 for the zero3/pipelining interaction.
     ck = cache_key if cache_key else f"moe_{gate_weights[0].data_ptr()}_{num_experts}"
-    if ck not in _ptr_cache:
-        _ptr_cache[ck] = _build_ptr_tables(
-            gate_weights, up_weights, down_weights)
+    if any_cpu_weight:
+        tables = _build_ptr_tables(gate_weights, up_weights, down_weights)
         DeviceAllocator.set_device(act_dev)
         DeviceAllocator.ensure_triton_device(act_dev)
-
-    tables = _ptr_cache[ck]
+    else:
+        if ck not in _ptr_cache:
+            _ptr_cache[ck] = _build_ptr_tables(
+                gate_weights, up_weights, down_weights)
+            DeviceAllocator.set_device(act_dev)
+            DeviceAllocator.ensure_triton_device(act_dev)
+        tables = _ptr_cache[ck]
 
     # ================================================================
     # STEP 3: Align tokens by expert (sorting)
@@ -348,10 +404,26 @@ def execute_moe_fused(
     if len(orig_shape) == 3:
         output = output.reshape(orig_shape)
 
-    pass
+    # Under zero3 (any_cpu_weight=True), explicitly drop the promoted
+    # weight lists AND the local `tables` before returning. The ptr
+    # tables' int64 addresses become stale once the GPU NBXTensors are
+    # freed, so we must release both in the same frame. Without this,
+    # CPython may keep the function frame alive one extra tick on the
+    # caller's stack, holding ~800 MB per MoE op and OOMing after 7-8
+    # blocks on a 16 GB V100.
+    if any_cpu_weight:
+        del gate_weights, up_weights, down_weights
+        del tables
+        import gc as _gc
+        _gc.collect()
 
     DeviceAllocator.set_device(act_dev)
     DeviceAllocator.ensure_triton_device(act_dev)
+
+    if _Z3_DIAG and any_cpu_weight:
+        print(f"[Z3_MOE] {cache_key} post-return "
+              f"cuda_live={DeviceAllocator.memory_allocated(act_dev)/1e6:.1f}MB",
+              flush=True)
 
     return output
 

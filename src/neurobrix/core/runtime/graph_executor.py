@@ -1428,7 +1428,12 @@ class GraphExecutor:
         is_decode = any(
             t.shape[1] == 1 for t in input_map.values()
             if hasattr(t, 'shape') and len(t.shape) >= 2)
-        self._triton_seq.run(skip_kills=is_decode)
+        # Thread pre_op_callback from the executor into TritonSequence.
+        # Explicit per-call wins over the persistent hook (installed by
+        # strategies like zero3). This mirrors the behaviour of
+        # _execute_compiled_graph in native mode.
+        cb = self._pre_op_callback or self._persistent_pre_op_callback
+        self._triton_seq.run(skip_kills=is_decode, pre_op_callback=cb)
         return self._triton_seq.gather_outputs(), self._triton_seq.num_ops
 
     def _run_triton_sequential(self, input_map: dict, device_idx: int):
