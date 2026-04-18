@@ -923,6 +923,17 @@ class RuntimeExecutor:
 
         executor._weights_loaded = True
 
+        # Zero3 needs to install its per-executor hooks (pipeline callback
+        # + post-run teardown) BEFORE any executor.run() call. Flow
+        # handlers that bypass strategy.execute_component (autoregressive
+        # LLM prefill) still funnel through here for weight loading, so
+        # this is the natural install point. Other strategies ignore —
+        # the method is zero3-specific by design.
+        if self._is_zero3_component(comp_name) and self.strategy is not None:
+            install_fn = getattr(self.strategy, 'install_for_executor', None)
+            if install_fn is not None:
+                install_fn(comp_name, executor)
+
     def _unload_component_weights(self, comp_name: str) -> None:
         """Unload weights for a component to free GPU memory."""
         executor = self.executors.get(comp_name)
