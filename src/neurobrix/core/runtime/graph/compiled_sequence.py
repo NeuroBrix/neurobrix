@@ -21,6 +21,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union, TYPE_CHECKING
 import os
+import re
 import torch
 
 from neurobrix.core.dtype.config import parse_dtype as _cfg_parse_dtype, DTYPE_MAP as _DTYPE_MAP
@@ -50,6 +51,22 @@ _ACCUMULATOR_OPS = frozenset({
     "aten::scatter_reduce", "aten::scatter_add", "aten::index_add",
     "aten::scatter", "aten::index_put",
 })
+
+# ============================================================================
+# TRANSFORMER BLOCK REGEX — used by get_op_blocks() introspection and shared
+# with execution strategies (zero3 pipelining) that need to group weights or
+# ops by transformer layer. Pattern extracts the integer block index from
+# tensor/weight names following both NeuroTax (NeuroBrix standard, singular
+# "block.N.") and HuggingFace / native conventions (plural "blocks.N.",
+# "layers.N.", "model.layers.N.", etc.).
+#   "block.0.attn.q"          → 0  (NeuroTax — the canonical form in NBX)
+#   "blocks.0.attn.wq"        → 0  (vendor plural)
+#   "model.layers.12.mlp.gate" → 12
+#   "encoder.layers.5.norm"   → 5
+# Non-block names (embeddings, final norms, lm_head) return no match — these
+# are classified as block_idx = -1 by get_op_blocks().
+# ============================================================================
+_BLOCK_RE = re.compile(r'(?:blocks?|layers|model\.layers|encoder\.layers|decoder\.layers)\.(\d+)\.')
 
 
 def _has_none_arg(args: tuple) -> bool:
@@ -265,6 +282,7 @@ class CompiledSequence:
         '_seq_dependent_constants',  # Constants with trace-time seq_len dim: [(slot, axis, sym_id, trace_val)]
         '_seq_constant_originals',  # Original full-size constants: {slot: tensor} — never narrowed
         '_pretranspose_weights',  # Weight tensor IDs that need .t().contiguous() at bind time
+        '_op_blocks_cache',  # Cache for get_op_blocks() — immutable post-compile
     )
 
     def __init__(
@@ -338,6 +356,9 @@ class CompiledSequence:
 
         # Weight tensor IDs that need pre-transposition (set by _eliminate_weight_transpose_ops)
         self._pretranspose_weights: set = set()
+
+        # get_op_blocks() cache — immutable after compile(), lazy populated
+        self._op_blocks_cache: Optional[Dict[int, Dict[str, Any]]] = None
 
         # Seq-dependent constants: RoPE cos/sin with trace-time seq_len dimension.
         # Populated at compile time, sliced at runtime after symbol binding.
@@ -2421,6 +2442,45 @@ class CompiledSequence:
                     tensor = tensor.t()
                 self._arena[slot] = tensor
 
+    def rebind_partial(self, partial_map: Dict[str, torch.Tensor]) -> List[int]:
+        """Replace a subset of weights in the arena without touching the rest.
+
+        Zero3 block-wise pipelining calls this to swap a block's weights
+        between CPU (pinned, inert) and GPU (hot, used by compute) during
+        a single component run. Unlike bind_weights(), this method is
+        designed for the hot path — it only touches the arena slots for
+        the provided tensor_ids and returns the list of modified slot
+        indices so the caller can pass them to
+        recompute_op_devices_for_slots() without rescanning the full op
+        list.
+
+        The same _pretranspose_weights contract as bind_weights() applies:
+        2-D weights whose aten::t op was eliminated at compile time get a
+        .t() view here too — otherwise a rebind to the transposed GPU
+        tensor would break matmul shapes on the second block onwards.
+
+        Args:
+            partial_map: tensor_id → tensor. Tensor IDs not in
+                self._tensor_id_to_slot are silently skipped (e.g. the
+                caller may supply the full block weight list even when
+                some names weren't in the graph).
+
+        Returns:
+            List of slot indices that were modified. Order is insertion
+            order of partial_map but with unresolved tensor_ids skipped.
+        """
+        assert self._arena is not None, "compile() must be called before rebind_partial()"
+        modified: List[int] = []
+        for tensor_id, tensor in partial_map.items():
+            slot = self._tensor_id_to_slot.get(tensor_id)
+            if slot is None:
+                continue
+            if tensor_id in self._pretranspose_weights and tensor.ndim == 2:
+                tensor = tensor.t()
+            self._arena[slot] = tensor
+            modified.append(slot)
+        return modified
+
         # Pre-populate constant weight slots not provided by weight loader.
         # Only allocate for genuinely empty/constant tensors (shape [0] or constant_*).
         # Do NOT allocate for regular weight slots that weren't provided — zero3
@@ -2559,6 +2619,188 @@ class CompiledSequence:
                 for s in op.output_slots:
                     slot_device[s] = out_dev
 
+    def recompute_op_devices_for_slots(self, modified_slots: List[int]) -> None:
+        """Patch per-op device flags after a partial arena rebind.
+
+        Called by zero3 block-wise pipelining: after rebind_partial()
+        swaps a block's weights between CPU and GPU, the ops that read
+        those weight slots need their op.device and op.needs_transfer
+        flags re-derived from the new arena contents. The global
+        activation-device graph built by compute_op_devices() stays
+        valid (graph topology is immutable), so we only revisit the ops
+        whose weight inputs intersect modified_slots.
+
+        Contract — matches the semantics of Phase 1 + the zero3 slow
+        path rule (CUDA always wins over CPU, so needs_transfer is True
+        iff op.device differs from self.device):
+
+            op.device        = device of first weight tensor currently in arena
+            op.needs_transfer = (op.device != self.device)
+
+        For weightless ops we skip — they inherit their activation
+        device from the surrounding graph, which is unchanged.
+
+        Args:
+            modified_slots: output of rebind_partial(). Empty list is
+                valid (no-op). Duplicates are tolerated.
+        """
+        assert self._arena is not None, "compile() must be called before recompute_op_devices_for_slots()"
+        if not modified_slots:
+            return
+        arena = self._arena
+        touched = set(modified_slots)
+        exec_dev = self.device
+        for op in self._ops:
+            if not op.weight_input_slots:
+                continue
+            if not any(ws in touched for ws in op.weight_input_slots):
+                continue
+            # Re-derive op.device from the first non-None weight tensor.
+            new_dev = None
+            for ws in op.weight_input_slots:
+                tensor = arena[ws]
+                if tensor is not None and hasattr(tensor, 'device'):
+                    new_dev = tensor.device
+                    break
+            if new_dev is not None:
+                op.device = new_dev
+                op.needs_transfer = (exec_dev is not None and new_dev != exec_dev)
+
+    def mark_cpu_weighted_ops_for_transfer(self, exec_device: torch.device) -> int:
+        """Zero3 correctness: flag every CPU-weighted op to go slow-path.
+
+        compute_op_devices() sets op.needs_transfer=True only for the
+        FIRST weighted op in Phase 4's device-transition scan. For
+        zero3 that's wrong: every CPU-weighted op needs the slow path
+        because its weight is on CPU while activations are on GPU. The
+        slow path in _run_inner_multi_device moves args to the GPU
+        target per-op, so setting op.device=CPU + needs_transfer=True
+        makes the allocator's per-op scratch tensor pattern kick in —
+        VRAM stays bounded to one op's working set at a time.
+
+        Idempotent. Returns the number of ops whose flag was flipped,
+        for diagnostic logging at install time.
+        """
+        assert self._arena is not None, (
+            "compile() must be called before mark_cpu_weighted_ops_for_transfer()")
+        flipped = 0
+        for op in self._ops:
+            if not op.weight_input_slots:
+                continue
+            for ws in op.weight_input_slots:
+                t = self._arena[ws]
+                if t is not None and hasattr(t, 'device') and t.device != exec_device:
+                    op.device = t.device
+                    op.needs_transfer = True
+                    flipped += 1
+                    break
+        return flipped
+
+    def override_weightless_op_devices(self, device: torch.device) -> None:
+        """Force op.device = device for every op without weight inputs.
+
+        compute_op_devices() derives each op's device from its weight
+        inputs, and weightless ops (arange, scalar_tensor, full, casts
+        on activation-only tensors) inherit device from the preceding
+        weighted op. For zero3 that inheritance is WRONG: the weighted
+        op is on CPU (weights CPU-offloaded) while the actual compute
+        must happen on the GPU execution device. Tensor-creation ops
+        then allocate on CPU (via kwargs['device'] = op.device patched
+        in _run_inner_multi_device) and downstream SDPA crashes with
+        "attn_bias on cpu".
+
+        Zero3Strategy calls this once per component, right after
+        compute_op_devices has run, to override the inherited device
+        for every weightless op. Weighted ops stay untouched — their
+        op.device still reflects weight placement and the normal rebind
+        flow (rebind_partial + recompute_op_devices_for_slots) keeps
+        them in sync as blocks swap in and out.
+        """
+        assert self._arena is not None, (
+            "compile() must be called before override_weightless_op_devices()")
+        for op in self._ops:
+            if not op.weight_input_slots:
+                op.device = device
+                op.needs_transfer = False
+
+    def get_op_blocks(self) -> Dict[int, Dict[str, Any]]:
+        """Group the compiled op list by transformer block for pipelining.
+
+        Each block is identified by an integer index extracted from the
+        weight tensor names via _BLOCK_RE (e.g. "blocks.3.attn.wq" → 3).
+        Weights that don't match the regex (embeddings, final norm,
+        lm_head) go into block -1 — these are "non-block" weights that
+        zero3 keeps GPU-resident for the whole component run.
+
+        Ops without weight_input_slots inherit the block assignment of
+        their predecessor in topological order. This keeps weightless
+        ops (add/norm/activation) in the same boundary group as the
+        weighted op they feed, so rebinding happens at the right moment.
+
+        The result is cached on self._op_blocks_cache — safe because the
+        compiled op list and slot↔tensor_id mapping are immutable after
+        compile().
+
+        Returns:
+            Dict[int, Dict[str, Any]]:
+                block_idx → {
+                    'first_op': int,          # first op_idx in block (inclusive)
+                    'last_op':  int,          # last op_idx in block (inclusive)
+                    'weight_tensor_ids': List[str],  # tensor_ids in this block
+                }
+        """
+        if self._op_blocks_cache is not None:
+            return self._op_blocks_cache
+
+        blocks: Dict[int, Dict[str, Any]] = {}
+        last_assigned: int = -1
+        for op_idx, op in enumerate(self._ops):
+            block_idx: Optional[int] = None
+            op_weight_tids: List[str] = []
+            for ws in op.weight_input_slots:
+                tid = self._slot_to_tensor_id.get(ws)
+                if not tid:
+                    continue
+                op_weight_tids.append(tid)
+                if block_idx is None:
+                    # Strip "param::"/"buffer::" prefix before regex match.
+                    if tid.startswith("param::"):
+                        name = tid[7:]
+                    elif tid.startswith("buffer::"):
+                        name = tid[8:]
+                    else:
+                        name = tid
+                    m = _BLOCK_RE.search(name)
+                    block_idx = int(m.group(1)) if m else -1
+
+            if block_idx is None:
+                # Weightless op — inherit predecessor's block.
+                block_idx = last_assigned
+
+            last_assigned = block_idx
+            entry = blocks.get(block_idx)
+            if entry is None:
+                entry = {
+                    'first_op': op_idx,
+                    'last_op': op_idx,
+                    'weight_tensor_ids': [],
+                }
+                blocks[block_idx] = entry
+            else:
+                entry['last_op'] = op_idx
+            if op_weight_tids:
+                entry['weight_tensor_ids'].extend(op_weight_tids)
+
+        # Dedupe weight_tensor_ids per block (preserve first-seen order).
+        for entry in blocks.values():
+            seen: Dict[str, None] = {}
+            for tid in entry['weight_tensor_ids']:
+                seen.setdefault(tid, None)
+            entry['weight_tensor_ids'] = list(seen.keys())
+
+        self._op_blocks_cache = blocks
+        return blocks
+
     def bind_inputs(self, inputs: Dict[str, torch.Tensor]) -> None:
         """Bind input tensors to arena slots."""
         assert self._arena is not None, "compile() must be called before bind_inputs()"
@@ -2596,7 +2838,11 @@ class CompiledSequence:
             return None
         return self._arena[slot]
 
-    def run(self, debug: bool = False) -> None:
+    def run(
+        self,
+        debug: bool = False,
+        pre_op_callback: Optional[Callable[[int, "CompiledOp"], None]] = None,
+    ) -> None:
         """
         Execute the compiled sequence.
 
@@ -2608,12 +2854,19 @@ class CompiledSequence:
 
         Args:
             debug: If True, enable verbose error handling (slower)
+            pre_op_callback: Optional (op_idx, op) -> None hook fired
+                before each op dispatch. Used by zero3 pipelining to
+                rebind/evict block weights at block boundaries. Default
+                None → no overhead. Only honored by the multi-device
+                path; single-device runs ignore it (zero3 is always
+                multi-device-classified because weights on CPU differ
+                from the CUDA executor device).
         """
         arena = self._arena
 
         # Use inference_mode to disable autograd and reduce memory usage
         with torch.inference_mode():
-            self._run_inner(arena, debug)
+            self._run_inner(arena, debug, pre_op_callback)
 
     def _maybe_dump_tid_native(self, op, out_slot: int, tensor) -> None:
         """TEMP diagnostic: mirror of TritonSequence._maybe_dump_tid.
@@ -2680,7 +2933,12 @@ class CompiledSequence:
         except Exception as e:
             print(f"[NBX_DUMP_TIDS native] failed on {tid}: {e}", flush=True)
 
-    def _run_inner(self, arena, debug: bool = False) -> None:
+    def _run_inner(
+        self,
+        arena,
+        debug: bool = False,
+        pre_op_callback: Optional[Callable[[int, "CompiledOp"], None]] = None,
+    ) -> None:
         """Inner loop extracted for inference_mode wrapping."""
         trace_nan = _TRACE_NAN
         nan_guard = _NAN_GUARD
@@ -2689,7 +2947,7 @@ class CompiledSequence:
 
         # Set CUDA device to match component placement
         if self._is_multi_device:
-            self._run_inner_multi_device(arena, debug)
+            self._run_inner_multi_device(arena, debug, pre_op_callback)
             return
 
         # NaN-guard counters for summary (only if verbose)
@@ -2994,7 +3252,12 @@ class CompiledSequence:
             print(f"  Total NaN values replaced: {total_nans}")
             print(f"{'='*60}")
 
-    def _run_inner_multi_device(self, arena, _debug: bool = False) -> None:  # noqa: ARG002
+    def _run_inner_multi_device(
+        self,
+        arena,
+        _debug: bool = False,  # noqa: ARG002
+        pre_op_callback: Optional[Callable[[int, "CompiledOp"], None]] = None,
+    ) -> None:
         """
         FGP multi-device hot loop with cross-device activation transfer.
 
@@ -3006,11 +3269,21 @@ class CompiledSequence:
         Cross-device .to() queues the copy on the source stream, but the
         target stream doesn't implicitly wait. We use CUDA events for
         fine-grained sync: record on source, wait on target.
+
+        pre_op_callback is invoked with (op_idx, op) BEFORE each op's
+        args are resolved. Used by zero3 pipelining: the callback checks
+        whether op_idx crosses a block boundary, and if so it synchronizes
+        the transfer stream, rebinds the next block's weights via
+        rebind_partial + recompute_op_devices_for_slots, and kicks off
+        the prefetch of the block after that. The callback is skipped
+        entirely (no branch cost beyond the None check) when None.
         """
         import torch
         _current_device_idx = self.device.index if self.device.index is not None else 0
         torch.cuda.set_device(_current_device_idx)
-        for op in self._ops:
+        for op_idx, op in enumerate(self._ops):
+            if pre_op_callback is not None:
+                pre_op_callback(op_idx, op)
             args = op.args_resolver(arena)
             kwargs = op.kwargs_resolver(arena)
 
