@@ -210,29 +210,61 @@ class ExecutionStrategy(ABC):
 
     def transfer_tensor(
         self,
-        tensor: torch.Tensor,
+        tensor: Any,
         target_device: str,
         async_transfer: bool = False,
-    ) -> torch.Tensor:
+    ) -> Any:
         """
         Transfer tensor to target device.
 
+        Polymorphic on tensor type:
+          - torch.Tensor → .to(device) on the native (PyTorch) path.
+          - NBXTensor   → NBXTensor.to_cuda(device_idx) on the triton
+            path (zero torch, uses DeviceAllocator under the hood).
+
+        The two branches live here so strategies don't have to know
+        which engine they're wrapping. Zero3Strategy on triton would
+        otherwise try to call .pin_memory() / .to() on NBXTensor and
+        crash — this single point of polymorphism keeps the triton
+        code 100% torch-free while reusing the same strategy API.
+
         Args:
-            tensor: Tensor to transfer
+            tensor: Tensor to transfer (torch.Tensor or NBXTensor)
             target_device: Target device string (e.g., "cuda:0")
-            async_transfer: Use non-blocking transfer (for NVLink)
+            async_transfer: Use non-blocking transfer (for NVLink). Only
+                honored on the torch path today; NBXTensor.to_cuda
+                queues on the default stream synchronously.
 
         Returns:
-            Tensor on target device
+            Tensor on target device (same type as input).
         """
-        if str(tensor.device) == target_device:
-            return tensor
+        # Duck-type detection: NBXTensor exposes to_cuda/to_cpu and
+        # has _device attr. This avoids a hard import dependency on
+        # kernels.nbx_tensor from a core/strategies path that may run
+        # before triton kernels are loaded.
+        if hasattr(tensor, 'to_cuda') and hasattr(tensor, '_device'):
+            # Triton path — zero torch. Parse "cuda:N" → int device_idx.
+            if target_device.startswith("cuda:"):
+                dev_idx = int(target_device.split(":", 1)[1])
+            elif target_device == "cuda":
+                dev_idx = 0
+            else:
+                # CPU target — use NBXTensor.to_cpu for zero3-style
+                # evictions (if ever called from strategy code).
+                return tensor.to_cpu()
+            return tensor.to_cuda(dev_idx)
 
-        target = torch.device(target_device)
-        if async_transfer:
-            return tensor.to(target, non_blocking=True)
-        else:
-            return tensor.to(target)
+        if isinstance(tensor, torch.Tensor):
+            if str(tensor.device) == target_device:
+                return tensor
+            target = torch.device(target_device)
+            if async_transfer:
+                return tensor.to(target, non_blocking=True)
+            else:
+                return tensor.to(target)
+
+        # Unknown tensor type — return unchanged.
+        return tensor
 
     def transfer_dict(
         self,

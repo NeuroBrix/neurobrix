@@ -18,7 +18,7 @@ import functools
 import math
 import struct
 from enum import IntEnum
-from typing import Tuple
+from typing import Dict, Optional, Tuple
 
 
 # ============================================================================
@@ -177,6 +177,16 @@ _GPU_BACKENDS = {
         "memcpy": "cudaMemcpy", "memset": "cudaMemset",
         "set_device": "cudaSetDevice", "get_device": "cudaGetDevice",
         "sync": "cudaDeviceSynchronize",
+        "malloc_host": "cudaMallocHost", "free_host": "cudaFreeHost",
+        # Stream-ordered memory allocator (CUDA 11.2+). The driver
+        # handles kernel-lifetime correctness per-stream, so freeing a
+        # tensor while an async kernel is still reading from it is
+        # safe — the free is ordered against the stream's pending work.
+        # Using stream=0 (default stream) keeps us aligned with the
+        # rest of NeuroBrix's single-default-stream execution model;
+        # when pipelining introduces a transfer stream in a future
+        # session we'll route those allocs to it.
+        "malloc_async": "cudaMallocAsync", "free_async": "cudaFreeAsync",
     },
     "hip": {
         "rt_libs": ["libamdhip64.so", "libamdhip64.so.5"],
@@ -184,11 +194,35 @@ _GPU_BACKENDS = {
         "memcpy": "hipMemcpy", "memset": "hipMemset",
         "set_device": "hipSetDevice", "get_device": "hipGetDevice",
         "sync": "hipDeviceSynchronize",
+        "malloc_host": "hipHostMalloc", "free_host": "hipHostFree",
+        # ROCm 4.3+ exposes the same stream-ordered API under hip*
+        # names. Not tested in this pass (investigation was V100-only),
+        # but the symbol mapping is kept for symmetry.
+        "malloc_async": "hipMallocAsync", "free_async": "hipFreeAsync",
     },
 }
 
 
 class DeviceAllocator:
+    """GPU + pinned-host memory allocator via raw runtime API.
+
+    Tracks running byte counters per device and for pinned host memory
+    so diagnostics (especially for zero3 CPU offload) don't need to
+    round-trip through cudaMemGetInfo or torch.cuda.memory_allocated —
+    both of which are unavailable or incorrect for NBXTensor.
+    """
+
+    # Running counters — populated by every malloc_cuda/free_cuda and
+    # malloc_host_pinned/free_host_pinned. Class-level so the accounting
+    # is process-wide. Not thread-safe; NeuroBrix runtime is
+    # single-threaded per component by convention.
+    _cuda_live_bytes: Dict[int, int] = {}            # device_idx -> live
+    _cuda_peak_bytes: Dict[int, int] = {}            # device_idx -> peak
+    _cuda_ptr_size: Dict[int, int] = {}              # ptr -> nbytes (for free accounting)
+    _cuda_ptr_device: Dict[int, int] = {}            # ptr -> device_idx (REQUIRED for cudaFreeAsync correctness)
+    _host_pinned_live_bytes: int = 0
+    _host_pinned_peak_bytes: int = 0
+    _host_pinned_ptr_size: Dict[int, int] = {}       # ptr -> nbytes
 
     @staticmethod
     def set_device(device_id: int):
@@ -211,22 +245,163 @@ class DeviceAllocator:
 
     @staticmethod
     def malloc_cuda(nbytes: int) -> int:
+        """Allocate GPU memory via the synchronous allocator.
+
+        Uses cudaMalloc. The stream-ordered allocator (cudaMallocAsync)
+        was prototyped but disabled because its per-device memory pools
+        don't grant cross-device peer access by default — freeing a
+        cuda:N pointer from a Python-GC site while cuda:M is current
+        produced illegal memory accesses on the multi-GPU
+        pipeline_parallel path (Qwen3-30B --triton without --hardware
+        override). The synchronous path combined with TritonSequence's
+        _deferred batch-release is stable across single-GPU, zero3,
+        and pipeline_parallel. See tests/scratch/zero3_triton_impl/
+        LEAK_PINPOINT_REPORT.md for history; the actual block-sized
+        leak was fixed by TritonSequence._find_cuda_arg, not by the
+        allocator swap.
+        """
         if nbytes == 0:
             return 0
         ptr = ctypes.c_void_p()
         rt = _gpu_runtime()
-        ret = getattr(rt, _active_backend()["malloc"])(
+        backend = _active_backend()
+        ret = getattr(rt, backend["malloc"])(
             ctypes.byref(ptr), ctypes.c_size_t(nbytes))
         if ret != 0:
             raise RuntimeError(
                 f"GPU malloc failed (error {ret}) for {nbytes} bytes")
-        return ptr.value or 0
+        p = ptr.value or 0
+        dev = DeviceAllocator.get_device()
+        DeviceAllocator._cuda_ptr_size[p] = nbytes
+        DeviceAllocator._cuda_ptr_device[p] = dev
+        live = DeviceAllocator._cuda_live_bytes.get(dev, 0) + nbytes
+        DeviceAllocator._cuda_live_bytes[dev] = live
+        peak = DeviceAllocator._cuda_peak_bytes.get(dev, 0)
+        if live > peak:
+            DeviceAllocator._cuda_peak_bytes[dev] = live
+        return p
 
     @staticmethod
     def free_cuda(ptr: int):
+        """Free GPU memory via the synchronous allocator.
+
+        cudaFree blocks the calling thread until the device is idle
+        for the relevant stream, so TritonSequence batches freeable
+        tensors into _deferred and releases them after a sync at the
+        end of each forward pass. This avoids serialising on every
+        kernel while still being UAF-safe (sync before free).
+        """
         if ptr:
             rt = _gpu_runtime()
-            getattr(rt, _active_backend()["free"])(ctypes.c_void_p(ptr))
+            backend = _active_backend()
+            alloc_dev = DeviceAllocator._cuda_ptr_device.pop(ptr, None)
+            getattr(rt, backend["free"])(ctypes.c_void_p(ptr))
+            nbytes = DeviceAllocator._cuda_ptr_size.pop(ptr, None)
+            if nbytes is not None:
+                if alloc_dev is not None:
+                    # Accurate decrement: always use the allocation's
+                    # own device, independent of current context.
+                    live = DeviceAllocator._cuda_live_bytes.get(alloc_dev, 0) - nbytes
+                    DeviceAllocator._cuda_live_bytes[alloc_dev] = live
+                else:
+                    dev = DeviceAllocator.get_device()
+                    live = DeviceAllocator._cuda_live_bytes.get(dev, 0) - nbytes
+                    if live < 0:
+                        for d in DeviceAllocator._cuda_live_bytes:
+                            if DeviceAllocator._cuda_live_bytes[d] >= nbytes:
+                                DeviceAllocator._cuda_live_bytes[d] -= nbytes
+                                break
+                    else:
+                        DeviceAllocator._cuda_live_bytes[dev] = live
+
+    @staticmethod
+    def malloc_host_pinned(nbytes: int) -> int:
+        """Allocate page-locked host memory. Enables non_blocking H2D DMA.
+
+        Uses cudaMallocHost (or hipHostMalloc on ROCm). The returned
+        pointer is a HOST address — numpy can wrap it via
+        np.frombuffer(ctypes.string_at(ptr, nbytes), ...) or ctypes
+        casting, and cudaMemcpy kind=1 (H2D) uses it as src.
+        """
+        if nbytes == 0:
+            return 0
+        ptr = ctypes.c_void_p()
+        rt = _gpu_runtime()
+        backend = _active_backend()
+        fn_name = backend.get("malloc_host")
+        if fn_name is None:
+            raise RuntimeError(
+                f"Pinned host allocation unsupported on backend "
+                f"{_detect_gpu_backend()!r}")
+        ret = getattr(rt, fn_name)(
+            ctypes.byref(ptr), ctypes.c_size_t(nbytes))
+        if ret != 0:
+            raise RuntimeError(
+                f"Host pinned malloc failed (error {ret}) for {nbytes} bytes")
+        p = ptr.value or 0
+        DeviceAllocator._host_pinned_ptr_size[p] = nbytes
+        DeviceAllocator._host_pinned_live_bytes += nbytes
+        if DeviceAllocator._host_pinned_live_bytes > DeviceAllocator._host_pinned_peak_bytes:
+            DeviceAllocator._host_pinned_peak_bytes = DeviceAllocator._host_pinned_live_bytes
+        return p
+
+    @staticmethod
+    def free_host_pinned(ptr: int):
+        if ptr:
+            rt = _gpu_runtime()
+            backend = _active_backend()
+            fn_name = backend.get("free_host")
+            if fn_name is None:
+                return
+            getattr(rt, fn_name)(ctypes.c_void_p(ptr))
+            nbytes = DeviceAllocator._host_pinned_ptr_size.pop(ptr, None)
+            if nbytes is not None:
+                DeviceAllocator._host_pinned_live_bytes -= nbytes
+
+    # ------------------------------------------------------------------
+    # Accounting API — use instead of cudaMemGetInfo for per-NeuroBrix
+    # observability (cudaMemGetInfo returns device-wide numbers
+    # including other processes, which is useless for debugging a
+    # specific zero3 leak).
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def memory_allocated(device_idx: Optional[int] = None) -> int:
+        """Live bytes allocated via malloc_cuda on the given device.
+        With device_idx=None, returns the total across all devices."""
+        if device_idx is None:
+            return sum(DeviceAllocator._cuda_live_bytes.values())
+        return DeviceAllocator._cuda_live_bytes.get(device_idx, 0)
+
+    @staticmethod
+    def peak_memory_allocated(device_idx: Optional[int] = None) -> int:
+        """Highest live-bytes watermark observed for the device.
+        With device_idx=None, returns the total peak across all devices."""
+        if device_idx is None:
+            return sum(DeviceAllocator._cuda_peak_bytes.values())
+        return DeviceAllocator._cuda_peak_bytes.get(device_idx, 0)
+
+    @staticmethod
+    def reset_peak_memory(device_idx: Optional[int] = None) -> None:
+        """Reset the peak watermark to the current live value.
+        With device_idx=None, resets all devices."""
+        if device_idx is None:
+            for d in list(DeviceAllocator._cuda_live_bytes.keys()):
+                DeviceAllocator._cuda_peak_bytes[d] = (
+                    DeviceAllocator._cuda_live_bytes[d])
+        else:
+            DeviceAllocator._cuda_peak_bytes[device_idx] = (
+                DeviceAllocator._cuda_live_bytes.get(device_idx, 0))
+
+    @staticmethod
+    def host_pinned_allocated() -> int:
+        """Live bytes allocated via malloc_host_pinned."""
+        return DeviceAllocator._host_pinned_live_bytes
+
+    @staticmethod
+    def host_pinned_peak() -> int:
+        """Peak pinned host bytes observed."""
+        return DeviceAllocator._host_pinned_peak_bytes
 
     @staticmethod
     def memset_cuda(ptr: int, value: int, nbytes: int):
@@ -420,12 +595,16 @@ class NBXTensor:
 
     __slots__ = ('_data_ptr', '_shape', '_strides', '_dtype', '_device',
                  '_nbytes', '_numel', '_offset', '_owns_data', '_device_idx',
-                 '_base')  # reference to parent tensor (prevents GC of underlying memory)
+                 '_base',     # reference to parent tensor (prevents GC of underlying memory);
+                              # also holds the numpy buffer for unpinned CPU tensors
+                 '_pinned',   # True for pinned host memory (cudaMallocHost); used by __del__
+                              # to dispatch to free_host_pinned instead of free_cuda
+                 )
 
     def __init__(self, data_ptr: int, shape: Tuple[int, ...],
                  strides: Tuple[int, ...], dtype: NBXDtype,
                  device: str = 'cuda', offset: int = 0, owns_data: bool = False,
-                 device_idx: int = 0, base=None):
+                 device_idx: int = 0, base=None, pinned: bool = False):
         self._data_ptr = data_ptr
         self._shape = tuple(shape)
         self._strides = tuple(strides)
@@ -435,6 +614,7 @@ class NBXTensor:
         self._owns_data = owns_data
         self._device_idx = device_idx
         self._base = base  # keep parent alive to prevent use-after-free on views
+        self._pinned = pinned
         self._numel = math.prod(shape) if shape else 1
         self._nbytes = self._numel * dtype_size(dtype)
 
@@ -442,6 +622,11 @@ class NBXTensor:
         if self._owns_data and self._data_ptr:
             if self._device == 'cuda':
                 DeviceAllocator.free_cuda(self._data_ptr)
+            elif self._device == 'cpu' and self._pinned:
+                # Pinned host memory allocated via cudaMallocHost.
+                DeviceAllocator.free_host_pinned(self._data_ptr)
+            # Unpinned CPU: backed by self._base (numpy array) — Python
+            # GC drops it automatically when self goes out of scope.
 
     # ========================================================================
     # PROPERTIES
@@ -505,6 +690,20 @@ class NBXTensor:
     @property
     def is_cuda(self) -> bool:
         return self._device == 'cuda'
+
+    @property
+    def is_cpu(self) -> bool:
+        """True for NBXTensor allocated on host memory (zero3 offload,
+        pinned or unpinned). Every NBXTensor is either CUDA or CPU
+        today; there is no third state."""
+        return self._device == 'cpu'
+
+    @property
+    def is_pinned(self) -> bool:
+        """True for CPU-backed tensors allocated via cudaMallocHost
+        (fast non_blocking H2D DMA). False otherwise, including all
+        CUDA tensors."""
+        return self._pinned
 
     # ========================================================================
     # TYPE CHECKS
@@ -636,6 +835,115 @@ class NBXTensor:
         """
         return NBXTensor(ptr, shape, _contiguous_strides(shape), dtype, device,
                          owns_data=owns_data, device_idx=device_idx, base=base)
+
+    # ------------------------------------------------------------------
+    # CPU form — zero3 weight offload and similar scenarios where
+    # weights live on host memory between promotions to GPU. Uses numpy
+    # for unpinned backing (default) or cudaMallocHost for pinned
+    # backing (faster H2D DMA). Zero torch dependency.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def empty_cpu(shape, dtype: 'Optional[NBXDtype]' = None,
+                  pinned: bool = False) -> 'NBXTensor':
+        """Allocate a CPU-backed NBXTensor.
+
+        Unpinned (pinned=False, default): backed by a numpy array. Cheap
+        to allocate, usable by numpy-based prep code, but incurs a
+        pageable→pinned staging copy on H2D.
+
+        Pinned (pinned=True): backed by cudaMallocHost-allocated memory.
+        Enables non_blocking DMA at ~2× unpinned throughput. Used by
+        zero3 for weights that will be transferred on the hot path.
+        """
+        if isinstance(shape, int):
+            shape = (shape,)
+        if isinstance(shape, list):
+            shape = tuple(shape)
+        nbx_dt = dtype if isinstance(dtype, NBXDtype) else (
+            parse_dtype(str(dtype)) if dtype else NBXDtype.float32)
+        numel = math.prod(shape) if shape else 1
+        elem = dtype_size(nbx_dt)
+        nbytes = numel * elem
+
+        if nbytes == 0:
+            return NBXTensor(0, shape, _contiguous_strides(shape), nbx_dt,
+                             'cpu', device_idx=0)
+
+        if pinned:
+            ptr = DeviceAllocator.malloc_host_pinned(nbytes)
+            return NBXTensor(ptr, shape, _contiguous_strides(shape), nbx_dt,
+                             'cpu', owns_data=True, device_idx=0,
+                             pinned=True)
+        else:
+            # Numpy backing — keep the array alive via _base.
+            import numpy as np
+            np_dtype_name = {
+                NBXDtype.float32: np.float32,
+                NBXDtype.float16: np.float16,
+                NBXDtype.bfloat16: np.uint16,   # bf16 stored as uint16 bits
+                NBXDtype.float64: np.float64,
+                NBXDtype.int64: np.int64,
+                NBXDtype.int32: np.int32,
+                NBXDtype.int16: np.int16,
+                NBXDtype.int8: np.int8,
+                NBXDtype.uint8: np.uint8,
+                NBXDtype.bool_: np.uint8,
+            }.get(nbx_dt, np.float32)
+            arr = np.empty(shape, dtype=np_dtype_name)
+            return NBXTensor(arr.ctypes.data, shape,
+                             _contiguous_strides(shape), nbx_dt, 'cpu',
+                             owns_data=True, device_idx=0,
+                             base=arr,  # keep numpy alive
+                             pinned=False)
+
+    def to_cuda(self, device_idx: int = 0) -> 'NBXTensor':
+        """Copy this tensor to a CUDA device. Returns a new GPU NBXTensor.
+
+        Handles CPU→GPU (kind=1 H2D) and GPU→GPU (kind=3 D2D). If the
+        tensor is already on the requested CUDA device, returns self.
+        """
+        if self._device == 'cuda' and self._device_idx == device_idx:
+            return self
+        DeviceAllocator.set_device(device_idx)
+        ptr = DeviceAllocator.malloc_cuda(self._nbytes)
+        if self._nbytes > 0:
+            # kind: 1 = H2D if source is CPU, 3 = D2D if source is GPU.
+            kind = 1 if self._device == 'cpu' else 3
+            DeviceAllocator.memcpy(ptr, self.data_ptr(), self._nbytes, kind=kind)
+        return NBXTensor(ptr, self._shape, self._strides, self._dtype,
+                         'cuda', owns_data=True, device_idx=device_idx)
+
+    def to_cpu(self, pinned: bool = False) -> 'NBXTensor':
+        """Copy this tensor to host memory. Returns a new CPU NBXTensor.
+
+        pinned=True allocates via cudaMallocHost for fast future H2D
+        promotion; pinned=False uses numpy backing.
+        """
+        if self._device == 'cpu' and self._pinned == pinned:
+            return self
+        dst = NBXTensor.empty_cpu(self._shape, self._dtype, pinned=pinned)
+        if self._nbytes > 0:
+            # kind: 2 = D2H from GPU, 0 = H2H if we're re-packing CPU.
+            kind = 2 if self._device == 'cuda' else 0
+            DeviceAllocator.memcpy(dst.data_ptr(), self.data_ptr(),
+                                   self._nbytes, kind=kind)
+        return dst
+
+    def pin_host(self) -> 'NBXTensor':
+        """Promote an unpinned CPU tensor to pinned host memory.
+
+        No-op if the tensor is already pinned. Used by Zero3Strategy to
+        accelerate subsequent H2D transfers during block-wise execution.
+        Raises on non-CPU tensors — pinning a GPU tensor is nonsensical.
+        """
+        if self._device != 'cpu':
+            raise RuntimeError(
+                f"pin_host() called on device={self._device}; pinning only "
+                f"applies to CPU-backed NBXTensors")
+        if self._pinned:
+            return self
+        return self.to_cpu(pinned=True)
 
     # ========================================================================
     # METADATA OPS — pure Python, zero data movement

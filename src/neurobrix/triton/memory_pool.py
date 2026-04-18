@@ -25,7 +25,14 @@ class ComponentArena:
     ALIGNMENT = 256  # GPU memory alignment (matches CUDA spec)
 
     def __init__(self, total_bytes: int, device_idx: int):
+        # Initialize _base_ptr BEFORE the malloc call so __del__ is safe
+        # even if malloc_cuda raises (OOM on one device shouldn't leave
+        # a half-constructed object whose __del__ then crashes on
+        # attribute access). This closes a secondary issue flagged
+        # during the zero3 leak investigation (see tests/scratch/
+        # zero3_leak_investigation/REPORT.md §0.5).
         self.device_idx = device_idx
+        self._base_ptr = 0
         self._total = self._align(total_bytes)
         self._offset = 0
 
@@ -80,4 +87,8 @@ class ComponentArena:
         return (n + self.ALIGNMENT - 1) & ~(self.ALIGNMENT - 1)
 
     def __del__(self):
-        self.free()
+        # Guard: __init__ may raise before _base_ptr is set (rare but
+        # happens when malloc_cuda throws OOM immediately). Let __del__
+        # remain a no-op in that case.
+        if getattr(self, '_base_ptr', 0):
+            self.free()

@@ -2,10 +2,22 @@
 
 Zero torch dependency. Uses ComponentArena for one-shot GPU allocation
 per device (zero fragmentation). Loads weights via raw byte parsing.
+
+Zero3 CPU offload support: when shard_map maps a weight key to "cpu"
+(Prism zero3 strategy), the weight is loaded as a CPU-backed NBXTensor
+(pinned host memory via cudaMallocHost) instead of going through the
+GPU arena. Non-block weights (embeddings, final norm, lm_head) are
+kept GPU-resident regardless of the shard_map value, because they are
+called by flow handlers (GraphLMSession.prefill → w.embedding) that
+bypass the execution sequence and expect GPU pointers. The block-vs-
+non-block distinction is driven by the same _BLOCK_RE regex that
+CompiledSequence.get_op_blocks uses, so the partitioning is consistent
+across native and triton modes.
 """
 
 import json
 import math
+import re
 import struct
 from pathlib import Path
 from typing import Dict, Optional
@@ -16,6 +28,15 @@ from neurobrix.kernels.nbx_tensor import (
     NBXTensor, NBXDtype, DeviceAllocator, _contiguous_strides, dtype_size,
 )
 from .memory_pool import ComponentArena
+
+
+# Same pattern as core/runtime/graph/compiled_sequence.py _BLOCK_RE.
+# Matches NeuroTax singular (block.N.) and vendor plurals (blocks.N.,
+# layers.N., model.layers.N., encoder.layers.N., decoder.layers.N.).
+# Weights that do NOT match are treated as non-block and stay GPU-
+# resident under zero3.
+_BLOCK_RE = re.compile(
+    r'(?:blocks?|layers|model\.layers|encoder\.layers|decoder\.layers)\.(\d+)\.')
 
 
 # safetensors dtype → (numpy dtype for reading, NBXDtype, bytes per element)
@@ -72,14 +93,47 @@ def load_component_weights(
     DeviceAllocator.set_device(device_idx)
     DeviceAllocator.ensure_triton_device(device_idx)
 
-    # Parse shard_map → per-weight device index
+    # Parse shard_map. Prism uses two styles:
+    #
+    #   1. Per-shard-path (standard): keys are zip paths like
+    #      "components/model/weights/shard_000.safetensors". The
+    #      value is the target device string for every weight in
+    #      that shard file. zero3 produces this form with all values
+    #      equal to "cpu" (whole component → host offload); multi-GPU
+    #      strategies (pipeline_parallel, component_placement) produce
+    #      "cuda:N" per shard.
+    #
+    #   2. Per-weight-name (FGP): keys are weight names like
+    #      "block.0.attn.q.weight" with "cuda:N" values. This is what
+    #      the native weight_loader's FGP path consumes; the triton
+    #      path does not support FGP today.
+    #
+    # In the triton path we detect style (1) and route accordingly.
+    # Under zero3 we partition block vs non-block via _BLOCK_RE and
+    # only honor "cpu" for block weights — non-block weights
+    # (embeddings, final norm, lm_head) must stay GPU-resident
+    # because flow handlers (GraphLMSession.prefill) call
+    # w.embedding(embed_weight, ...) directly with raw pointers, and
+    # a CPU pointer passed to a Triton kernel would segfault.
     weight_device: Dict[str, int] = {}
+    cpu_weights: set = set()
+    all_cpu_component = False
     if shard_map:
-        for wname, dev_str in shard_map.items():
-            if isinstance(dev_str, str) and ':' in dev_str:
-                weight_device[wname] = int(dev_str.split(':')[-1])
-            elif isinstance(dev_str, int):
-                weight_device[wname] = dev_str
+        # Detect "whole component → CPU" pattern: every shard_map
+        # value is "cpu". This is zero3's calling convention.
+        vals = [str(v).lower() for v in shard_map.values()]
+        if vals and all(v == "cpu" for v in vals):
+            all_cpu_component = True
+        else:
+            # Multi-GPU style: values are "cuda:N" per shard path or
+            # per weight name. The triton path does not implement FGP
+            # today, so we only honor shard-path keys that can be
+            # resolved to a device index.
+            for wname, dev_str in shard_map.items():
+                if isinstance(dev_str, str) and ':' in dev_str:
+                    weight_device[wname] = int(dev_str.split(':')[-1])
+                elif isinstance(dev_str, int):
+                    weight_device[wname] = dev_str
 
     # Phase 1: Scan all shards to compute per-device bytes for both the
     # regular (fp16/bf16-targeted) path and the hypothetical fp32 upcast
@@ -96,7 +150,17 @@ def load_component_weights(
         for key, info in header.items():
             if key == '__metadata__':
                 continue
-            target_dev = weight_device.get(key, device_idx)
+            # Zero3 whole-component CPU offload: block weights (those
+            # matching _BLOCK_RE) go to pinned host memory; non-block
+            # weights (embeddings, norms, lm_head) stay GPU-resident.
+            if all_cpu_component:
+                if _BLOCK_RE.search(key):
+                    cpu_weights.add(key)
+                    continue
+                # Non-block → GPU sizing continues below.
+                target_dev = device_idx
+            else:
+                target_dev = weight_device.get(key, device_idx)
             regular = _target_nbytes(info, compute_dtype)
             upcast = _target_nbytes(info, compute_dtype,
                                     upcast_fp16_to_fp32=True)
@@ -138,18 +202,25 @@ def load_component_weights(
     for dev, total in dev_bytes.items():
         arenas[dev] = ComponentArena(total, dev)
 
-    # Phase 3: Load tensors into arenas
+    # Phase 3: Load tensors into arenas (GPU) or CPU pinned buffers.
     weights: Dict[str, NBXTensor] = {}
 
     for shard_path, header, data_offset in shard_headers:
         _load_shard_into_arenas(
             shard_path, header, data_offset,
             weights, device_idx, compute_dtype,
-            weight_device, arenas,
+            weight_device, arenas, cpu_weights,
             upcast_effective=upcast_effective)
 
     # Store arenas on the dict so they stay alive (prevent GC of GPU memory)
     weights['_arenas'] = arenas  # type: ignore
+
+    if cpu_weights:
+        total_cpu_mb = DeviceAllocator.host_pinned_allocated() / (1024 * 1024)
+        print(f"[weight_loader] zero3 CPU partition for {component}: "
+              f"{len(cpu_weights)} block weights on pinned host "
+              f"(~{total_cpu_mb:.0f}MB), "
+              f"non-block on cuda:{device_idx}")
 
     return weights
 
@@ -222,6 +293,57 @@ def _bf16_to_fp16_inplace(ptr: int, numel: int, device_idx: int):
     bf16_to_fp16_kernel[grid](src, dst, numel, BLOCK=BLOCK, num_warps=4)
 
 
+def _load_to_pinned_cpu(
+    raw: bytes,
+    shape: tuple,
+    source_dtype: NBXDtype,
+    target_dtype: NBXDtype,
+) -> NBXTensor:
+    """Decode safetensors raw bytes into a pinned-host NBXTensor.
+
+    Applies the standard dtype remap chain (bf16→fp16, fp16→bf16) via
+    numpy before copying to pinned memory. bf16→fp16 uses the same
+    uint16-bit reinterpret path the GPU arena loader uses, so the
+    resulting values match exactly.
+    """
+    # Decode source bytes to a numpy array matching target_dtype.
+    if source_dtype == NBXDtype.bfloat16:
+        # Raw bf16 bits stored as uint16. Stays uint16 if target is
+        # bf16, or gets bit-shifted to fp32 then cast to fp16 if target
+        # is fp16.
+        raw_u16 = np.frombuffer(raw, dtype=np.uint16).reshape(shape)
+        if target_dtype == NBXDtype.float16:
+            u32 = raw_u16.astype(np.uint32) << 16
+            arr = np.ascontiguousarray(u32.view(np.float32)).astype(np.float16)
+        else:
+            arr = np.ascontiguousarray(raw_u16)
+    else:
+        np_dtype = {
+            NBXDtype.float16: np.float16,
+            NBXDtype.float32: np.float32,
+            NBXDtype.float64: np.float64,
+            NBXDtype.int64: np.int64,
+            NBXDtype.int32: np.int32,
+            NBXDtype.int16: np.int16,
+            NBXDtype.int8: np.int8,
+            NBXDtype.uint8: np.uint8,
+            NBXDtype.bool_: np.bool_,
+        }[source_dtype]
+        arr = np.frombuffer(raw, dtype=np_dtype).reshape(shape)
+        arr = np.ascontiguousarray(arr)
+        if target_dtype == NBXDtype.bfloat16 and source_dtype == NBXDtype.float16:
+            # fp16 → bf16 (truncate mantissa)
+            fp32 = arr.astype(np.float32)
+            arr = np.ascontiguousarray(
+                (fp32.view(np.uint32) >> 16).astype(np.uint16))
+
+    # Allocate pinned host memory and copy in (kind=0 = H2H).
+    dst = NBXTensor.empty_cpu(shape, target_dtype, pinned=True)
+    DeviceAllocator.memcpy(dst.data_ptr(), arr.ctypes.data,
+                           arr.nbytes, kind=0)
+    return dst
+
+
 def _load_shard_into_arenas(
     path: str,
     header: dict,
@@ -231,6 +353,7 @@ def _load_shard_into_arenas(
     compute_dtype: NBXDtype,
     weight_device: Dict[str, int],
     arenas: Dict[int, ComponentArena],
+    cpu_weights: set,
     upcast_effective: bool = False,
 ) -> None:
     """Load tensors from one shard, sub-allocating from arenas.
@@ -238,6 +361,12 @@ def _load_shard_into_arenas(
     When upcast_effective is True, weights whose target dtype resolves
     to fp16 (via the standard remap chain) are stored as fp32 instead.
     This is decided upstream based on per-device VRAM budget.
+
+    Weights listed in cpu_weights skip the GPU arena and land on pinned
+    host memory as CPU-backed NBXTensors (zero3 offload). They are not
+    subject to upcast_effective — CPU weights are stored in their
+    native dtype (post-remap) to save host RAM. The runtime slow path
+    handles CPU→GPU transfer per op.
     """
     with open(path, 'rb') as f:
         for key, info in header.items():
@@ -265,6 +394,15 @@ def _load_shard_into_arenas(
                 target_dtype = NBXDtype.float16
             elif nbx_dtype == NBXDtype.float16 and compute_dtype == NBXDtype.bfloat16:
                 target_dtype = NBXDtype.bfloat16
+
+            # Zero3 CPU offload — skip the GPU arena entirely and
+            # allocate pinned host memory for this weight. The numpy
+            # decode step still applies (bf16→fp16 via uint16 remap,
+            # etc.) but the final NBXTensor is CPU-backed.
+            if key in cpu_weights:
+                weights[key] = _load_to_pinned_cpu(
+                    raw, shape, nbx_dtype, target_dtype)
+                continue
 
             # Bind-time fp16→fp32 upcast for pre-Ampere overflow protection.
             # Only promote weights whose final target is fp16; bf16 targets,
