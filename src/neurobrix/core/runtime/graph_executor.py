@@ -174,6 +174,21 @@ class GraphExecutor:
         # Set by serving layer for warm-compatible strategies (load once, serve many).
         self._persistent: bool = False
 
+        # Per-call pre-op callback forwarded to CompiledSequence.run.
+        # Set by run() and cleared in its finally block — used exclusively
+        # by zero3 block-wise pipelining. None on the fast path.
+        self._pre_op_callback: Optional[Callable[[int, Any], None]] = None
+
+        # Persistent hooks installed by ExecutionStrategy (zero3) at
+        # weight-load time. Survive across run() calls and are picked up
+        # transparently, which is essential for flow handlers that
+        # bypass strategy.execute_component and call executor.run
+        # directly (e.g. GraphLMSession.prefill for autoregressive LLMs).
+        # The pre-op hook takes priority over the per-call callback only
+        # when the per-call one is None — explicit per-call wins.
+        self._persistent_pre_op_callback: Optional[Callable[[int, Any], None]] = None
+        self._post_run_hook: Optional[Callable[[], None]] = None
+
     # =========================================================================
     # Op Interceptor Registration (Phase 2.1: KV Cache Support)
     # =========================================================================
@@ -1292,7 +1307,11 @@ class GraphExecutor:
     # Execution: run() and helpers
     # =========================================================================
 
-    def run(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+    def run(
+        self,
+        inputs: Dict[str, Any],
+        pre_op_callback: Optional[Callable[[int, Any], None]] = None,
+    ) -> Dict[str, Any]:
         """
         Execute DAG mechanically.
 
@@ -1301,22 +1320,42 @@ class GraphExecutor:
 
         Args:
             inputs: Named input tensors (model inputs). Can be torch.Tensor or NBXTensor.
+            pre_op_callback: Optional (op_idx, op) -> None hook forwarded
+                to CompiledSequence.run() for the compiled path. Used by
+                zero3 block-wise pipelining to swap block weights between
+                CPU and GPU at block boundaries. Only the compiled+
+                multi-device path honors it; triton and native paths
+                ignore it (zero3 is PyTorch-only today).
 
         Returns:
             Output tensors
         """
-        # TRITON MODES: direct NBXTensor path — no torch wrapping
-        if self.mode in ("triton", "triton_sequential"):
-            return self._run_triton(inputs)
+        # Explicit per-call callback wins over the persistent one
+        # (installed by zero3). _execute_compiled_graph consumes via
+        # self._pre_op_callback — reset in finally so the instance
+        # state is clean between calls.
+        self._pre_op_callback = pre_op_callback or self._persistent_pre_op_callback
 
-        # NATIVE/COMPILED MODE: torch path
-        with torch.inference_mode():
-            self._ctx = self._prepare_execution(inputs)
-            self._resolver = TensorResolver(self._ctx)
-            stats = self._execute_all_ops()
-            outputs = self._gather_outputs()
-            self._last_stats = stats
-            return outputs
+        try:
+            # TRITON MODES: direct NBXTensor path — no torch wrapping
+            if self.mode in ("triton", "triton_sequential"):
+                return self._run_triton(inputs)
+
+            # NATIVE/COMPILED MODE: torch path
+            with torch.inference_mode():
+                self._ctx = self._prepare_execution(inputs)
+                self._resolver = TensorResolver(self._ctx)
+                stats = self._execute_all_ops()
+                outputs = self._gather_outputs()
+                self._last_stats = stats
+                return outputs
+        finally:
+            self._pre_op_callback = None
+            # Post-run hook runs unconditionally (even on exception) so
+            # zero3 can evict the current block back to CPU and leave
+            # the arena in a clean state for the next call.
+            if self._post_run_hook is not None:
+                self._post_run_hook()
 
     def _run_triton(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
         """Execute via triton path with NBXTensor inputs. Zero torch.
@@ -1981,7 +2020,7 @@ class GraphExecutor:
         assert self._compiled_seq is not None
         num_ops = self._compiled_seq.num_ops
 
-        self._compiled_seq.run()
+        self._compiled_seq.run(pre_op_callback=self._pre_op_callback)
 
         elapsed_ms = (time.perf_counter() - start_time) * 1000
 
