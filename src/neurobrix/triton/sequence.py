@@ -2778,6 +2778,13 @@ class TritonSequence:
         correctly materialises via strided_copy, matching what the
         native torch.Tensor.to(device) contract does.
         """
+        # Expand views (stride == 0 on a broadcast axis) have
+        # numel * esz > backing bytes. A straight memcpy(nbytes)
+        # would over-read the source allocation and stamp garbage into
+        # the GPU buffer, so materialise first. contiguous() picks the
+        # right CPU/GPU path based on the source device.
+        if tensor.is_expanded():
+            tensor = tensor.contiguous()
         DeviceAllocator.set_device(target_dev)
         src_device = getattr(tensor, '_device', 'cuda')
         kind = 1 if src_device == 'cpu' else 3

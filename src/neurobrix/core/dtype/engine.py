@@ -408,6 +408,16 @@ class DtypeEngine:
                 # NEVER cast complex → real (discards imaginary part, corrupts RoPE)
                 if inp.is_complex() and not target_dtype.is_complex:
                     return inp
+                # Clamp to fp16 range before narrowing to fp16. Without
+                # this, values produced in fp32 that exceed ±65504
+                # (OpenAudio DualAR pre-projection activations, certain
+                # attention bias paths) saturate to ±Inf the moment
+                # torch.Tensor.to(fp16) runs, then the next mm sees Inf
+                # and propagates NaN through the rest of the graph.
+                if (target_dtype == torch.float16
+                        and inp.dtype in (torch.float32, torch.float64,
+                                          torch.bfloat16)):
+                    return inp.clamp(-65504.0, 65504.0).to(target_dtype)
                 return inp.to(target_dtype)
             return to_copy_with_dtype
 
@@ -429,6 +439,11 @@ class DtypeEngine:
                 # NEVER cast complex → real (discards imaginary part, corrupts RoPE)
                 if inp.is_complex() and not dtype.is_complex:
                     return inp
+                # Same clamp rationale as the dtype-explicit branch above.
+                if (dtype == torch.float16
+                        and inp.dtype in (torch.float32, torch.float64,
+                                          torch.bfloat16)):
+                    return inp.clamp(-65504.0, 65504.0).to(dtype)
                 return inp.to(dtype)
             return inp
         return to_copy_passthrough

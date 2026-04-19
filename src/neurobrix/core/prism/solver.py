@@ -10,6 +10,8 @@ Algorithm: Best-Fit-Decreasing with Activation-Aware Memory Estimation
 """
 
 import json
+import logging
+import os
 import re
 import torch
 from datetime import datetime
@@ -468,14 +470,10 @@ class PrismSolver:
         component_memory = self._compute_memory(container, neural_components, input_config, target_dtype_str)
         sorted_components = sorted(component_memory.items(), key=lambda x: -x[1].total_bytes)
 
-        total_mem = sum(m.total_mb for _, m in sorted_components)
-
         # Step 3: Prepare devices
         devices = self._prepare_devices(profile)
         if not devices:
             raise RuntimeError("ZERO FALLBACK: No GPU devices in hardware profile")
-
-        total_vram = sum(d.capacity_mb for d in devices)
 
         # Step 4: Try ALL strategies and pick best by score
         # Single-GPU shortcut: skip multi-GPU strategies (Apple Silicon, single NVIDIA, etc.)
@@ -499,16 +497,63 @@ class PrismSolver:
                 ("zero3", self._try_zero3),
             ]
 
+        # NBX_FORCE_STRATEGY: deterministic single-strategy selection for
+        # matrix validation and debugging. Filter the cascade down to the
+        # requested strategy; zero fallback if it cannot fit (the caller
+        # asked for X specifically, picking Y silently would hide bugs).
+        forced = os.environ.get("NBX_FORCE_STRATEGY", "").strip()
+        if forced:
+            valid = {
+                "single_gpu", "single_gpu_lifecycle",
+                "component_placement", "pipeline_parallel",
+                "block_scatter", "weight_sharding",
+                "component_placement_lazy", "lazy_sequential",
+                "zero3",
+            }
+            if forced not in valid:
+                raise RuntimeError(
+                    f"NBX_FORCE_STRATEGY='{forced}' is invalid. "
+                    f"Valid values: {sorted(valid)}"
+                )
+            filtered = [(n, fn) for n, fn in strategies if n == forced]
+            if not filtered:
+                raise RuntimeError(
+                    f"NBX_FORCE_STRATEGY='{forced}' not available for "
+                    f"this device count (len(devices)={len(devices)}). "
+                    f"The single-GPU shortcut excludes multi-GPU-only "
+                    f"strategies — run on a multi-GPU profile or pick "
+                    f"one of: "
+                    f"{sorted(n for n, _ in strategies)}"
+                )
+            strategies = filtered
+            logging.getLogger(__name__).info(
+                f"[Prism] NBX_FORCE_STRATEGY={forced} — forcing strategy, "
+                f"bypassing score cascade"
+            )
+
         shard_sizes = container.get_shard_sizes()
         candidates = self._evaluate_all_strategies(
             strategies, sorted_components, component_memory, devices, shard_sizes, profile, container
         )
 
+        # When NBX_FORCE_STRATEGY is set and the strategy cannot fit, the
+        # rest of solve() would fall through to fp32 fallback or the final
+        # _fail_error path. Neither is desirable when the operator has
+        # explicitly requested one strategy — they need to see the plain
+        # "this strategy does not fit" signal without Prism retrying
+        # alternatives.
+        if forced and not candidates:
+            raise RuntimeError(
+                f"ZERO FALLBACK: NBX_FORCE_STRATEGY={forced} cannot fit "
+                f"the model on the given hardware profile. Remove the env "
+                f"var to let Prism's cascade select an alternative, or "
+                f"use a larger hardware profile."
+            )
+
         # Serve mode fallback: if hot mode failed, retry with cold budget
         # User chose serve but hardware can't keep all weights resident →
         # degrade gracefully to cold mode instead of crashing
         if not candidates and serve_mode:
-            import logging
             logging.getLogger(__name__).warning(
                 "[Prism] Serve mode: hot budget doesn't fit — falling back to cold mode.\n"
                 "The daemon will load/unload weights per request (not near-zero latency).\n"
@@ -600,7 +645,7 @@ class PrismSolver:
                 remaining = max(total_capacity - total_allocated, 0)
                 try:
                     kv_plan = self._compute_kv_cache_plan(container, target_dtype, remaining)
-                except RuntimeError as e:
+                except RuntimeError:
                     # Strategy rejected: KV cache doesn't fit
                     continue
                 kv_cache_plan = kv_plan
@@ -871,7 +916,6 @@ class PrismSolver:
         if not all([h, w, head_dim, channels]):
             return activation_bytes, 0, False
 
-        scale_factor = 2 ** (vae_blocks - 1)
         patch = PRISM_DEFAULTS.get("default_patch_size", 2)
         trace_seq = (h // patch) * (w // patch)
         runtime_seq = trace_seq  # Same resolution for now
@@ -1783,7 +1827,6 @@ class PrismSolver:
         # Serve mode: eager strategies are much more valuable (near-zero latency)
         serve_mode = getattr(self, '_serve_mode', False)
         if serve_mode:
-            from neurobrix.core.prism.structure import AllocationStrategy
             eager_values = {s.value for s in AllocationStrategy if s.is_eager}
             if strategy_name in eager_values:
                 score += 100.0  # Boost eager strategies in serve mode
@@ -2171,7 +2214,6 @@ class PrismSolver:
         #
         # Serve cold fallback: user asked for serve (hot) but VRAM can't hold all
         # weights → force lazy mode. The daemon still works, just not near-zero latency.
-        from neurobrix.core.prism.structure import AllocationStrategy
         _EAGER_VALUES = {s.value for s in AllocationStrategy if s.is_eager}
         _LAZY_VALUES = {s.value for s in AllocationStrategy if not s.is_eager}
 
