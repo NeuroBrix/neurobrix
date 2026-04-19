@@ -827,6 +827,18 @@ class NBXTensor:
         """Method for ATen API compat."""
         return self._strides == _contiguous_strides(self._shape)
 
+    def is_expanded(self) -> bool:
+        """True when the view replays elements along a broadcast axis.
+
+        Expand views have one or more (shape > 1, stride == 0) axes, which
+        means `numel * element_size > actual_backing_bytes`. Any caller that
+        intends to `memcpy(nbytes)` across a device boundary MUST first
+        materialise via `contiguous()` — otherwise the H2D / D2D read runs
+        past the real allocation and copies garbage.
+        """
+        return any(st == 0 and sh > 1
+                   for sh, st in zip(self._shape, self._strides))
+
     @property
     def is_cuda(self) -> bool:
         return self._device == 'cuda'
@@ -1042,16 +1054,19 @@ class NBXTensor:
 
         Handles CPU→GPU (kind=1 H2D) and GPU→GPU (kind=3 D2D). If the
         tensor is already on the requested CUDA device, returns self.
+        Expand views (stride == 0 on a broadcast axis) are materialised
+        first so the memcpy does not over-read the backing storage.
         """
         if self._device == 'cuda' and self._device_idx == device_idx:
             return self
+        src = self.contiguous() if self.is_expanded() else self
         DeviceAllocator.set_device(device_idx)
-        ptr = DeviceAllocator.malloc_cuda(self._nbytes)
-        if self._nbytes > 0:
+        ptr = DeviceAllocator.malloc_cuda(src._nbytes)
+        if src._nbytes > 0:
             # kind: 1 = H2D if source is CPU, 3 = D2D if source is GPU.
-            kind = 1 if self._device == 'cpu' else 3
-            DeviceAllocator.memcpy(ptr, self.data_ptr(), self._nbytes, kind=kind)
-        return NBXTensor(ptr, self._shape, self._strides, self._dtype,
+            kind = 1 if src._device == 'cpu' else 3
+            DeviceAllocator.memcpy(ptr, src.data_ptr(), src._nbytes, kind=kind)
+        return NBXTensor(ptr, src._shape, src._strides, src._dtype,
                          'cuda', owns_data=True, device_idx=device_idx)
 
     def to_cuda_async(self, device_idx: int = 0, stream: int = 0) -> 'NBXTensor':
@@ -1072,14 +1087,15 @@ class NBXTensor:
         """
         if self._device == 'cuda' and self._device_idx == device_idx:
             return self
+        src = self.contiguous() if self.is_expanded() else self
         DeviceAllocator.set_device(device_idx)
-        ptr = DeviceAllocator.malloc_cuda(self._nbytes)
-        if self._nbytes > 0:
-            kind = 1 if self._device == 'cpu' else 3
+        ptr = DeviceAllocator.malloc_cuda(src._nbytes)
+        if src._nbytes > 0:
+            kind = 1 if src._device == 'cpu' else 3
             DeviceAllocator.memcpy_async(
-                ptr, self.data_ptr(), self._nbytes,
+                ptr, src.data_ptr(), src._nbytes,
                 kind=kind, stream=stream)
-        return NBXTensor(ptr, self._shape, self._strides, self._dtype,
+        return NBXTensor(ptr, src._shape, src._strides, src._dtype,
                          'cuda', owns_data=True, device_idx=device_idx)
 
     def to_cpu(self, pinned: bool = False) -> 'NBXTensor':
@@ -1132,7 +1148,7 @@ class NBXTensor:
             shape[neg_idx] = self._numel // known
             shape = tuple(shape)
         return NBXTensor(self._data_ptr, shape, _contiguous_strides(shape),
-                         self._dtype, self._device, self._offset, device_idx=self._device_idx, base=self._base if self._base is not None else self)
+                         self._dtype, self._device, self._offset, device_idx=self._device_idx, base=self._base if self._base is not None else self, pinned=self._pinned)
 
     def reshape(self, *shape) -> 'NBXTensor':
         if len(shape) == 1 and isinstance(shape[0], (list, tuple)):
@@ -1149,7 +1165,7 @@ class NBXTensor:
         new_shape.insert(dim, 1)
         new_strides.insert(dim, stride_val)
         return NBXTensor(self._data_ptr, tuple(new_shape), tuple(new_strides),
-                         self._dtype, self._device, self._offset, device_idx=self._device_idx, base=self._base if self._base is not None else self)
+                         self._dtype, self._device, self._offset, device_idx=self._device_idx, base=self._base if self._base is not None else self, pinned=self._pinned)
 
     def squeeze(self, dim=None) -> 'NBXTensor':
         if dim is not None:
@@ -1167,7 +1183,7 @@ class NBXTensor:
                     s.append(sz)
                     st.append(sr)
         return NBXTensor(self._data_ptr, tuple(s), tuple(st),
-                         self._dtype, self._device, self._offset, device_idx=self._device_idx, base=self._base if self._base is not None else self)
+                         self._dtype, self._device, self._offset, device_idx=self._device_idx, base=self._base if self._base is not None else self, pinned=self._pinned)
 
     def permute(self, *dims) -> 'NBXTensor':
         if len(dims) == 1 and isinstance(dims[0], (list, tuple)):
@@ -1175,7 +1191,7 @@ class NBXTensor:
         return NBXTensor(self._data_ptr,
                          tuple(self._shape[d] for d in dims),
                          tuple(self._strides[d] for d in dims),
-                         self._dtype, self._device, self._offset, device_idx=self._device_idx, base=self._base if self._base is not None else self)
+                         self._dtype, self._device, self._offset, device_idx=self._device_idx, base=self._base if self._base is not None else self, pinned=self._pinned)
 
     def transpose(self, dim0: int, dim1: int) -> 'NBXTensor':
         dim0, dim1 = dim0 % self.ndim, dim1 % self.ndim
@@ -1184,7 +1200,7 @@ class NBXTensor:
         s[dim0], s[dim1] = s[dim1], s[dim0]
         st[dim0], st[dim1] = st[dim1], st[dim0]
         return NBXTensor(self._data_ptr, tuple(s), tuple(st),
-                         self._dtype, self._device, self._offset, device_idx=self._device_idx, base=self._base if self._base is not None else self)
+                         self._dtype, self._device, self._offset, device_idx=self._device_idx, base=self._base if self._base is not None else self, pinned=self._pinned)
 
     def t(self) -> 'NBXTensor':
         if self.ndim < 2:
@@ -1210,7 +1226,7 @@ class NBXTensor:
             else:
                 new_s.append(s); new_st.append(old_st[i])
         return NBXTensor(self._data_ptr, tuple(new_s), tuple(new_st),
-                         self._dtype, self._device, self._offset, device_idx=self._device_idx, base=self._base if self._base is not None else self)
+                         self._dtype, self._device, self._offset, device_idx=self._device_idx, base=self._base if self._base is not None else self, pinned=self._pinned)
 
     def expand_as(self, other) -> 'NBXTensor':
         return self.expand(*other._shape if isinstance(other, NBXTensor) else other.shape)
@@ -1221,7 +1237,7 @@ class NBXTensor:
         s[dim] = length
         new_off = self._offset + start * self._strides[dim]
         return NBXTensor(self._data_ptr, tuple(s), self._strides,
-                         self._dtype, self._device, new_off, device_idx=self._device_idx, base=self._base if self._base is not None else self)
+                         self._dtype, self._device, new_off, device_idx=self._device_idx, base=self._base if self._base is not None else self, pinned=self._pinned)
 
     def select(self, dim: int, index: int) -> 'NBXTensor':
         dim = dim % self.ndim
@@ -1231,7 +1247,7 @@ class NBXTensor:
         s.pop(dim)
         st.pop(dim)
         return NBXTensor(self._data_ptr, tuple(s), tuple(st),
-                         self._dtype, self._device, new_off, device_idx=self._device_idx, base=self._base if self._base is not None else self)
+                         self._dtype, self._device, new_off, device_idx=self._device_idx, base=self._base if self._base is not None else self, pinned=self._pinned)
 
     def flatten(self, start_dim: int = 0, end_dim: int = -1) -> 'NBXTensor':
         start_dim = start_dim % self.ndim
@@ -1247,11 +1263,49 @@ class NBXTensor:
     def contiguous(self) -> 'NBXTensor':
         if self.is_contiguous():
             return self
+        if self._device == 'cpu':
+            return self._contiguous_cpu()
         new = NBXTensor.empty(self._shape, self._dtype, f"cuda:{self._device_idx}")
         n = self._numel
         if n > 0:
             _strided_copy(self, new)
         return new
+
+    def _contiguous_cpu(self) -> 'NBXTensor':
+        """CPU-side materialization of a non-contiguous view.
+
+        The shared _strided_copy path launches a Triton kernel over GPU
+        pointers, so it cannot reach host memory. This helper performs
+        the same strided → contiguous copy in numpy (C-implemented
+        `ascontiguousarray` over an `as_strided` view) and preserves the
+        source's pinned / unpinned backing. Expand views (stride == 0)
+        materialize correctly because numpy replays the same source
+        element along zero-stride axes.
+        """
+        import numpy as np
+        dst = NBXTensor.empty_cpu(self._shape, self._dtype, pinned=self._pinned)
+        if self._numel == 0:
+            return dst
+        esz = dtype_size(self._dtype)
+        # Byte window touched by the strided view starting at self.data_ptr():
+        # last-reachable element offset + one element for esz bytes.
+        max_elem_offset = 1 + sum(
+            (dim - 1) * st for dim, st in zip(self._shape, self._strides)
+            if dim > 0)
+        n_bytes = max_elem_offset * esz
+        src_bytes = np.ctypeslib.as_array(
+            ctypes.cast(self.data_ptr(), ctypes.POINTER(ctypes.c_ubyte)),
+            shape=(n_bytes,),
+        )
+        byte_strides = tuple(s * esz for s in self._strides)
+        strided_view = np.lib.stride_tricks.as_strided(
+            src_bytes,
+            shape=tuple(self._shape) + (esz,),
+            strides=byte_strides + (1,),
+        )
+        contig = np.ascontiguousarray(strided_view)
+        ctypes.memmove(dst.data_ptr(), contig.ctypes.data, dst._nbytes)
+        return dst
 
     def unfold(self, dimension: int, size: int, step: int) -> 'NBXTensor':
         dimension = dimension % self.ndim
@@ -1263,12 +1317,12 @@ class NBXTensor:
         st[dimension] = self._strides[dimension] * step
         st.append(self._strides[dimension])
         return NBXTensor(self._data_ptr, tuple(s), tuple(st),
-                         self._dtype, self._device, self._offset, device_idx=self._device_idx, base=self._base if self._base is not None else self)
+                         self._dtype, self._device, self._offset, device_idx=self._device_idx, base=self._base if self._base is not None else self, pinned=self._pinned)
 
     def as_strided(self, size, stride, storage_offset=None) -> 'NBXTensor':
         off = storage_offset if storage_offset is not None else self._offset
         return NBXTensor(self._data_ptr, tuple(size), tuple(stride),
-                         self._dtype, self._device, off, device_idx=self._device_idx, base=self._base if self._base is not None else self)
+                         self._dtype, self._device, off, device_idx=self._device_idx, base=self._base if self._base is not None else self, pinned=self._pinned)
 
     def view_as(self, other) -> 'NBXTensor':
         s = other._shape if isinstance(other, NBXTensor) else other.shape
