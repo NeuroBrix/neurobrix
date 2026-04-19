@@ -189,8 +189,11 @@ class TensorArena:
     def __getitem__(self, idx: int) -> Optional[torch.Tensor]:
         return self._memory[idx]
 
-    def __setitem__(self, idx: int, value: torch.Tensor) -> None:
+    def __setitem__(self, idx: int, value: Optional[torch.Tensor]) -> None:
         self._memory[idx] = value
+
+    def __len__(self) -> int:
+        return len(self._memory)
 
     def clear_intermediates(self) -> None:
         """Clear only intermediate tensors (keep weights and inputs)."""
@@ -2695,6 +2698,76 @@ class CompiledSequence:
                     flipped += 1
                     break
         return flipped
+
+    def materialize_slots_depending_on(self, weight_slot_ids) -> int:
+        """Materialize every intermediate slot whose tensor aliases one of
+        the given weight slots, so evicting those weights is safe.
+
+        Mirror of TritonSequence.materialize_slots_depending_on.
+
+        Under zero3 pipelining, a block's weights may be referenced by
+        arena intermediates through torch's view semantics (shared storage
+        via `_base`). Dropping the weight tensor while dependents still
+        reference its storage would leave stale pointers. Calling this
+        primitive before the evict breaks the alias by copying each
+        dependent intermediate into fresh storage via `.contiguous()`,
+        then replacing the slot.
+
+        Intended to be called rarely — under a correctly-fused MoE graph
+        (see moe_fusion.py Pass 2 output-sweep), dead views never land in
+        the arena so this typically returns 0 on zero3.
+
+        Args:
+            weight_slot_ids: iterable of slot indices whose tensors are
+                about to be freed.
+
+        Returns:
+            Count of slots that were materialized.
+        """
+        assert self._arena is not None, (
+            "compile() must be called before materialize_slots_depending_on()")
+        weight_slots = set(weight_slot_ids)
+        if not weight_slots:
+            return 0
+        arena = self._arena
+
+        # Collect the storage identities of weights being evicted. Views
+        # in PyTorch share a `Storage` object with their base — the storage
+        # address is the canonical identity.
+        forbidden_storage_ids = set()
+        for ws in weight_slots:
+            t = arena[ws]
+            if t is None or not hasattr(t, 'untyped_storage'):
+                continue
+            try:
+                forbidden_storage_ids.add(
+                    t.untyped_storage().data_ptr())
+            except Exception:
+                continue
+
+        if not forbidden_storage_ids:
+            return 0
+
+        materialized = 0
+        for slot_idx in range(len(arena)):
+            if slot_idx in weight_slots:
+                continue
+            t = arena[slot_idx]
+            if t is None or not hasattr(t, 'untyped_storage'):
+                continue
+            try:
+                storage_ptr = t.untyped_storage().data_ptr()
+            except Exception:
+                continue
+            if storage_ptr not in forbidden_storage_ids:
+                continue
+            # Materialize: fresh storage, break the alias.
+            try:
+                arena[slot_idx] = t.contiguous().clone()
+            except Exception:
+                arena[slot_idx] = None
+            materialized += 1
+        return materialized
 
     def override_weightless_op_devices(self, device: torch.device) -> None:
         """Force op.device = device for every op without weight inputs.

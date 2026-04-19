@@ -1746,6 +1746,84 @@ class TritonSequence:
                     break
         return flipped
 
+    def materialize_slots_depending_on(self, weight_slot_ids) -> int:
+        """Materialize every intermediate slot whose tensor aliases one of
+        the given weight slots, so evicting those weights is safe.
+
+        Mirror of CompiledSequence.materialize_slots_depending_on.
+
+        Context: under zero3 pipelining, a block's weights may be referenced
+        by arena intermediates via `_base` (views created by compute ops
+        that produce sliced/transposed projections of a weight). Dropping
+        the weight before these intermediates are consumed would leave the
+        views pointing at freed GPU memory. Calling this primitive before
+        the evict breaks the alias by copying each dependent intermediate
+        into fresh storage via `.contiguous()`, then replacing the slot.
+
+        Intended to be called rarely — under a correctly-fused MoE graph
+        (see moe_fusion.py Pass 2 output-sweep), dead views never land in
+        the arena so this typically returns 0 on zero3.
+
+        Args:
+            weight_slot_ids: iterable of slot indices whose tensors are
+                about to be freed.
+
+        Returns:
+            Count of slots that were materialized.
+        """
+        assert self._arena is not None, (
+            "compile() must be called before materialize_slots_depending_on()")
+        weight_slots = set(weight_slot_ids)
+        if not weight_slots:
+            return 0
+        arena = self._arena
+
+        # Collect the set of root-tensor identities for the weights being
+        # evicted. NBXTensor.base is flattened to root on construction so
+        # a single-level check is sufficient, but we walk defensively.
+        forbidden_roots = set()
+        for ws in weight_slots:
+            t = arena[ws]
+            if t is None:
+                continue
+            root = getattr(t, '_base', None) or t
+            forbidden_roots.add(id(root))
+
+        if not forbidden_roots:
+            return 0
+
+        materialized = 0
+        for slot_idx in range(len(arena)):
+            if slot_idx in weight_slots:
+                continue
+            t = arena[slot_idx]
+            if t is None:
+                continue
+            # Skip anything that doesn't alias another tensor's storage.
+            base = getattr(t, '_base', None)
+            if base is None:
+                continue
+            depends = False
+            node = base
+            while node is not None:
+                if id(node) in forbidden_roots:
+                    depends = True
+                    break
+                node = getattr(node, '_base', None)
+            if not depends:
+                continue
+            # Materialize: copy into fresh storage, break the alias.
+            try:
+                arena[slot_idx] = t.contiguous()
+            except Exception:
+                # Defensive: if contiguous() fails (e.g. CPU NBXTensor
+                # without a matching path), drop the slot so the evict
+                # can proceed. Re-run of the graph will refill the slot.
+                arena[slot_idx] = None
+            materialized += 1
+        return materialized
+        return flipped
+
     def get_op_blocks(self) -> Dict[int, Dict[str, Any]]:
         """Group the compiled op list by transformer block.
 

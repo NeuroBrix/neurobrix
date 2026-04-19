@@ -187,6 +187,16 @@ _GPU_BACKENDS = {
         # when pipelining introduces a transfer stream in a future
         # session we'll route those allocs to it.
         "malloc_async": "cudaMallocAsync", "free_async": "cudaFreeAsync",
+        # Stream + event API — used by zero3 pipelining for async H2D
+        # overlap of block N+1 with compute on block N.
+        "stream_create": "cudaStreamCreate",
+        "stream_destroy": "cudaStreamDestroy",
+        "stream_sync": "cudaStreamSynchronize",
+        "event_create": "cudaEventCreate",
+        "event_destroy": "cudaEventDestroy",
+        "event_record": "cudaEventRecord",
+        "stream_wait_event": "cudaStreamWaitEvent",
+        "memcpy_async": "cudaMemcpyAsync",
     },
     "hip": {
         "rt_libs": ["libamdhip64.so", "libamdhip64.so.5"],
@@ -199,6 +209,14 @@ _GPU_BACKENDS = {
         # names. Not tested in this pass (investigation was V100-only),
         # but the symbol mapping is kept for symmetry.
         "malloc_async": "hipMallocAsync", "free_async": "hipFreeAsync",
+        "stream_create": "hipStreamCreate",
+        "stream_destroy": "hipStreamDestroy",
+        "stream_sync": "hipStreamSynchronize",
+        "event_create": "hipEventCreate",
+        "event_destroy": "hipEventDestroy",
+        "event_record": "hipEventRecord",
+        "stream_wait_event": "hipStreamWaitEvent",
+        "memcpy_async": "hipMemcpyAsync",
     },
 }
 
@@ -428,6 +446,128 @@ class DeviceAllocator:
         sync_name = backend.get("sync")
         if sync_name:
             getattr(rt, sync_name)()
+
+    # ------------------------------------------------------------------
+    # Async stream + event primitives (zero torch).
+    # Zero3 pipelining opens a dedicated transfer stream so that the H2D
+    # copy of block N+1 overlaps with the compute on block N which runs
+    # on the default stream. Events synchronize the two streams so we
+    # never read a weight that's still being copied.
+    #
+    # Handles are opaque ctypes.c_void_p values surfaced as Python ints
+    # (0 is the default/NULL stream). Keep them in Python state; do not
+    # re-wrap them on each use — ctypes creates a fresh opaque object
+    # each call.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def create_stream() -> int:
+        """Create a new non-blocking GPU stream. Returns opaque handle."""
+        rt = _gpu_runtime()
+        backend = _active_backend()
+        fn_name = backend.get("stream_create")
+        if fn_name is None:
+            raise RuntimeError(
+                f"Stream create unsupported on backend {_detect_gpu_backend()!r}")
+        h = ctypes.c_void_p()
+        ret = getattr(rt, fn_name)(ctypes.byref(h))
+        if ret != 0:
+            raise RuntimeError(f"stream create failed (error {ret})")
+        return h.value or 0
+
+    @staticmethod
+    def destroy_stream(stream: int):
+        """Destroy a stream created by create_stream. No-op for default (0)."""
+        if not stream:
+            return
+        rt = _gpu_runtime()
+        backend = _active_backend()
+        fn_name = backend.get("stream_destroy")
+        if fn_name is None:
+            return
+        getattr(rt, fn_name)(ctypes.c_void_p(stream))
+
+    @staticmethod
+    def stream_synchronize(stream: int):
+        """Block the caller until the given stream drains."""
+        rt = _gpu_runtime()
+        backend = _active_backend()
+        fn_name = backend.get("stream_sync")
+        if fn_name is None:
+            return
+        getattr(rt, fn_name)(ctypes.c_void_p(stream))
+
+    @staticmethod
+    def create_event() -> int:
+        """Create a new event. Returns opaque handle."""
+        rt = _gpu_runtime()
+        backend = _active_backend()
+        fn_name = backend.get("event_create")
+        if fn_name is None:
+            raise RuntimeError(
+                f"Event create unsupported on backend {_detect_gpu_backend()!r}")
+        h = ctypes.c_void_p()
+        ret = getattr(rt, fn_name)(ctypes.byref(h))
+        if ret != 0:
+            raise RuntimeError(f"event create failed (error {ret})")
+        return h.value or 0
+
+    @staticmethod
+    def destroy_event(event: int):
+        """Destroy an event created by create_event."""
+        if not event:
+            return
+        rt = _gpu_runtime()
+        backend = _active_backend()
+        fn_name = backend.get("event_destroy")
+        if fn_name is None:
+            return
+        getattr(rt, fn_name)(ctypes.c_void_p(event))
+
+    @staticmethod
+    def record_event(event: int, stream: int = 0):
+        """Capture the current state of `stream` into `event`."""
+        rt = _gpu_runtime()
+        backend = _active_backend()
+        fn_name = backend.get("event_record")
+        if fn_name is None:
+            return
+        getattr(rt, fn_name)(
+            ctypes.c_void_p(event), ctypes.c_void_p(stream))
+
+    @staticmethod
+    def stream_wait_event(stream: int, event: int, flags: int = 0):
+        """Make `stream` wait for `event` without blocking the host."""
+        rt = _gpu_runtime()
+        backend = _active_backend()
+        fn_name = backend.get("stream_wait_event")
+        if fn_name is None:
+            return
+        getattr(rt, fn_name)(
+            ctypes.c_void_p(stream), ctypes.c_void_p(event),
+            ctypes.c_uint(flags))
+
+    @staticmethod
+    def memcpy_async(dst: int, src: int, nbytes: int,
+                     kind: int = 1, stream: int = 0):
+        """Asynchronous memcpy on a specific stream.
+
+        kind: 0=H2H, 1=H2D, 2=D2H, 3=D2D (matches cudaMemcpyKind).
+        For H2D to actually overlap with compute, `src` must be pinned.
+        """
+        if nbytes <= 0:
+            return
+        rt = _gpu_runtime()
+        backend = _active_backend()
+        fn_name = backend.get("memcpy_async")
+        if fn_name is None:
+            # Fallback to synchronous memcpy if async is unsupported.
+            DeviceAllocator.memcpy(dst, src, nbytes, kind)
+            return
+        getattr(rt, fn_name)(
+            ctypes.c_void_p(dst), ctypes.c_void_p(src),
+            ctypes.c_size_t(nbytes), ctypes.c_int(kind),
+            ctypes.c_void_p(stream))
 
     @staticmethod
     def ensure_triton_device(device_idx: int):
@@ -911,6 +1051,34 @@ class NBXTensor:
             # kind: 1 = H2D if source is CPU, 3 = D2D if source is GPU.
             kind = 1 if self._device == 'cpu' else 3
             DeviceAllocator.memcpy(ptr, self.data_ptr(), self._nbytes, kind=kind)
+        return NBXTensor(ptr, self._shape, self._strides, self._dtype,
+                         'cuda', owns_data=True, device_idx=device_idx)
+
+    def to_cuda_async(self, device_idx: int = 0, stream: int = 0) -> 'NBXTensor':
+        """Non-blocking variant of to_cuda for zero3 pipelining.
+
+        Enqueues the memcpy on `stream` instead of running synchronously.
+        Caller is responsible for sequencing — either via stream_wait_event
+        before reading the returned tensor, or via stream_synchronize.
+
+        For H2D to actually overlap with compute on the default stream, the
+        source NBXTensor MUST be pinned (self._pinned == True). Otherwise
+        the driver falls back to a synchronous bounce-buffer copy and no
+        overlap happens.
+
+        Returns a GPU NBXTensor backed by a freshly-malloc'd pointer. The
+        allocation itself is synchronous (cudaMalloc); only the fill is
+        asynchronous.
+        """
+        if self._device == 'cuda' and self._device_idx == device_idx:
+            return self
+        DeviceAllocator.set_device(device_idx)
+        ptr = DeviceAllocator.malloc_cuda(self._nbytes)
+        if self._nbytes > 0:
+            kind = 1 if self._device == 'cpu' else 3
+            DeviceAllocator.memcpy_async(
+                ptr, self.data_ptr(), self._nbytes,
+                kind=kind, stream=stream)
         return NBXTensor(ptr, self._shape, self._strides, self._dtype,
                          'cuda', owns_data=True, device_idx=device_idx)
 
