@@ -1478,12 +1478,27 @@ class GraphExecutor:
         for tid, tensor in input_map.items():
             store[tid] = tensor
 
-        # Execute ops sequentially
+        # Execute ops sequentially. Thread pre_op_callback here for
+        # the same reason as _run_triton_compiled — zero3 (and any other
+        # strategy that installs a persistent hook) needs to see every op
+        # before dispatch so it can promote the block weights the op
+        # needs to GPU. Without this the sequential path never fires the
+        # hook and zero3-weighted ops run against CPU pointers.
+        cb = self._pre_op_callback or self._persistent_pre_op_callback
         num_ops = 0
-        for op_uid in exec_order:
+        for op_idx, op_uid in enumerate(exec_order):
             op_data = ops_meta.get(op_uid)
             if op_data is None:
                 continue
+
+            if cb is not None:
+                try:
+                    cb(op_idx, op_data)
+                except Exception:
+                    # Callback must never break dispatch — match the
+                    # TritonSequence.run() contract where cb failures are
+                    # isolated from the compute loop.
+                    pass
 
             op_type = op_data.get("op_type", "")
             attrs = op_data.get("attributes", {})
