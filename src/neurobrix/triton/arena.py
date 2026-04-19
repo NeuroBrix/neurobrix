@@ -20,6 +20,9 @@ class Arena:
     def __setitem__(self, idx: int, value):
         self._slots[idx] = value
 
+    def __len__(self) -> int:
+        return len(self._slots)
+
     def clear_intermediates(self):
         """Free intermediate slots (keep weights + inputs)."""
         start = self._num_weights + self._num_inputs
