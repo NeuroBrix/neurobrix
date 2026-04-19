@@ -66,6 +66,7 @@ def detect_and_fuse_moe(dag: Dict[str, Any], family: str, norm_topk_prob: bool =
 
     fused_count = 0
     ops_removed_total = 0
+    dead_outputs_total = 0
 
     for topk_uid in moe_topk_uids:
         result = _fuse_one_moe_layer(
@@ -74,9 +75,10 @@ def detect_and_fuse_moe(dag: Dict[str, Any], family: str, norm_topk_prob: bool =
             norm_topk_prob=norm_topk_prob,
         )
         if result is not None:
-            removed_count, fused_uid, fused_op = result
+            removed_count, fused_uid, fused_op, dead_outputs_count = result
             fused_count += 1
             ops_removed_total += removed_count
+            dead_outputs_total += dead_outputs_count
 
             # Incremental map update: add fused op's inputs/outputs
             for in_tid in _collect_input_tids(fused_op):
@@ -90,6 +92,15 @@ def detect_and_fuse_moe(dag: Dict[str, Any], family: str, norm_topk_prob: bool =
     dag["ops"] = ops
     dag["execution_order"] = execution_order
 
+    # Criterion (H): log output-sweep count. Expect 0 on dense LLMs (TinyLlama),
+    # ~384 × num_blocks on MoE (e.g. Qwen3-30B-A3B: 18432 ± 10%).
+    if os.environ.get("NBX_DEBUG") or os.environ.get("NBX_MOE_FUSION_LOG"):
+        print(
+            f"[MoE Fusion] fused_layers={fused_count} "
+            f"ops_removed={ops_removed_total} "
+            f"output_sweep_removed={dead_outputs_total}"
+        )
+
     return dag
 
 
@@ -102,7 +113,7 @@ def _fuse_one_moe_layer(
     producer_map: Dict[str, str],
     topk_uid: str,
     norm_topk_prob: bool = True,
-) -> Optional[Tuple[int, str, Dict[str, Any]]]:
+) -> Optional[Tuple[int, str, Dict[str, Any], int]]:
     """
     Fuse one MoE layer starting from a topk op.
 
@@ -301,15 +312,79 @@ def _fuse_one_moe_layer(
     if dead_ops:
         new_order = [uid for uid in new_order if uid not in dead_ops]
 
-    # Update structures
+    # Pass 2 requires the fused_op to be discoverable via `ops` so its
+    # inputs (hidden_states_tid, gate_scores_tid, expert weight tids) are
+    # counted as live consumers during the local_consumer_map build below.
+    # Inserting it here (before the sweep) rather than at the very end of
+    # the function doesn't affect the rest of the flow — new_order still
+    # references fused_uid, and the final execution_order swap still
+    # happens atomically.
     ops[fused_uid] = fused_op
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # Pass 2: Output-side dead-op sweep (architectural fix for MoE weight retention)
+    # ═══════════════════════════════════════════════════════════════════════════
+    # After MoE fusion, ops like `aten::t` on expert weights lose their only
+    # consumer (the aten::mm that was fused into custom::moe_fused). If left in,
+    # they run at execution, store a .t() view in the arena whose `_base` pins
+    # the CPU-offloaded expert weight to GPU memory under zero3 pipelining.
+    # Pass 1 (input-side) misses them because their INPUTS are still weight
+    # params (not in removed_producers) — only their OUTPUT consumer is gone.
+    # Fixed-point iteration so chains (t → t → mm) collapse in one call.
+    #
+    # PROTECTS: fused_uid, shared_expert paths, DAG-level output tids.
+    active_ops: Set[str] = set(new_order) - dead_ops
+    graph_outputs: Set[str] = set(dag.get("output_tensor_ids", []))
+
+    local_consumer_map: Dict[str, Set[str]] = {}
+    for uid in active_ops:
+        op_data = ops.get(uid, {})
+        for in_tid in _collect_input_tids(op_data):
+            local_consumer_map.setdefault(in_tid, set()).add(uid)
+
+    dead_outputs_count = 0
+    changed = True
+    while changed:
+        changed = False
+        for uid in list(active_ops):
+            if uid == fused_uid:
+                continue
+            op_data = ops.get(uid, {})
+            parent_module = op_data.get("parent_module", "")
+            if "shared_expert" in parent_module or "shared" in parent_module:
+                continue
+            out_tids = op_data.get("output_tensor_ids", [])
+            if not out_tids:
+                continue
+            all_dead = True
+            for out_tid in out_tids:
+                if out_tid in graph_outputs:
+                    all_dead = False
+                    break
+                live_consumers = local_consumer_map.get(out_tid, set()) & active_ops
+                live_consumers.discard(uid)
+                if live_consumers:
+                    all_dead = False
+                    break
+            if all_dead:
+                dead_ops.add(uid)
+                active_ops.discard(uid)
+                dead_outputs_count += 1
+                for in_tid in _collect_input_tids(op_data):
+                    local_consumer_map.get(in_tid, set()).discard(uid)
+                changed = True
+
+    if dead_outputs_count:
+        new_order = [uid for uid in new_order if uid not in dead_ops]
+
+    # Update structures (fused_op already inserted into `ops` before Pass 2).
     # Don't delete old ops from ops dict (tensors reference them), just remove from execution_order
     execution_order.clear()
     execution_order.extend(new_order)
 
     ops_removed = len(moe_op_uids)
 
-    return ops_removed, fused_uid, fused_op
+    return ops_removed, fused_uid, fused_op, dead_outputs_count
 
 
 # ============================================================================

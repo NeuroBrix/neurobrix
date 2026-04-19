@@ -19,7 +19,7 @@ Multi-GPU: one set of kernel launches per device, bulk D2D transfers.
 """
 
 import ctypes as _ctypes
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 
 import numpy as np
 
@@ -35,7 +35,56 @@ _BLOCK_SIZE_M = 16
 # POINTER TABLE BUILDER — zero-copy, cached
 # ============================================================================
 
-_ptr_cache = {}
+# LRU cache of pointer tables keyed by a data_ptr fingerprint of every
+# expert weight. Under zero3 pipelining weights may be freed and
+# reallocated at the same virtual address, so a static cache_key
+# (e.g. first expert's data_ptr) can resolve to a stale PtrTables and
+# cause silent garbage or illegal memory accesses. Hashing ALL
+# expert data_ptrs detects any change to the arena layout.
+#
+# Bounded by _PTR_CACHE_MAXSIZE entries — eviction is LRU (OrderedDict
+# move_to_end on hit, popitem(last=False) on overflow). The cap keeps
+# memory flat when running many blocks across devices during
+# pipelining; 256 entries × 3 int64 tables × few hundred experts is
+# still sub-megabyte.
+_PTR_CACHE_MAXSIZE = 256
+_ptr_cache: "OrderedDict[int, PtrTables]" = OrderedDict()
+
+
+def _ptr_cache_fingerprint(
+    gate_weights, up_weights, down_weights, num_experts: int
+) -> int:
+    """Stable hash over every expert's data_ptr for all three projections.
+
+    Any weight swap (H2D, D2D, free-and-remalloc at the same address)
+    changes at least one data_ptr — and in the rare adversarial case
+    where the driver hands out identical addresses for a pair of
+    identically-sized buffers, we still hash all 3 × num_experts ptrs
+    so a single match isn't enough for a false cache hit.
+    """
+    vals = []
+    vals.append(num_experts)
+    for i in range(num_experts):
+        vals.append(gate_weights[i].data_ptr())
+        vals.append(up_weights[i].data_ptr())
+        vals.append(down_weights[i].data_ptr())
+    return hash(tuple(vals))
+
+
+def _ptr_cache_get(fp: int):
+    """LRU lookup. Promotes the hit to the MRU end."""
+    tables = _ptr_cache.get(fp)
+    if tables is not None:
+        _ptr_cache.move_to_end(fp)
+    return tables
+
+
+def _ptr_cache_put(fp: int, tables):
+    """Insert + evict the oldest entry if we're over the cap."""
+    _ptr_cache[fp] = tables
+    _ptr_cache.move_to_end(fp)
+    while len(_ptr_cache) > _PTR_CACHE_MAXSIZE:
+        _ptr_cache.popitem(last=False)
 
 
 class PtrTables:
@@ -346,18 +395,25 @@ def execute_moe_fused(
     # promoted GPU tensors are freshly allocated per call, so cached
     # pointers would dangle after this call returns. See comment at
     # STEP 0 for the zero3/pipelining interaction.
-    ck = cache_key if cache_key else f"moe_{gate_weights[0].data_ptr()}_{num_experts}"
+    #
+    # Under pipelining (all weights already on GPU but evicted/promoted
+    # between blocks), the cache key is a fingerprint of EVERY expert
+    # data_ptr so a swapped buffer invalidates the cache. LRU-bounded
+    # to _PTR_CACHE_MAXSIZE entries.
     if any_cpu_weight:
         tables = _build_ptr_tables(gate_weights, up_weights, down_weights)
         DeviceAllocator.set_device(act_dev)
         DeviceAllocator.ensure_triton_device(act_dev)
     else:
-        if ck not in _ptr_cache:
-            _ptr_cache[ck] = _build_ptr_tables(
+        fp = _ptr_cache_fingerprint(
+            gate_weights, up_weights, down_weights, num_experts)
+        tables = _ptr_cache_get(fp)
+        if tables is None:
+            tables = _build_ptr_tables(
                 gate_weights, up_weights, down_weights)
+            _ptr_cache_put(fp, tables)
             DeviceAllocator.set_device(act_dev)
             DeviceAllocator.ensure_triton_device(act_dev)
-        tables = _ptr_cache[ck]
 
     # ================================================================
     # STEP 3: Align tokens by expert (sorting)
