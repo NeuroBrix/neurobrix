@@ -2675,26 +2675,43 @@ class TritonSequence:
         return new_kw
 
     def _transfer_tensor(self, tensor: NBXTensor, target_dev: int) -> NBXTensor:
-        """Copy NBXTensor to target CUDA device.
+        """Copy NBXTensor to target CUDA device, preserving strides.
 
         Picks the memcpy kind based on the source device:
           - CPU source (zero3 offload): kind=1 (H2D)
           - CUDA source (cross-GPU transfer): kind=3 (D2D)
 
-        Pinned host memory enables ~2× throughput on the H2D path, so
-        zero3 weights loaded via NBXTensor.empty_cpu(..., pinned=True)
-        naturally benefit from this path when the slow-path transfers
-        them.
+        Stride preservation (critical for zero3 correctness): the
+        destination NBXTensor is constructed with the source's shape
+        AND strides, not forced to contiguous. When
+        _eliminate_weight_transpose_ops pre-transposes a linear weight
+        at bind time, the arena holds a .t() view with swapped strides
+        over the original row-major bytes. A previous implementation
+        used NBXTensor.empty() for the destination, which hard-sets
+        _contiguous_strides(shape) — the memcpy'd bytes (still the
+        original layout) were then re-indexed as if they were the
+        transposed layout, silently producing act @ W instead of
+        act @ W.t() inside every mm under zero3. Logit cosine vs
+        native was near zero. See
+        tests/scratch/divergence_inv/DIVERGENCE_REPORT.md for the
+        bytes-vs-strides walkthrough and reproducer. Fix: construct
+        the GPU NBXTensor directly so the view's stride semantics
+        carry over; downstream .contiguous() inside mm/bmm then
+        correctly materialises via strided_copy, matching what the
+        native torch.Tensor.to(device) contract does.
         """
         DeviceAllocator.set_device(target_dev)
-        dst = NBXTensor.empty(tensor._shape, tensor._dtype,
-                              f"cuda:{target_dev}")
+        src_device = getattr(tensor, '_device', 'cuda')
+        kind = 1 if src_device == 'cpu' else 3
         if tensor._nbytes > 0:
-            src_device = getattr(tensor, '_device', 'cuda')
-            kind = 1 if src_device == 'cpu' else 3
-            DeviceAllocator.memcpy(dst.data_ptr(), tensor.data_ptr(),
+            dst_raw_ptr = DeviceAllocator.malloc_cuda(tensor._nbytes)
+            DeviceAllocator.memcpy(dst_raw_ptr, tensor.data_ptr(),
                                    tensor._nbytes, kind=kind)
-        return dst
+        else:
+            dst_raw_ptr = 0
+        return NBXTensor(
+            dst_raw_ptr, tensor._shape, tensor._strides, tensor._dtype,
+            'cuda', owns_data=True, device_idx=target_dev, offset=0)
 
     def gather_outputs(self, output_ids: Optional[List[str]] = None) -> Dict[str, Any]:
         """Read output tensors from arena."""
