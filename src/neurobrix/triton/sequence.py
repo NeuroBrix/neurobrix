@@ -7,6 +7,7 @@ with NBXDtype and uses Arena + SymbolResolver for triton mode.
 Zero torch dependency in the hot loop.
 """
 
+import os
 import re
 from collections import defaultdict
 from dataclasses import dataclass
@@ -18,6 +19,61 @@ from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, p
 from .arena import Arena
 from .symbols import SymbolResolver
 from .dtype import TritonDtypeEngine
+
+
+# ----------------------------------------------------------------------------
+# Periodic _deferred drain — Route A (April 2026)
+# ----------------------------------------------------------------------------
+# The hot loops in _run_single_device / _run_multi_device push any tensor
+# evicted from an arena slot (output overwrite + kill_slot) onto a local
+# `_deferred` list. Until April 2026 that list was drained exactly once
+# per run(), after a device sync. On a DiT with ~5600 ops per forward
+# pass (PixArt-Sigma 28 layers × ~200 ops/layer, CFG batch=2), `_deferred`
+# grew to ~950 live tensors × ~40 MB avg = 30 GB — on a V100 32 GB that
+# hit OOM inside the transformer, not because anything leaked but because
+# the peak concurrency was bounded only by the run's total allocation
+# volume.
+#
+# Fix: drain `_deferred` the moment it crosses a bytes OR count threshold.
+# The drain still uses `sync_device()` before clearing the list (cudaFree
+# is synchronous and releasing while a kernel is still reading would
+# UAF), so correctness is identical to the end-of-run drain — we just
+# do it more often. Empirically ~5 ms of extra sync per run on PixArt
+# against 158 s of decode — noise.
+#
+# Tuning via env vars (lookup once, not in the hot loop):
+#   NBX_DEFERRED_DRAIN_BYTES  default 2_000_000_000  (2 GB)
+#      Primary threshold. Sized so it never triggers on small models
+#      (TinyLlama, Janus) where end-of-run drain already fits
+#      comfortably, but triggers ~9× per run on PixArt-scale DiTs.
+#   NBX_DEFERRED_DRAIN_COUNT  default 512
+#      Safety net against pathologies where many small tensors accumulate
+#      without ever crossing the bytes threshold (hypothetical: many-heads
+#      SDPA with strided workspace). OR-ed with the bytes threshold —
+#      the first trigger drains.
+#   NBX_DEFERRED_DRAIN_DIAG   default "0"
+#      Set to "1" to print drain events (count, bytes, trigger reason).
+#
+# Known limit (April 2026): Route A plafonne le peak concurrency
+# INTRA-run. PixArt-Sigma/Alpha triton crash further along with an
+# independent arena-state bug between runs (cross-run slot corruption
+# — a tensor retained by `_base` chain across the first run's final
+# drain has a dangling data_ptr on run 3). Tracked in
+# docs/follow-ups/pixart_triton_arena_inter_run_bug.md.
+# ----------------------------------------------------------------------------
+
+def _parse_env_int(name: str, default: int) -> int:
+    v = os.environ.get(name)
+    if not v:
+        return default
+    try:
+        return int(v)
+    except ValueError:
+        return default
+
+
+_DEFERRED_DRAIN_BYTES_DEFAULT = 2_000_000_000
+_DEFERRED_DRAIN_COUNT_DEFAULT = 512
 
 
 # Same pattern as core/runtime/graph/compiled_sequence._BLOCK_RE and
@@ -2402,10 +2458,17 @@ class TritonSequence:
         multi-device (CPU weights), so this branch never runs under zero3.
         """
         arena = self._arena
-        _deferred = []
+        _deferred: List[NBXTensor] = []
+        _deferred_bytes: int = 0
+        _drain_bytes_limit = _parse_env_int(
+            "NBX_DEFERRED_DRAIN_BYTES", _DEFERRED_DRAIN_BYTES_DEFAULT)
+        _drain_count_limit = _parse_env_int(
+            "NBX_DEFERRED_DRAIN_COUNT", _DEFERRED_DRAIN_COUNT_DEFAULT)
+        _drain_diag = os.environ.get("NBX_DEFERRED_DRAIN_DIAG") == "1"
+        _drain_stats = [0, 0, 0] if _drain_diag else None  # [drains, bytes-trig, count-trig]
 
         # ===== TEMP PROFILING INSTRUMENTATION =====
-        import os, time as _time
+        import time as _time
         _PROF = os.environ.get("NBX_TRITON_PROF") == "1"
         if _PROF:
             _MATMUL = {"aten::mm", "aten::bmm", "aten::addmm"}
@@ -2444,12 +2507,14 @@ class TritonSequence:
                         old = arena[s]
                         if old is not None:
                             _deferred.append(old)
+                            _deferred_bytes += old._nbytes
                         arena[s] = None
                     if not skip_kills:
                         for s in op.kill_slots:
                             old = arena[s]
                             if old is not None:
                                 _deferred.append(old)
+                                _deferred_bytes += old._nbytes
                             arena[s] = None
                     continue
             else:
@@ -2485,11 +2550,13 @@ class TritonSequence:
             # Defer old slot tensors before overwriting — cudaFree is
             # synchronous so immediate release while a kernel may still
             # be reading the memory would UAF. The deferred list is
-            # drained after a device sync at the end of run().
+            # drained when it crosses a bytes/count threshold (Route A)
+            # and one final time after the loop to catch the tail.
             for s in op.output_slots:
                 old = arena[s]
                 if old is not None:
                     _deferred.append(old)
+                    _deferred_bytes += old._nbytes
 
             # Store outputs
             if not op.output_slots:
@@ -2520,12 +2587,41 @@ class TritonSequence:
                     old = arena[s]
                     if old is not None:
                         _deferred.append(old)
+                        _deferred_bytes += old._nbytes
                     arena[s] = None
+
+            # Route A — periodic drain. OR of bytes and count thresholds.
+            # Same correctness as the final drain (sync before free),
+            # just sooner. Sync bounds peak VRAM to ~drain_bytes worth
+            # of retained tensors instead of run-total.
+            if (_deferred_bytes >= _drain_bytes_limit
+                    or len(_deferred) >= _drain_count_limit):
+                if _drain_stats is not None:
+                    _drain_stats[0] += 1
+                    if _deferred_bytes >= _drain_bytes_limit:
+                        _drain_stats[1] += 1
+                    else:
+                        _drain_stats[2] += 1
+                    print(f"[NBX_DEFERRED_DRAIN] single-dev drain "
+                          f"#{_drain_stats[0]}: {len(_deferred)} tensors, "
+                          f"{_deferred_bytes/1e9:.2f} GB, "
+                          f"trigger={'bytes' if _deferred_bytes >= _drain_bytes_limit else 'count'}",
+                          flush=True)
+                DeviceAllocator.sync_device()
+                _deferred.clear()
+                _deferred_bytes = 0
 
         # All kernels submitted — sync GPU then release deferred tensors
         if _deferred:
             DeviceAllocator.sync_device()
             _deferred.clear()
+            _deferred_bytes = 0
+
+        if _drain_stats is not None and _drain_stats[0] > 0:
+            print(f"[NBX_DEFERRED_DRAIN] single-dev totals: "
+                  f"{_drain_stats[0]} drains "
+                  f"({_drain_stats[1]} bytes-trig, {_drain_stats[2]} count-trig)",
+                  flush=True)
 
         # ===== TEMP PROFILING REPORT =====
         if _PROF:
@@ -2564,8 +2660,11 @@ class TritonSequence:
 
         Uses cudaMalloc/cudaFree (sync) underneath, so both output-slot
         overwrites and kill_slots batch their old tensors into a
-        `_deferred` list and drop them after a device sync at end of
-        run — releasing while a kernel is still reading would UAF.
+        `_deferred` list. The list is drained when its bytes or count
+        cross the Route A thresholds (NBX_DEFERRED_DRAIN_BYTES /
+        NBX_DEFERRED_DRAIN_COUNT) and one final time after the loop —
+        same correctness as the original end-of-run-only drain (sync
+        before free), just more often.
 
         pre_op_callback is invoked with (op_idx, op) BEFORE each op's
         args are resolved. Used by zero3 for first-tick priming and by
@@ -2574,7 +2673,14 @@ class TritonSequence:
         """
         arena = self._arena
         _current_dev = self.device_idx
-        _deferred = []
+        _deferred: List[NBXTensor] = []
+        _deferred_bytes: int = 0
+        _drain_bytes_limit = _parse_env_int(
+            "NBX_DEFERRED_DRAIN_BYTES", _DEFERRED_DRAIN_BYTES_DEFAULT)
+        _drain_count_limit = _parse_env_int(
+            "NBX_DEFERRED_DRAIN_COUNT", _DEFERRED_DRAIN_COUNT_DEFAULT)
+        _drain_diag = os.environ.get("NBX_DEFERRED_DRAIN_DIAG") == "1"
+        _drain_stats = [0, 0, 0] if _drain_diag else None
 
         for op_idx, op in enumerate(self._ops):
             if pre_op_callback is not None:
@@ -2592,12 +2698,14 @@ class TritonSequence:
                     old = arena[s]
                     if old is not None:
                         _deferred.append(old)
+                        _deferred_bytes += old._nbytes
                     arena[s] = None
                 if not skip_kills:
                     for s in op.kill_slots:
                         old = arena[s]
                         if old is not None:
                             _deferred.append(old)
+                            _deferred_bytes += old._nbytes
                         arena[s] = None
                 continue
 
@@ -2634,6 +2742,7 @@ class TritonSequence:
                 old = arena[s]
                 if old is not None:
                     _deferred.append(old)
+                    _deferred_bytes += old._nbytes
 
             # Store outputs
             if not op.output_slots:
@@ -2658,12 +2767,39 @@ class TritonSequence:
                     old = arena[s]
                     if old is not None:
                         _deferred.append(old)
+                        _deferred_bytes += old._nbytes
                     arena[s] = None
+
+            # Route A — periodic drain. See the Route A block at module
+            # top for rationale.
+            if (_deferred_bytes >= _drain_bytes_limit
+                    or len(_deferred) >= _drain_count_limit):
+                if _drain_stats is not None:
+                    _drain_stats[0] += 1
+                    if _deferred_bytes >= _drain_bytes_limit:
+                        _drain_stats[1] += 1
+                    else:
+                        _drain_stats[2] += 1
+                    print(f"[NBX_DEFERRED_DRAIN] multi-dev drain "
+                          f"#{_drain_stats[0]}: {len(_deferred)} tensors, "
+                          f"{_deferred_bytes/1e9:.2f} GB, "
+                          f"trigger={'bytes' if _deferred_bytes >= _drain_bytes_limit else 'count'}",
+                          flush=True)
+                DeviceAllocator.sync_device()
+                _deferred.clear()
+                _deferred_bytes = 0
 
         # All kernels submitted — sync GPU then release deferred tensors
         if _deferred:
             DeviceAllocator.sync_device()
             _deferred.clear()
+            _deferred_bytes = 0
+
+        if _drain_stats is not None and _drain_stats[0] > 0:
+            print(f"[NBX_DEFERRED_DRAIN] multi-dev totals: "
+                  f"{_drain_stats[0]} drains "
+                  f"({_drain_stats[1]} bytes-trig, {_drain_stats[2]} count-trig)",
+                  flush=True)
 
 
     @staticmethod
