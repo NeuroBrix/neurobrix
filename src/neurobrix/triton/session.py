@@ -60,6 +60,15 @@ class TritonLMSession:
         else:
             run_inputs = {"input_ids": input_ids}
 
+        # Mark the pre-lm_head tensor as persistent BEFORE first run so the
+        # triton sequence's liveness analysis keeps its slot alive. Janus-
+        # style image-AR graphs declare text-vocab logits (shape[-1]=vocab,
+        # not hidden_dim) as the graph output; without this the session
+        # would fall back to returning the logits as "hidden states" and
+        # feed the wrong shape into gen_head.
+        if hasattr(self.executor, "enable_hidden_states_capture"):
+            self.executor.enable_hidden_states_capture()
+
         outputs = self.executor.run(run_inputs)
 
         # Switch to decode mode / init O(n) accumulator
@@ -68,8 +77,17 @@ class TritonLMSession:
         else:
             self._accumulated_ids = input_ids
 
-        # Extract hidden states from outputs (NBXTensor)
-        hidden = self._extract_hidden(outputs)
+        # Prefer the explicit pre-lm_head tensor via get_hidden_states;
+        # fall back to the output-scan (graph output IS hidden states,
+        # e.g. DeepSeek-MoE).
+        hidden = None
+        if hasattr(self.executor, "get_hidden_states"):
+            hidden = self.executor.get_hidden_states(
+                expected_hidden_dim=self.hidden_dim,
+                expected_batch_size=batch_size,
+            )
+        if hidden is None:
+            hidden = self._extract_hidden(outputs)
         if hidden is None:
             raise RuntimeError("Prefill could not extract hidden_states.")
 
@@ -112,7 +130,14 @@ class TritonLMSession:
 
         outputs = self.executor.run(run_inputs)
 
-        hidden = self._extract_hidden(outputs)
+        hidden = None
+        if hasattr(self.executor, "get_hidden_states"):
+            hidden = self.executor.get_hidden_states(
+                expected_hidden_dim=self.hidden_dim,
+                expected_batch_size=batch_size,
+            )
+        if hidden is None:
+            hidden = self._extract_hidden(outputs)
         if hidden is None:
             raise RuntimeError("Decode step could not extract hidden_states.")
         while hidden.ndim > 3:

@@ -1613,8 +1613,24 @@ class GraphExecutor:
         DeviceAllocator.set_device(device_idx)
         DeviceAllocator.ensure_triton_device(device_idx)
 
+        # Persistent tids (e.g., hidden_states for image-AR LLMs where the
+        # graph output is text logits) must be added to the dag's declared
+        # outputs BEFORE compile(). TritonSequence's liveness analysis uses
+        # `dag.output_tensor_ids` to protect slots from being freed; without
+        # this, the hidden_tid's slot is reclaimed after its last use and
+        # `gather_outputs([hidden_tid])` returns nothing. Native's
+        # CompiledSequence uses a separate _persistent_tensor_ids set +
+        # protect_tensor() hook; triton gets there via the dag outputs path.
+        dag_for_triton = self._dag
+        if self._persistent_tensor_ids:
+            dag_for_triton = dict(self._dag)
+            existing = list(self._dag.get("output_tensor_ids", []))
+            extras = [t for t in self._persistent_tensor_ids if t not in existing]
+            if extras:
+                dag_for_triton["output_tensor_ids"] = existing + extras
+
         self._triton_seq = TritonSequence(
-            self._dag, device_idx=device_idx,
+            dag_for_triton, device_idx=device_idx,
             compute_dtype=parse_dtype(self.dtype))
         self._triton_seq.compile()
 
@@ -2582,6 +2598,13 @@ class GraphExecutor:
         Returns:
             Hidden states tensor [batch, seq_len, hidden_dim] or None
         """
+        # Triton mode: tensor_store is not populated (execution lives in
+        # the TritonSequence arena, not self._ctx). Read the persistent
+        # tid's slot directly from the triton sequence's arena.
+        if self.mode in ("triton", "triton_sequential"):
+            return self._get_hidden_states_triton(
+                expected_hidden_dim, expected_batch_size)
+
         if self._ctx is None:
             return None
 
@@ -2621,6 +2644,64 @@ class GraphExecutor:
             return None
 
         return self._reshape_hidden(hidden_tensor, expected_hidden_dim, expected_batch_size)
+
+    def _get_hidden_states_triton(
+        self,
+        expected_hidden_dim: int,
+        expected_batch_size: Optional[int],
+    ) -> Optional[Any]:
+        """Triton-mode hidden-states retrieval.
+
+        Mirrors the two-strategy cascade of the native `get_hidden_states`
+        but reads from the TritonSequence arena (the triton analog of
+        ExecutionContext.tensor_store). Returns an NBXTensor — callers on
+        the triton path are already NBX-native (TritonLMSession).
+        """
+        if not hasattr(self, "_triton_seq") or self._triton_seq is None:
+            return None
+        assert self._dag is not None
+
+        # Strategy 1: declared graph output whose last dim matches hidden_dim
+        output_tids = self._dag.get("output_tensor_ids", [])
+        arena_outs = self._triton_seq.gather_outputs(list(output_tids))
+        for tid, tensor in arena_outs.items():
+            if tensor is not None and tensor.shape[-1] == expected_hidden_dim:
+                return tensor
+
+        # Strategy 2: pre-lm_head input (image-AR LLMs: graph output is
+        # text-vocab logits, hidden states are the first input to the
+        # last aten::mm). Requires that enable_hidden_states_capture()
+        # added hidden_tid to _persistent_tensor_ids BEFORE triton compile
+        # — _ensure_triton_compiled threads that into the dag's declared
+        # outputs so the arena slot stays alive through liveness GC.
+        execution_order = self._dag.get("execution_order", [])
+        last_mm_uid = None
+        for op_uid in reversed(execution_order):
+            op_data = self._dag["ops"].get(op_uid, {})
+            if op_data.get("op_type") in ("aten::mm", "mm"):
+                last_mm_uid = op_uid
+                break
+        if not last_mm_uid:
+            return None
+        op_data = self._dag["ops"][last_mm_uid]
+        input_ids = op_data.get("input_tensor_ids", [])
+        if not input_ids:
+            return None
+        hidden_tid = input_ids[0]
+        gathered = self._triton_seq.gather_outputs([hidden_tid])
+        hidden = gathered.get(hidden_tid)
+        if hidden is None:
+            return None
+        # Reshape: triton may hand back the flattened (1408, 4096) form
+        # (per Janus's lm_head view). Unflatten to (batch, seq, hidden).
+        if hidden.ndim == 2:
+            total, hdim = hidden.shape
+            if hdim == expected_hidden_dim:
+                bsz = expected_batch_size or 1
+                if bsz > 1 and total % bsz == 0:
+                    return hidden.view(bsz, total // bsz, hdim)
+                return hidden.unsqueeze(0)
+        return hidden
 
     def _reshape_hidden(
         self,
