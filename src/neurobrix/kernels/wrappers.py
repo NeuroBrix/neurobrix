@@ -1053,11 +1053,7 @@ def mm(a, b) :
     # magnitudes get saturated to ±Inf when a graph-level _to_copy cast
     # them back to fp16 — the next mm then propagates Inf through HMMA →
     # NaN cascade. Mirror the native DtypeEngine AMP path: upcast the
-    # ACTIVATION to fp32. The weight is expected to be fp32 already when
-    # the loader has bind-time upcast it; if the loader kept it fp16
-    # (model too large for fp32), the dtype alignment block below handles
-    # the per-call cast as a fallback. On bf16-capable hardware this
-    # whole branch is a no-op.
+    # ACTIVATION to fp32. On bf16-capable hardware this branch is a no-op.
     # NBXTensor.dtype returns triton.language.dtype (for kernel dispatch);
     # NBXTensor.nbx_dtype returns the NBXDtype enum used by these guards.
     a_nbx = a.nbx_dtype
@@ -1066,13 +1062,18 @@ def mm(a, b) :
         a = a.to(NBXDtype.float32)
         a_nbx = NBXDtype.float32
 
-    # Dtype alignment: when upstream mm promoted output to fp32 (force_fp32
-    # path from bmm or the M<=4 rule on bf16 hw), the next matmul could see
-    # fp32 × bf16 which `tl.dot` refuses. Widen — no-op when both match.
-    # Also serves as the per-call fallback on pre-Ampere when the loader
-    # could not bind-time upcast the weight (e.g. Qwen3-30B in fp32 would
-    # exceed VRAM).
-    if a_nbx != b_nbx:
+    # Dtype alignment. Three situations:
+    #   1. Same dtype  → no-op.
+    #   2. fp32 act × fp16 weight on pre-Ampere → this is the common case
+    #      after step 2. Keep the weight fp16 in memory; the kernel
+    #      promotes the b tile to fp32 inline via PROMOTE_B. No heap alloc.
+    #   3. Anything else (fp32 × bf16, bf16 × fp16, etc.) → widen to the
+    #      common dtype. Rare; typically a downstream force_fp32 bmm feeding
+    #      the next matmul.
+    promote_b = (not _NBX_HAS_NATIVE_BF16
+                 and a_nbx == NBXDtype.float32
+                 and b_nbx == NBXDtype.float16)
+    if a_nbx != b_nbx and not promote_b:
         _order = (NBXDtype.float32, NBXDtype.bfloat16, NBXDtype.float16)
         widest = next(d for d in _order if d in (a_nbx, b_nbx))
         if a_nbx != widest:
@@ -1138,6 +1139,7 @@ def mm(a, b) :
         c.stride(0), c.stride(1),
         BLOCK_M=_MM_BM, BLOCK_N=_MM_BN, BLOCK_K=_MM_BK, GROUP_M=_MM_GROUP,
         IEEE_PRECISION=ieee,
+        PROMOTE_B=promote_b,
         num_warps=4, num_stages=2,
     )
     return c
@@ -1164,13 +1166,17 @@ def bmm(a, b) :
         a = a.to(NBXDtype.float32)
         a_nbx = NBXDtype.float32
 
-    # Align dtypes. `bmm` below forces fp32 output for half-precision inputs
-    # (diffusion attention math overflows fp16 on V100), so a downstream
-    # bmm fed by that fp32 result + a fresh fp16 weight will present mixed
-    # dtypes to matmul_kernel / mv_wrapper, and tl.dot crashes with
-    # "Both operands must be same dtype". Promote the narrower side to the
-    # wider one up-front; no-op in the common same-dtype case.
-    if a_nbx != b_nbx:
+    # Dtype alignment — see mm() for the full rationale. Fast path: when
+    # activation is fp32 (after step 2) and weight is fp16 on pre-Ampere,
+    # leave the weight fp16 and let the kernel promote its tile via
+    # PROMOTE_B. All other mismatches fall back to the widening path.
+    # mv_wrapper (M≤4 decode path below) already upcasts both operands
+    # internally via `.to(tl.float32)` in mv_kernel, so it is also safe
+    # to pass mixed dtypes there.
+    promote_b = (not _NBX_HAS_NATIVE_BF16
+                 and a_nbx == NBXDtype.float32
+                 and b_nbx == NBXDtype.float16)
+    if a_nbx != b_nbx and not promote_b:
         _order = (NBXDtype.float32, NBXDtype.bfloat16, NBXDtype.float16)
         widest = next(d for d in _order if d in (a_nbx, b_nbx))
         if a_nbx != widest:
@@ -1210,6 +1216,7 @@ def bmm(a, b) :
             c[i].stride(0), c[i].stride(1),
             BLOCK_M=_MM_BM, BLOCK_N=_MM_BN, BLOCK_K=_MM_BK, GROUP_M=_MM_GROUP,
             IEEE_PRECISION=ieee,
+            PROMOTE_B=promote_b,
             num_warps=4, num_stages=2,
         )
     return c
@@ -1349,14 +1356,22 @@ def addmm(bias, a, b,
         a = a.to(NBXDtype.float32)
         a_nbx = NBXDtype.float32
 
-    # Dtype alignment (see mm() for rationale): fp32×fp16 crashes tl.dot.
-    if a_nbx != b_nbx:
+    # Dtype alignment (see mm() for rationale). Same two branches:
+    # promote_b keeps fp16 weight fp16 + kernel casts tile inline;
+    # otherwise fall back to full widening.
+    promote_b = (not _NBX_HAS_NATIVE_BF16
+                 and a_nbx == NBXDtype.float32
+                 and b_nbx == NBXDtype.float16)
+    if a_nbx != b_nbx and not promote_b:
         _order = (NBXDtype.float32, NBXDtype.bfloat16, NBXDtype.float16)
         widest = next(d for d in _order if d in (a_nbx, b_nbx))
         if a_nbx != widest:
             a = a.to(widest)
         if b_nbx != widest:
             b = b.to(widest)
+    # Bias tracks the accumulator dtype — it is added inside the kernel
+    # after tl.dot, so bias must match the activation dtype, not the
+    # (possibly-fp16) weight.
     if bias.nbx_dtype != a.nbx_dtype:
         bias = bias.to(a.nbx_dtype)
 
@@ -1398,6 +1413,7 @@ def addmm(bias, a, b,
         alpha, beta,
         BLOCK_M=_MM_BM, BLOCK_N=_MM_BN, BLOCK_K=_MM_BK, GROUP_M=_MM_GROUP,
         IEEE_PRECISION=ieee,
+        PROMOTE_B=promote_b,
         num_warps=4, num_stages=2,
     )
     return c

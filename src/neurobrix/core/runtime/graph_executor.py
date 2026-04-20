@@ -946,27 +946,17 @@ class GraphExecutor:
         DeviceAllocator.set_device(device_idx)
         DeviceAllocator.ensure_triton_device(device_idx)
 
-        # Decide whether to bind-time upcast fp16 weights to fp32. Active
-        # only on pre-Ampere hardware (no native bf16) and only when the
-        # doubled fp32 footprint fits each device's weight budget. We
-        # reserve ~50% of device memory for activations, KV cache, and
-        # other transient buffers. If the model doesn't fit, the loader
-        # falls back silently and the kernel wrappers absorb the per-call
-        # upcast cost via the dtype alignment block.
-        hw_profile = _w.get_hardware_profile()
-        upcast = not _w.has_native_bf16()
-        per_device_budget: Optional[Dict[int, int]] = None
-        if upcast and hw_profile is not None and getattr(hw_profile, "devices", None):
-            per_device_budget = {
-                d.index: int(d.memory_mb * 1024 * 1024 * 0.5)
-                for d in hw_profile.devices
-            }
-
+        # Bind-time fp16→fp32 weight upcast is always OFF. The in-kernel
+        # PROMOTE_B path in matmul_kernel / addmm_kernel (landed Apr 2026)
+        # handles fp32 activation × fp16 weight on pre-Ampere without any
+        # full-weight fp32 copy — the kernel casts each b tile inline,
+        # fused with the load. Keeping weights fp16 in memory halves the
+        # VRAM footprint (measured: TinyLlama peak 4.74 → 2.54 GB on V100)
+        # and is also faster end-to-end (TinyLlama 9.94 s → 5.04 s),
+        # because the bind-time upcast cost itself was never cheap.
         self._weights = load_component_weights(
             nbx_path, component, device_idx, compute_dtype,
-            shard_map=shard_map,
-            upcast_fp16_to_fp32=upcast,
-            per_device_vram_budget=per_device_budget)
+            shard_map=shard_map)
 
         # TEMP DIAG: probe VRAM right after triton weight load commits the
         # component's arena. Gate env NBX_UNLOAD_DIAG=1.
