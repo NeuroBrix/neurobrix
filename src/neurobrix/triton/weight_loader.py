@@ -243,26 +243,36 @@ def _target_nbytes(info: dict, compute_dtype: NBXDtype,
     dtype is fp16 (either native fp16 or bf16 remapped to fp16 via the
     standard bf16→fp16 path) are treated as fp32 for sizing purposes.
     """
+    from neurobrix.kernels.nbx_tensor import dtype_size as _dsize
     shape = info["shape"]
     sf_dtype = info["dtype"]
     dtype_info = _SF_DTYPE_INFO.get(sf_dtype)
     if dtype_info is None:
         return 0
-    _, nbx_dtype, elem_size = dtype_info
+    _, nbx_dtype, _ = dtype_info
 
     numel = math.prod(shape) if shape else 1
 
-    if upcast_fp16_to_fp32:
-        # Replicate the effective-target-dtype logic from the loader.
-        target = nbx_dtype
-        if nbx_dtype == NBXDtype.bfloat16 and compute_dtype == NBXDtype.float16:
-            target = NBXDtype.float16
-        elif nbx_dtype == NBXDtype.float16 and compute_dtype == NBXDtype.bfloat16:
-            target = NBXDtype.bfloat16
-        if target == NBXDtype.float16:
-            return numel * 4  # fp32
+    # Effective target dtype — must mirror the remap logic in the loader
+    # below so arena sizing matches the bytes we actually write.  The
+    # fp32 → half downcast (fp32-on-disk + half-precision compute) was
+    # missing here and caused triton to allocate full fp32-sized arenas
+    # for fp32-shipping weights (T5 text_encoder in PixArt: 19 GB vs the
+    # 9.5 GB the load loop actually writes → OOM on a 32 GB V100 even
+    # though the data fits).
+    target = nbx_dtype
+    if nbx_dtype == NBXDtype.bfloat16 and compute_dtype == NBXDtype.float16:
+        target = NBXDtype.float16
+    elif nbx_dtype == NBXDtype.float16 and compute_dtype == NBXDtype.bfloat16:
+        target = NBXDtype.bfloat16
+    elif (nbx_dtype == NBXDtype.float32
+          and compute_dtype in (NBXDtype.float16, NBXDtype.bfloat16)):
+        target = compute_dtype
 
-    return numel * elem_size
+    if upcast_fp16_to_fp32 and target == NBXDtype.float16:
+        return numel * 4  # pre-Ampere overflow protection path
+
+    return numel * _dsize(target)
 
 
 def _bf16_to_fp16_inplace(ptr: int, numel: int, device_idx: int):
@@ -396,6 +406,12 @@ def _load_shard_into_arenas(
                 target_dtype = NBXDtype.float16
             elif nbx_dtype == NBXDtype.float16 and compute_dtype == NBXDtype.bfloat16:
                 target_dtype = NBXDtype.bfloat16
+            elif (nbx_dtype == NBXDtype.float32
+                  and compute_dtype in (NBXDtype.float16, NBXDtype.bfloat16)):
+                # fp32 on disk + half-precision compute → downcast at load
+                # time. Mirrors native's WeightLoader(torch_dtype=fp16).
+                # Required for T5 text_encoders (shipped fp32, used fp16).
+                target_dtype = compute_dtype
 
             # Zero3 CPU offload — skip the GPU arena entirely and
             # allocate pinned host memory for this weight. The numpy
@@ -452,6 +468,22 @@ def _load_shard_into_arenas(
                     # Native fp16 → fp32 widening (exact, no precision loss).
                     arr = np.ascontiguousarray(arr.astype(np.float32))
                     final_dtype = NBXDtype.float32
+                elif (nbx_dtype == NBXDtype.float32
+                      and target_dtype == NBXDtype.float16):
+                    # fp32 → fp16 downcast. Required when an encoder ships
+                    # fp32 on disk (PixArt T5, SDXL text_encoder_2, ...)
+                    # but the compute path wants fp16. Native's
+                    # WeightLoader(torch_dtype=fp16) does this implicitly;
+                    # triton needs to do it explicitly so arena sizing
+                    # and the kernel-side dtype agree.
+                    arr = np.ascontiguousarray(arr.astype(np.float16))
+                    final_dtype = NBXDtype.float16
+                elif (nbx_dtype == NBXDtype.float32
+                      and target_dtype == NBXDtype.bfloat16):
+                    # fp32 → bf16 (top 16 bits of fp32 mantissa).
+                    arr = np.ascontiguousarray(
+                        (arr.view(np.uint32) >> 16).astype(np.uint16))
+                    final_dtype = NBXDtype.bfloat16
                 elif target_dtype != nbx_dtype:
                     # fp16 → bf16 (truncation of mantissa, standard path).
                     fp32 = arr.astype(np.float32)
