@@ -1,9 +1,11 @@
-# Temporary Session Profile — REMOVE BEFORE COMMIT
+# Hardware Profile: 2x V100 16GB NVLink — cuda:0 + cuda:1 slice
 # ID: v100-16g-x2-01
-# Purpose: Run Phase 2 matrix multi-GPU strategies on cuda:0 + cuda:1
-#          while the regression harness occupies cuda:2 / cuda:3.
-# Spec: 2 × V100 16GB (NVLink mesh on the Dell C4140).
-# Host: Dell C4140 with 4x V100 in full NVLink mesh.
+# Purpose: Report the real 2-GPU slice of the Dell C4140 (cuda:0 +
+#          cuda:1). Pairs with v100-16g-x2-tight-2200 / tight-2000
+#          (matrix-test profiles that lie about memory) to exercise
+#          Prism multi-device strategies without contending with the
+#          regression harness on cuda:2 / cuda:3.
+# Spec: 2 × V100 16GB (NVLink full-mesh on the Dell C4140).
 
 id: v100-16g-x2-01
 vendor: dell

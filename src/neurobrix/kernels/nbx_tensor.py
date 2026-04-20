@@ -586,6 +586,21 @@ class DeviceAllocator:
         triton.runtime.driver.active.set_current_device(device_idx)
 
 
+def _set_device(t):
+    """Sync Triton/CUDA driver context with the tensor's physical device.
+
+    Called before every Triton kernel launch. Triton's internal driver
+    state must match `t._device_idx`, or the kernel will target the
+    wrong device and raise "Pointer argument cannot be accessed from
+    Triton" when the pointer lives on a different GPU. Single source of
+    truth — imported by wrappers.py, dispatch.py, shape_utils.py,
+    triton/weight_loader.py so every kernel-launching module honours
+    the contract.
+    """
+    if hasattr(t, '_device_idx'):
+        DeviceAllocator.ensure_triton_device(t._device_idx)
+
+
 @functools.lru_cache(maxsize=1)
 def _detect_gpu_backend() -> str:
     """Detect GPU backend: 'cuda' or 'hip'."""
@@ -648,6 +663,7 @@ def _strided_copy(src: 'NBXTensor', dst: 'NBXTensor'):
 
     BLOCK = 1024
     grid = (triton.cdiv(n, BLOCK),)
+    _set_device(src)
     strided_copy_kernel[grid](
         src, dst, n,
         stride5[0], stride5[1], stride5[2], stride5[3], stride5[4],
@@ -671,6 +687,7 @@ def _strided_scatter(src: 'NBXTensor', dst: 'NBXTensor'):
 
     BLOCK = 1024
     grid = (triton.cdiv(n, BLOCK),)
+    _set_device(src)
     strided_scatter_kernel[grid](
         src, dst, n,
         stride5[0], stride5[1], stride5[2], stride5[3], stride5[4],
@@ -1477,6 +1494,7 @@ class NBXTensor:
             from neurobrix.kernels.ops.copy_op import copy_kernel
             import triton
             src = self.contiguous()
+            _set_device(src)
             copy_kernel[(triton.cdiv(n, 1024),)](src, new, n, BLOCK_SIZE=1024)
         return new
 
@@ -1597,6 +1615,7 @@ class NBXTensor:
                     continue
                 BLOCK = 1024
                 grid = (triton.cdiv(max_total, BLOCK), len(batch))
+                _set_device(out)
                 cat_copy_kernel_4[grid](
                     out,
                     contig[0], contig[1], contig[2], contig[3],
