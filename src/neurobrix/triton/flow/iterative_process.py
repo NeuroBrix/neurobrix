@@ -260,14 +260,16 @@ class TritonIterativeProcessHandler:
                             _max = t.float().reshape(-1)[-1].item()
                             print(f"[AUDIT] {key}: shape={list(t.shape)} dtype={t.dtype}")
 
-            # Unload weights immediately
-            import os as _os_d
-            _UNLOAD_DIAG = _os_d.environ.get("NBX_UNLOAD_DIAG") == "1"
-            if _UNLOAD_DIAG:
-                _vram_probe(f"before_unload[{comp_name}]")
-            self._unload_component(comp_name)
-            if _UNLOAD_DIAG:
-                _vram_probe(f"after_unload[{comp_name}]")
+            # Unload weights immediately. Pre_loop components (e.g. the
+            # T5 text_encoder ~9.5 GB fp16 for PixArt) are used exactly
+            # once per request, so we force-unload even in eager mode —
+            # otherwise their VRAM stays resident for the entire
+            # transformer loop and a cudaMalloc-based allocator (triton
+            # path) fragments into small-alloc failures partway through
+            # the DiT. If the caller actually wanted to keep the encoder
+            # resident across requests, persistent_mode (serve mode)
+            # short-circuits this at the top of _unload_component.
+            self._unload_component(comp_name, force=True)
 
     def _execute_negative_encoding(self, text_encoder_name: str) -> None:
         """

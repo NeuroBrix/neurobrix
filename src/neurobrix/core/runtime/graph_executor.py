@@ -922,6 +922,25 @@ class GraphExecutor:
         # Must reload on every weight load since cleanup() clears _weights entirely.
         self._load_constants_from_graph()
 
+        # Compute runtime-resolved buffers (sincos 2D pos_embed, interpolated
+        # pos_embed). These are marked `is_computable=True` in graph.json —
+        # the safetensors shards do not contain them. Mirrored into both
+        # modes: previously only _load_weights_triton called this, which
+        # left `aten.add::0` (pos_embed add) with an undefined input on the
+        # native path for PixArt/Sana/any DiT with sincos pos_embed. The
+        # legacy component-handler `prepare_weights` fallback is kept for
+        # models that use learned positional embeddings scaled at load
+        # time (no computable_spec in graph).
+        if hasattr(self, "_computable_specs") and self._computable_specs:
+            self._compute_computable_buffers()
+        elif self._component_handler is not None:
+            if self._runtime_height is not None and self._runtime_width is not None:
+                self._weights = self._component_handler.prepare_weights(
+                    self._weights,
+                    self._runtime_height,
+                    self._runtime_width,
+                )
+
     def _load_weights_native(self, nbx_path, component, shard_map):
         """Load weights as torch.Tensor (native mode)."""
         from neurobrix.core.io import WeightLoader
@@ -986,23 +1005,9 @@ class GraphExecutor:
                 print(f"[VRAM_PROBE after_load_weights_triton[{component}]] "
                       f"failed: {_e}", flush=True)
 
-        # COMPUTABLE BUFFERS: Compute buffers at runtime resolution
-        # This is the preferred approach for pos_embed and other resolution-dependent buffers.
-        # The computation spec comes from graph.json (set during trace).
-        if hasattr(self, "_computable_specs") and self._computable_specs:
-            self._compute_computable_buffers()
-            # Don't use handler/legacy approach for buffers we just computed
-            return
-
-        # Let component handler prepare weights (e.g., pos_embed scaling)
-        # DATA-DRIVEN: Handler uses config from profile.json (not hardcoded values)
-        if self._component_handler is not None:
-            if self._runtime_height is not None and self._runtime_width is not None:
-                self._weights = self._component_handler.prepare_weights(
-                    self._weights,
-                    self._runtime_height,
-                    self._runtime_width
-                )
+        # Computable buffers + handler prep now live in load_weights() so
+        # both native and triton paths run them. See shared post-dispatch
+        # block above.
 
     def _reconcile_weight_keys(self) -> None:
         """Reconcile weight dict keys with graph param names.

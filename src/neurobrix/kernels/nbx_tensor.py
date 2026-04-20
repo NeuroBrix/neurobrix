@@ -1268,6 +1268,16 @@ class NBXTensor:
 
     def select(self, dim: int, index: int) -> 'NBXTensor':
         dim = dim % self.ndim
+        # PyTorch semantics: negative index counts from the end.
+        # Without this, `select(0, -1)` on a (300,) contiguous tensor
+        # produced `new_off = -1 * 1 = -1`, and `data_ptr() = base - elem`
+        # pointed 4 bytes BEFORE the cudaMalloc'd block. Triton's
+        # cuPointerGetAttribute then flagged the pointer as CPU memory
+        # and raised "Pointer argument (at 0) cannot be accessed from
+        # Triton (cpu tensor?)" (PixArt T5 encoder aten.select+aten.add
+        # chain at position_ids build).
+        if index < 0:
+            index = self._shape[dim] + index
         new_off = self._offset + index * self._strides[dim]
         s = list(self._shape)
         st = list(self._strides)

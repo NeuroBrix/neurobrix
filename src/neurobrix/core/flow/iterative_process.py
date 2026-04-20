@@ -163,8 +163,10 @@ class IterativeProcessHandler(FlowHandler):
                             print(f"[AUDIT] {key}: shape={list(t.shape)} dtype={t.dtype} "
                                   f"min={t.min().item():.4f} max={t.max().item():.4f} std={t.float().std().item():.4f}")
 
-            # Unload weights immediately
-            self._unload_component(comp_name)
+            # Unload weights immediately. Pre_loop components run once
+            # per request, so force-unload even in eager mode to free
+            # VRAM for the main loop. Matches the triton path.
+            self._unload_component(comp_name, force=True)
 
     def _execute_negative_encoding(self, text_encoder_name: str) -> None:
         """
