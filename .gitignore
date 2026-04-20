@@ -59,7 +59,18 @@ test-*.json
 test-*.png
 test-*.txt
 test_*.py
-tests/
+tests/*
+# Regression harness — tracked explicitly. Everything else under tests/
+# (scratch, __pycache__, etc.) stays ignored via the `tests/*` rule above,
+# which matches only immediate children of tests/.
+!tests/regression/
+!tests/regression/__init__.py
+!tests/regression/conftest.py
+!tests/regression/test_all_models.py
+!tests/regression/pytest.ini
+!tests/regression/README.md
+!tests/regression/golden/
+!tests/regression/golden/*.txt
 tmp/
 todos/
 vendors/
