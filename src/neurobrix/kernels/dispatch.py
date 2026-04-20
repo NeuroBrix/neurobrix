@@ -439,7 +439,7 @@ def _build_op_map() -> Dict[str, Callable]:
         "rms_norm": w.rms_norm,
         "swiglu_fused": w.swiglu_fused_wrapper,
         "rope_fused": w.rope_fused_wrapper,
-        "native_group_norm": w.group_norm_wrapper,
+        "native_group_norm": w.native_group_norm_wrapper,
         "group_norm": w.group_norm_wrapper,
         "cudnn_batch_norm": w.batch_norm_wrapper,
         "native_batch_norm": w.batch_norm_wrapper,

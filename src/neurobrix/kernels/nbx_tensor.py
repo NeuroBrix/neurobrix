@@ -1151,6 +1151,16 @@ class NBXTensor:
     # ========================================================================
 
     def view(self, *shape) -> 'NBXTensor':
+        # Match PyTorch's aten::view tolerance: if the source tensor is
+        # expanded (stride-0 broadcast) or otherwise non-contiguous, the
+        # old path silently re-strode the view as contiguous while the
+        # underlying memory still held the unmaterialized broadcast —
+        # later kernel launches walked past the end of the backing
+        # allocation and got "Pointer argument cannot be accessed from
+        # Triton" on the second batch iteration (Janus RoPE bmm). Matches
+        # reshape's fallback: contiguous() first, then re-stride.
+        if not self.is_contiguous():
+            return self.contiguous().view(*shape)
         if len(shape) == 1 and isinstance(shape[0], (list, tuple)):
             shape = tuple(shape[0])
         neg_idx = None

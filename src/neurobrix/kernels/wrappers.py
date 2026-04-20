@@ -1207,6 +1207,12 @@ def bmm(a, b) :
     grid = (triton.cdiv(M, _MM_BM) * triton.cdiv(N, _MM_BN),)
     ieee = (not _NBX_HAS_NATIVE_BF16) and (out_dtype == NBXDtype.float32)
 
+    # Match mm() — sync Triton driver to a's device immediately before launch.
+    # NBXTensor.empty(...) above can cudaSetDevice without updating Triton's
+    # driver active device, and dtype alignment paths may also have touched
+    # it. Without this, batched kernels on non-zero devices hit
+    # "Pointer argument (at 0) cannot be accessed from Triton".
+    _set_device(a)
     for i in range(B):
         matmul_kernel[grid](
             a[i], b[i], c[i],
@@ -1924,7 +1930,13 @@ def upsample_nearest2d_wrapper(
 
 
 def group_norm_wrapper(x, num_groups: int, weight, bias, eps=1e-5):
-    """GroupNorm. Returns (output, mean, rstd) matching ATen native_group_norm."""
+    """GroupNorm. Returns (output, mean, rstd) matching ATen native_group_norm.
+
+    Friendly signature (x, num_groups, weight, bias, eps) for direct callers.
+    The graph-level `aten::native_group_norm` op uses a longer signature
+    (input, weight, bias, N, C, HxW, num_groups, eps) — see
+    `native_group_norm_wrapper` below for the adapter.
+    """
     x = x.contiguous()
     N = x.shape[0]
     C = x.shape[1]
@@ -1949,6 +1961,17 @@ def group_norm_wrapper(x, num_groups: int, weight, bias, eps=1e-5):
         BLOCK_HW_SIZE=triton.next_power_of_2(HxW),
     )
     return y, mean, rstd
+
+
+def native_group_norm_wrapper(input, weight, bias, N, C, HxW, num_groups, eps):
+    """Adapter for ATen's low-level `aten::native_group_norm`.
+
+    The op is dispatched with 8 positional args (input, weight, bias, N, C,
+    HxW, num_groups, eps). We recompute N/C/HxW inside the kernel wrapper
+    from `input.shape`, so we just forward the friendly call — dropping the
+    redundant N/C/HxW scalars.
+    """
+    return group_norm_wrapper(input, int(num_groups), weight, bias, float(eps))
 
 
 def index_select_wrapper(x, dim: int, index) :

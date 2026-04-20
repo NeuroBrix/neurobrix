@@ -17,6 +17,19 @@ from neurobrix.triton.generator import TritonGenerator
 from neurobrix.triton.session import TritonLMSession
 
 
+def _flatten_tokenizer_output(token_ids: Any) -> List[int]:
+    """Normalize tokenizer return into a flat List[int]."""
+    if hasattr(token_ids, 'input_ids'):
+        token_ids = token_ids['input_ids']
+    elif (isinstance(token_ids, dict) or
+          (hasattr(token_ids, '__getitem__') and not isinstance(token_ids, list)
+           and 'input_ids' in token_ids)):
+        token_ids = token_ids['input_ids']
+    if not isinstance(token_ids, list):
+        token_ids = list(token_ids)
+    return token_ids
+
+
 def _build_generator_config(defaults: Dict, resolver: Any) -> Dict[str, Any]:
     """Build generator config from defaults.json — pure Python."""
     config = {
@@ -128,14 +141,32 @@ class TritonAutoregressiveHandler:
             if is_done:
                 break
 
-            decode_ids = strategy.prepare_decode_input(next_token, batch_size)
-            hidden = session.decode_step(decode_ids)
+            token_embed = strategy.embed_token(next_token, step_idx)
+            decode_ids, decode_embeds = strategy.prepare_decode_input(
+                next_token, token_embed, batch_size)
+            hidden = session.decode_step(decode_ids,
+                                         inputs_embeds=decode_embeds)
+
+        # Free LM + KV cache VRAM before the VQ decoder runs.  Janus's
+        # language_model alone is ~13 GB bf16; adding the 249-op conv
+        # decoder on top OOMs a 32 GB V100 unless the LM's arena is
+        # released first. Text generation keeps the LM loaded (there is
+        # no post-loop component), so this cleanup only triggers when
+        # the strategy actually owns one.
+        is_image = isinstance(strategy, TritonImageStrategy)
+        if is_image:
+            gen_info = self.ctx.pkg.topology.get("flow", {}).get(
+                "generation", {})
+            lm_name = gen_info.get("lm_component", "language_model")
+            session.cleanup()
+            self._unload_component_weights(lm_name)
 
         # Output
         generated_tokens = generator.get_generated_tokens()
         strategy.process_output(generated_tokens, self.ctx)
 
-        session.cleanup()
+        if not is_image:
+            session.cleanup()
         return self.ctx.variable_resolver.resolve_all()
 
     def _graph_lm_prefill(self, input_ids: NBXTensor) -> NBXTensor:
@@ -231,16 +262,43 @@ class TritonAutoregressiveHandler:
         else:
             raise RuntimeError("Tokenizer has no encode method.")
 
-        # BatchEncoding (transformers) returns dict-like with 'input_ids' key
-        if hasattr(token_ids, 'input_ids'):
-            token_ids = token_ids['input_ids']
-        elif isinstance(token_ids, dict) or (hasattr(token_ids, '__getitem__') and not isinstance(token_ids, list) and 'input_ids' in token_ids):
-            token_ids = token_ids['input_ids']
-        if not isinstance(token_ids, list):
-            token_ids = list(token_ids)
+        token_ids = _flatten_tokenizer_output(token_ids)
+        ids_np_cond = np.array([token_ids], dtype=np.int64)
 
-        # Convert to NBXTensor via numpy
-        ids_np = np.array([token_ids], dtype=np.int64)
+        # CFG branch (image-AR only): tokenize unconditional variant and
+        # concat → batch=2. Mirrors core/flow/autoregressive.py _tokenize:
+        # graphs for Janus's gen_head/gen_embed/gen_aligner were traced at
+        # batch=2 and the LM's RoPE bmm was traced at batch=2 as well, so
+        # prefill MUST run at batch=2 for shapes to bind correctly.
+        use_cfg = False
+        if is_image_ar:
+            cli_cfg = self.ctx.variable_resolver.resolved.get(
+                "global.guidance_scale")
+            cfg_weight = (float(cli_cfg) if cli_cfg is not None
+                          else defaults.get("guidance_scale"))
+            if cfg_weight is None:
+                raise RuntimeError(
+                    "guidance_scale missing from defaults.json for "
+                    "autoregressive_image. Set via forge model_registry.yml.")
+            use_cfg = float(cfg_weight) > 1.0
+
+        if use_cfg:
+            token_ids_un = tokenizer.format_generation_prompt(
+                prompt=prompt,
+                sft_format=sft_format,
+                special_token_ids=special_token_ids,
+                is_unconditional=True,
+            )
+            token_ids_un = _flatten_tokenizer_output(token_ids_un)
+            ids_np_uncond = np.array([token_ids_un], dtype=np.int64)
+            if ids_np_uncond.shape[1] != ids_np_cond.shape[1]:
+                raise RuntimeError(
+                    f"CFG cond/uncond token length mismatch: "
+                    f"{ids_np_cond.shape[1]} vs {ids_np_uncond.shape[1]}")
+            ids_np = np.concatenate([ids_np_cond, ids_np_uncond], axis=0)
+        else:
+            ids_np = ids_np_cond
+
         DeviceAllocator.set_device(device_idx)
         return NBXTensor.from_numpy(ids_np)
 
@@ -391,8 +449,67 @@ class TritonAutoregressiveHandler:
         )
 
     def _create_strategy(self, gen_info: Dict,
-                         session: TritonLMSession) -> "TritonTextStrategy":
-        """Create text generation strategy."""
+                         session: TritonLMSession):
+        """Create TextStrategy or ImageStrategy based on gen_type.
+
+        Mirrors core/flow/autoregressive.py::_create_strategy.
+        """
+        gen_type = gen_info.get("type")
+        defaults = self.ctx.pkg.defaults
+
+        if gen_type == "autoregressive_image":
+            head_name = gen_info.get("head_component", "gen_head")
+            embed_name = gen_info.get("embed_component", "gen_embed")
+            aligner_name = gen_info.get("aligner_component", "gen_aligner")
+            decoder_name = gen_info.get("decoder_component", "gen_vision_model")
+
+            for cn in (head_name, embed_name, aligner_name):
+                if cn in self.ctx.executors:
+                    self._ensure_weights_loaded(cn)
+
+            head_exec = self.ctx.executors.get(head_name)
+            embed_exec = self.ctx.executors.get(embed_name)
+            aligner_exec = self.ctx.executors.get(aligner_name)
+            if not all((head_exec, embed_exec, aligner_exec)):
+                missing = [n for n, e in (
+                    (head_name, head_exec),
+                    (embed_name, embed_exec),
+                    (aligner_name, aligner_exec)) if e is None]
+                raise RuntimeError(
+                    f"autoregressive_image requires executors: missing {missing}")
+
+            cli_cfg = self.ctx.variable_resolver.resolved.get(
+                "global.guidance_scale")
+            cfg_weight = (float(cli_cfg) if cli_cfg is not None
+                          else defaults.get("guidance_scale"))
+            if cfg_weight is None:
+                raise RuntimeError(
+                    "guidance_scale missing from defaults.json for "
+                    "autoregressive_image.")
+            cfg_weight = float(cfg_weight)
+
+            lm_vocab_size = defaults.get("lm_vocab_size")
+            codebook_size = defaults.get("codebook_size")
+            if lm_vocab_size is None or codebook_size is None:
+                raise RuntimeError(
+                    "lm_vocab_size or codebook_size missing from defaults.json "
+                    "for autoregressive_image.")
+            vq_token_offset = lm_vocab_size - codebook_size
+
+            return TritonImageStrategy(
+                head_executor=head_exec,
+                embed_executor=embed_exec,
+                aligner_executor=aligner_exec,
+                decoder_name=decoder_name,
+                ctx=self.ctx,
+                ensure_weights_fn=self._ensure_weights_loaded,
+                cfg_weight=cfg_weight,
+                vq_token_offset=vq_token_offset,
+                defaults=defaults,
+                device_idx=self._parse_device_idx(),
+            )
+
+        # Default: text strategy (TinyLlama, Qwen3, DeepSeek-MoE, ...)
         head_name = gen_info.get("head_component", "lm_head")
         self._ensure_weights_loaded(head_name)
         head_executor = self.ctx.executors.get(head_name)
@@ -444,15 +561,23 @@ class TritonTextStrategy:
             return val
         raise RuntimeError("lm_head produced no output.")
 
-    def embed_token(self, next_token: NBXTensor, step_idx: int) -> NBXTensor:
-        return next_token
+    def embed_token(self, next_token: NBXTensor, step_idx: int) -> None:
+        """Text path: graph embeds token_ids internally → no separate embed step."""
+        return None
 
     def prepare_decode_input(self, next_token: NBXTensor,
-                             batch_size: int) -> NBXTensor:
-        """Prepare input_ids for decode step."""
+                             token_embed,
+                             batch_size: int) -> Tuple[NBXTensor, None]:
+        """Prepare input_ids for decode step (text: no embeds).
+
+        Returns (decode_ids, None) — the None signals the session to
+        embed inside the graph via its embed_tokens weight.
+        """
         if next_token.ndim == 1:
-            return next_token.unsqueeze(1)
-        return next_token
+            decode_ids = next_token.unsqueeze(1)
+        else:
+            decode_ids = next_token
+        return decode_ids, None
 
     def process_output(self, generated_tokens: List[int], ctx) -> None:
         """Store generated tokens in variable resolver."""
@@ -465,3 +590,200 @@ class TritonTextStrategy:
             ctx.variable_resolver.resolved["global.generated_token_ids"] = generated_tokens
             from neurobrix.core.flow.audio_utils import postprocess_audio_output
             postprocess_audio_output(ctx)
+
+
+def _graph_input_name(executor, fallback: str) -> str:
+    """Resolve the single graph input name from executor._dag."""
+    dag = getattr(executor, '_dag', None)
+    if not dag:
+        return fallback
+    for tid in dag.get("input_tensor_ids", []):
+        if isinstance(tid, str) and "::" in tid:
+            return tid.split("::", 1)[-1]
+    return fallback
+
+
+def _int64_shift(nbx: NBXTensor, offset: int) -> NBXTensor:
+    """Add a scalar offset to an int64 NBXTensor via D2H → add → H2D.
+
+    Used to shift VQ codebook indices (0..codebook_size-1) into the LM vocab
+    range (lm_vocab_size - codebook_size .. lm_vocab_size-1) before feeding
+    them back as language_model decode tokens. The transfer is tiny (one
+    int64 per decode step × 576 steps) — not a hot-path concern.
+    """
+    import ctypes
+    n = nbx.numel()
+    host_buf = (ctypes.c_int64 * n)()
+    DeviceAllocator.memcpy(ctypes.addressof(host_buf), nbx.data_ptr(),
+                           n * 8, kind=2)  # D2H
+    host_np = np.ctypeslib.as_array(host_buf).reshape(nbx.shape)
+    shifted = host_np + offset
+    return NBXTensor.from_numpy(np.ascontiguousarray(shifted))
+
+
+class TritonImageStrategy:
+    """VQ autoregressive image strategy — zero torch.
+
+    Mirrors core/flow/autoregressive.py::ImageStrategy for the triton path.
+    Runs gen_head with CFG-split inputs, uses gen_embed→gen_aligner to
+    build decode-time inputs_embeds, and feeds the VQ sequence through
+    gen_vision_model.decode_code at the end.
+    """
+
+    def __init__(self, head_executor, embed_executor, aligner_executor,
+                 decoder_name: str, ctx, ensure_weights_fn: Callable,
+                 cfg_weight: float, vq_token_offset: int,
+                 defaults: Dict, device_idx: int):
+        self._head = head_executor
+        self._embed = embed_executor
+        self._aligner = aligner_executor
+        self._decoder_name = decoder_name
+        self._ctx = ctx
+        self._ensure_weights = ensure_weights_fn
+        self._cfg_weight = cfg_weight
+        self._use_cfg = cfg_weight > 1.0
+        self._vq_token_offset = vq_token_offset
+        self._defaults = defaults
+        self._device_idx = device_idx
+        self._head_in = _graph_input_name(head_executor, "x")
+        self._embed_in = _graph_input_name(embed_executor, "input")
+        self._aligner_in = _graph_input_name(aligner_executor, "x_or_tuple")
+
+    def create_generator(self, defaults: Dict, resolver) -> TritonGenerator:
+        """VQ image generator: fixed max_tokens = num_patches², no EOS."""
+        image_size = defaults["image_size"]
+        patch_size = defaults["patch_size"]
+        num_patches = image_size // patch_size
+        max_tokens = num_patches * num_patches
+        config = {
+            "max_tokens": max_tokens,
+            "temperature": defaults["temperature"],
+            "top_p": defaults["top_p"],
+            "top_k": defaults["top_k"],
+            "repetition_penalty": defaults["repetition_penalty"],
+            "vocab_size": defaults["codebook_size"],
+            "eos_token_id": None,
+            "pad_token_id": None,
+            "_class_name": "TritonVQImageGenerator",
+        }
+        if resolver is not None:
+            resolved = getattr(resolver, 'resolved', {})
+            for key in ("temperature", "top_p", "top_k", "repetition_penalty"):
+                gkey = f"global.{key}"
+                if gkey in resolved and resolved[gkey] is not None:
+                    config[key] = resolved[gkey]
+        return TritonGenerator(config)
+
+    def get_logits(self, hidden: NBXTensor, step_idx: int) -> NBXTensor:
+        """Run gen_head on last hidden position, CFG-combine if enabled.
+
+        Head was traced with batch=2 (CFG) but runs correctly at batch=1
+        via symbolic dim binding — so we split cond/uncond and run twice,
+        matching native ImageStrategy.
+        """
+        last = hidden.select(1, hidden.shape[1] - 1).unsqueeze(1)  # (B, 1, D)
+        if self._use_cfg and last.shape[0] >= 2:
+            l_cond = self._run_head(last.narrow(0, 0, 1).contiguous())
+            l_uncond = self._run_head(last.narrow(0, 1, 1).contiguous())
+            return l_uncond + self._cfg_weight * (l_cond - l_uncond)
+        return self._run_head(last)
+
+    def _run_head(self, hidden: NBXTensor) -> NBXTensor:
+        outputs = self._head.run({self._head_in: hidden})
+        for val in outputs.values():
+            logits = val
+            if logits.ndim == 3 and logits.shape[1] > 1:
+                logits = logits.narrow(1, 0, 1)
+            return logits
+        raise RuntimeError("gen_head produced no output.")
+
+    def embed_token(self, next_token: NBXTensor, step_idx: int) -> NBXTensor:
+        """Look up VQ codebook embedding via gen_embed.
+
+        gen_embed graph is one op (aten::embedding) traced with input shape
+        (2, 1). The codebook is (16384, 8). We pass the raw sampled token
+        without the LM-vocab offset — gen_embed indexes the VQ codebook.
+        """
+        tok = next_token
+        if tok.ndim == 0:
+            # Shouldn't happen with current sampler, but guard anyway.
+            raise RuntimeError("Unexpected scalar next_token from sampler.")
+        if tok.ndim == 1:
+            tok = tok.unsqueeze(0) if tok.shape[0] == 1 else tok.unsqueeze(1)
+        # Now tok is at least 2D (B, 1) — embed graph handles it.
+        outputs = self._embed.run({self._embed_in: tok})
+        for val in outputs.values():
+            emb = val
+            if emb.ndim == 3 and emb.shape[1] > 1:
+                emb = emb.narrow(1, 0, 1)
+            return emb
+        raise RuntimeError("gen_embed produced no output.")
+
+    def prepare_decode_input(self, next_token: NBXTensor,
+                             token_embed: NBXTensor,
+                             batch_size: int) -> Tuple[NBXTensor, NBXTensor]:
+        """Align VQ embedding to LM hidden dim, shift token to LM vocab range.
+
+        Returns (decode_token_ids, aligned_embeds).  The session feeds
+        aligned_embeds as inputs_embeds; decode_token_ids is kept for
+        bookkeeping / repetition_penalty context on the generator side.
+        """
+        outputs = self._aligner.run({self._aligner_in: token_embed})
+        aligned = None
+        for val in outputs.values():
+            aligned = val
+            break
+        if aligned is None:
+            raise RuntimeError("gen_aligner produced no output.")
+        if aligned.ndim == 3 and aligned.shape[1] > 1:
+            aligned = aligned.narrow(1, 0, 1)
+
+        # Shift token into LM vocab range (VQ index → LM token id).
+        decode_token = _int64_shift(next_token, self._vq_token_offset)
+        if decode_token.ndim == 1:
+            decode_token = decode_token.unsqueeze(0)  # → (1, S)
+        if decode_token.ndim == 2 and decode_token.shape[1] != 1:
+            decode_token = decode_token.narrow(1, 0, 1)
+
+        if self._use_cfg:
+            if aligned.shape[0] == 1:
+                aligned = aligned.expand(2, -1, -1).contiguous()
+            if decode_token.shape[0] == 1:
+                decode_token = decode_token.expand(2, -1).contiguous()
+
+        return decode_token, aligned
+
+    def process_output(self, generated_tokens: List[int], ctx) -> None:
+        """Decode the VQ token sequence into pixels via gen_vision_model."""
+        ctx.variable_resolver.resolved["global.output_tokens"] = generated_tokens
+        ctx.variable_resolver.resolved["output_tokens"] = generated_tokens
+
+        self._ensure_weights(self._decoder_name)
+        decoder = ctx.executors.get(self._decoder_name)
+        if decoder is None:
+            raise RuntimeError(
+                f"Decoder '{self._decoder_name}' not found in executors.")
+
+        num_tokens = len(generated_tokens)
+        ids_np = np.array(generated_tokens, dtype=np.int64)
+        DeviceAllocator.set_device(self._device_idx)
+        code_b = NBXTensor.from_numpy(ids_np)
+
+        decoder_in = _graph_input_name(decoder, "code_b")
+        decoder_output = decoder.run({decoder_in: code_b})
+
+        image = None
+        for val in decoder_output.values():
+            if hasattr(val, 'shape') and val.ndim == 4:
+                image = val
+                break
+        if image is None:
+            for val in decoder_output.values():
+                image = val
+                break
+        if image is None:
+            raise RuntimeError(
+                f"gen_vision_model produced no output (ran on {num_tokens} tokens).")
+
+        ctx.variable_resolver.resolved["global.output_image"] = image
+        ctx.variable_resolver.resolved["output_image"] = image
