@@ -16,9 +16,98 @@ from __future__ import annotations
 import ctypes
 import functools
 import math
+import os
 import struct
+import sys
 from enum import IntEnum
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
+
+
+# ============================================================================
+# MALLOC CALL-SITE LOGGER — env-gated, zero cost when disabled
+# ============================================================================
+#
+# When NBX_MALLOC_TRACE=<path> is set, every DeviceAllocator.malloc_cuda
+# records one row and every free_cuda records the matching "F" row. The
+# buffer is flushed to <path> at interpreter exit via atexit. When unset,
+# the allocator pays a single module-level `is None` check per call — no
+# frame walk, no list append.
+#
+# How to use:
+#   NBX_MALLOC_TRACE=/tmp/run.tsv  neurobrix run --model ... --triton
+#
+# Row format (tab-separated):
+#   event_id \t M|F \t ptr \t nbytes \t <file:line func>   (M rows only;
+#                                                           F leaves empty)
+#
+# Recipes:
+#   - Total allocation volume by site:
+#       awk '$2=="M"{by[$5]+=$4} END{for(k in by)print by[k],k}' run.tsv \
+#         | sort -rn | head
+#   - Live-set composition at peak: walk events, track ptr→nbytes live
+#     map, record the set at each new peak, then aggregate by site.
+#     This is the discriminator between "leak" (unfreed allocs), "peak
+#     concurrency" (tensors retained by a deferred-free mechanism), and
+#     "fragmentation" (total freed > 80% but driver rejects next alloc).
+#     In April 2026 this tool killed a wrong hypothesis in ~30 min on
+#     PixArt triton (confirmed _deferred accumulation as root cause,
+#     not workspace leak as initially hypothesised). Kept permanent —
+#     same discriminator work will be needed for Qwen3 long-context,
+#     Sana 4Kpx, video upscalers.
+# ============================================================================
+
+_MALLOC_TRACE_FILE: Optional[str] = os.environ.get("NBX_MALLOC_TRACE") or None
+_MALLOC_TRACE_EVENTS: List[Tuple[int, str, int, int, str]] = []  # (eid, kind, ptr, nbytes, site)
+_MALLOC_TRACE_COUNTER: List[int] = [0]
+
+
+def _extract_neurobrix_site(max_frames: int = 12) -> str:
+    """Return nearest neurobrix/ frame as 'file:line func', skipping this file.
+
+    The logger only fires inside DeviceAllocator — we want the CALLER of the
+    allocator (wrappers.py, dispatch.py, sequence.py, ...) not the allocator
+    itself. Walk the stack until the first frame whose filename contains
+    'neurobrix/' AND is NOT nbx_tensor.py.
+    """
+    f = sys._getframe(2)  # skip this fn + malloc_cuda/free_cuda
+    n = 0
+    while f is not None and n < max_frames:
+        fname = f.f_code.co_filename
+        if "neurobrix" in fname and not fname.endswith("/nbx_tensor.py"):
+            rel = fname.split("neurobrix/")[-1]
+            return f"{rel}:{f.f_lineno} {f.f_code.co_name}"
+        f = f.f_back
+        n += 1
+    return "<unknown>"
+
+
+def _record_malloc_site(ptr: int, nbytes: int, dev: int) -> None:
+    eid = _MALLOC_TRACE_COUNTER[0]
+    _MALLOC_TRACE_COUNTER[0] = eid + 1
+    site = _extract_neurobrix_site()
+    _MALLOC_TRACE_EVENTS.append((eid, "M", ptr, nbytes, site))
+
+
+def _record_free_site(ptr: int, nbytes: int) -> None:
+    eid = _MALLOC_TRACE_COUNTER[0]
+    _MALLOC_TRACE_COUNTER[0] = eid + 1
+    _MALLOC_TRACE_EVENTS.append((eid, "F", ptr, nbytes, ""))
+
+
+def _flush_malloc_trace() -> None:
+    path = _MALLOC_TRACE_FILE
+    if path is None or not _MALLOC_TRACE_EVENTS:
+        return
+    try:
+        with open(path, "w") as fh:
+            for eid, kind, ptr, nbytes, site in _MALLOC_TRACE_EVENTS:
+                fh.write(f"{eid}\t{kind}\t{ptr}\t{nbytes}\t{site}\n")
+    except Exception:
+        pass
+
+
+import atexit as _atexit
+_atexit.register(_flush_malloc_trace)
 
 
 # ============================================================================
@@ -297,6 +386,8 @@ class DeviceAllocator:
         peak = DeviceAllocator._cuda_peak_bytes.get(dev, 0)
         if live > peak:
             DeviceAllocator._cuda_peak_bytes[dev] = live
+        if _MALLOC_TRACE_FILE is not None:
+            _record_malloc_site(p, nbytes, dev)
         return p
 
     @staticmethod
@@ -315,6 +406,8 @@ class DeviceAllocator:
             alloc_dev = DeviceAllocator._cuda_ptr_device.pop(ptr, None)
             getattr(rt, backend["free"])(ctypes.c_void_p(ptr))
             nbytes = DeviceAllocator._cuda_ptr_size.pop(ptr, None)
+            if _MALLOC_TRACE_FILE is not None and nbytes is not None:
+                _record_free_site(ptr, nbytes)
             if nbytes is not None:
                 if alloc_dev is not None:
                     # Accurate decrement: always use the allocation's
