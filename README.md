@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo_NeuroBrix.png" alt="NeuroBrix Logo" width="200"/>
+  <img src="https://gitlab.com/neurobrix/Neurobrix/-/raw/main/assets/logo_NeuroBrix.png" alt="NeuroBrix Logo" width="200"/>
 </p>
 
 <h1 align="center">NeuroBrix</h1>
@@ -506,4 +506,4 @@ NeuroBrix is managed by [**WizWorks OÜ**](https://wizworks.io), a property of [
 
 The Apache 2.0 license covers the NeuroBrix engine, CLI, runtime, and NBX format tooling. **It does not cover the model weights** executed by the engine — those are governed by their respective licenses as listed in the [Supported Models](#supported-models) section.
 
-See [LICENSE](LICENSE) for the full text.
+See [LICENSE](https://gitlab.com/neurobrix/Neurobrix/-/blob/main/LICENSE) for the full text.
