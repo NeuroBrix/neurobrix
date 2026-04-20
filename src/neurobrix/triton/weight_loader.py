@@ -26,6 +26,7 @@ import numpy as np
 
 from neurobrix.kernels.nbx_tensor import (
     NBXTensor, NBXDtype, DeviceAllocator, _contiguous_strides, dtype_size,
+    _set_device,
 )
 from .memory_pool import ComponentArena
 
@@ -290,6 +291,7 @@ def _bf16_to_fp16_inplace(ptr: int, numel: int, device_idx: int):
 
     BLOCK = 1024
     grid = (triton.cdiv(numel, BLOCK),)
+    _set_device(src)
     bf16_to_fp16_kernel[grid](src, dst, numel, BLOCK=BLOCK, num_warps=4)
 
 

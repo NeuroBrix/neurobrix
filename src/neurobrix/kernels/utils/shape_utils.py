@@ -9,6 +9,7 @@ import triton.language as tl
 
 from neurobrix.kernels.utils import triton_lang_extension as tle
 from neurobrix.kernels.utils.codegen_config_utils import get_heuristics_for_num_warps
+from neurobrix.kernels.nbx_tensor import _set_device
 
 Shape = Tuple[int]
 Stride = Tuple[int]
@@ -374,6 +375,7 @@ def offset_calculator(inp, idx, strides, dim, isInp):
             triton.cdiv(M, meta["BLOCK_M"]),
             triton.cdiv(N, meta["BLOCK_N"]),
         )
+        _set_device(idx)
         add_on_kernel[grid](idx, add_on, shape[d], strides[d], M, N)
 
         offsets = torch.add(offsets, add_on)

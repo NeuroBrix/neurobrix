@@ -11,7 +11,7 @@ Dependencies: triton, NBXTensor. Used exclusively by dispatch.py.
 
 import triton
 
-from .nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, _broadcast_shapes
+from .nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, _broadcast_shapes, _set_device
 
 # === Activations ===
 
@@ -316,17 +316,6 @@ def _ensure_cuda(t):
     return t
 
 
-def _set_device(t):
-    """Ensure GPU context matches tensor device for Triton kernel launch.
-
-    Called before every Triton kernel in wrappers. ALWAYS calls
-    ensure_triton_device — Triton's internal state needs the device
-    context set before each kernel launch, even on single-device systems.
-    """
-    if hasattr(t, '_device_idx'):
-        DeviceAllocator.ensure_triton_device(t._device_idx)
-
-
 def _transfer_to_device(tensor, target_device_idx: int):
     """Transfer NBXTensor to a different GPU via cudaMemcpy D2D."""
     if not hasattr(tensor, '_device_idx') or tensor._device_idx == target_device_idx:
@@ -479,6 +468,7 @@ def _prepare_comparison(a, b):
 def relu(x) :
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
+    _set_device(x)
     relu_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
@@ -486,6 +476,7 @@ def relu(x) :
 def silu(x) :
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
+    _set_device(x)
     silu_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
@@ -493,6 +484,7 @@ def silu(x) :
 def gelu(x, approximate: str = 'none') :
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
+    _set_device(x)
     gelu_forward_kernel[_1d_grid(x.numel())](
         x, output, x.numel(), approximate=(approximate == 'tanh'),
         BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
@@ -502,6 +494,7 @@ def gelu(x, approximate: str = 'none') :
 def sigmoid_wrapper(x) :
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
+    _set_device(x)
     sigmoid_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
@@ -509,6 +502,7 @@ def sigmoid_wrapper(x) :
 def tanh_wrapper(x) :
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
+    _set_device(x)
     tanh_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
@@ -516,6 +510,7 @@ def tanh_wrapper(x) :
 def hardsigmoid(x) :
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
+    _set_device(x)
     hardsigmoid_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
@@ -523,6 +518,7 @@ def hardsigmoid(x) :
 def hardswish(x) :
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
+    _set_device(x)
     hardswish_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
@@ -530,6 +526,7 @@ def hardswish(x) :
 def leaky_relu(x, negative_slope: float = 0.01) :
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
+    _set_device(x)
     leaky_relu_forward_kernel[_1d_grid(x.numel())](
         x, output, x.numel(), negative_slope,
         BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
@@ -539,6 +536,7 @@ def leaky_relu(x, negative_slope: float = 0.01) :
 def elu(x, alpha: float = 1.0) :
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
+    _set_device(x)
     elu_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), alpha, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
@@ -546,6 +544,7 @@ def elu(x, alpha: float = 1.0) :
 def mish(x) :
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
+    _set_device(x)
     mish_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
@@ -553,6 +552,7 @@ def mish(x) :
 def selu_wrapper(x) :
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
+    _set_device(x)
     selu_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
@@ -564,6 +564,7 @@ def selu_wrapper(x) :
 def neg(x) :
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
+    _set_device(x)
     neg_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
@@ -571,6 +572,7 @@ def neg(x) :
 def exp(x) :
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
+    _set_device(x)
     exp_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
@@ -578,6 +580,7 @@ def exp(x) :
 def sin(x) :
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
+    _set_device(x)
     sin_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
@@ -585,6 +588,7 @@ def sin(x) :
 def cos(x) :
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
+    _set_device(x)
     cos_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
@@ -592,6 +596,7 @@ def cos(x) :
 def rsqrt(x) :
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
+    _set_device(x)
     rsqrt_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
@@ -599,6 +604,7 @@ def rsqrt(x) :
 def sqrt_wrapper(x) :
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
+    _set_device(x)
     sqrt_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
@@ -606,6 +612,7 @@ def sqrt_wrapper(x) :
 def abs_wrapper(x) :
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
+    _set_device(x)
     abs_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
@@ -613,6 +620,7 @@ def abs_wrapper(x) :
 def log_wrapper(x) :
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
+    _set_device(x)
     log_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
@@ -620,6 +628,7 @@ def log_wrapper(x) :
 def reciprocal(x) :
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
+    _set_device(x)
     reciprocal_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
@@ -629,6 +638,7 @@ def pow_wrapper(x, exponent) :
     output = NBXTensor.empty_like(x)
     if isinstance(exponent, NBXTensor):
         exponent = exponent.item()
+    _set_device(x)
     pow_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), exponent, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
@@ -638,6 +648,7 @@ def clamp(x, min_val=None, max_val=None) :
     output = NBXTensor.empty_like(x)
     _min = float(min_val) if min_val is not None else 0.0
     _max = float(max_val) if max_val is not None else 0.0
+    _set_device(x)
     clamp_forward_kernel[_1d_grid(x.numel())](
         x, output, x.numel(), _min, _max,
         has_min=(min_val is not None), has_max=(max_val is not None),
@@ -648,6 +659,7 @@ def clamp(x, min_val=None, max_val=None) :
 def erf(x) :
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
+    _set_device(x)
     erf_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
@@ -655,6 +667,7 @@ def erf(x) :
 def floor_wrapper(x):
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
+    _set_device(x)
     floor_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
@@ -662,6 +675,7 @@ def floor_wrapper(x):
 def ceil_wrapper(x):
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
+    _set_device(x)
     ceil_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
@@ -669,6 +683,7 @@ def ceil_wrapper(x):
 def round_wrapper(x):
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
+    _set_device(x)
     round_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
@@ -676,6 +691,7 @@ def round_wrapper(x):
 def trunc_wrapper(x):
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
+    _set_device(x)
     trunc_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
@@ -683,6 +699,7 @@ def trunc_wrapper(x):
 def copy_to(x, dtype: object) :
     x = x.contiguous()
     output = NBXTensor.empty_like(x, dtype=dtype)
+    _set_device(x)
     copy_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
@@ -746,6 +763,7 @@ def where_wrapper(cond, x, y) :
     else:
         cond, x, y = cond.contiguous(), x.contiguous(), y.contiguous()
     output = NBXTensor.empty_like(x)
+    _set_device(cond)
     where_forward_kernel[_1d_grid(x.numel())](cond, x, y, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
@@ -780,6 +798,7 @@ def masked_fill(x, mask, value: float) :
         x, mask = x.contiguous(), mask.contiguous()
     value = _to_scalar(value) if isinstance(value, NBXTensor) else value
     output = NBXTensor.empty_like(x)
+    _set_device(x)
     masked_fill_forward_kernel[_1d_grid(x.numel())](
     x, mask, output, x.numel(), float(value),
     BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
@@ -860,6 +879,7 @@ def native_layer_norm(x, normalized_shape, weight, bias, eps=1e-5):
 
     _bsb = _batch_block(batch_dim, feat_dim)
     grid = (triton.cdiv(batch_dim, _bsb),)
+    _set_device(x_2d)
     layer_norm_forward_kernel[grid](
         x_2d, weight if has_weight else x_2d, bias if has_bias else x_2d,
         mean, inv_std, output_2d,
@@ -922,6 +942,7 @@ def softmax(x, dim: int = -1, half_to_float: bool = False) :
 
     _bsb = _batch_block(batch_dim, feat_dim)
     grid = (triton.cdiv(batch_dim, _bsb),)
+    _set_device(x_2d)
     softmax_forward_kernel[grid](
         x_2d, output_2d,
         batch_dim, feat_dim,
@@ -945,6 +966,7 @@ def log_softmax(x, dim: int = -1) :
 
     _bsb = _batch_block(batch_dim, feat_dim)
     grid = (triton.cdiv(batch_dim, _bsb),)
+    _set_device(x_2d)
     softmax_forward_kernel[grid](
         x_2d, output_2d,
         batch_dim, feat_dim,
@@ -1684,6 +1706,7 @@ def mean_wrapper(x, dim=None, keepdim=False) :
     output = NBXTensor.empty(batch_dim, dtype=NBXDtype.float32, device=x.device)
     _bsb = _batch_block(batch_dim, feat_dim)
     grid = (triton.cdiv(batch_dim, _bsb),)
+    _set_device(x_2d)
     mean_forward_kernel[grid](
         x_2d, output,
         batch_dim, feat_dim,
@@ -1721,6 +1744,7 @@ def sum_wrapper(x, dim=None, keepdim=False) :
     output = NBXTensor.empty(batch_dim, dtype=NBXDtype.float32, device=x.device)
     _bsb = _batch_block(batch_dim, feat_dim)
     grid = (triton.cdiv(batch_dim, _bsb),)
+    _set_device(x_2d)
     sum_forward_kernel[grid](
         x_2d, output,
         batch_dim, feat_dim,
@@ -1758,6 +1782,7 @@ def amax_wrapper(x, dim=None, keepdim=False) :
     output = NBXTensor.empty(batch_dim, dtype=x.dtype, device=x.device)
     _bsb = _batch_block(batch_dim, feat_dim)
     grid = (triton.cdiv(batch_dim, _bsb),)
+    _set_device(x_2d)
     amax_forward_kernel[grid](
         x_2d, output,
         batch_dim, feat_dim,
@@ -1787,6 +1812,7 @@ def glu_wrapper(x, dim: int = -1, act_func: str = 'sigmoid') :
     x1, x2 = x.narrow(dim, 0, half_size), x.narrow(dim, half_size, half_size)
     x1, x2 = x1.contiguous(), x2.contiguous()
     output = NBXTensor.empty_like(x1)
+    _set_device(x1)
     glu_forward_kernel[_1d_grid(x1.numel())](
         x1, x2, output, x1.numel(), act_func,
         BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
@@ -1809,6 +1835,7 @@ def le(a, b) :
 def softplus_wrapper(x, beta: float = 1.0, threshold: float = 20.0) :
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
+    _set_device(x)
     softplus_forward_kernel[_1d_grid(x.numel())](
         x, output, x.numel(), beta, threshold,
         BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
@@ -1821,6 +1848,7 @@ def dropout_wrapper(x, p: float = 0.5, train: bool = False) :
         # Inference mode: passthrough
         x = x.contiguous()
         output = NBXTensor.empty_like(x)
+        _set_device(x)
         dropout_inference_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
         return output
     raise NotImplementedError("Training dropout with Triton RNG not implemented yet")
@@ -1870,6 +1898,7 @@ def upsample_nearest2d_wrapper(
         triton.cdiv(total_threads, _EW_BLOCK),
         triton.cdiv(N * C, 4),
     )
+    _set_device(output)
     upsample_nearest2d_kernel[grid](
         output, x, N, C, OH, OW, IH, IW,
         reciprocal_scale_h, reciprocal_scale_w,
@@ -1891,6 +1920,7 @@ def group_norm_wrapper(x, num_groups: int, weight, bias, eps=1e-5):
     rstd = NBXTensor.empty((N, num_groups), dtype=NBXDtype.float32, device=x.device)
 
     grid = (N * num_groups,)
+    _set_device(x)
     group_norm_forward_kernel[grid](
         x, y,
         weight if weight is not None else x,
@@ -1928,6 +1958,7 @@ def index_select_wrapper(x, dim: int, index) :
     BLOCK_M = min(64, triton.next_power_of_2(M))
     BLOCK_N = min(64, triton.next_power_of_2(index_len))
     grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(index_len, BLOCK_N))
+    _set_device(x)
     index_select_kernel[grid](x, out, M, N, index, index_len, BLOCK_M, BLOCK_N)
 
     if dim != x.ndim - 1:
@@ -1946,6 +1977,7 @@ def triu_wrapper(x, diagonal: int = 0) :
 
     if x.ndim == 2:
         grid = (triton.cdiv(M, _TRIU_MBS),)
+        _set_device(x)
         triu_kernel[grid](x, out, M, N, diagonal,
                           M_BLOCK_SIZE=_TRIU_MBS, N_BLOCK_SIZE=_TRIU_NBS,
                           num_warps=4)
@@ -1956,6 +1988,7 @@ def triu_wrapper(x, diagonal: int = 0) :
             triton.cdiv(batch, _TRIU_BATCH_BS),
             triton.cdiv(M * N, _TRIU_MN_BS),
         )
+        _set_device(B)
         triu_batch_kernel[grid](B, out.reshape(batch, M * N), batch, M * N, N, diagonal,
                                 BATCH_BLOCK_SIZE=_TRIU_BATCH_BS, MN_BLOCK_SIZE=_TRIU_MN_BS,
                                 num_warps=4)
@@ -1971,6 +2004,7 @@ def tril_wrapper(x, diagonal: int = 0) :
 
     if x.ndim == 2:
         grid = (triton.cdiv(M, _TRIU_MBS),)
+        _set_device(x)
         tril_kernel[grid](x, out, M, N, diagonal,
                           M_BLOCK_SIZE=_TRIU_MBS, N_BLOCK_SIZE=_TRIU_NBS,
                           num_warps=4)
@@ -1981,6 +2015,7 @@ def tril_wrapper(x, diagonal: int = 0) :
             triton.cdiv(batch, _TRIU_BATCH_BS),
             triton.cdiv(M * N, _TRIU_MN_BS),
         )
+        _set_device(B)
         tril_batch_kernel[grid](B, out.reshape(batch, M * N), batch, M * N, N, diagonal,
                                 BATCH_BLOCK_SIZE=_TRIU_BATCH_BS, MN_BLOCK_SIZE=_TRIU_MN_BS,
                                 num_warps=4)
@@ -2000,7 +2035,9 @@ def argmax_wrapper(x, dim=None, keepdim=False) :
         mid_index = NBXTensor.empty((mid_size,), dtype=NBXDtype.int64, device=x.device)
         out = NBXTensor.empty([], dtype=NBXDtype.int64, device=x.device)
 
+        _set_device(x.contiguous())
         argmax_kernel_1[(mid_size, 1, 1)](x.contiguous(), mid_value, mid_index, M, block_size)
+        _set_device(mid_value)
         argmax_kernel_2[(1, 1, 1)](mid_value, mid_index, out, mid_size, block_mid)
         return out
     else:
@@ -2016,6 +2053,7 @@ def argmax_wrapper(x, dim=None, keepdim=False) :
 
         TILE_N = min(triton.next_power_of_2(N), 4096)
         grid = (M, 1, 1)
+        _set_device(x)
         argmax_kernel_inner[grid](x, out_index, M, N, TILE_N=TILE_N, ONE_TILE_PER_CTA=(TILE_N >= N))
         return out_index
 
@@ -2033,7 +2071,9 @@ def argmin_wrapper(x, dim=None, keepdim=False) :
         mid_index = NBXTensor.empty((mid_size,), dtype=NBXDtype.int64, device=x.device)
         out = NBXTensor.empty([], dtype=NBXDtype.int64, device=x.device)
 
+        _set_device(x.contiguous())
         argmin_kernel_1[(mid_size, 1, 1)](x.contiguous(), mid_value, mid_index, M, block_size)
+        _set_device(mid_value)
         argmin_kernel_2[(1, 1, 1)](mid_value, mid_index, out, mid_size, block_mid)
         return out
     else:
@@ -2057,6 +2097,7 @@ def argmin_wrapper(x, dim=None, keepdim=False) :
         BLOCK_N = min(4096, triton.next_power_of_2(N))
         BLOCK_M = 4
         grid = (triton.cdiv(M, BLOCK_M), K)
+        _set_device(x)
         argmin_kernel[grid](x, out_index, M, N, K, BLOCK_M, BLOCK_N)
         return out_index
 
@@ -2109,6 +2150,7 @@ def conv2d_wrapper(
         triton.cdiv(out_c // groups, _CONV_OUTF),
         groups,
     )
+    _set_device(x_c)
     conv2d_forward_kernel[grid](
     x_c, w_c, output,
     N, in_c, in_h, in_w,
@@ -2150,6 +2192,7 @@ def batch_norm_wrapper(
     inv_std_out = NBXTensor.empty(C, dtype=NBXDtype.float32, device=x.device)
 
     grid = (C,)
+    _set_device(x.contiguous())
     batch_norm_forward_kernel[grid](
         x.contiguous(),
         weight.contiguous() if weight is not None else x,
@@ -2192,12 +2235,14 @@ def cumsum_wrapper(x, dim: int = 0) :
         part_num = triton.cdiv(scan_size, BLOCK_SIZE)
         partial_sum = NBXTensor.empty(part_num, dtype=NBXDtype.float32, device=x.device)
 
+        _set_device(row_in)
         scan_part_sum_kernel[(part_num,)](
             row_in, row_out, partial_sum, scan_size, part_num, BLOCK_SIZE=BLOCK_SIZE)
 
         if part_num > 1:
             for i in range(1, part_num):
                 partial_sum[i] += partial_sum[i - 1]
+            _set_device(row_out)
             add_base_sum_kernel[(part_num,)](
                 row_out, partial_sum, scan_size, part_num, BLOCK_SIZE=BLOCK_SIZE)
 
@@ -2211,6 +2256,7 @@ def cumsum_wrapper(x, dim: int = 0) :
 def exp2_wrapper(x) :
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
+    _set_device(x)
     exp2_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
@@ -2218,6 +2264,7 @@ def exp2_wrapper(x) :
 def tan_wrapper(x) :
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
+    _set_device(x)
     tan_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
@@ -2225,6 +2272,7 @@ def tan_wrapper(x) :
 def celu_wrapper(x, alpha: float = 1.0) :
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
+    _set_device(x)
     celu_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), alpha, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
@@ -2232,6 +2280,7 @@ def celu_wrapper(x, alpha: float = 1.0) :
 def log_sigmoid_wrapper(x) :
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
+    _set_device(x)
     log_sigmoid_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
@@ -2239,6 +2288,7 @@ def log_sigmoid_wrapper(x) :
 def isfinite_wrapper(x) :
     x = x.contiguous()
     output = NBXTensor.empty(x.shape, dtype=NBXDtype.bool_, device=x.device)
+    _set_device(x)
     isfinite_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
@@ -2246,6 +2296,7 @@ def isfinite_wrapper(x) :
 def isinf_wrapper(x) :
     x = x.contiguous()
     output = NBXTensor.empty(x.shape, dtype=NBXDtype.bool_, device=x.device)
+    _set_device(x)
     isinf_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
@@ -2253,6 +2304,7 @@ def isinf_wrapper(x) :
 def isnan_wrapper(x) :
     x = x.contiguous()
     output = NBXTensor.empty(x.shape, dtype=NBXDtype.bool_, device=x.device)
+    _set_device(x)
     isnan_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
@@ -2262,6 +2314,7 @@ def nan_to_num_wrapper(x, nan: float = 0.0,
                        neginf: float = -3.4028235e+38) :
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
+    _set_device(x)
     nan_to_num_forward_kernel[_1d_grid(x.numel())](
         x, output, x.numel(), nan, posinf, neginf,
         BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
@@ -2271,6 +2324,7 @@ def nan_to_num_wrapper(x, nan: float = 0.0,
 def threshold_wrapper(x, threshold: float, value: float) :
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
+    _set_device(x)
     threshold_forward_kernel[_1d_grid(x.numel())](
         x, output, x.numel(), threshold, value,
         BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
@@ -2290,6 +2344,7 @@ def addcdiv_wrapper(input, tensor1,
     """result = input + value * (tensor1 / tensor2)"""
     input, tensor1, tensor2 = input.contiguous(), tensor1.contiguous(), tensor2.contiguous()
     output = NBXTensor.empty_like(input)
+    _set_device(input)
     addcdiv_forward_kernel[_1d_grid(input.numel())](
         input, tensor1, tensor2, output, input.numel(), value,
         BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
@@ -2301,6 +2356,7 @@ def addcmul_wrapper(input, tensor1,
     """result = input + value * tensor1 * tensor2"""
     input, tensor1, tensor2 = input.contiguous(), tensor1.contiguous(), tensor2.contiguous()
     output = NBXTensor.empty_like(input)
+    _set_device(input)
     addcmul_forward_kernel[_1d_grid(input.numel())](
         input, tensor1, tensor2, output, input.numel(), value,
         BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
@@ -2322,7 +2378,9 @@ def all_wrapper(x, dim=None, keepdim=False) :
         BLOCK_MID = triton.next_power_of_2(mid_size)
         mid = NBXTensor.empty(mid_size, dtype=NBXDtype.bool_, device=x.device)
         out = NBXTensor.empty([], dtype=NBXDtype.bool_, device=x.device)
+        _set_device(x)
         all_kernel_mid[(mid_size,)](x, mid, M, mid_size, BLOCK_SIZE=BLOCK_SIZE)
+        _set_device(mid)
         all_kernel_result[(1,)](mid, out, mid_size, BLOCK_MID=BLOCK_MID)
         return out
     else:
@@ -2334,6 +2392,7 @@ def all_wrapper(x, dim=None, keepdim=False) :
         out = NBXTensor.empty(M, dtype=NBXDtype.bool_, device=x.device)
         BLOCK_N = min(4096, triton.next_power_of_2(N))
         grid = (triton.cdiv(M, _RED_BM),)
+        _set_device(x_perm)
         all_kernel_dim[grid](x_perm, out, M, N, BLOCK_M=_RED_BM, BLOCK_N=BLOCK_N,
                              num_warps=4)
         shape[dim] = 1
@@ -2354,7 +2413,9 @@ def any_wrapper(x, dim=None, keepdim=False) :
         BLOCK_MID = triton.next_power_of_2(mid_size)
         mid = NBXTensor.empty(mid_size, dtype=NBXDtype.bool_, device=x.device)
         out = NBXTensor.empty([], dtype=NBXDtype.bool_, device=x.device)
+        _set_device(x)
         any_kernel_mid[(mid_size,)](x, mid, M, mid_size, BLOCK_SIZE=BLOCK_SIZE)
+        _set_device(mid)
         any_kernel_result[(1,)](mid, out, mid_size, BLOCK_MID=BLOCK_MID)
         return out
     else:
@@ -2366,6 +2427,7 @@ def any_wrapper(x, dim=None, keepdim=False) :
         out = NBXTensor.empty(M, dtype=NBXDtype.bool_, device=x.device)
         BLOCK_N = min(4096, triton.next_power_of_2(N))
         grid = (triton.cdiv(M, _RED_BM),)
+        _set_device(x_perm)
         any_kernel_dim[grid](x_perm, out, M, N, BLOCK_M=_RED_BM, BLOCK_N=BLOCK_N,
                              num_warps=4)
         shape[dim] = 1
@@ -2382,6 +2444,7 @@ def any_wrapper(x, dim=None, keepdim=False) :
 def bitwise_and_wrapper(a, b) :
     a, b = a.contiguous(), b.contiguous()
     output = NBXTensor.empty_like(a)
+    _set_device(a)
     bitwise_and_forward_kernel[_1d_grid(a.numel())](a, b, output, a.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
@@ -2389,6 +2452,7 @@ def bitwise_and_wrapper(a, b) :
 def bitwise_or_wrapper(a, b) :
     a, b = a.contiguous(), b.contiguous()
     output = NBXTensor.empty_like(a)
+    _set_device(a)
     bitwise_or_forward_kernel[_1d_grid(a.numel())](a, b, output, a.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
@@ -2396,6 +2460,7 @@ def bitwise_or_wrapper(a, b) :
 def bitwise_not_wrapper(x) :
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
+    _set_device(x)
     bitwise_not_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
@@ -2407,6 +2472,7 @@ def bitwise_not_wrapper(x) :
 def logical_and_wrapper(a, b) :
     a, b = a.contiguous(), b.contiguous()
     output = NBXTensor.empty(a.shape, dtype=NBXDtype.bool_, device=a.device)
+    _set_device(a)
     logical_and_forward_kernel[_1d_grid(a.numel())](a, b, output, a.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
@@ -2414,6 +2480,7 @@ def logical_and_wrapper(a, b) :
 def logical_or_wrapper(a, b) :
     a, b = a.contiguous(), b.contiguous()
     output = NBXTensor.empty(a.shape, dtype=NBXDtype.bool_, device=a.device)
+    _set_device(a)
     logical_or_forward_kernel[_1d_grid(a.numel())](a, b, output, a.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
@@ -2421,6 +2488,7 @@ def logical_or_wrapper(a, b) :
 def logical_not_wrapper(x) :
     x = x.contiguous()
     output = NBXTensor.empty(x.shape, dtype=NBXDtype.bool_, device=x.device)
+    _set_device(x)
     logical_not_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
@@ -2464,14 +2532,17 @@ def lerp_wrapper(input, end, weight) :
     output = NBXTensor.empty_like(input)
     if isinstance(weight, NBXTensor):
         weight = weight.contiguous()
+        _set_device(input)
         lerp_tensor_forward_kernel[_1d_grid(input.numel())](
             input, end, weight, output, input.numel(),
             BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     elif abs(weight) < 0.5:
+        _set_device(input)
         lerp_scalar_head_kernel[_1d_grid(input.numel())](
             input, end, output, input.numel(), float(weight),
             BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     else:
+        _set_device(input)
         lerp_scalar_tail_kernel[_1d_grid(input.numel())](
             input, end, output, input.numel(), float(weight),
             BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
@@ -2490,14 +2561,17 @@ def dot_wrapper(x, y) :
 
     if N <= BLOCK_SIZE:
         out = NBXTensor.empty([], dtype=NBXDtype.float32, device=x.device)
+        _set_device(x)
         dot_kernel_small[(1,)](x, y, out, N, BLOCK_SIZE=BLOCK_SIZE)
         return out.to(x.dtype)
     else:
         mid_size = triton.cdiv(N, BLOCK_SIZE)
         mid = NBXTensor.empty(mid_size, dtype=NBXDtype.float32, device=x.device)
+        _set_device(x)
         dot_kernel_partial[(mid_size,)](x, y, mid, N, BLOCK_SIZE=BLOCK_SIZE)
         BLOCK_MID = triton.next_power_of_2(mid_size)
         out = NBXTensor.empty([], dtype=NBXDtype.float32, device=x.device)
+        _set_device(mid)
         dot_kernel_reduce[(1,)](mid, out, mid_size, BLOCK_MID=BLOCK_MID)
         return out.to(x.dtype)
 
@@ -2512,6 +2586,7 @@ def mv_wrapper(mat, vec) :
     N, M = mat.shape
     out = NBXTensor.empty(N, device=mat.device, dtype=_matmul_out_dtype(mat))
     grid = (triton.cdiv(N, _MV_BN),)
+    _set_device(mat)
     mv_kernel[grid](
         mat, vec, out,
         N, M,
@@ -2539,6 +2614,7 @@ def flip_wrapper(x, dims) :
         dim = dim % result.ndim
         if result.ndim == 1:
             output = NBXTensor.empty_like(result)
+            _set_device(result)
             flip_1d_kernel[_1d_grid(result.numel())](
                 result, output, result.numel(),
                 BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
@@ -2552,6 +2628,7 @@ def flip_wrapper(x, dims) :
             for i in range(dim + 1, result.ndim):
                 stride_dim *= result.shape[i]
             grid = (triton.cdiv(n_elements, _EW_BLOCK),)
+            _set_device(result)
             flip_strided_kernel[grid](
                 result, output, n_elements,
                 dim_size, stride_dim, stride_dim,
@@ -2575,7 +2652,9 @@ def prod_wrapper(x, dim=None, keepdim=False) :
         BLOCK_MID = triton.next_power_of_2(mid_size)
         mid = NBXTensor.empty(mid_size, dtype=x.dtype, device=x.device)
         out = NBXTensor.empty([], dtype=x.dtype, device=x.device)
+        _set_device(x.view(-1))
         prod_kernel_mid[(mid_size,)](x.view(-1), mid, M, BLOCK_SIZE=BLOCK_SIZE)
+        _set_device(mid)
         prod_kernel_result[(1,)](mid, out, mid_size, BLOCK_MID=BLOCK_MID)
         return out
     else:
@@ -2586,6 +2665,7 @@ def prod_wrapper(x, dim=None, keepdim=False) :
         x_perm = x.movedim(dim, -1).contiguous().reshape(M, N)
         out = NBXTensor.empty(M, dtype=x.dtype, device=x.device)
         grid = (triton.cdiv(M, _RED_BM),)
+        _set_device(x_perm)
         prod_kernel[grid](x_perm, out, M, N,
                           BLOCK_M=_RED_BM, BLOCK_N=_RED_BN,
                           num_warps=4)
@@ -2611,7 +2691,9 @@ def min_wrapper(x, dim=None, keepdim=False):
         BLOCK_MID = triton.next_power_of_2(mid_size)
         mid = NBXTensor.empty(mid_size, dtype=x.dtype, device=x.device)
         out = NBXTensor.empty([], dtype=x.dtype, device=x.device)
+        _set_device(x.view(-1))
         min_kernel_mid[(mid_size,)](x.view(-1), mid, M, BLOCK_SIZE=BLOCK_SIZE)
+        _set_device(mid)
         min_kernel_result[(1,)](mid, out, mid_size, BLOCK_MID=BLOCK_MID)
         return out
     else:
@@ -2622,6 +2704,7 @@ def min_wrapper(x, dim=None, keepdim=False):
         x_perm = x.movedim(dim, -1).contiguous().reshape(M, N)
         out = NBXTensor.empty(M, dtype=x.dtype, device=x.device)
         grid = (triton.cdiv(M, _RED_BM),)
+        _set_device(x_perm)
         min_kernel[grid](x_perm, out, M, N,
                          BLOCK_M=_RED_BM, BLOCK_N=_RED_BN,
                          num_warps=4)
@@ -2643,7 +2726,9 @@ def max_wrapper(x, dim=None, keepdim=False):
         BLOCK_MID = triton.next_power_of_2(mid_size)
         mid = NBXTensor.empty(mid_size, dtype=x.dtype, device=x.device)
         out = NBXTensor.empty([], dtype=x.dtype, device=x.device)
+        _set_device(x.view(-1))
         max_kernel_mid[(mid_size,)](x.view(-1), mid, M, BLOCK_SIZE=BLOCK_SIZE)
+        _set_device(mid)
         max_kernel_result[(1,)](mid, out, mid_size, BLOCK_MID=BLOCK_MID)
         return out
     else:
@@ -2654,6 +2739,7 @@ def max_wrapper(x, dim=None, keepdim=False):
         x_perm = x.movedim(dim, -1).contiguous().reshape(M, N)
         out = NBXTensor.empty(M, dtype=x.dtype, device=x.device)
         grid = (triton.cdiv(M, _RED_BM),)
+        _set_device(x_perm)
         max_kernel[grid](x_perm, out, M, N,
                          BLOCK_M=_RED_BM, BLOCK_N=_RED_BN,
                          num_warps=4)
@@ -2696,6 +2782,7 @@ def baddbmm_wrapper(
         1,
         B,
     )
+    _set_device(batch1)
     baddbmm_kernel[grid](
         batch1, batch2, output, input,
         alpha, beta,
@@ -2724,6 +2811,7 @@ def addmv_wrapper(
     N, M = mat.shape
     out = NBXTensor.empty(N, device=mat.device, dtype=_matmul_out_dtype(mat))
     grid = (triton.cdiv(N, _MV_BN),)
+    _set_device(mat)
     addmv_kernel[grid](
         mat, vec, input, out,
         N, M,
@@ -2749,6 +2837,7 @@ def mse_loss_wrapper(input, target,
     input, target = input.contiguous(), target.contiguous()
     if reduction == 0:
         output = NBXTensor.empty_like(input)
+        _set_device(input)
         mse_loss_none_kernel[_1d_grid(input.numel())](
             input, target, output, input.numel(),
             BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
@@ -2760,8 +2849,10 @@ def mse_loss_wrapper(input, target,
     BLOCK_MID = triton.next_power_of_2(mid_size)
     mid = NBXTensor.empty(mid_size, dtype=NBXDtype.float32, device=input.device)
     out = NBXTensor.empty([], dtype=NBXDtype.float32, device=input.device)
+    _set_device(input)
     mse_loss_partial_kernel[(mid_size,)](
         input, target, mid, M, BLOCK_SIZE=BLOCK_SIZE, reduction=reduction)
+    _set_device(mid)
     mse_loss_reduce_kernel[(1,)](mid, out, mid_size, BLOCK_MID=BLOCK_MID)
     return out.to(input.dtype)
 
@@ -2791,6 +2882,7 @@ def nll_loss_wrapper(input, target,
 
     wgt_ptr = weight.contiguous() if weight is not None else None
 
+    _set_device(input)
     nll_loss_forward_kernel[(num_blocks,)](
         input, target, wgt_ptr, out,
         ignore_index, N, C,
@@ -2824,6 +2916,7 @@ def cross_entropy_wrapper(input, target,
     output = NBXTensor.empty(num_blocks, dtype=NBXDtype.float32, device=input.device)
     sum_weights = NBXTensor.empty(num_blocks, dtype=NBXDtype.float32, device=input.device) if weighted else output
 
+    _set_device(input)
     cross_entropy_loss_forward_kernel[(num_blocks,)](
         input, target,
         weight.contiguous() if weighted else input,
@@ -2855,8 +2948,10 @@ def std_wrapper(x, dim=None, correction=1, keepdim=False) :
         tmp_sum = NBXTensor.empty(num_blocks, dtype=NBXDtype.float32, device=x.device)
         tmp_sum_sq = NBXTensor.empty(num_blocks, dtype=NBXDtype.float32, device=x.device)
         out = NBXTensor.empty([], dtype=NBXDtype.float32, device=x.device)
+        _set_device(x.view(-1))
         std_map_kernel[(num_blocks,)](x.view(-1), tmp_sum, tmp_sum_sq, N, BLOCK_N=BLOCK_N)
         BLOCK_SIZE = triton.next_power_of_2(num_blocks)
+        _set_device(tmp_sum)
         std_reduce_kernel[(1,)](
             tmp_sum, tmp_sum_sq, out, N, float(correction), num_blocks,
             BLOCK_SIZE=BLOCK_SIZE)
@@ -2871,6 +2966,7 @@ def std_wrapper(x, dim=None, correction=1, keepdim=False) :
         x_2d = x_perm.reshape(M, N)
         out_flat = NBXTensor.empty(M, dtype=NBXDtype.float32, device=x.device)
         grid = (triton.cdiv(M, _RED_BM),)
+        _set_device(x_2d)
         std_dim_kernel[grid](
             x_2d, out_flat,
             x_2d.stride(0), x_2d.stride(1),
@@ -2898,8 +2994,10 @@ def var_wrapper(x, dim=None, correction=1, keepdim=False) :
         average = NBXTensor.empty(num_blocks, dtype=NBXDtype.float32, device=x.device)
         count = NBXTensor.empty(num_blocks, dtype=NBXDtype.float32, device=x.device)
         out = NBXTensor.empty([], dtype=NBXDtype.float32, device=x.device)
+        _set_device(x.view(-1))
         var_kernel_1[(num_blocks,)](x.view(-1), acc, average, count, N, BLOCK_N=BLOCK_N)
         BLOCK_NUM = triton.next_power_of_2(num_blocks)
+        _set_device(acc)
         var_kernel_2[(1,)](
             acc, average, count, out, N, float(correction), num_blocks,
             BLOCK_N=BLOCK_NUM)
@@ -2914,6 +3012,7 @@ def var_wrapper(x, dim=None, correction=1, keepdim=False) :
         x_2d = x_perm.reshape(M, N)
         out_flat = NBXTensor.empty(M, dtype=NBXDtype.float32, device=x.device)
         grid = (triton.cdiv(M, _RED_BM),)
+        _set_device(x_2d)
         var_welford_kernel[grid](x_2d, out_flat, M, N, float(correction),
                                  BLOCK_M=_RED_BM, BLOCK_N=_RED_BN,
                                  num_warps=4)
@@ -2958,6 +3057,7 @@ def gather_wrapper(input, dim: int, index) :
     out_stride_dim = out.stride(dim)
     out_stride_inner = out.stride(-1) if dim < input.ndim - 1 else 0
 
+    _set_device(input)
     gather_kernel[_1d_grid(N)](
         input, index, out,
         N,
@@ -2994,6 +3094,7 @@ def scatter_wrapper(input, dim: int, index,
         inner_size *= index.shape[i]
     dim_size = index.shape[dim]
 
+    _set_device(src)
     scatter_kernel[_1d_grid(N)](
         src, index, out,
         N,
@@ -3026,6 +3127,7 @@ def scatter_add_wrapper(input, dim: int, index,
         inner_size *= index.shape[i]
     dim_size = index.shape[dim]
 
+    _set_device(src)
     scatter_add_kernel[_1d_grid(N)](
         src, index, out,
         N,
@@ -3082,6 +3184,7 @@ def scatter_reduce_wrapper(input, dim: int, index,
         outer_size, dim_size, inner_size,
     )
 
+    _set_device(out)
     if reduce == "sum" or reduce == "add":
         scatter_add_kernel[_1d_grid(N)](*stride_args, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     elif reduce == "amax":
@@ -3126,6 +3229,7 @@ def index_add_wrapper(x, dim: int, index,
     src_stride_dim = source.stride(dim)
     src_stride_inner = source.stride(-1) if dim < source.ndim - 1 else 0
 
+    _set_device(index)
     index_add_kernel[_1d_grid(N)](
         index, source, out,
         N, x.numel(),
@@ -3197,6 +3301,7 @@ def avg_pool2d_wrapper(
         N * C,
         triton.cdiv(oh, _POOL_BH) * triton.cdiv(ow, _POOL_BW),
     )
+    _set_device(x.contiguous())
     avg_pool2d_forward_kernel[grid](
         x.contiguous(), output,
         x.stride(0), x.stride(1), x.stride(2), x.stride(3),
@@ -3260,6 +3365,7 @@ def max_pool2d_wrapper(
         N * C,
         triton.cdiv(oh, _POOL_BH) * triton.cdiv(ow, _POOL_BW),
     )
+    _set_device(x.contiguous())
     max_pool2d_forward_kernel[grid](
         x.contiguous(), output, indices,
         x.stride(0), x.stride(1), x.stride(2), x.stride(3),
@@ -3315,6 +3421,7 @@ def sort_wrapper(x, dim: int = -1,
     TILE_R = 8
 
     # Stage 1: compute global histogram
+    _set_device(x.contiguous())
     radix_sort_histogram_kernel[(m * grid_n,)](
         x.contiguous(), global_hist,
         n_passes, m, n, tiles_per_cta,
@@ -3346,6 +3453,7 @@ def sort_wrapper(x, dim: int = -1,
     # Stage 2: sweep per radix pass
     for i in range(n_passes):
         status.zero_()
+        _set_device(arr_in)
         radix_sort_sweep_kernel[(m * sweep_grid_n, grid_r)](
             arr_in, indices_in, arr_out, indices_out,
             ex_cumsum, status,
@@ -3371,6 +3479,7 @@ def pixel_shuffle_wrapper(x, upscale_factor: int) :
     output = NBXTensor.empty((N, C_out, OH, OW), device=x.device, dtype=x.dtype)
     total = N * C_out * OH * OW
     grid = (triton.cdiv(total, _EW_BLOCK),)
+    _set_device(x)
     pixel_shuffle_kernel[grid](
         x, output, total,
         C_out, H, W, r, OH, OW,
@@ -3389,6 +3498,7 @@ def pixel_unshuffle_wrapper(x, downscale_factor: int) :
     output = NBXTensor.empty((N, C_out, OH, OW), device=x.device, dtype=x.dtype)
     total = N * C_out * OH * OW
     grid = (triton.cdiv(total, _EW_BLOCK),)
+    _set_device(x)
     pixel_unshuffle_kernel[grid](
         x, output, total,
         C, IH, IW, r, C_out, OH, OW,
@@ -3419,6 +3529,7 @@ def upsample_bilinear2d_wrapper(x, output_size, align_corners=False,
         triton.cdiv(OW, _BILINEAR_BY),
         N * C,
     )
+    _set_device(x.contiguous())
     upsample_bilinear2d_kernel[grid](
         x.contiguous(), output,
         N, C, IH, IW, OH, OW,
@@ -3439,6 +3550,7 @@ def adaptive_avg_pool2d_wrapper(x, output_size) :
     total = N * C * OH * OW
     grid = (triton.cdiv(total, _EW_BLOCK),)
     x_c = x.contiguous()
+    _set_device(x_c)
     adaptive_avg_pool2d_kernel[grid](
         x_c, output, total,
         IH, IW, OH, OW,
@@ -3463,6 +3575,7 @@ def conv_depthwise2d_wrapper(x, weight, bias=None,
         triton.cdiv(OH, _BILINEAR_BY),
         N * C,
     )
+    _set_device(x.contiguous())
     conv_depthwise2d_kernel[grid](
         x.contiguous(), weight.contiguous(), output,
         N, C, IH, IW, C, KH, KW, OH, OW,
@@ -3478,6 +3591,7 @@ def conv_depthwise2d_wrapper(x, weight, bias=None,
 def logical_xor_wrapper(a, b) :
     a, b = a.contiguous(), b.contiguous()
     output = NBXTensor.empty(a.shape, dtype=NBXDtype.bool_, device=a.device)
+    _set_device(a)
     logical_xor_kernel[_1d_grid(a.numel())](a, b, output, a.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
@@ -3487,9 +3601,11 @@ def bitwise_left_shift_wrapper(a, b) :
     output = NBXTensor.empty_like(a)
     if isinstance(b, NBXTensor):
         b = b.contiguous()
+        _set_device(a)
         bitwise_left_shift_kernel[_1d_grid(a.numel())](a, b, output, a.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     else:
         from .ops.bitwise_left_shift import bitwise_left_shift_scalar_kernel
+        _set_device(a)
         bitwise_left_shift_scalar_kernel[_1d_grid(a.numel())](a, output, a.numel(), int(b), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
@@ -3499,9 +3615,11 @@ def bitwise_right_shift_wrapper(a, b) :
     output = NBXTensor.empty_like(a)
     if isinstance(b, NBXTensor):
         b = b.contiguous()
+        _set_device(a)
         bitwise_right_shift_kernel[_1d_grid(a.numel())](a, b, output, a.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     else:
         from .ops.bitwise_right_shift import bitwise_right_shift_scalar_kernel
+        _set_device(a)
         bitwise_right_shift_scalar_kernel[_1d_grid(a.numel())](a, output, a.numel(), int(b), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
@@ -3539,14 +3657,19 @@ def vector_norm_wrapper(x, ord: float = 2.0, dim=None, keepdim=False) :
     grid = (triton.cdiv(M, _RED_BM),)
 
     if ord == 2 or ord == 2.0:
+        _set_device(x_2d)
         l2_norm_kernel[grid](x_2d, out, M, N, BLOCK_M=_RED_BM, BLOCK_N=_RED_BN, num_warps=4)
     elif ord == float('inf'):
+        _set_device(x_2d)
         linf_norm_kernel[grid](x_2d, out, M, N, BLOCK_M=_RED_BM, BLOCK_N=_RED_BN, num_warps=4)
     elif ord == 0 or ord == 0.0:
+        _set_device(x_2d)
         l0_norm_kernel[grid](x_2d, out, M, N, BLOCK_M=_RED_BM, BLOCK_N=_RED_BN, num_warps=4)
     elif ord == 1 or ord == 1.0:
+        _set_device(x_2d)
         l1_norm_kernel[grid](x_2d, out, M, N, BLOCK_M=_RED_BM, BLOCK_N=_RED_BN, num_warps=4)
     else:
+        _set_device(x_2d)
         lp_norm_kernel[grid](x_2d, out, M, N, ord, BLOCK_M=_RED_BM, BLOCK_N=_RED_BN, num_warps=4)
 
     result = out.to(x.dtype).view(out_shape)
@@ -3568,6 +3691,7 @@ def addr_wrapper(input, vec1, vec2,
     BLOCK_M = min(32, triton.next_power_of_2(M))
     BLOCK_N = min(32, triton.next_power_of_2(N))
     grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
+    _set_device(inp_c)
     addr_kernel[grid](
         inp_c, v1_c, v2_c, output,
         beta, alpha, M, N,
@@ -3585,6 +3709,7 @@ def clamp_min_wrapper(x, min_val) :
     output = NBXTensor.empty_like(x)
     if isinstance(min_val, NBXTensor):
         min_val = min_val.item()
+    _set_device(x)
     clamp_min_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), float(min_val), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
@@ -3627,6 +3752,7 @@ def topk_wrapper(x, k: int, dim: int = -1,
 
     # Stage 1: per-chunk top-k (iterative argmax → already sorted descending
     # for largest=True).
+    _set_device(s1_vals)
     topk_stage1_kernel[batch_size, chunk_num](
         s1_vals, s1_idxs, x.contiguous(),
         k, topk_n, chunk_size, descending)
@@ -3655,6 +3781,7 @@ def topk_wrapper(x, k: int, dim: int = -1,
     # Stage 2: merge chunks via bitonic sort
     stage2_n = chunk_num * k
     BLOCK = triton.next_power_of_2(stage2_n)
+    _set_device(s2_vals)
     topk_stage2_kernel[batch_size,](
         s2_vals, s2_idxs, s1_vals, s1_idxs,
         dim, k, stage2_n, BLOCK, descending)
@@ -3671,6 +3798,7 @@ def trace_wrapper(x) :
     assert x.ndim >= 2
     n = min(x.shape[-2], x.shape[-1])
     out = NBXTensor.empty(1, dtype=NBXDtype.float32, device=x.device)
+    _set_device(x.contiguous())
     trace_kernel[(1,)](
         x.contiguous(), out, n,
         x.stride(-2), x.stride(-1),
@@ -3704,6 +3832,7 @@ def upsample_nearest3d_wrapper(
         triton.cdiv(total_threads, _EW_BLOCK),
         triton.cdiv(N * C, 4),
     )
+    _set_device(output)
     upsample_nearest3d_kernel[grid](
         output, x, N, C, OD, OH, OW, ID, IH, IW,
         reciprocal_scale_d, reciprocal_scale_h, reciprocal_scale_w,
@@ -3732,6 +3861,7 @@ def weight_norm_interface_wrapper(
         M = v.shape[0]
         N = math.prod(v.shape[1:])
         grid = (triton.cdiv(M, _WNORM_BM),)
+        _set_device(output)
         weight_norm_kernel_first[grid](output, norm, v, g, M, N, eps,
                                        BLOCK_M=_WNORM_BM, BLOCK_N=_WNORM_BN,
                                        num_warps=4)
@@ -3739,6 +3869,7 @@ def weight_norm_interface_wrapper(
         M = math.prod(v.shape[:-1])
         N = v.shape[dim]
         grid = (triton.cdiv(N, _WNORM_BN),)
+        _set_device(output)
         weight_norm_kernel_last[grid](output, norm, v, g, M, N, eps,
                                       BLOCK_M=_WNORM_BM, BLOCK_N=_WNORM_BN,
                                       num_warps=4)
@@ -3787,6 +3918,7 @@ def repeat_interleave_tensor_wrapper(
     size = repeats.size(0)
 
     BLOCK_SIZE = 32
+    _set_device(repeats)
     repeat_interleave_tensor_kernel[(size,)](
         repeats, cumsum, out, size, BLOCK_SIZE=BLOCK_SIZE, num_warps=1,
     )
@@ -3836,6 +3968,7 @@ def rand_wrapper(*args, **kwargs) :
     if n == 0:
         return output
     seed = __import__("random").randint(0, 2**31 - 1)
+    _set_device(output)
     rand_kernel[_1d_grid(n)](output, n, seed, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
@@ -3855,6 +3988,7 @@ def randn_wrapper(*args, **kwargs) :
     if n == 0:
         return output
     seed = __import__("random").randint(0, 2**31 - 1)
+    _set_device(output)
     randn_kernel[_1d_grid(n)](output, n, seed, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
@@ -3869,6 +4003,7 @@ def rand_like_wrapper(x, **kwargs) :
     if n == 0:
         return output
     seed = __import__("random").randint(0, 2**31 - 1)
+    _set_device(output)
     rand_kernel[_1d_grid(n)](output, n, seed, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
@@ -3883,6 +4018,7 @@ def randn_like_wrapper(x, **kwargs) :
     if n == 0:
         return output
     seed = __import__("random").randint(0, 2**31 - 1)
+    _set_device(output)
     randn_kernel[_1d_grid(n)](output, n, seed, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
@@ -3907,6 +4043,7 @@ def normal_wrapper(*args, **kwargs) :
     if n == 0:
         return output
     seed = __import__("random").randint(0, 2**31 - 1)
+    _set_device(output)
     randn_kernel[_1d_grid(n)](output, n, seed, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     # Transform N(0,1) → N(mean, std)
     if std != 1.0:
@@ -4427,11 +4564,13 @@ def _triton_fft_forward_1d(x_real, x_imag) -> tuple:
     # Bit reversal
     temp_real = NBXTensor.empty_like(x_real)
     temp_imag = NBXTensor.empty_like(x_imag)
+    _set_device(x_real)
     bit_reverse_kernel[(N,)](x_real, x_imag, temp_real, temp_imag, N)
 
     # Butterfly stages
     log2n = N.bit_length() - 1
     for stage in range(1, log2n + 1):
+        _set_device(temp_real)
         fft_stage_kernel[(N // 2,)](temp_real, temp_imag, N, stage)
 
     return temp_real, temp_imag
@@ -4447,11 +4586,13 @@ def _triton_ifft_1d(x_real, x_imag) -> tuple:
     # Bit reversal
     temp_real = NBXTensor.empty_like(x_real)
     temp_imag = NBXTensor.empty_like(x_imag)
+    _set_device(x_real)
     bit_reverse_kernel[(N,)](x_real, x_imag, temp_real, temp_imag, N)
 
     # Inverse butterfly stages
     log2n = N.bit_length() - 1
     for stage in range(1, log2n + 1):
+        _set_device(temp_real)
         ifft_stage_kernel[(N // 2,)](temp_real, temp_imag, N, stage)
 
     # Scale by 1/N — simple element-wise multiply
