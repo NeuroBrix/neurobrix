@@ -113,13 +113,41 @@ class InputSynthesizer:
                 dtype = val.dtype
                 break
 
-        # Fallback to plan/config if no tensors in inputs
+        # Fallback to plan/config if no tensors in inputs.
+        # The Plan dataclass (`core/prism/solver.py::Plan`) exposes
+        # `primary_device` as a full device string ("cuda:2") via a
+        # @property — it does NOT expose `primary_device_index`. The
+        # previous `getattr(plan, 'primary_device_index', 0)` therefore
+        # silently returned 0 on every call, placing synthesised tensors
+        # on cuda:0 regardless of where the component actually runs. On a
+        # multi-GPU profile where the executor targets cuda:N (N ≠ 0),
+        # Triton kernels then reject the cross-device pointer with the
+        # same "cpu tensor?" error as genuine CPU pointers. Parse
+        # `primary_device` ("cuda:2" → 2) so the fallback matches the
+        # allocation plan. Keep the default at 0 for the rare case where
+        # the plan has no primary device either.
         if device is None:
-            # Get vendor/arch from plan and derive device prefix
-            vendor = getattr(self._plan, 'vendor', 'nvidia')
-            arch = getattr(self._plan, 'architecture', 'volta')
-            device_prefix = get_device_prefix(vendor, arch)
-            device_index = getattr(self._plan, 'primary_device_index', 0)
+            # Look up the component's own allocation first — it is the
+            # ground truth for this tensor's destination.
+            comp_alloc = getattr(self._plan, 'components', {}).get(comp_name)
+            comp_device = getattr(comp_alloc, 'device', None) if comp_alloc else None
+            primary = getattr(self._plan, 'primary_device', None)
+            selected = comp_device or primary
+            if selected and ":" in selected:
+                head, _, tail = selected.partition(":")
+                try:
+                    device_index = int(tail)
+                    device_prefix = head
+                except ValueError:
+                    vendor = getattr(self._plan, 'vendor', 'nvidia')
+                    arch = getattr(self._plan, 'architecture', 'volta')
+                    device_prefix = get_device_prefix(vendor, arch)
+                    device_index = 0
+            else:
+                vendor = getattr(self._plan, 'vendor', 'nvidia')
+                arch = getattr(self._plan, 'architecture', 'volta')
+                device_prefix = get_device_prefix(vendor, arch)
+                device_index = 0
             device = f"{device_prefix}:{device_index}"
 
         if dtype is None:

@@ -1,6 +1,18 @@
-# PixArt triton — arena inter-run corruption (April 2026, OPEN)
+# PixArt triton — arena inter-run corruption (April 2026, PARTIALLY RESOLVED → NOW VRAM-PRESSURE BLOCKER)
 
-**Status**: open. Route A (periodic `_deferred` drain) landed as a prerequisite; this bug is orthogonal and blocks PixArt triton end-to-end.
+**Status**: inter-run hypothesis was a **misdiagnosis**. Re-verified via `NBX_SINGLE_RUN_ONLY` test. Root cause was two intra-run input-binding bugs in the triton path, fixed in a follow-up commit (see below). Remaining blocker is V100 32 GB VRAM pressure inside a single transformer run — addressable via drain-threshold tuning or a user-space caching pool.
+
+## Resolution log
+
+- **Route A** (periodic `_deferred` drain) — landed `bd3ec92`. Necessary for any triton model that accumulates arena-output retention inside a single run.
+- **Phase 1 universal fixes** — landed after `bd3ec92` (nested-dict input lookup in `_run_triton`, cross-device placement of synthesised tensors in `InputSynthesizer`). See CHANGELOG entry for the commit. PixArt-Alpha no longer crashes at `aten.cat::2 None`; PixArt-Sigma no longer crashes at the early addmm. Both now reach the transformer body on V100 32 GB.
+- **Remaining blocker**: peak VRAM during a single transformer run at 1024×1024 exceeds 32 GB on V100 because raw `cudaMalloc` has no block reuse (unlike PyTorch's caching allocator which masks the same pattern for native). Phase 2 will try `NBX_DEFERRED_DRAIN_BYTES=500_000_000` (500 MB, ~4× tighter than default 2 GB); Phase 3 will implement a user-space caching pool if Phase 2 is insufficient.
+
+---
+
+## Original diagnosis (preserved for context)
+
+**Status at time of writing**: open. Route A (periodic `_deferred` drain) landed as a prerequisite; this bug is orthogonal and blocks PixArt triton end-to-end.
 **Affected models**: PixArt-Sigma-XL-2-1024-MS, PixArt-XL-2-1024-MS (alpha). Both native 1024 × 1024 green at `8ae49dd`.
 **Blocks**: PixArt-Sigma/Alpha triton 3-gate validation (coherent image, `cos(native, triton) ≥ 0.95` on post-CFG latent step 0, CFG preservation).
 **Follow-up chain**: depends on NeuroBrix arena/liveness inspection tooling; will likely also benefit Sana triton multi-step, Flex.1 triton, SANA-Video triton, upscaler tiling paths — any triton model that calls `run()` more than once per request.
