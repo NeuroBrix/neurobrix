@@ -1373,7 +1373,19 @@ class GraphExecutor:
         DeviceAllocator.set_device(device_idx)
         DeviceAllocator.ensure_triton_device(device_idx)
 
-        # Build input map: name → NBXTensor (keyed by tensor ID)
+        # Build input map: name → NBXTensor (keyed by tensor ID).
+        # InputSynthesizer.synthesize_missing_inputs writes dotted inputs
+        # (e.g. "added_cond_kwargs.resolution") as nested dicts via
+        # `_set_nested` (resolution/input_synthesizer.py:130-137). Native
+        # reads them back via tensor_resolver.py:82-101 with a two-strategy
+        # cascade (flat lookup, then dotted-path navigation). The triton
+        # path was missing the dotted-path branch: the flat `.get()` alone
+        # returned None → input slot unset → downstream op received
+        # undefined input → NOP propagation cascaded through the micro-
+        # conditioning chain and crashed (PixArt-Alpha `aten.cat::2` None,
+        # PixArt-Sigma later `aten.clone::28` error 700 in a subsequent
+        # op). Universal for any model with synthesis rules (PixArt,
+        # Sana, Flex, SANA-Video, future diffusion).
         input_map = {}
         tensors_meta = self._dag.get("tensors", {})
         for tid in tensors_meta:
@@ -1381,11 +1393,34 @@ class GraphExecutor:
                 continue
             input_name = tid[7:]
             value = inputs.get(input_name)
+            if value is None and "." in input_name:
+                cur = inputs
+                for part in input_name.split("."):
+                    if isinstance(cur, dict) and part in cur:
+                        cur = cur[part]
+                    else:
+                        cur = None
+                        break
+                value = cur
             if value is None:
                 continue
             if isinstance(value, NBXTensor):
                 input_map[tid] = value
             elif hasattr(value, 'data_ptr'):
+                # Cross-device safety. InputSynthesizer falls back to
+                # `plan.primary_device_index` (default 0) when it can't
+                # read the device off an existing tensor — on a multi-GPU
+                # profile where the executor runs on cuda:N ≠ 0, the
+                # synthesised tensor lands on cuda:0. Triton rejects
+                # cross-device pointers with the exact same error message
+                # as genuine CPU pointers ("Pointer argument ... cannot
+                # be accessed from Triton (cpu tensor?)"). Native's
+                # `_execute_compiled_graph` entry does `.to(self.device)`
+                # for every torch input — triton must do the same here.
+                src_idx = getattr(value.device, 'index', None)
+                if (isinstance(src_idx, int) and src_idx != device_idx) \
+                        or str(value.device) == "cpu":
+                    value = value.to(f"cuda:{device_idx}")
                 didx = value.device.index if isinstance(getattr(value.device, 'index', None), int) else device_idx
                 input_map[tid] = NBXTensor.from_raw(
                     value.data_ptr(), tuple(value.shape),
