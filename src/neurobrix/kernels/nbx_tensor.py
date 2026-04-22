@@ -741,51 +741,109 @@ def _gpu_runtime():
 # STRIDED COPY
 # ============================================================================
 
-def _strided_copy(src: 'NBXTensor', dst: 'NBXTensor'):
-    """Copy non-contiguous src into contiguous dst via Triton kernel.
+def _upload_int64_array(values, device_idx: int) -> 'NBXTensor':
+    """Upload a small tuple/list of ints to the GPU as a contiguous
+    int64 NBXTensor. Used to hand shape and stride vectors to the N-D
+    strided_copy / strided_scatter kernels.
 
-    Uses strided_copy_kernel from kernels/ops/strided_copy.py.
-    Pads shape/strides to 5D for the kernel interface.
+    Zero-torch: goes through `NBXTensor.from_numpy`, which internally
+    uses `DeviceAllocator.malloc_cuda` + `DeviceAllocator.memcpy` (via
+    `_GPU_BACKENDS`). The returned tensor owns its storage; its
+    Python-refcount lifetime covers the kernel launch and it is freed
+    by `NBXTensor.__del__` as soon as the caller stops referencing it.
+    For shapes with up to 25 dims, this is 200 bytes per upload —
+    small enough that the driver-level malloc / free overhead is
+    amortised across a whole transformer forward pass (< 1 ms total).
+    """
+    import numpy as _np
+    arr = _np.asarray(values, dtype=_np.int64)
+    DeviceAllocator.set_device(device_idx)
+    return NBXTensor.from_numpy(arr)
+
+
+# PyTorch's hard limit on tensor rank. Beyond this we refuse to launch
+# rather than silently truncate. See torch/_C/_TensorBase.pyi:
+#   PyTorch stores ndim in an int64 but actual ops are bounded by
+#   TensorIterator::MAX_DIMS == 25 (aten/src/ATen/TensorIterator.h).
+_MAX_NDIM = 25
+
+
+def _strided_copy(src: 'NBXTensor', dst: 'NBXTensor'):
+    """Copy non-contiguous src into contiguous dst via the N-D scalable
+    Triton kernel.
+
+    The kernel is parameterised by `NDIM: tl.constexpr`; Triton's
+    kernel cache stores one specialised compilation per distinct ndim
+    encountered at runtime (first call compiles, subsequent calls hit
+    the cache at near-zero overhead). Shape and strides travel via
+    small int64 scratch buffers on-device, loaded inside the kernel
+    body — this keeps the kernel text identical regardless of ndim.
+
+    History: the prior 5-D-hardcoded kernel silently dropped dims
+    beyond 5 (via `[1] * (5 - ndim)` returning `[]` when `ndim > 5`),
+    producing OOB reads. 6-D PixArt patchify clones corrupted
+    (Alpha) or crashed (Sigma) on this path; 8-D SANA-Video VAE
+    clones never reached production. N-D path covers all of them
+    without a hardcoded ceiling.
     """
     import triton
     from neurobrix.kernels.ops.strided_copy import strided_copy_kernel
 
+    ndim = src.ndim
+    if ndim > _MAX_NDIM:
+        raise RuntimeError(
+            f"NBXTensor._strided_copy: ndim={ndim} exceeds the PyTorch "
+            f"hard limit of {_MAX_NDIM}. Please open an issue with the "
+            f"model name and trace site."
+        )
     n = src._numel
-    shape5 = list(src._shape) + [1] * (5 - src.ndim)
-    stride5 = list(src._strides) + [0] * (5 - src.ndim)
+
+    shape_buf = _upload_int64_array(src._shape, src._device_idx)
+    stride_buf = _upload_int64_array(src._strides, src._device_idx)
 
     BLOCK = 1024
     grid = (triton.cdiv(n, BLOCK),)
     _set_device(src)
     strided_copy_kernel[grid](
         src, dst, n,
-        stride5[0], stride5[1], stride5[2], stride5[3], stride5[4],
-        shape5[0], shape5[1], shape5[2], shape5[3], shape5[4],
+        shape_buf, stride_buf,
         BLOCK_SIZE=BLOCK,
+        NDIM=ndim,
     )
 
 
 def _strided_scatter(src: 'NBXTensor', dst: 'NBXTensor'):
-    """Scatter contiguous src into non-contiguous dst via Triton kernel.
+    """Scatter contiguous src into non-contiguous dst via the N-D
+    scalable Triton kernel. Inverse of `_strided_copy`.
 
-    Inverse of _strided_copy. Used by __setitem__ for KV cache writes
-    where the destination is a narrow view with non-contiguous strides.
+    Used by `NBXTensor.__setitem__` for KV-cache indexed writes where
+    the destination is a narrow view with non-contiguous strides. KV
+    caches are typically 4-D today so this path rarely exercises the
+    N-D machinery, but it stays in sync with `_strided_copy` for
+    consistency and to future-proof any emerging cache layouts.
     """
     import triton
     from neurobrix.kernels.ops.strided_copy import strided_scatter_kernel
 
+    ndim = dst.ndim
+    if ndim > _MAX_NDIM:
+        raise RuntimeError(
+            f"NBXTensor._strided_scatter: ndim={ndim} exceeds the "
+            f"PyTorch hard limit of {_MAX_NDIM}. Please open an issue."
+        )
     n = src._numel
-    shape5 = list(dst._shape) + [1] * (5 - dst.ndim)
-    stride5 = list(dst._strides) + [0] * (5 - dst.ndim)
+
+    shape_buf = _upload_int64_array(dst._shape, dst._device_idx)
+    stride_buf = _upload_int64_array(dst._strides, dst._device_idx)
 
     BLOCK = 1024
     grid = (triton.cdiv(n, BLOCK),)
     _set_device(src)
     strided_scatter_kernel[grid](
         src, dst, n,
-        stride5[0], stride5[1], stride5[2], stride5[3], stride5[4],
-        shape5[0], shape5[1], shape5[2], shape5[3], shape5[4],
+        shape_buf, stride_buf,
         BLOCK_SIZE=BLOCK,
+        NDIM=ndim,
     )
 
 
