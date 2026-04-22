@@ -1,16 +1,36 @@
-"""Strided-to-contiguous copy — pure @triton.jit kernel.
+"""Strided ↔ contiguous copy kernels — N-D scalable, Triton-JIT.
 
-Copies data from a non-contiguous (strided) source tensor into a
-contiguous destination tensor. Handles arbitrary strides including
-stride=0 (from expand/broadcast views).
+Two operations:
 
-Why this exists: NBXTensor.expand() creates views with stride=0.
-A simple cudaMemcpy copies raw bytes from the base pointer, which
-is wrong for stride-0 layouts — it reads past the actual data.
-This kernel computes the correct source offset per element using
-the source strides and shape decomposition.
+* `strided_copy_kernel`    — read from a non-contiguous (strided) source,
+                             write to a contiguous destination. Used by
+                             `NBXTensor.clone` / `NBXTensor.contiguous`
+                             whenever the source is a view (permute,
+                             transpose, narrow, expand, ...).
 
-Supports tensors up to 5D (padded with shape=1, stride=0 for unused dims).
+* `strided_scatter_kernel` — read from a contiguous source, write to a
+                             non-contiguous destination. Used by
+                             `NBXTensor.__setitem__` (KV cache indexed
+                             writes into a narrow view).
+
+Both kernels are parameterised by `NDIM: tl.constexpr`. Triton
+specialises and caches one compiled kernel per distinct ndim
+encountered at runtime: the per-dimension index decomposition loop is
+unrolled at compile time via `tl.static_range(NDIM)`.
+
+The shape and stride vectors are passed as GPU pointers to small int64
+arrays (NDIM elements each). The kernel loads them inside the JIT body,
+so callers can handle any tensor up to PyTorch's 25-D hard limit
+without recompiling the code. A 6-D PixArt patchify clone, an 8-D
+SANA-Video VAE reshape, and a hypothetical 10-12-D multi-view 4D-scene
+permute all route through the same kernel text.
+
+Why this matters: the previous version was hardcoded to 5 dims
+(`d0..d4`, `s0..s4`). The wrapper silently dropped higher dims via
+`[1] * (5 - ndim)` returning `[]` for ndim > 5. 6-D PixArt clones
+produced out-of-bounds reads past the source allocation — silently
+corrupted data (Alpha) or `cudaErrorIllegalAddress` (Sigma), and
+8-D SANA-Video VAE clones had been unreachable entirely.
 """
 
 import triton
@@ -21,39 +41,46 @@ import triton.language as tl
 def strided_copy_kernel(
     src_ptr, dst_ptr,
     n_elements,
-    s0, s1, s2, s3, s4,
-    d0, d1, d2, d3, d4,
+    shape_ptr,     # GPU pointer → NDIM int64 shape values (source)
+    stride_ptr,    # GPU pointer → NDIM int64 stride values (source)
     BLOCK_SIZE: tl.constexpr,
+    NDIM: tl.constexpr,
 ):
-    """Copy strided src to contiguous dst.
-
-    Each thread computes the multi-dimensional index from its flat output
-    position, then uses the source strides to find the correct read offset.
+    """Copy strided src → contiguous dst. Dimensions are unrolled at
+    compile time via the NDIM constexpr; shape/strides are loaded from
+    GPU scratch buffers so the kernel text is identical for every
+    ndim Triton specialises.
 
     Args:
-        src_ptr: Source tensor pointer (may be non-contiguous).
-        dst_ptr: Destination tensor pointer (contiguous).
-        n_elements: Total number of elements to copy.
-        s0..s4: Source strides per dimension (0-padded for unused dims).
-        d0..d4: Shape per dimension (1-padded for unused dims).
-        BLOCK_SIZE: Elements per thread block.
+        src_ptr:     Source tensor data pointer (may be non-contiguous).
+        dst_ptr:     Destination tensor data pointer (contiguous).
+        n_elements:  Total elements to copy (= src._numel).
+        shape_ptr:   Pointer to NDIM int64 shape values (source shape).
+        stride_ptr:  Pointer to NDIM int64 stride values (source strides).
+        BLOCK_SIZE:  Elements per thread block (constexpr).
+        NDIM:        Rank of the tensors (constexpr; triggers
+                     specialisation + kernel cache entry).
     """
     pid = tl.program_id(0)
     offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
 
-    # Flat dst index → multi-dim indices → strided src offset
+    # Decompose the flat offset into multi-dim indices, walking dims
+    # from the innermost (NDIM-1) outward. At each step, `remaining %
+    # d` gives the current-dim index and `remaining // d` feeds the
+    # next outer dim. The src_offsets accumulator multiplies each
+    # per-dim index by the source's stride for that dim — this is
+    # what lets the kernel read from a non-contiguous layout while
+    # writing contiguously.
     remaining = offsets
-    i0 = remaining // (d1 * d2 * d3 * d4)
-    remaining = remaining % (d1 * d2 * d3 * d4)
-    i1 = remaining // (d2 * d3 * d4)
-    remaining = remaining % (d2 * d3 * d4)
-    i2 = remaining // (d3 * d4)
-    remaining = remaining % (d3 * d4)
-    i3 = remaining // d4
-    i4 = remaining % d4
-
-    src_offsets = i0 * s0 + i1 * s1 + i2 * s2 + i3 * s3 + i4 * s4
+    src_offsets = tl.zeros_like(offsets)
+    for i in tl.static_range(NDIM):
+        dim = NDIM - 1 - i
+        d = tl.load(shape_ptr + dim)
+        s = tl.load(stride_ptr + dim)
+        idx = remaining % d
+        remaining = remaining // d
+        src_offsets = src_offsets + idx * s
 
     vals = tl.load(src_ptr + src_offsets, mask=mask)
     tl.store(dst_ptr + offsets, vals, mask=mask)
@@ -63,40 +90,37 @@ def strided_copy_kernel(
 def strided_scatter_kernel(
     src_ptr, dst_ptr,
     n_elements,
-    s0, s1, s2, s3, s4,
-    d0, d1, d2, d3, d4,
+    shape_ptr,     # GPU pointer → NDIM int64 shape values (destination)
+    stride_ptr,    # GPU pointer → NDIM int64 stride values (destination)
     BLOCK_SIZE: tl.constexpr,
+    NDIM: tl.constexpr,
 ):
-    """Scatter contiguous src into strided dst.
-
-    Inverse of strided_copy_kernel: reads src linearly and writes
-    to dst using the dst's strides. Used for KV cache indexed writes
-    where the destination is a narrow view (non-contiguous).
+    """Scatter contiguous src → strided dst. Inverse of
+    `strided_copy_kernel`. Same N-D specialisation strategy.
 
     Args:
-        src_ptr: Source tensor pointer (contiguous).
-        dst_ptr: Destination tensor pointer (may be non-contiguous).
-        n_elements: Total number of elements.
-        s0..s4: Destination strides per dimension.
-        d0..d4: Shape per dimension.
-        BLOCK_SIZE: Elements per thread block.
+        src_ptr:     Source tensor data pointer (contiguous).
+        dst_ptr:     Destination tensor data pointer (may be non-
+                     contiguous — e.g. a narrow view into a KV cache).
+        n_elements:  Total elements to scatter (= dst._numel).
+        shape_ptr:   Pointer to NDIM int64 shape values (dst shape).
+        stride_ptr:  Pointer to NDIM int64 stride values (dst strides).
+        BLOCK_SIZE:  Elements per thread block.
+        NDIM:        Rank of the tensors (constexpr).
     """
     pid = tl.program_id(0)
     offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
 
-    # Flat src index → multi-dim indices → strided dst offset
     remaining = offsets
-    i0 = remaining // (d1 * d2 * d3 * d4)
-    remaining = remaining % (d1 * d2 * d3 * d4)
-    i1 = remaining // (d2 * d3 * d4)
-    remaining = remaining % (d2 * d3 * d4)
-    i2 = remaining // (d3 * d4)
-    remaining = remaining % (d3 * d4)
-    i3 = remaining // d4
-    i4 = remaining % d4
-
-    dst_offsets = i0 * s0 + i1 * s1 + i2 * s2 + i3 * s3 + i4 * s4
+    dst_offsets = tl.zeros_like(offsets)
+    for i in tl.static_range(NDIM):
+        dim = NDIM - 1 - i
+        d = tl.load(shape_ptr + dim)
+        s = tl.load(stride_ptr + dim)
+        idx = remaining % d
+        remaining = remaining // d
+        dst_offsets = dst_offsets + idx * s
 
     vals = tl.load(src_ptr + offsets, mask=mask)
     tl.store(dst_ptr + dst_offsets, vals, mask=mask)
