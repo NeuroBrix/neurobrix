@@ -273,7 +273,8 @@ class GraphExecutor:
             raise RuntimeError(f"No interceptor registered for {op_type}")
         return interceptor(*args, **kwargs)
 
-    def execute(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+    def execute(self, inputs: Dict[str, Any],
+                skip_kills: Optional[bool] = None) -> Dict[str, Any]:
         """
         Execute the graph with given inputs.
 
@@ -281,11 +282,13 @@ class GraphExecutor:
 
         Args:
             inputs: Input tensors
+            skip_kills: Optional explicit control of triton kill_slots.
+                Defaults to None (run() treats None as False).
 
         Returns:
             Output tensors
         """
-        return self.run(inputs)
+        return self.run(inputs, skip_kills=skip_kills)
 
     def _setup_executors(self) -> None:
         """
@@ -1306,6 +1309,7 @@ class GraphExecutor:
         self,
         inputs: Dict[str, Any],
         pre_op_callback: Optional[Callable[[int, Any], None]] = None,
+        skip_kills: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """
         Execute DAG mechanically.
@@ -1321,6 +1325,21 @@ class GraphExecutor:
                 CPU and GPU at block boundaries. Only the compiled+
                 multi-device path honors it; triton and native paths
                 ignore it (zero3 is PyTorch-only today).
+            skip_kills: Optional explicit control of triton kill_slots
+                processing. None (default) → kill_slots fire (safe,
+                required for diffusion / prefill / any graph with distinct
+                per-op output slots). True → kill_slots skipped (only
+                legitimate for autoregressive decode steps that reuse
+                the same arena slots every step — setting True anywhere
+                else retains all intermediate tensors in arena and
+                blows up VRAM). Caller flow handlers pass True
+                explicitly; the triton path itself never infers it from
+                input shapes. See PR "triton: explicit skip_kills flag"
+                for the history — the prior shape-based heuristic
+                mis-fired on diffusion `aspect_ratio` (B, 1) inputs,
+                which are shape-indistinguishable from LLM decode
+                `input_ids` (B, 1), so only the flow-handler-provided
+                value is reliable.
 
         Returns:
             Output tensors
@@ -1334,7 +1353,7 @@ class GraphExecutor:
         try:
             # TRITON MODES: direct NBXTensor path — no torch wrapping
             if self.mode in ("triton", "triton_sequential"):
-                return self._run_triton(inputs)
+                return self._run_triton(inputs, skip_kills=skip_kills)
 
             # NATIVE/COMPILED MODE: torch path
             with torch.inference_mode():
@@ -1352,12 +1371,19 @@ class GraphExecutor:
             if self._post_run_hook is not None:
                 self._post_run_hook()
 
-    def _run_triton(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+    def _run_triton(self, inputs: Dict[str, Any],
+                    skip_kills: Optional[bool] = None) -> Dict[str, Any]:
         """Execute via triton path with NBXTensor inputs. Zero torch.
 
         Supports both compiled (--triton) and sequential (--triton-sequential).
         Compiled: TritonSequence (arena + closures, fast).
         Sequential: TritonSequentialDispatcher (dict lookup per op, debuggable).
+
+        Args:
+            inputs: Named input tensors.
+            skip_kills: Forwarded to the underlying compiled-sequence
+                hot loop. None → False (default safe — kill_slots fire).
+                See `run()` for why this is an explicit flag.
         """
         import time as _time
         from neurobrix.kernels.nbx_tensor import NBXTensor, parse_dtype, DeviceAllocator
@@ -1429,10 +1455,10 @@ class GraphExecutor:
 
         if self.mode == "triton_sequential":
             raw_outputs, num_ops = self._run_triton_sequential(
-                input_map, device_idx)
+                input_map, device_idx, skip_kills=skip_kills)
         else:
             raw_outputs, num_ops = self._run_triton_compiled(
-                input_map, device_idx)
+                input_map, device_idx, skip_kills=skip_kills)
 
         # Map tensor IDs to semantic output names
         outputs = {}
@@ -1446,28 +1472,49 @@ class GraphExecutor:
             total_ops=num_ops, triton_ops=num_ops, total_time_ms=elapsed)
         return outputs
 
-    def _run_triton_compiled(self, input_map: dict, device_idx: int):
-        """Execute via TritonSequence (arena + closures)."""
+    def _run_triton_compiled(self, input_map: dict, device_idx: int,
+                             skip_kills: Optional[bool] = None):
+        """Execute via TritonSequence (arena + closures).
+
+        `skip_kills` is an explicit flag threaded from the caller's
+        flow handler. Default False (safe). The prior shape-based
+        heuristic (`any(t.shape[1] == 1 for t in inputs)`) was removed
+        because it cannot distinguish an LLM decode step
+        (`input_ids` shape `(B, 1)`, 2D, seq_len=1) from a diffusion
+        model's micro-conditioning input (`aspect_ratio` shape
+        `(B, 1)`, 2D, a per-item scalar), so it fired `skip_kills=True`
+        on PixArt batched-CFG runs and left every intermediate alive
+        in the arena for the full 2495-op transformer forward pass →
+        ~31 GB peak on V100 32 GB and OOM. Autoregressive flow handlers
+        that genuinely benefit from skip_kills pass it explicitly
+        (see `triton/flow/autoregressive.py`), diffusion flows leave
+        it at the default.
+        """
         self._ensure_triton_compiled(device_idx)
         self._triton_seq.bind_inputs(input_map)
         self._triton_seq.bind_symbols(input_map)
         self._triton_seq.update_seq_dependent_constants()
 
-        # Decode steps (seq_len==1) reuse same-size intermediates every step.
-        # Skip kill_slots to avoid cudaFree + sync overhead.
-        is_decode = any(
-            t.shape[1] == 1 for t in input_map.values()
-            if hasattr(t, 'shape') and len(t.shape) >= 2)
+        effective_skip_kills = bool(skip_kills) if skip_kills is not None else False
+
         # Thread pre_op_callback from the executor into TritonSequence.
         # Explicit per-call wins over the persistent hook (installed by
         # strategies like zero3). This mirrors the behaviour of
         # _execute_compiled_graph in native mode.
         cb = self._pre_op_callback or self._persistent_pre_op_callback
-        self._triton_seq.run(skip_kills=is_decode, pre_op_callback=cb)
+        self._triton_seq.run(skip_kills=effective_skip_kills, pre_op_callback=cb)
         return self._triton_seq.gather_outputs(), self._triton_seq.num_ops
 
-    def _run_triton_sequential(self, input_map: dict, device_idx: int):
-        """Execute via TritonSequentialDispatcher (op-by-op, debuggable)."""
+    def _run_triton_sequential(self, input_map: dict, device_idx: int,
+                               skip_kills: Optional[bool] = None):
+        """Execute via TritonSequentialDispatcher (op-by-op, debuggable).
+
+        `skip_kills` is accepted for signature parity with
+        `_run_triton_compiled`; the sequential dispatcher does not use
+        arena slots and therefore has no kill_slots concept — the flag
+        is effectively ignored here.
+        """
+        del skip_kills  # unused, kept for signature parity
         from neurobrix.triton.sequential import TritonSequentialDispatcher
         from neurobrix.triton.symbols import SymbolResolver
         from neurobrix.kernels.nbx_tensor import NBXTensor, parse_dtype
