@@ -69,7 +69,12 @@ class TritonLMSession:
         if hasattr(self.executor, "enable_hidden_states_capture"):
             self.executor.enable_hidden_states_capture()
 
-        outputs = self.executor.run(run_inputs)
+        # Prefill: distinct per-op output slots for the full prompt,
+        # kill_slots MUST fire during the forward pass. Pass False
+        # explicitly to document the intent (default is also False now
+        # that the shape-based is_decode heuristic is gone — see
+        # graph_executor._run_triton_compiled).
+        outputs = self.executor.run(run_inputs, skip_kills=False)
 
         # Switch to decode mode / init O(n) accumulator
         if self.kv_wrapper is not None:
@@ -128,7 +133,12 @@ class TritonLMSession:
         else:
             run_inputs = {"input_ids": input_ids}
 
-        outputs = self.executor.run(run_inputs)
+        # Decode step with KV cache: same-size intermediates every
+        # step, arena slots are always overwritten before being read,
+        # kill_slots are redundant work — skip them. This is the
+        # ONE legitimate skip_kills=True site in the triton runtime
+        # (mirrored below for the O(n) fallback).
+        outputs = self.executor.run(run_inputs, skip_kills=True)
 
         hidden = None
         if hasattr(self.executor, "get_hidden_states"):
@@ -172,7 +182,12 @@ class TritonLMSession:
         else:
             run_inputs = {"input_ids": self._accumulated_ids}
 
-        outputs = self.executor.run(run_inputs)
+        # O(n) fallback decode (no KV cache). Logically a growing
+        # prefill, but the arena slot mapping is identical across
+        # calls and every op's output slot is overwritten at the
+        # start of each run — same no-UAF invariant as the KV
+        # fast path, so skip kill_slots here too.
+        outputs = self.executor.run(run_inputs, skip_kills=True)
         hidden = self._extract_hidden(outputs)
         if hidden is None:
             raise RuntimeError("O(n) decode could not extract hidden_states.")
