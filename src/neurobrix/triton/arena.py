@@ -28,3 +28,15 @@ class Arena:
         start = self._num_weights + self._num_inputs
         for i in range(start, len(self._slots)):
             self._slots[i] = None
+
+    def clear_inputs(self) -> None:
+        """Clear input tensors (for next inference)."""
+        start = self._num_weights
+        end = self._num_weights + self._num_inputs
+        for i in range(start, end):
+            self._slots[i] = None
+
+    def clear_all(self) -> None:
+        """Clear all tensors."""
+        for i in range(len(self._slots)):
+            self._slots[i] = None

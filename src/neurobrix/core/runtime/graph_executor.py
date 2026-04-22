@@ -2832,18 +2832,31 @@ class GraphExecutor:
         Call this when the component is no longer needed (e.g., before VAE decode).
         Respects _persistent flag: when True, weights stay in VRAM (serving mode).
 
-        CRITICAL: Must clear compiled sequence arena BEFORE clearing weights dict,
-        because the arena holds direct references to weight tensors in its slots.
-        Without this, tensor refs survive in arena → GPU memory never freed.
+        CRITICAL: Must clear the compiled sequence arena BEFORE clearing weights
+        dict, because the arena holds direct references to weight tensors in its
+        slots. Without this, tensor refs survive in arena → GPU memory never
+        freed. Applies to BOTH the native `_compiled_seq._arena` (torch.Tensor
+        slots) and the triton `_triton_seq._arena` (NBXTensor slots). The
+        `_triton_seq` attribute is created lazily in `_ensure_triton_compiled`,
+        so guard with `hasattr`.
         """
         if self._persistent:
             return
 
-        # Step 1: Clear compiled sequence arena (holds tensor refs including weights)
+        # Step 1a: Clear native compiled sequence arena (torch.Tensor refs).
         if self._compiled_seq is not None:
             assert hasattr(self._compiled_seq, '_arena')
             self._compiled_seq._arena.clear_all()  # type: ignore[attr-defined]
             self._compiled_seq = None
+
+        # Step 1b: Clear triton sequence arena (NBXTensor refs).
+        # Sync before releasing NBXTensor Python refs so __del__ → free_cuda
+        # can't race an async kernel still reading the memory (UAF).
+        if hasattr(self, '_triton_seq') and self._triton_seq is not None:
+            from neurobrix.kernels.nbx_tensor import DeviceAllocator as _DA
+            _DA.sync_device()
+            self._triton_seq._arena.clear_all()  # type: ignore[attr-defined]
+            self._triton_seq = None
 
         # Step 2: Use centralized memory manager
         MemoryManager.cleanup_context(self._ctx)
@@ -2858,11 +2871,23 @@ class GraphExecutor:
         Respects _persistent flag: when True, preserves weights in VRAM
         and keeps compiled sequence for reuse. Only clears per-request
         intermediates (arena slots, execution context).
+
+        Mirrors the unload_weights arena-clear for BOTH native
+        `_compiled_seq._arena` (torch.Tensor slots) and triton
+        `_triton_seq._arena` (NBXTensor slots). Unlike unload_weights,
+        cleanup preserves the sequence objects themselves so subsequent
+        requests can rebind fresh weights into the same compiled slot
+        mapping without recompiling the op graph.
         """
         if self._persistent:
-            # Persistent mode: clear per-request state only, keep weights + compiled sequence
+            # Persistent mode: clear per-request state only, keep weights
+            # + compiled sequence (both native and triton).
             if self._compiled_seq is not None:
                 self._compiled_seq._arena.clear_all()  # type: ignore[attr-defined]
+            if hasattr(self, '_triton_seq') and self._triton_seq is not None:
+                from neurobrix.kernels.nbx_tensor import DeviceAllocator as _DA
+                _DA.sync_device()
+                self._triton_seq._arena.clear_all()  # type: ignore[attr-defined]
             MemoryManager.cleanup_context(self._ctx)
             return
 
@@ -2875,6 +2900,12 @@ class GraphExecutor:
             self._compiled_seq._arena.clear_all()  # type: ignore[attr-defined]
             # Keep _compiled_seq alive — R2 rebinds fresh weights into same slots
             # Keep _persistent_tensor_ids — slot mappings remain valid in same sequence
+
+        if hasattr(self, '_triton_seq') and self._triton_seq is not None:
+            from neurobrix.kernels.nbx_tensor import DeviceAllocator as _DA
+            _DA.sync_device()
+            self._triton_seq._arena.clear_all()  # type: ignore[attr-defined]
+            # Keep _triton_seq alive — R2 rebinds fresh weights into same slots
 
         MemoryManager.cleanup_context(self._ctx)
         MemoryManager.unload_weights(self._weights)
