@@ -1555,6 +1555,62 @@ class GraphExecutor:
         for tid, tensor in input_map.items():
             store[tid] = tensor
 
+        # Liveness analysis: mirror TritonSequence._compute_liveness
+        # (triton/sequence.py:1394-1421) so the sequential dispatcher
+        # reclaims intermediate VRAM after an op's last consumer.
+        # Without this, `store` grows monotonically across the whole
+        # component forward pass — fine for small LLMs (TinyLlama 4-D
+        # intermediates, ≤ 5 GB), fatal for diffusion VAEs (Sana
+        # DC-AE 32× upsamples to (1, C, 1024, 1024) tensors that
+        # cumulate into > 32 GB if never freed). `dead_at_op[op_idx]`
+        # lists the tids whose last use is this op; after dispatch we
+        # `store.pop` them, which drops their Python refcount. Unlike
+        # the compiled path, the sequential dispatcher has no in-flight
+        # kernel overlap — every op call is synchronous from Python's
+        # point of view — so `NBXTensor.__del__` → `free_cuda` at
+        # refcount-0 is safe without an explicit sync_device().
+        protected: set = set()
+        for tid in tensors:
+            if tid.startswith("param::") or tid.startswith("buffer::") \
+                    or tid.startswith("input::"):
+                protected.add(tid)
+        for tid in self._dag.get("output_tensor_ids", []):
+            protected.add(tid)
+
+        def _collect_arg_tids(arg, out_set):
+            if not isinstance(arg, dict):
+                return
+            atype = arg.get("type")
+            if atype in ("tensor", "tensor_ref"):
+                t = arg.get("tensor_id")
+                if t:
+                    out_set.add(t)
+            elif atype == "tensor_tuple":
+                for t in arg.get("tensor_ids", []):
+                    out_set.add(t)
+            elif atype == "list":
+                for item in arg.get("value", []):
+                    _collect_arg_tids(item, out_set)
+
+        last_use: Dict[str, int] = {}
+        for op_idx, op_uid in enumerate(exec_order):
+            op_data = ops_meta.get(op_uid)
+            if op_data is None:
+                continue
+            seen: set = set()
+            attrs = op_data.get("attributes", {})
+            for arg in attrs.get("args", []):
+                _collect_arg_tids(arg, seen)
+            for arg in attrs.get("kwargs", {}).values():
+                _collect_arg_tids(arg, seen)
+            for t in seen:
+                last_use[t] = op_idx
+        dead_at_op: Dict[int, list] = {}
+        for tid, li in last_use.items():
+            if tid in protected:
+                continue
+            dead_at_op.setdefault(li, []).append(tid)
+
         # Execute ops sequentially. Thread pre_op_callback here for
         # the same reason as _run_triton_compiled — zero3 (and any other
         # strategy that installs a persistent hook) needs to see every op
@@ -1589,6 +1645,8 @@ class GraphExecutor:
                         store[tid] = result[i] if i < len(result) else None
                 elif output_tids:
                     store[output_tids[0]] = result
+                for dead_tid in dead_at_op.get(op_idx, ()):
+                    store.pop(dead_tid, None)
                 num_ops += 1
                 continue
 
@@ -1609,6 +1667,11 @@ class GraphExecutor:
             else:
                 if output_tids:
                     store[output_tids[0]] = result
+
+            # Evict tids whose last-use was this op. See the liveness
+            # comment before the loop for the motivation.
+            for dead_tid in dead_at_op.get(op_idx, ()):
+                store.pop(dead_tid, None)
 
             num_ops += 1
 
