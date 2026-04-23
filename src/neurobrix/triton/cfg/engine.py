@@ -324,6 +324,22 @@ class TritonCFGEngine:
             self._ctx.variable_resolver.set("global.encoder_attention_mask", pos_mask)
         self._ctx.variable_resolver.loop_state[self._ctx.loop_id] = orig_timestep
 
+        # Persist the post-CFG noise_pred as the component's effective
+        # output. Without this, RuntimeExecutor.store_component_outputs
+        # (core/runtime/resolution/output_extractor.py:115) has already
+        # written the RAW batch=2 transformer forward-pass output into
+        # `variable_resolver.resolved[f"{comp_name}.output_0"]` during
+        # the batched `_execute_component` call above, and that raw
+        # batched tensor will be what any downstream connection
+        # (typically `transformer.output_0 -> vae.z` in diffusion
+        # topologies) resolves to — propagating the CFG batch all the
+        # way to the VAE decoder and yielding `(2*B, C, H, W)` images
+        # (Sana: incoherent; PixArt-Alpha/Sigma: silently doubled,
+        # saved by uncond/cond convergence at low timesteps but still
+        # wrong). Overwriting with `noise_pred` puts the effective
+        # batch=1 guidance output in place for post-loop resolution.
+        self._ctx.variable_resolver.resolved[f"{comp_name}.output_0"] = noise_pred
+
         return {"output_0": noise_pred}
 
     # =========================================================================
@@ -392,6 +408,18 @@ class TritonCFGEngine:
                   f"uncond (triton), cond (triton)")
 
         self._ctx.variable_resolver.set(encoder_key, pos_hidden)
+
+        # Persist the post-CFG noise_pred as the component's effective
+        # output for the same reason as in `_execute_batched_cfg` above:
+        # `RuntimeExecutor.store_component_outputs` overwrote
+        # `{comp_name}.output_0` on each of the two sequential passes
+        # (last write wins → noise_pred_cond is what's there now),
+        # which would leak the unguided conditional output to any
+        # downstream connection resolving `transformer.output_0`
+        # (typically the VAE). Overwrite with the CFG-applied
+        # `noise_pred` so post-loop consumers see the effective output.
+        self._ctx.variable_resolver.resolved[f"{comp_name}.output_0"] = noise_pred
+
         return {"output_0": noise_pred}
 
     # =========================================================================
