@@ -10,6 +10,7 @@ Dependencies: triton, NBXTensor. Used exclusively by dispatch.py.
 """
 
 import triton
+from typing import Dict, Tuple
 
 from .nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, _broadcast_shapes, _set_device
 
@@ -1949,6 +1950,14 @@ def group_norm_wrapper(x, num_groups: int, weight, bias, eps=1e-5):
 
     grid = (N * num_groups,)
     _set_device(x)
+    # BLOCK_SIZE: chunk along hidden_size = group_size*HxW. Cap at 16384
+    # (= 16K elements per chunk → 64 KB at fp32, 32 KB at fp16) so the
+    # per-program tile stays under SMEM regardless of dtype, and well
+    # under Triton's 2^20 numel ceiling. The kernel loops over chunks
+    # so any hidden_size works (PixArt VAE 1024×1024: hidden up to ~4M
+    # spread across many chunks).
+    hidden = group_size * HxW
+    block_size = min(16384, triton.next_power_of_2(min(hidden, 16384)))
     group_norm_forward_kernel[grid](
         x, y,
         weight if weight is not None else x,
@@ -1957,8 +1966,7 @@ def group_norm_wrapper(x, num_groups: int, weight, bias, eps=1e-5):
         group_size, C, HxW, num_groups, eps,
         scale_by_weight=(weight is not None),
         add_bias=(bias is not None),
-        BLOCK_GROUP_SIZE=triton.next_power_of_2(group_size),
-        BLOCK_HW_SIZE=triton.next_power_of_2(HxW),
+        BLOCK_SIZE=block_size,
     )
     return y, mean, rstd
 
@@ -4397,6 +4405,118 @@ def _get_causal_bias(device_idx, seqlen_q, seqlen_k, dtype):
     return bias
 
 
+# SMEM budget for flash-attention tile selection.
+# Empirical correction factor between the analytical Q+K+V+bias+acc footprint
+# below and Triton's actual per-program SMEM allocation: Triton compiler adds
+# pipelining buffers, register spill scratch, and softmax statistics scratch
+# that the formula cannot model directly. On head_dim=512 fp16 (32,32) the
+# formula yields 102 KB while Triton reports 131 KB → factor 1.28. We use
+# 0.7 (= 1/1.43) as the safety margin so the picked block always fits with
+# headroom on the actual hardware.
+_FA_SMEM_SAFETY = 0.7
+
+# Cache of (device_idx → max_shared_mem_bytes) discovered via the Triton
+# driver. Populated lazily and reused across SDPA calls — driver query is
+# fast but not free, and the SMEM capacity does not change at runtime.
+_FA_SMEM_CACHE: Dict[int, int] = {}
+
+
+def _fa_max_smem(device_idx: int) -> int:
+    """Query GPU shared-memory-per-SM capacity via the Triton driver.
+
+    Hardware-universal by construction: V100 (98304), A100 (167936), H100
+    (232448), AMD CDNA all expose this via the same driver interface. No
+    hardware-specific branch.
+
+    Falls back to 49152 (Volta lower bound, no shared-memory carveout
+    config) if the driver query fails — pessimistic on purpose so a
+    failure to detect never causes a crash, only a smaller block size.
+    """
+    if device_idx in _FA_SMEM_CACHE:
+        return _FA_SMEM_CACHE[device_idx]
+    try:
+        props = triton.runtime.driver.active.utils.get_device_properties(device_idx)
+        smem = int(props.get("max_shared_mem", 49152))
+    except Exception:
+        smem = 49152
+    _FA_SMEM_CACHE[device_idx] = smem
+    return smem
+
+
+def _pick_attention_blocks(head_dim: int, dtype, device_idx: int,
+                           seqlen_q: int) -> Tuple[int, int]:
+    """Choose (BLOCK_M, BLOCK_N) for flash_attention given head_dim, dtype,
+    seqlen_q, and the actual SMEM/SM capacity of the target device.
+
+    Hardware-universal by construction — replaces the prior table that
+    hardcoded V100's 96 KB SMEM and silently exceeded it on head_dim=512.
+    Adapts automatically to V100 (98 KB), A100 (164 KB), H100 (228 KB),
+    AMD CDNA, and any future architecture exposing max_shared_mem via
+    the Triton driver. ZERO HARDCODE per-arch.
+
+    Footprint model (per kernel program, shared memory only):
+      Q tile:        BLOCK_M  * BLOCK_HEADDIM * dtype_bytes
+      K tile:        BLOCK_N  * BLOCK_HEADDIM * dtype_bytes
+      V tile:        BLOCK_N  * BLOCK_HEADDIM * dtype_bytes
+      bias tile:     BLOCK_M  * BLOCK_N      * dtype_bytes (matches Q dtype)
+
+    The accumulator (BM × BLOCK_HEADDIM, fp32) and softmax scratch
+    (BM × BN, fp32) live in the register file, not in SMEM, and are
+    therefore excluded from this footprint. Triton internally inflates
+    the SMEM use by ~1.3× for double-buffered pipelining; that 30%
+    overhead is absorbed by _FA_SMEM_SAFETY (= 0.7 → margin of ~43%).
+
+    Constraints:
+    - BLOCK_M ≥ 16, BLOCK_N ≥ 16 (TensorCore tile minimum on Volta+)
+    - footprint ≤ max_smem * _FA_SMEM_SAFETY
+    - decode (seqlen_q ≤ 16): BLOCK_M = 16, BLOCK_N as large as fits
+    """
+    # Map NBXDtype → element bytes
+    if dtype in (NBXDtype.float16, NBXDtype.bfloat16):
+        dt_bytes = 2
+    elif dtype == NBXDtype.float32:
+        dt_bytes = 4
+    else:
+        dt_bytes = 4  # pessimistic
+
+    block_headdim = max(triton.next_power_of_2(head_dim), 16)
+    budget = int(_fa_max_smem(device_idx) * _FA_SMEM_SAFETY)
+
+    def footprint(bm: int, bn: int) -> int:
+        qkv = (bm + 2 * bn) * block_headdim * dt_bytes
+        bias = bm * bn * dt_bytes
+        return qkv + bias
+
+    # Decode path — fixed BM=16, walk BN candidates from largest to smallest.
+    if seqlen_q <= 16:
+        for bn in (128, 64, 32, 16):
+            if footprint(16, bn) <= budget:
+                return 16, bn
+        raise RuntimeError(
+            f"ZERO FALLBACK: cannot fit decode flash_attention tile in SMEM. "
+            f"head_dim={head_dim}, dtype={dtype}, max_smem="
+            f"{_fa_max_smem(device_idx)}, budget={budget}. Hardware too "
+            f"constrained for this attention shape — consider tiling at the "
+            f"dispatch level over heads or sequence."
+        )
+
+    # General prefill / spatial-attention path. Candidates ordered from
+    # largest TensorCore utilization to smallest, guaranteed-fit floor at
+    # (16, 16). On modern hardware (A100/H100) larger tiles win; on Volta
+    # head_dim=512 we fall through to (32, 16).
+    for bm, bn in [(128, 64), (64, 64), (64, 32), (32, 32), (32, 16), (16, 16)]:
+        if footprint(bm, bn) <= budget:
+            return bm, bn
+    raise RuntimeError(
+        f"ZERO FALLBACK: cannot fit flash_attention tile in SMEM. "
+        f"head_dim={head_dim}, dtype={dtype}, max_smem="
+        f"{_fa_max_smem(device_idx)}, budget={budget}. Even (16, 16) "
+        f"exceeds the SMEM budget — head_dim={head_dim} too large for this "
+        f"hardware. Consider tiling at the dispatch level over heads or "
+        f"sequence."
+    )
+
+
 def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
                                           dropout_p=0.0, is_causal=False,
                                           scale=None, **kwargs):
@@ -4486,25 +4606,44 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     if not (q.dtype == k.dtype == v.dtype):
         q, k, v = q.to(NBXDtype.float32), k.to(NBXDtype.float32), v.to(NBXDtype.float32)
 
-    # Adaptive BLOCK_M (Phase 1): decode-path seqlen_q is typically 1–4. Using
-    # BLOCK_M=128 wastes >99% of the Q tile. 16 is the floor enforced by
-    # tl.dot (TensorCore tile minimum) — below that the kernel crashes.
-    # Block sizes — adapted from Dao-AILab defaults.
-    # Reduce BLOCK_M for large headdim to stay within shared memory limits.
-    # V100 has 96KB shared memory. With headdim=256: 128×256×2×3 = 192KB > 96KB.
+    # BLOCK_M / BLOCK_N selection is hardware-aware via _pick_attention_blocks
+    # (see docstring above). The picker queries SMEM/SM via the Triton driver
+    # and chooses the largest valid tile that fits — V100 (98 KB), A100 (164
+    # KB), H100 (228 KB), AMD CDNA, all by construction. ZERO HARDCODE.
     BLOCK_HEADDIM = max(triton.next_power_of_2(headdim), 16)
-    if seqlen_q <= 16:
-        BLOCK_M = 16
-        BLOCK_N = 64 if BLOCK_HEADDIM < 128 else (64 if BLOCK_HEADDIM < 256 else 32)
-    elif BLOCK_HEADDIM >= 256:
-        BLOCK_M = 32
-        BLOCK_N = 32
-    elif BLOCK_HEADDIM >= 128:
-        BLOCK_M = 64
-        BLOCK_N = 64
-    else:
-        BLOCK_M = 128
-        BLOCK_N = 64
+    device_idx_pick = q._device_idx if hasattr(q, '_device_idx') else 0
+    # IMPORTANT: pass nbx_dtype (NBXDtype enum), not q.dtype which on
+    # NBXTensor returns triton.language dtype for Triton JIT compatibility.
+    # The picker keys its bytes-per-element table on NBXDtype.
+    pick_dtype = q.nbx_dtype if hasattr(q, 'nbx_dtype') else q.dtype
+    # Adaptive precision fallback: when the kernel's Q+K+V+bias footprint
+    # in the requested dtype exceeds the device's SMEM budget at the
+    # smallest valid (16, 16) tile, downcast Q/K/V to fp16. The kernel
+    # always accumulates in fp32 internally (acc_o = tl.float32), so the
+    # only precision loss is the input quantization to fp16. This handles
+    # the PixArt VAE on V100: head_dim=512 fp32 needs 98 KB of SMEM for
+    # Q+K+V alone, exactly V100's per-SM limit, and Triton needs more for
+    # pipelining → impossible. The same compute in fp16 needs 49 KB → fits
+    # comfortably with (16, 16) and produces visually-equivalent output.
+    # On A100 (164 KB) and H100 (228 KB) fp32 fits natively → no downcast.
+    output_upcast_to = None
+    try:
+        BLOCK_M, BLOCK_N = _pick_attention_blocks(
+            head_dim=headdim, dtype=pick_dtype,
+            device_idx=device_idx_pick, seqlen_q=seqlen_q,
+        )
+    except RuntimeError:
+        if pick_dtype == NBXDtype.float32:
+            BLOCK_M, BLOCK_N = _pick_attention_blocks(
+                head_dim=headdim, dtype=NBXDtype.float16,
+                device_idx=device_idx_pick, seqlen_q=seqlen_q,
+            )
+            output_upcast_to = NBXDtype.float32
+            q = q.to(NBXDtype.float16)
+            k = k.to(NBXDtype.float16)
+            v = v.to(NBXDtype.float16)
+        else:
+            raise
 
     # Output allocation. seqlen_q_rounded must align with actual BLOCK_M.
     o = NBXTensor.empty_like(q)
@@ -4573,6 +4712,8 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
         BLOCK_N=BLOCK_N,
         GQA_GROUPS=gqa_groups,
     )
+    if output_upcast_to is not None:
+        o = o.to(output_upcast_to)
     return o
 
 
