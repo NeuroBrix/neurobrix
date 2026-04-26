@@ -19,6 +19,18 @@ from ..base import ComponentHandler, ComponentConfig
 from ..registry import register_handler
 
 
+def _cat(tensors, dim):
+    """Universal concatenation across torch.Tensor and NBXTensor.
+
+    NBXTensor exposes a class-level cat() classmethod (see
+    src/neurobrix/kernels/nbx_tensor.py); torch.Tensor does not, so we
+    dispatch on the runtime type of the first tensor.
+    """
+    if hasattr(type(tensors[0]), 'cat'):
+        return type(tensors[0]).cat(tensors, dim=dim)
+    return torch.cat(tensors, dim=dim)
+
+
 @register_handler("text_encoder")
 class TextEncoderComponentHandler(ComponentHandler):
     """
@@ -205,19 +217,29 @@ class TextEncoderComponentHandler(ComponentHandler):
 
         # Check if slicing is needed (Sana-style CHI handling)
         if complex_human_instruction and hidden_state.shape[1] > max_sequence_length:
-            # Select_index pattern: [BOS token] + [last N-1 tokens]
-            # The CHI prefix occupies the first ~208 tokens. With padding="max_length",
-            # the user's actual prompt content is at the END of the sequence.
-            # This pattern keeps the BOS token (position 0) and the last (N-1) tokens
-            # which contain the user prompt, discarding the CHI prefix in the middle.
-            # This matches the original Sana pipeline behavior exactly.
+            # Sana CHI slicing: keep [BOS token at index 0] + [last (N-1)
+            # tokens] which contain the user prompt. The CHI prefix in the
+            # middle is discarded. Matches the HuggingFace
+            # Sana_1600M_1024px_MultiLing pipeline behavior.
+            #
+            # Implemented via narrow + cat instead of fancy indexing
+            # (hidden_state[:, list_of_indices]) because NBXTensor in
+            # --triton mode does not support fancy indexing by Python list.
+            # narrow + cat is universally compatible with both torch.Tensor
+            # and NBXTensor and produces a single contiguous output ready
+            # for downstream ops.
             orig_seq_len = hidden_state.shape[1]
-            select_index = [0] + list(range(-max_sequence_length + 1, 0))
-            hidden_state = hidden_state[:, select_index]
+            tail_len = max_sequence_length - 1
+            tail_start = orig_seq_len - tail_len
+            first_token = hidden_state.narrow(1, 0, 1)
+            last_chunk = hidden_state.narrow(1, tail_start, tail_len)
+            hidden_state = _cat([first_token, last_chunk], dim=1)
 
             # Apply same slicing to attention_mask if present
             if attention_mask is not None and attention_mask.shape[1] > max_sequence_length:
-                attention_mask = attention_mask[:, select_index]
+                mask_first = attention_mask.narrow(1, 0, 1)
+                mask_last = attention_mask.narrow(1, tail_start, tail_len)
+                attention_mask = _cat([mask_first, mask_last], dim=1)
 
         result["hidden_state"] = hidden_state
         if attention_mask is not None:

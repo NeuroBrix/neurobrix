@@ -33,6 +33,26 @@ from neurobrix.core.cfg.engine import CFGEngine
 from neurobrix.core.module.tiling_engine import TilingEngine
 
 
+def _is_tensor(x) -> bool:
+    """True for torch.Tensor or NBXTensor.
+
+    The triton runtime substitutes NBXTensor for torch.Tensor at component
+    boundaries, but isinstance(x, torch.Tensor) returns False for NBXTensor.
+    Without this dual check, every site that gates logic on
+    isinstance(*, torch.Tensor) silently short-circuits in --triton mode.
+    NBXTensor is imported lazily to avoid a hard dependency on the triton
+    subsystem from core runtime.
+    """
+    if isinstance(x, torch.Tensor):
+        return True
+    try:
+        from neurobrix.kernels.nbx_tensor import NBXTensor
+        return isinstance(x, NBXTensor)
+    except ImportError:
+        return False
+
+
+
 class RuntimeExecutor:
     """
     NeuroBrix Runtime Executor - Orchestrator Only
@@ -890,10 +910,14 @@ class RuntimeExecutor:
 
     # ========== TILING HELPERS ==========
 
-    def _find_spatial_input(self, comp_inputs: Dict[str, Any]) -> Optional[torch.Tensor]:
-        """Find the first 4D spatial tensor in component inputs for tiling."""
+    def _find_spatial_input(self, comp_inputs: Dict[str, Any]) -> Optional[Any]:
+        """Find the first 4D spatial tensor in component inputs for tiling.
+
+        Returns either torch.Tensor or NBXTensor — both expose .dim() and
+        are usable downstream by the tiling engine.
+        """
         for value in comp_inputs.values():
-            if isinstance(value, torch.Tensor) and value.dim() == 4:
+            if _is_tensor(value) and value.dim() == 4:
                 return value
         return None
 
@@ -1120,7 +1144,7 @@ class RuntimeExecutor:
         # Replace all tensor inputs with the final latents
         fixed_inputs = {}
         for input_name, value in comp_inputs.items():
-            if isinstance(value, torch.Tensor):
+            if _is_tensor(value):
                 fixed_inputs[input_name] = final_latents
             else:
                 fixed_inputs[input_name] = value

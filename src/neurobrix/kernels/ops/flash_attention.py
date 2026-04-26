@@ -8,10 +8,20 @@ Features:
 - Self-attention and cross-attention
 - Arbitrary seqlens (not just multiples of 128)
 - Head dimensions up to 128
-- Attention bias (vector or matrix)
+- Attention bias (vector or matrix) — REQUIRED, not optional
 
 Tested on A100. See original source for caveats about race conditions
 on non-64/128 head dimensions.
+
+BIAS_TYPE accepts only "vector" or "matrix" — the original "none"
+path (zero bias materialized in registers via tl.zeros) was removed
+because Triton's IR-level optimization passes propagate the bias
+*origin* (constant-fold candidate vs memory-to-register load) through
+to the MMA selection of the downstream tl.dot, producing
+non-bit-equivalent results vs the matrix path on identical Q/K/V in
+fp32 inputs. Callers that previously passed BIAS_TYPE="none" must now
+provide a memory-resident zero bias buffer (the Python wrapper handles
+this transparently via a cached zero buffer).
 """
 
 import triton
@@ -38,7 +48,6 @@ def flash_attention_forward_kernel(
     nheads, seqlen_q, seqlen_k, seqlen_q_rounded, headdim,
     CACHE_KEY_SEQLEN_Q, CACHE_KEY_SEQLEN_K,
     BIAS_TYPE: tl.constexpr,
-    IS_CAUSAL: tl.constexpr,
     BLOCK_HEADDIM: tl.constexpr,
     EVEN_M: tl.constexpr,
     EVEN_N: tl.constexpr,
@@ -70,7 +79,7 @@ def flash_attention_forward_kernel(
     )
     if BIAS_TYPE == "vector":
         b_ptrs = Bias + off_b * stride_bb + off_h * stride_bh + offs_n
-    elif BIAS_TYPE == "matrix":
+    else:  # BIAS_TYPE == "matrix"
         b_ptrs = (
             Bias + off_b * stride_bb + off_h * stride_bh
             + (offs_m[:, None] * stride_bm + offs_n[None, :])
@@ -93,8 +102,12 @@ def flash_attention_forward_kernel(
         else:
             q = tl.load(q_ptrs, mask=(offs_m[:, None] < seqlen_q) & (offs_d[None, :] < headdim), other=0.0)
 
-    # Loop over K, V blocks
-    end_n = seqlen_k if not IS_CAUSAL else tl.minimum((start_m + 1) * BLOCK_M, seqlen_k)
+    # Loop over K, V blocks. Causal masking is applied via the bias
+    # tensor (memory-loaded), not via an internal IS_CAUSAL constexpr —
+    # the wrapper materializes a causal additive mask {-inf above diag,
+    # 0 elsewhere} when needed and passes it as bias_matrix. This keeps
+    # every tensor reaching tl.dot on a single tl.load path.
+    end_n = seqlen_k
     for start_n in range(0, end_n, BLOCK_N):
         start_n = tl.multiple_of(start_n, BLOCK_N)
 
@@ -117,30 +130,34 @@ def flash_attention_forward_kernel(
 
         if not EVEN_N:
             qk += tl.where((start_n + offs_n)[None, :] < seqlen_k, 0, float("-inf"))
-        if IS_CAUSAL:
-            qk += tl.where(offs_m[:, None] >= (start_n + offs_n)[None, :], 0, float("-inf"))
 
-        # Bias
-        if BIAS_TYPE != "none":
-            if BIAS_TYPE == "vector":
-                if EVEN_N:
-                    bias = tl.load(b_ptrs + start_n).to(tl.float32)
-                else:
-                    bias = tl.load(b_ptrs + start_n, mask=(start_n + offs_n) < seqlen_k, other=0.0).to(tl.float32)
-                bias = bias[None, :]
-            elif BIAS_TYPE == "matrix":
-                if EVEN_M & EVEN_N:
-                    bias = tl.load(b_ptrs + start_n).to(tl.float32)
-                else:
-                    bias = tl.load(b_ptrs + start_n,
-                                   mask=(offs_m[:, None] < seqlen_q) & ((start_n + offs_n)[None, :] < seqlen_k),
-                                   other=0.0).to(tl.float32)
-            qk = qk * softmax_scale + bias
-            m_ij = tl.maximum(tl.max(qk, 1), lse_i)
-            p = tl.exp(qk - m_ij[:, None])
-        else:
-            m_ij = tl.maximum(tl.max(qk, 1) * softmax_scale, lse_i)
-            p = tl.exp(qk * softmax_scale - m_ij[:, None])
+        # Bias load — always memory-resident (BIAS_TYPE is "vector" or
+        # "matrix", never "none"). Triton's IR-level optimizer propagates
+        # the bias *origin* (constant-fold candidate vs memory load) all
+        # the way to the MMA selection of the downstream tl.dot, producing
+        # non-bit-equivalent results when the bias originates from
+        # tl.zeros vs tl.load. The Python wrapper guarantees a memory-
+        # resident bias by routing no-mask calls through a cached zero
+        # buffer (see scaled_dot_product_attention_wrapper). Single
+        # softmax path → single tl.dot compile → bit-equivalent results
+        # across all NVIDIA archs (Volta SIMT, Ampere/Hopper TF32) and
+        # AMD ROCm CDNA matrix cores.
+        if BIAS_TYPE == "vector":
+            if EVEN_N:
+                bias = tl.load(b_ptrs + start_n).to(tl.float32)
+            else:
+                bias = tl.load(b_ptrs + start_n, mask=(start_n + offs_n) < seqlen_k, other=0.0).to(tl.float32)
+            bias = bias[None, :]
+        else:  # BIAS_TYPE == "matrix"
+            if EVEN_M & EVEN_N:
+                bias = tl.load(b_ptrs + start_n).to(tl.float32)
+            else:
+                bias = tl.load(b_ptrs + start_n,
+                               mask=(offs_m[:, None] < seqlen_q) & ((start_n + offs_n)[None, :] < seqlen_k),
+                               other=0.0).to(tl.float32)
+        qk = qk * softmax_scale + bias
+        m_ij = tl.maximum(tl.max(qk, 1), lse_i)
+        p = tl.exp(qk - m_ij[:, None])
         l_ij = tl.sum(p, 1)
 
         # Scale accumulator

@@ -1528,7 +1528,37 @@ class NBXTensor:
         return self.permute(*dims)
 
     def __getitem__(self, key):
-        """Basic tensor indexing: t[0], t[:, :, 0], t[:, 2:5], etc."""
+        """Basic tensor indexing: t[0], t[:, :, 0], t[:, 2:5], etc.
+
+        Fancy indexing by Python list of integers (e.g.
+        t[:, [0, -3, -2, -1]]) is NOT supported. NBXTensor enforces
+        explicit slicing via narrow, cat, or index_select_wrapper to
+        guarantee numerical and structural parity with torch. Prior to
+        this guard, list keys were silently no-op'd, returning the
+        original tensor unchanged — a bomb that masked a real bug in
+        the Sana CHI handler (see commit log). The crash is intentional
+        and forces the explicit pattern at every call site.
+        """
+        # Reject fancy indexing by list — silently no-op'd before, now hard-fails.
+        if isinstance(key, list):
+            raise RuntimeError(
+                "ZERO FALLBACK: NBXTensor does not support fancy indexing by "
+                "Python list (e.g. tensor[[0, 1, 2]]). Use narrow + cat for "
+                "static patterns or index_select_wrapper for dynamic indices. "
+                "See src/neurobrix/core/components/handlers/text_encoder_handler.py "
+                "for an example of the narrow + cat pattern."
+            )
+        if isinstance(key, tuple):
+            for k in key:
+                if isinstance(k, list):
+                    raise RuntimeError(
+                        "ZERO FALLBACK: NBXTensor does not support fancy indexing "
+                        "by Python list within a tuple (e.g. tensor[:, [0, 1, 2]]). "
+                        "Use narrow + cat for static patterns or "
+                        "index_select_wrapper for dynamic indices. See "
+                        "src/neurobrix/core/components/handlers/text_encoder_handler.py "
+                        "for an example of the narrow + cat pattern."
+                    )
         if isinstance(key, int):
             return self.select(0, key)
         if isinstance(key, slice):
