@@ -4340,6 +4340,63 @@ def unfold_backward_wrapper(*args, **kwargs) :
 # Kernel: ops/flash_attention.py (extracted from same source)
 # ===========================================================================
 
+# Cache of zero-bias buffers for the no-mask flash attention path. The
+# kernel always reads bias from memory (BIAS_TYPE="vector"|"matrix" only)
+# to guarantee bit-equivalent MMA selection across configurations — a
+# tl.zeros in-register was empirically shown to produce a different MMA
+# than a tl.load on Volta SIMT (and likely on AMD CDNA), so every call
+# without an explicit mask is routed through tl.load via this shared
+# zero buffer. Cache key = (device_idx, seqlen_q, seqlen_k, dtype). One
+# allocation per distinct shape per device — typically caps at 2-4 keys
+# per inference session. Memory: ~4-16 MB total for typical attention
+# shapes, negligible vs model weights.
+_zero_bias_cache: dict = {}
+_causal_bias_cache: dict = {}
+
+
+def _get_zero_bias(device_idx, seqlen_q, seqlen_k, dtype):
+    key = (device_idx, seqlen_q, seqlen_k, dtype)
+    cached = _zero_bias_cache.get(key)
+    if cached is not None:
+        return cached
+    DeviceAllocator.set_device(device_idx)
+    bias = NBXTensor.zeros((seqlen_q, seqlen_k), dtype=dtype,
+                            device=f"cuda:{device_idx}")
+    _zero_bias_cache[key] = bias
+    return bias
+
+
+def _get_causal_bias(device_idx, seqlen_q, seqlen_k, dtype):
+    """Return a cached causal additive mask [seqlen_q, seqlen_k]:
+    0.0 for positions k <= q + (seqlen_k - seqlen_q), -inf otherwise.
+
+    Materialized via memory so the flash kernel reads it through
+    tl.load — same physical path as user-provided explicit masks.
+    Required for numerical parity: Triton compiles tl.where(constexpr,
+    0, -inf) and tl.load(memory) with different IR optimization
+    passes, propagating to different MMA selections downstream.
+    Empirical: fp32 hd=256 IS_CAUSAL via constexpr produced cosine
+    0.937; via memory produces 0.999997.
+    """
+    key = (device_idx, seqlen_q, seqlen_k, dtype)
+    cached = _causal_bias_cache.get(key)
+    if cached is not None:
+        return cached
+    DeviceAllocator.set_device(device_idx)
+    # Build via tril + masked_fill: ones[Q,K] -> tril(diagonal=offset)
+    # gives 1 in valid positions, 0 in masked positions. masked_fill
+    # those zero positions with -inf, the rest stays as 0 baseline.
+    offset = seqlen_k - seqlen_q
+    base = NBXTensor.zeros((seqlen_q, seqlen_k), dtype=dtype,
+                            device=f"cuda:{device_idx}")
+    ones = add(base, 1.0)
+    tril_mask = tril_wrapper(ones, diagonal=offset)
+    inverted = eq(tril_mask, 0.0)
+    bias = masked_fill(base, inverted, float('-inf'))
+    _causal_bias_cache[key] = bias
+    return bias
+
+
 def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
                                           dropout_p=0.0, is_causal=False,
                                           scale=None, **kwargs):
@@ -4391,18 +4448,15 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     if hasattr(dropout_p, 'item'):
         dropout_p = float(dropout_p.item()) if hasattr(dropout_p, 'numel') and dropout_p.numel() == 1 else float(dropout_p)
 
-    # When is_causal=True, the kernel handles causal masking internally.
-    # Drop the explicit mask to avoid double-masking.
-    # For 2D square masks: check if it's a causal tril pattern before
-    # overriding. Non-causal 2D masks (e.g., attention masks in diffusion
-    # models) must be preserved.
+    # When is_causal=True with an explicit attn_mask, drop the mask —
+    # the causal bias materializer below covers the causal semantics
+    # uniformly through memory.
     if is_causal and attn_mask is not None:
         attn_mask = None
-    elif attn_mask is not None and attn_mask.ndim == 2:
-        # Square 2D mask with seqlen_q == seqlen_k → likely causal tril
-        if attn_mask.shape[0] == attn_mask.shape[1] == seqlen_q:
-            is_causal = True
-            attn_mask = None
+    # The former heuristic "2D square mask with seqlen_q == seqlen_k →
+    # assume causal tril" has been removed. The kernel is now strictly
+    # bias-driven (no IS_CAUSAL constexpr path), and any causal pattern
+    # arrives via memory through the cache below.
 
     # Default scale
     if scale is None:
@@ -4460,20 +4514,42 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     tmp = NBXTensor.empty((batch, nheads, seqlen_q_rounded), dtype=NBXDtype.float32,
                           device=f"cuda:{q._device_idx}" if hasattr(q, '_device_idx') else 'cuda')
 
-    # Bias handling
-    has_bias = attn_mask is not None
-    if has_bias:
+    # Bias handling — always memory-resident.
+    # The kernel only accepts BIAS_TYPE in {"vector", "matrix"} and the
+    # IS_CAUSAL constexpr is gone. Every tensor reaching tl.dot must
+    # arrive via tl.load to guarantee Triton compiles a single MMA path.
+    # Three sub-cases below all converge to BIAS_TYPE="matrix" with a
+    # memory-resident bias.
+    device_idx = q._device_idx if hasattr(q, '_device_idx') else 0
+    if attn_mask is not None:
+        if attn_mask.ndim == 2:
+            attn_mask = attn_mask.unsqueeze(0).unsqueeze(0).expand(
+                batch, nheads, seqlen_q, seqlen_k
+            )
+        elif attn_mask.ndim == 3:
+            if attn_mask.shape[0] == 1 and batch > 1:
+                attn_mask = attn_mask.expand(batch, seqlen_q, seqlen_k)
+            attn_mask = attn_mask.unsqueeze(1).expand(
+                batch, nheads, seqlen_q, seqlen_k
+            )
         bias = attn_mask.contiguous()
-        if bias.ndim == 2:
-            bias_type = "vector"
-        else:
-            # 3D or 4D bias — pass as matrix.
-            # For 4D (batch, heads, q, k): kernel reads via strides.
-            # stride(0)=heads*q*k, stride(1)=q*k, stride(2)=k
-            bias_type = "matrix"
+    elif is_causal:
+        causal_base = _get_causal_bias(device_idx, seqlen_q, seqlen_k, q.dtype)
+        bias = causal_base.unsqueeze(0).unsqueeze(0).expand(
+            batch, nheads, seqlen_q, seqlen_k
+        )
     else:
-        bias = q  # dummy, not used
-        bias_type = "none"
+        zero_base = _get_zero_bias(device_idx, seqlen_q, seqlen_k, q.dtype)
+        bias = zero_base.unsqueeze(0).unsqueeze(0).expand(
+            batch, nheads, seqlen_q, seqlen_k
+        )
+    bias_type = "matrix"
+    # Causal semantics now live entirely in the materialized bias above —
+    # the kernel's IS_CAUSAL path has been removed. Force False here so
+    # any caller-provided is_causal flag does not reach the kernel
+    # signature (it no longer accepts one anyway, but we keep the local
+    # variable for clarity).
+    is_causal = False
 
     grid = (triton.cdiv(seqlen_q, BLOCK_M), batch * nheads)
 
@@ -4487,14 +4563,11 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
         q.stride(0), q.stride(1), q.stride(2),
         k.stride(0), k.stride(1), k.stride(2),
         v.stride(0), v.stride(1), v.stride(2),
-        bias.stride(0) if has_bias and bias.ndim == 4 else (bias.stride(0) if has_bias and bias.ndim == 3 else 0),
-        bias.stride(1) if has_bias and bias.ndim == 4 else 0,
-        bias.stride(-2) if has_bias and bias.ndim >= 3 else 0,
+        bias.stride(0), bias.stride(1), bias.stride(-2),
         o.stride(0), o.stride(1), o.stride(2),
         nheads, seqlen_q, seqlen_k, seqlen_q_rounded, headdim,
         seqlen_q // 32, seqlen_k // 32,  # cache keys
         BIAS_TYPE=bias_type,
-        IS_CAUSAL=is_causal,
         BLOCK_HEADDIM=BLOCK_HEADDIM,
         BLOCK_M=BLOCK_M,
         BLOCK_N=BLOCK_N,

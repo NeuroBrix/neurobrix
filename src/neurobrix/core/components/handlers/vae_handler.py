@@ -19,6 +19,24 @@ from ..registry import register_handler
 from neurobrix.core.module.output_processor import OutputProcessor, VAE_CLAMP_REGISTRY
 
 
+def _is_tensor(x) -> bool:
+    """True for torch.Tensor or NBXTensor.
+
+    The triton runtime substitutes NBXTensor for torch.Tensor at component
+    boundaries, but isinstance(x, torch.Tensor) returns False for NBXTensor.
+    Without this dual check, every handler that gates logic on
+    isinstance(*, torch.Tensor) silently short-circuits in --triton mode —
+    the symptom that broke Sana VAE scaling (cosine -0.82, amplitude ~0.5x).
+    """
+    if isinstance(x, torch.Tensor):
+        return True
+    try:
+        from neurobrix.kernels.nbx_tensor import NBXTensor
+        return isinstance(x, NBXTensor)
+    except ImportError:
+        return False
+
+
 @register_handler("vae")
 class VAEComponentHandler(ComponentHandler):
     """
@@ -73,7 +91,7 @@ class VAEComponentHandler(ComponentHandler):
             return inputs
 
         latent = inputs[latent_key]
-        if not isinstance(latent, torch.Tensor):
+        if not _is_tensor(latent):
             return inputs
 
         # Step 1: Per-channel latent denormalization (DATA-DRIVEN)
@@ -82,12 +100,25 @@ class VAEComponentHandler(ComponentHandler):
         latents_mean = self.config.get("latents_mean")
         latents_std = self.config.get("latents_std")
         if latents_mean is not None and latents_std is not None:
-            mean_t = torch.tensor(latents_mean, device=latent.device, dtype=latent.dtype)
-            std_t = torch.tensor(latents_std, device=latent.device, dtype=latent.dtype)
-            # Reshape for broadcasting: [1, C, 1, 1] for 4D, [1, C, 1, 1, 1] for 5D
             view_shape = [1, -1] + [1] * (latent.dim() - 2)
-            mean_t = mean_t.view(*view_shape)
-            std_inv = (1.0 / std_t).view(*view_shape)
+            if isinstance(latent, torch.Tensor):
+                mean_t = torch.tensor(latents_mean, device=latent.device, dtype=latent.dtype)
+                std_t = torch.tensor(latents_std, device=latent.device, dtype=latent.dtype)
+                mean_t = mean_t.view(*view_shape)
+                std_inv = (1.0 / std_t).view(*view_shape)
+            else:
+                # NBXTensor path
+                import numpy as np
+                from neurobrix.kernels.nbx_tensor import NBXTensor
+                mean_arr = np.asarray(latents_mean, dtype=np.float32)
+                std_arr = np.asarray(1.0 / np.asarray(latents_std, dtype=np.float32), dtype=np.float32)
+                mean_t = NBXTensor.from_numpy(mean_arr)
+                std_inv = NBXTensor.from_numpy(std_arr)
+                if mean_t.nbx_dtype != latent.nbx_dtype:
+                    mean_t = mean_t.to(latent.nbx_dtype)
+                    std_inv = std_inv.to(latent.nbx_dtype)
+                mean_t = mean_t.view(*view_shape)
+                std_inv = std_inv.view(*view_shape)
             latent = latent / std_inv + mean_t
 
         # Step 2: scaling_factor (DATA-DRIVEN)
@@ -148,7 +179,7 @@ class VAEComponentHandler(ComponentHandler):
 
         # Search for any 4D/5D tensor
         for key, value in inputs.items():
-            if isinstance(value, torch.Tensor) and value.dim() in (4, 5):
+            if _is_tensor(value) and value.dim() in (4, 5):
                 return key
 
         return None
