@@ -17,24 +17,7 @@ import torch
 from ..base import ComponentHandler, ComponentConfig
 from ..registry import register_handler
 from neurobrix.core.module.output_processor import OutputProcessor, VAE_CLAMP_REGISTRY
-
-
-def _is_tensor(x) -> bool:
-    """True for torch.Tensor or NBXTensor.
-
-    The triton runtime substitutes NBXTensor for torch.Tensor at component
-    boundaries, but isinstance(x, torch.Tensor) returns False for NBXTensor.
-    Without this dual check, every handler that gates logic on
-    isinstance(*, torch.Tensor) silently short-circuits in --triton mode —
-    the symptom that broke Sana VAE scaling (cosine -0.82, amplitude ~0.5x).
-    """
-    if isinstance(x, torch.Tensor):
-        return True
-    try:
-        from neurobrix.kernels.nbx_tensor import NBXTensor
-        return isinstance(x, NBXTensor)
-    except ImportError:
-        return False
+from neurobrix.core.runtime.tensor_compat import is_tensor as _is_tensor
 
 
 @register_handler("vae")

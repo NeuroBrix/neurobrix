@@ -31,25 +31,7 @@ from neurobrix.core.runtime.resolution.input_synthesizer import InputSynthesizer
 from neurobrix.core.runtime.resolution.output_extractor import OutputExtractor
 from neurobrix.core.cfg.engine import CFGEngine
 from neurobrix.core.module.tiling_engine import TilingEngine
-
-
-def _is_tensor(x) -> bool:
-    """True for torch.Tensor or NBXTensor.
-
-    The triton runtime substitutes NBXTensor for torch.Tensor at component
-    boundaries, but isinstance(x, torch.Tensor) returns False for NBXTensor.
-    Without this dual check, every site that gates logic on
-    isinstance(*, torch.Tensor) silently short-circuits in --triton mode.
-    NBXTensor is imported lazily to avoid a hard dependency on the triton
-    subsystem from core runtime.
-    """
-    if isinstance(x, torch.Tensor):
-        return True
-    try:
-        from neurobrix.kernels.nbx_tensor import NBXTensor
-        return isinstance(x, NBXTensor)
-    except ImportError:
-        return False
+from neurobrix.core.runtime.tensor_compat import is_tensor as _is_tensor
 
 
 
