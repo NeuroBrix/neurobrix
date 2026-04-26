@@ -1,4 +1,18 @@
-# PixArt triton — arena inter-run corruption (April 2026, PARTIALLY RESOLVED → NOW VRAM-PRESSURE BLOCKER)
+# PixArt triton — arena inter-run corruption (April 2026, ARCHIVED → SUPERSEDED BY LAYER 7)
+
+**Status (2026-04-26)**: ARCHIVED. After Layer 6 (commit pending), the
+SDPA SMEM crash described later in this doc is gone (sub-fix 6.2 picks
+hardware-driven block sizes), and the Sub-fix 6.2 fp32→fp16 fallback
+unblocks PixArt VAE attention on V100. The remaining PixArt blocker is
+NEW and architectural: VAE conv2d output overflow when fp16 storage
+saturates legitimate >65504 math values. See
+`docs/follow-ups/layer7-prism-dtype-override.md` for the active blocker
+and fix plan. Original content preserved below for historical context
+(diagnoses pre-Layer-6 behavior).
+
+---
+
+## Pre-Layer-6 status (preserved for context)
 
 **Status**: inter-run hypothesis was a **misdiagnosis**. Re-verified via `NBX_SINGLE_RUN_ONLY` test. Root cause was two intra-run input-binding bugs in the triton path, fixed in a follow-up commit (see below). Remaining blocker is V100 32 GB VRAM pressure inside a single transformer run — addressable via drain-threshold tuning or a user-space caching pool.
 

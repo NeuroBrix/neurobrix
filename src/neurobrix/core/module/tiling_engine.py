@@ -108,6 +108,41 @@ class TilingEngine:
         input_ids = graph.get("input_tensor_ids", [])
         tensors = graph.get("tensors", {})
 
+        # NBX SYMBOLIC SHAPES — MASTER CONTRACT
+        # ────────────────────────────────────────────────────────────────
+        # Forge tracer marks dims that the runtime can rebind as symbolic
+        # in `tensor["symbolic_shape"]["dims"]`. CompiledSequence's symbol
+        # binding pass adapts every consumer op to the actual runtime
+        # shape, so a graph with symbolic spatial dims is spatial-adaptive
+        # by construction and does NOT need TilingEngine.
+        #
+        # TilingEngine is for graphs with FULLY-CONCRETE spatial shapes
+        # (typical: pure tile-only models like Swin2SR upscalers, or any
+        # graph that hardcodes patch grids / spatial buffers).
+        #
+        # Reading only `tensor["shape"]` (the concrete trace value) and
+        # ignoring `tensor["symbolic_shape"]` is THE pattern that produced
+        # the Sana 4Kpx triton crash — TilingEngine activated on a DC-AE
+        # VAE whose H/W are symbolic, fed an NBXTensor into the torch-only
+        # accumulator path, and TypeError'd. The fix is upstream: never
+        # instantiate TilingEngine for spatial-adaptive graphs.
+        #
+        # See docs/architecture/symbolic-shapes-contract.md for the full
+        # contract and why every site that inspects an NBX graph shape
+        # must consult symbolic_shape before drawing conclusions from the
+        # concrete trace value.
+        for input_id in input_ids:
+            tensor = tensors.get(str(input_id), {})
+            symbolic_dims = tensor.get("symbolic_shape", {}).get("dims", [])
+            if not symbolic_dims:
+                continue
+            # Spatial dims start at index 2 (skip batch and channels).
+            # 4D NCHW: indices 2 (H), 3 (W). 5D NCDHW: 2 (D), 3 (H), 4 (W).
+            for idx in range(2, len(symbolic_dims)):
+                dim_spec = symbolic_dims[idx]
+                if isinstance(dim_spec, dict) and dim_spec.get("type") == "symbol":
+                    return None  # spatial-adaptive graph — no tiling
+
         trace_size = None
         for input_id in input_ids:
             tensor = tensors.get(str(input_id), {})
