@@ -4404,6 +4404,95 @@ def _get_causal_bias(device_idx, seqlen_q, seqlen_k, dtype):
     return bias
 
 
+def _is_power_of_2(n: int) -> bool:
+    return n > 0 and (n & (n - 1)) == 0
+
+
+def _math_attention(q, k, v, attn_mask=None, is_causal=False, scale=None):
+    """Math-decomposed attention — deterministic for any head_dim.
+
+    Used for non-power-of-2 head_dim (PixArt 72, Sana 112) where the
+    flash kernel's masked-load path is non-deterministic on Volta SIMT.
+
+    Shapes: q [B, H, T_q, D], k/v [B, H_k, T_k, D]. Returns [B, H, T_q, D].
+
+    Algorithm:
+        scores = Q @ K^T * scale       (bmm)
+        scores = scores + mask         (additive bias when needed)
+        p = softmax(scores, dim=-1)    (per-row softmax)
+        out = p @ V                    (bmm)
+
+    GQA: when nheads != nheads_k, K and V are repeated to match Q heads
+    via expand+reshape (zero-copy view). Same pattern flash uses
+    internally via GQA_GROUPS, but materialized here since math path
+    has no constexpr GQA hook.
+    """
+    import math as _math
+    B, H, T_q, D = q.shape
+    H_k = k.shape[1]
+    T_k = k.shape[2]
+
+    if scale is None:
+        scale = 1.0 / _math.sqrt(D)
+
+    # GQA broadcast — repeat K/V heads to match Q. For plain MHA
+    # (H == H_k) this is a no-op view.
+    if H != H_k:
+        groups = H // H_k
+        assert H_k * groups == H
+        # [B, H_k, T_k, D] -> [B, H_k, 1, T_k, D] -> [B, H_k, groups, T_k, D] -> [B, H, T_k, D]
+        k = k.unsqueeze(2).expand(B, H_k, groups, T_k, D).reshape(B, H, T_k, D).contiguous()
+        v = v.unsqueeze(2).expand(B, H_k, groups, T_k, D).reshape(B, H, T_k, D).contiguous()
+
+    # Reshape to 3D for bmm
+    q_3d = q.reshape(B * H, T_q, D)
+    # Transpose K's last two dims so bmm computes Q @ K^T
+    k_3d_t = k.transpose(-2, -1).contiguous().reshape(B * H, D, T_k)
+    v_3d = v.reshape(B * H, T_k, D)
+
+    # scores = q @ k^T (bmm returns fp32 on V100 via force_fp32)
+    scores = bmm(q_3d, k_3d_t)  # [B*H, T_q, T_k]
+    scores = mul(scores, float(scale))
+
+    # Causal/explicit mask handling — additive bias on scores.
+    # Built via existing tril-based path; skipped for non-causal no-mask.
+    if is_causal and attn_mask is None:
+        device_idx = q._device_idx if hasattr(q, '_device_idx') else 0
+        bias = _get_causal_bias(device_idx, T_q, T_k, scores.nbx_dtype)
+        # bias shape [T_q, T_k] -> broadcast to [B*H, T_q, T_k]
+        scores = add(scores, bias.unsqueeze(0).expand(B * H, T_q, T_k))
+    elif attn_mask is not None:
+        # attn_mask may be [T_q, T_k], [B, T_q, T_k], or [B, H, T_q, T_k].
+        if attn_mask.ndim == 2:
+            mask_3d = attn_mask.unsqueeze(0).expand(B * H, T_q, T_k)
+        elif attn_mask.ndim == 3:
+            if attn_mask.shape[0] == 1 and B > 1:
+                attn_mask = attn_mask.expand(B, T_q, T_k)
+            mask_3d = attn_mask.unsqueeze(1).expand(B, H, T_q, T_k).reshape(B * H, T_q, T_k)
+        elif attn_mask.ndim == 4:
+            mask_3d = attn_mask.expand(B, H, T_q, T_k).reshape(B * H, T_q, T_k)
+        else:
+            raise RuntimeError(f"unsupported attn_mask.ndim={attn_mask.ndim}")
+        if mask_3d.nbx_dtype != scores.nbx_dtype:
+            mask_3d = mask_3d.to(scores.nbx_dtype)
+        scores = add(scores, mask_3d.contiguous())
+
+    # softmax along K dim — kernel handles fp16/fp32 internally,
+    # returns same dtype as input. Score is fp32 from bmm so softmax
+    # output is fp32.
+    p = softmax(scores, dim=-1)
+    # Cast back to value dtype for the second bmm
+    if p.nbx_dtype != v_3d.nbx_dtype:
+        p = p.to(v_3d.nbx_dtype)
+
+    # out = p @ v (bmm again returns fp32 on V100)
+    out_3d = bmm(p, v_3d)  # [B*H, T_q, D]
+    if out_3d.nbx_dtype != q.nbx_dtype:
+        out_3d = out_3d.to(q.nbx_dtype)
+
+    return out_3d.reshape(B, H, T_q, D)
+
+
 def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
                                           dropout_p=0.0, is_causal=False,
                                           scale=None, **kwargs):
@@ -4492,6 +4581,31 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     # no-op — zero overhead.
     if not (q.dtype == k.dtype == v.dtype):
         q, k, v = q.to(NBXDtype.float32), k.to(NBXDtype.float32), v.to(NBXDtype.float32)
+
+    # Layer 7 — math-decomposed attention for non-power-of-2 head_dim.
+    #
+    # The Dao-AILab flash kernel's masked-load path (EVEN_HEADDIM=False)
+    # is non-deterministic on Volta SIMT for head_dim < BLOCK_HEADDIM
+    # (e.g. PixArt 72, Sana 112). Outputs differ by max ~0.03 across
+    # consecutive calls with bit-identical inputs, concentrated at the
+    # last few Q-blocks. Cumulative drift over 28 DiT blocks produces
+    # the visible h=126,127 banding. Verified empirically: 5 consecutive
+    # calls yield 5 different outputs (top divergence at Q-blocks 56-63).
+    #
+    # The flash kernel docstring documents this as a known caveat:
+    #   "See original source for caveats about race conditions on
+    #    non-64/128 head dimensions."
+    #
+    # Fix: when head_dim is not a power of 2, use the standard math
+    # decomposition (Q@K^T → softmax → @V). matmul + softmax are
+    # deterministic by construction (no online-softmax accumulation,
+    # no MMA reordering across K tiles). Memory cost: scores tensor of
+    # shape [B*H, T_q, T_k]. For PixArt self-attn this is 1GB fp32 —
+    # fits within V100 budget. For Sana 4Kpx (T=16384) it would
+    # exceed memory; that path is blocked by other issues anyway.
+    if not _is_power_of_2(headdim):
+        return _math_attention(q, k, v, attn_mask=attn_mask,
+                                is_causal=is_causal, scale=softmax_scale)
 
     # Adaptive BLOCK_M (Phase 1): decode-path seqlen_q is typically 1–4. Using
     # BLOCK_M=128 wastes >99% of the Q tile. 16 is the floor enforced by
