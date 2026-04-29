@@ -786,7 +786,14 @@ class CompiledSequence:
                     seq_len_symbols[sym_id] = trace_val
 
         if not seq_len_symbols:
-            return  # No seq_len symbols (diffusion models, audio, etc.)
+            # No seq_len symbols (diffusion models, audio): skip the LLM
+            # path but STILL run spatial promotion below — image VAEs have
+            # named "height"/"width" symbols that need rebinding when the
+            # runtime spatial size differs from the trace size (Sana 4Kpx).
+            from neurobrix.triton.promotion import _spatial_promotion_pass
+            _spatial_promotion_pass(self.dag, tensors, ops_metadata,
+                                    symbols, set(), set())
+            return
 
         # Collision check: if trace_value appears in any weight/buffer shape,
         # it could be a model constant (head_dim, hidden_size, etc.).
@@ -1027,6 +1034,28 @@ class CompiledSequence:
                                 args[1] = {"type": "list", "value": shape_list}
                             else:
                                 args[1] = shape_list
+
+        # Layer 8 — spatial-symbol promotion for diffusion VAEs.
+        #
+        # The seq_len pass above only promotes symbols named "seq_len" — by
+        # design, that's the LLM contract. Image-diffusion graphs use named
+        # symbols "height" and "width" (and occasionally "depth"); they
+        # were left out. For Sana 1024 / PixArt 1024 the trace size happens
+        # to equal the runtime size, so missing rebind is a silent no-op.
+        # For Sana 4Kpx (trace 64×64 latent → runtime 128×128 latent) the
+        # missing rebind surfaces as a literal `4096` (= trace H*W) / `64`
+        # (= trace H or W) baked into `aten::expand` / `aten::view` shape
+        # args that should have been `s_h * s_w` / `s_h` / `s_w`. This
+        # pass walks view/expand/reshape/ones/zeros/full/new_zeros/new_ones
+        # and promotes adjacent (H, W) pairs at any cascade scale plus
+        # H*W flattened products. Bit-perfect on trace == runtime models
+        # (resolver substitutes the symbol with its own trace_value).
+        # Same implementation as triton/promotion.py — single source of
+        # truth, mirrored across the native CompiledSequence and the
+        # triton sequential dispatcher.
+        from neurobrix.triton.promotion import _spatial_promotion_pass
+        _spatial_promotion_pass(self.dag, tensors, ops_metadata,
+                                symbols, set(), set())
 
     def _identify_seq_dependent_constants(self, tensors: Dict[str, Any]) -> None:
         """
