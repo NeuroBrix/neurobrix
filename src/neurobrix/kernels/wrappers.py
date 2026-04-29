@@ -1903,13 +1903,34 @@ def upsample_nearest1d_wrapper(
 def upsample_nearest2d_wrapper(
     x, output_size, scales_h=None, scales_w=None
 ) :
-    """Upsample nearest 2D. Wrapper from FlagGems."""
+    """Upsample nearest 2D. Wrapper from FlagGems.
+
+    PyTorch's traced graph stores both `output_size` (concrete trace
+    value) and `scales_h/w` (the upsampling ratio). When the runtime
+    input size differs from the trace size — Sana 4Kpx: trace 64×64
+    latent → runtime 128×128, and every cascading decoder upsample
+    inherits the doubling — `output_size` no longer matches
+    `IH * scales_h`. Native PyTorch recomputes from the live input
+    when scale factors are present; the wrapper must do the same so
+    the cascade scales correctly. When `scales_h/w` is None we keep
+    the literal `output_size` (path used by audio paths that don't
+    rebind spatial dims).
+    """
     assert x.ndim == 4
     N, C, IH, IW = x.shape
     if isinstance(output_size, (list, tuple)):
         OH, OW = output_size[0], output_size[1]
     else:
         OH, OW = output_size, output_size
+
+    # Recompute output size from runtime input when scale factors are
+    # given. Bit-identical when trace == runtime; corrects the cascade
+    # when they differ (Sana 4Kpx and any other graph traced at a
+    # smaller spatial size than runtime).
+    if scales_h is not None:
+        OH = int(IH * float(scales_h))
+    if scales_w is not None:
+        OW = int(IW * float(scales_w))
 
     reciprocal_scale_h = (1.0 / scales_h) if scales_h is not None else (IH / OH)
     reciprocal_scale_w = (1.0 / scales_w) if scales_w is not None else (IW / OW)
