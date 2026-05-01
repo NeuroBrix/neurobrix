@@ -46,3 +46,34 @@ defaults:
   height: 1024               # Default output height
   width: 1024                # Default output width
 
+execution:
+  # flow_type varies per model (iterative_process diffusion vs autoregressive_generation VQ)
+  has_kv_cache: false        # Diffusion path; VQ-image override via topology check
+  use_graph_executor: true
+  compiled_mode: true
+
+inputs:
+  required: ["--prompt"]
+  optional:
+    - flag: "--input-image"
+      triggers_mode: "img2img"
+    - flag: "--mask-image"
+      requires: "--input-image"
+      triggers_mode: "inpainting"
+    - flag: "--reference-image"
+    - flag: "--steps"
+    - flag: "--cfg"
+    - flag: "--height"
+    - flag: "--width"
+
+modes:
+  supported: ["t2i", "img2img", "inpainting"]
+  default: "t2i"
+  multimodal_strict: false
+
+output:
+  default_extension_per_mode:
+    t2i: ".png"
+    img2img: ".png"
+    inpainting: ".png"
+

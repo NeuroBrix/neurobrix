@@ -45,5 +45,26 @@ moe:
 # Execution configuration
 execution:
   flow_type: "autoregressive_generation"
+  has_kv_cache: true         # LLM autoregressive uses KV cache
   use_graph_executor: true   # Force GraphExecutor instead of UniversalLMExecutor
   compiled_mode: true        # Use CompiledSequenceV2 for zero-overhead execution
+
+inputs:
+  required: ["--prompt"]
+  optional:
+    - flag: "--system"
+    - flag: "--chat"
+    - flag: "--no-chat"
+    - flag: "--temperature"
+    - flag: "--repetition-penalty"
+    - flag: "--max-tokens"
+
+modes:
+  supported: ["text", "chat"]
+  default: "text"
+  multimodal_strict: false
+
+output:
+  default_extension_per_mode:
+    text: ".txt"
+    chat: ".txt"
