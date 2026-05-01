@@ -447,15 +447,36 @@ class PrismSolver:
 
         neural_components = sorted(neural_components, key=lambda c: c.name)
 
-        # Step 0: Determine model category from manifest family
+        # Step 0: Determine model category from manifest family — DATA-DRIVEN
+        # Reads execution.has_kv_cache from config/families/<family>.yml plus
+        # topology.flow.generation.type to discriminate VQ-image autoregressive
+        # paths from text autoregressive paths. Falls back to legacy detection
+        # for the unknown case (defensive).
         manifest = container.get_manifest() or {}
         family = manifest.get("family", "unknown")
         has_lm_config = bool(self._read_lm_config(container))
+        family_kv_cache = False
+        try:
+            from neurobrix.core.config import get_family_config
+            family_kv_cache = bool(
+                get_family_config(family).get("execution", {}).get("has_kv_cache", False)
+            )
+        except (FileNotFoundError, RuntimeError):
+            pass
 
-        if family == "llm":
-            self._model_category = "llm"
-        elif family == "image" and has_lm_config:
+        # Inspect topology for autoregressive_image (VQ multimodal Janus pattern)
+        gen_type = ""
+        try:
+            topology = container.get_topology() or {}
+            gen_type = topology.get("flow", {}).get("generation", {}).get("type", "") or ""
+        except Exception:
+            gen_type = ""
+        is_image_vq = (gen_type == "autoregressive_image") and has_lm_config
+
+        if is_image_vq:
             self._model_category = "image_vq"
+        elif family_kv_cache:
+            self._model_category = "llm"
         else:
             self._model_category = "diffusion"
 

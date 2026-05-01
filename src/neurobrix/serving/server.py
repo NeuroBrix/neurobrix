@@ -321,8 +321,16 @@ class ServingDaemon:
             if method == "generate":
                 output_path = params.pop("output_path", None)
                 result = self._engine.generate(**params)
-                # For non-LLM: save output file, return path instead of raw tensors
-                if output_path and self._engine.family != "llm" and "outputs" in result:
+                # For binary-output families (image, video, tts wav): save the
+                # tensor to disk and return the path instead of raw tensors.
+                # Text families (llm, vlm, multimodal-text, stt, audio_llm) put
+                # the answer directly in the JSON response.
+                from neurobrix.core.runtime.output_dispatch import get_output_format
+                try:
+                    fmt = get_output_format(self._engine.family or "")
+                except RuntimeError:
+                    fmt = "txt"
+                if output_path and fmt != "txt" and "outputs" in result:
                     saved = self._engine.save_output(result["outputs"], output_path)
                     result.pop("outputs", None)
                     result["output_path"] = saved
