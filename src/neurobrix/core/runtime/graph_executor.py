@@ -250,7 +250,8 @@ class GraphExecutor:
 
     def register_op_uid_interceptors(self, interceptors: Dict[str, Callable]) -> None:
         """
-        Register fine-grained per-op_uid interceptors.
+        Register fine-grained per-op_uid interceptors on BOTH the compiled
+        and triton sequences (R30: native + triton + triton_sequential).
 
         Targets specific op INSTANCES (e.g. only "aten.convolution::62") rather
         than every op of a given type. Used by the op-level tiling engine to
@@ -269,6 +270,14 @@ class GraphExecutor:
             self._interceptors_dirty = False
         else:
             self._interceptors_dirty = True
+        # Triton path mirror — register on _triton_seq if it exists, otherwise
+        # stash for _ensure_triton_compiled to pick up.
+        if hasattr(self, '_triton_seq') and self._triton_seq is not None:
+            self._triton_seq.update_op_uid_interceptors(interceptors)
+        else:
+            if not hasattr(self, '_pending_triton_uid_interceptors'):
+                self._pending_triton_uid_interceptors = {}
+            self._pending_triton_uid_interceptors.update(interceptors)
 
     def _execute_intercepted_op(
         self,
@@ -1817,6 +1826,10 @@ class GraphExecutor:
         if hasattr(self, '_pending_triton_interceptors'):
             for op_type, func in self._pending_triton_interceptors.items():
                 self._triton_seq.register_op_interceptor(op_type, func)
+        # Apply pending per-op_uid interceptors (op-level tiling, R30 mirror)
+        if hasattr(self, '_pending_triton_uid_interceptors'):
+            for op_uid, func in self._pending_triton_uid_interceptors.items():
+                self._triton_seq.register_op_uid_interceptor(op_uid, func)
 
     def _prepare_execution(self, inputs: Dict[str, Any]) -> ExecutionContext:
         """
