@@ -248,6 +248,28 @@ class GraphExecutor:
                 self._compile_execution_sequence()
                 self._interceptors_dirty = False
 
+    def register_op_uid_interceptors(self, interceptors: Dict[str, Callable]) -> None:
+        """
+        Register fine-grained per-op_uid interceptors.
+
+        Targets specific op INSTANCES (e.g. only "aten.convolution::62") rather
+        than every op of a given type. Used by the op-level tiling engine to
+        intercept exactly the ops Prism flagged as VRAM overflows while
+        leaving sibling ops of the same type on the native path.
+
+        Hot-swaps if already compiled, otherwise marks dirty for next compile.
+        Op_uid interceptors take priority over op_type interceptors.
+        """
+        if not hasattr(self, '_op_uid_interceptors'):
+            self._op_uid_interceptors = {}
+        for op_uid, interceptor in interceptors.items():
+            self._op_uid_interceptors[op_uid] = interceptor
+        if self._compiled_seq is not None:
+            self._compiled_seq.update_op_uid_interceptors(interceptors)
+            self._interceptors_dirty = False
+        else:
+            self._interceptors_dirty = True
+
     def _execute_intercepted_op(
         self,
         op_type: str,
@@ -873,6 +895,10 @@ class GraphExecutor:
         # Register any op interceptors BEFORE compilation (Phase 2.2: KV cache support)
         for op_type, interceptor in self._op_interceptors.items():
             self._compiled_seq.register_op_interceptor(op_type, interceptor)
+        # Register fine-grained per-op_uid interceptors (op-level tiling)
+        if hasattr(self, '_op_uid_interceptors'):
+            for op_uid, interceptor in self._op_uid_interceptors.items():
+                self._compiled_seq.register_op_uid_interceptor(op_uid, interceptor)
 
         self._compiled_seq.compile()
         self._interceptors_dirty = False
