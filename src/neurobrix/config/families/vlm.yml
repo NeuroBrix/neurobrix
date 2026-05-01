@@ -1,0 +1,55 @@
+# Family-level constants for VLM (Vision-Language Models)
+# Pattern: image input + text output (Qwen3-VL, LLaVA, InternVL)
+# NeuroBrix ZERO HARDCODE: All VLM family models share these defaults
+
+output_processing:
+  layout: "sequence"
+  batch_axis: 0
+  sequence_axis: 1
+  vocab_axis: -1
+  output_format: "txt"
+
+defaults:
+  max_new_tokens: 512
+  temperature: 0.7
+  top_p: 0.9
+  top_k: 50
+  repetition_penalty: 1.0
+
+architecture:
+  rope:
+    base: 10000.0
+    scaling_type: null
+    scaling_factor: 1.0
+  attention:
+    type: "sdpa"
+    head_dim: 128
+    num_kv_heads: null
+
+kv_cache:
+  enabled: true
+  strategy: "dynamic"
+  injection_op: "aten::scaled_dot_product_attention"
+
+execution:
+  flow_type: "autoregressive_generation"
+  has_kv_cache: true
+  use_graph_executor: true
+  compiled_mode: true
+
+inputs:
+  required: ["--prompt", "--input-image"]
+  optional:
+    - flag: "--system"
+    - flag: "--chat"
+    - flag: "--no-chat"
+
+modes:
+  supported: ["text", "chat"]
+  default: "text"
+  multimodal_strict: false
+
+output:
+  default_extension_per_mode:
+    text: ".txt"
+    chat: ".txt"

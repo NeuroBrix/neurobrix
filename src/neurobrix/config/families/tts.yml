@@ -1,0 +1,40 @@
+# Family-level constants for TTS (Text-to-Speech) models
+# Pattern: text input + waveform output
+# References: Chatterbox, Orpheus, OpenAudio-S1, VibeVoice, Kokoro
+# NeuroBrix ZERO HARDCODE: sample_rate per-model in defaults.json
+
+output_processing:
+  layout: "channels_last"
+  channel_axis: -1
+  batch_axis: 0
+  bit_depth: 16
+  sample_rate: 24000  # Common TTS default; per-model overrides via defaults.json
+  output_range: [-1.0, 1.0]
+  output_format: "wav"
+
+defaults:
+  temperature: 0.7
+  max_tokens: 2048
+
+execution:
+  # flow_type varies per model (tts_llm Chatterbox, dual_ar OpenAudio,
+  # autoregressive_generation Orpheus). Read from topology.json.
+  has_kv_cache: true  # Most TTS LLM-based models use KV cache
+  use_graph_executor: true
+  compiled_mode: true
+
+inputs:
+  required: ["--prompt"]
+  optional:
+    - flag: "--reference-audio"
+    - flag: "--speaker"
+    - flag: "--temperature"
+
+modes:
+  supported: ["audio"]
+  default: "audio"
+  multimodal_strict: false
+
+output:
+  default_extension_per_mode:
+    audio: ".wav"

@@ -1,0 +1,35 @@
+# Family-level constants for STT (Speech-to-Text) models
+# Pattern: audio waveform input + text transcription output
+# References: Whisper, Canary-Qwen, Parakeet (RNN-T), Granite-Speech
+
+output_processing:
+  layout: "sequence"
+  batch_axis: 0
+  sequence_axis: 1
+  vocab_axis: -1
+  output_format: "txt"
+
+defaults:
+  temperature: 0.0  # Greedy decoding default for STT
+  max_tokens: 448   # Whisper standard max generation length
+
+execution:
+  # flow_type varies per model (encoder_decoder Whisper, rnnt Parakeet).
+  # Read from topology.json.
+  has_kv_cache: false  # encoder-decoder uses cross-attention, not LLM KV cache
+  use_graph_executor: true
+  compiled_mode: true
+
+inputs:
+  required: ["--audio"]
+  optional:
+    - flag: "--prompt"  # rare: transcription context hint
+
+modes:
+  supported: ["text"]
+  default: "text"
+  multimodal_strict: false
+
+output:
+  default_extension_per_mode:
+    text: ".txt"
