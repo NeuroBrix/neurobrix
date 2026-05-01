@@ -82,6 +82,31 @@ For more information: https://gitlab.com/neurobrix/Neurobrix
     run_parser.add_argument('--max-tokens', type=int, default=None, dest='max_tokens',
                             help='Maximum number of tokens to generate (LLM only)')
 
+    # ── 9-family inputs ──
+    run_parser.add_argument('--input-image', default=None, dest='input_image',
+                            help='Input image path (vlm, img2img, inpainting, upscaler, multimodal)')
+    run_parser.add_argument('--mask-image', default=None, dest='mask_image',
+                            help='Inpainting mask image path (image inpainting mode)')
+    run_parser.add_argument('--reference-image', default=None, dest='reference_image',
+                            help='Style reference image path (image)')
+    run_parser.add_argument('--reference-audio', default=None, dest='reference_audio',
+                            help='Voice clone reference audio path (tts)')
+    run_parser.add_argument('--speaker', default=None,
+                            help='Speaker preset id (tts)')
+    run_parser.add_argument('--video', default=None, dest='video',
+                            help='Input video path (video v2v)')
+    run_parser.add_argument('--num-frames', type=int, default=None, dest='num_frames',
+                            help='Number of frames to generate (video)')
+    run_parser.add_argument('--fps', type=int, default=None,
+                            help='Output frame rate (video)')
+    run_parser.add_argument('--system', default=None,
+                            help='System prompt for chat-style models (llm, vlm, audio_llm)')
+    run_parser.add_argument('--mode', default=None,
+                            choices=['auto', 'text', 'chat', 'image', 'audio', 'video',
+                                     't2i', 'img2img', 'inpainting', 't2v', 'i2v', 'v2v'],
+                            help='Execution mode. Required for multimodal (text|image). '
+                                 'Auto-deduced for other families from inputs provided.')
+
     chat_group = run_parser.add_mutually_exclusive_group()
     chat_group.add_argument('--chat', action='store_true', default=None, dest='chat_mode',
                             help='Force chat template formatting')

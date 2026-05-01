@@ -24,30 +24,6 @@ from typing import Any, Dict, Optional
 from neurobrix.serving.session import ConversationSession
 
 
-def _write_video_h264(output_path: str, frames_uint8, fps: float):
-    """Write video as H.264/mp4 using ffmpeg (QuickTime/browser compatible)."""
-    import subprocess
-    import imageio_ffmpeg
-    T, H, W, C = frames_uint8.shape
-    ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
-    cmd = [
-        ffmpeg_exe, "-y",
-        "-f", "rawvideo",
-        "-vcodec", "rawvideo",
-        "-s", f"{W}x{H}",
-        "-pix_fmt", "rgb24",
-        "-r", str(fps),
-        "-i", "-",
-        "-vcodec", "libx264",
-        "-pix_fmt", "yuv420p",
-        "-crf", "18",
-        "-preset", "medium",
-        output_path,
-    ]
-    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    proc.communicate(input=frames_uint8.tobytes())
-
-
 # Warm serving is now determined by loading_mode from Prism solver.
 # loading_mode="eager" → weights stay in VRAM (warm serving)
 # loading_mode="lazy"  → weights reload per request (cold serving)
@@ -168,11 +144,17 @@ class InferenceEngine:
         self._executor.setup()
 
         # 7. Pre-warm weights for warm strategies (load into VRAM now, not on R1)
-        # Audio models skip warmup — require real audio file, can't meaningfully warm up
-        if self._warm_serving and self._family != "audio":
-            warmup_inputs = {"global.prompt": "warmup", "global.max_tokens": 1}
-            if self._family == "llm":
-                warmup_inputs["global.chat_mode"] = True
+        # Only LLM family benefits from a tiny text warmup. Other families
+        # (tts, stt, audio_llm, vlm, multimodal, image, upscaler, video) need
+        # real-modality inputs (audio, image, etc.) or have multi-step paths
+        # that don't respond to "warmup" + max_tokens=1 — skip warmup for them.
+        from neurobrix.core.runtime.output_dispatch import family_uses_text_warmup
+        if self._warm_serving and family_uses_text_warmup(self._family or ""):
+            warmup_inputs = {
+                "global.prompt": "warmup",
+                "global.max_tokens": 1,
+                "global.chat_mode": True,
+            }
             self._executor.execute(warmup_inputs)
 
         t_load = time.time() - t_start
@@ -228,16 +210,10 @@ class InferenceEngine:
         device_sync(self._device)
         t_total = time.time() - t_start
 
-        # Build result
+        # Build result — DATA-DRIVEN by family output_format
+        from neurobrix.core.runtime.output_dispatch import extract_result
         result = {"timing": {"total_s": round(t_total, 3)}, "family": self._family}
-
-        if self._family == "llm":
-            result.update(self._extract_llm_output(outputs))
-        elif self._family == "audio":
-            result.update(self._extract_audio_output(outputs))
-        else:
-            result["outputs"] = outputs
-
+        result.update(extract_result(outputs, self._family or "", self._executor))
         return result
 
     def _generate_from_token_ids(self, token_ids: list, **kwargs) -> Dict[str, Any]:
@@ -389,108 +365,20 @@ class InferenceEngine:
 
     def save_output(self, outputs: Dict[str, Any], output_path: str) -> str:
         """
-        Save non-LLM output (image/audio/video) to file. Returns saved path.
-        Replicates cold-path logic from run.py.
+        Save non-text output (image/audio/video) to file. Returns saved path.
+        Delegates to data-driven output_dispatch.save_output.
         """
-        # Audio family: save waveform or transcription
-        if self._family == "audio":
-            waveform = outputs.get("waveform") or outputs.get("global.output_audio")
-            if waveform is not None:
-                from neurobrix.core.module.audio.output_processor import AudioOutputProcessor
-                from neurobrix.core.config import get_output_processing
-                audio_cfg = get_output_processing("audio")
-                sample_rate = self._pkg.defaults.get("sample_rate", audio_cfg.get("sample_rate", 16000)) if self._pkg else 16000
-                if not output_path.endswith(".wav"):
-                    output_path = output_path.rsplit(".", 1)[0] + ".wav"
-                AudioOutputProcessor.save_waveform(waveform, output_path, sample_rate)
-                return output_path
-            transcription = outputs.get("transcription") or outputs.get("global.transcription")
-            if transcription:
-                with open(output_path, 'w') as f:
-                    f.write(str(transcription))
-                return output_path
-
-        import numpy as np
-        from neurobrix.core.config import get_output_processing
-        from neurobrix.core.module.output_processor import OutputProcessor
-
-        final_output = self._executor.get_final_output(outputs)
-        if final_output is None:
-            raise RuntimeError("ZERO FALLBACK: No tensor output from model")
-
-        output_range = self._pkg.defaults.get("output_range")
-        if output_range is None:
-            output_cfg = get_output_processing(self._family)
-            output_range = output_cfg.get("output_range", [-1.0, 1.0])
-
-        output_cfg = get_output_processing(self._family)
-        batch_axis = output_cfg.get("batch_axis", 0)
-        layout = output_cfg.get("layout", "CHW")
-        valid_channels = output_cfg.get("valid_channels", [1, 3, 4])
-        channel_axis = output_cfg.get("channel_axis", 1)
-        bit_depth = output_cfg.get("bit_depth", 8)
-
-        tensor = torch.select(final_output, batch_axis, 0).cpu().float()
-
-        processor = OutputProcessor.from_package(self._pkg)
-        tensor = processor.process(tensor, output_range)
-        tensor = tensor.clamp(0, 1)
-
-        # ── VIDEO OUTPUT (4D: TCHW or CTHW) ──
-        if self._family == "video" and tensor.dim() == 4:
-            if not output_path.endswith(".mp4"):
-                output_path = output_path.rsplit(".", 1)[0] + ".mp4"
-
-            fps = output_cfg.get("fps", 24)
-            fps = self._pkg.defaults.get("fps", fps) if self._pkg else fps
-
-            if layout == "CTHW":
-                # [C, T, H, W] → [T, H, W, C]
-                frames = tensor.permute(1, 2, 3, 0).numpy()
-            elif layout == "TCHW":
-                # [T, C, H, W] → [T, H, W, C]
-                frames = tensor.permute(0, 2, 3, 1).numpy()
-            else:
-                # Fallback: assume CTHW (diffusers standard)
-                frames = tensor.permute(1, 2, 3, 0).numpy()
-
-            frames_uint8 = (frames * 255).astype(np.uint8)
-            T, H, W, C = frames_uint8.shape
-
-            _write_video_h264(output_path, frames_uint8, fps)
-            return output_path
-
-        # ── IMAGE OUTPUT (3D: CHW) ──
-        from PIL import Image
-
-        if layout == "CHW" and tensor.dim() == 3:
-            actual_channel_axis = channel_axis - 1 if batch_axis < channel_axis else channel_axis
-            if tensor.shape[actual_channel_axis] in valid_channels:
-                tensor = tensor.permute(1, 2, 0)
-
-        if bit_depth == 8:
-            img_np = (tensor.numpy() * 255).astype(np.uint8)
-        elif bit_depth == 16:
-            img_np = (tensor.numpy() * 65535).astype(np.uint16)
-        else:
-            img_np = (tensor.numpy() * 255).astype(np.uint8)
-
-        if img_np.shape[-1] == 1:
-            img_np = img_np.squeeze(-1)
-
-        Image.fromarray(img_np).save(output_path)
-        return output_path
-
-    def _extract_audio_output(self, outputs: Dict[str, Any]) -> Dict[str, Any]:
-        """Extract audio output: transcription (STT) or waveform (TTS)."""
-        result = {}
-        transcription = outputs.get("global.transcription")
-        if transcription:
-            result["transcription"] = transcription
-        waveform = outputs.get("global.output_audio")
-        if waveform is not None:
-            result["waveform"] = waveform
-        return result
+        from neurobrix.core.runtime.output_dispatch import save_output
+        # Strip any "waveform" alias so save_output finds global.output_audio.
+        wf = outputs.get("waveform")
+        if wf is not None and "global.output_audio" not in outputs:
+            outputs = {**outputs, "global.output_audio": wf}
+        tx = outputs.get("transcription")
+        if tx is not None and "global.transcription" not in outputs:
+            outputs = {**outputs, "global.transcription": tx}
+        return save_output(
+            outputs, output_path, self._family or "", self._executor, self._pkg
+        )
 
     def _extract_llm_output(self, outputs: Dict[str, Any]) -> Dict[str, Any]:
         """Extract text from LLM generation outputs."""
