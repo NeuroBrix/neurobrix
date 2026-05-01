@@ -204,6 +204,28 @@ def cmd_run(args):
         print(f"\nERROR: {e}")
         sys.exit(1)
 
+    # Multimodal-strict build/mode coherence: a Janus-style .nbx is traced
+    # for ONE generation_type at build time. If the user asks for a mode the
+    # build cannot serve, error clearly here instead of running the image AR
+    # path and writing image tokens to a .txt.
+    cache_path = container._cache_path
+    assert cache_path is not None
+    _topo_path = cache_path / "topology.json"
+    if _topo_path.exists():
+        with open(_topo_path) as f:
+            _topo = json.load(f)
+        _build_gen_type = _topo.get("flow", {}).get("generation", {}).get("type", "")
+        _mode_gen_type = {"text": "autoregressive_text", "image": "autoregressive_image"}.get(mode or "")
+        if _mode_gen_type and _build_gen_type and _mode_gen_type != _build_gen_type:
+            _supported_mode = "image" if _build_gen_type == "autoregressive_image" else "text"
+            print(
+                f"\nERROR: This '{args.model}' build supports only --mode "
+                f"{_supported_mode} (its trace generation_type is "
+                f"'{_build_gen_type}'). Re-import a build traced for "
+                f"--mode {mode} to use that mode."
+            )
+            sys.exit(1)
+
     neural_components = container.get_neural_components()
     print(f"   Components: {[c.name for c in neural_components]}")
 
