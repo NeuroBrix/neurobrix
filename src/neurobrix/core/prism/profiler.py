@@ -78,6 +78,12 @@ class ActivationProfile:
     tensor_count_at_peak: int
     total_ops: int
     final_live_bytes: int  # Memory still live at end
+    # NEW: ops whose own footprint (output_bytes + workspace_bytes for the
+    # given mode) exceeds the per-GPU VRAM budget × safety. Populated by
+    # estimate_peak_memory() when called with vram_per_gpu_bytes set.
+    # Each entry: (op_uid, op_type, output_bytes, workspace_bytes,
+    #              input_tids_for_fusion_detection)
+    overflow_ops: List = None  # type: ignore  # Optional[List[Tuple[...]]]
 
     @property
     def peak_mb(self) -> float:
@@ -88,9 +94,11 @@ class ActivationProfile:
         return self.peak_bytes / (1024 * 1024 * 1024)
 
     def __repr__(self) -> str:
+        ov = len(self.overflow_ops) if self.overflow_ops else 0
         return (
             f"ActivationProfile(peak={self.peak_gb:.2f}GB at step {self.peak_step}/{self.total_ops}, "
-            f"op={self.peak_op_uid}, tensors_at_peak={self.tensor_count_at_peak})"
+            f"op={self.peak_op_uid}, tensors_at_peak={self.tensor_count_at_peak}, "
+            f"overflow_ops={ov})"
         )
 
 
@@ -183,6 +191,9 @@ class ActivationProfiler:
         self,
         input_config: Optional[InputConfig] = None,
         dtype_bytes: Optional[int] = None,
+        vram_per_gpu_bytes: Optional[int] = None,
+        mode: str = "compiled",
+        safety: float = 0.85,
     ) -> ActivationProfile:
         """
         Simulate execution to find peak activation memory.
@@ -252,6 +263,44 @@ class ActivationProfiler:
                         current_bytes -= live_tensors[out_tid]
                         del live_tensors[out_tid]
 
+        # Scan per-op output + workspace to flag overflows for op-level tiling
+        overflow_ops = []
+        if vram_per_gpu_bytes is not None and vram_per_gpu_bytes > 0:
+            from neurobrix.core.prism.memory_estimator import estimate_op_workspace_bytes
+            threshold = int(vram_per_gpu_bytes * safety)
+            for op_uid in self.execution_order:
+                op = self.ops.get(op_uid, {})
+                op_type = op.get("op_type", "")
+                in_tids = op.get("input_tensor_ids", [])
+                out_tids = op.get("output_tensor_ids", [])
+                in_shapes = []
+                for tid in in_tids:
+                    meta = self.tensors.get(tid, {})
+                    in_shapes.append(self._resolve_shape(meta, symbol_map))
+                out_shapes = []
+                out_bytes_total = 0
+                for tid in out_tids:
+                    meta = self.tensors.get(tid, {})
+                    sh = self._resolve_shape(meta, symbol_map)
+                    out_shapes.append(sh)
+                    out_bytes_total += self._compute_size(sh, meta, dtype_bytes)
+                ws_bytes = estimate_op_workspace_bytes(
+                    mode, op_type, in_shapes, out_shapes, dtype_bytes,
+                    vram_per_gpu_bytes=vram_per_gpu_bytes,
+                )
+                # Largest single input tensor (live at op start)
+                largest_in_bytes = 0
+                for tid, sh in zip(in_tids, in_shapes):
+                    meta = self.tensors.get(tid, {})
+                    largest_in_bytes = max(
+                        largest_in_bytes, self._compute_size(sh, meta, dtype_bytes)
+                    )
+                op_footprint = largest_in_bytes + out_bytes_total + ws_bytes
+                if op_footprint > threshold:
+                    overflow_ops.append(
+                        (op_uid, op_type, out_bytes_total, ws_bytes, list(in_tids))
+                    )
+
         return ActivationProfile(
             peak_bytes=peak_bytes,
             peak_op_uid=peak_op_uid,
@@ -259,6 +308,7 @@ class ActivationProfiler:
             tensor_count_at_peak=peak_tensor_count,
             total_ops=len(self.execution_order),
             final_live_bytes=current_bytes,
+            overflow_ops=overflow_ops,
         )
 
     def _resolve_shape(

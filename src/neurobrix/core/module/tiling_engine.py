@@ -23,7 +23,7 @@ Algorithm: Accumulate-and-divide (SwinIR/Swin2SR pattern)
 import torch
 import json
 import logging
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -375,3 +375,169 @@ class TilingEngine:
             f"scale_factor={self.scale_factor}, "
             f"window_alignment={self.window_alignment})"
         )
+
+
+# ============================================================================
+# Op-level tiling — intercepts specific ops by op_uid to stream-execute them
+# without ever materializing the full intermediate tensor that would OOM.
+#
+# Pattern: Prism's ActivationProfiler flags ops whose output + workspace
+# exceed the per-GPU VRAM budget. For Sana 4Kpx VAE the dominant overflow
+# is the upsample_nearest2d::4 → convolution::62 pair (16 GB intermediate
+# fp32 tensor consumed exactly once by the conv). Same pattern at
+# upsample::3 → conv::55. Op-level tiling fuses each pair via
+# fused_upsample_conv2d which streams band-by-band without ever
+# materializing the upsampled tensor.
+#
+# Lives in tiling_engine.py per R31 (single architectural location for
+# tiling logic). Plumbing ride on graph_executor's existing interceptor
+# mechanism (Phase 2.1, originally for KV cache injection) extended with
+# fine-grained per-op_uid matching.
+# ============================================================================
+
+
+class OpLevelTilingPlan:
+    """Compact spec emitted by Prism describing which ops in which
+    component must be intercepted with what tiling strategy.
+
+    A "fusion pair" is the most common case: an upsample whose output is
+    too big for VRAM, immediately consumed by a conv. The fusion absorbs
+    the upsample into the conv; the upsample interceptor returns a
+    FusionUpsampleProxy and the conv interceptor reads it.
+    """
+
+    __slots__ = ("component_name", "fusion_pairs", "tiled_ops")
+
+    def __init__(self, component_name: str):
+        self.component_name = component_name
+        # Each entry: (upsample_op_uid, conv_op_uid, tile_factor)
+        self.fusion_pairs: List[Tuple[str, str, int]] = []
+        # Each entry: (op_uid, op_type, tile_factor) — single-op tiling
+        # without fusion (e.g. a standalone conv whose workspace OOMs).
+        self.tiled_ops: List[Tuple[str, str, int]] = []
+
+    def add_upsample_conv_fusion(self, upsample_uid: str, conv_uid: str,
+                                  tile_factor: int) -> None:
+        self.fusion_pairs.append((upsample_uid, conv_uid, max(1, int(tile_factor))))
+
+    def add_tiled_op(self, op_uid: str, op_type: str, tile_factor: int) -> None:
+        self.tiled_ops.append((op_uid, op_type, max(1, int(tile_factor))))
+
+    def is_empty(self) -> bool:
+        return not self.fusion_pairs and not self.tiled_ops
+
+    def __repr__(self) -> str:
+        return (
+            f"OpLevelTilingPlan(comp={self.component_name}, "
+            f"fusion_pairs={len(self.fusion_pairs)}, "
+            f"tiled_ops={len(self.tiled_ops)})"
+        )
+
+
+class OpLevelTilingEngine:
+    """Builds and registers per-op_uid interceptors on a GraphExecutor.
+
+    Constructed by Prism via from_op_level_constraint() once the strategy
+    cascade has decided that op-level tiling is necessary on a given
+    component. Wires interceptors via graph_executor.register_op_uid_interceptors
+    which is hot-swap-safe (no recompilation of the CompiledSequence).
+    """
+
+    def __init__(self, plan: OpLevelTilingPlan):
+        self.plan = plan
+
+    @classmethod
+    def from_op_level_constraint(cls, plan: OpLevelTilingPlan) -> Optional["OpLevelTilingEngine"]:
+        """Factory — returns None if the plan is empty (no overflow ops)."""
+        if plan.is_empty():
+            return None
+        return cls(plan)
+
+    def register_into_graph_executor(self, graph_executor) -> int:
+        """Wire all op_uid interceptors. Returns the count registered.
+
+        Called by RuntimeExecutor right after the component's GraphExecutor
+        is created, BEFORE the first execute() so interceptors are in
+        place when CompiledSequence is compiled.
+        """
+        from neurobrix.kernels.ops.fused_upsample_conv import (
+            make_upsample_proxy_interceptor,
+            fused_upsample_conv2d,
+        )
+
+        interceptors: Dict[str, Callable] = {}
+
+        # Upsample → conv fusion pairs
+        for upsample_uid, conv_uid, tile_factor in self.plan.fusion_pairs:
+            # Upsample interceptor: returns a FusionUpsampleProxy (no compute)
+            interceptors[upsample_uid] = make_upsample_proxy_interceptor()
+
+            # Conv interceptor: detects proxy, runs band-streaming fused kernel
+            tf = tile_factor
+
+            def make_conv_interceptor(_tile_factor):
+                def _conv(input_or_proxy, weight, bias=None,
+                          stride=1, padding=0, dilation=1,
+                          transposed=False, output_padding=0, groups=1, *args, **kwargs):
+                    return fused_upsample_conv2d(
+                        input_or_proxy, weight, bias,
+                        stride=stride, padding=padding, dilation=dilation,
+                        transposed=transposed, output_padding=output_padding,
+                        groups=groups, tile_factor=_tile_factor,
+                    )
+                return _conv
+
+            interceptors[conv_uid] = make_conv_interceptor(tf)
+
+        # Standalone tiled ops (no fusion — input already materialized but
+        # the op's workspace alone would OOM)
+        from neurobrix.kernels.ops.fused_upsample_conv import (
+            tiled_conv2d_spatial, tiled_rms_norm_spatial,
+        )
+        for op_uid, op_type, tile_factor in self.plan.tiled_ops:
+            cl = op_type.split("::")[-1]
+            if cl in ("convolution", "conv2d", "_convolution"):
+                tf = tile_factor
+
+                def make_tiled_conv(_tile_factor):
+                    def _tiled(input_tensor, weight, bias=None,
+                               stride=1, padding=0, dilation=1,
+                               transposed=False, output_padding=0, groups=1,
+                               *args, **kwargs):
+                        return tiled_conv2d_spatial(
+                            input_tensor, weight, bias,
+                            stride=stride, padding=padding, dilation=dilation,
+                            transposed=transposed, output_padding=output_padding,
+                            groups=groups, tile_factor=_tile_factor,
+                        )
+                    return _tiled
+
+                interceptors[op_uid] = make_tiled_conv(tf)
+            elif cl == "rms_norm":
+                tf = tile_factor
+
+                def make_tiled_rms(_tile_factor):
+                    def _tiled(x, weight=None, eps=1e-6, *args, **kwargs):
+                        return tiled_rms_norm_spatial(
+                            x, weight, eps, tile_factor=_tile_factor,
+                        )
+                    return _tiled
+                interceptors[op_uid] = make_tiled_rms(tf)
+            else:
+                logger.debug(
+                    f"[OpLevelTilingEngine] No tiled implementation for "
+                    f"op_type={op_type} (uid={op_uid}); skipping."
+                )
+
+        if not interceptors:
+            return 0
+        graph_executor.register_op_uid_interceptors(interceptors)
+        logger.info(
+            f"[OpLevelTilingEngine] Registered {len(interceptors)} op_uid "
+            f"interceptors on component '{self.plan.component_name}': "
+            f"fusion_pairs={[(u, c, t) for u, c, t in self.plan.fusion_pairs]}"
+        )
+        return len(interceptors)
+
+    def __repr__(self) -> str:
+        return f"OpLevelTilingEngine({self.plan})"

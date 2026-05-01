@@ -191,6 +191,11 @@ class ExecutionPlan:
     loading_mode: str = "lazy"
     kv_cache_plan: Optional[KVCachePlan] = None
     cpu_ram_mb: int = 0  # CPU RAM budget for offload strategies
+    # Op-level tiling — per-component plan emitted when a single op's
+    # output+workspace exceeds the assigned GPU's safe VRAM budget. Picked
+    # up by RuntimeExecutor to wire op_uid interceptors on the component's
+    # GraphExecutor. Empty dict when no op-level tiling is required.
+    runtime_op_tiling: Dict = field(default_factory=dict)
 
     @property
     def primary_device(self) -> str:
@@ -447,6 +452,15 @@ class PrismSolver:
 
         neural_components = sorted(neural_components, key=lambda c: c.name)
 
+        # Step 0a: Detect op-level tiling needs per component (fused
+        # upsample→conv pairs whose intermediate tensor would OOM). Done
+        # AFTER strategies are tried — only if the cascade can't place the
+        # component otherwise. For Sana 4Kpx VAE: upsample::3→conv::55 and
+        # upsample::4→conv::62 (16 GB intermediate at 4Kpx).
+        # The actual scan happens after _evaluate_all_strategies — see
+        # _detect_op_level_tiling_pairs() below. This comment marks where
+        # the data lives in the plan: plan.runtime_op_tiling.
+
         # Step 0: Determine model category from manifest family — DATA-DRIVEN
         # Reads execution.has_kv_cache from config/families/<family>.yml plus
         # topology.flow.generation.type to discriminate VQ-image autoregressive
@@ -693,9 +707,217 @@ class PrismSolver:
         plan = self._build_plan(allocations, component_memory, devices, component_dtypes, profile, chosen_strategy)
         plan.kv_cache_plan = kv_cache_plan
 
+        # Step 7b: Op-level tiling — detect upsample→conv fusion pairs whose
+        # intermediate tensor would OOM the assigned GPU. Decision happens
+        # AFTER strategies are picked (allocations known) so we know the per-
+        # component VRAM budget. Plan stored in plan.runtime_op_tiling for
+        # the runtime executor to wire as op_uid interceptors.
+        plan.runtime_op_tiling = self._detect_op_level_tiling_pairs(
+            container, neural_components, allocations, profile, input_config,
+            target_dtype_str,
+        )
+
         # Step 8: Summary
         self._print_summary(devices, plan, profile)
         return plan
+
+    def _detect_op_level_tiling_pairs(
+        self, container, components, allocations, profile, input_config,
+        target_dtype_str: str,
+    ):
+        """For each component, scan the DAG for upsample→conv pairs whose
+        intermediate tensor exceeds the assigned GPU's safe VRAM budget.
+
+        Returns: Dict[comp_name, OpLevelTilingPlan]. Empty dict if no
+        component needs op-level tiling.
+        """
+        from neurobrix.core.module.tiling_engine import OpLevelTilingPlan
+        from neurobrix.core.prism.profiler import ActivationProfiler
+        from neurobrix.core.prism.memory_estimator import (
+            get_dtype_bytes_per_element, estimate_op_workspace_bytes,
+        )
+
+        result = {}
+        # Per-GPU capacity in bytes — pick the smallest assigned device for
+        # this component (op-level tiling only fires if the worst-case GPU
+        # can't hold the op).
+        device_caps = {}
+        for dev in profile.devices:
+            device_caps[dev.get_device_string()] = int(dev.memory_mb * 1024 * 1024)
+
+        dtype_bytes = get_dtype_bytes_per_element(target_dtype_str)
+
+        for comp in components:
+            if comp.graph is None:
+                continue
+            alloc = allocations.get(comp.name)
+            if alloc is None:
+                continue
+            assigned_dev_str = alloc[0] if isinstance(alloc, tuple) else alloc.device
+            comp_vram = device_caps.get(assigned_dev_str, 0)
+            if comp_vram == 0:
+                continue
+
+            profiler = ActivationProfiler(comp.graph)
+            ap = profiler.estimate_peak_memory(
+                input_config=input_config,
+                dtype_bytes=dtype_bytes,
+                vram_per_gpu_bytes=comp_vram,
+                mode="compiled",
+                safety=0.85,
+            )
+            if not ap.overflow_ops:
+                continue
+
+            # Look for upsample→conv adjacency in execution_order
+            ops = comp.graph.get("ops", {})
+            order = comp.graph.get("execution_order", [])
+            uid_to_step = {uid: i for i, uid in enumerate(order)}
+            # Build consumer map: tensor_id -> list of (consumer_uid, step)
+            consumers = {}
+            for uid in order:
+                op = ops.get(uid, {})
+                for tid in op.get("input_tensor_ids", []):
+                    consumers.setdefault(tid, []).append((uid, uid_to_step[uid]))
+
+            plan = OpLevelTilingPlan(comp.name)
+            seen_pair_convs = set()
+            for uid in order:
+                op = ops.get(uid, {})
+                if "upsample" not in op.get("op_type", ""):
+                    continue
+                # Find the unique consumer
+                out_tids = op.get("output_tensor_ids", [])
+                if len(out_tids) != 1:
+                    continue
+                cons = consumers.get(out_tids[0], [])
+                if len(cons) != 1:
+                    continue  # not a single-consumer upsample → can't fuse
+                conv_uid, conv_step = cons[0]
+                conv_op = ops.get(conv_uid, {})
+                if "convolution" not in conv_op.get("op_type", ""):
+                    continue
+                if conv_uid in seen_pair_convs:
+                    continue
+                # Only fuse if the conv is in overflow_ops (i.e. it would OOM)
+                conv_overflow = any(o[0] == conv_uid for o in ap.overflow_ops)
+                # OR if the upsample output itself is large enough to OOM
+                up_in_tids = op.get("input_tensor_ids", [])
+                up_in_shape = []
+                for tid in up_in_tids[:1]:
+                    meta = comp.graph["tensors"].get(tid, {})
+                    up_in_shape.append(profiler._resolve_shape(
+                        meta, input_config.to_symbol_map()
+                    ))
+                up_out_meta = comp.graph["tensors"].get(out_tids[0], {})
+                up_out_shape = profiler._resolve_shape(
+                    up_out_meta, input_config.to_symbol_map()
+                )
+                up_out_bytes = profiler._compute_size(up_out_shape, up_out_meta, dtype_bytes)
+                # Threshold: upsample output that exceeds 25% of VRAM is
+                # worth fusing (typical: 16 GB on 32 GB GPU).
+                up_overflow = up_out_bytes > 0.25 * comp_vram
+                if not (conv_overflow or up_overflow):
+                    continue
+
+                # Compute tile_factor analytically. Each band materializes:
+                #   up_band         = up_out_bytes / tile_factor
+                #   cudnn_workspace = workspace_full_bytes / tile_factor
+                #   conv_band       = conv_out_bytes / tile_factor
+                # And the conv output (full resolution) stays allocated:
+                #   conv_out_full = conv_out_bytes
+                # Target: per-band transient + conv_out_full ≤ safety × VRAM
+                # → tile_factor ≥ (up_out + cudnn_ws + conv_out) /
+                #                  (budget − conv_out_full)
+                conv_in_shapes = []
+                for tid in conv_op.get("input_tensor_ids", []):
+                    meta = comp.graph["tensors"].get(tid, {})
+                    conv_in_shapes.append(profiler._resolve_shape(
+                        meta, input_config.to_symbol_map()
+                    ))
+                conv_out_shapes = []
+                conv_out_bytes = 0
+                for tid in conv_op.get("output_tensor_ids", []):
+                    meta = comp.graph["tensors"].get(tid, {})
+                    sh = profiler._resolve_shape(meta, input_config.to_symbol_map())
+                    conv_out_shapes.append(sh)
+                    conv_out_bytes += profiler._compute_size(sh, meta, dtype_bytes)
+                cudnn_ws_bytes = estimate_op_workspace_bytes(
+                    "compiled", conv_op.get("op_type", ""),
+                    conv_in_shapes, conv_out_shapes, dtype_bytes,
+                    vram_per_gpu_bytes=comp_vram,
+                )
+                # Per-band budget: total VRAM × 0.65 (safety) minus the
+                # conv output that stays full-resolution allocated.
+                budget_per_band = int(0.65 * comp_vram) - conv_out_bytes
+                if budget_per_band < (256 * 1024 * 1024):  # < 256 MB usable
+                    budget_per_band = 256 * 1024 * 1024
+                total_to_tile = up_out_bytes + cudnn_ws_bytes + conv_out_bytes
+                import math
+                tile_factor = max(2, math.ceil(total_to_tile / budget_per_band))
+                # Round up to power-of-2 for halo alignment.
+                pow2 = 2
+                while pow2 < tile_factor and pow2 < 64:
+                    pow2 *= 2
+                tile_factor = pow2
+
+                plan.add_upsample_conv_fusion(uid, conv_uid, tile_factor)
+                seen_pair_convs.add(conv_uid)
+
+            # Standalone conv overflow (no upsample to fuse) — tile spatially
+            # so cuDNN workspace stays bounded per band. Skip convs already
+            # picked up by a fusion pair above.
+            for op_uid, op_type, out_b, ws_b, in_tids in ap.overflow_ops:
+                if op_uid in seen_pair_convs:
+                    continue
+                if "convolution" not in op_type:
+                    continue  # only conv tiling implemented for now
+                # tile_factor: same formula as fusion path but without the
+                # upsample term (no intermediate to absorb).
+                budget_per_band = int(0.65 * comp_vram) - out_b
+                if budget_per_band < (256 * 1024 * 1024):
+                    budget_per_band = 256 * 1024 * 1024
+                total_to_tile = ws_b + out_b
+                import math
+                tf = max(2, math.ceil(total_to_tile / budget_per_band))
+                pow2 = 2
+                while pow2 < tf and pow2 < 64:
+                    pow2 *= 2
+                plan.add_tiled_op(op_uid, op_type, pow2)
+
+            # Custom rms_norm tiling — rms_norm normalizes along the last
+            # (channel) dim, so each H row is independent. Tile by H bands
+            # to bound the per-band materialized output. Fires on rms_norm
+            # ops whose output size > 25% of VRAM (same threshold as fusion).
+            # 20% of VRAM — strict less-than-or-equal would skip exactly-8GB
+            # tensors on a 32GB GPU which is precisely Sana 4Kpx's pattern.
+            ovf_threshold = 0.20 * comp_vram
+            for uid in order:
+                op = ops.get(uid, {})
+                if op.get("op_type", "") != "custom::rms_norm":
+                    continue
+                out_tids = op.get("output_tensor_ids", [])
+                if not out_tids:
+                    continue
+                out_meta = comp.graph["tensors"].get(out_tids[0], {})
+                out_sh = profiler._resolve_shape(
+                    out_meta, input_config.to_symbol_map()
+                )
+                out_b = profiler._compute_size(out_sh, out_meta, dtype_bytes)
+                if out_b <= ovf_threshold:
+                    continue
+                budget_per_band = int(0.65 * comp_vram)
+                import math
+                tf = max(2, math.ceil(out_b / budget_per_band))
+                pow2 = 2
+                while pow2 < tf and pow2 < 64:
+                    pow2 *= 2
+                plan.add_tiled_op(uid, "custom::rms_norm", pow2)
+
+            if not plan.is_empty():
+                result[comp.name] = plan
+
+        return result
 
     def solve_smart(self, container, profile, input_config=None, serve_mode: bool = False):
         """Backward compatibility alias for solve()."""

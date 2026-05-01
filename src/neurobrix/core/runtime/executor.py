@@ -399,6 +399,34 @@ class RuntimeExecutor:
             except (FileNotFoundError, ValueError) as e:
                 logger.debug(f"Tiling not available for {comp_name}: {e}")
 
+        # Op-level tiling — wires per-op_uid interceptors on the component's
+        # GraphExecutor so upsample→conv fusion pairs stream band-by-band
+        # without materializing the OOM intermediate. Plan emitted by Prism
+        # when single-op overflow is detected (e.g. Sana 4Kpx VAE).
+        op_tiling_plans = getattr(self.plan, 'runtime_op_tiling', None) or {}
+        if op_tiling_plans:
+            from neurobrix.core.module.tiling_engine import OpLevelTilingEngine
+            for comp_name, op_plan in op_tiling_plans.items():
+                comp_executor = self.executors.get(comp_name)
+                if comp_executor is None:
+                    logger.debug(f"Op-level tiling skipped: no executor for '{comp_name}'")
+                    continue
+                graph_exec = getattr(comp_executor, 'graph_executor', None) or comp_executor
+                if not hasattr(graph_exec, 'register_op_uid_interceptors'):
+                    logger.warning(
+                        f"Op-level tiling skipped for '{comp_name}': "
+                        f"graph executor missing register_op_uid_interceptors"
+                    )
+                    continue
+                engine = OpLevelTilingEngine.from_op_level_constraint(op_plan)
+                if engine is None:
+                    continue
+                count = engine.register_into_graph_executor(graph_exec)
+                logger.info(
+                    f"[OpLevelTiling] {comp_name}: registered {count} op_uid "
+                    f"interceptors ({len(op_plan.fusion_pairs)} fusion pairs)"
+                )
+
         # Note: CFGEngine is created in _create_flow_handler where FlowContext is available
 
     def _create_flow_handler(self, flow_type: str, ctx: FlowContext):
