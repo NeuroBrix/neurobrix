@@ -296,7 +296,9 @@ def save_image(
     tensor = processor.process(tensor, output_range)
     tensor = tensor.clamp(0, 1)
 
-    if layout == "CHW" and tensor.dim() == 3:
+    # save_image only fires when we've already picked image as the output
+    # modality, so a "mode_dependent" layout means CHW here.
+    if layout in ("CHW", "mode_dependent") and tensor.dim() == 3:
         actual_channel_axis = channel_axis - 1 if batch_axis < channel_axis else channel_axis
         if tensor.shape[actual_channel_axis] in valid_channels:
             tensor = tensor.permute(1, 2, 0)
@@ -433,13 +435,21 @@ def extract_result(
 # ---------------------------------------------------------------------------
 
 
+def _get_tokens(outputs: Dict[str, Any]):
+    """Lookup output tokens without booleanising tensors (`or` would fail)."""
+    tokens = outputs.get("output_tokens")
+    if tokens is None:
+        tokens = outputs.get("global.output_tokens")
+    return tokens
+
+
 def _extract_text(outputs: Dict[str, Any], executor) -> Optional[str]:
     """Decode tokens to text via executor.modules['tokenizer'], or pass through transcription."""
     transcription = outputs.get("global.transcription")
     if transcription:
         return transcription
 
-    tokens = outputs.get("output_tokens") or outputs.get("global.output_tokens")
+    tokens = _get_tokens(outputs)
     if tokens is None:
         return None
 
@@ -453,7 +463,7 @@ def _extract_text(outputs: Dict[str, Any], executor) -> Optional[str]:
 
 
 def _extract_token_count(outputs: Dict[str, Any]) -> int:
-    tokens = outputs.get("output_tokens") or outputs.get("global.output_tokens")
+    tokens = _get_tokens(outputs)
     if tokens is None:
         return 0
     if isinstance(tokens, list):
