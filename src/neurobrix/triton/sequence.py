@@ -200,6 +200,10 @@ class TritonSequence:
 
         # Op interceptors: op_type → callable (for KV cache injection)
         self._op_interceptors: Dict[str, Callable] = {}
+        # Per-op_uid interceptors (op-level tiling). Checked BEFORE op_type
+        # interceptors so a per-uid hook (e.g. only aten.convolution::62)
+        # overrides any op_type-wide interceptor.
+        self._op_uid_interceptors: Dict[str, Callable] = {}
 
         # Weight tensor IDs that need .t() at bind time (from
         # _eliminate_weight_transpose_ops pass).
@@ -217,6 +221,29 @@ class TritonSequence:
             for op in self._ops:
                 if op.op_type == op_type:
                     op.func = interceptor
+
+    def register_op_uid_interceptor(self, op_uid: str, interceptor: Callable):
+        """Register a fine-grained interceptor for one specific op instance.
+
+        Targets a single op_uid rather than every op of a given type — used
+        by op-level tiling to intercept exactly the ops Prism flagged as
+        VRAM overflows while leaving sibling ops on the native Triton path.
+        Op_uid hooks take priority over op_type hooks at compile time.
+        """
+        self._op_uid_interceptors[op_uid] = interceptor
+        if self._compiled:
+            for op in self._ops:
+                if op.op_uid == op_uid:
+                    op.func = interceptor
+
+    def update_op_uid_interceptors(self, interceptors: Dict[str, Callable]):
+        """Hot-swap per-op_uid interceptors on an already-compiled sequence."""
+        self._op_uid_interceptors.update(interceptors)
+        if not self._compiled:
+            return
+        for op in self._ops:
+            if op.op_uid in interceptors:
+                op.func = interceptors[op.op_uid]
 
     # ========================================================================
     # COMPILE
@@ -1436,8 +1463,10 @@ class TritonSequence:
         if op_type == "custom::moe_fused":
             return self._compile_moe_fused_op(op_uid, op_data, kill_slots)
 
-        # Check for registered interceptor (e.g., KV cache for SDPA)
-        if op_type in self._op_interceptors:
+        # Op_uid match (op-level tiling) wins over op_type match (KV cache).
+        if op_uid in self._op_uid_interceptors:
+            func = self._op_uid_interceptors[op_uid]
+        elif op_type in self._op_interceptors:
             func = self._op_interceptors[op_type]
         else:
             func = dispatch(op_type)
