@@ -282,6 +282,7 @@ class CompiledSequence:
         '_is_multi_device',  # FGP: True when weights span multiple devices
         '_persistent_tensor_ids',  # Protected from liveness GC (e.g., hidden states for LLM)
         '_op_interceptors',  # Op interceptors for KV cache (maps op_type -> interceptor)
+        '_op_uid_interceptors',  # Fine-grained per-op_uid interceptors for op-level tiling
         '_seq_dependent_constants',  # Constants with trace-time seq_len dim: [(slot, axis, sym_id, trace_val)]
         '_seq_constant_originals',  # Original full-size constants: {slot: tensor} — never narrowed
         '_pretranspose_weights',  # Weight tensor IDs that need .t().contiguous() at bind time
@@ -356,6 +357,10 @@ class CompiledSequence:
 
         # Op interceptors for KV cache injection (maps op_type -> interceptor callable)
         self._op_interceptors: Dict[str, Callable] = {}
+        # Fine-grained per-op_uid interceptors (op-level tiling: targets a single
+        # op instance, e.g. only aten.convolution::62 for Sana 4Kpx fusion).
+        # Checked BEFORE op_type interceptors so a per-uid hook wins.
+        self._op_uid_interceptors: Dict[str, Callable] = {}
 
         # Weight tensor IDs that need pre-transposition (set by _eliminate_weight_transpose_ops)
         self._pretranspose_weights: set = set()
@@ -414,6 +419,33 @@ class CompiledSequence:
             if op.op_type in interceptors:
                 op.func = interceptors[op.op_type]
                 patched += 1
+
+    def register_op_uid_interceptor(self, op_uid: str, interceptor: Callable) -> None:
+        """
+        Register a fine-grained interceptor for ONE specific op instance by uid.
+
+        Distinct from register_op_interceptor (op_type-wide): this targets a
+        single op_uid (e.g. "aten.convolution::62"). Used by the op-level
+        tiling engine to intercept exactly the ops Prism flagged as VRAM
+        overflows, not every conv/upsample in the DAG.
+
+        Must be called BEFORE compile() OR followed by update_op_uid_interceptors()
+        for hot-swap on an already-compiled sequence.
+        """
+        self._op_uid_interceptors[op_uid] = interceptor
+
+    def update_op_uid_interceptors(self, interceptors: Dict[str, Callable]) -> None:
+        """
+        Hot-swap per-op_uid interceptors on an already-compiled sequence.
+
+        Same pattern as update_op_interceptors but matches by op_uid.
+        """
+        self._op_uid_interceptors.update(interceptors)
+        if not self._ops:
+            return
+        for op in self._ops:
+            if op.op_uid in interceptors:
+                op.func = interceptors[op.op_uid]
 
     def compile(self) -> None:
         """
@@ -1433,9 +1465,13 @@ class CompiledSequence:
         if op_type == "custom::moe_fused":
             return self._compile_moe_fused_op(op_uid, op_data, kill_slots)
 
-        # Check for registered interceptor (KV cache injection for LLM execution)
-        if op_type in self._op_interceptors:
-            # Use interceptor instead of native op
+        # Interceptor priority: op_uid (fine-grained, op-level tiling) > op_type
+        # (broad, KV cache) > native op resolver. The per-uid hook wins so a
+        # specific instance can be tiled while siblings of the same op_type
+        # keep the native path.
+        if op_uid in self._op_uid_interceptors:
+            func = self._op_uid_interceptors[op_uid]
+        elif op_type in self._op_interceptors:
             func = self._op_interceptors[op_type]
         else:
             # Get function from autonomous op resolver (100% independent from sequential_dispatcher)
