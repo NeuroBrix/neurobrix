@@ -20,3 +20,34 @@ defaults:
   num_frames: 16             # Default number of frames
   negative_prompt: ""        # Empty is allowed
 
+execution:
+  flow_type: "iterative_process"
+  has_kv_cache: false
+  use_graph_executor: true
+  compiled_mode: true
+
+inputs:
+  required: ["--prompt"]
+  optional:
+    - flag: "--input-image"
+      triggers_mode: "i2v"
+    - flag: "--video"
+      triggers_mode: "v2v"
+    - flag: "--num-frames"
+    - flag: "--fps"
+    - flag: "--steps"
+    - flag: "--cfg"
+    - flag: "--height"
+    - flag: "--width"
+
+modes:
+  supported: ["t2v", "i2v", "v2v"]
+  default: "t2v"
+  multimodal_strict: false
+
+output:
+  default_extension_per_mode:
+    t2v: ".mp4"
+    i2v: ".mp4"
+    v2v: ".mp4"
+

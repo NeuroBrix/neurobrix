@@ -1,0 +1,35 @@
+# Family-level constants for Upscaler models
+# Pattern: image input + scale factor → upscaled image output
+# References: Swin2SR, Real-ESRGAN, BSRGAN
+
+output_processing:
+  layout: "CHW"
+  channel_axis: 1
+  batch_axis: 0
+  valid_channels: [3]
+  bit_depth: 8
+  output_range: [0.0, 1.0]  # Upscalers typically output [0,1] not [-1,1]
+  output_format: "png"
+
+defaults:
+  # No height/width — output spatial = input * upscale_factor (per-model)
+  pass_through: true
+
+execution:
+  # flow_type varies per model (static_graph or forward_pass).
+  has_kv_cache: false
+  use_graph_executor: true
+  compiled_mode: true
+
+inputs:
+  required: ["--input-image"]
+  optional: []
+
+modes:
+  supported: ["image"]
+  default: "image"
+  multimodal_strict: false
+
+output:
+  default_extension_per_mode:
+    image: ".png"
