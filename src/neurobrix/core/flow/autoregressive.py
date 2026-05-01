@@ -706,16 +706,20 @@ class AutoregressiveHandler(FlowHandler):
         uses_embeds = 'inputs_embeds' in graph_inputs
 
         # Detect position_ids policy: absolute vs relative
-        # Models with INT arange for RoPE (Janus, DeepSeek-V2 MLA) need absolute position_ids
-        # Models with FLOAT arange (DeepSeek-V1, Llama) use relative (arange interceptor shifts)
+        # VQ-image autoregressive paths (Janus pattern) need absolute position_ids
+        # regardless of which family they're packaged under (legacy "image",
+        # current "multimodal"). Detection is data-driven via the topology's
+        # flow.generation.type — INT arange detection is a defensive fallback
+        # for models without that field.
         family = self.ctx.pkg.manifest.get("family")
         if family is None:
             raise RuntimeError(
                 "ZERO FALLBACK: 'family' missing from manifest.json. "
-                "Add it via forge builder and rebuild."
+                "Reimport the model."
             )
+        gen_type = self.ctx.pkg.topology.get("flow", {}).get("generation", {}).get("type", "")
         uses_int_arange = _detect_int_arange_for_rope(dag)
-        uses_absolute_position = family == "image" or uses_int_arange
+        uses_absolute_position = (gen_type == "autoregressive_image") or uses_int_arange
 
         # Get hidden_dim
         lm_extracted = self.ctx.pkg.topology.get("extracted_values", {}).get(lm_name, {})

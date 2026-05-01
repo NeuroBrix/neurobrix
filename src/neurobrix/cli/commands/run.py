@@ -19,30 +19,6 @@ from neurobrix import __version__
 from neurobrix.cli.utils import find_model
 
 
-def _write_video_h264(output_path: str, frames_uint8, fps: float):
-    """Write video as H.264/mp4 using ffmpeg (QuickTime/browser compatible)."""
-    import subprocess
-    import imageio_ffmpeg
-    T, H, W, C = frames_uint8.shape
-    ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
-    cmd = [
-        ffmpeg_exe, "-y",
-        "-f", "rawvideo",
-        "-vcodec", "rawvideo",
-        "-s", f"{W}x{H}",
-        "-pix_fmt", "rgb24",
-        "-r", str(fps),
-        "-i", "-",
-        "-vcodec", "libx264",
-        "-pix_fmt", "yuv420p",
-        "-crf", "18",
-        "-preset", "medium",
-        output_path,
-    ]
-    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    proc.communicate(input=frames_uint8.tobytes())
-
-
 def _try_warm_path(args) -> bool:
     """Attempt warm-path execution via running daemon. Returns True if handled."""
     from neurobrix.serving.client import DaemonClient
@@ -86,15 +62,25 @@ def _try_warm_path(args) -> bool:
     if getattr(args, 'audio', None):
         kwargs["audio_path"] = args.audio
 
-    # For non-LLM non-audio: pass output_path so daemon saves the file
+    # For binary-output families (image, video, audio-wav): pass output_path
+    # so daemon saves the file. Text families (llm/vlm/multimodal-text/stt/
+    # audio_llm) return text in the JSON response and don't need a server-side
+    # save path.
     family = status.get("family")
-    if family not in ("llm", "audio"):
-        from neurobrix.core.config import get_output_processing
-        _output_cfg = get_output_processing(family)
-        _default_ext = _output_cfg.get("output_format", "png")
-        output_path = args.output or f"output_{args.model}.{_default_ext}"
-        # Resolve to absolute path so daemon saves in client's cwd, not daemon's
-        kwargs["output_path"] = str(Path(output_path).resolve())
+    if family:
+        from neurobrix.core.runtime.output_dispatch import (
+            get_output_format,
+            resolve_output_path,
+            resolve_mode,
+        )
+        try:
+            fmt = get_output_format(family)
+        except RuntimeError:
+            fmt = "txt"
+        if fmt != "txt":
+            mode = resolve_mode(family, args)
+            output_path = resolve_output_path(args.output, args.model, family, mode)
+            kwargs["output_path"] = str(Path(output_path).resolve())
 
     try:
         result = client.generate(prompt=args.prompt or "", **kwargs)
@@ -104,27 +90,25 @@ def _try_warm_path(args) -> bool:
         client.close()
         return False
 
-    # Display result
+    # Display result — data-driven by family output_format
+    from neurobrix.core.runtime.output_dispatch import get_output_format
     timing = result.get("timing", {})
     total_s = timing.get("total_s", 0)
 
-    if family == "llm":
-        text = result.get("text", "")
+    try:
+        fmt = get_output_format(family) if family else "txt"
+    except RuntimeError:
+        fmt = "txt"
+
+    if fmt == "txt":
+        text = result.get("text") or result.get("transcription") or ""
         tokens = result.get("tokens", 0)
-        print(f"\n[Output] Generated {tokens} tokens in {total_s}s")
+        if tokens:
+            print(f"\n[Output] Generated {tokens} tokens in {total_s}s")
         if text:
             print(f"\n{text}")
-    elif family == "audio":
-        # Audio STT: transcription text
-        transcription = result.get("transcription")
-        if transcription:
-            print(f"\n[Transcription] {transcription}")
-        # Audio TTS: waveform saved
-        saved_path = result.get("output_path")
-        if saved_path:
-            print(f"\n{'='*70}")
-            print(f"SAVED: {saved_path}")
-            print(f"{'='*70}")
+        elif result.get("output_path"):
+            print(f"\nSAVED: {result['output_path']}")
     else:
         saved_path = result.get("output_path")
         if saved_path:
@@ -202,26 +186,22 @@ def cmd_run(args):
     print("\n[1/4] Loading NBX container...")
     container = NBXContainer.load(str(nbx_path))
 
-    # DATA-DRIVEN: Validate input modality before proceeding
+    # DATA-DRIVEN: Validate inputs against family YAML inputs.required spec
     manifest = container.get_manifest() or {}
     family = manifest.get("family")
-    input_modality = manifest.get("input_modality", "text")
-
-    # Image-to-image models (super-resolution, upscaling)
-    if input_modality == "image":
-        model_name = manifest.get("model_name", args.model)
-        print(f"\nERROR: '{model_name}' is an image-to-image model requiring --input-image.")
-        print(f"Image-to-image inference is not yet supported.")
+    if family is None:
+        print(f"ERROR: 'family' missing in manifest for '{args.model}'.")
         sys.exit(1)
 
-    # Audio family input validation
-    if family == "audio":
-        audio_arg = getattr(args, 'audio', None)
-        if not audio_arg and not args.prompt:
-            print("ERROR: Audio model requires --audio <file> (STT) or --prompt <text> (TTS)")
-            sys.exit(1)
-    elif not args.prompt:
-        print("ERROR: --prompt is required for this model family.")
+    from neurobrix.core.runtime.output_dispatch import (
+        validate_required_inputs,
+        resolve_mode,
+    )
+    try:
+        validate_required_inputs(family, args)
+        mode = resolve_mode(family, args)
+    except RuntimeError as e:
+        print(f"\nERROR: {e}")
         sys.exit(1)
 
     neural_components = container.get_neural_components()
@@ -384,190 +364,46 @@ def cmd_run(args):
     # 6a. Print timing summary
     print(f"\n[Timing] Total execution: {t_exec_total:.2f}s")
 
-    # 7. Find and Save Output - FAMILY-DRIVEN
+    # 7. Save output — DATA-DRIVEN by family YAML output_format
     family = pkg.manifest.get("family")
     if family is None:
         raise RuntimeError(
             f"ZERO FALLBACK: 'family' missing in manifest for model '{args.model}'.\n"
-            f"Model data incomplete. Re-import: neurobrix remove {args.model} && neurobrix import <org>/<model>"
+            f"Model data incomplete. Re-import: neurobrix remove {args.model} && "
+            f"neurobrix import <org>/<model>"
         )
 
-    # =========================================================================
-    # LLM Family: Text/Token Output
-    # =========================================================================
-    if family == "llm":
-        output_tokens = outputs.get("output_tokens")
-        if output_tokens is None:
-            output_tokens = outputs.get("global.output_tokens")
-        if output_tokens is None:
-            print(f"\n[WARNING] No output_tokens found")
-            print(f"Available: {list(outputs.keys())}")
+    from neurobrix.core.runtime.output_dispatch import (
+        get_output_format,
+        resolve_output_path,
+        save_output,
+    )
+
+    fmt = get_output_format(family)
+
+    # Text-output families: print to stdout; only write file if --output given.
+    if fmt == "txt":
+        from neurobrix.core.runtime.output_dispatch import _extract_text, _extract_token_count
+        text = _extract_text(outputs, executor)
+        if text is None:
+            print(f"\n[WARNING] No text output found. Available: {list(outputs.keys())}")
             sys.exit(1)
-
-        num_tokens = len(output_tokens) if isinstance(output_tokens, list) else output_tokens.shape[-1]
-        print(f"\n[Output] Generated {num_tokens} tokens")
-
-        generated_text = None
-        if "tokenizer" in executor.modules:
-            tokenizer = executor.modules["tokenizer"]
-            if hasattr(tokenizer, 'decode'):
-                token_ids = output_tokens if isinstance(output_tokens, list) else (output_tokens if isinstance(output_tokens, list) else output_tokens.flatten().tolist())
-                generated_text = tokenizer.decode(token_ids, skip_special_tokens=True)
-
+        tokens = _extract_token_count(outputs)
+        if tokens:
+            print(f"\n[Output] Generated {tokens} tokens")
         if args.output:
-            output_path = args.output
-            if output_path.endswith(".json"):
-                import json as json_mod
-                result = {
-                    "model": args.model,
-                    "choices": [{
-                        "message": {
-                            "role": "assistant",
-                            "content": generated_text or str((output_tokens if isinstance(output_tokens, list) else output_tokens.flatten().tolist())),
-                        },
-                        "finish_reason": "stop",
-                    }],
-                }
-                with open(output_path, 'w') as f:
-                    json_mod.dump(result, f, indent=2, ensure_ascii=False)
-            else:
-                with open(output_path, 'w') as f:
-                    f.write(generated_text if generated_text else str((output_tokens if isinstance(output_tokens, list) else output_tokens.flatten().tolist())))
+            output_path = resolve_output_path(args.output, args.model, family, mode)
+            save_output(outputs, output_path, family, executor, pkg, mode=mode)
             print(f"\n[Success] Output saved to: {output_path}")
         else:
-            if generated_text:
-                print(f"\n{generated_text}")
-            else:
-                print(f"\n{(output_tokens if isinstance(output_tokens, list) else output_tokens.flatten().tolist())}")
-
+            print(f"\n{text}")
         sys.exit(0)
 
-    # =========================================================================
-    # Audio Family: Transcription (STT) or Waveform (TTS)
-    # =========================================================================
-    if family == "audio":
-        # STT: text transcription
-        transcription = outputs.get("global.transcription")
-        if transcription:
-            print(f"\n[Transcription]")
-            print(f"\n{transcription}")
-            if args.output:
-                with open(args.output, 'w') as f:
-                    f.write(transcription)
-                print(f"\nSaved to: {args.output}")
-            sys.exit(0)
-
-        # TTS: waveform tensor
-        waveform = outputs.get("global.output_audio")
-        if waveform is not None:
-            output_path = args.output or f"output_{args.model}.wav"
-            from neurobrix.core.module.audio.output_processor import AudioOutputProcessor
-            from neurobrix.core.config import get_output_processing
-            audio_cfg = get_output_processing("audio")
-            flow_sr = pkg.topology.get("flow", {}).get("audio", {}).get("sample_rate")
-            sample_rate = flow_sr or pkg.defaults.get("sample_rate", audio_cfg.get("sample_rate", 24000))
-            AudioOutputProcessor.save_waveform(waveform, output_path, sample_rate)
-            print(f"\n{'='*70}")
-            print(f"SAVED: {output_path}")
-            print(f"{'='*70}")
-            sys.exit(0)
-
-        print(f"\n[WARNING] Audio model produced no transcription or waveform output")
-        print(f"Available: {list(outputs.keys())}")
-        sys.exit(1)
-
-    # =========================================================================
-    # Image/Video Family: Tensor Output
-    # =========================================================================
-    final_output = executor.get_final_output(outputs)
-    if final_output is None:
-        final_comp = executor.get_final_component()
-        print(f"\n[WARNING] No tensor output from '{final_comp}'")
-        print(f"Available: {[k for k in outputs.keys() if isinstance(outputs.get(k), torch.Tensor)]}")
-        sys.exit(1)
-
-    print(f"\n[Output] Final tensor: {final_output.shape}")
-    print(f"[Output] Raw VAE output: min={final_output.min():.4f}, max={final_output.max():.4f}, mean={final_output.mean():.4f}")
-
-    output_range = pkg.defaults.get("output_range")
-    if output_range is None:
-        output_cfg = get_output_processing(family)
-        output_range = output_cfg.get("output_range", [-1.0, 1.0])
-
-    output_cfg = get_output_processing(family)
-    batch_axis = output_cfg.get("batch_axis", 0)
-    channel_axis = output_cfg.get("channel_axis", 1)
-    valid_channels = output_cfg.get("valid_channels", [1, 3, 4])
-    bit_depth = output_cfg.get("bit_depth", 8)
-    layout = output_cfg.get("layout", "CHW")
-
-    from neurobrix.core.module.output_processor import OutputProcessor
-    processor = OutputProcessor.from_package(pkg)
-
-    # Remove batch dimension
-    tensor = torch.select(final_output, batch_axis, 0).cpu().float()
-    tensor = processor.process(tensor, output_range)
-    tensor = tensor.clamp(0, 1)
-
-    import numpy as np
-
-    # Default output path uses family's output_format
-    default_ext = output_cfg.get("output_format", "png")
-    output_path = args.output or f"output_{args.model}.{default_ext}"
-
-    # ── VIDEO OUTPUT (4D: TCHW or CTHW) ──
-    if family == "video" and tensor.dim() == 4:
-        if not output_path.endswith(".mp4"):
-            output_path = output_path.rsplit(".", 1)[0] + ".mp4"
-
-        fps = output_cfg.get("fps", 24)
-        fps = pkg.defaults.get("fps", fps)
-
-        # Normalize to [T, H, W, C] for cv2
-        if layout == "CTHW":
-            # [C, T, H, W] → [T, H, W, C]
-            frames = tensor.permute(1, 2, 3, 0).numpy()
-        elif layout == "TCHW":
-            # [T, C, H, W] → [T, H, W, C]
-            frames = tensor.permute(0, 2, 3, 1).numpy()
-        else:
-            # Fallback: assume CTHW (diffusers standard)
-            frames = tensor.permute(1, 2, 3, 0).numpy()
-
-        frames_uint8 = (frames * 255).astype(np.uint8)
-        T, H, W, C = frames_uint8.shape
-
-        _write_video_h264(output_path, frames_uint8, fps)
-
-        print(f"\n{'='*70}")
-        print(f"SAVED: {output_path} ({T} frames, {W}x{H}, {fps} fps)")
-        print(f"{'='*70}")
-        return 0
-
-    # ── IMAGE OUTPUT (3D: CHW) ──
-    output_path = args.output or f"output_{args.model}.png"
-
-    if layout == "CHW" and tensor.dim() == 3:
-        actual_channel_axis = channel_axis - 1 if batch_axis < channel_axis else channel_axis
-        if tensor.shape[actual_channel_axis] in valid_channels:
-            tensor = tensor.permute(1, 2, 0)
-
-    from PIL import Image
-
-    if bit_depth == 8:
-        img_np = (tensor.numpy() * 255).astype(np.uint8)
-    elif bit_depth == 16:
-        img_np = (tensor.numpy() * 65535).astype(np.uint16)
-    else:
-        img_np = (tensor.numpy() * 255).astype(np.uint8)
-
-    if img_np.shape[-1] == 1:
-        img_np = img_np.squeeze(-1)
-
-    Image.fromarray(img_np).save(output_path)
+    # Binary-output families (image, video, audio-wav, multimodal-image)
+    output_path = resolve_output_path(args.output, args.model, family, mode)
+    saved = save_output(outputs, output_path, family, executor, pkg, mode=mode)
 
     print(f"\n{'='*70}")
-    print(f"SAVED: {output_path}")
+    print(f"SAVED: {saved}")
     print(f"{'='*70}")
-
     return 0

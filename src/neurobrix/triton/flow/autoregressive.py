@@ -218,10 +218,12 @@ class TritonAutoregressiveHandler:
           2. HuggingFace chat_template            — LLM chat path
           3. Basic encode                         — fallback
 
-        Image-AR models (gen_type == "autoregressive_image" or
-        family == "image") NEVER go through chat_template even when the
-        tokenizer exposes apply_chat_template — Janus's underlying
-        DeepSeek tokenizer has the method but no template configured.
+        Image-AR models (gen_type == "autoregressive_image") NEVER go
+        through chat_template even when the tokenizer exposes
+        apply_chat_template — Janus's underlying DeepSeek tokenizer has the
+        method but no template configured. Detection is data-driven via
+        topology gen_type, independent of which family the model is
+        packaged under (legacy "image" or current "multimodal").
         """
         if "tokenizer" not in self.ctx.modules:
             raise RuntimeError("autoregressive_generation requires 'tokenizer' module.")
@@ -229,9 +231,7 @@ class TritonAutoregressiveHandler:
         prompt = self.ctx.variable_resolver.resolved.get("global.prompt", "")
         defaults = self.ctx.pkg.defaults
         gen_type = gen_info.get("type")
-        family = self.ctx.pkg.manifest.get("family")
-        is_image_ar = (gen_type == "autoregressive_image"
-                       or family == "image")
+        is_image_ar = (gen_type == "autoregressive_image")
 
         sft_format = defaults.get("sft_format")
         special_token_ids = defaults.get("special_token_ids")
