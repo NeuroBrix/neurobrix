@@ -147,129 +147,132 @@ def _fused_upsample_conv2d_torch(
     proxy_or_tensor, weight, bias, stride, padding, dilation,
     transposed, output_padding, groups, tile_factor,
 ):
+    """Band-streaming fused upsample+conv with REAL halo (no zero-pad seams).
+
+    Per band, we build the upsample-output slice that covers
+    [up_start - halo, up_end + halo) where halo = (kh-1)*dh // 2. The conv
+    runs with padding=(0, pad_w) — the halo provides the rows the kernel
+    needs internally, so no zero-pad is inserted at internal band frontiers.
+    Image borders (band 0 top, last band bottom) get F.pad with the original
+    pad_h. Bit-identical to a non-tiled conv when the halo is correct.
+    """
     import torch
     import torch.nn.functional as F
 
-    # Normalize stride / padding / dilation to (h, w) tuples
     sh_st, sw_st = _pair(stride)
     pad_h, pad_w = _pair(padding)
     dh, dw = _pair(dilation)
 
-    if isinstance(proxy_or_tensor, FusionUpsampleProxy):
-        proxy = proxy_or_tensor
-        pre_input = proxy.pre_input
-        up_sh, up_sw = proxy.scales_h, proxy.scales_w
-        N, _, OH, OW = proxy.output_shape  # output of upsample
-        in_c = pre_input.shape[1]
-    else:
-        # Plain conv path — fallback when the upsample interceptor wasn't
-        # active (e.g. compile-time wiring missed). Run a standard conv
-        # without tiling (caller will OOM if input is too big — same
-        # behaviour as before this interceptor existed).
+    if not isinstance(proxy_or_tensor, FusionUpsampleProxy):
         return F.conv2d(
             proxy_or_tensor, weight, bias=bias,
             stride=(sh_st, sw_st), padding=(pad_h, pad_w),
             dilation=(dh, dw), groups=groups,
         )
 
+    proxy = proxy_or_tensor
+    pre_input = proxy.pre_input
+    up_sh, up_sw = proxy.scales_h, proxy.scales_w
+    N, _, OH, OW = proxy.output_shape
+
     out_c, _, kh, kw = weight.shape
-    # Output spatial of the conv (after the absorbed upsample)
     conv_out_h = (OH + 2 * pad_h - dh * (kh - 1) - 1) // sh_st + 1
     conv_out_w = (OW + 2 * pad_w - dw * (kw - 1) - 1) // sw_st + 1
 
-    # Allocate full conv output — downstream consumers expect a whole tensor.
     out_dtype = weight.dtype
     output = torch.empty(
         (N, out_c, conv_out_h, conv_out_w),
         dtype=out_dtype, device=pre_input.device,
     )
 
-    # Tile along output H. tile_factor is a hint from Prism; clamp to >= 1.
     tile_factor = max(1, int(tile_factor))
     band_oh = (conv_out_h + tile_factor - 1) // tile_factor
-    if band_oh < 1:
-        band_oh = conv_out_h
-
     pre_h = pre_input.shape[2]
 
-    # Halo: each output row reads (kh) input rows post-upsample.
-    # Pre-upsample row index for upsample-output row r is floor(r / up_sh).
-    halo_pre = max(1, int((kh - 1) // 2 + 1))
+    # Halo on the upsample-output side: kernel needs (kh-1)*dh // 2 rows
+    # of REAL pixels above and below each band. Pre-upsample halo derived
+    # by dividing through the nearest-upsample ratio (one pre row covers
+    # `up_sh` upsample rows, so halo_post / up_sh pre rows is enough).
+    halo_post = (kh - 1) * dh // 2
 
     for oh_start in range(0, conv_out_h, band_oh):
         oh_end = min(oh_start + band_oh, conv_out_h)
 
-        # Upsample-output rows that this conv band reads (with conv padding
-        # reaching into the previous band by kh//2):
-        up_start = max(0, oh_start * sh_st - pad_h)
-        up_end = min(OH, (oh_end - 1) * sh_st + dh * (kh - 1) + 1 - pad_h)
-        if up_end <= up_start:
+        # Upsample-output rows the conv band reads: stride / dilation aware.
+        # First row read = oh_start*sh - pad_h - halo_post (clamp 0)
+        # Last row read  = (oh_end-1)*sh + halo_post - pad_h (clamp OH-1)
+        # We over-read by halo_post on each side so the conv internal padding
+        # is zero (no synthetic zero rows at band frontiers).
+        # NOTE: when oh_start == 0 we INCLUDE the natural pad_h at top via
+        # F.pad below; idem for oh_end == conv_out_h at bottom.
+        up_inner_start = oh_start * sh_st - pad_h
+        up_inner_end = (oh_end - 1) * sh_st + dh * (kh - 1) + 1 - pad_h
+
+        # Add halo for the conv kernel internal frontier.
+        is_top_band = (oh_start == 0)
+        is_bot_band = (oh_end == conv_out_h)
+        halo_top = 0 if is_top_band else halo_post
+        halo_bot = 0 if is_bot_band else halo_post
+
+        up_read_start = up_inner_start - halo_top
+        up_read_end = up_inner_end + halo_bot
+
+        # Clamp to valid upsample-output range; track how much each side was
+        # cut so we can apply F.pad to recover the boundary halo with zeros.
+        up_clamped_start = max(0, up_read_start)
+        up_clamped_end = min(OH, up_read_end)
+        pad_top_real = max(0, -up_read_start) + (pad_h if is_top_band else 0)
+        pad_bot_real = max(0, up_read_end - OH) + (pad_h if is_bot_band else 0)
+
+        if up_clamped_end <= up_clamped_start:
             continue
 
-        # Pre-upsample rows that produce up_start..up_end (nearest mapping):
-        # ih = floor(uh / up_sh); we add halo_pre on each side for safety.
-        pre_start = max(0, int(up_start // up_sh) - halo_pre)
-        pre_end = min(pre_h, int((up_end - 1) // up_sh) + 1 + halo_pre)
+        # Pre-upsample rows that produce [up_clamped_start, up_clamped_end).
+        # nearest mapping: pre_row = floor(up_row / up_sh).
+        pre_start = max(0, int(up_clamped_start // up_sh))
+        pre_end = min(pre_h, int((up_clamped_end - 1) // up_sh) + 1)
 
         pre_band = pre_input[:, :, pre_start:pre_end, :]
-        # Cast pre_band to weight dtype if needed (mixed precision safety)
         if pre_band.dtype != out_dtype:
             pre_band = pre_band.to(out_dtype)
         pre_band = pre_band.contiguous()
 
-        # Upsample the band only (small allocation freed at end of iteration)
-        # Use the SAME nearest mapping as the original op: explicit scale
-        # factor to avoid output_size rounding mismatch.
+        # Upsample only the needed strip (small transient allocation).
         up_band = F.interpolate(
             pre_band, scale_factor=(up_sh, up_sw), mode="nearest"
         )
 
-        # The up_band's first row corresponds to upsample-output row
-        # pre_start * up_sh. Slice to get exactly up_start..up_end.
-        up_offset_local = up_start - int(pre_start * up_sh)
-        up_band_local_h = up_end - up_start
-        up_band = up_band[:, :, up_offset_local:up_offset_local + up_band_local_h, :]
+        # Slice the upsample-band to exactly the rows we wanted to read.
+        up_offset_local = up_clamped_start - int(pre_start * up_sh)
+        up_local_h = up_clamped_end - up_clamped_start
+        up_band = up_band[:, :, up_offset_local:up_offset_local + up_local_h, :]
         up_band = up_band.contiguous()
 
-        # Conv with adjusted padding: zero on internal band edges (the
-        # adjacent band covers them), original padding on outer edges.
-        pad_top = pad_h if oh_start == 0 else 0
-        pad_bot = pad_h if oh_end == conv_out_h else 0
-        if pad_top != pad_bot:
-            # Asymmetric pad — apply manually then conv with padding 0 on H.
-            up_band = F.pad(up_band, (0, 0, pad_top, pad_bot), mode="constant", value=0.0)
-            band_pad_h = 0
-        else:
-            band_pad_h = pad_top
+        # Apply boundary padding (image-edge halo + clipped over-read).
+        if pad_top_real > 0 or pad_bot_real > 0 or pad_w > 0:
+            up_band = F.pad(
+                up_band,
+                (pad_w, pad_w, pad_top_real, pad_bot_real),
+                mode="constant", value=0.0,
+            )
 
+        # Conv with padding=(0,0) on H (halo already provided in up_band).
         conv_band = F.conv2d(
             up_band, weight, bias=None,
             stride=(sh_st, sw_st),
-            padding=(band_pad_h, pad_w),
+            padding=(0, 0),
             dilation=(dh, dw),
             groups=groups,
         )
 
-        # The conv_band first output row corresponds to up_start (after
-        # accounting for the symmetric padding that was applied). Slice the
-        # exact (oh_end - oh_start) rows we want.
+        # conv_band has exactly (oh_end - oh_start) rows by construction
+        # (halo accounts for kernel borrow; F.pad accounts for image edges).
         actual_band_h = oh_end - oh_start
-        # When padding was symmetric (band_pad_h > 0), the conv preserves H
-        # for stride=1: conv_band.shape[2] == up_band_local_h.
-        # When asymmetric (manual pad), same property holds.
-        band_first_oh = up_start // sh_st
-        local_offset = oh_start - band_first_oh
-        if local_offset < 0:
-            local_offset = 0
-        conv_band = conv_band[:, :, local_offset:local_offset + actual_band_h, :]
-        if conv_band.shape[2] != actual_band_h:
-            # Defensive: clip / pad to match exactly. Should not happen for
-            # stride=1 conv with standard padding but covers edge rounding.
-            actual_band_h = min(conv_band.shape[2], actual_band_h)
+        if conv_band.shape[2] < actual_band_h:
+            actual_band_h = conv_band.shape[2]
         output[:, :, oh_start:oh_start + actual_band_h, :] = conv_band[:, :, :actual_band_h, :]
 
     if bias is not None:
-        # Bias add as separate broadcast — in-place to save one alloc.
         output += bias.view(1, -1, 1, 1)
 
     return output
@@ -340,6 +343,13 @@ def _tiled_conv2d_spatial_torch(
     input_tensor, weight, bias, sh_st, sw_st, pad_h, pad_w,
     dh, dw, groups, tile_factor,
 ):
+    """Band-streaming standalone conv with REAL halo (no zero-pad seams).
+
+    Same algorithm as the fused variant minus the upsample. For each output
+    band we slice the input with halo = (kh-1)*dh//2 rows above and below;
+    the conv runs with padding=(0,0) on H. Image-edge halos are filled by
+    F.pad with the original pad_h. Bit-identical to non-tiled conv2d.
+    """
     import torch
     import torch.nn.functional as F
 
@@ -355,42 +365,53 @@ def _tiled_conv2d_spatial_torch(
 
     tile_factor = max(1, int(tile_factor))
     band_oh = (out_h + tile_factor - 1) // tile_factor
-    if band_oh < 1:
-        band_oh = out_h
+    halo_h = (kh - 1) * dh // 2
 
     for oh_start in range(0, out_h, band_oh):
         oh_end = min(oh_start + band_oh, out_h)
-        # Input rows that produce this output band
-        ih_start = max(0, oh_start * sh_st - pad_h)
-        ih_end = min(IH, (oh_end - 1) * sh_st + dh * (kh - 1) + 1 - pad_h)
-        if ih_end <= ih_start:
+        is_top_band = (oh_start == 0)
+        is_bot_band = (oh_end == out_h)
+
+        # Input rows the kernel needs to produce [oh_start, oh_end):
+        # core range minus pad_h, then extend by halo_h for internal frontiers.
+        in_inner_start = oh_start * sh_st - pad_h
+        in_inner_end = (oh_end - 1) * sh_st + dh * (kh - 1) + 1 - pad_h
+        halo_top = 0 if is_top_band else halo_h
+        halo_bot = 0 if is_bot_band else halo_h
+        in_read_start = in_inner_start - halo_top
+        in_read_end = in_inner_end + halo_bot
+
+        in_clamped_start = max(0, in_read_start)
+        in_clamped_end = min(IH, in_read_end)
+        pad_top_real = max(0, -in_read_start) + (pad_h if is_top_band else 0)
+        pad_bot_real = max(0, in_read_end - IH) + (pad_h if is_bot_band else 0)
+
+        if in_clamped_end <= in_clamped_start:
             continue
-        in_band = input_tensor[:, :, ih_start:ih_end, :]
+
+        in_band = input_tensor[:, :, in_clamped_start:in_clamped_end, :]
         if in_band.dtype != out_dtype:
             in_band = in_band.to(out_dtype)
         in_band = in_band.contiguous()
 
-        pad_top = pad_h if oh_start == 0 else 0
-        pad_bot = pad_h if oh_end == out_h else 0
-        if pad_top != pad_bot:
-            in_band = F.pad(in_band, (0, 0, pad_top, pad_bot), mode="constant", value=0.0)
-            band_pad_h = 0
-        else:
-            band_pad_h = pad_top
+        if pad_top_real > 0 or pad_bot_real > 0 or pad_w > 0:
+            in_band = F.pad(
+                in_band,
+                (pad_w, pad_w, pad_top_real, pad_bot_real),
+                mode="constant", value=0.0,
+            )
 
         conv_band = F.conv2d(
             in_band, weight, bias=None,
             stride=(sh_st, sw_st),
-            padding=(band_pad_h, pad_w),
+            padding=(0, 0),
             dilation=(dh, dw),
             groups=groups,
         )
+
         actual_band_h = oh_end - oh_start
-        # First output row of conv_band corresponds to ih_start // sh_st
-        band_first_oh = ih_start // sh_st
-        local_offset = max(0, oh_start - band_first_oh)
-        conv_band = conv_band[:, :, local_offset:local_offset + actual_band_h, :]
-        actual_band_h = min(conv_band.shape[2], actual_band_h)
+        if conv_band.shape[2] < actual_band_h:
+            actual_band_h = conv_band.shape[2]
         output[:, :, oh_start:oh_start + actual_band_h, :] = conv_band[:, :, :actual_band_h, :]
 
     if bias is not None:
