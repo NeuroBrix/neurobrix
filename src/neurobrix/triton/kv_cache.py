@@ -113,7 +113,14 @@ class TritonAttentionInterceptor:
 
     def intercept(self, q, k, v, attn_mask=None, dropout_p=0.0,
                   is_causal=True, scale=None, layer_idx=-1):
-        """Intercept SDPA: update KV cache for decode, passthrough for prefill."""
+        """Intercept SDPA: update KV cache for decode, passthrough for prefill.
+
+        Self-managed dtype (Phase 1 opt-in cleanup): Flash Attention works
+        in fp16/bf16 not fp32, and the interceptor casts q/k/v internally
+        to the cache dtype. The DtypeEngine wrap would either no-op
+        (correct dtypes already) or create unwanted upcasts. Marked
+        explicit on the bound method below.
+        """
         from neurobrix.kernels.wrappers import scaled_dot_product_attention_wrapper
 
         if layer_idx < 0:
@@ -226,3 +233,9 @@ class TritonAttentionInterceptor:
         for layer in self.cache._layers.values():
             return layer.current_len
         return 0
+
+
+# Phase 1 opt-in cleanup: mark the interceptor's underlying function
+# as self-managing dtype. TritonSequence._compile_op walks
+# func.__func__ for bound methods to pick up this flag.
+TritonAttentionInterceptor.intercept.self_manages_dtype = True  # type: ignore[attr-defined]
