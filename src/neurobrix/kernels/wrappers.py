@@ -1055,6 +1055,19 @@ def _matmul_out_dtype(a, M: int = 1, force_fp32: bool = False):
 
     `force_fp32=True` overrides everything (used by bmm for diffusion
     attention on all hardware).
+
+    **Phase 1.5 attempt (2026-05) — REVERTED.** A bypass of hardware
+    gate (1) when `activations_fp16_safe=True` was prototyped on the
+    intuition that fp16-safe activations would unlock HMMA-fp16 via
+    Triton. Empirical measurement on Sana 1024 (M=2048×2240) refuted
+    this: pure fp16 path was 6.52 ms vs 2.82 ms current path (2.3×
+    WORSE). Triton fp16×fp16 → fp32 accumulator on Volta does NOT
+    lower to HMMA-fp16 in this kernel — it falls back to fp32
+    emulation. cuBLAS reaches 0.295 ms via its own dedicated HMMA-fp16
+    code path that we cannot replicate by toggling a flag. The
+    force_fp32 hardware gate stays unconditional. Real speedup
+    requires either a HMMA-tuned Triton kernel OR adopting
+    FlagGems / similar — see Phase 1.5 follow-up.
     """
     dt = a.nbx_dtype if hasattr(a, 'nbx_dtype') else a.dtype
     is_fp16 = (dt == NBXDtype.float16)
@@ -1098,6 +1111,13 @@ def mm(a, b) :
     # ACTIVATION to fp32. On bf16-capable hardware this branch is a no-op.
     # NBXTensor.dtype returns triton.language.dtype (for kernel dispatch);
     # NBXTensor.nbx_dtype returns the NBXDtype enum used by these guards.
+    #
+    # NOTE (Phase 1.5 attempt, reverted): an activations_fp16_safe opt-in
+    # bypass was prototyped but empirically slower on Sana 1024 (6.5 vs
+    # 2.8 ms — Triton fp16×fp16 does NOT lower to HMMA on Volta in this
+    # kernel; cuBLAS reaches 0.295 ms via dedicated HMMA path we cannot
+    # match by flag-flipping). Real speedup needs a HMMA-tuned Triton
+    # kernel or FlagGems adoption — see Phase 1.5 follow-up.
     a_nbx = a.nbx_dtype
     b_nbx = b.nbx_dtype
     if not _NBX_HAS_NATIVE_BF16 and a_nbx == NBXDtype.float16:
