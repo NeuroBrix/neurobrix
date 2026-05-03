@@ -339,8 +339,21 @@ def cmd_run(args):
     print(f"   Total inputs: {len(inputs)}")
 
     # 5. Determine Execution Engine Mode
+    # Mutually exclusive flags: --compiled / --sequential / --triton /
+    # --triton-sequential. Default = compiled when no flag is passed.
+    _mode_flags = [
+        getattr(args, 'compiled', False),
+        args.sequential,
+        args.triton,
+        getattr(args, 'triton_sequential', False),
+    ]
+    if sum(bool(f) for f in _mode_flags) > 1:
+        print("\nERROR: Only one execution mode flag can be passed at a time.")
+        print("       Choose one of: --compiled (default), --sequential, --triton, --triton-sequential")
+        return 1
+
     if args.sequential:
-        execution_mode = "native"
+        execution_mode = "sequential"
     elif args.triton or getattr(args, 'triton_sequential', False):
         # Triton mode: validate hardware compatibility
         if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
@@ -358,6 +371,7 @@ def cmd_run(args):
         else:
             execution_mode = "triton"
     else:
+        # default OR --compiled explicit
         execution_mode = "compiled"
 
     # 6. Execute

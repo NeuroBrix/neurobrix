@@ -55,7 +55,8 @@ class FlowContext:
     # Path to NBX cache for weight loading
     nbx_path_str: str
 
-    # Execution mode: "compiled" (default), "native" (ATen debug), "triton" (R&D)
+    # Execution mode: "compiled" (default), "sequential" (PyTorch eager debug),
+    # "triton" (Triton-pure compiled), "triton_sequential" (Triton-pure debug)
     mode: str = "compiled"
 
     # Persistent mode: when True, GraphExecutors mark themselves _persistent

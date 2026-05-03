@@ -525,11 +525,16 @@ class AutoregressiveHandler(FlowHandler):
                                         key=lambda i: -flat[i])[:10]
                     top10 = [(i, flat[i]) for i in idx_sorted]
                     with open(_dump_path, 'w') as _f:
-                        _json_dl.dump({"engine": "native",
+                        # PyTorch path dump tag (compiled or sequential mode);
+                        # the matching triton-path dump in
+                        # triton/flow/autoregressive.py uses "triton".
+                        # Historical value "native" was renamed for vocabulary
+                        # consistency — see CLAUDE.md "Execution Modes".
+                        _json_dl.dump({"engine": "compiled",
                                        "vocab_size": len(flat),
                                        "top10": top10,
                                        "argmax": idx_sorted[0]}, _f)
-                    print(f"[NBX_DUMP_LOGITS] native dumped top10 "
+                    print(f"[NBX_DUMP_LOGITS] compiled dumped top10 "
                           f"to {_dump_path}", flush=True)
                 next_token, is_done = generator.step(logits, step_idx)
 
