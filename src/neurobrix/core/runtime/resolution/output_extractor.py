@@ -95,7 +95,7 @@ class OutputExtractor:
         """
         Store component outputs in resolved variables.
 
-        VARIABLE EMBARQUEE: Stores outputs with both semantic names and output_N aliases.
+        EMBEDDED VARIABLE: Stores outputs with both semantic names and output_N aliases.
         Semantic outputs (not T_xxxxxx) are mapped to output_0, output_1, etc.
 
         Args:

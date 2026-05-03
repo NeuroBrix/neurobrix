@@ -42,7 +42,7 @@ baseline, all ruled in via systematic bisect:
 - `_resolve_blocks_and_dtype` cached lookup (even with 100% cache hit rate
   after the first call).
 - List literal `candidates = [(16, 64), ...]` allocated per call (Layer 6
-  original DRIFT cause, isolated by Étape 3e bisect).
+  original DRIFT cause, isolated by Step 3e bisect).
 
 The empirical signature is the same in every case: 3 successive runs of
 the same `python -m neurobrix run --model TinyLlama --temperature 0

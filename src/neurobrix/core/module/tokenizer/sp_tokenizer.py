@@ -66,7 +66,7 @@ class SPTokenizer:
         self._config = config or {}
         self._vocab_size = self._sp.GetPieceSize()
 
-        # VARIABLE EMBARQUÉE: Special token IDs from config
+        # EMBEDDED VARIABLE: Special token IDs from config
         # Use SentencePiece defaults if not in config (SP standard: pad=0, eos=1, unk=2)
         self._pad_id = self._config.get("pad_token_id", self._sp.pad_id() if hasattr(self._sp, 'pad_id') else 0)
         self._eos_id = self._config.get("eos_token_id", self._sp.eos_id() if hasattr(self._sp, 'eos_id') else 1)

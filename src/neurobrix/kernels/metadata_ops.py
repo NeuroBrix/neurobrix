@@ -2,9 +2,9 @@
 Metadata Operations Implementation - NeuroBrix
 ATen Native Operations - Pure PyTorch
 
-Ces opérations manipulent les shapes, les indices et les constantes.
-ZERO type hardening dangereux - on préserve les dtypes originaux.
-Toutes les ops sont en format aten::* (trace ATen native).
+These operations manipulate shapes, indices and constants.
+ZERO unsafe type hardening — original dtypes are preserved.
+All ops use the aten::* format (native ATen trace).
 """
 
 import torch
