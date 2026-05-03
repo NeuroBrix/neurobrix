@@ -67,6 +67,9 @@ def baddbmm_kernel(
         mask_b = mask_k[:, None] & (offs_n[None, :] < N)
         a = tl.load(a_ptrs, mask=mask_a, other=0.0)
         b = tl.load(b_ptrs, mask=mask_b, other=0.0)
+        # NOTE: Phase 1.5 Étape 1 (2026-05) tested 3-arg `tl.dot(a, b, acc)`
+        # form here — measured 0% gain on V100 sm_70 (same conclusion as
+        # kernels/ops/matmul.py:matmul_kernel). Reverted to 2-arg form.
         accumulator += tl.dot(a, b, allow_tf32=False)
         offs_k += BLOCK_K
         a_ptrs += BLOCK_K * stride_ak
