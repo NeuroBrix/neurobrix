@@ -255,6 +255,48 @@ def get_hardware_profile():
     return _NBX_HW_PROFILE
 
 
+# ---------------------------------------------------------------------------
+# Per-component runtime context: compute_dtype + activations_fp16_safe flag.
+# These globals are set by TritonSequence.run() at hot-loop entry and
+# restored at exit (try/finally). Single-threaded NeuroBrix runtime by
+# convention (sequence.py:325 docstring), so module-level state is safe.
+#
+# - _NBX_COMPUTE_DTYPE: the per-component compute dtype Prism allocated
+#   for this sequence. Read by self-managed wrappers (conv2d_wrapper)
+#   to decide output dtype, mirroring what cuDNN does in compiled mode.
+# - _NBX_ACTIVATIONS_FP16_SAFE: per-component opt-in flag from
+#   forge/config/model_registry.yml. When True, ops in AMP_FP32_OPS
+#   that produce fp32 internally cast their output back to compute_dtype
+#   (rms_norm, div, etc.) — VRAM-preserving for models whose activations
+#   are confirmed within fp16 range by measure_activation_ranges. Default
+#   False keeps the conservative fp32-output behavior.
+# ---------------------------------------------------------------------------
+_NBX_COMPUTE_DTYPE = None
+_NBX_ACTIVATIONS_FP16_SAFE: bool = False
+
+
+def set_compute_dtype(dt) -> None:
+    """Set the active per-component compute dtype. Called by TritonSequence.run."""
+    global _NBX_COMPUTE_DTYPE
+    _NBX_COMPUTE_DTYPE = dt
+
+
+def get_compute_dtype():
+    """Return the active per-component compute dtype, or None if not set."""
+    return _NBX_COMPUTE_DTYPE
+
+
+def set_activations_fp16_safe(safe: bool) -> None:
+    """Set the activations-fp16-safe opt-in flag for the active component."""
+    global _NBX_ACTIVATIONS_FP16_SAFE
+    _NBX_ACTIVATIONS_FP16_SAFE = bool(safe)
+
+
+def get_activations_fp16_safe() -> bool:
+    """Return the activations-fp16-safe flag for the active component."""
+    return _NBX_ACTIVATIONS_FP16_SAFE
+
+
 def _1d_grid(n_elements):
     """Grid for element-wise (memory-bound) kernels. Fixed BLOCK_SIZE=1024."""
     return (triton.cdiv(n_elements, _EW_BLOCK),)
@@ -2206,9 +2248,51 @@ def conv2d_wrapper(
     out_h = (in_h + 2 * pad_h - dil_h * (kh - 1) - 1) // stride_h + 1
     out_w = (in_w + 2 * pad_w - dil_w * (kw - 1) - 1) // stride_w + 1
 
+    # Self-managed dtype doctrine — VRAM-preserving (different from the
+    # mm/bmm/addmm doctrine which is accumulation-overflow-protected).
+    #
+    # mm/bmm/addmm: deep matmul stacks risk fp16 accumulation overflow.
+    #   Step 1 upcasts input fp16 → fp32 on pre-Ampere, output forced to
+    #   fp32 (force_fp32 in _matmul_out_dtype). Cible précision.
+    #
+    # conv2d: spatial activation chain (VAE/UNet). The kernel already
+    #   accumulates in fp32 internally (conv2d.py line 47:
+    #   `accum = tl.zeros(..., dtype=tl.float32)`), so there is no
+    #   overflow risk requiring an input fp16→fp32 upcast. The risk here
+    #   is VRAM (4096×4096 spatial tensors). We therefore:
+    #     - skip Step 1 (no input upcast)
+    #     - Step 2 narrows mismatched input/weight to the lowest-precision
+    #       common dtype (opposite of mm widening — VRAM over precision)
+    #     - Step 4 sets output dtype = compute_dtype from
+    #       _NBX_COMPUTE_DTYPE (the per-component Prism dtype set by
+    #       TritonSequence.run), mirroring what cuDNN does silently in
+    #       compiled mode. Falls back to x.dtype if not set (run outside
+    #       a TritonSequence context).
+    # Universal hardware: no _NBX_HAS_NATIVE_BF16 gate — same behavior on
+    # Volta and Ampere+ since it operates on dtype tags, not hardware
+    # capability. R33-pure: NBXTensor.to uses a @triton.jit copy kernel.
+
+    # Step 0: ensure cuda + cross-device alignment (identical to mm)
+    # (already implicit; weight transfer handled by upstream callers / arena)
+
+    # Step 2: dtype alignment NARROWING (opposite of mm widening)
+    x_nbx = x.nbx_dtype if hasattr(x, 'nbx_dtype') else x.dtype
+    w_nbx = weight.nbx_dtype if hasattr(weight, 'nbx_dtype') else weight.dtype
+    if x_nbx != w_nbx:
+        _order = (NBXDtype.float16, NBXDtype.bfloat16, NBXDtype.float32)
+        narrowest = next(d for d in _order if d in (x_nbx, w_nbx))
+        if x_nbx != narrowest:
+            x = x.to(narrowest)
+        if w_nbx != narrowest:
+            weight = weight.to(narrowest)
+
     x_c = x.contiguous()
     w_c = weight.contiguous()
-    output = NBXTensor.empty((N, out_c, out_h, out_w), device=x.device, dtype=x.dtype)
+
+    # Step 4: output dtype = compute_dtype from per-component Prism context.
+    # Falls back to x.dtype when no TritonSequence is active.
+    out_dtype = _NBX_COMPUTE_DTYPE if _NBX_COMPUTE_DTYPE is not None else x.dtype
+    output = NBXTensor.empty((N, out_c, out_h, out_w), device=x.device, dtype=out_dtype)
 
     fp16 = x.dtype == NBXDtype.float16
 

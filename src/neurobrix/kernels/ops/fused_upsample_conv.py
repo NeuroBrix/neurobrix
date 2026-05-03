@@ -615,3 +615,23 @@ def _fused_upsample_conv2d_nbx(
     if bias is not None:
         output = nbx_add(output, bias.view(1, -1, 1, 1))
     return output
+
+
+# Phase 1 opt-in cleanup: mark op-level tiling NBX interceptors as
+# self-managing dtype. TritonSequence._compile_op checks this flag to
+# skip the DtypeEngine wrap for these ops. Justified because:
+#   - fused_upsample_conv2d may receive a FusionUpsampleProxy as arg[0]
+#     (no nbx_dtype attribute → DtypeEngine wrap would no-op anyway)
+#   - the nested per-band calls delegate to conv2d_wrapper which is
+#     itself self-managed (narrowing + output = compute_dtype)
+#   - rms_norm tiled wrapper delegates to the rms_norm wrapper which
+#     follows AMP_FP32_OPS via DtypeEngine (or the opt-in cast-back
+#     variant when activations_fp16_safe is enabled)
+fused_upsample_conv2d.self_manages_dtype = True
+_fused_upsample_conv2d_nbx.self_manages_dtype = True
+_tiled_conv2d_spatial_nbx.self_manages_dtype = True
+# Public dispatchers (mode-agnostic) used by the tiling engine as
+# op_uid interceptors — they delegate to the _torch/_nbx helpers, so
+# the dtype self-management is the responsibility of the chosen path.
+tiled_conv2d_spatial.self_manages_dtype = True
+tiled_rms_norm_spatial.self_manages_dtype = True
