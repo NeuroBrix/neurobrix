@@ -42,6 +42,20 @@ def matmul_kernel(
     fp32); the accumulator is fp32 so the final dot product is identical
     to the path that widens the full weight pre-kernel.
     """
+    # NOTE Phase 1.5 Étape 1 (2026-05, REVERTED): patterns from the official
+    # Triton matmul tutorial were tested:
+    #   (a) `tl.dot(a, b, accumulator)` 3-arg HMMA-FMA fused form
+    #   (b) `tl.assume(stride_* > 0)` integer-analyzer hints
+    # Measured -0.7% delta (noise) on Sana 1024 mm M=2048×K=2240×N=2240
+    # V100 sm_70 with our static config BM=64 BN=64 BK=32 warps=4 stages=2.
+    # Diagnostic: Triton compiler already lowers `acc += tl.dot(...)` to
+    # the 3-arg fused form at the IR level; pointer arithmetic in this
+    # kernel is simple enough that tl.assume hints provide no measurable
+    # gain. The official tutorial reaches 81% cuBLAS on V100 only when
+    # combined with @triton.autotune adaptive config selection, which is
+    # interdit en production NeuroBrix this year (deferred chantier
+    # P-AUTOTUNE-OFFLINE post-dev). Do NOT re-test these patterns in
+    # isolation without autotune — proven inactive on Volta.
     pid = tl.program_id(0)
     num_pid_m = tl.cdiv(M, BLOCK_M)
     num_pid_n = tl.cdiv(N, BLOCK_N)
@@ -98,6 +112,8 @@ def addmm_kernel(
     tile cast; enables the wrapper to keep fp16 weights fp16 in memory
     while still running tl.dot with matched dtypes.
     """
+    # NOTE: same Phase 1.5 Étape 1 rollback applies here — see matmul_kernel
+    # docstring. Patterns reverted, kernel back to pre-Étape-1 state.
     pid = tl.program_id(0)
     num_pid_m = tl.cdiv(M, BLOCK_M)
     num_pid_n = tl.cdiv(N, BLOCK_N)

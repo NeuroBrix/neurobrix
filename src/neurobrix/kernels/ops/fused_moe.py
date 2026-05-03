@@ -95,6 +95,9 @@ def fused_moe_kernel(
             mask=offs_k[:, None] < K - k * BLOCK_SIZE_K,
             other=0.0,
         )
+        # NOTE: Phase 1.5 Étape 1 (2026-05) tested 3-arg `tl.dot(a, b, acc)`
+        # form — measured 0% gain on V100 sm_70. Reverted to 2-arg form.
+        # See kernels/ops/matmul.py:matmul_kernel docstring for full audit.
         accumulator += tl.dot(a, b)
         a_ptrs += BLOCK_SIZE_K * stride_ak
         b_ptrs += BLOCK_SIZE_K * stride_bk
