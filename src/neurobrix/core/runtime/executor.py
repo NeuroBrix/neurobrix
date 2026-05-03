@@ -51,11 +51,17 @@ class RuntimeExecutor:
         Args:
             runtime_package: Loaded NBX package (immutable).
             execution_plan: Prism PipelineExecutionPlan (contains allocations).
-            mode: Execution engine mode: "compiled" (default), "native", "pytorch", or "triton".
+            mode: Execution engine mode. One of:
+                  - "compiled" (default): PyTorch fused (CompiledSequence + cuDNN)
+                  - "sequential": PyTorch eager op-by-op
+                  - "triton": Triton-pure compiled (TritonSequence)
+                  - "triton_sequential": Triton-pure op-by-op (debug)
+                  See CLAUDE.md "Execution Modes" section. The legacy value
+                  "native" is deprecated — use "sequential".
         """
         self.pkg = runtime_package
         self.plan = execution_plan
-        self.mode = mode  # "native", "pytorch", or "triton"
+        self.mode = mode
         self.executors: Dict[str, Any] = {}
         self.modules: Dict[str, Any] = {}
         self.variable_resolver: Optional[VariableResolver] = None

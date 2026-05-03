@@ -73,12 +73,28 @@ For more information: https://gitlab.com/neurobrix/Neurobrix
                             help='Repetition penalty (1.0 = none, 1.1-1.5 recommended)')
     run_parser.add_argument('--set', action='append', metavar='KEY=VALUE',
                             help='Set arbitrary runtime variable (e.g., --set global.cfg=7.5)')
+    # Execution modes (mutually exclusive). When no flag is passed the
+    # default is --compiled. See CLAUDE.md "Execution Modes" section.
+    run_parser.add_argument('--compiled', action='store_true',
+                            help='Default mode: PyTorch fused graph + cuDNN/cuBLAS '
+                                 '(CompiledSequence). Production PyTorch performance. '
+                                 'Used when no execution flag is passed; this flag '
+                                 'makes the choice explicit.')
     run_parser.add_argument('--sequential', action='store_true',
-                            help='Fallback: Sequential PyTorch ATen execution (for debugging)')
+                            help='PyTorch eager op-by-op (no fusion, ATen dispatcher). '
+                                 'Useful for debugging individual ATen ops. '
+                                 'Slower than --compiled.')
     run_parser.add_argument('--triton', action='store_true',
-                            help='Triton kernels: compiled execution with Triton ops (experimental)')
+                            help='Triton-pure compiled mode: NeuroBrix Triton kernels '
+                                 'with arena + closures + fused kernels (TritonSequence). '
+                                 'Production NeuroBrix Triton mode. Should match or beat '
+                                 '--compiled on target shapes (project bet: custom '
+                                 'kernels > cuDNN).')
     run_parser.add_argument('--triton-sequential', action='store_true', dest='triton_sequential',
-                            help='Triton kernels: sequential execution for debugging (experimental)')
+                            help='Triton-pure eager mode: Triton kernels op-by-op (no '
+                                 'fusion, TritonSequentialDispatcher). Equivalent of '
+                                 '--sequential but for the Triton backend. Useful for '
+                                 'debugging individual Triton kernels.')
     run_parser.add_argument('--max-tokens', type=int, default=None, dest='max_tokens',
                             help='Maximum number of tokens to generate (LLM only)')
 
@@ -245,12 +261,17 @@ Examples:
                               help='Idle timeout in seconds (default: 1800)')
     serve_parser.add_argument('--foreground', action='store_true',
                               help='Run in foreground (block terminal, for debugging)')
+    # Execution modes (mutually exclusive). When no flag is passed the
+    # default is --compiled. Mirror of run_parser; see CLAUDE.md
+    # "Execution Modes" section for the contract.
+    serve_parser.add_argument('--compiled', action='store_true',
+                              help='Default mode: PyTorch fused graph + cuDNN/cuBLAS')
     serve_parser.add_argument('--sequential', action='store_true',
-                              help='Use sequential ATen execution')
+                              help='PyTorch eager op-by-op (no fusion, debug)')
     serve_parser.add_argument('--triton', action='store_true',
-                              help='Use Triton kernels (compiled)')
+                              help='Triton-pure compiled mode (NeuroBrix Triton kernels)')
     serve_parser.add_argument('--triton-sequential', action='store_true', dest='triton_sequential',
-                              help='Use Triton kernels (sequential, debug)')
+                              help='Triton-pure eager op-by-op (debug Triton)')
 
     # ========================================
     # CHAT command
