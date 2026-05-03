@@ -93,21 +93,21 @@ class TritonAudioEngine:
             if execution == "forward":
                 self._execute_forward_stage(stage)
             elif execution == "native_kokoro":
-                # VIOLATION TEMPORAIRE — ce handler natif utilise torch. Sera
-                # remplace par triton/flow/stages/ quand forge tracera ce
-                # modele. Ne pas ajouter d'autres imports core/flow/stages/ ici.
+                # TEMPORARY R33 VIOLATION — this native handler uses torch. Will be
+                # replaced by triton/flow/stages/ once forge can trace this
+                # model. Do NOT add other imports of core/flow/stages/ here.
                 from neurobrix.core.flow.stages.kokoro import execute_native_kokoro
                 execute_native_kokoro(self, stage, audio_config)
             elif execution == "diffusion":
-                # VIOLATION TEMPORAIRE — ce handler natif utilise torch. Sera
-                # remplace par triton/flow/stages/ quand forge tracera ce
-                # modele. Ne pas ajouter d'autres imports core/flow/stages/ ici.
+                # TEMPORARY R33 VIOLATION — this native handler uses torch. Will be
+                # replaced by triton/flow/stages/ once forge can trace this
+                # model. Do NOT add other imports of core/flow/stages/ here.
                 from neurobrix.core.flow.stages.vibevoice import execute_diffusion_stage
                 execute_diffusion_stage(self, stage, audio_config)
             elif execution == "native_acoustic_decoder":
-                # VIOLATION TEMPORAIRE — ce handler natif utilise torch. Sera
-                # remplace par triton/flow/stages/ quand forge tracera ce
-                # modele. Ne pas ajouter d'autres imports core/flow/stages/ ici.
+                # TEMPORARY R33 VIOLATION — this native handler uses torch. Will be
+                # replaced by triton/flow/stages/ once forge can trace this
+                # model. Do NOT add other imports of core/flow/stages/ here.
                 from neurobrix.core.flow.stages.vibevoice import execute_native_acoustic_decoder
                 execute_native_acoustic_decoder(self, stage, audio_config)
             else:
@@ -245,9 +245,9 @@ class TritonAudioEngine:
         # Phonemizer path
         phoneme_vocab = self.ctx.pkg.defaults.get("phoneme_vocab")
         if tokenizer is None and phoneme_vocab:
-            # VIOLATION TEMPORAIRE — ce handler natif utilise torch. Sera
-            # remplace par triton/flow/stages/ quand forge tracera ce
-            # modele. Ne pas ajouter d'autres imports core/flow/stages/ ici.
+            # TEMPORARY R33 VIOLATION — this native handler uses torch. Will be
+            # replaced by triton/flow/stages/ once forge can trace this
+            # model. Do NOT add other imports of core/flow/stages/ here.
             from neurobrix.core.flow.stages.kokoro import preprocess_phonemizer_input
             preprocess_phonemizer_input(self, prompt, phoneme_vocab)
             return

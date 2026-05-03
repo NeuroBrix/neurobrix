@@ -216,7 +216,7 @@ class TokenizerFactory:
                     "This value is required to load the correct tokenizer."
                 )
 
-            # VARIABLE EMBARQUÉE: max_length_override has priority (from topology.shapes)
+            # EMBEDDED VARIABLE: max_length_override has priority (from topology.shapes)
             if max_length_override is not None:
                 max_length = max_length_override
             else:
@@ -256,7 +256,7 @@ class TokenizerFactory:
         """
         import transformers
 
-        # VARIABLE EMBARQUÉE: Dynamic class loading from config
+        # EMBEDDED VARIABLE: Dynamic class loading from config
         tokenizer_cls = getattr(transformers, class_name, None)
 
         if tokenizer_cls is None:

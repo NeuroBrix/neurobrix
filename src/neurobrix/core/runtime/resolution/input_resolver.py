@@ -163,7 +163,7 @@ class InputResolver:
         - "global.xxx" - global variable
         - "component.output" - output from another component
 
-        VARIABLE EMBARQUÉE: index_variable from topology.flow.loop, not hardcoded.
+        EMBEDDED VARIABLE: index_variable from topology.flow.loop, not hardcoded.
 
         Args:
             source: Source identifier string
@@ -175,7 +175,7 @@ class InputResolver:
             RuntimeError: If source cannot be resolved (ZERO FALLBACK)
         """
         if source.startswith("global."):
-            # VARIABLE EMBARQUÉE: Check if this is the loop index variable (e.g., timestep)
+            # EMBEDDED VARIABLE: Check if this is the loop index variable (e.g., timestep)
             loop_def = self._topology.get("flow", {}).get("loop", {})
             index_variable = loop_def.get("index_variable")
 

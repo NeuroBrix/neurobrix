@@ -37,7 +37,7 @@ is:
 | `228be08`  | build(sdist): exclude venvs, regression harness, media artefacts          |
 | `d4c229d`  | fix: zero torch in triton/, flow-aware audio harness, Janus family-guard, kernel coverage for TTS vocoders |
 | `f42970c`  | wip: hardware-gated fp16 overflow architecture                            |
-| `c70ed46`  | fix(triton): bind-time fp16→fp32 weight upcast on pre-Ampere — étape 2    |
+| `c70ed46`  | fix(triton): bind-time fp16→fp32 weight upcast on pre-Ampere — step 2    |
 | `857378a`  | fix(memory): sync before clear in MemoryManager.unload_weights            |
 | `ea90d66`  | fix(zero3): correct mat2-on-CPU crash via per-op slow-path forcing        |
 | `2b1b0d4`  | feat(zero3-triton): universality + metadata-op retention leak fix         |

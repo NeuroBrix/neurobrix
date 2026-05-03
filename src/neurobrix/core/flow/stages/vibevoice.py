@@ -7,45 +7,45 @@ full traced graph covers encode+decode but TTS only needs the decoder half.
 All functions take the AudioEngine instance (``engine``) as first parameter.
 """
 
-# ═══════════════════════════════════════════════════════════════════════
-#  WARNING — VIOLATIONS DU CONTRAT NEUROBRIX
-# ═══════════════════════════════════════════════════════════════════════
+# =======================================================================
+#  WARNING — TEMPORARY VIOLATIONS OF THE NEUROBRIX CONTRACT
+# =======================================================================
 #
-#  Ce fichier existe à titre TEMPORAIRE et enfreint deux principes
-#  structurants du moteur NeuroBrix :
+#  This file exists TEMPORARILY and violates two structural NeuroBrix
+#  engine principles:
 #
-#  1)  BYPASS DU TENSORDAG : ce handler exécute en dur une boucle DDPM
-#      de débruitage + un décodeur ConvNext1d en PyTorch natif pur, au
-#      lieu que ces deux étapes soient exprimées comme des composants
-#      tracés dans le DAG et pilotées par le flow ``iterative_process``.
-#      NeuroBrix est un moteur d'inférence universel : la boucle de
-#      diffusion doit venir du flow générique et le décodeur doit être
-#      exécuté par CompiledSequence / TritonSequence, jamais par un
-#      passage PyTorch dédié.
+#  1)  TENSORDAG BYPASS: this handler executes a DDPM denoising loop
+#      and a ConvNext1d decoder inline in pure native PyTorch, instead
+#      of expressing these two steps as components traced in the DAG
+#      and driven by the ``iterative_process`` flow. NeuroBrix is a
+#      universal inference engine: the diffusion loop must come from
+#      the generic flow, and the decoder must be executed by
+#      CompiledSequence / TritonSequence, never by a dedicated PyTorch
+#      shortcut.
 #
-#  2)  DÉCOUPAGE ENCODE/DECODE NON-TRACÉ : le ``.nbx`` de VibeVoice
-#      ne contient aujourd'hui que le graphe encode+decode complet ; la
-#      TTS n'utilise que la moitié décodeur. Au lieu d'avoir tracé le
-#      décodeur comme composant isolé, on re-implémente ConvNext1d en
-#      PyTorch en lisant les poids à la main via ``engine._weights``.
-#      C'est exactement le type d'accès ``executor._weights`` interdit
-#      par la règle data-driven flow (voir MEMORY.md :
+#  2)  UNTRACED ENCODE/DECODE SPLIT: the VibeVoice ``.nbx`` currently
+#      contains only the full encode+decode graph; TTS only uses the
+#      decoder half. Instead of having traced the decoder as an
+#      isolated component, we re-implement ConvNext1d in PyTorch by
+#      reading weights manually via ``engine._weights``. This is
+#      exactly the kind of ``executor._weights`` access forbidden by
+#      the data-driven flow rule (see MEMORY.md:
 #      feedback_datadriven_flow.md).
 #
-#  RÉSOLUTION (côté forge, pas runtime) :
-#    - Re-tracer VibeVoice en **deux composants distincts** dans le
-#      ``.nbx`` : ``diffusion_transformer`` (ou ``prediction_head``) et
-#      ``acoustic_decoder``. Chacun avec son propre ``graph.json``.
-#    - Déclarer le flow comme ``iterative_process`` standard avec
+#  RESOLUTION (forge side, not runtime):
+#    - Re-trace VibeVoice as **two separate components** in the
+#      ``.nbx``: ``diffusion_transformer`` (or ``prediction_head``)
+#      and ``acoustic_decoder``. Each with its own ``graph.json``.
+#    - Declare the flow as a standard ``iterative_process`` with
 #      ``pre_loop=[text_encoder]``, ``loop={driver: scheduler,
-#      components: [prediction_head]}``, ``post_loop=[acoustic_decoder]``.
-#      Le flow handler générique prend alors le relais — plus de code
-#      VibeVoice-spécifique ici.
-#    - Supprimer tous les accès à ``engine._weights`` depuis ce fichier
+#      components: [prediction_head]}``,
+#      ``post_loop=[acoustic_decoder]``. The generic flow handler
+#      then takes over — no more VibeVoice-specific code here.
+#    - Remove all ``engine._weights`` accesses from this file
 #      (data-driven flow rule).
 #
-#  Ce fichier sera retiré une fois le re-tracing forge effectué.
-# ═══════════════════════════════════════════════════════════════════════
+#  This file will be removed once the forge re-tracing is done.
+# =======================================================================
 
 import gc
 from neurobrix.core.device_utils import device_empty_cache
