@@ -25,9 +25,22 @@ def cmd_serve(args):
         print(f"[Serve] Use 'neurobrix chat' to connect, or 'neurobrix stop' to shutdown.")
         sys.exit(1)
 
-    # Determine execution mode
+    # Determine execution mode (mutually exclusive flags;
+    # default = compiled; see CLAUDE.md "Execution Modes").
+    _mode_flags = [
+        getattr(args, 'compiled', False),
+        getattr(args, 'sequential', False),
+        getattr(args, 'triton', False),
+        getattr(args, 'triton_sequential', False),
+    ]
+    if sum(bool(f) for f in _mode_flags) > 1:
+        print("[Serve] ERROR: only one execution mode flag may be passed "
+              "(--compiled / --sequential / --triton / --triton-sequential).")
+        sys.exit(1)
     if getattr(args, 'sequential', False):
-        mode = "native"
+        mode = "sequential"
+    elif getattr(args, 'triton_sequential', False):
+        mode = "triton_sequential"
     elif getattr(args, 'triton', False):
         mode = "triton"
     else:

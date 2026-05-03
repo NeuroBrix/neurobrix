@@ -97,8 +97,10 @@ class ExecutorFactory:
             allocation: Prism ComponentAllocation (SINGLE SOURCE OF TRUTH)
             nbx_path: Path to .nbx file (for weights)
             dag: TensorDAG dict (loaded by NBXContainer)
-            mode: Execution engine mode: "compiled" (pre-compiled sequence, default),
-                  "native" (Python loop + ATen), "triton" (Python loop + Triton)
+            mode: Execution engine mode: "compiled" (pre-compiled PyTorch
+                  sequence, default), "sequential" (PyTorch op-by-op),
+                  "triton" (Triton-pure compiled), "triton_sequential"
+                  (Triton-pure op-by-op debug)
             skip_weights: If True (default), skip weight loading during creation.
                          Weights should be loaded lazily via executor.load_weights()
                          before first execution. This prevents OOM from loading all
