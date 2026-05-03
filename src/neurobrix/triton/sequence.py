@@ -193,6 +193,12 @@ class TritonSequence:
         self._dtype_engine = TritonDtypeEngine(
             compute_dtype, has_native_bf16=_has_bf16())
         self._compute_dtype = compute_dtype
+        # Phase 1 — per-component opt-in flag from forge/config/model_registry.yml
+        # `activations_fp16_safe`. Default False = conservative (rms_norm/div
+        # output stays fp32). Set via set_activations_fp16_safe() after
+        # construction, before compile/run, by the registry-driven plumbing
+        # in graph_executor (or equivalent component init site).
+        self._activations_fp16_safe: bool = False
         self._compiled = False
 
         # Multi-device support (pipeline_parallel)
@@ -212,6 +218,17 @@ class TritonSequence:
         # Cache for get_op_blocks — lazy populated on first call, safe
         # because the compiled op list is immutable after compile().
         self._op_blocks_cache: Optional[Dict[int, Dict[str, Any]]] = None
+
+    def set_activations_fp16_safe(self, safe: bool) -> None:
+        """Set the per-component activations_fp16_safe opt-in flag.
+
+        Read from forge/config/model_registry.yml at component init via
+        RegistryV2. When True, AMP_FP32_OPS in
+        _AMP_FP32_OPS_OPT_IN_CAST_BACK (currently rms_norm + div) cast
+        their output back to compute_dtype after the fp32 internal
+        compute. Conservative default (False) preserves fp32 output.
+        """
+        self._activations_fp16_safe = bool(safe)
 
     def register_op_interceptor(self, op_type: str, interceptor: Callable):
         """Register an interceptor for a specific op type (e.g., SDPA for KV cache)."""
@@ -1464,10 +1481,25 @@ class TritonSequence:
             return self._compile_moe_fused_op(op_uid, op_data, kill_slots)
 
         # Op_uid match (op-level tiling) wins over op_type match (KV cache).
+        # Phase 1 — interceptors are wrapped by DtypeEngine UNLESS they
+        # declare `self_manages_dtype = True` on the callable (opt-in
+        # cleanup, replaces the previous implicit bypass). Documented
+        # interceptors that self-manage:
+        #   - TritonAttentionInterceptor.intercept (kv_cache.py):
+        #     Flash Attention works in fp16/bf16, casts internally
+        #   - fused_upsample_conv2d / _tiled_conv2d_spatial_nbx /
+        #     _tiled_rms_norm_nbx (op-level tiling): delegate to
+        #     conv2d_wrapper which is itself self-managed
         if op_uid in self._op_uid_interceptors:
             func = self._op_uid_interceptors[op_uid]
+            if not getattr(func, 'self_manages_dtype', getattr(getattr(func, '__func__', None), 'self_manages_dtype', False)):
+                bare_name = op_type.split("::")[-1] if "::" in op_type else op_type
+                func = self._dtype_engine.wrap_op(bare_name, func)
         elif op_type in self._op_interceptors:
             func = self._op_interceptors[op_type]
+            if not getattr(func, 'self_manages_dtype', getattr(getattr(func, '__func__', None), 'self_manages_dtype', False)):
+                bare_name = op_type.split("::")[-1] if "::" in op_type else op_type
+                func = self._dtype_engine.wrap_op(bare_name, func)
         else:
             func = dispatch(op_type)
             if func is None:
@@ -2328,10 +2360,25 @@ class TritonSequence:
         """
         DeviceAllocator.ensure_triton_device(self.device_idx)
 
-        if self._is_multi_device:
-            self._run_multi_device(skip_kills, pre_op_callback)
-        else:
-            self._run_single_device(skip_kills, pre_op_callback)
+        # Phase 1 — set per-component dtype context for self-managed wrappers
+        # (conv2d_wrapper reads _NBX_COMPUTE_DTYPE for output dtype, the
+        # opt-in cast-back wrap variant reads _NBX_ACTIVATIONS_FP16_SAFE
+        # for rms_norm/div). Restore prior values after to keep nested or
+        # multi-component runs correct. Single-threaded NeuroBrix runtime,
+        # safe to use module-level state.
+        from neurobrix.kernels import wrappers as _w
+        _prev_dt = _w.get_compute_dtype()
+        _prev_safe = _w.get_activations_fp16_safe()
+        _w.set_compute_dtype(self._compute_dtype)
+        _w.set_activations_fp16_safe(self._activations_fp16_safe)
+        try:
+            if self._is_multi_device:
+                self._run_multi_device(skip_kills, pre_op_callback)
+            else:
+                self._run_single_device(skip_kills, pre_op_callback)
+        finally:
+            _w.set_compute_dtype(_prev_dt)
+            _w.set_activations_fp16_safe(_prev_safe)
 
     def _maybe_trace_nan(self, op: 'CompiledOp', arena) -> None:
         """Scan op output(s) for Inf/NaN. Print the first offender on

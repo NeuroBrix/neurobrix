@@ -3066,10 +3066,14 @@ class CompiledSequence:
             if key not in seen_keys:
                 existing.append(new_record)
             with open(dump_path, "w") as f:
-                _json_d.dump({"engine": "native", "records": existing},
+                # Tag = "compiled": this writer runs inside CompiledSequence
+                # (compiled-mode PyTorch path). The matching triton-path dump
+                # in triton/sequence.py uses "triton". Historical value
+                # "native" was renamed for vocabulary consistency.
+                _json_d.dump({"engine": "compiled", "records": existing},
                              f, indent=1)
         except Exception as e:
-            print(f"[NBX_DUMP_TIDS native] failed on {tid}: {e}", flush=True)
+            print(f"[NBX_DUMP_TIDS compiled] failed on {tid}: {e}", flush=True)
 
     def _run_inner(
         self,
@@ -3082,6 +3086,18 @@ class CompiledSequence:
         nan_guard = _NAN_GUARD
         nan_guard_verbose = _NAN_GUARD_VERBOSE
         trace_zeros = _TRACE_ZEROS
+        # NBX_TRACE_RANGES=op1,op2,... — log per-op output max(abs) to
+        # NBX_RANGE_LOG (default /tmp/nbx_ranges.tsv). Used by
+        # neurobrix.tools.measure_activation_ranges to decide the
+        # per-component activations_fp16_safe flag opt-in.
+        _trace_ranges_env = os.environ.get("NBX_TRACE_RANGES", "")
+        _trace_ranges_set = set(_trace_ranges_env.split(",")) if _trace_ranges_env else set()
+        _range_log_path = os.environ.get("NBX_RANGE_LOG", "/tmp/nbx_ranges.tsv")
+        _range_log_fh = None
+        if _trace_ranges_set:
+            _range_log_fh = open(_range_log_path, "a")
+            _range_log_fh.write(f"# new run, ops={_trace_ranges_env}\n")
+            _range_log_fh.write("op_idx\top_uid\top_type\tmax_abs\tdtype\tnumel\n")
 
         # Set CUDA device to match component placement
         if self._is_multi_device:
@@ -3286,6 +3302,14 @@ class CompiledSequence:
                                 })
 
                     arena[s] = item
+
+            # === TEMP RANGE TRACE ===
+            if _range_log_fh is not None and isinstance(result, torch.Tensor) and result.is_floating_point():
+                bare = op.op_type.split("::")[-1] if "::" in op.op_type else op.op_type
+                if bare in _trace_ranges_set:
+                    _ma = result.detach().abs().max().item() if result.numel() > 0 else 0.0
+                    _range_log_fh.write(f"{op_idx}\t{op.op_uid}\t{op.op_type}\t{_ma:.6g}\t{result.dtype}\t{result.numel()}\n")
+            # =========================
 
             # NaN/Inf TRACING: Find ALL CREATORS of NaN or Inf (NBX_TRACE_NAN=1)
             # This is diagnostic-only, doesn't modify values

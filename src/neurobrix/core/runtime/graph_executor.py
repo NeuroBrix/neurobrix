@@ -13,9 +13,13 @@ Architecture (decomposed):
   - core/runtime/graph/sequential_dispatcher.py: NativeATenDispatcher for ATen ops
 
 Execution Modes:
-- "compiled": Pre-compiled execution sequence (DEFAULT, zero-overhead)
-- "native": Pure PyTorch ATen ops (debug/compatibility)
-- "triton": Python loop + Triton kernels (R&D mode)
+- "compiled": Pre-compiled PyTorch execution sequence (DEFAULT, zero-overhead)
+- "sequential": Pure PyTorch ATen ops, op-by-op eager (debug/compatibility)
+- "triton": Triton-pure compiled (NeuroBrix arena + closures + fused kernels)
+- "triton_sequential": Triton-pure op-by-op (debug Triton kernels)
+See CLAUDE.md "Execution Modes" section for the full performance contract
+between the four modes. The string value "native" is deprecated and
+remapped to "sequential".
 
 The executor mechanically plays the DAG:
 1. Read op_data DIRECTLY from dag["ops"][op_uid]
@@ -113,9 +117,10 @@ class GraphExecutor:
             device: Device string (cuda:0, cuda:1, etc.)
             dtype: Execution dtype
             mode: Execution engine mode:
-                  - "compiled": Pre-compiled sequence (DEFAULT, zero-overhead)
-                  - "native": Python loop + ATen ops (debugging)
-                  - "triton": Python loop + Triton kernels (R&D)
+                  - "compiled": Pre-compiled PyTorch sequence (DEFAULT)
+                  - "sequential": PyTorch ATen op-by-op eager (debug)
+                  - "triton": Triton-pure compiled (NeuroBrix arena+closures)
+                  - "triton_sequential": Triton-pure op-by-op (debug)
         """
         self.family = family
         self.vendor = vendor
@@ -1817,6 +1822,28 @@ class GraphExecutor:
         self._triton_seq = TritonSequence(
             dag_for_triton, device_idx=device_idx,
             compute_dtype=parse_dtype(self.dtype))
+
+        # Phase 1 — read per-component opt-in flag from
+        # forge/config/model_registry.yml (no Forge re-build required;
+        # runtime-direct read keeps the .nbx contract immutable per R18).
+        # Defaults to False (conservative). Annotated only for models whose
+        # activation ranges have been validated fp16-safe via
+        # neurobrix.tools.measure_activation_ranges.
+        from neurobrix.core.runtime.registry_flags import get_component_flag
+        _model_name = None
+        try:
+            _cache_path = getattr(self._pkg, 'cache_path', None) if hasattr(self, '_pkg') else None
+            if _cache_path is not None:
+                _model_name = Path(_cache_path).name
+        except Exception:
+            pass
+        _fp16_safe = get_component_flag(
+            _model_name, self._component_name,
+            "activations_fp16_safe", default=False,
+            env_override="NBX_ACTIVATIONS_FP16_SAFE",
+        )
+        self._triton_seq.set_activations_fp16_safe(bool(_fp16_safe))
+
         self._triton_seq.compile()
 
         # Weights already loaded as NBXTensor by load_weights()
@@ -1921,7 +1948,7 @@ class GraphExecutor:
             # constant_T_* tensors (RoPE cos/sin) have trace_seq_len in their shape.
             # Slice to match actual runtime seq_len to prevent index out of bounds.
             # Compiled mode does this in update_seq_dependent_constants().
-            if self.mode in ("native", "triton_sequential"):
+            if self.mode in ("sequential", "triton_sequential"):
                 # Sequential modes: patch ops that reference trace_seq_len in shape args
                 self._patch_seq_len_in_ops(bound)
 
@@ -2060,8 +2087,8 @@ class GraphExecutor:
         Execute all ops in execution order.
 
         Execution modes:
-        - "compiled": Pre-compiled execution sequence (DEFAULT, zero-overhead)
-        - "native": Pure PyTorch ATen ops (debug/compatibility)
+        - "compiled": Pre-compiled PyTorch execution sequence (DEFAULT)
+        - "sequential": Pure PyTorch ATen op-by-op eager (debug)
 
         Note: "triton" and "triton_sequential" modes are handled by
         run() → _run_triton() and never reach this method.
@@ -2327,10 +2354,10 @@ class GraphExecutor:
         Returns:
             OpExecution type used
         """
-        # NATIVE MODE: Run ALL ops through native PyTorch ATen
+        # SEQUENTIAL MODE: Run ALL ops through PyTorch ATen op-by-op
         # Return METADATA to skip nan/inf check - PyTorch handles this correctly
         # (e.g., T5 GELU pow(x,3) produces transient inf that gets masked by where())
-        if self.mode == "native":
+        if self.mode == "sequential":
             self._execute_native_op(op_uid, op_data, op_type)
             return OpExecution.METADATA
 
@@ -2338,7 +2365,8 @@ class GraphExecutor:
         # and never reach _dispatch_op. If we get here with an unexpected mode, crash.
         raise RuntimeError(
             f"ZERO FALLBACK: _dispatch_op called with unexpected mode '{self.mode}'. "
-            f"Expected 'native' (sequential dispatches set mode='native' temporarily)."
+            f"Expected 'sequential' (the eager-mode dispatcher sets mode='sequential' "
+            f"temporarily; the historical name 'native' is deprecated)."
         )
 
     def _check_nan_inf(self, op_uid: str, op_type: str, exec_type: OpExecution) -> None:
