@@ -60,6 +60,17 @@ class FusionUpsampleProxy:
     def ndim(self):
         return len(self.output_shape)
 
+    # Sentinel: FusionUpsampleProxy holds no GPU allocation of its own
+    # (it just references the pre-upsample tensor + scales). The triton
+    # sequence's deferred-free accounting (sequence.py:_run_single_device)
+    # reads `_nbytes` to size the drain budget; expose 0 here so the
+    # proxy is a no-op in that accounting path. The actual pre-upsample
+    # tensor lives in its own arena slot and is freed when that slot is
+    # killed independently.
+    @property
+    def _nbytes(self):
+        return 0
+
     def __repr__(self):
         return (
             f"FusionUpsampleProxy(pre={tuple(self.pre_input.shape)}, "
