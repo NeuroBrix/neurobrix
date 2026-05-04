@@ -12,7 +12,7 @@ Dependencies: triton, NBXTensor. Used exclusively by dispatch.py.
 import os
 import triton
 
-from .nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, _broadcast_shapes, _set_device
+from .nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, _broadcast_shapes, _set_device, dtype_size
 
 # === Activations ===
 
@@ -2344,7 +2344,7 @@ def conv2d_wrapper(
     # _tiled_conv2d_spatial_nbx: each band re-enters this same wrapper with
     # a smaller H, so the recursion bottoms out on its own. The full output
     # remains allocated for downstream consumers in the DAG.
-    out_dtype_bytes = out_dtype.itemsize if hasattr(out_dtype, "itemsize") else NBXDtype(out_dtype).itemsize
+    out_dtype_bytes = dtype_size(out_dtype)
     if _conv2d_should_band_stream(N, out_c, out_h, out_w, out_dtype_bytes):
         return _conv2d_band_streamed(
             x_c, w_c, bias,
