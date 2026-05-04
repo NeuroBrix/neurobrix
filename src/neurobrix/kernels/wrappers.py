@@ -1187,22 +1187,23 @@ def mm(a, b) :
     out_dtype = _matmul_out_dtype(a, M)
     c = NBXTensor.empty((M, N), device=f"cuda:{a._device_idx}" if hasattr(a, '_device_idx') else 'cuda',
                         dtype=out_dtype)
-    grid = (triton.cdiv(M, _MM_BM) * triton.cdiv(N, _MM_BN),)
-    _set_device(a)
     # IEEE mode: force strict fp32 tl.dot on pre-Ampere when we've promoted
     # inputs to fp32 for overflow protection. Otherwise tl.dot silently
     # casts fp32 → fp16 HMMA → saturates at ±65504 → NaN/Inf cascade.
     ieee = (not _NBX_HAS_NATIVE_BF16) and (out_dtype == NBXDtype.float32)
+    # Phase 1.5 autotune: BLOCK_*/GROUP_M/num_warps/num_stages chosen
+    # adaptively per (M, N, K, IEEE_PRECISION, PROMOTE_B). Grid uses
+    # META lambda so autotune-selected blocks drive the launch shape.
+    grid = lambda META: (triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']),)
+    _set_device(a)
     matmul_kernel[grid](
         a, b, c,
         M, N, K,
         a.stride(0), a.stride(1),
         b.stride(0), b.stride(1),
         c.stride(0), c.stride(1),
-        BLOCK_M=_MM_BM, BLOCK_N=_MM_BN, BLOCK_K=_MM_BK, GROUP_M=_MM_GROUP,
         IEEE_PRECISION=ieee,
         PROMOTE_B=promote_b,
-        num_warps=4, num_stages=2,
     )
     return c
 
@@ -1266,8 +1267,8 @@ def bmm(a, b) :
     b = b.contiguous()
     out_dtype = _matmul_out_dtype(a, M, force_fp32=True)
     c = NBXTensor.empty((B, M, N), device=a.device, dtype=out_dtype)
-    grid = (triton.cdiv(M, _MM_BM) * triton.cdiv(N, _MM_BN),)
     ieee = (not _NBX_HAS_NATIVE_BF16) and (out_dtype == NBXDtype.float32)
+    grid = lambda META: (triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']),)
 
     # Match mm() — sync Triton driver to a's device immediately before launch.
     # NBXTensor.empty(...) above can cudaSetDevice without updating Triton's
@@ -1282,10 +1283,8 @@ def bmm(a, b) :
             a[i].stride(0), a[i].stride(1),
             b[i].stride(0), b[i].stride(1),
             c[i].stride(0), c[i].stride(1),
-            BLOCK_M=_MM_BM, BLOCK_N=_MM_BN, BLOCK_K=_MM_BK, GROUP_M=_MM_GROUP,
             IEEE_PRECISION=ieee,
             PROMOTE_B=promote_b,
-            num_warps=4, num_stages=2,
         )
     return c
 
@@ -1470,8 +1469,8 @@ def addmm(bias, a, b,
     bias = bias.contiguous()
     out_dtype = _matmul_out_dtype(a, M)
     c = NBXTensor.empty((M, N), device=a.device, dtype=out_dtype)
-    grid = (triton.cdiv(M, _MM_BM) * triton.cdiv(N, _MM_BN),)
     ieee = (not _NBX_HAS_NATIVE_BF16) and (out_dtype == NBXDtype.float32)
+    grid = lambda META: (triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']),)
     addmm_kernel[grid](
         a, b, bias, c,
         M, N, K,
@@ -1479,10 +1478,8 @@ def addmm(bias, a, b,
         b.stride(0), b.stride(1),
         c.stride(0), c.stride(1),
         alpha, beta,
-        BLOCK_M=_MM_BM, BLOCK_N=_MM_BN, BLOCK_K=_MM_BK, GROUP_M=_MM_GROUP,
         IEEE_PRECISION=ieee,
         PROMOTE_B=promote_b,
-        num_warps=4, num_stages=2,
     )
     return c
 
@@ -2948,8 +2945,8 @@ def baddbmm_wrapper(
         bias_m_stride = input.stride(-2)
         bias_n_stride = input.stride(-1)
 
-    grid = (
-        triton.cdiv(M, _MM_BM) * triton.cdiv(N, _MM_BN),
+    grid = lambda META: (
+        triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']),
         1,
         B,
     )
@@ -2962,8 +2959,6 @@ def baddbmm_wrapper(
         batch2.stride(0), batch2.stride(1), batch2.stride(2),
         output.stride(0), output.stride(1), output.stride(2),
         bias_batch_stride, bias_m_stride, bias_n_stride,
-        BLOCK_M=_MM_BM, BLOCK_N=_MM_BN, BLOCK_K=_MM_BK, GROUP_M=_MM_GROUP,
-        num_warps=4, num_stages=2,
     )
     return output
 
