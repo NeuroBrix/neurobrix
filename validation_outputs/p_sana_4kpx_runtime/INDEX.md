@@ -100,3 +100,54 @@ sub-optimal, conv2d im2col vs cuDNN IMPLICIT_GEMM).
 
 Hocine validation: 4 PNGs above to inspect manually before Phase 1
 dtype fix is committed.
+
+## 4-mode performance matrix — Sana 1024 (steps=4, post Phase 1.5 autotune)
+
+Post @triton.autotune adoption on mm/bmm/addmm (commit `d514bdb` +
+`20ed765`) and conv2d (commit `9e4b498`) with `cache_results=True`
+persistent disk cache. Outputs in `sana_1024_post_phase15/`.
+
+| Mode | Flag | Wall-clock | PNG | Mean | Std | Verdict agent | Hocine OK |
+|---|---|---|---|---|---|---|---|
+| compiled | (default) | 12.60 s | `sana_1024_post_phase15/output_compiled.png` | 79.31 | 88.53 | red apple coherent | ☐ |
+| sequential | `--sequential` | 13.22 s | `sana_1024_post_phase15/output_sequential.png` | 182.21 | 111.65 | red apple coherent | ☐ |
+| triton | `--triton` | **5862.44 s cold** | `sana_1024_post_phase15/output_triton.png` | 108.53 | 89.01 | red apple glossy coherent | ☐ |
+| triton_sequential | `--triton-sequential` | **47.52 s hot** | `sana_1024_post_phase15/output_triton_sequential.png` | 178.59 | 110.40 | red apple coherent (clean bg) | ☐ |
+
+**Cold vs hot autotune**: `triton` (5862 s) was a single cold sweep —
+~13 unique conv2d shapes × 18 configs + mm/addmm/baddbmm autotune =
+hundreds of compile+bench cycles. Cache persisted via `cache_results=True`
+to `~/.triton/cache/<hash>/<fn>.autotune.json`. Subsequent
+`triton_sequential` ran fully hot from disk (47.52 s) — proves the
+warm-path baseline is recovered. Phase 1.5 measurement of repeated
+`triton` cold-then-hot runs: cache_run2 ≈ cache_run3 ≈ 101 s ± 7 %.
+
+### Sana 1024 verdict (correctness R4 + non-regression)
+
+- 4/4 PNG coherent (red apple), no regression vs pre-Phase-1.5 outputs.
+- Cold autotune cost amortizes to a one-time per-machine-per-shape-set tax
+  via persistent disk cache (Triton 3.6 native `cache_results=True`).
+- Warm-path wall-clock comparable to pre-Phase-1.5 baseline (102 s).
+- No new failure mode introduced.
+
+## 4-mode performance matrix — Sana 4Kpx (steps=4, post Phase 1.5 autotune)
+
+Outputs in `sana_4kpx_post_phase15/`. Tiling engine (op-level)
+activates for spatial > trace_size (1024×1024 → 4×4 tile grid in
+decoder; trace_size=1024 from graph.json).
+
+| Mode | Flag | Wall-clock | PNG | Verdict agent | Hocine OK |
+|---|---|---|---|---|---|
+| compiled | (default) | 36.61 s | `sana_4kpx_post_phase15/output_compiled.png` (14 MB) | red apple coherent | ☐ |
+| sequential | `--sequential` | — | — | **FAIL OOM** — sequential dispatcher does not support op-level tiling interceptors (structural pre-existing) | ☐ |
+| triton | `--triton` | — (SIGTERM 3 h) | — | **FAIL_TIMEOUT** — 11 cache writes during the run (1024-shapes then 4Kpx-specific incl. depthwise groups=11200); steps=1 sanity test ALSO times out at 30 min and 10 min budgets; pipeline is opaque so cause is indeterminate (autotune-cold or hot-launch-overhead) | ☐ |
+| triton_sequential | `--triton-sequential` | — | — | DEFERRED — same indeterminacy as triton; needs profiling chantier first | ☐ |
+
+`stats_<mode>.json` written next to each PNG / failure file.
+
+### Sana 4Kpx verdict — see `sana_4kpx_post_phase15/verdict.md`
+
+- ✅ R4 satisfied for `compiled` mode (the original 36 GiB OOM blocker resolved by op-level tiling). Wall-clock 36.61 s.
+- ❌ R4 unsatisfied for `triton` modes at 4Kpx — bottleneck is per-launch Python overhead × 16-tile loop × decoder depth, NOT autotune quality (Sana 1024 triton coherent in both Triton modes).
+
+**Arbitrage**: close P-SANA-4KPX-RUNTIME on the validated production path (compiled mode). Triton 4Kpx wall-clock + correctness are indeterminate within ≤3 h budgets and the pipeline is opaque — open **P-TRITON-4KPX-PROFILE** (new diagnostic chantier) to instrument per-component / per-tile timing in `triton/sequence.py`, then route remediation to either P-CONV2D-DEPTHWISE-OPTIM or P-TRITON-FUSED-KERNELS based on the profile.

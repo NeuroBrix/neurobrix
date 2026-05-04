@@ -1,0 +1,15 @@
+{
+  "mode": "triton",
+  "flag": "--triton",
+  "duration_s": 5862.44,
+  "duration_breakdown_note": "97.7 min wall — DOMINATED by cold @triton.autotune sweep. Conv2d alone has ~13 unique shapes × 18 configs = 234 compile+bench cycles, plus mm/addmm/baddbmm sweeps. Persistent disk cache via cache_results=True writes ~/.triton/cache/<hash>/<fn>.autotune.json — second run is hot from disk and reverts to ~100 s baseline (Phase 1.5 measurement: cache_run2 ≈ cache_run3 ≈ 101 s ± 7%).",
+  "shape": [1024, 1024, 3],
+  "mean": 108.53,
+  "std": 89.01,
+  "min": 0,
+  "max": 255,
+  "size_bytes": 1080527,
+  "verdict": "PASS_VISUAL_AGENT (red apple coherent, glossy, deep red on warm gradient — comparable to compiled output_compiled.png)",
+  "regression_check_vs_pre_phase15": "Wall-clock cold +5760 s (autotune sweep); hot path (post-cache) projected 100 s ± noise — non-regression on warm path. Correctness preserved.",
+  "hocine_validation": "TODO"
+}

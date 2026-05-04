@@ -1,0 +1,19 @@
+{
+  "mode": "triton",
+  "flag": "--triton",
+  "duration_s": null,
+  "duration_observed_s": 10800,
+  "shape": null,
+  "verdict": "FAIL_TIMEOUT",
+  "error": "SIGTERM at 10800 s wall-clock (3 h hard cap). Process never wrote output_triton.png.",
+  "observed_pattern": [
+    "13:21-13:31 (11 min): 6 cache writes for 1024-tile-shape conv2d/matmul/addmm — partial cache from earlier Phase 1.5 work was reused.",
+    "13:31-15:50 (2 h 19 min): no new cache writes; GPU 100 % util sustained; later evidence shows the sweep was still grinding through a single very-expensive depthwise shape autotune.",
+    "15:50-15:57 (7 min): 5 new cache writes appeared for 4Kpx-specific shapes — notably conv2d key [2, 11200, 128, 128, 11200, 128, 128, 3, 3, 1, 1, 1, 1, 11200, ...] = depthwise conv with groups=11200 channels (DC-AE expansion stage).",
+    "16:21: SIGTERM at 3 h cap; process was still mid-autotune on additional 4Kpx-specific shapes."
+  ],
+  "diagnosis": "The bench did not exit autotune within 3 h. The 4Kpx VAE decoder uses convolution shapes that are absent from the Sana 1024 cache — specifically depthwise convolutions with groups=11200 channels and large in_feat/out_feat (5600, 11200). These shapes do not match the Volta-viable autotune subspace well (im2col with 11200-group depthwise routes a tiny per-group workload through an 18-config sweep), so per-shape autotune wall-clock is on the order of 30+ min each. Hot path performance is undetermined — the cache was never fully populated within the 3 h cap.",
+  "scope_reframing": "Earlier hypothesis 'per-launch overhead × tile loop' was reconstruction without evidence; the actual blocker is autotune cost on heavy depthwise shapes specific to Sana 4Kpx. Two distinct improvements are now relevant: (a) finish cache population in a one-time longer-budget run, then re-measure hot path; (b) a depthwise-aware kernel variant (FlagGems / lmdeploy patterns) instead of im2col for groups>>1 — candidate for P-CONV2D-DEPTHWISE-OPTIM, not P-TRITON-FUSED-KERNELS.",
+  "next_diagnostic": "steps=1 sanity test (separate run, 30 min budget) to determine whether the partial cache populated by this 3 h run is sufficient for hot-path completion at minimal step count. Result will pin down whether the gap is exclusively autotune-cold or also includes a non-linear inference cost.",
+  "hocine_validation": "TODO"
+}
