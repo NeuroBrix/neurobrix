@@ -1,14 +1,94 @@
-"""Matrix multiplication — pure @triton.jit kernel.
+"""Matrix multiplication — pure @triton.jit kernel with autotune.
 
-Ported from Triton official tutorial (BSD license).
-Handles mm (2D), addmm via bias parameter.
-bmm handled in wrappers via batch loop.
+Ported from Triton official tutorial (BSD license)
+https://triton-lang.org/main/getting-started/tutorials/03-matrix-multiplication.html
+adapted for NeuroBrix:
+  - NBXTensor inputs (handled by wrappers, kernel sees raw ptrs/strides)
+  - Volta-aware static dtype path (PROMOTE_B + IEEE_PRECISION constexpr)
+  - @triton.autotune across 18 configs (Phase 1.5, 2026-05): the only
+    proven path to ≥70% cuBLAS HMMA on Sana DiT shapes — see CLAUDE.md
+    "Autotune policy" section for the doctrinal exception that allows
+    @triton.autotune on mm/bmm/addmm/conv2d.
+  - tl.dot 3-arg HMMA-FMA fused form
+  - tl.assume integer-analyzer hints
+  - in-kernel cast accum → output dtype
+Handles mm (2D) + addmm (with bias). bmm handled in wrappers via batch loop.
 """
 
 import triton
 import triton.language as tl
 
 
+# Per-architecture autotune configs (tutorial pattern
+# `get_cuda_autotune_config()` adapted to NeuroBrix: gate by detected
+# compute capability so each hardware explores ONLY its viable subspace).
+# Volta sm_70 has 96 KB SMEM/SM (vs 192 KB sm_80 / 228 KB sm_90); large
+# blocks (BM≥128 BK≥64 warps=8) saturate SMEM → register spill →
+# catastrophic perf (98-145 ms measured Phase 1.5 Étape 2 FlagGems
+# bench). The Volta-viable subspace is restricted to BM∈{32,64},
+# BN∈{32,64,128}, BK∈{32,64}, warps∈{2,4}, stages∈{2..5} — ~20
+# combinations giving the autotuner a denser space of fitting configs.
+# Ampere+ (sm_80+) gates BM/BN/BK larger as the hardware supports it.
+
+_MATMUL_AUTOTUNE_VOLTA = [
+    # BM=32 row
+    triton.Config({'BLOCK_M': 32, 'BLOCK_N': 32,  'BLOCK_K': 32, 'GROUP_M': 8}, num_stages=4, num_warps=2),
+    triton.Config({'BLOCK_M': 32, 'BLOCK_N': 32,  'BLOCK_K': 64, 'GROUP_M': 8}, num_stages=4, num_warps=2),
+    triton.Config({'BLOCK_M': 32, 'BLOCK_N': 64,  'BLOCK_K': 32, 'GROUP_M': 8}, num_stages=4, num_warps=2),
+    triton.Config({'BLOCK_M': 32, 'BLOCK_N': 64,  'BLOCK_K': 32, 'GROUP_M': 8}, num_stages=5, num_warps=2),
+    triton.Config({'BLOCK_M': 32, 'BLOCK_N': 64,  'BLOCK_K': 64, 'GROUP_M': 8}, num_stages=3, num_warps=4),
+    triton.Config({'BLOCK_M': 32, 'BLOCK_N': 128, 'BLOCK_K': 32, 'GROUP_M': 8}, num_stages=3, num_warps=4),
+    # BM=64 row (the historical NeuroBrix default neighborhood)
+    triton.Config({'BLOCK_M': 64, 'BLOCK_N': 32,  'BLOCK_K': 32, 'GROUP_M': 8}, num_stages=5, num_warps=2),
+    triton.Config({'BLOCK_M': 64, 'BLOCK_N': 32,  'BLOCK_K': 64, 'GROUP_M': 8}, num_stages=4, num_warps=2),
+    triton.Config({'BLOCK_M': 64, 'BLOCK_N': 64,  'BLOCK_K': 32, 'GROUP_M': 8}, num_stages=2, num_warps=4),
+    triton.Config({'BLOCK_M': 64, 'BLOCK_N': 64,  'BLOCK_K': 32, 'GROUP_M': 8}, num_stages=3, num_warps=4),
+    triton.Config({'BLOCK_M': 64, 'BLOCK_N': 64,  'BLOCK_K': 32, 'GROUP_M': 8}, num_stages=4, num_warps=4),
+    triton.Config({'BLOCK_M': 64, 'BLOCK_N': 64,  'BLOCK_K': 64, 'GROUP_M': 8}, num_stages=3, num_warps=4),
+    triton.Config({'BLOCK_M': 64, 'BLOCK_N': 64,  'BLOCK_K': 64, 'GROUP_M': 8}, num_stages=4, num_warps=4),
+    triton.Config({'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 32, 'GROUP_M': 8}, num_stages=2, num_warps=4),
+    triton.Config({'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 32, 'GROUP_M': 8}, num_stages=3, num_warps=4),
+    triton.Config({'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 32, 'GROUP_M': 8}, num_stages=4, num_warps=4),
+    triton.Config({'BLOCK_M': 64, 'BLOCK_N': 128, 'BLOCK_K': 64, 'GROUP_M': 8}, num_stages=3, num_warps=4),
+]
+
+# Ampere/Hopper subspace (sm_80+) — larger blocks allowed thanks to
+# SMEM doubling and tensor-core throughput. Tutorial canonical configs.
+_MATMUL_AUTOTUNE_AMPERE_PLUS = [
+    triton.Config({'BLOCK_M': 128, 'BLOCK_N': 256, 'BLOCK_K': 64,  'GROUP_M': 8}, num_stages=3, num_warps=8),
+    triton.Config({'BLOCK_M': 64,  'BLOCK_N': 256, 'BLOCK_K': 32,  'GROUP_M': 8}, num_stages=4, num_warps=4),
+    triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 32,  'GROUP_M': 8}, num_stages=4, num_warps=4),
+    triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64,  'BLOCK_K': 32,  'GROUP_M': 8}, num_stages=4, num_warps=4),
+    triton.Config({'BLOCK_M': 64,  'BLOCK_N': 128, 'BLOCK_K': 32,  'GROUP_M': 8}, num_stages=4, num_warps=4),
+    triton.Config({'BLOCK_M': 128, 'BLOCK_N': 128, 'BLOCK_K': 64,  'GROUP_M': 8}, num_stages=4, num_warps=4),
+    triton.Config({'BLOCK_M': 128, 'BLOCK_N': 64,  'BLOCK_K': 64,  'GROUP_M': 8}, num_stages=4, num_warps=4),
+    triton.Config({'BLOCK_M': 64,  'BLOCK_N': 128, 'BLOCK_K': 64,  'GROUP_M': 8}, num_stages=4, num_warps=4),
+] + _MATMUL_AUTOTUNE_VOLTA  # Ampere+ also benefits from smaller configs
+
+
+def _detect_arch_configs():
+    """Return autotune configs for the active CUDA arch.
+
+    sm_70 (Volta V100) → Volta-viable subset (no SMEM-saturating blocks).
+    sm_80+ (Ampere/Hopper) → tutorial canonical + Volta subset.
+    Cached at module import time. Falls back to Volta subset if detection
+    fails (safe choice — won't OOM on any arch).
+    """
+    try:
+        cap = triton.runtime.driver.active.get_current_target().arch
+        # Triton arch on NVIDIA = compute cap × 10 (sm_70 → 70, sm_80 → 80)
+        if isinstance(cap, int) and cap >= 80:
+            return _MATMUL_AUTOTUNE_AMPERE_PLUS
+        return _MATMUL_AUTOTUNE_VOLTA
+    except Exception:
+        return _MATMUL_AUTOTUNE_VOLTA
+
+
+_MATMUL_AUTOTUNE_CONFIGS = _detect_arch_configs()
+
+
+@triton.autotune(configs=_MATMUL_AUTOTUNE_CONFIGS,
+                 key=['M', 'N', 'K', 'IEEE_PRECISION', 'PROMOTE_B'])
 @triton.jit
 def matmul_kernel(
     a_ptr, b_ptr, c_ptr,
@@ -16,15 +96,17 @@ def matmul_kernel(
     stride_am, stride_ak,
     stride_bk, stride_bn,
     stride_cm, stride_cn,
-    BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
-    GROUP_M: tl.constexpr,
     IEEE_PRECISION: tl.constexpr = False,
     PROMOTE_B: tl.constexpr = False,
+    BLOCK_M: tl.constexpr = 64,
+    BLOCK_N: tl.constexpr = 64,
+    BLOCK_K: tl.constexpr = 32,
+    GROUP_M: tl.constexpr = 8,
 ):
     """C = A @ B where A is [M, K], B is [K, N], C is [M, N].
 
     Accumulates in fp32 for numerical stability.
-    Output dtype determined by output pointer's dtype.
+    Output dtype determined by output pointer's dtype (in-kernel cast).
 
     IEEE_PRECISION=True forces `tl.dot(input_precision="ieee")` — required
     when fp32 inputs carry magnitudes > fp16_max on pre-Ampere GPUs,
@@ -41,21 +123,16 @@ def matmul_kernel(
     of a fp16 tile is free numerically (fp16 values are a subset of
     fp32); the accumulator is fp32 so the final dot product is identical
     to the path that widens the full weight pre-kernel.
+
+    Phase 1.5 (2026-05): @triton.autotune ENABLED. The autotune key
+    includes IEEE_PRECISION + PROMOTE_B so each (Volta-fp32 / Volta-fp16-mixed
+    / Ampere+ pure fp16) path gets its own selected config.
     """
-    # NOTE Phase 1.5 Étape 1 (2026-05, REVERTED): patterns from the official
-    # Triton matmul tutorial were tested:
-    #   (a) `tl.dot(a, b, accumulator)` 3-arg HMMA-FMA fused form
-    #   (b) `tl.assume(stride_* > 0)` integer-analyzer hints
-    # Measured -0.7% delta (noise) on Sana 1024 mm M=2048×K=2240×N=2240
-    # V100 sm_70 with our static config BM=64 BN=64 BK=32 warps=4 stages=2.
-    # Diagnostic: Triton compiler already lowers `acc += tl.dot(...)` to
-    # the 3-arg fused form at the IR level; pointer arithmetic in this
-    # kernel is simple enough that tl.assume hints provide no measurable
-    # gain. The official tutorial reaches 81% cuBLAS on V100 only when
-    # combined with @triton.autotune adaptive config selection, which is
-    # interdit en production NeuroBrix this year (deferred chantier
-    # P-AUTOTUNE-OFFLINE post-dev). Do NOT re-test these patterns in
-    # isolation without autotune — proven inactive on Volta.
+    # tl.assume hints (tutorial pattern) — combined with autotune they
+    # carry through; without autotune they were inactive (rollback 396fef1).
+    tl.assume(stride_am > 0); tl.assume(stride_ak > 0)
+    tl.assume(stride_bk > 0); tl.assume(stride_bn > 0)
+    tl.assume(stride_cm > 0); tl.assume(stride_cn > 0)
     pid = tl.program_id(0)
     num_pid_m = tl.cdiv(M, BLOCK_M)
     num_pid_n = tl.cdiv(N, BLOCK_N)
@@ -78,21 +155,26 @@ def matmul_kernel(
         b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_K, other=0.0)
         if PROMOTE_B:
             b = b.to(a.dtype)
+        # 3-arg HMMA-FMA fused form (tutorial pattern).
         if IEEE_PRECISION:
-            accumulator += tl.dot(a, b, input_precision="ieee")
+            accumulator = tl.dot(a, b, accumulator, input_precision="ieee")
         else:
-            accumulator += tl.dot(a, b)
+            accumulator = tl.dot(a, b, accumulator)
         a_ptrs += BLOCK_K * stride_ak
         b_ptrs += BLOCK_K * stride_bk
 
-    # Write back — Triton auto-converts fp32 accum to output ptr dtype
+    # In-kernel cast accum → output dtype (tutorial pattern; faster than
+    # tl.store auto-cast since the conversion happens in registers).
+    c = accumulator.to(c_ptr.dtype.element_ty)
     offs_cm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
     offs_cn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
     c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
     c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
-    tl.store(c_ptrs, accumulator, mask=c_mask)
+    tl.store(c_ptrs, c, mask=c_mask)
 
 
+@triton.autotune(configs=_MATMUL_AUTOTUNE_CONFIGS,
+                 key=['M', 'N', 'K', 'IEEE_PRECISION', 'PROMOTE_B'])
 @triton.jit
 def addmm_kernel(
     a_ptr, b_ptr, bias_ptr, c_ptr,
@@ -101,19 +183,26 @@ def addmm_kernel(
     stride_bk, stride_bn,
     stride_cm, stride_cn,
     alpha, beta,
-    BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
-    GROUP_M: tl.constexpr,
     IEEE_PRECISION: tl.constexpr = False,
     PROMOTE_B: tl.constexpr = False,
+    BLOCK_M: tl.constexpr = 64,
+    BLOCK_N: tl.constexpr = 64,
+    BLOCK_K: tl.constexpr = 32,
+    GROUP_M: tl.constexpr = 8,
 ):
     """C = beta * bias + alpha * (A @ B) where bias is [N].
 
     PROMOTE_B: see matmul_kernel docstring. Same in-kernel fp16→fp32
     tile cast; enables the wrapper to keep fp16 weights fp16 in memory
     while still running tl.dot with matched dtypes.
+
+    Phase 1.5 (2026-05): @triton.autotune ENABLED — same configs as
+    matmul_kernel. Tutorial pattern adapted with NeuroBrix's bias
+    addition + alpha/beta scaling.
     """
-    # NOTE: same Phase 1.5 Étape 1 rollback applies here — see matmul_kernel
-    # docstring. Patterns reverted, kernel back to pre-Étape-1 state.
+    tl.assume(stride_am > 0); tl.assume(stride_ak > 0)
+    tl.assume(stride_bk > 0); tl.assume(stride_bn > 0)
+    tl.assume(stride_cm > 0); tl.assume(stride_cn > 0)
     pid = tl.program_id(0)
     num_pid_m = tl.cdiv(M, BLOCK_M)
     num_pid_n = tl.cdiv(N, BLOCK_N)
@@ -137,9 +226,9 @@ def addmm_kernel(
         if PROMOTE_B:
             b = b.to(a.dtype)
         if IEEE_PRECISION:
-            accumulator += tl.dot(a, b, input_precision="ieee")
+            accumulator = tl.dot(a, b, accumulator, input_precision="ieee")
         else:
-            accumulator += tl.dot(a, b)
+            accumulator = tl.dot(a, b, accumulator)
         a_ptrs += BLOCK_K * stride_ak
         b_ptrs += BLOCK_K * stride_bk
 

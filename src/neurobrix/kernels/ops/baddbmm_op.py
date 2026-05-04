@@ -1,14 +1,21 @@
-"""Batched addmm (baddbmm) — pure @triton.jit kernel.
+"""Batched addmm (baddbmm) — pure @triton.jit kernel with autotune.
 
 Ported from FlagGems baddbmm (Apache-2.0 license).
 Computes: out = beta * bias + alpha * (batch1 @ batch2)
 where batch1 is [B, M, K], batch2 is [B, K, N], bias is broadcastable to [B, M, N].
+
+Phase 1.5 (2026-05): @triton.autotune ENABLED with same Volta-viable
+configs as kernels/ops/matmul.py. See CLAUDE.md "Autotune policy"
+section for the doctrinal exception.
 """
 
 import triton
 import triton.language as tl
 
+from neurobrix.kernels.ops.matmul import _MATMUL_AUTOTUNE_CONFIGS
 
+
+@triton.autotune(configs=_MATMUL_AUTOTUNE_CONFIGS, key=['M', 'N', 'K'])
 @triton.jit
 def baddbmm_kernel(
     A_ptr,
@@ -24,10 +31,10 @@ def baddbmm_kernel(
     bias_batch_stride,
     bias_m_stride,
     bias_n_stride,
-    BLOCK_M: tl.constexpr,
-    BLOCK_N: tl.constexpr,
-    BLOCK_K: tl.constexpr,
-    GROUP_M: tl.constexpr,
+    BLOCK_M: tl.constexpr = 64,
+    BLOCK_N: tl.constexpr = 64,
+    BLOCK_K: tl.constexpr = 32,
+    GROUP_M: tl.constexpr = 8,
 ):
     """Batched matrix multiply with bias: out = beta*bias + alpha*(A @ B).
 
