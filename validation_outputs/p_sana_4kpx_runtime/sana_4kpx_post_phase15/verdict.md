@@ -22,7 +22,23 @@
 | triton | 5862 s **cold sweep** | PASS coherent (autotune populated cache; warm path = ~100 s ± noise per Phase 1.5 measurement) |
 | triton_sequential | 47.52 s **hot** | PASS coherent (proves cache_results=True replay works end-to-end) |
 
-## P-SANA-4KPX-RUNTIME closure (honest wording)
+## P-SANA-4KPX-RUNTIME — REOPENED 2026-05-04
+
+The "closure on production-mode validation" recorded below was rescinded the same day. INDETERMINATE within a 3 h budget is not a closure verdict — it is a deferred failure disguised as mystery, and the successor diagnostic chantier (P-TRITON-4KPX-PROFILE) violated the project rule against fictitious sub-chantiers. The chantier stays open until the 4 modes factually work OR a structural irreducible cause is documented.
+
+Three hierarchical levers must be exhausted before re-attempting closure (full text in `memory/feedback_p_sana_4kpx_reopen_2026_05.md`):
+
+1. Kernel-level tiling INSIDE conv2d_wrapper triton (port `_fused_upsample_conv2d_nbx` band-streaming to the Triton wrapper).
+2. Prism op-level tiling parity audit on triton path (R30 coverage check).
+3. Multi-GPU placement Prism for Sana 4Kpx triton (4× V100 = 128 GB total).
+
+External study allowed: structural pattern reading from OneFlow / MegEngine / CUTLASS / lmdeploy / NCNN / MNN sm_70 sources, then re-implementation Triton-pure.
+
+The historical wording below is preserved as a record of the rescinded verdict.
+
+---
+
+## (RESCINDED) Closure on production-mode validation
 
 **Closed on production-mode validation. R4 strict (4-mode) is NOT claimed satisfied.**
 
