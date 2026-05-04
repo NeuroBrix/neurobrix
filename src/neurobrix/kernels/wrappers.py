@@ -108,6 +108,7 @@ from .ops.tril import tril_kernel, tril_batch_kernel
 from .ops.argmax import argmax_kernel_1, argmax_kernel_2, argmax_kernel_inner
 from .ops.argmin import argmin_kernel_1, argmin_kernel_2, argmin_kernel
 from .ops.conv2d import conv2d_forward_kernel
+from .ops.depthwise_conv2d import depthwise_conv2d_kernel
 from .ops.batch_norm import batch_norm_forward_kernel
 from .ops.cumsum import scan_part_sum_kernel, add_base_sum_kernel
 from .ops.scatter_op import scatter_kernel, scatter_add_kernel, scatter_reduce_amax_kernel, scatter_reduce_amin_kernel
@@ -2242,6 +2243,13 @@ def argmin_wrapper(x, dim=None, keepdim=False) :
 # NBX_CONV2D_BAND_BYTES if needed for non-Volta hardware.
 _NBX_CONV2D_BAND_BYTES = int(os.environ.get("NBX_CONV2D_BAND_BYTES", str(4 * 1024 * 1024 * 1024)))
 
+# Diagnostic trace — when set, every conv2d_wrapper call prints the
+# (in_shape, out_shape, kernel, groups, output_MB) so we can see the actual
+# spatial workload arriving in triton mode. Used by P-SANA-4KPX-RUNTIME
+# Étape 1 verification on Sana 4Kpx (was the wrapper-internal band-streaming
+# triggered? what shapes are dominant?).
+_NBX_CONV2D_TRACE = os.environ.get("NBX_CONV2D_TRACE", "0") == "1"
+
 
 def _conv2d_should_band_stream(N, out_c, out_h, out_w, dtype_bytes):
     """Return True when the conv2d output alone would exceed the spatial
@@ -2344,8 +2352,33 @@ def conv2d_wrapper(
     # _tiled_conv2d_spatial_nbx: each band re-enters this same wrapper with
     # a smaller H, so the recursion bottoms out on its own. The full output
     # remains allocated for downstream consumers in the DAG.
-    out_dtype_bytes = dtype_size(out_dtype)
+    # x.dtype returns a triton.language dtype; use x.nbx_dtype for the
+    # NBXDtype used by dtype_size().
+    out_nbx_dtype = x.nbx_dtype if hasattr(x, 'nbx_dtype') else x._dtype
+    out_dtype_bytes = dtype_size(out_nbx_dtype)
+    if _NBX_CONV2D_TRACE:
+        out_mb = N * out_c * out_h * out_w * out_dtype_bytes / 1024 / 1024
+        print(f"[CONV2D] in=({N},{in_c},{in_h},{in_w}) out=({N},{out_c},{out_h},{out_w}) "
+              f"k=({kh},{kw}) g={groups} out={out_mb:.1f}MB", flush=True)
+
+    # P-SANA-4KPX-RUNTIME Étape 3 — depthwise specialization. The generic
+    # im2col conv2d_forward_kernel is structurally inefficient for the
+    # depthwise pattern (groups == in_c == out_c, weight (C,1,kh,kw)) on
+    # Sana 4Kpx VAE: ~4.8 s per call vs cuDNN dedicated path ~2.6 ms,
+    # ~1800x gap. Route to the dedicated stencil kernel instead.
+    if groups == in_c and groups == out_c and dil_h == 1 and dil_w == 1:
+        if _NBX_CONV2D_TRACE:
+            print(f"[CONV2D] DEPTHWISE path (g={groups})", flush=True)
+        return _depthwise_conv2d_dispatch(
+            x_c, w_c, bias,
+            N, in_c, in_h, in_w, out_h, out_w,
+            kh, kw, stride_h, stride_w, pad_h, pad_w,
+            out_dtype,
+        )
+
     if _conv2d_should_band_stream(N, out_c, out_h, out_w, out_dtype_bytes):
+        if _NBX_CONV2D_TRACE:
+            print(f"[CONV2D] BAND-STREAM triggered (out > {_NBX_CONV2D_BAND_BYTES/1024/1024/1024:.1f}GiB)", flush=True)
         return _conv2d_band_streamed(
             x_c, w_c, bias,
             N, in_c, in_h, in_w, out_c, out_h, out_w,
@@ -2374,6 +2407,44 @@ def conv2d_wrapper(
         stride_height=stride_h, stride_width=stride_w,
         padding_height=pad_h, padding_width=pad_w,
         groups=groups, fp16=fp16,
+    )
+
+    if bias is not None:
+        output = add(output, bias.view(1, -1, 1, 1))
+
+    return output
+
+
+def _depthwise_conv2d_dispatch(
+    x_c, w_c, bias,
+    N, C, IH, IW, out_h, out_w,
+    kh, kw, stride_h, stride_w, pad_h, pad_w,
+    out_dtype,
+):
+    """Launch the depthwise stencil kernel. Caller has already verified
+    the depthwise signature (groups == in_c == out_c, dilation == 1) and
+    done dtype narrowing + contiguous(). Bias is added separately so the
+    kernel stays signature-clean."""
+    output = NBXTensor.empty((N, C, out_h, out_w), device=x_c.device, dtype=out_dtype)
+    x_nbx_dt = x_c.nbx_dtype if hasattr(x_c, 'nbx_dtype') else x_c._dtype
+    fp16 = x_nbx_dt == NBXDtype.float16
+
+    grid = lambda META: (
+        N,
+        triton.cdiv(C, META['BLOCK_C']),
+        triton.cdiv(out_h * out_w, META['BLOCK_HW']),
+    )
+    _set_device(x_c)
+    depthwise_conv2d_kernel[grid](
+        x_c, w_c, output,
+        N, C,
+        IH, IW, out_h, out_w,
+        *x_c.stride(), *w_c.stride()[:1], *w_c.stride()[2:],
+        *output.stride(),
+        kh=kh, kw=kw,
+        stride_h=stride_h, stride_w=stride_w,
+        pad_h=pad_h, pad_w=pad_w,
+        fp16=fp16,
     )
 
     if bias is not None:
