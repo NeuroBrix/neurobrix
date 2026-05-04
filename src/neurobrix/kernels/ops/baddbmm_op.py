@@ -15,7 +15,8 @@ import triton.language as tl
 from neurobrix.kernels.ops.matmul import _MATMUL_AUTOTUNE_CONFIGS
 
 
-@triton.autotune(configs=_MATMUL_AUTOTUNE_CONFIGS, key=['M', 'N', 'K'])
+@triton.autotune(configs=_MATMUL_AUTOTUNE_CONFIGS, key=['M', 'N', 'K'],
+                 cache_results=True)
 @triton.jit
 def baddbmm_kernel(
     A_ptr,
