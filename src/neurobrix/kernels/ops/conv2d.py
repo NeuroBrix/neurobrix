@@ -1,14 +1,61 @@
-"""Conv2D forward — pure @triton.jit kernel.
+"""Conv2D forward — pure @triton.jit kernel with autotune.
 
-From attorch (BobMcDear/attorch) conv_kernels.py.
-Chosen over FlagGems for V100 compatibility (proper num_stages handling).
-Im2col approach with tl.dot, fp32 accumulation, groups support.
+From attorch (BobMcDear/attorch) conv_kernels.py — chosen over FlagGems
+for V100 compatibility (proper num_stages handling). Im2col approach
+with tl.dot, fp32 accumulation, groups support.
+
+Phase 1.5 conv2d Étape (b) (2026-05): @triton.autotune + cache_results=True
+adoption — same pattern as mm/bmm/addmm/baddbmm (commits d514bdb +
+20ed765). Configs restricted to Volta-viable subspace (BLOCK_BHW ∈
+{32,64,128}, BLOCK_OUTF ∈ {32,64,128}, BLOCK_INF ∈ {16,32,64}, num_warps
+∈ {2,4}, num_stages ∈ {2,3}). Triton compiler ejects configs that
+exceed sm_70's 96 KB SMEM at compile time (native fallback). See
+CLAUDE.md "Autotune policy" for the doctrinal exception scope.
 """
 
 import triton
 import triton.language as tl
 
 
+# Volta-viable conv2d autotune subspace.
+# SMEM budget per config (rough): 2 stages × dtype_bytes × (BLOCK_BHW *
+# BLOCK_INF [input tile] + BLOCK_INF * BLOCK_OUTF [weight tile]).
+# fp16 (2B), 2 stages: BLOCK_BHW=128, BLOCK_INF=64, BLOCK_OUTF=128 →
+# 2 * 2 * (128*64 + 64*128) = 65 KB → fits 96 KB sm_70.
+# BLOCK_BHW=128, BLOCK_INF=64, BLOCK_OUTF=128, stages=3 → 98 KB → over.
+# Triton ejects over-SMEM configs at compile time via native fallback.
+_CONV2D_AUTOTUNE_VOLTA = [
+    triton.Config({'BLOCK_SIZE_BHW': 32,  'BLOCK_SIZE_OUTF': 32,  'BLOCK_SIZE_INF': 16}, num_stages=2, num_warps=2),
+    triton.Config({'BLOCK_SIZE_BHW': 32,  'BLOCK_SIZE_OUTF': 32,  'BLOCK_SIZE_INF': 32}, num_stages=2, num_warps=2),
+    triton.Config({'BLOCK_SIZE_BHW': 32,  'BLOCK_SIZE_OUTF': 64,  'BLOCK_SIZE_INF': 32}, num_stages=2, num_warps=2),
+    triton.Config({'BLOCK_SIZE_BHW': 32,  'BLOCK_SIZE_OUTF': 64,  'BLOCK_SIZE_INF': 32}, num_stages=3, num_warps=4),
+    triton.Config({'BLOCK_SIZE_BHW': 32,  'BLOCK_SIZE_OUTF': 128, 'BLOCK_SIZE_INF': 32}, num_stages=2, num_warps=4),
+    triton.Config({'BLOCK_SIZE_BHW': 64,  'BLOCK_SIZE_OUTF': 32,  'BLOCK_SIZE_INF': 16}, num_stages=2, num_warps=2),
+    triton.Config({'BLOCK_SIZE_BHW': 64,  'BLOCK_SIZE_OUTF': 32,  'BLOCK_SIZE_INF': 32}, num_stages=2, num_warps=4),
+    triton.Config({'BLOCK_SIZE_BHW': 64,  'BLOCK_SIZE_OUTF': 32,  'BLOCK_SIZE_INF': 32}, num_stages=3, num_warps=4),
+    triton.Config({'BLOCK_SIZE_BHW': 64,  'BLOCK_SIZE_OUTF': 64,  'BLOCK_SIZE_INF': 16}, num_stages=2, num_warps=4),
+    triton.Config({'BLOCK_SIZE_BHW': 64,  'BLOCK_SIZE_OUTF': 64,  'BLOCK_SIZE_INF': 32}, num_stages=2, num_warps=4),
+    triton.Config({'BLOCK_SIZE_BHW': 64,  'BLOCK_SIZE_OUTF': 64,  'BLOCK_SIZE_INF': 32}, num_stages=3, num_warps=4),
+    triton.Config({'BLOCK_SIZE_BHW': 64,  'BLOCK_SIZE_OUTF': 64,  'BLOCK_SIZE_INF': 64}, num_stages=2, num_warps=4),
+    triton.Config({'BLOCK_SIZE_BHW': 64,  'BLOCK_SIZE_OUTF': 128, 'BLOCK_SIZE_INF': 16}, num_stages=2, num_warps=4),
+    triton.Config({'BLOCK_SIZE_BHW': 64,  'BLOCK_SIZE_OUTF': 128, 'BLOCK_SIZE_INF': 32}, num_stages=2, num_warps=4),
+    triton.Config({'BLOCK_SIZE_BHW': 128, 'BLOCK_SIZE_OUTF': 32,  'BLOCK_SIZE_INF': 32}, num_stages=2, num_warps=4),
+    triton.Config({'BLOCK_SIZE_BHW': 128, 'BLOCK_SIZE_OUTF': 64,  'BLOCK_SIZE_INF': 16}, num_stages=2, num_warps=4),
+    triton.Config({'BLOCK_SIZE_BHW': 128, 'BLOCK_SIZE_OUTF': 64,  'BLOCK_SIZE_INF': 32}, num_stages=2, num_warps=4),
+    triton.Config({'BLOCK_SIZE_BHW': 128, 'BLOCK_SIZE_OUTF': 128, 'BLOCK_SIZE_INF': 32}, num_stages=2, num_warps=4),
+]
+
+
+@triton.autotune(
+    configs=_CONV2D_AUTOTUNE_VOLTA,
+    key=['batch_dim', 'in_feat_dim', 'in_height', 'in_width',
+         'out_feat_dim', 'out_height', 'out_width',
+         'kernel_height', 'kernel_width',
+         'stride_height', 'stride_width',
+         'padding_height', 'padding_width',
+         'groups', 'fp16'],
+    cache_results=True,
+)
 @triton.jit
 def conv2d_forward_kernel(
     input_pointer, weight_pointer, output_pointer,
@@ -21,8 +68,9 @@ def conv2d_forward_kernel(
     stride_height: tl.constexpr, stride_width: tl.constexpr,
     padding_height: tl.constexpr, padding_width: tl.constexpr,
     groups: tl.constexpr, fp16: tl.constexpr,
-    BLOCK_SIZE_BHW: tl.constexpr, BLOCK_SIZE_INF: tl.constexpr,
-    BLOCK_SIZE_OUTF: tl.constexpr,
+    BLOCK_SIZE_BHW: tl.constexpr = 64,
+    BLOCK_SIZE_INF: tl.constexpr = 32,
+    BLOCK_SIZE_OUTF: tl.constexpr = 64,
 ):
     bhw_pid = tl.program_id(0)
     outf_pid = tl.program_id(1)
