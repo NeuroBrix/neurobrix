@@ -2313,23 +2313,23 @@ def conv2d_wrapper(
 
     fp16 = x.dtype == NBXDtype.float16
 
-    grid = (
-        triton.cdiv(N * out_h * out_w, _CONV_BHW),
-        triton.cdiv(out_c // groups, _CONV_OUTF),
+    # Phase 1.5 conv2d autotune: BLOCK_SIZE_*/num_warps/num_stages chosen
+    # adaptively per shape signature, persisted via cache_results=True.
+    grid = lambda META: (
+        triton.cdiv(N * out_h * out_w, META['BLOCK_SIZE_BHW']),
+        triton.cdiv(out_c // groups, META['BLOCK_SIZE_OUTF']),
         groups,
     )
     _set_device(x_c)
     conv2d_forward_kernel[grid](
-    x_c, w_c, output,
-    N, in_c, in_h, in_w,
-    out_c, out_h, out_w,
-    *x_c.stride(), *w_c.stride(), *output.stride(),
-    kernel_height=kh, kernel_width=kw,
-    stride_height=stride_h, stride_width=stride_w,
-    padding_height=pad_h, padding_width=pad_w,
-    groups=groups, fp16=fp16,
-    BLOCK_SIZE_BHW=_CONV_BHW, BLOCK_SIZE_INF=_CONV_INF, BLOCK_SIZE_OUTF=_CONV_OUTF,
-    num_warps=4, num_stages=2,
+        x_c, w_c, output,
+        N, in_c, in_h, in_w,
+        out_c, out_h, out_w,
+        *x_c.stride(), *w_c.stride(), *output.stride(),
+        kernel_height=kh, kernel_width=kw,
+        stride_height=stride_h, stride_width=stride_w,
+        padding_height=pad_h, padding_width=pad_w,
+        groups=groups, fp16=fp16,
     )
 
     if bias is not None:
