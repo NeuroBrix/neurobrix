@@ -9,6 +9,7 @@ Each wrapper:
 Dependencies: triton, NBXTensor. Used exclusively by dispatch.py.
 """
 
+import os
 import triton
 
 from .nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, _broadcast_shapes, _set_device
@@ -2232,13 +2233,40 @@ def argmin_wrapper(x, dim=None, keepdim=False) :
 # CONV2D WRAPPER — Extracted from FlagGems
 # ===========================================================================
 
+# Spatial band-streaming threshold for conv2d. When the per-launch output
+# tensor would exceed this many bytes, conv2d_wrapper transparently splits
+# along the H dimension and streams band-by-band. This is the kernel-level
+# tiling lever (P-SANA-4KPX-RUNTIME, Étape 1 — internal to the wrapper, not
+# a Prism op-level interceptor). 4 GiB default leaves headroom for weights,
+# activations and arena overhead on V100 32 GB. Override via env var
+# NBX_CONV2D_BAND_BYTES if needed for non-Volta hardware.
+_NBX_CONV2D_BAND_BYTES = int(os.environ.get("NBX_CONV2D_BAND_BYTES", str(4 * 1024 * 1024 * 1024)))
+
+
+def _conv2d_should_band_stream(N, out_c, out_h, out_w, dtype_bytes):
+    """Return True when the conv2d output alone would exceed the spatial
+    band-streaming threshold. Output is the dominant transient because the
+    @triton.jit kernel accumulates in fp32 internally but writes the final
+    output at compute_dtype. Weights are residence-cost (already in arena),
+    not per-launch transients."""
+    out_bytes = N * out_c * out_h * out_w * dtype_bytes
+    return out_bytes > _NBX_CONV2D_BAND_BYTES
+
+
 def conv2d_wrapper(
     x, weight, bias=None,
     stride=1, padding=0, dilation=1,
     transposed=False, output_padding=0, groups=1,
 ) :
     """Convolution forward. Handles both 1D (3D tensors) and 2D (4D tensors).
-    Routes to conv1d_wrapper for 3D inputs."""
+    Routes to conv1d_wrapper for 3D inputs.
+
+    Spatial band-streaming (P-SANA-4KPX-RUNTIME Étape 1): when the output
+    tensor would exceed _NBX_CONV2D_BAND_BYTES (default 4 GiB), the wrapper
+    splits along the H output dimension and streams band-by-band. Each band
+    re-enters this same wrapper with a smaller H, so the recursion bottoms
+    out automatically. The full output stays allocated for downstream
+    consumers."""
     # Route 1D convolutions to conv1d_wrapper
     if weight.ndim == 3:
         return conv1d_wrapper(x, weight, bias, stride, padding, dilation, groups)
@@ -2309,6 +2337,22 @@ def conv2d_wrapper(
     # Step 4: output dtype = compute_dtype from per-component Prism context.
     # Falls back to x.dtype when no TritonSequence is active.
     out_dtype = _NBX_COMPUTE_DTYPE if _NBX_COMPUTE_DTYPE is not None else x.dtype
+
+    # P-SANA-4KPX-RUNTIME Étape 1 — kernel-level spatial band-streaming.
+    # When the output tensor would exceed the per-launch threshold (default
+    # 4 GiB), split along H and stream band-by-band. Halo handling mirrors
+    # _tiled_conv2d_spatial_nbx: each band re-enters this same wrapper with
+    # a smaller H, so the recursion bottoms out on its own. The full output
+    # remains allocated for downstream consumers in the DAG.
+    out_dtype_bytes = out_dtype.itemsize if hasattr(out_dtype, "itemsize") else NBXDtype(out_dtype).itemsize
+    if _conv2d_should_band_stream(N, out_c, out_h, out_w, out_dtype_bytes):
+        return _conv2d_band_streamed(
+            x_c, w_c, bias,
+            N, in_c, in_h, in_w, out_c, out_h, out_w,
+            kh, kw, stride_h, stride_w, pad_h, pad_w, dil_h, dil_w,
+            groups, out_dtype, out_dtype_bytes,
+        )
+
     output = NBXTensor.empty((N, out_c, out_h, out_w), device=x.device, dtype=out_dtype)
 
     fp16 = x.dtype == NBXDtype.float16
@@ -2331,6 +2375,66 @@ def conv2d_wrapper(
         padding_height=pad_h, padding_width=pad_w,
         groups=groups, fp16=fp16,
     )
+
+    if bias is not None:
+        output = add(output, bias.view(1, -1, 1, 1))
+
+    return output
+
+
+def _conv2d_band_streamed(
+    x_c, w_c, bias,
+    N, in_c, IH, IW, out_c, out_h, out_w,
+    kh, kw, stride_h, stride_w, pad_h, pad_w, dil_h, dil_w,
+    groups, out_dtype, out_dtype_bytes,
+):
+    """Band-streaming inner path for conv2d_wrapper. The full output tensor
+    is allocated up front (downstream consumers expect it whole); per band
+    we slice the input H, recurse into conv2d_wrapper for the band (which
+    falls back to the single-launch path because the band's output is now
+    small), and write the band slice back into the full output.
+
+    Halo on internal frontiers: each band's input slice is extended by
+    pad_h on the read side (clamped to image edges); the recursive
+    conv2d_wrapper call uses the original padding=(pad_h, pad_w), which
+    inserts pad_h zeros on internal frontiers — same engineering trade
+    used by `_tiled_conv2d_spatial_nbx` for compiled mode (faint seam at
+    band frontiers, accepted as a follow-up halo-correctness chantier).
+    """
+    # Choose tile_factor so each band's output bytes <= half the threshold;
+    # the headroom covers transient input slice + kernel intermediate.
+    band_target_bytes = max(1, _NBX_CONV2D_BAND_BYTES // 2)
+    row_bytes = N * out_c * out_w * out_dtype_bytes
+    rows_per_band = max(1, band_target_bytes // max(1, row_bytes))
+    tile_factor = max(1, (out_h + rows_per_band - 1) // rows_per_band)
+    band_oh = (out_h + tile_factor - 1) // tile_factor
+
+    output = NBXTensor.empty((N, out_c, out_h, out_w), device=x_c.device, dtype=out_dtype)
+
+    for oh_start in range(0, out_h, band_oh):
+        oh_end = min(oh_start + band_oh, out_h)
+        ih_start = max(0, oh_start * stride_h - pad_h)
+        ih_end = min(IH, (oh_end - 1) * stride_h + dil_h * (kh - 1) + 1 - pad_h)
+        if ih_end <= ih_start:
+            continue
+        in_band = x_c[:, :, ih_start:ih_end, :]
+        # Recurse — band's out_h is now small enough to fall through to the
+        # single-launch path. bias is applied once at the end here (not
+        # per-band) to avoid double-add when the band path returns.
+        conv_band = conv2d_wrapper(
+            in_band, w_c, None,
+            stride=(stride_h, stride_w),
+            padding=(pad_h, pad_w),
+            dilation=(dil_h, dil_w),
+            groups=groups,
+        )
+        actual_band_h = oh_end - oh_start
+        band_first_oh = ih_start // stride_h
+        local_offset = max(0, oh_start - band_first_oh)
+        actual_band_h = min(conv_band.shape[2] - local_offset, actual_band_h)
+        if actual_band_h <= 0:
+            continue
+        output[:, :, oh_start:oh_start + actual_band_h, :] = conv_band[:, :, local_offset:local_offset + actual_band_h, :]
 
     if bias is not None:
         output = add(output, bias.view(1, -1, 1, 1))
