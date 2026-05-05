@@ -2617,10 +2617,17 @@ class TritonSequence:
                         try:
                             w_n = self._num_weights
                             i_n = self._num_inputs
-                            n_w = n_i = n_m = 0
+                            n_w = n_i = n_m = n_other = n_none = 0
                             b_w = b_i = b_m = 0
+                            type_counts: Dict[str, int] = {}
                             for s, t in enumerate(arena):
-                                if t is None or not hasattr(t, '_nbytes'):
+                                if t is None:
+                                    n_none += 1
+                                    continue
+                                tn = type(t).__name__
+                                type_counts[tn] = type_counts.get(tn, 0) + 1
+                                if not hasattr(t, '_nbytes'):
+                                    n_other += 1
                                     continue
                                 nb = t._nbytes
                                 if s < w_n:
@@ -2633,8 +2640,68 @@ class TritonSequence:
                                   f"weights={n_w}/{b_w/1024/1024:.0f}MB "
                                   f"inputs={n_i}/{b_i/1024/1024:.0f}MB "
                                   f"intermediates={n_m}/{b_m/1024/1024:.0f}MB "
+                                  f"none_slots={n_none} other_slots={n_other} "
+                                  f"types={type_counts} "
                                   f"deferred_queue={len(_deferred)}/{_deferred_bytes/1024/1024:.0f}MB",
                                   flush=True)
+                            # Walk DeviceAllocator._cuda_ptr_size directly
+                            # to show ALL live cudaMalloc blocks per device,
+                            # bucketed by size. Exposes blocks that NBX
+                            # allocated but no NBXTensor in this arena
+                            # references (the 21 GB gap mystery).
+                            from neurobrix.kernels.nbx_tensor import DeviceAllocator as _DAW
+                            from collections import Counter as _Counter
+                            per_dev_buckets: Dict[int, "_Counter[int]"] = {}
+                            per_dev_total: Dict[int, int] = {}
+                            for _ptr, _nb in _DAW._cuda_ptr_size.items():
+                                _d = _DAW._cuda_ptr_device.get(_ptr, -1)
+                                bucket = (_nb // (1024 * 1024)) * 1024 * 1024
+                                if bucket >= 100 * 1024 * 1024:  # only buckets >= 100 MB
+                                    per_dev_buckets.setdefault(_d, _Counter())[bucket] += 1
+                                per_dev_total[_d] = per_dev_total.get(_d, 0) + _nb
+                            for _d, _t in sorted(per_dev_total.items()):
+                                buckets = per_dev_buckets.get(_d, _Counter())
+                                top = sorted(buckets.items(), key=lambda x: -x[0]*x[1])[:8]
+                                print(f"[LIVE_BLOCKS dev={_d}] total={_t/1024/1024:.0f}MB "
+                                      f"big_blocks(>=100MB): "
+                                      + " ".join(f"{c}x{sz/1024/1024:.0f}MB" for sz, c in top),
+                                      flush=True)
+                            # Walk gc.get_objects() to find NBXTensor objects
+                            # whose data_ptr matches the >= 1 GB allocations.
+                            # Reports the type/repr of OTHER referrers (besides
+                            # the tensor itself) — the source of the leak.
+                            try:
+                                import gc as _gc_h
+                                from neurobrix.kernels.nbx_tensor import NBXTensor as _NBX_H
+                                big_ptrs = {p: _DAW._cuda_ptr_size[p]
+                                            for p in _DAW._cuda_ptr_size
+                                            if _DAW._cuda_ptr_size[p] >= 1024*1024*1024}
+                                big_tensors = []
+                                for o in _gc_h.get_objects():
+                                    if isinstance(o, _NBX_H) and getattr(o, '_data_ptr', 0) in big_ptrs:
+                                        big_tensors.append(o)
+                                print(f"[BIG_TENSORS] {len(big_tensors)} NBXTensors with data_ptr in big blocks (>=1GB)",
+                                      flush=True)
+                                for i, t in enumerate(big_tensors[:10]):
+                                    refs = _gc_h.get_referrers(t)
+                                    refs_summary = []
+                                    for r in refs[:5]:
+                                        rt = type(r).__name__
+                                        info = ""
+                                        if rt == "list":
+                                            info = f"[len={len(r)}]"
+                                        elif rt == "dict":
+                                            info = f"{{len={len(r)}}}"
+                                        elif rt == "tuple":
+                                            info = f"(len={len(r)})"
+                                        refs_summary.append(f"{rt}{info}")
+                                    print(f"  tensor#{i} shape={tuple(t._shape)} "
+                                          f"nbytes={t._nbytes/1024/1024:.0f}MB "
+                                          f"owns={t._owns_data} "
+                                          f"referrers({len(refs)}): {refs_summary}",
+                                          flush=True)
+                            except Exception as _ge:
+                                print(f"[BIG_TENSORS scan failed: {_ge}]", flush=True)
                         except Exception as _dump_e:
                             print(f"[LIVE_DUMP failed: {_dump_e}]", flush=True)
                     raise RuntimeError(
@@ -2702,6 +2769,18 @@ class TritonSequence:
                         _deferred.append(old)
                         _deferred_bytes += old._nbytes
                     arena[s] = None
+
+            # Diagnostic: NBX_FORCE_GC=N forces Python gc.collect() every N
+            # ops to test if the live_tracked watermark gap is from stale
+            # Python references holding NBXTensor __del__ from firing.
+            # Per-op (N=1) is too slow for production but useful for diag.
+            import os as _os_gc
+            _gc_n = _os_gc.environ.get("NBX_FORCE_GC", "0")
+            if _gc_n != "0":
+                _gc_int = int(_gc_n)
+                if _gc_int > 0 and op_idx % _gc_int == 0:
+                    import gc as _gc_force
+                    _gc_force.collect()
 
             # Route A — periodic drain. OR of bytes and count thresholds.
             # Same correctness as the final drain (sync before free),
