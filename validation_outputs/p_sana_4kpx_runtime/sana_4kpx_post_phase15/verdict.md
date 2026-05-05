@@ -22,6 +22,12 @@
 | triton | 5862 s **cold sweep** | PASS coherent (autotune populated cache; warm path = ~100 s ± noise per Phase 1.5 measurement) |
 | triton_sequential | 47.52 s **hot** | PASS coherent (proves cache_results=True replay works end-to-end) |
 
+## P-SANA-4KPX-RUNTIME — REOPENED AGAIN 2026-05-05 (rescind closure 7d99b03)
+
+The "closure" of commit `7d99b03` (factual root cause + named follow-ons P-TRITON-LIVE-SET-AUDIT / P-MULTI-GPU-NBX-ADAPTER) was premature. Sana 4Kpx triton still does not produce a PNG, and naming a follow-on chantier was a defer in disguise. The live-set gap investigation moves back INTO this chantier with the four documented suspects (kill_slots laxness / deferred-free retention / autotune workspace overhead / live-set diff compiled vs triton at conv::62 boundary). The 2026-05-04 reopen wording below remains valid.
+
+---
+
 ## P-SANA-4KPX-RUNTIME — REOPENED 2026-05-04
 
 The "closure on production-mode validation" recorded below was rescinded the same day. INDETERMINATE within a 3 h budget is not a closure verdict — it is a deferred failure disguised as mystery. The chantier stays open until the 4 modes factually work OR a structural irreducible cause is documented.
