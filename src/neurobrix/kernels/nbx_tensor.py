@@ -492,6 +492,18 @@ class DeviceAllocator:
                 ret = getattr(rt, backend["malloc"])(
                     ctypes.byref(ptr_obj), ctypes.c_size_t(nbytes))
 
+        # Pre-allocation OOM-recovery (independent of pool): trigger a
+        # cycle-collecting gc.collect() then retry. Sana 4Kpx triton
+        # showed ~25 GB of NBXTensor instances pinned alive at conv::62
+        # OOM by Python frame-args lists from recursive conv2d_wrapper
+        # band loops; gc.collect() picks them up if they form a cycle.
+        # Gated by NBX_GC_ON_OOM=1 (opt-in until validated cross-model).
+        if ret != 0 and os.environ.get("NBX_GC_ON_OOM", "0") == "1":
+            import gc as _gc_oom
+            _gc_oom.collect()
+            ret = getattr(rt, backend["malloc"])(
+                ctypes.byref(ptr_obj), ctypes.c_size_t(nbytes))
+
         if ret != 0:
             # Diagnostic: how much live + how big the pool was at OOM time.
             live_now = DeviceAllocator._cuda_live_bytes.get(dev, 0)
