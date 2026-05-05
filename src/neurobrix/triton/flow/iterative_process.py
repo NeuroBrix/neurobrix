@@ -534,7 +534,16 @@ class TritonIterativeProcessHandler:
         # Release loop + pre_loop component weights to free VRAM for VAE
         pre_loop = self.ctx.pkg.topology.get("flow", {}).get("pre_loop", [])
         for comp_name in list(loop_components) + pre_loop:
-            self._unload_component(comp_name, force=True)
+            import os as _os_dbg
+            if _os_dbg.environ.get("NBX_LIVE_DUMP_ON_OOM") == "1":
+                from neurobrix.kernels.nbx_tensor import DeviceAllocator as _DA
+                pre_live = sum(_DA._cuda_live_bytes.values())
+                self._unload_component(comp_name, force=True)
+                post_live = sum(_DA._cuda_live_bytes.values())
+                print(f"[UNLOAD] {comp_name}: live {pre_live/1024/1024:.0f}MB → {post_live/1024/1024:.0f}MB "
+                      f"(freed {(pre_live-post_live)/1024/1024:.0f}MB)", flush=True)
+            else:
+                self._unload_component(comp_name, force=True)
 
         # Get state variable for validation
         loop_def = self.ctx.pkg.topology.get("flow", {}).get("loop", {})

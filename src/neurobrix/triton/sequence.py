@@ -2569,7 +2569,7 @@ class TritonSequence:
             self._prof_call_idx += 1
         # ===========================================
 
-        for op in self._ops:
+        for op_idx, op in enumerate(self._ops):
             args = op.args_resolver(arena)
             kwargs = op.kwargs_resolver(arena)
 
@@ -2597,9 +2597,46 @@ class TritonSequence:
                 if _PROF:
                     DeviceAllocator.sync_device()
                     _t0 = _time.perf_counter()
+                # Periodic live tracking — every NBX_LIVE_DUMP_EVERY ops,
+                # log the NBX live_tracked counter so we can scrub a log to
+                # find when leakage begins. Cheap: just a counter read.
+                import os as _os_per
+                _per = _os_per.environ.get("NBX_LIVE_DUMP_EVERY", "0")
+                if _per != "0":
+                    _per_n = int(_per)
+                    if _per_n > 0 and op_idx % _per_n == 0:
+                        from neurobrix.kernels.nbx_tensor import DeviceAllocator as _DA_p
+                        _live = _DA_p._cuda_live_bytes.get(_DA_p.get_device(), 0)
+                        print(f"[LIVE_TRACK op_idx={op_idx} {op.op_uid}] live={_live/1024/1024:.0f}MB",
+                              flush=True)
                 try:
                     result = op.func(*args, **kwargs)
                 except Exception as e:
+                    import os as _os_oom
+                    if _os_oom.environ.get("NBX_LIVE_DUMP_ON_OOM") == "1" and "malloc failed" in str(e):
+                        try:
+                            w_n = self._num_weights
+                            i_n = self._num_inputs
+                            n_w = n_i = n_m = 0
+                            b_w = b_i = b_m = 0
+                            for s, t in enumerate(arena):
+                                if t is None or not hasattr(t, '_nbytes'):
+                                    continue
+                                nb = t._nbytes
+                                if s < w_n:
+                                    n_w += 1; b_w += nb
+                                elif s < w_n + i_n:
+                                    n_i += 1; b_i += nb
+                                else:
+                                    n_m += 1; b_m += nb
+                            print(f"[LIVE_DUMP at {op.op_uid}] arena_size={len(arena)} "
+                                  f"weights={n_w}/{b_w/1024/1024:.0f}MB "
+                                  f"inputs={n_i}/{b_i/1024/1024:.0f}MB "
+                                  f"intermediates={n_m}/{b_m/1024/1024:.0f}MB "
+                                  f"deferred_queue={len(_deferred)}/{_deferred_bytes/1024/1024:.0f}MB",
+                                  flush=True)
+                        except Exception as _dump_e:
+                            print(f"[LIVE_DUMP failed: {_dump_e}]", flush=True)
                     raise RuntimeError(
                         f"Failed at {op.op_uid} ({op.op_type}): {e}") from e
                 if _PROF:
