@@ -2366,7 +2366,7 @@ def conv2d_wrapper(
     # depthwise pattern (groups == in_c == out_c, weight (C,1,kh,kw)) on
     # Sana 4Kpx VAE: ~4.8 s per call vs cuDNN dedicated path ~2.6 ms,
     # ~1800x gap. Route to the dedicated stencil kernel instead.
-    if groups == in_c and groups == out_c and dil_h == 1 and dil_w == 1:
+    if (os.environ.get("NBX_DEPTHWISE_DISABLE", "0") != "1") and groups == in_c and groups == out_c and dil_h == 1 and dil_w == 1:
         if _NBX_CONV2D_TRACE:
             print(f"[CONV2D] DEPTHWISE path (g={groups})", flush=True)
         return _depthwise_conv2d_dispatch(
