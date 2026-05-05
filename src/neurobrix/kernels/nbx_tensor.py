@@ -331,6 +331,21 @@ class DeviceAllocator:
     _host_pinned_peak_bytes: int = 0
     _host_pinned_ptr_size: Dict[int, int] = {}       # ptr -> nbytes
 
+    # Phase 2 — caching free-list pool. Per-device map of nbytes → list of
+    # cached free pointers. On free, the pointer is returned to the pool
+    # instead of cudaFree (which would re-fragment the driver heap). On
+    # malloc, the pool is checked first (exact size match, then smallest-
+    # fit ≥ requested). On cudaMalloc OOM, the entire pool is flushed back
+    # to the driver via cudaFree and the malloc is retried — this gives
+    # the driver a chance to coalesce its internal heap before declaring
+    # failure (analog to torch CachingAllocator's release-cached-blocks
+    # path on OOM). Gated by NBX_ALLOC_POOL=1 (default off; opt-in until
+    # validated across the full model surface). P-SANA-4KPX-RUNTIME
+    # Phase 2.
+    _pool_free: Dict[int, Dict[int, list]] = {}      # device_idx -> {nbytes: [ptr, ...]}
+    _pool_alloc_size: Dict[int, int] = {}            # ptr -> ALLOCATED nbytes (may exceed requested when smallest-fit is bigger)
+    _pool_enabled: bool = False                      # set by _maybe_init_pool() from env
+
     @staticmethod
     def set_device(device_id: int):
         """Set current GPU device for allocations (runtime API only).
@@ -351,34 +366,160 @@ class DeviceAllocator:
         return dev.value
 
     @staticmethod
-    def malloc_cuda(nbytes: int) -> int:
-        """Allocate GPU memory via the synchronous allocator.
+    def _maybe_init_pool() -> None:
+        """One-shot read of NBX_ALLOC_POOL=1 env var. Cached on the class."""
+        if not hasattr(DeviceAllocator, '_pool_enabled_init'):
+            DeviceAllocator._pool_enabled = os.environ.get("NBX_ALLOC_POOL", "0") == "1"
+            DeviceAllocator._pool_enabled_init = True
 
-        Uses cudaMalloc. The stream-ordered allocator (cudaMallocAsync)
-        was prototyped but disabled because its per-device memory pools
-        don't grant cross-device peer access by default — freeing a
-        cuda:N pointer from a Python-GC site while cuda:M is current
-        produced illegal memory accesses on the multi-GPU
-        pipeline_parallel path (Qwen3-30B --triton without --hardware
-        override). The synchronous path combined with TritonSequence's
-        _deferred batch-release is stable across single-GPU, zero3,
-        and pipeline_parallel. See tests/scratch/zero3_triton_impl/
-        LEAK_PINPOINT_REPORT.md for history; the actual block-sized
-        leak was fixed by TritonSequence._find_cuda_arg, not by the
-        allocator swap.
+    @staticmethod
+    def _pool_take(dev: int, nbytes: int) -> Optional[int]:
+        """Try to satisfy a `nbytes` request from the pool. Returns the
+        pointer on hit (alloc size may exceed request — caller stores the
+        ALLOC size in _cuda_ptr_size + _pool_alloc_size). Returns None on
+        miss. Smallest-fit policy keeps fragmentation contained.
+        """
+        per_dev = DeviceAllocator._pool_free.get(dev)
+        if not per_dev:
+            return None
+        # Exact-size hit first (fast path for repeated shapes).
+        bucket = per_dev.get(nbytes)
+        if bucket:
+            ptr = bucket.pop()
+            if not bucket:
+                del per_dev[nbytes]
+            return ptr
+        # Smallest-fit ≥ nbytes, capped at 2× to avoid catastrophic waste.
+        max_acceptable = nbytes * 2
+        for sz in sorted(per_dev.keys()):
+            if sz >= nbytes and sz <= max_acceptable and per_dev[sz]:
+                ptr = per_dev[sz].pop()
+                if not per_dev[sz]:
+                    del per_dev[sz]
+                # Caller stores `sz` (the actual alloc) in _pool_alloc_size
+                # so free() returns the correct size to the pool.
+                DeviceAllocator._pool_alloc_size[ptr] = sz
+                return ptr
+        return None
+
+    @staticmethod
+    def _pool_flush(dev: Optional[int] = None) -> int:
+        """Release all cached blocks back to the driver. Returns bytes freed.
+        Called on OOM-retry path and from explicit empty_cache_pool().
+        """
+        rt = _gpu_runtime()
+        backend = _active_backend()
+        freed = 0
+        devs = [dev] if dev is not None else list(DeviceAllocator._pool_free.keys())
+        for d in devs:
+            per_dev = DeviceAllocator._pool_free.pop(d, None)
+            if not per_dev:
+                continue
+            for sz, ptrs in per_dev.items():
+                for p in ptrs:
+                    getattr(rt, backend["free"])(ctypes.c_void_p(p))
+                    DeviceAllocator._pool_alloc_size.pop(p, None)
+                    DeviceAllocator._cuda_ptr_size.pop(p, None)
+                    DeviceAllocator._cuda_ptr_device.pop(p, None)
+                    live = DeviceAllocator._cuda_live_bytes.get(d, 0) - sz
+                    DeviceAllocator._cuda_live_bytes[d] = max(0, live)
+                    freed += sz
+        return freed
+
+    @staticmethod
+    def empty_cache_pool() -> int:
+        """Public API: release all pool-cached blocks back to the driver.
+        Returns total bytes freed. Safe to call when pool is disabled
+        (no-op). Useful between phases to defragment proactively."""
+        DeviceAllocator._maybe_init_pool()
+        if not DeviceAllocator._pool_enabled:
+            return 0
+        return DeviceAllocator._pool_flush()
+
+    @staticmethod
+    def malloc_cuda(nbytes: int) -> int:
+        """Allocate GPU memory.
+
+        Default path: synchronous cudaMalloc. The stream-ordered allocator
+        (cudaMallocAsync) was prototyped but disabled because its per-
+        device memory pools don't grant cross-device peer access by
+        default — freeing a cuda:N pointer from a Python-GC site while
+        cuda:M is current produced illegal memory accesses on the multi-
+        GPU pipeline_parallel path (Qwen3-30B --triton). The synchronous
+        path combined with TritonSequence's _deferred batch-release is
+        stable across single-GPU, zero3, and pipeline_parallel.
+
+        Phase 2 path (NBX_ALLOC_POOL=1): satisfies requests from a per-
+        device free-list pool first; on cudaMalloc OOM, flushes the pool
+        back to the driver and retries (analog to torch CachingAllocator
+        release_cached_blocks → retry). Mitigates fragmentation when
+        many small/medium allocs precede a large alloc, which was the
+        Sana 4Kpx VAE conv::62 8 GiB OOM pattern.
         """
         if nbytes == 0:
             return 0
-        ptr = ctypes.c_void_p()
+        DeviceAllocator._maybe_init_pool()
+        dev = DeviceAllocator.get_device()
+
+        # Pool fast path
+        if DeviceAllocator._pool_enabled:
+            ptr = DeviceAllocator._pool_take(dev, nbytes)
+            if ptr is not None:
+                # alloc size: exact-size hit reuses nbytes; smallest-fit
+                # populated _pool_alloc_size with the bigger size.
+                actual = DeviceAllocator._pool_alloc_size.pop(ptr, nbytes)
+                DeviceAllocator._cuda_ptr_size[ptr] = actual
+                DeviceAllocator._cuda_ptr_device[ptr] = dev
+                if _MALLOC_TRACE_FILE is not None:
+                    _record_malloc_site(ptr, actual, dev)
+                # No live-byte change: pool blocks stay counted as live
+                # for the lifetime of the segment (pool == still allocated
+                # from the driver's POV). Peak unchanged.
+                return ptr
+
+        ptr_obj = ctypes.c_void_p()
         rt = _gpu_runtime()
         backend = _active_backend()
         ret = getattr(rt, backend["malloc"])(
-            ctypes.byref(ptr), ctypes.c_size_t(nbytes))
+            ctypes.byref(ptr_obj), ctypes.c_size_t(nbytes))
+
+        # Phase 2 OOM-retry: if cudaMalloc fails and the pool holds cached
+        # blocks, flush them back to the driver and retry. Defragments the
+        # driver's internal heap before declaring failure.
+        if ret != 0 and DeviceAllocator._pool_enabled:
+            freed = DeviceAllocator._pool_flush(dev)
+            if freed > 0:
+                ret = getattr(rt, backend["malloc"])(
+                    ctypes.byref(ptr_obj), ctypes.c_size_t(nbytes))
+
         if ret != 0:
+            # Diagnostic: how much live + how big the pool was at OOM time.
+            live_now = DeviceAllocator._cuda_live_bytes.get(dev, 0)
+            pool_total = 0
+            pool_count = 0
+            per_dev = DeviceAllocator._pool_free.get(dev, {})
+            for sz, ptrs in per_dev.items():
+                pool_total += sz * len(ptrs)
+                pool_count += len(ptrs)
+            try:
+                free_b = ctypes.c_size_t()
+                total_b = ctypes.c_size_t()
+                if hasattr(rt, backend.get("mem_get_info", "cudaMemGetInfo")):
+                    getattr(rt, backend.get("mem_get_info", "cudaMemGetInfo"))(
+                        ctypes.byref(free_b), ctypes.byref(total_b))
+                    driver_free = free_b.value
+                    driver_total = total_b.value
+                else:
+                    driver_free = driver_total = 0
+            except Exception:
+                driver_free = driver_total = 0
             raise RuntimeError(
-                f"GPU malloc failed (error {ret}) for {nbytes} bytes")
-        p = ptr.value or 0
-        dev = DeviceAllocator.get_device()
+                f"GPU malloc failed (error {ret}) for {nbytes} bytes "
+                f"[device cuda:{dev} live_tracked={live_now/1024/1024:.0f}MB "
+                f"pool_cached={pool_total/1024/1024:.0f}MB ({pool_count} blocks) "
+                f"driver_free={driver_free/1024/1024:.0f}MB / "
+                f"driver_total={driver_total/1024/1024:.0f}MB]")
+        p = ptr_obj.value or 0
         DeviceAllocator._cuda_ptr_size[p] = nbytes
         DeviceAllocator._cuda_ptr_device[p] = dev
         live = DeviceAllocator._cuda_live_bytes.get(dev, 0) + nbytes
@@ -392,38 +533,63 @@ class DeviceAllocator:
 
     @staticmethod
     def free_cuda(ptr: int):
-        """Free GPU memory via the synchronous allocator.
+        """Free GPU memory.
 
-        cudaFree blocks the calling thread until the device is idle
-        for the relevant stream, so TritonSequence batches freeable
-        tensors into _deferred and releases them after a sync at the
-        end of each forward pass. This avoids serialising on every
-        kernel while still being UAF-safe (sync before free).
+        Default path: cudaFree. Blocks the calling thread until the
+        device is idle for the relevant stream, so TritonSequence
+        batches freeable tensors into _deferred and releases them
+        after a sync at the end of each forward pass.
+
+        Phase 2 path (NBX_ALLOC_POOL=1): the pointer is returned to the
+        per-device free-list pool instead of cudaFree, keeping the
+        driver's internal heap intact (avoids fragmenting it with the
+        churn of small/medium tensors typical of a diffusion forward
+        pass). Live byte counters stay unchanged because the block is
+        STILL allocated from the driver's POV — it just sits in the
+        pool waiting to satisfy the next compatible malloc. cudaFree
+        eventually fires from _pool_flush() on OOM-retry or from
+        empty_cache_pool().
         """
-        if ptr:
-            rt = _gpu_runtime()
-            backend = _active_backend()
-            alloc_dev = DeviceAllocator._cuda_ptr_device.pop(ptr, None)
-            getattr(rt, backend["free"])(ctypes.c_void_p(ptr))
-            nbytes = DeviceAllocator._cuda_ptr_size.pop(ptr, None)
-            if _MALLOC_TRACE_FILE is not None and nbytes is not None:
-                _record_free_site(ptr, nbytes)
-            if nbytes is not None:
-                if alloc_dev is not None:
-                    # Accurate decrement: always use the allocation's
-                    # own device, independent of current context.
-                    live = DeviceAllocator._cuda_live_bytes.get(alloc_dev, 0) - nbytes
-                    DeviceAllocator._cuda_live_bytes[alloc_dev] = live
+        if not ptr:
+            return
+        DeviceAllocator._maybe_init_pool()
+
+        # Phase 2: push to pool, no cudaFree.
+        if DeviceAllocator._pool_enabled:
+            nbytes = DeviceAllocator._cuda_ptr_size.get(ptr)
+            dev = DeviceAllocator._cuda_ptr_device.get(ptr)
+            if nbytes is not None and dev is not None:
+                per_dev = DeviceAllocator._pool_free.setdefault(dev, {})
+                per_dev.setdefault(nbytes, []).append(ptr)
+                # Do NOT clear _cuda_ptr_size / _cuda_ptr_device — block
+                # is still allocated from the driver. Do NOT decrement
+                # live bytes — pool blocks count as live for the driver.
+                if _MALLOC_TRACE_FILE is not None:
+                    _record_free_site(ptr, nbytes)
+                return
+            # Bookkeeping missing for this ptr — fall through to cudaFree.
+
+        rt = _gpu_runtime()
+        backend = _active_backend()
+        alloc_dev = DeviceAllocator._cuda_ptr_device.pop(ptr, None)
+        getattr(rt, backend["free"])(ctypes.c_void_p(ptr))
+        nbytes = DeviceAllocator._cuda_ptr_size.pop(ptr, None)
+        if _MALLOC_TRACE_FILE is not None and nbytes is not None:
+            _record_free_site(ptr, nbytes)
+        if nbytes is not None:
+            if alloc_dev is not None:
+                live = DeviceAllocator._cuda_live_bytes.get(alloc_dev, 0) - nbytes
+                DeviceAllocator._cuda_live_bytes[alloc_dev] = live
+            else:
+                dev = DeviceAllocator.get_device()
+                live = DeviceAllocator._cuda_live_bytes.get(dev, 0) - nbytes
+                if live < 0:
+                    for d in DeviceAllocator._cuda_live_bytes:
+                        if DeviceAllocator._cuda_live_bytes[d] >= nbytes:
+                            DeviceAllocator._cuda_live_bytes[d] -= nbytes
+                            break
                 else:
-                    dev = DeviceAllocator.get_device()
-                    live = DeviceAllocator._cuda_live_bytes.get(dev, 0) - nbytes
-                    if live < 0:
-                        for d in DeviceAllocator._cuda_live_bytes:
-                            if DeviceAllocator._cuda_live_bytes[d] >= nbytes:
-                                DeviceAllocator._cuda_live_bytes[d] -= nbytes
-                                break
-                    else:
-                        DeviceAllocator._cuda_live_bytes[dev] = live
+                    DeviceAllocator._cuda_live_bytes[dev] = live
 
     @staticmethod
     def malloc_host_pinned(nbytes: int) -> int:

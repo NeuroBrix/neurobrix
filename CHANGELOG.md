@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Caching free-list pool in `DeviceAllocator` (opt-in via `NBX_ALLOC_POOL=1`)** (`src/neurobrix/kernels/nbx_tensor.py`): on `free_cuda` the pointer is returned to a per-device free-list pool instead of `cudaFree`, keeping the driver's internal heap intact across the churn of small/medium allocs typical of a triton forward pass. On `malloc_cuda` the pool is checked first (exact-size hit, then smallest-fit ≤ 2× the request); on `cudaMalloc` OOM the pool is flushed back to the driver and the malloc is retried — analog to torch's `CachingAllocator.release_cached_blocks → retry`. Live-byte counters are unchanged for pool returns (the block stays allocated from the driver's POV). Default off until validated across the full model surface; Sana 1024 hot regression intact at 42 s. The OOM error path also now reports a factual VRAM readout (`live_tracked / pool_cached / driver_free / driver_total`) for downstream diagnosis.
+
 ### Fixed
 
 - **Sana 4Kpx triton VAE decoder no longer crashes on `'FusionUpsampleProxy' object has no attribute '_nbytes'`** (`src/neurobrix/kernels/ops/fused_upsample_conv.py`): the deferred-free accounting in `triton/sequence.py:_run_single_device` reads `_nbytes` from arena-resident objects to size the drain budget. `FusionUpsampleProxy` is the sentinel returned by the upsample-fusion interceptor and holds no GPU allocation of its own (it just references the pre-upsample tensor + scales). The proxy now exposes `_nbytes = 0` so it is a no-op in the deferred-free path; the actual pre-upsample tensor lives in its own arena slot and is freed when that slot is killed independently.
