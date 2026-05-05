@@ -24,17 +24,53 @@
 
 ## P-SANA-4KPX-RUNTIME — REOPENED 2026-05-04
 
-The "closure on production-mode validation" recorded below was rescinded the same day. INDETERMINATE within a 3 h budget is not a closure verdict — it is a deferred failure disguised as mystery, and the successor diagnostic chantier (P-TRITON-4KPX-PROFILE) violated the project rule against fictitious sub-chantiers. The chantier stays open until the 4 modes factually work OR a structural irreducible cause is documented.
+The "closure on production-mode validation" recorded below was rescinded the same day. INDETERMINATE within a 3 h budget is not a closure verdict — it is a deferred failure disguised as mystery. The chantier stays open until the 4 modes factually work OR a structural irreducible cause is documented.
 
-Three hierarchical levers must be exhausted before re-attempting closure (full text in `memory/feedback_p_sana_4kpx_reopen_2026_05.md`):
+## Trajectory of fixes shipped (2026-05-04 → 2026-05-05)
 
-1. Kernel-level tiling INSIDE conv2d_wrapper triton (port `_fused_upsample_conv2d_nbx` band-streaming to the Triton wrapper).
-2. Prism op-level tiling parity audit on triton path (R30 coverage check).
-3. Multi-GPU placement Prism for Sana 4Kpx triton (4× V100 = 128 GB total).
+| Commit | Change | Effect on Sana 4Kpx triton |
+|---|---|---|
+| `c740018` `0c373b1` | Étape 1 — kernel-level band-streaming inside `conv2d_wrapper` (4 GiB threshold default) | Dead code on Sana 4Kpx (per-op output ≤ 700 MB after op-level tiling). Kept for other models. |
+| `b7c0773` | Étape 3 Niveau 1 — depthwise convolution specialization (groups == in_c == out_c → `depthwise_conv2d_kernel` direct stencil). Pattern: MultiPath/DepthwiseConv2d (CUTLASS sm_70). | **453× speedup** on the VAE depthwise op (4800 ms → 10.65 ms). Numerical max \|diff\|=0.0 vs cuDNN 2.6 ms. Unblocked the diffusion phase + VAE encoder/middle. |
+| `7fd5396` | `FusionUpsampleProxy._nbytes = 0` (sentinel proxy, no GPU bytes). | Unblocked the VAE decoder past the upsample-fusion crash. |
+| `12802be` | Phase 2 — caching free-list pool in `DeviceAllocator` (`NBX_ALLOC_POOL=1`, opt-in). Pattern: torch CachingAllocator release-cached-blocks → retry. + factual VRAM readout on OOM. | Sana 1024 hot regression intact at 42 s. **Does NOT unblock Sana 4Kpx** — diagnostic at OOM proves the issue is not fragmentation (see below). |
 
-External study allowed: structural pattern reading from OneFlow / MegEngine / CUTLASS / lmdeploy / NCNN / MNN sm_70 sources, then re-implementation Triton-pure.
+## Factual root cause of the residual blocker
 
-The historical wording below is preserved as a record of the rescinded verdict.
+At `aten.convolution::62` in the VAE post_loop:
+
+```
+device cuda:2  request=8589934592 bytes (8 GiB)
+live_tracked = 26367 MB   pool_cached = 0 MB
+driver_free  = 5482 MB    driver_total = 32501 MB
+shortfall    = 2710 MB
+```
+
+This is **NBX live-watermark gap vs compiled mode**, not allocator fragmentation. The pool is empty because nothing has been freed — every byte is genuinely live in NBX's accounting. Compiled mode runs the same VAE in 36 s on the same GPU because torch's autograd-disabled cleanup + caching allocator hold a lower live watermark.
+
+Suspects (to be settled by the next chantier):
+- `kill_slots` metadata laxness in `triton/sequence.py`
+- Deferred-free queue retention beyond compiled-mode last-use boundaries
+- Triton autotune workspace overhead invisible to NBX's accounting
+
+## Honest closure (2026-05-05)
+
+| Mode | Verdict | Wall-clock |
+|---|---|---|
+| compiled (4Kpx) | ✅ PASS coherent PNG | 36.61 s |
+| sequential (4Kpx) | ❌ FAIL_OOM by design (no op-level tiling in sequential dispatcher) | — |
+| triton (4Kpx) | ❌ FAIL_OOM root-caused: NBX live watermark = 26.4 GB at conv::62, 5.4 GB driver-free, request 8 GiB short by 2.7 GB | — |
+| triton_sequential (4Kpx) | (same root cause as triton — same arena lifecycle) | — |
+| compiled (1024) | ✅ PASS | 12.6 s |
+| sequential (1024) | ✅ PASS | 13.2 s |
+| triton (1024) | ✅ PASS | 42 s hot |
+| triton_sequential (1024) | ✅ PASS | 47 s hot |
+
+**Two named follow-on chantiers**:
+- **P-TRITON-LIVE-SET-AUDIT** (next priority) — instrument compiled vs triton modes to log per-op live tensor count + bytes, diff at conv::62 boundary, audit `kill_slots` / arena lifecycle / drain timing. Settles the watermark gap factually before any new optimisation work.
+- **P-MULTI-GPU-NBX-ADAPTER** (lower priority) — make `core/strategies/component_placement.py` / `pipeline_parallel.py` work with NBXTensor. Would give VAE a dedicated GPU and bypass the watermark issue, but does NOT address the root cause.
+
+Phase 2 free-list pool (commit `12802be`) is shipped opt-in and remains useful for any other workload bottlenecked by allocator fragmentation. Default off until validated across the full model surface.
 
 ---
 
