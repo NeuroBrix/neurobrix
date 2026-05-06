@@ -366,6 +366,64 @@ unblock add::86 + advance le pipeline triton plus loin que jamais.
 Le résidu conv::64/rms_norm est PRE-EXISTANT à F2a (verified par
 signature orphan identique entre commits 9c81e8a et etape5/6/7).
 
+## Update 2026-05-06 (final) — bisection 3-suspects suite, fixes empilés
+
+Suspect A (closure/frame retention) raffiné par instrumentation
+ciblée NBX_TRACE_TIDS + NBX_TRACE_DEL_BIG_MB:
+- pixel_shuffle::4::out_0 et conv::63::out_0 ont les MÊMES patterns
+  de référants → SUSPECT SYSTÉMIQUE +2 refs sur tout tensor stocké.
+- NBX_DEL trace prouve que conv::63 NBXTensor.__del__ ne fire QU'AU
+  OOM unwind, PAS au silu::24's kill_slots → leak structurel.
+- Root cause identifié: `for s in op.kill_slots: old = arena[s]`
+  avec `old` Python loop variable persistante post-loop. Le `old`
+  retient 8 GiB de chaque kill across iterations subséquentes
+  jusqu'au prochain kill_slots loop qui rebind.
+
+**Fix landed** commit cd5a108: explicit `old = None` post-loop à 5
+sites dans `_run_single_device` + multi-device variant.
+
+**Mesure post-fix etape10**: chain advance conv::64 → rms_norm::24
+(2 ops). Live trajectory inchangée à add::86 (21 GB) parce que la
+rétention `old` n'affectait pas le steady state mais le moment
+exact de l'OOM.
+
+**Suite — rms_norm OOM (exec[710])**: rms_norm wrapper alloue
+2 × 8 GiB (x.contiguous() pour permute view + NBXTensor.empty_like
+pour output). Fix in-place: si x.contiguous() matérialise (input
+non-contiguous), output_2d = x_2d (kernel per-tile-safe).
+
+**Fix landed** commit beeab71 (avec add bias).
+
+**Suite — add::88 OOM (exec[711])**: add wrapper matérialise bias
+broadcast 8 GiB via b.expand(out_shape).contiguous(). Fix:
+add_bias_broadcast_kernel lit bias[offset % feat_dim] direct.
+
+**Fix landed** commit beeab71.
+
+**Outcome final cette session**:
+- Chain advance: conv::64 (exec[708]) → conv::69 (exec[735]) = +27 ops
+- conv::69 = LAST conv VAE (output RGB 1×3×4096×4096)
+- OOM "Triton Error [CUDA]: out of memory" — Triton runtime-level,
+  pas malloc_cuda. Probable autotune workspace overflow vs
+  conv2d_wrapper x.contiguous() materialization for permute view input.
+
+**État chantier P-SANA-4KPX-RUNTIME (post-session)**:
+- 5 fixes incrémentaux land cette session
+- Pipeline triton 4Kpx structurellement très proche de la fin (27 ops
+  past original blocker, on est dans le LAST conv avant write)
+- Le résidu live=30 GB à conv::69 est dans le seuil 32 GB V100 mais
+  Triton autotune workspace ou x.contiguous() matérialisation le
+  pousse over.
+
+**Next étape factuelle (intra-P-SANA-4KPX-RUNTIME)**: investiguer
+le mode OOM exact à conv::69 (autotune workspace vs contiguous
+materialization). Si autotune: configurer un fixed config pour
+conv::69 (output channels=3 unique). Si contiguous: appliquer
+même pattern in-place qu'à rms_norm pour conv2d_wrapper avec
+non-contiguous input.
+
+ETA estimé pour clore: 1-2h investigation + fix targeted.
+
 ## Discipline maintenue
 
 - Pas de "INDÉTERMINÉ" — chaque verdict est factuel avec adresse mémoire,
