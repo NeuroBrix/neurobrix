@@ -1697,8 +1697,25 @@ class GraphExecutor:
                 resolved_args.append(
                     self._resolve_sequential_arg(arg, store, sym_resolver, dispatcher))
 
-            # Dispatch
-            result = dispatcher.dispatch(op_type, resolved_args, attrs)
+            # Op_uid interceptor priority (matches CompiledSequence and
+            # TritonSequence: op_uid > op_type > native dispatch). Without
+            # this branch, triton_sequential silently bypasses Prism's
+            # `register_op_uid_interceptors` plumbing — Sana 4Kpx VAE
+            # conv::54 would arrive at the conv2d_wrapper with the raw
+            # 36 GiB request shape (only the wrapper-internal 4 GiB
+            # band-streaming would protect), retaining ~29 GB live and
+            # OOMing on a 32 GB V100. Interceptors set
+            # `self_manages_dtype = True` (see fused_upsample_conv.py)
+            # so no dtype-engine AMP wrap needed here. R30 (Mode
+            # Universality) parity, P-SANA-4KPX-RUNTIME 2026-05-05
+            # bisection.
+            if hasattr(self, '_op_uid_interceptors') and op_uid in self._op_uid_interceptors:
+                resolved_kwargs = dispatcher.resolve_kwargs(attrs)
+                result = self._op_uid_interceptors[op_uid](
+                    *resolved_args, **resolved_kwargs)
+            else:
+                # Dispatch
+                result = dispatcher.dispatch(op_type, resolved_args, attrs)
 
             # Store outputs
             if isinstance(result, tuple):
@@ -2111,6 +2128,14 @@ class GraphExecutor:
         metadata_count = 0
         total_ops = len(execution_order)
 
+        # Sequential parity instrumentation — mirrors NBX_LIVE_DUMP_EVERY in
+        # triton/sequence.py. Every N ops, log torch.cuda.memory_allocated()
+        # so a sequential vs triton_sequential bisection has comparable per-op
+        # live-watermark traces. Cheap (env read once + memory_allocated call
+        # every N ops). Disabled by default (env var unset).
+        import os as _os_nat
+        _native_per = int(_os_nat.environ.get("NBX_NATIVE_LIVE_DUMP_EVERY", "0") or "0")
+
         for i, op_uid in enumerate(execution_order):
             # Read op_data DIRECTLY - no transformation
             op_data = ops[op_uid]
@@ -2138,6 +2163,16 @@ class GraphExecutor:
 
             # Memory management: Clean up finished tensors
             self._cleanup_finished_tensors(i, op_data, last_use_tid)
+
+            if _native_per > 0 and i % _native_per == 0:
+                try:
+                    _live = torch.cuda.memory_allocated() / 1024 / 1024
+                    _peak = torch.cuda.max_memory_allocated() / 1024 / 1024
+                    print(f"[NATIVE_LIVE_TRACK op_idx={i} {op_uid}] "
+                          f"live={_live:.0f}MB peak={_peak:.0f}MB",
+                          flush=True)
+                except Exception:
+                    pass
 
         return ExecutionStats(
             total_ops=total_ops,
@@ -2524,8 +2559,19 @@ class GraphExecutor:
         # AMP: Cast inputs per DtypeEngine rules (fp32 for pow/rsqrt/softmax, etc.)
         normalized_inputs = self._dtype_engine.amp_cast_inputs(op_type, normalized_inputs)
 
-        # Check for op interceptor (e.g., KV cache SDPA interceptor)
-        if op_type in self._op_interceptors:
+        # Check for op interceptors. Priority order matches CompiledSequence
+        # and TritonSequence: op_uid (fine-grained, op-level tiling Prism)
+        # > op_type (broad, KV cache SDPA) > native op resolver. Without the
+        # op_uid branch, sequential mode silently bypasses Prism's
+        # `register_op_uid_interceptors` plumbing — Sana 4Kpx VAE conv::54
+        # then arrives at cuDNN with its raw 36 GiB request and OOMs on a
+        # 32 GB V100, while compiled mode (which DOES consume the op_uid
+        # interceptors) tiles it into ~600 MB bands. R30 (Mode Universality)
+        # parity, P-SANA-4KPX-RUNTIME 2026-05-05 bisection.
+        if hasattr(self, '_op_uid_interceptors') and op_uid in self._op_uid_interceptors:
+            resolved_kwargs = self._resolver.resolve_kwargs(op_uid, attrs, op_type, op_data)
+            result = self._op_uid_interceptors[op_uid](*normalized_inputs, **resolved_kwargs)
+        elif op_type in self._op_interceptors:
             # Resolve kwargs for interceptor
             resolved_kwargs = self._resolver.resolve_kwargs(op_uid, attrs, op_type, op_data)
             result = self._op_interceptors[op_type](*normalized_inputs, **resolved_kwargs)

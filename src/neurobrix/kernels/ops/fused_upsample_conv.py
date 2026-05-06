@@ -456,9 +456,10 @@ def tiled_rms_norm_spatial(
     if not isinstance(input_tensor, torch.Tensor):
         # NBXTensor path — defer to the standard wrapper, no tiling
         # (single rms_norm rarely overflows alone in triton mode where
-        # kernels stream).
-        from neurobrix.kernels.wrappers import rms_norm_wrapper  # type: ignore
-        return rms_norm_wrapper(input_tensor, weight, eps)
+        # kernels stream). Function is named `rms_norm` (no `_wrapper`
+        # suffix) in wrappers.py.
+        from neurobrix.kernels.wrappers import rms_norm as nbx_rms_norm
+        return nbx_rms_norm(input_tensor, weight, eps)
 
     x = input_tensor
     # Channels is the LAST dim
@@ -531,9 +532,11 @@ def _tiled_conv2d_spatial_nbx(
         local_offset = max(0, oh_start - band_first_oh)
         conv_band = conv_band[:, :, local_offset:local_offset + actual_band_h, :]
         actual_band_h = min(conv_band.shape[2], actual_band_h)
+        # Bias add inside band — see _fused_upsample_conv2d_nbx for rationale
+        # (avoids 8 GiB bias broadcast materialization on Sana 4Kpx).
+        if bias is not None:
+            conv_band = nbx_add(conv_band, bias.view(1, -1, 1, 1))
         output[:, :, oh_start:oh_start + actual_band_h, :] = conv_band[:, :, :actual_band_h, :]
-    if bias is not None:
-        output = nbx_add(output, bias.view(1, -1, 1, 1))
     return output
 
 
@@ -621,10 +624,17 @@ def _fused_upsample_conv2d_nbx(
         local_offset = max(0, oh_start - band_first_oh)
         conv_band = conv_band[:, :, local_offset:local_offset + actual_band_h, :]
         actual_band_h = min(conv_band.shape[2], actual_band_h)
+        # Bias add inside band — keeps the broadcast bounded to one band's
+        # (N, out_c, actual_band_h, conv_out_w) instead of the full output
+        # (8 GiB broadcast on Sana 4Kpx 4096×4096 fp16). Mathematically
+        # identical (bias is per-channel, applies element-wise on H,W).
+        # Without this, _prepare_binary materializes the bias broadcast at
+        # full output shape and OOMs at the conv::54 boundary on V100 32 GB
+        # (P-SANA-4KPX-RUNTIME 2026-05-05 Étape 2 root cause).
+        if bias is not None:
+            conv_band = nbx_add(conv_band, bias.view(1, -1, 1, 1))
         output[:, :, oh_start:oh_start + actual_band_h, :] = conv_band[:, :, :actual_band_h, :]
 
-    if bias is not None:
-        output = nbx_add(output, bias.view(1, -1, 1, 1))
     return output
 
 
