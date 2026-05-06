@@ -245,6 +245,73 @@ Artefacts:
   Si F1+F2 résolvent: triton modes débloqués SANS multi-GPU.
   Si pas suffisant: P-MULTI-GPU-NBX-ADAPTER backup.
 
+## Update 2026-05-06 — F2a Approche C landed (commit 08cbe15)
+
+**F2a Approche C** (kernel broadcast-aware via clone interceptor) implémenté
+et validé R29 4-mode:
+
+| Mode               | Résultat | Wall   | PNG          | OOM site                      |
+|--------------------|----------|--------|--------------|-------------------------------|
+| compiled           | ✓ PASS   | 74s    | cohérent     | —                             |
+| sequential         | ✓ PASS   | 89s    | cohérent     | —                             |
+| triton compiled    | ✗ FAIL   | 253s   | —            | conv::64 (live=25GB req=8GB)  |
+| triton_sequential  | ✗ FAIL   | 252s   | —            | rms_norm (live=25GB req=8GB)  |
+
+**Validation factuelle F2a**:
+- Le clone::5 8 GiB allocation a disparu factuellement (verified par advance
+  du pipeline triton de `aten.add::86` vers `aten.convolution::64`).
+- compiled mode unchanged dual-backend safe (74s vs prior 82s — 8s gagnés
+  sur le seul fix tensor_resolver `unknown` torch.* handler qui évite
+  resolve_kwargs path détourné).
+- sequential mode dual-backend safe (89s) avec `tensor_resolver._resolve_arg_info`
+  étendu pour résoudre `torch.contiguous_format` quand op_uid interceptor
+  force kwargs resolution.
+
+**Résidu factuel — chantier suivant nommé**:
+
+`P-TRITON-LIVE-WATERMARK-AUDIT` (intra-P-SANA-4KPX-RUNTIME, pas defer flou):
+au moment OOM (conv::64 ou rms_norm post-pixel_shuffle::4), live_tracked
+factuel = 25292 MB avec 3 × (1,128,4096,4096) NBXTensors live:
+- tensor#1 = `aten.silu::24::out_0` 8192 MB (in-progress op input, attendu)
+- tensor#2 = `aten.add::86::out_0` 8192 MB (devrait être tué par kill_slots)
+- tensor#0 = ORPHAN(not in arena) 8192 MB held par
+  `list[len=3] contents=[NBXTensor×3]` × 2 + `tuple(len=2) contents=[int,NBXTensor]`
+  + `cell` (closure cell)
+
+Le pattern d'orphan retention `list[len=3]×NBXTensor + cell` est SAME que
+celui identifié dans le commit 9c81e8a pré-F2a — donc structurel à
+TritonSequence args_resolver / closure capture, **PAS** introduit par F2a
+(F2a a juste fait avancer la chain assez loin pour exposer cet orphan
+distinct du clone::5 maintenant éliminé).
+
+**Hypothèse factuelle pour P-TRITON-LIVE-WATERMARK-AUDIT**:
+- Args list (`[r(arena) for r in resolvers_t]`) capturée par `enumerate()`
+  ou par closure cell de `for op_idx, op in enumerate(self._ops)` dans
+  `_run_single_device`. La référence persiste à travers les itérations
+  parce que la frame courante / le cell pointent vers la liste précédente.
+- ETA estimé: 1-2h diagnostic + fix targeted (force-clear args list à fin
+  d'iter, ou rewrite resolver pour ne pas créer une fresh list à chaque
+  call).
+
+P-MULTI-GPU-NBX-ADAPTER reste backup si P-TRITON-LIVE-WATERMARK-AUDIT
+échoue (mais résoudre le live-watermark Triton-side évite le coût
+multi-GPU pour modèles single-GPU-fittable).
+
+**Discipline maintenue**:
+- Pas de "INDÉTERMINÉ" — outcome factuel par mode, dump live_tracked / req
+  / driver_free chiffré, BIG_TENSORS scan avec referrers
+- Pas de défer flou — `P-TRITON-LIVE-WATERMARK-AUDIT` scopé avec hypothèse
+  testable (closure args list capture)
+- F2a closes 1 des 3 leviers identifiés au début (kernel-level fix) ; live-
+  watermark était implicite dans le levier "Prism op-level parity" mais
+  émergé comme orphan retention distinct du clone::5
+
+**Référentiel chantiers ouverts**:
+- `P-OP-PATTERN-FUSION` (proposé pré-F2a): registry universel patterns
+  pytorch décomposés (pixel_shuffle DONE via F2a + 8 autres scopés:
+  pixel_unshuffle, layer_norm, softmax, GELU, unfold/fold, repeat_interleave,
+  roll, grid_sample). À ouvrir post-`P-TRITON-LIVE-WATERMARK-AUDIT`.
+
 ## Discipline maintenue
 
 - Pas de "INDÉTERMINÉ" — chaque verdict est factuel avec adresse mémoire,
