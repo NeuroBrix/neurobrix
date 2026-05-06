@@ -2682,6 +2682,18 @@ class TritonSequence:
                                         big_tensors.append(o)
                                 print(f"[BIG_TENSORS] {len(big_tensors)} NBXTensors with data_ptr in big blocks (>=1GB)",
                                       flush=True)
+                                # Build reverse arena lookup: data_ptr -> tid
+                                # so each big tensor can be identified by its
+                                # graph tensor_id (or "ORPHAN" if not in arena).
+                                ptr_to_tid: Dict[int, str] = {}
+                                if arena is not None:
+                                    if not hasattr(self, '_slot_to_tid'):
+                                        self._slot_to_tid = {
+                                            s: tid for tid, s in self._tid_to_slot.items()}
+                                    for slot_idx, arena_t in enumerate(arena):
+                                        if arena_t is not None and hasattr(arena_t, '_data_ptr'):
+                                            ptr_to_tid.setdefault(arena_t._data_ptr,
+                                                self._slot_to_tid.get(slot_idx, f"slot::{slot_idx}"))
                                 for i, t in enumerate(big_tensors[:10]):
                                     refs = _gc_h.get_referrers(t)
                                     refs_summary = []
@@ -2695,7 +2707,8 @@ class TritonSequence:
                                         elif rt == "tuple":
                                             info = f"(len={len(r)})"
                                         refs_summary.append(f"{rt}{info}")
-                                    print(f"  tensor#{i} shape={tuple(t._shape)} "
+                                    tid = ptr_to_tid.get(t._data_ptr, "ORPHAN(not in arena)")
+                                    print(f"  tensor#{i} tid={tid} shape={tuple(t._shape)} "
                                           f"nbytes={t._nbytes/1024/1024:.0f}MB "
                                           f"owns={t._owns_data} "
                                           f"referrers({len(refs)}): {refs_summary}",
