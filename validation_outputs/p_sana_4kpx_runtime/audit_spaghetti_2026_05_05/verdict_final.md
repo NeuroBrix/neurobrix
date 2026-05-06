@@ -1,13 +1,22 @@
-# P-SANA-4KPX-RUNTIME — Verdict factuel final 2026-05-05
+# P-SANA-4KPX-RUNTIME — Verdict factuel final 2026-05-05/06
 
-## Bisection scientifique aboutie — 4 modes, 4 verdicts factuels
+## Bisection scientifique aboutie — 4 modes, 4 verdicts factuels (post Fix B)
 
-| Mode | Wall | Verdict | Live @ crash | Cause racine |
-|---|---|---|---|---|
-| sequential | **90s** | **PASS** | 16.5 GB (torch) | — |
-| compiled | 36-74s | **PASS** (CHANGELOG) | torch tracked | — |
-| triton compiled | 314s | **FAIL** @ aten.add::86 | 25.2 GB (NBX) | multi-branch DC-AE structural |
-| triton_sequential | 253s | **FAIL** @ rms_norm | 25.3 GB (NBX) | idem |
+| Mode | Wall | Verdict | Live @ crash | OOM site | Cause racine |
+|---|---|---|---|---|---|
+| sequential | **90s** | **PASS** | 16.5 GB (torch) | — | — |
+| compiled | 36-74s | **PASS** (CHANGELOG) | torch tracked | — | — |
+| triton compiled (post Fix B) | 252s | **FAIL** | 25.3 GB (NBX) | conv::64 (chain retention) | structural multi-branch chain residue |
+| triton_sequential (post Fix B) | similar | **FAIL** | ~25 GB (NBX) | rms_norm or conv::64 | idem |
+
+**Fix Vector B (in-place residual add) implementé et fire correctement** —
+la mesure factuelle montre que l'OOM site bouge de aten.add::86 (8 GiB
+alloc refusée pré-fix) à aten.convolution::64 (différent op, même live
+~25 GB). L'in-place add::86 succède (no new alloc, pixel_shuffle::4
+freed at last use), mais la chaîne multi-branch globale retient
+toujours 25 GB live à conv::64 — chaque add::XX::out_0 a 2 consumers
+(next residual + downstream conv) donc reste alive jusqu'à ce que les
+DEUX aient run.
 
 ## Trois causes racines orthogonales découvertes par la bisection
 
@@ -86,23 +95,26 @@ Avantages:
 - Débloque TOUS les modèles 4Kpx+ en triton sur multi-V100
 - Pas de modification du graphe forge
 
-### B. Multi-branch in-place fusion dans DC-AE decoder.up.0
+### B. Multi-branch in-place fusion dans DC-AE decoder.up.0 (IMPLEMENTÉ commit 5b891f3)
 
-Réécrire le residual add en in-place: `branch_A += branch_B` au lieu
-de `result = branch_A + branch_B`. Économise 8 GiB peak.
+**Implémenté et committé** comme universal detector dans
+`OpLevelTilingEngine`. Détecte 26 candidats sur Sana 4Kpx VAE
+(8 ≥ 4 GiB au 4096×4096, 4 au 2048×2048, 14 plus petits). Le fix
+fire correctement: in-place add::86 succède (no new alloc), OOM site
+moves de aten.add::86 → aten.convolution::64.
 
-Chantier: modification kernel `add` pour supporter `inplace=True` +
-ajustement de la fusion engine pour détecter pattern.
-ETA: 3-5 jours.
+**Mais Fix B SEUL ne suffit pas** — la mesure factuelle post-fix montre
+live_tracked toujours à 25 GB au conv::64. Raison: chaque
+add::XX::out_0 a 2 consommateurs (next residual + downstream conv)
+dans le multi-branch DC-AE, donc reste alive jusqu'à exécution des
+DEUX. La chaîne 4Kpx retient 3-4 tenseurs de 8 GiB simultanément +
+le 2048-level retient 4-5 de 4 GiB. Total ~24-30 GiB structurellement
+alive AT conv::64.
 
-Avantages:
-- Quick win immédiat
-- Pas de dépendance multi-GPU
-- Bénéficie aussi à compiled mode (réduit le peak)
-
-Inconvénients:
-- Spécifique à Sana DC-AE (pas universel)
-- Dépend de la disponibilité des `_base` chains pour vérifier in-place safety
+**Fix B est donc NÉCESSAIRE mais pas SUFFISANT** pour Sana 4Kpx
+triton sur 1× V100 32 GB. Il économise les nouvelles allocations
+(8 GiB par add résiduel) mais ne réduit pas la rétention totale.
+Universel — bénéficie tout modèle multi-branch décodeur.
 
 ### C. NBX caching allocator avec splitting/coalescing
 
@@ -121,22 +133,27 @@ Inconvénients:
 - Long terme
 - Risque de bugs subtils
 
-## Recommandation factuelle
+## Recommandation factuelle (révisée post-Fix-B)
 
-**Combinaison A + B**:
-- B (multi-branch in-place fusion) en quick-win 3-5 jours pour débloquer
-  Sana 4Kpx triton sur 1× V100 32 GB immédiatement
-- A (multi-GPU NBX pipeline_parallel) comme chantier architectural
-  long-terme qui débloque toute la classe 4K+ en triton
+**Plus de quick win disponible** pour Sana 4Kpx triton 1× V100. Fix B
+IMPLEMENTÉ et insuffisant (mesuré). Fix A ou C requis.
 
-C est intéressant mais peut attendre — torch a montré qu'un caching
-allocator est faisable mais lourd à maintenir; A+B couvrent le cas
-production immédiat sans payer ce coût.
+**A (multi-GPU NBX pipeline_parallel)** est maintenant le path le
+plus court vers Sana 4Kpx triton fonctionnel:
+- 24 GB peak fits trivialement sur 2× V100 32 GB = 64 GB
+- Aligné philosophie NeuroBrix premier principe (multi-GPU+Prism)
+- Débloque TOUTE la classe 4K+ en triton, pas que Sana
+- Chantier P-MULTI-GPU-NBX-ADAPTER à ouvrir, ETA 2-4 semaines
+
+**C (NBX caching allocator)** reste long terme. Long lift, peu
+spécifique à Sana 4Kpx. Tabler sur A.
 
 ## Sortants de cette session
 
 Commits:
 - `f8375a9` fix(runtime): R30 op-level tiling parity + NBX bias broadcast OOM
+- `9dcf588` docs(P-SANA-4KPX): bisection scientific verdict + 4-mode factual diff
+- `5b891f3` feat(tiling): in-place residual add fusion (Sana 4Kpx peak ~8 GB savings)
 
 Artefacts:
 - `validation_outputs/p_sana_4kpx_runtime/audit_spaghetti_2026_05_05/`
@@ -147,10 +164,13 @@ Artefacts:
   - `run_etape*.sh` — scripts de bisection reproductibles
   - `etape*.log` — logs factuels des runs
 
-État chantier P-SANA-4KPX-RUNTIME:
-- Sequential mode Sana 4Kpx: **DÉBLOQUÉ** par R30 fix
-- Triton/compiled modes Sana 4Kpx: **PRESSION STRUCTURELLE multi-branch DC-AE
-  isolée par mesure**, attente arbitrage Hocine sur fix vectors A/B/C
+État chantier P-SANA-4KPX-RUNTIME (post Fix B):
+- Sequential mode Sana 4Kpx: **DÉBLOQUÉ** par R30 fix (PNG cohérente)
+- Compiled mode Sana 4Kpx: **DÉBLOQUÉ** (CHANGELOG existing PASS)
+- Triton/triton_sequential modes Sana 4Kpx: **FAIL persistant** —
+  Fix B implémenté et insuffisant. Fix A (multi-GPU NBX
+  pipeline_parallel) requis comme chantier dédié pour débloquer.
+  P-MULTI-GPU-NBX-ADAPTER ouvert, scope documenté.
 
 ## Discipline maintenue
 
