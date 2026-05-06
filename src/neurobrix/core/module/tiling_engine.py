@@ -658,6 +658,11 @@ class OpLevelTilingEngine:
         # compiled mode keeps its perf path AND benefits from in-place
         # semantics — torch CachingAllocator already handles the alloc
         # pattern efficiently but in-place still saves a transient).
+        # NBX_DISABLE_INPLACE_ADD=1 skips registration to bisect whether
+        # in-place add is the source of an unidentified leak.
+        import os as _os_iadd
+        if _os_iadd.environ.get("NBX_DISABLE_INPLACE_ADD", "0") == "1":
+            self.plan.inplace_adds = []
         if self.plan.inplace_adds:
             from neurobrix.kernels.wrappers import add_inplace_nbx
             from neurobrix.kernels.nbx_tensor import NBXTensor
