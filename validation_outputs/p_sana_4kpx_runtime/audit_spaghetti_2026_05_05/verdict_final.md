@@ -133,20 +133,45 @@ Inconvénients:
 - Long terme
 - Risque de bugs subtils
 
-## Recommandation factuelle (révisée post-Fix-B)
+## Recommandation factuelle (révisée post-leak-diagnostic 2026-05-06)
 
-**Plus de quick win disponible** pour Sana 4Kpx triton 1× V100. Fix B
-IMPLEMENTÉ et insuffisant (mesuré). Fix A ou C requis.
+**Diagnostic [BIG_TENSORS] avec tid identification au OOM révèle un
+ORPHAN:** sur les 3 × 8 GiB live au conv::64, l'arena n'en track que
+2 (silu::24::out_0 + add::86::out_0). Le 3ème tensor est ORPHAN
+(`tid=ORPHAN(not in arena)`) — alive par Python refs hors arena.
 
-**A (multi-GPU NBX pipeline_parallel)** est maintenant le path le
-plus court vers Sana 4Kpx triton fonctionnel:
-- 24 GB peak fits trivialement sur 2× V100 32 GB = 64 GB
-- Aligné philosophie NeuroBrix premier principe (multi-GPU+Prism)
-- Débloque TOUTE la classe 4K+ en triton, pas que Sana
-- Chantier P-MULTI-GPU-NBX-ADAPTER à ouvrir, ETA 2-4 semaines
+C'est **case (b) liveness divergence** (non case (a) structural pur).
+Si on libère cet orphelin, live drop 25 → 17 GB, conv::64 alloc 8 GB
+→ 25 GB total ≤ 32 GB driver = **PASS Sana 4Kpx triton sans
+multi-GPU**.
 
-**C (NBX caching allocator)** reste long terme. Long lift, peu
-spécifique à Sana 4Kpx. Tabler sur A.
+**Avant d'ouvrir P-MULTI-GPU-NBX-ADAPTER (2-4 semaines), un nouveau
+chantier court P-TRITON-LIVE-LEAK-AUDIT** pour identifier la source
+du leak ORPHAN:
+
+1. Référants observés: `list[len=3] × 2 + tuple(len=2)` (inhabituel
+   pour arena-managed)
+2. Pas dans _deferred queue (drain récent confirmé par
+   deferred_queue=0)
+3. Suspects:
+   - `other.contiguous()` / `other.to(dtype)` dans add_inplace_nbx
+     créent NBXTensor temporaires dont le ref persiste
+   - silu output capturant conv::63::out_0 via view `_base` chain
+   - args_resolver retient un tuple ancien via Python frame lifecycle
+4. Méthode: instrumentation par-op des `gc.get_referrers` avec
+   tid identification (déjà en place commit en cours), bisection
+   par désactivation de chaque suspect
+
+ETA P-TRITON-LIVE-LEAK-AUDIT: 1-3 jours selon complexité du leak.
+
+**Plus de quick win disponible avant ce diagnostic** — l'in-place add
+fix B est nécessaire mais pas suffisant tant que le leak ORPHAN existe.
+
+**A (multi-GPU NBX pipeline_parallel)** déclassé en backup au cas où
+P-TRITON-LIVE-LEAK-AUDIT échoue. Si le leak est fixé, multi-GPU
+n'est PAS nécessaire pour Sana 4Kpx (seul cas qui aurait justifié A).
+
+**C (NBX caching allocator)** reste long terme.
 
 ## Sortants de cette session
 
@@ -164,13 +189,18 @@ Artefacts:
   - `run_etape*.sh` — scripts de bisection reproductibles
   - `etape*.log` — logs factuels des runs
 
-État chantier P-SANA-4KPX-RUNTIME (post Fix B):
+État chantier P-SANA-4KPX-RUNTIME (post leak-diagnostic 2026-05-06):
 - Sequential mode Sana 4Kpx: **DÉBLOQUÉ** par R30 fix (PNG cohérente)
-- Compiled mode Sana 4Kpx: **DÉBLOQUÉ** (CHANGELOG existing PASS)
-- Triton/triton_sequential modes Sana 4Kpx: **FAIL persistant** —
-  Fix B implémenté et insuffisant. Fix A (multi-GPU NBX
-  pipeline_parallel) requis comme chantier dédié pour débloquer.
-  P-MULTI-GPU-NBX-ADAPTER ouvert, scope documenté.
+- Compiled mode Sana 4Kpx: **DÉBLOQUÉ** + dual-backend regression fix
+  (PNG cohérente 82s post-fix)
+- Triton/triton_sequential modes Sana 4Kpx: **FAIL bloqué par leak ORPHAN
+  identifié factuellement** — case (b) liveness divergence prouvée par
+  tid identification dans [BIG_TENSORS] dump. Tensor 8 GiB alive hors
+  arena, référants list[len=3]×2 + tuple(len=2). Si fix → triton
+  modes débloqués sans multi-GPU.
+- **Next chantier: P-TRITON-LIVE-LEAK-AUDIT** (1-3 jours) pour
+  identifier la source du leak ORPHAN. P-MULTI-GPU-NBX-ADAPTER
+  reste backup si P-TRITON-LIVE-LEAK-AUDIT échoue.
 
 ## Discipline maintenue
 
