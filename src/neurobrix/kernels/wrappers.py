@@ -761,6 +761,54 @@ def add(a, b, alpha: float = 1.0) :
     return output
 
 
+def add_inplace_nbx(target, other, alpha: float = 1.0):
+    """In-place element-wise add: target += alpha * other.
+
+    Used by op-level tiling for residual adds where Prism's liveness
+    analysis proved that one input has its last use at this op (so its
+    buffer can be safely reused as output, avoiding a 3rd allocation).
+    Saves up to N bytes per call where N = output tensor size — on
+    Sana 4Kpx VAE residual adds at (1, 128, 4096, 4096) fp32 this is
+    8 GiB per call.
+
+    CONTRACT (caller-enforced by Prism liveness analysis):
+      - target.shape == other.shape (no broadcast, by construction since
+        residual adds always operate on identical shapes)
+      - target.dtype == other.dtype
+      - target.device == other.device
+      - target is contiguous (produced by upstream kernels which write
+        contiguous tensors by default)
+      - target has no other consumer in the graph (last use here)
+
+    Returns target (same object, mutated in place).
+    """
+    assert target.shape == other.shape, (
+        f"add_inplace_nbx requires identical shapes; got "
+        f"target={target.shape} other={other.shape}")
+    if hasattr(target, '_device_idx') and hasattr(other, '_device_idx') \
+            and target._device_idx != other._device_idx:
+        other = _transfer_to_device(other, target._device_idx)
+    # Dtype alignment. In-place semantics require writing into target's
+    # buffer, so target's dtype is the result dtype. If `other` is at a
+    # different precision, cast it (the cast allocates a transient sized
+    # like other — same VRAM cost as a non-in-place add only when other
+    # < target dtype). If target is NARROWER than other, in-place would
+    # lose precision: fall back to the standard non-in-place `add` so the
+    # standard `_wider_dtype` upcast path kicks in.
+    if target._dtype != other._dtype:
+        if _wider_dtype(target._dtype, other._dtype) == target._dtype:
+            other = other.to(target._dtype)
+        else:
+            return add(target, other, alpha=alpha)
+    other = other.contiguous()
+    n = target.numel()
+    _set_device(target)
+    add_forward_kernel[_1d_grid(n)](
+        target, other, target, n, alpha,
+        BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    return target
+
+
 def mul(a, b) :
     a, b, output, n, dev_ctx, scalar = _prepare_binary(a, b)
     if scalar:

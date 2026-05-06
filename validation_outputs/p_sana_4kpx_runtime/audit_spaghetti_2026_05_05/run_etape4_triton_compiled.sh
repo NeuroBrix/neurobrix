@@ -14,6 +14,7 @@ mkdir -p "$OUTDIR"
 
 export NBX_LIVE_DUMP_EVERY=10
 export NBX_LIVE_DUMP_ON_OOM=1
+export NBX_ALLOC_POOL=1
 
 START=$(date +%s)
 echo "[START] $(date -u)" > "$OUTDIR/etape4_triton_compiled.log"
