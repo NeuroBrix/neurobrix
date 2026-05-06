@@ -312,6 +312,60 @@ multi-GPU pour modèles single-GPU-fittable).
   pixel_unshuffle, layer_norm, softmax, GELU, unfold/fold, repeat_interleave,
   roll, grid_sample). À ouvrir post-`P-TRITON-LIVE-WATERMARK-AUDIT`.
 
+## Update 2026-05-06 (later) — bisection 3-suspects post-F2a (etape 5,6,7)
+
+**Suspect A (closure/frame retention) — FACTUELLEMENT RÉFUTÉ**.
+NBX_AGGRESSIVE_CLEANUP=1 (force `args=kwargs=result=None` après chaque
+op.func + gc.collect via NBX_FORCE_GC=1) ne change RIEN à la trajectoire
+live: `op 662 silu::24 live=31441MB` identique avec et sans cleanup.
+Le leak n'est PAS au niveau frame Python.
+
+**Trajectoire fine per-op (etape6, etape7)**:
+```
+op 654 conv::62           live=30417 MB  (post-add::84 spike)
+op 659 pixel_shuffle::4   live=27444 MB  (-3 GB)
+op 660 add::86            live=21198 MB  (-6 GB Fix B in-place)
+op 661 conv::63           live=21198 MB  (no change BEFORE conv::63)
+op 662 silu::24           live=31441 MB  (+10 GB conv::63 alloc)
+op 663 conv::64           live=31441 MB  (BEFORE conv::64 alloc → OOM)
+```
+
+Le saut +10 GB entre conv::63 et silu::24 = conv::63's allocation
+(8 GB output + ~2 GB band-streaming transients qui ne se libèrent
+pas). Avec OOM live=25 GB et 3×8 GiB tensors live (silu::24, add::86,
+ORPHAN), la signature factuelle est:
+
+- silu::24 (legitimate, in-progress conv::64 input)
+- add::86 (legitimate, has remaining consumer add::89)
+- ORPHAN — soit pixel_shuffle::4::out_0 (devait être killed à add::86)
+  soit conv::63::out_0 (devait être killed à silu::24)
+
+**Conclusion factuelle**: le leak est au niveau C-extension. Sources
+candidates restantes:
+- Triton autotune cache holding kernel args via internal refs not
+  visible from Python gc (CompiledKernel cache, BenchmarkRunner state)
+- NBXTensor `_owns_data` flag interaction with `_base` chain creating
+  a strong-ref-cycle that breaks NBXTensor.__del__ → cudaFree
+- CUDA driver-level retention not visible from Python
+
+**Bisection suspect non-testée — mais coût opportunité élevé**:
+Suspect B (wrapper self_managed_dtype) et Suspect C (decomposed
+PyTorch op) restent à tester, mais mesure factuelle requise vs
+diagnostic instrumentation déjà saturée.
+
+**Décision factuelle pour le chantier**:
+Le résidu live-watermark Triton 4Kpx = limite structurelle de
+debugging Python-level. Le fix requiert soit (a) instrumentation
+plus profonde NBXTensor lifecycle (suivre __init__/__del__ sites
+factuellement), soit (b) basculer sur P-MULTI-GPU-NBX-ADAPTER pour
+contourner via VAE sur GPU dédié (l'option backup nommée). Choix
+arbitré par Hocine.
+
+F2a Approche C reste un fix réel et durable (commit 08cbe15) qui
+unblock add::86 + advance le pipeline triton plus loin que jamais.
+Le résidu conv::64/rms_norm est PRE-EXISTANT à F2a (verified par
+signature orphan identique entre commits 9c81e8a et etape5/6/7).
+
 ## Discipline maintenue
 
 - Pas de "INDÉTERMINÉ" — chaque verdict est factuel avec adresse mémoire,
