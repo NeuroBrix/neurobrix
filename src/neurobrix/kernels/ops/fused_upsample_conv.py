@@ -79,6 +79,62 @@ class FusionUpsampleProxy:
         )
 
 
+class BroadcastClonePyroxy:
+    """Sentinel returned by an intercepted aten.clone op whose input is
+    a broadcast-view (stride=0 on some dim from a preceding aten.expand)
+    and whose consumer chain is `aten.view -> aten.pixel_shuffle`. Carries
+    the broadcast-view tensor itself (NBX expand returns a stride-0 view,
+    not a materialized tensor — see NBXTensor.expand line 1581) plus the
+    static broadcast metadata so pixel_shuffle can read through the view
+    directly (Triton tl.load with stride 0 aliases broadcast indices),
+    eliminating the clone materialization entirely.
+
+    Same architectural pattern as FusionUpsampleProxy: zero compute,
+    zero allocation in the interceptor; the downstream pixel_shuffle
+    consumes the proxy and performs the fused work.
+
+    `bcast_view`: the expand output (5D NBXTensor with stride 0 on
+    `bcast_dim`). Same data_ptr as the pre-expand tensor (NBX expand
+    is metadata-only).
+    `bcast_dim` / `bcast_factor`: extracted statically at register
+    time from the expand op's input/output shape diff.
+    `post_clone_shape` / `post_view_shape`: kept for the view
+    interceptor's dim arithmetic compatibility.
+    """
+
+    __slots__ = ("bcast_view", "bcast_dim", "bcast_factor",
+                 "post_clone_shape", "post_view_shape", "dtype", "device")
+
+    def __init__(self, bcast_view, bcast_dim, bcast_factor,
+                 post_clone_shape, post_view_shape):
+        self.bcast_view = bcast_view
+        self.bcast_dim = int(bcast_dim)
+        self.bcast_factor = int(bcast_factor)
+        self.post_clone_shape = tuple(post_clone_shape)
+        self.post_view_shape = tuple(post_view_shape)
+        self.dtype = getattr(bcast_view, "dtype", None)
+        self.device = getattr(bcast_view, "device", None)
+
+    @property
+    def shape(self):
+        return self.post_clone_shape
+
+    @property
+    def ndim(self):
+        return len(self.post_clone_shape)
+
+    @property
+    def _nbytes(self):
+        return 0
+
+    def __repr__(self):
+        return (
+            f"BroadcastClonePyroxy(view={tuple(self.bcast_view.shape)}, "
+            f"bcast_dim={self.bcast_dim}, bcast={self.bcast_factor}, "
+            f"post_clone={self.post_clone_shape})"
+        )
+
+
 def make_upsample_proxy_interceptor():
     """Return an interceptor that turns an upsample into a FusionUpsampleProxy
     (no compute, no allocation of the full upsampled tensor)."""

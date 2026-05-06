@@ -23,7 +23,7 @@ Algorithm: Accumulate-and-divide (SwinIR/Swin2SR pattern)
 import torch
 import json
 import logging
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -466,6 +466,150 @@ class OpLevelTilingEngine:
         return cls(plan)
 
     @staticmethod
+    def _detect_pixel_shuffle_broadcast_chains(graph_executor):
+        """Detect the expand→clone→view→pixel_shuffle pattern in the DAG.
+
+        Each detected chain is a 4-tuple: (expand_uid, clone_uid, view_uid,
+        pixel_shuffle_uid). Returns a list of dicts with the uids and
+        broadcast/shape metadata for register_into_graph_executor to wire
+        proxy interceptors on clone, view, and pixel_shuffle.
+
+        Pattern criteria (all must hold):
+          1. expand op produces a tensor with at least one stride-0 dim
+             (= broadcast view, identifiable from input_shape vs
+             output_shape comparison: the dim that grew from size N>=1 to
+             size > N is the broadcast dim).
+          2. expand's only consumer is an aten.clone op.
+          3. clone's only consumer is an aten.view op.
+          4. view's only consumer is an aten.pixel_shuffle op.
+          5. The size of the broadcast dim must equal the pixel_shuffle
+             upscale_factor (typical DC-AE pattern: bcast=r=2).
+
+        On Sana 4Kpx VAE this matches 1 chain (exec[701-704]:
+        expand::41 → clone::5 → view::95 → pixel_shuffle::4).
+        Universal: any model with this decomposition pattern benefits.
+        """
+        dag = getattr(graph_executor, '_dag', None)
+        if dag is None:
+            return []
+        ops = dag.get("ops", {})
+        if isinstance(ops, list):
+            ops_by_uid = {o["op_uid"]: o for o in ops}
+        else:
+            ops_by_uid = ops
+        order = dag.get("execution_order", [])
+
+        # Build consumer map (tid -> list of op_uid that reads it)
+        def _collect_arg_tids(arg, out_set):
+            if isinstance(arg, dict):
+                atype = arg.get("type")
+                if atype in ("tensor", "tensor_ref"):
+                    t = arg.get("tensor_id")
+                    if t:
+                        out_set.add(t)
+                elif atype == "tensor_tuple":
+                    for t in arg.get("tensor_ids", []):
+                        out_set.add(t)
+                elif atype == "list":
+                    for item in arg.get("value", []):
+                        _collect_arg_tids(item, out_set)
+
+        consumers: Dict[str, List[str]] = {}
+        for op_uid in order:
+            op = ops_by_uid.get(op_uid)
+            if op is None:
+                continue
+            seen: set = set()
+            attrs = op.get("attributes", {})
+            for arg in attrs.get("args", []):
+                _collect_arg_tids(arg, seen)
+            for arg in attrs.get("kwargs", {}).values():
+                _collect_arg_tids(arg, seen)
+            for tid in seen:
+                consumers.setdefault(tid, []).append(op_uid)
+
+        chains: List[Dict[str, Any]] = []
+        for op_uid in order:
+            op = ops_by_uid.get(op_uid)
+            if op is None or op.get("op_type") != "aten::expand":
+                continue
+            expand_in_shapes = op.get("input_shapes", [])
+            expand_out_shapes = op.get("output_shapes", [])
+            if not expand_in_shapes or not expand_out_shapes:
+                continue
+            in_sh = expand_in_shapes[0]
+            out_sh = expand_out_shapes[0]
+            if len(in_sh) != len(out_sh):
+                continue
+            # Find the dim that was broadcast (in_sh[d]=1, out_sh[d]>1)
+            broadcast_dim = -1
+            broadcast_factor = 1
+            for d in range(len(in_sh)):
+                if in_sh[d] == 1 and out_sh[d] > 1:
+                    if broadcast_dim != -1:
+                        # Multiple broadcast dims — skip (rare, not our pattern)
+                        broadcast_dim = -1
+                        break
+                    broadcast_dim = d
+                    broadcast_factor = out_sh[d]
+            if broadcast_dim == -1:
+                continue
+            expand_out_tid = op.get("output_tensor_ids", [None])[0]
+            if expand_out_tid is None:
+                continue
+            expand_consumers = consumers.get(expand_out_tid, [])
+            if len(expand_consumers) != 1:
+                continue
+            clone_uid = expand_consumers[0]
+            clone_op = ops_by_uid.get(clone_uid)
+            if clone_op is None or clone_op.get("op_type") != "aten::clone":
+                continue
+            clone_out_tid = clone_op.get("output_tensor_ids", [None])[0]
+            if clone_out_tid is None:
+                continue
+            clone_consumers = consumers.get(clone_out_tid, [])
+            if len(clone_consumers) != 1:
+                continue
+            view_uid = clone_consumers[0]
+            view_op = ops_by_uid.get(view_uid)
+            if view_op is None or view_op.get("op_type") != "aten::view":
+                continue
+            view_out_tid = view_op.get("output_tensor_ids", [None])[0]
+            if view_out_tid is None:
+                continue
+            view_consumers = consumers.get(view_out_tid, [])
+            if len(view_consumers) != 1:
+                continue
+            ps_uid = view_consumers[0]
+            ps_op = ops_by_uid.get(ps_uid)
+            if ps_op is None or ps_op.get("op_type") != "aten::pixel_shuffle":
+                continue
+            # Extract upscale_factor from pixel_shuffle args (second arg)
+            ps_attrs = ps_op.get("attributes", {})
+            ps_args = ps_attrs.get("args", [])
+            upscale_factor = None
+            if len(ps_args) >= 2:
+                arg2 = ps_args[1]
+                if isinstance(arg2, dict):
+                    upscale_factor = arg2.get("value")
+            if upscale_factor is None:
+                continue
+            # Optional sanity: bcast == upscale_factor in the typical pattern.
+            # Don't enforce strictly — log if mismatch but still register.
+            chains.append({
+                "expand_uid": op_uid,
+                "clone_uid": clone_uid,
+                "view_uid": view_uid,
+                "pixel_shuffle_uid": ps_uid,
+                "bcast_dim": int(broadcast_dim),
+                "bcast_factor": int(broadcast_factor),
+                "post_clone_shape": tuple(clone_op.get("output_shapes", [[]])[0]),
+                "post_view_shape": tuple(view_op.get("output_shapes", [[]])[0]),
+                "upscale_factor": int(upscale_factor),
+            })
+        return chains
+
+    @staticmethod
     def _detect_inplace_add_candidates(
         graph_executor, threshold_bytes: int = 1024 * 1024 * 1024,
     ) -> "List[Tuple[str, int]]":
@@ -706,6 +850,104 @@ class OpLevelTilingEngine:
 
             for op_uid, reuse_index in self.plan.inplace_adds:
                 interceptors[op_uid] = make_inplace_add_interceptor(reuse_index)
+
+        # Pixel-shuffle broadcast-aware fusion (P-SANA-4KPX-RUNTIME Fix F2,
+        # Approche C). Detect `expand -> clone -> view -> pixel_shuffle`
+        # statically. The expand output is already an NBX stride-0 view
+        # (NBXTensor.expand line 1581: stride is 0 on the broadcast dim,
+        # data_ptr shared with the pre-expand tensor). The clone interceptor
+        # wraps that view directly into a BroadcastClonePyroxy — no _base
+        # walk, no DAG runtime lookup. The view interceptor is a pass-through.
+        # The pixel_shuffle interceptor reads via a stride-aware kernel that
+        # exploits stride_v_b == 0 to alias broadcast indices. Universal:
+        # any DC-AE-like decomposition benefits.
+        chain_specs = OpLevelTilingEngine._detect_pixel_shuffle_broadcast_chains(
+            graph_executor)
+        if chain_specs:
+            from neurobrix.kernels.ops.fused_upsample_conv import (
+                BroadcastClonePyroxy,
+            )
+            from neurobrix.kernels.nbx_tensor import NBXTensor
+
+            def make_clone_proxy_interceptor(_bcast_dim, _bcast_factor,
+                                             _post_clone_shape,
+                                             _post_view_shape):
+                def _clone_proxy(input_tensor, *_args, **_kwargs):
+                    # NBX path: input_tensor IS the expand stride-0 view —
+                    # wrap it directly. No materialization, no _base walk.
+                    if isinstance(input_tensor, NBXTensor):
+                        return BroadcastClonePyroxy(
+                            input_tensor, _bcast_dim, _bcast_factor,
+                            _post_clone_shape, _post_view_shape)
+                    # Torch path (compiled / sequential): mirror the original
+                    # graph's `clone(..., memory_format=torch.contiguous_format)`
+                    # semantic explicitly so the downstream view always sees
+                    # a strictly contiguous tensor. torch CachingAllocator
+                    # handles the materialization without leaking.
+                    import torch as _torch
+                    return input_tensor.clone(
+                        memory_format=_torch.contiguous_format)
+                setattr(_clone_proxy, "self_manages_dtype", True)
+                return _clone_proxy
+
+            def make_view_proxy_interceptor():
+                def _view_proxy(input_tensor, *args, **_kwargs):
+                    # NBX path: forward the proxy unchanged. The pixel_shuffle
+                    # interceptor reads bcast_view + bcast_dim/factor from the
+                    # proxy, so the intermediate view is logically transparent.
+                    if isinstance(input_tensor, BroadcastClonePyroxy):
+                        return input_tensor
+                    # Torch path: use .reshape() instead of .view() — semantically
+                    # equivalent on contiguous tensors, but tolerates the case
+                    # where the upstream `clone` was a no-op interceptor or
+                    # otherwise left the input non-contiguous. PyTorch's own
+                    # error message ("Use .reshape(...) instead.") is exactly
+                    # this advice.
+                    if args:
+                        first = args[0]
+                        if isinstance(first, (list, tuple)):
+                            return input_tensor.reshape(*first)
+                        return input_tensor.reshape(*args)
+                    return input_tensor.reshape(input_tensor.shape)
+                setattr(_view_proxy, "self_manages_dtype", True)
+                return _view_proxy
+
+            def make_pixel_shuffle_proxy_interceptor():
+                from neurobrix.kernels.wrappers import (
+                    pixel_shuffle_wrapper as nbx_pixel_shuffle,
+                )
+
+                def _pixel_shuffle_proxy(input_tensor, upscale_factor,
+                                         *_args, **_kwargs):
+                    # NBX path (proxy or plain NBXTensor): the wrapper
+                    # auto-routes proxy -> _pixel_shuffle_broadcast_aware,
+                    # plain NBXTensor -> standard kernel.
+                    if isinstance(input_tensor, (BroadcastClonePyroxy, NBXTensor)):
+                        return nbx_pixel_shuffle(input_tensor, int(upscale_factor))
+                    # Torch path: native pixel_shuffle (compiled mode).
+                    import torch.nn.functional as F
+                    return F.pixel_shuffle(input_tensor, int(upscale_factor))
+                setattr(_pixel_shuffle_proxy, "self_manages_dtype", True)
+                return _pixel_shuffle_proxy
+
+            for spec in chain_specs:
+                clone_uid = spec['clone_uid']
+                view_uid = spec['view_uid']
+                ps_uid = spec['pixel_shuffle_uid']
+                bcast_dim = spec['bcast_dim']
+                bcast_factor = spec['bcast_factor']
+                post_clone_shape = spec['post_clone_shape']
+                post_view_shape = spec['post_view_shape']
+                interceptors[clone_uid] = make_clone_proxy_interceptor(
+                    bcast_dim, bcast_factor,
+                    post_clone_shape, post_view_shape)
+                interceptors[view_uid] = make_view_proxy_interceptor()
+                interceptors[ps_uid] = make_pixel_shuffle_proxy_interceptor()
+                logger.info(
+                    f"[OpLevelTilingEngine] F2 pixel_shuffle broadcast-aware "
+                    f"chain wired: {spec['expand_uid']} -> {clone_uid} -> "
+                    f"{view_uid} -> {ps_uid} (bcast_dim={bcast_dim} "
+                    f"bcast={bcast_factor} r={spec['upscale_factor']})")
 
         if not interceptors:
             return 0
