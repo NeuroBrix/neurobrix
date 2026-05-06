@@ -1105,6 +1105,21 @@ class NBXTensor:
         self._nbytes = self._numel * dtype_size(dtype)
 
     def __del__(self):
+        # Targeted lifecycle trace: NBX_TRACE_DEL_BIG_MB=N (default off)
+        # logs every __del__ on owns=True NBXTensors >= N MB. Lets us
+        # tell whether a leaked NBXTensor is actually freed and when.
+        try:
+            import os as _os_td
+            _big = _os_td.environ.get("NBX_TRACE_DEL_BIG_MB", "0")
+            if _big != "0" and self._owns_data and self._data_ptr:
+                _thresh = int(_big) * 1024 * 1024
+                if self._nbytes >= _thresh:
+                    print(f"[NBX_DEL data_ptr={self._data_ptr} "
+                          f"shape={self._shape} nbytes={self._nbytes/1024/1024:.0f}MB]",
+                          flush=True)
+        except Exception:
+            pass
+
         if self._owns_data and self._data_ptr:
             if self._device == 'cuda':
                 DeviceAllocator.free_cuda(self._data_ptr)
