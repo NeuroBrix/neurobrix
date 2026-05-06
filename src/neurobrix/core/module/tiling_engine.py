@@ -653,14 +653,49 @@ class OpLevelTilingEngine:
 
         # In-place residual adds (multi-branch fusion fix vector B).
         # See `_detect_inplace_add_candidates` for the safety contract.
+        # Dual-backend: routes to NBX in-place kernel for triton modes,
+        # to torch's tensor.add_() for compiled/sequential modes (so
+        # compiled mode keeps its perf path AND benefits from in-place
+        # semantics — torch CachingAllocator already handles the alloc
+        # pattern efficiently but in-place still saves a transient).
         if self.plan.inplace_adds:
             from neurobrix.kernels.wrappers import add_inplace_nbx
+            from neurobrix.kernels.nbx_tensor import NBXTensor
 
             def make_inplace_add_interceptor(_reuse_index):
                 def _inplace_add(a, b, alpha=1.0, *args, **kwargs):
                     target = a if _reuse_index == 0 else b
                     other = b if _reuse_index == 0 else a
-                    return add_inplace_nbx(target, other, alpha=float(alpha))
+                    if isinstance(target, NBXTensor):
+                        return add_inplace_nbx(target, other,
+                                               alpha=float(alpha))
+                    # Torch path (compiled / sequential modes).
+                    import torch
+                    if isinstance(target, torch.Tensor):
+                        # Cast `other` to target's dtype if needed (mirror
+                        # the NBX wrapper's behaviour). If target is the
+                        # narrower precision, fall back to non-in-place
+                        # `torch.add` so the upcast happens in the new
+                        # buffer instead of corrupting target.
+                        if hasattr(other, 'dtype') and other.dtype != target.dtype:
+                            try:
+                                # Wider-or-equal dtype check via a tiny
+                                # promotion: if torch's promotion picks
+                                # target's dtype, in-place is safe.
+                                promo = torch.promote_types(target.dtype,
+                                                            other.dtype)
+                                if promo == target.dtype:
+                                    other = other.to(target.dtype)
+                                else:
+                                    return torch.add(target, other,
+                                                     alpha=float(alpha))
+                            except Exception:
+                                return torch.add(target, other,
+                                                 alpha=float(alpha))
+                        target.add_(other, alpha=float(alpha))
+                        return target
+                    # Unknown backend — fall back to plain `+`.
+                    return target + other * float(alpha)
                 _inplace_add.self_manages_dtype = True
                 return _inplace_add
 
