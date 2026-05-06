@@ -46,7 +46,7 @@ from .ops.copy import copy_forward_kernel
 
 # === Binary element-wise ===
 
-from .ops.add import add_forward_kernel, add_scalar_kernel
+from .ops.add import add_forward_kernel, add_scalar_kernel, add_bias_broadcast_kernel
 from .ops.mul import mul_forward_kernel, mul_scalar_kernel
 from .ops.div import div_forward_kernel, div_scalar_kernel
 from .ops.sub import sub_forward_kernel, rsub_forward_kernel
@@ -756,6 +756,37 @@ def copy_to(x, dtype: object) :
 # ===========================================================================
 
 def add(a, b, alpha: float = 1.0) :
+    # Bias-broadcast fast path: when `b` is a 1D tensor matching `a`'s
+    # last dim and `a` is already contiguous, route to the broadcast-aware
+    # kernel that reads `bias[offset % feat_dim]` instead of materializing
+    # an 8 GiB contiguous expand of the bias. Sana 4Kpx VAE add::88
+    # (`mul::58::out_0 (1, 4096, 4096, 128) + bias (128)`) is the
+    # canonical case — saves an 8 GiB transient that otherwise crowds
+    # out the rms_norm output during the post-pixel_shuffle chain.
+    if (not _is_scalar(b)
+            and hasattr(a, '_dtype') and hasattr(b, '_dtype')
+            and a.ndim >= 1 and b.ndim == 1
+            and a.shape[-1] == b.shape[0]
+            and a.is_contiguous()):
+        # Dtype align (mirror _prepare_binary).
+        common_dtype = _wider_dtype(a._dtype, b._dtype)
+        if a._dtype != common_dtype:
+            a = a.to(common_dtype)
+        if b._dtype != common_dtype:
+            b = b.to(common_dtype)
+        # Device align.
+        if (hasattr(a, '_device_idx') and hasattr(b, '_device_idx')
+                and a._device_idx != b._device_idx):
+            b = _transfer_to_device(b, a._device_idx)
+        n = a.numel()
+        feat_dim = b.shape[0]
+        output = NBXTensor.empty_like(a)
+        _set_device(a)
+        add_bias_broadcast_kernel[_1d_grid(n)](
+            a, b, output, n, feat_dim, alpha,
+            BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        return output
+
     a, b, output, n, dev_ctx, scalar = _prepare_binary(a, b)
     if scalar:
         add_scalar_kernel[_1d_grid(n)](a, output, n, float(b) * alpha, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
@@ -991,7 +1022,17 @@ def native_layer_norm(x, normalized_shape, weight, bias, eps=1e-5):
 
 
 def rms_norm(x, weight, eps=1e-6, epsilon=None):
-    """RMSNorm wrapper."""
+    """RMSNorm wrapper.
+
+    When `x.contiguous()` materializes a new tensor (input is a strided
+    view such as the NHWC permute pattern in DC-AE VAEs), the rms_norm
+    kernel can safely write its output back into that fresh contiguous
+    buffer in place: each program block reads its full BLOCK_SIZE_BATCH
+    x BLOCK_SIZE_FEAT tile via `tl.load` before any `tl.store`, so
+    input==output is per-tile safe and no other Python consumer sees
+    the materialized copy. This saves an 8 GiB transient on the
+    Sana 4Kpx VAE rms_norm::24 (post-pixel_shuffle NHWC chain).
+    """
     if epsilon is not None:
         eps = epsilon
     x = _ensure_cuda(x)
@@ -999,8 +1040,15 @@ def rms_norm(x, weight, eps=1e-6, epsilon=None):
     feat_dim = x.shape[-1]
     batch_dim = x.numel() // feat_dim
 
-    x_2d = x.contiguous().view(batch_dim, feat_dim)
-    output_2d = NBXTensor.empty_like(x_2d)
+    x_contig = x.contiguous()
+    x_2d = x_contig.view(batch_dim, feat_dim)
+    if x_contig is not x:
+        # contiguous() allocated a fresh buffer with no other holder —
+        # write rms_norm output directly into it (in-place) instead of
+        # paying for a second 8 GiB allocation.
+        output_2d = x_2d
+    else:
+        output_2d = NBXTensor.empty_like(x_2d)
 
     has_weight = weight is not None
 
