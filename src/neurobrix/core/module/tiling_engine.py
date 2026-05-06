@@ -406,7 +406,7 @@ class OpLevelTilingPlan:
     FusionUpsampleProxy and the conv interceptor reads it.
     """
 
-    __slots__ = ("component_name", "fusion_pairs", "tiled_ops")
+    __slots__ = ("component_name", "fusion_pairs", "tiled_ops", "inplace_adds")
 
     def __init__(self, component_name: str):
         self.component_name = component_name
@@ -415,6 +415,14 @@ class OpLevelTilingPlan:
         # Each entry: (op_uid, op_type, tile_factor) — single-op tiling
         # without fusion (e.g. a standalone conv whose workspace OOMs).
         self.tiled_ops: List[Tuple[str, str, int]] = []
+        # Each entry: (op_uid, reuse_input_index) — residual aten::add
+        # ops where Prism's liveness analysis proved one input has its
+        # last use at this op, so its buffer can be reused as output
+        # (saves a 3rd allocation = output_size bytes per call). Detected
+        # at register-time from the DAG; populated by
+        # `_detect_inplace_add_candidates`. P-SANA-4KPX-RUNTIME 2026-05-05
+        # multi-branch fusion fix vector B.
+        self.inplace_adds: List[Tuple[str, int]] = []
 
     def add_upsample_conv_fusion(self, upsample_uid: str, conv_uid: str,
                                   tile_factor: int) -> None:
@@ -423,8 +431,12 @@ class OpLevelTilingPlan:
     def add_tiled_op(self, op_uid: str, op_type: str, tile_factor: int) -> None:
         self.tiled_ops.append((op_uid, op_type, max(1, int(tile_factor))))
 
+    def add_inplace_add(self, op_uid: str, reuse_input_index: int) -> None:
+        self.inplace_adds.append((op_uid, int(reuse_input_index)))
+
     def is_empty(self) -> bool:
-        return not self.fusion_pairs and not self.tiled_ops
+        return (not self.fusion_pairs and not self.tiled_ops
+                and not self.inplace_adds)
 
     def __repr__(self) -> str:
         return (
@@ -453,6 +465,107 @@ class OpLevelTilingEngine:
             return None
         return cls(plan)
 
+    @staticmethod
+    def _detect_inplace_add_candidates(
+        graph_executor, threshold_bytes: int = 1024 * 1024 * 1024,
+    ) -> "List[Tuple[str, int]]":
+        """Scan the GraphExecutor's DAG for residual aten::add ops where
+        liveness analysis proves at least one input has its last use at
+        this op. Returns a list of `(op_uid, reuse_input_index)` for adds
+        whose output exceeds `threshold_bytes` (default 1 GiB).
+
+        Detection is purely DAG-static (no Prism profile / no runtime
+        info): builds a consumer map and checks whether each input's only
+        downstream consumer is the add itself AND the input is not a
+        graph output. This is the same liveness logic used by triton
+        sequence's `_compute_liveness` and `_run_triton_sequential`'s
+        `dead_at_op`.
+
+        Universal — applies to any model whose decoder has multi-branch
+        residual merges (DC-AE, ResNet residual blocks at high spatial
+        resolution, etc.). On Sana 4Kpx VAE, returns 26 candidates
+        (8 above 4 GiB at the 4096×4096 res, 4 above 4 GiB at 2048×2048).
+        """
+        dag = getattr(graph_executor, '_dag', None)
+        if dag is None:
+            return []
+        ops = dag.get("ops", {})
+        if isinstance(ops, list):
+            ops_by_uid = {o["op_uid"]: o for o in ops}
+        else:
+            ops_by_uid = ops
+        order = dag.get("execution_order", [])
+        output_ids = set(dag.get("output_tensor_ids", []))
+
+        # Build consumer map: tensor_id -> [op_uid that reads it]
+        def _collect_arg_tids(arg, out_set):
+            if isinstance(arg, dict):
+                atype = arg.get("type")
+                if atype in ("tensor", "tensor_ref"):
+                    t = arg.get("tensor_id")
+                    if t:
+                        out_set.add(t)
+                elif atype == "tensor_tuple":
+                    for t in arg.get("tensor_ids", []):
+                        out_set.add(t)
+                elif atype == "list":
+                    for item in arg.get("value", []):
+                        _collect_arg_tids(item, out_set)
+
+        consumers: Dict[str, List[str]] = {}
+        for op_uid in order:
+            op = ops_by_uid.get(op_uid)
+            if op is None:
+                continue
+            attrs = op.get("attributes", {})
+            seen: set = set()
+            for arg in attrs.get("args", []):
+                _collect_arg_tids(arg, seen)
+            for arg in attrs.get("kwargs", {}).values():
+                _collect_arg_tids(arg, seen)
+            for tid in seen:
+                consumers.setdefault(tid, []).append(op_uid)
+
+        candidates: List[Tuple[str, int]] = []
+        for op_uid in order:
+            op = ops_by_uid.get(op_uid)
+            if op is None or op.get("op_type") != "aten::add":
+                continue
+            inp_tids = op.get("input_tensor_ids", [])
+            ishapes = op.get("input_shapes", [])
+            oshapes = op.get("output_shapes", [])
+            if len(inp_tids) < 2 or len(ishapes) < 2 or not oshapes:
+                continue
+            sh_a = ishapes[0]
+            sh_b = ishapes[1]
+            sh_o = oshapes[0]
+            # Residual pattern: identical 4D input shapes.
+            if sh_a != sh_b or len(sh_a) != 4:
+                continue
+            # Output size (use fp32 as conservative estimate; runtime
+            # dtype may be smaller but we'd rather under-trigger than
+            # mis-trigger). The threshold is intentionally generous.
+            elems = 1
+            for d in sh_o:
+                elems *= max(1, int(d))
+            out_bytes = elems * 4  # fp32
+            if out_bytes < threshold_bytes:
+                continue
+            # Liveness check: is at least one input's last use this op?
+            a_consumers = consumers.get(inp_tids[0], [])
+            b_consumers = consumers.get(inp_tids[1], [])
+            a_last = (len(a_consumers) == 1
+                      and a_consumers[0] == op_uid
+                      and inp_tids[0] not in output_ids)
+            b_last = (len(b_consumers) == 1
+                      and b_consumers[0] == op_uid
+                      and inp_tids[1] not in output_ids)
+            if a_last:
+                candidates.append((op_uid, 0))
+            elif b_last:
+                candidates.append((op_uid, 1))
+        return candidates
+
     def register_into_graph_executor(self, graph_executor) -> int:
         """Wire all op_uid interceptors. Returns the count registered.
 
@@ -464,6 +577,15 @@ class OpLevelTilingEngine:
             make_upsample_proxy_interceptor,
             fused_upsample_conv2d,
         )
+
+        # Auto-detect in-place residual add candidates from the DAG. Only
+        # populated for components where Prism already triggered op-level
+        # tiling (high-VRAM-pressure models — Sana 4Kpx and similar);
+        # cheaper models bypass this entire engine. The detection is
+        # universal (any multi-branch residual pattern; not Sana-specific).
+        if not self.plan.inplace_adds:
+            self.plan.inplace_adds = OpLevelTilingEngine._detect_inplace_add_candidates(
+                graph_executor)
 
         interceptors: Dict[str, Callable] = {}
 
@@ -529,13 +651,31 @@ class OpLevelTilingEngine:
                     f"op_type={op_type} (uid={op_uid}); skipping."
                 )
 
+        # In-place residual adds (multi-branch fusion fix vector B).
+        # See `_detect_inplace_add_candidates` for the safety contract.
+        if self.plan.inplace_adds:
+            from neurobrix.kernels.wrappers import add_inplace_nbx
+
+            def make_inplace_add_interceptor(_reuse_index):
+                def _inplace_add(a, b, alpha=1.0, *args, **kwargs):
+                    target = a if _reuse_index == 0 else b
+                    other = b if _reuse_index == 0 else a
+                    return add_inplace_nbx(target, other, alpha=float(alpha))
+                _inplace_add.self_manages_dtype = True
+                return _inplace_add
+
+            for op_uid, reuse_index in self.plan.inplace_adds:
+                interceptors[op_uid] = make_inplace_add_interceptor(reuse_index)
+
         if not interceptors:
             return 0
         graph_executor.register_op_uid_interceptors(interceptors)
         logger.info(
             f"[OpLevelTilingEngine] Registered {len(interceptors)} op_uid "
             f"interceptors on component '{self.plan.component_name}': "
-            f"fusion_pairs={[(u, c, t) for u, c, t in self.plan.fusion_pairs]}"
+            f"fusion_pairs={len(self.plan.fusion_pairs)} "
+            f"tiled_ops={len(self.plan.tiled_ops)} "
+            f"inplace_adds={len(self.plan.inplace_adds)}"
         )
         return len(interceptors)
 
