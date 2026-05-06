@@ -2592,6 +2592,10 @@ class TritonSequence:
                                 _deferred.append(old)
                                 _deferred_bytes += old._nbytes
                             arena[s] = None
+                    # Drop the loop variable so it does not retain the
+                    # last killed tensor across subsequent outer-loop
+                    # iterations. See P-SANA-4KPX-RUNTIME 2026-05-06.
+                    old = None  # noqa: F841
                     continue
             else:
                 if _PROF:
@@ -2945,6 +2949,10 @@ class TritonSequence:
                 if old is not None:
                     _deferred.append(old)
                     _deferred_bytes += old._nbytes
+            # Drop the loop variable so it does not retain the
+            # last seen NBXTensor across subsequent outer-loop
+            # iterations. See P-SANA-4KPX-RUNTIME 2026-05-06.
+            old = None  # noqa: F841
 
             # Store outputs
             if not op.output_slots:
@@ -2970,13 +2978,70 @@ class TritonSequence:
                 self._maybe_dump_tid(op, _dump_tids_env)
             # =============================================================
 
+            # === Targeted tid lifecycle trace (P-SANA-4KPX-RUNTIME) ===
+            # NBX_TRACE_TIDS="tid1,tid2" prints [ALLOC] when a slot for a
+            # matching tid receives a tensor, and [KILL] when that slot
+            # is killed by op.kill_slots. Refcount snapshot at each event
+            # tells us whether the NBXTensor is held only by the arena
+            # (refcount==2: 1 from arena, 1 from sys.getrefcount's own
+            # arg) or by some other reference too (refcount>2 = leak).
+            import os as _os_tt
+            _trace_tids_env = _os_tt.environ.get("NBX_TRACE_TIDS", "")
+            _trace_tids = (set(t.strip() for t in _trace_tids_env.split(","))
+                           if _trace_tids_env else set())
+            if _trace_tids:
+                import sys as _sys_tt
+                if not hasattr(self, '_slot_to_tid'):
+                    self._slot_to_tid = {
+                        sl: t for t, sl in self._tid_to_slot.items()}
+                for s in op.output_slots:
+                    tid = self._slot_to_tid.get(s)
+                    if tid in _trace_tids:
+                        t = arena[s]
+                        if t is not None:
+                            print(f"[TID_TRACE ALLOC op_idx={op_idx} {op.op_uid}] "
+                                  f"tid={tid} slot={s} "
+                                  f"data_ptr={getattr(t, '_data_ptr', '?')} "
+                                  f"refcount={_sys_tt.getrefcount(t)} "
+                                  f"shape={tuple(getattr(t, '_shape', ()))} "
+                                  f"nbytes={getattr(t, '_nbytes', 0)/1024/1024:.0f}MB",
+                                  flush=True)
+
             if not skip_kills:
                 for s in op.kill_slots:
                     old = arena[s]
                     if old is not None:
+                        # Targeted lifecycle trace: snapshot refcount
+                        # BEFORE kill_slots assigns arena[s]=None. If
+                        # refcount > 2 (arena + sys.getrefcount arg),
+                        # the tensor has additional Python refs that
+                        # will keep it alive after the kill — that is
+                        # exactly the orphan-leak signature.
+                        if _trace_tids:
+                            tid = self._slot_to_tid.get(s)
+                            if tid in _trace_tids:
+                                import sys as _sys_tk
+                                print(f"[TID_TRACE KILL op_idx={op_idx} {op.op_uid}] "
+                                      f"tid={tid} slot={s} "
+                                      f"data_ptr={getattr(old, '_data_ptr', '?')} "
+                                      f"refcount_before_kill={_sys_tk.getrefcount(old)} "
+                                      f"(if >2 = orphan-leak; arena+sys.getrefcount=2)",
+                                      flush=True)
                         _deferred.append(old)
                         _deferred_bytes += old._nbytes
                     arena[s] = None
+                # Python `for` loop variables persist after the loop,
+                # bound to the last iteration's value. If the last
+                # killed slot held a large NBXTensor, `old` retains
+                # that reference across subsequent outer-loop iterations
+                # until the next op with kill_slots rebinds it. On
+                # Sana 4Kpx VAE this leaked an 8 GiB conv::63 tensor
+                # past silu::24's kill_slots into conv::64's allocation
+                # attempt, triggering OOM at live=25GB despite the
+                # arena and the deferred queue both having released.
+                # Drop the binding explicitly so the reference chain
+                # breaks here. P-SANA-4KPX-RUNTIME 2026-05-06.
+                old = None  # noqa: F841
 
             # Diagnostic: NBX_FORCE_GC=N forces Python gc.collect() every N
             # ops to test if the live_tracked watermark gap is from stale
@@ -3107,6 +3172,7 @@ class TritonSequence:
                             _deferred.append(old)
                             _deferred_bytes += old._nbytes
                         arena[s] = None
+                old = None  # noqa: F841 — see P-SANA-4KPX-RUNTIME 2026-05-06
                 continue
 
             # FAST PATH: no transfer needed
@@ -3169,6 +3235,7 @@ class TritonSequence:
                         _deferred.append(old)
                         _deferred_bytes += old._nbytes
                     arena[s] = None
+            old = None  # noqa: F841 — see P-SANA-4KPX-RUNTIME 2026-05-06
 
             # Route A — periodic drain. See the Route A block at module
             # top for rationale.
