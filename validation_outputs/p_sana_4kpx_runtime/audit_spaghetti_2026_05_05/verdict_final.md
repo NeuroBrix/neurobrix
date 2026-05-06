@@ -189,18 +189,61 @@ Artefacts:
   - `run_etape*.sh` — scripts de bisection reproductibles
   - `etape*.log` — logs factuels des runs
 
-État chantier P-SANA-4KPX-RUNTIME (post leak-diagnostic 2026-05-06):
+État chantier P-SANA-4KPX-RUNTIME (post bisection 3-suspects 2026-05-06):
 - Sequential mode Sana 4Kpx: **DÉBLOQUÉ** par R30 fix (PNG cohérente)
 - Compiled mode Sana 4Kpx: **DÉBLOQUÉ** + dual-backend regression fix
   (PNG cohérente 82s post-fix)
-- Triton/triton_sequential modes Sana 4Kpx: **FAIL bloqué par leak ORPHAN
-  identifié factuellement** — case (b) liveness divergence prouvée par
-  tid identification dans [BIG_TENSORS] dump. Tensor 8 GiB alive hors
-  arena, référants list[len=3]×2 + tuple(len=2). Si fix → triton
-  modes débloqués sans multi-GPU.
-- **Next chantier: P-TRITON-LIVE-LEAK-AUDIT** (1-3 jours) pour
-  identifier la source du leak ORPHAN. P-MULTI-GPU-NBX-ADAPTER
-  reste backup si P-TRITON-LIVE-LEAK-AUDIT échoue.
+- Triton/triton_sequential modes Sana 4Kpx: **FAIL — cause racine
+  factuellement identifiée** par bisection des 3 suspects + NBX_MALLOC_TRACE
+  + tid identification dans BIG_TENSORS:
+
+  **Suspect 1 (silu _base chain) — RÉFUTÉ** par audit code: silu wrapper
+  alloue output via `NBXTensor.empty_like(x)` qui crée NBXTensor avec
+  `_base=None` (pas de view chain).
+
+  **Suspect 2 (args_resolver lifecycle) — RÉFUTÉ** par audit code:
+  closures capturent slot indices (int), pas tensors.
+
+  **Suspect 3 (autre op du chain) — IDENTIFIÉ FACTUELLEMENT**:
+
+  Pattern Sana DC-AE pixel_shuffle (exec[700-704]):
+  ```
+  unsqueeze::5 (1,256,1,2048,2048) — view
+  expand::41 (1,256,2,2048,2048) — broadcast view (stride=0 dim 2)
+  clone::5   (1,256,2,2048,2048) — ALLOC 8 GiB (matérialise broadcast)
+  view::95   (1,512,2048,2048) — view de clone::5
+  pixel_shuffle::4 (1,128,4096,4096)
+  ```
+
+  L'orphan tensor#3 de la BIG_TENSORS scan correspond exactement à
+  `aten.clone::5::out_0` shape (1,256,2,2048,2048) owns=True 8 GiB.
+  Tensor#1 view::95::out_0 (view de clone::5).
+
+  Le clone matérialise un broadcast pour fournir un input contiguous à
+  pixel_shuffle. Les 256 channels sont DUPLIQUÉS via expand, puis copiés
+  en mémoire — 8 GiB alloués pour des données redondantes.
+
+  **Confirmation par bisection NBX_DISABLE_INPLACE_ADD=1**: avec
+  l'in-place add désactivé, les orphans deviennent EXPLICITEMENT
+  `aten.clone::5::out_0` + `aten.view::95::out_0`. La cause est
+  STRUCTURELLE au DAG forge'd, pas au runtime triton.
+
+- **Next fix concret (intra-P-SANA-4KPX-RUNTIME, pas nouveau chantier):**
+
+  **Fix structural pixel_shuffle broadcast elimination**:
+  - **Option F1**: graph-level pass dans TritonSequence.compile qui détecte
+    le pattern `expand → clone → view → pixel_shuffle` et élimine le clone
+    en routant la stride directement à pixel_shuffle (qui en interne lit
+    les channels broadcastés en re-mappant `ic >= C/2` vers `ic - C/2`).
+    Économie: 8 GiB peak. Univeral pour tous les pixel_shuffle dans DC-AE.
+    ETA: 60-90 min implémentation + test.
+
+  - **Option F2**: pixel_shuffle wrapper détecte broadcast input via
+    stride pattern et ajuste la lecture dans le kernel sans matérialiser.
+    ETA: 30-60 min wrapper-level.
+
+  Si F1+F2 résolvent: triton modes débloqués SANS multi-GPU.
+  Si pas suffisant: P-MULTI-GPU-NBX-ADAPTER backup.
 
 ## Discipline maintenue
 

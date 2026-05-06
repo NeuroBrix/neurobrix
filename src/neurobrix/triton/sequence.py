@@ -2673,6 +2673,21 @@ class TritonSequence:
                             try:
                                 import gc as _gc_h
                                 from neurobrix.kernels.nbx_tensor import NBXTensor as _NBX_H
+                                # Force a cycle-collecting gc.collect() BEFORE the
+                                # scan. If the ORPHAN tensors are part of a Python
+                                # ref cycle that prevents __del__ from firing,
+                                # this resolves them. Compare big-block count
+                                # before/after to confirm cycle vs leak.
+                                pre_collect_big = sum(
+                                    1 for p in _DAW._cuda_ptr_size
+                                    if _DAW._cuda_ptr_size[p] >= 1024*1024*1024)
+                                _collected = _gc_h.collect()
+                                post_collect_big = sum(
+                                    1 for p in _DAW._cuda_ptr_size
+                                    if _DAW._cuda_ptr_size[p] >= 1024*1024*1024)
+                                print(f"  [GC_COLLECT_TEST] gc.collect() collected {_collected} cycle objects, "
+                                      f"big_blocks(>=1GB) before={pre_collect_big} after={post_collect_big}",
+                                      flush=True)
                                 big_ptrs = {p: _DAW._cuda_ptr_size[p]
                                             for p in _DAW._cuda_ptr_size
                                             if _DAW._cuda_ptr_size[p] >= 1024*1024*1024}
@@ -2702,17 +2717,197 @@ class TritonSequence:
                                         info = ""
                                         if rt == "list":
                                             info = f"[len={len(r)}]"
+                                            # For small lists/tuples, sample their contents
+                                            # to identify the data structure (NBXTensor count,
+                                            # other types). Useful for ORPHAN diagnosis.
+                                            if len(r) <= 10:
+                                                contents = [type(item).__name__
+                                                            for item in r]
+                                                info += f" contents={contents}"
                                         elif rt == "dict":
                                             info = f"{{len={len(r)}}}"
+                                            if len(r) <= 10:
+                                                key_types = [(type(k).__name__,
+                                                              type(v).__name__)
+                                                             for k, v in list(r.items())[:5]]
+                                                info += f" sample_kv={key_types}"
                                         elif rt == "tuple":
                                             info = f"(len={len(r)})"
+                                            if len(r) <= 10:
+                                                contents = [type(item).__name__
+                                                            for item in r]
+                                                info += f" contents={contents}"
+                                        elif rt == "frame":
+                                            # Frame referrer — try to get the function name
+                                            try:
+                                                fname = r.f_code.co_name
+                                                fline = r.f_lineno
+                                                ffile = r.f_code.co_filename.split('/')[-1]
+                                                info = f"@{fname}:{ffile}:{fline}"
+                                            except Exception:
+                                                pass
                                         refs_summary.append(f"{rt}{info}")
                                     tid = ptr_to_tid.get(t._data_ptr, "ORPHAN(not in arena)")
+                                    # Refcount + gc.is_tracked diagnostic
+                                    import sys as _sys_rc
+                                    rc = _sys_rc.getrefcount(t)
+                                    is_tracked = _gc_h.is_tracked(t)
                                     print(f"  tensor#{i} tid={tid} shape={tuple(t._shape)} "
                                           f"nbytes={t._nbytes/1024/1024:.0f}MB "
                                           f"owns={t._owns_data} "
+                                          f"data_ptr={t._data_ptr} "
+                                          f"refcount={rc} gc_tracked={is_tracked} "
                                           f"referrers({len(refs)}): {refs_summary}",
                                           flush=True)
+                                    # For ORPHAN tensors specifically, walk one
+                                    # level deeper: who holds the list[len=3]
+                                    # and tuple(len=2) referrers? That gives the
+                                    # actual data structure name.
+                                    if tid.startswith("ORPHAN"):
+                                        for j, r in enumerate(refs[:5]):
+                                            grand = _gc_h.get_referrers(r)
+                                            grand_summary = []
+                                            for gr in grand[:3]:
+                                                grt = type(gr).__name__
+                                                ginfo = ""
+                                                if grt == "frame":
+                                                    try:
+                                                        ginfo = f"@{gr.f_code.co_name}:{gr.f_code.co_filename.split('/')[-1]}:{gr.f_lineno}"
+                                                    except Exception:
+                                                        pass
+                                                elif grt in ("list", "tuple", "dict"):
+                                                    ginfo = f"[len={len(gr)}]"
+                                                elif hasattr(gr, '__class__') and gr.__class__.__module__ != 'builtins':
+                                                    ginfo = f"<{gr.__class__.__module__}.{grt}>"
+                                                grand_summary.append(f"{grt}{ginfo}")
+                                            print(f"    └─ ref#{j} {type(r).__name__} held by ({len(grand)}): {grand_summary}",
+                                                  flush=True)
+                                        # Find any 'cell' referrer and trace it
+                                        for r in refs:
+                                            if type(r).__name__ != 'cell':
+                                                continue
+                                            # Verify cell.cell_contents IS the tensor
+                                            try:
+                                                cc = r.cell_contents
+                                                cc_match = (cc is t)
+                                            except Exception:
+                                                cc_match = False
+                                            cell_holders = _gc_h.get_referrers(r)
+                                            print(f"    [CELL_TRACE] cell.cell_contents is t: {cc_match}, "
+                                                  f"cell id={id(r)}, cell holders ({len(cell_holders)}):",
+                                                  flush=True)
+                                            for ch in cell_holders[:5]:
+                                                cht = type(ch).__name__
+                                                cinfo = f" id={id(ch)} len={len(ch) if hasattr(ch,'__len__') else '?'}"
+                                                # Identify if this list/tuple is our diagnostic structures
+                                                if ch is big_tensors:
+                                                    cinfo += " [DIAG=big_tensors]"
+                                                # Print first few elements
+                                                try:
+                                                    sample = [type(x).__name__ for x in list(ch)[:5]]
+                                                    cinfo += f" sample={sample}"
+                                                except Exception:
+                                                    pass
+                                                # Find who holds this cell_holder
+                                                gh = _gc_h.get_referrers(ch)
+                                                gh_summary = []
+                                                for ghi in gh[:5]:
+                                                    ght = type(ghi).__name__
+                                                    if ght == "function":
+                                                        try:
+                                                            gh_summary.append(f"fn:{ghi.__name__}@{ghi.__code__.co_filename.split('/')[-1]}:{ghi.__code__.co_firstlineno}")
+                                                        except Exception:
+                                                            gh_summary.append("fn:?")
+                                                    elif ght == "frame":
+                                                        try:
+                                                            gh_summary.append(f"frame@{ghi.f_code.co_name}:{ghi.f_code.co_filename.split('/')[-1]}:{ghi.f_lineno}")
+                                                        except Exception:
+                                                            gh_summary.append("frame:?")
+                                                    elif ght == "module":
+                                                        gh_summary.append(f"module:{getattr(ghi,'__name__','?')}")
+                                                    elif ght in ("list", "tuple", "dict"):
+                                                        gh_summary.append(f"{ght}[{len(ghi) if hasattr(ghi,'__len__') else '?'}]")
+                                                    else:
+                                                        gh_summary.append(ght)
+                                                cinfo += f" holders={gh_summary}"
+                                                print(f"      cell_holder: {cht}{cinfo}", flush=True)
+                                        # EXHAUSTIVE scan: walk ALL gc.get_objects
+                                        # to find any object that refers to t via
+                                        # any attribute (including __slots__).
+                                        # gc.get_referrers might miss C-extension
+                                        # or slot-based refs; this walks every
+                                        # object's __dict__/__slots__/contents.
+                                        candidate_holders = []
+                                        for obj in _gc_h.get_objects():
+                                            if obj is t or obj is refs:
+                                                continue
+                                            if isinstance(obj, (list, tuple, dict, set, frozenset)):
+                                                continue  # already covered
+                                            try:
+                                                # Check __dict__
+                                                d = getattr(obj, '__dict__', None)
+                                                if d is not None and t in d.values():
+                                                    # Find the specific attr name
+                                                    attr_names = [k for k, v in d.items() if v is t]
+                                                    obj_label = type(obj).__name__
+                                                    # If obj is a module, get its name
+                                                    if obj_label == 'module':
+                                                        obj_label = f"module:{getattr(obj, '__name__', '?')}"
+                                                    candidate_holders.append(
+                                                        (type(obj).__module__, obj_label,
+                                                         f'attr:{attr_names[:3]}'))
+                                                    continue
+                                                # Check __slots__
+                                                slots = getattr(type(obj), '__slots__', ())
+                                                if isinstance(slots, str):
+                                                    slots = (slots,)
+                                                for slot in slots:
+                                                    try:
+                                                        if getattr(obj, slot, None) is t:
+                                                            candidate_holders.append(
+                                                                (type(obj).__module__, type(obj).__name__, f'slot:{slot}'))
+                                                            break
+                                                    except Exception:
+                                                        pass
+                                            except Exception:
+                                                pass
+                                        print(f"    [EXHAUSTIVE] {len(candidate_holders)} non-container holders:",
+                                              flush=True)
+                                        for mod, cls, where in candidate_holders[:10]:
+                                            print(f"      {mod}.{cls} via {where}", flush=True)
+                                # Print _seq_constant_originals size for context
+                                try:
+                                    sco_size = len(getattr(self, '_seq_constant_originals', {}))
+                                    print(f"  [DIAG] _seq_constant_originals dict size: {sco_size}",
+                                          flush=True)
+                                except Exception:
+                                    pass
+                                # Scan Triton Autotuner instances for nargs leaks
+                                # (autotune's self.nargs = None is only reached
+                                # on success; on exception, args dict persists
+                                # holding tensor refs as C-level hidden refs).
+                                try:
+                                    from triton.runtime.autotuner import Autotuner as _AT
+                                    autotuners = [o for o in _gc_h.get_objects()
+                                                  if isinstance(o, _AT)]
+                                    leaks = []
+                                    for at_inst in autotuners:
+                                        nargs = getattr(at_inst, 'nargs', None)
+                                        if nargs is not None and isinstance(nargs, dict):
+                                            tensor_count = sum(1 for v in nargs.values()
+                                                               if isinstance(v, _NBX_H))
+                                            if tensor_count > 0:
+                                                fn_name = getattr(getattr(at_inst, 'base_fn', None),
+                                                                  '__name__', '?')
+                                                leaks.append((fn_name, len(nargs), tensor_count))
+                                    print(f"  [AUTOTUNE_LEAK_SCAN] {len(autotuners)} Autotuner instances; "
+                                          f"{len(leaks)} with non-None nargs holding NBXTensors:",
+                                          flush=True)
+                                    for fn_name, n_args, n_tensors in leaks:
+                                        print(f"    LEAK: kernel={fn_name} nargs_count={n_args} "
+                                              f"nbxtensor_count={n_tensors}", flush=True)
+                                except Exception as _e:
+                                    print(f"  [AUTOTUNE_LEAK_SCAN failed: {_e}]", flush=True)
                             except Exception as _ge:
                                 print(f"[BIG_TENSORS scan failed: {_ge}]", flush=True)
                         except Exception as _dump_e:

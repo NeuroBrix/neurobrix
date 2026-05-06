@@ -15,6 +15,12 @@ mkdir -p "$OUTDIR"
 export NBX_LIVE_DUMP_EVERY=10
 export NBX_LIVE_DUMP_ON_OOM=1
 export NBX_ALLOC_POOL=1
+# Trace every NBX malloc/free with caller's tid + stack site.
+# At OOM, post-process this tsv to find data_ptr that's allocated
+# but never freed = the orphan source.
+export NBX_MALLOC_TRACE=/home/mlops/NeuroBrix_System/validation_outputs/p_sana_4kpx_runtime/audit_spaghetti_2026_05_05/malloc_trace.tsv
+# Bisection: disable in-place add to test if it's the orphan source
+export NBX_DISABLE_INPLACE_ADD=1
 
 START=$(date +%s)
 echo "[START] $(date -u)" > "$OUTDIR/etape4_triton_compiled.log"
