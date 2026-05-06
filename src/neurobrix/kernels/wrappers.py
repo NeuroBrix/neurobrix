@@ -165,7 +165,10 @@ from .ops.sort_op import radix_sort_histogram_kernel, radix_sort_sweep_kernel
 # === Phase 5: RoPE, spatial, RNG, remaining ===
 
 from .ops.rope import rope_forward_kernel
-from .ops.pixel_shuffle import pixel_shuffle_kernel
+from .ops.pixel_shuffle import (
+    pixel_shuffle_kernel,
+    pixel_shuffle_broadcast_aware_kernel,
+)
 from .ops.pixel_unshuffle import pixel_unshuffle_kernel
 from .ops.upsample_bilinear2d import upsample_bilinear2d_kernel
 from .ops.adaptive_avg_pool2d import adaptive_avg_pool2d_kernel
@@ -3859,7 +3862,18 @@ def sort_wrapper(x, dim: int = -1,
 # ===========================================================================
 
 def pixel_shuffle_wrapper(x, upscale_factor: int) :
-    """Pixel shuffle: [N,C*r*r,H,W] -> [N,C,H*r,W*r]."""
+    """Pixel shuffle: [N,C*r*r,H,W] -> [N,C,H*r,W*r].
+
+    If `x` is a `BroadcastClonePyroxy` (returned by an upstream intercepted
+    aten.clone whose input is an NBX expand stride-0 view), reads through
+    the unmaterialized broadcast view via a stride-aware kernel and
+    eliminates the 8 GiB clone copy. P-SANA-4KPX-RUNTIME Fix F2 (Approche C).
+    """
+    from .ops.fused_upsample_conv import BroadcastClonePyroxy
+
+    if isinstance(x, BroadcastClonePyroxy):
+        return _pixel_shuffle_broadcast_aware(x, upscale_factor)
+
     N, C_in, H, W = x.shape
     r = upscale_factor
     C_out = C_in // (r * r)
@@ -3873,6 +3887,58 @@ def pixel_shuffle_wrapper(x, upscale_factor: int) :
         x, output, total,
         C_out, H, W, r, OH, OW,
         *x.stride(), *output.stride(),
+        BLOCK_SIZE=_EW_BLOCK)
+    return output
+
+
+def _pixel_shuffle_broadcast_aware(proxy, upscale_factor: int):
+    """Read directly through an NBX expand stride-0 view, allocate clean
+    4D contiguous output, no clone materialization.
+
+    `proxy.bcast_view` is the expand output (5D NBXTensor with stride 0
+    on `proxy.bcast_dim`). Same data_ptr as the pre-expand tensor — NBX
+    expand is metadata-only (kernels/nbx_tensor.py:1581). The kernel reads
+    via 5D strides; the stride-0 dim aliases broadcast indices for free.
+
+    Layout assumption (matches DC-AE / Sana 4Kpx VAE pattern after
+    `unsqueeze(dim=2) -> expand(dim=2, B)`): the 5D view is laid out
+    (N, C_pre, B, H, W). bcast_dim is dim 2.
+
+    Output shape: (N, C_out, H*r, W*r) where C_out = (C_pre * B) // (r*r).
+    """
+    view = proxy.bcast_view
+    bcast = proxy.bcast_factor
+    bcast_dim = proxy.bcast_dim
+    r = int(upscale_factor)
+
+    if view.ndim != 5 or bcast_dim != 2:
+        raise NotImplementedError(
+            f"_pixel_shuffle_broadcast_aware: only 5D layout (N,C,B,H,W) "
+            f"with bcast_dim=2 supported (matches NBX unsqueeze+expand "
+            f"DC-AE pattern). Got ndim={view.ndim} bcast_dim={bcast_dim}.")
+
+    N, C_pre, B_size, H, W = view.shape
+    if B_size != bcast:
+        raise AssertionError(
+            f"_pixel_shuffle_broadcast_aware: view dim 2 size {B_size} != "
+            f"bcast factor {bcast} from static DAG analysis")
+    C_in_view = C_pre * bcast
+    if C_in_view % (r * r) != 0:
+        raise AssertionError(
+            f"_pixel_shuffle_broadcast_aware: post-view channels {C_in_view} "
+            f"not divisible by r*r={r*r}")
+    C_out = C_in_view // (r * r)
+    OH, OW = H * r, W * r
+
+    output = NBXTensor.empty((N, C_out, OH, OW),
+                             device=view.device, dtype=view.dtype)
+    total = N * C_out * OH * OW
+    grid = (triton.cdiv(total, _EW_BLOCK),)
+    _set_device(view)
+    pixel_shuffle_broadcast_aware_kernel[grid](
+        view, output, total,
+        C_out, OH, OW, r, bcast,
+        *view.stride(), *output.stride(),
         BLOCK_SIZE=_EW_BLOCK)
     return output
 

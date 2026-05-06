@@ -479,7 +479,24 @@ class TensorResolver:
             return torch.strided
 
         elif arg_type == "unknown":
-            raise RuntimeError(f"ZERO FALLBACK: Unknown argument type in {op_type} ({op_uid})")
+            # Some traces serialize standard torch enum/format singletons with
+            # type="unknown" because the trace introspection didn't classify
+            # them as `memory_format` / `dtype` / `layout`. When the value is a
+            # `torch.<attr>` string and `torch` exposes that attribute, resolve
+            # it directly. This unblocks ops like `aten::clone(memory_format=
+            # torch.contiguous_format)` whose kwarg lands in this branch when
+            # an op_uid interceptor forces kwargs resolution in sequential
+            # mode (see graph_executor._execute_native_op). The strict raise
+            # is preserved for genuinely unknown values.
+            val = arg_info.get("value")
+            if isinstance(val, str) and val.startswith("torch."):
+                attr_name = val.split(".", 1)[1]
+                resolved = getattr(torch, attr_name, None)
+                if resolved is not None:
+                    return resolved
+            raise RuntimeError(
+                f"ZERO FALLBACK: Unknown argument type in {op_type} ({op_uid}) "
+                f"value={val!r}")
 
         return arg_info
 

@@ -67,3 +67,74 @@ def pixel_shuffle_kernel(
 
     val = tl.load(input_ptr + in_offset, mask=mask)
     tl.store(output_ptr + out_offset, val, mask=mask)
+
+
+@triton.jit
+def pixel_shuffle_broadcast_aware_kernel(
+    bcast_view_ptr,  # 5D NBX expand-output view (N, C_pre, B, H, W) with stride_b == 0
+    output_ptr,      # 4D contiguous output (N, C_out, OH, OW)
+    n_elements,
+    C_out,           # output channels = (C_pre * B) // (r*r)
+    OH,              # = H * r
+    OW,              # = W * r
+    r,               # pixel_shuffle upscale factor
+    bcast,           # broadcast factor (= B, the size on the stride-0 dim)
+    # 5D bcast_view strides (NBX expand sets stride_b = 0).
+    stride_v_n,
+    stride_v_c,
+    stride_v_b,
+    stride_v_h,
+    stride_v_w,
+    # 4D output strides (contiguous NCHW).
+    stride_out_n,
+    stride_out_c,
+    stride_out_h,
+    stride_out_w,
+    BLOCK_SIZE: tl.constexpr,
+):
+    """Pixel shuffle that reads through an unmaterialized NBX broadcast view.
+
+    Input layout: (N, C_pre, B, H, W) where the original DAG pattern is
+    `unsqueeze(dim=2) -> expand(dim=2, B) -> clone -> view -> pixel_shuffle`.
+    NBX expand sets stride_b=0 (kernels/nbx_tensor.py:1581), so the 5D view
+    aliases the pre-expand tensor with no materialization. We read through
+    that view directly and skip the clone's 8 GiB copy.
+
+    The post-clone-post-view shape consumed by a normal pixel_shuffle is
+    (N, C_pre*B, H, W); here the kernel does the equivalent decomposition
+    inline:
+      ic_view = c*r*r + (oh%r)*r + (ow%r)         in [0, C_pre*B)
+      c_pre   = ic_view // bcast                   in [0, C_pre)
+      b       = ic_view %  bcast                   in [0, B)
+      ih      = oh // r
+      iw      = ow // r
+    Read offset uses all 5D strides; with stride_v_b == 0, the `b` index
+    contributes nothing and the load aliases naturally.
+    """
+    pid = tl.program_id(0)
+    idx = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = idx < n_elements
+
+    ow = idx % OW
+    tmp = idx // OW
+    oh = tmp % OH
+    tmp2 = tmp // OH
+    c = tmp2 % C_out
+    n = tmp2 // C_out
+
+    sub_h = oh % r
+    sub_w = ow % r
+    ic_view = c * (r * r) + sub_h * r + sub_w
+    c_pre = ic_view // bcast
+    b = ic_view % bcast
+
+    ih = oh // r
+    iw = ow // r
+
+    in_offset = (n * stride_v_n + c_pre * stride_v_c + b * stride_v_b
+                 + ih * stride_v_h + iw * stride_v_w)
+    out_offset = (n * stride_out_n + c * stride_out_c
+                  + oh * stride_out_h + ow * stride_out_w)
+
+    val = tl.load(bcast_view_ptr + in_offset, mask=mask)
+    tl.store(output_ptr + out_offset, val, mask=mask)
