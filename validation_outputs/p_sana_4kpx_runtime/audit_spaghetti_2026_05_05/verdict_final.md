@@ -516,6 +516,72 @@ triton modes PASS R29. triton compiled OOM at conv::69 = LAST conv
 before output. Chain advance +27 ops vs original. 2 GB GPU
 headroom shortage at conv::69 entry.
 
+## Update 2026-05-07 (final, bisection tensor-value diff)
+
+Phase 1 alt — tensor-value fingerprint diff sequential vs
+triton_sequential (commit c91cc75) corrigé après lecture initiale
+faussement noisy. La fingerprint instrumentation EST correcte pour
+les compute ops (ops produisant tenseurs contigus frais). Pour les
+view ops (transpose/expand/slice/permute/t), raw byte sampling diffère
+de torch.flatten() — sampling artifact à filtrer.
+
+**Bisection compute-ops only par iteration**:
+
+- **Iter 0** (text_encoder): NO real divergence > 0.5 in compute ops.
+  Sequential et triton produisent les mêmes valeurs — text_encoder
+  triton est numériquement aligné avec sequential.
+
+- **Iter 1** (transformer step 1): premier réel divergence à
+  **`aten.mm::17`** (op_idx=394). Shape `(32768, 2240) @ (2240, 2240)`
+  — batch 32768 caractéristique Sana 4Kpx (Sana 1024 même mm aurait
+  batch ~1024). Position 4 (n-1, dernier élément) diverge:
+  - seq: `[-0.0189, 0.06755, 0.03314, 0.06563, -0.08473]`
+  - tri: `[-0.0189, 0.06765, 0.03327, 0.06521, -0.1057]`
+  - delta=0.021 propage downstream à mul::41 (0.06), mul::42 (0.05).
+
+- **Iter 2-12** (transformer steps 2-12): premier divergence à
+  `aten.convolution::0` op_idx=4 (delta 1-3). Conséquence de iter 1
+  divergence accumulée → state transformer biaisé → conv::0 next step
+  démarre déjà différent.
+
+- **Iter 13**: divergence à `aten.addmm::3` (delta 4.55), one position
+  only. Other downstream ~0.
+
+- **Iter 14** (VAE): premier divergence à `aten.convolution::0` (op_idx=4)
+  delta 1.97. Cascade compounding du transformer accumulé.
+
+**Identification factuelle**:
+
+Le bug NUMÉRIQUE est dans le **NBX mm kernel à batch 32768 ligne 32K
+output**. Sana 1024 batch ~1024 fonctionne. Sana 4Kpx batch 32K
+diverge position n-1.
+
+Le pattern "position 4 (n-1) diverge" suggère un boundary/mask issue
+dans le mm kernel à très-large batch — dernier tile potentiellement
+mal masqué OU autotune config qui produit valeur différente sur le
+dernier tile à batch 32K.
+
+**Next concrete step (intra-P-SANA-4KPX-RUNTIME)**:
+
+1. Lire `kernels/ops/matmul.py` mm kernel — vérifier mask handling
+   pour le dernier tile à batch dim non-multiple de BLOCK_M.
+
+2. Comparer avec PyTorch / cuBLAS reference (open source — torch's
+   mm uses cuBLAS GEMM, well-tested at any batch).
+
+3. Si autotune-related: vérifier configs Volta dont la BLOCK_M
+   choisie pour batch=32768 produit ce résultat divergent. Peut-être
+   un config a un bug spécifique aux grands batchs.
+
+4. Fix ciblé sur le NBX mm kernel ou son autotune config set.
+
+5. Re-run sequential vs triton_sequential value diff — vérifier que
+   iter 1 op 394 mm::17 disparait + downstream s'aligne.
+
+6. R29 4 modes Sana 4Kpx + 4 PNGs.
+
+ETA estimé: 1-2h lecture mm kernel + identification fix + validation.
+
 ## Discipline maintenue
 
 - Pas de "INDÉTERMINÉ" — chaque verdict est factuel avec adresse mémoire,
