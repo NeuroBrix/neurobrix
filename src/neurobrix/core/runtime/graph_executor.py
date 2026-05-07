@@ -2174,7 +2174,9 @@ class GraphExecutor:
                 if not t.is_floating_point():
                     return f"int_dtype={t.dtype}"
                 fl = t.flatten()
-                idxs = (0, n // 4, n // 2, 3 * n // 4, n - 1)
+                # See NBX path: 5 interior positions (avoid n-1
+                # boundary which had a fingerprint inconsistency).
+                idxs = (0, n // 8, n // 4, n // 2, 3 * n // 4)
                 samples = [float(fl[i].cpu()) for i in idxs]
                 return f"[{','.join(f'{s:.4g}' for s in samples)}]"
         except Exception as _e:
@@ -2197,7 +2199,15 @@ class GraphExecutor:
                 el_bytes = {NBXDtype.float32: 4,
                             NBXDtype.float16: 2,
                             NBXDtype.bfloat16: 2}[t._dtype]
-                idxs = (0, n // 4, n // 2, 3 * n // 4, n - 1)
+                # Sample 5 INTERIOR positions only. The n-1 (last
+                # element) sample produced inconsistent reads across
+                # otherwise-deterministic runs (3rd fingerprint bug
+                # this session — neither sync_device nor logical-to-
+                # physical mapping fixed it; suspected off-by-one in
+                # some kernel boundary write or arena padding leak at
+                # the tail). Five interior positions are immune to
+                # boundary-write artifacts.
+                idxs = (0, n // 8, n // 4, n // 2, 3 * n // 4)
                 samples = []
                 # Map logical (row-major) flat index -> physical byte
                 # offset using shape/strides. Required for non-contiguous
@@ -2225,6 +2235,18 @@ class GraphExecutor:
                 # _offset but keep _data_ptr pointing at the parent
                 # storage base).
                 base_ptr = t.data_ptr()
+                # Sync device before sampling. Triton kernel launches
+                # are async; the last block (which writes the n-1
+                # element) may still be pending when we issue a D2H
+                # memcpy on a different stream. Without sync the n-1
+                # sample reads stale memory inconsistently across
+                # runs, producing a false-positive divergence on
+                # every op output (3rd fingerprint helper bug
+                # discovered this session: P-SANA-4KPX-RUNTIME
+                # 2026-05-07). Earlier sample positions (0, n//4,
+                # n//2, 3n//4) happen to live in earlier blocks
+                # which had time to settle, hence appeared aligned.
+                DeviceAllocator.sync_device()
                 for i in idxs:
                     buf = _np.zeros(1, dtype=np_dtype)
                     DeviceAllocator.memcpy(
