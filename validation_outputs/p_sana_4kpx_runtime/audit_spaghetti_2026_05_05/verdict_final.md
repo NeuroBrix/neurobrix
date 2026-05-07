@@ -1,5 +1,91 @@
 # P-SANA-4KPX-RUNTIME — Verdict factuel final 2026-05-05/07
 
+## Update 2026-05-07 (final⁴ — triton 1024 vs triton 4Kpx oracle redirected)
+
+User redirected the comparison: the correct oracle is **Sana 1024
+triton_sequential (PNG coherent ✓) vs Sana 4Kpx triton_sequential
+(garbage)**, not sequential vs triton_sequential of the same model.
+Reasons:
+- text_encoder graph.json md5 IDENTICAL between Sana 1024 and Sana
+  4Kpx (`bada6254...`); same prompt → embeddings MUST be bit-aligned.
+- Same kernels, same code, same NBX path on both models.
+- Sana 1024 triton_sequential PNG VALIDATED (red apple, R29 PASS at
+  this session: `sana1024_triseq_values.png`).
+
+Ran Sana 1024 triton_sequential with VALUE_TRACE instrumentation,
+diff'd vs Sana 4Kpx triton_sequential. Findings:
+
+### text_encoder (3449 ops each, identical graph)
+
+| classification | count |
+|---|---|
+| bit-exact / fp16 noise | 1118 |
+| pos-4-only (fingerprint artifact at n-1) | 2143 |
+| wide divergence (real numerical) | **0** |
+
+**Conclusion**: text_encoder is bit-aligned between Sana 1024 and
+Sana 4Kpx. The "pos-4-only" pattern is a fingerprint helper artifact
+(the n-1 sample reads inconsistently — 3rd fingerprint bug
+discovered this session, orthogonal to the bug hunt).
+
+### transformer iter 0 (3449 vs 3449 ops)
+
+Graphs differ md5 but op count differs by ONLY 1 (Sana 4Kpx has 2344
+ops, Sana 1024 has 2343). The one extra op:
+
+```
+op_idx=7  Sana 4Kpx ONLY:  aten.add::0
+  inputs:  aten.transpose::0::out_0  (2, 16384, 2240)
+           param::patch_embed.pos_embed (1, 16384, 2240)
+  output:  (2, 16384, 2240)   = 73,400,320 elements
+  parent:  patch_embed
+```
+
+Sana 1024 lacks this op — its patch_embed doesn't add a learnable
+positional embedding (different scheme). All subsequent ops are
+shifted by 1 between the two graphs.
+
+### Microtest: NBX add at (2, 16384, 2240) + (1, 16384, 2240)
+
+```
+ref samples: [0.266, -0.161, 0.0909, -0.212, -0.042]
+nbx samples: [0.266, -0.161, 0.0909, -0.212, -0.042]
+max abs diff: 0.0   (BIT-EXACT)
+batch[1] start max diff: 0.0 (broadcast batch dim correct)
+```
+
+The NBX add wrapper handles this broadcast pattern bit-exact.
+**The pos_embed add itself is NOT the bug source**.
+
+### Where this leaves the bug
+
+- text_encoder: clean
+- transformer patch_embed pos_embed add: clean in isolation
+- conv2d at this shape: clean in isolation (microtest above)
+
+The bug must be in a DOWNSTREAM op that responds to scale-dependent
+shapes (e.g., 16384 patches vs 1024). Candidate next investigations:
+1. transformer attention ops at seq_len=16384 (vs 1024) — softmax,
+   sdpa, mm at large M dim. If autotune picks a buggy config at
+   M=16384 in transformer block 0+, divergence cascades.
+2. VAE graphs differ md5 (`a7401c1d...` vs `8abfd113...`). If the
+   bug is in a VAE op only present at 4Kpx (or scale-dependent),
+   it'd corrupt the final decode step. Sequential VAE 4Kpx works
+   (PNG coherent) so cuDNN handles it; NBX VAE may not.
+
+ETA next iteration: 30 min — instrument transformer block 0 attention
+in both runs, diff specific op outputs at seq_len=16384 vs 1024.
+
+Commits this session:
+- `a2fd933` fingerprint logical→physical mapping
+- `aadf5b0` fingerprint via data_ptr() (slice/narrow alignment)
+- `1c78a62` (superseded) verdict pointing at conv kernel
+- `4c41e15` microtest disproves conv kernel
+- (this update) text_encoder bit-aligned, pos_embed add bit-exact,
+  bug must be in downstream scale-dependent op
+
+---
+
 ## Update 2026-05-07 (final³ — fingerprint methodology cleaned, bug pinpointed)
 
 The op-by-op value diff (sequential vs triton_sequential) initially
