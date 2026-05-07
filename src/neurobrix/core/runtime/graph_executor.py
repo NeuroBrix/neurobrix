@@ -2199,11 +2199,31 @@ class GraphExecutor:
                             NBXDtype.bfloat16: 2}[t._dtype]
                 idxs = (0, n // 4, n // 2, 3 * n // 4, n - 1)
                 samples = []
+                # Map logical (row-major) flat index -> physical byte
+                # offset using shape/strides. Required for non-contiguous
+                # views (transpose, slice) so NBX fingerprint matches
+                # torch.Tensor.flatten()[i] semantics. P-SANA-4KPX-RUNTIME
+                # 2026-05-07: fixed false-positive divergence on every
+                # transpose op caused by raw data_ptr + i*el_bytes which
+                # samples physical storage order, diverging from the
+                # logical row-major view that torch flatten() returns.
+                shape = tuple(t._shape) if hasattr(t, '_shape') else ()
+                strides = tuple(t._strides) if hasattr(t, '_strides') else ()
+                def _logical_to_physical_byte(p):
+                    if not shape:
+                        return p * el_bytes
+                    off = 0
+                    rem = p
+                    for d in range(len(shape) - 1, -1, -1):
+                        coord = rem % shape[d]
+                        rem //= shape[d]
+                        off += coord * strides[d]
+                    return off * el_bytes
                 for i in idxs:
                     buf = _np.zeros(1, dtype=np_dtype)
                     DeviceAllocator.memcpy(
                         buf.ctypes.data,
-                        t._data_ptr + i * el_bytes,
+                        t._data_ptr + _logical_to_physical_byte(i),
                         el_bytes, 2)  # kind=2 = D2H
                     # bf16 stored as fp16 numpy (raw bits) — convert via
                     # bit-cast for human-readable comparison.
