@@ -1,3 +1,53 @@
+# P-SANA-4KPX-RUNTIME — Verdict factuel final 2026-05-05/07
+
+## Update 2026-05-07 (final³ — fingerprint methodology cleaned, bug pinpointed)
+
+The op-by-op value diff (sequential vs triton_sequential) initially
+flagged ~70% of ops as divergent. Investigation revealed the
+fingerprint helper was reading NBXTensor at raw `_data_ptr + i *
+el_bytes` while reading torch.Tensor via `flatten()[i]`. Two methodology
+bugs:
+
+1. **Logical-to-physical mapping**: torch flatten respects strides;
+   raw byte offsets sample physical storage order. Disagrees on every
+   transposed view (commit a2fd933).
+2. **`_offset` not added**: NBXTensor stores `_offset` separately
+   from `_data_ptr`; narrow/select shift only `_offset`. Reading raw
+   `_data_ptr` for a slice gave parent storage from offset 0 → every
+   `aten.slice::N` flagged divergent (commit aadf5b0).
+
+After both fixes, re-run triton_sequential, re-diff. The trace is now
+CLEAN through op_idx 0-3. The FIRST real divergence is:
+
+```
+op_idx=4 op_uid=aten.convolution::0   n_div=5/5  max_rel=1.34
+seq    = [0.1125, 0.915, 0.1125, 0.915, -0.1318]
+tri    = [0.4619, -0.3113, 0.4619, -0.3113, -0.2042]
+```
+
+Sana 4Kpx shape: `(2, 32, 128, 128) → (2, 2240, 128, 128)` — 1×1
+conv, stride 1, padding 0, groups 1. batch_dim = 2*128*128 = 32768.
+Sana 1024 same op type, batch_dim=2048 → coherent PNG.
+
+The bug lives in `conv2d_forward_kernel` (or its wrapper / autotune
+config selection) at this specific shape, NOT in upstream propagation.
+All upstream ops (text_encoder + first 4 transformer ops) align.
+
+**Next concrete steps**:
+
+1. Read kernel source for the 1×1 case at concrete numbers
+   (batch_dim=32768, in_c=32, out_c=2240, BLOCK_BHW=64).
+2. Bisect autotune by forcing one config and re-testing. Eliminates
+   "buggy autotune choice" from "kernel logic bug" hypothesis.
+3. Instrument wrapper call to dump (data_ptr, strides, dims, dtype)
+   for first conv::0 in both paths — verify identical parameters.
+4. If kernel is the bug: fix or route 1×1 conv via mm reshape
+   (`(N*H*W, C_in) @ (C_in, C_out)`).
+
+ETA: 2-3h + R29 4-mode validation when fixed.
+
+---
+
 # P-SANA-4KPX-RUNTIME — Verdict factuel final 2026-05-05/06
 
 ## Bisection scientifique aboutie — 4 modes, 4 verdicts factuels (post Fix B)
