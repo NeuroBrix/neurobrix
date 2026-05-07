@@ -2219,11 +2219,17 @@ class GraphExecutor:
                         rem //= shape[d]
                         off += coord * strides[d]
                     return off * el_bytes
+                # Use t.data_ptr() — it adds _offset * el_bytes for
+                # sliced/narrowed views (NBXTensor stores _offset
+                # separately from _data_ptr; narrow/select update
+                # _offset but keep _data_ptr pointing at the parent
+                # storage base).
+                base_ptr = t.data_ptr()
                 for i in idxs:
                     buf = _np.zeros(1, dtype=np_dtype)
                     DeviceAllocator.memcpy(
                         buf.ctypes.data,
-                        t._data_ptr + _logical_to_physical_byte(i),
+                        base_ptr + _logical_to_physical_byte(i),
                         el_bytes, 2)  # kind=2 = D2H
                     # bf16 stored as fp16 numpy (raw bits) — convert via
                     # bit-cast for human-readable comparison.
