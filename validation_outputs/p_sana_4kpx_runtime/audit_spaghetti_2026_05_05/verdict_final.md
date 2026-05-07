@@ -1,5 +1,108 @@
 # P-SANA-4KPX-RUNTIME — Verdict factuel final 2026-05-05/07
 
+## Update 2026-05-07 (final⁷ — bug nature identified: drift amplification, not kernel bug)
+
+### Six microtests at exact failing shapes — ALL BIT-EXACT
+
+| Kernel | Shape (4Kpx) | Result vs torch reference |
+|---|---|---|
+| conv2d_forward_kernel | (2,32,128,128)→(2,2240,128,128) bf16/fp16 | BIT-EXACT |
+| pos_embed add (broadcast) | (2,16384,2240) + (1,16384,2240) | BIT-EXACT |
+| bmm cross-attn QK^T | (140,33,16384) × (140,16384,32) | BIT-EXACT |
+| softmax fp32 | scales 1, 1e6, 1e7 | BIT-EXACT (sum=1.0) |
+| mm self-attn Q | (32768,2240) × (2240,2240) fp32 | BIT-EXACT |
+| (Sana 1024 control mm) | (2048,2240) × (2240,2240) fp32 | 5e-4 noise (1 sign flip / 4.5M) |
+
+### Sequential 4Kpx vs triton_seq 4Kpx — error growth trajectory
+
+Same model, same prompt, same seed, same graph. Only the backend
+differs (PyTorch cuDNN vs NBX Triton).
+
+| Threshold | First op | Component | max_d |
+|---|---|---|---|
+| abs_d ≥ 1   | aten.mean::78 | text_encoder | 1 (drift on value=5790) |
+| abs_d ≥ 10  | aten.mm::0    | transformer iter 1, block.0.self_attn.query | 26.64 (sign flip pos 2) |
+| abs_d ≥ 100 | aten.bmm::0   | transformer iter 1 | 420 |
+| abs_d ≥ 1k  | aten.bmm::1   | transformer iter 1 cross-attn QK^T | **1.47e+06** |
+
+### Mechanism — drift amplification through softmax
+
+bmm::0 → softmax → bmm::1 chain:
+1. tiny cuDNN-vs-NBX numerical drift in text_encoder (~0.02% rel on
+   activations of magnitude ~5000).
+2. mm Q-projection: drift becomes 26 absolute (sign flip on small
+   value within otherwise-aligned matrix).
+3. bmm::0 (cross-attn scores from one Q row): drift = 420 on values
+   of magnitude 40,000 (~1% rel).
+4. softmax of (40000, 39580): exponentiation amplifies the 1%
+   relative input difference into orders-of-magnitude output
+   differences (probability mass flips between competing positions).
+5. bmm::1 (softmax_probs @ V): catastrophic 1.47M absolute divergence
+   from cuDNN reference.
+
+This isn't a kernel bug — it's the **chaotic-dynamics nature of
+attention at the magnitude regime Sana 4Kpx hits**. Tiny numerical
+drift between cuDNN and NBX Triton gets amplified by softmax of
+high-magnitude pre-softmax scores. Sana 1024 doesn't exhibit this
+because its smaller seq_len keeps scores in a regime where 1%
+relative drift doesn't flip softmax mass distribution.
+
+### What this means for the chantier
+
+The conclusion changes the resolution path:
+
+A) **Match cuDNN behavior numerically**: NBX mm/bmm needs to
+   reproduce cuDNN's accumulation order on Volta sm_70 to within
+   tighter tolerance than 1% relative. This requires either
+   (a) bit-exact GEMM that matches cuBLAS on Volta (autotune not
+   sufficient — it's already at 12% perf vs cuBLAS, the gap is
+   structural per CLAUDE.md autotune doctrine), or
+   (b) higher precision accumulation (fp32→fp64) for the chain
+   before softmax — costly.
+
+B) **Reduce attention-chain sensitivity**: pre-softmax score
+   magnitude 4e+04 in fp32 is high but representable. cuDNN handles
+   it; NBX path's bit-pattern of accumulation does not match
+   cuDNN's. A targeted patch could force NBX softmax to use a
+   higher-precision intermediate, or apply attention scale before
+   bmm to keep magnitudes lower.
+
+C) **Numerical reproducibility audit**: trace cuDNN vs NBX accumulation
+   block-by-block at a representative mm to identify exactly where
+   the 0.02% rel drift originates. If it's a specific NBX
+   block-config choice, target that.
+
+### Microtest gap — what tests don't exhibit the drift
+
+Random-input microtests of mm/bmm at the failing shapes ALL show
+bit-exact match with torch. The drift only manifests when the
+inputs come from the actual pipeline — i.e., from a chain of
+preceding NBX ops. This means the issue is **input-dependent**,
+not shape-dependent. A specific structure in the pipeline's
+intermediate activations triggers the cuDNN-vs-NBX divergence,
+not the matrix shapes themselves.
+
+ETA next session: 1-2h targeted instrumentation comparing
+intermediate activations seq vs tri at a single transformer block
+to identify which kernel's intermediate output first drifts beyond
+expected fp32 noise.
+
+Commits this session (final list, 11 total):
+- `a2fd933` fingerprint logical→physical mapping
+- `aadf5b0` fingerprint via data_ptr() (slice/narrow alignment)
+- `1c78a62` (superseded) verdict pointing at conv kernel
+- `4c41e15` microtest disproves conv kernel
+- `4508293` triton 1024 vs 4Kpx oracle
+- `8104c8d` fingerprint drops n-1, uses 5 interior positions
+- `4f939bd` clean diff reveals magnitudes are not the bug
+- `0c9588a` softmax bit-exact, 4Kpx PNG is structured texture
+- (this update) 6 kernels acquitted by microtest; bug is drift
+  amplification through softmax at attention chain; resolution
+  path requires either cuDNN-bit-match or higher-precision
+  intermediate for attention chain
+
+---
+
 ## Update 2026-05-07 (final⁶ — softmax cleared, 4Kpx PNG inspected)
 
 ### Microtest sweep results
