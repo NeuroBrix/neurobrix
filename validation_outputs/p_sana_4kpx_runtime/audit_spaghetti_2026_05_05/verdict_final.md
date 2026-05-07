@@ -582,6 +582,44 @@ dernier tile à batch 32K.
 
 ETA estimé: 1-2h lecture mm kernel + identification fix + validation.
 
+## Update 2026-05-07 (final² — bisection convergence)
+
+Bisection raffinée révèle: **mm::17 noise est secondaire**. La VRAIE
+SOURCE de divergence est `aten.convolution::0` (transformer patch_embed)
+qui DIVERGE DEPUIS LA PREMIÈRE INVOCATION en iter 1, pas une accumulation.
+
+- iter 1 op 4 `aten.convolution::0` shape `(2, 32, 128, 128) → (2, 2240, 128, 128)`:
+  - Sequential: `[0.1125, 0.915, 0.1125, 0.915, -0.1318]`
+  - Triton:     `[0.2079, -2.018, 0.2079, -2.018, -0.1721]`
+  - delta=2.9 — pas du noise, **vraies valeurs différentes**
+- iter 0 (text_encoder, no conv): zero divergence
+- iter 1 OPS BEFORE conv::0 (op 0-3 = mask setup): zero divergence
+- conv::0 reçoit MÊME input dans les 2 paths, produit OUTPUT DIFFÉRENT
+
+**Comparaison Sana 1024 (works) vs Sana 4Kpx (broken)**:
+- Sana 1024 conv::0: `(2, 32, 32, 32) → (2, 2240, 32, 32)` — batch_dim = 2*32*32 = **2048** — works
+- Sana 4Kpx conv::0: `(2, 32, 128, 128) → (2, 2240, 128, 128)` — batch_dim = 2*128*128 = **32768** — broken
+
+Le bug est dans `conv2d_forward_kernel` à batch_dim = 32768 (16x plus
+grand que Sana 1024). Le kernel est 1×1 conv stride 1 padding 0 groups 1
+(patch_embed projection 32→2240).
+
+**Hypothèses raffinées pour l'op spécifique**:
+1. Autotune choisit BLOCK_BHW pour 32768 qui produit valeurs incorrectes
+2. Int overflow dans une multiplication d'offset à grande batch
+3. Mask handling spécifique à batch_dim non-power-of-something à grand
+   nombre de blocks
+4. tl.dot precision issue à large M dim avec fp32 accumulation
+
+mm::17 divergence (0.021 position 4) était fp16 reduction-order noise
+(pas un bug).
+
+**Next factuel**: lire conv2d_forward_kernel ligne 75-141 + simuler
+batch_dim=32768 avec Triton offline pour pinpoint le défaut au config
+ou kernel-level.
+
+ETA: 2-3h lecture + simulation + fix + validation R29.
+
 ## Discipline maintenue
 
 - Pas de "INDÉTERMINÉ" — chaque verdict est factuel avec adresse mémoire,
