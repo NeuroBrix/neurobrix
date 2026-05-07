@@ -1,5 +1,72 @@
 # P-SANA-4KPX-RUNTIME — Verdict factuel final 2026-05-05/07
 
+## Update 2026-05-07 (final⁸ — VAE acquitted, bug lives in transformer)
+
+Per user's plan step (3) discriminator: instrument transformer→VAE
+boundary in seq 4Kpx (PNG coherent, gold) vs tri 4Kpx (PNG garbage).
+
+### Boundary diff results
+
+| Position | Op | seq vs tri max_d | Notes |
+|---|---|---|---|
+| Last transformer op (line 35025) | aten.clone::81 | **0.998** on values ~1 | 100% rel drift |
+| First VAE op (line 35026) | aten.unsqueeze::0 | 13.54 | downstream of corrupted latent |
+| Last VAE op (line 35761) | aten.convolution::69 | structured | decoded garbage → garbage |
+
+### Discriminator verdict
+
+**VAE is INNOCENT**. The transformer's noise prediction at iteration
+11 already differs by 100% relative between seq (cuDNN) and tri (NBX)
+paths. After 12 scheduler iterations, the cumulative drift in the
+latent is fully developed; VAE receives a wrong latent and faithfully
+decodes the wrong-but-structured input into structured-but-wrong
+output (the green texture pattern observed in the garbage PNG).
+
+Bug location confirmed: **transformer cross-attention chain**.
+Mechanism: tiny cuDNN-vs-NBX fp32 numerical drift gets amplified
+exponentially through softmax of high-magnitude pre-softmax cross-
+attention scores at Sana 4Kpx scale (K=16384 reduction).
+
+Sana 1024 doesn't exhibit this because K=1024 keeps pre-softmax
+scores in a regime where 1% drift doesn't flip softmax mass.
+
+### Final session commit list (12 total)
+
+- `a2fd933` fingerprint logical→physical mapping
+- `aadf5b0` fingerprint via data_ptr() (slice/narrow alignment)
+- `1c78a62` (superseded) verdict pointing at conv kernel
+- `4c41e15` microtest disproves conv kernel
+- `4508293` triton 1024 vs 4Kpx oracle redirect
+- `8104c8d` fingerprint drops n-1, uses 5 interior positions
+- `4f939bd` clean diff reveals magnitudes are not the bug
+- `0c9588a` softmax bit-exact, 4Kpx PNG is structured texture
+- `3cd1595` bug nature: drift amplification, not kernel bug
+- (this update) VAE acquitted, transformer cross-attention chain
+  is bug location
+
+### Resolution path (next chantier)
+
+This is a **numerical-precision gap** between PyTorch (cuDNN/cuBLAS)
+and NBX (Triton). Three options:
+
+A) Bit-match cuDNN GEMM accumulation pattern on Volta. Structural
+   ~12% perf gap per CLAUDE.md autotune doctrine — fundamentally
+   hard given Triton compiler's dot lowering on sm_70.
+
+B) Higher-precision intermediate (fp64) for the attention chain,
+   specifically pre-softmax scores. Costly (~2× memory) but
+   eliminates the chaotic-amplification regime.
+
+C) Algorithm-level fix: apply attention scaling 1/sqrt(d_head) BEFORE
+   bmm Q@K^T instead of after, keeping pre-softmax magnitudes
+   bounded. Mirrors the F2a pattern of structural fixes.
+
+User direction needed on which path A/B/C to pursue in the next
+session. The chantier methodology is now complete: bug nature
+characterized, location pinpointed, kernels acquitted by microtest.
+
+---
+
 ## Update 2026-05-07 (final⁷ — bug nature identified: drift amplification, not kernel bug)
 
 ### Six microtests at exact failing shapes — ALL BIT-EXACT
