@@ -467,6 +467,55 @@ several days (P-MULTI-GPU-NBX-ADAPTER scope).
 prematuré (option 3 reste backup). Le chantier reste ouvert avec
 1-2 options option 1/option 2 actionable scopable.
 
+## Update 2026-05-07 (later) — Option 1 attempted, factually rejected
+
+**Tentative**: Option 1 (autotune bypass for conv::69 via `out_c<=8`
+heuristic + direct `conv2d_forward_kernel.fn[grid]` call with
+fixed Volta-viable config).
+
+**Etape14**: BLOCK_BHW=64, BLOCK_OUTF=32, BLOCK_INF=32, num_warps=4
+→ run completes WITHOUT OOM (autotune workspace bypassed) →
+**PNG produced 47 MB at 4Kpx for the first time**, but visual
+inspection shows GREEN TEXTURE NOISE pattern, not the expected
+red apple. R29 visual FAIL.
+
+**Etape15**: smaller config BLOCK_OUTF=16, BLOCK_INF=16,
+num_warps=2 → same GARBAGE output, same shape pattern.
+
+**Numerical microtest**: bypass kernel call vs autotune'd call on
+small (1,32,16,16) input → max|diff| = 0.0 (bit-identical).
+
+**Sana 1024 triton regression check**: PNG COHERENT post-fixes
+(commits cd5a108, beeab71). My fixes (loop-var, rms_norm
+in-place, add bias broadcast) are numerically correct.
+
+**Conclusion factuelle**: the bypass is numerically correct on
+small shapes but produces garbage at 4Kpx scale. Some Triton
+kernel-launch detail differs between the autotune wrapper and
+direct .fn[grid] call at this specific scale. Debugging the
+exact mechanism would require comparing per-tile output between
+the two paths — beyond the immediate session scope.
+
+**Option 1 STATUS**: REJECTED. The bypass approach can't be
+trivially used as a workaround.
+
+**Revert**: bypass removed from `conv2d_wrapper` (commit reverted
+to autotune'd path). 5 prior fixes (08cbe15, cd5a108, beeab71)
+remain; chain advance to conv::69 OOM remains the structural
+ceiling.
+
+**Next concrete options**:
+- Option 2 (pre-warm autotune cache at startup, ~60-90 min)
+- Reduce live by another ~1-2 GB via additional in-place
+  optimization in the post-pixel_shuffle chain (e.g. residual
+  add::89 reuse pattern audit)
+- P-MULTI-GPU-NBX-ADAPTER pivot (backup, several days)
+
+**Etat session**: 6 commits land cette session. compiled+sequential
+triton modes PASS R29. triton compiled OOM at conv::69 = LAST conv
+before output. Chain advance +27 ops vs original. 2 GB GPU
+headroom shortage at conv::69 entry.
+
 ## Discipline maintenue
 
 - Pas de "INDÉTERMINÉ" — chaque verdict est factuel avec adresse mémoire,
