@@ -18,6 +18,8 @@ Handles mm (2D) + addmm (with bias). bmm handled in wrappers via batch loop.
 import triton
 import triton.language as tl
 
+from ._autotune_policy import maybe_pin_single, is_matmul_pinned
+
 
 # Per-architecture autotune configs (tutorial pattern
 # `get_cuda_autotune_config()` adapted to NeuroBrix: gate by detected
@@ -84,7 +86,8 @@ def _detect_arch_configs():
         return _MATMUL_AUTOTUNE_VOLTA
 
 
-_MATMUL_AUTOTUNE_CONFIGS = _detect_arch_configs()
+_MATMUL_AUTOTUNE_CONFIGS = maybe_pin_single(
+    _detect_arch_configs(), is_matmul_pinned)
 
 
 @triton.autotune(configs=_MATMUL_AUTOTUNE_CONFIGS,

@@ -27,17 +27,22 @@ unrolled at compile time via `tl.constexpr` for kh, kw.
 import triton
 import triton.language as tl
 
+from ._autotune_policy import maybe_pin_single, is_depthwise_conv2d_pinned
+
+
+_DEPTHWISE_CONV2D_CONFIGS = [
+    triton.Config({'BLOCK_HW': 32, 'BLOCK_C': 32}, num_stages=2, num_warps=2),
+    triton.Config({'BLOCK_HW': 64, 'BLOCK_C': 32}, num_stages=2, num_warps=4),
+    triton.Config({'BLOCK_HW': 64, 'BLOCK_C': 64}, num_stages=2, num_warps=4),
+    triton.Config({'BLOCK_HW': 128, 'BLOCK_C': 32}, num_stages=2, num_warps=4),
+    triton.Config({'BLOCK_HW': 32, 'BLOCK_C': 64}, num_stages=2, num_warps=4),
+    triton.Config({'BLOCK_HW': 64, 'BLOCK_C': 32}, num_stages=3, num_warps=4),
+    triton.Config({'BLOCK_HW': 128, 'BLOCK_C': 64}, num_stages=2, num_warps=8),
+]
+
 
 @triton.autotune(
-    configs=[
-        triton.Config({'BLOCK_HW': 32, 'BLOCK_C': 32}, num_stages=2, num_warps=2),
-        triton.Config({'BLOCK_HW': 64, 'BLOCK_C': 32}, num_stages=2, num_warps=4),
-        triton.Config({'BLOCK_HW': 64, 'BLOCK_C': 64}, num_stages=2, num_warps=4),
-        triton.Config({'BLOCK_HW': 128, 'BLOCK_C': 32}, num_stages=2, num_warps=4),
-        triton.Config({'BLOCK_HW': 32, 'BLOCK_C': 64}, num_stages=2, num_warps=4),
-        triton.Config({'BLOCK_HW': 64, 'BLOCK_C': 32}, num_stages=3, num_warps=4),
-        triton.Config({'BLOCK_HW': 128, 'BLOCK_C': 64}, num_stages=2, num_warps=8),
-    ],
+    configs=maybe_pin_single(_DEPTHWISE_CONV2D_CONFIGS, is_depthwise_conv2d_pinned),
     key=['C', 'H_in', 'W_in', 'H_out', 'W_out', 'kh', 'kw',
          'stride_h', 'stride_w', 'pad_h', 'pad_w', 'fp16'],
     cache_results=True,
