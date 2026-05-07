@@ -1741,6 +1741,27 @@ class GraphExecutor:
             for dead_tid in dead_at_op.get(op_idx, ()):
                 store.pop(dead_tid, None)
 
+            # Tensor-value fingerprint trace AFTER op runs, BEFORE
+            # kill_slots evicts. Mirrors [VALUE_TRACE path=native] in
+            # _execute_all_ops for sequential vs triton_sequential
+            # value diff. Gated by NBX_VALUE_DUMP_EVERY=N.
+            import os as _os_vdt
+            _vdt_per = int(_os_vdt.environ.get("NBX_VALUE_DUMP_EVERY",
+                                                 "0") or "0")
+            if _vdt_per > 0 and op_idx % _vdt_per == 0:
+                try:
+                    _vdt_t = None
+                    if output_tids and output_tids[0] in store:
+                        _vdt_t = store[output_tids[0]]
+                    _fp_t = self._value_fingerprint(_vdt_t)
+                    print(f"[VALUE_TRACE path=tritonseq op_idx={op_idx} "
+                          f"op_uid={op_uid} samp={_fp_t}]",
+                          flush=True)
+                except Exception as _e_vdt:
+                    print(f"[VALUE_TRACE path=tritonseq op_idx={op_idx} "
+                          f"op_uid={op_uid} ERR={_e_vdt}]",
+                          flush=True)
+
             # Per-op symmetric trace (post-cleanup, before next op runs).
             if _tsq_per > 0 and op_idx % _tsq_per == 0:
                 try:
@@ -2130,6 +2151,75 @@ class GraphExecutor:
                         # (downstream ops will handle via modular indexing)
                         break
 
+    def _value_fingerprint(self, t):
+        """Sample 5 values from a tensor (torch.Tensor or NBXTensor) at
+        fixed flat positions [0, n//4, n//2, 3n//4, n-1] for sequential
+        vs triton_sequential value diff. Returns a compact string. For
+        large tensors, samples via per-scalar copy_d2h to avoid full
+        tensor materialization on host. Tuple outputs sample first
+        element only. Non-float dtypes return "ints".
+        P-SANA-4KPX-RUNTIME 2026-05-07."""
+        import numpy as _np
+        if t is None:
+            return "None"
+        if isinstance(t, tuple):
+            t = t[0] if t else None
+            if t is None:
+                return "tuple_empty"
+        try:
+            if isinstance(t, torch.Tensor):
+                n = t.numel()
+                if n == 0:
+                    return "empty"
+                if not t.is_floating_point():
+                    return f"int_dtype={t.dtype}"
+                fl = t.flatten()
+                idxs = (0, n // 4, n // 2, 3 * n // 4, n - 1)
+                samples = [float(fl[i].cpu()) for i in idxs]
+                return f"[{','.join(f'{s:.4g}' for s in samples)}]"
+        except Exception as _e:
+            return f"ERR_torch:{_e}"
+        try:
+            from neurobrix.kernels.nbx_tensor import (
+                NBXTensor, NBXDtype, DeviceAllocator)
+            if isinstance(t, NBXTensor):
+                n = t._numel
+                if n == 0:
+                    return "empty"
+                if t._dtype not in (NBXDtype.float32, NBXDtype.float16,
+                                    NBXDtype.bfloat16):
+                    return f"int_dtype={t._dtype}"
+                # Map NBX dtype -> numpy dtype + element-size bytes.
+                np_dtype_map = {NBXDtype.float32: _np.float32,
+                                NBXDtype.float16: _np.float16,
+                                NBXDtype.bfloat16: _np.float16}
+                np_dtype = np_dtype_map[t._dtype]
+                el_bytes = {NBXDtype.float32: 4,
+                            NBXDtype.float16: 2,
+                            NBXDtype.bfloat16: 2}[t._dtype]
+                idxs = (0, n // 4, n // 2, 3 * n // 4, n - 1)
+                samples = []
+                for i in idxs:
+                    buf = _np.zeros(1, dtype=np_dtype)
+                    DeviceAllocator.memcpy(
+                        buf.ctypes.data,
+                        t._data_ptr + i * el_bytes,
+                        el_bytes, 2)  # kind=2 = D2H
+                    # bf16 stored as fp16 numpy (raw bits) — convert via
+                    # bit-cast for human-readable comparison.
+                    if t._dtype == NBXDtype.bfloat16:
+                        u = buf.view(_np.uint16)[0]
+                        # bf16 -> fp32: shift left 16 bits
+                        f32_bits = int(u) << 16
+                        samples.append(float(_np.array(
+                            f32_bits, dtype=_np.uint32).view(_np.float32)))
+                    else:
+                        samples.append(float(buf[0]))
+                return f"[{','.join(f'{s:.4g}' for s in samples)}]"
+        except Exception as _e:
+            return f"ERR_nbx:{_e}"
+        return f"unknown:{type(t).__name__}"
+
     def _execute_all_ops(self) -> ExecutionStats:
         """
         Execute all ops in execution order.
@@ -2184,6 +2274,29 @@ class GraphExecutor:
 
                 # NAN/INF guard for TRITON ops only
                 self._check_nan_inf(op_uid, op_type, exec_type)
+
+                # Tensor-value fingerprint trace BEFORE op_outputs[op_uid]
+                # is deleted. Mirrors the [VALUE_TRACE] format in
+                # _run_triton_sequential. Gated by NBX_VALUE_DUMP_EVERY=N.
+                import os as _os_vd
+                _vd_per = int(_os_vd.environ.get("NBX_VALUE_DUMP_EVERY",
+                                                  "0") or "0")
+                if _vd_per > 0 and i % _vd_per == 0:
+                    try:
+                        _vd_t = None
+                        # op_outputs[op_uid] is a list of tensors (one per
+                        # output tid). Grab first output for fingerprint.
+                        _ol = self._ctx.op_outputs.get(op_uid)
+                        if isinstance(_ol, list) and _ol:
+                            _vd_t = _ol[0]
+                        _fp = self._value_fingerprint(_vd_t)
+                        print(f"[VALUE_TRACE path=native op_idx={i} "
+                              f"op_uid={op_uid} samp={_fp}]",
+                              flush=True)
+                    except Exception as _e_vd:
+                        print(f"[VALUE_TRACE path=native op_idx={i} "
+                              f"op_uid={op_uid} ERR={_e_vd}]",
+                              flush=True)
 
                 # Clear op_outputs entry after nan/inf check (memory management)
                 if op_uid in self._ctx.op_outputs:
