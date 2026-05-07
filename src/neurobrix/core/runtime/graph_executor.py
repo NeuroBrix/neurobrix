@@ -1659,6 +1659,17 @@ class GraphExecutor:
         # hook and zero3-weighted ops run against CPU pointers.
         cb = self._pre_op_callback or self._persistent_pre_op_callback
         num_ops = 0
+
+        # Symmetric instrumentation parity with `_execute_native_graph`'s
+        # NBX_NATIVE_LIVE_DUMP_EVERY. NBX_TRITONSEQ_LIVE_DUMP_EVERY=N logs
+        # the NBX live_tracked counter every N ops as
+        # `[OP_TRACE path=tritonseq op_idx=N op_uid=U live_mb=X out_ptr=P]`
+        # so a sequential vs triton_sequential bisection has comparable
+        # per-op traces. P-SANA-4KPX-RUNTIME 2026-05-07.
+        import os as _os_tsq
+        _tsq_per = int(_os_tsq.environ.get("NBX_TRITONSEQ_LIVE_DUMP_EVERY",
+                                            "0") or "0")
+
         for op_idx, op_uid in enumerate(exec_order):
             op_data = ops_meta.get(op_uid)
             if op_data is None:
@@ -1729,6 +1740,26 @@ class GraphExecutor:
             # comment before the loop for the motivation.
             for dead_tid in dead_at_op.get(op_idx, ()):
                 store.pop(dead_tid, None)
+
+            # Per-op symmetric trace (post-cleanup, before next op runs).
+            if _tsq_per > 0 and op_idx % _tsq_per == 0:
+                try:
+                    from neurobrix.kernels.nbx_tensor import (
+                        DeviceAllocator as _DA_ts)
+                    # Sum NBX live across all devices for parity with
+                    # native path.
+                    _live = sum(_DA_ts._cuda_live_bytes.values()) / 1024 / 1024
+                    _out_ptr = "?"
+                    if output_tids and output_tids[0] in store:
+                        _t = store[output_tids[0]]
+                        _out_ptr = str(getattr(_t, '_data_ptr',
+                                               getattr(_t, 'data_ptr',
+                                                       lambda: '?')()))
+                    print(f"[OP_TRACE path=tritonseq op_idx={op_idx} "
+                          f"op_uid={op_uid} live_mb={_live:.0f} "
+                          f"out_ptr={_out_ptr}]", flush=True)
+                except Exception:
+                    pass
 
             num_ops += 1
 
@@ -2166,8 +2197,30 @@ class GraphExecutor:
 
             if _native_per > 0 and i % _native_per == 0:
                 try:
-                    _live = torch.cuda.memory_allocated() / 1024 / 1024
-                    _peak = torch.cuda.max_memory_allocated() / 1024 / 1024
+                    # Sum live across all CUDA devices — Sana 4Kpx VAE
+                    # runs on cuda:2 per Prism placement, but other
+                    # components may use other devices. Aggregate so
+                    # the trace matches the NBX `_cuda_live_bytes` sum.
+                    _live = 0.0
+                    _peak = 0.0
+                    for _di in range(torch.cuda.device_count()):
+                        _live += torch.cuda.memory_allocated(_di) / 1024 / 1024
+                        _peak += torch.cuda.max_memory_allocated(_di) / 1024 / 1024
+                    output_tids = op_data.get("output_tensor_ids", [])
+                    _out_ptr = "?"
+                    if output_tids:
+                        _o = self._ctx.op_outputs.get(output_tids[0])
+                        if _o is None:
+                            _o = self._ctx.op_outputs.get(op_uid)
+                        if _o is not None and hasattr(_o, 'data_ptr'):
+                            try:
+                                _out_ptr = str(_o.data_ptr())
+                            except Exception:
+                                pass
+                    print(f"[OP_TRACE path=native op_idx={i} "
+                          f"op_uid={op_uid} live_mb={_live:.0f} "
+                          f"out_ptr={_out_ptr}]", flush=True)
+                    # Legacy format for backward compat.
                     print(f"[NATIVE_LIVE_TRACK op_idx={i} {op_uid}] "
                           f"live={_live:.0f}MB peak={_peak:.0f}MB",
                           flush=True)
