@@ -33,18 +33,63 @@ The bug lives in `conv2d_forward_kernel` (or its wrapper / autotune
 config selection) at this specific shape, NOT in upstream propagation.
 All upstream ops (text_encoder + first 4 transformer ops) align.
 
+**Microtest verdict (2026-05-07 14:50 UTC)**:
+
+Built a focused microtest at the EXACT failing shape `(2,32,128,128) →
+(2,2240,128,128)`, 1×1 conv, random inputs. NBX `conv2d_wrapper`
+output matches torch cuDNN reference **BIT-EXACT** in both dtypes:
+
+| Path | NBX max abs diff vs cuDNN | Verdict |
+|---|---|---|
+| bf16 | 0.000 (BIT-EXACT) | clean |
+| fp16 | 0.00195 (= 1 fp16 ULP) | clean |
+
+The kernel is **NOT buggy** at this shape. The bug is **upstream of
+conv::0 in the pipeline** — different inputs and/or weights flowing
+into the conv between sequential and triton_sequential paths.
+
+Supporting evidence: `aten.mul::394` at op_idx=3447 (last text_encoder
+op before transformer starts) shows position-4 divergence
+(seq=-2.464 vs tri=-4.853, 2× difference). text_encoder feeds
+cross-attention not patch_embed conv, but it shows that NBX path
+diverges from torch path even on text_encoder's own ops. So the
+input-divergence hypothesis has a known starting point.
+
+Latent generation is via `torch.randn(seed)` in `variable_resolver.py`
+which is SHARED between sequential and triton_sequential paths —
+should be deterministically identical. So divergence is not in
+randn; suspect either:
+
+1. Weight-loading dtype/conversion differs between
+   `core/runtime/weight_loader.py` (sequential) and
+   `triton/weight_loader.py` (triton). Both load bf16 safetensors,
+   but they take different paths to GPU. If one path applies a
+   transform the other doesn't, weight values differ.
+2. `_NBX_COMPUTE_DTYPE` set by Prism + TritonSequence may force a
+   bf16→fp16 downcast on Volta that doesn't happen in sequential.
+3. Some tensor going through NBX↔torch boundary mid-pipeline
+   produces a fingerprint-invisible difference that compounds.
+
 **Next concrete steps**:
 
-1. Read kernel source for the 1×1 case at concrete numbers
-   (batch_dim=32768, in_c=32, out_c=2240, BLOCK_BHW=64).
-2. Bisect autotune by forcing one config and re-testing. Eliminates
-   "buggy autotune choice" from "kernel logic bug" hypothesis.
-3. Instrument wrapper call to dump (data_ptr, strides, dims, dtype)
-   for first conv::0 in both paths — verify identical parameters.
-4. If kernel is the bug: fix or route 1×1 conv via mm reshape
-   (`(N*H*W, C_in) @ (C_in, C_out)`).
+1. Instrument `conv2d_wrapper` (triton path) AND graph_executor's
+   `_handle_aten__convolution` (sequential path) to dump conv::0's
+   INPUT fingerprint and WEIGHT fingerprint on first invocation of
+   transformer. Compare. This isolates input-divergence from
+   weight-divergence.
+2. Same pattern at text_encoder mul::394 — what mul::394's two
+   inputs are, and why the position-4 result differs.
+3. Audit weight_loader paths for any dtype-conversion asymmetry on
+   Volta (bf16 storage → fp16 compute path).
 
-ETA: 2-3h + R29 4-mode validation when fixed.
+ETA: 1-2h instrumentation + analysis + targeted fix.
+
+Commits this session:
+- `a2fd933` fingerprint logical→physical mapping (transpose alignment)
+- `aadf5b0` fingerprint via data_ptr() (slice/narrow alignment)
+- `1c78a62` (now superseded) verdict pointing at conv kernel
+- (this update) microtest disproves kernel hypothesis, redirects to
+  pipeline-input divergence
 
 ---
 
