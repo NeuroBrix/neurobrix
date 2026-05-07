@@ -1,5 +1,92 @@
 # P-SANA-4KPX-RUNTIME — Verdict factuel final 2026-05-05/07
 
+## Update 2026-05-07 (final⁹ — autotune ELIMINATED as cause via Cas B)
+
+User imposed scientific discipline: before any architectural multi-week
+chantier (bit-match cuDNN GEMM, fp64 intermediate, scaling order
+change), isolate the autotune variable factually in a single test.
+
+### NBX_DISABLE_AUTOTUNE diagnostic implemented (commit `fcf84b7`)
+
+A new env var `NBX_DISABLE_AUTOTUNE=1` filters all `@triton.autotune`
+config lists across the 4 autotuned kernels (matmul mm+addmm,
+baddbmm bmm, conv2d, depthwise_conv2d) down to a single Volta-safe
+static config:
+- mm/bmm/addmm: `BLOCK_M=64, BLOCK_N=64, BLOCK_K=32, num_warps=4, num_stages=2`
+- conv2d: `BLOCK_BHW=64, BLOCK_OUTF=64, BLOCK_INF=32, num_warps=4, num_stages=2`
+- depthwise_conv2d: `BLOCK_HW=64, BLOCK_C=32`
+
+Universal R23 (works on V100 sm_70 / Ampere+ — Volta-viable subset
+fits all SMs).
+
+### Discriminant test results
+
+| Test | Wall | PNG |
+|---|---|---|
+| Sana 1024 triton_seq + DISABLE_AUTOTUNE | 57s | ✅ COHERENT (red apple) |
+| Sana 4Kpx triton_seq + DISABLE_AUTOTUNE | 402s | ❌ GARBAGE (same green texture) |
+
+Sana 1024 anti-régression PASS (R29 visual). Sana 4Kpx PNG with
+disabled autotune is **identical garbage pattern** as the autotune-
+enabled run.
+
+### **Cas B confirmed — autotune is NOT the cause**
+
+The bug persists when a single static config is used identically at
+all shapes. Shape-dependence is therefore NOT in config selection.
+The investigation must shift away from autotune-related hypotheses.
+
+### Remaining hypotheses (after autotune elimination)
+
+The bug is shape-dependent but not config-dependent. Suspects:
+
+1. **Reduction order in fp32 accumulation** — softmax/layer_norm/
+   rms_norm sum reductions may accumulate in different order than
+   cuDNN, producing slightly different but bounded numerics that
+   amplify only at large seq_len. This matches the trajectory
+   observed (drift entry at text_encoder mean::78, sign flip at
+   self-attn mm::0, catastrophic at cross-attn bmm::1).
+
+2. **Specific layout/stride handling at large spatial** — NHWC vs
+   NCHW handling, or some op that handles strides incorrectly at
+   shapes where stride*dim exceeds some threshold (int32 boundary
+   = 2^31 ≈ 2.15e9; Sana 4Kpx tensors are well below this but
+   intermediate offset computations may overflow).
+
+3. **dtype intermediate in a specific NBX op** — maybe one op
+   doesn't upcast fp16→fp32 the way cuDNN does, causing a precision
+   loss that compounds in the long attention chain at 4Kpx.
+
+### Next concrete investigation (next session)
+
+Per discipline, no more architectural speculation. Decisive next
+test: instrument NBX softmax + rms_norm + layer_norm to dump their
+intermediate fp32 reduction values during pipeline execution. Diff
+seq vs tri 4Kpx at these specific reduction operations. If reduction
+order differs measurably between cuDNN and NBX → suspect 1 confirmed.
+If not, audit suspect 2 or 3 specifically.
+
+ETA next session: 30-60 min instrumentation + 5 min run + analysis.
+
+### Final session commit list (13 total)
+
+- `a2fd933` fingerprint logical→physical mapping
+- `aadf5b0` fingerprint via data_ptr() (slice/narrow alignment)
+- `1c78a62` (superseded) verdict pointing at conv kernel
+- `4c41e15` microtest disproves conv kernel
+- `4508293` triton 1024 vs 4Kpx oracle redirect
+- `8104c8d` fingerprint drops n-1, uses 5 interior positions
+- `4f939bd` clean diff reveals magnitudes are not the bug
+- `0c9588a` softmax bit-exact, 4Kpx PNG is structured texture
+- `3cd1595` bug nature: drift amplification (provisional)
+- `41e1ef5` VAE acquitted, bug in transformer
+- `fcf84b7` NBX_DISABLE_AUTOTUNE diagnostic + Cas B verdict
+- (this update) chantier methodology aligned: autotune eliminated
+  factually, focus shifts to reduction order / layout / dtype
+  intermediate as remaining hypotheses
+
+---
+
 ## Update 2026-05-07 (final⁸ — VAE acquitted, bug lives in transformer)
 
 Per user's plan step (3) discriminator: instrument transformer→VAE
