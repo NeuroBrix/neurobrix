@@ -1,5 +1,70 @@
 # P-SANA-4KPX-RUNTIME — Verdict factuel final 2026-05-05/07
 
+## Update 2026-05-07 (final⁶ — softmax cleared, 4Kpx PNG inspected)
+
+### Microtest sweep results
+
+| Kernel | At Sana 4Kpx shape | Verdict |
+|---|---|---|
+| conv2d_forward_kernel | (2,32,128,128)→(2,2240,128,128), bf16 + fp16 | BIT-EXACT vs cuDNN |
+| pos_embed add (broadcast) | (2,16384,2240) + (1,16384,2240) | BIT-EXACT vs torch |
+| bmm cross-attn | (140,33,16384) × (140,16384,32) | BIT-EXACT vs torch |
+| softmax (fp32) | (8,33,16384) at scales 1, 1e6, 1e7 | BIT-EXACT vs torch (sum=1.0, no NaN) |
+
+**Five candidate kernels eliminated** as bug sources by isolated
+microtest at the exact failing shapes.
+
+### Magnitude regime is NOT the bug
+
+Both Sana 1024 (PNG coherent) and Sana 4Kpx (PNG garbage) reach
+attention pre-softmax scores of magnitude 10⁶+. fp32 softmax max-
+subtraction handles both regimes correctly. NaN/Inf scan of 4Kpx
+trace shows zero spurious infinities (the 105 -inf entries are
+text_encoder mask saturation, identical between models).
+
+### 4Kpx PNG visual inspection
+
+Output is structured green texture with regular grain pattern (not
+random noise). This indicates **systematic miscomputation** in a
+specific op, not stability failure. The model executes mostly
+correctly but produces wrong-but-structured intermediate
+activations that decode to noise.
+
+### Remaining hypotheses
+
+1. **VAE 4Kpx specifically**: graph md5 differs from 1024
+   (`a7401c1d` vs `8abfd113`), shape-dependent op that cuDNN
+   handles in sequential mode but NBX mishandles in triton.
+2. **Transformer attribute-dependent op**: an op whose attributes
+   differ between 1024 and 4Kpx graphs (positional embedding scale,
+   shape-dependent attribute) where the NBX handler doesn't cover
+   the 4Kpx attribute case correctly.
+
+### Decisive next test (requires next session)
+
+Instrument the transformer→VAE boundary in BOTH sequential 4Kpx
+(coherent PNG) and triton 4Kpx (garbage PNG). Compare the
+transformer's last output (= VAE input) values:
+- If match: bug is in VAE 4Kpx only.
+- If differ: bug is in transformer at some op the current bisection
+  couldn't surface (likely a shape-attribute mismatch).
+
+ETA: 30 min instrumentation + 5 min run + diff = 1h to discriminate.
+
+Commits this session:
+- `a2fd933` fingerprint logical→physical mapping
+- `aadf5b0` fingerprint via data_ptr() (slice/narrow alignment)
+- `1c78a62` (superseded) verdict pointing at conv kernel
+- `4c41e15` microtest disproves conv kernel
+- `4508293` triton 1024 vs 4Kpx oracle
+- `8104c8d` fingerprint drops n-1, uses 5 interior positions
+- `4f939bd` clean diff reveals magnitudes are not the bug
+- (this update) softmax bit-exact at all magnitudes, 4Kpx PNG
+  is structured green texture (systematic miscomputation,
+  not overflow); next session: transformer→VAE boundary diff
+
+---
+
 ## Update 2026-05-07 (final⁵ — fingerprint clean, bug area localized)
 
 Per user's strict redirect: fingerprint helper had a 3rd bug at the
