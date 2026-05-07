@@ -1,5 +1,86 @@
 # P-SANA-4KPX-RUNTIME — Verdict factuel final 2026-05-05/07
 
+## Update 2026-05-07 (final⁵ — fingerprint clean, bug area localized)
+
+Per user's strict redirect: fingerprint helper had a 3rd bug at the
+n-1 sample (`pos[0..3] match, pos[4] differs` pattern in 100% of
+text_encoder ops, even though text_encoder graph md5 + safetensor
+md5 are bit-identical between Sana 1024 and Sana 4Kpx). Neither
+sync_device() nor the prior logical-to-physical fix eliminated this
+artifact. **Fix**: drop the n-1 sample. Use 5 interior positions
+`(0, n//8, n//4, n//2, 3n//4)` immune to any boundary-write artifact.
+Apply same change to torch path for symmetric semantics across paths.
+
+### Re-run with clean fingerprint (commit `8104c8d`):
+
+Sana 1024 triton_sequential v3 vs Sana 4Kpx triton_sequential v5:
+- text_encoder: **3261/3261 float ops bit-exact** (perfect alignment).
+- transformer iter 0 ops 0..6 (pre-pos_embed): bit-exact.
+- transformer iter 0 ops 7..end: alignment off-by-1 (4Kpx has extra
+  add::0 for pos_embed); after structural skip, downstream values
+  diverge by EXPECTED amount (fine-tunes have different weights).
+
+### Where divergence becomes ABNORMAL
+
+After skipping the structural extra add::0, the first op where
+4Kpx's max-abs significantly exceeds 1024's is at line 6927
+(transformer iter 1):
+
+```
+op_idx=79 aten.bmm::0   ratio 63×
+  1024 max-abs: 630.6   |   4Kpx max-abs: 4e+04
+```
+
+This is the cross-attention Q @ K^T:
+- 1024: bmm((140, 33, 1024),  (140, 1024, 32))
+- 4Kpx: bmm((140, 33, 16384), (140, 16384, 32))
+- Reduction dim K=16384 vs K=1024 (16× larger).
+
+### bmm kernel microtest at exact shapes
+
+```
+Sana_1024 ((140,33,1024), (140,1024,32)) -> max abs diff 0.000487 (fp16 ULP)
+Sana_4Kpx ((140,33,16384),(140,16384,32))-> max abs diff 0.002 (fp16 ULP)
+```
+
+NBX bmm is **BIT-EXACT vs torch.bmm at both shapes**. The 63× ratio
+reflects model-weight differences between Sana 1024 (MultiLing) and
+Sana 4Kpx (BF16) fine-tunes, NOT a kernel bug.
+
+### CRITICAL re-read
+
+Sana 1024 ALSO has values at ~10⁶ (e.g. line 6991: 1024=4.22e+05).
+**Sana 1024 PNG is coherent**, proving 10⁶ magnitudes are normal for
+pre-softmax attention scores. The failure mode at 4Kpx is therefore
+NOT the magnitudes themselves but how they propagate through some
+downstream op. Likely softmax / normalization at the magnitude
+regime where 4Kpx's 10⁷ values overflow the kernel's stability
+guards but 1024's 10⁶ values stay within them.
+
+### Next concrete investigation
+
+1. Find FIRST op where 4Kpx's NaN / Inf appears (vs 1024 staying
+   finite). Add NaN-detection to the diff over all components.
+2. Microtest NBX softmax kernel at large-magnitude inputs — check if
+   max-subtraction trick is applied for stability at fp16 inputs of
+   magnitude 10⁷.
+3. If softmax is OK, test layer_norm / rms_norm at large-magnitude
+   inputs — check for catastrophic cancellation in variance compute.
+
+ETA: 30 min instrumentation + microtests, then targeted fix.
+
+Commits this session (final list):
+- `a2fd933` fingerprint logical→physical mapping
+- `aadf5b0` fingerprint via data_ptr() (slice/narrow alignment)
+- `1c78a62` (superseded) verdict pointing at conv kernel
+- `4c41e15` microtest disproves conv kernel
+- `4508293` triton 1024 vs 4Kpx oracle redirect
+- `8104c8d` fingerprint drops n-1, uses 5 interior positions
+- (this update) bmm bit-exact, focus shifts to softmax/norm at
+  large-magnitude regime
+
+---
+
 ## Update 2026-05-07 (final⁴ — triton 1024 vs triton 4Kpx oracle redirected)
 
 User redirected the comparison: the correct oracle is **Sana 1024
