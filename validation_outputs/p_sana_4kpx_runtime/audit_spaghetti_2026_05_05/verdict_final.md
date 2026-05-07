@@ -424,6 +424,49 @@ non-contiguous input.
 
 ETA estimé pour clore: 1-2h investigation + fix targeted.
 
+## Update 2026-05-07 — etape13 force_gc test, hypothèses raffinées
+
+**Hypothèse (2) contiguous() materialization REFUTED** par audit
+DAG: conv::69 input = `aten.relu::18::out_0` (relu wrapper alloue
+output contigu via NBXTensor.empty_like — pas un permute view).
+Le path `x.contiguous()` dans conv2d_wrapper est no-op pour
+conv::69. Pas de matérialisation 8 GiB ici.
+
+**Hypothèse (1) Triton autotune workspace TESTÉE** via etape13
+NBX_FORCE_GC=10 (gc.collect every 10 ops). Same OOM at conv::69.
+gc.collect ne libère pas de cycles → leak n'est pas Python-level.
+
+**Stack trace confirmé**: OOM source est
+`triton/backends/nvidia/driver.py:713 self.launch()` —
+**CUDA driver-level kernel launch**, PAS NBX malloc_cuda. La
+launch reserve quelques KB pour kernel args + Triton runtime
+buffers. Avec live=30GB / 32GB V100 = 2GB free, une fragmentation
+ou Triton do_bench cache_flush buffer (~256 MB par défaut)
+suffit à pousser over.
+
+**Conclusion factuelle**: le résidu conv::69 est limite
+**structurelle V100 32GB** pour Sana 4Kpx VAE post-pixel_shuffle
+chain. Pour clore définitivement, options scopables:
+
+1. **Bypass autotune pour conv::69 specifique**: detect output
+   channels=3 (unique pattern in VAE) dans conv2d_wrapper, route
+   vers un appel `conv2d_forward_kernel.fn[grid](...)` avec config
+   fixed (pas d'autotune do_bench overhead).
+
+2. **Pre-warm autotune cache**: run conv::69 at startup with
+   dummy tensors to populate disk cache before VAE pressure.
+   Subsequent runs use cached config without benchmarking.
+
+3. **Multi-GPU pipeline_parallel for VAE component**: VAE moves
+   to dedicated GPU (32 GB free). Bypasses tightness.
+
+ETA option 1: 30-60 min. ETA option 2: 60-90 min. ETA option 3:
+several days (P-MULTI-GPU-NBX-ADAPTER scope).
+
+**Discipline maintenue**: pas d'INDÉTERMINÉ, pas de pivot
+prematuré (option 3 reste backup). Le chantier reste ouvert avec
+1-2 options option 1/option 2 actionable scopable.
+
 ## Discipline maintenue
 
 - Pas de "INDÉTERMINÉ" — chaque verdict est factuel avec adresse mémoire,
