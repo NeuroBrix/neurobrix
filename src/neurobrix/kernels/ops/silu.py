@@ -12,7 +12,13 @@ def silu_forward_kernel(
     BLOCK_SIZE: tl.constexpr,
 ):
     pid = tl.program_id(0)
-    offset = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    # Cast offset to int64 so that mask `offset < n_elements`
+    # works correctly when n_elements >= 2^31 (e.g. Sana 4Kpx VAE
+    # silu input 1*128*4096*4096 = 2^31 elements). Without this,
+    # int32 n_elements wraps to negative and the mask is all-False,
+    # silently skipping every element and leaving output as
+    # uninitialized memory (= garbage).
+    offset = (pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)).to(tl.int64)
     mask = offset < n_elements
 
     x = tl.load(input_ptr + offset, mask=mask)

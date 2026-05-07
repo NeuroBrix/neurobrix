@@ -112,7 +112,11 @@ def pixel_shuffle_broadcast_aware_kernel(
     contributes nothing and the load aliases naturally.
     """
     pid = tl.program_id(0)
-    idx = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    # Cast to int64 to support tensors with >= 2^31 elements
+    # (e.g. Sana 4Kpx VAE 1*128*4096*4096 = 2^31 — at INT32_MAX
+    # boundary; signed int32 multiplication of strides overflows
+    # silently and corrupts offsets, producing garbage output).
+    idx = (pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)).to(tl.int64)
     mask = idx < n_elements
 
     ow = idx % OW

@@ -53,7 +53,11 @@ def add_bias_broadcast_kernel(
     addressing.
     """
     pid = tl.program_id(0)
-    offset = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    # Cast to int64 — tensors >= 2^31 elements (e.g. Sana 4Kpx VAE
+    # add::88 input 1x4096x4096x128 = 2^31) overflow int32 offset
+    # arithmetic silently and corrupt `offset % feat_dim`, producing
+    # garbage output. P-SANA-4KPX-RUNTIME 2026-05-07.
+    offset = (pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)).to(tl.int64)
     mask = offset < n_elements
 
     c = offset % feat_dim
