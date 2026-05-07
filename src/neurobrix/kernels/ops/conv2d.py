@@ -16,6 +16,8 @@ CLAUDE.md "Autotune policy" for the doctrinal exception scope.
 import triton
 import triton.language as tl
 
+from ._autotune_policy import maybe_pin_single, is_conv2d_pinned
+
 
 # Volta-viable conv2d autotune subspace.
 # SMEM budget per config (rough): 2 stages × dtype_bytes × (BLOCK_BHW *
@@ -47,7 +49,7 @@ _CONV2D_AUTOTUNE_VOLTA = [
 
 
 @triton.autotune(
-    configs=_CONV2D_AUTOTUNE_VOLTA,
+    configs=maybe_pin_single(_CONV2D_AUTOTUNE_VOLTA, is_conv2d_pinned),
     key=['batch_dim', 'in_feat_dim', 'in_height', 'in_width',
          'out_feat_dim', 'out_height', 'out_width',
          'kernel_height', 'kernel_width',
