@@ -106,11 +106,62 @@ offset, drop n-1 sample).
 Diagnostic infrastructure : tools/diff_dag_op_by_op.py,
 NBX_DISABLE_AUTOTUNE, NBX_FORCE_FP32_ACCUM.
 
-## 7. Non-fait, à faire (next session)
+## 7. Phase 1 résultat (2026-05-08, commit `eda0629`)
 
-- Phase 1 : run Sana 1024 sequential + triton_sequential avec clean
-  fingerprint, exécuter diff_dag_op_by_op.py, vérifier si seuils
-  flagent du noise normal ou si Sana 1024 montre vraiment ~0 real
-  divergences.
-- Selon résultat : investigation pow/_to_copy (Cas A) ou pivot stats
-  globaux (Cas B).
+Sana 1024 control diff (sequential vs triton_seq, both PNG R29 PASS) :
+
+| Variant | none | noise | borderline | real | skip |
+|---|---|---|---|---|---|
+| Sana 4Kpx | 7976 | 5237 | 3169 | **18931 (~53%)** | 450 |
+| Sana 1024 | 7841 | 5370 | 3251 | **18851 (~53%)** | 438 |
+
+→ **Cas B confirmé**. Le seuil 5-position flagge cuDNN-vs-Triton fp16
+noise sur LES DEUX variants identiquement. La narrative "drift
+accumulée distribuée" Sana 4Kpx était un artifact d'analyse, pas un
+signature de bug.
+
+## 8. Pivot méthodologique : cross-variant analysis
+
+`tools/diff_dag_cross_variant.py` compare **par (op_idx, op_uid)** la
+divergence rel max entre 4Kpx (PNG garbage) et 1024 (PNG cohérent).
+Filtre les ops à `rel_ratio = rel_4kpx / rel_1024 >= 10` ET `rel_4kpx
+>= 0.5` — exclut le bruit baseline commun aux deux variants, isole
+le signature shape-dependent.
+
+Résultats (commit `eda0629`) :
+
+- **126 ops avec rel_ratio ≥ 10** : signature shape-dependent claire.
+- **First in trace order** : `aten.transpose::2` op_idx=67 line 9309
+  = **transformer iter 2** (boundaries `[0, 3449, 6898, 9241, ...]`).
+  rel_4kpx=5.05, rel_1024=0.0002, ratio 20621×. abs_4kpx=30.05,
+  abs_1024=0.001.
+- **TOP-20 par rel_ratio** : silu / relu / conv / pixel_shuffle ops
+  avec op_idx 519-692 (pattern caractéristique VAE) avec ratios
+  165-2.9M. La VAE 4Kpx montre les divergences les plus extrêmes.
+
+Picture qui émerge :
+1. text_encoder + transformer iter 0 + iter 1 : pas d'anomalie
+   shape-specific (rel_4kpx ≈ rel_1024).
+2. À iter 2 op_idx=67 transpose : drift accumulée à travers iter 1
+   noise pred → scheduler latent update → début iter 2 visible en
+   cross-variant.
+3. VAE : ratios extrêmes (jusqu'à 2.9M) — soit VAE 4Kpx amplifie
+   shape-dependent un input déjà corrompu par transformer, soit VAE
+   a son propre bug shape-dependent.
+
+## 9. Non-fait, à faire (next session)
+
+Pour discriminer "VAE input-corrupted vs VAE op-buggy" :
+
+- **Test d'isolation VAE** : feed le final latent du pipeline
+  sequential 4Kpx (qui produit PNG cohérent) à la VAE triton 4Kpx.
+  Si output cohérent → VAE triton OK, bug en transformer. Si output
+  garbage → VAE triton a un bug shape-dependent intrinsèque.
+- **Audit op_idx=67 transformer iter 2** : identifier ce que
+  `aten.transpose::2` opère (input shape, parent_module dans
+  graph.json) et l'op upstream qui produit son input. Comprendre
+  pourquoi iter 2 cross seuil mais pas iter 0/1.
+- **Audit TOP-VAE ops** (silu::18-23, relu::15-16, pixel_shuffle::3,
+  convolution::61) : vérifier si chaque kernel est bit-exact à shape
+  4Kpx avec inputs aléatoires (microtest pattern de la session
+  précédente).
