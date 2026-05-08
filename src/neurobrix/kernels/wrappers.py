@@ -75,6 +75,7 @@ from .ops.softmax import softmax_forward_kernel
 # === Matmul ===
 
 from .ops.matmul import matmul_kernel, addmm_kernel
+from .ops._autotune_policy import NBX_FORCE_FP32_ACCUM
 
 # === Fused MoE ===
 
@@ -1175,6 +1176,13 @@ def _matmul_out_dtype(a, M: int = 1, force_fp32: bool = False):
     is_bf16 = (dt == NBXDtype.bfloat16)
     is_half = is_fp16 or is_bf16
 
+    # NBX_FORCE_FP32_ACCUM diagnostic: always store fp32 for any half
+    # input. Pairs with the input upcast in mm/bmm/addmm wrappers so
+    # the entire matmul chain operates in fp32 - isolates the dtype
+    # variable from the P-SANA-4KPX-RUNTIME bug hunt.
+    if NBX_FORCE_FP32_ACCUM and is_half:
+        return NBXDtype.float32
+
     # (1) Hardware gate: fp16 on hardware without native bf16 gets fp32.
     if is_fp16 and not _NBX_HAS_NATIVE_BF16:
         return NBXDtype.float32
@@ -1221,6 +1229,18 @@ def mm(a, b) :
     # kernel or FlagGems adoption — see Phase 1.5 follow-up.
     a_nbx = a.nbx_dtype
     b_nbx = b.nbx_dtype
+    # NBX_FORCE_FP32_ACCUM diagnostic: upcast BOTH inputs to fp32 on any
+    # hardware when the env var is set. Sacrifices VRAM/perf to isolate
+    # the dtype-intermediate hypothesis in P-SANA-4KPX-RUNTIME. The
+    # existing fp16-only Volta gate below missed bf16 inputs, which on
+    # Volta have no native HMMA support and may degrade through Triton's
+    # tl.dot lowering.
+    if NBX_FORCE_FP32_ACCUM and a_nbx in (NBXDtype.float16, NBXDtype.bfloat16):
+        a = a.to(NBXDtype.float32)
+        a_nbx = NBXDtype.float32
+    if NBX_FORCE_FP32_ACCUM and b_nbx in (NBXDtype.float16, NBXDtype.bfloat16):
+        b = b.to(NBXDtype.float32)
+        b_nbx = NBXDtype.float32
     if not _NBX_HAS_NATIVE_BF16 and a_nbx == NBXDtype.float16:
         a = a.to(NBXDtype.float32)
         a_nbx = NBXDtype.float32
@@ -1326,6 +1346,13 @@ def bmm(a, b) :
     # Use nbx_dtype for guard comparisons; .dtype returns triton.language.dtype.
     a_nbx = a.nbx_dtype
     b_nbx = b.nbx_dtype
+    # NBX_FORCE_FP32_ACCUM diagnostic — see mm() comment.
+    if NBX_FORCE_FP32_ACCUM and a_nbx in (NBXDtype.float16, NBXDtype.bfloat16):
+        a = a.to(NBXDtype.float32)
+        a_nbx = NBXDtype.float32
+    if NBX_FORCE_FP32_ACCUM and b_nbx in (NBXDtype.float16, NBXDtype.bfloat16):
+        b = b.to(NBXDtype.float32)
+        b_nbx = NBXDtype.float32
     if not _NBX_HAS_NATIVE_BF16 and a_nbx == NBXDtype.float16:
         a = a.to(NBXDtype.float32)
         a_nbx = NBXDtype.float32
@@ -1520,6 +1547,13 @@ def addmm(bias, a, b,
     # Use nbx_dtype for guard comparisons; .dtype returns triton.language.dtype.
     a_nbx = a.nbx_dtype
     b_nbx = b.nbx_dtype
+    # NBX_FORCE_FP32_ACCUM diagnostic — see mm() comment.
+    if NBX_FORCE_FP32_ACCUM and a_nbx in (NBXDtype.float16, NBXDtype.bfloat16):
+        a = a.to(NBXDtype.float32)
+        a_nbx = NBXDtype.float32
+    if NBX_FORCE_FP32_ACCUM and b_nbx in (NBXDtype.float16, NBXDtype.bfloat16):
+        b = b.to(NBXDtype.float32)
+        b_nbx = NBXDtype.float32
     if not _NBX_HAS_NATIVE_BF16 and a_nbx == NBXDtype.float16:
         a = a.to(NBXDtype.float32)
         a_nbx = NBXDtype.float32

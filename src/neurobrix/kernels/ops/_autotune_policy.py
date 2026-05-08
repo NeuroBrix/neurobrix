@@ -25,6 +25,20 @@ import os
 
 NBX_DISABLE_AUTOTUNE = os.environ.get("NBX_DISABLE_AUTOTUNE", "0") == "1"
 
+# Diagnostic env var (P-SANA-4KPX-RUNTIME 2026-05-08): forces all
+# half-precision (fp16/bf16) inputs to mm/bmm/addmm to be upcast to
+# fp32 BEFORE entering the matmul kernel, regardless of hardware
+# capability or M size. Also forces output dtype to fp32 and
+# IEEE_PRECISION=True. Used to isolate whether the residual Sana 4Kpx
+# bug is caused by a dtype-intermediate path (cuDNN-vs-NBX
+# accumulation precision difference) that the existing wrapper rules
+# don't cover for bf16 inputs on Volta. NOT for production - costs
+# 2x VRAM and disables HMMA. Once a definitive verdict is reached
+# (Cas A: bug fixed -> isolate the specific dtype path that needs
+# correction; Cas B: bug persists -> dtype intermediate eliminated as
+# suspect, focus shifts to reduction order or layout/stride).
+NBX_FORCE_FP32_ACCUM = os.environ.get("NBX_FORCE_FP32_ACCUM", "0") == "1"
+
 
 def maybe_pin_single(configs, predicate):
     """If `NBX_DISABLE_AUTOTUNE=1`, return a single-element list with

@@ -1,5 +1,69 @@
 # P-SANA-4KPX-RUNTIME — Verdict factuel final 2026-05-05/07
 
+## Update 2026-05-08 (final¹⁰ — NBX_FORCE_FP32_ACCUM yields Cas C OOM)
+
+User-imposed discipline: isolate suspect 3 (dtype intermediate path)
+factually before any architectural pivot. Implemented
+`NBX_FORCE_FP32_ACCUM=1` env var in `_autotune_policy.py` + wired
+into mm/bmm/addmm wrappers (`wrappers.py:_matmul_out_dtype`,
+mm L1224, bmm L1325, addmm L1539). When set, ALL fp16/bf16 inputs
+to mm-class wrappers upcast to fp32 universally; outputs forced to
+fp32; sacrifices 2× VRAM and disables HMMA on Volta.
+
+### Discriminant test results
+
+| Test | Wall | Verdict |
+|---|---|---|
+| Sana 1024 triton_seq + FORCE_FP32 | 1679s (28 min) | ✅ PNG coherent (red apple) — anti-régression PASS |
+| Sana 4Kpx triton_seq + FORCE_FP32 | 13625s (3h47m) | ❌ **OOM at 29.4 GB live** + 1 GiB request → driver_free=54 MB |
+
+### **Cas C: OOM — test inconclusive**
+
+The fp32 path doubled activation memory enough to exceed V100 32 GB.
+Cannot factually discriminate Cas A (suspect 3 confirmed) vs Cas B
+(suspect 3 eliminated) at Sana 4Kpx scale with universal fp32 force.
+
+The Sana 1024 PASS confirms the patch is numerically correct (no
+regression introduced); the issue is purely VRAM-budget-bound on
+4Kpx's larger activation footprint.
+
+### Scoped retry options (next iteration)
+
+1. **Per-op-uid fp32 force**: target only the FIRST cross-attention
+   bmm (op_uid `aten.bmm::1` in transformer iter 1, the catastrophic
+   divergence point identified in earlier diff). Apply fp32 only for
+   that specific op via op-uid hook, leaving the rest of the pipeline
+   in its current dtype path. Memory cost: ~1 op × 2× = negligible.
+
+2. **Per-component-name fp32 force**: target only `block.0.self_attn`
+   parent_module's mm/bmm calls. ~5 ops × 2× = small budget.
+
+3. **`--steps 1` reduction**: doesn't help — peak VRAM is per-step,
+   not aggregated. Same OOM expected.
+
+4. **Multi-GPU pipeline** (4× V100 = 128 GB total): bypasses the
+   V100 32 GB cap. Requires Prism `pipeline_parallel` to work with
+   NBXTensor — currently a deferred chantier.
+
+Option 1 is the cheapest path to a binary verdict: if forcing fp32
+ONLY on `aten.bmm::1` in transformer iter 1 fixes 4Kpx PNG, suspect
+3 is confirmed AND the bug is localized to that exact op. If 4Kpx
+still garbage, suspect 3 is eliminated AND bug is elsewhere
+(likely upstream feeding bmm::1 with already-corrupted Q/K — or
+suspect 1 reduction order).
+
+ETA for option 1 retry: 30 min op-uid hook impl + 30 min run + R29 = ~1.5h.
+
+### Final session commit list (15+)
+
+- `a2fd933`, `aadf5b0`, `1c78a62`, `4c41e15`, `4508293`, `8104c8d`,
+  `4f939bd`, `0c9588a`, `3cd1595`, `41e1ef5`, `fcf84b7`, `2f8b74d`
+  (prior 12, see earlier sections)
+- (this session) `NBX_FORCE_FP32_ACCUM` env var implementation +
+  Cas C verdict above
+
+---
+
 ## Update 2026-05-07 (final⁹ — autotune ELIMINATED as cause via Cas B)
 
 User imposed scientific discipline: before any architectural multi-week
