@@ -20,14 +20,28 @@ sample (0, n//8, n//4, n//2) and are deterministic.
 
 Output: validation_outputs/p_sana_4kpx_runtime/audit_spaghetti_2026_05_05/diff_dag_op_by_op_report.md
 """
+import os
 import re
 from pathlib import Path
 
 ROOT = Path("/home/mlops/NeuroBrix_System")
 LOG_DIR = ROOT / "validation_outputs/p_sana_4kpx_runtime/audit_spaghetti_2026_05_05"
-SEQ_LOG = LOG_DIR / "sequential_4kpx_values_v2.log"
-TRI_LOG = LOG_DIR / "sana4kpx_triseq_values_v5.log"
-OUT_MD = LOG_DIR / "diff_dag_op_by_op_report.md"
+
+# Variant selection: SANA_VARIANT=4kpx (default) or 1024.
+# 1024 path is the discriminant control (PNG cohérent for both backends);
+# if Sana 1024 also shows ~50% "real" divergences, the threshold is
+# misclassifying noise rather than real bug.
+VARIANT = os.environ.get("SANA_VARIANT", "4kpx")
+if VARIANT == "4kpx":
+    SEQ_LOG = LOG_DIR / "sequential_4kpx_values_v2.log"
+    TRI_LOG = LOG_DIR / "sana4kpx_triseq_values_v5.log"
+    OUT_MD = LOG_DIR / "diff_dag_op_by_op_report.md"
+elif VARIANT == "1024":
+    SEQ_LOG = LOG_DIR / "sequential_1024_values_clean.log"
+    TRI_LOG = LOG_DIR / "triton_seq_1024_values_clean.log"
+    OUT_MD = LOG_DIR / "diff_dag_op_by_op_report_1024.md"
+else:
+    raise SystemExit(f"unknown SANA_VARIANT={VARIANT!r} (expected 4kpx or 1024)")
 
 # Tolerance bands (positions 0-3 only).
 # Two-tier classification:
