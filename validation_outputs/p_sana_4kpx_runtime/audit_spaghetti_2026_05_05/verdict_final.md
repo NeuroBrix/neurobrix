@@ -1,5 +1,74 @@
 # P-SANA-4KPX-RUNTIME — Verdict factuel final 2026-05-05/07
 
+## Update 2026-05-08 (final¹¹ — multi-GPU profile doesn't bypass OOM)
+
+User redirected: leverage the actual hardware (Dell C4140, **96 GB total**
+heterogeneous = **2× V100 32GB + 2× V100 16GB** NVLink mesh, NOT 128 GB
+as I initially mis-claimed; verified factuellement in
+`config/hardware/c4140-4xv100-custom-nvlink.yml`). Re-launched
+discriminant test with `--hardware c4140-4xv100-custom-nvlink`.
+
+### Multi-GPU + FORCE_FP32 results
+
+| Test | Wall | Verdict |
+|---|---|---|
+| Sana 1024 + 4GPU profile + FORCE_FP32 | 43s | ✅ PNG coherent (autotune cache warm from prior run) |
+| Sana 4Kpx + 4GPU profile + FORCE_FP32 | 851s (14min) | ❌ **OOM — Prism picked `single_gpu` strategy on cuda:2** |
+
+### Root cause of the second OOM
+
+Prism's solver uses the model's stored dtype (bf16) for memory
+estimation. `NBX_FORCE_FP32_ACCUM` is an opaque runtime env-var-time
+decision invisible to the solver. Sana 4Kpx fits within 32 GB in
+normal bf16 mode → solver picks `single_gpu` → at runtime, FORCE_FP32
+doubles activation memory → OOM. The 4-GPU profile is unused because
+no distributed strategy was selected.
+
+```
+[Sana 4Kpx 4GPU log]
+vae → cuda:2
+transformer → cuda:2
+text_encoder → cuda:2
+Strategy: single_gpu
+[ERROR] Pipeline failed: Triton Error [CUDA]: out of memory
+```
+
+### **Cas C-bis: still OOM. Multi-GPU profile alone is insufficient.**
+
+The 96 GB total exists physically but Prism's strategy decision
+prevents using it for this discriminant.
+
+### Three resolution paths
+
+1. **Prism solver hint for FORCE_FP32**: couple env var to solver
+   so memory estimate doubles when set. Forces `pipeline_parallel`
+   selection naturally. Moderate complexity (touches strategy
+   solver).
+
+2. **Force Prism strategy via env var**: e.g.
+   `NBX_FORCE_STRATEGY=component_placement`. Bypasses solver entirely.
+   Lower complexity but reduces auto-placement intelligence.
+
+3. **Pivot to scoped op-uid FORCE_FP32 (cheapest)**: limit fp32
+   force to ~5 ops at the catastrophic divergence point identified
+   factually in earlier diff (`aten.bmm::1` cross-attn QK^T, op_idx=87
+   transformer iter 1). Memory overhead <1%, fits in single-GPU
+   budget. Impl ~30 min, run ~30 min, R29 visual = decisive
+   ~1.5h test. No Prism changes.
+
+Recommend Option 3 unless Hocine prefers a different discriminant.
+
+### Final session commit list (16 total)
+
+- `a2fd933`, `aadf5b0`, `1c78a62`, `4c41e15`, `4508293`, `8104c8d`,
+  `4f939bd`, `0c9588a`, `3cd1595`, `41e1ef5`, `fcf84b7`, `2f8b74d`,
+  `0f49d03` (prior 13)
+- (this update) Cas C-bis verdict: multi-GPU profile alone
+  insufficient; option 3 (op-uid scoped fp32) is the cheapest path
+  to a binary verdict
+
+---
+
 ## Update 2026-05-08 (final¹⁰ — NBX_FORCE_FP32_ACCUM yields Cas C OOM)
 
 User-imposed discipline: isolate suspect 3 (dtype intermediate path)
