@@ -347,7 +347,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--capture", action="store_true")
     ap.add_argument("--vae-only-decode", action="store_true",
-                    help="Decode saved latent through triton-sequential VAE only")
+                    help="Decode saved latent through VAE only (mode controlled by --mode)")
+    ap.add_argument("--mode", default="triton_sequential",
+                    choices=["sequential", "triton_sequential"],
+                    help="Execution mode for VAE-only decode")
     ap.add_argument("--model", default="Sana_1600M_4Kpx_BF16")
     args = ap.parse_args()
 
@@ -371,8 +374,9 @@ def main():
         if not DUMP_PATH.exists():
             print(f"[FAIL] need {DUMP_PATH} (run --capture first)")
             sys.exit(2)
-        rc = _vae_only_decode(args.model, DUMP_PATH, TRI_PNG,
-                               mode="triton_sequential")
+        out_png = TRI_PNG if args.mode == "triton_sequential" else (
+            OUT_DIR / f"vae_isolation_seq_decode_{args.mode}.png")
+        rc = _vae_only_decode(args.model, DUMP_PATH, out_png, mode=args.mode)
         if rc != 0:
             sys.exit(rc)
 
