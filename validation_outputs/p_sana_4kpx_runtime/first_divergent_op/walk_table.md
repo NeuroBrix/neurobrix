@@ -1,6 +1,38 @@
 # VAE-only walk: full-tensor diff sequential vs triton_sequential
 ## P-SANA-4KPX-RUNTIME — Hocine pivot 2026-05-09
 
+## ⚠️ 2026-05-09 RETRACTION (causality check refuted root-cause framing)
+
+The verdict below identifies `aten.add::0` as the FIRST DIVERGENT op
+in trace order — that observation stands. But the framing that
+add::0's dtype gap is the CAUSAL ROOT is REFUTED by the 2×2
+causality matrix in
+`../causality_check_view0/INDEX.md`.
+
+Cells: forcing view::0 → fp32 in seq mode (so add::0 output =
+fp32, matching tri profile) → still produces red apple PNG.
+Forcing view::0 → fp16 in tri mode (so add::0 inputs match seq
+profile) → still produces green texture PNG.
+
+Therefore the dtype gap at view::0/add::0 is **correlated but NOT
+causal**. The three fix options ("Awaiting Hocine arbitrage" below)
+are INVALID — none of them would lift the green-texture bug.
+
+The TRUE causal root is downstream of add::0 in the VAE chain,
+where seq and tri implementations diverge in a way that survives
+even when their upstream dtype profiles are aligned.
+
+The factual walk data (table below) remains valid as a CHRONOLOGICAL
+snapshot of where divergent VALUES first appear — but those
+divergent values are the result of fp16-vs-fp32 storage drift in the
+chain, not of a localized kernel bug at add::0.
+
+The original verdict is preserved verbatim below for the historical
+record.
+
+---
+
+
 ## Methodology
 
 Per Hocine's redirect: identify the FIRST op where seq and triton_seq
