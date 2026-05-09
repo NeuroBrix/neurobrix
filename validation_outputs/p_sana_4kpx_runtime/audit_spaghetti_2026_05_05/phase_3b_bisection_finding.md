@@ -1,4 +1,37 @@
-# Phase 3b bisection — fp16 ULP introduced at op_idx=5 add::0
+# Phase 3b bisection — REFUTED (add::0 is baseline noise, not the bug)
+
+## 2026-05-09 retraction
+
+The verdict below ("first ULP at op_idx=5 add::0 is the bug source")
+is **refuted by the cross-variant report**:
+
+`diff_dag_cross_variant_report.md` lists the shape-specific
+(rel_4kpx / rel_1024 ≥ 10) divergent add ops as **only** `add::1`,
+`add::11`, `add::20`, `add::75`. **`add::0` is NOT in that list** —
+it diverges by the same ~1 fp16 ULP at Sana 1024 (where the model
+produces a coherent PNG) as it does at 4Kpx.
+
+The Phase 3b same-variant bisection re-introduced the noise floor
+that the Phase 1 cross-variant pivot was designed to filter out.
+The "first ULP at add::0" is the cuDNN-vs-Triton fp16 noise, common
+to both variants — fixing it would not produce a fix.
+
+The first MEANINGFUL (shape-specific) divergence in chronological
+trace order is `aten.transpose::2` at full-trace op_idx=67
+(rel_4kpx=5.05, rel_1024=0.0002, rel_ratio=20622×, abs_4kpx=30.05).
+Within the VAE component the first shape-specific divergence is
+`aten.convolution::2` at full-trace line 35048 (rel_ratio=12.6).
+
+Next chantier step: tighter VAE-only bisection with threshold
+`rel ≥ 0.5 AND abs ≥ 0.5` to filter the noise floor and identify
+the first MEANINGFUL VAE-internal shape-specific divergence on the
+VAE-isolation logs (where both modes feed the same captured latent).
+
+The original 2026-05-08 finding follows for the historical record.
+
+---
+
+# (HISTORICAL — REFUTED 2026-05-09) fp16 ULP introduced at op_idx=5 add::0
 
 ## Bisection of ops 0..488 in VAE-only seq vs tri trace
 
