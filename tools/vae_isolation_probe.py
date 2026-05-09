@@ -179,9 +179,41 @@ def _vae_only_decode(model_name: str, dump_path: Path, output_png: Path,
         else:
             comp_inputs[k] = payload.get("value")
 
-    print(f"[VAE_ISO] invoking vae_exec.run() — VAE-only forward pass...",
-          flush=True)
-    output = vae_exec.run(comp_inputs)
+    # Reproduce the standard pipeline's tiling integration
+    # (executor.py:870-882). At Sana 4Kpx, VAE input (1,32,128,128)
+    # exceeds trace size — the TilingEngine slices spatially and
+    # invokes vae_exec.run on each tile, then blends. Without this,
+    # VAE allocates full 4Kpx upsample chain immediately → > 32 GB.
+    vae_tiling = executor._component_tiling.get("vae")
+    print(f"[VAE_ISO] _component_tiling['vae'] = {vae_tiling!r}", flush=True)
+    if vae_tiling is not None:
+        # Pick the first 4D spatial tensor in comp_inputs (= our 'z').
+        spatial_input = None
+        for v in comp_inputs.values():
+            if hasattr(v, 'dim') and v.dim() == 4:
+                spatial_input = v
+                break
+        if spatial_input is not None and vae_tiling.should_tile(spatial_input):
+            input_name = next(iter(comp_inputs.keys()))
+            print(f"[VAE_ISO] tiling enabled: input='{input_name}' "
+                  f"shape={tuple(spatial_input.shape)}", flush=True)
+
+            def execute_tile(tile):
+                result = vae_exec.run({input_name: tile})
+                if isinstance(result, dict):
+                    result = next(iter(result.values()))
+                return result
+
+            print(f"[VAE_ISO] invoking tiling.tiled_execute()...", flush=True)
+            output = vae_tiling.tiled_execute(spatial_input, execute_tile)
+        else:
+            print(f"[VAE_ISO] tiling configured but should_tile=False; "
+                  f"running vae_exec.run() directly", flush=True)
+            output = vae_exec.run(comp_inputs)
+    else:
+        print(f"[VAE_ISO] no tiling for VAE; running vae_exec.run() directly",
+              flush=True)
+        output = vae_exec.run(comp_inputs)
     print(f"[VAE_ISO] VAE forward done. output type: {type(output).__name__}",
           flush=True)
 
