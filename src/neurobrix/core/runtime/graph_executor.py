@@ -1591,8 +1591,11 @@ class GraphExecutor:
                 if wname in self._weights:
                     store[tid] = self._weights[wname]
 
-        # Load inputs into store
-        for tid, tensor in input_map.items():
+        # Load inputs into store (POINT 1: cast through TritonDtypeEngine
+        # to mirror DtypeEngine path at component entry — graph metadata
+        # + Prism compute_dtype determine target dtype).
+        cast_input_map = dispatcher.bind_inputs(input_map, tensors)
+        for tid, tensor in cast_input_map.items():
             store[tid] = tensor
 
         # Liveness analysis: mirror TritonSequence._compute_liveness

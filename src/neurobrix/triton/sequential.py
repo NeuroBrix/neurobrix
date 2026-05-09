@@ -34,6 +34,24 @@ class TritonSequentialDispatcher:
             compute_dtype, has_native_bf16=_has_bf16())
         self._op_cache: Dict[str, Any] = {}
 
+    def bind_inputs(self, input_map, graph_tensors):
+        """Cast component-entry runtime inputs through the dtype engine.
+
+        Mirrors TritonSequence.bind_inputs (compiled mode) and
+        DtypeEngine path at GraphExecutor._prepare_execution
+        (sequential mode oracle). Graph floating-point dtype →
+        compute_dtype; non-floating → preserved.
+
+        Args:
+            input_map: {tensor_id → NBXTensor}.
+            graph_tensors: dag["tensors"] dict.
+
+        Returns:
+            Cast input_map dict (new dict; tensors unchanged where no
+            cast was needed).
+        """
+        return self._dtype_engine.cast_runtime_inputs(input_map, graph_tensors)
+
     def resolve_attr(self, attr: Any) -> Any:
         """Resolve a single attribute from graph.json format."""
         if not isinstance(attr, dict):

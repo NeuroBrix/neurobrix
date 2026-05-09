@@ -12,7 +12,7 @@ Rules (from PyTorch AT_FORALL_FP32 / AT_FORALL_LOWER_PRECISION_FP):
 
 from typing import Callable, FrozenSet
 
-from neurobrix.kernels.nbx_tensor import NBXDtype
+from neurobrix.kernels.nbx_tensor import NBXDtype, NBXTensor
 
 
 # ============================================================================
@@ -143,6 +143,62 @@ class TritonDtypeEngine:
         # Wrapping them in lower_precision here would silently re-downcast
         # the weights to fp16, defeating the bind-time cache.
         self.has_native_bf16 = has_native_bf16
+
+    def cast_runtime_inputs(self, input_map, graph_tensors):
+        """Cast component-entry runtime inputs to expected dtype.
+
+        Mirrors PyTorch DtypeEngine path at GraphExecutor._prepare_execution
+        (core/runtime/graph_executor.py:1965-1970): for each input::* tensor,
+        consult graph metadata for its declared dtype. If the graph dtype is
+        floating-point, cast to compute_dtype (Prism's per-component dtype).
+        If the graph dtype is non-floating (int64, bool), preserve the
+        graph dtype (cast if needed).
+
+        Data-driven: no per-model hardcode. The cast decision derives from
+        graph_tensors metadata + compute_dtype, both of which are already
+        engine inputs.
+
+        Args:
+            input_map: {tensor_id → NBXTensor} of fresh component inputs.
+            graph_tensors: dag["tensors"] dict (tid → metadata with
+                "dtype" string and "is_input" flag).
+
+        Returns:
+            Cast input_map (new dict, original NBXTensors unchanged where
+            no cast was needed).
+        """
+        cast = {}
+        for tid, tensor in input_map.items():
+            if not isinstance(tensor, NBXTensor):
+                cast[tid] = tensor
+                continue
+            target = self._target_dtype_for_input(tid, graph_tensors)
+            if target is not None and tensor._dtype != target:
+                tensor = tensor.to(target)
+            cast[tid] = tensor
+        return cast
+
+    def _target_dtype_for_input(self, tid, graph_tensors):
+        """Resolve the expected NBXDtype for an input tensor id.
+
+        Floating graph dtype → compute_dtype (Prism).
+        Non-floating graph dtype → preserve graph dtype.
+        Unknown / missing → None (no cast).
+        """
+        meta = graph_tensors.get(tid) or {}
+        dtype_str = meta.get("dtype")
+        if not dtype_str:
+            return None
+        from neurobrix.kernels.nbx_tensor import parse_dtype
+        try:
+            graph_dt = parse_dtype(dtype_str.replace("torch.", ""))
+        except Exception:
+            return None
+        if graph_dt is None:
+            return None
+        if graph_dt in _FLOATING:
+            return self.compute_dtype
+        return graph_dt
 
     def wrap_op(self, op_name: str, func: Callable) -> Callable:
         """Wrap an op function with AMP casting rules.
