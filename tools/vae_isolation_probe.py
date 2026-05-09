@@ -202,6 +202,8 @@ def _vae_only_decode(model_name: str, dump_path: Path, output_png: Path,
     # TOP-divergent ops to dump inputs at runtime. Phase 3a-bis.
     if os.environ.get("NBX_CAPTURE_VAE_OPS", "0") == "1":
         TARGET_UIDS = [
+            "aten.silu::12",        # input to convolution::36 (Phase 3b finding)
+            "aten.convolution::36", # depthwise conv showing sign flip
             "aten.relu::15",
             "aten.silu::18", "aten.silu::19", "aten.silu::20",
             "aten.silu::21", "aten.silu::22", "aten.silu::23",
