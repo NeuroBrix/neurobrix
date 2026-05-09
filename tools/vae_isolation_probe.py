@@ -198,6 +198,75 @@ def _vae_only_decode(model_name: str, dump_path: Path, output_png: Path,
         else:
             comp_inputs[k] = payload.get("value")
 
+    # NBX_CAPTURE_VAE_OPS=1: register op_uid_interceptors for the 9
+    # TOP-divergent ops to dump inputs at runtime. Phase 3a-bis.
+    if os.environ.get("NBX_CAPTURE_VAE_OPS", "0") == "1":
+        TARGET_UIDS = [
+            "aten.relu::15",
+            "aten.silu::18", "aten.silu::19", "aten.silu::20",
+            "aten.silu::21", "aten.silu::22", "aten.silu::23",
+            "aten.pixel_shuffle::3",
+            "aten.convolution::61",
+        ]
+        capture_dir = OUT_DIR / "vae_op_input_dumps"
+        capture_dir.mkdir(exist_ok=True)
+        from neurobrix.kernels.nbx_tensor import nbx_to_torch, NBXTensor as _NBXT
+        if not hasattr(vae_exec, "_op_uid_interceptors"):
+            vae_exec._op_uid_interceptors = {}
+        # Save the original interceptor (if any) so we forward.
+        # For our targets there shouldn't be one already, but be safe.
+        prior = dict(getattr(vae_exec, "_op_uid_interceptors", {}))
+        # We need a forward-after-capture: easiest is to call the
+        # standard dispatcher post-capture. Build one bound to vae_exec.
+        from neurobrix.triton.sequential import TritonSequentialDispatcher
+        try:
+            from neurobrix.kernels.nbx_tensor import NBXDtype as _NBXD
+            std_disp = TritonSequentialDispatcher(
+                device_idx=int(target_dev.split(":")[-1]) if isinstance(target_dev, str) and ":" in target_dev else 0,
+                compute_dtype=_NBXD.float16)
+        except Exception as _e:
+            std_disp = None
+            print(f"[VAE_ISO_CAPTURE] could not build dispatcher: {_e}", flush=True)
+        def _make_int(uid):
+            def _interceptor(*args, **kwargs):
+                payload = {"uid": uid, "args": [], "kwargs": {}}
+                import torch as _t
+                for i, a in enumerate(args):
+                    if isinstance(a, _NBXT):
+                        try:
+                            tt = nbx_to_torch(a)
+                            payload["args"].append({
+                                "kind": "torch", "i": i,
+                                "tensor": tt.detach().cpu().contiguous(),
+                                "shape": tuple(tt.shape),
+                                "dtype": str(tt.dtype)})
+                        except Exception as _e:
+                            payload["args"].append({"kind": "err", "i": i, "err": str(_e)})
+                    elif hasattr(a, "shape"):
+                        payload["args"].append({
+                            "kind": "torch", "i": i,
+                            "tensor": a.detach().cpu().contiguous() if hasattr(a, "detach") else a,
+                            "shape": tuple(a.shape),
+                            "dtype": str(a.dtype) if hasattr(a, "dtype") else "?"})
+                    else:
+                        payload["args"].append({"kind": "scalar", "i": i, "value": str(a)[:80]})
+                for k, v in kwargs.items():
+                    payload["kwargs"][k] = str(v)[:80]
+                fname = uid.replace(":", "_").replace(".", "_") + ".pt"
+                _t.save(payload, str(capture_dir / fname))
+                print(f"[VAE_ISO_CAPTURE] dumped {uid} -> {fname}", flush=True)
+                # Forward via standard dispatcher
+                base = uid.split("::")[0].replace("aten.", "")
+                op_type = f"aten::{base}"
+                if std_disp is None:
+                    raise RuntimeError("no dispatcher available")
+                return std_disp.dispatch(op_type, list(args), {})
+            return _interceptor
+        for uid in TARGET_UIDS:
+            vae_exec._op_uid_interceptors[uid] = _make_int(uid)
+        print(f"[VAE_ISO_CAPTURE] registered {len(TARGET_UIDS)} target interceptors",
+              flush=True)
+
     # Reproduce the standard pipeline's tiling integration
     # (executor.py:870-882). At Sana 4Kpx, VAE input (1,32,128,128)
     # exceeds trace size — the TilingEngine slices spatially and
