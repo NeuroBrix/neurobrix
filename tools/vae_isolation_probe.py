@@ -144,8 +144,27 @@ def _vae_only_decode(model_name: str, dump_path: Path, output_png: Path,
     print(f"[VAE_ISO] running executor.setup() (modules + executors + strategy)...",
           flush=True)
     executor.setup()
+    # Reproduce the prelude of executor.execute() steps 2-3 to populate
+    # variable_resolver and _component_tiling. Steps mirror executor.py
+    # lines 263-268. Minimal inputs — the orchestration phases (pre_loop
+    # + loop) are skipped so only inputs that VAE actually consumes
+    # matter; we override comp_inputs anyway just before the kernel
+    # call.
+    minimal_inputs = {
+        "global.prompt": "a red apple",
+        "global.num_inference_steps": 12,
+    }
+    print(f"[VAE_ISO] preparing defaults + variable_resolver...", flush=True)
+    merged_defaults = executor._prepare_defaults(minimal_inputs)
+    executor._init_variable_resolver(minimal_inputs, merged_defaults)
+    executor._set_runtime_resolution_on_executors(merged_defaults)
+    print(f"[VAE_ISO] running executor._init_helpers() to populate tiling...",
+          flush=True)
+    executor._init_helpers()
     print(f"[VAE_ISO] executor.executors keys: {list(executor.executors)}",
           flush=True)
+    print(f"[VAE_ISO] executor._component_tiling keys: "
+          f"{list(executor._component_tiling)}", flush=True)
 
     if "vae" not in executor.executors:
         print(f"[VAE_ISO] FATAL: no 'vae' in executors. keys={list(executor.executors)}",
@@ -230,10 +249,15 @@ def _vae_only_decode(model_name: str, dump_path: Path, output_png: Path,
     else:
         output_tensor = output
 
-    if hasattr(output_tensor, 'detach'):
+    # output_tensor may be torch.Tensor (sequential) or NBXTensor (triton).
+    # nbx_to_torch handles the NBXTensor->torch.Tensor conversion via D2D.
+    from neurobrix.kernels.nbx_tensor import nbx_to_torch, NBXTensor
+    if isinstance(output_tensor, NBXTensor):
+        print(f"[VAE_ISO] converting NBXTensor->torch via nbx_to_torch...",
+              flush=True)
+        out_t = nbx_to_torch(output_tensor).detach().cpu().float()
+    elif hasattr(output_tensor, 'detach'):
         out_t = output_tensor.detach().cpu().float()
-    elif hasattr(output_tensor, 'to_torch'):
-        out_t = output_tensor.to_torch().detach().cpu().float()
     else:
         out_t = _torch.tensor(output_tensor)
 
