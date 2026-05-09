@@ -209,6 +209,13 @@ def _vae_only_decode(model_name: str, dump_path: Path, output_png: Path,
             "aten.silu::21", "aten.silu::22", "aten.silu::23",
             "aten.pixel_shuffle::3",
             "aten.convolution::61",
+            # 2026-05-09 — high cross-variant rel_ratio ops not yet
+            # microtested on captured runtime input.
+            "aten.mm::1",            # first big amplification (per-pos 134 ULPs)
+            "aten.convolution::2",   # first VAE-region shape-specific (rel_ratio 12.6)
+            "aten.mul::37",          # gating, rel_ratio 276
+            "aten.add::75",          # residual add, rel_ratio 504
+            "aten.relu::16",         # rel_ratio 580
         ]
         capture_dir = OUT_DIR / "vae_op_input_dumps"
         capture_dir.mkdir(exist_ok=True)
