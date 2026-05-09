@@ -2329,8 +2329,16 @@ class TritonSequence:
         self.compute_op_devices()
 
     def bind_inputs(self, inputs: Dict[str, NBXTensor]):
-        """Bind input tensors to arena slots."""
-        for tid, tensor in inputs.items():
+        """Bind input tensors to arena slots.
+
+        Casts each input to its expected runtime dtype via the engine
+        (mirrors PyTorch DtypeEngine path at component entry). Graph
+        floating-point dtype → compute_dtype; non-floating → preserved.
+        Data-driven: graph metadata + compute_dtype.
+        """
+        graph_tensors = self.dag.get("tensors", {})
+        cast = self._dtype_engine.cast_runtime_inputs(inputs, graph_tensors)
+        for tid, tensor in cast.items():
             slot = self._tid_to_slot.get(tid)
             if slot is not None:
                 self._arena[slot] = tensor
