@@ -149,6 +149,46 @@ Picture qui émerge :
    shape-dependent un input déjà corrompu par transformer, soit VAE
    a son propre bug shape-dependent.
 
+## 9.5. Phase 1 path 1 attempts (VAE isolation discriminant)
+
+Two attempts both blocked by V100 32 GB ceiling :
+
+- **v1 (commit `4eb8df0`)** : monkey-patch `RuntimeExecutor._execute_component`
+  to override `comp_inputs` at VAE call. **Phase A capture OK**
+  (`vae_isolation_input.pt` 2 MB + sequential decode PNG cohérent
+  red apple). **Phase B replay OOM** because the override only fires
+  AT the VAE call, but the diffusion loop (text_encoder + 12
+  transformer iters) still ran fully and exhausted memory before
+  reaching VAE.
+
+- **v2 (`tools/vae_isolation_probe.py --vae-only-decode`)** : public
+  API path via `RuntimeExecutor(pkg, plan, mode).setup()` +
+  `executor.executors["vae"].run({"z": saved_z})`. Bypasses
+  text_encoder + transformer entirely. **Still OOM** even with
+  `NBX_DISABLE_AUTOTUNE=1` :
+  ```
+  GPU malloc failed for 8 GiB: live_tracked=25172MB
+  driver_free=6996MB
+  ```
+  
+  Root cause: the standalone path bypasses the TilingEngine
+  (`executor._component_tiling.get("vae")`) that the standard
+  pipeline uses. At Sana 4Kpx, the VAE input `(1, 32, 128, 128)`
+  spatially exceeds trace size, so without tiling the upsample
+  chain allocates full 4Kpx output tensors immediately → > 32 GB.
+
+### Path 1 next iteration plan
+
+To engage TilingEngine in the standalone path, after `executor.setup()`:
+```python
+tiling = executor._component_tiling.get("vae")
+output = tiling.tiled_execute(saved_z, lambda tile:
+    executor.executors["vae"].run({"z": tile}))
+```
+
+This replays the same tiling logic that the full pipeline uses.
+ETA next session: 30 min impl + 5-10 min run + R29 visual.
+
 ## 9. Non-fait, à faire (next session)
 
 Pour discriminer "VAE input-corrupted vs VAE op-buggy" :
