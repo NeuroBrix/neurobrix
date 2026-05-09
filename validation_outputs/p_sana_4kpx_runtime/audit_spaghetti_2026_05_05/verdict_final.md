@@ -149,6 +149,60 @@ Picture qui émerge :
    shape-dependent un input déjà corrompu par transformer, soit VAE
    a son propre bug shape-dependent.
 
+## 9.6. Phase 1 path 1 v5 — **CAS B FACTUEL CONFIRMÉ**
+
+After 4 prior attempts (v1 monkey-patch, v2 standalone direct, v3
+TilingEngine integration, v4 prelude+_init_helpers), v5 succeeded:
+
+```
+NBX_DISABLE_AUTOTUNE=1 + python -u + file logging + 1200s timeout
++ executor.setup() + _prepare_defaults + _init_variable_resolver
++ _init_helpers + _ensure_weights_loaded("vae") + vae_exec.run({"z": z})
+```
+
+Wall-clock: **80s** (NBX_DISABLE_AUTOTUNE bypassed the autotune-bench
+OOM that blocked v3/v4). Op-level interceptors (`op_tiling_plans`)
+remained engaged and handled the OOM-prone conv ops via spatial
+tiling.
+
+### Discriminant binary result
+
+| Mode | Input | Output PNG R29 |
+|---|---|---|
+| Sequential 4Kpx VAE | saved latent (post-handler-transform) | ✅ **Red apple** (`vae_isolation_seq_decode.png`) |
+| **Triton 4Kpx VAE** | **SAME saved latent** | ❌ **Green texture garbage** (`vae_isolation_tri_decode.png`) |
+
+**Cas B confirmed**: VAE triton has a **shape-dependent intrinsic bug
+at Sana 4Kpx**. The latent is verified correct (sequential VAE produces
+coherent output from it). The bug is localized inside VAE itself.
+
+### Implication: cross-variant analysis interpretation must be revised
+
+The "distributed cumulative drift" narrative from earlier in this
+session was misleading. The cross-variant analysis correctly
+identified VAE ops with extreme rel_ratio (`silu::18-23` 165×-2.9M×,
+`pixel_shuffle::3` 504×, `convolution::61` 165×) — but these are
+**bug origins themselves**, not just propagation amplifiers of
+upstream transformer drift.
+
+### Next step: Path 3 microtests
+
+Microtest each VAE TOP-divergent op at the exact failing shape
+against torch reference:
+- `aten.silu::18..23` (op_idx 643, 651, 659, 665, 675, 683, 691) at
+  fp32 large-magnitude inputs
+- `aten.pixel_shuffle::3` (op_idx 672)
+- `aten.convolution::61` (op_idx 692)
+
+If a microtest produces non-bit-exact result vs torch, that op IS the
+bug. If all microtests are bit-exact in isolation, then the bug is in
+input-dependent kernel behavior at the runtime activation distribution
+(not random fp32) — would require dumping VAE intermediate activations
+to feed real inputs to the microtest.
+
+ETA: ~30 min for first round of 9 microtests (silu × 6 + pixel_shuffle
++ convolution + audit one VAE rms_norm or layer_norm if relevant).
+
 ## 9.5. Phase 1 path 1 attempts (VAE isolation discriminant)
 
 Two attempts both blocked by V100 32 GB ceiling :
