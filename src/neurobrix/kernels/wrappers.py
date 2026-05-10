@@ -820,6 +820,20 @@ def add_inplace_nbx(target, other, alpha: float = 1.0):
     assert target.shape == other.shape, (
         f"add_inplace_nbx requires identical shapes; got "
         f"target={target.shape} other={other.shape}")
+    # POINT 6 H2 FIX: kernel uses flat 1D indexing
+    # `tl.load/store(target_ptr + offset, ...)` which assumes target
+    # is contiguous in memory. If target is a non-contiguous view
+    # (permute, transpose, slice with stride), flat indexing reads/
+    # writes wrong addresses — silent corruption. The caller's "last-
+    # use" liveness analysis from Prism does not check contiguity.
+    # Pre-fix on Sana 4Kpx VAE: residual adds at op 649+ (add::69
+    # onward) showed +1.3% rel divergence introducing horizontal-
+    # band garbage that then amplified through downstream tiled
+    # kernels. Fall back to the standard non-in-place `add` when
+    # target is not contiguous (handles strided views correctly via
+    # `_prepare_binary` + `expand+contiguous`).
+    if not target.is_contiguous():
+        return add(target, other, alpha=alpha)
     if hasattr(target, '_device_idx') and hasattr(other, '_device_idx') \
             and target._device_idx != other._device_idx:
         other = _transfer_to_device(other, target._device_idx)
