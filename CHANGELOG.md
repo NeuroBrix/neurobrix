@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-05-10 — P-SANA-4KPX-RUNTIME POINT 8 closure factuelle (audit perf compiled vs sequential)
+
+Audit profile-driven du gap perf triton compiled (hot-loop
+TritonSequence) vs triton_sequential (TritonSequentialDispatcher).
+Mesures sur 1× V100 32 GiB, `NBX_DISABLE_AUTOTUNE=1` :
+
+| | wall compiled | wall sequential | gap |
+|---|---|---|---|
+| Sana 1024 | 70.35 s | 73.91 s | −4.8 % |
+| Sana 4Kpx | 511.78 s | 513.96 s | **−0.4 %** |
+
+GPU util sustained pendant Sana 4Kpx triton = **83.5 % avg avec 67.5 %
+du temps actif >90 %** → workload **compute-bound**. Borne haute
+arithmétique du speedup compiled vs sequential = 100/83.5 = **1.20×**
+< cible mandate 1.5× → cible **structurellement inatteignable**.
+Toutes les hypothèses H1–H5 (silent fallback, no fusion,
+contiguous-guard cost, defensive sync, degenerate hot-loop) sont
+invalidées par lecture code + corrélation mesures (voir
+`validation_outputs/p_sana_4kpx_runtime/point8_compiled_perf_audit/diagnostic_par_hypothese.md`).
+Aucune modification de code. Closure factuelle conforme au mandate.
+Pistes backlog : `P-TRITON-FUSED-KERNELS`, `P-CUDA-GRAPHS`,
+autotune-ON re-mesure baseline.
+
 ## 2026-05-10 — P-SANA-4KPX-RUNTIME fully closed (full pipeline validation)
 
 Total scope closed. Full pipeline Sana 4Kpx (text_encoder →
