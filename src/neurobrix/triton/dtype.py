@@ -25,6 +25,14 @@ AMP_FP32_OPS: FrozenSet[str] = frozenset({
     "sinh", "tan", "pow", "softplus",
     "layer_norm", "native_layer_norm", "group_norm", "native_group_norm",
     "batch_norm", "native_batch_norm", "cudnn_batch_norm", "instance_norm",
+    # Phase 2 — rms_norm is a NeuroBrix custom reduction op (not in
+    # PyTorch's AT_FORALL_FP32 because PyTorch has no rms_norm). Its
+    # internal pow→mean→rsqrt chain is overflow-prone in fp16 (squared
+    # values overflow fp16 max above ~256), so it MUST run fp32-internal.
+    # Treated as AMP_FP32 here so the unified cast-back path (read
+    # activations_fp16_safe at call time) governs whether the output is
+    # cast back to compute_dtype or stays fp32.
+    "rms_norm",
     "frobenius_norm", "nuclear_norm", "cosine_similarity",
     "poisson_nll_loss", "cosine_embedding_loss", "nll_loss",
     "mse_loss", "smooth_l1_loss", "huber_loss",
@@ -40,17 +48,18 @@ AMP_FP32_OPS: FrozenSet[str] = frozenset({
     "linalg_vector_norm", "linalg_matrix_norm",
 })
 
-# Phase 1 — Subset of AMP_FP32_OPS whose internal fp32 compute is justified
-# (overflow-prone reductions: pow→mean→rsqrt for rms_norm, epsilon
-# underflow for div) but whose output can safely cast back to compute_dtype
-# when the model's activations are confirmed fp16-safe via
-# `activations_fp16_safe: true` in forge/config/model_registry.yml. Default
-# behavior (flag False) preserves output fp32 — conservative.
-_AMP_FP32_OPS_OPT_IN_CAST_BACK: FrozenSet[str] = frozenset({
-    "rms_norm",
-    # div is in _FP16_NEED_FP32 path below (FP16 op needing fp32 protection
-    # on V100), reuses the same cast-back mechanism.
-})
+# Phase 2 — UNIFORM cast-back doctrine: every AMP_FP32_OPS goes through
+# the fp32-internal-compute-then-conditional-cast-back wrap. The cast-back
+# is gated SOLELY by the per-component `activations_fp16_safe` flag from
+# model_registry.yml (read at call time via _w._NBX_ACTIVATIONS_FP16_SAFE).
+# When False (default, conservative — typical LLMs without an explicit
+# fp16-safe annotation), output stays fp32 (matches PyTorch oracle).
+# When True (annotated VAE/UNet on diffusion models), output is cast back
+# to compute_dtype for VRAM-preserving fp16-throughout flow.
+# The previous `_AMP_FP32_OPS_OPT_IN_CAST_BACK` set was an additional
+# membership gate that fragmented the doctrine: rms_norm and div had
+# the cast-back hook but rsqrt/exp/layer_norm/batch_norm/etc did not.
+# Removed in favor of a single uniform gate (the registry flag).
 
 AMP_FP16_OPS: FrozenSet[str] = frozenset({
     "_convolution", "conv1d", "conv2d", "conv3d", "convolution",
@@ -222,24 +231,19 @@ class TritonDtypeEngine:
             return func
 
         if op_name in AMP_FP32_OPS:
-            # Phase 1 — opt-in cast-back: when the model has annotated
-            # `activations_fp16_safe: true` in model_registry, cast the
-            # output of these reduction-ops back to compute_dtype. Pure
-            # VRAM saving on diffusion VAE chains. Default behavior
-            # preserved (no cast-back) when flag is False.
-            if op_name in _AMP_FP32_OPS_OPT_IN_CAST_BACK:
-                return self._wrap_fp32_internal_compute_dtype_output(func)
-            return self._wrap_fp32(func)
+            # Phase 2 — uniform cast-back: all AMP_FP32_OPS go through the
+            # fp32-internal-then-conditional-cast-back wrap. The cast-back
+            # decision is gated solely by the `activations_fp16_safe`
+            # registry flag (read at call time via _w global). When False
+            # (default), output stays fp32 (PyTorch-oracle parity). When
+            # True (annotated fp16-safe model), output cast to compute_dtype.
+            return self._wrap_fp32_internal_compute_dtype_output(func)
 
         if op_name in AMP_FP16_OPS:
             if self.compute_dtype == NBXDtype.float16 and op_name in _FP16_NEED_FP32:
-                # Same opt-in cast-back applies to div (in _FP16_NEED_FP32):
-                # epsilon underflow is the reason for fp32 internal compute,
-                # output can return to compute_dtype when activations are
-                # confirmed fp16-safe.
-                if op_name == "div":
-                    return self._wrap_fp32_internal_compute_dtype_output(func)
-                return self._wrap_fp32(func)
+                # div is in _FP16_NEED_FP32 (FP16 op needing fp32 protection
+                # on V100, epsilon underflow). Same uniform cast-back wrap.
+                return self._wrap_fp32_internal_compute_dtype_output(func)
             return self._wrap_lower_precision(func)
 
         if op_name in AMP_PROMOTE_OPS:
