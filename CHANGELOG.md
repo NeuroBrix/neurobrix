@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-05-10 — P-SANA-4KPX-RUNTIME POINT 7 closure totale (full pipeline + anti-régression)
+
+POINT 7 ferme le scope restant après POINTS 1-6 H2. Sana 4Kpx FULL
+pipeline (text_encoder → transformer 12 steps → VAE) produit une
+pomme rouge cohérente en **triton_sequential** (510 s) ET en
+**triton compiled** (515 s) sur 1× V100 32 GiB, stratégie Prism
+`single_gpu`. Peak VRAM mesuré = **16.6 GiB / 32.5 GiB** (51 % du
+budget) — la mesure historique conv::62 OOM 26+8 GiB est éliminée
+par les fixes POINTS 1-6, sans toucher au memory pool. Matrice
+anti-régression : **10/10 cellules numériquement vertes** (Sana 1024
+4 modes, PixArt-XL + PixArt-Sigma triton_seq, TinyLlama triton_seq,
+Sana 4Kpx VAE-iso triton_seq, Sana 4Kpx FULL triton_seq + triton
+compiled). Découverte factuelle sur configs ≤ 16 GiB :
+`PrismSolver` estime activations VAE Sana 4Kpx = 28 GiB worst-case
+sans intégrer l'op-level tiling kernel-embedded (runtime réel
+16.6 GiB) → rejette au planning avec `ZERO FALLBACK` avant que le
+tiling ne puisse engager. Ouvre deux chantiers backlog :
+`P-PRISM-ACTIVATION-ESTIMATOR-TILING-AWARE` (estimator tiling-aware)
+et `P-MULTI-GPU-NBX-ADAPTER` (déjà nommé). Artefacts R29 :
+`validation_outputs/p_sana_4kpx_runtime/point7_full_closure/`.
+
 ## 2026-05-10 — P-SANA-4KPX-RUNTIME closed (numerical correctness)
 
 Sana 4Kpx VAE in triton_sequential mode now produces coherent output.
