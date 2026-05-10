@@ -611,7 +611,13 @@ def _tiled_conv2d_spatial_nbx(
         if in_clamped_end <= in_clamped_start:
             continue
 
-        in_band = input_tensor[:, :, in_clamped_start:in_clamped_end, :]
+        # POINT 6 FIX (P-SANA-4KPX-RUNTIME): see `_fused_upsample_conv2d_nbx`
+        # for the full rationale — H-slice on an NCHW tensor produces a
+        # non-contiguous view; the downstream conv/pad Triton wrappers use
+        # flat indexing that assumes contiguous and read wrong memory
+        # otherwise. The torch backend (`_tiled_conv2d_spatial_torch`)
+        # already enforces contiguity at this point.
+        in_band = input_tensor[:, :, in_clamped_start:in_clamped_end, :].contiguous()
         if pad_top_real > 0 or pad_bot_real > 0 or pad_w > 0:
             # constant_pad_nd_wrapper: pad_list per F.pad convention
             # (last-dim-first): [W_left, W_right, H_top, H_bot]
@@ -717,7 +723,19 @@ def _fused_upsample_conv2d_nbx(
         pre_start = max(0, int(up_clamped_start // up_sh))
         pre_end = min(pre_h, int((up_clamped_end - 1) // up_sh) + 1)
 
-        pre_band = pre_input[:, :, pre_start:pre_end, :]
+        # POINT 6 FIX (P-SANA-4KPX-RUNTIME): slicing on the H dimension of
+        # an NCHW tensor produces a non-contiguous view (the C stride keeps
+        # its original H-based value while the slice covers a smaller H).
+        # The downstream Triton wrappers (`upsample_nearest2d_wrapper`,
+        # `conv2d_wrapper`) use flat 1D indexing that ASSUMES contiguous
+        # input — fed a strided view they read wrong memory and produce
+        # garbage (94% of elements differ by >1.0 vs torch reference,
+        # measured at conv::55 on Sana 4Kpx). The torch path
+        # (`_fused_upsample_conv2d_torch`) calls `.contiguous()` at the
+        # same two points; mirror that here. Bands where the slice covers
+        # the full H (first band when `tile_factor==1`) hit the early-
+        # return path in `NBXTensor.contiguous()` at zero cost.
+        pre_band = pre_input[:, :, pre_start:pre_end, :].contiguous()
         up_band = upsample_nearest2d_wrapper(
             pre_band,
             output_size=[int(pre_band.shape[2] * up_sh), int(pre_band.shape[3] * up_sw)],
@@ -725,7 +743,7 @@ def _fused_upsample_conv2d_nbx(
         )
         up_offset_local = up_clamped_start - int(pre_start * up_sh)
         up_local_h = up_clamped_end - up_clamped_start
-        up_band = up_band[:, :, up_offset_local:up_offset_local + up_local_h, :]
+        up_band = up_band[:, :, up_offset_local:up_offset_local + up_local_h, :].contiguous()
 
         # Apply boundary padding (image-edge halo + clipped over-read).
         # Internal band frontiers get pad_top/bot_real == 0 because halo
