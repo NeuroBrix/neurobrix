@@ -555,8 +555,26 @@ def _tiled_conv2d_spatial_nbx(
     input_tensor, weight, bias, sh_st, sw_st, pad_h, pad_w,
     dh, dw, groups, tile_factor,
 ):
+    """Band-streaming standalone conv with REAL halo (no zero-pad seams).
+
+    POINT 5 FIX (P-SANA-4KPX-RUNTIME): mirrors `_tiled_conv2d_spatial_torch`
+    exactly. The previous version applied `padding=(pad_h, pad_w)` on every
+    band — at internal band frontiers this filled zeros where the kernel
+    should have read from the NEXT band's rows (real halo). The result was
+    bit-divergent from the non-tiled path at every band boundary, by ~50 in
+    max_abs at Sana 4Kpx (98%+ of elements affected). The torch backend has
+    always used the halo-based algorithm; the NBX backend now matches it.
+
+    Per band we slice the input with halo = (kh-1)*dh//2 rows above and
+    below; conv runs with `padding=(0,0)`. Image-edge halos are filled by
+    `constant_pad_nd_wrapper` with the original `pad_h` only on the top of
+    the first band and the bottom of the last band. Bit-identical to the
+    non-tiled `conv2d_wrapper` + `_torch` backend.
+    """
     from neurobrix.kernels.nbx_tensor import NBXTensor
-    from neurobrix.kernels.wrappers import conv2d_wrapper, add as nbx_add
+    from neurobrix.kernels.wrappers import (
+        conv2d_wrapper, add as nbx_add, constant_pad_nd_wrapper,
+    )
 
     N, in_c, IH, IW = input_tensor.shape
     out_c, _, kh, kw = weight.shape
@@ -569,25 +587,47 @@ def _tiled_conv2d_spatial_nbx(
     )
     tile_factor = max(1, int(tile_factor))
     band_oh = (out_h + tile_factor - 1) // tile_factor
+    halo_h = (kh - 1) * dh // 2
 
     for oh_start in range(0, out_h, band_oh):
         oh_end = min(oh_start + band_oh, out_h)
-        ih_start = max(0, oh_start * sh_st - pad_h)
-        ih_end = min(IH, (oh_end - 1) * sh_st + dh * (kh - 1) + 1 - pad_h)
-        if ih_end <= ih_start:
+        is_top_band = (oh_start == 0)
+        is_bot_band = (oh_end == out_h)
+
+        # Input rows the kernel needs to produce [oh_start, oh_end):
+        # core range minus pad_h, then extend by halo_h for internal frontiers.
+        in_inner_start = oh_start * sh_st - pad_h
+        in_inner_end = (oh_end - 1) * sh_st + dh * (kh - 1) + 1 - pad_h
+        halo_top = 0 if is_top_band else halo_h
+        halo_bot = 0 if is_bot_band else halo_h
+        in_read_start = in_inner_start - halo_top
+        in_read_end = in_inner_end + halo_bot
+
+        in_clamped_start = max(0, in_read_start)
+        in_clamped_end = min(IH, in_read_end)
+        pad_top_real = max(0, -in_read_start) + (pad_h if is_top_band else 0)
+        pad_bot_real = max(0, in_read_end - IH) + (pad_h if is_bot_band else 0)
+
+        if in_clamped_end <= in_clamped_start:
             continue
-        in_band = input_tensor[:, :, ih_start:ih_end, :]
-        band_pad_h = pad_h
+
+        in_band = input_tensor[:, :, in_clamped_start:in_clamped_end, :]
+        if pad_top_real > 0 or pad_bot_real > 0 or pad_w > 0:
+            # constant_pad_nd_wrapper: pad_list per F.pad convention
+            # (last-dim-first): [W_left, W_right, H_top, H_bot]
+            in_band = constant_pad_nd_wrapper(
+                in_band, [pad_w, pad_w, pad_top_real, pad_bot_real], value=0.0,
+            )
+
         conv_band = conv2d_wrapper(
             in_band, weight, None,
-            stride=(sh_st, sw_st), padding=(band_pad_h, pad_w),
+            stride=(sh_st, sw_st), padding=(0, 0),
             dilation=(dh, dw), groups=groups,
         )
+
         actual_band_h = oh_end - oh_start
-        band_first_oh = ih_start // sh_st
-        local_offset = max(0, oh_start - band_first_oh)
-        conv_band = conv_band[:, :, local_offset:local_offset + actual_band_h, :]
-        actual_band_h = min(conv_band.shape[2], actual_band_h)
+        if conv_band.shape[2] < actual_band_h:
+            actual_band_h = conv_band.shape[2]
         # Bias add inside band — see _fused_upsample_conv2d_nbx for rationale
         # (avoids 8 GiB bias broadcast materialization on Sana 4Kpx).
         if bias is not None:
@@ -642,51 +682,73 @@ def _fused_upsample_conv2d_nbx(
     tile_factor = max(1, int(tile_factor))
     band_oh = (conv_out_h + tile_factor - 1) // tile_factor
     pre_h = pre_input.shape[2]
-    halo_pre = max(1, (kh - 1) // 2 + 1)
+    # POINT 5 FIX (P-SANA-4KPX-RUNTIME): mirror `_fused_upsample_conv2d_torch`
+    # halo logic exactly. Previous version applied `padding=(pad_h, pad_w)` on
+    # every band — at internal frontiers this filled zeros where the kernel
+    # should have read from the next band's upsample rows (real halo), causing
+    # value divergence at every band frontier (~50 max_abs at Sana 4Kpx,
+    # 98%+ of elements differ from torch path). NBX backend now matches.
+    halo_post = (kh - 1) * dh // 2
+
+    from neurobrix.kernels.wrappers import constant_pad_nd_wrapper
 
     for oh_start in range(0, conv_out_h, band_oh):
         oh_end = min(oh_start + band_oh, conv_out_h)
-        up_start = max(0, oh_start * sh_st - pad_h)
-        up_end = min(OH, (oh_end - 1) * sh_st + dh * (kh - 1) + 1 - pad_h)
-        if up_end <= up_start:
+
+        up_inner_start = oh_start * sh_st - pad_h
+        up_inner_end = (oh_end - 1) * sh_st + dh * (kh - 1) + 1 - pad_h
+        is_top_band = (oh_start == 0)
+        is_bot_band = (oh_end == conv_out_h)
+        halo_top = 0 if is_top_band else halo_post
+        halo_bot = 0 if is_bot_band else halo_post
+        up_read_start = up_inner_start - halo_top
+        up_read_end = up_inner_end + halo_bot
+
+        up_clamped_start = max(0, up_read_start)
+        up_clamped_end = min(OH, up_read_end)
+        pad_top_real = max(0, -up_read_start) + (pad_h if is_top_band else 0)
+        pad_bot_real = max(0, up_read_end - OH) + (pad_h if is_bot_band else 0)
+
+        if up_clamped_end <= up_clamped_start:
             continue
-        pre_start = max(0, int(up_start // up_sh) - halo_pre)
-        pre_end = min(pre_h, int((up_end - 1) // up_sh) + 1 + halo_pre)
+
+        # Pre-upsample rows that produce [up_clamped_start, up_clamped_end).
+        # nearest mapping: pre_row = floor(up_row / up_sh).
+        pre_start = max(0, int(up_clamped_start // up_sh))
+        pre_end = min(pre_h, int((up_clamped_end - 1) // up_sh) + 1)
 
         pre_band = pre_input[:, :, pre_start:pre_end, :]
-        # Upsample band via the existing Triton wrapper
         up_band = upsample_nearest2d_wrapper(
             pre_band,
             output_size=[int(pre_band.shape[2] * up_sh), int(pre_band.shape[3] * up_sw)],
             scales_h=up_sh, scales_w=up_sw,
         )
-        up_offset_local = up_start - int(pre_start * up_sh)
-        up_band_local_h = up_end - up_start
-        up_band = up_band[:, :, up_offset_local:up_offset_local + up_band_local_h, :]
+        up_offset_local = up_clamped_start - int(pre_start * up_sh)
+        up_local_h = up_clamped_end - up_clamped_start
+        up_band = up_band[:, :, up_offset_local:up_offset_local + up_local_h, :]
 
-        # Conv via the existing Triton wrapper. NBX wrapper does NOT support
-        # asymmetric padding; we handle external boundaries by full padding
-        # (the existing wrapper's padding semantic) and rely on the slice
-        # below to extract the correct rows.
-        band_pad_h = pad_h if (oh_start == 0 or oh_end == conv_out_h) else pad_h
+        # Apply boundary padding (image-edge halo + clipped over-read).
+        # Internal band frontiers get pad_top/bot_real == 0 because halo
+        # already provides real rows.
+        if pad_top_real > 0 or pad_bot_real > 0 or pad_w > 0:
+            up_band = constant_pad_nd_wrapper(
+                up_band, [pad_w, pad_w, pad_top_real, pad_bot_real], value=0.0,
+            )
+
+        # Conv with padding=(0,0) — halo + image-edge padding already in up_band.
         conv_band = conv2d_wrapper(
             up_band, weight, None,
-            stride=(sh_st, sw_st), padding=(band_pad_h, pad_w),
+            stride=(sh_st, sw_st), padding=(0, 0),
             dilation=(dh, dw), groups=groups,
         )
 
         actual_band_h = oh_end - oh_start
-        band_first_oh = up_start // sh_st
-        local_offset = max(0, oh_start - band_first_oh)
-        conv_band = conv_band[:, :, local_offset:local_offset + actual_band_h, :]
-        actual_band_h = min(conv_band.shape[2], actual_band_h)
+        if conv_band.shape[2] < actual_band_h:
+            actual_band_h = conv_band.shape[2]
         # Bias add inside band — keeps the broadcast bounded to one band's
         # (N, out_c, actual_band_h, conv_out_w) instead of the full output
         # (8 GiB broadcast on Sana 4Kpx 4096×4096 fp16). Mathematically
         # identical (bias is per-channel, applies element-wise on H,W).
-        # Without this, _prepare_binary materializes the bias broadcast at
-        # full output shape and OOMs at the conv::54 boundary on V100 32 GB
-        # (P-SANA-4KPX-RUNTIME 2026-05-05 Étape 2 root cause).
         if bias is not None:
             conv_band = nbx_add(conv_band, bias.view(1, -1, 1, 1))
         output[:, :, oh_start:oh_start + actual_band_h, :] = conv_band[:, :, :actual_band_h, :]
