@@ -1559,8 +1559,26 @@ class GraphExecutor:
         from neurobrix.triton.symbols import SymbolResolver
         from neurobrix.kernels.nbx_tensor import NBXTensor, parse_dtype
 
+        # POINT 2 — read activations_fp16_safe from registry, mirror of
+        # compiled-mode flag init at _ensure_triton_compiled (line 1909-1917).
+        # Sequential mode dispatcher needs the flag for the uniform
+        # AMP_FP32_OPS cast-back path in TritonDtypeEngine.
+        from neurobrix.core.runtime.registry_flags import get_component_flag
+        _seq_model_name = None
+        try:
+            _seq_cache_path = getattr(self._pkg, 'cache_path', None) if hasattr(self, '_pkg') else None
+            if _seq_cache_path is not None:
+                _seq_model_name = Path(_seq_cache_path).name
+        except Exception:
+            pass
+        _seq_fp16_safe = get_component_flag(
+            _seq_model_name, self._component_name,
+            "activations_fp16_safe", default=False,
+            env_override="NBX_ACTIVATIONS_FP16_SAFE",
+        )
         dispatcher = TritonSequentialDispatcher(
-            device_idx=device_idx, compute_dtype=parse_dtype(self.dtype))
+            device_idx=device_idx, compute_dtype=parse_dtype(self.dtype),
+            activations_fp16_safe=bool(_seq_fp16_safe))
 
         tensors = self._dag.get("tensors", {})
         ops_meta = self._dag.get("ops", {})

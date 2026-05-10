@@ -26,13 +26,28 @@ class TritonSequentialDispatcher:
     Simpler than TritonSequence — easier to debug individual ops.
     """
 
-    def __init__(self, device_idx: int = 0, compute_dtype: NBXDtype = NBXDtype.float16):
+    def __init__(self, device_idx: int = 0, compute_dtype: NBXDtype = NBXDtype.float16,
+                 activations_fp16_safe: bool = False):
         self.device_idx = device_idx
         self.compute_dtype = compute_dtype
+        self.activations_fp16_safe = activations_fp16_safe
         from neurobrix.kernels.wrappers import has_native_bf16 as _has_bf16
+        from neurobrix.kernels import wrappers as _w
         self._dtype_engine = TritonDtypeEngine(
             compute_dtype, has_native_bf16=_has_bf16())
         self._op_cache: Dict[str, Any] = {}
+        # Phase 2 — propagate per-component dtype context to wrappers
+        # global state, mirroring TritonSequence.run() but without the
+        # try/finally restore (sequential mode doesn't nest within
+        # compiled mode within a single component invocation; if a
+        # later compiled run happens, its own try/finally will
+        # save/restore around its run).
+        # The cast-back wrap in TritonDtypeEngine reads
+        # _w._NBX_ACTIVATIONS_FP16_SAFE at call time; setting it once
+        # here makes Phase 2 uniform cast-back functional in
+        # triton_sequential mode (mirror of compiled mode flag init).
+        _w.set_compute_dtype(compute_dtype)
+        _w.set_activations_fp16_safe(activations_fp16_safe)
 
     def bind_inputs(self, input_map, graph_tensors):
         """Cast component-entry runtime inputs through the dtype engine.
