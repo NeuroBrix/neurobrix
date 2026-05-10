@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-05-10 — P-SANA-4KPX-RUNTIME closed (numerical correctness)
+
+Sana 4Kpx VAE in triton_sequential mode now produces coherent output.
+Chantier closed via 9 structured commits (POINTS 1-6 H2, refs `ea8e8e2`
+through `a862fe0`, tag `p-sana-4kpx-runtime-closed`). Root cause final:
+missing `.contiguous()` after NBXTensor slice in tiled conv wrappers —
+flat-indexed downstream wrappers were reading wrong memory addresses on
+non-contiguous views. Structural acquisitions: TritonDtypeEngine
+matured (registry-resolved `activations_fp16_safe` flag now
+runtime-effective for the first time), halo-based tiled conv2d (50-75×
+divergence reduction), contiguous-guard pattern documented as
+architectural rule. Full pipeline 4Kpx remains blocked by live-watermark
+memory gap — separate chantier `P-TRITON-LIVE-WATERMARK-AUDIT`.
+
 ## [Unreleased]
 
 ### Fixed
