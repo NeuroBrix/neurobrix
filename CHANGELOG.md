@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-05-10 — P-SANA-4KPX-RUNTIME fully closed (full pipeline validation)
+
+Total scope closed. Full pipeline Sana 4Kpx (text_encoder →
+transformer 12 steps → VAE) produit pomme rouge sur 1× V100 32 GiB
+en triton_sequential (510 s) ET triton compiled (515 s), peak VRAM
+**16.6 GiB / 32.5 GiB** (éliminé mécaniquement par les fixes
+numériques POINTS 1-6 sans toucher au memory pool). Anti-régression
+matrice **10/10 cellules**. Tag élargi `p-sana-4kpx-runtime-fully-closed`
+sur `90ac662` distingue cette clôture finale du tag numérique
+`p-sana-4kpx-runtime-closed` sur `a862fe0` (POINT 6 H2). Backlog
+ouvert : `P-PRISM-ACTIVATION-ESTIMATOR-TILING-AWARE` (estimator
+tiling-aware pour VRAM-contraintes ≤ 16 GiB) et
+`P-MULTI-GPU-NBX-ADAPTER` (priorité abaissée — 1× 32 GiB suffit en
+production).
+
 ## 2026-05-10 — P-SANA-4KPX-RUNTIME POINT 7 closure totale (full pipeline + anti-régression)
 
 POINT 7 ferme le scope restant après POINTS 1-6 H2. Sana 4Kpx FULL
