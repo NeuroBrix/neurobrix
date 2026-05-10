@@ -137,6 +137,12 @@ class GraphExecutor:
         self._last_stats = None
         self._last_symbols = {}  # For CFG batch inference
         self._component_name = "unknown"
+        # POINT 2bis — cache_path of the .nbx archive this executor's
+        # component lives in. Set by ExecutorFactory.create after
+        # construction; None for manually-instantiated executors (tests).
+        # Used by registry-driven flag init (activations_fp16_safe etc.)
+        # to resolve model_name = Path(cache_path).name.
+        self._cache_path: Optional[str] = None
 
         # Symbolic shape resolver
         self._shape_resolver = None
@@ -1563,12 +1569,14 @@ class GraphExecutor:
         # compiled-mode flag init at _ensure_triton_compiled (line 1909-1917).
         # Sequential mode dispatcher needs the flag for the uniform
         # AMP_FP32_OPS cast-back path in TritonDtypeEngine.
+        # POINT 2bis — read self._cache_path (set by ExecutorFactory)
+        # instead of self._pkg.cache_path (which doesn't exist on
+        # GraphExecutor — pre-existing latent bug).
         from neurobrix.core.runtime.registry_flags import get_component_flag
         _seq_model_name = None
         try:
-            _seq_cache_path = getattr(self._pkg, 'cache_path', None) if hasattr(self, '_pkg') else None
-            if _seq_cache_path is not None:
-                _seq_model_name = Path(_seq_cache_path).name
+            if getattr(self, '_cache_path', None) is not None:
+                _seq_model_name = Path(self._cache_path).name
         except Exception:
             pass
         _seq_fp16_safe = get_component_flag(
@@ -1919,12 +1927,16 @@ class GraphExecutor:
         # Defaults to False (conservative). Annotated only for models whose
         # activation ranges have been validated fp16-safe via
         # neurobrix.tools.measure_activation_ranges.
+        # POINT 2bis — read self._cache_path (set by ExecutorFactory)
+        # instead of self._pkg.cache_path (latent bug — self._pkg never
+        # existed on GraphExecutor; the lookup silently fell back to
+        # default False, neutralising every activations_fp16_safe
+        # annotation in the registry until now).
         from neurobrix.core.runtime.registry_flags import get_component_flag
         _model_name = None
         try:
-            _cache_path = getattr(self._pkg, 'cache_path', None) if hasattr(self, '_pkg') else None
-            if _cache_path is not None:
-                _model_name = Path(_cache_path).name
+            if getattr(self, '_cache_path', None) is not None:
+                _model_name = Path(self._cache_path).name
         except Exception:
             pass
         _fp16_safe = get_component_flag(

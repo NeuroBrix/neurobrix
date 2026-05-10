@@ -408,6 +408,11 @@ class ExecutorFactory:
 
         # Create and attach component handler (DATA-DRIVEN)
         cache_path = str(ensure_extracted(Path(nbx_path)))
+        # POINT 2bis — pose le cache_path sur l'executor pour que
+        # graph_executor.py puisse résoudre _model_name au flag init
+        # (registry lookup depended on self._pkg which doesn't exist
+        # on GraphExecutor — was a pre-existing silent default-False).
+        executor._cache_path = cache_path
         component_type = cls._infer_component_type(component, dag)
         handler = cls._create_component_handler(component, component_type, cache_path)
         executor._component_handler = handler
