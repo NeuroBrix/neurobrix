@@ -501,8 +501,11 @@ class PrismSolver:
         target_dtype_str = str(target_dtype).split('.')[-1]
         self._target_dtype_str = target_dtype_str
 
-        # Step 2: Compute memory requirements
-        component_memory = self._compute_memory(container, neural_components, input_config, target_dtype_str)
+        # Step 2: Compute memory requirements (tiling-aware via profile)
+        component_memory = self._compute_memory(
+            container, neural_components, input_config, target_dtype_str,
+            profile=profile,
+        )
         sorted_components = sorted(component_memory.items(), key=lambda x: -x[1].total_bytes)
 
         # Step 3: Prepare devices
@@ -606,7 +609,10 @@ class PrismSolver:
         if not candidates:
             if self._try_fp32_fallback(container, profile):
                 target_dtype_str = "float32"
-                component_memory = self._compute_memory(container, neural_components, input_config, target_dtype_str)
+                component_memory = self._compute_memory(
+                    container, neural_components, input_config, target_dtype_str,
+                    profile=profile,
+                )
                 sorted_components = sorted(component_memory.items(), key=lambda x: -x[1].total_bytes)
                 devices = self._prepare_devices(profile)
                 candidates = self._evaluate_all_strategies(
@@ -927,11 +933,246 @@ class PrismSolver:
     # MEMORY COMPUTATION - Full Intelligence
     # =========================================================================
 
+    def _identify_inplace_add_candidates_static(
+        self, graph: Dict, threshold_bytes: int = 1024 * 1024 * 1024,
+    ):
+        """DAG-static replica of `OpLevelTilingEngine._detect_inplace_add_candidates`
+        (`tiling_engine.py:613`) — returns the same list of `(op_uid,
+        reuse_input_idx)` for residual `aten::add` ops where one input has
+        its last use at the add (so its buffer can be reused as output).
+        Operates on `graph.json` `input_tensor_ids` (the post-import
+        canonical form) instead of the runtime version's
+        `attributes.args` walk; both yield the same set on a
+        well-formed graph (input_tensor_ids is built from args at import
+        time). Threshold default 1 GiB matches the runtime helper.
+        Same threshold formula MUST match — divergence would mean the
+        estimator predicts an in-place that the runtime won't actually
+        engage. P-PRISM-ACTIVATION-ESTIMATOR-TILING-AWARE 2026-05-11.
+        """
+        ops = graph.get("ops", {})
+        order = graph.get("execution_order", [])
+        output_ids = set(graph.get("output_tensor_ids", []))
+        consumers: Dict[str, List[str]] = {}
+        for uid in order:
+            op = ops.get(uid, {})
+            for tid in op.get("input_tensor_ids", []):
+                consumers.setdefault(tid, []).append(uid)
+        candidates: List[Tuple[str, int]] = []
+        for uid in order:
+            op = ops.get(uid, {})
+            if op.get("op_type") != "aten::add":
+                continue
+            in_tids = op.get("input_tensor_ids", [])
+            ishapes = op.get("input_shapes", [])
+            oshapes = op.get("output_shapes", [])
+            if len(in_tids) < 2 or len(ishapes) < 2 or not oshapes:
+                continue
+            sh_a = ishapes[0]
+            sh_b = ishapes[1]
+            sh_o = oshapes[0]
+            if sh_a != sh_b or len(sh_a) != 4:
+                continue
+            elems = 1
+            for d in sh_o:
+                elems *= max(1, int(d))
+            out_bytes = elems * 4  # fp32 conservative — matches runtime helper
+            if out_bytes < threshold_bytes:
+                continue
+            a_consumers = consumers.get(in_tids[0], [])
+            b_consumers = consumers.get(in_tids[1], [])
+            a_last = (len(a_consumers) == 1
+                      and a_consumers[0] == uid
+                      and in_tids[0] not in output_ids)
+            b_last = (len(b_consumers) == 1
+                      and b_consumers[0] == uid
+                      and in_tids[1] not in output_ids)
+            if a_last:
+                candidates.append((uid, 0))
+            elif b_last:
+                candidates.append((uid, 1))
+        return candidates
+
+    def _identify_pixel_shuffle_chain_proxy_uids(self, graph: Dict):
+        """Identify expand/clone/view op_uids that are part of an
+        `expand → clone → view → pixel_shuffle` chain that
+        `OpLevelTilingEngine._detect_pixel_shuffle_broadcast_chains` will
+        intercept at runtime. The expand returns a stride-0 view (no
+        allocation), clone returns a `BroadcastClonePyroxy` sentinel,
+        and view is a pass-through — none of these materialize a real
+        tensor at runtime. P-PRISM-ACTIVATION-ESTIMATOR-TILING-AWARE
+        2026-05-11.
+
+        Note: the pixel_shuffle output IS materialized at runtime (its
+        broadcast-aware kernel allocates a real output), so the
+        pixel_shuffle uid is NOT in the returned set.
+
+        Replicates the detection pattern from
+        `tiling_engine.py:_detect_pixel_shuffle_broadcast_chains:469`
+        exactly: same chain structure (single-consumer adjacency
+        expand→clone→view→pixel_shuffle), same broadcast-dim detection
+        (in_shape[d]==1 → out_shape[d]>1, exactly one such d). Mismatch
+        with the runtime detection → estimator zeroes ops that
+        runtime won't intercept → over-optimistic peak.
+        """
+        proxy_uids = set()
+        ops = graph.get("ops", {})
+        order = graph.get("execution_order", [])
+        # Build consumer map from input_tensor_ids (the runtime version
+        # walks `attributes.args` for tensor refs; the post-import
+        # graph.json's `input_tensor_ids` is the canonical equivalent).
+        consumers: Dict[str, List[str]] = {}
+        for uid in order:
+            op = ops.get(uid, {})
+            for tid in op.get("input_tensor_ids", []):
+                consumers.setdefault(tid, []).append(uid)
+        for uid in order:
+            op = ops.get(uid, {})
+            if op.get("op_type") != "aten::expand":
+                continue
+            in_shapes = op.get("input_shapes", [])
+            out_shapes = op.get("output_shapes", [])
+            if not in_shapes or not out_shapes:
+                continue
+            in_sh = in_shapes[0]
+            out_sh = out_shapes[0]
+            if len(in_sh) != len(out_sh):
+                continue
+            broadcast_dim = -1
+            for d in range(len(in_sh)):
+                if in_sh[d] == 1 and out_sh[d] > 1:
+                    if broadcast_dim != -1:
+                        broadcast_dim = -1
+                        break
+                    broadcast_dim = d
+            if broadcast_dim == -1:
+                continue
+            expand_out_tids = op.get("output_tensor_ids", [])
+            if not expand_out_tids:
+                continue
+            expand_consumers = consumers.get(expand_out_tids[0], [])
+            if len(expand_consumers) != 1:
+                continue
+            clone_uid = expand_consumers[0]
+            clone_op = ops.get(clone_uid, {})
+            if clone_op.get("op_type") != "aten::clone":
+                continue
+            clone_out_tids = clone_op.get("output_tensor_ids", [])
+            if not clone_out_tids:
+                continue
+            clone_consumers = consumers.get(clone_out_tids[0], [])
+            if len(clone_consumers) != 1:
+                continue
+            view_uid = clone_consumers[0]
+            view_op = ops.get(view_uid, {})
+            if view_op.get("op_type") != "aten::view":
+                continue
+            view_out_tids = view_op.get("output_tensor_ids", [])
+            if not view_out_tids:
+                continue
+            view_consumers = consumers.get(view_out_tids[0], [])
+            if len(view_consumers) != 1:
+                continue
+            ps_uid = view_consumers[0]
+            ps_op = ops.get(ps_uid, {})
+            if ps_op.get("op_type") != "aten::pixel_shuffle":
+                continue
+            # Chain confirmed — expand/clone/view are zero-alloc at runtime.
+            proxy_uids.add(uid)
+            proxy_uids.add(clone_uid)
+            proxy_uids.add(view_uid)
+        return proxy_uids
+
+    def _identify_fusion_upsample_uids(
+        self, graph: Dict, overflow_ops, input_config: InputConfig,
+        dtype_bytes: int, comp_vram_bytes: int,
+    ):
+        """Identify upsample op_uids that will be fused with their consumer
+        conv by `_detect_op_level_tiling_pairs` at runtime — replicates the
+        same eligibility logic exactly (`conv_overflow OR up_overflow`,
+        same `0.25 * comp_vram` threshold) so the tiling-aware activation
+        estimate and the runtime tiling plan agree on which upsamples are
+        materialized as `FusionUpsampleProxy` (size=0).
+
+        P-PRISM-ACTIVATION-ESTIMATOR-TILING-AWARE: critical to keep the
+        threshold formula synced with `_detect_op_level_tiling_pairs:819`.
+        Mismatch → estimator and runtime disagree about which upsamples
+        are "free" → estimate says "fits" but runtime won't fuse.
+        """
+        from neurobrix.core.prism.profiler import ActivationProfiler
+        if comp_vram_bytes <= 0:
+            return set()
+        profiler = ActivationProfiler(graph)
+        ops = graph.get("ops", {})
+        order = graph.get("execution_order", [])
+        consumers: Dict[str, List[str]] = {}
+        for uid in order:
+            op = ops.get(uid, {})
+            for tid in op.get("input_tensor_ids", []):
+                consumers.setdefault(tid, []).append(uid)
+        overflow_conv_uids = set()
+        if overflow_ops:
+            overflow_conv_uids = {o[0] for o in overflow_ops}
+        symbol_map = input_config.to_symbol_map()
+        fusion_uids = set()
+        for uid in order:
+            op = ops.get(uid, {})
+            if "upsample" not in op.get("op_type", ""):
+                continue
+            out_tids = op.get("output_tensor_ids", [])
+            if len(out_tids) != 1:
+                continue
+            cons = consumers.get(out_tids[0], [])
+            if len(cons) != 1:
+                continue  # not single-consumer upsample — can't fuse
+            conv_uid = cons[0]
+            conv_op = ops.get(conv_uid, {})
+            if "convolution" not in conv_op.get("op_type", ""):
+                continue
+            # Eligibility: conv would overflow OR upsample output > 25% VRAM.
+            # Same formula as solver.py:819 _detect_op_level_tiling_pairs.
+            conv_overflow = conv_uid in overflow_conv_uids
+            up_out_meta = graph["tensors"].get(out_tids[0], {})
+            up_out_shape = profiler._resolve_shape(up_out_meta, symbol_map)
+            up_out_bytes = profiler._compute_size(
+                up_out_shape, up_out_meta, dtype_bytes
+            )
+            up_overflow = up_out_bytes > 0.25 * comp_vram_bytes
+            if conv_overflow or up_overflow:
+                fusion_uids.add(uid)
+        return fusion_uids
+
     def _compute_memory(
         self, container: "NBXContainer", components: List["ComponentData"],
-        input_config: InputConfig, target_dtype_str: str
+        input_config: InputConfig, target_dtype_str: str,
+        profile: Optional["PrismProfile"] = None,
     ) -> Dict[str, ComponentMemory]:
-        """Compute Total = Weights + Activations + Overhead with full intelligence."""
+        """Compute Total = Weights + Activations + Overhead with full intelligence.
+
+        When `profile` is passed, the activation estimation becomes
+        **tiling-aware** via a two-pass flow per component:
+
+        1. First pass with `vram_per_gpu_bytes = smallest_GPU_in_profile`
+           (worst-case budget): identify overflow_ops at the standard
+           `safety=0.85` threshold.
+        2. Detect which upsample → conv adjacencies would be intercepted
+           as fusion pairs by `_detect_op_level_tiling_pairs` at runtime.
+        3. Second pass with `fusion_upsample_uids` set: re-estimate peak
+           with upsample outputs in fusion pairs zeroed (matches runtime
+           FusionUpsampleProxy sentinel behavior).
+
+        The result is a realistic peak_bytes that lets the strategy
+        cascade accept configs where the runtime tiling makes the model
+        fit. P-PRISM-ACTIVATION-ESTIMATOR-TILING-AWARE 2026-05-10.
+        Without `profile` (legacy callers): worst-case full-materialization
+        behaviour preserved.
+
+        Caveat: when the profile has mixed-size GPUs, picking the smallest
+        as the tiling-aware budget is conservative — a component placed
+        on the larger GPU may have its peak under-counted (no harm) but
+        a component flagged for tiling may have its estimate biased toward
+        more fusion than strictly needed. For POINT 9 scope (v100-16g and
+        v100-16g-x2-01 — both uniform 16 GiB), this caveat does not apply.
+        """
         result = {}
         shard_sizes = container.get_shard_sizes()
         manifest = container.get_manifest()
@@ -972,13 +1213,93 @@ class PrismSolver:
             if comp.graph is not None:
                 try:
                     profiler = ActivationProfiler(comp.graph)
-                    profile = profiler.estimate_peak_memory(
+                    dtype_bytes = get_dtype_bytes_per_element(target_dtype_str)
+                    # Tiling-aware budget: smallest GPU in the profile.
+                    # When profile is None (legacy callers), this stays 0
+                    # and the two-pass logic short-circuits to worst-case.
+                    smallest_gpu_bytes = 0
+                    if profile is not None and getattr(profile, "devices", None):
+                        smallest_gpu_bytes = min(
+                            int(d.memory_mb * 1024 * 1024) for d in profile.devices
+                        )
+                    # First pass: worst-case + overflow_ops detection.
+                    # `force_compute_dtype_for_fp` aligns the activation
+                    # estimate with the runtime compute dtype — graph
+                    # tensors traced as fp32 (PyTorch autocast off /
+                    # fp32 capture path) actually flow through fp16
+                    # kernels at runtime, halving their byte footprint.
+                    # Without this override the estimator doubles the
+                    # activation bill for any model where trace dtype
+                    # != runtime compute dtype (Sana 4Kpx VAE: graph
+                    # tensors fp32, runtime fp16 → 2× over-estimation).
+                    ap = profiler.estimate_peak_memory(
                         input_config=input_config,
-                        dtype_bytes=get_dtype_bytes_per_element(target_dtype_str),
+                        dtype_bytes=dtype_bytes,
+                        vram_per_gpu_bytes=smallest_gpu_bytes or None,
+                        force_compute_dtype_for_fp=True,
                     )
-                    activation_bytes = profile.peak_bytes
-                    peak_op_uid = profile.peak_op_uid
-                    peak_step = profile.peak_step
+                    # Second pass (tiling-aware) only when first pass found
+                    # overflow_ops AND we have a real budget to reason about.
+                    if smallest_gpu_bytes > 0 and ap.overflow_ops:
+                        fusion_uids = self._identify_fusion_upsample_uids(
+                            comp.graph, ap.overflow_ops, input_config,
+                            dtype_bytes, smallest_gpu_bytes,
+                        )
+                        # Also zero out F2a pixel_shuffle broadcast-aware
+                        # chain ops (expand/clone/view return stride-0
+                        # views or sentinel proxies at runtime — see
+                        # tiling_engine.py:_detect_pixel_shuffle_broadcast_chains
+                        # and the BroadcastClonePyroxy interceptor wiring).
+                        f2a_uids = self._identify_pixel_shuffle_chain_proxy_uids(
+                            comp.graph
+                        )
+                        zero_uids = fusion_uids | f2a_uids
+                        # In-place residual adds: detected statically by the
+                        # same liveness logic the runtime engine uses. The
+                        # add's output buffer = one input's buffer at runtime
+                        # (no new allocation). The profiler aliases the output
+                        # tid to the reused input tid, which extends that
+                        # input's lifetime through downstream consumers and
+                        # zero-allocates the output.
+                        inplace_adds = self._identify_inplace_add_candidates_static(
+                            comp.graph
+                        )
+                        if zero_uids or inplace_adds:
+                            ap_tiled = profiler.estimate_peak_memory(
+                                input_config=input_config,
+                                dtype_bytes=dtype_bytes,
+                                zero_alloc_uids=zero_uids,
+                                inplace_adds=inplace_adds,
+                                force_compute_dtype_for_fp=True,
+                            )
+                            activation_bytes = ap_tiled.peak_bytes
+                            peak_op_uid = ap_tiled.peak_op_uid
+                            peak_step = ap_tiled.peak_step
+                        else:
+                            activation_bytes = ap.peak_bytes
+                            peak_op_uid = ap.peak_op_uid
+                            peak_step = ap.peak_step
+                    else:
+                        # No overflow ops at this budget — also try in-place
+                        # add detection alone (relevant for shapes where
+                        # in-place adds dominate even without upsample fusion).
+                        inplace_adds = self._identify_inplace_add_candidates_static(
+                            comp.graph
+                        )
+                        if inplace_adds:
+                            ap_tiled = profiler.estimate_peak_memory(
+                                input_config=input_config,
+                                dtype_bytes=dtype_bytes,
+                                inplace_adds=inplace_adds,
+                                force_compute_dtype_for_fp=True,
+                            )
+                            activation_bytes = ap_tiled.peak_bytes
+                            peak_op_uid = ap_tiled.peak_op_uid
+                            peak_step = ap_tiled.peak_step
+                        else:
+                            activation_bytes = ap.peak_bytes
+                            peak_op_uid = ap.peak_op_uid
+                            peak_step = ap.peak_step
                     activation_profiled = True
                 except Exception:
                     activation_bytes = int(weight_bytes * 0.5)

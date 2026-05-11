@@ -28,6 +28,30 @@ Aucune modification de code. Closure factuelle conforme au mandate.
 Pistes backlog : `P-TRITON-FUSED-KERNELS`, `P-CUDA-GRAPHS`,
 autotune-ON re-mesure baseline.
 
+## 2026-05-11 — P-PRISM-ACTIVATION-ESTIMATOR-TILING-AWARE landed (POINT 9)
+
+`PrismSolver._compute_memory` désormais tiling-aware via two-pass dans
+`estimate_peak_memory`. Trois nouveaux mécanismes substituent les
+sentinels runtime au peak estimation :
+(1) `zero_alloc_uids` — upsamples en fusion pair (`FusionUpsampleProxy`,
+0 byte) et chaînes pixel_shuffle broadcast-aware F2a (expand stride-0,
+clone `BroadcastClonePyroxy`, view pass-through) marquées 0 byte ;
+(2) `inplace_adds` — adds résiduels avec liveness in-place aliasés
+(output share buffer with reused input ; reverse-map `frees_at`
+gère les last-uses étendus via alias) ;
+(3) `force_compute_dtype_for_fp` — override des fp meta dtypes (graph
+traced fp32) par le runtime compute_dtype (fp16) pour activations.
+Mesure Sana 4Kpx VAE : peak estimé pre-fix **28 GiB** → post-fix
+**12 GiB** (−57%) cohérent avec runtime mesuré 16.6 GiB.
+Fix config bonus : `config/hardware/v100-16g-x2-01.yml`
+`preferred_dtype: float16` ajouté (manquant — fallback fp32 inflait
+de 2× toutes les estimations multi-GPU). Anti-régression matrice
+4/4 cellules vertes (Sana 1024 / Sana 4Kpx 32g / PixArt-XL / TinyLlama).
+Cible binaire Sana 4Kpx FULL sur 1× V100 16 GiB **non atteinte** —
+runtime peak structurel ~17 GiB > 16 GiB hardware ;
+intra-component VAE split `P-MULTI-GPU-NBX-INTRA-COMPONENT-SPLIT`
+ouvert au backlog (explicitement out-of-scope POINT 9 par mandate).
+
 ## 2026-05-10 — P-SANA-4KPX-RUNTIME fully closed (full pipeline validation)
 
 Total scope closed. Full pipeline Sana 4Kpx (text_encoder →
