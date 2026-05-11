@@ -2821,14 +2821,34 @@ class PrismSolver:
         total_avail = sum(d.capacity_mb for d in devices)
         comp_info = "\n".join(f"  {n}: {m.total_mb:.0f}MB (W={m.weight_mb:.0f}, A={m.activation_mb:.0f})" for n, m in sorted_comps)
         dev_info = "\n".join(f"  {d.device_string}: {d.capacity_mb:.0f}MB" for d in devices)
+        # The full cascade depends on the device count (single-GPU vs multi-GPU
+        # profile). The error message lists what Prism actually tried so the
+        # user can correlate the failure with the strategy set in scope.
+        # Hardcoded list previously only mentioned 5 of the 9 strategies,
+        # misleading the diagnosis at P-SANA-4KPX-RUNTIME POINT 9.
+        if len(devices) == 1:
+            tried_str = ("single_gpu, single_gpu_lifecycle, lazy_sequential, "
+                         "zero3 - ALL FAILED")
+        else:
+            tried_str = (
+                "single_gpu, single_gpu_lifecycle, pipeline_parallel, "
+                "component_placement, block_scatter, weight_sharding, "
+                "component_placement_lazy, lazy_sequential, zero3 - "
+                "ALL FAILED"
+            )
         raise RuntimeError(
             f"ZERO FALLBACK: No strategy can fit this model.\n\n"
-            f"Strategies tried: single_gpu, component_placement, pipeline_parallel, block_scatter, weight_sharding - ALL FAILED\n\n"
+            f"Strategies tried: {tried_str}\n\n"
             f"Components:\n{comp_info}\n\n"
             f"Total required: {total_req:.0f}MB\n\n"
             f"GPUs:\n{dev_info}\n\n"
             f"Total available: {total_avail:.0f}MB\n\n"
-            f"Solutions:\n  1. Use larger GPUs\n  2. Reduce resolution/batch\n  3. Use smaller model"
+            f"Solutions:\n  1. Use larger GPUs\n  2. Reduce resolution/batch\n"
+            f"  3. Use smaller model\n"
+            f"  4. CPU offload for the overflowing component "
+            f"(open chantier P-PRISM-NEVER-REFUSE / "
+            f"P-MULTI-GPU-NBX-INTRA-COMPONENT-SPLIT for the architectural "
+            f"work this requires)"
         )
 
     def _print_summary(self, devices: List[DeviceState], plan: ExecutionPlan, profile: PrismProfile):
