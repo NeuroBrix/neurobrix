@@ -194,6 +194,9 @@ class ActivationProfiler:
         vram_per_gpu_bytes: Optional[int] = None,
         mode: str = "compiled",
         safety: float = 0.85,
+        zero_alloc_uids: Optional[set] = None,
+        inplace_adds: Optional[List] = None,
+        force_compute_dtype_for_fp: bool = False,
     ) -> ActivationProfile:
         """
         Simulate execution to find peak activation memory.
@@ -201,6 +204,17 @@ class ActivationProfiler:
         Args:
             input_config: Runtime input configuration (batch, height, width)
             dtype_bytes: Bytes per element override (default: from input_config.dtype)
+            zero_alloc_uids: Set of op_uids whose outputs are NOT allocated at
+                runtime because an `OpLevelTilingEngine` interceptor returns a
+                sentinel proxy (`FusionUpsampleProxy`, `BroadcastClonePyroxy`)
+                or a stride-0 view sharing data with the input. When provided,
+                the simulation substitutes their output size with 0 to mirror
+                the runtime exactly — turns worst-case full-materialization
+                into tiling-aware estimation. Used by `PrismSolver._compute_memory`'s
+                two-pass flow. Members typically include: upsample uids in
+                upsample→conv fusion pairs; expand/clone/view uids in F2a
+                pixel_shuffle broadcast-aware chains. None → legacy worst-case
+                estimation (no substitution).
 
         Returns:
             ActivationProfile with peak memory info
@@ -224,6 +238,63 @@ class ActivationProfiler:
 
         # Get graph output tensors (these are never freed)
         graph_outputs = set(self.dag.get("output_tensor_ids", []))
+        # Tiling-aware: ops whose outputs are sentinel proxies / stride-0 views
+        # at runtime (FusionUpsampleProxy on fusion-paired upsamples,
+        # BroadcastClonePyroxy on F2a clone, pass-through view on F2a view,
+        # NBXTensor.expand stride-0 view on F2a expand). Substituting size=0
+        # here mirrors the runtime exactly. See P-PRISM-ACTIVATION-ESTIMATOR-
+        # TILING-AWARE audit for the gap quantification.
+        zero_set = set(zero_alloc_uids) if zero_alloc_uids else set()
+
+        # In-place add aliasing: at runtime, in-place adds reuse one input
+        # buffer as the output (no new allocation). Each in-place add's
+        # output buffer IS its reused input's buffer. Their combined
+        # lifetime extends through the LATER of the two original last-uses.
+        # P-PRISM-ACTIVATION-ESTIMATOR-TILING-AWARE 2026-05-11.
+        alias = {}
+        last_uses_eff = self.last_uses
+        if inplace_adds:
+            # Build alias map: output_tid -> reused_input_tid (resolve
+            # transitive chains so all aliases point to the root buffer).
+            for entry in inplace_adds:
+                op_uid_inp, reuse_idx = entry
+                op_inp = self.ops.get(op_uid_inp, {})
+                in_tids = op_inp.get("input_tensor_ids", [])
+                out_tids = op_inp.get("output_tensor_ids", [])
+                if not out_tids or reuse_idx >= len(in_tids):
+                    continue
+                target = in_tids[reuse_idx]
+                seen_walk = set()
+                while target in alias and target not in seen_walk:
+                    seen_walk.add(target)
+                    target = alias[target]
+                for out_tid in out_tids:
+                    alias[out_tid] = target
+                # Output is zero-allocated (rebinds to reused buffer)
+                zero_set.add(op_uid_inp)
+            # Recompute last_uses with the alias substitution: any consumer
+            # of an aliased output_tid extends the lifetime of the merged
+            # buffer (the alias root). Build by walking ops in order so the
+            # LAST consumer wins.
+            last_uses_eff = dict(self.last_uses)
+            for op_uid_w in self.execution_order:
+                op_w = self.ops.get(op_uid_w, {})
+                for in_tid in op_w.get("input_tensor_ids", []):
+                    if in_tid in alias:
+                        target = in_tid
+                        seen_resolve = set()
+                        while target in alias and target not in seen_resolve:
+                            seen_resolve.add(target)
+                            target = alias[target]
+                        last_uses_eff[target] = op_uid_w
+        # Reverse map for the free phase: op_uid -> list of tids whose
+        # effective last-use is this op. Required to handle the alias case
+        # where an extended last-use points to an op that doesn't list the
+        # tid in its `input_tensor_ids`. Costs O(n) extra at simulation
+        # start, eliminates O(live_count) per-op scan.
+        frees_at: Dict[str, List[str]] = {}
+        for tid, op_uid_l in last_uses_eff.items():
+            frees_at.setdefault(op_uid_l, []).append(tid)
 
         # Simulation loop
         for step, op_uid in enumerate(self.execution_order):
@@ -231,10 +302,19 @@ class ActivationProfiler:
 
             # 1. ALLOCATE: Add output tensors
             output_tids = op.get("output_tensor_ids", [])
+            op_is_zero_alloc = op_uid in zero_set
             for out_tid in output_tids:
                 tensor_meta = self.tensors.get(out_tid, {})
                 shape = self._resolve_shape(tensor_meta, symbol_map)
-                size = self._compute_size(shape, tensor_meta, dtype_bytes)
+                size = self._compute_size(shape, tensor_meta, dtype_bytes,
+                                          force_compute_dtype_for_fp=force_compute_dtype_for_fp)
+
+                # Zero-alloc op: output is a sentinel proxy / stride-0 view
+                # at runtime, not a real allocation. Liveness still tracks
+                # the entry (so del live_tensors[tid] works downstream) —
+                # size=0 makes current_bytes -= 0 a no-op when freed.
+                if op_is_zero_alloc:
+                    size = 0
 
                 live_tensors[out_tid] = size
                 current_bytes += size
@@ -246,22 +326,16 @@ class ActivationProfiler:
                 peak_step = step
                 peak_tensor_count = len(live_tensors)
 
-            # 3. FREE: Remove dead tensors (liveness analysis)
-            # Check input tensors whose last use is this op
-            input_tids = op.get("input_tensor_ids", [])
-            for in_tid in input_tids:
-                if self.last_uses.get(in_tid) == op_uid:
-                    if in_tid not in graph_outputs and in_tid in live_tensors:
-                        current_bytes -= live_tensors[in_tid]
-                        del live_tensors[in_tid]
-
-            # Check output tensors that are dead-on-arrival (never consumed)
-            # These have last_use[tid] == producing_op_uid (set in step 3 of _compute_last_uses)
-            for out_tid in output_tids:
-                if self.last_uses.get(out_tid) == op_uid:
-                    if out_tid not in graph_outputs and out_tid in live_tensors:
-                        current_bytes -= live_tensors[out_tid]
-                        del live_tensors[out_tid]
+            # 3. FREE: Remove all tids whose effective last-use is this op.
+            # Uses the precomputed `frees_at` reverse map so the free phase
+            # handles aliased tids whose extended last-use points to an op
+            # that doesn't list the tid in its `input_tensor_ids`.
+            for tid in frees_at.get(op_uid, ()):
+                if tid in graph_outputs:
+                    continue
+                if tid in live_tensors:
+                    current_bytes -= live_tensors[tid]
+                    del live_tensors[tid]
 
         # Scan per-op output + workspace to flag overflows for op-level tiling
         overflow_ops = []
@@ -393,18 +467,35 @@ class ActivationProfiler:
         self,
         shape: List[int],
         tensor_meta: Dict[str, Any],
-        default_dtype_bytes: int
+        default_dtype_bytes: int,
+        force_compute_dtype_for_fp: bool = False,
     ) -> int:
         """
         Compute tensor size in bytes.
 
         Uses tensor's own dtype if available, otherwise default.
+
+        Args:
+            force_compute_dtype_for_fp: When True, override the meta's
+                floating-point dtype with the caller's `default_dtype_bytes`
+                (the runtime compute dtype). Mirrors the runtime: graph
+                tensors traced as fp32 (PyTorch autocast off / fp32 capture
+                path) are computed at compute_dtype (e.g. fp16) at runtime.
+                Non-floating dtypes (int64 indices, bool masks) preserve
+                their meta dtype. Used by `estimate_peak_memory` for
+                activation budgeting; weight estimation continues to use
+                the meta dtype unchanged.
         """
         # Get dtype from tensor meta if available
         dtype = tensor_meta.get("dtype", None)
 
         if dtype:
             dtype_bytes = get_dtype_bytes_per_element(dtype)
+            # Override for floating-point types if requested
+            if force_compute_dtype_for_fp:
+                d = str(dtype).lower()
+                if "float" in d or "bf16" in d or "half" in d:
+                    dtype_bytes = default_dtype_bytes
         else:
             dtype_bytes = default_dtype_bytes
 
