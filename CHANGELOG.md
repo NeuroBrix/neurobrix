@@ -28,6 +28,26 @@ Aucune modification de code. Closure factuelle conforme au mandate.
 Pistes backlog : `P-TRITON-FUSED-KERNELS`, `P-CUDA-GRAPHS`,
 autotune-ON re-mesure baseline.
 
+## 2026-05-11 — POINT 10 P-PRISM-NEVER-REFUSE remontée condition #2
+
+Investigation extensive du blocker Sana 4Kpx sur 1× et 2× V100 16 GiB.
+**Cible binaire NON ATTEINTE** ; remontée selon condition de sortie #2
+(blocker architectural >200 lignes hors scope). 6 stratégies testées
+end-to-end (`single_gpu`, `single_gpu_lifecycle`, `lazy_sequential`,
+`zero3`, pool-tuned `triton_sequential`, `--sequential` PyTorch native +
+`expandable_segments`) ; **toutes OOM au même endroit** : `aten.convolution::62`
+au runtime peak ~17 GiB (live ~13 GiB + 4 GiB conv output structurel).
+Le post-POINT-9 estimator prédit 12 GiB pour VAE, cohérent avec le live
+mesuré ; **l'estimator n'est pas le bug**, c'est la model size structurelle
+qui dépasse 16 GiB hardware. Audit doctrinal model-agnostic : zero violation
+dans le code actif (uniquement des commentaires historiques mentionnant
+des noms de modèles). Audit cascade : 9 stratégies effectivement câblées
+(message d'erreur misleading qui listait 5/9 est fixé dans cette session).
+**Acquis 32 GiB POINTS 7-9 préservés** ; aucune modification de runtime.
+Chantiers backlog ouverts : `P-MULTI-GPU-NBX-INTRA-COMPONENT-SPLIT`
+(pour 2× 16 GiB), `P-PRISM-CPU-FALLBACK-EXECUTION` (pour 1× 16 GiB,
+nouveau, pour respecter pleinement la doctrine "Prism never refuses").
+
 ## 2026-05-11 — P-PRISM-ACTIVATION-ESTIMATOR-TILING-AWARE landed (POINT 9)
 
 `PrismSolver._compute_memory` désormais tiling-aware via two-pass dans
