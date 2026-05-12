@@ -28,6 +28,20 @@ Aucune modification de code. Closure factuelle conforme au mandate.
 Pistes backlog : `P-TRITON-FUSED-KERNELS`, `P-CUDA-GRAPHS`,
 autotune-ON re-mesure baseline.
 
+### Added
+
+- **Op-level memory diagnostic** (`core/runtime/graph_executor.py`):
+  new `NBX_LIVENESS_AUDIT_AT_OP_UID=<op_uid>` environment variable
+  for the `triton_sequential` execution path. When set, prints at
+  the moment the matching op is about to execute: the device-tracked
+  live memory counter, the per-tid breakdown of the tensor store
+  (sorted by size), and any tensors held past their graph-declared
+  last use. Useful for users diagnosing GPU memory pressure on large
+  diffusion models (e.g. Sana 4Kpx) — points to the exact op where
+  intermediate tensors accumulate and whether the runtime liveness
+  matches the graph declaration. Inactive by default (env var unset
+  → zero overhead).
+
 ## 2026-05-11 — POINT 10 P-PRISM-NEVER-REFUSE remontée condition #2
 
 Investigation extensive du blocker Sana 4Kpx sur 1× et 2× V100 16 GiB.
