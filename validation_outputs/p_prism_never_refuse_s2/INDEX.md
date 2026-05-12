@@ -6,6 +6,10 @@ Sub-chantier: native `--sequential` mode adapted for runtime seq_len != trace_se
 |---|---|---|---|---|---|---|---|
 | tinyllama_cpu_sequential | llm | sequential (cpu-only-x86) | PASS (coherent text, 36.7s, 8 tok) | duration=36.69s | 33B | [output.txt](tinyllama_cpu_sequential/output.txt) | TODO |
 | tinyllama_gpu_sequential | llm | sequential (v100-32g) | PASS anti-régression (coherent text, 3.8s, 8 tok) | duration=3.82s | 36B | [output.txt](tinyllama_gpu_sequential/output.txt) | TODO |
+| tinyllama_gpu_triton_sequential | llm | triton-sequential (v100-32g) | PASS R30 mirror (coherent text, 48.3s, 5 tok) | "There may be different levels" | — | inline | TODO |
+| tinyllama_gpu_compiled | llm | compiled (v100-32g) | PASS anti-régression (coherent text, 3.3s, 5 tok) | "Sure! I can" | — | inline | TODO |
+| sana1024_seq_redapple | image | sequential (v100-32g) | PASS anti-régression (coherent red apple, 14.7s) | duration=14.73s | inline | [png](anti_regression_post_s2/sana1024_seq.png) | TODO |
+| pixart_xl_seq_redapple | image | sequential (v100-32g) | PASS anti-régression (coherent red apple, 20.7s) | duration=20.65s | inline | [png](anti_regression_post_s2/pixart_xl_seq.png) | TODO |
 
 ## Fix summary
 
