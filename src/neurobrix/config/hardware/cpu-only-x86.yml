@@ -1,0 +1,33 @@
+# Hardware Profile: CPU-only (no GPU). Generic x86_64.
+# Doctrine R35 — Prism must accept this profile and route compute to CPU.
+# Use case: developers/researchers without GPU access, validation matrix.
+
+id: cpu-only-x86
+vendor: generic
+preferred_dtype: float32
+summary:
+  total_gpus: 0
+  total_vram_gb: 0
+  total_ram_gb: 251.5
+  topology: CPU-only
+cpu:
+  model: Intel(R) Xeon(R) Gold 6230 CPU @ 2.10GHz
+  cores: 40
+  threads: 80
+  ram_mb: 257530
+  architecture: x86_64
+  features:
+  - fma
+  - sse4_1
+  - sse4_2
+  - avx
+  - f16c
+  - avx2
+  - avx512f
+  - avx512_vnni
+devices: []
+notes: 'CPU-only profile for Doctrine R35 cascade R35 validation.
+
+  CPU: Intel(R) Xeon(R) Gold 6230 CPU @ 2.10GHz (40 cores, 251.5 GB RAM)
+
+  No GPU.'
