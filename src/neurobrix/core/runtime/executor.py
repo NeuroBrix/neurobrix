@@ -889,6 +889,18 @@ class RuntimeExecutor:
             elif self._is_zero3_component(comp_name) and self.strategy is not None:
                 # Zero3 components: delegate to strategy for pinned memory + GPU transfer
                 output = self.strategy.execute_component(comp_name, phase, comp_inputs)
+            elif self._is_hybrid_strategy() and self.strategy is not None:
+                # Hybrid placement strategies (lazy_sequential with mixed
+                # CPU/GPU, cpu_execution, any strategy where different
+                # components live on different devices) MUST go through
+                # `strategy.execute_component` so the strategy can transfer
+                # inputs to the destination component's device. Otherwise
+                # inputs produced on cuda:0 by one component would arrive
+                # on the consumer's CPU dispatcher unchanged and ATen would
+                # either hang in implicit transfer or raise a device-
+                # mismatch error. P-RUNTIME-HYBRID-DEVICE-DISPATCH
+                # 2026-05-12.
+                output = self.strategy.execute_component(comp_name, phase, comp_inputs)
             else:
                 output = executor.run(comp_inputs)
 
@@ -922,6 +934,42 @@ class RuntimeExecutor:
             alloc = self.plan.components.get(comp_name)
             if alloc:
                 return getattr(alloc, 'strategy', '') == 'zero3'
+        return False
+
+    def _is_hybrid_strategy(self) -> bool:
+        """Check whether the active strategy needs per-component device
+        transfer of inputs (lazy_sequential with hybrid CPU+GPU
+        placement, cpu_execution, etc.). Strategies where every
+        component lives on the same device (single_gpu, component
+        placement on a single GPU class, ...) do not need this — the
+        producer's output is already on the consumer's device.
+
+        Heuristic: a strategy is "hybrid" if it can route different
+        components to devices with different families (`cpu` vs
+        `cuda:*`). `lazy_sequential` is the canonical case after
+        `_place_component` Strategy 4 (CPU fallback) lands. Also
+        triggers for `cpu_execution` so its `prepare_inputs` runs
+        consistently — host-resident producer outputs are still
+        torch.Tensors that need explicit `.to('cpu')` if they
+        crossed a graph executor boundary.
+
+        P-RUNTIME-HYBRID-DEVICE-DISPATCH 2026-05-12.
+        """
+        if self._strategy_name in ("lazy_sequential", "cpu_execution"):
+            return True
+        # Generic detection: if allocations route any component to "cpu"
+        # AND any other to "cuda:*" / "hip:*" / "xpu:*", we're hybrid.
+        if hasattr(self.plan, 'components'):
+            seen_cpu = False
+            seen_gpu = False
+            for alloc in self.plan.components.values():
+                dev = getattr(alloc, 'device', '')
+                if dev == 'cpu' or dev.startswith('cpu'):
+                    seen_cpu = True
+                elif dev.startswith(('cuda', 'hip', 'xpu')):
+                    seen_gpu = True
+            if seen_cpu and seen_gpu:
+                return True
         return False
 
     # ========== TILING HELPERS ==========

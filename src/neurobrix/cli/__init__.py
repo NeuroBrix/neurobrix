@@ -4,6 +4,23 @@ NeuroBrix CLI — Package entry point.
 Commands: run, info, inspect, validate, import, list, remove, clean, hub
 """
 
+# Pre-import startup: configure OpenMP / MKL thread count from physical
+# core count BEFORE any torch / numpy import below. PyTorch initialises
+# its intra-op thread pool the first time ATen runs, and OpenMP reads
+# `OMP_NUM_THREADS` at libgomp load time. Calling
+# `torch.set_num_threads` after import is a no-op for the already-
+# initialised thread pool. Doctrine R34: derived from `os.cpu_count()`
+# at startup as a default; the Prism `apply_cpu_config` path may
+# override with the hardware-profile value later. Users who set
+# `OMP_NUM_THREADS` themselves keep their override (setdefault only).
+# P-RUNTIME-HYBRID-DEVICE-DISPATCH 2026-05-12 — required for
+# MKL/oneDNN to parallelise compute on the CPU portion of hybrid
+# CPU+GPU placements (and on pure-CPU profiles).
+import os as _os_startup
+_cpu_count = _os_startup.cpu_count() or 1
+_os_startup.environ.setdefault("OMP_NUM_THREADS", str(_cpu_count))
+_os_startup.environ.setdefault("MKL_NUM_THREADS", str(_cpu_count))
+
 import sys
 import argparse
 from pathlib import Path
