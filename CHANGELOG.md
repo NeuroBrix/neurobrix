@@ -30,6 +30,28 @@ autotune-ON re-mesure baseline.
 
 ### Added
 
+- **Hybrid CPU+GPU placement — components that overflow the GPU route
+  to CPU automatically** (`core/prism/solver.py`,
+  `config/hardware/v100-16g.yml`): `_place_component` (the per-component
+  cascade used by the `lazy_sequential` strategy) gains a Strategy 4
+  CPU fallback. Components that don't fit any single GPU even with
+  zero3 weight offload are placed on host CPU; smaller siblings stay
+  on GPU. Result: `lazy_sequential` now produces hybrid plans like
+  `vae → cpu, text_encoder → cuda:0, transformer → cuda:0` on a
+  V100 16 GiB system running Sana 4Kpx. Also adds a 3 GiB
+  driver/library overhead reserve (`_OOM_RESERVE_MB`) to both
+  `_place_component` Strategy 1 and `_try_single_gpu` cold-mode
+  budget, so the planner no longer accepts plans that fit the
+  activation estimator but OOM at runtime inside conv outputs.
+  The `v100-16g` hardware profile now carries a generic `cpu:`
+  section (16-core, 128 GiB, AVX2-class) so the new strategy has a
+  RAM budget to consult on minimal profiles. **User-visible effect**:
+  on hardware where a single component (typically the diffusion
+  VAE at high resolution) exceeds GPU VRAM, the model still produces
+  output — VAE runs on CPU while the GPU handles smaller components.
+  Wall-time is unbounded (4Kpx VAE on CPU is genuinely a 30-60min
+  workload on 16-core hosts) but availability is guaranteed.
+
 - **CPU-only execution support — Prism never refuses on hosts without
   GPUs** (`core/strategies/cpu_execution.py`, `core/prism/solver.py`,
   `core/prism/structure.py`, `config/hardware/cpu-only-x86.yml`):
