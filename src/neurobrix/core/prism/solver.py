@@ -510,17 +510,29 @@ class PrismSolver:
 
         # Step 3: Prepare devices
         devices = self._prepare_devices(profile)
-        if not devices:
-            raise RuntimeError("ZERO FALLBACK: No GPU devices in hardware profile")
 
-        # Step 4: Try ALL strategies and pick best by score
-        # Single-GPU shortcut: skip multi-GPU strategies (Apple Silicon, single NVIDIA, etc.)
-        if len(devices) == 1:
+        # Step 4: Try ALL strategies and pick best by score.
+        # Doctrine R35 — Prism never refuses. The cascade always ends with
+        # `cpu_execution` (everything on CPU, perf libre). This is the last-
+        # resort entry of the cascade for any hardware that exposes CPU +
+        # RAM, including profiles with zero GPUs (developer machines, CI
+        # runners, dev boxes, future Mac Studio).
+        if not devices:
+            # CPU-only profile: skip the entire GPU cascade and jump
+            # straight to cpu_execution.
+            strategies = [
+                ("cpu_execution", self._try_cpu_execution),
+            ]
+        elif len(devices) == 1:
+            # Single-GPU shortcut: skip multi-GPU strategies (Apple Silicon,
+            # single NVIDIA, single RDNA, ...). Cascade ends in
+            # cpu_execution (R35).
             strategies = [
                 ("single_gpu", self._try_single_gpu),
                 ("single_gpu_lifecycle", self._try_single_gpu_lifecycle),
                 ("lazy_sequential", self._try_lazy_sequential),
                 ("zero3", self._try_zero3),
+                ("cpu_execution", self._try_cpu_execution),
             ]
         else:
             strategies = [
@@ -533,6 +545,7 @@ class PrismSolver:
                 ("component_placement_lazy", self._try_component_placement_lazy),
                 ("lazy_sequential", self._try_lazy_sequential),
                 ("zero3", self._try_zero3),
+                ("cpu_execution", self._try_cpu_execution),
             ]
 
         # NBX_FORCE_STRATEGY: deterministic single-strategy selection for
@@ -547,6 +560,7 @@ class PrismSolver:
                 "block_scatter", "weight_sharding",
                 "component_placement_lazy", "lazy_sequential",
                 "zero3",
+                "cpu_execution",
             }
             if forced not in valid:
                 raise RuntimeError(
@@ -641,7 +655,18 @@ class PrismSolver:
                 kv_already_counted = self._estimate_kv_cache_bytes(container, target_dtype_str)
 
                 # Strategy-aware capacity and allocation calculation
-                if strat_name in ("single_gpu", "single_gpu_lifecycle"):
+                if strat_name == "cpu_execution":
+                    # CPU-only: capacity = host RAM budget. KV cache lives
+                    # in host RAM alongside weights and activations.
+                    # Use 0.7 × ram_mb (matches `_try_cpu_execution`'s
+                    # budget formula, R34 generic).
+                    if profile.cpu and profile.cpu.ram_mb > 0:
+                        total_capacity = int(profile.cpu.ram_mb * 0.7 * 1024 * 1024)
+                    else:
+                        # No CPU stats — accept unconditionally (runtime
+                        # will fail clean if RAM truly insufficient).
+                        total_capacity = 2**62
+                elif strat_name in ("single_gpu", "single_gpu_lifecycle"):
                     # Single GPU: capacity = largest GPU only
                     total_capacity = int(max(d.capacity_mb for d in strat_devices) * 1024 * 1024)
                 else:
@@ -2331,6 +2356,10 @@ class PrismSolver:
             "component_placement_lazy": 400,
             "lazy_sequential": 300,
             "zero3": 100,
+            # R35 last-resort: CPU execution. Very low score so any
+            # successful GPU strategy beats it; only chosen when nothing
+            # else fits OR when the profile has no GPUs.
+            "cpu_execution": 10,
         }
         score = float(BASE_SCORES.get(strategy_name, 500))
 
@@ -2512,6 +2541,58 @@ class PrismSolver:
             shard_map = {s: "cpu" for s in shard_sizes.get(comp_name, {})}
             allocations[comp_name] = (f"zero3:{largest.device_string}", shard_map)
 
+        return allocations, fresh
+
+    def _try_cpu_execution(
+        self, sorted_comps, comp_mem, devices, shard_sizes, profile, container
+    ) -> Optional[Tuple[Dict, List[DeviceState]]]:
+        """CPU-only execution — Doctrine R35 last-resort cascade.
+
+        Place EVERY component (weights + activations) on CPU. Compute
+        routed to PyTorch ATen native CPU dispatcher (branch A) — sequential
+        and compiled modes work out of the box because `sequential_dispatcher`
+        and CompiledSequence are device-aware. Triton modes fall back to
+        PyTorch CPU when no Triton-CPU runtime is integrated (TODO
+        documented in `triton_cpu_coverage_gaps.md` once the branch B
+        Triton-CPU integration lands).
+
+        Activation budget: `sum(component peaks) <= cpu.ram_mb * 0.7`
+        (reserve 30% for OS, Python interpreter, MKL/oneDNN workspaces,
+        and intermediate activations not modelled by the estimator).
+        For profiles without a `cpu` config or with `ram_mb == 0`, accept
+        unconditionally — the doctrine says Prism never refuses, and the
+        runtime will fail clean if RAM is genuinely insufficient. This
+        keeps the strategy useful on profiles where CPU stats weren't
+        captured.
+
+        Wall-time is intentionally unbounded — the strategy may take
+        minutes or hours for large diffusion models at high resolution.
+        Doctrine R35: perf libre, disponibilité first.
+
+        R34 model-agnostic: discrimination only by hardware-profile
+        (`cpu.ram_mb`) and graph-derived component memory. No model
+        names, no families. P-PRISM-NEVER-REFUSE v2 — 2026-05-12.
+        """
+        # Validate CPU RAM if a cpu config is present
+        if profile.cpu and profile.cpu.ram_mb > 0:
+            total_required_mb = sum(mem.total_mb for _, mem in sorted_comps)
+            available_ram_mb = profile.cpu.ram_mb * 0.7
+            if total_required_mb > available_ram_mb:
+                # Genuinely insufficient RAM. Return None so the cascade
+                # can emit a clear error message at _fail_error level —
+                # explicitly mentions hardware (more RAM) instead of
+                # silently failing inside the runtime.
+                return None
+
+        allocations: Dict[str, Tuple[str, Dict[str, str]]] = {}
+        for comp_name, _mem in sorted_comps:
+            shard_map = {s: "cpu" for s in shard_sizes.get(comp_name, {})}
+            allocations[comp_name] = ("cpu", shard_map)
+
+        # CPU-only "fresh devices" list. Used downstream by the executor
+        # factory for context; an empty list is the historical signal
+        # for "no GPU used". We preserve that signal.
+        fresh = self._fresh_devices(devices)
         return allocations, fresh
 
     # Dtype string to bytes-per-element for safetensors header parsing
@@ -2734,8 +2815,22 @@ class PrismSolver:
         self, allocations, comp_mem, devices, comp_dtypes, profile: PrismProfile, strategy: str
     ) -> ExecutionPlan:
         """Build ExecutionPlan from allocation results."""
-        arch = profile.devices[0].architecture if profile.devices else ""
-        vendor = profile.devices[0].brand.value if profile.devices else ""
+        # GPU profile: use first device's arch/brand. CPU-only profile:
+        # fall back to the CPU's architecture (x86_64, arm64, riscv) and
+        # a generic "cpu" vendor. The factory's `_extract_architecture`
+        # and `_extract_vendor` accept any non-empty string — the values
+        # are used downstream for vendor-specific kernel selection
+        # (which is a no-op on the CPU path that uses PyTorch ATen
+        # native via MKL/oneDNN). R34 generic — no model-specific.
+        if profile.devices:
+            arch = profile.devices[0].architecture
+            vendor = profile.devices[0].brand.value
+        elif profile.cpu:
+            arch = profile.cpu.architecture or "x86_64"
+            vendor = "cpu"
+        else:
+            arch = "x86_64"
+            vendor = "cpu"
 
         components = {}
         total_mb = 0.0

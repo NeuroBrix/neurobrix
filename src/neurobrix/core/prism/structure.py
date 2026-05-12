@@ -108,6 +108,13 @@ class AllocationStrategy(Enum):
     LAZY_SEQUENTIAL = "lazy_sequential"             # One component at a time on largest GPU
     ZERO3 = "zero3"                                 # CPU offload, stream to GPU for compute
 
+    # === CPU-only (Doctrine R35 last-resort cascade) ===
+    # All weights and activations on host RAM; compute via PyTorch ATen
+    # native CPU dispatcher (branch A) or Triton-CPU (branch B, when
+    # integrated). Wall-time is unbounded but availability is guaranteed
+    # on any host with sufficient RAM. R34 generic — works for any model.
+    CPU_EXECUTION = "cpu_execution"
+
     @property
     def is_eager(self) -> bool:
         """True if weights stay in VRAM permanently (fast serving)."""
