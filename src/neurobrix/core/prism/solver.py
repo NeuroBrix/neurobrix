@@ -1600,7 +1600,17 @@ class PrismSolver:
         overhead_pct = 0.0 if needs_kv else 0.05
         total_required += total_required * overhead_pct
 
-        if total_required > largest.capacity_mb:
+        # P-PRISM-NEVER-REFUSE v2 B.4: blanket driver/library overhead
+        # reserve (matches `_place_component` Strategy 1 — see comment
+        # there for the empirical justification). Prevents `single_gpu`
+        # from accepting plans that fit the activation estimator but
+        # then runtime-OOM at the conv::62 boundary of Sana 4Kpx on
+        # 1× V100 16 GiB. The cascade can then fall through to
+        # `lazy_sequential` (which routes VAE to CPU via Strategy 4
+        # of `_place_component`) or `cpu_execution`.
+        _OOM_RESERVE_MB = 3072
+        effective_capacity = largest.capacity_mb - _OOM_RESERVE_MB
+        if total_required > effective_capacity:
             return None
 
         allocations = {}
@@ -2152,8 +2162,19 @@ class PrismSolver:
         real_weight = mem.weight_mb * cost_mult
         required = real_weight + mem.activation_mb
 
-        # Strategy 1: single_gpu — component fits on largest GPU
-        if required <= largest.capacity_mb * 0.92:
+        # Strategy 1: single_gpu — component fits on largest GPU.
+        # Capacity discounted by a fixed driver/library overhead reserve
+        # (cuDNN/cuBLAS workspaces, Triton kernel cache, autotune state,
+        # PyTorch caching allocator fragmentation). Observed empirically:
+        # 16.6 GiB peak runtime usage on 32 GiB GPU for ~13 GiB of live
+        # NBX tensors → ~3 GiB driver-side overhead. Applying the reserve
+        # at planning time prevents per-component placements that fit
+        # the estimator but OOM at runtime, which then triggers Strategy
+        # 4 (CPU placement) below. P-PRISM-NEVER-REFUSE v2 B.4 —
+        # 2026-05-12.
+        _OOM_RESERVE_MB = 3072  # 3 GiB blanket driver/library overhead
+        effective_capacity = largest.capacity_mb - _OOM_RESERVE_MB
+        if required <= effective_capacity * 0.92:
             shard_map = {s: largest.device_string for s in shard_sizes.get(comp_name, {})}
             return (largest.device_string, shard_map)
 
@@ -2164,12 +2185,37 @@ class PrismSolver:
         if fgp_result is not None:
             return fgp_result
 
-        # Strategy 3: zero3 — CPU offload, GPU for compute only
-        if mem.activation_mb <= largest.capacity_mb * 0.92:
+        # Strategy 3: zero3 — CPU offload of weights, GPU for compute only.
+        # Works only when activations fit on the largest GPU (with the
+        # same driver-overhead reserve as Strategy 1).
+        if mem.activation_mb <= effective_capacity * 0.92:
             shard_map = {s: "cpu" for s in shard_sizes.get(comp_name, {})}
             return (f"zero3:{largest.device_string}", shard_map)
 
-        return None
+        # Strategy 4: cpu — both weights AND compute on CPU.
+        # Last-resort placement for a single component whose activations
+        # don't fit any GPU even with zero3 weight offload. Used by
+        # `lazy_sequential` to route the largest component (e.g. Sana 4Kpx
+        # VAE on V100 16 GiB) to host RAM while smaller components stay
+        # on GPU. Validates that the component fits in 70% of host RAM
+        # (matches `_try_cpu_execution`'s budget formula).
+        #
+        # When `profile.cpu` is missing (some older or hand-written
+        # profile YAMLs without a `cpu:` section), accept unconditionally
+        # per Doctrine R35 — Prism never refuses on hardware that exposes
+        # CPU at the OS level. The runtime will fail clean if RAM is
+        # truly insufficient, with a clearer signal than an OOM-at-conv.
+        # P-PRISM-NEVER-REFUSE v2 B.4 — Doctrine R35 cascade per-component.
+        if profile.cpu and profile.cpu.ram_mb > 0:
+            if mem.total_mb <= profile.cpu.ram_mb * 0.7:
+                shard_map = {s: "cpu" for s in shard_sizes.get(comp_name, {})}
+                return ("cpu", shard_map)
+            # RAM accounted and insufficient → genuinely can't place
+            return None
+
+        # No CPU stats → accept (R35 default; runtime validates real RAM)
+        shard_map = {s: "cpu" for s in shard_sizes.get(comp_name, {})}
+        return ("cpu", shard_map)
 
     def _place_component_fgp(
         self,

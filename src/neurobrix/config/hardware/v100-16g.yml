@@ -8,6 +8,23 @@ summary:
   total_gpus: 1
   total_vram_gb: 16
   topology: Single-GPU
+# CPU section enables the Doctrine R35 cascade — `_place_component`
+# Strategy 4 (CPU placement for components that overflow the GPU)
+# and `cpu_execution` (last-resort whole-model CPU) both consult the
+# host RAM budget here.
+cpu:
+  model: generic-x86_64
+  cores: 16
+  threads: 32
+  ram_mb: 131072
+  architecture: x86_64
+  features:
+  - fma
+  - sse4_1
+  - sse4_2
+  - avx
+  - f16c
+  - avx2
 devices:
 - index: 0
   brand: nvidia
