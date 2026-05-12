@@ -380,6 +380,18 @@ class NativeATenDispatcher:
         except Exception as e:
             logger.error(f"[Sandbox Error] Failed to dispatch {op_type}")
             logger.error(f"  Error: {str(e)}")
+            # Verbose diagnostic — print input tensor shapes/devices to help
+            # localise sequential autoregressive bugs like the index OOB
+            # that fires on the first KV-cache write (P-NATIVE-SEQUENTIAL-
+            # CPU-DEBUG). One-off diagnostic; cheap when no error.
+            for ai, a in enumerate(inputs):
+                if hasattr(a, 'shape') and hasattr(a, 'device'):
+                    try:
+                        logger.error(f"  input[{ai}]: shape={list(a.shape)} dtype={a.dtype} device={a.device}")
+                    except Exception:
+                        pass
+                elif isinstance(a, (int, float, bool, str)):
+                    logger.error(f"  input[{ai}]: scalar={a!r}")
             raise
 
     def _resolve_op(self, op_name: str) -> Any:
