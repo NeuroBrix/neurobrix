@@ -69,6 +69,14 @@ class ExecutorFactory:
         # === Sequential / Offload ===
         "lazy_sequential": "graph",
         "zero3": "graph",
+
+        # === CPU-only (Doctrine R35 last-resort cascade) ===
+        # All weights and activations placed on host RAM, compute via
+        # PyTorch ATen native CPU dispatcher (branch A) or Triton-CPU
+        # (branch B, when integrated). GraphExecutor reuses the same
+        # device-aware sequential_dispatcher / compiled_sequence path
+        # — only the device routing changes.
+        "cpu_execution": "graph",
     }
 
     @classmethod

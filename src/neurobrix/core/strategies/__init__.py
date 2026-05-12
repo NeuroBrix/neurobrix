@@ -30,6 +30,7 @@ from .block_scatter import BlockScatterStrategy
 from .weight_sharding import WeightShardingStrategy
 from .lazy_sequential import LazySequentialStrategy
 from .zero3 import Zero3Strategy
+from .cpu_execution import CPUExecutionStrategy
 
 
 # =============================================================================
@@ -63,6 +64,9 @@ STRATEGY_REGISTRY = {
     # === Sequential / Offload ===
     "lazy_sequential": LazySequentialStrategy,
     "zero3": Zero3Strategy,
+
+    # === CPU-only (Doctrine R35 last-resort cascade) ===
+    "cpu_execution": CPUExecutionStrategy,
 }
 
 
@@ -93,6 +97,7 @@ __all__ = [
     "WeightShardingStrategy",
     "LazySequentialStrategy",
     "Zero3Strategy",
+    "CPUExecutionStrategy",
     "get_strategy",
     "STRATEGY_REGISTRY",
 ]

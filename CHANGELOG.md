@@ -30,6 +30,31 @@ autotune-ON re-mesure baseline.
 
 ### Added
 
+- **CPU-only execution support — Prism never refuses on hosts without
+  GPUs** (`core/strategies/cpu_execution.py`, `core/prism/solver.py`,
+  `core/prism/structure.py`, `config/hardware/cpu-only-x86.yml`):
+  new `cpu_execution` strategy added as the last entry of every
+  Prism cascade (single-GPU profiles, multi-GPU profiles, and brand-
+  new pure-CPU profiles). When the cascade reaches it, every
+  component runs entirely on host RAM via the PyTorch ATen native
+  CPU dispatcher (`--compiled` and `--sequential` modes). The
+  strategy validates that `sum(component totals) <= cpu.ram_mb * 0.7`
+  at planning time and selects "cpu" as the placement device. Thread
+  configuration is wired automatically from the host profile (cores,
+  threads, architecture, features) via the existing
+  `apply_cpu_config` path — no hardcoded thread counts. **User-visible
+  effect**: NeuroBrix users on developer machines, CI runners, and
+  any host without a GPU can now run any model end-to-end via
+  `--hardware cpu-only-x86` (or any future CPU-only profile).
+  Wall-time is unbounded but the pipeline always produces output.
+  Validated: TinyLlama-1.1B-Chat-v1.0 generates a coherent 39-token
+  haiku in 6.03 s on a 40-core Xeon Gold 6230 + 256 GiB RAM via
+  `--compiled` mode. Triton-CPU integration for the `--triton` /
+  `--triton-sequential` modes is a follow-up. No GPU code paths are
+  affected — `cpu_execution` scores below every GPU strategy and is
+  only chosen when nothing else fits or when the profile reports
+  zero GPUs.
+
 - **Op-level memory diagnostic** (`core/runtime/graph_executor.py`):
   new `NBX_LIVENESS_AUDIT_AT_OP_UID=<op_uid>` environment variable
   for the `triton_sequential` execution path. When set, prints at
