@@ -14,50 +14,52 @@ alignment with mature ML runtimes (llama.cpp, vLLM, transformers,
 torch itself do not auto-install optional backends). See
 `src/neurobrix/triton/cpu_backend.py` docstring for the full rationale.
 
-## Quick install (recommended)
+## Install — build from source (only path today)
 
-```bash
-pip install triton-cpu
-```
-
-This pulls the wheel from PyPI matching your Python version and OS.
-
-## Supported platforms (verified by NeuroBrix CI as of 2026-05)
-
-| Platform                | Wheel available | Status                             |
-|-------------------------|-----------------|------------------------------------|
-| Linux x86_64 (glibc 2.27+) | yes           | primary target — CI green          |
-| Linux aarch64           | yes             | secondary — basic ops validated    |
-| macOS arm64 (Apple Silicon) | yes         | secondary — basic ops validated    |
-| macOS x86_64            | no              | build-from-source only             |
-| Windows                 | no              | not supported by upstream          |
-
-If your distro is older (e.g. CentOS 7, RHEL 7, Ubuntu 18.04) the
-PyPI wheel may reject the install with a glibc-version error. In that
-case, build from source (next section).
-
-## Build from source
-
-`triton-cpu` is part of the `triton-lang/triton-cpu` repository. The
-build pulls a pinned LLVM commit (~30 minutes on a modern workstation,
-~15 GB peak disk).
+As of 2026-05, **upstream does not publish a PyPI wheel** for
+`triton-cpu`. The project README states "It's still work in progress"
+and install is build-from-source only. NeuroBrix gates the
+`--triton` CPU path on a successful build of this upstream project.
 
 ```bash
 git clone https://github.com/triton-lang/triton-cpu.git
 cd triton-cpu
-pip install ninja cmake
-pip install -e python
+pip install -r python/requirements.txt
+pip install -e .
 ```
+
+Prerequisites (typical Triton build chain — install via your distro's
+package manager before `pip install`):
+
+- LLVM (pinned by upstream; the build pulls and configures it).
+- CMake ≥ 3.18.
+- Ninja.
+- A C++17-capable host compiler (gcc ≥ 9 or clang ≥ 10).
+
+Expected build duration: ~30 minutes on a modern workstation.
+Expected peak disk: ~15 GB (LLVM build tree).
 
 Verify the install:
 
 ```bash
-python -c "import triton_cpu; print(triton_cpu.__version__)"
+TRITON_CPU_BACKEND=1 python3 -c "
+import triton.runtime.driver
+print('active:', triton.runtime.driver.active.__class__.__name__)
+print('target:', triton.runtime.driver.active.get_current_target())
+"
 ```
 
-If you see an `ImportError` referencing `libtinfo.so.6` on older
-distros, install your distro's `ncurses` package (`apt install
-libncurses6` on Debian/Ubuntu).
+A working install prints a CPU target (architecture string like
+`cpu` or `x86_64`) and does not raise.
+
+## Why no auto-install
+
+NeuroBrix never auto-fetches or auto-builds optional backends. See
+`src/neurobrix/triton/cpu_backend.py` docstring for the full
+rationale (security, trust, air-gapped deployments, alignment with
+mature ML runtimes). When you invoke `--triton` on a CPU-only host
+without `triton-cpu` built, NeuroBrix raises
+`TritonCPUNotInstalledError` with the install pointer.
 
 ## Air-gapped install
 
