@@ -2124,6 +2124,9 @@ class GraphExecutor:
             if self.mode in ("sequential", "triton_sequential"):
                 # Sequential modes: patch ops that reference trace_seq_len in shape args
                 self._patch_seq_len_in_ops(bound)
+                # Adapt constant_T_* RoPE cos/sin tables to runtime seq_len
+                # (mirrors CompiledSequence.update_seq_dependent_constants).
+                self._adapt_seq_dependent_weights(bound)
 
         return ctx
 
@@ -2203,6 +2206,37 @@ class GraphExecutor:
 
             # slice
             elif bare == "slice" and len(args) >= 4:
+                # RoPE cache slice (cos_cached/sin_cached): replace `end` with
+                # the FULL table dim, not runtime_seq_len, so absolute-position
+                # indexing during decode still hits valid rows. Mirrors the
+                # compiled-mode fix in
+                # compiled_sequence._promote_seq_len_scalars_to_symbolic.
+                input_tids = op_data.get("input_tensor_ids", [])
+                first_input = input_tids[0] if input_tids else ""
+                is_rope_cache = (
+                    isinstance(first_input, str)
+                    and first_input.startswith("param::")
+                    and any(k in first_input for k in
+                            ("cos_cached", "sin_cached", "cos_cache", "sin_cache"))
+                )
+                if is_rope_cache:
+                    table_shape = (
+                        self._dag.get("tensors", {})
+                        .get(first_input, {})
+                        .get("shape", [])
+                    )
+                    dim_arg = args[1]
+                    dim_val = (
+                        dim_arg if isinstance(dim_arg, int)
+                        else dim_arg.get("value") if isinstance(dim_arg, dict)
+                        else 0
+                    )
+                    if (isinstance(dim_val, int)
+                            and 0 <= dim_val < len(table_shape)):
+                        arg = args[3]
+                        if isinstance(arg, dict) and arg.get("type") == "scalar":
+                            arg["value"] = table_shape[dim_val]
+                        continue
                 arg = args[3]
                 if isinstance(arg, dict) and arg.get("type") == "scalar":
                     v = arg.get("value")
@@ -2220,15 +2254,27 @@ class GraphExecutor:
                                 arg[key] = runtime_map[v]
 
     def _adapt_seq_dependent_weights(self, bound_symbols: Dict[str, int]) -> None:
-        """Slice constant_T_* weights to match runtime seq_len.
+        """Adapt constant_T_* weights to match runtime seq_len.
 
         RoPE cos/sin tables are captured at trace_seq_len. If runtime seq_len
-        differs, we must slice (shorter) or the pre-computed tables (longer).
-        This is the sequential equivalent of CompiledSequence.update_seq_dependent_constants().
+        differs, narrow (runtime < trace) or extend (runtime > trace) the
+        tables. Sequential-mode equivalent of
+        `CompiledSequence.update_seq_dependent_constants()`.
+
+        Extension recomputes via the model's inv_freq buffer when present
+        (`param::rotary_embed.inv_freq` or any tensor matching the inv_freq
+        naming convention). R34 generic — no model-specific hardcode.
+        P-NATIVE-SEQUENTIAL-CPU-DEBUG / S2 2026-05-12.
         """
         assert self._dag is not None
         symbolic_context = self._dag.get("symbolic_context", {})
         symbols = symbolic_context.get("symbols", {})
+
+        # Snapshot the original full-size constants on first call so repeated
+        # decode-step invocations re-narrow / re-extend from the SAME basis
+        # (mirrors CompiledSequence._seq_constant_originals).
+        if not hasattr(self, "_seq_constant_originals_native"):
+            self._seq_constant_originals_native = {}
 
         # Find seq_len symbol and its trace/runtime values
         for sym_id, sym_info in symbols.items():
@@ -2236,24 +2282,101 @@ class GraphExecutor:
                 continue
             trace_val = sym_info.get("trace_value")
             runtime_val = bound_symbols.get(sym_id)
-            if trace_val is None or runtime_val is None or runtime_val == trace_val:
+            if trace_val is None or runtime_val is None:
                 continue
 
             # Scan weights for constant_T_* tensors with trace_seq_len in shape
-            tensors_meta = self._dag.get("tensors", {})
             for wname, weight in list(self._weights.items()):
                 if not wname.startswith("constant_T_"):
                     continue
                 for axis, dim in enumerate(weight.shape):
-                    if dim == trace_val:
-                        if runtime_val < trace_val:
-                            # Slice down
-                            slices = [slice(None)] * weight.ndim
-                            slices[axis] = slice(0, runtime_val)
-                            self._weights[wname] = weight[tuple(slices)]
-                        # If runtime > trace, the table is too small — keep full table
-                        # (downstream ops will handle via modular indexing)
-                        break
+                    if dim != trace_val:
+                        continue
+                    # Remember the original full-size weight (first
+                    # encounter only) so subsequent calls don't compound.
+                    if wname not in self._seq_constant_originals_native:
+                        self._seq_constant_originals_native[wname] = weight
+                    original = self._seq_constant_originals_native[wname]
+
+                    if runtime_val == original.shape[axis]:
+                        # Restore original
+                        self._weights[wname] = original
+                    elif runtime_val < original.shape[axis]:
+                        # Narrow from the original — slice positions 0..N-1
+                        slices = [slice(None)] * original.ndim
+                        slices[axis] = slice(0, runtime_val)
+                        self._weights[wname] = original[tuple(slices)]
+                    else:
+                        # Extend: recompute cos/sin via inv_freq if available
+                        extended = self._recompute_rope_seq_dependent(
+                            original, runtime_val, axis
+                        )
+                        if extended is not None:
+                            self._weights[wname] = extended
+                            # Update snapshot so subsequent calls don't
+                            # try to re-extend from an extended basis.
+                            self._seq_constant_originals_native[wname] = extended
+                    break
+
+    def _recompute_rope_seq_dependent(
+        self, original: torch.Tensor, seq_len: int, axis: int,
+    ) -> Optional[torch.Tensor]:
+        """Recompute a RoPE cos/sin table for `seq_len` positions.
+
+        Looks up `param::rotary_embed.inv_freq` (or any
+        `*.rotary_embed.inv_freq` per-block buffer) in `self._weights`.
+        Uses the canonical RoPE formula:
+          freqs = outer(positions, inv_freq)
+          emb   = cat([freqs, freqs], dim=-1)
+          out   = cos(emb) or sin(emb), depending on the original's
+                  position-0 value (cos(0)=1, sin(0)=0).
+
+        Mirrors `CompiledSequence._recompute_rope_constant`. Returns None
+        when no inv_freq is found — caller falls back to the original
+        table (downstream may still error, but we've done what's
+        recoverable without inv_freq).
+        """
+        # Find inv_freq across canonical naming conventions
+        inv_freq = None
+        for wname, w in self._weights.items():
+            if "rotary_embed.inv_freq" in wname and isinstance(w, torch.Tensor):
+                inv_freq = w
+                break
+        if inv_freq is None:
+            return None
+
+        positions = torch.arange(
+            seq_len, device=inv_freq.device, dtype=inv_freq.dtype
+        )
+        freqs = torch.outer(positions, inv_freq)
+        emb = torch.cat([freqs, freqs], dim=-1)
+
+        first_val = float(original.flatten()[0].item())
+        if abs(first_val - 1.0) < 0.01:
+            result = emb.cos()
+        else:
+            result = emb.sin()
+
+        # Reshape to match original's shape on non-seq axes.
+        # CompiledSequence assumes shape [1, seq_len, head_dim] → unsqueeze(0).
+        # Here we generalise via axis: insert seq_len on `axis` of original.
+        target_shape = list(original.shape)
+        target_shape[axis] = seq_len
+        # Build the result with the same dims as original. Common cases:
+        #   original=[seq, dim], axis=0 → result=[seq_len, dim] (no unsqueeze)
+        #   original=[1, seq, dim], axis=1 → result=[1, seq_len, dim] (unsqueeze 0)
+        # General approach: ensure result has the same ndim as original;
+        # unsqueeze any leading dims of size 1.
+        while result.ndim < original.ndim:
+            result = result.unsqueeze(0)
+        if list(result.shape) != target_shape:
+            # As a final fallback, broadcast-reshape if shapes are
+            # compatible; otherwise return None to keep the original.
+            try:
+                result = result.expand(target_shape).contiguous()
+            except RuntimeError:
+                return None
+        return result.to(original.dtype)
 
     def _value_fingerprint(self, t):
         """Sample 5 values from a tensor (torch.Tensor or NBXTensor) at
