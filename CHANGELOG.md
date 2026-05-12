@@ -30,6 +30,26 @@ autotune-ON re-mesure baseline.
 
 ### Added
 
+- **Hybrid CPU+GPU runtime dispatch — Prism plans with mixed CPU/GPU
+  components now execute correctly** (`core/runtime/executor.py`,
+  `core/strategies/lazy_sequential.py`, `cli/__init__.py`):
+  the executor previously bypassed strategy-level input prep for
+  `lazy_sequential`, so a CPU component consuming the output of a GPU
+  producer would either stall in implicit transfer or raise a
+  device-mismatch error. The fix routes mixed-device plans through
+  `strategy.execute_component`, which transfers inputs to each
+  component's device before calling `executor.run`. The hybrid
+  routing fires when (a) the active strategy is `lazy_sequential` or
+  `cpu_execution`, or (b) the plan places one component on CPU and
+  another on a GPU device. The CLI entry point also configures
+  `OMP_NUM_THREADS` and `MKL_NUM_THREADS` from `os.cpu_count()`
+  before any torch import so MKL/oneDNN can parallelise the CPU
+  portion of a hybrid run. **User-visible effect**: Sana 4Kpx on
+  1× V100 16 GiB no longer fails — the VAE runs on host CPU with
+  text_encoder and transformer on GPU. Wall-time is dominated by
+  the 4096×4096 CPU VAE decode (≥30 min on 40-core hosts; in line
+  with Doctrine R35 perf-libre principle).
+
 - **Hybrid CPU+GPU placement — components that overflow the GPU route
   to CPU automatically** (`core/prism/solver.py`,
   `config/hardware/v100-16g.yml`): `_place_component` (the per-component

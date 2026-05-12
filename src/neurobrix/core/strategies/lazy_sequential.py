@@ -62,7 +62,10 @@ class LazySequentialStrategy(ExecutionStrategy):
             self._pin_cpu_weights(component_name, executor)
             self._pinned_components.add(component_name)
 
-        # Prepare inputs on correct device
+        # Prepare inputs on correct device — required for hybrid CPU+GPU
+        # placement where a CPU component consumes the output of a GPU
+        # producer (or vice versa). transfer_dict is a no-op when source
+        # and target are already the same device.
         if inputs:
             device = self._get_component_device(component_name)
             inputs = self.transfer_dict(inputs, device)
