@@ -1185,6 +1185,158 @@ class OpLevelTilingEngine:
                     f"{view_uid} -> {ps_uid} (bcast_dim={bcast_dim} "
                     f"bcast={bcast_factor} r={spec['upscale_factor']})")
 
+        # S5 — Residual chain band-streaming.
+        # For each chain in the plan, register interceptors on the fork,
+        # all chain intermediates, and the merge. The fork interceptor
+        # computes the merge output once via the band-streamed wrapper
+        # and stashes it in a registry. The intermediate interceptors
+        # return zero-allocation `ChainSentinel`s (their outputs are
+        # only consumed by the next chain op, also intercepted). The
+        # merge interceptor retrieves the precomputed result.
+        # Compiled-mode (torch) path lands here; NBX port is follow-up.
+        # P-PRISM-NEVER-REFUSE v2 S5 2026-05-13.
+        if self.plan.residual_chains:
+            from neurobrix.kernels.ops.residual_chain import (
+                ChainSentinel,
+                resolve_chain_weights,
+                band_streamed_chain_torch,
+            )
+            # Per-engine chain registry: chain_id → precomputed merge tensor.
+            if not hasattr(self, "_chain_registry"):
+                self._chain_registry: Dict[str, Any] = {}
+
+            # Build the node-role map: each op_uid may simultaneously act
+            # as merge of chain N and fork of chain N+1 (DC-AE stacked
+            # residual blocks at the same spatial scale). One unified
+            # interceptor per uid handles all roles in the correct order:
+            # 1. drain any chain whose merge ends here (pull precomputed
+            #    result from registry → that becomes the value of this op)
+            # 2. if no chain ends here, run the natural op (add) to get
+            #    the value
+            # 3. for any chain that starts at this uid, run the band-
+            #    streamed wrapper on the value and stash the result
+            # 4. return the value
+            roles: Dict[str, Dict[str, List[Any]]] = {}
+            for spec in self.plan.residual_chains:
+                cid = f"{self.plan.component_name}::{spec['fork_uid']}->{spec['merge_uid']}"
+                spec_with_cid = dict(spec)
+                spec_with_cid["chain_id"] = cid
+                roles.setdefault(spec["fork_uid"], {
+                    "forks": [], "merges": [], "intermediate_for": []
+                })["forks"].append(spec_with_cid)
+                roles.setdefault(spec["merge_uid"], {
+                    "forks": [], "merges": [], "intermediate_for": []
+                })["merges"].append(spec_with_cid)
+                for uid in spec["chain_uids"]:
+                    roles.setdefault(uid, {
+                        "forks": [], "merges": [], "intermediate_for": []
+                    })["intermediate_for"].append(spec_with_cid)
+
+            def make_unified_node_interceptor(
+                _uid,
+                _node_roles,
+                _executor_ref=graph_executor,
+                _registry=self._chain_registry,
+            ):
+                # Lazy weight cache per chain that starts here.
+                _wcache: Dict[str, Any] = {}
+
+                def _resolve(spec_cid):
+                    if spec_cid["chain_id"] in _wcache:
+                        return _wcache[spec_cid["chain_id"]]
+                    w_dict = getattr(_executor_ref, '_weights', None) or {}
+                    cw = resolve_chain_weights(
+                        spec_cid, _executor_ref._dag, w_dict)
+                    _wcache[spec_cid["chain_id"]] = cw
+                    return cw
+
+                def _node(*args, **kwargs):
+                    # Step 1: drain a chain whose merge ends here.
+                    value = None
+                    for merge_spec in _node_roles["merges"]:
+                        cid = merge_spec["chain_id"]
+                        if cid in _registry:
+                            value = _registry.pop(cid)
+                            break
+
+                    # Step 2: if no chain provided the value, run the
+                    # natural op. For intermediate uids: return a
+                    # sentinel referencing the active chain (caller
+                    # downstream is intercepted too).
+                    if value is None:
+                        if _node_roles["intermediate_for"]:
+                            # Use the latest active chain for sentinel
+                            # metadata. Multiple intermediate roles for
+                            # the SAME uid don't occur in practice (a
+                            # chain op belongs to exactly one chain by
+                            # detection construction).
+                            spec_int = _node_roles["intermediate_for"][0]
+                            cid = spec_int["chain_id"]
+                            if cid in _registry:
+                                t = _registry[cid]
+                                return ChainSentinel(cid, tuple(spec_int["shape"]),
+                                                     t.dtype, t.device)
+                            # Active chain not yet computed → likely
+                            # fork failed. Surface naturally.
+                            return None
+                        # Otherwise it's a plain op being intercepted
+                        # only because it's a fork → run the underlying
+                        # binary add on the args.
+                        if len(args) >= 2 and isinstance(args[0],
+                                torch.Tensor) and isinstance(args[1],
+                                torch.Tensor):
+                            alpha = kwargs.get("alpha", 1.0)
+                            if len(args) > 2 and isinstance(args[2],
+                                    (int, float)):
+                                alpha = args[2]
+                            value = torch.add(args[0], args[1],
+                                              alpha=float(alpha))
+                        elif len(args) >= 2:
+                            value = args[0] + args[1]
+                        else:
+                            return None
+
+                    # Step 3: for each chain that starts here, run the
+                    # band-streamed wrapper and stash the result.
+                    for fork_spec in _node_roles["forks"]:
+                        if not isinstance(value, torch.Tensor):
+                            continue
+                        cw = _resolve(fork_spec)
+                        if not cw:
+                            continue
+                        try:
+                            merge_out = band_streamed_chain_torch(
+                                value, cw,
+                                tile_factor=int(fork_spec.get(
+                                    "tile_factor", 4)),
+                                halo=int(fork_spec.get("halo", 2)),
+                            )
+                            _registry[fork_spec["chain_id"]] = merge_out
+                        except Exception as e:
+                            logger.warning(
+                                f"[S5] band-streamed chain failed for "
+                                f"{fork_spec['chain_id']}: "
+                                f"{type(e).__name__}: {e}. "
+                                f"Falling back to standard dispatch."
+                            )
+                            _registry.pop(fork_spec["chain_id"], None)
+
+                    return value
+
+                setattr(_node, "self_manages_dtype", True)
+                return _node
+
+            for uid, node_roles in roles.items():
+                interceptors[uid] = make_unified_node_interceptor(
+                    uid, node_roles)
+
+            logger.info(
+                f"[S5] residual chains wired: "
+                f"{len(self.plan.residual_chains)} chains across "
+                f"{len(roles)} op nodes "
+                f"on component '{self.plan.component_name}'"
+            )
+
         if not interceptors:
             return 0
         graph_executor.register_op_uid_interceptors(interceptors)
@@ -1193,7 +1345,8 @@ class OpLevelTilingEngine:
             f"interceptors on component '{self.plan.component_name}': "
             f"fusion_pairs={len(self.plan.fusion_pairs)} "
             f"tiled_ops={len(self.plan.tiled_ops)} "
-            f"inplace_adds={len(self.plan.inplace_adds)}"
+            f"inplace_adds={len(self.plan.inplace_adds)} "
+            f"residual_chains={len(self.plan.residual_chains)}"
         )
         return len(interceptors)
 
