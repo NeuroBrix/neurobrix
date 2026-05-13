@@ -527,18 +527,28 @@ def tiled_rms_norm_spatial(
     tile_factor = min(int(tile_factor), H)
     band_h = (H + tile_factor - 1) // tile_factor
 
-    # Force contiguous output layout. If x is a permute view (non-contig
-    # NHWC over NCHW storage), `empty_like` defaults to preserve_format
-    # which produces a non-contig output. Some downstream ops then read
-    # mis-aligned strides; force contig to keep the output unambiguous.
-    output = torch.empty_like(x, memory_format=torch.contiguous_format)
+    # PyTorch `empty_like(x, memory_format=contiguous_format)` has known
+    # edge cases on non-contig sources (pytorch/pytorch issues #62027,
+    # #79813, #158022) where the output stride pattern silently inherits
+    # the source's permuted layout instead of true C-contiguous. The
+    # symptom on Sana 4Kpx 16g VAE was a fully-black PNG: rms_norm::27
+    # receives a non-contig NHWC view of NCHW storage; band slicing at
+    # `band_h=256` (tile_factor=16) and `band_h=512` (tile_factor=8) both
+    # fired the same compute, but the indexed assignment
+    # `output[s] = out_band` wrote to a stride pattern that didn't match
+    # the dispatcher's downstream reader.
+    # Fix: allocate `output` via explicit `torch.empty(shape, dtype=,
+    # device=)` (default C-contig, unambiguous) + force `.contiguous()`
+    # on `x_band` before the math so the slice math is on packed
+    # storage. Mirrors the repo's "Contiguous-guard pattern" doctrine
+    # for tiled wrappers (CLAUDE.md).
+    output = torch.empty(x.shape, dtype=x.dtype, device=x.device)
     for h_start in range(0, H, band_h):
         h_end = min(h_start + band_h, H)
-        # Slice along the H dim (axis -3 for [B, H, W, C])
         slicer = [slice(None)] * x.ndim
         slicer[-3] = slice(h_start, h_end)
         s = tuple(slicer)
-        x_band = x[s]
+        x_band = x[s].contiguous()
         out_band = _rms_norm_direct(x_band, weight, eps)
         output[s] = out_band
     return output
