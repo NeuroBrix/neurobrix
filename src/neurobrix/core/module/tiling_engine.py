@@ -406,7 +406,8 @@ class OpLevelTilingPlan:
     FusionUpsampleProxy and the conv interceptor reads it.
     """
 
-    __slots__ = ("component_name", "fusion_pairs", "tiled_ops", "inplace_adds")
+    __slots__ = ("component_name", "fusion_pairs", "tiled_ops",
+                 "inplace_adds", "residual_chains")
 
     def __init__(self, component_name: str):
         self.component_name = component_name
@@ -423,6 +424,13 @@ class OpLevelTilingPlan:
         # `_detect_inplace_add_candidates`. P-SANA-4KPX-RUNTIME 2026-05-05
         # multi-branch fusion fix vector B.
         self.inplace_adds: List[Tuple[str, int]] = []
+        # Each entry: dict {"fork_uid": str, "merge_uid": str,
+        # "chain_uids": List[str], "tile_factor": int, "spatial_axis": int,
+        # "halo": int, "shape": List[int]} — long residual chains where
+        # fork→linear_chain≥3→merge has 3+ large intermediates co-resident.
+        # Detected from the DAG; populated at register-time by
+        # `_detect_residual_chains`. P-PRISM-NEVER-REFUSE v2 S5 2026-05-13.
+        self.residual_chains: List[Dict[str, Any]] = []
 
     def add_upsample_conv_fusion(self, upsample_uid: str, conv_uid: str,
                                   tile_factor: int) -> None:
@@ -434,15 +442,21 @@ class OpLevelTilingPlan:
     def add_inplace_add(self, op_uid: str, reuse_input_index: int) -> None:
         self.inplace_adds.append((op_uid, int(reuse_input_index)))
 
+    def add_residual_chain(self, spec: Dict[str, Any]) -> None:
+        """Register a long-residual-chain spec. See `residual_chains`
+        slot docstring for the expected dict shape."""
+        self.residual_chains.append(dict(spec))
+
     def is_empty(self) -> bool:
         return (not self.fusion_pairs and not self.tiled_ops
-                and not self.inplace_adds)
+                and not self.inplace_adds and not self.residual_chains)
 
     def __repr__(self) -> str:
         return (
             f"OpLevelTilingPlan(comp={self.component_name}, "
             f"fusion_pairs={len(self.fusion_pairs)}, "
-            f"tiled_ops={len(self.tiled_ops)})"
+            f"tiled_ops={len(self.tiled_ops)}, "
+            f"residual_chains={len(self.residual_chains)})"
         )
 
 
@@ -709,6 +723,228 @@ class OpLevelTilingEngine:
             elif b_last:
                 candidates.append((op_uid, 1))
         return candidates
+
+    @staticmethod
+    def _detect_residual_chains(
+        graph_executor,
+        threshold_bytes: int = 1_600_000_000,  # 1.6 GiB at fp32, ~0.8 GiB at bf16
+    ) -> "List[Dict[str, Any]]":
+        """Detect long residual chains (`fork → ≥3-op chain → merge`).
+
+        Structural R34-conforming signature (NO model name lookup):
+
+          1. A producer op (the **fork**) produces a tensor `T_base`.
+          2. `T_base` has EXACTLY 2 consumers: the first op of a chain
+             AND an `aten::add` (the **merge**) that takes `T_base` as
+             one of its inputs.
+          3. Between the chain start and merge: a linear chain of N ≥ 3
+             intermediate ops where each op has exactly ONE consumer
+             (the next op in the chain). The last chain op feeds the
+             merge as the OTHER input.
+          4. All chain intermediates AND `T_base` AND the merge output
+             share the same trailing spatial dims (H, W) so the chain
+             is uniformly band-tileable.
+          5. `T_base` size (fp32, conservative) ≥ `threshold_bytes`.
+
+        Returns a list of dicts:
+          {"fork_uid": str, "merge_uid": str, "chain_uids": [str, ...],
+           "spatial_axis": 2, "halo": int, "shape": [N, C, H, W],
+           "bytes_fp32": int}
+
+        `spatial_axis` is the H dimension of NCHW tensors (axis 2). The
+        chain is tiled along this axis. `halo` is the accumulated
+        `(kernel_size - 1) // 2` across all chain convolutions; the
+        caller uses it to expand the input band before computing the
+        chain.
+
+        Validated on Sana 4Kpx VAE: matches 4 chains (one per DC-AE
+        block at 4096², 2048², 1024², 512²). Anti-pattern check:
+        returns [] for Sana 1024 VAE, PixArt KL-AE, TinyLlama, etc.
+        """
+        dag = getattr(graph_executor, '_dag', None)
+        if dag is None:
+            return []
+        ops = dag.get("ops", {})
+        if isinstance(ops, list):
+            ops_by_uid = {o["op_uid"]: o for o in ops}
+        else:
+            ops_by_uid = ops
+        order = dag.get("execution_order", [])
+        exec_idx = {uid: i for i, uid in enumerate(order)}
+        output_ids = set(dag.get("output_tensor_ids", []))
+
+        # Build consumer map: tensor_id -> [op_uid that reads it]
+        def _collect_arg_tids(arg, out_set):
+            if isinstance(arg, dict):
+                atype = arg.get("type")
+                if atype in ("tensor", "tensor_ref"):
+                    t = arg.get("tensor_id")
+                    if t:
+                        out_set.add(t)
+                elif atype == "tensor_tuple":
+                    for t in arg.get("tensor_ids", []):
+                        out_set.add(t)
+                elif atype == "list":
+                    for item in arg.get("value", []):
+                        _collect_arg_tids(item, out_set)
+
+        consumers: Dict[str, List[str]] = {}
+        for op_uid in order:
+            op = ops_by_uid.get(op_uid)
+            if op is None:
+                continue
+            attrs = op.get("attributes", {})
+            seen: set = set()
+            for arg in attrs.get("args", []):
+                _collect_arg_tids(arg, seen)
+            for arg in attrs.get("kwargs", {}).values():
+                _collect_arg_tids(arg, seen)
+            for tid in seen:
+                consumers.setdefault(tid, []).append(op_uid)
+
+        # Chain-eligible op types: pointwise + spatial-local with optional
+        # feature-dim transformations. Each entry maps op_type to
+        # (halo_per_side, requires_kernel_lookup).
+        # - aten::convolution adds halo = (kH-1)//2 to the input band
+        # - aten::silu, aten::gelu, aten::add (pointwise): halo = 0
+        # - custom::rms_norm reduces along the LAST dim (feature-dim);
+        #   spatial-local (per-pixel), halo = 0
+        # - aten::permute / aten::view: zero-copy reshapes (in NCHW <->
+        #   NHWC for rms_norm sandwich). halo = 0, but we treat them
+        #   as transparent (skip them in the chain depth count if they
+        #   are between conv and rms_norm).
+        CHAIN_OP_TYPES = {
+            "aten::convolution": "conv",
+            "aten::silu": "pointwise",
+            "aten::gelu": "pointwise",
+            "aten::relu": "pointwise",
+            "aten::add": "pointwise",     # mid-chain bias adds (broadcast)
+            "aten::mul": "pointwise",
+            "custom::rms_norm": "rms_norm",
+            "aten::permute": "permute",
+            "aten::view": "reshape",
+            "aten::reshape": "reshape",
+        }
+
+        chains: List[Dict[str, Any]] = []
+        seen_chains: set = set()
+
+        for fork_uid in order:
+            fork_op = ops_by_uid.get(fork_uid)
+            if fork_op is None:
+                continue
+            out_tids = fork_op.get("output_tensor_ids", [])
+            if len(out_tids) != 1:
+                continue
+            t_base = out_tids[0]
+            if t_base in output_ids:
+                continue
+            t_base_consumers = consumers.get(t_base, [])
+            # Need EXACTLY 2 consumers: chain start + merge
+            if len(t_base_consumers) != 2:
+                continue
+            # Check shape threshold (use fp32 as conservative estimate)
+            fork_oshape = fork_op.get("output_shapes", [None])[0]
+            if not fork_oshape or len(fork_oshape) != 4:
+                continue
+            elems = 1
+            for d in fork_oshape:
+                elems *= max(1, int(d))
+            t_base_bytes_fp32 = elems * 4
+            if t_base_bytes_fp32 < threshold_bytes:
+                continue
+            # Identify chain_start and merge_op among the two consumers.
+            # The merge op must be aten::add. The chain_start is
+            # something else (typically aten::convolution).
+            c_a, c_b = t_base_consumers
+            op_a = ops_by_uid.get(c_a, {})
+            op_b = ops_by_uid.get(c_b, {})
+            merge_uid = None
+            chain_start_uid = None
+            if op_a.get("op_type") == "aten::add" and op_b.get("op_type") != "aten::add":
+                merge_uid, chain_start_uid = c_a, c_b
+            elif op_b.get("op_type") == "aten::add" and op_a.get("op_type") != "aten::add":
+                merge_uid, chain_start_uid = c_b, c_a
+            else:
+                continue
+            # Sanity — merge must be AFTER chain_start in execution order
+            if exec_idx.get(merge_uid, -1) <= exec_idx.get(chain_start_uid, -1):
+                continue
+            # Walk the linear chain from chain_start. Each op must have
+            # type in CHAIN_OP_TYPES and a single consumer (the next op).
+            chain_uids: List[str] = []
+            halo_total = 0
+            cur_uid = chain_start_uid
+            spatial_h = int(fork_oshape[2]) if len(fork_oshape) >= 3 else 0
+            spatial_w = int(fork_oshape[3]) if len(fork_oshape) >= 4 else 0
+            chain_ok = False
+            for _ in range(32):  # Safety bound — chain length << 32
+                cur_op = ops_by_uid.get(cur_uid, {})
+                cur_type = cur_op.get("op_type", "")
+                category = CHAIN_OP_TYPES.get(cur_type)
+                if category is None:
+                    break
+                # Conv halo accumulation
+                if category == "conv":
+                    # Convolution kernel size from attributes/input shapes
+                    in_shapes = cur_op.get("input_shapes", [])
+                    if len(in_shapes) >= 2 and len(in_shapes[1]) == 4:
+                        # weight shape [out_c, in_c, kH, kW]
+                        kH = int(in_shapes[1][2])
+                        halo_total += (kH - 1) // 2
+                chain_uids.append(cur_uid)
+                # Check this op's output is consumed by exactly one
+                # downstream consumer.
+                cur_outs = cur_op.get("output_tensor_ids", [])
+                if len(cur_outs) != 1:
+                    break
+                cur_out = cur_outs[0]
+                cur_cons = consumers.get(cur_out, [])
+                if len(cur_cons) != 1:
+                    break
+                next_uid = cur_cons[0]
+                if next_uid == merge_uid:
+                    chain_ok = True
+                    break
+                cur_uid = next_uid
+            if not chain_ok or len(chain_uids) < 3:
+                continue
+            # All intermediate output shapes must be uniformly
+            # band-tileable: they must contain the same spatial extent
+            # as T_base (`spatial_h` rows along some axis). NCHW
+            # [N,C,H,W] and NHWC [N,H,W,C] both qualify when H matches
+            # T_base. Anything rank ≠ 4 is rejected (rank-5+ broadcast
+            # chains have their own pattern; rank-3 doesn't belong in
+            # a spatial chain).
+            shapes_consistent = True
+            for cu in chain_uids:
+                shp = ops_by_uid.get(cu, {}).get("output_shapes",
+                                                [None])[0]
+                if not shp or len(shp) != 4:
+                    shapes_consistent = False
+                    break
+                # spatial_h must be present as one of the dim values.
+                if spatial_h not in [int(d) for d in shp]:
+                    shapes_consistent = False
+                    break
+            if not shapes_consistent:
+                continue
+            # Avoid double-registering the same merge as the chain end
+            # of two different forks (defensive).
+            sig = (fork_uid, merge_uid)
+            if sig in seen_chains:
+                continue
+            seen_chains.add(sig)
+            chains.append({
+                "fork_uid": fork_uid,
+                "merge_uid": merge_uid,
+                "chain_uids": list(chain_uids),
+                "spatial_axis": 2,
+                "halo": int(halo_total),
+                "shape": [int(x) for x in fork_oshape],
+                "bytes_fp32": int(t_base_bytes_fp32),
+            })
+        return chains
 
     def register_into_graph_executor(self, graph_executor) -> int:
         """Wire all op_uid interceptors. Returns the count registered.
