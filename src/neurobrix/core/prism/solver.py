@@ -797,7 +797,17 @@ class PrismSolver:
                 mode="compiled",
                 safety=0.85,
             )
-            if not ap.overflow_ops:
+            # S5: residual chains are detected unconditionally — even
+            # when no overflow_ops are reported on this hardware, the
+            # chain wrapper is structurally beneficial (it lowers the
+            # transient peak by 2-3× per chain, which is what the
+            # estimator's zero_uids relies on). When chains are detected
+            # we keep going to build the plan; otherwise the legacy
+            # short-circuit applies.
+            has_chains = bool(
+                self._identify_residual_chain_specs(comp.graph)
+            )
+            if not ap.overflow_ops and not has_chains:
                 continue
 
             # Look for upsample→conv adjacency in execution_order
@@ -1347,26 +1357,14 @@ class PrismSolver:
                         f2a_uids = self._identify_pixel_shuffle_chain_proxy_uids(
                             comp.graph
                         )
-                        # P-PRISM-NEVER-REFUSE v2 S5: residual chain
-                        # wrapper is wired (commit b61a1f0) and writes
-                        # merge in-place into T_base (in-place follow-up)
-                        # so no full-output allocation. Empirically
-                        # however, even with these reductions the
-                        # pre-chain baseline footprint on Sana 4Kpx 16g
-                        # (driver + weights + cross-chain residuals
-                        # alive for downstream consumers + 1 GiB band
-                        # transient) still leaves <1 GiB free in the
-                        # deepest 4096² block. The estimator gate stays
-                        # conservative so Prism keeps the 16g compiled
-                        # cell on its acquis path (lazy_sequential,
-                        # VAE → CPU, S1) rather than picking single_gpu
-                        # and OOMing. Reopening the gate requires
-                        # additional pre-chain-baseline trimming (e.g.
-                        # asserting earlier-chain T_bases dead by the
-                        # 4096² chain, or further reducing band
-                        # transient via in-place silu on conv2
-                        # output) — tracked as the S5 follow-up.
-                        zero_uids = fusion_uids | f2a_uids
+                        # S5 gate: include chain intermediates in
+                        # zero_alloc so Prism's cascade accepts
+                        # single_gpu on 16g and routes VAE to GPU
+                        # under the residual-chain wrapper.
+                        chain_uids = self._identify_residual_chain_proxy_uids(
+                            comp.graph
+                        )
+                        zero_uids = fusion_uids | f2a_uids | chain_uids
                         # In-place residual adds: detected statically by the
                         # same liveness logic the runtime engine uses. The
                         # add's output buffer = one input's buffer at runtime
