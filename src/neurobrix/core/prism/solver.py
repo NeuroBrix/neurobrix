@@ -1347,6 +1347,18 @@ class PrismSolver:
                         f2a_uids = self._identify_pixel_shuffle_chain_proxy_uids(
                             comp.graph
                         )
+                        # P-PRISM-NEVER-REFUSE v2 S5: the residual chain
+                        # runtime wrapper is wired structurally but the
+                        # per-band overhead on the deepest 4Kpx scales is
+                        # still ~1 GiB more than the 3 GiB OOM reserve
+                        # absorbs on a single 16 GiB GPU. Keep the
+                        # estimator conservative until the wrapper is
+                        # tightened (in-place writeback into T_base,
+                        # eliminating the full-buffer output allocation).
+                        # Without this gate, Prism would accept
+                        # single_gpu on 16g and regress the 16g compiled
+                        # cell that currently works via lazy_sequential
+                        # (VAE → CPU, S1 acquis).
                         zero_uids = fusion_uids | f2a_uids
                         # In-place residual adds: detected statically by the
                         # same liveness logic the runtime engine uses. The
