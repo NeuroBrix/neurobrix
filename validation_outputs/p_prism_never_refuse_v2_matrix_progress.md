@@ -13,20 +13,22 @@ Configs:
 
 Modes: `compiled` / `sequential` / `triton` / `triton_sequential`.
 
-## State (2026-05-13, post P-S5-RMS_NORM-16G-NUMERICAL closure)
+## State (2026-05-13, post S4 trivial closure via single_gpu cascade)
 
 | Config × Mode      | compiled | sequential | triton | triton_sequential |
 |--------------------|---|---|---|---|
 | 32g                | ✓ | ✓ | ✓ | ✓ |
-| 16g                | ✓ S5 GPU-pure | ✓ S5 GPU-pure | ⏳ triton VAE-specific | ⏳ triton VAE-specific |
-| 2×16g              | ⏳ S4 | ⏳ S4 | ⏳ S4 | ⏳ S4 |
+| 16g                | ✓ S5 GPU-pure | ✓ S5 GPU-pure | ⏳ P-TRITON-VAE-16G-STRIPED | ⏳ P-TRITON-VAE-16G-STRIPED |
+| 2×16g              | ✓ single_gpu | ✓ single_gpu | ⏳ same triton bug | ⏳ same triton bug |
 | cpu                | ✓ S1 | ✓ S2 | ⏸ S3 upstream | ⏸ S3 upstream |
 
 Legend: ✓ validated · ⏳ pending sub-chantier · ⏸ upstream-blocked
 
-**Achievement: 10/16 cells validated** (up from 8/16 at session
-start). The S5 chain wrapper + depthwise tile-skip fix unblocked 16g
-compiled and sequential GPU-pure paths.
+**Achievement: 12/16 cells validated** (up from 8/16 at v2 mandate
+session start). S4 Gap A naturally satisfied: after the S5 depthwise
+fix, Sana 4Kpx VAE fits a single 16 GiB GPU, so Prism's existing
+`single_gpu` cascade strategy chooses cuda:0 on 2×16g hardware. No
+solver extension required.
 
 The two ⏸ cells (`cpu × triton`, `cpu × triton_sequential`) are
 upstream-blocked and excluded honestly per the mandate's escalation
