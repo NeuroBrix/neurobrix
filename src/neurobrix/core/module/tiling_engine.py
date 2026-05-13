@@ -1204,6 +1204,15 @@ class OpLevelTilingEngine:
             # Per-engine chain registry: chain_id → precomputed merge tensor.
             if not hasattr(self, "_chain_registry"):
                 self._chain_registry: Dict[str, Any] = {}
+            # Per-engine pending-chain map shared by every unified node
+            # interceptor below. Fork ops populate this; first
+            # intermediate of the same chain drains it. Sharing across
+            # interceptors is what lets the deferred-compute pattern
+            # work — without this, each `_node` closure had its own
+            # `_pending_chain` dict and the intermediate never saw the
+            # fork's entry.
+            if not hasattr(self, "_pending_chain"):
+                self._pending_chain: Dict[str, Any] = {}
 
             # Build the node-role map: each op_uid may simultaneously act
             # as merge of chain N and fork of chain N+1 (DC-AE stacked
@@ -1237,6 +1246,7 @@ class OpLevelTilingEngine:
                 _node_roles,
                 _executor_ref=graph_executor,
                 _registry=self._chain_registry,
+                _pending=self._pending_chain,
             ):
                 # Lazy weight cache per chain that starts here.
                 _wcache: Dict[str, Any] = {}
@@ -1250,7 +1260,76 @@ class OpLevelTilingEngine:
                     _wcache[spec_cid["chain_id"]] = cw
                     return cw
 
+                # `_pending` is the engine-wide pending-chain map
+                # populated when a fork op executes; drained at first
+                # intermediate of the same chain. Sharing across
+                # interceptors (set up above) is what lets the
+                # deferred-compute pattern work.
+
                 def _node(*args, **kwargs):
+                    # S5 pre-chain baseline audit (fires on fork entry
+                    # when env var set). NBX_S5_BASELINE_AUDIT="<fork_uid>"
+                    # logs torch.cuda.memory_allocated() + reserved +
+                    # the largest live tensors in the compiled-sequence
+                    # arena so the baseline retention gap can be
+                    # analyzed factually.
+                    import os as _os_aud
+                    _aud = _os_aud.environ.get("NBX_S5_BASELINE_AUDIT", "")
+                    if _aud and _node_roles["forks"]:
+                        for fs in _node_roles["forks"]:
+                            if fs["fork_uid"] == _aud:
+                                try:
+                                    import torch as _t
+                                    _alloc = _t.cuda.memory_allocated() / 1024**2
+                                    _peak = _t.cuda.max_memory_allocated() / 1024**2
+                                    _reserved = _t.cuda.memory_reserved() / 1024**2
+                                    print(f"[S5_BASELINE_AUDIT "
+                                          f"fork={fs['fork_uid']}] "
+                                          f"alloc={_alloc:.0f} MB "
+                                          f"reserved={_reserved:.0f} MB "
+                                          f"peak={_peak:.0f} MB",
+                                          flush=True)
+                                    # Top live tensors via compiled
+                                    # sequence arena (where compiled
+                                    # mode stores op outputs).
+                                    cseq = getattr(_executor_ref,
+                                                   '_compiled_seq', None)
+                                    arena = (getattr(cseq, '_arena', None)
+                                             if cseq is not None else None)
+                                    if arena is not None:
+                                        entries = []
+                                        for slot, t in enumerate(arena):
+                                            if t is None:
+                                                continue
+                                            if isinstance(t, _t.Tensor):
+                                                sz = t.numel() * t.element_size()
+                                                entries.append((slot, sz,
+                                                               tuple(t.shape),
+                                                               str(t.dtype)))
+                                            elif hasattr(t, '_nbytes'):
+                                                entries.append((slot,
+                                                               getattr(t, '_nbytes', 0),
+                                                               getattr(t, 'shape',
+                                                                       None),
+                                                               str(getattr(t, 'dtype',
+                                                                           '?'))))
+                                        entries.sort(key=lambda kv: -kv[1])
+                                        print(f"  Arena: {len(entries)} non-None "
+                                              f"slots, total "
+                                              f"{sum(e[1] for e in entries)/1024**2:.0f} MB",
+                                              flush=True)
+                                        print("  Top 20 live tensors:",
+                                              flush=True)
+                                        for slot, sz, sh, dt in entries[:20]:
+                                            print(f"    slot={slot:<5} "
+                                                  f"{sz/1024**2:>8.0f} MB  "
+                                                  f"shape={sh} dtype={dt}",
+                                                  flush=True)
+                                except Exception as e:
+                                    print(f"[S5_BASELINE_AUDIT] error: {e}",
+                                          flush=True)
+                                break
+
                     # Step 1: drain a chain whose merge ends here.
                     value = None
                     for merge_spec in _node_roles["merges"]:
@@ -1259,29 +1338,63 @@ class OpLevelTilingEngine:
                             value = _registry.pop(cid)
                             break
 
-                    # Step 2: if no chain provided the value, run the
-                    # natural op. For intermediate uids: return a
-                    # sentinel referencing the active chain (caller
-                    # downstream is intercepted too).
+                    # Step 2 (intermediate path): if this node is an
+                    # intermediate of any chain, run the deferred chain
+                    # wrapper here using the pending fork value (the
+                    # fork's input slots have been freed by the
+                    # dispatcher between the fork call and this
+                    # intermediate call — that's what makes the peak
+                    # fit on tight 16 GiB VRAM). Return ChainSentinel
+                    # so downstream chain ops see a no-op marker.
+                    if _node_roles["intermediate_for"]:
+                        spec_int = _node_roles["intermediate_for"][0]
+                        cid = spec_int["chain_id"]
+                        # First intermediate: pending entry exists.
+                        if cid in _pending:
+                            t_base_pending = _pending.pop(cid)
+                            cw = _resolve(spec_int)
+                            if not cw:
+                                _registry[cid] = t_base_pending
+                            else:
+                                try:
+                                    import torch as _t_inst
+                                    _pre = _t_inst.cuda.memory_allocated() / 1024**2
+                                    merge_out = band_streamed_chain_torch(
+                                        t_base_pending, cw,
+                                        tile_factor=int(spec_int.get(
+                                            "tile_factor", 4)),
+                                        halo=int(spec_int.get("halo", 2)),
+                                    )
+                                    _post = _t_inst.cuda.memory_allocated() / 1024**2
+                                    print(f"[S5_CHAIN_OK] {cid} "
+                                          f"pre={_pre:.0f}MB "
+                                          f"post={_post:.0f}MB",
+                                          flush=True)
+                                    _registry[cid] = merge_out
+                                except Exception as e:
+                                    print(f"[S5_CHAIN_FAIL] {cid}: "
+                                          f"{type(e).__name__}: {e}",
+                                          flush=True)
+                                    logger.warning(
+                                        f"[S5] deferred band-streamed "
+                                        f"chain failed for {cid}: "
+                                        f"{type(e).__name__}: {e}."
+                                    )
+                                    _registry[cid] = t_base_pending
+                        # Whether first or later, return sentinel
+                        # referencing the chain's registry entry.
+                        if cid in _registry:
+                            t = _registry[cid]
+                            return ChainSentinel(
+                                cid, tuple(spec_int["shape"]),
+                                t.dtype, t.device)
+                        return None  # Active chain not yet computed
+
+                    # Step 3: if no chain provided the value AND this
+                    # node is not a chain intermediate, run the natural
+                    # add (this node is a fork-only of one or more
+                    # chains).
                     if value is None:
-                        if _node_roles["intermediate_for"]:
-                            # Use the latest active chain for sentinel
-                            # metadata. Multiple intermediate roles for
-                            # the SAME uid don't occur in practice (a
-                            # chain op belongs to exactly one chain by
-                            # detection construction).
-                            spec_int = _node_roles["intermediate_for"][0]
-                            cid = spec_int["chain_id"]
-                            if cid in _registry:
-                                t = _registry[cid]
-                                return ChainSentinel(cid, tuple(spec_int["shape"]),
-                                                     t.dtype, t.device)
-                            # Active chain not yet computed → likely
-                            # fork failed. Surface naturally.
-                            return None
-                        # Otherwise it's a plain op being intercepted
-                        # only because it's a fork → run the underlying
-                        # binary add on the args.
                         if len(args) >= 2 and isinstance(args[0],
                                 torch.Tensor) and isinstance(args[1],
                                 torch.Tensor):
@@ -1296,30 +1409,13 @@ class OpLevelTilingEngine:
                         else:
                             return None
 
-                    # Step 3: for each chain that starts here, run the
-                    # band-streamed wrapper and stash the result.
+                    # Step 4: for each chain that STARTS here, stash
+                    # the fork result for deferred compute at the first
+                    # intermediate call.
                     for fork_spec in _node_roles["forks"]:
                         if not isinstance(value, torch.Tensor):
                             continue
-                        cw = _resolve(fork_spec)
-                        if not cw:
-                            continue
-                        try:
-                            merge_out = band_streamed_chain_torch(
-                                value, cw,
-                                tile_factor=int(fork_spec.get(
-                                    "tile_factor", 4)),
-                                halo=int(fork_spec.get("halo", 2)),
-                            )
-                            _registry[fork_spec["chain_id"]] = merge_out
-                        except Exception as e:
-                            logger.warning(
-                                f"[S5] band-streamed chain failed for "
-                                f"{fork_spec['chain_id']}: "
-                                f"{type(e).__name__}: {e}. "
-                                f"Falling back to standard dispatch."
-                            )
-                            _registry.pop(fork_spec["chain_id"], None)
+                        _pending[fork_spec["chain_id"]] = value
 
                     return value
 
