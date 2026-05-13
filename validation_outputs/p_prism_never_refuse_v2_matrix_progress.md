@@ -82,19 +82,33 @@ Both ⏸ cells in the matrix carry this rationale via the backlog
 chantier `P-TRITON-CPU-UPSTREAM-WHEEL-FOLLOWUP` (see Backlog
 below).
 
-### S4 — P-MULTI-GPU-NBX-INTRA-COMPONENT-SPLIT (starting)
+### S5 — P-DC-AE-RESIDUAL-CHAIN-TILING (NEXT)
+
+Scope: 16 GiB single-GPU cells (compiled / sequential / triton /
+triton_sequential) for Sana 4Kpx. Refactor the DC-AE residual chain
+to free 3× 4 GiB co-resident tensors (silu::24 op 707 site:
+`add::86::out_0` + `conv::63::out_0` + `silu::24::out_0`). Estimated
+300-500 lines.
+
+**Reordered before S4** based on the factual VAE-alone peak
+measurement at commit `e88eca0` (Q4 case 2): VAE intrinsic peak
+> 16 GiB regardless of placement, so 2×16 GiB cells (S4 Gap A
+target) cannot be unlocked by inter-component placement alone —
+the VAE first has to fit within any single 16 GiB GPU. See
+`p_prism_never_refuse_v2_s4_measurement.md`.
+
+### S4 — P-MULTI-GPU-NBX-INTRA-COMPONENT-SPLIT (after S5)
 
 Scope: 4 cells of `2×16g × {compiled, sequential, triton,
-triton_sequential}`. Intra-component weight split across two GPUs
-with NBXTensor cross-device transfer at layer boundaries. Estimated
-400-800 lines per the mandate. Begins immediately.
-
-### S5 — P-DC-AE-RESIDUAL-CHAIN-TILING (pending)
-
-Scope: GPU-pure 16 GiB triton / triton_sequential cells for
-Sana 4Kpx. Refactor the DC-AE residual chain to free 3×4 GiB
-co-resident tensors (silu::24 op 707 site). Estimated 300-500
-lines. Triggers after S4.
+triton_sequential}`. **Gap A only** per mandate Q4 decision —
+make Prism's solver / activation estimator produce a real
+multi-GPU `component_placement` (cuda:0 + cuda:1) when N devices
+≥ 2 and each component fits individually, instead of the current
+cascade landing on `component_placement_lazy` with all components
+on cuda:0. Activation peak per component is the discriminating
+input. Estimated 150-300 lines in Prism solver. Gap B (per-op
+cross-device split) is explicitly out of scope and tracked as
+backlog `P-OP-LEVEL-CROSS-DEVICE-SPLIT`.
 
 ## Upstream-blocked cells (S3 escalation rows)
 
@@ -122,3 +136,52 @@ haiku + Sana 1024 red apple on cpu-only-x86).
   P-TRITON-CPU-UPSTREAM-WHEEL-FOLLOWUP above (same monitoring
   surface: upstream `triton-cpu` issue tracker). One re-test
   cadence, not two.
+- **P-OP-LEVEL-CROSS-DEVICE-SPLIT** — Gap B, opened by S4 doctrine
+  decision Q4 (option a). Per-op cross-device split for models
+  whose individual components do NOT fit in any single available
+  GPU (e.g. Qwen3-30B-A3B class on 2× consumer 16 GiB). PCIe
+  activation transfer per op = perf regression on non-NVLink
+  hosts → must remain a last-resort fallback, not a standard
+  feature. Open when a concrete model demands it.
+
+## Reference — upstream issues citation index
+
+The S3 escalation rationale relies on several `triton-cpu` open
+upstream issues. Their durable home is `S3_READINESS_AND_PLAN.md`
+under the same directory tree (one level under
+`validation_outputs/p_prism_never_refuse_s2/`) — keep that file even
+when S3 closes so the references survive. Quick map:
+
+- triton-cpu #147 — fp16 Dot3D accuracy gap (open).
+- triton-cpu #222 — `make_block_ptr` GEMM does not handle masks.
+- triton-cpu #229 — AVX512-BF16 matmul perf / tuning (perf only).
+- triton-cpu #233 — torch 2.6+ build incompatibility on the
+  build path (install-time only).
+
+## Next session entry point
+
+1. Read `validation_outputs/p_prism_never_refuse_v2_s4_measurement.md`
+   for the empirical reorder rationale.
+2. Begin S5 by inspecting the Sana 4Kpx VAE DAG at
+   `~/.neurobrix/cache/Sana_1600M_4Kpx_BF16/components/vae/graph.json`
+   around `silu::24` (execution_order index ≈ 707) to map the full
+   residual chain bounds: which `conv::*` op forks off, which
+   intermediate `silu::*` ops bridge it, where `add::*` merges back,
+   and what tensor shapes are at play. Project memory has the names
+   (`add::86::out_0`, `conv::63::out_0`, `silu::24::out_0`) but the
+   full chain shape signature and bounds need DAG-level confirmation
+   before writing detection code. Treat the project-memory pointer
+   as a starting probe, not a complete pattern spec.
+3. The existing `OpLevelTilingEngine` (`core/module/tiling_engine.py`)
+   already supports fusion pairs, single-op tiling, in-place
+   residual adds, and pixel-shuffle broadcast chains via
+   `_detect_pixel_shuffle_broadcast_chains`. S5 adds a fifth
+   pattern: long-chain band-streaming. Mirror that file's existing
+   detection structure for the new chain pattern; then add the
+   tiled wrapper(s) under `kernels/ops/`. R30 / R33 / R34 all apply
+   (triton mode mirrors required, no torch in triton path,
+   detection by structural signature not by model name).
+4. Anti-regression matrix to preserve after S5: Sana 1024 BF16 ×4
+   modes, PixArt-XL/Sigma, TinyLlama, Sana 4Kpx 32g (the run that
+   produced `p_prism_never_refuse_v2_s4_sana4kpx_32g_reference.png`
+   — that PNG is the numerical-equivalence target for S5).
