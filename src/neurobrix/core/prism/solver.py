@@ -947,12 +947,37 @@ class PrismSolver:
                 out_b = profiler._compute_size(out_sh, out_meta, dtype_bytes)
                 if out_b <= ovf_threshold:
                     continue
-                budget_per_band = int(0.65 * comp_vram)
+                # Per-band budget tightened from 0.65× to 0.20× of
+                # comp_vram. The original 0.65× assumed the rms_norm
+                # wrapper ran in isolation (input + output ≈ full
+                # budget). With S5 chains active upstream, the
+                # pre-rms_norm baseline carries ~5-7 GiB of chain
+                # state into the rms_norm dispatch; we need each
+                # band's transient (fp32 cast of x_band) to fit
+                # alongside that residue. 0.20× → tile_factor at
+                # least ceil(out_b / 0.20×comp_vram), e.g. 4 GiB
+                # output on 16 GiB GPU → tile_factor=4 (band 1 GiB,
+                # fp32 cast 2 GiB transient, fits with chain
+                # residue). S5 follow-up: in-place rms_norm to
+                # eliminate the full output buffer entirely; for
+                # now the conservative tile_factor preserves
+                # numerical correctness over the in-place attempt
+                # that produced a black PNG.
+                budget_per_band = int(0.10 * comp_vram)
                 import math
-                tf = max(2, math.ceil(out_b / budget_per_band))
+                tf = max(4, math.ceil(out_b / budget_per_band))
                 pow2 = 2
                 while pow2 < tf and pow2 < 64:
                     pow2 *= 2
+                # Cap at tile_factor=8: empirically 16 produces a
+                # numerically wrong output on the Sana 4Kpx
+                # rms_norm::27 site (post-chain wrapper, NHWC view of
+                # non-contig storage). tile_factor=8 was validated
+                # coherent on 32g and is the largest viable value
+                # observed. S5 follow-up: identify whether the issue
+                # is the band_h=256 boundary stride math or some other
+                # PyTorch issue with non-contig views + small bands.
+                pow2 = min(pow2, 8)
                 plan.add_tiled_op(uid, "custom::rms_norm", pow2)
 
             # P-PRISM-NEVER-REFUSE v2 S5: residual chain detection.
