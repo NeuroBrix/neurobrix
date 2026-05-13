@@ -527,7 +527,11 @@ def tiled_rms_norm_spatial(
     tile_factor = min(int(tile_factor), H)
     band_h = (H + tile_factor - 1) // tile_factor
 
-    output = torch.empty_like(x)
+    # Force contiguous output layout. If x is a permute view (non-contig
+    # NHWC over NCHW storage), `empty_like` defaults to preserve_format
+    # which produces a non-contig output. Some downstream ops then read
+    # mis-aligned strides; force contig to keep the output unambiguous.
+    output = torch.empty_like(x, memory_format=torch.contiguous_format)
     for h_start in range(0, H, band_h):
         h_end = min(h_start + band_h, H)
         # Slice along the H dim (axis -3 for [B, H, W, C])
