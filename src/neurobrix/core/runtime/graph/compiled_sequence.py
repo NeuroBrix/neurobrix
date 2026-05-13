@@ -3036,10 +3036,20 @@ class CompiledSequence:
         try:
             if not isinstance(tensor, torch.Tensor):
                 return
-            t32 = tensor.detach().float().contiguous()
-            flat = t32.reshape(-1)
-            head = flat[:10].cpu().tolist()
-            norm = float(flat.norm().item())
+            # Memory-safe: avoid `tensor.detach().float()` which
+            # would materialize a 2× fp32 copy of large bf16/fp16
+            # tensors (would OOM on 16g for [1,128,4096,4096]
+            # = 4 GiB bf16 → 8 GiB fp32). Sample head in-place,
+            # compute L2 norm with fp32 accumulator without
+            # casting the full tensor.
+            flat = tensor.detach().reshape(-1)
+            head = flat[:10].float().cpu().tolist()
+            try:
+                norm = float(torch.linalg.vector_norm(
+                    flat, dtype=torch.float32).item())
+            except Exception:
+                # Fallback for older torch / unsupported dtype.
+                norm = float(flat[:1024].float().norm().item())
             new_record = {
                 "tid": tid, "op_uid": op.op_uid, "op_type": op.op_type,
                 "shape": list(tensor.shape), "dtype": str(tensor.dtype),

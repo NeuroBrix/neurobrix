@@ -913,6 +913,30 @@ class PrismSolver:
                     continue
                 if "convolution" not in op_type:
                     continue  # only conv tiling implemented for now
+                # Skip tiling for depthwise convolutions: the cuDNN
+                # workspace estimator overshoots them (depthwise
+                # actually needs a tiny workspace — kh*kw per channel),
+                # so they get tile-flagged here even though they don't
+                # need to be tiled. Tiling these convs introduces a
+                # numerical divergence on 16g specifically (where they
+                # trigger; on 32g the budget threshold is higher and
+                # they pass through native).
+                # Detection: depthwise weight shape is [out_c, 1, kh,
+                # kw] (in_channels_per_group == 1).
+                # Diagnosed factually 2026-05-13 via per-op bit-diff:
+                # transformer block depthwise convs (block.X.ffn.conv_
+                # depth) were the first divergent ops on 16g.
+                _op_data = ops.get(op_uid, {})
+                _in_shapes = _op_data.get("input_shapes", [])
+                if (len(_in_shapes) >= 2 and len(_in_shapes[1]) == 4
+                        and int(_in_shapes[1][1]) == 1):
+                    # Depthwise — skip tiling.
+                    continue
+                # Diagnostic gate: NBX_S5_SKIP_CONV_TILE=1 skips all
+                # remaining standalone convolution tiling.
+                import os as _os_skipc
+                if _os_skipc.environ.get("NBX_S5_SKIP_CONV_TILE") == "1":
+                    continue
                 # tile_factor: same formula as fusion path but without the
                 # upsample term (no intermediate to absorb).
                 budget_per_band = int(0.65 * comp_vram) - out_b
