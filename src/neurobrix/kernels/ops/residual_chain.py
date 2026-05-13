@@ -203,9 +203,12 @@ def band_streamed_chain_torch(
     tile_factor: int,
     halo: int,
 ) -> torch.Tensor:
-    """Execute the residual chain band-by-band, return the merge output.
+    """Execute the residual chain band-by-band, write result IN-PLACE
+    into T_base's buffer, return T_base.
 
-    t_base: [N, C, H, W] NCHW, the fork tensor (residual base).
+    t_base: [N, C, H, W] NCHW, the fork tensor (residual base). MODIFIED
+        in place to hold the merge output. Caller's view of T_base is
+        invalidated; the returned tensor is the merge output.
     chain_weights: dict from `resolve_chain_weights`.
     tile_factor: number of bands along H.
     halo: rows of halo on each side per band (sum of conv halo radii).
@@ -213,14 +216,23 @@ def band_streamed_chain_torch(
     The chain is hard-coded to the validated pattern:
       conv1 → silu → conv2 → permute(NCHW→NHWC) → rms_norm → bias_add →
       permute(NHWC→NCHW)
-    Then add to T_base = output.
+    Then add to T_base IN PLACE = output.
 
-    Returns: [N, C, H, W] tensor on the same device/dtype as t_base.
+    Correctness invariant: a `halo_carry` buffer holds the rows the
+    NEXT band needs as its top halo, captured before the current band
+    overwrites them. The first band uses T_base directly (no top halo
+    has been overwritten yet).
+
+    Memory: T_base full (in-place), halo_carry tiny (halo × W × C × dt
+    bytes ≪ 1 MiB for 4Kpx scales), band transient ~ 1 / tile_factor of
+    the full intermediate size. No full-output allocation.
+
+    Returns: t_base (modified in place).
     """
     N, C, H, W = t_base.shape
     band_h = (H + tile_factor - 1) // tile_factor  # ceil division
 
-    output = torch.empty_like(t_base)
+    halo_carry: Optional[torch.Tensor] = None
 
     for i in range(tile_factor):
         h_start = i * band_h
@@ -231,10 +243,29 @@ def band_streamed_chain_torch(
         h_in_start = max(0, h_start - halo)
         h_in_end = min(H, h_end + halo)
 
-        # Band input from T_base — `.contiguous()` so the conv's flat
-        # indexing reads a packed layout. The slice is non-contig along
-        # the H dim's stride which still uses the original full H.
-        band = t_base[:, :, h_in_start:h_in_end, :].contiguous()
+        # Build the input band: top halo from halo_carry if any rows in
+        # the top-halo region have been overwritten by previous bands;
+        # rest from T_base. `.contiguous()` so the conv reads a packed
+        # layout.
+        if halo_carry is not None and h_in_start < h_start:
+            top_size = h_start - h_in_start
+            # halo_carry has the most recent `halo` rows of original T_base
+            # right before they were overwritten. We need the LAST top_size
+            # of them.
+            top_band = halo_carry[:, :, -top_size:, :]
+            rest_band = t_base[:, :, h_start:h_in_end, :]
+            band = torch.cat([top_band, rest_band], dim=2).contiguous()
+            del top_band, rest_band
+        else:
+            band = t_base[:, :, h_in_start:h_in_end, :].contiguous()
+
+        # Save original rows that the NEXT band will need as its top halo,
+        # BEFORE we overwrite them. The save is the last `halo` rows of
+        # [h_start:h_end]; clone to detach from t_base storage.
+        if i + 1 < tile_factor:
+            halo_save_size = min(halo, h_end - h_start)
+            halo_carry = t_base[:, :,
+                                h_end - halo_save_size:h_end, :].clone()
 
         # conv1 (cast weights once per band for consistency with band's
         # dtype; PyTorch caches weight conversions in practice but the
@@ -301,14 +332,14 @@ def band_streamed_chain_torch(
         # permute NHWC → NCHW
         band = band.permute(*chain_weights["permute_backward"]).contiguous()
 
-        # Trim halo and merge with T_base into output
+        # Trim halo and merge IN PLACE into T_base rows [h_start:h_end].
+        # `t_base[h_start:h_end]` is the LAST consumer of original T_base
+        # in this region (top halo for band i+1 was saved into halo_carry
+        # above), so writing back here is correctness-safe.
         trim_top = h_start - h_in_start
         trim_h = h_end - h_start
         band_out = band[:, :, trim_top:trim_top + trim_h, :]
-        t_base_band = t_base[:, :, h_start:h_end, :]
-        torch.add(t_base_band, band_out,
-                  out=output[:, :, h_start:h_end, :])
-        del band
-        del band_out
+        t_base[:, :, h_start:h_end, :].add_(band_out)
+        del band, band_out
 
-    return output
+    return t_base
