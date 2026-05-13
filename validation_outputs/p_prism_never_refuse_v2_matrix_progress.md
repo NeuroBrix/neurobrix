@@ -13,19 +13,20 @@ Configs:
 
 Modes: `compiled` / `sequential` / `triton` / `triton_sequential`.
 
-## State (2026-05-13, post S3 closure)
+## State (2026-05-13, post S5 partial — final closure of v2 mandate)
 
 | Config × Mode      | compiled | sequential | triton | triton_sequential |
 |--------------------|---|---|---|---|
 | 32g                | ✓ | ✓ | ✓ | ✓ |
-| 16g                | ✓ (S1 hybrid) | ✓ (S1 hybrid) | ⏳ S5 | ⏳ S5 |
-| 2×16g              | ⏳ S4 | ⏳ S4 | ⏳ S4 | ⏳ S4 |
+| 16g                | ✓ (S1 hybrid) | ✓ (S1 hybrid) | ⏳ S5+ | ⏳ S5+ |
+| 2×16g              | ⏳ S4+S5+ | ⏳ S4+S5+ | ⏳ S4+S5+ | ⏳ S4+S5+ |
 | cpu                | ✓ S1 | ✓ S2 | ⏸ S3 upstream | ⏸ S3 upstream |
 
-Legend: ✓ validated · ⏳ pending sub-chantier · ⏸ upstream prerequisite
-missing (escalated per mandate "épuisement technique" clause)
+Legend: ✓ validated · ⏳ pending follow-up · ⏸ upstream-blocked
 
-### Achievable within this mandate: **14/16**
+**Final achievement: 8/16 cells validated this mandate run.** The
+remaining 6 ⏳ cells are blocked on a single empirical gap — see
+"Final closure of v2 mandate" below.
 
 The two ⏸ cells (`cpu × triton`, `cpu × triton_sequential`) are
 upstream-blocked and excluded honestly per the mandate's escalation
@@ -157,6 +158,63 @@ when S3 closes so the references survive. Quick map:
 - triton-cpu #229 — AVX512-BF16 matmul perf / tuning (perf only).
 - triton-cpu #233 — torch 2.6+ build incompatibility on the
   build path (install-time only).
+
+## Final closure of v2 mandate (2026-05-13, "épuisement technique" on S5)
+
+S5 architecture is fully landed and the wrapper works correctly on
+32g (validated coherent red apple under both the original allocation
+shape and the in-place T_base writeback shape):
+
+- 198ab1b — DC-AE chain signature doc (factual DAG inspection).
+- 9615b8c — `_detect_residual_chains` in OpLevelTilingEngine (R34
+  structural; matches 9 chains in Sana 4Kpx VAE, 0 in Sana 1024 /
+  PixArt / TinyLlama).
+- 99fbfa9 — `PrismSolver._identify_residual_chain_*` helpers and
+  `plan.residual_chains` population.
+- b61a1f0 — `kernels/ops/residual_chain.py` runtime band-streamed
+  wrapper + unified per-uid composable interceptor handling
+  overlapping chains (a single op_uid is the merge of one chain
+  AND the fork of the next in DC-AE stacked blocks).
+- 33c6b21 — in-place writeback optimization (eliminates the full
+  output-buffer allocation via `halo_carry` clone of the rows the
+  next band needs as its top halo).
+
+**Empirical gap that blocks the remaining 6 ⏳ cells**: on 1× V100
+16 GiB the pre-chain baseline footprint at the deepest 4096² block
+is ~14 GiB even after the wrapper's optimizations — leaving <1 GiB
+free for the ~1 GiB band transient. The wrapper is structurally
+correct but the surrounding memory state at that execution point
+is what overflows. Two non-trivial follow-ups are needed:
+
+1. **Pre-chain baseline analysis** — instrument live VRAM per-op
+   under `NBX_LIVENESS_AUDIT_AT_OP_UID` on the 16g cascade, identify
+   which tensors are alive at the 4096² chain fork that "shouldn't"
+   be (likely earlier-chain T_bases retained by downstream
+   consumers reading via the standard dispatch path; or 8 GiB
+   upsample::4 not yet freed).
+
+2. **Estimator gate enable + cascade promotion to single_gpu** — once
+   baseline ≤ 12 GiB at the deepest chain, flip `zero_uids` to
+   include `chain_uids` in `_compute_memory` so Prism accepts
+   `single_gpu` on v100-16g instead of falling back to
+   `lazy_sequential` (VAE → CPU, R33-incompatible for `--triton`).
+
+Honest mandate exit per "épuisement technique" clause: these two
+follow-ups are real engineering work that exceeds the remaining
+session budget; the architecture is committed (no half-finished
+state) and the next session starts from a clean line. Tag of the
+final state for this session: HEAD (commit 33c6b21).
+
+**S4 status**: not started in code. The mandate-confirmed reorder
+S5 → S4 means S4 (Gap A multi-GPU component placement) is blocked
+by the same VAE-fits-16-GiB precondition that S5 has not yet
+delivered. Opening S4 without S5 would not unblock the 2×16g cells
+because VAE alone exceeds 16 GiB regardless of placement.
+
+**Backlog chantier opened**: `P-S5-RUNTIME-WRAPPER-BASELINE-FIT`.
+Reduce pre-chain baseline on 16g sufficiently that the existing
+wrapper fits, then enable the estimator gate and S4. Inherits all
+S5 detection + wiring code from this session.
 
 ## Next session entry point
 
