@@ -1195,7 +1195,24 @@ class OpLevelTilingEngine:
         # merge interceptor retrieves the precomputed result.
         # Compiled-mode (torch) path lands here; NBX port is follow-up.
         # P-PRISM-NEVER-REFUSE v2 S5 2026-05-13.
-        if self.plan.residual_chains:
+        # S5 residual chain wrapper currently uses PyTorch ATen ops
+        # internally (F.conv2d, F.silu, custom rms_norm) and is
+        # therefore correct only for compiled / sequential modes.
+        # On triton / triton_sequential modes the chain inputs are
+        # NBXTensor and the wrapper's torch calls would either crash
+        # (`F.conv2d(nbx_tensor, ...)`) or produce silently corrupt
+        # data. Skip chain registration on triton modes — the natural
+        # NBX dispatch path handles those ops via the standard
+        # `conv2d_wrapper` / `rms_norm_wrapper` chain (memory may be
+        # tighter but correctness is preserved). R33 zero-torch in
+        # triton/ preserved. R30 dualité: a future
+        # `band_streamed_chain_nbx` would close this gap.
+        _mode = getattr(graph_executor, "mode", None)
+        _residual_chains_active = (
+            self.plan.residual_chains
+            and _mode in ("compiled", "sequential")
+        )
+        if _residual_chains_active:
             from neurobrix.kernels.ops.residual_chain import (
                 ChainSentinel,
                 resolve_chain_weights,
