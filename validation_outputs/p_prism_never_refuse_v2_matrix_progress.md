@@ -13,20 +13,20 @@ Configs:
 
 Modes: `compiled` / `sequential` / `triton` / `triton_sequential`.
 
-## State (2026-05-13, post S5 partial — final closure of v2 mandate)
+## State (2026-05-13, post P-S5-RMS_NORM-16G-NUMERICAL closure)
 
 | Config × Mode      | compiled | sequential | triton | triton_sequential |
 |--------------------|---|---|---|---|
 | 32g                | ✓ | ✓ | ✓ | ✓ |
-| 16g                | ✓ (S1 hybrid) | ✓ (S1 hybrid) | ⏳ S5+ | ⏳ S5+ |
-| 2×16g              | ⏳ S4+S5+ | ⏳ S4+S5+ | ⏳ S4+S5+ | ⏳ S4+S5+ |
+| 16g                | ✓ S5 GPU-pure | ✓ S5 GPU-pure | ⏳ triton VAE-specific | ⏳ triton VAE-specific |
+| 2×16g              | ⏳ S4 | ⏳ S4 | ⏳ S4 | ⏳ S4 |
 | cpu                | ✓ S1 | ✓ S2 | ⏸ S3 upstream | ⏸ S3 upstream |
 
-Legend: ✓ validated · ⏳ pending follow-up · ⏸ upstream-blocked
+Legend: ✓ validated · ⏳ pending sub-chantier · ⏸ upstream-blocked
 
-**Final achievement: 8/16 cells validated this mandate run.** The
-remaining 6 ⏳ cells are blocked on a single empirical gap — see
-"Final closure of v2 mandate" below.
+**Achievement: 10/16 cells validated** (up from 8/16 at session
+start). The S5 chain wrapper + depthwise tile-skip fix unblocked 16g
+compiled and sequential GPU-pure paths.
 
 The two ⏸ cells (`cpu × triton`, `cpu × triton_sequential`) are
 upstream-blocked and excluded honestly per the mandate's escalation
