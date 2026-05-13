@@ -1347,18 +1347,25 @@ class PrismSolver:
                         f2a_uids = self._identify_pixel_shuffle_chain_proxy_uids(
                             comp.graph
                         )
-                        # P-PRISM-NEVER-REFUSE v2 S5: the residual chain
-                        # runtime wrapper is wired structurally but the
-                        # per-band overhead on the deepest 4Kpx scales is
-                        # still ~1 GiB more than the 3 GiB OOM reserve
-                        # absorbs on a single 16 GiB GPU. Keep the
-                        # estimator conservative until the wrapper is
-                        # tightened (in-place writeback into T_base,
-                        # eliminating the full-buffer output allocation).
-                        # Without this gate, Prism would accept
-                        # single_gpu on 16g and regress the 16g compiled
-                        # cell that currently works via lazy_sequential
-                        # (VAE → CPU, S1 acquis).
+                        # P-PRISM-NEVER-REFUSE v2 S5: residual chain
+                        # wrapper is wired (commit b61a1f0) and writes
+                        # merge in-place into T_base (in-place follow-up)
+                        # so no full-output allocation. Empirically
+                        # however, even with these reductions the
+                        # pre-chain baseline footprint on Sana 4Kpx 16g
+                        # (driver + weights + cross-chain residuals
+                        # alive for downstream consumers + 1 GiB band
+                        # transient) still leaves <1 GiB free in the
+                        # deepest 4096² block. The estimator gate stays
+                        # conservative so Prism keeps the 16g compiled
+                        # cell on its acquis path (lazy_sequential,
+                        # VAE → CPU, S1) rather than picking single_gpu
+                        # and OOMing. Reopening the gate requires
+                        # additional pre-chain-baseline trimming (e.g.
+                        # asserting earlier-chain T_bases dead by the
+                        # 4096² chain, or further reducing band
+                        # transient via in-place silu on conv2
+                        # output) — tracked as the S5 follow-up.
                         zero_uids = fusion_uids | f2a_uids
                         # In-place residual adds: detected statically by the
                         # same liveness logic the runtime engine uses. The
