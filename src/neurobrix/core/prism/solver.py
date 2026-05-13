@@ -945,10 +945,44 @@ class PrismSolver:
                     pow2 *= 2
                 plan.add_tiled_op(uid, "custom::rms_norm", pow2)
 
+            # P-PRISM-NEVER-REFUSE v2 S5: residual chain detection.
+            # Add specs of detected chains to the plan so the runtime's
+            # `OpLevelTilingEngine.register_into_graph_executor` wires
+            # band-streaming interceptors on every chain op. Detection
+            # is structural (R34): only models that match the
+            # fork→linear-N≥3→merge signature with large intermediates
+            # get any chain spec; cheaper models pay nothing.
+            chain_specs = self._identify_residual_chain_specs(comp.graph)
+            for spec in chain_specs:
+                # Tile factor: aim for band size ≤ 1 GiB at runtime.
+                # bytes_fp32 / 2 = bf16 estimate, divide by 1 GiB.
+                import math as _math
+                bf16_bytes = spec.get("bytes_fp32", 0) // 2
+                tf = max(2, _math.ceil(bf16_bytes / (1024 ** 3)))
+                pow2 = 2
+                while pow2 < tf and pow2 < 32:
+                    pow2 *= 2
+                spec_with_tf = dict(spec)
+                spec_with_tf["tile_factor"] = pow2
+                plan.add_residual_chain(spec_with_tf)
+
             if not plan.is_empty():
                 result[comp.name] = plan
 
         return result
+
+    def _identify_residual_chain_specs(self, graph: Dict):
+        """Return raw residual-chain specs from a DAG dict. Wrapper around
+        `OpLevelTilingEngine._detect_residual_chains` that accepts a raw
+        graph dict so the solver does not depend on a live GraphExecutor.
+        S5 2026-05-13."""
+        from neurobrix.core.module.tiling_engine import OpLevelTilingEngine
+
+        class _DagWrap:
+            def __init__(self, d):
+                self._dag = d
+
+        return OpLevelTilingEngine._detect_residual_chains(_DagWrap(graph))
 
     def solve_smart(self, container, profile, input_config=None, serve_mode: bool = False):
         """Backward compatibility alias for solve()."""
@@ -1016,6 +1050,41 @@ class PrismSolver:
             elif b_last:
                 candidates.append((uid, 1))
         return candidates
+
+    def _identify_residual_chain_proxy_uids(self, graph: Dict):
+        """Identify the chain-intermediate op_uids that
+        `OpLevelTilingEngine._detect_residual_chains` will band-stream at
+        runtime. Each intermediate writes a band-sized buffer at any
+        given moment, not the full-resolution buffer it would otherwise.
+        The estimator approximates this by treating the chain
+        intermediates as zero-alloc, which gives a slightly optimistic
+        peak; the existing 3 GiB `_OOM_RESERVE_MB` in `_try_single_gpu`
+        absorbs the residual band transient comfortably (band size ≪
+        full intermediate at tile_factor ≥ 4 on 4 GiB-class tensors).
+        P-PRISM-NEVER-REFUSE v2 S5 2026-05-13.
+
+        The fork op (the producer of `T_base`) and the merge op (the
+        final `aten::add`) are NOT in the returned set — both keep
+        their full buffer at runtime. The wrapper sees them as
+        legitimate live tensors throughout the band loop.
+
+        Routes through `OpLevelTilingEngine._detect_residual_chains`
+        via a lightweight DAG wrapper so the structural signature
+        stays in one place (avoids the drift risk noted above for
+        `_identify_pixel_shuffle_chain_proxy_uids`).
+        """
+        from neurobrix.core.module.tiling_engine import OpLevelTilingEngine
+
+        class _DagWrap:
+            def __init__(self, d):
+                self._dag = d
+
+        chains = OpLevelTilingEngine._detect_residual_chains(_DagWrap(graph))
+        proxy_uids: set = set()
+        for c in chains:
+            for uid in c.get("chain_uids", []):
+                proxy_uids.add(uid)
+        return proxy_uids
 
     def _identify_pixel_shuffle_chain_proxy_uids(self, graph: Dict):
         """Identify expand/clone/view op_uids that are part of an
