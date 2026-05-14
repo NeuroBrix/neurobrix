@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Tiled conv2d output alignment — `_tiled_conv2d_spatial_*` and
+  `_fused_upsample_conv2d_*` wrappers** (`kernels/ops/fused_upsample_conv.py`):
+  two coupled math bugs caused band outputs to be shifted by `pad_h`
+  rows on edge bands and by `halo_top` rows on internal-frontier
+  bands. Edge bands double-counted the image-edge padding (the
+  `max(0, -in_read_start)` term already provides it). Internal
+  bands wrote `conv_band[:band_h]` to output positions
+  `[oh_start:oh_start+band_h]` without offsetting by `halo_top`,
+  so each internal-frontier band placed F.conv2d output row
+  `oh_start+halo_top-1` at output row `oh_start`. Effect on
+  Sana 4Kpx 16g compiled: 50 tiled VAE convs each shifted the
+  output by 1 row, producing visually-coherent-but-shifted PNGs.
+  Validated by `scripts/microtest_tiled_conv2d_small_scale.py`
+  sweeping `(kh ∈ {1,3,5}, pad ∈ {0,1,2}, tile_factor ∈ {1,2})`
+  — torch path post-fix is bit-exact vs `F.conv2d`. P-NBX-TILED-
+  CONV2D-SMALL-SCALE step 1.
+
 ## 2026-05-10 — P-SANA-4KPX-RUNTIME POINT 8 closure factuelle (audit perf compiled vs sequential)
 
 Audit profile-driven du gap perf triton compiled (hot-loop
