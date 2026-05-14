@@ -1502,9 +1502,17 @@ class OpLevelTilingEngine:
 
                     # Step 4: for each chain that STARTS here, stash
                     # the fork result for deferred compute at the first
-                    # intermediate call.
+                    # intermediate call. Accept torch.Tensor (compiled
+                    # mode) AND NBXTensor (triton modes). The original
+                    # `isinstance(value, torch.Tensor)` guard silently
+                    # skipped NBXTensor → triton chain forks never
+                    # populated _pending → chain wrapper never fired on
+                    # triton (P-TRITON-LIVE-WATERMARK-AUDIT L4b).
+                    from neurobrix.kernels.nbx_tensor import (
+                        NBXTensor as _NBXT,
+                    )
                     for fork_spec in _node_roles["forks"]:
-                        if not isinstance(value, torch.Tensor):
+                        if not isinstance(value, (torch.Tensor, _NBXT)):
                             continue
                         _pending[fork_spec["chain_id"]] = value
 
