@@ -1456,6 +1456,66 @@ class OpLevelTilingEngine:
                                             _t_inst.cuda.memory_allocated()
                                             / 1024**2
                                         )
+                                    # P-TRITON-CHAIN-CPU-POINTER C1
+                                    # 2026-05-14: per-chain device-state
+                                    # log gated by NBX_CHAIN_DIAG=1.
+                                    # On 16g+32g triton, chain 1 runs OK
+                                    # then chain N (N≥2) fails with
+                                    # "Pointer argument cannot be
+                                    # accessed from Triton (cpu tensor?)".
+                                    # Log t_base_pending and each chain
+                                    # weight: device_idx, data_ptr (raw),
+                                    # is_contiguous, _nbytes. Diff
+                                    # between chain 1 (OK) and chain N
+                                    # (FAIL) gives the dispositive
+                                    # device-state mismatch.
+                                    import os as _os_cd
+                                    if (_is_triton_mode and
+                                            _os_cd.environ.get(
+                                                "NBX_CHAIN_DIAG", "0")
+                                            == "1"):
+                                        try:
+                                            _tbp = t_base_pending
+                                            _tbp_d = getattr(
+                                                _tbp, "_device_idx", "?")
+                                            _tbp_p = getattr(
+                                                _tbp, "_data_ptr", "?")
+                                            _tbp_ct = (
+                                                _tbp.is_contiguous()
+                                                if hasattr(_tbp,
+                                                           'is_contiguous')
+                                                else "?")
+                                            print(
+                                                f"[CHAIN_DIAG cid={cid}] "
+                                                f"t_base dev={_tbp_d} "
+                                                f"ptr={_tbp_p} "
+                                                f"contig={_tbp_ct} "
+                                                f"shape={tuple(_tbp.shape)}",
+                                                flush=True)
+                                            for _wk, _wv in cw.items():
+                                                _d = getattr(
+                                                    _wv, "_device_idx",
+                                                    None)
+                                                if _d is None:
+                                                    continue
+                                                _p = getattr(
+                                                    _wv, "_data_ptr", "?")
+                                                _ct = (
+                                                    _wv.is_contiguous()
+                                                    if hasattr(_wv,
+                                                               'is_contiguous')
+                                                    else "?")
+                                                print(
+                                                    f"  weight[{_wk}]: "
+                                                    f"dev={_d} ptr={_p} "
+                                                    f"contig={_ct} "
+                                                    f"shape={tuple(_wv.shape)}",
+                                                    flush=True)
+                                        except Exception as _de:
+                                            print(
+                                                f"[CHAIN_DIAG cid={cid}] "
+                                                f"error: {_de}",
+                                                flush=True)
                                     merge_out = _band_streamed_chain(
                                         t_base_pending, cw,
                                         tile_factor=int(spec_int.get(
