@@ -1238,15 +1238,34 @@ class OpLevelTilingEngine:
         # triton/ preserved. R30 dualité: a future
         # `band_streamed_chain_nbx` would close this gap.
         # P-TRITON-LIVE-WATERMARK-AUDIT 2026-05-14 L4: chain wrapper now
-        # has an NBX-pure variant (`band_streamed_chain_nbx`), so it
-        # runs on triton / triton_sequential modes too. R30 dualité
-        # restored. The previous skip (commit c9d2581) caused two 4 GiB
-        # tensors to co-reside at Sana 4Kpx VAE add::89 on 16g triton.
+        # has an NBX-pure variant (`band_streamed_chain_nbx`). Mode-aware
+        # dispatcher selects nbx variant for triton/triton_sequential.
+        # R30 dualité is structurally restored.
+        #
+        # GATING for triton modes: 6/7 chains pass on 16g triton and
+        # 6/9 chains pass on 32g triton; the remaining chains fail
+        # with "Pointer argument cannot be accessed from Triton (cpu
+        # tensor?)" (sub-chantier P-TRITON-CHAIN-CPU-POINTER). The
+        # failed chains silently fall back to the unmodified t_base
+        # via the try/except wrapper, producing visible horizontal
+        # artifacts on the 32g triton PNG (anti-regression).
+        # Until P-TRITON-CHAIN-CPU-POINTER closes, gate the triton
+        # variant behind an opt-in env var so 32g triton anti-régression
+        # (the pre-L4 baseline) stays clean. Setting
+        # NBX_TRITON_CHAIN_WRAPPER=1 enables the wrapper for
+        # diagnostic / 16g-unblock work.
+        import os as _os_chain
+        _triton_chain_enabled = (
+            _os_chain.environ.get("NBX_TRITON_CHAIN_WRAPPER", "0") == "1"
+        )
         _mode = getattr(graph_executor, "mode", None)
+        _triton_chain_modes = (
+            ("triton", "triton_sequential")
+            if _triton_chain_enabled else ()
+        )
         _residual_chains_active = (
             self.plan.residual_chains
-            and _mode in ("compiled", "sequential",
-                          "triton", "triton_sequential")
+            and _mode in ("compiled", "sequential") + _triton_chain_modes
         )
         if _residual_chains_active:
             from neurobrix.kernels.ops.residual_chain import (
