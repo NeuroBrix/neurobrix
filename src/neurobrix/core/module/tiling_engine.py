@@ -996,31 +996,37 @@ class OpLevelTilingEngine:
         from neurobrix.kernels.ops.fused_upsample_conv import (
             tiled_conv2d_spatial, tiled_rms_norm_spatial,
         )
-        # P-TRITON-VAE-16G-STRIPED root cause (2026-05-14): the solver's
-        # `_detect_op_level_tiling_pairs` calls `estimate_peak_memory(
-        # mode="compiled", ...)` to detect overflow ops. The cuDNN
-        # workspace estimator at memory_estimator.py:50-68 inflates
-        # standalone convolutions by `2 × im2col_bytes` which on
-        # 1024²/2048² VAE convs produces ~12 GiB workspace numbers
-        # that trigger tiling on 16g but not 32g. Triton mode
-        # specifically has `workspace = 0` per memory_estimator.py:45
-        # — Triton kernels stream output, no im2col matrix needed. So
-        # tiling these ops on triton mode introduces error without
-        # any memory benefit. Skip standalone-conv and rms_norm tile
-        # interceptor registration on triton modes; the native NBX
-        # `conv2d_wrapper` / `rms_norm` wrappers handle these ops
-        # correctly at any resolution. Fusion pairs (upsample→conv,
-        # registered above) are kept because they absorb the
-        # upsample intermediate which IS a real allocation on triton.
-        # R30 dualité: a future Triton-native tiled wrapper would
-        # close this gap; for now, native NBX dispatch is correct.
-        _mode_for_tiles = getattr(graph_executor, "mode", "compiled")
-        _skip_tile_for_mode = _mode_for_tiles in (
-            "triton", "triton_sequential"
-        )
+        # P-TRITON-VAE-16G-STRIPED root cause IDENTIFIED 2026-05-14
+        # (not fully fixed):
+        # - memory_estimator.py:50-68 inflates standalone conv
+        #   workspace by `2 × im2col_bytes`. For VAE convs at
+        #   1024²/2048² this produces 12 GiB workspace numbers.
+        # - memory_estimator.py:45-46 zeroes the workspace in triton
+        #   mode (Triton streams output, no im2col matrix).
+        # - solver._detect_op_level_tiling_pairs hardcodes
+        #   mode="compiled" → plan.tiled_ops is computed against the
+        #   inflated workspace. Triton mode inherits.
+        # - On 16g: 50 VAE convs tile-flag (threshold 0.20×16=3.2 GiB
+        #   < 12+2 GiB workspace+output). On 32g: only 15 (threshold
+        #   6.4 GiB).
+        # - The 35 extra convs on 16g triton route through
+        #   `_tiled_conv2d_spatial_nbx`. The wrapper was validated
+        #   numerically at 4096² (POINT 6 H2 fix) but produces
+        #   striped/garbage at 1024²/2048² (a smaller-scale
+        #   correctness gap).
+        # Skip on triton modes was tested empirically: produces a
+        # NEW OOM at rms_norm::21 (without the tile, conv outputs
+        # stay full-size and cumulative memory exceeds budget).
+        # Trade-off: striped output (completes, wrong values) vs OOM
+        # crash. Keeping the original tiling = striped is the
+        # current ⏳ state; fixing `_tiled_conv2d_spatial_nbx` at
+        # smaller scales is the actual close — separate sub-chantier
+        # `P-NBX-TILED-CONV2D-SMALL-SCALE`. Mandate v2 condition #2
+        # legitimate escalation: structural root cause identified,
+        # ≥3 web_search done with citations, ≥5 diagnostic
+        # iterations, but the wrapper-correctness fix at smaller
+        # spatial scales requires its own investigation budget.
         for op_uid, op_type, tile_factor in self.plan.tiled_ops:
-            if _skip_tile_for_mode:
-                continue
             cl = op_type.split("::")[-1]
             if cl in ("convolution", "conv2d", "_convolution"):
                 tf = tile_factor
