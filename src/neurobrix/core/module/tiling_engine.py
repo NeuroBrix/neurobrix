@@ -1237,16 +1237,29 @@ class OpLevelTilingEngine:
         # tighter but correctness is preserved). R33 zero-torch in
         # triton/ preserved. R30 dualité: a future
         # `band_streamed_chain_nbx` would close this gap.
+        # P-TRITON-LIVE-WATERMARK-AUDIT 2026-05-14 L4: chain wrapper now
+        # has an NBX-pure variant (`band_streamed_chain_nbx`), so it
+        # runs on triton / triton_sequential modes too. R30 dualité
+        # restored. The previous skip (commit c9d2581) caused two 4 GiB
+        # tensors to co-reside at Sana 4Kpx VAE add::89 on 16g triton.
         _mode = getattr(graph_executor, "mode", None)
         _residual_chains_active = (
             self.plan.residual_chains
-            and _mode in ("compiled", "sequential")
+            and _mode in ("compiled", "sequential",
+                          "triton", "triton_sequential")
         )
         if _residual_chains_active:
             from neurobrix.kernels.ops.residual_chain import (
                 ChainSentinel,
                 resolve_chain_weights,
                 band_streamed_chain_torch,
+                band_streamed_chain_nbx,
+            )
+            # Pick the chain wrapper for the runtime mode.
+            _is_triton_mode = _mode in ("triton", "triton_sequential")
+            _band_streamed_chain = (
+                band_streamed_chain_nbx if _is_triton_mode
+                else band_streamed_chain_torch
             )
             # Per-engine chain registry: chain_id → precomputed merge tensor.
             if not hasattr(self, "_chain_registry"):
@@ -1404,15 +1417,46 @@ class OpLevelTilingEngine:
                                 _registry[cid] = t_base_pending
                             else:
                                 try:
-                                    import torch as _t_inst
-                                    _pre = _t_inst.cuda.memory_allocated() / 1024**2
-                                    merge_out = band_streamed_chain_torch(
+                                    # Mode-aware peak measurement: torch
+                                    # cuda allocator is meaningless in
+                                    # triton mode (no torch tensors).
+                                    # Read DeviceAllocator live_bytes
+                                    # for triton modes.
+                                    if _is_triton_mode:
+                                        from neurobrix.kernels.nbx_tensor import (
+                                            DeviceAllocator as _DA_pre,
+                                        )
+                                        _pre = (
+                                            _DA_pre._cuda_live_bytes.get(
+                                                _DA_pre.get_device(), 0)
+                                            / 1024**2
+                                        )
+                                    else:
+                                        import torch as _t_inst
+                                        _pre = (
+                                            _t_inst.cuda.memory_allocated()
+                                            / 1024**2
+                                        )
+                                    merge_out = _band_streamed_chain(
                                         t_base_pending, cw,
                                         tile_factor=int(spec_int.get(
                                             "tile_factor", 4)),
                                         halo=int(spec_int.get("halo", 2)),
                                     )
-                                    _post = _t_inst.cuda.memory_allocated() / 1024**2
+                                    if _is_triton_mode:
+                                        from neurobrix.kernels.nbx_tensor import (
+                                            DeviceAllocator as _DA_post,
+                                        )
+                                        _post = (
+                                            _DA_post._cuda_live_bytes.get(
+                                                _DA_post.get_device(), 0)
+                                            / 1024**2
+                                        )
+                                    else:
+                                        _post = (
+                                            _t_inst.cuda.memory_allocated()
+                                            / 1024**2
+                                        )
                                     print(f"[S5_CHAIN_OK] {cid} "
                                           f"pre={_pre:.0f}MB "
                                           f"post={_post:.0f}MB",
