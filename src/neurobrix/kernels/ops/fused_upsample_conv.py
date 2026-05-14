@@ -288,8 +288,19 @@ def _fused_upsample_conv2d_torch(
         # cut so we can apply F.pad to recover the boundary halo with zeros.
         up_clamped_start = max(0, up_read_start)
         up_clamped_end = min(OH, up_read_end)
-        pad_top_real = max(0, -up_read_start) + (pad_h if is_top_band else 0)
-        pad_bot_real = max(0, up_read_end - OH) + (pad_h if is_bot_band else 0)
+        # P-NBX-TILED-CONV2D-SMALL-SCALE 2026-05-14: previous formula
+        # `+ (pad_h if is_top_band else 0)` double-counted edge padding.
+        # `up_inner_start = oh_start*sh_st - pad_h`, so for is_top_band
+        # (oh_start=0) we have up_inner_start = -pad_h and up_read_start
+        # = -pad_h (halo_top=0). Then max(0, -up_read_start) = pad_h
+        # already provides the image-top zero padding. Adding pad_h
+        # again over-padded by one row, shifting band-1 output up by
+        # pad_h rows. Symmetric on bot_band via in_read_end formula.
+        # Validated by microtest scripts/microtest_tiled_conv2d_small_scale.py
+        # which sweeps (kh, pad_h) at 1024^2 — pad_h=0 already PASS
+        # pre-fix, pad_h>0 FAIL pre-fix, all PASS post-fix.
+        pad_top_real = max(0, -up_read_start)
+        pad_bot_real = max(0, up_read_end - OH)
 
         if up_clamped_end <= up_clamped_start:
             continue
@@ -335,9 +346,17 @@ def _fused_upsample_conv2d_torch(
         # conv_band has exactly (oh_end - oh_start) rows by construction
         # (halo accounts for kernel borrow; F.pad accounts for image edges).
         actual_band_h = oh_end - oh_start
-        if conv_band.shape[2] < actual_band_h:
-            actual_band_h = conv_band.shape[2]
-        output[:, :, oh_start:oh_start + actual_band_h, :] = conv_band[:, :, :actual_band_h, :]
+        # P-NBX-TILED-CONV2D-SMALL-SCALE 2026-05-14: when halo_top>0
+        # (internal band frontier), conv_band starts at the halo row
+        # before the band's first useful output row. The previous slice
+        # `conv_band[:actual_band_h]` skipped the halo offset, shifting
+        # all internal-frontier output rows by halo_top toward the top.
+        # Cap actual_band_h by available conv_band height after the
+        # halo offset, not by raw conv_band.shape[2].
+        avail_after_halo = conv_band.shape[2] - halo_top
+        if avail_after_halo < actual_band_h:
+            actual_band_h = avail_after_halo
+        output[:, :, oh_start:oh_start + actual_band_h, :] = conv_band[:, :, halo_top:halo_top + actual_band_h, :]
 
     if bias is not None:
         output += bias.view(1, -1, 1, 1)
@@ -450,8 +469,16 @@ def _tiled_conv2d_spatial_torch(
 
         in_clamped_start = max(0, in_read_start)
         in_clamped_end = min(IH, in_read_end)
-        pad_top_real = max(0, -in_read_start) + (pad_h if is_top_band else 0)
-        pad_bot_real = max(0, in_read_end - IH) + (pad_h if is_bot_band else 0)
+        # P-NBX-TILED-CONV2D-SMALL-SCALE 2026-05-14: removed redundant
+        # `+ (pad_h if is_top_band/is_bot_band else 0)`. `in_inner_start
+        # = oh_start*sh_st - pad_h` already shifts by -pad_h, so the
+        # max(0, -in_read_start) term ALREADY provides image-edge
+        # padding for the top/bot band. Adding it twice shifted band-1
+        # output up by pad_h rows on top and similarly for bot — caused
+        # cos near 0 vs F.conv2d at any (kh>=3, pad_h>=1) signature
+        # (microtest scripts/microtest_tiled_conv2d_small_scale.py).
+        pad_top_real = max(0, -in_read_start)
+        pad_bot_real = max(0, in_read_end - IH)
 
         if in_clamped_end <= in_clamped_start:
             continue
@@ -477,9 +504,17 @@ def _tiled_conv2d_spatial_torch(
         )
 
         actual_band_h = oh_end - oh_start
-        if conv_band.shape[2] < actual_band_h:
-            actual_band_h = conv_band.shape[2]
-        output[:, :, oh_start:oh_start + actual_band_h, :] = conv_band[:, :, :actual_band_h, :]
+        # P-NBX-TILED-CONV2D-SMALL-SCALE 2026-05-14: when halo_top>0
+        # (internal band frontier), conv_band starts at the halo row
+        # before the band's first useful output row. The previous slice
+        # `conv_band[:actual_band_h]` skipped the halo offset, shifting
+        # all internal-frontier output rows by halo_top toward the top.
+        # Cap actual_band_h by available conv_band height after the
+        # halo offset, not by raw conv_band.shape[2].
+        avail_after_halo = conv_band.shape[2] - halo_top
+        if avail_after_halo < actual_band_h:
+            actual_band_h = avail_after_halo
+        output[:, :, oh_start:oh_start + actual_band_h, :] = conv_band[:, :, halo_top:halo_top + actual_band_h, :]
 
     if bias is not None:
         output += bias.view(1, -1, 1, 1)
@@ -619,8 +654,16 @@ def _tiled_conv2d_spatial_nbx(
 
         in_clamped_start = max(0, in_read_start)
         in_clamped_end = min(IH, in_read_end)
-        pad_top_real = max(0, -in_read_start) + (pad_h if is_top_band else 0)
-        pad_bot_real = max(0, in_read_end - IH) + (pad_h if is_bot_band else 0)
+        # P-NBX-TILED-CONV2D-SMALL-SCALE 2026-05-14: removed redundant
+        # `+ (pad_h if is_top_band/is_bot_band else 0)`. `in_inner_start
+        # = oh_start*sh_st - pad_h` already shifts by -pad_h, so the
+        # max(0, -in_read_start) term ALREADY provides image-edge
+        # padding for the top/bot band. Adding it twice shifted band-1
+        # output up by pad_h rows on top and similarly for bot — caused
+        # cos near 0 vs F.conv2d at any (kh>=3, pad_h>=1) signature
+        # (microtest scripts/microtest_tiled_conv2d_small_scale.py).
+        pad_top_real = max(0, -in_read_start)
+        pad_bot_real = max(0, in_read_end - IH)
 
         if in_clamped_end <= in_clamped_start:
             continue
@@ -726,8 +769,19 @@ def _fused_upsample_conv2d_nbx(
 
         up_clamped_start = max(0, up_read_start)
         up_clamped_end = min(OH, up_read_end)
-        pad_top_real = max(0, -up_read_start) + (pad_h if is_top_band else 0)
-        pad_bot_real = max(0, up_read_end - OH) + (pad_h if is_bot_band else 0)
+        # P-NBX-TILED-CONV2D-SMALL-SCALE 2026-05-14: previous formula
+        # `+ (pad_h if is_top_band else 0)` double-counted edge padding.
+        # `up_inner_start = oh_start*sh_st - pad_h`, so for is_top_band
+        # (oh_start=0) we have up_inner_start = -pad_h and up_read_start
+        # = -pad_h (halo_top=0). Then max(0, -up_read_start) = pad_h
+        # already provides the image-top zero padding. Adding pad_h
+        # again over-padded by one row, shifting band-1 output up by
+        # pad_h rows. Symmetric on bot_band via in_read_end formula.
+        # Validated by microtest scripts/microtest_tiled_conv2d_small_scale.py
+        # which sweeps (kh, pad_h) at 1024^2 — pad_h=0 already PASS
+        # pre-fix, pad_h>0 FAIL pre-fix, all PASS post-fix.
+        pad_top_real = max(0, -up_read_start)
+        pad_bot_real = max(0, up_read_end - OH)
 
         if up_clamped_end <= up_clamped_start:
             continue
