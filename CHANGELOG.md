@@ -23,8 +23,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   output by 1 row, producing visually-coherent-but-shifted PNGs.
   Validated by `scripts/microtest_tiled_conv2d_small_scale.py`
   sweeping `(kh ∈ {1,3,5}, pad ∈ {0,1,2}, tile_factor ∈ {1,2})`
-  — torch path post-fix is bit-exact vs `F.conv2d`. P-NBX-TILED-
-  CONV2D-SMALL-SCALE step 1.
+  — torch path post-fix is bit-exact vs `F.conv2d`. NBX paths
+  (`_tiled_conv2d_spatial_nbx`, `_fused_upsample_conv2d_nbx`)
+  fixed in a follow-up commit when the pattern-replace missed
+  the two sites where `nbx_add(bias)` is interpolated between
+  the `actual_band_h` cap and the indexed-write — post-fix 8/8
+  OK, cos=1.0000 max_abs=0.0000. P-NBX-TILED-CONV2D-SMALL-SCALE
+  steps 1 + 2.
 
 ## 2026-05-10 — P-SANA-4KPX-RUNTIME POINT 8 closure factuelle (audit perf compiled vs sequential)
 
