@@ -240,17 +240,19 @@ def main():
               "nbx_to_torch / set_hardware_profile not wired correctly.")
         return 2
 
-    # SMOKE-TEST phase: isolate the bug by varying with_bias.
-    # If with_bias=False is OK but True is DIVERGENT → bug in nbx_add of
-    # broadcast bias. If both DIVERGENT → bug is in halo/padding/setitem.
+    # FULL-COVERAGE phase: validate the fix scales across spatial
+    # (1024, 2048, 4096) and tile_factor (1, 2, 4, 8). Sana 4Kpx VAE
+    # tiled convs span these scales.
     configs = [
         # (spatial, in_c, out_c, kh, with_bias)
         (1024, 64, 64, 3, True),
-        (1024, 64, 64, 3, False),   # same config, no bias
         (1024, 128, 128, 3, True),
-        (1024, 128, 128, 3, False),
+        (2048, 32, 32, 3, True),
+        (2048, 64, 64, 3, True),
+        (4096, 16, 16, 3, True),
+        (4096, 32, 32, 3, True),
     ]
-    tile_factors = [1, 2]
+    tile_factors = [1, 2, 4, 8]
 
     print(f"\n{'CONFIG':<40} {'TILE':>5} {'COS':>8} {'MAX_ABS':>10} "
           f"{'%DIV':>7} {'VERDICT':<10} {'REF(ms)':>9} {'TILED(ms)':>10}")
