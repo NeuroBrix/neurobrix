@@ -689,13 +689,19 @@ def _tiled_conv2d_spatial_nbx(
         )
 
         actual_band_h = oh_end - oh_start
-        if conv_band.shape[2] < actual_band_h:
-            actual_band_h = conv_band.shape[2]
+        # P-NBX-TILED-CONV2D-SMALL-SCALE step 2: same halo offset fix
+        # as the torch path. When halo_top > 0 (internal band frontier),
+        # conv_band[0] is the convolution at the halo row, not at the
+        # band's first useful output row. Skip the halo rows on the
+        # read side.
+        avail_after_halo = conv_band.shape[2] - halo_top
+        if avail_after_halo < actual_band_h:
+            actual_band_h = avail_after_halo
         # Bias add inside band — see _fused_upsample_conv2d_nbx for rationale
         # (avoids 8 GiB bias broadcast materialization on Sana 4Kpx).
         if bias is not None:
             conv_band = nbx_add(conv_band, bias.view(1, -1, 1, 1))
-        output[:, :, oh_start:oh_start + actual_band_h, :] = conv_band[:, :, :actual_band_h, :]
+        output[:, :, oh_start:oh_start + actual_band_h, :] = conv_band[:, :, halo_top:halo_top + actual_band_h, :]
     return output
 
 
@@ -829,15 +835,20 @@ def _fused_upsample_conv2d_nbx(
         )
 
         actual_band_h = oh_end - oh_start
-        if conv_band.shape[2] < actual_band_h:
-            actual_band_h = conv_band.shape[2]
+        # P-NBX-TILED-CONV2D-SMALL-SCALE step 2: halo_top offset on the
+        # conv_band read side. Internal band frontiers (halo_top > 0)
+        # write F.conv2d output row `oh_start + halo_top - 1` at
+        # output row `oh_start` without this offset.
+        avail_after_halo = conv_band.shape[2] - halo_top
+        if avail_after_halo < actual_band_h:
+            actual_band_h = avail_after_halo
         # Bias add inside band — keeps the broadcast bounded to one band's
         # (N, out_c, actual_band_h, conv_out_w) instead of the full output
         # (8 GiB broadcast on Sana 4Kpx 4096×4096 fp16). Mathematically
         # identical (bias is per-channel, applies element-wise on H,W).
         if bias is not None:
             conv_band = nbx_add(conv_band, bias.view(1, -1, 1, 1))
-        output[:, :, oh_start:oh_start + actual_band_h, :] = conv_band[:, :, :actual_band_h, :]
+        output[:, :, oh_start:oh_start + actual_band_h, :] = conv_band[:, :, halo_top:halo_top + actual_band_h, :]
 
     return output
 
