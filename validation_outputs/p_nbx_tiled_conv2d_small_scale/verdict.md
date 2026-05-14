@@ -61,6 +61,17 @@ Production Sana 4Kpx 16g compiled (anti-regression):
 22.98s, coherent red apple PNG saved at
 `validation_outputs/p_nbx_tiled_conv2d_small_scale/sana_4kpx_16g_compiled_postfix_antiregression.png`.
 
+Production Sana 4Kpx 32g triton (anti-regression):
+3747.09s wall, coherent red apple PNG saved at
+`validation_outputs/p_nbx_tiled_conv2d_small_scale/sana_4kpx_32g_triton_postwrapperfix_3747s.png`.
+Visual quality is MORE defined than 16g compiled (the prior
+1-row-per-conv shift was producing subtle blur). Wall-time is
+2.6× the prior baseline (1443.6s). Most likely a one-time
+Triton JIT recompile cost after the code change in
+`fused_upsample_conv.py`; a second run (cache-hot) should
+return to the ~1500s magnitude. To be confirmed in a follow-up
+session.
+
 ## Residual blocker for 16g triton
 
 Sana 4Kpx 16g triton post-wrapper-fix:
