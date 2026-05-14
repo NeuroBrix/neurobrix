@@ -1,5 +1,20 @@
 # P-PRISM-NEVER-REFUSE v2 — final mandate verdict (2026-05-14)
 
+## Update — 2026-05-14 evening session
+
+P-NBX-TILED-CONV2D-SMALL-SCALE wrapper math bug **fixed and validated**
+(commits `176bc7e`, `63edb03`, `fd52c37`, `712e2a4`). See
+`p_nbx_tiled_conv2d_small_scale/verdict.md`. The matrix cell
+16g triton **remains ⏳** because the failure mode shifted from
+"striped/garbage output" to the previously-documented
+live-watermark OOM at `aten.convolution::64` (live_tracked=12898MB,
+driver_free=208MB). The wrapper fix is necessary but NOT sufficient
+for 16g triton; the live-watermark gap is a separate sub-chantier.
+32g triton anti-regression: coherent red apple PNG, wall 3747s
+(2.6x baseline — most likely one-time Triton JIT recompile after
+the code change, to be confirmed in a follow-up session). 16g
+compiled anti-regression: 22.98s coherent red apple.
+
 ## Matrix final state: **10/16 ✓ + 2/16 ⏸ + 4/16 ⏳**
 
 | Config × Mode      | compiled | sequential | triton | triton_sequential |
