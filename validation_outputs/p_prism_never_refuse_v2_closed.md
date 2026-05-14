@@ -1,5 +1,42 @@
 # P-PRISM-NEVER-REFUSE v2 — final mandate verdict (2026-05-14)
 
+## Update — 2026-05-14 second-evening session (P-TRITON-LIVE-WATERMARK-AUDIT)
+
+P-TRITON-LIVE-WATERMARK-AUDIT **partially closed** (commits `993181f`,
+`f8a8ad8`, `f997479`, `b9590ea`). See
+`p_triton_live_watermark_audit/verdict.md`.
+
+Architectural acquis:
+- **L1**: NBX_LIVE_WATERMARK_TRACE JSONL instrumentation +
+  per-slot OOM dump (`triton/sequence.py`).
+- **L2 dispositive fact**: the 8 GiB co-residence at Sana 4Kpx
+  16g triton OOM is NOT a liveness bug. Both surviving 4 GiB
+  tensors are the LEGITIMATE inputs of the failing add op
+  (last_use=current_op_idx). Real memory pressure, not orphan
+  retention.
+- **L4 NBX-pure chain wrapper** (`band_streamed_chain_nbx`):
+  143-line R33 mirror of `band_streamed_chain_torch`. R30
+  dualité chain wrapper structurally restored. 4-6 chains pass
+  per Sana 4Kpx VAE run.
+
+Residual blockers (named sub-chantiers, NOT fictional):
+- **P-TRITON-CHAIN-CPU-POINTER**: 2-3 chains/run fail with
+  "Pointer argument (at 0) cannot be accessed from Triton (cpu
+  tensor?)". Device-sync race between successive chain executions.
+- **P-TRITON-FORK-INPLACE-ADD**: even with chain wrapper fully
+  active, the fork add at Sana 4Kpx 16g triton allocates 4 GiB
+  on top of two 4 GiB legitimate inputs — `add_inplace_nbx` must
+  be wired via `plan.inplace_adds` on the triton dispatch path.
+
+Gate added: chain wrapper triton variant is opt-in via
+`NBX_TRITON_CHAIN_WRAPPER=1` (default OFF) — preserves the
+pre-L4 32g triton clean anti-regression. Re-enabling on triton
+modes by default requires P-TRITON-CHAIN-CPU-POINTER closure.
+
+Matrix unchanged: **10/16 ✓**. The wrapper is a doctrinal acquis
+(R30 architectural mirror in place, tested at multi-chain
+granularity) but cannot unblock 16g triton on its own.
+
 ## Update — 2026-05-14 evening session
 
 P-NBX-TILED-CONV2D-SMALL-SCALE wrapper math bug **fixed and validated**
