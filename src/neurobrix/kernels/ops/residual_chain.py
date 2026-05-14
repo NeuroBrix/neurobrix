@@ -343,3 +343,146 @@ def band_streamed_chain_torch(
         del band, band_out
 
     return t_base
+
+
+# ---------------------------------------------------------------------------
+# NBX-PURE TRITON variant — R33 zero-torch port of band_streamed_chain_torch.
+# ---------------------------------------------------------------------------
+# Same band-streaming algorithm, same correctness invariant (halo_carry),
+# same memory shape. The only difference is the backend: every ATen op
+# is replaced by its NBX wrapper from `neurobrix.kernels.wrappers`.
+#
+# P-TRITON-LIVE-WATERMARK-AUDIT 2026-05-14 L4: closes the R30 chain wrapper
+# gap left open by commit c9d2581 ("future band_streamed_chain_nbx would
+# close this gap"). On Sana 4Kpx 16g triton the L2 LIVE_DUMP showed two
+# 4 GiB tensors at (1, 128, 4096, 4096) co-resident at add::89 because
+# the chain wrapper was SKIP'd on triton — natural NBX dispatch keeps
+# all chain intermediates fully materialized. With this wrapper the
+# chain runs band-by-band on the triton arena tensors, peak transient
+# drops to 1/tile_factor of the chain intermediate.
+
+
+def band_streamed_chain_nbx(
+    t_base: "Any",
+    chain_weights: Dict[str, Any],
+    tile_factor: int,
+    halo: int,
+) -> "Any":
+    """NBXTensor band-streamed residual chain (R33-pure mirror of
+    `band_streamed_chain_torch`).
+
+    Args:
+      t_base: NBXTensor, the fork tensor (residual base). Mutated in
+        place to hold the merge output. Returned for caller convenience.
+      chain_weights: dict from `resolve_chain_weights` — same shape as
+        for the torch variant, but weight values are NBXTensor when
+        the executor is in triton mode.
+      tile_factor: number of bands along H.
+      halo: rows of halo on each side per band.
+
+    Returns: t_base (mutated).
+
+    R33: no `torch.*`, no `F.*`. All ops via
+    `neurobrix.kernels.wrappers` and NBXTensor methods.
+
+    Correctness invariant: halo_carry is a clone of the rows the NEXT
+    band needs as its top halo, captured BEFORE the current band's
+    `add_` overwrites them. The first band uses t_base directly because
+    no top halo has been overwritten yet.
+    """
+    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from neurobrix.kernels.wrappers import (
+        conv2d_wrapper, silu as silu_w, rms_norm as rms_norm_w,
+        add as add_w,
+    )
+
+    N, C, H, W = t_base.shape
+    band_h = (H + tile_factor - 1) // tile_factor
+
+    halo_carry = None  # type: Optional[NBXTensor]
+
+    for i in range(tile_factor):
+        h_start = i * band_h
+        h_end = min((i + 1) * band_h, H)
+        if h_start >= h_end:
+            break
+
+        h_in_start = max(0, h_start - halo)
+        h_in_end = min(H, h_end + halo)
+
+        # Build the input band.
+        # If we have a halo_carry AND the top-halo region [h_in_start,
+        # h_start) has been overwritten by the previous band's add_,
+        # take the top from halo_carry and the rest from t_base.
+        if halo_carry is not None and h_in_start < h_start:
+            top_size = h_start - h_in_start
+            top_band = halo_carry[:, :, -top_size:, :]
+            rest_band = t_base[:, :, h_start:h_in_end, :]
+            band = NBXTensor.cat([top_band, rest_band], dim=2).contiguous()
+        else:
+            band = t_base[:, :, h_in_start:h_in_end, :].contiguous()
+
+        # Save halo for next band BEFORE overwriting (clone detaches
+        # from t_base storage).
+        if i + 1 < tile_factor:
+            halo_save_size = min(halo, h_end - h_start)
+            halo_carry = t_base[:, :,
+                                h_end - halo_save_size:h_end, :].clone()
+
+        # conv1
+        w1 = chain_weights["conv1_weight"]
+        b1 = chain_weights["conv1_bias"]
+        band = conv2d_wrapper(
+            band, w1, b1,
+            stride=tuple(chain_weights["conv1_stride"]),
+            padding=tuple(chain_weights["conv1_padding"]),
+            dilation=tuple(chain_weights["conv1_dilation"]),
+            groups=chain_weights["conv1_groups"],
+        )
+
+        # silu
+        band = silu_w(band)
+
+        # conv2
+        w2 = chain_weights["conv2_weight"]
+        b2 = chain_weights["conv2_bias"]
+        band = conv2d_wrapper(
+            band, w2, b2,
+            stride=tuple(chain_weights["conv2_stride"]),
+            padding=tuple(chain_weights["conv2_padding"]),
+            dilation=tuple(chain_weights["conv2_dilation"]),
+            groups=chain_weights["conv2_groups"],
+        )
+
+        # permute NCHW → NHWC (R33-pure NBXTensor.permute)
+        band = band.permute(*chain_weights["permute_forward"]).contiguous()
+
+        # rms_norm over last (feature) dim
+        norm_w = chain_weights["norm_weight"]
+        eps = float(chain_weights.get("norm_eps", 1e-6))
+        band = rms_norm_w(band, norm_w, eps)
+
+        # post-norm bias shift (if any)
+        post_bias = chain_weights.get("post_norm_bias")
+        if post_bias is not None:
+            band = add_w(band, post_bias)
+
+        # permute NHWC → NCHW
+        band = band.permute(*chain_weights["permute_backward"]).contiguous()
+
+        # Trim halo from chain output, then add to t_base in place via
+        # __setitem__ + add. NBX add_inplace_nbx requires identical
+        # shapes AND contiguous target, but t_base[:, :, h_start:h_end, :]
+        # is a non-contig view (slicing on dim 2) — so we use the
+        # `add_w` + setitem pattern: materialize the band-sized sum,
+        # write it back. The setitem path uses _strided_scatter for
+        # the non-contig dst and a single contiguous src copy.
+        trim_top = h_start - h_in_start
+        trim_h = h_end - h_start
+        band_out = band[:, :, trim_top:trim_top + trim_h, :]
+        t_base_slice = t_base[:, :, h_start:h_end, :]
+        # add returns a new contiguous tensor; setitem writes back.
+        t_base[:, :, h_start:h_end, :] = add_w(t_base_slice, band_out)
+
+    return t_base
+
