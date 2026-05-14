@@ -390,11 +390,20 @@ def band_streamed_chain_nbx(
     `add_` overwrites them. The first band uses t_base directly because
     no top halo has been overwritten yet.
     """
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from neurobrix.kernels.nbx_tensor import NBXTensor, _set_device
     from neurobrix.kernels.wrappers import (
         conv2d_wrapper, silu as silu_w, rms_norm as rms_norm_w,
         add as add_w,
     )
+
+    # P-TRITON-LIVE-WATERMARK-AUDIT L4b: explicit device sync. Chain 1
+    # runs OK then chain 2+ fail with "Pointer argument (at 0) cannot
+    # be accessed from Triton (cpu tensor?)". Likely cause: between
+    # chains, some allocation path (NBXTensor.empty, strided_scatter,
+    # etc.) cudaSetDevice's the OS-thread context without updating
+    # Triton's driver active device. Anchor the chain entry on
+    # t_base's device.
+    _set_device(t_base)
 
     N, C, H, W = t_base.shape
     band_h = (H + tile_factor - 1) // tile_factor
