@@ -2505,26 +2505,13 @@ class TritonSequence:
                     "l2_norm": norm,
                 }
                 self._dump_records.append(new_record)
-                # Merge with any records written by other pipeline stages
-                # (see the matching fix in compiled_sequence.py:
-                # per-instance state would otherwise overwrite the file
-                # with only the last component's records).
-                import os as _os_dj
-                existing = []
-                if _os_dj.path.exists(dump_path):
-                    try:
-                        with open(dump_path) as _rf:
-                            existing = _json_d.load(_rf).get("records", [])
-                    except Exception:
-                        existing = []
-                seen_keys = {(r.get("op_uid"), r.get("tid"))
-                             for r in existing}
-                key = (new_record["op_uid"], new_record["tid"])
-                if key not in seen_keys:
-                    existing.append(new_record)
-                with open(dump_path, "w") as f:
+                # JSONL append-mode write — O(1) IO per call vs the
+                # earlier O(N²) read-then-append. Each record is one
+                # JSON line; bit-diff readers consume line-by-line.
+                with open(dump_path, "a") as f:
                     _json_d.dump({"engine": "triton",
-                                  "records": existing}, f, indent=1)
+                                  "record": new_record}, f)
+                    f.write("\n")
             except Exception as e:
                 print(f"[NBX_DUMP_TIDS] failed on {tid}: {e}", flush=True)
 
