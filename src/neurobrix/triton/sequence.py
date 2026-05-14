@@ -1458,6 +1458,13 @@ class TritonSequence:
             if s is not None:
                 protected.add(s)
 
+        # P-TRITON-LIVE-WATERMARK-AUDIT L2: persist slot_last_use on
+        # self so the OOM dump in `_run_single_device` can compare each
+        # surviving slot's last_use against the current op_idx and
+        # decide whether the liveness analysis missed a kill (last_use
+        # <= op_idx) or the tensor is legitimately needed downstream
+        # (last_use > op_idx).
+        self._slot_last_use = dict(slot_last_use)
         # Step 3: Build dead_at_op
         dead_at_op: Dict[int, List[int]] = defaultdict(list)
         for s, last_idx in slot_last_use.items():
@@ -2706,6 +2713,51 @@ class TritonSequence:
                                   f"types={type_counts} "
                                   f"deferred_queue={len(_deferred)}/{_deferred_bytes/1024/1024:.0f}MB",
                                   flush=True)
+                            # P-TRITON-LIVE-WATERMARK-AUDIT L2: per-intermediate
+                            # detail. For every non-None, non-weight, non-input
+                            # slot at OOM, log: slot id, nbytes, shape, tid,
+                            # producing op_uid, slot_last_use (from the liveness
+                            # pass cached on self), and current op_idx. This
+                            # is the dispositive fact: if last_use <= op_idx
+                            # the liveness analysis missed a kill; if
+                            # last_use > op_idx the tensor is legitimately
+                            # needed downstream.
+                            try:
+                                if not hasattr(self, '_slot_to_tid'):
+                                    self._slot_to_tid = {
+                                        sl: t for t, sl in self._tid_to_slot.items()}
+                                # Build slot -> producing op_uid map
+                                if not hasattr(self, '_slot_to_producer'):
+                                    _p_map: Dict[int, str] = {}
+                                    for _o_idx, _o in enumerate(self._ops):
+                                        for _s_p in _o.output_slots:
+                                            _p_map[_s_p] = _o.op_uid
+                                    self._slot_to_producer = _p_map
+                                for _s_l, _t_l in enumerate(arena):
+                                    if _t_l is None:
+                                        continue
+                                    if _s_l < w_n or _s_l < w_n + i_n:
+                                        continue
+                                    _nb_l = getattr(_t_l, '_nbytes', 0)
+                                    if _nb_l < 100 * 1024 * 1024:
+                                        continue  # only large slots
+                                    _sh_l = tuple(getattr(_t_l, '_shape', ()))
+                                    _tid_l = self._slot_to_tid.get(_s_l, "?")
+                                    _prod_l = self._slot_to_producer.get(
+                                        _s_l, "?")
+                                    _lu_l = getattr(
+                                        self, '_slot_last_use', {}).get(_s_l, "?")
+                                    print(f"[LIVE_DUMP_SLOT slot={_s_l} "
+                                          f"tid={_tid_l} "
+                                          f"nbytes={_nb_l/1024/1024:.0f}MB "
+                                          f"shape={_sh_l} "
+                                          f"producer={_prod_l} "
+                                          f"last_use={_lu_l} "
+                                          f"current_op_idx={op_idx}]",
+                                          flush=True)
+                            except Exception as _slot_e:
+                                print(f"[LIVE_DUMP_SLOT error] {_slot_e}",
+                                      flush=True)
                             # Walk DeviceAllocator._cuda_ptr_size directly
                             # to show ALL live cudaMalloc blocks per device,
                             # bucketed by size. Exposes blocks that NBX
