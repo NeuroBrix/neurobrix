@@ -996,7 +996,31 @@ class OpLevelTilingEngine:
         from neurobrix.kernels.ops.fused_upsample_conv import (
             tiled_conv2d_spatial, tiled_rms_norm_spatial,
         )
+        # P-TRITON-VAE-16G-STRIPED root cause (2026-05-14): the solver's
+        # `_detect_op_level_tiling_pairs` calls `estimate_peak_memory(
+        # mode="compiled", ...)` to detect overflow ops. The cuDNN
+        # workspace estimator at memory_estimator.py:50-68 inflates
+        # standalone convolutions by `2 × im2col_bytes` which on
+        # 1024²/2048² VAE convs produces ~12 GiB workspace numbers
+        # that trigger tiling on 16g but not 32g. Triton mode
+        # specifically has `workspace = 0` per memory_estimator.py:45
+        # — Triton kernels stream output, no im2col matrix needed. So
+        # tiling these ops on triton mode introduces error without
+        # any memory benefit. Skip standalone-conv and rms_norm tile
+        # interceptor registration on triton modes; the native NBX
+        # `conv2d_wrapper` / `rms_norm` wrappers handle these ops
+        # correctly at any resolution. Fusion pairs (upsample→conv,
+        # registered above) are kept because they absorb the
+        # upsample intermediate which IS a real allocation on triton.
+        # R30 dualité: a future Triton-native tiled wrapper would
+        # close this gap; for now, native NBX dispatch is correct.
+        _mode_for_tiles = getattr(graph_executor, "mode", "compiled")
+        _skip_tile_for_mode = _mode_for_tiles in (
+            "triton", "triton_sequential"
+        )
         for op_uid, op_type, tile_factor in self.plan.tiled_ops:
+            if _skip_tile_for_mode:
+                continue
             cl = op_type.split("::")[-1]
             if cl in ("convolution", "conv2d", "_convolution"):
                 tf = tile_factor
