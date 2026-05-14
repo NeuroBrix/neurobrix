@@ -22,12 +22,40 @@ from pathlib import Path
 
 
 def _load(path):
-    with open(path) as f:
-        d = json.load(f)
+    """Load dump from JSON (legacy) or JSONL (post-2026-05-14).
+
+    JSONL format: one `{"engine": ..., "record": {...}}` per line.
+    JSON format:  `{"engine": ..., "records": [...]}`.
+    """
     out = {}
-    for r in d.get("records", []):
-        key = (r["op_uid"], tuple(r["shape"]))
-        out[key] = r
+    with open(path) as f:
+        first = f.read(2)
+        f.seek(0)
+        if first == "{\n" or first == "{ ":
+            # JSON object — try parsing the whole file.
+            try:
+                d = json.load(f)
+                for r in d.get("records", []):
+                    key = (r["op_uid"], tuple(r["shape"]))
+                    out[key] = r
+                return out
+            except json.JSONDecodeError:
+                f.seek(0)
+        # JSONL fallback
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                d = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            r = d.get("record")
+            if r is None:
+                continue
+            key = (r["op_uid"], tuple(r["shape"]))
+            # Dedupe — keep the LATEST entry for a given (op_uid, shape).
+            out[key] = r
     return out
 
 
