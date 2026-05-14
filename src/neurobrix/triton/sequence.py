@@ -2608,6 +2608,69 @@ class TritonSequence:
                         _live = _DA_p._cuda_live_bytes.get(_DA_p.get_device(), 0)
                         print(f"[LIVE_TRACK op_idx={op_idx} {op.op_uid}] live={_live/1024/1024:.0f}MB",
                               flush=True)
+                # P-TRITON-LIVE-WATERMARK-AUDIT 2026-05-14 L1: extended
+                # periodic trace. NBX_LIVE_WATERMARK_TRACE=path/to/file.jsonl
+                # samples every NBX_LIVE_WATERMARK_EVERY ops (default 50)
+                # the FULL memory picture: nbx_live, nbx_pool_cached,
+                # driver_free, driver_total, and computes the untracked
+                # gap (= driver_used - nbx_live - nbx_pool_cached). This
+                # gap is what we need to identify and reduce on 16g
+                # triton where conv::64 OOMs at driver_free=208MB while
+                # nbx_live=12898MB on a 16151MB GPU.
+                _wm_path = _os_per.environ.get("NBX_LIVE_WATERMARK_TRACE", "")
+                if _wm_path:
+                    _wm_every = int(_os_per.environ.get(
+                        "NBX_LIVE_WATERMARK_EVERY", "50"))
+                    if _wm_every > 0 and op_idx % _wm_every == 0:
+                        try:
+                            import ctypes as _ct_wm
+                            import json as _json_wm
+                            from neurobrix.kernels.nbx_tensor import (
+                                DeviceAllocator as _DA_wm,
+                                _gpu_runtime as _gpu_rt_wm,
+                                _active_backend as _bk_fn_wm,
+                            )
+                            _rt_wm = _gpu_rt_wm()
+                            _bk_wm = _bk_fn_wm()
+                            _dev_wm = _DA_wm.get_device()
+                            _nbx_live = _DA_wm._cuda_live_bytes.get(_dev_wm, 0)
+                            _per_dev_wm = _DA_wm._pool_free.get(_dev_wm, {})
+                            _pool_cached = 0
+                            for _sz_wm, _ptrs_wm in _per_dev_wm.items():
+                                _pool_cached += _sz_wm * len(_ptrs_wm)
+                            _free_b_wm = _ct_wm.c_size_t()
+                            _total_b_wm = _ct_wm.c_size_t()
+                            _mgi_name = _bk_wm.get(
+                                "mem_get_info", "cudaMemGetInfo")
+                            if hasattr(_rt_wm, _mgi_name):
+                                getattr(_rt_wm, _mgi_name)(
+                                    _ct_wm.byref(_free_b_wm),
+                                    _ct_wm.byref(_total_b_wm))
+                                _drv_free = _free_b_wm.value
+                                _drv_total = _total_b_wm.value
+                            else:
+                                _drv_free = _drv_total = 0
+                            _drv_used = _drv_total - _drv_free
+                            _untracked = (
+                                _drv_used - _nbx_live - _pool_cached)
+                            _rec = {
+                                "op_idx": op_idx,
+                                "op_uid": op.op_uid,
+                                "op_type": getattr(op, "op_type", ""),
+                                "nbx_live_mb": _nbx_live / 1024 / 1024,
+                                "nbx_pool_cached_mb":
+                                    _pool_cached / 1024 / 1024,
+                                "driver_free_mb": _drv_free / 1024 / 1024,
+                                "driver_used_mb": _drv_used / 1024 / 1024,
+                                "driver_total_mb":
+                                    _drv_total / 1024 / 1024,
+                                "untracked_mb": _untracked / 1024 / 1024,
+                            }
+                            with open(_wm_path, "a") as _wm_f:
+                                _wm_f.write(_json_wm.dumps(_rec) + "\n")
+                        except Exception as _wm_e:
+                            print(f"[LIVE_WATERMARK_TRACE error] {_wm_e}",
+                                  flush=True)
                 try:
                     result = op.func(*args, **kwargs)
                 except Exception as e:
