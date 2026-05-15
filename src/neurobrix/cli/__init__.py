@@ -363,6 +363,31 @@ Validation levels:
     validate_parser.add_argument('--json', action='store_true', help='Output results as JSON')
     validate_parser.add_argument('--verbose', '-v', action='store_true', help='Show detailed info')
 
+    # ========================================
+    # UPSCALE command — image super-resolution
+    # ========================================
+    upscale_parser = subparsers.add_parser(
+        'upscale',
+        help='Upscale an image using a super-resolution model',
+        description='Image super-resolution. Loads an input image, '
+                    'runs it through an upscaler model, writes the '
+                    'high-resolution result.'
+    )
+    upscale_parser.add_argument('--model', required=True,
+                                help='Upscaler model name (e.g. '
+                                     'swin2SR-realworld-sr-x4-64-bsrgan-psnr)')
+    upscale_parser.add_argument('--input', required=True,
+                                help='Input image path (PNG/JPEG)')
+    upscale_parser.add_argument('--output', required=True,
+                                help='Output image path (PNG)')
+    upscale_parser.add_argument('--mode', default='compiled',
+                                choices=['compiled', 'sequential',
+                                         'triton', 'triton-sequential'],
+                                help='Execution mode (default: compiled)')
+    upscale_parser.add_argument('--hardware', default=None,
+                                help='Hardware profile ID '
+                                     '(auto-detected if omitted)')
+
     return parser
 
 
@@ -408,6 +433,9 @@ def main():
         elif args.command == 'validate':
             from neurobrix.cli.commands.validate import cmd_validate
             cmd_validate(args)
+        elif args.command == 'upscale':
+            from neurobrix.cli.commands.upscale import cmd_upscale
+            cmd_upscale(args)
         elif args.command == 'doctor':
             from neurobrix.cli._path_helper import print_path_diagnostics
             print_path_diagnostics()
