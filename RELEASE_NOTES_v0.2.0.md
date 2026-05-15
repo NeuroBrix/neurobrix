@@ -113,8 +113,8 @@ remain ⏸ until upstream ships PyPI wheels — automatic unblock then.
   variant uses only NBX wrappers + NBXTensor methods, no torch
   import on the execute path.
 - **R29 inspectable artefacts**: every cell ✓ has a coherent red
-  apple PNG in `validation_outputs/p_triton_chain_cpu_pointer/` and
-  `validation_outputs/p_nbx_tiled_conv2d_small_scale/`.
+  apple PNG in `docs/verdicts/p_triton_chain_cpu_pointer/` and
+  `docs/verdicts/p_nbx_tiled_conv2d_small_scale/`.
 
 ## Known limitations (transparency)
 
@@ -131,12 +131,12 @@ remain ⏸ until upstream ships PyPI wheels — automatic unblock then.
 ## Validation artefacts
 
 The mandate v2 verdict and per-cell R29 artefacts are committed:
-- `validation_outputs/p_prism_never_refuse_v2_closed.md` — full
+- `docs/verdicts/p_prism_never_refuse_v2_closed.md` — full
   verdict, sub-chantier history, commit hashes, anti-régression table.
-- `validation_outputs/p_triton_chain_cpu_pointer/` — 6 coherent red
+- `docs/verdicts/p_triton_chain_cpu_pointer/` — 6 coherent red
   apple PNGs (32g compiled / 32g triton / 16g compiled / 16g triton /
   16g triton-seq / 2× 16g triton / 2× 16g triton-seq).
-- `validation_outputs/p_nbx_tiled_conv2d_small_scale/` — microtest
+- `docs/verdicts/p_nbx_tiled_conv2d_small_scale/` — microtest
   logs + 16g compiled anti-regression PNG + 32g triton baseline PNG.
 
 ## Key commits
