@@ -2510,6 +2510,40 @@ class CompiledSequence:
                     tensor = tensor.t()
                 self._arena[slot] = tensor
 
+        # Pre-populate constant weight slots NOT provided by the weight
+        # loader. These are trace-time orphan constants (e.g. the Python
+        # scalar `cnt` from a `mask[slice] = cnt` loop captured as
+        # `param::constant_T_*` with no constant_data, or KV-cache init
+        # tensors with shape [0]). Without this, their arena slot stays
+        # None and the consuming op (e.g. aten::fill) receives None →
+        # crash. Mirrors the working sequential path in
+        # tensor_resolver.py step 4 (`torch.empty(shape)` with a 0-dim
+        # default). Only constant_*/shape-[0]/missing-norm slots are
+        # touched — regular weight slots left unprovided by zero3
+        # block-by-block streaming are intentionally NOT allocated.
+        tensors_meta = self.dag.get("tensors", {})
+        for tensor_id in self._weight_tensor_ids:
+            slot = self._tensor_id_to_slot[tensor_id]
+            if self._arena[slot] is not None:
+                continue
+            meta = tensors_meta.get(tensor_id, {})
+            # 0-dim scalar default (matches the trace shape `[]` for
+            # orphan scalars and tensor_resolver.py). A 1-dim `[0]`
+            # default produced an ndim-1 tensor that broke aten::fill,
+            # which requires a 0-dim value.
+            shape = meta.get("shape", [])
+            dtype_str = meta.get("dtype", "float32")
+            t_dtype = _DTYPE_MAP.get(dtype_str, torch.float32)
+            if shape == [0] or "constant_" in tensor_id:
+                self._arena[slot] = torch.empty(shape, dtype=t_dtype, device=self.device)
+            elif not meta.get("weight_key") and ".norm." in tensor_id:
+                resolved_shape = [s if isinstance(s, int) else s.get("trace_value", 1)
+                                  for s in shape] if isinstance(shape, list) else shape
+                if tensor_id.endswith(".weight"):
+                    self._arena[slot] = torch.ones(resolved_shape, dtype=t_dtype, device=self.device)
+                elif tensor_id.endswith(".bias"):
+                    self._arena[slot] = torch.zeros(resolved_shape, dtype=t_dtype, device=self.device)
+
     def rebind_partial(self, partial_map: Dict[str, torch.Tensor]) -> List[int]:
         """Replace a subset of weights in the arena without touching the rest.
 
@@ -2548,30 +2582,6 @@ class CompiledSequence:
             self._arena[slot] = tensor
             modified.append(slot)
         return modified
-
-        # Pre-populate constant weight slots not provided by weight loader.
-        # Only allocate for genuinely empty/constant tensors (shape [0] or constant_*).
-        # Do NOT allocate for regular weight slots that weren't provided — zero3
-        # block-by-block execution provides partial weight sets intentionally.
-        tensors_meta = self.dag.get("tensors", {})
-        for tensor_id in self._weight_tensor_ids:
-            slot = self._tensor_id_to_slot[tensor_id]
-            if self._arena[slot] is not None:
-                continue
-            meta = tensors_meta.get(tensor_id, {})
-            shape = meta.get("shape", [0])
-            dtype_str = meta.get("dtype", "float32")
-            t_dtype = _DTYPE_MAP.get(dtype_str, torch.float32)
-            # Empty-state constants (e.g., KV cache init tensors)
-            if shape == [0] or "constant_" in tensor_id:
-                self._arena[slot] = torch.empty(shape, dtype=t_dtype, device=self.device)
-            elif not meta.get("weight_key") and ".norm." in tensor_id:
-                resolved_shape = [s if isinstance(s, int) else s.get("trace_value", 1)
-                                  for s in shape] if isinstance(shape, list) else shape
-                if tensor_id.endswith(".weight"):
-                    self._arena[slot] = torch.ones(resolved_shape, dtype=t_dtype, device=self.device)
-                elif tensor_id.endswith(".bias"):
-                        self._arena[slot] = torch.zeros(resolved_shape, dtype=t_dtype, device=self.device)
 
     def compute_op_devices(self) -> None:
         """
