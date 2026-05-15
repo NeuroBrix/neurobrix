@@ -61,35 +61,72 @@ NeuroBrix-pure path.
 
 ---
 
-## SECTION 4 (NeuroBrix side) — Hub `neurobrix.es`: PULL is implemented
+## SECTION 4 (NeuroBrix side) — Hub `neurobrix.es`: LIVE PRODUCTION SERVICE
 
-`src/neurobrix/cli/utils.py:20` → `REGISTRY_URL = "https://neurobrix.es"`.
+> CORRECTION (2026-05-15): an earlier draft of this report said
+> hub deployment was "not determinable / do not assume live".
+> That was wrong — written without consulting the architecture
+> memory. **The hub is a mature, deployed, operational service.**
+> Verified this session by querying it directly.
 
-NeuroBrix-side hub interaction is fully coded in
-`src/neurobrix/cli/commands/registry.py`:
+**Storage layers — do not conflate them (user-visible scope):**
 
-- **Browse** (`cmd_hub`, line 449): `GET {registry}/api/models?limit=&category=&q=`,
-  JSON, no auth, `User-Agent: neurobrix-cli/<ver>`. Cross-checks
-  which listed models are already local.
-- **Pull** (`cmd_import`, line 17): 4-step flow —
-  1. `GET /api/models/{org}/{name}` → metadata (license, gating)
-  2. `GET /api/models/{org}/{name}/download` (header
-     `X-License-Accepted: true` if gated) → `{ "url", "fileName" }`
-  3. stream `GET <download_url>` → `~/.neurobrix/store/<file>.nbx`
-  4. extract to `~/.neurobrix/cache/<name>/`
+1. **huggingface.co** — upstream SOURCE ONLY. Raw third-party
+   models are obtained FROM here. **Never a destination.**
+   Publishing `.nbx` to HF is forbidden. HF is not "our"
+   registry — it is just where public weights originate.
+2. **NeuroBrix local store** — `~/.neurobrix/store/<file>.nbx`,
+   where `nbx import` lands a downloaded `.nbx` before extract.
+3. **NeuroBrix local cache** — `~/.neurobrix/cache/<model>/`,
+   the extracted container the runtime executes.
+4. **NeuroBrix Hub** — `neurobrix.es` (proprietary, ours). The
+   production registry where the official `.nbx` are hosted.
+   `nbx import` / `nbx hub` pull/browse it.
 
-So the **client (download/browse) side is ready**. The expected
-backend API surface is precisely defined: `GET /api/models`,
-`/api/models/{org}/{name}`, `/api/models/{org}/{name}/download`.
-The **upload/publish toolchain** lives on the model-packaging
-side and is documented in the private companion report.
+(The upstream→`.nbx` packaging pipeline and its intermediate
+working directories are proprietary and documented only in the
+private companion report — not in this public file.)
 
-**Deployment status of `neurobrix.es`**: NOT determinable from
-this repo. The code is a client; whether the service is
-deployed/active and whether a storage backend exists is a
-runtime/infra question the next session must verify (e.g.
-`curl -sSf https://neurobrix.es/api/models?limit=1`) — do NOT
-assume it is live.
+**Hub infrastructure (live, verified — also in the
+`architecture_details` memory):**
+- `neurobrix.es` → Next.js app at `10.0.0.39:3000`
+  (server hostname `NeuroBrix`, reachable via SSH `mlops@10.0.0.39`).
+- PostgreSQL at `10.0.0.35:5432` (Prisma).
+- MinIO object storage at `10.0.0.36:9000`.
+- `hub.neurobrix.es` → public download path
+  (Cloudflare → OPNsense HAProxy → MinIO:9000).
+- Dual S3 client: internal `s3` for uploads, `s3Public`
+  (hub.neurobrix.es) for downloads.
+- Auth: GitHub + Google OAuth, GDPR primitives, Brevo SMTP.
+  Hub source repo: `github.com/benkelaya/NeuroBrix_Hub`
+  (Phase 1 = auth/GDPR/email 2026-04-30; Phase 2 = 9-family
+  taxonomy migration; server-side reports
+  `~/hub_phase1_report.md`, `~/hub_phase2_cleanup.md` on
+  10.0.0.39).
+- 9-family `ModelCategory` taxonomy in Prisma matches the
+  packaging taxonomy.
+
+**Current hub catalogue (queried live this session, 15 models):**
+LLM: TinyLlama-1.1B-Chat, Qwen3-30B-A3B, DeepSeek-MoE-16B-Chat,
+Qwen3-30B-A3B-Thinking · IMAGE: PixArt-Sigma-XL-1024,
+PixArt-XL-1024, Sana-1600M-MultiLing, Sana-1600M-4Kpx-BF16,
+Flex.1-alpha · VIDEO: SANA-Video-2B-720p · STT:
+Whisper-V3-Turbo · MULTIMODAL: Janus-Pro-7B · TTS: Chatterbox,
+Orpheus-3B · AUDIO_LLM: Voxtral-Mini-3B.
+
+NeuroBrix client side (`cli/commands/registry.py`):
+- **Browse** (`cmd_hub`): `GET /api/models?limit=&category=&q=`
+  (no auth).
+- **Pull** (`cmd_import`): `GET /api/models/{org}/{name}` →
+  `GET /api/models/{org}/{name}/download` → stream to
+  `~/.neurobrix/store/` → extract to `~/.neurobrix/cache/`.
+
+**The real gap is NOT "activate the hub" — the hub is live.**
+The concrete gap: the 10 upscaler `.nbx` built this session
+(Real-ESRGAN/SwinIR/HAT/Swin2SR) are **NOT published** — a live
+query of `?category=UPSCALER` returns NONE. Publishing them is a
+packaging-side `publish` operation (private companion report
+Section 4-build), not an infra project.
 
 ---
 
@@ -219,15 +256,22 @@ triton path (silent-correctness, not a crash).
 
 ## SECTION 10 — Recommended next chantiers (Hocine picks)
 
-1. **P-HUB-ACTIVATION (end-to-end neurobrix.es)** — *scope:
-   medium-large, infra-heavy.* The client (pull/browse) side is
-   coded; the publish side toolchain exists (private companion).
-   Unknown/likely-missing: a deployed service + storage backend +
-   auth/token issuance + catalogue metadata schema. First step is
-   a 1-day spike: probe `neurobrix.es` liveness, inventory what
-   backend (if any) exists, then either deploy or spec the
-   missing pieces. High strategic value (proprietary distribution
-   channel) — verify infra reality before committing scope.
+1. **P-MODEL-COVERAGE-CONTINUATION (primary, user-directed)** —
+   *scope: large, the main thrust.* The hub is LIVE and already
+   serves 15 models across LLM/IMAGE/VIDEO/STT/MULTIMODAL/TTS/
+   AUDIO_LLM. The next body of work is **completing NeuroBrix's
+   coverage of the remaining models** — audio / STT / TTS /
+   multimodal / video — i.e. packaging them to `.nbx` and
+   validating the `nbx run` per-family runtime path, then
+   publishing. Precondition Hocine set: first **audit all
+   technical debt** from prior sessions to clear the ground
+   (this report's Section 5 + the dedicated debt-audit doc).
+   Immediate concrete sub-item: the 10 upscaler `.nbx` from this
+   session are built but **not yet published** (live
+   `?category=UPSCALER` = NONE) — publish them (a routine
+   packaging-side `publish`, the hub infra already exists; see
+   private companion Section 4-build). This is NOT an
+   infrastructure project — the hub is deployed and operational.
 
 2. **P-TRITON-IM2COL-KERNEL** — *scope: small-medium,
    well-bounded.* One Triton-pure `aten::im2col` kernel +
