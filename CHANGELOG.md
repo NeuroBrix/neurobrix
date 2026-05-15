@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Audio model loading is now portable across hosts**
+  (`core/flow/audio.py`, `core/flow/audio_utils.py`,
+  `triton/flow/audio.py`): the three `_find_model_config_path`
+  variants no longer fall back to a non-portable per-container
+  path entry. The runtime now resolves audio preprocessing
+  configuration strictly from the `modules/processor/` or
+  `modules/tokenizer/` directories embedded inside the .nbx,
+  making audio models loadable on any host (Linux / macOS /
+  Windows). Containers produced by older builds that do not
+  embed these directories need to be re-imported to remain
+  loadable.
+
 - **Tiled conv2d output alignment — `_tiled_conv2d_spatial_*` and
   `_fused_upsample_conv2d_*` wrappers** (`kernels/ops/fused_upsample_conv.py`):
   two coupled math bugs caused band outputs to be shifted by `pad_h`
