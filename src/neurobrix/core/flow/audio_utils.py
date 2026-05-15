@@ -238,11 +238,16 @@ def find_model_config_path(ctx: FlowContext) -> Path:
         candidate = nbx_path / subdir
         if candidate.exists():
             return candidate
-    for comp_info in ctx.pkg.topology.get("components", {}).values():
-        comp_path = comp_info.get("path")
-        if comp_path and Path(comp_path).exists():
-            return Path(comp_path)
-    raise RuntimeError("ZERO FALLBACK: Cannot find model config path.")
+    # Removed: legacy absolute-path fallback to `topology.components.path`.
+    # That field held the trace-host absolute snapshot location and is no
+    # longer present in correctly-built containers. Audio models without
+    # an embedded `modules/processor` directory must be re-imported with
+    # the current builder which embeds `preprocessor_config.json`.
+    raise RuntimeError(
+        "Cannot find model config path. Expected `modules/processor/` "
+        "or `modules/tokenizer/` inside the .nbx. Re-import the model "
+        "with the current builder which embeds these directories."
+    )
 
 
 def get_component_input_shape(
