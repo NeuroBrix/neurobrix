@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **SwinIR classical super-resolution (x2 / x4)** is now supported
+  via `neurobrix upscale`, across all four execution modes
+  (compiled / sequential / triton / triton-sequential) with
+  numerically equivalent output.
+- **Per-component fp32 compute opt-in.** Architectures whose
+  activation range structurally exceeds the fp16 representable
+  range (e.g. deep transformer super-resolution stacks without
+  inter-block normalisation) can now declare
+  `requires_fp32_compute` so Prism pins those components to
+  float32 regardless of the hardware preferred dtype, instead of
+  producing NaN/garbage at fp16. Strictly opt-in — existing
+  models are unaffected.
+
 ### Fixed
 
 - **Audio model loading is now portable across hosts**
