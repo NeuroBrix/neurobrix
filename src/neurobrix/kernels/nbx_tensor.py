@@ -1754,9 +1754,24 @@ class NBXTensor:
                     )
         if isinstance(key, int):
             return self.select(0, key)
+        # P-TRITON-CHAIN-CPU-POINTER C3d 2026-05-15: handle negative slice
+        # start/stop per torch / numpy contract. Previous code did
+        # `k.start or 0` which silently converted None → 0 but left
+        # negative values untouched. For `t[-N:]` (slice(-N, None)),
+        # `start` stayed at `-N` and `narrow(dim, -N, length)` computed
+        # `new_off = offset - N*stride` → data_ptr pointed BEFORE the
+        # cudaMalloc'd block → Triton's cuPointerGetAttribute rejected
+        # the pointer with "Pointer argument (at 0) cannot be accessed
+        # from Triton (cpu tensor?)". The Sana 4Kpx VAE chain wrapper's
+        # `halo_carry[:, :, -top_size:, :]` triggered this at the third
+        # iteration of the 4096² chains (chains 7-9 of run).
         if isinstance(key, slice):
-            start = key.start or 0
-            stop = key.stop or self._shape[0]
+            start = key.start if key.start is not None else 0
+            stop = key.stop if key.stop is not None else self._shape[0]
+            if start < 0:
+                start = max(0, self._shape[0] + start)
+            if stop < 0:
+                stop = self._shape[0] + stop
             return self.narrow(0, start, stop - start)
         if isinstance(key, tuple):
             result = self
@@ -1767,11 +1782,17 @@ class NBXTensor:
                     result = result.select(actual_dim, k)
                     dim_offset += 1  # select reduces ndim
                 elif isinstance(k, slice):
-                    start = k.start or 0
-                    stop = k.stop or result._shape[actual_dim]
+                    start = k.start if k.start is not None else 0
+                    stop = (
+                        k.stop if k.stop is not None
+                        else result._shape[actual_dim]
+                    )
+                    if start < 0:
+                        start = max(0, result._shape[actual_dim] + start)
                     if stop < 0:
                         stop = result._shape[actual_dim] + stop
-                    result = result.narrow(actual_dim, start, stop - start)
+                    result = result.narrow(
+                        actual_dim, start, stop - start)
                 # slice(None) = : → no-op on this dim
         return result
 
