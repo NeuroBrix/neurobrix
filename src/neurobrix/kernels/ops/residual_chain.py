@@ -412,6 +412,13 @@ def band_streamed_chain_nbx(
 
     N, C, H, W = t_base.shape
     band_h = (H + tile_factor - 1) // tile_factor
+    # P-TRITON-CHAIN-CPU-POINTER C3c 2026-05-14: log halo / tile_factor /
+    # band_h / H so we can confirm the band_h+halo math matches what the
+    # diag CHAIN_STEP shows (e.g. 1030 = 1024 + 6 implies halo=6 not 2).
+    import os as _os_cd3
+    if _os_cd3.environ.get("NBX_CHAIN_DIAG", "0") == "1":
+        print(f"  [CHAIN_GEOM H={H} band_h={band_h} halo={halo} "
+              f"tile_factor={tile_factor}]", flush=True)
 
     halo_carry = None  # type: Optional[NBXTensor]
 
@@ -449,6 +456,17 @@ def band_streamed_chain_nbx(
         _set_device(band)
         w1 = chain_weights["conv1_weight"]
         b1 = chain_weights["conv1_bias"]
+        import os as _os_cd2
+        if _os_cd2.environ.get("NBX_CHAIN_DIAG", "0") == "1":
+            _bp = getattr(band, "_data_ptr", "?")
+            _bd = getattr(band, "_device_idx", "?")
+            _bc = band.is_contiguous() if hasattr(
+                band, 'is_contiguous') else "?"
+            print(f"  [CHAIN_STEP i={i} h_start={h_start} h_end={h_end} "
+                  f"h_in_start={h_in_start} h_in_end={h_in_end} "
+                  f"conv1_pre band ptr={_bp} dev={_bd} "
+                  f"contig={_bc} shape={tuple(band.shape)}]",
+                  flush=True)
         band = conv2d_wrapper(
             band, w1, b1,
             stride=tuple(chain_weights["conv1_stride"]),
