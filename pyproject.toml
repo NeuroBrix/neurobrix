@@ -81,18 +81,27 @@ packages = ["src/neurobrix"]
 exclude = ["src/neurobrix/kernels/triton_kernels_ref"]
 
 [tool.hatch.build.targets.sdist]
+# Whitelist approach: only include source tree + minimum metadata.
+# Previous blacklist approach scanned 32 GB of validation_outputs/
+# before excluding them, causing builds to hang for 15+ minutes.
+include = [
+    "src/neurobrix",
+    "pyproject.toml",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "RELEASE_NOTES_*.md",
+]
 exclude = [
     "src/neurobrix/kernels/triton_kernels_ref",
     "src/neurobrix/kernels/triton_kernels_ref/**",
-    ".venv",
-    ".venv-*",
-    "venv",
-    "tests",
-    "tests/**",
-    ".env",
-    ".env.*",
-    "*.wav",
-    "*.flac",
-    "*.mp4",
-    "*.png",
+    "**/__pycache__",
+    "**/*.pyc",
+    "**/*.pyo",
+    "**/*.png",
+    "**/*.wav",
+    "**/*.flac",
+    "**/*.mp4",
+    "**/*.jsonl",
+    "**/*.log",
 ]
