@@ -564,6 +564,7 @@ def _build_op_map() -> Dict[str, Callable]:
         "sort": w.sort_wrapper,
         "topk": w.topk_wrapper,
         "flip": w.flip_wrapper,
+        "roll": w.roll_wrapper,
 
         "pixel_shuffle": w.pixel_shuffle_wrapper,
         "pixel_unshuffle": w.pixel_unshuffle_wrapper,

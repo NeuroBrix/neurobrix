@@ -3093,6 +3093,45 @@ def mv_wrapper(mat, vec) :
 # Flip
 # ---------------------------------------------------------------------------
 
+def roll_wrapper(x, shifts, dims=None):
+    """Circular shift along given dim(s) — `torch.roll` semantics.
+
+    R33-pure: decomposed into `narrow` + `NBXTensor.cat`, no new
+    Triton kernel. A roll by `s` on a dim of size `n` is
+    `cat([x[..., n-s:, ...], x[..., :n-s, ...]], dim)`. Used by
+    Swin-attention models (Swin2SR / SwinIR / HAT) for the cyclic
+    window shift.
+    """
+    # Normalise shifts/dims to parallel lists (torch allows int or
+    # tuple for both; dims=None means roll over the flattened tensor).
+    if dims is None:
+        flat = x.contiguous().view(-1)
+        n = flat.shape[0]
+        s = int(shifts if isinstance(shifts, int) else shifts[0]) % n
+        if s == 0:
+            return x
+        rolled = NBXTensor.cat(
+            [flat.narrow(0, n - s, s), flat.narrow(0, 0, n - s)], dim=0)
+        return rolled.view(*x.shape)
+
+    if isinstance(shifts, int):
+        shifts = [shifts]
+    if isinstance(dims, int):
+        dims = [dims]
+
+    result = x.contiguous()
+    for shift, dim in zip(shifts, dims):
+        dim = dim % result.ndim
+        n = result.shape[dim]
+        s = int(shift) % n
+        if s == 0:
+            continue
+        tail = result.narrow(dim, n - s, s)
+        head = result.narrow(dim, 0, n - s)
+        result = NBXTensor.cat([tail, head], dim=dim).contiguous()
+    return result
+
+
 def flip_wrapper(x, dims) :
     """Reverse elements along the given dimension(s)."""
     x = x.contiguous()
@@ -4798,11 +4837,47 @@ def reflection_pad1d_wrapper(x, pad_list) :
 
 
 def reflection_pad2d_wrapper(x, pad_list) :
-    """Reflection pad 2D — NOT YET IMPLEMENTED in Triton."""
-    raise RuntimeError(
-        "[--triton mode] reflection_pad2d has no Triton kernel. "
-        "Implement in src/neurobrix/kernels/ops/pad_op.py."
-    )
+    """Reflection pad 2D — `F.pad(mode='reflect')` semantics.
+
+    R33-pure: decomposed into `narrow` + `flip` + `NBXTensor.cat`,
+    no new Triton kernel (flip is already a Triton kernel; cat and
+    narrow are Triton-backed). Reflection excludes the edge pixel
+    itself (PyTorch `reflect`, not `replicate`/`symmetric`): a left
+    pad of `p` mirrors columns `[1 .. p]` reversed, a right pad
+    mirrors columns `[W-1-p .. W-2]` reversed. Same on the H axis,
+    applied to the width-padded intermediate.
+
+    Used by Swin-attention SR models (Swin2SR / SwinIR / HAT) for
+    the input feature reflection pad.
+    """
+    pad_list = [int(v) for v in pad_list]
+    # torch convention: last-dim-first → [W_left, W_right, H_top, H_bot]
+    left, right, top, bottom = (pad_list + [0, 0, 0, 0])[:4]
+    out = x.contiguous()
+
+    # --- Width axis (dim=-1) ---
+    W = out.shape[-1]
+    parts = []
+    if left > 0:
+        parts.append(flip_wrapper(out.narrow(-1, 1, left), [-1]))
+    parts.append(out)
+    if right > 0:
+        parts.append(flip_wrapper(out.narrow(-1, W - 1 - right, right), [-1]))
+    if len(parts) > 1:
+        out = NBXTensor.cat(parts, dim=-1).contiguous()
+
+    # --- Height axis (dim=-2), on the width-padded tensor ---
+    H = out.shape[-2]
+    parts = []
+    if top > 0:
+        parts.append(flip_wrapper(out.narrow(-2, 1, top), [-2]))
+    parts.append(out)
+    if bottom > 0:
+        parts.append(flip_wrapper(out.narrow(-2, H - 1 - bottom, bottom), [-2]))
+    if len(parts) > 1:
+        out = NBXTensor.cat(parts, dim=-2).contiguous()
+
+    return out
 
 
 def replication_pad1d_wrapper(x, pad_list) :
