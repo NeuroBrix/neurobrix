@@ -24,6 +24,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Compiled mode no longer crashes on models with trace-time
+  orphan scalar constants.** The constant-slot pre-population in
+  the zero-overhead compiled path was unreachable dead code, so
+  graphs containing a Python-scalar constant captured without
+  embedded data (e.g. an attention-mask construction loop) left
+  that arena slot unset and the consuming op received `None` →
+  crash. The pre-population now runs as part of weight binding
+  with a 0-dim scalar default (matching the sequential reference
+  path), so these models execute correctly in compiled mode.
+  Regular and KV-cache weight slots are unaffected.
+
 - **Audio model loading is now portable across hosts**
   (`core/flow/audio.py`, `core/flow/audio_utils.py`,
   `triton/flow/audio.py`): the three `_find_model_config_path`
