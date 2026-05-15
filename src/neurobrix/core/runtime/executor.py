@@ -1261,6 +1261,22 @@ class RuntimeExecutor:
                 if key in outputs and _is_tensor(outputs[key]):
                     return _to_torch(outputs[key])
 
+        # forward_pass flow (no loop): the final output is produced by
+        # the LAST component in `flow.order`. Without this branch the
+        # generic "first tensor" fallback below could return an
+        # intermediate trunk output (e.g. an upscaler's feature trunk
+        # at input resolution) instead of the head's upscaled image.
+        # DATA-DRIVEN (R34): the component name comes from the
+        # container topology, never hardcoded.
+        if flow.get("type") == "forward_pass":
+            order = flow.get("order", [])
+            if order:
+                final_comp = order[-1]
+                for key in (f"{final_comp}.last_output",
+                            f"{final_comp}.output_0"):
+                    if key in outputs and _is_tensor(outputs[key]):
+                        return _to_torch(outputs[key])
+
         # Fallback: find first tensor in outputs
         for key, value in outputs.items():
             if _is_tensor(value) and (value.dim() if hasattr(value, 'dim') else value.ndim) >= 3:
