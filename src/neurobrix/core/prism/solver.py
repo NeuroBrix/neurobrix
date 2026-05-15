@@ -2933,8 +2933,51 @@ class PrismSolver:
     # DTYPE RESOLUTION
     # =========================================================================
 
+    def _components_force_fp32(self, container: "NBXContainer") -> set:
+        """Per-component opt-in set: components whose registry flag
+        `requires_fp32_compute` pins them to float32 regardless of the
+        hardware `preferred_dtype`.
+
+        For architectures whose activation range structurally exceeds
+        the fp16 representable range (e.g. deep transformer-SR stacks
+        with no inter-block normalisation — SwinIR's RSTB cascade hits
+        NaN by conv_after_body in pure fp16), running at the hardware's
+        preferred fp16 produces NaN/garbage. Dtype is a property of the
+        MODEL as well as the hardware (dtype-engine doctrine); this is
+        the data-driven seam for the model side.
+
+        Read through `registry_flags.get_component_flag` — no .nbx
+        field added (R18 preserved), takes effect without a container
+        rebuild. Default-absent ⇒ empty set ⇒ ZERO behaviour change
+        for every existing model (anti-régression guarantee). Env
+        override `NBX_FORCE_FP32_COMPUTE` forces it on for dev
+        iteration without a YAML edit.
+        """
+        from neurobrix.core.runtime.registry_flags import get_component_flag
+        try:
+            manifest = container.get_manifest() or {}
+            model_name = manifest.get("model_name")
+        except Exception:
+            model_name = None
+        forced = set()
+        try:
+            for comp in container.get_neural_components():
+                if get_component_flag(model_name, comp.name,
+                                      "requires_fp32_compute", default=False,
+                                      env_override="NBX_FORCE_FP32_COMPUTE"):
+                    forced.add(comp.name)
+        except Exception:
+            pass
+        return forced
+
     def _resolve_dtype(self, container: "NBXContainer", profile: PrismProfile) -> str:
         """Resolve target dtype. bf16 → fp16 if weights fit in range, else fp32."""
+        # Model-side opt-in: a component flagged requires_fp32_compute
+        # overrides the hardware preferred_dtype. Checked FIRST so the
+        # fp16 preference below cannot win for fp16-unsafe architectures.
+        if self._components_force_fp32(container):
+            return "float32"
+
         # Find model's dominant dtype
         dtypes = {}
         for comp in container.get_neural_components():
@@ -2962,7 +3005,12 @@ class PrismSolver:
         """Resolve dtype per component. Returns dtype strings."""
         result = {}
 
+        forced_fp32 = self._components_force_fp32(container) if container is not None else set()
+
         for comp in components:
+            if comp.name in forced_fp32:
+                result[comp.name] = "float32"
+                continue
             native = comp.get_dominant_dtype()
             if profile.preferred_dtype and profile.devices_support_dtype(profile.preferred_dtype):
                 resolved = profile.preferred_dtype
