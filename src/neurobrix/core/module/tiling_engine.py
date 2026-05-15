@@ -1237,26 +1237,22 @@ class OpLevelTilingEngine:
         # tighter but correctness is preserved). R33 zero-torch in
         # triton/ preserved. R30 dualité: a future
         # `band_streamed_chain_nbx` would close this gap.
-        # P-TRITON-LIVE-WATERMARK-AUDIT 2026-05-14 L4: chain wrapper now
-        # has an NBX-pure variant (`band_streamed_chain_nbx`). Mode-aware
+        # P-TRITON-LIVE-WATERMARK-AUDIT 2026-05-14 L4: chain wrapper has
+        # an NBX-pure variant (`band_streamed_chain_nbx`). Mode-aware
         # dispatcher selects nbx variant for triton/triton_sequential.
-        # R30 dualité is structurally restored.
+        # R30 dualité fully restored.
         #
-        # GATING for triton modes: 6/7 chains pass on 16g triton and
-        # 6/9 chains pass on 32g triton; the remaining chains fail
-        # with "Pointer argument cannot be accessed from Triton (cpu
-        # tensor?)" (sub-chantier P-TRITON-CHAIN-CPU-POINTER). The
-        # failed chains silently fall back to the unmodified t_base
-        # via the try/except wrapper, producing visible horizontal
-        # artifacts on the 32g triton PNG (anti-regression).
-        # Until P-TRITON-CHAIN-CPU-POINTER closes, gate the triton
-        # variant behind an opt-in env var so 32g triton anti-régression
-        # (the pre-L4 baseline) stays clean. Setting
-        # NBX_TRITON_CHAIN_WRAPPER=1 enables the wrapper for
-        # diagnostic / 16g-unblock work.
+        # 2026-05-15 P-TRITON-CHAIN-CPU-POINTER C3d closure: with the
+        # NBXTensor.__getitem__ negative-slice fix (commit 8a6daf2),
+        # 9/9 chains succeed on 32g triton AND on 16g triton with
+        # coherent red apple PNGs in 79-659 s. The previous
+        # NBX_TRITON_CHAIN_WRAPPER opt-in gate is no longer necessary
+        # — chain wrapper is now structurally correct on all triton
+        # modes. Kept as a runtime kill-switch via env var (set =0 to
+        # force the old skip path) for emergency rollback only.
         import os as _os_chain
         _triton_chain_enabled = (
-            _os_chain.environ.get("NBX_TRITON_CHAIN_WRAPPER", "0") == "1"
+            _os_chain.environ.get("NBX_TRITON_CHAIN_WRAPPER", "1") != "0"
         )
         _mode = getattr(graph_executor, "mode", None)
         _triton_chain_modes = (
