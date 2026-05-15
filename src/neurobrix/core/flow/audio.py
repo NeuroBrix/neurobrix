@@ -650,19 +650,20 @@ class AudioEngine(FlowHandler):
     def _find_model_config_path(self) -> Path:
         """Find model config path from NBX container."""
         nbx_path = Path(self.ctx.nbx_path_str)
-        # 1. NBX container modules/tokenizer (has preprocessor_config.json)
+        # NBX container modules/tokenizer or modules/processor
+        # (has preprocessor_config.json for audio models).
         for subdir in ["modules/tokenizer", "modules/processor"]:
             candidate = nbx_path / subdir
             if candidate.exists():
                 return candidate
-        # 2. Component path from topology (first component with a path)
-        for comp_info in self.ctx.pkg.topology.get("components", {}).values():
-            comp_path = comp_info.get("path")
-            if comp_path and Path(comp_path).exists():
-                return Path(comp_path)
+        # Removed: legacy absolute-path fallback. See the comment in
+        # `core/flow/audio_utils.py:find_model_config_path` for the
+        # rationale — the field held a trace-host snapshot location
+        # and is no longer present in correctly-built containers.
         raise RuntimeError(
-            "ZERO FALLBACK: Cannot find model config path.\n"
-            "Expected modules/tokenizer in NBX container or component path in topology."
+            "Cannot find model config path. Expected `modules/tokenizer/` "
+            "or `modules/processor/` inside the .nbx. Re-import the model "
+            "with the current builder which embeds these directories."
         )
 
     def _get_component_input_shape(self, comp_name: Optional[str]) -> Optional[Tuple[int, ...]]:
