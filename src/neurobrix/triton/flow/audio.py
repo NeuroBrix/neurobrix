@@ -450,8 +450,10 @@ def _find_model_config_path(ctx) -> Path:
         candidate = nbx_path / subdir
         if candidate.exists():
             return candidate
-    for comp_info in ctx.pkg.topology.get("components", {}).values():
-        comp_path = comp_info.get("path")
-        if comp_path and Path(comp_path).exists():
-            return Path(comp_path)
-    raise RuntimeError("ZERO FALLBACK: Cannot find model config path.")
+    # Removed: legacy absolute-path fallback. The field held a
+    # trace-host snapshot location and is no longer present in
+    # correctly-built containers.
+    raise RuntimeError(
+        "Cannot find model config path. Expected `modules/processor/` "
+        "or `modules/tokenizer/` inside the .nbx."
+    )
