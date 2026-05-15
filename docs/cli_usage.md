@@ -185,17 +185,38 @@ Output: `.png`.
 
 ## upscaler — Image Super-Resolution
 
-References: Swin2SR, Real-ESRGAN, BSRGAN.
+References: Swin2SR (classical = clean images, realworld = degraded
+photos), Real-ESRGAN, BSRGAN.
+
+Dedicated subcommand:
 
 ```bash
-neurobrix run --model Swin2SR-x4 --input-image low_res.png
+neurobrix upscale \
+    --model swin2SR-realworld-sr-x4-64-bsrgan-psnr \
+    --input low_res.png \
+    --output upscaled.png \
+    --mode compiled
 ```
 
 | Flag | Required | Notes |
 |------|----------|-------|
-| `--input-image` | yes | Source image to upscale |
+| `--model` | yes | Upscaler model name |
+| `--input` | yes | Source image (PNG/JPEG) |
+| `--output` | yes | Destination image path (PNG) |
+| `--mode` | no | `compiled` (default) / `sequential` / `triton` / `triton-sequential` |
+| `--hardware` | no | Hardware profile id (auto-detected if omitted) |
 
-Output: `.png` (input × upscale_factor per model).
+Output: `.png` at `input × upscale_factor` (the factor is
+intrinsic to each model, e.g. x2 / x4). All four execution modes
+produce numerically equivalent results.
+
+Model guide:
+
+| Model | Scale | Best for |
+|-------|-------|----------|
+| swin2SR-classical-sr-x2-64 | 2× | clean source images |
+| swin2SR-classical-sr-x4-64 | 4× | clean source images |
+| swin2SR-realworld-sr-x4-64-bsrgan-psnr | 4× | degraded / real-world photos |
 
 ## video — Video Generation
 
