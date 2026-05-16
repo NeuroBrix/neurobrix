@@ -722,8 +722,8 @@ def _build_op_map() -> Dict[str, Callable]:
 
         # Advanced indexing — aten::index(tensor, [idx0, idx1, ...])
         "index": _meta_index,
-        "index_put": lambda x, indices, values, acc=False: x,  # TODO
-        "index_put_": lambda x, indices, values, acc=False: x,  # TODO
+        "index_put": w.index_put_wrapper,
+        "index_put_": w.index_put_wrapper,
 
         # Split/chunk (use narrow internally)
         "split": lambda x, size, dim=0: tuple(x.narrow(dim, i * size, size) for i in range(x.shape[dim] // size)),
