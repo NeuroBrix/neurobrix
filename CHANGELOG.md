@@ -24,6 +24,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`linspace` now returns correct values in Triton modes.**
+  Models whose graph contains `aten::linspace` (diffusion / video
+  timestep schedules, positional grids) silently received
+  uninitialised memory in `--triton` / `--triton-sequential` —
+  no crash, no NaN, just wrong output. The Triton linspace kernel
+  is now wired (bit-exact vs the reference in fp32, ≤1 ULP in
+  fp16/bf16, exact endpoints). Compiled mode was unaffected.
+
 - **Compiled mode no longer crashes on models with trace-time
   orphan scalar constants.** The constant-slot pre-population in
   the zero-overhead compiled path was unreachable dead code, so
