@@ -147,9 +147,16 @@ KNOWN_FAILURES: List[Tuple[str, str | None, str]] = [
 
 
 def _read_manifest(model_dir: Path) -> Dict[str, str]:
-    """Return (family, flow_type) for a cached model.  '?' if missing."""
+    """Return (family, flow_type, gen_type) for a cached model.  '?' if missing.
+
+    gen_type is `topology.flow.generation.type` — multimodal builds are
+    traced for exactly one generation_type (Janus image-only vs text-only),
+    and `neurobrix run` enforces `--mode` matching that type, so the harness
+    must derive the mode from the build rather than guess it.
+    """
     family = "?"
     flow = "?"
+    gen_type = "?"
     mf = model_dir / "manifest.json"
     if mf.exists():
         try:
@@ -159,10 +166,12 @@ def _read_manifest(model_dir: Path) -> Dict[str, str]:
     tp = model_dir / "topology.json"
     if tp.exists():
         try:
-            flow = json.loads(tp.read_text()).get("flow", {}).get("type", "?")
+            flow_obj = json.loads(tp.read_text()).get("flow", {})
+            flow = flow_obj.get("type", "?")
+            gen_type = flow_obj.get("generation", {}).get("type", "?")
         except Exception:
             pass
-    return {"family": family, "flow": flow}
+    return {"family": family, "flow": flow, "gen_type": gen_type}
 
 
 def discover_models() -> List[Dict[str, str | int]]:
@@ -183,6 +192,7 @@ def discover_models() -> List[Dict[str, str | int]]:
             "name": name,
             "family": meta["family"],
             "flow": meta["flow"],
+            "gen_type": meta["gen_type"],
             "timeout_s": timeout,
         })
     return out
