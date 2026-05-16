@@ -24,6 +24,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An unknown input-synthesis method is now a clear error instead
+  of a silently missing input.** A synthesis rule naming an
+  unregistered method was skipped silently, leaving the input slot
+  unset so the downstream component consumed garbage and produced
+  silently wrong output. It now raises a descriptive ZERO-FALLBACK
+  error listing the known methods.
+
 - **A corrupt VAE profile is now a clear error instead of a silently
   wrong image.** When a model's VAE `profile.json` existed but failed
   to parse, the output processor silently fell back to
