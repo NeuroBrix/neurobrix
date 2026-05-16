@@ -245,7 +245,16 @@ class InputSynthesizer:
                 _set_nested(inputs, input_name, tensor)
 
             else:
-                pass  # Unknown synthesis method - skip silently
+                raise RuntimeError(
+                    f"ZERO FALLBACK: unknown synthesis method "
+                    f"{method!r} for input '{input_name}' of "
+                    f"{comp_name}. A skipped synthesis rule leaves the "
+                    f"input slot unset → the downstream component "
+                    f"silently consumes garbage. Register the method "
+                    f"or fix the synthesis rule.\n"
+                    f"Known methods: from_dimensions, compute_ratio, "
+                    f"zeros, ones, latent_image_ids."
+                )
 
         return inputs
 
