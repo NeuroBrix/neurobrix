@@ -58,8 +58,15 @@ LLM_TEMPERATURE = 0.0
 # Shared audio asset used for STT inputs and TTS reference voices.
 AUDIO_REF = REPO / "test_speech_ref.wav"
 
-# Flow types that consume an audio file as the primary input (STT).
-STT_FLOWS = {"encoder_decoder", "rnnt", "audio_llm"}
+# Shared image asset used as the input for the upscaler family.
+IMAGE_REF = REPO / "assets" / "logo_NeuroBrix.png"
+
+# Flow types that consume an audio file as the ONLY input (pure STT:
+# Whisper encoder_decoder, Parakeet rnnt).  audio_llm is deliberately NOT
+# here — Voxtral/canary-qwen/granite-speech take an audio file AND a text
+# instruction prompt (audio-conditioned LLM), so they have their own
+# dispatch branch below.
+STT_FLOWS = {"encoder_decoder", "rnnt"}
 
 # Flow types that generate audio and REQUIRE an audio reference voice
 # (voice cloning / speaker conditioning).
@@ -99,22 +106,48 @@ def _build_parametrize() -> List:
     return params
 
 
-def _cli_inputs_for(family: str, flow: str) -> List[str]:
-    """Build the model-specific CLI inputs based on (family, flow).
+def _mode_for_gen_type(gen_type: str) -> str:
+    """Map a build's `flow.generation.type` to the `--mode` value.
 
-    Dispatch matrix:
+    Multimodal builds are traced for exactly one generation_type
+    (`autoregressive_image` / `autoregressive_text`); `neurobrix run`
+    rejects a `--mode` that doesn't match the trace.  The mode token is
+    the last `_`-segment of the gen_type ("image" / "text").
+    """
+    tail = gen_type.rsplit("_", 1)[-1]
+    return tail if tail in ("image", "text") else "image"
+
+
+def _cli_inputs_for(family: str, flow: str, gen_type: str) -> List[str]:
+    """Build the model-specific CLI inputs based on (family, flow, gen_type).
+
+    Dispatch matrix (family-first, then flow):
       family=llm                      → --prompt + --max-tokens
-      flow in STT_FLOWS               → --audio only (whisper, parakeet,
-                                        canary-qwen, Voxtral, granite-speech)
+      family=upscaler                 → --input-image (real image input;
+                                        --prompt is meaningless here)
+      family=multimodal               → --mode <gen_type> + --prompt
+                                        (Janus: build is image-only, the
+                                        CLI enforces --mode == trace type)
+      flow in STT_FLOWS               → --audio only (Whisper, Parakeet)
+      flow == audio_llm               → --audio + --prompt (Voxtral,
+                                        canary-qwen, granite-speech:
+                                        audio-conditioned LLM)
       flow in TTS_WITH_REF_FLOWS      → --prompt + --audio reference voice
                                         (chatterbox, openaudio-s1-mini)
       everything else                 → --prompt (Kokoro/VibeVoice TTS,
-                                        diffusion image/video, Janus image)
+                                        diffusion image/video)
     """
     if family == "llm":
         return ["--prompt", LLM_PROMPT, "--max-tokens", str(LLM_MAX_TOKENS)]
+    if family == "upscaler":
+        return ["--input-image", str(IMAGE_REF)]
+    if family == "multimodal":
+        return ["--mode", _mode_for_gen_type(gen_type),
+                "--prompt", "Hello world"]
     if flow in STT_FLOWS:
         return ["--audio", str(AUDIO_REF)]
+    if flow == "audio_llm":
+        return ["--audio", str(AUDIO_REF), "--prompt", "Hello world"]
     if flow in TTS_WITH_REF_FLOWS:
         return ["--prompt", "Hello world", "--audio", str(AUDIO_REF)]
     return ["--prompt", "Hello world"]
@@ -135,6 +168,7 @@ def _runtime_python() -> str:
 
 
 def _run_neurobrix(model: str, mode: str, family: str, flow: str,
+                   gen_type: str,
                    timeout_s: int) -> subprocess.CompletedProcess:
     """Invoke `neurobrix run` in a subprocess."""
     cmd = [
@@ -142,7 +176,7 @@ def _run_neurobrix(model: str, mode: str, family: str, flow: str,
         "--model", model,
         "--temperature", "0",
     ]
-    cmd.extend(_cli_inputs_for(family, flow))
+    cmd.extend(_cli_inputs_for(family, flow, gen_type))
     if mode == "triton":
         cmd.append("--triton")
 
@@ -177,10 +211,11 @@ def test_model_runs(model_meta: Dict[str, str | int], mode: str) -> None:
     name = str(model_meta["name"])
     family = str(model_meta["family"])
     flow = str(model_meta["flow"])
+    gen_type = str(model_meta.get("gen_type", "?"))
     timeout_s = int(model_meta["timeout_s"])
 
     try:
-        r = _run_neurobrix(name, mode, family, flow, timeout_s)
+        r = _run_neurobrix(name, mode, family, flow, gen_type, timeout_s)
     except subprocess.TimeoutExpired as e:
         pytest.fail(
             f"{name} / {mode}: timeout after {timeout_s}s. "
