@@ -24,6 +24,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`index_put` / `index_put_` scatter writes are no longer silently
+  dropped in Triton modes.** Both ops were mapped to identity
+  functions, so any model whose graph performs an indexed scatter
+  write (MoE-v2 expert-output aggregation, KV-cache indexed writes,
+  masked scatter) produced silently wrong output in `--triton` /
+  `--triton-sequential` — no crash, no warning. A real Triton
+  scatter kernel is now wired for the common case (one integer
+  index on the leading dim, with/without accumulate). Unsupported
+  advanced-indexing forms now raise a clear error instead of
+  silently mis-scattering. Compiled mode was unaffected.
+
 - **`linspace` now returns correct values in Triton modes.**
   Models whose graph contains `aten::linspace` (diffusion / video
   timestep schedules, positional grids) silently received

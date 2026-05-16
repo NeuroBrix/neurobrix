@@ -161,6 +161,7 @@ from .ops.nllloss import nll_loss_forward_kernel
 from .ops.std import std_map_kernel, std_reduce_kernel, std_dim_kernel
 from .ops.var import var_kernel_1, var_kernel_2, var_welford_kernel
 from .ops.index_add import index_add_kernel
+from .ops.index_put_op import index_put_kernel
 from .ops.sort_op import radix_sort_histogram_kernel, radix_sort_sweep_kernel
 
 # === Phase 5: RoPE, spatial, RNG, remaining ===
@@ -3763,6 +3764,85 @@ def index_add_wrapper(x, dim: int, index,
         inp_dim_stride, inp_shape_dim, src_shape_dim, delta, alpha,
         src_stride_outer, src_stride_dim, src_stride_inner,
         outer_size, dim_size, inner_size,
+        BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS,
+    )
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Index Put
+# ---------------------------------------------------------------------------
+
+def index_put_wrapper(x, indices, values, accumulate: bool = False):
+    """aten::index_put / index_put_ — scatter-write `values` into `x`.
+
+    Functional: returns a fresh tensor (the executor reassigns the op's
+    output slot, exactly like `index_add_wrapper`; the `_` in-place
+    variant is realised by the graph, not by mutating the input here).
+
+    Scope = the decomposed-ATen norm: exactly ONE non-None *integer*
+    index tensor on the leading dim (covers MoE-v2 expert aggregation,
+    KV-cache indexed writes, post-`aten::nonzero` masked scatter).
+    k>=2 advanced indices, non-leading-dim indexing, boolean masks, and
+    un-broadcastable `values` raise NotImplementedError with a named
+    follow-up rather than silently mis-scattering (ZERO-FALLBACK — a
+    visible crash beats the previous identity-lambda silent data loss).
+    """
+    from .nbx_tensor import NBXDtype
+
+    if not isinstance(indices, (list, tuple)):
+        indices = [indices]
+    non_none = [(d, ix) for d, ix in enumerate(indices) if ix is not None]
+    if len(non_none) != 1 or non_none[0][0] != 0:
+        raise NotImplementedError(
+            "aten::index_put supports exactly one leading-dim index "
+            f"tensor; got non-None at positions "
+            f"{[d for d, _ in non_none]} of {len(indices)} — k>=2 / "
+            "non-leading advanced indexing is unwired (follow-up "
+            "P-INDEX-PUT-ADVANCED-GENERAL).")
+    idx = non_none[0][1]
+    if idx.dtype == NBXDtype.bool_:
+        raise NotImplementedError(
+            "aten::index_put with a boolean-mask index is unwired (no "
+            "nonzero kernel in the catalogue) — follow-up "
+            "P-INDEX-PUT-ADVANCED-GENERAL.")
+    if idx.dtype in (NBXDtype.float16, NBXDtype.bfloat16,
+                     NBXDtype.float32, NBXDtype.float64):
+        raise NotImplementedError(
+            f"aten::index_put index tensor must be integer, got "
+            f"{idx.dtype} — follow-up P-INDEX-PUT-ADVANCED-GENERAL.")
+
+    x = x.contiguous()
+    idx = idx.contiguous()
+    out = x.clone()
+
+    T = 1
+    for i in range(1, x.ndim):
+        T *= x.shape[i]
+    Sn = idx.numel()
+    N = Sn * T
+    if N == 0:
+        return out
+
+    vnumel = values.numel()
+    if vnumel == 1:
+        val_scalar = True
+        vbuf = values.contiguous()
+    elif vnumel == N:
+        val_scalar = False
+        vbuf = values.contiguous()
+    else:
+        raise NotImplementedError(
+            f"aten::index_put values numel {vnumel} != idx*tail {N} "
+            "and not scalar — value broadcasting unwired (follow-up "
+            "P-INDEX-PUT-ADVANCED-GENERAL).")
+
+    _set_device(out)
+    index_put_kernel[_1d_grid(N)](
+        out, idx, vbuf,
+        T, N,
+        VAL_SCALAR=val_scalar,
+        ACCUMULATE=bool(accumulate),
         BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS,
     )
     return out
