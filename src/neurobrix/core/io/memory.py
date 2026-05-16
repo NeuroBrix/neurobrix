@@ -9,14 +9,17 @@ Provides:
 ZERO HARDCODE: Configuration from environment variables
 """
 
+import logging
 import os
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from queue import Queue, Empty
+from queue import Queue, Empty, Full
 from typing import Dict, List, Optional, Any
 
 import torch
+
+logger = logging.getLogger(__name__)
 
 
 # ============================================================================
@@ -259,9 +262,16 @@ class PrefetchQueue:
             with self._lock:
                 self._cache[component_name] = item
 
-        except:
-            # Queue full, skip prefetch
-            pass
+        except Full:
+            # Backpressure: queue saturated. NOT silenced — a skipped
+            # prefetch means the warm path serves this component
+            # uncached (D3.3). Any other exception (and
+            # KeyboardInterrupt/SystemExit) now propagates instead of
+            # being swallowed by the former bare `except:`.
+            logger.warning(
+                "prefetch queue full — component %r not prefetched; "
+                "warm path will load it uncached", component_name
+            )
 
     def get(
         self,
