@@ -24,6 +24,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A corrupt VAE profile is now a clear error instead of a silently
+  wrong image.** When a model's VAE `profile.json` existed but failed
+  to parse, the output processor silently fell back to
+  `clamp_before_normalize=False`, producing an out-of-range image
+  with no diagnostic. It now raises a descriptive error; an absent
+  profile remains a legitimate defaults path.
+
 - **`index_put` / `index_put_` scatter writes are no longer silently
   dropped in Triton modes.** Both ops were mapped to identity
   functions, so any model whose graph performs an indexed scatter
