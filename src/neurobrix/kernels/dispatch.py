@@ -335,12 +335,37 @@ def _create_full_like(x, fill_value, *, dtype=None, layout=None, device=None,
 
 def _create_linspace(start, end, steps, *, dtype=None, layout=None,
                      device=None, pin_memory=None, **kwargs):
-    """aten::linspace — evenly spaced values."""
+    """aten::linspace — evenly spaced values via Triton kernel.
+
+    Reference: FlagGems ops/linspace.py — bidirectional kernel
+    (`kernels/ops/linspace_op.py`), forward from start for the first
+    half and backward from end for the second half so both endpoints
+    are exact (matches torch.linspace semantics).
+
+    steps == 1 degenerates to a single `start` value (torch returns
+    [start], not [end]); the bidirectional formula would yield `end`
+    for that lone element, so it is special-cased through fill_kernel.
+    """
     from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype
+    from neurobrix.kernels.ops.linspace_op import linspace_kernel
     from neurobrix.kernels.ops.fill_op import fill_kernel
     steps = int(steps)
-    out = NBXTensor.empty((steps,), dtype=dtype or NBXDtype.float32, device=device or 'cuda')
-    # TODO: proper Triton linspace kernel
+    start = float(start)
+    end = float(end)
+    out = NBXTensor.empty((steps,), dtype=dtype or NBXDtype.float32,
+                          device=device or 'cuda')
+    if steps <= 0:
+        return out
+    BLOCK_SIZE = 128
+    grid = (triton.cdiv(steps, BLOCK_SIZE),)
+    _set_device(out)
+    if steps == 1:
+        fill_kernel[grid](out, start, 1, BLOCK_SIZE=BLOCK_SIZE)
+        return out
+    step_size = (end - start) / (steps - 1)
+    mid = steps // 2
+    linspace_kernel[grid](out, out.stride(0), start, mid, end,
+                          step_size, steps, BLOCK_SIZE=BLOCK_SIZE)
     return out
 
 
