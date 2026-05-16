@@ -24,6 +24,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Prefetch queue saturation is now logged, and is interruptible.**
+  The component prefetch wrapped its enqueue in a bare `except:`
+  that swallowed everything — including `KeyboardInterrupt` /
+  `SystemExit` — and silently served the component uncached. It now
+  catches only queue-full, logs a warning, and lets every other
+  exception (and Ctrl-C) propagate.
+
 - **An unknown input-synthesis method is now a clear error instead
   of a silently missing input.** A synthesis rule naming an
   unregistered method was skipped silently, leaving the input slot
