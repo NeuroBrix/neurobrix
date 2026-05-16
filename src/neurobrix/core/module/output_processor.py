@@ -67,25 +67,35 @@ class OutputProcessor:
         """
         config = ProcessorConfig()
 
-        # Try to load VAE profile to get _class_name
+        # Load the VAE profile to get _class_name. Absent profile is a
+        # legitimate "no VAE → defaults apply" (the .exists() guard skips
+        # without error). But an EXISTING profile that fails to parse must
+        # NOT silently fall back to clamp_before_normalize=False — that
+        # produces an out-of-range VAE image with zero diagnostic. ZERO
+        # FALLBACK: surface the real error (D3.1).
         # Use cache_path (where files are extracted), not root_path (.nbx file)
-        try:
-            vae_profile_path = pkg.cache_path / "components" / "vae" / "profile.json"
-            if vae_profile_path.exists():
+        vae_profile_path = pkg.cache_path / "components" / "vae" / "profile.json"
+        if vae_profile_path.exists():
+            try:
                 with open(vae_profile_path) as f:
                     vae_profile = json.load(f)
+            except (OSError, ValueError) as e:
+                raise RuntimeError(
+                    f"VAE profile present but unreadable at "
+                    f"{vae_profile_path}: {e}. Refusing to silently "
+                    f"continue with clamp defaults (would yield an "
+                    f"out-of-range VAE image)."
+                ) from e
 
-                vae_class = vae_profile.get("config", {}).get("_class_name", "")
-                config.vae_class = vae_class
+            vae_class = vae_profile.get("config", {}).get("_class_name", "")
+            config.vae_class = vae_class
 
-                # Check registry for this VAE class
-                if vae_class in VAE_CLAMP_REGISTRY:
-                    registry_config = VAE_CLAMP_REGISTRY[vae_class]
-                    config.clamp_before_normalize = registry_config.get(
-                        "clamp_before_normalize", False
-                    )
-        except Exception:
-            pass  # Silently continue with defaults
+            # Check registry for this VAE class
+            if vae_class in VAE_CLAMP_REGISTRY:
+                registry_config = VAE_CLAMP_REGISTRY[vae_class]
+                config.clamp_before_normalize = registry_config.get(
+                    "clamp_before_normalize", False
+                )
 
         # Check for custom output_processing in defaults
         if hasattr(pkg, 'defaults') and pkg.defaults:
