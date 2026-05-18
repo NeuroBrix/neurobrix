@@ -123,19 +123,16 @@ KNOWN_FAILURES: List[Tuple[str, str | None, str]] = [
     ("openaudio-s1-mini",  "triton", "triton/flow/dual_ar.py doesn't wire audio_path reference voice"),
 
     # ------------------------------------------------------------------
-    # Kokoro — both modes currently xfail.
-    # Triton: _execute_native_text_encoder still passes NBXTensor to
-    #   torch.nn.functional.embedding — stage handler needs an NBXTensor→
-    #   torch boundary conversion for the Triton path.
-    # Native: regressed between v0.1.5 (a64aa4b, green) and be5c7b8 (red).
-    #   Fails at aten::cudnn_batch_norm with "sym_strides() called on an
-    #   undefined Tensor" — one of the kernel's required args reaches the
-    #   compiled sequence as None. Root cause in compiled_sequence.py or
-    #   graph_executor.py, not bisected yet; follow-up scoped in
-    #   docs/follow-ups/kokoro_cudnn_batch_norm_regression.md.
+    # Kokoro — triton only. _execute_native_text_encoder still passes
+    # NBXTensor to torch.nn.functional.embedding — the stage handler
+    # needs an NBXTensor→torch boundary conversion for the Triton path.
+    # (::native was un-xfailed: the aten::cudnn_batch_norm undefined-
+    # tensor regression introduced by ea90d66 was fixed indirectly in
+    # the zero3 refactor era — see
+    # docs/follow-ups/archive/kokoro_cudnn_batch_norm_regression.md and
+    # docs/verdicts/p_kokoro_native_cudnn_batch_norm/verdict.md.)
     # ------------------------------------------------------------------
     ("Kokoro-82M", "triton", "_execute_native_text_encoder passes NBXTensor to torch.nn.functional.embedding — stage needs NBX→torch boundary"),
-    ("Kokoro-82M", "native", "aten::cudnn_batch_norm fails with 'sym_strides() called on an undefined Tensor' — regression introduced between v0.1.5 (a64aa4b, green) and be5c7b8 (red); see docs/follow-ups/kokoro_cudnn_batch_norm_regression.md"),
 
     # ------------------------------------------------------------------
     # VibeVoice — structural contract violation: DDPM loop + ConvNext1d
