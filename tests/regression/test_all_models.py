@@ -58,8 +58,11 @@ LLM_TEMPERATURE = 0.0
 # Shared audio asset used for STT inputs and TTS reference voices.
 AUDIO_REF = REPO / "test_speech_ref.wav"
 
-# Shared image asset used as the input for the upscaler family.
-IMAGE_REF = REPO / "assets" / "logo_NeuroBrix.png"
+# Small (64x64 RGB, window_size-safe) image fed to `nbx upscale` for the
+# upscaler family. Deliberately tiny: the project logo (1983x1536) OOMs
+# at x4/x8 (52 GiB conv allocation), which would leave upscaler cells
+# red for a sizing artefact unrelated to the dispatch under test.
+IMAGE_REF = REPO / "test_upscale_input.png"
 
 # Flow types that consume an audio file as the ONLY input (pure STT:
 # Whisper encoder_decoder, Parakeet rnnt).  audio_llm is deliberately NOT
@@ -121,10 +124,13 @@ def _mode_for_gen_type(gen_type: str) -> str:
 def _cli_inputs_for(family: str, flow: str, gen_type: str) -> List[str]:
     """Build the model-specific CLI inputs based on (family, flow, gen_type).
 
+    NOTE: family=upscaler does NOT pass through here — it uses the
+    dedicated `nbx upscale` subcommand (see `_run_neurobrix`), not
+    `nbx run`. `nbx run` has no image-input wiring (P-IMAGE-INPUT-FLOW,
+    deferred); `nbx upscale` is the validated production path.
+
     Dispatch matrix (family-first, then flow):
       family=llm                      → --prompt + --max-tokens
-      family=upscaler                 → --input-image (real image input;
-                                        --prompt is meaningless here)
       family=multimodal               → --mode <gen_type> + --prompt
                                         (Janus: build is image-only, the
                                         CLI enforces --mode == trace type)
@@ -139,8 +145,6 @@ def _cli_inputs_for(family: str, flow: str, gen_type: str) -> List[str]:
     """
     if family == "llm":
         return ["--prompt", LLM_PROMPT, "--max-tokens", str(LLM_MAX_TOKENS)]
-    if family == "upscaler":
-        return ["--input-image", str(IMAGE_REF)]
     if family == "multimodal":
         return ["--mode", _mode_for_gen_type(gen_type),
                 "--prompt", "Hello world"]
@@ -167,18 +171,71 @@ def _runtime_python() -> str:
     return os.environ.get("NEUROBRIX_PYTHON", sys.executable)
 
 
+def _upscale_out_path(model: str, mode: str) -> Path:
+    """Deterministic output path for an upscaler regression cell.
+
+    Shared by `_run_neurobrix` (the `--output`) and `test_model_runs`
+    (the existence/dimension assertion).
+    """
+    return Path("/tmp") / f"regression_upscale_{model}_{mode}.png"
+
+
+def _upscale_scale(model: str) -> int | None:
+    """Parse the integer scale factor from an upscaler model name.
+
+    real-esrgan-x2 → 2, swin2SR-classical-sr-x4-64 → 4,
+    swinir-classical-x2 → 2, hat-l-x4 → 4. None if unparseable.
+    """
+    m = re.search(r"x(\d+)", model)
+    return int(m.group(1)) if m else None
+
+
+def _png_size(path: Path) -> tuple[int, int] | None:
+    """(width, height) from a PNG IHDR. Dependency-free (no PIL — the
+    pytest interpreter may lack it). None if absent / not a PNG."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(24)
+    except OSError:
+        return None
+    if len(head) < 24 or head[:8] != b"\x89PNG\r\n\x1a\n":
+        return None
+    import struct
+    w, h = struct.unpack(">II", head[16:24])
+    return int(w), int(h)
+
+
 def _run_neurobrix(model: str, mode: str, family: str, flow: str,
                    gen_type: str,
                    timeout_s: int) -> subprocess.CompletedProcess:
-    """Invoke `neurobrix run` in a subprocess."""
-    cmd = [
-        _runtime_python(), "-m", "neurobrix", "run",
-        "--model", model,
-        "--temperature", "0",
-    ]
-    cmd.extend(_cli_inputs_for(family, flow, gen_type))
-    if mode == "triton":
-        cmd.append("--triton")
+    """Invoke the appropriate `neurobrix` subcommand in a subprocess.
+
+    family=upscaler → `nbx upscale` (the validated image-SR path; `nbx
+    run` has no image-input wiring — P-IMAGE-INPUT-FLOW, deferred).
+    Everything else → `nbx run` with family-aware inputs.
+
+    Harness mode → `nbx upscale --mode`: native↔compiled, triton↔triton.
+    """
+    if family == "upscaler":
+        out_path = _upscale_out_path(model, mode)
+        if out_path.exists():
+            out_path.unlink()
+        cmd = [
+            _runtime_python(), "-m", "neurobrix", "upscale",
+            "--model", model,
+            "--input", str(IMAGE_REF),
+            "--output", str(out_path),
+            "--mode", "triton" if mode == "triton" else "compiled",
+        ]
+    else:
+        cmd = [
+            _runtime_python(), "-m", "neurobrix", "run",
+            "--model", model,
+            "--temperature", "0",
+        ]
+        cmd.extend(_cli_inputs_for(family, flow, gen_type))
+        if mode == "triton":
+            cmd.append("--triton")
 
     env = {**os.environ, "PYTHONPATH": str(REPO / "src")}
     return subprocess.run(
@@ -228,6 +285,34 @@ def test_model_runs(model_meta: Dict[str, str | int], mode: str) -> None:
             f"{name} / {mode}: exit {r.returncode}\n"
             f"... tail:\n{tail}"
         )
+
+    # Upscaler: beyond exit 0, assert a real super-resolved PNG was
+    # written at the expected scale (R29 — inspect the artefact, not
+    # just the exit code). The 64x64 input is window_size-safe, so no
+    # processor padding → output dims are exactly input × scale.
+    if family == "upscaler":
+        out_path = _upscale_out_path(name, mode)
+        in_size = _png_size(IMAGE_REF)
+        out_size = _png_size(out_path)
+        assert in_size is not None, f"test input PNG unreadable: {IMAGE_REF}"
+        assert out_size is not None, (
+            f"{name} / {mode}: no PNG written at {out_path}\n"
+            f"stdout tail:\n{r.stdout[-600:]}"
+        )
+        scale = _upscale_scale(name)
+        iw, ih = in_size
+        ow, oh = out_size
+        if scale is not None:
+            assert (ow, oh) == (iw * scale, ih * scale), (
+                f"{name} / {mode}: expected {iw*scale}x{ih*scale} "
+                f"(input {iw}x{ih} × {scale}), got {ow}x{oh}"
+            )
+        else:
+            assert ow > iw and oh > ih, (
+                f"{name} / {mode}: output {ow}x{oh} not larger than "
+                f"input {iw}x{ih} (scale unparseable from name)"
+            )
+        return
 
     # Non-LLM families: v1 regression = successful run (exit 0).
     if family != "llm":

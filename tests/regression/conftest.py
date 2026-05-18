@@ -75,6 +75,9 @@ FAMILY_TIMEOUT_S: Dict[str, int] = {
     "audio": 240,
     "image": 600,
     "video": 900,
+    # upscaler runs `nbx upscale` on a 64x64 fixture — the tiny tensor
+    # is instant; the budget covers model load + Triton kernel compile.
+    "upscaler": 240,
 }
 
 # Per-model overrides (name → seconds). Use when a model needs more than
