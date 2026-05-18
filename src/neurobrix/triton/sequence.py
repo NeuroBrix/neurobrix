@@ -139,7 +139,20 @@ class ExprArg:
 # COMPILED OP
 # ============================================================================
 
-_ACCUMULATOR_OPS = frozenset({"add", "mul"})
+# NOP-propagation accumulator ops (deactivated-MoE-expert path: when
+# args[0] is None the op passes the base accumulator through instead of
+# nulling the output slot). R30: must mirror the semantics of
+# core/runtime/graph/compiled_sequence.py:_ACCUMULATOR_OPS (the
+# reference oracle), which lists the aten:: MoE-aggregation ops
+# {scatter_reduce, scatter_add, index_add, scatter, index_put}. The
+# triton NOP check compares the BARE op name (op_type.split("::")[-1]),
+# so the compiled set is mirrored here as bare names. `add`/`mul` are
+# kept (triton-specific accumulator NOP handling — extend, do not
+# replace, to avoid regressing models that rely on them).
+_ACCUMULATOR_OPS = frozenset({
+    "add", "mul",
+    "scatter_reduce", "scatter_add", "index_add", "scatter", "index_put",
+})
 
 
 @dataclass
