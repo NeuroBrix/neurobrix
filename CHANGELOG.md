@@ -24,6 +24,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **MoE models in `--triton` now handle deactivated experts the same
+  way as the default engine.** When a Mixture-of-Experts router
+  skips an expert, that expert's accumulation into the combined
+  output was being dropped in `--triton` mode (the deactivated-path
+  was nulled instead of passing the running accumulator through),
+  diverging from the default engine. Triton MoE output now mirrors
+  the default-engine semantics for skipped experts.
+
 - **Prefetch queue saturation is now logged, and is interruptible.**
   The component prefetch wrapped its enqueue in a bare `except:`
   that swallowed everything — including `KeyboardInterrupt` /
