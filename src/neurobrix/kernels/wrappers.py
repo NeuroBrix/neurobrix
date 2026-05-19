@@ -160,7 +160,7 @@ from .ops.mse_loss import mse_loss_partial_kernel, mse_loss_reduce_kernel, mse_l
 from .ops.nllloss import nll_loss_forward_kernel
 from .ops.std import std_map_kernel, std_reduce_kernel, std_dim_kernel
 from .ops.var import var_kernel_1, var_kernel_2, var_welford_kernel
-from .ops.index_add import index_add_kernel
+from .ops.index_add import index_add_gather_kernel
 from .ops.index_put_op import index_put_kernel
 from .ops.sort_op import radix_sort_histogram_kernel, radix_sort_sweep_kernel
 
@@ -3737,9 +3737,6 @@ def index_add_wrapper(x, dim: int, index,
     index = index.contiguous()
     dim = dim % x.ndim
 
-    out = x.clone()
-    N = source.numel()
-
     outer_size = 1
     for i in range(dim):
         outer_size *= source.shape[i]
@@ -3747,24 +3744,29 @@ def index_add_wrapper(x, dim: int, index,
     for i in range(dim + 1, source.ndim):
         inner_size *= source.shape[i]
     dim_size = source.shape[dim]
-
-    inp_dim_stride = x.stride(dim)
     inp_shape_dim = x.shape[dim]
-    src_shape_dim = source.shape[dim]
-    delta = inp_shape_dim - src_shape_dim
+
+    if x.numel() == 0 or dim_size == 0:     # nothing to add -> out = x
+        return x.clone()
+
+    out = NBXTensor.empty_like(x)
 
     src_stride_outer = source.stride(0) if dim > 0 else 0
     src_stride_dim = source.stride(dim)
     src_stride_inner = source.stride(-1) if dim < source.ndim - 1 else 0
 
-    _set_device(index)
-    index_add_kernel[_1d_grid(N)](
-        index, source, out,
-        N, x.numel(),
-        inp_dim_stride, inp_shape_dim, src_shape_dim, delta, alpha,
+    # Deterministic output-owner gather: one program per
+    # (outer, dest, inner-tile) output cell, ascending-j sequential
+    # fp32 fold, zero atomics, no sort dependency. See
+    # ops/index_add.py for the rationale and state-of-the-art notes.
+    n_inner_tiles = (inner_size + _EW_BLOCK - 1) // _EW_BLOCK
+    grid = (outer_size * inp_shape_dim * n_inner_tiles,)
+    _set_device(x)
+    index_add_gather_kernel[grid](
+        x, source, index, out,
+        dim_size, inp_shape_dim, inner_size, alpha,
         src_stride_outer, src_stride_dim, src_stride_inner,
-        outer_size, dim_size, inner_size,
-        BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS,
+        INNER_BLOCK=_EW_BLOCK, num_warps=_EW_WARPS,
     )
     return out
 
