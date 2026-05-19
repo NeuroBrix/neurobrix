@@ -2535,6 +2535,72 @@ class TritonSequence:
             except Exception as e:
                 print(f"[NBX_DUMP_TIDS] failed on {tid}: {e}", flush=True)
 
+    def _maybe_fingerprint(self, op: 'CompiledOp', arena, path: str) -> None:
+        """Run-to-run op-output fingerprint (P-TRITON-MOE-DETERMINISM-RESIDUAL,
+        P-SANA differential methodology). Gated by env NBX_OP_FINGERPRINT=
+        <jsonl-path>. Appends one line per op output:
+        {op_idx, op_uid, op_type, shape, dtype, sha256(full raw bytes)}.
+        Diff the JSONL across 3 runs: the FIRST op whose sha256 differs is
+        the causal non-determinism site. Diagnostic only, same retained
+        class as NBX_DUMP_TIDS / NBX_TRITON_TRACE_NAN."""
+        import os as _os_f, json as _json_f, hashlib as _hl
+        import ctypes as _ct_f
+        if not hasattr(self, "_fp_idx"):
+            self._fp_idx = 0
+        # Optional global cap on number of fingerprinted op-outputs
+        # (NBX_OP_FINGERPRINT_MAX). Lets a full-hash (CAP=0) run stay
+        # cheap by stopping after the suspect region. Shared across all
+        # TritonSequence instances via the class.
+        _fp_max = int(_os_f.environ.get("NBX_OP_FINGERPRINT_MAX", "0"))
+        if _fp_max:
+            _cls = type(self)
+            _g = getattr(_cls, "_fp_global", 0)
+            if _g >= _fp_max:
+                return
+        if not hasattr(self, "_slot_to_tid"):
+            self._slot_to_tid = {s: t for t, s in self._tid_to_slot.items()}
+        try:
+            from neurobrix.kernels.nbx_tensor import DeviceAllocator
+            recs = []
+            for out_slot in op.output_slots:
+                t = arena[out_slot] if arena else None
+                self._fp_idx += 1
+                _clsg = type(self)
+                _clsg._fp_global = getattr(_clsg, "_fp_global", 0) + 1
+                tid = self._slot_to_tid.get(out_slot, f"slot::{out_slot}")
+                if t is None or not hasattr(t, "data_ptr"):
+                    recs.append({"i": self._fp_idx, "op_uid": op.op_uid,
+                                 "op_type": op.op_type, "tid": tid,
+                                 "sha": "none"})
+                    continue
+                if hasattr(t, "_device_idx"):
+                    DeviceAllocator.set_device(t._device_idx)
+                c = t.contiguous()
+                nb = c._nbytes
+                # Byte-cap (default 8 KiB): non-deterministic-reduction
+                # bit-noise is distributed across the tensor, so the
+                # leading bytes reflect any divergence while keeping
+                # 115k-op model traces feasible. NBX_OP_FINGERPRINT_CAP=0
+                # disables the cap (full hash).
+                cap = int(_os_f.environ.get("NBX_OP_FINGERPRINT_CAP", "8192"))
+                hb = nb if cap == 0 else min(nb, cap)
+                buf = (_ct_f.c_char * hb)()
+                DeviceAllocator.memcpy(_ct_f.addressof(buf), c.data_ptr(),
+                                       hb, kind=2)
+                recs.append({
+                    "i": self._fp_idx, "op_uid": op.op_uid,
+                    "op_type": op.op_type, "tid": tid,
+                    "shape": list(t.shape), "dtype": str(t.dtype),
+                    "nbytes": nb, "hashed": hb,
+                    "sha": _hl.sha256(bytes(buf)).hexdigest()})
+            with open(path, "a") as f:
+                for r in recs:
+                    _json_f.dump(r, f)
+                    f.write("\n")
+        except Exception as e:
+            print(f"[NBX_OP_FINGERPRINT] failed at {op.op_uid}: {e}",
+                  flush=True)
+
     def _run_single_device(self, skip_kills: bool = False,
                             pre_op_callback: Optional[Callable[[int, 'CompiledOp'], None]] = None):
         """Single-device fast path — no device switching.
@@ -3094,6 +3160,14 @@ class TritonSequence:
                 self._maybe_trace_nan(op, arena)
             # =============================================================
 
+            # === NBX_OP_FINGERPRINT=<jsonl> : run-to-run op-output hash
+            #     (P-TRITON-MOE-DETERMINISM-RESIDUAL differential) ===
+            import os as _os_fp
+            _fp_path = _os_fp.environ.get("NBX_OP_FINGERPRINT", "")
+            if _fp_path and op.output_slots:
+                self._maybe_fingerprint(op, arena, _fp_path)
+            # =============================================================
+
             # === TEMP TID DUMP: compare triton vs native per-op output ===
             import os as _os_tid
             _dump_tids_env = _os_tid.environ.get("NBX_DUMP_TIDS")
@@ -3350,6 +3424,13 @@ class TritonSequence:
             if _dtids and op.output_slots:
                 self._maybe_dump_tid(op, _dtids)
             # ===========================================
+
+            # === NBX_OP_FINGERPRINT (multi-device branch) ===
+            import os as _os_fp_md
+            _fp_path_md = _os_fp_md.environ.get("NBX_OP_FINGERPRINT", "")
+            if _fp_path_md and op.output_slots:
+                self._maybe_fingerprint(op, arena, _fp_path_md)
+            # ================================================
 
             if not skip_kills:
                 for s in op.kill_slots:
