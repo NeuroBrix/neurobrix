@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`NBX_DTYPE_CLAMP_DIAG=1` diagnostic.** When the dtype engine
+  narrows an fp32/fp64/bf16 value to fp16 at an `aten::_to_copy`
+  boundary cast and the source actually exceeds the fp16
+  representable range (±65504), the engine clips pre-cast to ±65504
+  to avoid the alternative of saturating to ±Inf and propagating
+  NaN downstream. Enabling this env var logs a one-shot line per
+  call site (target / passthrough branch) the first time the clamp
+  is actually exercised, with the source dtype, shape, and max-abs
+  value — useful when investigating activation-overflow symptoms
+  on a new model. Default-off, zero runtime cost.
+
 - **SwinIR classical super-resolution (x2 / x4)** is now supported
   via `neurobrix upscale`, across all four execution modes
   (compiled / sequential / triton / triton-sequential) with
