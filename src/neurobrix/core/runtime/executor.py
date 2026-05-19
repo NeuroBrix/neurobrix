@@ -579,6 +579,15 @@ class RuntimeExecutor:
                 unload_weights_fn=self._unload_component_weights,
             )
         elif flow_type == "audio_llm":
+            if ctx.mode in ("triton", "triton_sequential"):
+                from neurobrix.triton.flow.audio_llm import TritonAudioLLMEngine
+                return TritonAudioLLMEngine(
+                    ctx=ctx,
+                    execute_component_fn=self._execute_component,
+                    resolve_inputs_fn=self._input_resolver.resolve_component_inputs,
+                    ensure_weights_fn=self._ensure_weights_loaded,
+                    unload_weights_fn=self._unload_component_weights,
+                )
             from neurobrix.core.flow.audio_llm import AudioLLMEngine
             return AudioLLMEngine(
                 ctx=ctx,

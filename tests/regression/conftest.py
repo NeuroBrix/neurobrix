@@ -111,9 +111,14 @@ KNOWN_FAILURES: List[Tuple[str, str | None, str]] = [
     ("whisper-large",          "triton", "Triton encoder_decoder audio flow not validated end-to-end yet"),
     ("whisper-large-v3-turbo", "triton", "Triton encoder_decoder audio flow not validated end-to-end yet"),
     ("parakeet-tdt-1.1b",      "triton", "Triton rnnt flow not validated end-to-end yet"),
-    ("canary-qwen-2.5b",       "triton", "triton/flow/audio_llm.py missing — handler never ported from core/flow/audio_llm.py"),
-    ("granite-speech-3.3-8b",  "triton", "triton/flow/audio_llm.py missing + CFormer projector native-stage mix"),
-    ("Voxtral-Mini-3B-2507",   "triton", "triton/flow/audio_llm.py missing — handler never ported from core/flow/audio_llm.py"),
+    # P-AUDIO-LLM-TRITON-FLOW: triton/flow/audio_llm.py now ported
+    # (TritonAudioLLMEngine, R33-pure). Voxtral validated
+    # compiled<->triton byte-identical → un-xfail'd. canary-qwen /
+    # granite-speech reach the new handler but hit pre-existing
+    # triton kernel-op gaps (NOT the flow port) — xfail kept,
+    # residual blockers named for follow-up.
+    ("canary-qwen-2.5b",       "triton", "P-TRITON-NBXTENSOR-REPEAT-MISSING — flow ported; encoder aten::repeat → NBXTensor has no .repeat (dispatch.py:161 _meta_repeat)"),
+    ("granite-speech-3.3-8b",  "triton", "P-TRITON-SAFE-SOFTMAX-MISSING — flow ported; encoder triton compile aborts on missing op aten::_safe_softmax (sequence.py:1526) + prior CFormer projector note"),
 
     # ------------------------------------------------------------------
     # TTS models that work in --native but need reference-voice plumbing
