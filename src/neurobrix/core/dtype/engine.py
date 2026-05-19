@@ -16,10 +16,34 @@ Source of truth: PyTorch aten/src/ATen/autocast_mode.h
 PRISM IS THE MASTER: compute_dtype comes from Prism. We apply it.
 ZERO SEMANTIC: No model/family knowledge. Only tensor dtype math.
 """
+import os
 import torch
 from typing import Callable, Optional, Dict, Any, FrozenSet
 
 from neurobrix.core.dtype.config import parse_dtype, strip_aten_prefix
+
+
+# Diagnostic: when NBX_DTYPE_CLAMP_DIAG=1, log the first fp32→fp16
+# narrowing where the source actually exceeds the fp16 range. Empirical
+# witness that the _to_copy clamp protects a real overflow (the comment
+# in _make_to_copy cites OpenAudio DualAR pre-projection activations and
+# certain attention bias paths as the motivating sites). Default-off,
+# zero runtime cost; one-shot per call site.
+_CLAMP_DIAG_ENABLED = os.environ.get("NBX_DTYPE_CLAMP_DIAG", "0") == "1"
+_CLAMP_DIAG_FIRED: Dict[str, bool] = {}
+
+
+def _maybe_log_clamp(site: str, inp: torch.Tensor) -> None:
+    if not _CLAMP_DIAG_ENABLED or _CLAMP_DIAG_FIRED.get(site):
+        return
+    try:
+        max_abs = float(inp.abs().max().item())
+    except Exception:
+        return
+    if max_abs > 65504.0:
+        _CLAMP_DIAG_FIRED[site] = True
+        print(f"[NBX_DTYPE_CLAMP_DIAG] site={site} max_abs={max_abs:.2f} "
+              f"src_dtype={inp.dtype} shape={tuple(inp.shape)}")
 
 
 
@@ -417,6 +441,7 @@ class DtypeEngine:
                 if (target_dtype == torch.float16
                         and inp.dtype in (torch.float32, torch.float64,
                                           torch.bfloat16)):
+                    _maybe_log_clamp("to_copy_target", inp)
                     return inp.clamp(-65504.0, 65504.0).to(target_dtype)
                 return inp.to(target_dtype)
             return to_copy_with_dtype
@@ -443,6 +468,7 @@ class DtypeEngine:
                 if (dtype == torch.float16
                         and inp.dtype in (torch.float32, torch.float64,
                                           torch.bfloat16)):
+                    _maybe_log_clamp("to_copy_passthrough", inp)
                     return inp.clamp(-65504.0, 65504.0).to(dtype)
                 return inp.to(dtype)
             return inp
