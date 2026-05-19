@@ -231,6 +231,70 @@ toolkit — documented in `src/neurobrix/CLAUDE.md` §8):
 `NBX_OP_FINGERPRINT` (+`_CAP`/`_MAX`), `NBX_FORCE_MATH_ATTENTION`,
 `NBX_SDPA_ROUTE_DIAG`.
 
-Hocine validation: TODO (functional outcome proven; Sana image
-artefact present for R29 visual sign-off — the Qwen3 determinism
-result is text and self-evident in this verdict).
+## Section 8 — Repo-hygiene blocker (discovered + absorbed, decision A)
+
+**Discovery**: the runtime fix (`07881ee`) reads
+`config/vendors/nvidia/volta.yml`
+`memory.sdpa_math_max_scores_bytes`, but `src/neurobrix/config/
+vendors/` was **gitignored** (`.gitignore:87` over-broad bare
+`vendors/`, never tracked) while `config/families/*.yml` ARE
+tracked. `get_vendor_config` is ZERO-FALLBACK → a fresh clone would
+crash on every `get_vendor_config` call on every architecture. A
+PRE-EXISTING critical repo defect the 2026-05-16 audit missed,
+independent of Ch4bis but blocking its durability and inherited by
+Ch6/Ch7/Ch8.
+
+**Decision (Hocine) = A** — absorb in the chantier that revealed it
+(scope tractable: 1 gitignore negation + 4 ymls + 1 README). Rationale:
+internal consistency with tracked `families/`; (B) tracking only
+volta.yml violates R23 (fresh clone still crashes on A100/H100/AMD);
+(C) deferring re-burns future Ch6/7/8 sessions on the same blocker.
+
+**Applied**:
+- `.gitignore` (`1935ab9`): targeted negation
+  `!src/neurobrix/config/vendors/` — only the runtime hardware-config
+  dir is tracked; any other `vendors/` tree (per-model build
+  vendoring, R25) stays ignored by its own parent rule. Verified:
+  `git status` shows the dir as tracked; other build/vendoring
+  trees remain ignored by their own parent rules.
+- 4 canonical vendor ymls (`5f68952`) with honest
+  `validation_status` headers: `volta` = `validated_empirical`
+  (lists Ch4bis-validated models); `ampere`/`hopper`/`cdna` =
+  `hand_curated_from_docs`. R10 schema parity: every file now has
+  `memory.sdpa_math_max_scores_bytes` — volta 128 MiB (empirical),
+  ampere/hopper `0` (flash deterministic on async-MMA archs — math
+  fallback disabled by design; value, not key presence, is the
+  gate), cdna `0` (ROCm/HIP backend, Volta-SIMT race not
+  transferable).
+- `config/vendors/README.md` (`95c5e62`): role, validation-status
+  convention, schema-parity policy, why this dir is tracked.
+
+**Fresh-clone durability — PASS**: `git clone` of the branch into
+`/tmp`, `PYTHONPATH=src` → `get_vendor_config` returns for all four
+arches with no `FileNotFoundError`
+(`volta sdpa_math_max_scores_bytes=134217728`, ampere/hopper/cdna
+`=0`). The pre-existing fresh-clone crash is resolved; the Ch4bis
+fix is now durable.
+
+## Section 9 — ZERO-FALLBACK fresh-clone audit
+
+Grep of `src/neurobrix/` for config-file readers that could
+`FileNotFoundError` on a clean checkout. Result: the only
+fresh-clone-broken ZERO-FALLBACK site was `config/vendors/` (now
+fixed). `config/families/` and `config/hardware/` (24 ymls) are
+tracked. Other `yaml.safe_load` sites read caller-supplied paths or
+are `.exists()`-guarded (model-cache-relative), not fresh-clone
+risks. Other "ZERO FALLBACK" strings are runtime-state guards
+(daemon/engine/tokenizer/family), not file-missing. **Audit clean —
+1 site, fixed; no follow-up chantier needed.**
+
+## Section 10
+
+Hocine validation: TODO. Ch4bis FULLY CLOSED on delivered+durable
+acquis: Qwen3-30B::triton residual non-determinism eliminated
+(3 runs byte-identical, default path), root cause airtight (§5.8
+differential), fix data-driven/R34/R23/R10, repo-durable
+(fresh-clone PASS), anti-reg green (TinyLlama/DeepSeek-MoE
+deterministic, Sana R29 PNG inspected). Latent follow-ups for Ch10:
+P-PIXART-XL-1024-TRITON-PERF, P-SDPA-WRAPPER-BLOCK-PICKER-DRIFT,
+upstream Dao-AILab caveat-incomplete note.
