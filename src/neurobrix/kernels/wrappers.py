@@ -5070,6 +5070,35 @@ def _is_power_of_2(n: int) -> bool:
     return n > 0 and (n & (n - 1)) == 0
 
 
+def _sdpa_math_scores_budget_bytes() -> int:
+    """Pre-Ampere scores-tensor budget for routing SDPA to the
+    deterministic `_math_attention` path (P-TRITON-MOE-DETERMINISM-
+    RESIDUAL, option B). Data-driven from
+    config/vendors/<vendor>/<arch>.yml `memory.sdpa_math_max_scores_bytes`
+    (R10/R23 — no hardcoded hardware param, no driver query in the hot
+    path; the value is read from the YAML keyed by the detected
+    profile). Returns 0 (→ pow2 head_dim never routes on size, i.e.
+    flash unchanged) when the profile or the key is unavailable, so an
+    unconfigured arch never silently changes the attention path."""
+    prof = get_hardware_profile()
+    devices = getattr(prof, "devices", None) if prof is not None else None
+    if not devices:
+        return 0
+    try:
+        from neurobrix.core.config.loader import get_vendor_config
+        # The vendor-config key is the GPU brand ("nvidia"/"amd"), i.e.
+        # the DEVICE brand — NOT PrismProfile.vendor (that is the
+        # machine maker, e.g. "dell", and would mis-resolve the path
+        # config/vendors/<vendor>/<arch>.yml).
+        _brand = devices[0].brand
+        _vendor = getattr(_brand, "value", _brand)
+        cfg = get_vendor_config(_vendor, devices[0].architecture)
+        return int(cfg.get("memory", {}).get(
+            "sdpa_math_max_scores_bytes", 0))
+    except Exception:
+        return 0
+
+
 def _math_attention(q, k, v, attn_mask=None, is_causal=False, scale=None):
     """Math-decomposed attention — deterministic for any head_dim.
 
@@ -5244,28 +5273,77 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     if not (q.dtype == k.dtype == v.dtype):
         q, k, v = q.to(NBXDtype.float32), k.to(NBXDtype.float32), v.to(NBXDtype.float32)
 
-    # Layer 7 — math-decomposed attention for non-power-of-2 head_dim.
+    # Deterministic-attention routing (P-TRITON-MOE-DETERMINISM-RESIDUAL,
+    # Hocine scope decision = option B: hardware + memory-budget, ZERO
+    # model/family knowledge — R34 strict; the SDPA wrapper is a
+    # universal runtime primitive).
     #
-    # The Dao-AILab flash kernel's masked-load path (EVEN_HEADDIM=False)
-    # is non-deterministic on Volta SIMT for head_dim < BLOCK_HEADDIM
-    # (e.g. PixArt 72, Sana 112). Outputs differ by max ~0.03 across
-    # consecutive calls with bit-identical inputs, concentrated at the
-    # last few Q-blocks. Cumulative drift over 28 DiT blocks produces
-    # the visible h=126,127 banding. Verified empirically: 5 consecutive
-    # calls yield 5 different outputs (top divergence at Q-blocks 56-63).
+    # The Dao-AILab flash Triton kernel is non-deterministic on
+    # pre-Ampere SIMT (Volta sm_70 / Turing sm_75):
+    #   - documented for the masked-load path (EVEN_HEADDIM=False,
+    #     head_dim < BLOCK_HEADDIM, e.g. PixArt 72 / Sana 112): "race
+    #     conditions on non-64/128 head dimensions"; 5 consecutive
+    #     calls yield 5 different outputs (DiT h=126,127 banding).
+    #   - EMPIRICALLY confirmed for power-of-2 head_dim=128 too
+    #     (Qwen3-30B-A3B GQA/fp32: §5.8 op-by-op full-hash differential
+    #     — pos 0..74 byte-identical across 3 runs, first divergence
+    #     SDPA::0 with bit-identical inputs; 3 runs → 3 distinct
+    #     outputs). So `_is_power_of_2(headdim)` was an INCOMPLETE
+    #     guard — pow2 hd=128 is not safe on Volta.
     #
-    # The flash kernel docstring documents this as a known caveat:
-    #   "See original source for caveats about race conditions on
-    #    non-64/128 head dimensions."
+    # `_math_attention` (Q@K^T→softmax→@V; plain bmm+softmax, no
+    # online-softmax accumulation, no MMA reorder across K-tiles) is
+    # deterministic by construction. Counterfactual proof:
+    # NBX_FORCE_MATH_ATTENTION=1 → Qwen3-30B::triton 3 runs
+    # BYTE-IDENTICAL. Cost: a [B*H,Tq,Tk] scores tensor — negligible
+    # for LLM small-T, ~1 GiB+ for image-diffusion large-T.
     #
-    # Fix: when head_dim is not a power of 2, use the standard math
-    # decomposition (Q@K^T → softmax → @V). matmul + softmax are
-    # deterministic by construction (no online-softmax accumulation,
-    # no MMA reordering across K tiles). Memory cost: scores tensor of
-    # shape [B*H, T_q, T_k]. For PixArt self-attn this is 1GB fp32 —
-    # fits within V100 budget. For Sana 4Kpx (T=16384) it would
-    # exceed memory; that path is blocked by other issues anyway.
-    if not _is_power_of_2(headdim):
+    # Routing (universal technical signals only):
+    #   - Ampere+ (sm_80+, has_native_bf16): flash unchanged — flash is
+    #     deterministic there (R23: zero non-Volta regression).
+    #   - non-pow2 head_dim: _math_attention, UNCONDITIONAL on ALL
+    #     hardware — EXACT prior behaviour preserved (the old guard was
+    #     `if not _is_power_of_2(headdim): return _math_attention`,
+    #     hardware-independent). R23 strict: zero non-Volta regression,
+    #     PixArt hd=72 / Sana hd=112 path byte-unchanged everywhere.
+    #   - pow2 head_dim + scores_bytes ≤ vendor-yml budget:
+    #     _math_attention — NEW (Qwen3 LLM fix), the ONLY added
+    #     routing. The hardware gate IS the data-driven per-arch
+    #     budget: only config/vendors/nvidia/volta.yml defines
+    #     `memory.sdpa_math_max_scores_bytes`; ampere.yml / hopper.yml
+    #     / cdna.yml have no such key → budget 0 → scores_bytes ≤ 0 is
+    #     False → flash unchanged (R23: flash is deterministic on
+    #     Ampere+; zero non-Volta regression, no ambiguous capability
+    #     proxy). Budget-gated so a pow2 + large-T tensor never OOMs:
+    #     it stays on flash, residual non-determinism documented +
+    #     trackable via NBX_OP_FINGERPRINT.
+    # NBX_FORCE_MATH_ATTENTION=1 — retained diagnostic (same class as
+    # NBX_DISABLE_AUTOTUNE / NBX_DUMP_TIDS): force the deterministic
+    # path regardless of hardware/headdim.
+    import os as _os_fma
+    _use_math = _os_fma.environ.get("NBX_FORCE_MATH_ATTENTION") == "1"
+    if not _use_math:
+        if not _is_power_of_2(headdim):
+            _use_math = True                      # UNCONDITIONAL (all hw)
+        else:
+            # _math_attention materialises an fp32 [B*H,Tq,Tk] scores
+            # tensor (bmm returns fp32 on V100) — 4 bytes/elem is the
+            # true memory cost, independent of q's dtype. Budget is 0
+            # on non-Volta (no yml key) → this never fires there.
+            _scores_bytes = batch * nheads * seqlen_q * seqlen_k * 4
+            _use_math = _scores_bytes <= _sdpa_math_scores_budget_bytes()
+    if _os_fma.environ.get("NBX_SDPA_ROUTE_DIAG") == "1" and not getattr(
+            scaled_dot_product_attention_wrapper, "_route_diag_done", False):
+        scaled_dot_product_attention_wrapper._route_diag_done = True
+        _pr = get_hardware_profile()
+        _dv = getattr(_pr, "devices", None) if _pr is not None else None
+        print(f"[NBX_SDPA_ROUTE_DIAG] hd={headdim} pow2={_is_power_of_2(headdim)} "
+              f"B={batch} H={nheads} Tq={seqlen_q} Tk={seqlen_k} "
+              f"scores_bytes={batch*nheads*seqlen_q*seqlen_k*4} "
+              f"budget={_sdpa_math_scores_budget_bytes()} "
+              f"profile={'None' if _pr is None else getattr(_pr,'vendor','?')+'/'+(getattr(_dv[0],'architecture','?') if _dv else '?')} "
+              f"use_math={_use_math}", flush=True)
+    if _use_math:
         return _math_attention(q, k, v, attn_mask=attn_mask,
                                 is_causal=is_causal, scale=softmax_scale)
 
