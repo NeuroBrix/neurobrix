@@ -24,6 +24,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **LLM/MoE models in `--triton` are now deterministic run-to-run on
+  V100-class GPUs.** Greedy generation of the same model and prompt
+  could produce different text on consecutive runs: the attention
+  kernel used on these GPUs was not bit-reproducible for some model
+  shapes. Attention now routes to a bit-reproducible computation on
+  the affected hardware whenever it is memory-affordable, so repeated
+  runs are byte-identical. Larger image-diffusion models are
+  unaffected (unchanged path).
+
 - **MoE models in `--triton` now handle deactivated experts the same
   way as the default engine.** When a Mixture-of-Experts router
   skips an expert, that expert's accumulation into the combined
