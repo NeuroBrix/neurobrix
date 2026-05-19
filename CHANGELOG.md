@@ -32,6 +32,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   diverging from the default engine. Triton MoE output now mirrors
   the default-engine semantics for skipped experts.
 
+- **MoE models in `--triton` are now deterministic run-to-run.**
+  Mixture-of-Experts expert aggregation accumulated through a
+  non-deterministic atomic add, so two identical greedy runs of the
+  same model and prompt could produce different text. Aggregation is
+  now a fixed-order deterministic reduction: repeated runs are
+  byte-identical, matching the default engine.
+
 - **Prefetch queue saturation is now logged, and is interruptible.**
   The component prefetch wrapped its enqueue in a bare `except:`
   that swallowed everything — including `KeyboardInterrupt` /
