@@ -1,0 +1,117 @@
+# AMD CDNA Architecture Compute Configuration
+# MI100, MI200 (MI210, MI250, MI250X), MI300
+# CDNA1, CDNA2, CDNA3
+#
+# validation_status: hand_curated_from_docs
+#   No AMD CDNA hardware available locally (V100 only). Pre-existing
+#   keys are hand-curated from ROCm/HIP + AMD Instinct documentation
+#   and were NOT empirically validated here. The
+#   `memory.sdpa_math_max_scores_bytes` key was added 2026-05-19
+#   (P-TRITON-MOE-DETERMINISM-RESIDUAL) for R10 schema parity with
+#   volta.yml; its value/rationale is documented inline.
+
+architecture: cdna
+compute_capability: "gfx90a"  # MI200 series
+
+# Device string mapping - HIP uses CUDA-like API via ROCm
+# PyTorch on ROCm still uses "cuda" device string
+device_prefix: "cuda"
+
+# Kernel block sizes - AMD CDNA-optimized
+block_sizes:
+  # Default block size for simple kernels
+  default: 1024
+
+  # GEMM configuration - Matrix Core optimized
+  gemm:
+    block_m: 64
+    block_n: 64
+    block_k: 16          # Smaller K for AMD
+    num_warps: 4
+    num_stages: 2
+
+  # Batched Matrix Multiply configuration
+  bmm:
+    block_m: 64
+    block_n: 64
+    block_k: 16
+    num_warps: 4
+
+  # Convolution configuration
+  conv2d:
+    block_h: 16
+    block_w: 16
+    num_warps: 4
+
+  # Resize/interpolation block size
+  resize: 256
+
+  # Softmax maximum reduction width
+  softmax_cap: 8192
+
+  # LayerNorm tile width
+  layernorm_tile: 1024
+
+  # GroupNorm maximum elements per group
+  groupnorm_cap: 65536
+
+  # Generic reduction block size
+  reduction: 1024
+
+# Scaled Dot-Product Attention block size thresholds.
+# Schema documented in volta.yml. Decode entries first.
+# CDNA1/2 values conservative for the 64 KB SMEM budget. CDNA3
+# (MI300) has 160 KB and could use larger tiles — when needed,
+# split into cdna3.yml or extend with conditional blocks.
+sdpa_thresholds:
+  # Decode path (seqlen_q ≤ 16)
+  - seqlen_q_le: 16
+    head_dim_ge: 256
+    block_m: 16
+    block_n: 16
+    num_warps: 4
+  - seqlen_q_le: 16
+    block_m: 16
+    block_n: 32
+    num_warps: 4
+  # Prefill path (seqlen_q > 16)
+  - head_dim_ge: 256
+    block_m: 16
+    block_n: 16
+    num_warps: 4
+  - head_dim_ge: 128
+    block_m: 32
+    block_n: 32
+    num_warps: 4
+  - head_dim_lt: 128
+    block_m: 64
+    block_n: 64
+    num_warps: 4
+
+# Memory constraints — CDNA1 (MI100) and CDNA2 (MI210/MI250) both
+# expose 64 KB SMEM/CU. CDNA3 (MI300) raises this to 160 KB but the
+# distinction needs a separate cdna3.yml when the picker actually
+# benefits from larger tiles on MI300.
+memory:
+  max_shared_memory_per_block: 65536    # 64 KB (CDNA1/2)
+  max_registers_per_block: 65536
+  wavefront_size: 64    # AMD uses 64-wide wavefronts (vs 32 warps)
+  # SDPA deterministic-routing budget (R10 schema parity with
+  # volta.yml). 0 = NOT APPLICABLE: the flash-attention
+  # non-determinism diagnosed in P-TRITON-MOE-DETERMINISM-RESIDUAL
+  # is an NVIDIA Volta-SIMT MMA issue. ROCm/HIP uses a different
+  # Triton backend and matrix-core path; the Volta race does not
+  # transfer. Left 0 (no routing) until/unless empirically shown
+  # otherwise on CDNA hardware. hand_curated_from_docs.
+  sdpa_math_max_scores_bytes: 0
+
+# SMEM budget safety factor — see volta.yml comment. Same 0.7 across
+# vendors; if AMD wave64 changes the pipeline overhead, recalibrate.
+sdpa_smem_safety: 0.7
+
+# CDNA2/3 precision support
+precision:
+  supports_fp16: true
+  supports_bf16: true    # CDNA2+ supports BF16
+  supports_tf32: false   # AMD does not have TF32
+  supports_fp8: true     # CDNA3 (MI300) supports FP8
