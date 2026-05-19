@@ -1,0 +1,111 @@
+# NVIDIA Hopper Architecture Compute Configuration
+# H100, H200
+# Compute Capability: 9.0
+#
+# validation_status: hand_curated_from_docs
+#   No Hopper hardware available locally (V100 only). Pre-existing
+#   keys are hand-curated from NVIDIA Hopper/H100 documentation and
+#   were NOT empirically validated here. The
+#   `memory.sdpa_math_max_scores_bytes` key was added 2026-05-19
+#   (P-TRITON-MOE-DETERMINISM-RESIDUAL) for R10 schema parity with
+#   volta.yml; its value/rationale is documented inline.
+
+architecture: hopper
+compute_capability: "9.0"
+
+# Device string mapping
+device_prefix: "cuda"
+
+# Kernel block sizes - Hopper-optimized (TMA, larger blocks)
+block_sizes:
+  # Default block size for simple kernels
+  default: 1024
+
+  # GEMM configuration - optimized for H100
+  gemm:
+    block_m: 128
+    block_n: 256         # Larger N tile for H100
+    block_k: 64          # Larger K tile
+    num_warps: 8
+    num_stages: 4        # More pipeline stages
+
+  # Batched Matrix Multiply configuration
+  bmm:
+    block_m: 64
+    block_n: 128
+    block_k: 32
+    num_warps: 8
+
+  # Convolution configuration
+  conv2d:
+    block_h: 32
+    block_w: 32
+    num_warps: 8
+
+  # Resize/interpolation block size
+  resize: 512
+
+  # Softmax maximum reduction width
+  softmax_cap: 16384     # Larger for H100
+
+  # LayerNorm tile width
+  layernorm_tile: 2048
+
+  # GroupNorm maximum elements per group
+  groupnorm_cap: 131072
+
+  # Generic reduction block size
+  reduction: 2048
+
+# Scaled Dot-Product Attention block size thresholds.
+# Schema documented in volta.yml. Decode entries first.
+# Hopper values not yet empirically calibrated; tile sizes scaled
+# up for the larger SMEM budget (227 KB).
+sdpa_thresholds:
+  # Decode path (seqlen_q ≤ 16)
+  - seqlen_q_le: 16
+    head_dim_ge: 256
+    block_m: 16
+    block_n: 64
+    num_warps: 8
+  - seqlen_q_le: 16
+    block_m: 16
+    block_n: 128
+    num_warps: 8
+  # Prefill path (seqlen_q > 16)
+  - head_dim_ge: 256
+    block_m: 32
+    block_n: 32
+    num_warps: 8
+  - head_dim_ge: 128
+    block_m: 64
+    block_n: 64
+    num_warps: 8
+  - head_dim_lt: 128
+    block_m: 128
+    block_n: 128
+    num_warps: 8
+
+# Memory constraints — H100 SXM5/PCIe.
+memory:
+  max_shared_memory_per_block: 232448   # 227 KB
+  max_registers_per_block: 65536
+  warp_size: 32
+  # SDPA deterministic-routing budget (R10 schema parity with
+  # volta.yml). 0 = DISABLED BY DESIGN: the flash-attention Triton
+  # non-determinism is a Volta-SIMT issue; Hopper has 4th-gen
+  # async tensor-core MMA and the flash kernel is deterministic
+  # here. Routing to the slower _math_attention fallback would be a
+  # pure perf regression with zero determinism benefit. The key's
+  # VALUE, not its presence, is the gate. hand_curated_from_docs.
+  sdpa_math_max_scores_bytes: 0
+
+# SMEM budget safety factor — see volta.yml comment.
+sdpa_smem_safety: 0.7
+
+# Hopper has full precision support
+precision:
+  supports_fp16: true
+  supports_bf16: true
+  supports_tf32: true
+  supports_fp8: true     # Hopper supports FP8
