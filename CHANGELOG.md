@@ -22,6 +22,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   producing NaN/garbage at fp16. Strictly opt-in — existing
   models are unaffected.
 
+### Added
+
+- **Audio-conditioned LLM models now run in `--triton` mode.** Models
+  that transcribe/answer from audio via an encoder→projector→LLM
+  pipeline (e.g. Voxtral) previously only worked in the default
+  engine. The `--triton` path now produces output byte-identical to
+  the default engine for Voxtral (validated on a reference clip,
+  greedy decoding).
+
 ### Fixed
 
 - **LLM/MoE models in `--triton` are now deterministic run-to-run on
