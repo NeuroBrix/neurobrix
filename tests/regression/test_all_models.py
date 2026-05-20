@@ -55,6 +55,17 @@ LLM_PROMPT = "Hello"
 LLM_MAX_TOKENS = 5
 LLM_TEMPERATURE = 0.0
 
+# Diffusion/image-family anti-regression prompt. Matches the historical
+# "red apple on a table" used across the P-SANA-4KPX-RUNTIME chantier
+# (every Sana 1024 / PixArt anti-regression cell verifies "still
+# produces a coherent red apple PNG"). Diffusion model behaviour is
+# prompt-sensitive: Sana 1600M_1024px in particular returns a
+# stylised "comics fade" illustration for landscape/scene prompts but
+# returns a photorealistic decode for simple-object prompts like this
+# one. Using the historical anti-reg prompt makes R29 outputs
+# comparable across sessions (Dette C 2026-05-20).
+IMAGE_PROMPT = "a red apple on a wooden table"
+
 # Shared audio asset used for STT inputs and TTS reference voices.
 AUDIO_REF = REPO / "test_speech_ref.wav"
 
@@ -175,14 +186,25 @@ def _cli_inputs_for(family: str, flow: str, gen_type: str) -> List[str]:
     if family == "llm":
         return ["--prompt", LLM_PROMPT, "--max-tokens", str(LLM_MAX_TOKENS)]
     if family == "multimodal":
-        return ["--mode", _mode_for_gen_type(gen_type),
-                "--prompt", "Hello world"]
+        # Multimodal image gen (Janus) benefits from the same simple-
+        # object prompt as image diffusion — Sana-class style
+        # sensitivity applies here too.
+        prompt = IMAGE_PROMPT if (gen_type or "").startswith("autoregressive_image") else "Hello world"
+        return ["--mode", _mode_for_gen_type(gen_type), "--prompt", prompt]
     if flow in STT_FLOWS:
         return ["--audio", str(AUDIO_REF)]
     if flow == "audio_llm":
         return ["--audio", str(AUDIO_REF), "--prompt", "Hello world"]
     if flow in TTS_WITH_REF_FLOWS:
         return ["--prompt", "Hello world", "--audio", str(AUDIO_REF)]
+    # Image-diffusion + video + TTS without ref + any other family:
+    # use the historical anti-reg prompt for image (Sana 1600M reads
+    # this photorealistically; landscapes return stylised illustration).
+    # Audio TTS Kokoro/VibeVoice/orpheus also hit this branch — the
+    # prompt content doesn't matter for them (vocoder output depends on
+    # the model, not the prompt subject), but consistency is harmless.
+    if family in ("image", "video"):
+        return ["--prompt", IMAGE_PROMPT]
     return ["--prompt", "Hello world"]
 
 
