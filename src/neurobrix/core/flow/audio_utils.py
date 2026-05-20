@@ -172,11 +172,13 @@ def postprocess_audio_output(ctx: FlowContext) -> None:
             generated_ids, vocab_size=vocab_size, device=device,
         )
         if waveform.numel() > 1:
-            model_name = ctx.pkg.manifest.get("model_name", "model")
-            sample_rate = get_sample_rate(ctx)
-            output_path = f"output_{model_name}.wav"
-            AudioOutputProcessor.save_waveform(waveform, output_path, sample_rate=sample_rate)
-            print(f"\n{'='*70}\nSAVED: {output_path}\n{'='*70}")
+            # Output saving is the CLI's responsibility via
+            # `output_dispatch.save_audio` — it reads
+            # `global.output_audio` from outputs and writes to
+            # args.output / family-aware default. The flow handler
+            # must NOT write directly (that produced a stray
+            # `output_<model>.wav` in cwd regardless of --output).
+            ctx.variable_resolver.resolved["global.output_audio"] = waveform
             return
 
     # Raw waveform output
@@ -196,12 +198,8 @@ def postprocess_audio_output(ctx: FlowContext) -> None:
                     break
 
     if waveform is not None:
-        model_name = ctx.pkg.manifest.get("model_name", "model")
-        sample_rate = get_sample_rate(ctx)
-        output_path = f"output_{model_name}.wav"
-        from neurobrix.core.module.audio.output_processor import AudioOutputProcessor
-        AudioOutputProcessor.save_waveform(waveform, output_path, sample_rate=sample_rate)
-        print(f"\n{'='*70}\nSAVED: {output_path}\n{'='*70}")
+        # CLI handles the actual save — see comment in SNAC branch above.
+        ctx.variable_resolver.resolved["global.output_audio"] = waveform
 
 
 # ─── Shared helpers ──────────────────────────────────────────────────────────
