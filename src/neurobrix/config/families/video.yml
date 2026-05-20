@@ -51,3 +51,18 @@ output:
     i2v: ".mp4"
     v2v: ".mp4"
 
+# ============================================================================
+# DTYPE POLICY — same conv-cascade overflow physics as image VAE.
+# See config/families/image.yml dtype_policy comment + docs/audits/
+# layer7_auto_fp32_audit.md (Ch8). Video VAEs (CogVideoX, Wan, Mochi,
+# Allegro, Open-Sora) share the conv-encoder/decoder cascade pattern;
+# auto-detect should fire on them under the same rule.
+# ============================================================================
+dtype_policy:
+  auto_fp32_on_overflow_risk:
+    enabled: true
+    require_graph_dtype: "float32"
+    skip_when_hw_supports_bf16: true
+    min_conv2d_count: 20
+    conv2d_to_sdpa_ratio_min: 10
+
