@@ -1566,6 +1566,15 @@ shipped/validated in **compiled** mode. The other four matrix models are 4/4.
   bypasses the auto-detect for diagnosis (manual flag remains
   honored).
 
+  Visible side-effect for users comparing pre/post outputs:
+  PixArt-α 1024 px `--triton` images are now slightly
+  higher-contrast (closer to the fp32-VAE physics) than the
+  pre-auto-fp32 fp16-VAE output; the manual revert is
+  `NBX_DISABLE_AUTO_FP32=1`. Sana 1024 `--triton` recovers ~30 %
+  of the file size lost in the prior fp16-VAE rendering, restoring
+  detail. PixArt-σ 1024 px is visually unchanged within the
+  noise floor.
+
 - **`NBX_DTYPE_CLAMP_DIAG=1` diagnostic.** When the dtype engine
   narrows an fp32/fp64/bf16 value to fp16 at an `aten::_to_copy`
   boundary cast and the source actually exceeds the fp16
