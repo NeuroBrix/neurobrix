@@ -80,13 +80,24 @@ TTS_WITH_REF_FLOWS = {"tts_llm", "dual_ar"}
 # matches exactly what the fixture reports.
 sys.path.insert(0, str(Path(__file__).parent))
 from conftest import (  # noqa: E402
-    discover_models, KNOWN_FAILURES, SLOW_FAMILIES,
+    discover_models, discover_target_matrix, KNOWN_FAILURES, SLOW_FAMILIES,
 )
 
 
-def _marks_for(name: str, mode: str, family: str) -> List:
-    """Build the pytest.mark list for a (model, mode) cell."""
+def _marks_for(name: str, mode: str, family: str,
+               status: str = "testable",
+               skip_reason: str = "") -> List:
+    """Build the pytest.mark list for a (model, mode) cell.
+
+    `status='not_traced'` cells receive a `pytest.mark.skip` with the
+    DETTE_TECHNIQUE_NON_OUVERTE reason — the harness lists them as
+    coverage gaps without attempting to run them.
+    """
     marks: List = []
+    if status == "not_traced":
+        marks.append(pytest.mark.skip(reason=skip_reason or
+                                      "DETTE_TECHNIQUE_NON_OUVERTE: model not traced"))
+        return marks
     if family in SLOW_FAMILIES:
         marks.append(pytest.mark.slow)
     for kn_name, kn_mode, reason in KNOWN_FAILURES:
@@ -97,7 +108,14 @@ def _marks_for(name: str, mode: str, family: str) -> List:
 
 
 def _build_parametrize() -> List:
-    """Return a list of pytest.param entries for each (model, mode)."""
+    """Return a list of pytest.param entries for each (model, mode).
+
+    Testable cells come from `discover_models()` (= cached .nbx
+    inventory). Not-traced reference-matrix cells come from
+    `discover_target_matrix()` and skip with reason — they make
+    family-coverage gaps visible at every harness run instead of
+    being silently absent.
+    """
     params = []
     for m in discover_models():
         for mode in MODES:
@@ -106,6 +124,17 @@ def _build_parametrize() -> List:
                 marks=_marks_for(m["name"], mode, m["family"]),
                 id=f"{m['name']}::{mode}",
             ))
+    # Not-yet-traced reference matrix — single skipped cell per
+    # model (no per-mode expansion: the model isn't built, so the
+    # mode distinction is moot until it lands in the cache).
+    for m in discover_target_matrix():
+        params.append(pytest.param(
+            m, "native",
+            marks=_marks_for(m["name"], "native", m["family"],
+                             status=str(m.get("status", "testable")),
+                             skip_reason=str(m.get("skip_reason", ""))),
+            id=f"{m['name']}::not_traced",
+        ))
     return params
 
 
