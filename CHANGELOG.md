@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **PixArt and Sana now run in `--triton` mode without manual
+  per-component flags.** The hardware allocator detects components
+  at structural risk of fp16 overflow (build-time graph dtype is
+  fp32, the model family is image or video, the conv2d-cascade
+  count and conv2d-vs-attention ratio mark the component as VAE-class,
+  and the target hardware does not natively support bf16) and pins
+  those components to fp32 automatically. PixArt-XL-2 / PixArt-Sigma /
+  Sana 1024 produce coherent images in `--triton` out of the box;
+  previously the VAE saturated to NaN. Other families (LLM, audio,
+  upscaler, multimodal, …) are unaffected by design; manual
+  `requires_fp32_compute` continues to work as an explicit override
+  and is honored on top of the auto-detect. `NBX_DISABLE_AUTO_FP32=1`
+  bypasses the auto-detect for diagnosis (manual flag remains
+  honored).
+
 - **`NBX_DTYPE_CLAMP_DIAG=1` diagnostic.** When the dtype engine
   narrows an fp32/fp64/bf16 value to fp16 at an `aten::_to_copy`
   boundary cast and the source actually exceeds the fp16
