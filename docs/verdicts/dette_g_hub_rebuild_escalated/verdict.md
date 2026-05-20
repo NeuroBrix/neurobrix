@@ -139,9 +139,50 @@ Once access is available, the agent will:
    Hocine decision (rebuild without addressing underlying issue
    = wasteful; defer = quality state unchanged).
 
+## Section 5b — Progress post-unblock (2026-05-20 17:30, TinyLlama end-to-end OK)
+
+The operator unblocked the three access questions:
+- No SSH to the object store needed; the build-subtree `publish`
+  tool is the canonical push path (POST to neurobrix.es +
+  presigned MinIO PUT).
+- `NEUROBRIX_API_TOKEN` is in a `.env` in the build subtree
+  (sourced via `set -a; source <env>; set +a` — never printed).
+- Workflow = option (a): build subtree's `build` command runs
+  from the leak-clean extracted cache → publish; no re-build of
+  the model identity from scratch needed.
+
+**First model (TinyLlama) end-to-end CONFIRMED**:
+- Build from cache → 2.05 GB clean `.nbx`.
+- Leak grep: 0 hits.
+- R29 smoke: 24-token coherent gravity definition, 5.65 s.
+- Publish: 2.07 GB uploaded in 6.4 s; MinIO key
+  `models/TinyLlama/TinyLlama-1.1B-Chat.nbx`; DB upsert verified
+  via Prisma at updatedAt=2026-05-20T17:26:05Z.
+
+**Pipeline correction surfaced empirically**: the build step for
+whisper-class models with nested `components.model.<sub>.path`
+re-emits the source-asset path in `topology.json`. The Phase D
+cleanup tool (`cleanup_path_leak.py` in the build subtree)
+covers this case but is **not auto-invoked by the build
+pipeline**. Workaround added to the Dette G batch: explicit
+cleanup-tool invocation between build and publish per model.
+Idempotent — topology=0 / profile=0 when no leak.
+Recommended follow-up **P-BUILD-CLEANUP-PIPELINE** to wire the
+cleanup into the build pipeline directly.
+
+**Batch in progress** for the remaining 9 models
+(whisper-v3-turbo through Qwen3-30B-A3B-Thinking, size-ascending).
+Final aggregate results in the closure report.
+
 ## Section 6 — Disposition
 
-**Dette G is ESCALATED to Hocine** for the access unblock
+**Dette G is in-progress** — TinyLlama published end-to-end;
+batch for the 9 remaining models is running. Section 6 was
+"ESCALATED to operator" pre-unblock; the access answers have
+landed and execution is mechanical from here. The original
+escalation content kept below for historical record.
+
+**Dette G original disposition (pre-unblock)**: was ESCALATED
 (Section 4 options A/B/C). Inventory + categorization + pipeline
 design are complete and committed. The actual rebuild/reupload
 batch is a separate execution step waiting on the unblock; once
