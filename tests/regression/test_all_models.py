@@ -180,6 +180,37 @@ def _upscale_out_path(model: str, mode: str) -> Path:
     return Path("/tmp") / f"regression_upscale_{model}_{mode}.png"
 
 
+def _run_out_path(model: str, mode: str, family: str, gen_type: str) -> Path:
+    """Deterministic output path for a non-upscaler regression cell.
+
+    Mirrors `_upscale_out_path`: writes under `/tmp` so the harness
+    never leaves stray `output_<model>.<ext>` artefacts in the repo
+    root (which used to happen when `nbx run` was invoked without
+    `--output` and defaulted to cwd = `REPO`). The per-family
+    extension matches the family YAML's `output.default_extension_per_mode`
+    (kept as a small in-harness mapping to avoid importing
+    `neurobrix.core.runtime.output_dispatch` from a subprocess
+    harness).
+    """
+    if family == "multimodal":
+        ext = "png" if (gen_type or "").startswith("autoregressive_image") else "txt"
+    elif family in ("image",):
+        ext = "png"
+    elif family in ("video",):
+        ext = "mp4"
+    elif family in ("audio_llm", "llm", "vlm"):
+        ext = "txt"
+    elif family in ("audio", "tts", "stt"):
+        # audio family covers both STT (transcription → txt by CLI dispatch)
+        # and TTS (synthesis → wav); `neurobrix run` family-aware dispatch
+        # handles the actual writer, we just need an extension the CLI
+        # accepts without strict-mismatch error. .wav is the audio default.
+        ext = "wav"
+    else:
+        ext = "out"
+    return Path("/tmp") / f"regression_run_{model}_{mode}.{ext}"
+
+
 def _upscale_scale(model: str) -> int | None:
     """Parse the integer scale factor from an upscaler model name.
 
@@ -233,6 +264,20 @@ def _run_neurobrix(model: str, mode: str, family: str, flow: str,
             "--model", model,
             "--temperature", "0",
         ]
+        # For families with a *file* output (image/video/audio binary),
+        # pass --output under /tmp so the CLI does NOT default to
+        # writing `output_<model>.<ext>` in the harness cwd (= REPO).
+        # LLM (and text-mode multimodal) output goes to stdout and is
+        # consumed by _parse_llm_text — those families must NOT get
+        # --output (it would redirect the text away from stdout).
+        text_only = (family == "llm" or
+                     (family == "multimodal" and not
+                      (gen_type or "").startswith("autoregressive_image")))
+        if not text_only:
+            out_path = _run_out_path(model, mode, family, gen_type)
+            if out_path.exists():
+                out_path.unlink()
+            cmd.extend(["--output", str(out_path)])
         cmd.extend(_cli_inputs_for(family, flow, gen_type))
         if mode == "triton":
             cmd.append("--triton")

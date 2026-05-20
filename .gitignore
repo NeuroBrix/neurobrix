@@ -63,6 +63,24 @@ test-*.json
 test-*.png
 test-*.txt
 test_*.py
+
+# Stray run/upscale outputs at repo root — the CLI defaults to writing
+# `output_<model>.<ext>` in cwd when `--output` is not provided. The
+# regression harness now passes an explicit --output under /tmp (see
+# tests/regression/test_all_models.py:_run_out_path), but any other
+# invocation that forgets --output must not leak into the repo root.
+output_*.png
+output_*.wav
+output_*.txt
+output_*.mp4
+output_*.jpg
+output_*.jpeg
+
+# macOS resource-fork "shadow" files. These appear when the project
+# tree is browsed from macOS (NFS / SMB share) and are never useful
+# in a Linux repo.
+._*
+.DS_Store
 tests/*
 # Regression harness — tracked explicitly. Everything else under tests/
 # (scratch, __pycache__, etc.) stays ignored via the `tests/*` rule above,

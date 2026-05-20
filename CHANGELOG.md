@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Audio TTS runs no longer write a duplicate `output_<model>.wav`
+  in the current working directory.** The compiled-mode and
+  shared triton-mode audio flow handlers (`core/flow/audio.py`,
+  `core/flow/audio_utils.py`) each saved the waveform directly to
+  a hardcoded `output_<model>.wav` path relative to cwd in
+  addition to the CLI's family-aware `save_audio` writer at
+  `--output`. With `--output` passed, this produced two files
+  (the requested one and the stray); without `--output`, it
+  produced the legacy default-name file. The flow handlers now
+  only deposit the waveform into the variable resolver; the CLI
+  is the single writer (`output_dispatch.save_audio`). One
+  `SAVED:` print instead of two.
+
 ### Added
 
 - **PixArt and Sana now run in `--triton` mode without manual

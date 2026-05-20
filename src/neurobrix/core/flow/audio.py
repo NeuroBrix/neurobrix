@@ -412,12 +412,15 @@ class AudioEngine(FlowHandler):
                 generated_ids, vocab_size=vocab_size, device=device,
             )
             if waveform.numel() > 1:
+                # Output saving is the CLI's responsibility via
+                # `output_dispatch.save_audio` (reads `global.output_audio`
+                # from outputs and writes to args.output / family-aware
+                # default). The flow handler must NOT write directly —
+                # that produced a stray `output_<model>.wav` in cwd
+                # regardless of --output (the actual save then ran twice
+                # for harness/--output users). Store the waveform in the
+                # resolver and let the CLI handle the file.
                 self.ctx.variable_resolver.resolved[variable] = waveform
-                model_name = self.ctx.pkg.manifest.get("model_name", "model")
-                sample_rate = self._get_sample_rate()
-                output_path = f"output_{model_name}.wav"
-                AudioOutputProcessor.save_waveform(waveform, output_path, sample_rate=sample_rate)
-                print(f"\n{'='*70}\nSAVED: {output_path}\n{'='*70}")
                 return
 
         # Raw waveform: find output tensor from last stage (Kokoro, VibeVoice, etc.)
@@ -436,13 +439,10 @@ class AudioEngine(FlowHandler):
                         break
 
         if waveform is not None:
+            # Output saving is the CLI's responsibility — see comment
+            # in the SNAC branch above. Flow handler stores the waveform
+            # in the resolver and stops.
             self.ctx.variable_resolver.resolved[variable] = waveform
-            model_name = self.ctx.pkg.manifest.get("model_name", "model")
-            sample_rate = self._get_sample_rate()
-            output_path = f"output_{model_name}.wav"
-            from neurobrix.core.module.audio.output_processor import AudioOutputProcessor
-            AudioOutputProcessor.save_waveform(waveform, output_path, sample_rate=sample_rate)
-            print(f"\n{'='*70}\nSAVED: {output_path}\n{'='*70}")
 
     # ─────────────────────────────────────────────────────────────
     # Shared helpers
