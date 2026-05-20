@@ -170,9 +170,48 @@ Idempotent — topology=0 / profile=0 when no leak.
 Recommended follow-up **P-BUILD-CLEANUP-PIPELINE** to wire the
 cleanup into the build pipeline directly.
 
-**Batch in progress** for the remaining 9 models
-(whisper-v3-turbo through Qwen3-30B-A3B-Thinking, size-ascending).
-Final aggregate results in the closure report.
+**Batch COMPLETE** — 11/11 models rebuilt + published end-to-end,
+DB upserts confirmed via Prisma (timestamps shown):
+
+| # | hub slug | size | published | leak cleanup |
+|---|---|---|---|---|
+| 1 | TinyLlama/TinyLlama-1.1B-Chat | 2.22 GB | 17:26:05Z | already clean |
+| 2 | openai/Whisper-V3-Turbo | 1.63 GB | 17:33:19Z | **topology=1** stripped |
+| 3 | mistralai/Voxtral-Mini-3B | 9.38 GB | 17:35:30Z | **topology=1** stripped |
+| 4 | NVlabs/Sana-1600M-MultiLing | 12.97 GB | 17:37:44Z | already clean |
+| 5 | NVlabs/Sana-1600M-4Kpx-BF16 | 12.97 GB | 17:40:39Z | already clean |
+| 6 | deepseek-ai/Janus-Pro-7B | 14.86 GB | 17:44:55Z | **topology=1** stripped |
+| 7 | PixArt/PixArt-Sigma-XL-1024 | 21.84 GB | 17:49:40Z | already clean |
+| 8 | PixArt/PixArt-XL-1024 | 21.90 GB | 17:56:59Z | already clean |
+| 9 | ostris/Flex.1-alpha | 26.29 GB | 18:04:34Z | already clean |
+| 10 | deepseek-ai/DeepSeek-MoE-16B-Chat | 32.81 GB | 18:13:33Z | **topology=1** stripped |
+| 11 | Qwen/Qwen3-30B-A3B-Thinking | 61.36 GB | 18:33:33Z | **topology=1** stripped |
+
+Total wall-clock 17:26→18:33 = 67 minutes for 218 GB combined,
+all leak-clean post-cleanup, all DB upserts verified via Prisma.
+
+Pattern observed: models with nested
+`components.<model>.<sub>.path` (whisper encoder/decoder, Voxtral
+audio_tower/language_model/multi_modal_projector, Janus
+gen_*/vision_*, DeepSeek and Qwen3 MoE block paths) re-emit
+the source-asset path at build time → cleanup tool strips it
+in a follow-up step. Models with a flat `components.<name>`
+layout (TinyLlama / Sana / PixArt / Flex.1-alpha) build clean
+on the first pass. Both code paths converge to leak_hits=0
+after cleanup. Recommended follow-up
+**P-BUILD-CLEANUP-PIPELINE** to wire the cleanup into the build
+step directly.
+
+**Deferred (audio-chantier scope — broken audio decoders, not
+re-uploaded)**:
+- resemble-ai/Chatterbox (P-AUDIO-CHATTERBOX-LOOP)
+- canopylabs/Orpheus-3B (audio chantier)
+- Kokoro-82M (P-AUDIO-KOKORO-PHONEMES, not yet on hub)
+- openaudio-s1-mini (P-AUDIO-OPENAUDIO-CARRIER-TONE, not yet on hub)
+
+**Deferred (P-PRISM-VIDEO-5D-UNPACK)**: NVlabs/SANA-Video-2B-720p
+kept on hub with the prior .nbx; rebuild would propagate the
+runtime-broken state.
 
 ## Section 6 — Disposition
 
