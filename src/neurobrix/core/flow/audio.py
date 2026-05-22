@@ -385,6 +385,15 @@ class AudioEngine(FlowHandler):
         variable = output_config.get("variable", "global.output_audio")
         device = self.ctx.primary_device
 
+        # Read-and-clear the per-request content fraction. A stage that feeds a
+        # fixed-window decoder a partially-filled input (e.g. the Kokoro
+        # predictor, whose asr/F0/N tail is zero) sets this so the synthesised
+        # silent tail is cropped here. Popping it prevents a stale ratio from
+        # cropping a later warm-mode request routed through a different model.
+        content_ratio = self.ctx.variable_resolver.resolved.pop(
+            "global.audio_content_ratio", None
+        )
+
         # Check if output is audio token IDs or raw waveform
         # Detection is DATA-DRIVEN: defaults.json audio_output_type and audio_token_start
         defaults = self.ctx.pkg.defaults
@@ -439,6 +448,11 @@ class AudioEngine(FlowHandler):
                         break
 
         if waveform is not None:
+            # Crop the synthesised silent tail when the decoder ran on a
+            # partially-filled fixed window (content_ratio < 1.0). Shared with
+            # the triton output path so the crop is symmetric across modes.
+            from .audio_utils import crop_waveform_to_content_ratio
+            waveform = crop_waveform_to_content_ratio(waveform, content_ratio)
             # Output saving is the CLI's responsibility — see comment
             # in the SNAC branch above. Flow handler stores the waveform
             # in the resolver and stops.

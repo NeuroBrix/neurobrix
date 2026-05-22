@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Kokoro-82M no longer pads short-prompt audio to a fixed ~10 s
+  window.** The native predictor stage previously force-scaled the
+  predicted phoneme durations so they summed to exactly the traced
+  128-frame decoder window, stretching a short prompt several-fold
+  (e.g. "Hello world." filled ~3 s of elongated phonemes). Durations
+  that already fit the window are now kept as predicted and the
+  synthesised silent tail is cropped to the spoken content, in both
+  compiled and `--triton` modes. This addresses only the duration /
+  length behavior — Kokoro speech-content intelligibility is still
+  under repair and tracked separately.
+
 ### Fixed
 
 - **Audio TTS runs no longer write a duplicate `output_<model>.wav`

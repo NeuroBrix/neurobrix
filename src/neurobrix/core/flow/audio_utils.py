@@ -159,6 +159,11 @@ def postprocess_audio_output(ctx: FlowContext) -> None:
     audio_output_type = defaults.get("audio_output_type")
     generated_ids = ctx.variable_resolver.resolved.get("global.generated_token_ids")
 
+    # Read-and-clear the per-request content fraction so a stale ratio cannot
+    # crop a later warm-mode request routed through a different model (R30:
+    # the kokoro stage sets this in both modes; both must consume it).
+    content_ratio = ctx.variable_resolver.resolved.pop("global.audio_content_ratio", None)
+
     if audio_output_type == "snac_tokens" and generated_ids and isinstance(generated_ids, list):
         audio_token_start = defaults.get("audio_token_start")
         if audio_token_start is None:
@@ -198,11 +203,34 @@ def postprocess_audio_output(ctx: FlowContext) -> None:
                     break
 
     if waveform is not None:
+        waveform = crop_waveform_to_content_ratio(waveform, content_ratio)
         # CLI handles the actual save — see comment in SNAC branch above.
         ctx.variable_resolver.resolved["global.output_audio"] = waveform
 
 
 # ─── Shared helpers ──────────────────────────────────────────────────────────
+
+def crop_waveform_to_content_ratio(waveform, ratio):
+    """Crop a synthesised waveform to the spoken-content fraction.
+
+    A stage that fed a fixed-window decoder a partially-filled input (e.g. the
+    Kokoro predictor, whose asr/F0/N tail is zero) sets the per-request float
+    `global.audio_content_ratio`; this crops the synthesised silent tail to
+    `ratio` of the sample length. No-op when `ratio` is absent or >= 1.0.
+
+    Shared by the compiled (`AudioEngine`) and triton output paths so the crop
+    is symmetric across modes (R30). Works for both `torch.Tensor` and
+    `NBXTensor` — only `.shape` and a trailing-axis slice are used.
+    """
+    if not isinstance(ratio, (int, float)) or not (0.0 < ratio < 1.0):
+        return waveform
+    crop_len = max(1, int(waveform.shape[-1] * ratio))
+    if crop_len >= waveform.shape[-1]:
+        return waveform
+    print(f"   [Output] Cropped to spoken content: {crop_len} samples "
+          f"(ratio={ratio:.3f})")
+    return waveform[..., :crop_len]
+
 
 def get_compute_dtype(ctx: FlowContext) -> torch.dtype:
     """Get compute dtype from manifest."""
