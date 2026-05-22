@@ -168,13 +168,24 @@ many times, occasionally produces 70 rows of pure white at top.
 ## Audio-family quality (full audio chantier scope)
 
 ### P-AUDIO-OPENAUDIO-CARRIER-TONE — P0
-**Scope**: openaudio-s1-mini codec decode produces a quiet ~689 Hz
-tone instead of speech (peak amplitude 1%, ZCR 0.029).
-**Site**: codec.encoder → codec.quantizer → codec.decoder
-pipeline; suspected codec.decoder mel→waveform vocoder kernel.
-**Repro**: `nbx run --model openaudio-s1-mini --prompt "Hello world" --audio test_speech_ref.wav --output /tmp/x.wav` → listen.
-**R29**: `validation_outputs/p_dette_e_tts_audio_diagnosis/openaudio_carrier_tone.wav`.
-**Surfaced**: Dette E.
+**Scope**: openaudio-s1-mini produces a quiet ~689 Hz carrier tone
+(RMS 0.006, peak 0.01, ZCR 0.03) instead of speech.
+**Root cause (2026-05-22, root-caused — NOT the codec kernel)**: the DualAR
+flow runs only the **slow** backbone (semantic tokens) and feeds the model's
+**text** `embed.weight` embeddings to `codec.decoder`, which expects acoustic
+VQ feature frames `[1, 1024, T]`. The **fast/depth transformer** (`fast_block.*`,
+`codebook_embeddings` — present in the `.nbx`) that generates the N acoustic
+codebook tokens, and `codec.quantizer`, are **never run**. Codec decoder gets
+text embeddings → carrier tone (embed dim 1024 coincidentally matches, so no
+crash — silent semantic failure). Secondary: semantic loop never emits EOS
+(2048-token max → 23.8 s every time).
+**Site**: `core/flow/dual_ar.py:106-180` (slow-only loop + text-embed feed).
+Fix = implement the fast-AR (hand-rolled native, Kokoro-predictor style, OR
+build-side re-trace). **Architectural decision — escalated to Hocine.**
+**Repro**: `neurobrix run --model openaudio-s1-mini --prompt "Hello world." --audio test_speech_ref.wav`.
+**R29**: `validation_outputs/p_audio_p0b_openaudio/` + diagnosis
+`docs/audits/audio_p0b_openaudio_carrier_tone_diagnosis.md`.
+**Surfaced**: Dette E; root-caused by P0b (2026-05-22).
 
 ### P-KOKORO-NATIVE-PORT-FIDELITY (was P-AUDIO-KOKORO-PHONEMES) — closed
 Kokoro-82M babbling RESOLVED (2026-05-22): two native-port divergences vs the
