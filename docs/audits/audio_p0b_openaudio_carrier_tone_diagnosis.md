@@ -113,10 +113,23 @@ Trace-gap inventory the build re-trace must close:
   — zero graph consumers today.
 - **Gap 2 (confirmed)**: `forward_generate` must expose `hidden_states` as a
   graph output (only `logits` is exposed today).
-- **Gap 3 (to verify)**: the codec codes→features dequantize. The traced
-  `codec.quantizer` takes `z=[1,1024,T]` (encode direction: features→codes); the
-  decode direction (codes→features) feeding `codec.decoder` may also be
-  un-traced. Verify during the build chantier before assuming it exists.
+- **Gap 3 (CONFIRMED)**: the codec codes→features dequantize is un-traced. The
+  codec is a Residual-VQ (`quantizer.quantizers.0-8.codebook.weight`,
+  `semantic_quantizer`); vendor `DAC.decode(indices)` dequantizes codes→z
+  (RVQ codebook lookup + sum) then runs the decoder. The traced `codec.quantizer`
+  is encode-only (`z→codes`), and `codec.decoder` takes the already-dequantized
+  `z=[1,1024,T]`. The `codes→z` dequantize step has no traced path → the re-trace
+  must capture it.
+
+**Design simplification (no KV-cache tracing needed)**: the slow backbone is
+already run in NeuroBrix as a *full re-forward per step* over the trace window
+(no KV cache — `dual_ar.py` slides the window and re-runs). The fast transformer
+can use the same pattern: its training-forward already processes the
+`[hidden, cb0_emb, …, cb(N-2)_emb]` sequence under a causal mask, so the runtime
+can re-forward the growing codebook sequence and take the last position per
+codebook step — mirroring the slow path, avoiding KV-cache replay. This makes
+the re-trace target a plain full forward (slow→hidden+logits, fast→codebook
+logits, codec dequantize), not an AR-with-cache capture.
 
 Runtime consequence (after the re-trace): `core/flow/dual_ar.py` drives the
 nested AR loop — slow step → fast loop over N codebooks → dequantize → codec
