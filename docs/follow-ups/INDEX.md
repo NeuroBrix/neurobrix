@@ -179,13 +179,34 @@ codebook tokens, and `codec.quantizer`, are **never run**. Codec decoder gets
 text embeddings → carrier tone (embed dim 1024 coincidentally matches, so no
 crash — silent semantic failure). Secondary: semantic loop never emits EOS
 (2048-token max → 23.8 s every time).
-**Site**: `core/flow/dual_ar.py:106-180` (slow-only loop + text-embed feed).
-Fix = implement the fast-AR (hand-rolled native, Kokoro-predictor style, OR
-build-side re-trace). **Architectural decision — escalated to Hocine.**
+**Confirmed cause = INCOMPLETE BUILD TRACE (not missing arch, not key-mapping)**:
+the fast-transformer weights ARE present + correctly normalized, but in the
+`model` graph (3116 ops) every fast weight has `consumers=0` — the build trace
+captured only the slow backbone inference forward; the dual-AR generation
+forward (which runs the fast transformer) was bypassed. `codebook_embeddings` IS
+consumed 10× on the slow input side, proving the key normalization works.
+**Site**: build-side trace stimulus for `dual_ar` model (slow-only forward).
+**Fix = build-side re-trace** → [[P-BUILD-OPENAUDIO-DUALAR-TRACE]]. Runtime
+hand-roll REJECTED (would re-implement vendored, traceable compute). Hocine
+confirmed the build route.
 **Repro**: `neurobrix run --model openaudio-s1-mini --prompt "Hello world." --audio test_speech_ref.wav`.
 **R29**: `validation_outputs/p_audio_p0b_openaudio/` + diagnosis
 `docs/audits/audio_p0b_openaudio_carrier_tone_diagnosis.md`.
-**Surfaced**: Dette E; root-caused by P0b (2026-05-22).
+**Surfaced**: Dette E; root-caused + build-localised by P0b (2026-05-22).
+
+### P-BUILD-OPENAUDIO-DUALAR-TRACE — P0
+**Scope**: re-trace the openaudio-s1-mini `model` component so the **fast/depth
+transformer** forward is captured into the graph (currently only the slow
+backbone inference forward is traced; fast weights are vendored but have zero
+graph consumers → 689 Hz carrier tone, see [[P-AUDIO-OPENAUDIO-CARRIER-TONE]]).
+The re-trace must expose the dual-AR generation path (slow hidden → fast
+transformer → 10 codebook logits) so the runtime can drive the fast-AR loop and
+feed real acoustic codes to the codec decoder.
+**Site**: private build subtree (the `dual_ar` model trace stimulus currently
+redirects to the slow-backbone forward because the generation forward is gated
+"training-only" on this arch).
+**Surfaced**: P0b (2026-05-22). The fast transformer is 4 standard transformer
+layers — fully traceable, so this is the correct fix (not a runtime hand-roll).
 
 ### P-KOKORO-NATIVE-PORT-FIDELITY (was P-AUDIO-KOKORO-PHONEMES) — closed
 Kokoro-82M babbling RESOLVED (2026-05-22): two native-port divergences vs the
