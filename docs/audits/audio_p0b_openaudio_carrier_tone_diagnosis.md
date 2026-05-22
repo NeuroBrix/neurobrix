@@ -84,11 +84,41 @@ be justified if the trace structurally could not capture the fast path (it can).
 The architectural build-vs-runtime fork was escalated to Hocine, who confirmed
 the build-side route.
 
-R16 reference (informs what the re-trace must capture): Fish-Speech / OpenAudio
-inference — slow transformer predicts the primary semantic codebook; the fast
-transformer, with its KV cache reset per slow step, autoregressively emits the
-N residual codebooks (`hidden = fast_embeddings(token)` feeds the next codebook
-step); the stacked `[N+1, T]` codes drive the codec decoder.
-
 Follow-up: `P-AUDIO-OPENAUDIO-CARRIER-TONE` (root cause recorded here);
 `P-BUILD-OPENAUDIO-DUALAR-TRACE` (the build-side fix).
+
+## Section 5 — R16: the generation+decode path the re-trace must capture
+
+Vendor reference (Fish-Speech `DualARTransformer`, public). The inference
+generation path that the build trace must record (it currently records only the
+slow training-style backbone forward):
+
+1. **Slow step** — `forward_generate(x)` runs the slow backbone and returns the
+   semantic `logits` AND the per-position `hidden_states` (projected to the fast
+   dim). The current trace exposes only `logits [1,23,155776]`; it must ALSO
+   expose `hidden_states`.
+2. **Sample** the semantic token from the slow logits (stop on the end token —
+   note the runtime currently never emits EOS, the secondary 23.8 s symptom).
+3. **Fast loop** — reset the fast KV cache, then for `codebook_idx` in
+   `0..N-1` (N=10, from `codebook_embeddings [40960,1024] = 10×4096`):
+   `forward_generate_fast(hidden, input_pos=codebook_idx)` → codebook logits
+   `[1,1,4096]`; sample token; `hidden = fast_embeddings(token)` feeds the next
+   codebook step. The fast transformer is 4 standard layers (RMSNorm + attention
+   + FFN) — fully traceable.
+4. **Codes → waveform** — the stacked codes `[N, T]` must be dequantized to the
+   `[1,1024,T]` acoustic features the `codec.decoder` consumes.
+
+Trace-gap inventory the build re-trace must close:
+- **Gap 1 (confirmed)**: the fast transformer forward (`forward_generate_fast`)
+  — zero graph consumers today.
+- **Gap 2 (confirmed)**: `forward_generate` must expose `hidden_states` as a
+  graph output (only `logits` is exposed today).
+- **Gap 3 (to verify)**: the codec codes→features dequantize. The traced
+  `codec.quantizer` takes `z=[1,1024,T]` (encode direction: features→codes); the
+  decode direction (codes→features) feeding `codec.decoder` may also be
+  un-traced. Verify during the build chantier before assuming it exists.
+
+Runtime consequence (after the re-trace): `core/flow/dual_ar.py` drives the
+nested AR loop — slow step → fast loop over N codebooks → dequantize → codec
+decode — replacing the current "text-embed → codec.decoder" shortcut. This is a
+build + runtime co-design, scoped under `P-BUILD-OPENAUDIO-DUALAR-TRACE`.
