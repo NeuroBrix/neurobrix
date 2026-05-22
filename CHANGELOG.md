@@ -16,11 +16,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (e.g. "Hello world." filled ~3 s of elongated phonemes). Durations
   that already fit the window are now kept as predicted and the
   synthesised silent tail is cropped to the spoken content, in both
-  compiled and `--triton` modes. This addresses only the duration /
-  length behavior — Kokoro speech-content intelligibility is still
-  under repair and tracked separately.
+  compiled and `--triton` modes.
 
 ### Fixed
+
+- **Kokoro-82M now produces intelligible speech.** Previously the
+  output was babbling / unintelligible (e.g. "Hello world." came out
+  as garbled vowels). Two bugs in the native predictor/text-encoder
+  path were corrected: the phoneme padding mask was inverted (so the
+  model ran on padding instead of the real tokens), and the text
+  encoder's convolution block applied its normalisation and activation
+  in the wrong order and with the wrong activation slope. "Hello world."
+  now transcribes back as "Hello world." via STT. Prompts longer than
+  the model's traced ~23-phoneme input window are still truncated
+  (their surviving words are correct); lifting that limit is tracked
+  separately.
 
 - **Audio TTS runs no longer write a duplicate `output_<model>.wav`
   in the current working directory.** The compiled-mode and

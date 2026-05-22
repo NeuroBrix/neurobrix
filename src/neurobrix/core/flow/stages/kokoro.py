@@ -333,8 +333,15 @@ def preprocess_phonemizer_input(engine, prompt: str, phoneme_vocab: Dict) -> Non
     for key in ["global.text_lengths", "text_lengths", "input_lengths"]:
         engine.ctx.variable_resolver.resolved[key] = text_lengths
 
-    text_mask = torch.zeros(1, max_len, dtype=torch.bool, device=device)
-    text_mask[0, :actual_len] = True
+    # text_mask convention: True = PADDING (vendor Kokoro
+    # KModel.forward_with_tokens uses `gt(arange+1, input_lengths)`, i.e. True
+    # for positions beyond the real length). Every consumer here
+    # (`masked_fill_(text_mask, 0)` in the DurationEncoder / text_encoder and
+    # `inv_mask = ~text_mask` for durations) is written for that convention, so
+    # the mask MUST be True=padding — setting True=valid silently zeroed the
+    # real tokens and kept the padding (P-KOKORO-NATIVE-PORT-FIDELITY).
+    text_mask = torch.ones(1, max_len, dtype=torch.bool, device=device)
+    text_mask[0, :actual_len] = False
     for key in ["global.text_mask", "text_mask", "m"]:
         engine.ctx.variable_resolver.resolved[key] = text_mask
 
@@ -435,23 +442,32 @@ def _execute_native_text_encoder(engine, comp_name: str) -> None:
         # x: [B, seq, 512]
         x = x.transpose(1, 2)  # [B, 512, seq]
 
-        # 3x (WeightNorm Conv1d + LeakyReLU + LayerNorm)
+        # Mask padding after embedding (vendor TextEncoder: x.masked_fill_(m, 0)).
+        # text_mask is True=padding; m broadcasts over the channel dim.
+        m = text_mask.unsqueeze(1).to(device) if text_mask is not None else None
+        if m is not None:
+            x = x.masked_fill(m, 0.0)
+
+        # 3x vendor block: WeightNorm Conv1d -> LayerNorm -> LeakyReLU(0.2),
+        # then mask padding. Op order and slope must match vendor exactly
+        # (was conv -> LeakyReLU(0.01) -> LayerNorm, no per-block mask).
         for i in range(3):
-            # WeightNorm: weight = g * v / ||v||
+            # WeightNorm: weight = g * v / ||v|| (dim=0, norm over in/kernel)
             wg = w[f"cnn.{i}.0.weight_g"].to(device=device, dtype=dtype)
             wv = w[f"cnn.{i}.0.weight_v"].to(device=device, dtype=dtype)
             bias = w[f"cnn.{i}.0.bias"].to(device=device, dtype=dtype)
-            # Compute weight_norm: w = g * v / ||v||_2
             norm = wv.norm(dim=(1, 2), keepdim=True)
             conv_w = wg * wv / (norm + 1e-12)
             x = torch.nn.functional.conv1d(x, conv_w, bias, padding=2)
-            x = torch.nn.functional.leaky_relu(x, negative_slope=0.01)
-            # LayerNorm over last dim (channel dim after transpose)
+            # LayerNorm over the channel dim (vendor custom LayerNorm on [B,C,T])
             gamma = w[f"cnn.{i}.1.gamma"].to(device=device, dtype=dtype)
             beta = w[f"cnn.{i}.1.beta"].to(device=device, dtype=dtype)
             x_t = x.transpose(1, 2)  # [B, seq, C]
             x_t = torch.nn.functional.layer_norm(x_t, [gamma.shape[0]], gamma, beta)
             x = x_t.transpose(1, 2)  # [B, 512, seq]
+            x = torch.nn.functional.leaky_relu(x, negative_slope=0.2)
+            if m is not None:
+                x = x.masked_fill(m, 0.0)
 
         # BiLSTM with pack_padded_sequence
         x = x.transpose(1, 2)  # [B, seq, 512]
