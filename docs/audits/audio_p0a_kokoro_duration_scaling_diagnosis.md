@@ -1,5 +1,19 @@
 # Audio P0a — Kokoro phonemes diagnosis (2026-05-20)
 
+> **UPDATE 2026-05-22 — this diagnosis was partially WRONG (kept for the
+> record).** Option A (duration-scaling fix) was implemented and STT-validated.
+> Result: the babbling **persists** ("Hello world." → "What?"; "Hello world,
+> this is a test." → "So I get everything. Hey, hey, hey."). A §5.8 vendor
+> reference proves vendor `kokoro` is fully intelligible on the same prompts
+> (word-overlap 1.00) with byte-identical phoneme IDs and the same voicepack —
+> so the babbling root cause is the **NeuroBrix native port** of the predictor/
+> decoder, NOT duration scaling. Section 1's claim that the medium prompt was
+> stretched 4× is empirically false (its natural durations sum to ≥128 → it
+> hits the compress branch, code path unchanged by Option A). Full evidence and
+> the localised divergences: `validation_outputs/p_audio_p0a_kokoro/INDEX.md`.
+> Path forward: `P-KOKORO-NATIVE-PORT-FIDELITY` + `P-BUILD-KOKORO-DYNAMIC-FRAMES`
+> (`docs/follow-ups/INDEX.md`).
+
 §5.8 differential identified the structural bug behind the
 Hocine-flagged "babbling phonemes / hey hey hey" symptom on
 `Kokoro-82M`. STT auto-validation: pre-fix whisper-large
