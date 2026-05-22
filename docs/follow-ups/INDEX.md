@@ -80,6 +80,23 @@ referenced from in-forward `mask[slice]=cnt` patterns.
 **Existing file**: `docs/follow-ups/p-container-embed-orphan-scalars.md`.
 **Surfaced**: P-NEUROBRIX-UPSCALERS-V1.
 
+### P-BUILD-KOKORO-DYNAMIC-FRAMES — P0
+**Scope**: re-trace the Kokoro decoder with a symbolic `asr_frames`
+dim AND a symbolic phoneme `seq_len` (same paradigm as Ch6 symbolic
+dims / LLM seq_len applied to audio: `asr_frames` should be symbolic
+like `n_codec_frames`, not a build-time-frozen 128). Removes three
+runtime band-aids: the fixed 128-frame decoder window, the 23-phoneme
+input truncation (vendor handles 48), and the P0a post-decode crop.
+The hand-rolled native predictor in `core/flow/stages/kokoro.py` exists
+only because the LSTM/pack_padded path can't trace; a clean re-trace
+with dynamic frames would let the predictor run in-graph and lift
+[[P-KOKORO-NATIVE-PORT-FIDELITY]]'s 128-frame constraint.
+**Site**: private build subtree (audio symbolic-dim conventions);
+runtime consumer is `core/flow/stages/kokoro.py:_scale_kokoro_durations`
++ `_get_kokoro_decoder_shapes`.
+**Repro**: `neurobrix run --model Kokoro-82M --prompt "The quick brown fox jumps over the lazy dog."` → only first ~23 phonemes survive.
+**Surfaced**: P-AUDIO-P0a (2026-05-22). Option B in the P0a diagnosis doc.
+
 ---
 
 ## Prism / runtime allocator gaps
@@ -154,18 +171,29 @@ pipeline; suspected codec.decoder mel→waveform vocoder kernel.
 **R29**: `validation_outputs/p_dette_e_tts_audio_diagnosis/openaudio_carrier_tone.wav`.
 **Surfaced**: Dette E.
 
-### P-AUDIO-KOKORO-PHONEMES — P0
-**Scope**: Kokoro-82M produces speech-like spectral signature
-but content is babbling (unintelligible). Acoustic envelope
-plausible; linguistic content wrong.
-**Site**: text_encoder → predictor (style+pitch) → decoder. Hypothesis:
-missing speaker/style condition in runtime invocation chain
-post-Ch3 cudnn-batch-norm fix.
-**Repro**: `nbx run --model Kokoro-82M --prompt "Hello world" --output /tmp/x.wav` → listen.
-**R29**: `validation_outputs/p_dette_e_tts_audio_diagnosis/kokoro_random_sounds.wav`.
-**Surfaced**: Dette E. **Important**: Ch3 P-KOKORO-NATIVE-CUDNN-BATCH-NORM
-fixed the **crash**, not the **content quality** — R29 audio inspection
-was missing from that closure.
+### P-KOKORO-NATIVE-PORT-FIDELITY — P0 (was P-AUDIO-KOKORO-PHONEMES)
+**Scope**: Kokoro-82M babbles (whisper word-overlap 0.00); vendor `kokoro`
+is fully intelligible (overlap 1.00) on identical phoneme IDs + voicepack.
+Bug is in the NeuroBrix native port of the predictor/decoder, NOT duration
+scaling (P0a Option A ruled that out), NOT phoneme vocab (byte-identical).
+**Site**: `core/flow/stages/kokoro.py:execute_native_kokoro` vs vendor
+`kokoro/model.py:forward_with_tokens`. Localised divergences (candidates,
+not yet individually confirmed causal):
+(1) alignment: vendor `repeat_interleave` + `clamp(min=1)` per token, variable
+length; NBX `clamp(min=0)` + fixed 128 frames.
+(2) `text_mask` convention: vendor True=padding; NBX True=valid — audit the
+mask-fill / `inv_mask` usages.
+(3) `input_lengths`: vendor full padded length; NBX `actual_len`.
+(4) voicepack row: vendor `voicepack[len(ps)-1]`; NBX `min(actual_len, N-1)`.
+**Repro**: `neurobrix run --model Kokoro-82M --prompt "Hello world." --output /tmp/x.wav` then `neurobrix run --model whisper-large-v3-turbo --audio /tmp/x.wav`.
+**R29**: `validation_outputs/p_audio_p0a_kokoro/INDEX.md` (full §5.8 evidence +
+vendor reference WAVs).
+**Surfaced**: Dette E; localised to native port by P-AUDIO-P0a (2026-05-22).
+Ch3 P-KOKORO-NATIVE-CUDNN-BATCH-NORM fixed the crash, not content quality.
+**Method**: op-by-op tensor diff vs vendor `forward_with_tokens`
+(text_encoder out → durations → asr → F0/N → decoder) within the fixed
+128-frame constraint; the constraint itself is lifted by
+[[P-BUILD-KOKORO-DYNAMIC-FRAMES]].
 
 ### P-AUDIO-CHATTERBOX-LOOP — P1
 **Scope**: chatterbox produces 82 s of saturated audio for short
