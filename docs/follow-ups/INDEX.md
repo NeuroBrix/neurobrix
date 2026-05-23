@@ -102,6 +102,26 @@ runtime consumer is `core/flow/stages/kokoro.py:_scale_kokoro_durations`
 **Repro**: `neurobrix run --model Kokoro-82M --prompt "The quick brown fox jumps over the lazy dog."` → only first ~23 phonemes survive.
 **Surfaced**: P-AUDIO-P0a (2026-05-22). Option B in the P0a diagnosis doc.
 
+### P-SYMBOLIC-ARANGE-SUM-FROM-ITEM — P1
+**Scope**: chatterbox vocoder (s3gen) crashes building its pad mask. The mask
+sequence length is `arange(prompt_token_len + generated_token_len)`, but the
+`.item()` on that token-count sum severs the symbolic link, so the mask dim
+freezes at the build-time value while the token embedding beside it stays
+symbolic → mismatch at the first generated token whose total length differs
+from the build-time one.
+**Site**: build-side symbolic shape engine — the creation-op scalar reverse
+lookup registers single seq/batch symbols only (not sums), and
+expression-value matching is deliberately disabled after a prior spatial-dim
+false-match incident. Resolution lives in the private build subtree; full
+design + the two candidate paths in the build doc.
+**Shared primitive** — touches the symbolic shape rules used by every model;
+non-regression across the model matrix is delicate → engine-extension
+escalation, not a unilateral fix.
+**Repro**: `neurobrix run --model chatterbox --prompt "Hello world."` →
+`Failed at op aten.mul::0: size of tensor a (181) must match b (180) at dim 1`.
+**Status**: PARKED — dedicated chantier. chatterbox conditioning itself is
+RESOLVED (see the audio-family section).
+
 ---
 
 ## Prism / runtime allocator gaps
@@ -217,15 +237,26 @@ transcribes 1.00. Resolution + §5.8 evidence:
 `docs/verdicts/p_kokoro_native_port_fidelity/verdict.md`. Remaining long-prompt
 shortfall is the 23-phoneme input truncation → [[P-BUILD-KOKORO-DYNAMIC-FRAMES]].
 
-### P-AUDIO-CHATTERBOX-LOOP — P1
-**Scope**: chatterbox produces 82 s of saturated audio for short
-prompts (expected ~1 s); peak hits full scale (0.99). Length
-unconstrained, possibly looping.
-**Site**: `src/neurobrix/core/flow/tts_llm.py` stop-token /
-max-length logic; decoder length cap.
-**Repro**: `nbx run --model chatterbox --prompt "Hello world" --audio test_speech_ref.wav --output /tmp/x.wav` → wav 82 s.
-**R29**: `validation_outputs/p_dette_e_tts_audio_diagnosis/chatterbox_82s_loop.wav`.
-**Surfaced**: Dette E.
+### P-CHATTERBOX-CONDITIONING-REARCH (was P-AUDIO-CHATTERBOX-LOOP) — RESOLVED (conditioning)
+The over-generation (1052+ speech tokens → ~43 s garbage, whisper empty) was a
+symptom of WRONG conditioning, not a stop-token bug. The tts_llm flow hand-rolled
+T3CondEnc and produced `cond_emb [1,2,1024]` (speaker(zero)+emotion), **skipping
+the Perceiver resampler**; the vendor produces `[1,34,1024]` (1 speaker + 32
+perceiver + 1 emotion → 0.96 s "Hello world.").
+**RESOLVED 2026-05-23**: conditioning is now produced by running the `cond_enc`
+component (full speaker + Perceiver + emotion) embedded in the container, fed from
+the embedded default-voice conditioning; the flow hand-roll is removed
+(`core/flow/tts_llm.py`). cond_emb matches the vendor `[1,34,1024]`, and with
+correct conditioning the speech LM stops over-generating (1052+ → ~24-48 tokens,
+~1 s). The vocoder ref-dict is fed from the same embedded conditioning;
+`--reference-audio` is wired through the CLI.
+**Remaining**: coherent vocoder audio is blocked on a build-side sequence-length
+symbolic limitation → [[P-SYMBOLIC-ARANGE-SUM-FROM-ITEM]]. The voice-clone path
+(`--reference-audio` with a custom voice) is a further step — it needs the
+reference tokenizer + speaker encoder captured, plus that same dynamic-length
+symbolic capability.
+**Repro (was)**: `neurobrix run --model chatterbox --prompt "Hello world."` → ~43 s garbage.
+**Surfaced**: Dette E; diagnosed + conditioning fixed 2026-05-23.
 
 ### P-VOXTRAL-HALLUCINATION — P2
 **Scope**: Voxtral audio_llm answers conversationally instead
