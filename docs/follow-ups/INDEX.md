@@ -258,6 +258,29 @@ symbolic capability.
 **Repro (was)**: `neurobrix run --model chatterbox --prompt "Hello world."` → ~43 s garbage.
 **Surfaced**: Dette E; diagnosed + conditioning fixed 2026-05-23.
 
+### P-ORPHEUS-DECODE-ROPE-DEGENERATE — P1
+**Scope**: orpheus-3b-0.1-ft TTS reaches the decode loop, but the first
+generated-token attention receives a degenerate query (seq=0) and key
+(head_dim=0) while the value is correct ([1,24,1,128]). The two broken tensors
+(q, k) are exactly the ones RoPE touches (`q·cos + rotate(q)·sin`); the value
+skips RoPE and is intact. The RoPE cos/sin seq-dependent constants slice
+correctly at prefill (q/k/v all [1,24,seq,128]) but collapse a dimension at the
+seq=1 decode step (the decode position-slice yields an empty range).
+**Site**: decode-time seq-dependent-constant (RoPE cos/sin) resolution. Shared
+with every RoPE LLM — TinyLlama decodes correctly, so the trigger is
+orpheus-graph specific (likely a build-time structure difference the runtime
+mis-slices); needs a build-vs-runtime split before fixing.
+**Shared primitive** — non-regression across all LLMs is delicate → investigate
++ prove before any change.
+**Prerequisite FIXED**: the build now emits the LM head config
+(num_heads/head_dim/num_layers) for orpheus — it was missing, so the KV cache
+allocated a zero head_dim buffer. Necessary but NOT sufficient; the decode
+degeneracy above remains.
+**Repro**: `neurobrix run --model orpheus-3b-0.1-ft --prompt "Hello world."` →
+`Failed at op aten._scaled_dot_product_efficient_attention::0: expanded size 128 must match existing size 0 at dim 3`.
+**Status**: PARKED — localized to the decode RoPE path; dedicated chantier.
+**Surfaced**: audio loop 2026-05-23.
+
 ### P-VOXTRAL-HALLUCINATION — P2
 **Scope**: Voxtral audio_llm answers conversationally instead
 of transcribing (responds to the audio content as a chat
