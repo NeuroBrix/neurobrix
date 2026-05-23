@@ -20,6 +20,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Models with hand-written RMSNorm/LayerNorm no longer produce garbage on
+  fp16 hardware (V100) from variance overflow.** Such norms compute the
+  variance as `mean(x * x)`; the `x * x` squaring overflows fp16 (max 65504)
+  for any activation magnitude above ~256, collapsing the normalisation to
+  zero. The dtype engine now upcasts the squaring to fp32 on fp16 hardware
+  (and leaves it untouched on bf16 hardware, where the exponent range matches
+  fp32 and overflow cannot occur). This is the protection that lets OpenAudio
+  generate correct speech (below), and pre-empts the same failure in any other
+  model that squares large activations.
+
 - **OpenAudio (Fish-Speech dual-AR) TTS now produces correct speech.**
   Previously the model emitted a constant carrier tone and never stopped
   (running to the token limit); once stopping was corrected it then drifted
