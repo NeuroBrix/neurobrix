@@ -416,11 +416,16 @@ class KVCacheAttentionWrapper:
         Returns:
             attention output [batch, heads, seq_q, head_dim]
         """
-        # K may arrive transposed [B,H,D,S] from pattern-reassembled SDPA.
-        # SDPA and KV cache expect [B,H,S,D]. Detect and fix.
-        if k.ndim == 4 and q.ndim == 4 and k.shape[-2] != q.shape[-2]:
+        # K/V may arrive transposed [B,H,D,S] from pattern-reassembled SDPA;
+        # SDPA and KV cache expect [B,H,S,D]. Detect via head_dim (last axis),
+        # NOT seq (axis -2): seq_q != seq_k is normal (decode: seq_q=1; cross-
+        # attention: distinct lengths), so a seq-axis comparison wrongly transposes
+        # a correctly-shaped tensor. A real [B,H,D,S] carries head_dim in axis -2.
+        if (k.ndim == 4 and q.ndim == 4
+                and k.shape[-1] != q.shape[-1] and k.shape[-2] == q.shape[-1]):
             k = k.transpose(-2, -1)
-        if v.ndim == 4 and q.ndim == 4 and v.shape[-2] != q.shape[-2]:
+        if (v.ndim == 4 and q.ndim == 4
+                and v.shape[-1] != q.shape[-1] and v.shape[-2] == q.shape[-1]):
             v = v.transpose(-2, -1)
 
         # Slice attention mask to match runtime sequence length
