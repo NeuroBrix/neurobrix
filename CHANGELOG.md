@@ -20,6 +20,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Models with cross-attention (different query and key/value sequence
+  lengths) no longer crash with a shape-mismatch error inside attention.**
+  The runtime's attention layout-fixup keyed its "is this key transposed?"
+  decision on the sequence axis, which is only reliable for self-attention
+  (equal query/key lengths). For cross-attention — a Perceiver resampler with
+  32 latent queries over 150 prompt keys, or any encoder/decoder cross-attend
+  — it wrongly reshaped a correctly-laid-out tensor and aborted. The decision
+  now keys on the head-dimension axis, which is invariant across both cases;
+  self-attention behaviour is unchanged.
+
 - **Audio TTS models with an LLM backbone no longer crash with an
   out-of-memory error on the text prompt.** The text was tokenized with
   padding up to the model's full context length, so a short prompt was

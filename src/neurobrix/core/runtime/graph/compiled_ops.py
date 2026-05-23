@@ -468,8 +468,13 @@ class CompiledOpResolver:
         # Standard SDPA — handles pattern-reassembled ops + native SDPA
         def standard_attention(q, k, v, *args, **kwargs):
             q, k, v = _align_qkv_dtypes(q, k, v)
-            # K may be transposed [B,H,D,S] from pattern reassembly — fix to [B,H,S,D]
-            if k.ndim == 4 and q.ndim == 4 and k.shape[-2] != q.shape[-2]:
+            # K may be transposed [B,H,D,S] from pattern reassembly — fix to [B,H,S,D].
+            # Detect via head_dim (last axis), NOT seq (axis -2): cross-attention
+            # legitimately has seq_q != seq_k (Perceiver: 32 latent queries over 150
+            # prompt keys), so a seq-axis comparison wrongly transposes a correct K.
+            # A genuinely transposed [B,H,D,S] K carries head_dim in axis -2 == q[-1].
+            if (k.ndim == 4 and q.ndim == 4
+                    and k.shape[-1] != q.shape[-1] and k.shape[-2] == q.shape[-1]):
                 k = k.transpose(-2, -1)
 
             is_causal = _safe_is_causal(kwargs.pop('is_causal', False))
