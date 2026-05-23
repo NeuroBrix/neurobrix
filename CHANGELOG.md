@@ -20,6 +20,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Audio TTS models with an LLM backbone no longer crash with an
+  out-of-memory error on the text prompt.** The text was tokenized with
+  padding up to the model's full context length, so a short prompt was
+  expanded to tens of thousands of tokens; a language model whose attention
+  mask scales with sequence length then tried to allocate a mask of
+  `context_length²` (VibeVoice: a 131072×131072 mask ≈ 16 GiB) and ran out of
+  memory before producing anything. The prompt is now tokenized at its actual
+  length.
+
 - **Models with hand-written RMSNorm/LayerNorm no longer produce garbage on
   fp16 hardware (V100) from variance overflow.** Such norms compute the
   variance as `mean(x * x)`; the `x * x` squaring overflows fp16 (max 65504)

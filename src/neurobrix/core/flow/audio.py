@@ -254,11 +254,17 @@ class AudioEngine(FlowHandler):
             # LLM-style: direct encode (Orpheus, Voxtral TTS, etc.)
             # Use add_special_tokens=False when template already includes BOS
             add_special = tts_template is None
+            # padding=False: the LLM / autoregressive path must use the ACTUAL
+            # prompt length. The NeuroBrix tokenizer's encode() defaults to
+            # padding=True up to model_max_length; for an LM that left the seq
+            # symbolic, padding to max_position_embeddings inflates the causal
+            # mask to max_len² (VibeVoice: 131072² bool = 16 GiB tril OOM).
             try:
                 input_ids = tokenizer.encode(prompt, return_tensors="pt",
                                              add_special_tokens=add_special)
             except TypeError:
-                ids = tokenizer.encode(prompt, add_special_tokens=add_special)
+                ids = tokenizer.encode(prompt, add_special_tokens=add_special,
+                                       padding=False)
                 input_ids = torch.tensor([ids], dtype=torch.long)
             if isinstance(input_ids, list):
                 input_ids = torch.tensor([input_ids], dtype=torch.long)
