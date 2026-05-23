@@ -59,158 +59,214 @@ class DualAREngine(FlowHandler):
         from .audio_utils import preprocess_text_input
         preprocess_text_input(self.ctx)
 
-        # ── Step 2: DualAR generation ──
-        backbone_stage = stages[0]
-        comp_name = backbone_stage["component"]
+        # ── Step 2: DualAR generation (slow backbone + fast/depth transformer) ──
+        # Per position: slow backbone -> semantic token + hidden; then the fast
+        # transformer (separate `model.fast` component) generates the N acoustic
+        # codebooks by re-forwarding the growing codebook context under a causal
+        # mask (mirror of vendor decode_one_token_ar, no KV cache). The N codes
+        # per position are dequantized (codec.quantizer.decode) into the features
+        # the codec decoder consumes. Replaces the old text-embedding shortcut
+        # that fed the codec garbage (the 689 Hz carrier-tone bug).
+        import json as _json
+        from pathlib import Path as _Path
+        comp_name = stages[0]["component"]  # "model"
         device = self.ctx.primary_device
+        # CLI sampling overrides (global.*) take precedence over the embedded
+        # defaults, mirroring the autoregressive flow — --temperature 0 ⇒ greedy.
+        _ov = self.ctx.variable_resolver.resolved
+        max_tokens = _ov.get("global.max_tokens", defaults.get("max_tokens", 2048))
+        temperature = _ov.get("global.temperature", defaults.get("temperature", 0.7))
+        top_p = _ov.get("global.top_p", defaults.get("top_p", 0.8))
 
-        max_tokens = defaults.get("max_tokens", 2048)
-        temperature = defaults.get("temperature", 0.7)
-        top_p = defaults.get("top_p", 0.8)
-        eos_token_id = defaults.get("eos_token_id")
-
-        print(f"   [{comp_name}] DualAR generation (max_tokens={max_tokens})...")
-        start = time.perf_counter()
+        # Special token ids from the embedded tokenizer (no hardcode): the
+        # semantic-codebook offset and the stop token.
+        st_path = _Path(self.ctx.nbx_path_str) / "modules" / "tokenizer" / "special_tokens.json"
+        special = _json.load(open(st_path)) if st_path.exists() else {}
+        semantic_begin_id = special.get("<|semantic:0|>")
+        if semantic_begin_id is None:
+            raise RuntimeError("ZERO FALLBACK: '<|semantic:0|>' missing from tokenizer special_tokens.")
+        im_end_id = special.get("<|im_end|>", defaults.get("eos_token_id"))
 
         self._ensure_weights_loaded(comp_name)
-        executor = self.ctx.executors[comp_name]
+        slow_exec = self.ctx.executors[comp_name]
+        fast_exec = self.ctx.executors.get("model.fast")
+        if fast_exec is None:
+            raise RuntimeError("ZERO FALLBACK: DualAR requires the 'model.fast' component "
+                               "(re-trace the model with the fast-transformer split).")
+        self._ensure_weights_loaded("model.fast")
 
-        # Get graph input shape: [B, N+1, T]
-        dag = getattr(executor, '_dag', None)
-        n_codebooks = 11
-        trace_seq_len = 64
+        # Slow model input shape [B, N+1, T]
+        dag = getattr(slow_exec, '_dag', None)
+        n_rows, trace_seq_len = 11, 64
         if dag:
             for _tid, spec in dag.get("tensors", {}).items():
                 if spec.get("input_name") == "inp":
                     shape = spec.get("shape", [])
                     if len(shape) >= 3:
-                        n_val = shape[1]
-                        n_codebooks = n_val if isinstance(n_val, int) else 11
-                        t_val = shape[2]
-                        trace_seq_len = t_val if isinstance(t_val, int) else 64
+                        n_rows = shape[1] if isinstance(shape[1], int) else 11
+                        trace_seq_len = shape[2] if isinstance(shape[2], int) else 64
                     break
+        num_codebooks = n_rows - 1  # acoustic codebooks (semantic + residual)
+        acoustic_cb_size = 1024     # residual codebook size (codec quantizer)
 
-        # Get tokenized input
         input_ids = self.ctx.variable_resolver.resolved.get("global.input_ids")
         if input_ids is None:
             raise RuntimeError("ZERO FALLBACK: DualAR requires tokenized input_ids.")
+        prompt_ids = [int(x) for x in input_ids.squeeze(0).tolist()]
+        # Vendor builds ContentSequence(modality="interleave").append([TextPart(text)],
+        # speaker=0): the exact prompt is <|interleave|> + "<|speaker:0|>" (encoded
+        # as TEXT subwords — it is NOT a special token) + the text tokens, with no
+        # leading BOS and no trailing im_end (generation emits the audio then
+        # im_end). Verified against fish_speech ContentSequence.encode_for_inference.
+        bos_id = defaults.get("bos_token_id")
+        if bos_id is not None and prompt_ids and prompt_ids[0] == bos_id:
+            prompt_ids = prompt_ids[1:]
+        interleave_id = special.get("<|interleave|>")
+        tok = self.ctx.modules.get("tokenizer")
+        speaker_ids = []
+        if tok is not None:
+            try:
+                _s = tok.encode("<|speaker:0|>", add_special_tokens=False)
+            except TypeError:
+                _s = tok.encode("<|speaker:0|>")
+            speaker_ids = [int(x) for x in (_s.tolist() if hasattr(_s, "tolist") else _s)]
+        prompt_ids = ([interleave_id] if interleave_id is not None else []) + speaker_ids + prompt_ids
+        print(f"   [{comp_name}] prompt tokens ({len(prompt_ids)}): {prompt_ids[:16]}")
 
-        # Build initial 3D input [B, N+1, T_prompt]
-        prompt_len = input_ids.shape[-1]
-        inp = torch.zeros(1, n_codebooks, prompt_len, dtype=torch.long, device=device)
-        inp[0, 0, :prompt_len] = input_ids.squeeze(0)[:prompt_len]
+        from .audio_utils import sample_token
+        print(f"   [{comp_name}] DualAR generation (max_tokens={max_tokens}, N={num_codebooks})...")
+        start = time.perf_counter()
 
-        # Generate semantic tokens autoregressively
-        generated_semantic: List[int] = []
+        # Grid columns: each is [semantic, cb_1..cb_N]. Prompt columns carry the
+        # text token in row 0 and zero acoustic codes.
+        grid_cols = [[pid] + [0] * num_codebooks for pid in prompt_ids]
+        acoustic_codes = []  # [num_codebooks] per generated position
+        # Repetition penalty on the slow (semantic) head — vendor uses 1.2 with a
+        # sliding window. Without it the AR loop never emits im_end (infinite loop).
+        rep_pen = _ov.get("global.repetition_penalty", defaults.get("repetition_penalty", 1.2))
+        slow_history: List[int] = []
+        rep_window = 32
 
-        for step in range(max_tokens):
-            # Pad/truncate to trace_seq_len for CompiledSequence
-            cur_len = prompt_len + len(generated_semantic)
-            if cur_len <= trace_seq_len:
-                padded = torch.zeros(1, n_codebooks, trace_seq_len, dtype=torch.long, device=device)
-                padded[0, 0, :prompt_len] = input_ids.squeeze(0)[:prompt_len]
-                for i, tok in enumerate(generated_semantic):
-                    padded[0, 0, prompt_len + i] = tok
-            else:
-                # Sliding window
-                all_semantic = list(input_ids.squeeze(0).tolist()[:prompt_len]) + generated_semantic
-                window = all_semantic[-trace_seq_len:]
-                padded = torch.zeros(1, n_codebooks, trace_seq_len, dtype=torch.long, device=device)
-                for i, tok in enumerate(window):
-                    padded[0, 0, i] = tok
+        # Constrained decoding: the slow head may only emit semantic tokens or the
+        # stop token (vendor masks non-semantic logits). 4096 semantic ids.
+        sem_lo, sem_hi = semantic_begin_id, semantic_begin_id + 4096
 
-            output = executor.run({"inp": padded})
+        for _ in range(max_tokens):
+            # Feed the FULL grid (variable length). The slow model's seq dim is
+            # symbolic (audio_token_grid convention), so it accepts any length and
+            # sees the complete prompt+generation context (no fixed 23-window) —
+            # this is what lets it emit im_end at the right time. O(n) re-forward
+            # per step (the accepted decode_step "re-run full context" tier).
+            clen = len(grid_cols)
+            inp_t = torch.zeros(1, n_rows, clen, dtype=torch.long, device=device)
+            for ci, col in enumerate(grid_cols):
+                for ri, val in enumerate(col):
+                    inp_t[0, ri, ci] = val
+            pos = clen - 1
+            out = slow_exec.run({"inp": inp_t})
+            logits = out.get("logits") if isinstance(out, dict) else out
+            hidden = out.get("hidden_states") if isinstance(out, dict) else None
+            if logits is None or hidden is None:
+                raise RuntimeError("ZERO FALLBACK: slow model must output logits + hidden_states.")
 
-            if isinstance(output, dict):
-                logits = next(iter(output.values()))
-            elif isinstance(output, torch.Tensor):
-                logits = output
-            else:
-                logits = None
-
-            if logits is None:
+            slow_logits = logits[:, pos, :].clone()
+            # Mask to semantic ids + stop token.
+            mask = torch.full_like(slow_logits, float("-inf"))
+            mask[:, sem_lo:sem_hi] = slow_logits[:, sem_lo:sem_hi]
+            if im_end_id is not None:
+                mask[:, im_end_id] = slow_logits[:, im_end_id]
+            slow_token = int(sample_token(
+                mask.unsqueeze(1), temperature, top_p=top_p,
+                repetition_penalty=rep_pen, generated_ids=slow_history[-rep_window:]))
+            if im_end_id is not None and slow_token == im_end_id:
                 break
+            slow_history.append(slow_token)
 
-            # Get logits at last real token position
-            pos = min(cur_len - 1, trace_seq_len - 1)
-            if logits.dim() == 3:
-                last_logits = logits[:, pos, :].clone()
-            else:
-                last_logits = logits.clone()
+            hidden_pos = hidden[:, pos, :]  # [1, dim]
+            # codebook 0 (semantic VQ code) is the slow token mapped into [0, 4096);
+            # the fast/depth transformer then generates the N-1 residual codebooks
+            # autoregressively, conditioned on the growing codebook context.
+            ctx = [max(0, slow_token - semantic_begin_id)]
+            for _ in range(1, num_codebooks):
+                ctx_t = torch.zeros(1, num_codebooks - 1, dtype=torch.long, device=device)
+                for j, v in enumerate(ctx):
+                    ctx_t[0, j] = v
+                fout = fast_exec.run({"hidden": hidden_pos, "codebook_context": ctx_t})
+                flogits = fout.get("output") if isinstance(fout, dict) else fout
+                read_pos = len(ctx)  # depth position predicting the next codebook
+                cb_logits = flogits[:, read_pos, :acoustic_cb_size]
+                sampled = int(sample_token(cb_logits.unsqueeze(1), temperature, top_p=top_p))
+                ctx.append(sampled)
 
-            from .audio_utils import sample_token
-            next_token = sample_token(
-                last_logits.unsqueeze(1), temperature, top_p=top_p,
-            )
-
-            if eos_token_id is not None and next_token == eos_token_id:
-                break
-
-            generated_semantic.append(next_token)
+            acoustic_codes.append(ctx)
+            grid_cols.append([slow_token] + ctx)
 
         elapsed = (time.perf_counter() - start) * 1000
-        print(f"   [{comp_name}] Generated {len(generated_semantic)} semantic tokens in {elapsed:.0f}ms")
-
-        # ── Step 3: Embed semantic tokens → codec input ──
-        # Find the main text embedding (largest vocab, excludes codebook/fast)
-        embed_weight = None
-        if hasattr(executor, '_weights'):
-            best_vocab = 0
-            for wname, wtensor in executor._weights.items():
-                if 'embed' in wname and wname.endswith('.weight'):
-                    if 'codebook' in wname or 'fast' in wname:
-                        continue
-                    if wtensor.shape[0] > best_vocab:
-                        best_vocab = wtensor.shape[0]
-                        embed_weight = wtensor
-
-        if embed_weight is None:
-            raise RuntimeError("ZERO FALLBACK: DualAR model must have embed.weight.")
-
-        token_ids = torch.tensor(generated_semantic, dtype=torch.long, device=device)
-        max_id = token_ids.max().item()
-        print(f"   [{comp_name}] Token range: 0..{max_id}, embed vocab: {embed_weight.shape[0]}")
-        if max_id >= embed_weight.shape[0]:
-            print(f"   [{comp_name}] WARNING: token {max_id} >= vocab {embed_weight.shape[0]}, clamping")
-            token_ids = token_ids.clamp(0, embed_weight.shape[0] - 1)
-        with torch.no_grad():
-            token_embeds = torch.nn.functional.embedding(token_ids, embed_weight)
-
-        codec_input = token_embeds.unsqueeze(0).transpose(1, 2)  # [1, dim, T_gen]
-        print(f"   [{comp_name}] Embedded → {list(codec_input.shape)} for codec.decoder")
-
-        # Store for downstream
-        self.ctx.variable_resolver.resolved[f"{comp_name}.output_0"] = codec_input
-        self.ctx.variable_resolver.resolved["global.generated_codes"] = token_ids
-        self.ctx.variable_resolver.resolved["global.generated_token_ids"] = generated_semantic
+        print(f"   [{comp_name}] Generated {len(acoustic_codes)} positions in {elapsed:.0f}ms")
+        if not acoustic_codes:
+            raise RuntimeError("ZERO FALLBACK: DualAR produced no audio frames.")
 
         if not self.ctx.persistent_mode:
             self._unload_component_weights(comp_name)
+            self._unload_component_weights("model.fast")
             gc.collect()
-            device_empty_cache(self.ctx.primary_device)
+            device_empty_cache(device)
 
-        # ── Step 4: Codec decoder (forward stages) ──
+        # ── Step 3: codes -> codec.quantizer.decode (RVQ dequantize) -> features ──
+        T = len(acoustic_codes)
+        codes = torch.zeros(1, num_codebooks, T, dtype=torch.long, device=device)
+        for t, ac in enumerate(acoustic_codes):
+            for r, v in enumerate(ac):
+                codes[0, r, t] = v
+        self._ensure_weights_loaded("codec.quantizer")
+        q_exec = self.ctx.executors["codec.quantizer"]
+        # quantizer.decode is traced at a fixed code-window (q_seq codes -> z);
+        # chunk the variable-length codes into q_seq blocks (the upsample ratio is
+        # captured in each block) and concatenate the feature output.
+        q_seq = 23
+        qdag = getattr(q_exec, "_dag", None)
+        if qdag:
+            for _tid, spec in qdag.get("tensors", {}).items():
+                if spec.get("input_name") == "indices":
+                    sh = spec.get("shape", [])
+                    if len(sh) >= 3 and isinstance(sh[2], int):
+                        q_seq = sh[2]
+                    break
+        z_chunks = []
+        for cs in range(0, T, q_seq):
+            ce = min(cs + q_seq, T)
+            chunk = codes[:, :, cs:ce]
+            if chunk.shape[2] < q_seq:
+                chunk = torch.nn.functional.pad(chunk, (0, q_seq - chunk.shape[2]))
+            zc = q_exec.run({"indices": chunk})
+            zc = zc.get("output") if isinstance(zc, dict) else zc
+            if ce - cs < q_seq:  # trim padded tail proportionally
+                zc = zc[..., : max(1, int(zc.shape[-1] * (ce - cs) / q_seq))]
+            z_chunks.append(zc)
+        z = torch.cat(z_chunks, dim=-1)
+        print(f"   [codec.quantizer] decode codes {list(codes.shape)} -> features {list(z.shape)}")
+        # Bind features as the decoder input (graph input name 'x').
+        for key in ("global.x", "x", "codec.decoder.x"):
+            self.ctx.variable_resolver.resolved[key] = z
+        self.ctx.variable_resolver.resolved["global.generated_token_ids"] = [c[0] for c in acoustic_codes]
+        if not self.ctx.persistent_mode:
+            self._unload_component_weights("codec.quantizer")
+            gc.collect()
+            device_empty_cache(device)
+
+        # ── Step 4: codec.decoder (features -> waveform), chunked to its trace seq ──
         for stage in stages[1:]:
             codec_name = stage["component"]
             if codec_name not in self.ctx.executors:
-                print(f"   [{codec_name}] Skipped (not in executors)")
                 continue
-
-            print(f"   [{codec_name}] Running forward pass...")
-            codec_start = time.perf_counter()
             self._ensure_weights_loaded(codec_name)
-
-            # Try chunked forward if input exceeds trace-time seq_len
+            print(f"   [{codec_name}] Running forward pass...")
             if not self._try_chunked_forward(codec_name):
                 self._execute_component(codec_name, "forward", None)
-
-            codec_elapsed = (time.perf_counter() - codec_start) * 1000
-            print(f"   [{codec_name}] Done in {codec_elapsed:.0f}ms")
-
             if not self.ctx.persistent_mode:
                 self._unload_component_weights(codec_name)
                 gc.collect()
-                device_empty_cache(self.ctx.primary_device)
+                device_empty_cache(device)
 
         # ── Step 5: Output waveform ──
         from .audio_utils import postprocess_audio_output

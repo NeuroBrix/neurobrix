@@ -20,6 +20,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **OpenAudio (Fish-Speech dual-AR) TTS now produces correct speech.**
+  Previously the model emitted a constant carrier tone and never stopped
+  (running to the token limit); once stopping was corrected it then drifted
+  to unrelated words. The dual-AR generation path is fixed end to end: the
+  slow backbone now sees the full generated context each step and emits the
+  stop token on time, the fast/depth transformer generates the residual
+  acoustic codebooks correctly, and a half-precision overflow in the depth
+  transformer's normalisation (which collapsed the codebooks) was eliminated.
+  "Hello world." now transcribes back as "Hello world!" via STT, in compiled
+  mode. The CLI `--temperature` flag (and `--top-p` / `--repetition-penalty`)
+  is now honoured for this model — `--temperature 0` gives deterministic
+  greedy decoding — instead of always using the embedded defaults.
+
 - **Kokoro-82M now produces intelligible speech.** Previously the
   output was babbling / unintelligible (e.g. "Hello world." came out
   as garbled vowels). Two bugs in the native predictor/text-encoder
