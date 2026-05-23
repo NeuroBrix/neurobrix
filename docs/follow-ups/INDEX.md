@@ -347,6 +347,53 @@ investigation that picks one.
 **Existing file**: see CHANGELOG.md Layer 6.bis (commit `06d26c2`
 era) for the four hypotheses.
 
+### P-CEIL-PAD-WINDOW — P1
+**Scope**: granite-speech-3.3-8b STT is non-functional — its
+window-partition projector (Q-Former) computes the window count
+as `ceil(seq/W)` with a dynamic pad-to-multiple, but a
+trace-time-constant pad (7, the value at the trace sequence) is
+baked, so the window count is wrong for any sequence length other
+than the trace one.
+**Site (runtime side)**: the pad-to-multiple windowing handling at
+`src/neurobrix/core/runtime/graph/compiled_sequence.py:1532-1639`
+does not fire for this projector and must be extended; the
+shape-capability side is parked in a dedicated build chantier.
+**Shared primitive** — affects every pad/reshape/window-partition
+model (LLM masks, Swin upscalers, image); R23 byte-identical
+re-build of all such models mandatory before fixing.
+**Repro**: `neurobrix run --model granite-speech-3.3-8b --audio test_speech_ref.wav --prompt "Transcribe this audio."`
+→ `Failed at op aten.bmm::2: Expected [208,64] got [224,64]`.
+**Status**: PARKED — dedicated chantier, after the audio loop.
+
+### P-VIBEVOICE-NEXT-TOKEN-DIFFUSION-FLOW — P1
+**Scope**: VibeVoice-1.5B TTS needs a complete next-token-diffusion generation
+flow (LatentLM-style), which does not exist yet. The model runs end-to-end at
+runtime (OOM fixed, commit c0517a1) but emits SILENCE because the flow does a
+single LLM `forward` + a single diffusion pass on a fixed `[1,64,64]` latent
+instead of the autoregressive generation loop. This is a missing CAPABILITY (a
+new flow), not a bug — same nature as P-CEIL-PAD-WINDOW.
+**Required flow (per step, autoregressive)**:
+  1. LLM forward with KV cache on the running context → hidden state;
+  2. diffusion head (DDPM, ~10-20 steps, conditioned on that hidden) → next
+     acoustic VAE latent;
+  3. the acoustic connector (`SpeechConnector`) reprojects the latent to the LLM
+     hidden dim and it is appended as the next LLM input;
+  4. repeat until the stop condition; then the acoustic tokenizer (VAE decoder,
+     7.5 Hz frame rate) decodes the accumulated latent sequence → waveform.
+**Prerequisite (BLOCKER)**: the local vendor only ships the VibeVoice COMPONENTS
+(acoustic tokenizer, asr), NOT the full model with the generation loop (it is an
+unmerged transformers PR #40546; the model is assembled component-by-component).
+The complete vendor `modeling_vibevoice` streaming-inference loop (stop condition
++ speech-start protocol) must be retrieved (microsoft/VibeVoice source repo or
+the PR) as an executable oracle BEFORE building — op-by-op validation against an
+executable oracle is what made openaudio's dual_ar build converge; without it we
+would diverge blind.
+**Scope reference**: comparable to the dual_ar flow built for openaudio.
+**Site (runtime side)**: `core/flow/` (new flow handler) +
+`core/flow/stages/vibevoice.py`. **Repro**:
+`neurobrix run --model VibeVoice-1.5B --prompt "Hello world."` → silent .wav
+(RMS ~2e-5). **Status**: PARKED — dedicated chantier, after chatterbox + orpheus.
+
 ---
 
 ## Per-chantier follow-up archive
