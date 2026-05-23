@@ -266,6 +266,13 @@ class DtypeEngine:
             if op_name in AMP_PROMOTE_OPS:
                 return self._make_promote_wrapper(func)
 
+            # fp16-only: guard the squaring pattern x*x (RMSNorm/LayerNorm
+            # variance: mean(x*x)) against fp16 overflow. On bf16 the exponent
+            # range equals fp32's, so no guard is installed. See
+            # _make_square_safe_mul.
+            if op_name == "mul" and self.compute_dtype == torch.float16:
+                return self._make_square_safe_mul(func)
+
         return func
 
     # ========================================================================
@@ -321,6 +328,32 @@ class DtypeEngine:
             )
             return func(*new_args, **kwargs)
         return fp32_func
+
+    def _make_square_safe_mul(self, func: Callable) -> Callable:
+        """
+        fp16-ONLY overflow guard for the squaring pattern ``x * x``.
+
+        Hand-written RMSNorm / LayerNorm compute the variance as
+        ``mean(x * x)`` — a self-multiplication captured as aten::mul with both
+        operands bound to the same tensor. Squaring overflows fp16 (max 65504)
+        for any |x| > 256 → inf → the norm collapses to ~0 and the model emits
+        garbage (observed: openaudio dual-AR depth transformer). The vendor
+        protects this with an explicit ``x.float()`` before the square; we apply
+        the same upcast here, data-driven, so it holds regardless of what the
+        trace captured (an fp32 trace no-op-elides the vendor's ``.float()``).
+
+        Only the SQUARE (``a is b``) is upcast — a generic ``x * y`` stays in
+        compute_dtype. Output stays fp32; the downstream mean/rsqrt are already
+        AMP_FP32 and the next FP16 op casts back to compute_dtype.
+
+        Installed only on fp16 hardware (compile_op gates this): bf16's exponent
+        range equals fp32's, so ``x * x`` never overflows there.
+        """
+        def square_safe_mul(a, b, *args, **kwargs):
+            if a is b and isinstance(a, torch.Tensor) and a.dtype == torch.float16:
+                return func(a.float(), b.float(), *args, **kwargs)
+            return func(a, b, *args, **kwargs)
+        return square_safe_mul
 
     def _make_lower_precision_wrapper(self, func: Callable) -> Callable:
         """
