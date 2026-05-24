@@ -35,6 +35,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Autoregressive models whose graph computes positions with a two-argument
+  range (`arange(0, seq_len)`, the Llama `cache_position` form) no longer
+  produce an empty position range at decode.** The KV-cache decode position
+  shift assumed the single-argument `arange(seq_len)` form and mis-read the
+  two-argument form's first argument as the length, yielding an empty range
+  that collapsed the rotary-embedding table and the per-step query/key. The
+  shift now handles both forms; single-argument behaviour is unchanged.
+
 - **Models with cross-attention (different query and key/value sequence
   lengths) no longer crash with a shape-mismatch error inside attention.**
   The runtime's attention layout-fixup keyed its "is this key transposed?"
