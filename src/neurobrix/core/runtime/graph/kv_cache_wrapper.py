@@ -587,11 +587,21 @@ class KVCacheAttentionWrapper:
             return torch.arange(*args, **kwargs)
 
         cache_len = self._position_offset
-        if cache_len > 0 and len(args) >= 1 and isinstance(args[0], (int, float)):
-            end = args[0]
-            # Shift start to cache_len: arange(end) → arange(cache_len, cache_len + end)
-            # Output size unchanged (end elements), symbolic shapes preserved
-            return torch.arange(cache_len, cache_len + end, **kwargs)
+        if cache_len > 0 and args and isinstance(args[0], (int, float)):
+            # Shift the positional window to absolute decode positions by cache_len.
+            # Two graph forms occur:
+            #   arange(end)        — relative [0, end)      → [cache_len, cache_len+end)
+            #   arange(start, end) — relative [start, end)  → [cache_len+start, cache_len+end)
+            # The single-arg path is byte-identical to the prior behaviour (start=0).
+            # The two-arg form is what Llama-class graphs emit for cache_position
+            # (arange(0, seq_len) with start frozen at 0 from trace); treating its
+            # args[0]=0 as `end` previously produced arange(cache_len, cache_len) =
+            # an EMPTY range, collapsing the RoPE cos/sin and the q/k seq dims at decode.
+            if len(args) == 1:
+                return torch.arange(cache_len, cache_len + args[0], **kwargs)
+            if isinstance(args[1], (int, float)):
+                start, end = args[0], args[1]
+                return torch.arange(cache_len + start, cache_len + end, *args[2:], **kwargs)
 
         return torch.arange(*args, **kwargs)
 
