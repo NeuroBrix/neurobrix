@@ -147,23 +147,42 @@ propagate the windowed count. R23 proven (TinyLlama / Swin2SR / Sana 1024).
 Granite projector now runs end-to-end (`audio_embeds [1,42,4096]`). Resolution
 recorded in CHANGELOG [Unreleased].
 
-### P-GRANITE-AUDIO-NUMERICAL — P1 (new blocker, granite STT not yet functional)
-**Scope**: with windowing fixed, granite runs end-to-end but the LLM is not
-grounded on the audio. Embeds are sane-distribution (mean≈0, std≈0.24, no NaN)
-yet the model emits EOS immediately; with EOS suppressed it generates *"thank you
-for watching this video … bye bye"* — coherent English unrelated to the speech
-(whisper-large ref: "going along slushy country roads…"). Classic non-speech /
-ungrounded-audio hallucination: the encoder+projector compute does not capture
-the speech content.
-**Ruled out**: prompt template well-formed (system + user-role + 42 audio +
-"can you transcribe…?" + assistant-role); NOT the fp32-trace upcast-elision bug
-(encoder has 96 `aten::_to_copy`, uses `native_layer_norm`, bf16→fp16). Suspect:
-conformer encoder numerics, windowed-attention numerics, or audio preprocessing
-(160-dim conformer features); the encoder frame dim traced concrete (200).
-**Next step**: run the granite-speech vendor encoder+projector on
-`test_speech_ref.wav` as an executable oracle, op-by-op diff vs NeuroBrix to
-localize the divergence. Needs the vendor as oracle — a dedicated chantier.
-**Repro**: `neurobrix run --model granite-speech-3.3-8b --audio test_speech_ref.wav --prompt "transcribe"` → empty transcription.
+### P-GRANITE-CONFORMER-VARIABLE-FRAMES — P1 (granite STT not yet functional)
+**Localized via §5.8 vs the granite vendor oracle** (transformers
+`GraniteSpeechForConditionalGeneration` on `test_speech_ref.wav`; the LoRA
+adapter IS correctly merged into the NeuroBrix LLM — `|nbx_q - merged|=0.0009` vs
+`|nbx_q - base|=0.115` — so the LLM is speech-adapted, ruled out). The audio is
+not grounded because the audio path mishandles variable-length audio. Three
+compounding layers, all rooted in fixed-frame handling:
+
+1. **Preprocessing truncates the symbolic frame dim to the trace value.**
+   `audio_utils.py:67-81` pads/truncates EVERY non-batch dim to the graph trace
+   shape. The conformer frame dim is symbolic (encoder input
+   `symbolic_shape.dims = [s0, s1, 160]`), so it must NOT be truncated — but it
+   was cut to 200, dropping ~71% of a 13.7 s clip. Fix (known, ready): skip
+   pad/truncate for dims whose `symbolic_shape.dims[i]` is a symbol/expr; only
+   pad/truncate concrete dims. (Helper: read `symbolic_shape.dims`, not the
+   resolved `shape`.) Held back because it exposes layer 3 and needs R23 on the
+   other conformer model (canary).
+2. **Feature frame rate is 2× the vendor.** 13.69 s clip → vendor 685 frames
+   (20 ms shift / 50 fps) vs NeuroBrix `ConformerFeatureExtractor` 1367 frames
+   (kaldi default 10 ms / 100 fps). `preprocessor_config.json` is empty `{}`, so
+   the extractor must source the granite 20 ms shift (or a stride-2 stacking)
+   from the right config — currently uses the kaldi default.
+3. **Conformer encoder is mal tracé for variable frames (the core capability
+   gap).** With full-length features fed in, the encoder fails:
+   `aten.view::11` shape `[1,1,1,200,200,128]` (frame²×128 relative-position
+   attention) is baked CONCRETE 200; the cross-branch injection scales the view
+   target to the runtime frames but the data feeding it stays 200²-sized →
+   `shape '[1,1,1,1367,1367,128]' invalid for input of size 5120000` (=200²×128).
+   The conformer relative-position attention's frame²-dependent reshapes are not
+   symbolized consistently — a build-side "conformer mal tracé" gap, distinct
+   from the projector windowing (already fixed). This is the deep blocker.
+**Decision (2026-05-24)**: PARK per the maintainer rule — granite revealed a
+missing capability (conformer encoder symbolic frames). Layers 1-2 are bounded
+fixes; layer 3 is the conformer-symbolic capability. Embeds were sane only
+because the truncated 200-frame audio matched the encoder's frozen trace.
+**Repro**: `neurobrix run --model granite-speech-3.3-8b --audio test_speech_ref.wav --prompt "can you transcribe the speech into a written format?"` → empty (truncated) / encoder view crash (untruncated).
 **Surfaced**: 2026-05-24, after P-CEIL-PAD-WINDOW resolved.
 
 ---
