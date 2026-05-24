@@ -27,24 +27,31 @@ diffusion-math fp32.
 | `kernels/ops/topk.py:28,29` (`±65504`) | fp16 min/max masking constants | **KEEP** | Triton kernel-internal (R33-pure). Kernel layer's domain. |
 | `core/module/scheduler/{diffusion,consistency,utils}` fp32 | betas / alphas / sigmas in fp32 | **KEEP** | Mathematical correctness of the diffusion schedule, not a dtype-protection decision. |
 | `core/flow/stages/{kokoro,vibevoice}.py` `_coerce_torch_dtype` | string→`torch.dtype` at the triton-engine boundary | **KEEP** | CLAUDE.md doctrine: the triton engine returns a dtype *string*; stage handlers coerce it. Sanctioned boundary. |
-| `core/flow/{audio_utils,next_token_diffusion,audio}.py`, `core/cfg/engine.py` local string→dtype maps | string→`torch.dtype` duplication | **DEFER (cosmetic)** | Not protection logic — duplicated mapping. Could route to one `config` helper. No behaviour risk; 4 files; low priority. |
+| `core/flow/{audio_utils,next_token_diffusion,audio}.py` local string→dtype maps | string→`torch.dtype` duplication (3 inline copies of `DTYPE_MAP`) | **REPATRIATE** | → `config.get_torch_dtype`. The `manifest.get("dtype","float16")` default guarantees a valid key, so byte-identical for every real model. |
+| `core/cfg/engine.py` `_resolve_torch_dtype` | `Union[str, torch.dtype]` resolver | **KEEP** | Already delegates to `config.get_torch_dtype`; a thin Union-tolerant adapter, not a duplicated map. |
 
 ## Repatriated (R23-proven)
 
 - `dtype_adapter.py` deleted (dead parallel authority).
 - fp32-RMSNorm triplet → single `engine.rms_norm_fp32`.
+- 3 inline `DTYPE_MAP` copies in the audio flows → `config.get_torch_dtype`.
 
 R23 evidence: TinyLlama coherent in **compiled** and **sequential** ("The
 capital of France is Paris."); VibeVoice STT-faithful via the `_vv_rms_norm`
-path. The two LLM-fleet sites are byte-identical to their prior inline code
-by construction; the VibeVoice site is equivalent under the uniform-fp16
-stage and empirically validated.
+**and** `_compute_dtype` paths ("Hello, this is a final validation."); Whisper
+STT correct on the reference clip (audio.py + audio_utils `get_compute_dtype`).
+The two LLM-fleet RMSNorm sites are byte-identical to their prior inline code
+by construction; the VibeVoice RMSNorm site is equivalent under the
+uniform-fp16 stage; the 3 compute-dtype readers are byte-identical for every
+real model (manifest dtype is always a valid key).
 
 ## Deferred (named, with protocol — not fictional sub-chantiers)
 
-- **P-DTYPE-MOE-ROUTER-FP32**: move `gate_scores.float()` into the engine
-  only after an `NBX_OP_FINGERPRINT` before/after run proves byte-identity
-  on DeepSeek-MoE + Qwen3-30B (determinism-sensitive path).
-- **P-DTYPE-STRING-COERCE-DEDUP**: fold the 4 flow-handler string→dtype
-  maps into one `config` helper (cosmetic; the 2 stage-handler ones stay
-  per the triton-boundary doctrine).
+- **P-DTYPE-MOE-ROUTER-FP32**: the MoE router fp32 upcast
+  (`graph_executor.py:3144 gate_scores.float()`) is a single-site, not a
+  duplicated copy. Moving it into the engine is an *engine extension* (a new
+  routing-upcast seam), not a repatriation — and the path is
+  determinism-sensitive (P-TRITON-MOE-DETERMINISM). It should move only after
+  (a) Hocine signs off on the engine seam and (b) an `NBX_OP_FINGERPRINT`
+  before/after run proves byte-identity on DeepSeek-MoE + Qwen3-30B. Until
+  then it stays where it is, correct.

@@ -493,9 +493,8 @@ class NextTokenDiffusionEngine(FlowHandler):
         return out
 
     def _compute_dtype(self) -> torch.dtype:
-        dtype_str = self.ctx.pkg.manifest.get("dtype", "float16")
-        return {"float16": torch.float16, "bfloat16": torch.bfloat16,
-                "float32": torch.float32}.get(dtype_str, torch.float16)
+        from neurobrix.core.dtype.config import get_torch_dtype
+        return get_torch_dtype(self.ctx.pkg.manifest.get("dtype", "float16"))
 
     def _embed_weight(self, comp_name: str) -> Optional[torch.Tensor]:
         executor = self.ctx.executors.get(comp_name)
