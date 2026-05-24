@@ -290,6 +290,8 @@ def cmd_run(args):
         inputs["global.prompt"] = args.prompt
     if getattr(args, 'audio', None):
         inputs["global.audio_path"] = args.audio
+    if getattr(args, 'reference_audio', None):
+        inputs["global.reference_audio_path"] = args.reference_audio
 
     if args.steps is not None:
         inputs["global.num_inference_steps"] = args.steps

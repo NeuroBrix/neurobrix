@@ -182,12 +182,12 @@ class TTSLLMEngine(FlowHandler):
             raise RuntimeError(f"ZERO FALLBACK: text_emb weight not found in {lm_name}.")
 
         # ── Build conditioning embeddings ──
-        # cond_enc: speaker_emb → spkr_enc → [1, 1, dim]
-        #           + perceiver(prompt_speech_emb) if available
-        #           + emotion_adv_fc if available
+        # Runs the traced cond_enc component (spkr_enc + Perceiver resampler +
+        # emotion_adv_fc → cat → [1, 34, 1024]) on the embedded default-voice
+        # conditioning. No hand-rolled perceiver — the graph owns the compute.
         cond_embeds = self._build_conditioning(
-            aux_weights, speaker_emb, device, dtype
-        )
+            speaker_emb, speech_emb_w, device, dtype
+        ).to(dtype=dtype)
         print(f"   [{lm_name}] Conditioning: {cond_embeds.shape}")
 
         # ── Build text embeddings ──
@@ -314,6 +314,7 @@ class TTSLLMEngine(FlowHandler):
                 # because topology connections wrongly map t3_cfg output to ALL s3gen inputs.
                 speech_len = torch.tensor([len(speech_ids)], dtype=torch.long, device=device)
                 voc_executor = self.ctx.executors.get(voc_name)
+                conds = self._load_default_conditioning()
                 comp_inputs: Dict[str, Any] = {}
                 if voc_executor is not None:
                     voc_dag = getattr(voc_executor, '_dag', None)
@@ -326,8 +327,12 @@ class TTSLLMEngine(FlowHandler):
                                 comp_inputs[iname] = speech_tokens
                             elif iname == "speech_token_lens":
                                 comp_inputs[iname] = speech_len
+                            elif iname.startswith("ref_dict.") and conds is not None \
+                                    and f"gen.{iname[len('ref_dict.'):]}" in conds:
+                                # Reference-voice ref-dict from the embedded conditioning
+                                comp_inputs[iname] = conds[f"gen.{iname[len('ref_dict.'):]}"].to(device)
                             else:
-                                # Dummy inputs for ref_dict fields and others
+                                # Dummy inputs for any unmapped fields
                                 shape = tspec.get("shape", [1])
                                 dtype_str = tspec.get("dtype", "float32")
                                 t_dtype = torch.int64 if "int" in dtype_str else torch.float32
@@ -414,59 +419,88 @@ class TTSLLMEngine(FlowHandler):
 
         return result
 
+    def _load_default_conditioning(self) -> Optional[Dict[str, torch.Tensor]]:
+        """Load the embedded default-voice conditioning (built by forge).
+
+        runtime/default_conditioning.safetensors holds the conds.pt inputs:
+        t3.{speaker_emb, cond_prompt_speech_tokens, emotion_adv} for cond_enc
+        and gen.{prompt_token, prompt_token_len, prompt_feat, embedding} for
+        the s3gen ref-dict. Returns None if the build has no default voice.
+        """
+        if hasattr(self, "_default_conditioning_cache"):
+            return self._default_conditioning_cache
+        from safetensors.torch import load_file
+        path = Path(self.ctx.pkg.cache_path) / "runtime" / "default_conditioning.safetensors"
+        conds = load_file(str(path)) if path.exists() else None
+        self._default_conditioning_cache = conds
+        return conds
+
+    def _graph_input_names(self, executor) -> List[str]:
+        """Return the graph DAG input_name list for a component executor."""
+        dag = getattr(executor, "_dag", None)
+        if not dag:
+            return []
+        return [t["input_name"] for t in dag.get("tensors", {}).values()
+                if t.get("input_name")]
+
     def _build_conditioning(
-        self, aux_weights: Dict[str, torch.Tensor],
+        self,
         speaker_emb: Optional[torch.Tensor],
+        speech_emb_w: Optional[torch.Tensor],
         device: str, dtype: torch.dtype,
     ) -> torch.Tensor:
-        """Build conditioning embeddings from speaker/emotion/prompt info.
+        """Build conditioning by running the traced cond_enc component.
 
-        Implements T3CondEnc logic using auxiliary weights directly:
-        1. spkr_enc(speaker_emb) → [B, 1, dim]
-        2. perceiver(prompt_speech_emb) → [B, N, dim] (if prompt available)
-        3. emotion_adv_fc(0.5) → [B, 1, dim] (if emotion conditioning)
-        4. Concat all → [B, cond_len, dim]
+        cond_enc is the data-driven T3CondEnc graph: spkr_enc(speaker_emb) +
+        Perceiver(speech_emb(cond_prompt_speech_tokens)) + emotion_adv_fc →
+        cat → [1, 34, 1024]. Inputs come from the embedded default-voice
+        conditioning (or a live speaker_emb when reference audio is given).
+        ZERO FALLBACK: no hand-rolled perceiver, no zero-conditioning path.
         """
-        parts = []
-        dim = None
+        cond_name = "cond_enc"
+        cond_executor = self.ctx.executors.get(cond_name)
+        if cond_executor is None:
+            raise RuntimeError(
+                "ZERO FALLBACK: tts_llm conditioning requires a traced 'cond_enc' "
+                "component. Re-import a build that traces cond_enc."
+            )
+        conds = self._load_default_conditioning()
+        if conds is None:
+            raise RuntimeError(
+                "ZERO FALLBACK: missing runtime/default_conditioning.safetensors "
+                "(default-voice inputs for cond_enc)."
+            )
+        if speech_emb_w is None:
+            raise RuntimeError(
+                "ZERO FALLBACK: speech_emb weight required to embed prompt speech tokens."
+            )
 
-        # Speaker embedding projection
-        spkr_w = aux_weights.get("cond_enc.spkr_enc.weight")
-        spkr_b = aux_weights.get("cond_enc.spkr_enc.bias")
-        if spkr_w is not None:
-            dim = spkr_w.shape[0]
-            if speaker_emb is not None:
-                spkr_in = speaker_emb.view(1, -1).to(dtype=dtype)
-            else:
-                # No reference audio: use zero speaker embedding
-                spkr_size = spkr_w.shape[1]
-                spkr_in = torch.zeros(1, spkr_size, device=device, dtype=dtype)
+        cond_tokens = conds["t3.cond_prompt_speech_tokens"].to(device)
+        with torch.no_grad():
+            cond_prompt_speech_emb = F.embedding(cond_tokens, speech_emb_w.to(dtype=dtype))
 
-            with torch.no_grad():
-                cond_spkr = F.linear(spkr_in, spkr_w.to(dtype=dtype),
-                                     spkr_b.to(dtype=dtype) if spkr_b is not None else None)
-            cond_spkr = cond_spkr.unsqueeze(1)  # [1, 1, dim]
-            parts.append(cond_spkr)
+        # Live reference speaker_emb overrides the default voice when present
+        spk = speaker_emb.view(1, -1) if speaker_emb is not None \
+            else conds["t3.speaker_emb"].to(device)
 
-        # Perceiver resampler (processes prompt speech embeddings)
-        # For now, skip prompt conditioning (requires reference speech tokens)
-        # The perceiver output would go here as parts.append(perceiver_out)
+        comp_input_values = {
+            "speaker_emb": spk,
+            "cond_prompt_speech_emb": cond_prompt_speech_emb,
+            "emotion_adv": conds["t3.emotion_adv"].to(device),
+            "cond_prompt_speech_tokens": cond_tokens,
+        }
+        comp_inputs = {n: comp_input_values[n]
+                       for n in self._graph_input_names(cond_executor)
+                       if n in comp_input_values}
 
-        # Emotion adversarial conditioning
-        emotion_w = aux_weights.get("cond_enc.emotion_adv_fc.weight")
-        if emotion_w is not None and dim is not None:
-            with torch.no_grad():
-                emotion_val = torch.tensor([[[0.5]]], device=device, dtype=dtype)
-                emotion_emb = F.linear(emotion_val, emotion_w.to(dtype=dtype))
-            parts.append(emotion_emb)  # [1, 1, dim]
-
-        if not parts:
-            # Fallback: zero conditioning
-            if dim is None:
-                dim = 1024  # Will fail at concat if wrong
-            return torch.zeros(1, 1, dim, device=device, dtype=dtype)
-
-        return torch.cat(parts, dim=1)
+        self._ensure_weights_loaded(cond_name)
+        output = cond_executor.run(comp_inputs)
+        cond_emb = next(iter(output.values())) if isinstance(output, dict) else output
+        if not self.ctx.persistent_mode:
+            self._unload_component_weights(cond_name)
+            gc.collect()
+            device_empty_cache(self.ctx.primary_device)
+        return cond_emb
 
     def _sample_token(
         self, logits: torch.Tensor, temperature: float,

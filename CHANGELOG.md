@@ -18,6 +18,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   synthesised silent tail is cropped to the spoken content, in both
   compiled and `--triton` modes.
 
+### Changed
+
+- **Chatterbox TTS conditioning now runs the model's speaker + Perceiver
+  conditioning encoder instead of a hand-rolled approximation.** The runtime
+  previously hand-rolled the conditioning and skipped the Perceiver resampler,
+  producing a 2-token conditioning instead of the model's 34-token one (1
+  speaker + 32 Perceiver + 1 emotion); the speech model then over-generated
+  (1000+ tokens of garbage). The conditioning is now produced by running the
+  embedded conditioning-encoder component end-to-end on the default voice,
+  matching the vendor reference, so the speech model generates the correct
+  ~1 s of tokens. The vocoder is fed the reference voice from the same embedded
+  conditioning, and `--reference-audio` is wired through the CLI. Coherent
+  vocoder audio is still blocked on a separate sequence-length symbolic
+  limitation (tracked as P-SYMBOLIC-ARANGE-SUM-FROM-ITEM).
+
 ### Fixed
 
 - **Models with cross-attention (different query and key/value sequence
