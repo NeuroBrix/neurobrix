@@ -20,6 +20,7 @@ Based on:
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union, TYPE_CHECKING
+import copy
 import os
 import re
 import torch
@@ -1537,12 +1538,61 @@ class CompiledSequence:
         Pre-compilation pass: detect ops with data-dependent attributes and
         replace concrete values with symbolic expressions.
 
-        Pattern detected: constant_pad_nd → view/reshape (pad-to-multiple windowing).
-        - Pad amount becomes: (divisor - input_sym % divisor) % divisor
-        - View num_windows becomes: (input_sym + divisor - 1) // divisor
+        Pattern detected: constant_pad_nd → view/reshape (pad-to-multiple windowing,
+        e.g. a Q-Former / windowed-attention projector that pads a sequence up to a
+        multiple of a window size W and reshapes into windows).
+
+        Two coupled rewrites, both keyed on the SAME detected divisor W:
+        - Pad amount becomes the dynamic pad-to-multiple: (W - input_sym % W) % W.
+        - The pad-output symbolic dim, baked at trace as add(input_sym, pad_total)
+          (a constant pad), is replaced by the pad-to-multiple form
+          mul(ceil(input_sym/W), W) everywhere downstream of the pad. The trace
+          derived num_windows as floordiv(input_sym + pad_total, W) — the FLOOR of
+          the trace-specific pad, not ceil. Data-carrying reshapes self-correct
+          (they reshape from the real, correctly-padded element count), but
+          broadcast `expand` ops consume the explicit num_windows and diverge from
+          the data path (the granite Q-Former bmm size mismatch). Replacing the
+          pad-output expression makes both branches agree on ceil.
+
+        Trace-value preserving: at the trace seq the pad already makes the dim a
+        multiple of W, so ceil*W == input_sym + pad_total == the baked trace value.
+        Trace-time shapes are therefore byte-identical; only runtime seqs that are
+        not a multiple of W change. Scope is bounded to tensors/ops reachable
+        downstream of the pad — an identical add(input_sym, K) subtree outside that
+        set is an unrelated coincidence and is left untouched.
 
         Modifies ops IN PLACE before compilation.
         """
+        def _expr_struct_eq(a: Any, b: Any) -> bool:
+            """Structural equality of symbolic-dim trees, ignoring trace values."""
+            if isinstance(a, dict) and isinstance(b, dict):
+                ta = a.get("type")
+                if ta != b.get("type"):
+                    return False
+                if ta == "symbol":
+                    return (a.get("id", a.get("symbol_id"))
+                            == b.get("id", b.get("symbol_id")))
+                if ta in ("add", "sub", "mul", "floordiv", "mod"):
+                    return (_expr_struct_eq(a.get("left"), b.get("left"))
+                            and _expr_struct_eq(a.get("right"), b.get("right")))
+                if ta == "neg":
+                    return _expr_struct_eq(a.get("left", a.get("operand")),
+                                           b.get("left", b.get("operand")))
+                return False
+            return a == b
+
+        def _subst_subtree(node: Any, target: Any, repl: Any) -> Any:
+            """Replace every subtree structurally-equal to `target` with `repl`."""
+            if _expr_struct_eq(node, target):
+                return copy.deepcopy(repl)
+            if isinstance(node, dict):
+                out = dict(node)
+                for k in ("left", "right", "operand"):
+                    if k in out:
+                        out[k] = _subst_subtree(out[k], target, repl)
+                return out
+            return node
+
         for op_uid, op_data in ops.items():
             op_type = op_data.get("op_type", "")
             if op_type != "aten::constant_pad_nd":
@@ -1657,51 +1707,72 @@ class CompiledSequence:
             new_attrs["args"] = new_args
             op_data["attributes"] = new_attrs
 
-            # ── FIX VIEW OP ─────────────────────────────────────────────
-            if view_op_uid is not None:
-                view_data = ops[view_op_uid]
-                view_attrs = dict(view_data.get("attributes", {}))
-                for shape_key in ("shape", "size"):
-                    if shape_key in view_attrs:
-                        old_shape = list(view_attrs[shape_key])
-                        for _pi, dim_idx, _pt, in_dim in symbolic_pads:
-                            # num_windows = ceil(input_sym / divisor)
-                            #             = (input_sym + divisor - 1) // divisor
-                            in_conc = input_concrete[dim_idx]
-                            ceil_expr = {
-                                "type": "floordiv",
-                                "left": {
-                                    "type": "add", "left": in_dim,
-                                    "right": divisor - 1,
-                                    "trace": in_conc + divisor - 1,
-                                },
-                                "right": divisor,
-                                "trace": (in_conc + divisor - 1) // divisor,
-                            }
-                            # In view: batch*seq merged → find the num_windows slot
-                            if len(old_shape) > ndim:
-                                # View expanded (e.g. 3D→3D with dim split)
-                                # First unmatched dim = num_windows
-                                for vi in range(len(old_shape)):
-                                    if isinstance(old_shape[vi], int) and vi < dim_idx:
-                                        old_shape[vi] = ceil_expr
-                                        break
-                            elif len(old_shape) == ndim:
-                                if dim_idx < len(old_shape):
-                                    old_shape[dim_idx] = ceil_expr
-                        view_attrs[shape_key] = old_shape
-                        break
-                # Also update args list
-                view_args = list(view_attrs.get("args", []))
-                for i, arg in enumerate(view_args):
-                    if isinstance(arg, dict) and arg.get("type") == "list":
-                        orig = arg.get("value", [])
-                        new_shape = view_attrs.get("shape", view_attrs.get("size"))
-                        if new_shape and len(orig) == len(new_shape):
-                            view_args[i] = {"type": "list", "value": new_shape}
-                            break
-                view_attrs["args"] = view_args
-                view_data["attributes"] = view_attrs
+            # ── FIX SHAPES: model pad output as ceil(input/W)*W ─────────
+            # Compute the downstream-reachable set from the pad output (BFS via
+            # input→output tensor ids). Substitution is confined to it so an
+            # identical add(input_sym, K) subtree elsewhere is never touched.
+            reachable = {out_tid}
+            grew = True
+            while grew:
+                grew = False
+                for _o in ops.values():
+                    if any(t in reachable for t in _o.get("input_tensor_ids", [])):
+                        for t in _o.get("output_tensor_ids", []):
+                            if t not in reachable:
+                                reachable.add(t)
+                                grew = True
+
+            for _pi, dim_idx, _pt, in_dim in symbolic_pads:
+                # P_wrong = the pad output's symbolic dim, read as source of truth
+                # (baked as add(input_sym, pad_total) by the constant-pad rule).
+                out_dims = (tensors.get(out_tid, {}).get("symbolic_shape", {})
+                            .get("dims", []))
+                if dim_idx >= len(out_dims) or not isinstance(out_dims[dim_idx], dict):
+                    continue
+                p_wrong = out_dims[dim_idx]
+                in_conc = input_concrete[dim_idx]
+                # P_correct = ceil(input_sym/W) * W  (== input_sym + pad_total at
+                # the trace seq, since the trace pads to a multiple of W).
+                ceil_expr = {
+                    "type": "floordiv",
+                    "left": {"type": "add", "left": copy.deepcopy(in_dim),
+                             "right": divisor - 1, "trace": in_conc + divisor - 1},
+                    "right": divisor,
+                    "trace": (in_conc + divisor - 1) // divisor,
+                }
+                p_correct = {
+                    "type": "mul", "left": ceil_expr, "right": divisor,
+                    "trace": ((in_conc + divisor - 1) // divisor) * divisor,
+                }
+
+                # Substitute in reachable tensors' symbolic_shape dims.
+                for _tid in reachable:
+                    _ss = tensors.get(_tid, {}).get("symbolic_shape")
+                    if isinstance(_ss, dict) and isinstance(_ss.get("dims"), list):
+                        _ss["dims"] = [_subst_subtree(d, p_wrong, p_correct)
+                                       for d in _ss["dims"]]
+
+                # Substitute in ops touching a reachable tensor (shape/size/args).
+                for _o in ops.values():
+                    _touches = (any(t in reachable for t in _o.get("input_tensor_ids", []))
+                                or any(t in reachable for t in _o.get("output_tensor_ids", [])))
+                    if not _touches:
+                        continue
+                    _oa = _o.get("attributes")
+                    if not isinstance(_oa, dict):
+                        continue
+                    for _k in ("shape", "size"):
+                        if isinstance(_oa.get(_k), list):
+                            _oa[_k] = [_subst_subtree(s, p_wrong, p_correct)
+                                       for s in _oa[_k]]
+                    _oargs = _oa.get("args")
+                    if isinstance(_oargs, list):
+                        for _ai, _arg in enumerate(_oargs):
+                            if isinstance(_arg, dict) and _arg.get("type") == "list":
+                                _arg["value"] = [_subst_subtree(s, p_wrong, p_correct)
+                                                 for s in _arg.get("value", [])]
+                            elif isinstance(_arg, dict):
+                                _oargs[_ai] = _subst_subtree(_arg, p_wrong, p_correct)
 
     # ========================================================================
     # CROSS-BRANCH SYMBOLIC EXPRESSION PROPAGATION
@@ -1767,133 +1838,166 @@ class CompiledSequence:
 
         injected = 0
 
-        # Step 2: Inject into expand/view/reshape/_unsafe_view ops
-        for _op_uid, op_data in ops.items():
-            op_type = op_data.get("op_type", "")
-            attrs = op_data.get("attributes", {})
-            args = attrs.get("args", [])
+        # Step 2: Inject into expand/view/reshape/creation ops.
+        #
+        # Fixpoint loop: the dim-merge branch synthesizes product expressions
+        # (e.g. num_windows * num_queries) for a flatten whose merged dim the
+        # trace baked concrete. A LATER flatten in the same chain
+        # (view → view → view) re-uses that same merged value, but the trace
+        # bakes it concrete at every step AND it appears in that op's recorded
+        # input_shape — so the dim-merge passthrough-safety skips it and only a
+        # DIRECT match (which has no passthrough-safety) can fix it. Persisting
+        # each synthesized product back into expr_map and re-running lets the
+        # whole chain propagate a windowed dim consistently. Without it, the
+        # head of the chain symbolizes but the tail keeps the trace value
+        # (granite Q-Former: projector output [7,6,4096] instead of [1,42,4096]).
+        for _fixpoint_iter in range(8):  # bounded: each pass injects strictly more
+            injected_before = injected
+            new_products: Dict[int, Any] = {}  # trace_val → synthesized product expr
 
-            if op_type == "aten::expand" and len(args) >= 2:
-                # Expand: check broadcast dims (input_dim=1 → target_dim=N)
-                size_arg = args[1]
-                if not isinstance(size_arg, dict) or size_arg.get("type") != "list":
-                    continue
-                size_list = size_arg.get("value", [])
-                input_shapes = op_data.get("input_shapes", [[]])
-                if not input_shapes:
-                    continue
-                input_shape = input_shapes[0]
+            for _op_uid, op_data in ops.items():
+                op_type = op_data.get("op_type", "")
+                attrs = op_data.get("attributes", {})
+                args = attrs.get("args", [])
 
-                changed = False
-                new_size = list(size_list)
-                for i, (target, actual) in enumerate(zip(size_list, input_shape)):
-                    if (isinstance(target, int) and actual == 1
-                            and target > 1 and target in expr_map):
-                        new_size[i] = expr_map[target]
-                        changed = True
-                        injected += 1
-
-                if changed:
-                    new_args = list(args)
-                    new_args[1] = {"type": "list", "value": new_size}
-                    new_attrs = dict(attrs)
-                    new_attrs["args"] = new_args
-                    if "size" in new_attrs:
-                        new_attrs["size"] = new_size
-                    op_data["attributes"] = new_attrs
-
-            elif op_type in ("aten::view", "aten::reshape", "aten::_unsafe_view"):
-                # View/reshape: check for hardcoded dims matching expressions
-                shape_key = "shape" if "shape" in attrs else "size" if "size" in attrs else None
-                if shape_key is None:
-                    continue
-                old_shape = attrs[shape_key]
-                if not isinstance(old_shape, list):
-                    continue
-
-                # Skip if already fully symbolized
-                has_expr = any(isinstance(s, dict) and s.get("type") in
-                              ("floordiv", "add", "sub", "mul", "mod", "neg")
-                              for s in old_shape)
-                if has_expr:
-                    continue
-
-                # Get input shape for dim-merge product detection
-                input_shapes = op_data.get("input_shapes", [[]])
-                input_shape = input_shapes[0] if input_shapes else []
-
-                changed = False
-                new_shape = list(old_shape)
-                for i, dim_val in enumerate(old_shape):
-                    if not isinstance(dim_val, int) or dim_val <= 1:
+                if op_type == "aten::expand" and len(args) >= 2:
+                    # Expand: check broadcast dims (input_dim=1 → target_dim=N)
+                    size_arg = args[1]
+                    if not isinstance(size_arg, dict) or size_arg.get("type") != "list":
                         continue
-                    if dim_val in expr_map:
-                        # Direct match
-                        new_shape[i] = expr_map[dim_val]
-                        changed = True
-                        injected += 1
-                    elif input_shape and dim_val not in input_shape:
-                        # Dim-merge detection: dim_val = expr_val * constant
-                        # E.g., 15 = 5 * 3 where 5 is symbolic and 3 is from input
-                        # Safety: skip if dim_val appears in input_shape (passthrough,
-                        # not a merge — e.g., window_size=15 passing through unchanged)
-                        for expr_val, expr_dict in expr_map.items():
-                            if dim_val % expr_val == 0:
-                                quotient = dim_val // expr_val
-                                if quotient > 1 and quotient in input_shape:
-                                    # Create product expression
-                                    product_expr = {
-                                        "type": "mul",
-                                        "left": expr_dict,
-                                        "right": quotient,
-                                        "trace": dim_val,
-                                    }
-                                    new_shape[i] = product_expr
-                                    changed = True
-                                    injected += 1
+                    size_list = size_arg.get("value", [])
+                    input_shapes = op_data.get("input_shapes", [[]])
+                    if not input_shapes:
+                        continue
+                    input_shape = input_shapes[0]
+
+                    changed = False
+                    new_size = list(size_list)
+                    for i, (target, actual) in enumerate(zip(size_list, input_shape)):
+                        if (isinstance(target, int) and actual == 1
+                                and target > 1 and target in expr_map):
+                            new_size[i] = expr_map[target]
+                            changed = True
+                            injected += 1
+
+                    if changed:
+                        new_args = list(args)
+                        new_args[1] = {"type": "list", "value": new_size}
+                        new_attrs = dict(attrs)
+                        new_attrs["args"] = new_args
+                        if "size" in new_attrs:
+                            new_attrs["size"] = new_size
+                        op_data["attributes"] = new_attrs
+
+                elif op_type in ("aten::view", "aten::reshape", "aten::_unsafe_view"):
+                    # View/reshape: check for hardcoded dims matching expressions
+                    shape_key = "shape" if "shape" in attrs else "size" if "size" in attrs else None
+                    if shape_key is None:
+                        continue
+                    old_shape = attrs[shape_key]
+                    if not isinstance(old_shape, list):
+                        continue
+
+                    # Skip if already fully symbolized
+                    has_expr = any(isinstance(s, dict) and s.get("type") in
+                                  ("floordiv", "add", "sub", "mul", "mod", "neg")
+                                  for s in old_shape)
+                    if has_expr:
+                        continue
+
+                    # Get input shape for dim-merge product detection
+                    input_shapes = op_data.get("input_shapes", [[]])
+                    input_shape = input_shapes[0] if input_shapes else []
+
+                    changed = False
+                    new_shape = list(old_shape)
+                    for i, dim_val in enumerate(old_shape):
+                        if not isinstance(dim_val, int) or dim_val <= 1:
+                            continue
+                        if dim_val in expr_map:
+                            # Direct match (no passthrough-safety — an exact known
+                            # windowed value is always the windowed value)
+                            new_shape[i] = expr_map[dim_val]
+                            changed = True
+                            injected += 1
+                        elif input_shape and dim_val not in input_shape:
+                            # Dim-merge detection: dim_val = expr_val * constant
+                            # E.g., 15 = 5 * 3 where 5 is symbolic and 3 is from input
+                            # Safety: skip if dim_val appears in input_shape (passthrough,
+                            # not a merge — e.g., window_size=15 passing through unchanged)
+                            for expr_val, expr_dict in expr_map.items():
+                                if dim_val % expr_val == 0:
+                                    quotient = dim_val // expr_val
+                                    if quotient > 1 and quotient in input_shape:
+                                        # Create product expression
+                                        product_expr = {
+                                            "type": "mul",
+                                            "left": expr_dict,
+                                            "right": quotient,
+                                            "trace": dim_val,
+                                        }
+                                        new_shape[i] = product_expr
+                                        changed = True
+                                        injected += 1
+                                        # Persist so later flattens DIRECT-match it.
+                                        if dim_val not in new_products:
+                                            new_products[dim_val] = product_expr
+                                        break
+
+                    if changed:
+                        new_attrs = dict(attrs)
+                        new_attrs[shape_key] = new_shape
+                        # Also update args list
+                        new_args = list(new_attrs.get("args", []))
+                        for ai, arg in enumerate(new_args):
+                            if isinstance(arg, dict) and arg.get("type") == "list":
+                                orig = arg.get("value", [])
+                                if len(orig) == len(new_shape):
+                                    new_args[ai] = {"type": "list", "value": new_shape}
                                     break
+                        new_attrs["args"] = new_args
+                        op_data["attributes"] = new_attrs
 
-                if changed:
-                    new_attrs = dict(attrs)
-                    new_attrs[shape_key] = new_shape
-                    # Also update args list
-                    new_args = list(new_attrs.get("args", []))
-                    for ai, arg in enumerate(new_args):
-                        if isinstance(arg, dict) and arg.get("type") == "list":
-                            orig = arg.get("value", [])
-                            if len(orig) == len(new_shape):
-                                new_args[ai] = {"type": "list", "value": new_shape}
-                                break
-                    new_attrs["args"] = new_args
-                    op_data["attributes"] = new_attrs
+                elif op_type in ("aten::ones", "aten::zeros", "aten::full",
+                                 "aten::empty", "aten::ones_like", "aten::zeros_like"):
+                    # Creation ops: size list may contain hardcoded symbolic values
+                    # E.g., ones([5, 15]) for windowed attention mask
+                    if not args:
+                        continue
+                    size_arg = args[0]
+                    if not isinstance(size_arg, dict) or size_arg.get("type") != "list":
+                        continue
+                    size_list = size_arg.get("value", [])
 
-            elif op_type in ("aten::ones", "aten::zeros", "aten::full",
-                             "aten::empty", "aten::ones_like", "aten::zeros_like"):
-                # Creation ops: size list may contain hardcoded symbolic values
-                # E.g., ones([5, 15]) for windowed attention mask
-                if not args:
+                    changed = False
+                    new_size = list(size_list)
+                    for i, dim_val in enumerate(size_list):
+                        if isinstance(dim_val, int) and dim_val > 1 and dim_val in expr_map:
+                            new_size[i] = expr_map[dim_val]
+                            changed = True
+                            injected += 1
+
+                    if changed:
+                        new_args = list(args)
+                        new_args[0] = {"type": "list", "value": new_size}
+                        new_attrs = dict(attrs)
+                        new_attrs["args"] = new_args
+                        if "size" in new_attrs:
+                            new_attrs["size"] = new_size
+                        op_data["attributes"] = new_attrs
+
+            # Merge synthesized products into expr_map so the next pass can
+            # DIRECT-match later flattens. Skip values that are ambiguous or
+            # already mapped (don't override a tensor-derived expression).
+            grew = False
+            for _v, _e in new_products.items():
+                if _v in ambiguous or _v in expr_map:
                     continue
-                size_arg = args[0]
-                if not isinstance(size_arg, dict) or size_arg.get("type") != "list":
-                    continue
-                size_list = size_arg.get("value", [])
+                expr_map[_v] = _e
+                grew = True
 
-                changed = False
-                new_size = list(size_list)
-                for i, dim_val in enumerate(size_list):
-                    if isinstance(dim_val, int) and dim_val > 1 and dim_val in expr_map:
-                        new_size[i] = expr_map[dim_val]
-                        changed = True
-                        injected += 1
-
-                if changed:
-                    new_args = list(args)
-                    new_args[0] = {"type": "list", "value": new_size}
-                    new_attrs = dict(attrs)
-                    new_attrs["args"] = new_args
-                    if "size" in new_attrs:
-                        new_attrs["size"] = new_size
-                    op_data["attributes"] = new_attrs
+            if injected == injected_before and not grew:
+                break
 
     # ========================================================================
     # FUSED MoE COMPILATION
