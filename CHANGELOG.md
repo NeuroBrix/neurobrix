@@ -36,6 +36,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **RMSNorm fp32-precision handling is now centralized and shared across
+  execution modes.** The fp32 variance upcast that protects RMSNorm against
+  fp16 overflow was previously duplicated in three places (the compiled fused
+  path, the op-by-op sequential path, and the VibeVoice speech path); the three
+  copies are now a single source, guaranteeing identical numerical behaviour in
+  every mode. No change to output for any model.
+
 - **Kokoro-82M no longer pads short-prompt audio to a fixed ~10 s
   window.** The native predictor stage previously force-scaled the
   predicted phoneme durations so they summed to exactly the traced
