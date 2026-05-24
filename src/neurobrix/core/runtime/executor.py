@@ -632,11 +632,27 @@ class RuntimeExecutor:
                 ensure_weights_fn=self._ensure_weights_loaded,
                 unload_weights_fn=self._unload_component_weights,
             )
+        elif flow_type == "next_token_diffusion":
+            if ctx.mode in ("triton", "triton_sequential"):
+                raise RuntimeError(
+                    "ZERO FALLBACK: next_token_diffusion has no triton mirror yet "
+                    "(VibeVoice DDPM is a documented pending-forge-support case, "
+                    "see src/neurobrix/CLAUDE.md §0). Run in compiled/sequential mode."
+                )
+            from neurobrix.core.flow.next_token_diffusion import NextTokenDiffusionEngine
+            return NextTokenDiffusionEngine(
+                ctx=ctx,
+                execute_component_fn=self._execute_component,
+                resolve_inputs_fn=self._input_resolver.resolve_component_inputs,
+                ensure_weights_fn=self._ensure_weights_loaded,
+                unload_weights_fn=self._unload_component_weights,
+            )
 
         raise RuntimeError(
             f"ZERO FALLBACK: Unsupported flow type '{flow_type}'.\n"
             f"Supported: iterative_process, static_graph, forward_pass, "
-            f"autoregressive_generation, audio, rnnt, encoder_decoder, audio_llm, dual_ar, tts_llm"
+            f"autoregressive_generation, audio, rnnt, encoder_decoder, audio_llm, "
+            f"dual_ar, tts_llm, next_token_diffusion"
         )
 
     # ========== SETUP METHODS ==========
