@@ -102,33 +102,37 @@ runtime consumer is `core/flow/stages/kokoro.py:_scale_kokoro_durations`
 **Repro**: `neurobrix run --model Kokoro-82M --prompt "The quick brown fox jumps over the lazy dog."` → only first ~23 phonemes survive.
 **Surfaced**: P-AUDIO-P0a (2026-05-22). Option B in the P0a diagnosis doc.
 
-### P-SYMBOLIC-ARANGE-SUM-FROM-ITEM — P1
+### P-SYMBOLIC-ITEM-TRACKING (was P-SYMBOLIC-ARANGE-SUM-FROM-ITEM) — P1, PARKED capability chantier
 **Scope**: chatterbox vocoder (s3gen) crashes building its pad mask. The mask
-sequence length is `arange(prompt_token_len + generated_token_len)`, but the
+sequence length is `arange(prompt_token_len + generated_token_len)`; the
 `.item()` on that token-count sum severs the symbolic link, so the mask dim
 freezes at the build-time value while the token embedding beside it stays
 symbolic → mismatch at the first generated token whose total length differs
 from the build-time one.
-**Op-by-op (2026-05-24) — distinct from the orpheus arange (now fixed)**:
-orpheus's decode arange was SHAPE-derived (`arange(0, seq_len)`), so the engine
-symbolized it and a promotion-branch fix sufficed. chatterbox's mask arange end
-is a FROZEN SCALAR (180 = prompt 157 + generated 23) from `lengths.max().item()`
-— the `.item()` severs the link, and 180 is a SUM of two distinct seq symbols
-(s3=prompt_token, s1=speech_tokens), not a single symbol. The symbolic context
-has `expressions: {}` — no sum registered.
-**Site**: the creation-op scalar reverse lookup registers single seq/batch
-symbols only (not sums), and expression-value matching (`get_symbol_or_expr_for_value`)
-is deliberately disabled after a prior spatial-dim false-match incident. A fix
-needs either sum-expression registration + creation-op consultation (re-enables
-the deprecated value-match, risk of false matches) OR build-side symbolic
-`.item()` tracking — both broad.
-**Shared primitive** — touches the symbolic shape rules used by every seq_len
-model; the false-match risk means non-regression needs full-matrix validation
-→ ESCALATED (engine-extension question, not a unilateral fix).
+**Vendor source (s3gen flow.inference + utils/mask.py:186)**:
+`token = concat([prompt_token, token])` has symbolic shape [1, s3+s1], but
+`token_len = prompt_token_len + token_len` is a VALUE sum of the two `*_len`
+INPUT tensors, then `make_pad_mask(token_len)` → `arange(token_len.max().item())`.
+The arange end is value-derived, NOT shape-derived, so shape propagation cannot
+symbolize it. Confirmed distinct from the orpheus arange (shape-derived →
+symbolized → fixed by a promotion-branch change): chatterbox's end is a frozen
+scalar 180 = prompt(157)+generated(23), a SUM of two seq symbols (s3+s1), and
+the symbolic context has `expressions: {}` (no sum registered).
+**Why a clean source fix is a new capability, not a bounded change**: the
+build-side symbolic engine would have to (a) recognise that a `_len` input
+tensor's VALUE corresponds to another tensor's SHAPE symbol, (b) propagate it
+through the `+`, (c) carry it through `.item()` — i.e. value-symbolic tracking,
+matrix-wide. The two shortcuts are both rejected on principle: re-enabling the
+deprecated expression-value match (disabled after a spatial-dim false-match
+incident) is value-coincidence bricolage; a runtime patch that re-derives the
+mask length treats the symptom and fragilises the general mechanism.
+**Decision (2026-05-24)**: PARK as a dedicated capability chantier, exactly like
+[[P-CEIL-PAD-WINDOW]] (granite) and P-VIBEVOICE-NEXT-TOKEN-DIFFUSION-FLOW — a
+missing build-side capability, not a finishable bug. chatterbox conditioning is
+RESOLVED (audio-family section); only this vocoder mask-length symbolization
+remains.
 **Repro**: `neurobrix run --model chatterbox --prompt "Hello world."` →
 `Failed at op aten.mul::0: size of tensor a (178) must match b (180) at dim 1`.
-**Status**: ESCALATED — chatterbox conditioning is RESOLVED (audio-family
-section); only the vocoder mask-length symbolization remains.
 
 ---
 
