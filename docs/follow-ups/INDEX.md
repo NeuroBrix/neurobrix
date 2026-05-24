@@ -134,6 +134,38 @@ remains.
 **Repro**: `neurobrix run --model chatterbox --prompt "Hello world."` →
 `Failed at op aten.mul::0: size of tensor a (178) must match b (180) at dim 1`.
 
+### P-CEIL-PAD-WINDOW (granite Q-Former windowing) — RESOLVED (2026-05-24)
+**Resolution**: fixed in the runtime, NOT the build side as first framed. A
+windowed-attention projector pads its sequence to a multiple of window W and
+reshapes into `ceil(seq/W)` windows; the trace baked num_windows as
+`floordiv(seq + trace_pad, W)` (floor of the trace pad). Two coupled changes in
+`compiled_sequence.py` (commit `a66e135`): the pad-output expression
+`add(input_sym, pad_total)` is rewritten to `mul(ceil(input_sym/W), W)`
+downstream of the pad (trace-value preserving, BFS-scoped); and the cross-branch
+injection runs to a fixpoint persisting dim-merge products so chained flattens
+propagate the windowed count. R23 proven (TinyLlama / Swin2SR / Sana 1024).
+Granite projector now runs end-to-end (`audio_embeds [1,42,4096]`). Resolution
+recorded in CHANGELOG [Unreleased].
+
+### P-GRANITE-AUDIO-NUMERICAL — P1 (new blocker, granite STT not yet functional)
+**Scope**: with windowing fixed, granite runs end-to-end but the LLM is not
+grounded on the audio. Embeds are sane-distribution (mean≈0, std≈0.24, no NaN)
+yet the model emits EOS immediately; with EOS suppressed it generates *"thank you
+for watching this video … bye bye"* — coherent English unrelated to the speech
+(whisper-large ref: "going along slushy country roads…"). Classic non-speech /
+ungrounded-audio hallucination: the encoder+projector compute does not capture
+the speech content.
+**Ruled out**: prompt template well-formed (system + user-role + 42 audio +
+"can you transcribe…?" + assistant-role); NOT the fp32-trace upcast-elision bug
+(encoder has 96 `aten::_to_copy`, uses `native_layer_norm`, bf16→fp16). Suspect:
+conformer encoder numerics, windowed-attention numerics, or audio preprocessing
+(160-dim conformer features); the encoder frame dim traced concrete (200).
+**Next step**: run the granite-speech vendor encoder+projector on
+`test_speech_ref.wav` as an executable oracle, op-by-op diff vs NeuroBrix to
+localize the divergence. Needs the vendor as oracle — a dedicated chantier.
+**Repro**: `neurobrix run --model granite-speech-3.3-8b --audio test_speech_ref.wav --prompt "transcribe"` → empty transcription.
+**Surfaced**: 2026-05-24, after P-CEIL-PAD-WINDOW resolved.
+
 ---
 
 ## Prism / runtime allocator gaps
