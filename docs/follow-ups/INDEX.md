@@ -13,6 +13,23 @@ belongs there.
 
 ---
 
+## Dtype engine
+
+### P-DTYPE-MOE-ROUTER-FP32 — P2
+**Scope**: the MoE router fp32 upcast (`gate_scores.float()`) is the one
+dtype-protection decision still living outside the dtype engine. It is a
+single site (not a duplicated copy), and moving it requires the engine to
+grow a routing-upcast seam — an engine *extension*, not a repatriation —
+which is an escalate-to-Hocine architecture decision. The path is
+determinism-sensitive (P-TRITON-MOE-DETERMINISM), so any move must be gated
+on an `NBX_OP_FINGERPRINT` before/after byte-identity run on DeepSeek-MoE +
+Qwen3-30B. Until then it stays where it is, correct.
+**Site**: `src/neurobrix/core/runtime/graph_executor.py:3144`.
+**Repro**: n/a (no defect — deferred design decision).
+**Surfaced**: dtype centralization audit (`docs/audits/dtype_centralization_audit.md`).
+
+---
+
 ## Triton kernel-op coverage gaps
 
 ### P-TRITON-NBXTENSOR-REPEAT-MISSING — P1
