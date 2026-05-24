@@ -41,7 +41,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fp16 overflow was previously duplicated in three places (the compiled fused
   path, the op-by-op sequential path, and the VibeVoice speech path); the three
   copies are now a single source, guaranteeing identical numerical behaviour in
-  every mode. No change to output for any model.
+  every mode. Compute-dtype resolution in the audio flows likewise now reads
+  through the dtype engine instead of local copies of the dtype map. No change
+  to output for any model.
 
 - **Kokoro-82M no longer pads short-prompt audio to a fixed ~10 s
   window.** The native predictor stage previously force-scaled the

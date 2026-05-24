@@ -718,8 +718,6 @@ class AudioEngine(FlowHandler):
         return None
 
     def _get_compute_dtype(self) -> torch.dtype:
-        """Get compute dtype from manifest."""
-        dtype_str = self.ctx.pkg.manifest.get("dtype", "float16")
-        return {"float16": torch.float16, "bfloat16": torch.bfloat16, "float32": torch.float32}.get(
-            dtype_str, torch.float16
-        )
+        """Get compute dtype from manifest (string→torch.dtype via the dtype engine)."""
+        from neurobrix.core.dtype.config import get_torch_dtype
+        return get_torch_dtype(self.ctx.pkg.manifest.get("dtype", "float16"))
