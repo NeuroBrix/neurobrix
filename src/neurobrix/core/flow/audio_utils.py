@@ -233,11 +233,9 @@ def crop_waveform_to_content_ratio(waveform, ratio):
 
 
 def get_compute_dtype(ctx: FlowContext) -> torch.dtype:
-    """Get compute dtype from manifest."""
-    dtype_str = ctx.pkg.manifest.get("dtype", "float16")
-    return {"float16": torch.float16, "bfloat16": torch.bfloat16, "float32": torch.float32}.get(
-        dtype_str, torch.float16
-    )
+    """Get compute dtype from manifest (string→torch.dtype via the dtype engine)."""
+    from neurobrix.core.dtype.config import get_torch_dtype
+    return get_torch_dtype(ctx.pkg.manifest.get("dtype", "float16"))
 
 
 def get_sample_rate(ctx: FlowContext) -> int:
