@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Windowed-attention projectors (Q-Former style) now compute the correct
+  number of windows for input sequences whose length is not a multiple of the
+  window size.** Such a projector pads its sequence up to a multiple of a window
+  size and reshapes into `ceil(seq / window)` windows. The runtime previously
+  derived the window count from a floor of the trace-time padding, so the query
+  and key attention branches disagreed on the window count and the projector
+  attention failed with a tensor-size mismatch on any input whose length was not
+  a multiple of the window size. The window count and the dynamic pad are now
+  modelled consistently, and the windowed dimension propagates correctly through
+  the projector's output reshapes.
+
 ### Changed
 
 - **Kokoro-82M no longer pads short-prompt audio to a fixed ~10 s
