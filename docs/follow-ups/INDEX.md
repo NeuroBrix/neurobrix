@@ -109,18 +109,26 @@ sequence length is `arange(prompt_token_len + generated_token_len)`, but the
 freezes at the build-time value while the token embedding beside it stays
 symbolic → mismatch at the first generated token whose total length differs
 from the build-time one.
-**Site**: build-side symbolic shape engine — the creation-op scalar reverse
-lookup registers single seq/batch symbols only (not sums), and
-expression-value matching is deliberately disabled after a prior spatial-dim
-false-match incident. Resolution lives in the private build subtree; full
-design + the two candidate paths in the build doc.
-**Shared primitive** — touches the symbolic shape rules used by every model;
-non-regression across the model matrix is delicate → engine-extension
-escalation, not a unilateral fix.
+**Op-by-op (2026-05-24) — distinct from the orpheus arange (now fixed)**:
+orpheus's decode arange was SHAPE-derived (`arange(0, seq_len)`), so the engine
+symbolized it and a promotion-branch fix sufficed. chatterbox's mask arange end
+is a FROZEN SCALAR (180 = prompt 157 + generated 23) from `lengths.max().item()`
+— the `.item()` severs the link, and 180 is a SUM of two distinct seq symbols
+(s3=prompt_token, s1=speech_tokens), not a single symbol. The symbolic context
+has `expressions: {}` — no sum registered.
+**Site**: the creation-op scalar reverse lookup registers single seq/batch
+symbols only (not sums), and expression-value matching (`get_symbol_or_expr_for_value`)
+is deliberately disabled after a prior spatial-dim false-match incident. A fix
+needs either sum-expression registration + creation-op consultation (re-enables
+the deprecated value-match, risk of false matches) OR build-side symbolic
+`.item()` tracking — both broad.
+**Shared primitive** — touches the symbolic shape rules used by every seq_len
+model; the false-match risk means non-regression needs full-matrix validation
+→ ESCALATED (engine-extension question, not a unilateral fix).
 **Repro**: `neurobrix run --model chatterbox --prompt "Hello world."` →
-`Failed at op aten.mul::0: size of tensor a (181) must match b (180) at dim 1`.
-**Status**: PARKED — dedicated chantier. chatterbox conditioning itself is
-RESOLVED (see the audio-family section).
+`Failed at op aten.mul::0: size of tensor a (178) must match b (180) at dim 1`.
+**Status**: ESCALATED — chatterbox conditioning is RESOLVED (audio-family
+section); only the vocoder mask-length symbolization remains.
 
 ---
 
