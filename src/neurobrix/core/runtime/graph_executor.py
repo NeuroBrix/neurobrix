@@ -1091,6 +1091,47 @@ class GraphExecutor:
         if weight_keys <= graph_params:
             return
 
+        # Pass 0: EXACT direct + prefix-strip binding. Every graph param is bound
+        # to the weight key that EXACTLY equals it (direct), or to the unique
+        # weight key whose trailing dotted-suffix exactly equals it (prefix
+        # strip — e.g. graph `decoder.X` vs weight `model.acoustic_tok.decoder.X`).
+        # Exact match cannot mis-assign the way the ambiguous-suffix index below
+        # can: for a component with many structurally-repeated layers (VibeVoice
+        # acoustic/semantic tokenizers — upsample_layers.{i}.0.conv.conv.weight
+        # collide on the trailing suffix), the legacy suffix index drops them as
+        # ambiguous and the Pass-2 prefix heuristic mis-binds conv::0 to a convtr
+        # weight. We also tolerate EXTRA weight keys (the acoustic tokenizer ships
+        # encoder weights unused by the decode-only graph) — they're simply not
+        # bound. Accept Pass 0 only when it covers EVERY graph param; otherwise
+        # fall through to the legacy suffix passes (zero behavior change).
+        gp_to_wk: dict = {}
+        for gp in graph_params:
+            if gp in self._weights:
+                gp_to_wk[gp] = gp
+        if set(gp_to_wk.keys()) < graph_params:
+            # Some graph params not exact-present — try unique prefix-strip.
+            suffix_index: dict = {}
+            suffix_dupe: set = set()
+            for wk in weight_keys:
+                parts = wk.split('.')
+                for i in range(1, len(parts)):
+                    cand = '.'.join(parts[i:])
+                    if cand in suffix_dupe:
+                        continue
+                    if cand in suffix_index:
+                        del suffix_index[cand]
+                        suffix_dupe.add(cand)
+                    else:
+                        suffix_index[cand] = wk
+            for gp in graph_params:
+                if gp in gp_to_wk:
+                    continue
+                if gp in suffix_index:
+                    gp_to_wk[gp] = suffix_index[gp]
+        if set(gp_to_wk.keys()) >= graph_params:
+            self._weights = {gp: self._weights[wk] for gp, wk in gp_to_wk.items()}
+            return
+
         # Build suffix index from graph params (unique suffixes only)
         suffix_to_param: dict = {}
         suffix_ambiguous: set = set()

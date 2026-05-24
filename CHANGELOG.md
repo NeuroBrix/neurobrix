@@ -7,7 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **VibeVoice-1.5B text-to-speech is now supported** via a next-token-diffusion
+  generation flow. An autoregressive language model emits a control token per
+  step; on each speech step a diffusion head samples one acoustic latent
+  (classifier-free guidance, prompt-faithful by default), which is decoded to a
+  waveform chunk and re-encoded as semantic feedback to the model. Produces
+  24 kHz speech that transcribes back to the input text (STT-validated).
+
 ### Fixed
+
+- **Models with structurally-repeated layers** (e.g. tokenizer stacks whose
+  layers share identical per-layer names) could silently load some weights into
+  the wrong positions, corrupting their output. Such models now load their
+  weights correctly; models that already loaded correctly are unaffected.
 
 - **Windowed-attention projectors (Q-Former style) now compute the correct
   number of windows for input sequences whose length is not a multiple of the
