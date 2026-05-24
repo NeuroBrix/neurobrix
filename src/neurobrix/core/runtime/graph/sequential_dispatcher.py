@@ -578,10 +578,9 @@ class NativeATenDispatcher:
         epsilon = attributes.get("epsilon", 1e-6)
         if not epsilon:
             epsilon = attributes.get("kwargs", {}).get("epsilon", 1e-6)
-        x_fp32 = x.to(torch.float32)
-        variance = x_fp32.pow(2).mean(-1, keepdim=True)
-        x_normed = x_fp32 * torch.rsqrt(variance + epsilon)
-        return x_normed.to(weight.dtype) * weight
+        # fp32-variance RMSNorm; the dtype-upcast policy lives in the engine.
+        from neurobrix.core.dtype.engine import rms_norm_fp32
+        return rms_norm_fp32(x, weight, epsilon)
 
 
 # ===========================================================================

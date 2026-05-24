@@ -437,8 +437,10 @@ def _vv_convnext_block(
 def _vv_rms_norm(
     x: torch.Tensor, weight: torch.Tensor, eps: float = 1e-5,
 ) -> torch.Tensor:
-    """RMSNorm: x * rsqrt(mean(x^2) + eps) * weight."""
-    x_float = x.float()
-    variance = x_float.pow(2).mean(-1, keepdim=True)
-    x_normed = x_float * torch.rsqrt(variance + eps)
-    return weight * x_normed.to(x.dtype)
+    """RMSNorm: x * rsqrt(mean(x^2) + eps) * weight.
+
+    Delegates the fp32-variance dtype policy to the engine (x.dtype == weight.dtype
+    here, so the engine's .to(weight.dtype) is equivalent to the prior .to(x.dtype)).
+    """
+    from neurobrix.core.dtype.engine import rms_norm_fp32
+    return rms_norm_fp32(x, weight, eps)

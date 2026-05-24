@@ -23,6 +23,27 @@ from typing import Callable, Optional, Dict, Any, FrozenSet
 from neurobrix.core.dtype.config import parse_dtype, strip_aten_prefix
 
 
+def rms_norm_fp32(x: torch.Tensor, weight: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+    """RMSNorm with fp32 variance accumulation — the single source for the
+    fp32-upcast policy that reassembled / hand-rolled RMSNorm ops need.
+
+    Hand-rolled RMSNorm computes the variance as ``mean(x * x)``; on fp16
+    hardware the square overflows (|x| > 256 → inf → the norm collapses) — the
+    vendor protects this with an explicit ``x.float()`` and so do we. The upcast
+    is a dtype-protection decision, owned by the engine. This consolidates three
+    formerly byte-duplicated copies (the compiled reassembled ``custom::rms_norm``
+    op, the sequential dispatcher, and the VibeVoice stage handler) into one
+    source — an R30 divergence-by-copy risk removed. Currently an unconditional
+    fp32 upcast (numerically safe on all hardware); a hardware-aware variant
+    (skip the upcast on bf16, whose exponent range equals fp32's) is a future
+    refinement, not a behaviour change here.
+    """
+    x_fp32 = x.to(torch.float32)
+    variance = x_fp32.pow(2).mean(-1, keepdim=True)
+    x_normed = x_fp32 * torch.rsqrt(variance + eps)
+    return x_normed.to(weight.dtype) * weight
+
+
 # Diagnostic: when NBX_DTYPE_CLAMP_DIAG=1, log the first fp32→fp16
 # narrowing where the source actually exceeds the fp16 range. Empirical
 # witness that the _to_copy clamp protects a real overflow (the comment
