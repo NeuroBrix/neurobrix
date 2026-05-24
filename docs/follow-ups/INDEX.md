@@ -258,35 +258,16 @@ symbolic capability.
 **Repro (was)**: `neurobrix run --model chatterbox --prompt "Hello world."` → ~43 s garbage.
 **Surfaced**: Dette E; diagnosed + conditioning fixed 2026-05-23.
 
-### P-ORPHEUS-DECODE-ROPE-DEGENERATE — P1
-**Scope**: orpheus-3b-0.1-ft TTS decodes incorrectly — at the seq=1 decode step
-the RoPE position is broadcast to the trace sequence length (23), so cos/sin
-become seq=23 and corrupt both query and key (the RoPE-touched tensors); the
-value (no RoPE) stays correct. Prefill is correct (positions match seq).
-**Root cause (op-by-op, 2026-05-24)**: orpheus's graph carries SEVERAL distinct
-seq-len symbols (s1/s3/s6) all with the same trace value (23) for what is
-logically one sequence dimension. At decode only the input-derived symbol (s1)
-binds (→1); the RoPE position-expand symbol is unbound and falls back to its
-trace length (23). The position arange now yields the correct single position
-(see the two-arg arange fix below), but the downstream expand re-broadcasts it
-to 23.
-**Two FIXED prerequisites** (necessary, not sufficient):
-  1. build emits the LM head config (num_heads/head_dim/num_layers) — was
-     missing, so the KV cache allocated a zero head_dim buffer.
-  2. the KV-cache decode position shift now handles the two-arg
-     `arange(0, seq_len)` form (was producing an empty range).
-**Site**: the seq-len symbol promotion/binding in
-`src/neurobrix/core/runtime/graph/compiled_sequence.py` (ambiguous trace-value
-handling for multiple seq symbols) and/or unifying those symbols at the build
-side. **Shared primitive** — every RoPE LLM uses this binding; TinyLlama has a
-single seq symbol so it is unaffected. Binding sibling seq symbols together is
-semantically right for RoPE position but risks genuine multi-seq cases (mask vs
-query length); non-regression needs the full LLM matrix → ESCALATED.
-**Repro**: `neurobrix run --model orpheus-3b-0.1-ft --prompt "Hello world."` →
-`Failed at op aten._scaled_dot_product_efficient_attention::0: shape '[23,8,3,1,128]' is invalid for input of size 3072`.
-**Status**: ESCALATED — delicate shared symbolic primitive; awaiting direction
-(runtime sibling-symbol bind vs build-side symbol unification).
-**Surfaced**: audio loop 2026-05-23/24.
+### P-ORPHEUS-DECODE — RESOLVED (2026-05-24)
+orpheus-3b-0.1-ft TTS is functional and STT-validated (whisper-large
+transcribes "Hello World!", 1.88 s, 32.75 s runtime). The earlier
+"multi-seq-symbol" hypothesis was WRONG — the graph has only s0/s1. Real chain
+(all fixed): (1) lm_config emission; (2) two-arg `arange(0,seq_len)` decode
+shift; (3) `expand` size promotion of the wrapped-list form (the RoPE position
+expand kept its trace seq_len literal → broadcast the decode position to 23);
+(4) SNAC 7-per-frame hierarchical de-interleaving (was contiguous → noise);
+(5) speech-end EOS 128258 (was rambling to max_tokens). Verdict:
+`validation_outputs/audio_family/orpheus/verdict.md`.
 
 ### P-VOXTRAL-HALLUCINATION — P2
 **Scope**: Voxtral audio_llm answers conversationally instead
