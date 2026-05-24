@@ -1002,11 +1002,19 @@ class CompiledSequence:
                         if changed:
                             args[shape_idx] = shape_list
 
-            # aten::expand(tensor, size) — promote seq_len in size list
+            # aten::expand(tensor, size) — promote seq_len in size list.
+            # size may be a raw list OR the wrapped {"type":"list","value":[...]}
+            # form (same as view/reshape below); unwrap it so a seq_len element
+            # frozen in the size (e.g. RoPE position expand size [1,1,seq]) is
+            # promoted. Without the unwrap the wrapped form was silently skipped,
+            # leaving the trace seq_len literal — at decode it broadcast the
+            # single position to the trace length (orpheus RoPE degeneracy).
             elif op_type == "aten::expand" and len(args) >= 2:
                 size_arg = args[1]
-                if isinstance(size_arg, (list, tuple)):
-                    size_list = list(size_arg)
+                size_is_wrapped = isinstance(size_arg, dict) and size_arg.get("type") == "list"
+                size_items = size_arg.get("value", []) if size_is_wrapped else size_arg
+                if isinstance(size_items, (list, tuple)):
+                    size_list = list(size_items)
                     changed = False
                     for i, elem in enumerate(size_list):
                         if isinstance(elem, dict):
@@ -1022,7 +1030,7 @@ class CompiledSequence:
                                 promoted += 1
                                 changed = True
                     if changed:
-                        args[1] = size_list
+                        args[1] = {"type": "list", "value": size_list} if size_is_wrapped else size_list
 
             # aten::view / aten::reshape / aten::_unsafe_view
             # Shape args may contain seq_len — promote matching elements.

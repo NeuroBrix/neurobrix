@@ -35,6 +35,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A sequence length frozen inside an `expand` size is now made dynamic at
+  runtime, like it already was for `view`/`reshape`.** The symbolic-shape
+  promotion unwrapped the `{type:list,value:[...]}` size form for
+  `view`/`reshape` but not for `expand`, so an `expand` whose size carried the
+  trace-time sequence length (e.g. the rotary-embedding position expansion
+  `[1, 1, seq]`) kept that length literal. At decode the single new position
+  was then broadcast back to the full trace length, corrupting the rotary
+  embeddings and the per-step query/key. `expand` now unwraps and promotes the
+  same way; non-sequence models are unaffected (the path only runs when the
+  graph has sequence-length symbols).
+
 - **Autoregressive models whose graph computes positions with a two-argument
   range (`arange(0, seq_len)`, the Llama `cache_position` form) no longer
   produce an empty position range at decode.** The KV-cache decode position
