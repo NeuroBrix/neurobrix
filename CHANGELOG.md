@@ -35,6 +35,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Orpheus TTS now produces intelligible speech instead of noise.** The SNAC
+  audio codec expects each 7-token frame de-interleaved into its three
+  hierarchical codebook levels in a specific order (level 0: position 0; level
+  1: positions 1 and 4; level 2: positions 2, 3, 5, 6). The decoder split the
+  frame contiguously (positions 1-2 to level 1, 3-6 to level 2), scrambling the
+  hierarchy and producing noise. The de-interleaving now matches the model's
+  layout, and the synthesized speech transcribes back correctly.
+
 - **A sequence length frozen inside an `expand` size is now made dynamic at
   runtime, like it already was for `view`/`reshape`.** The symbolic-shape
   promotion unwrapped the `{type:list,value:[...]}` size form for
