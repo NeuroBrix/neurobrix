@@ -259,27 +259,34 @@ symbolic capability.
 **Surfaced**: Dette E; diagnosed + conditioning fixed 2026-05-23.
 
 ### P-ORPHEUS-DECODE-ROPE-DEGENERATE — P1
-**Scope**: orpheus-3b-0.1-ft TTS reaches the decode loop, but the first
-generated-token attention receives a degenerate query (seq=0) and key
-(head_dim=0) while the value is correct ([1,24,1,128]). The two broken tensors
-(q, k) are exactly the ones RoPE touches (`q·cos + rotate(q)·sin`); the value
-skips RoPE and is intact. The RoPE cos/sin seq-dependent constants slice
-correctly at prefill (q/k/v all [1,24,seq,128]) but collapse a dimension at the
-seq=1 decode step (the decode position-slice yields an empty range).
-**Site**: decode-time seq-dependent-constant (RoPE cos/sin) resolution. Shared
-with every RoPE LLM — TinyLlama decodes correctly, so the trigger is
-orpheus-graph specific (likely a build-time structure difference the runtime
-mis-slices); needs a build-vs-runtime split before fixing.
-**Shared primitive** — non-regression across all LLMs is delicate → investigate
-+ prove before any change.
-**Prerequisite FIXED**: the build now emits the LM head config
-(num_heads/head_dim/num_layers) for orpheus — it was missing, so the KV cache
-allocated a zero head_dim buffer. Necessary but NOT sufficient; the decode
-degeneracy above remains.
+**Scope**: orpheus-3b-0.1-ft TTS decodes incorrectly — at the seq=1 decode step
+the RoPE position is broadcast to the trace sequence length (23), so cos/sin
+become seq=23 and corrupt both query and key (the RoPE-touched tensors); the
+value (no RoPE) stays correct. Prefill is correct (positions match seq).
+**Root cause (op-by-op, 2026-05-24)**: orpheus's graph carries SEVERAL distinct
+seq-len symbols (s1/s3/s6) all with the same trace value (23) for what is
+logically one sequence dimension. At decode only the input-derived symbol (s1)
+binds (→1); the RoPE position-expand symbol is unbound and falls back to its
+trace length (23). The position arange now yields the correct single position
+(see the two-arg arange fix below), but the downstream expand re-broadcasts it
+to 23.
+**Two FIXED prerequisites** (necessary, not sufficient):
+  1. build emits the LM head config (num_heads/head_dim/num_layers) — was
+     missing, so the KV cache allocated a zero head_dim buffer.
+  2. the KV-cache decode position shift now handles the two-arg
+     `arange(0, seq_len)` form (was producing an empty range).
+**Site**: the seq-len symbol promotion/binding in
+`src/neurobrix/core/runtime/graph/compiled_sequence.py` (ambiguous trace-value
+handling for multiple seq symbols) and/or unifying those symbols at the build
+side. **Shared primitive** — every RoPE LLM uses this binding; TinyLlama has a
+single seq symbol so it is unaffected. Binding sibling seq symbols together is
+semantically right for RoPE position but risks genuine multi-seq cases (mask vs
+query length); non-regression needs the full LLM matrix → ESCALATED.
 **Repro**: `neurobrix run --model orpheus-3b-0.1-ft --prompt "Hello world."` →
-`Failed at op aten._scaled_dot_product_efficient_attention::0: expanded size 128 must match existing size 0 at dim 3`.
-**Status**: PARKED — localized to the decode RoPE path; dedicated chantier.
-**Surfaced**: audio loop 2026-05-23.
+`Failed at op aten._scaled_dot_product_efficient_attention::0: shape '[23,8,3,1,128]' is invalid for input of size 3072`.
+**Status**: ESCALATED — delicate shared symbolic primitive; awaiting direction
+(runtime sibling-symbol bind vs build-side symbol unification).
+**Surfaced**: audio loop 2026-05-23/24.
 
 ### P-VOXTRAL-HALLUCINATION — P2
 **Scope**: Voxtral audio_llm answers conversationally instead
