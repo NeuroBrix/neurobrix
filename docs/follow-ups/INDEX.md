@@ -185,6 +185,32 @@ because the truncated 200-frame audio matched the encoder's frozen trace.
 **Repro**: `neurobrix run --model granite-speech-3.3-8b --audio test_speech_ref.wav --prompt "can you transcribe the speech into a written format?"` → empty (truncated) / encoder view crash (untruncated).
 **Surfaced**: 2026-05-24, after P-CEIL-PAD-WINDOW resolved.
 
+### P-VIBEVOICE-VAE-ARCH — P1 (VibeVoice TTS; generation flow done, VAE blocked)
+**Status**: the `next_token_diffusion` generation flow is implemented
+(`core/flow/next_token_diffusion.py`, held uncommitted) and STRUCTURALLY VERIFIED
+— the LM control loop + DDPM diffusion-head sampling + connector feedback run
+correctly (emits the expected speech-diffusion token stream → speech_end → eos,
+natural stop). End-to-end is blocked on the acoustic/semantic VAE tokenizers.
+**Blocker**: the acoustic/semantic VAE tokenizer components don't match the
+model's actual weights — they were constructed for one VibeVoice tokenizer
+variant, but the shipped weights are a different variant (different module
+hierarchy + a depthwise stem). The graph expects `decoder.stem.conv [2048,64,7]`
+(standard conv) while the weights are `decoder.stages.*.mixer.conv [2048,1,7]`
+(depthwise); a non-strict load masked the mismatch, so the decoder fails at
+`aten.convolution::0` (channel clash). Plus a structural issue: the decoder is
+causal-streaming with a fixed-window (T=64) cache and the semantic encoder a
+fixed 24000-sample window, neither of which the stateless runtime can replicate
+per latent.
+**Resolution (build-side, substantial)**: reconstruct the VAE tokenizer
+components to match the model's actual tokenizer architecture and emit a FULL
+non-streaming decode (variable latent count, no causal cache) + non-windowed
+encode. If the decoder is genuinely stateful (cannot run non-streaming), that
+piece is the structurally-non-traceable park. The generation flow is done and
+waits on it.
+**Repro**: `neurobrix run --model VibeVoice-1.5B --prompt "Hello, this is a test." --output out.wav` → LM loop + diffusion run; acoustic decode crashes at conv::0.
+**R29**: `validation_outputs/p-vibevoice-next-token-diffusion-v1/`.
+**Surfaced**: 2026-05-24.
+
 ---
 
 ## Prism / runtime allocator gaps
