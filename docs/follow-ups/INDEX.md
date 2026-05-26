@@ -183,43 +183,28 @@ propagate the windowed count. R23 proven (TinyLlama / Swin2SR / Sana 1024).
 Granite projector now runs end-to-end (`audio_embeds [1,42,4096]`). Resolution
 recorded in CHANGELOG [Unreleased].
 
-### P-GRANITE-CONFORMER-VARIABLE-FRAMES — P1 (granite STT not yet functional)
-**Localized via §5.8 vs the granite vendor oracle** (transformers
-`GraniteSpeechForConditionalGeneration` on `test_speech_ref.wav`; the LoRA
-adapter IS correctly merged into the NeuroBrix LLM — `|nbx_q - merged|=0.0009` vs
-`|nbx_q - base|=0.115` — so the LLM is speech-adapted, ruled out). The audio is
-not grounded because the audio path mishandles variable-length audio. Three
-compounding layers, all rooted in fixed-frame handling:
-
-1. **Preprocessing truncates the symbolic frame dim to the trace value.**
-   `audio_utils.py:67-81` pads/truncates EVERY non-batch dim to the graph trace
-   shape. The conformer frame dim is symbolic (encoder input
-   `symbolic_shape.dims = [s0, s1, 160]`), so it must NOT be truncated — but it
-   was cut to 200, dropping ~71% of a 13.7 s clip. Fix (known, ready): skip
-   pad/truncate for dims whose `symbolic_shape.dims[i]` is a symbol/expr; only
-   pad/truncate concrete dims. (Helper: read `symbolic_shape.dims`, not the
-   resolved `shape`.) Held back because it exposes layer 3 and needs R23 on the
-   other conformer model (canary).
-2. **Feature frame rate is 2× the vendor.** 13.69 s clip → vendor 685 frames
-   (20 ms shift / 50 fps) vs NeuroBrix `ConformerFeatureExtractor` 1367 frames
-   (kaldi default 10 ms / 100 fps). `preprocessor_config.json` is empty `{}`, so
-   the extractor must source the granite 20 ms shift (or a stride-2 stacking)
-   from the right config — currently uses the kaldi default.
-3. **Conformer encoder is mal tracé for variable frames (the core capability
-   gap).** With full-length features fed in, the encoder fails:
-   `aten.view::11` shape `[1,1,1,200,200,128]` (frame²×128 relative-position
-   attention) is baked CONCRETE 200; the cross-branch injection scales the view
-   target to the runtime frames but the data feeding it stays 200²-sized →
-   `shape '[1,1,1,1367,1367,128]' invalid for input of size 5120000` (=200²×128).
-   The conformer relative-position attention's frame²-dependent reshapes are not
-   symbolized consistently — a build-side "conformer mal tracé" gap, distinct
-   from the projector windowing (already fixed). This is the deep blocker.
-**Decision (2026-05-24)**: PARK per the maintainer rule — granite revealed a
-missing capability (conformer encoder symbolic frames). Layers 1-2 are bounded
-fixes; layer 3 is the conformer-symbolic capability. Embeds were sane only
-because the truncated 200-frame audio matched the encoder's frozen trace.
-**Repro**: `neurobrix run --model granite-speech-3.3-8b --audio test_speech_ref.wav --prompt "can you transcribe the speech into a written format?"` → empty (truncated) / encoder view crash (untruncated).
-**Surfaced**: 2026-05-24, after P-CEIL-PAD-WINDOW resolved.
+### P-GRANITE-CONFORMER-VARIABLE-FRAMES — RESOLVED (2026-05-26)
+**Resolution**: granite is GROUNDED and frame-flexible (STT correct at 1/4/7
+blocks). Both prior diagnoses were wrong — corrected by reading the vendor
+source (`transformers/models/granite_speech/`):
+- The `[200,200,128]` was NOT "frame²" — it is `[context_size, context_size,
+  dim_head]`, a CONSTANT Shaw relative-position matrix per block
+  (`context_size=200`). The variable dim is `num_blocks = ceil(seq/context_size)`
+  (modeling l.155). Not a missing capability — the ceil-window pattern already
+  tooled by a66e135.
+- The 2× frame rate was NOT a "20 ms shift" — the vendor mel uses `hop_length=160`
+  (10 ms) THEN stacks adjacent frame pairs (`reshape(-1, 2·n_mels)`) → 160-dim,
+  half the frames. NeuroBrix used kaldi fbank + first-difference deltas (right
+  dim, wrong values + no halving).
+Three coupled fixes: (1) the conformer feature extractor reproduces the vendor
+recipe — log10-normalised mel + adjacent-frame stacking, not kaldi fbank +
+deltas (`2443f89`, §5.8 bit-match vs the vendor extractor); (2) the model is
+re-traced so its graph exercises more than one attention block, leaving the
+padded sequence length symbolic rather than equal to the fixed block size;
+(3) `num_blocks` made symbolic `ceil(seq/W)` across the conformer block reshapes
+(`5acab8f`, runtime extension of the a66e135 pad→view rewrite). Verdict +
+multi-duration R29 artefacts: `validation_outputs/p_granite_grounded/`. Reusable
+brick: `num_blocks=ceil(seq/W)` flexible windowing.
 
 ### P-VIBEVOICE-VAE-ARCH — P1 (VibeVoice TTS; generation flow done, VAE blocked)
 **Status**: the `next_token_diffusion` generation flow is implemented
