@@ -1644,6 +1644,14 @@ class CompiledSequence:
 
             view_op_uid = None
             divisor = None
+            # When the split view expands ndim into [.., num_blocks, W, heads, ..],
+            # num_blocks is the concrete dim AT the padded position and `heads` (the
+            # dim after W) is the fold co-factor: a downstream reshape merges
+            # [batch, num_blocks, heads] into one batched-block dim (num_blocks*heads).
+            # Both the bare num_blocks and that product must become symbolic, so
+            # capture them here alongside the divisor.
+            split_num_blocks = None   # concrete num_blocks at the split (== padded//W)
+            fold_cofactor = None      # heads dim after W (num_blocks*heads is the fold)
             for uid2, op2 in ops.items():
                 if op2.get("op_type", "") not in (
                     "aten::view", "aten::reshape", "aten::_unsafe_view"
@@ -1664,6 +1672,13 @@ class CompiledSequence:
                             c = view_shape[dim_idx + 1]
                             if isinstance(c, int) and c > 1:
                                 divisor = c
+                                nb = view_shape[dim_idx]
+                                if isinstance(nb, int) and nb > 1:
+                                    split_num_blocks = nb
+                                if dim_idx + 2 < len(view_shape):
+                                    h = view_shape[dim_idx + 2]
+                                    if isinstance(h, int) and h >= 1:
+                                        fold_cofactor = h
                     elif out_shapes and len(out_shapes[0]) == ndim:
                         if dim_idx < len(view_shape):
                             c = view_shape[dim_idx]
@@ -1773,6 +1788,55 @@ class CompiledSequence:
                                                  for s in _arg.get("value", [])]
                             elif isinstance(_arg, dict):
                                 _oargs[_ai] = _subst_subtree(_arg, p_wrong, p_correct)
+
+                # ── FIX num_blocks + its fold product (block-attention split) ──
+                # The pad-output rewrite above models the PADDED dim as
+                # ceil(input/W)*W, but a block-attention conformer (Granite Speech)
+                # then reshapes that padded dim into [.., num_blocks, W, heads, ..]
+                # with num_blocks baked CONCRETE (== padded_trace//W) and folds
+                # [batch, num_blocks, heads] into one batched-block dim
+                # (num_blocks*heads) for the per-block bmm. At any other block count
+                # those concrete values mis-shape (silent garbage). Make both
+                # symbolic, scoped to the pad-reachable set, with values derived
+                # STRUCTURALLY from the split view (num_blocks at the split, heads
+                # the dim after W) — not a value-multiple heuristic:
+                #   num_blocks        → ceil(input/W)
+                #   num_blocks*heads  → ceil(input/W) * heads
+                # so the split, the fold/un-fold, and the broadcast `expand` ops all
+                # track the real block count. The bare num_blocks and the fold
+                # product are distinct trace values, unique within the reachable set.
+                if split_num_blocks is not None:
+                    _int_subs = [(split_num_blocks, copy.deepcopy(ceil_expr))]
+                    if fold_cofactor and fold_cofactor > 1:
+                        _fold_val = split_num_blocks * fold_cofactor
+                        _fold_expr = {"type": "mul", "left": copy.deepcopy(ceil_expr),
+                                      "right": fold_cofactor, "trace": _fold_val}
+                        _int_subs.append((_fold_val, _fold_expr))
+                    for _tgt, _rep in _int_subs:
+                        for _tid in reachable:
+                            _ss = tensors.get(_tid, {}).get("symbolic_shape")
+                            if isinstance(_ss, dict) and isinstance(_ss.get("dims"), list):
+                                _ss["dims"] = [_subst_subtree(d, _tgt, _rep)
+                                               for d in _ss["dims"]]
+                        for _o in ops.values():
+                            if not (any(t in reachable for t in _o.get("input_tensor_ids", []))
+                                    or any(t in reachable for t in _o.get("output_tensor_ids", []))):
+                                continue
+                            _oa = _o.get("attributes")
+                            if not isinstance(_oa, dict):
+                                continue
+                            for _k in ("shape", "size"):
+                                if isinstance(_oa.get(_k), list):
+                                    _oa[_k] = [_subst_subtree(s, _tgt, _rep)
+                                               for s in _oa[_k]]
+                            _oargs = _oa.get("args")
+                            if isinstance(_oargs, list):
+                                for _ai, _arg in enumerate(_oargs):
+                                    if isinstance(_arg, dict) and _arg.get("type") == "list":
+                                        _arg["value"] = [_subst_subtree(s, _tgt, _rep)
+                                                         for s in _arg.get("value", [])]
+                                    elif isinstance(_arg, dict):
+                                        _oargs[_ai] = _subst_subtree(_arg, _tgt, _rep)
 
     # ========================================================================
     # CROSS-BRANCH SYMBOLIC EXPRESSION PROPAGATION
