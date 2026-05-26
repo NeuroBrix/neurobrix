@@ -229,11 +229,21 @@ class RawWaveformLoader:
 
 class ConformerFeatureExtractor:
     """
-    Feature extraction for Conformer-based models (Granite, Parakeet, Canary).
+    Feature extraction for Conformer-based models with adjacent-frame stacking
+    (Granite Speech).
 
-    Reads expected feature dimension from graph.json input shape.
-    Handles delta features when the model expects doubled dimensions
-    (e.g. Granite Speech: 80 mel bins + 80 delta = 160 input_dim).
+    Reproduces the vendor GraniteSpeechFeatureExtractor recipe (transformers
+    `granite_speech.feature_extraction_granite_speech._extract_mel_spectrograms`):
+    a torchaudio `MelSpectrogram`, a log10 + per-clip amax normalisation, an
+    odd-frame drop, then `frame_stack`-frame stacking (`n_mels → frame_stack·n_mels`,
+    frame count divided by `frame_stack`). For Granite: 80 mels × 2 = 160 input_dim
+    at half the frame rate (50 fps effective from a 100 fps mel).
+
+    This is the feature representation the conformer encoder was trained on.
+    The earlier delta-feature path produced the right dim (160) but wrong values
+    (kaldi fbank + first-difference deltas, not log10-normalised stacked mels)
+    AND twice the frames (no stacking) — leaving the audio ungrounded. Params are
+    the vendor defaults, overridable from the .nbx preprocessing block.
     """
 
     @staticmethod
@@ -245,73 +255,49 @@ class ConformerFeatureExtractor:
         input_shape: Optional[Tuple[int, ...]] = None,
     ) -> torch.Tensor:
         """
-        Extract Conformer-compatible features from audio file.
-
-        Args:
-            input_shape: Expected shape from graph.json, e.g. [1, frames, 160].
-                        Last dim = feat_dim. If double a standard mel count,
-                        delta features are computed automatically.
+        Extract stacked-log-mel Conformer features from an audio file.
 
         Returns:
-            features tensor [1, frames, feat_dim]
+            features tensor [1, frames // frame_stack, frame_stack * n_mels]
         """
         import json
+        import torchaudio
 
-        # Read config for sample rate
-        target_sr = 16000
+        # Vendor GraniteSpeechFeatureExtractor defaults; overridable from the
+        # .nbx preprocessing block (data-driven identity card).
+        sr, n_fft, win_length, hop_length, n_mels, frame_stack = 16000, 512, 400, 160, 80, 2
         config_path = model_path / "preprocessor_config.json"
         if config_path.exists():
             with open(config_path) as f:
                 config = json.load(f)
-            target_sr = config.get("sampling_rate", target_sr)
+            sr = config.get("sampling_rate", sr)
+            n_fft = config.get("n_fft", n_fft)
+            win_length = config.get("win_length", win_length)
+            hop_length = config.get("hop_length", hop_length)
+            n_mels = config.get("n_mels", n_mels)
+            frame_stack = config.get("frame_stack", frame_stack)
 
-        # Determine feature dim from graph input shape (DATA-DRIVEN)
-        feat_dim = 80
-        if input_shape and len(input_shape) >= 3:
-            # Conformer layout: [B, frames, feat_dim]
-            feat_dim = input_shape[-1]
+        audio, _sr = _load_audio(audio_path, target_sr=sr)
+        waveform = torch.from_numpy(audio).float().unsqueeze(0)  # [1, samples]
 
-        # Detect if delta features needed:
-        # If feat_dim is exactly 2x a standard mel count, compute base + delta
-        standard_mel_counts = {40, 64, 80, 128}
-        base_mels = feat_dim
-        use_deltas = False
-        if feat_dim // 2 in standard_mel_counts and feat_dim not in standard_mel_counts:
-            base_mels = feat_dim // 2
-            use_deltas = True
+        melspec = torchaudio.transforms.MelSpectrogram(
+            sample_rate=sr, n_fft=n_fft, win_length=win_length,
+            hop_length=hop_length, n_mels=n_mels,
+        )
+        mel = melspec(waveform)                                  # [1, n_mels, frames]
+        logmel = mel.transpose(-1, -2).clip_(min=1e-10).log10_()  # [1, frames, n_mels]
+        mx = logmel.amax(dim=(-2, -1), keepdim=True)
+        logmel = torch.maximum(logmel, mx - 8.0).div_(4).add_(1)
 
-        audio, _sr = _load_audio(audio_path, target_sr=target_sr)
+        # Drop trailing frames so the count is a clean multiple of frame_stack,
+        # then stack adjacent frames into the feature dim.
+        if frame_stack > 1:
+            rem = logmel.shape[1] % frame_stack
+            if rem:
+                logmel = logmel[:, : logmel.shape[1] - rem]
+            logmel = logmel.reshape(logmel.shape[0], -1, frame_stack * logmel.shape[-1])
 
-        try:
-            import torchaudio
-            waveform = torch.from_numpy(audio).unsqueeze(0)  # [1, samples]
-            features = torchaudio.compliance.kaldi.fbank(
-                waveform, num_mel_bins=base_mels, sample_frequency=target_sr
-            )
-            # fbank returns [frames, base_mels]
-            features = features.unsqueeze(0)  # [1, frames, base_mels]
-
-            if use_deltas:
-                # Compute delta features and concatenate
-                # compute_deltas expects [batch, feat, frames] → transpose
-                feat_t = features.transpose(1, 2)  # [1, base_mels, frames]
-                delta = torchaudio.functional.compute_deltas(feat_t)
-                delta = delta.transpose(1, 2)  # [1, frames, base_mels]
-                features = torch.cat([features, delta], dim=-1)  # [1, frames, feat_dim]
-
-        except ImportError:
-            import librosa
-            mel = librosa.feature.melspectrogram(y=audio, sr=target_sr, n_mels=base_mels)
-            log_mel = np.log(mel + 1e-6)  # [base_mels, frames]
-
-            if use_deltas:
-                delta = librosa.feature.delta(log_mel)
-                stacked = np.concatenate([log_mel, delta], axis=0)  # [feat_dim, frames]
-                features = torch.from_numpy(stacked.T).unsqueeze(0)  # [1, frames, feat_dim]
-            else:
-                features = torch.from_numpy(log_mel.T).unsqueeze(0)  # [1, frames, base_mels]
-
-        return features.to(device=device, dtype=dtype)
+        return logmel.to(device=device, dtype=dtype)
 
 
 class NemoMelExtractor:
