@@ -3140,8 +3140,10 @@ class GraphExecutor:
         _dump_n("gate_scores_in", gate_scores)
         _dump_n("hidden_states_in", hidden_states)
 
-        # ROUTING IN FP32 (same as compiled path)
-        gate_scores = gate_scores.float()
+        # ROUTING IN FP32 (same as compiled path). The fp32-upcast policy is
+        # owned by the dtype engine (single source); see routing_upcast_fp32.
+        from neurobrix.core.dtype.engine import routing_upcast_fp32
+        gate_scores = routing_upcast_fp32(gate_scores)
         _compute_dev = hidden_states.device
         if gate_scores.device != _compute_dev:
             gate_scores = gate_scores.to(_compute_dev)

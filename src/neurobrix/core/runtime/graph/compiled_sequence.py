@@ -2019,6 +2019,7 @@ class CompiledSequence:
         the DAG attributes set by moe_fusion.py — ZERO HARDCODE.
         """
         import torch.nn.functional as F
+        from neurobrix.core.dtype.engine import routing_upcast_fp32
 
         attrs = op_data.get("attributes", {})
         output_tensor_ids = op_data.get("output_tensor_ids", [])
@@ -2123,11 +2124,10 @@ class CompiledSequence:
             if hidden_states.dtype != w_dtype:
                 hidden_states = hidden_states.to(w_dtype)
 
-            # ROUTING IN FP32: MoE router precision is critical for expert selection.
-            # vLLM PR #14027 documents that bf16/fp16 routing causes quality degradation
-            # due to precision loss in softmax/topk/normalization. Gate scores MUST be
-            # computed in fp32 regardless of weight dtype.
-            gate_scores = gate_scores.float()
+            # ROUTING IN FP32: precision-critical for expert selection. The
+            # fp32-upcast policy is owned by the dtype engine (single source);
+            # see routing_upcast_fp32 for the rationale (vLLM PR #14027).
+            gate_scores = routing_upcast_fp32(gate_scores)
 
             # Ensure ALL routing tensors on hidden_states device
             _compute_dev = hidden_states.device

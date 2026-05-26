@@ -15,18 +15,34 @@ belongs there.
 
 ## Dtype engine
 
-### P-DTYPE-MOE-ROUTER-FP32 — P2
-**Scope**: the MoE router fp32 upcast (`gate_scores.float()`) is the one
-dtype-protection decision still living outside the dtype engine. It is a
-single site (not a duplicated copy), and moving it requires the engine to
-grow a routing-upcast seam — an engine *extension*, not a repatriation —
-which is an escalate-to-Hocine architecture decision. The path is
-determinism-sensitive (P-TRITON-MOE-DETERMINISM), so any move must be gated
-on an `NBX_OP_FINGERPRINT` before/after byte-identity run on DeepSeek-MoE +
-Qwen3-30B. Until then it stays where it is, correct.
-**Site**: `src/neurobrix/core/runtime/graph_executor.py:3144`.
-**Repro**: n/a (no defect — deferred design decision).
-**Surfaced**: dtype centralization audit (`docs/audits/dtype_centralization_audit.md`).
+### P-DTYPE-MOE-ROUTER-FP32-TRITON-MIRROR — P2
+**Scope**: the torch-mode MoE router fp32 upcast now lives in the dtype
+engine (`dtype.engine.routing_upcast_fp32`, both torch sites routed through
+it — done, see verdict). The symmetric move for the triton path is open: the
+NBXTensor routing upcast at `triton/moe.py:375` (`gate_scores.to(float32)`)
+should route through a `TritonDtypeEngine` seam so the triton engine is
+likewise the single authority for its routing-upcast policy (R30 symmetry of
+authority, not of code — R33 keeps the two engines sealed). Deferred here
+because it pulls in triton-MoE re-validation (P-TRITON-MOE-DETERMINISM
+territory) the torch chantier did not scope.
+**Site**: `src/neurobrix/triton/moe.py:375`; new seam in `src/neurobrix/triton/dtype.py`.
+**Repro**: n/a (architecture symmetry, no defect).
+**Surfaced**: P-DTYPE-MOE-ROUTER-FP32 closure (2026-05-26).
+
+### P-SEQUENTIAL-RUN-BACKTOBACK-HANG — P2
+**Scope**: two `neurobrix run` invocations chained in the same shell — the
+**second** hangs indefinitely (observed >30 min, SIGTERM'd) while the first
+completes normally (~27 s). Reproduced 2/2 on back-to-back sequential runs;
+0/2 on standalone single runs (fresh shell each). Suspect: GPU
+memory/CUDA-context not reclaimed fast enough between consecutive processes
+on the same device (cuda:2, ~30 GB DeepSeek-MoE) — the second process's
+allocation stalls. Bites any harness that chains model runs in one shell
+(the regression suite is a candidate); the workaround is one run per shell.
+Not a runtime-correctness bug (outputs are deterministic when runs complete).
+**Site**: TBD — process teardown / device-allocator reclaim boundary;
+`core/memory/manager.py` cleanup vs driver reclaim timing.
+**Repro**: `python3 -m neurobrix run --model deepseek-moe-16b-chat --prompt Hello --max-tokens 8 --sequential; python3 -m neurobrix run --model deepseek-moe-16b-chat --prompt Hello --max-tokens 8 --sequential` (2nd hangs).
+**Surfaced**: P-DTYPE-MOE-ROUTER-FP32 proof runs (2026-05-26).
 
 ---
 
