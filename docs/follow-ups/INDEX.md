@@ -39,8 +39,11 @@ on the same device (cuda:2, ~30 GB DeepSeek-MoE) — the second process's
 allocation stalls. Bites any harness that chains model runs in one shell
 (the regression suite is a candidate); the workaround is one run per shell.
 Not a runtime-correctness bug (outputs are deterministic when runs complete).
-**Site**: TBD — process teardown / device-allocator reclaim boundary;
-`core/memory/manager.py` cleanup vs driver reclaim timing.
+**Site**: TBD — process-teardown / driver context-reclaim boundary. Likely
+a CUDA driver lazy-release on process exit (outside NeuroBrix code) rather
+than `core/memory/manager.py` cleanup; confirmed empirically that the hang
+needs back-to-back processes within one shell — separate invocations (with
+the few-second gap of a fresh shell) reclaim fine.
 **Repro**: `python3 -m neurobrix run --model deepseek-moe-16b-chat --prompt Hello --max-tokens 8 --sequential; python3 -m neurobrix run --model deepseek-moe-16b-chat --prompt Hello --max-tokens 8 --sequential` (2nd hangs).
 **Surfaced**: P-DTYPE-MOE-ROUTER-FP32 proof runs (2026-05-26).
 
