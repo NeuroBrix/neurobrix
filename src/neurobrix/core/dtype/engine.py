@@ -44,6 +44,27 @@ def rms_norm_fp32(x: torch.Tensor, weight: torch.Tensor, eps: float = 1e-6) -> t
     return x_normed.to(weight.dtype) * weight
 
 
+def routing_upcast_fp32(x: torch.Tensor) -> torch.Tensor:
+    """MoE-router gate-score upcast to fp32 — the single source for the
+    fp32-upcast policy the fused MoE dispatch needs before topk / normalize.
+
+    MoE expert selection is precision-critical: bf16/fp16 routing degrades
+    quality through precision loss in the softmax / topk / normalization
+    chain (vLLM PR #14027). The vendor computes routing in fp32 regardless
+    of the weight dtype, and so do we. The upcast is a dtype-protection
+    decision, owned by the engine — consolidating the two formerly
+    byte-duplicated copies (the compiled fused-dispatch op and the
+    sequential native path) into one source, removing an R30
+    divergence-by-copy risk. The body is a pure dtype op, byte-identical to
+    the inline ``gate_scores.float()`` it replaces; device placement stays
+    at the call sites (it is placement, not dtype). Currently an
+    unconditional fp32 upcast (numerically safe on all hardware); a
+    hardware-aware variant (skip on bf16, whose exponent range equals
+    fp32's) is a future refinement, not a behaviour change here.
+    """
+    return x.float()
+
+
 # Diagnostic: when NBX_DTYPE_CLAMP_DIAG=1, log the first fp32→fp16
 # narrowing where the source actually exceeds the fp16 range. Empirical
 # witness that the _to_copy clamp protects a real overflow (the comment
