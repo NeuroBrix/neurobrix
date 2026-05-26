@@ -21,7 +21,7 @@ diffusion-math fp32.
 | `core/runtime/graph/sequential_dispatcher.py` `_dispatch_rms_norm` | Hand-rolled fp32-variance RMSNorm | **REPATRIATE** | → `engine.rms_norm_fp32`. Byte-identical to prior inline. |
 | `core/flow/stages/vibevoice.py` `_vv_rms_norm` | Hand-rolled fp32-variance RMSNorm | **REPATRIATE** | → `engine.rms_norm_fp32`. Equivalent (uniform-fp16 stage: cast-back `x.dtype`≡`weight.dtype`). |
 | `core/runtime/graph_executor.py` (720–761) | AMP enable/disable per component, op-level upcast | **KEEP** | Proper seam: `graph_executor` decides the per-component `amp_enabled` policy; `DtypeEngine` owns the op-level upcast. Already engine-delegated. |
-| `core/runtime/graph_executor.py:3144` `gate_scores.float()` | MoE router fp32 upcast | **DEFER (fingerprint plan)** | Determinism-sensitive (P-TRITON-MOE-DETERMINISM). Moving it requires `NBX_OP_FINGERPRINT` before/after on DeepSeek-MoE + Qwen3-30B to prove byte-identity. Posted as follow-up, not an orphan TODO. |
+| `core/runtime/graph_executor.py:3144` + `compiled_sequence.py:2130` `gate_scores.float()` | MoE router fp32 upcast | **DONE → `engine.routing_upcast_fp32`** | Both torch sites routed through the engine seam (single authority). Determinism-sensitive — proven byte-identical on DeepSeek-MoE compiled+sequential (tokens IDENTICAL + MoE op-level dump byte-identical, 27 layers). Verdict: `validation_outputs/p_dtype_moe_router_fp32/`. Triton-path symmetry posted as P-DTYPE-MOE-ROUTER-FP32-TRITON-MIRROR. |
 | `core/prism/solver.py:2858,2904` (`FP16_MAX=65504`) | bf16-weights→fp16 range scan | **KEEP** | Prism's offline placement decision (which compute dtype a component can take). Prism's domain, not a runtime protection hack. |
 | `core/runtime/graph/compiled_sequence.py:3323` `nan_to_num(±65504)` | NaN/Inf guard | **KEEP** | Diagnostic, gated behind `nan_guard_verbose`. Debug tooling (§5.8 toolkit), not the precision policy. |
 | `kernels/ops/topk.py:28,29` (`±65504`) | fp16 min/max masking constants | **KEEP** | Triton kernel-internal (R33-pure). Kernel layer's domain. |
@@ -45,13 +45,19 @@ by construction; the VibeVoice RMSNorm site is equivalent under the
 uniform-fp16 stage; the 3 compute-dtype readers are byte-identical for every
 real model (manifest dtype is always a valid key).
 
-## Deferred (named, with protocol — not fictional sub-chantiers)
+## Resolved
 
-- **P-DTYPE-MOE-ROUTER-FP32**: the MoE router fp32 upcast
-  (`graph_executor.py:3144 gate_scores.float()`) is a single-site, not a
-  duplicated copy. Moving it into the engine is an *engine extension* (a new
-  routing-upcast seam), not a repatriation — and the path is
-  determinism-sensitive (P-TRITON-MOE-DETERMINISM). It should move only after
-  (a) Hocine signs off on the engine seam and (b) an `NBX_OP_FINGERPRINT`
-  before/after run proves byte-identity on DeepSeek-MoE + Qwen3-30B. Until
-  then it stays where it is, correct.
+- **P-DTYPE-MOE-ROUTER-FP32** (closed 2026-05-26): the MoE router fp32
+  upcast now lives in `engine.routing_upcast_fp32`, the single authority for
+  that dtype-protection policy. Both torch sites
+  (`graph_executor.py:3144` sequential + `compiled_sequence.py:2130`
+  compiled) route through it; body is `x.float()`, byte-identical to the
+  inline upcast. Hocine corrected the original DEFER: a single-site
+  dtype-treatment is still out-of-doctrine where it is — the engine must be
+  the unique authority, so even a mono-site upcast belongs in the engine.
+  Determinism proven byte-identical on DeepSeek-MoE compiled+sequential
+  (tokens IDENTICAL + compiled MoE op-level dump byte-identical across all 27
+  MoE layers; sequential run-to-run deterministic). Qwen3-30B skipped as
+  overdetermination (provable 1:1 rename). Verdict:
+  `validation_outputs/p_dtype_moe_router_fp32/`. Triton-path symmetry is open
+  as **P-DTYPE-MOE-ROUTER-FP32-TRITON-MIRROR** (R33-sealed second engine).
