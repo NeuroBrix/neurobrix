@@ -860,10 +860,22 @@ class CompiledSequence:
             trace_val_counts[tv] = trace_val_counts.get(tv, 0) + 1
         ambiguous_vals = {tv for tv, count in trace_val_counts.items() if count > 1}
         if ambiguous_vals:
-            safe_symbols = {
-                sid: tv for sid, tv in safe_symbols.items()
-                if tv not in ambiguous_vals
-            }
+            distinct_vals = set(safe_symbols.values())
+            if len(distinct_vals) == 1:
+                # Every seq_len symbol shares ONE trace value → the component has a
+                # single sequence length (Kokoro: the phoneme count flows through
+                # bert→text_encoder→predictor; also plain LLMs). They all bind to the
+                # same runtime length, so the "which symbol does this 23 mean" worry
+                # is moot — collapse to one canonical symbol and promote. Models with
+                # genuinely distinct lengths (FLUX img=256 + txt=512) have distinct
+                # trace values and fall through to the conservative skip below.
+                canonical = next(iter(safe_symbols))
+                safe_symbols = {canonical: next(iter(distinct_vals))}
+            else:
+                safe_symbols = {
+                    sid: tv for sid, tv in safe_symbols.items()
+                    if tv not in ambiguous_vals
+                }
 
         # Also detect COMBINED seq_len values (sums of pairs).
         # FLUX-style models concatenate img+txt tokens, producing shapes like

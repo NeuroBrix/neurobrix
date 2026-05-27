@@ -187,8 +187,11 @@ class CompiledOpResolver:
             return self._make_rms_norm(attrs)
         if "scaled_dot_product" in op_name and "attention" in op_name:
             return self._make_attention(op_name, attrs)
-        if op_name in ("upsample_nearest2d", "upsample_bilinear2d", "upsample_bicubic2d"):
+        if op_name in ("upsample_nearest2d", "upsample_bilinear2d", "upsample_bicubic2d",
+                       "upsample_nearest1d", "upsample_linear1d"):
             return self._make_upsample(op_name)
+        if op_name == "as_strided":
+            return self._make_as_strided()
         return self._get_standard_op(op_name)
 
     # ========================================================================
@@ -508,15 +511,42 @@ class CompiledOpResolver:
         Graph contains hardcoded output_size from trace time. When scale factors
         are available, we recompute output_size from actual input dimensions.
         """
-        if op_name == "upsample_nearest2d":
-            raw_op = F.interpolate
+        raw_op = F.interpolate
+        is_1d = op_name.endswith("1d")
+        if "nearest" in op_name:
             mode = "nearest"
-        elif op_name == "upsample_bilinear2d":
-            raw_op = F.interpolate
-            mode = "bilinear"
+        elif "linear" in op_name:  # upsample_linear1d or upsample_bilinear2d
+            mode = "linear" if is_1d else "bilinear"
         else:  # upsample_bicubic2d
-            raw_op = F.interpolate
             mode = "bicubic"
+
+        if is_1d:
+            # The trace bakes a fixed output_size that won't track a dynamic input
+            # length (Kokoro F0/N prosody + decoder resample on the variable
+            # acoustic frame axis). Recompute the length from the LIVE input ×
+            # scale, mirroring the 2D fix below. The scale's arg position differs:
+            #   nearest1d(input, output_size, scales)             → scales = arg[2]
+            #   linear1d (input, output_size, align_corners, scales) → scales = arg[3]
+            nearest = (mode == "nearest")
+
+            def upsample_wrapper_1d(input_tensor, output_size=None, a2=None, a3=None, *args, **kwargs):
+                if nearest:
+                    scales, align = a2, None
+                else:
+                    scales, align = a3, a2  # a2 is align_corners (a bool)
+                # bool is an int subclass — exclude it so align_corners can't be
+                # mistaken for a scale (that produced int(W*False)=0).
+                if isinstance(scales, (int, float)) and not isinstance(scales, bool):
+                    size = int(round(input_tensor.shape[-1] * scales))
+                elif isinstance(output_size, (list, tuple)):
+                    size = output_size[0]
+                else:
+                    size = output_size
+                ac = None if nearest else bool(align) if align is not None else False
+                if size is not None and size > 0:
+                    return raw_op(input_tensor, size=size, mode=mode, align_corners=ac)
+                return raw_op(input_tensor, scale_factor=scales, mode=mode, align_corners=ac)
+            return upsample_wrapper_1d
 
         def upsample_wrapper(input_tensor, output_size=None, scales_h=None, scales_w=None, *args, **kwargs):
             # Multi-resolution fix: if scales are provided, recompute output_size
@@ -534,6 +564,30 @@ class CompiledOpResolver:
                 return raw_op(input_tensor, scale_factor=(scales_h, scales_w), mode=mode,
                              align_corners=False if mode != "nearest" else None)
         return upsample_wrapper
+
+    def _make_as_strided(self) -> Callable:
+        """as_strided used as an overlap-add framing view (iSTFT in the istftnet
+        vocoder) bakes the trace frame count into size[-2] and the full signal
+        length into stride[0]. At a different runtime audio length the baked view
+        over-reads storage. Recompute the window count and signal stride from the
+        LIVE input so the framing tracks the variable frame axis. Non-framing
+        as_strided (stride[-1] != 1 or non-3D) passes through unchanged.
+        """
+        def as_strided_wrapper(input_tensor, size=None, stride=None,
+                               storage_offset=0, *args, **kwargs):
+            if (isinstance(size, (list, tuple)) and isinstance(stride, (list, tuple))
+                    and len(size) == 3 and len(stride) == 3 and stride[-1] == 1):
+                B, _, W = size
+                L0, H, _ = stride
+                if B and H and B > 0 and H > 0:
+                    live_L = input_tensor.numel() // B
+                    if L0 != live_L:               # trace length ≠ runtime length
+                        N = (live_L - W) // H + 1
+                        size = [B, N, W]
+                        stride = [live_L, H, 1]
+            return torch.as_strided(input_tensor, list(size), list(stride),
+                                    storage_offset or 0)
+        return as_strided_wrapper
 
     def _make_expand(self) -> Callable:
         """
