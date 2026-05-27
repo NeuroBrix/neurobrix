@@ -213,6 +213,12 @@ AMP_FP16_OPS: FrozenSet[str] = frozenset({
     # RNN cells (PyTorch 100% match)
     "_thnn_fused_lstm_cell", "_thnn_fused_gru_cell",
     "lstm_cell", "gru_cell", "rnn_tanh_cell", "rnn_relu_cell",
+    # High-level RNN ops. PyTorch hides these behind cuDNN's own fp16 path;
+    # the RNN-reassembly pass emits a clean aten::lstm/gru, so the engine must
+    # cast its inputs (incl. hx/params lists) to compute_dtype itself —
+    # otherwise cuDNN rejects fp32-input × fp16-weights. cuDNN RNN accumulates
+    # in fp32 internally, so fp16 IO is safe (no _FP16_NEED_FP32 entry).
+    "lstm", "gru", "rnn_tanh", "rnn_relu",
     # DEVIATION: SDPA ops EXCLUDED (PyTorch classifies as LOWER_PRECISION_FP).
     # compiled_ops._make_attention() calls F.sdpa directly.
     # DtypeEngine must not double-wrap SDPA inputs.
@@ -408,13 +414,18 @@ class DtypeEngine:
         assert self.compute_dtype is not None  # Guaranteed by caller check
         compute: torch.dtype = self.compute_dtype
 
+        def _cast(a):
+            if isinstance(a, torch.Tensor):
+                return a.to(compute) if a.is_floating_point() and a.dtype != compute else a
+            # RNN ops pass hx/params as lists of tensors (and linalg_multi_dot
+            # takes a tensor list) — recurse so every nested float tensor is
+            # cast, keeping input/hx/params at one dtype for cuDNN.
+            if isinstance(a, (list, tuple)):
+                return type(a)(_cast(x) for x in a)
+            return a
+
         def lower_precision_func(*args, **kwargs):
-            new_args = tuple(
-                a.to(compute) if isinstance(a, torch.Tensor) and a.is_floating_point() and a.dtype != compute
-                else a
-                for a in args
-            )
-            return func(*new_args, **kwargs)
+            return func(*(_cast(a) for a in args), **kwargs)
         return lower_precision_func
 
     def _make_promote_wrapper(self, func: Callable) -> Callable:
