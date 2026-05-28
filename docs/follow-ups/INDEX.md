@@ -116,27 +116,44 @@ referenced from in-forward `mask[slice]=cnt` patterns.
 **Existing file**: `docs/follow-ups/p-container-embed-orphan-scalars.md`.
 **Surfaced**: P-NEUROBRIX-UPSCALERS-V1.
 
-### P-BUILD-KOKORO-DYNAMIC-FRAMES — P0
-**Scope**: re-trace the Kokoro decoder with a symbolic `asr_frames`
-dim AND a symbolic phoneme `seq_len` (same paradigm as Ch6 symbolic
-dims / LLM seq_len applied to audio: `asr_frames` should be symbolic
-like `n_codec_frames`, not a build-time-frozen 128). Removes three
-runtime band-aids: the fixed 128-frame decoder window, the 23-phoneme
-input truncation (vendor handles 48), and the P0a post-decode crop.
-The hand-rolled native predictor in `core/flow/stages/kokoro.py` exists
-only because the LSTM/pack_padded path can't trace; a clean re-trace
-with dynamic frames would let the predictor run in-graph, remove the
-native handler entirely, and thereby also fix Kokoro `--triton` (the
-native handler currently can't consume NBXTensor weights:
-`embedding(): weight must be Tensor, not NBXTensor`). The compute
-fidelity itself is already fixed in compiled mode
-([[P-KOKORO-NATIVE-PORT-FIDELITY]] closed); this lifts the remaining
-fixed-shape and triton limits.
-**Site**: private build subtree (audio symbolic-dim conventions);
-runtime consumer is `core/flow/stages/kokoro.py:_scale_kokoro_durations`
-+ `_get_kokoro_decoder_shapes`.
-**Repro**: `neurobrix run --model Kokoro-82M --prompt "The quick brown fox jumps over the lazy dog."` → only first ~23 phonemes survive.
-**Surfaced**: P-AUDIO-P0a (2026-05-22). Option B in the P0a diagnosis doc.
+### P-BUILD-KOKORO-DYNAMIC-FRAMES — P1 (was P0; phoneme seq_len + predictor RESOLVED 2026-05-28)
+**Resolved half**: the phoneme `seq_len` is now symbolic and the
+text_encoder + predictor run **fully variable-length** in-graph (verified
+`asr (1,512,360)→(1,512,3648)`, `F0_curve 720→7296`, scaling 10x with
+phoneme count for 15 vs 152 phonemes). This removes the 23-phoneme input
+truncation and runs the predictor (incl. its LSTM) in-graph instead of the
+hand-rolled native handler. Landed via: the cuDNN-RNN→`aten::lstm`
+reassembly with the full pack-ecosystem fold + the predictor broadcast-eq
+length regulator (build-side); opt-in seq-length symbolization for the
+component inputs the locked dim-naming convention couldn't name
+(`x/m/texts/t_en`); and the runtime length-symbol promotion extended to the
+wrapped-list `zeros/full` shape form + single-sequence symbol collapse.
+**Remaining → [[P-KOKORO-DECODER-ISTFT-FLEX]]**: the istftnet decoder still
+freezes its OUTPUT length. The signal path is dynamic at runtime (the 1D
+resample, the framing view, and the overlap-add reconstruction all recompute
+their length from the live input), but the **window-normalization branch**
+broadcasts `window^2` to a baked frame count with NO live tensor to recompute
+from (unlike the signal path, which derives its frame count from the inverse
+FFT output). The decoder's frame counts live at four rate-scales
+(asr=128, F0=256, samples=76800, windows=15361) so a single promotion symbol
+can't capture them, and 128/256 collide with weight dims. This is the
+documented VibeVoice class (STFT/causal-conv `math.ceil` length arithmetic
+resists a symbolic length — the VibeVoice decoder is traced at concrete
+length for the same reason). Until it lands, the registry keeps the Kokoro
+predictor/text_encoder on the native handler (the predictor variable-length
+capability is committed but not wired for Kokoro) so Kokoro runs via the
+existing fixed-length path; marked debt, not a solution.
+**Decision (2026-05-28, Hocine)**: predictor variable-length is the milestone
+(it fixes the real "phoneme stretching" babbling — the native handler scaled
+every utterance to a fixed ~128 frames). The decoder iSTFT frame-flexibility
+is the named follow-on: a VibeVoice-pattern handler that decodes at the
+runtime length, or threads the runtime frame count to the norm branch.
+**Site**: build-side audio seq-length symbolization (done for the phoneme
+axis); remaining runtime consumer is the istftnet window-norm reconstruction.
+**Repro**: `neurobrix run --model Kokoro-82M --prompt "<long sentence >23 phonemes>"`
+→ predictor now scales (asr frames track phonemes), decoder output still
+fixed-length (band-aid path active until the follow-on).
+**Surfaced**: P-AUDIO-P0a (2026-05-22); predictor half resolved 2026-05-28.
 
 ### P-SYMBOLIC-ITEM-TRACKING (was P-SYMBOLIC-ARANGE-SUM-FROM-ITEM) — P1, PARKED capability chantier
 **Scope**: chatterbox vocoder (s3gen) crashes building its pad mask. The mask
