@@ -192,6 +192,8 @@ class CompiledOpResolver:
             return self._make_upsample(op_name)
         if op_name == "as_strided":
             return self._make_as_strided()
+        if op_name == "unfold_backward":
+            return self._make_unfold_backward()
         return self._get_standard_op(op_name)
 
     # ========================================================================
@@ -564,6 +566,25 @@ class CompiledOpResolver:
                 return raw_op(input_tensor, scale_factor=(scales_h, scales_w), mode=mode,
                              align_corners=False if mode != "nearest" else None)
         return upsample_wrapper
+
+    def _make_unfold_backward(self) -> Callable:
+        """aten::unfold_backward(grad, input_sizes, dim, size, step) is the iSTFT
+        overlap-add reconstruction (inverse of the as_strided framing): it scatters
+        the `grad` windows back into a signal of `input_sizes`. The trace bakes
+        input_sizes at the trace frame count; recompute the reconstructed length
+        from the LIVE window count so it tracks variable audio:
+            input_sizes[dim] = (n_windows - 1) * step + size.
+        Mirror of the as_strided framing recompute.
+        """
+        def unfold_backward_wrapper(grad, input_sizes, dim, size, step, *args, **kwargs):
+            input_sizes = list(input_sizes)
+            if (isinstance(dim, int) and isinstance(size, int) and isinstance(step, int)
+                    and hasattr(grad, "shape") and 0 <= dim < len(input_sizes)
+                    and dim < grad.dim()):
+                n_windows = grad.shape[dim]
+                input_sizes[dim] = (n_windows - 1) * step + size
+            return torch.ops.aten.unfold_backward(grad, input_sizes, dim, size, step)
+        return unfold_backward_wrapper
 
     def _make_as_strided(self) -> Callable:
         """as_strided used as an overlap-add framing view (iSTFT in the istftnet

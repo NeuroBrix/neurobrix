@@ -996,8 +996,15 @@ class CompiledSequence:
                 shape_idx = 1 if op_type.startswith("aten::new_") else 0
                 if len(args) > shape_idx:
                     shape_arg = args[shape_idx]
-                    if isinstance(shape_arg, (list, tuple)):
-                        shape_list = list(shape_arg)
+                    # The shape may be a raw list OR the wrapped
+                    # {"type":"list","value":[...]} form — unwrap it (the wrapped
+                    # form was silently skipped, leaving e.g. zeros([B, seq, H])
+                    # frozen at the trace seq_len → the x_pad/mask buffers in
+                    # Kokoro's text_encoder failed at runtime).
+                    sa_wrapped = isinstance(shape_arg, dict) and shape_arg.get("type") == "list"
+                    shape_items = shape_arg.get("value", []) if sa_wrapped else shape_arg
+                    if isinstance(shape_items, (list, tuple)):
+                        shape_list = list(shape_items)
                         changed = False
                         for i, elem in enumerate(shape_list):
                             if isinstance(elem, dict):
@@ -1013,7 +1020,8 @@ class CompiledSequence:
                                     promoted += 1
                                     changed = True
                         if changed:
-                            args[shape_idx] = shape_list
+                            args[shape_idx] = ({"type": "list", "value": shape_list}
+                                               if sa_wrapped else shape_list)
 
             # aten::expand(tensor, size) — promote seq_len in size list.
             # size may be a raw list OR the wrapped {"type":"list","value":[...]}
