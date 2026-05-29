@@ -424,6 +424,15 @@ class CompiledOpResolver:
         raw_name = op_name.replace("aten::", "")
         base_name = raw_name.split(".")[0]
 
+        # The captured `is_causal` lives in the op attributes. Some transformers
+        # versions call SDPA with is_causal=True + attn_mask=None (chatterbox t3),
+        # while others ship an explicit causal mask (is_causal=None, mask tensor).
+        # The runtime kwargs at call time may not carry the flag, so default to the
+        # traced attribute — otherwise a causal attention silently runs bidirectional
+        # (future-token leakage). Mask-based models trace is_causal=None and keep the
+        # explicit-mask path below; non-causal encoders trace is_causal=None too.
+        _attr_is_causal = _safe_is_causal(attrs.get("is_causal", False))
+
         if base_name == "_scaled_dot_product_flash_attention_for_cpu":
             def flash_cpu_attention(q, k, v, dropout_p=0.0, is_causal=False, **kwargs):
                 q, k, v = _align_qkv_dtypes(q, k, v)
@@ -479,7 +488,7 @@ class CompiledOpResolver:
                     and k.shape[-1] != q.shape[-1] and k.shape[-2] == q.shape[-1]):
                 k = k.transpose(-2, -1)
 
-            is_causal = _safe_is_causal(kwargs.pop('is_causal', False))
+            is_causal = _safe_is_causal(kwargs.pop('is_causal', _attr_is_causal))
             kwargs.pop('dropout_p', None)
             scale = kwargs.pop('scale', None)
 
@@ -499,6 +508,9 @@ class CompiledOpResolver:
 
             if attn_mask is not None:
                 attn_mask = _cast_attn_mask(attn_mask, q)
+                # SDPA rejects an explicit mask together with is_causal=True; the
+                # mask already encodes causality, so the flag is redundant here.
+                is_causal = False
 
             return F.scaled_dot_product_attention(
                 q, k, v, attn_mask=attn_mask,
