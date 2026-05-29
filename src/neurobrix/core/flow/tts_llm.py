@@ -162,6 +162,26 @@ class TTSLLMEngine(FlowHandler):
         if bos_token_id is None:
             raise RuntimeError("ZERO FALLBACK: bos_token_id missing from defaults.json.")
 
+        # ── CFG via the centralized CFGEngine (single authority) ──
+        # The engine owns the FORMULA (apply_guidance) + the CASCADE (from_topology:
+        # CLI > topology > defaults guidance_scale + threshold) — no inline CFG here.
+        # The t3_cfg backbone is traced batch=1 (a baked-batch reshape breaks batch=2),
+        # so CFG runs SEQUENTIALLY: two batch=1 forwards (cond / text-zeroed uncond) per
+        # step, then engine.apply_guidance. Models with no guidance_scale -> CFG disabled
+        # (cond-only path unchanged, R23-safe).
+        from neurobrix.core.cfg.engine import CFGEngine
+        do_cfg = False
+        guidance_scale = 1.0
+        try:
+            _cfg_engine = CFGEngine.from_topology(
+                self.ctx, self._execute_component, lambda _c, _o: _o)
+            do_cfg = _cfg_engine.is_enabled
+            guidance_scale = _cfg_engine.guidance_scale
+        except KeyError:
+            do_cfg = False  # no guidance_scale in cascade -> disabled (cond-only)
+        if do_cfg:
+            print(f"   [{lm_name}] CFG enabled via CFGEngine (guidance_scale={guidance_scale}, sequential)")
+
         print(f"   [{lm_name}] Loading weights...")
         self._ensure_weights_loaded(lm_name)
 
@@ -191,13 +211,18 @@ class TTSLLMEngine(FlowHandler):
         print(f"   [{lm_name}] Conditioning: {cond_embeds.shape}")
 
         # ── Build text embeddings ──
+        # CFG uncond text = zero TOKEN embedding + learned POSITION (vendor order:
+        # text_emb[1].zero_() THEN += text_pos_emb). So uncond_text = position-only,
+        # NOT all-zeros — used to build the uncond context below.
         with torch.no_grad():
             text_embeds = F.embedding(input_ids, text_emb_w.to(dtype=dtype))
+            uncond_text_embeds = torch.zeros_like(text_embeds)  # token zeroed
             if text_pos_emb_w is not None:
                 # Learned position embeddings: index by token positions
                 pos_ids = torch.arange(input_ids.shape[1], device=device)
-                text_pos = F.embedding(pos_ids, text_pos_emb_w.to(dtype=dtype))
-                text_embeds = text_embeds + text_pos.unsqueeze(0)
+                text_pos = F.embedding(pos_ids, text_pos_emb_w.to(dtype=dtype)).unsqueeze(0)
+                text_embeds = text_embeds + text_pos
+                uncond_text_embeds = uncond_text_embeds + text_pos  # zero-token + position
 
         print(f"   [{lm_name}] Text embeds: {text_embeds.shape}")
 
@@ -214,6 +239,12 @@ class TTSLLMEngine(FlowHandler):
 
         # ── Build initial context: [cond, text, bos_speech] ──
         context_embeds = torch.cat([cond_embeds, text_embeds, bos_embed], dim=1)
+        # CFG uncond context (batch=1): zero the TEXT embedding (vendor text_emb[1].zero_());
+        # speaker-cond + speech tokens are shared. Grown in lockstep with context_embeds.
+        uncond_context = None
+        if do_cfg:
+            uncond_context = torch.cat(
+                [cond_embeds, uncond_text_embeds, bos_embed], dim=1)
         cond_len = cond_embeds.shape[1]
         text_len = text_embeds.shape[1]
 
@@ -225,25 +256,31 @@ class TTSLLMEngine(FlowHandler):
         generated_ids: list = []
         speech_head_w_typed = speech_head_w.to(dtype=dtype)
 
-        for step in range(max_tokens):
-            seq_len = context_embeds.shape[1]
+        def _t3_logits(ctx_embeds):
+            """One batch=1 backbone forward + speech_head → logits [1,1,vocab]."""
+            seq_len = ctx_embeds.shape[1]
             position_ids = torch.arange(seq_len, dtype=torch.long, device=device).unsqueeze(0)
-
-            # Bind inputs for backbone graph
-            self.ctx.variable_resolver.resolved["global.inputs_embeds"] = context_embeds
-            self.ctx.variable_resolver.resolved["inputs_embeds"] = context_embeds
+            self.ctx.variable_resolver.resolved["global.inputs_embeds"] = ctx_embeds
+            self.ctx.variable_resolver.resolved["inputs_embeds"] = ctx_embeds
             self.ctx.variable_resolver.resolved["global.position_ids"] = position_ids
             self.ctx.variable_resolver.resolved["position_ids"] = position_ids
-
             self._execute_component(lm_name, "forward", None)
+            out = self._get_component_output(lm_name)
+            if out is None:
+                return None
+            return torch.matmul(out[:, -1:, :], speech_head_w_typed.T)  # [1,1,vocab]
 
-            output = self._get_component_output(lm_name)
-            if output is None:
+        for step in range(max_tokens):
+            # Conditional (and, under CFG, unconditional) forward(s) → guided logits.
+            logits = _t3_logits(context_embeds)
+            if logits is None:
                 break
-
-            # Apply speech_head to last hidden state → logits over speech vocab
-            last_hidden = output[:, -1:, :]  # [B, 1, dim]
-            logits = torch.matmul(last_hidden, speech_head_w_typed.T)  # [B, 1, speech_vocab]
+            if do_cfg:
+                uncond_logits = _t3_logits(uncond_context)
+                if uncond_logits is None:
+                    break
+                # Centralized CFG formula (cond=context, uncond=text-zeroed context).
+                logits = CFGEngine.apply_guidance(logits, uncond_logits, guidance_scale)
 
             # Sample next token
             next_token = self._sample_token(
@@ -266,7 +303,10 @@ class TTSLLMEngine(FlowHandler):
                     token_pos = F.embedding(pos_idx, speech_pos_emb_w.to(dtype=dtype))
                     token_embed = token_embed + token_pos.unsqueeze(0)
 
+            # Grow both contexts in lockstep (shared speech sequence).
             context_embeds = torch.cat([context_embeds, token_embed], dim=1)
+            if do_cfg:
+                uncond_context = torch.cat([uncond_context, token_embed], dim=1)
 
         elapsed = (time.perf_counter() - start) * 1000
         print(f"   [{lm_name}] Generated {len(generated_ids)} speech tokens in {elapsed:.0f}ms")
