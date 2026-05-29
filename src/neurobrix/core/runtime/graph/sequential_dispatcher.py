@@ -269,6 +269,14 @@ class NativeATenDispatcher:
             # Fix K/V layout for standard SDPA path (Gemma-2 text encoder K transposition)
             if len(inputs) >= 3:
                 q, k, v = _fix_sdpa_kv_layout(inputs[0], inputs[1], inputs[2])
+                # Align Q/K/V dtypes (mirror the compiled _align_qkv_dtypes): upstream
+                # AMP upcasts (bmm→fp32 on fp16 hw) can leave V in fp16 while Q/K are
+                # fp32, which torch SDPA rejects. Cast to the narrowest common dtype.
+                if (hasattr(q, "dtype") and hasattr(k, "dtype") and hasattr(v, "dtype")
+                        and not (q.dtype == k.dtype == v.dtype)):
+                    _t = min((q.dtype, k.dtype, v.dtype),
+                             key=lambda d: torch.tensor([], dtype=d).element_size())
+                    q, k, v = q.to(_t), k.to(_t), v.to(_t)
                 inputs = [q, k, v] + list(inputs[3:])
 
         # [MULTI-RESOLUTION FIX] Upsample ops have hardcoded output_size from trace time.
