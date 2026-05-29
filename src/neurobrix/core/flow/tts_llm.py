@@ -108,15 +108,32 @@ class TTSLLMEngine(FlowHandler):
         if tokenizer is None:
             raise RuntimeError("ZERO FALLBACK: TTS model requires tokenizer module.")
 
-        # Tokenize with special tokens (model expects BOT/EOT markers)
-        # NeuroBrix tokenizers pad by default — disable padding for TTS input
-        ids = tokenizer.encode(prompt, padding=False, add_special_tokens=True)
-        if isinstance(ids, torch.Tensor):
-            input_ids = ids.to(device)
-            if input_ids.dim() == 1:
-                input_ids = input_ids.unsqueeze(0)
+        # Text tokenization — data-driven, scoped via the generation config.
+        # Models whose config declares start_text_token/stop_text_token (chatterbox's
+        # t3) reproduce the vendor's EnTokenizer.text_to_tokens + generate() contract:
+        # substitute a space marker so spaces survive BPE, then wrap the text with the
+        # sot/eot markers. Models without those keys (OpenAudio, ...) keep the standard
+        # encode path untouched — the wrap is NEVER applied unconditionally.
+        sot = defaults.get("start_text_token")
+        eot = defaults.get("stop_text_token")
+        space_marker = defaults.get("text_space_marker")
+        if sot is not None and eot is not None:
+            _txt = prompt.replace(" ", space_marker) if space_marker else prompt
+            _ids = tokenizer.encode(_txt, padding=False, add_special_tokens=False)
+            if isinstance(_ids, torch.Tensor):
+                _ids = _ids.flatten().tolist()
+            elif _ids and isinstance(_ids[0], (list, tuple)):
+                _ids = list(_ids[0])
+            _ids = [int(sot)] + [int(t) for t in _ids] + [int(eot)]
+            input_ids = torch.tensor([_ids], dtype=torch.long, device=device)
         else:
-            input_ids = torch.tensor([ids], dtype=torch.long, device=device)
+            ids = tokenizer.encode(prompt, padding=False, add_special_tokens=True)
+            if isinstance(ids, torch.Tensor):
+                input_ids = ids.to(device)
+                if input_ids.dim() == 1:
+                    input_ids = input_ids.unsqueeze(0)
+            else:
+                input_ids = torch.tensor([ids], dtype=torch.long, device=device)
 
         self.ctx.variable_resolver.resolved["global.input_ids"] = input_ids
         self.ctx.variable_resolver.resolved["input_ids"] = input_ids
@@ -206,7 +223,7 @@ class TTSLLMEngine(FlowHandler):
         # emotion_adv_fc → cat → [1, 34, 1024]) on the embedded default-voice
         # conditioning. No hand-rolled perceiver — the graph owns the compute.
         cond_embeds = self._build_conditioning(
-            speaker_emb, speech_emb_w, device, dtype
+            speaker_emb, speech_emb_w, speech_pos_emb_w, device, dtype
         ).to(dtype=dtype)
         print(f"   [{lm_name}] Conditioning: {cond_embeds.shape}")
 
@@ -487,6 +504,7 @@ class TTSLLMEngine(FlowHandler):
         self,
         speaker_emb: Optional[torch.Tensor],
         speech_emb_w: Optional[torch.Tensor],
+        speech_pos_emb_w: Optional[torch.Tensor],
         device: str, dtype: torch.dtype,
     ) -> torch.Tensor:
         """Build conditioning by running the traced cond_enc component.
@@ -518,6 +536,17 @@ class TTSLLMEngine(FlowHandler):
         cond_tokens = conds["t3.cond_prompt_speech_tokens"].to(device)
         with torch.no_grad():
             cond_prompt_speech_emb = F.embedding(cond_tokens, speech_emb_w.to(dtype=dtype))
+            # Vendor prepare_conditioning (t3.py:97-100, is_gpt=False) adds learned
+            # positional embeddings to the prompt-token embedding BEFORE T3CondEnc — the
+            # embedding is a pre-cond_enc step in the vendor too ("instead of in T3CondEnc").
+            # Omitting it weakens the conditioning (cond prefix diverges by max|diff|=2.6),
+            # flattening the t3 distribution -> temp-0.8 sampling drift. Same speech_pos_emb
+            # this flow already applies to the bos + generated speech tokens.
+            if speech_pos_emb_w is not None:
+                _L = cond_tokens.shape[1]
+                _pos_idx = torch.arange(_L, device=device).clamp(max=speech_pos_emb_w.shape[0] - 1)
+                cond_prompt_speech_emb = cond_prompt_speech_emb + F.embedding(
+                    _pos_idx, speech_pos_emb_w.to(dtype=dtype))
 
         # Live reference speaker_emb overrides the default voice when present
         spk = speaker_emb.view(1, -1) if speaker_emb is not None \
