@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Triton mode now promotes sequence-length-dependent `expand` sizes given in
+  the wrapped-list form, matching compiled mode.** The triton symbolic-promotion
+  pass handled only raw-list expand sizes, leaving the wrapped form's trace-time
+  length literal — so models with such an expand (e.g. a BERT-style token-type
+  embedding, or a RoPE position expand) failed or diverged at a runtime length
+  different from the trace length. Triton now mirrors the compiled promotion,
+  restoring four-mode parity.
+
 - **Kokoro-82M text-to-speech now runs end-to-end on the native forward path for
   prompts of any length.** The runtime previously padded or truncated every
   prompt to a fixed 23-phoneme length — collapsing every prompt to one fixed
