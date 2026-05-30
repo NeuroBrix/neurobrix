@@ -8,9 +8,19 @@ Dependencies: wrappers.py, NBXTensor. Used exclusively in --triton mode.
 """
 
 from typing import Optional, Callable, Dict
+import os
 import triton
 
 from .nbx_tensor import _set_device
+
+# Diagnostic (default-off): log when the metadata expand/view runtime-resolution
+# fixes actually fire. Used for R23 footprint screening (does a fix fire on a
+# trace==runtime model like an LLM?). Zero cost when unset.
+_META_RESOLVE_DEBUG = os.environ.get("NBX_DEBUG_META_RESOLVE")
+def _meta_resolve_log(msg):
+    if _META_RESOLVE_DEBUG:
+        import sys
+        sys.stderr.write(f"[META_RESOLVE] {msg}\n")
 
 _OP_MAP: Optional[Dict[str, Callable]] = None
 
@@ -45,14 +55,62 @@ def _tensor_to_int_or_none(val):
 # METADATA OPS — pure Python, NBXTensor methods, CPU stride math
 # ============================================================================
 
+def _resolve_view_shape(x, shape):
+    """Reconcile a trace-baked view/reshape shape with the runtime numel.
+
+    NBXTensor.view does NOT validate numel — it re-strides blindly over the same
+    data_ptr, so a baked trace dim that differs at runtime becomes a silent
+    out-of-bounds view (not an error, unlike torch). The graph bakes trace-time
+    shapes; a variable-length model's runtime numel can differ (Kokoro predictor
+    view::9: input [1,640,14], baked shape [1,640,23]). Mirror of compiled_ops.py
+    view_or_reshape's -1 inference: when the baked product mismatches the input
+    numel, infer the single changed dim, preferring the axis whose inferred size
+    matches the input's actual dim there. Bit-identical when product == numel
+    (trace==runtime) → returns the shape unchanged. Returns a list.
+    """
+    shape = list(shape)
+    if -1 in shape or len(shape) < 2:
+        return shape  # explicit infer dim, or scalar/1D — view handles it
+    numel = 1
+    for d in x.shape:
+        numel *= d
+    prod = 1
+    for d in shape:
+        prod *= d
+    if prod == numel:
+        return shape  # exact (trace==runtime) — no change, byte-identical
+    # numel mismatch: collect positions whose -1 inference divides evenly
+    candidates = []
+    for i in range(len(shape)):
+        rest = 1
+        for j, d in enumerate(shape):
+            if j != i:
+                rest *= d
+        if rest > 0 and numel % rest == 0:
+            candidates.append((i, numel // rest))
+    if not candidates:
+        return shape  # unresolvable (≥2 dims changed) — leave to caller
+    _orig = tuple(shape)
+    # prefer the axis whose inferred size matches the input's actual dim
+    for i, inferred in candidates:
+        if i < len(x.shape) and inferred == x.shape[i]:
+            shape[i] = inferred
+            _meta_resolve_log(f"view infer: in={tuple(x.shape)} baked={_orig} -> {tuple(shape)} (axis {i}, match)")
+            return shape
+    i, inferred = candidates[0]
+    shape[i] = inferred
+    _meta_resolve_log(f"view infer: in={tuple(x.shape)} baked={_orig} -> {tuple(shape)} (axis {i}, first)")
+    return shape
+
+
 def _meta_view(x, shape):
     if isinstance(shape, (list, tuple)):
-        return x.view(*shape)
+        return x.view(*_resolve_view_shape(x, shape))
     return x.view(shape)
 
 def _meta_reshape(x, shape):
     if isinstance(shape, (list, tuple)):
-        return x.reshape(*shape)
+        return x.reshape(*_resolve_view_shape(x, shape))
     return x.reshape(shape)
 
 def _meta_flatten(x, start_dim=0, end_dim=-1):
@@ -77,6 +135,21 @@ def _meta_contiguous(x, *args, **kwargs):
     return x.contiguous()
 
 def _meta_expand(x, size):
+    # Multi-resolution fix — mirror of compiled_ops.py _make_expand. The graph
+    # bakes trace-time expand sizes; at runtime a variable-length model's actual
+    # input dim can differ (Kokoro predictor: d.T seq 23->14, alignment frames
+    # 34->62). expand can only broadcast from 1, so when the input's actual dim is
+    # non-1 and differs from the baked target, the actual dim is the only valid
+    # size — use it. Bit-identical for trace==runtime models (actual == target →
+    # no override); restores R30 parity with compiled.
+    if isinstance(size, (list, tuple)) and len(size) == len(x.shape):
+        new_size = list(size)
+        for i, (actual, target) in enumerate(zip(x.shape, size)):
+            if actual != 1 and actual != target and target != -1:
+                new_size[i] = actual
+        if _META_RESOLVE_DEBUG and new_size != list(size):
+            _meta_resolve_log(f"expand override: in={tuple(x.shape)} baked={tuple(size)} -> {tuple(new_size)}")
+        return x.expand(*new_size)
     return x.expand(*size) if isinstance(size, (list, tuple)) else x.expand(size)
 
 def _meta_expand_as(x, other):
