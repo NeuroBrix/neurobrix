@@ -366,6 +366,10 @@ class NextTokenDiffusionEngine(FlowHandler):
     def _sample_speech_tokens(
         self, condition, neg_condition, cfg_scale, ddpm_steps, vae_dim, dtype, device, gen=None
     ) -> torch.Tensor:
+        # Lazy import: the CFG engine module would create a circular import at
+        # module load (cfg.engine <-> flow). Imported here (cached after first
+        # call) so the unified guidance formula is the single authority.
+        from neurobrix.core.cfg.engine import CFGEngine
         scheduler = self._build_scheduler()
         scheduler.set_timesteps(ddpm_steps, device=device)
 
@@ -389,7 +393,9 @@ class NextTokenDiffusionEngine(FlowHandler):
             t_batch = t.repeat(combined.shape[0]).to(device=device).float()  # [2]
             eps = self._head_forward(combined, t_batch, cond)                # [2, 64]
             cond_eps, uncond_eps = torch.split(eps, eps.shape[0] // 2, dim=0)
-            half_eps = uncond_eps + cfg_scale * (cond_eps - uncond_eps)
+            # CFG guidance via the unified CFGEngine (single formula authority).
+            # Identical to the prior inline `uncond + scale*(cond - uncond)`.
+            half_eps = CFGEngine.apply_guidance(cond_eps, uncond_eps, cfg_scale)
             eps = torch.cat([half_eps, half_eps], dim=0)
             out = scheduler.step(eps, t, speech)
             speech = out["prev_sample"] if isinstance(out, dict) else out
