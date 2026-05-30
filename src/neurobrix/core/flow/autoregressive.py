@@ -362,7 +362,11 @@ class ImageStrategy(GenerationStrategy):
             # Run head separately for cond/uncond (head traced with batch=1)
             logits_cond = self._run_head(last_hidden[0:1, ...], step_idx)
             logits_uncond = self._run_head(last_hidden[1:2, ...], step_idx)
-            return logits_uncond + self._cfg_weight * (logits_cond - logits_uncond)
+            # CFG guidance via the unified CFGEngine (single formula authority).
+            # Identical to the prior inline `uncond + scale*(cond - uncond)`.
+            # Lazy import avoids the cfg.engine<->flow circular import at load.
+            from neurobrix.core.cfg.engine import CFGEngine
+            return CFGEngine.apply_guidance(logits_cond, logits_uncond, self._cfg_weight)
         return self._run_head(last_hidden, step_idx)
 
     def embed_token(self, next_token: torch.Tensor, step_idx: int) -> torch.Tensor:
