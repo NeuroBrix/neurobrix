@@ -69,7 +69,19 @@ def _coerce_torch_dtype(dt) -> torch.dtype:
 # ─────────────────────────────────────────────────────────────
 
 def execute_native_kokoro(engine, stage: Dict, audio_config: Dict) -> None:
-    """Native execution for Kokoro components that can't run through CompiledSequence.
+    """Native (hand-rolled) execution for Kokoro's LSTM components.
+
+    TRITON-ONLY band-aid as of 2026-05-30. The COMPILED path no longer uses this:
+    Forge now traces the LSTM forward correctly (parent_module weight-resolution
+    fix for the cuDNN flatten_parameters data_ptr aliasing), so the compiled
+    registry runs the predictor + text_encoder via `execution: forward` (the
+    traced graph), validated element-wise vs the vendor oracle. The COMPILED
+    dispatch branch for `native_kokoro` was removed (core/flow/audio.py).
+
+    This function is retained for the TRITON path only (triton/flow/audio.py),
+    which cannot yet run the `aten::lstm` forward graph (no Triton LSTM kernel) —
+    a separate chantier (P-KOKORO-TRITON-LSTM-KERNEL, R33). Removing it now would
+    break the untested triton path; the removal is deliberately scoped to compiled.
 
     Handles:
     - text_encoder: embedding -> WeightNorm Conv1d x 3 -> BiLSTM (pack_padded_sequence)

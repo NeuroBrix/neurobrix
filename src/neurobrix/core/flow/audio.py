@@ -88,9 +88,6 @@ class AudioEngine(FlowHandler):
 
             if execution == "forward":
                 self._execute_forward_stage(stage)
-            elif execution == "native_kokoro":
-                from .stages.kokoro import execute_native_kokoro
-                execute_native_kokoro(self, stage, audio_config)
             elif execution == "diffusion":
                 from .stages.vibevoice import execute_diffusion_stage
                 execute_diffusion_stage(self, stage, audio_config)
@@ -98,9 +95,18 @@ class AudioEngine(FlowHandler):
                 from .stages.vibevoice import execute_native_acoustic_decoder
                 execute_native_acoustic_decoder(self, stage, audio_config)
             else:
+                # NOTE: `native_kokoro` was removed from the COMPILED dispatch —
+                # Kokoro's predictor now runs the traced forward graph
+                # (registry execution: forward), validated element-wise vs the
+                # vendor oracle. The `execute_native_kokoro` band-aid is retained
+                # ONLY for the TRITON path (triton/flow/audio.py), which cannot
+                # yet run the LSTM forward graph (no Triton LSTM kernel) — a
+                # separate chantier (P-KOKORO-TRITON-LSTM-KERNEL + R33). The
+                # removal here is scoped to compiled so an untested triton path
+                # is not broken.
                 raise RuntimeError(
                     f"ZERO FALLBACK: Unknown execution type '{execution}' "
-                    f"for stage '{comp_name}'. Expected: forward, native_kokoro, "
+                    f"for stage '{comp_name}'. Expected: forward, "
                     f"diffusion, native_acoustic_decoder"
                 )
 
