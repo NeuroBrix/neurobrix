@@ -1392,7 +1392,7 @@ def bmm(a, b) :
 
     B, M, K = a.shape
     B2, K2, N = b.shape
-    assert B == B2 and K == K2
+    assert B == B2 and K == K2, f"bmm shape mismatch: {tuple(a.shape)} @ {tuple(b.shape)}"
 
     if M <= 4:
         a = a.contiguous()
