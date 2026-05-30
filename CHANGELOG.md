@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Triton mode now executes LSTM (`aten::lstm`) models** via a pure-Triton LSTM
+  kernel — NBXTensor + Triton wrappers (matmul/sigmoid/tanh), zero torch, zero
+  NumPy compute; bidirectional, multi-layer, batch-first. Validated bit-close to
+  the compiled reference (max|diff| ~3e-4) and end-to-end on Kokoro (per-phoneme
+  durations match the reference implementation element-wise).
+
+### Fixed
+
+- **Triton `round` and `repeat_interleave` now work.** `round` referenced a Triton
+  math symbol absent in the installed version (it was crashing); it now uses the
+  round-half-to-even libdevice primitive (matches the reference). `repeat_interleave`
+  is now dispatched by argument shape — the single-tensor "interleaved indices"
+  overload (used by Kokoro's duration→alignment build) was misrouted to the
+  scalar-repeats path — and its tensor path no longer calls non-existent tensor
+  methods.
+
 - **VibeVoice-1.5B text-to-speech is now supported** via a next-token-diffusion
   generation flow. An autoregressive language model emits a control token per
   step; on each speech step a diffusion head samples one acoustic latent

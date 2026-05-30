@@ -425,6 +425,9 @@ def _build_op_map() -> Dict[str, Callable]:
         "mish": w.mish,
         "selu": w.selu_wrapper,
 
+        # --- Recurrent (triton-pure assembly; self-manages dtype) ---
+        "lstm": w.lstm_wrapper,
+
         # --- Unary element-wise ---
         "neg": w.neg,
         "exp": w.exp,
@@ -599,7 +602,7 @@ def _build_op_map() -> Dict[str, Callable]:
 
         # --- Weight norm ---
         "_weight_norm_interface": w.weight_norm_interface_wrapper,
-        "repeat_interleave": w.repeat_interleave_self_int_wrapper,
+        "repeat_interleave": w.repeat_interleave_wrapper,
 
         # --- RNG ---
         "rand": w.rand_wrapper,

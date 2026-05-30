@@ -4583,8 +4583,10 @@ def repeat_interleave_tensor_wrapper(
     repeats=[2,3,1] -> [0,0,1,1,1,2]
     """
     assert repeats.ndim == 1, "repeats must be a 1D tensor"
-    cumsum = repeats.cumsum(dim=0)
-    result_size = cumsum[-1].item()
+    # NBXTensor has no .cumsum()/[-1] — use the cumsum wrapper + select/item
+    # (the wrapper was never exercised in triton before Kokoro's alignment).
+    cumsum = cumsum_wrapper(repeats, 0)
+    result_size = int(cumsum.select(0, -1).item())
 
     out = NBXTensor.empty((result_size,), dtype=repeats.dtype, device=repeats.device)
     size = repeats.size(0)
@@ -4618,6 +4620,23 @@ def repeat_interleave_self_tensor_wrapper(
 
     indices = repeat_interleave_tensor_wrapper(repeats)
     return inp
+
+
+def repeat_interleave_wrapper(*args, **kwargs):
+    """aten::repeat_interleave dispatcher — routes by args, since the bare
+    op_type cannot distinguish the overloads:
+      repeat_interleave(repeats: Tensor)            1 arg        -> .Tensor   (index build)
+      repeat_interleave(self, repeats: int, dim)    int repeats  -> .self_int
+      repeat_interleave(self, repeats: Tensor, dim) Tensor reps  -> .self_Tensor
+    Kokoro's predictor alignment uses the 1-arg Tensor variant
+    (repeat_interleave(pred_dur) -> interleaved indices, length = sum(pred_dur));
+    the dispatch previously hardcoded self_int and dropped the `repeats` arg.
+    """
+    if len(args) == 1:
+        return repeat_interleave_tensor_wrapper(args[0], **kwargs)
+    if isinstance(args[1], NBXTensor):
+        return repeat_interleave_self_tensor_wrapper(*args, **kwargs)
+    return repeat_interleave_self_int_wrapper(*args, **kwargs)
 
 
 # ===========================================================================
@@ -5763,3 +5782,99 @@ def interpolate_wrapper(x, size=None, scale_factor=None,
     raise RuntimeError(
         f"[--triton mode] interpolate mode='{mode}' not implemented for {x.ndim}D input."
     )
+
+
+# ============================================================================
+# LSTM — triton-pure aten::lstm (mirror of F.lstm / cuDNN, the compiled ref).
+# Level-1 R33-pure: NBXTensor + Triton wrappers only (zero torch, zero NumPy
+# compute). Per-step recurrence assembled from mm/sigmoid/tanh/add/mul; a fused
+# @triton.jit LSTM is the deferred level-2 optimisation. Replaces the parakeet
+# NumPy LSTM (triton/flow/rnnt.py) once that flow is wired to it.
+# ============================================================================
+def _lstm_run_direction(x, w_ih_t, w_hh_t, b_ih, b_hh, h, c, hidden, reverse):
+    """One LSTM direction over the time axis.
+
+    x         : [B, T, I]   w_ih_t : [I, 4H]   w_hh_t : [H, 4H]
+    b_ih/b_hh : [4H] or None        h, c   : [B, H]
+    returns (out [B,T,H], h_last [B,H], c_last [B,H]).
+
+    Gate order i/f/g/o (PyTorch), mirrors triton/flow/rnnt.py:_lstm_cell_np:
+        gates = x@W_ih.T + b_ih + h@W_hh.T + b_hh
+        i=sigmoid(g[:H]); f=sigmoid(g[H:2H]); g_=tanh(g[2H:3H]); o=sigmoid(g[3H:])
+        c = f*c + i*g_;  h = o*tanh(c)
+    mm/bmm accumulate in fp32 (Triton tl.dot) → matches cuDNN's fp16 math.
+    """
+    T = x.shape[1]
+    H = hidden
+    Wx = matmul_wrapper(x, w_ih_t)                       # [B, T, 4H]
+    if b_ih is not None:
+        Wx = add(Wx, b_ih)                                # broadcast [4H]
+    outs = [None] * T
+    step_range = range(T - 1, -1, -1) if reverse else range(T)
+    for t in step_range:
+        gates = add(Wx.select(1, t), matmul_wrapper(h, w_hh_t))   # [B, 4H]
+        if b_hh is not None:
+            gates = add(gates, b_hh)
+        i_gate = sigmoid_wrapper(gates.narrow(1, 0, H))
+        f_gate = sigmoid_wrapper(gates.narrow(1, H, H))
+        g_gate = tanh_wrapper(gates.narrow(1, 2 * H, H))
+        o_gate = sigmoid_wrapper(gates.narrow(1, 3 * H, H))
+        c = add(mul(f_gate, c), mul(i_gate, g_gate))      # f*c + i*g_
+        h = mul(o_gate, tanh_wrapper(c))                  # o*tanh(c)
+        outs[t] = h.unsqueeze(1)                          # [B, 1, H]
+    return NBXTensor.cat(outs, dim=1), h, c               # [B, T, H]
+
+
+def lstm_wrapper(input_, hx, params, has_biases=True, num_layers=1,
+                 dropout=0.0, train=False, bidirectional=False,
+                 batch_first=False):
+    """Triton-pure aten::lstm. See _lstm_run_direction for the cell math.
+
+    input_ : [B,T,I] (batch_first) or [T,B,I] or [T,I]
+    hx     : [h0, c0], each [num_layers*num_dir, B, H]
+    params : flat list per layer per direction: [W_ih, W_hh, b_ih, b_hh] (biases)
+             or [W_ih, W_hh] (no biases); reverse direction follows forward.
+    returns (output [B,T,num_dir*H], h_n, c_n).
+    """
+    num_dir = 2 if bidirectional else 1
+    ppl = 4 if has_biases else 2
+    stride = ppl * num_dir
+
+    x = input_
+    if not batch_first and x.ndim == 3:
+        x = x.transpose(0, 1).contiguous()                # [T,B,I] -> [B,T,I]
+    if x.ndim == 2:
+        x = x.unsqueeze(0)                                # [T,I] -> [1,T,I]
+    cdt = x.dtype
+
+    h0_all, c0_all = hx[0], hx[1]                          # [layers*dir, B, H]
+    h_parts, c_parts = [], []
+    layer_in = x
+    for layer in range(int(num_layers)):
+        dir_outs = []
+        for d in range(num_dir):
+            base = layer * stride + d * ppl
+            w_ih = params[base].to(cdt)
+            w_hh = params[base + 1].to(cdt)
+            H = w_hh.shape[1]                              # w_hh: [4H, H]
+            b_ih = params[base + 2].to(cdt) if has_biases else None
+            b_hh = params[base + 3].to(cdt) if has_biases else None
+            si = layer * num_dir + d
+            h = h0_all.select(0, si).to(cdt)               # [B, H]
+            c = c0_all.select(0, si).to(cdt)
+            out_d, h_last, c_last = _lstm_run_direction(
+                layer_in,
+                w_ih.transpose(0, 1).contiguous(),
+                w_hh.transpose(0, 1).contiguous(),
+                b_ih, b_hh, h, c, H, reverse=(d == 1))
+            dir_outs.append(out_d)
+            h_parts.append(h_last.unsqueeze(0))
+            c_parts.append(c_last.unsqueeze(0))
+        layer_in = (NBXTensor.cat(dir_outs, dim=-1).contiguous()
+                    if num_dir == 2 else dir_outs[0])
+    h_n = NBXTensor.cat(h_parts, dim=0)                    # [layers*dir, B, H]
+    c_n = NBXTensor.cat(c_parts, dim=0)
+    return layer_in, h_n, c_n
+
+
+lstm_wrapper.self_manages_dtype = True
