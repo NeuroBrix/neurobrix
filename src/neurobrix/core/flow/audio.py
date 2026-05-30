@@ -525,8 +525,52 @@ class AudioEngine(FlowHandler):
             return False
 
         actual_seq = actual_input.shape[2]
-        if actual_seq <= graph_seq_len:
-            return False  # Fits in single pass, no chunking needed
+        if actual_seq == graph_seq_len:
+            return False  # exact trace length → single pass, window-norm matches
+        # actual_seq != graph_seq_len: the iSTFT window-norm divisor is baked at the
+        # trace frame count, so every decoder block must run at EXACTLY graph_seq_len.
+        # A shorter utterance runs as one block padded up to graph_seq_len (then the
+        # waveform is trimmed proportionally); a longer one as multiple blocks.
+
+        # Resolve the component's OTHER inputs so each chunk carries them too. A
+        # multi-input decoder (Kokoro: asr is chunked by frames; F0_curve/N are
+        # frame-dependent and chunked synchronously; s is the static style) otherwise
+        # loses every input but the primary one -> UNKNOWN_SCALAR at the first op.
+        # Frame-dependent vs static is detected per input (runtime dim > graph dim).
+        connections_all = self.ctx.pkg.topology.get("connections", [])
+
+        def _resolve_aux(iname):
+            for c in connections_all:
+                if c.get("to") == f"{comp_name}.{iname}":
+                    v = resolved.get(c.get("from"))
+                    if isinstance(v, torch.Tensor):
+                        return v
+            for key in (f"global.{iname}", iname, f"{comp_name}.{iname}"):
+                v = resolved.get(key)
+                if isinstance(v, torch.Tensor):
+                    return v
+            return None
+
+        aux_inputs = {}
+        for _tid2, spec2 in dag.get("tensors", {}).items():
+            iname2 = spec2.get("input_name")
+            if not iname2 or iname2 == graph_input_name:
+                continue
+            val2 = _resolve_aux(iname2)
+            if val2 is None:
+                continue
+            cdim2 = glen2 = None
+            gshape2 = spec2.get("shape", [])
+            for d in range(min(len(gshape2), val2.dim())):
+                gd = gshape2[d]
+                if isinstance(gd, dict):
+                    gd = gd.get("trace_value", gd)
+                if isinstance(gd, int) and val2.shape[d] != gd:
+                    # frame-dependent: chunk (runtime>graph) OR pad (runtime<graph)
+                    # to exactly graph_len so the decoder runs at the trace shape
+                    cdim2, glen2 = d, gd
+                    break
+            aux_inputs[iname2] = (val2, cdim2, glen2)
 
         # Chunk and execute
         print(f"   [{comp_name}] Chunked: {actual_seq} frames -> {graph_seq_len}-frame blocks")
@@ -542,6 +586,21 @@ class AudioEngine(FlowHandler):
                 chunk = torch.nn.functional.pad(chunk, (0, pad_size))
 
             comp_inputs = {graph_input_name: chunk}
+            block_idx = chunk_start // graph_seq_len
+            for iname2, (val2, cdim2, glen2) in aux_inputs.items():
+                if cdim2 is None:
+                    comp_inputs[iname2] = val2  # static (e.g. the style vector)
+                else:
+                    s2 = block_idx * glen2
+                    take = max(0, min(glen2, val2.shape[cdim2] - s2))
+                    c2 = val2.narrow(cdim2, s2, take)
+                    if c2.shape[cdim2] < glen2:
+                        pad_shape = list(c2.shape)
+                        pad_shape[cdim2] = glen2 - c2.shape[cdim2]
+                        c2 = torch.cat(
+                            [c2, torch.zeros(pad_shape, dtype=c2.dtype, device=c2.device)],
+                            dim=cdim2)
+                    comp_inputs[iname2] = c2
             output = executor.run(comp_inputs)
 
             if isinstance(output, dict):
