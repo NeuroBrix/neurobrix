@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Triton metadata `expand` / `view` / `reshape` now resolve trace-baked shapes
+  against the runtime numel** — mirror of the compiled `_make_expand` /
+  `_make_view_reshape` runtime fixes that the triton metadata-op port had dropped.
+  The graph bakes trace-time shapes; a variable-length model (e.g. the Kokoro
+  predictor) can have a different runtime length on a dimension the tracer left
+  concrete. `expand` now uses the input's actual non-1 dim when it differs from
+  the baked target (the only valid `expand` resolution); `view`/`reshape` infer
+  the single changed dimension when the baked product mismatches the input numel
+  (NBXTensor's `view` re-strides blindly without validating, so the mismatch is
+  detected proactively). Footprint-screened (`NBX_DEBUG_META_RESOLVE`): zero
+  activations on TinyLlama (LLM, runtime seq != trace seq) and Sana 1024
+  (diffusion) — byte-identical there; fires only on the variable-length case it
+  fixes. Restores R30 compiled/triton parity.
+
 ### Added
 
 - **Triton mode now executes LSTM (`aten::lstm`) models** via a pure-Triton LSTM
