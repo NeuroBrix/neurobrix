@@ -295,53 +295,30 @@ def preprocess_phonemizer_input(engine, prompt: str, phoneme_vocab: Dict) -> Non
             ids.append(phoneme_vocab[ch])
     ids.append(0)  # EOS/padding
 
-    # Step 3: Pad/truncate to graph's expected length
-    # Get expected length from first component's input shape
-    first_stage = engine.ctx.pkg.topology.get("flow", {}).get("audio", {}).get("stages", [])
-    max_len = None
-    if first_stage:
-        first_comp = first_stage[0].get("component", "")
-        executor = engine.ctx.executors.get(first_comp)
-        if executor and hasattr(executor, '_dag') and executor._dag:
-            for _tid, tinfo in executor._dag.get("tensors", {}).items():
-                if tinfo.get("is_input") and tinfo.get("input_name") in ("input_ids", "input", "inp"):
-                    shape = tinfo.get("shape", [])
-                    if len(shape) >= 2:
-                        max_len = shape[1]
-                    break
-
-    if max_len is None:
-        raise RuntimeError(
-            "ZERO FALLBACK: Cannot determine input_ids length from first stage graph.\n"
-            "Expected a graph input named 'input_ids', 'input', or 'inp' with a 2D shape."
-        )
-
+    # Step 3: Feed the ACTUAL phoneme sequence — no padding to the trace seq_len.
+    # The bert/text_encoder/predictor/decoder graphs carry a symbolic seq_len that
+    # the runtime binds from the input_ids shape, so every stage runs at the true
+    # length and the audio duration tracks the text. The previous code padded AND
+    # truncated every utterance to the trace's 23-phoneme length, which froze the
+    # output to a fixed duration (identical bytes for any prompt) and silently cut
+    # any text longer than 23 phonemes.
     actual_len = len(ids)
-    if len(ids) > max_len:
-        ids = ids[:max_len]
-        actual_len = max_len
-    else:
-        ids = ids + [0] * (max_len - len(ids))
-
     input_ids = torch.tensor([ids], dtype=torch.long, device=device)
     engine.ctx.variable_resolver.resolved["global.input_ids"] = input_ids
     engine.ctx.variable_resolver.resolved["input_ids"] = input_ids
-    print(f"   [Phonemizer] '{prompt}' -> {len(phonemes)} phonemes -> {actual_len} IDs (padded to {max_len})")
+    print(f"   [Phonemizer] '{prompt[:60]}' -> {len(phonemes)} phonemes "
+          f"-> {actual_len} IDs (dynamic seq_len)")
 
     # Bind text length and mask for downstream stages (text_encoder, predictor)
     text_lengths = torch.tensor([actual_len], dtype=torch.long, device=device)
     for key in ["global.text_lengths", "text_lengths", "input_lengths"]:
         engine.ctx.variable_resolver.resolved[key] = text_lengths
 
-    # text_mask convention: True = PADDING (vendor Kokoro
-    # KModel.forward_with_tokens uses `gt(arange+1, input_lengths)`, i.e. True
-    # for positions beyond the real length). Every consumer here
-    # (`masked_fill_(text_mask, 0)` in the DurationEncoder / text_encoder and
-    # `inv_mask = ~text_mask` for durations) is written for that convention, so
-    # the mask MUST be True=padding — setting True=valid silently zeroed the
-    # real tokens and kept the padding (P-KOKORO-NATIVE-PORT-FIDELITY).
-    text_mask = torch.ones(1, max_len, dtype=torch.bool, device=device)
-    text_mask[0, :actual_len] = False
+    # batch=1, no padding → every position is a real token. The mask convention is
+    # True = PADDING (vendor uses gt(arange+1, input_lengths)); with no padding the
+    # mask is all-False. (Consumers: masked_fill_(text_mask, 0) in the
+    # DurationEncoder / text_encoder, inv_mask = ~text_mask for durations.)
+    text_mask = torch.zeros(1, actual_len, dtype=torch.bool, device=device)
     for key in ["global.text_mask", "text_mask", "m"]:
         engine.ctx.variable_resolver.resolved[key] = text_mask
 

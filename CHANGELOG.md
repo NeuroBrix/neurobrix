@@ -18,6 +18,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Kokoro-82M text-to-speech now runs end-to-end on the native forward path for
+  prompts of any length.** The runtime previously padded or truncated every
+  prompt to a fixed 23-phoneme length — collapsing every prompt to one fixed
+  duration and silently cutting longer text — and ran the prosody predictor via a
+  hand-rolled fallback. It now feeds the true phoneme sequence so the sequence
+  length is bound per utterance, and chunks the iSTFT decoder across fixed frame
+  blocks so utterances of any length synthesize. Combined with corrected
+  prosody-predictor durations, the output now matches the reference
+  implementation in per-phoneme duration and total length, and is STT-correct for
+  short and long prompts (validated for 12-, 48-, and 172-phoneme inputs).
+
 - **Models with structurally-repeated layers** (e.g. tokenizer stacks whose
   layers share identical per-layer names) could silently load some weights into
   the wrong positions, corrupting their output. Such models now load their
