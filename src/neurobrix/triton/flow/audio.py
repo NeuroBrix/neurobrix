@@ -344,7 +344,14 @@ class TritonAudioEngine:
         start = time.perf_counter()
 
         self._ensure_weights_loaded(comp_name)
-        self._execute_component(comp_name, "forward", None)
+        # Fixed-length decoders (codec / iSTFT vocoder: the window-norm divisor and
+        # the as_strided framing are baked at the trace frame count) must run at
+        # EXACTLY the graph seq_len. Chunk a longer runtime input into trace-length
+        # blocks — triton mirror of compiled AudioFlow._try_chunked_forward.
+        # Data-driven: triggers only when the runtime 3D input seq_len differs from
+        # the graph's trace seq_len; otherwise the normal single pass runs.
+        if not self._try_chunked_forward(comp_name):
+            self._execute_component(comp_name, "forward", None)
 
         elapsed = (time.perf_counter() - start) * 1000
         print(f"   [{comp_name}] Done in {elapsed:.0f}ms")
@@ -352,6 +359,137 @@ class TritonAudioEngine:
         if not self.ctx.persistent_mode:
             self._unload_component_weights(comp_name)
             gc.collect()
+
+    def _try_chunked_forward(self, comp_name: str) -> bool:
+        """Run a fixed-length decoder in trace-length chunks (triton-pure mirror of
+        compiled AudioFlow._try_chunked_forward).
+
+        The graph expects [1, C, graph_seq_len]; the runtime input may be longer
+        (or shorter). The iSTFT window-norm divisor + as_strided framing are baked
+        at graph_seq_len, so each block must run at EXACTLY that length. The primary
+        frame input is chunked; frame-dependent aux inputs are chunked synchronously
+        (detected by runtime dim != graph dim); static inputs (style) pass whole.
+        Waveform chunks are concatenated. Returns True if chunking ran.
+        R33-pure: NBXTensor narrow/zeros/cat only.
+        """
+        executor = self.ctx.executors.get(comp_name)
+        dag = getattr(executor, '_dag', None) if executor else None
+        if dag is None:
+            return False
+
+        graph_input_name = None
+        graph_seq_len = None
+        for _tid, spec in dag.get("tensors", {}).items():
+            iname = spec.get("input_name")
+            if iname:
+                shape = spec.get("shape", [])
+                if len(shape) == 3:
+                    graph_seq_len = shape[2]
+                    if isinstance(graph_seq_len, dict):
+                        graph_seq_len = graph_seq_len.get("trace_value", graph_seq_len)
+                    graph_input_name = iname
+                break
+        if graph_input_name is None or not isinstance(graph_seq_len, int):
+            return False
+
+        resolved = self.ctx.variable_resolver.resolved
+        connections_all = self.ctx.pkg.topology.get("connections", [])
+
+        def _resolve(iname):
+            # Accept NBXTensor (frame inputs from upstream triton components) AND
+            # torch boundary tensors (e.g. the voicepack style vector) — convert
+            # the latter to NBXTensor so all chunking stays NBX-pure.
+            for c in connections_all:
+                if c.get("to") == f"{comp_name}.{iname}":
+                    v = resolved.get(c.get("from"))
+                    if _is_tensor(v):
+                        return _torch_to_nbx(v)
+            for key in (f"global.{iname}", iname, f"{comp_name}.{iname}"):
+                v = resolved.get(key)
+                if _is_tensor(v):
+                    return _torch_to_nbx(v)
+            return None
+
+        actual_input = _resolve(graph_input_name)
+        if actual_input is None or actual_input.ndim != 3:
+            return False
+        actual_seq = actual_input.shape[2]
+        if actual_seq == graph_seq_len:
+            return False  # exact trace length → single pass
+
+        # Frame-dependent aux inputs (runtime dim != graph dim) chunk synchronously;
+        # static ones pass whole.
+        aux_inputs = {}
+        for _tid2, spec2 in dag.get("tensors", {}).items():
+            iname2 = spec2.get("input_name")
+            if not iname2 or iname2 == graph_input_name:
+                continue
+            val2 = _resolve(iname2)
+            if val2 is None:
+                continue
+            cdim2 = glen2 = None
+            gshape2 = spec2.get("shape", [])
+            for d in range(min(len(gshape2), val2.ndim)):
+                gd = gshape2[d]
+                if isinstance(gd, dict):
+                    gd = gd.get("trace_value", gd)
+                if isinstance(gd, int) and val2.shape[d] != gd:
+                    cdim2, glen2 = d, gd
+                    break
+            aux_inputs[iname2] = (val2, cdim2, glen2)
+
+        def _pad_to(t, dim, length):
+            if t.shape[dim] >= length:
+                return t
+            pad_shape = list(t.shape)
+            pad_shape[dim] = length - t.shape[dim]
+            z = NBXTensor.zeros(tuple(pad_shape), dtype=t.dtype, device=t.device)
+            return NBXTensor.cat([t, z], dim=dim)
+
+        print(f"   [{comp_name}] Chunked: {actual_seq} frames -> {graph_seq_len}-frame blocks")
+        waveform_chunks = []
+        for chunk_start in range(0, actual_seq, graph_seq_len):
+            chunk_end = min(chunk_start + graph_seq_len, actual_seq)
+            chunk = actual_input.narrow(2, chunk_start, chunk_end - chunk_start)
+            chunk = _pad_to(chunk, 2, graph_seq_len)
+
+            comp_inputs = {graph_input_name: chunk}
+            block_idx = chunk_start // graph_seq_len
+            for iname2, (val2, cdim2, glen2) in aux_inputs.items():
+                if cdim2 is None:
+                    comp_inputs[iname2] = val2
+                else:
+                    s2 = block_idx * glen2
+                    take = max(0, min(glen2, val2.shape[cdim2] - s2))
+                    c2 = val2.narrow(cdim2, s2, take) if take > 0 else val2.narrow(cdim2, 0, 0)
+                    comp_inputs[iname2] = _pad_to(c2, cdim2, glen2)
+
+            output = executor.run(comp_inputs)
+            if isinstance(output, dict):
+                out_tensor = next(iter(output.values()), None)
+            elif isinstance(output, NBXTensor):
+                out_tensor = output
+            else:
+                out_tensor = None
+            if out_tensor is None:
+                continue
+            # Trim a padded last chunk proportionally.
+            if chunk_end - chunk_start < graph_seq_len and out_tensor.ndim >= 2:
+                ratio = (chunk_end - chunk_start) / graph_seq_len
+                last = out_tensor.ndim - 1
+                trim_len = int(out_tensor.shape[last] * ratio)
+                out_tensor = out_tensor.narrow(last, 0, trim_len)
+            waveform_chunks.append(out_tensor.contiguous())
+
+        if not waveform_chunks:
+            return False
+        last = waveform_chunks[0].ndim - 1
+        full_output = (waveform_chunks[0] if len(waveform_chunks) == 1
+                       else NBXTensor.cat(waveform_chunks, dim=last).contiguous())
+        resolved[f"{comp_name}.output_0"] = full_output
+        resolved["global.output_audio"] = full_output
+        print(f"   [{comp_name}] Waveform: {list(full_output.shape)}")
+        return True
 
     # -----------------------------------------------------------------
     # Output postprocessing

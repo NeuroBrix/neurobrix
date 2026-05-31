@@ -25,6 +25,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Triton audio flow: fixed-length-decoder chunking** (`_try_chunked_forward`,
+  triton-pure mirror of the compiled `AudioFlow._try_chunked_forward`). An iSTFT
+  vocoder / codec decoder bakes its window-norm divisor + `as_strided` framing at
+  the trace frame count, so it must run at exactly the graph seq_len. A longer
+  runtime input is split into trace-length blocks (the primary frame input chunked;
+  frame-dependent aux inputs chunked synchronously, detected by runtime-dim !=
+  graph-dim; static inputs like the style vector passed whole), each block decoded,
+  and the waveforms concatenated. Data-driven (triggers only on a 3D input whose
+  runtime seq_len differs from the trace seq_len) — no model-name branching. R33:
+  NBXTensor narrow/zeros/cat + the existing boundary `_torch_to_nbx` for the torch
+  voicepack style; zero torch compute.
+
+
 - **Triton transposed convolution** (`aten::convolution` with `transposed=True`,
   1D and 2D, groups + dilation aware). `conv2d_wrapper` previously dropped the
   `transposed`/`output_padding` flags when delegating 1D convs, so a
