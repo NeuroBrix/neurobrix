@@ -5710,9 +5710,13 @@ def _triton_ifft_1d(x_real, x_imag) -> tuple:
     return temp_real, temp_imag
 
 
-def fft_r2c_wrapper(x, dim: int = -1, norm: str = None,
+def fft_r2c_wrapper(x, dim=-1, norm: str = None,
                      onesided: bool = True) :
     """_fft_r2c: real-to-complex FFT (rfft equivalent)."""
+    # aten::_fft_r2c passes dim as an int[] (list of transform dims); take the
+    # single transform axis.
+    if isinstance(dim, (list, tuple)):
+        dim = dim[0] if dim else -1
     x = _ensure_cuda(x).contiguous()
     N = x.shape[dim]
     padded_N = _next_power_of_2(N)
