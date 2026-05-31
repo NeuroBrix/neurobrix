@@ -31,7 +31,12 @@ class AudioOutputProcessor:
         """Save waveform tensor as .wav file (TTS)."""
         import soundfile as sf
 
-        audio_np = waveform.cpu().float().numpy()
+        # torch.Tensor (compiled) → .cpu(); NBXTensor (triton) has no .cpu() but a
+        # numpy() boundary method. Duck-type so this single save point serves both.
+        if hasattr(waveform, "cpu"):
+            audio_np = waveform.cpu().float().numpy()
+        else:
+            audio_np = waveform.float().numpy()
 
         while audio_np.ndim > 1 and audio_np.shape[0] == 1:
             audio_np = audio_np.squeeze(0)

@@ -619,6 +619,12 @@ def neg(x) :
 
 
 def exp(x) :
+    if isinstance(x, NBXTensor) and x.is_complex():
+        # exp(a + bi) = e^a (cos b + i sin b)
+        a = x.real.contiguous()
+        b = x.imag.contiguous()
+        ea = exp(a)
+        return complex_wrapper(mul(ea, cos(b)), mul(ea, sin(b)))
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
     _set_device(x)
@@ -859,7 +865,61 @@ def add_inplace_nbx(target, other, alpha: float = 1.0):
     return target
 
 
+def _as_complex_scalar(v):
+    """Parse a complex literal ('1j', '(1+2j)', a Python complex) → complex, else None.
+    The tracer serializes complex constants like the imaginary unit as an
+    'unknown'-typed string ('1j')."""
+    if isinstance(v, complex):
+        return v
+    if isinstance(v, str):
+        try:
+            return complex(v.strip())
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
+def _cmul_scalar(x, c):
+    """x (real or complex NBXTensor) * complex scalar c → complex64."""
+    cr, ci = c.real, c.imag
+    if isinstance(x, NBXTensor) and x.is_complex():
+        xr, xi = x.real, x.imag
+        return complex_wrapper(sub(mul(xr, cr), mul(xi, ci)),
+                               add(mul(xr, ci), mul(xi, cr)))
+    real = mul(x, cr) if cr != 0.0 else NBXTensor.zeros_like(x)
+    imag = mul(x, ci) if ci != 0.0 else NBXTensor.zeros_like(x)
+    return complex_wrapper(real, imag)
+
+
+def _complex_mul(a, b):
+    """Handle a mul involving a complex scalar/tensor. Returns the complex result,
+    or None to fall through to the real elementwise mul (the common case)."""
+    ca = _as_complex_scalar(a)
+    cb = _as_complex_scalar(b)
+    a_t = isinstance(a, NBXTensor) and a.is_complex()
+    b_t = isinstance(b, NBXTensor) and b.is_complex()
+    if ca is None and cb is None and not a_t and not b_t:
+        return None  # purely real → real mul
+    if cb is not None and isinstance(a, NBXTensor):
+        return _cmul_scalar(a, cb)
+    if ca is not None and isinstance(b, NBXTensor):
+        return _cmul_scalar(b, ca)
+    # complex tensor * (real or complex) tensor
+    if a_t or b_t:
+        if a_t and not b_t:
+            return complex_wrapper(mul(a.real, b), mul(a.imag, b))
+        if b_t and not a_t:
+            return complex_wrapper(mul(b.real, a), mul(b.imag, a))
+        ar, ai, br, bi = a.real, a.imag, b.real, b.imag
+        return complex_wrapper(sub(mul(ar, br), mul(ai, bi)),
+                               add(mul(ar, bi), mul(ai, br)))
+    return None
+
+
 def mul(a, b) :
+    cr = _complex_mul(a, b)
+    if cr is not None:
+        return cr
     a, b, output, n, dev_ctx, scalar = _prepare_binary(a, b)
     if scalar:
         # Contract: tensor is always `a`, scalar is always `b`
@@ -5108,12 +5168,40 @@ def fold_wrapper(*args, **kwargs) :
     )
 
 
-def unfold_backward_wrapper(*args, **kwargs) :
-    """unfold_backward — NOT YET IMPLEMENTED in Triton."""
-    raise RuntimeError(
-        "[--triton mode] unfold_backward has no Triton kernel. "
-        "Implement in src/neurobrix/kernels/ops/unfold_op.py."
-    )
+def unfold_backward_wrapper(grad_in, input_sizes, dim, size, step) :
+    """unfold_backward (overlap-add): scatter-add the unfolded frames
+    [..lead.., N_frames, size] back into the original signal [..lead.., L] (L on
+    `dim`), summing overlapping positions. This is the iSTFT overlap-add.
+    R33-pure (one @triton.jit scatter-add kernel)."""
+    from .ops.unfold_op import unfold_backward_1d_kernel
+    grad_in = _ensure_cuda(grad_in).contiguous()
+    if isinstance(dim, (list, tuple)):
+        dim = dim[0]
+    if isinstance(size, (list, tuple)):
+        size = size[0]
+    if isinstance(step, (list, tuple)):
+        step = step[0]
+    out_shape = list(input_sizes)
+    dim = dim % len(out_shape)
+    L = out_shape[dim]
+    # grad_in: [*out_shape[:dim], N_frames, size] (the unfold replaced dim by
+    # (N_frames, size)). Collapse the leading dims into a batch.
+    gshape = list(grad_in.shape)
+    N_frames = gshape[dim]
+    sz = gshape[-1]
+    B = 1
+    for d in out_shape[:dim]:
+        B *= d
+    g2 = grad_in.reshape(B, N_frames, sz)
+    out = NBXTensor.zeros((B, L), dtype=grad_in.dtype, device=grad_in.device)
+    _set_device(g2)
+    max_overlap = (sz // step) + 2
+    BLOCK = 256
+    grid = (B, triton.cdiv(L, BLOCK))
+    unfold_backward_1d_kernel[grid](
+        g2, out, N_frames, sz, step, L,
+        MAX_OVERLAP=max_overlap, BLOCK_SIZE=BLOCK)
+    return out.reshape(*out_shape)
 
 
 # ===========================================================================
@@ -5815,6 +5903,11 @@ def fft_c2r_wrapper(x, dim: int = -1, norm: str = None,
     NBXTensor.zeros shape and called a non-existent NBXTensor.flip) and was never
     reachable for the audio decoders, so no working path is lost. Model-agnostic,
     R33-pure. fft_r2c keeps its working pow2 butterfly (+ non-pow2 DFT)."""
+    # aten::_fft_c2r passes dim as int[] and last_dim_size as a (Sym)int; take ints.
+    if isinstance(dim, (list, tuple)):
+        dim = dim[0] if dim else -1
+    if isinstance(last_dim_size, (list, tuple)):
+        last_dim_size = last_dim_size[0] if last_dim_size else None
     x = _ensure_cuda(x)
     moved = (dim != -1 and dim != x.ndim - 1)
     if moved:

@@ -1522,6 +1522,19 @@ class NBXTensor:
                                    self._nbytes, kind=kind)
         return dst
 
+    def numpy(self):
+        """Host numpy array (boundary conversion — copies to CPU). Used at the
+        triton output boundary (e.g. saving a waveform). float/int dtypes only;
+        bf16 has no numpy dtype (cast to float32 first)."""
+        import numpy as np
+        import ctypes
+        f = self.contiguous()
+        if f._device != 'cpu':
+            f = f.to_cpu()
+        typestr = _DTYPE_TYPESTR.get(f._dtype, '<f4')
+        raw = ctypes.string_at(f.data_ptr(), f.numel() * dtype_size(f._dtype))
+        return np.frombuffer(raw, dtype=np.dtype(typestr)).reshape(tuple(self._shape)).copy()
+
     def pin_host(self) -> 'NBXTensor':
         """Promote an unpinned CPU tensor to pinned host memory.
 
