@@ -1229,6 +1229,53 @@ class NBXTensor:
         return self._dtype in _COMPLEX_DTYPES
 
     # ========================================================================
+    # COMPLEX SUPPORT — complex64/128 stored as interleaved [real, imag] pairs
+    # (numpy '<c8'/'<c16', torch convention). Reinterprets are zero-copy when
+    # contiguous: the complex storage IS the float [..,N,2] storage. _offset is
+    # in elements of _dtype, so the complex↔float offset converts ×2 / ÷2.
+    # ========================================================================
+
+    def view_as_real(self) -> 'NBXTensor':
+        """complex [..,N] → float [..,N,2] (interleaved real/imag)."""
+        if not self.is_complex():
+            return self
+        x = self if self.is_contiguous() else self.contiguous()
+        fdt = NBXDtype.float64 if x._dtype == NBXDtype.complex128 else NBXDtype.float32
+        new_shape = x._shape + (2,)
+        return NBXTensor(x._data_ptr, new_shape, _contiguous_strides(new_shape),
+                         fdt, x._device, x._offset * 2,
+                         device_idx=x._device_idx,
+                         base=x._base if x._base is not None else x, pinned=x._pinned)
+
+    def view_as_complex(self) -> 'NBXTensor':
+        """float [..,N,2] → complex [..,N] (interleaved real/imag)."""
+        assert self._shape and self._shape[-1] == 2, \
+            f"view_as_complex expects last dim == 2, got {self._shape}"
+        x = self if self.is_contiguous() else self.contiguous()
+        cdt = NBXDtype.complex128 if x._dtype == NBXDtype.float64 else NBXDtype.complex64
+        new_shape = x._shape[:-1]
+        return NBXTensor(x._data_ptr, new_shape, _contiguous_strides(new_shape),
+                         cdt, x._device, x._offset // 2,
+                         device_idx=x._device_idx,
+                         base=x._base if x._base is not None else x, pinned=x._pinned)
+
+    @property
+    def real(self) -> 'NBXTensor':
+        """Real part (strided view, stride 2) of a complex tensor; self if real."""
+        if not self.is_complex():
+            return self
+        vr = self.view_as_real()
+        return vr.select(vr.ndim - 1, 0)
+
+    @property
+    def imag(self) -> 'NBXTensor':
+        """Imaginary part (strided view, stride 2) of a complex tensor."""
+        if not self.is_complex():
+            return NBXTensor.zeros(self._shape, dtype=self._dtype, device=self._device)
+        vr = self.view_as_real()
+        return vr.select(vr.ndim - 1, 1)
+
+    # ========================================================================
     # SHAPE QUERY METHODS
     # ========================================================================
 
