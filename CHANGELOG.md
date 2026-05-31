@@ -35,6 +35,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   size, slice to the declared element count (matching torch.load); only a genuinely
   shorter storage falls back to its length. Restores native/triton parity.
 
+### Fixed
+
+- **Triton `_fft_r2c` accepts the ATen `int[]` `dim` argument** (was indexing a
+  tuple with the list). Partial — the FFT wrappers remain radix-2 pow2-only; the
+  Kokoro iSTFT (n_fft=20, non-pow2) needs a DFT-via-matmul path (next).
+
 ### Added
 
 - **Triton audio flow: fixed-length-decoder chunking** (`_try_chunked_forward`,
