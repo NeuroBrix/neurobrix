@@ -2409,13 +2409,88 @@ def _conv2d_should_band_stream(N, out_c, out_h, out_w, dtype_bytes):
     return out_bytes > _NBX_CONV2D_BAND_BYTES
 
 
+def conv_transpose_wrapper(
+    x, weight, bias=None,
+    stride=1, padding=0, dilation=1, output_padding=0, groups=1,
+):
+    """Transposed convolution — aten::convolution(transposed=True).
+
+    Handles 1D (3D tensors, via H=1 unsqueeze) and 2D (4D tensors). Weight layout
+    matches PyTorch ConvTranspose: (C_in, C_out/groups, *K). Scatter-based
+    @triton.jit kernel (kernels/ops/conv_transpose2d.py), fp32 accumulation.
+    R33-pure: NBXTensor + Triton only.
+
+    A regular strided conv DOWNSAMPLES (out = in // stride); a transposed conv
+    UPSAMPLES: out = (in-1)*stride - 2*pad + dil*(k-1) + output_padding + 1. The
+    Kokoro F0/N ProsodyPredictor pool is a depthwise ConvTranspose1d (stride 2)
+    that doubles the frame axis (62->124). conv2d_wrapper routes here when
+    transposed=True (which it previously dropped when delegating 1D convs).
+    """
+    is_1d = (weight.ndim == 3)
+    if is_1d:
+        x = x.unsqueeze(2)            # [N, C_in, 1, L]
+        weight = weight.unsqueeze(2)  # [C_in, C_out/g, 1, K]
+        def _s(v):
+            return v[0] if isinstance(v, (list, tuple)) else v
+        sh, sw = 1, _s(stride)
+        ph, pw = 0, _s(padding)
+        dh, dw = 1, _s(dilation)
+        oph, opw = 0, _s(output_padding)
+    else:
+        def _hw(v):
+            if isinstance(v, (list, tuple)):
+                return (v[0], v[1] if len(v) > 1 else v[0])
+            return (v, v)
+        sh, sw = _hw(stride); ph, pw = _hw(padding)
+        dh, dw = _hw(dilation); oph, opw = _hw(output_padding)
+
+    # dtype alignment NARROWING (mirror conv2d_wrapper; fp32 accum in-kernel)
+    x_nbx = x.nbx_dtype if hasattr(x, 'nbx_dtype') else x.dtype
+    w_nbx = weight.nbx_dtype if hasattr(weight, 'nbx_dtype') else weight.dtype
+    if x_nbx != w_nbx:
+        _order = (NBXDtype.float16, NBXDtype.bfloat16, NBXDtype.float32)
+        narrowest = next(d for d in _order if d in (x_nbx, w_nbx))
+        if x_nbx != narrowest:
+            x = x.to(narrowest)
+        if w_nbx != narrowest:
+            weight = weight.to(narrowest)
+
+    x_c = x.contiguous()
+    w_c = weight.contiguous()
+    out_dtype = _NBX_COMPUTE_DTYPE if _NBX_COMPUTE_DTYPE is not None else x.dtype
+
+    N, C_in, IH, IW = x_c.shape
+    _, C_out_per_g, KH, KW = w_c.shape
+    C_out = C_out_per_g * groups
+    C_in_per_g = C_in // groups
+    OH = (IH - 1) * sh - 2 * ph + dh * (KH - 1) + oph + 1
+    OW = (IW - 1) * sw - 2 * pw + dw * (KW - 1) + opw + 1
+
+    output = NBXTensor.empty((N, C_out, OH, OW), device=x_c.device, dtype=out_dtype)
+    _set_device(x_c)
+    BLOCK = 256
+    grid = (N * C_out, triton.cdiv(OH * OW, BLOCK))
+    conv_transpose2d_kernel[grid](
+        x_c, w_c, output,
+        N, C_in, IH, IW, C_out, KH, KW, OH, OW,
+        sh, sw, ph, pw, dh, dw, C_in_per_g, C_out_per_g,
+        BLOCK_SIZE=BLOCK,
+    )
+    if bias is not None:
+        output = add(output, bias.view(1, C_out, 1, 1))
+    if is_1d:
+        output = output.squeeze(2)
+    return output
+
+
 def conv2d_wrapper(
     x, weight, bias=None,
     stride=1, padding=0, dilation=1,
     transposed=False, output_padding=0, groups=1,
 ) :
     """Convolution forward. Handles both 1D (3D tensors) and 2D (4D tensors).
-    Routes to conv1d_wrapper for 3D inputs.
+    Routes to conv1d_wrapper for 3D inputs, and to conv_transpose_wrapper when
+    transposed=True (1D or 2D).
 
     Spatial band-streaming (P-SANA-4KPX-RUNTIME Étape 1): when the output
     tensor would exceed _NBX_CONV2D_BAND_BYTES (default 4 GiB), the wrapper
@@ -2423,6 +2498,14 @@ def conv2d_wrapper(
     re-enters this same wrapper with a smaller H, so the recursion bottoms
     out automatically. The full output stays allocated for downstream
     consumers."""
+    # Transposed convolutions (1D or 2D) — route BEFORE the 1D delegation, which
+    # historically dropped the transposed/output_padding flags (Kokoro F0/N
+    # ConvTranspose1d was computed as a regular strided conv → halved instead of
+    # doubled the frame axis).
+    if transposed:
+        return conv_transpose_wrapper(x, weight, bias, stride, padding, dilation,
+                                      output_padding, groups)
+
     # Route 1D convolutions to conv1d_wrapper
     if weight.ndim == 3:
         return conv1d_wrapper(x, weight, bias, stride, padding, dilation, groups)
@@ -4930,11 +5013,27 @@ def pad_wrapper(x, pad_list, mode: str = "constant",
 
 
 def reflection_pad1d_wrapper(x, pad_list) :
-    """Reflection pad 1D — NOT YET IMPLEMENTED in Triton."""
-    raise RuntimeError(
-        "[--triton mode] reflection_pad1d has no Triton kernel. "
-        "Implement in src/neurobrix/kernels/ops/pad_op.py."
-    )
+    """Reflection pad 1D — `F.pad(mode='reflect')` on the last dim.
+
+    R33-pure: narrow + flip + cat, the width-axis case of
+    reflection_pad2d_wrapper (no new kernel — flip is a Triton kernel, cat and
+    narrow are Triton-backed). Reflection excludes the edge element (PyTorch
+    `reflect`): a left pad of p mirrors elements [1 .. p] reversed, a right pad
+    mirrors [L-1-p .. L-2] reversed. Used by vocoder conv/iSTFT pre-pad.
+    """
+    pad_list = [int(v) for v in pad_list]
+    left, right = (pad_list + [0, 0])[:2]
+    out = x.contiguous()
+    L = out.shape[-1]
+    parts = []
+    if left > 0:
+        parts.append(flip_wrapper(out.narrow(-1, 1, left), [-1]))
+    parts.append(out)
+    if right > 0:
+        parts.append(flip_wrapper(out.narrow(-1, L - 1 - right, right), [-1]))
+    if len(parts) > 1:
+        out = NBXTensor.cat(parts, dim=-1).contiguous()
+    return out
 
 
 def reflection_pad2d_wrapper(x, pad_list) :
@@ -5492,24 +5591,35 @@ def angle_wrapper(x) :
 
 def upsample_linear1d_wrapper(x, output_size, align_corners: bool = False,
                               scales=None) :
-    """upsample_linear1d via bilinear2d: [N,C,L] → unsqueeze → [N,C,1,L] → bilinear2d → squeeze."""
+    """upsample_linear1d via bilinear2d: [N,C,L] → unsqueeze → [N,C,1,L] → bilinear2d → squeeze.
+
+    Like upsample_nearest2d_wrapper: the traced graph stores BOTH the concrete
+    trace output_size AND the scale factor. When the runtime input length differs
+    from trace (variable-length audio decoders — Kokoro iSTFT source generator
+    runs at 124 vs the 256 trace), the baked output_size is stale; PyTorch
+    recomputes from the live input when a scale is present, so we do the same:
+    out_l = round(runtime_input_len * scale). Bit-identical when trace == runtime
+    (input_len * scale == baked output_size). Without this, a linear upsample
+    would desync from its sibling nearest upsample (which already scale-recomputes).
+    """
     x = _ensure_cuda(x).contiguous()
-    # [N, C, L] → [N, C, 1, L]
-    x_4d = x.unsqueeze(2)
-    if output_size is not None:
-        out_l = output_size[0] if isinstance(output_size, (list, tuple)) else int(output_size)
-        output_size_2d = [1, out_l]
-    else:
-        output_size_2d = None
+    x_4d = x.unsqueeze(2)  # [N, C, 1, L]
 
-    scales_2d = None
+    scale_val = None
     if scales is not None:
-        if isinstance(scales, (list, tuple)):
-            scales_2d = [1.0, scales[0] if len(scales) > 0 else 1.0]
-        else:
-            scales_2d = [1.0, float(scales)]
+        scale_val = scales[0] if isinstance(scales, (list, tuple)) else float(scales)
 
-    result_4d = upsample_bilinear2d_wrapper(x_4d, output_size_2d, align_corners, scales_2d)
+    if scale_val is not None:
+        out_l = int(round(x.shape[-1] * scale_val))
+    elif output_size is not None:
+        out_l = output_size[0] if isinstance(output_size, (list, tuple)) else int(output_size)
+    else:
+        out_l = None
+    output_size_2d = [1, out_l] if out_l is not None else None
+
+    # Pass output_size only; bilinear2d derives its interpolation scale from the
+    # (input, output) shapes + align_corners.
+    result_4d = upsample_bilinear2d_wrapper(x_4d, output_size_2d, align_corners)
     return result_4d.squeeze(2)
 
 

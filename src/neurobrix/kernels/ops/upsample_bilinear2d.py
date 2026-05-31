@@ -49,8 +49,11 @@ def upsample_bilinear2d_kernel(
     # Clamp to valid range
     src_h = tl.maximum(src_h, 0.0)
     src_w = tl.maximum(src_w, 0.0)
-    src_h = tl.minimum(src_h, (IH - 1).to(tl.float32))
-    src_w = tl.minimum(src_w, (IW - 1).to(tl.float32))
+    # IH/IW may arrive as a Python int (Triton-specialized) or a tl scalar
+    # depending on the call's shape — `.to()` fails on the former, float() on the
+    # latter. `* 1.0` promotes to float robustly for both.
+    src_h = tl.minimum(src_h, (IH - 1) * 1.0)
+    src_w = tl.minimum(src_w, (IW - 1) * 1.0)
 
     # Floor and ceil indices
     h0 = src_h.to(tl.int32)                         # [BLOCK_Y]
