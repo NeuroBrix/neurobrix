@@ -1350,15 +1350,22 @@ class GraphExecutor:
                         fixed = list(shape)
                         fixed[axis] = trace_seq_len
                         break
-            # Strategy B: 1-D constant where the bytes simply hold a few more
-            # (or fewer) elements than the declared shape — happens on TTS
-            # models like Kokoro whose graphs do not carry a seq_len symbol
-            # but where the tracer wrote a slightly off-by-one length on a
-            # 1-D table. Trust the bytes (mirrors what torch.load does on the
-            # native path; it ignores the JSON shape and uses the pickled
-            # tensor's metadata).
+            # Strategy B: 1-D constant whose ZIP storage holds a different element
+            # count than the declared shape. torch.load (native path) reconstructs
+            # the tensor from its pickled SHAPE — a view into the storage — NOT the
+            # storage's raw size. So the declared 1-D shape is authoritative when the
+            # storage is at least that large: the tensor is a view into a shared /
+            # padded buffer (e.g. the Kokoro iSTFT window — a [20] view into a
+            # 21-float storage; the native torch.load path yields [20], so triton
+            # must too). Slice the storage to the declared element count (offset 0,
+            # matching torch.load). Only when the storage is genuinely SHORTER than
+            # declared do we fall back to trusting its length.
             if fixed is None and len(shape) == 1:
-                fixed = [actual_elems]
+                if actual_elems >= declared_elems:
+                    fixed = list(shape)
+                    tensor_bytes = tensor_bytes[:declared_elems * dtype_bytes]
+                else:
+                    fixed = [actual_elems]
             if fixed is None:
                 raise RuntimeError(
                     f"Constant '{weight_name}' declared shape {shape} "
