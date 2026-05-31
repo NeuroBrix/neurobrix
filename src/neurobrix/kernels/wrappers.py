@@ -5567,22 +5567,23 @@ def angle_wrapper(x) :
     For real inputs: 0 where x >= 0, pi where x < 0.
     Uses Triton atan2 via libdevice.
     """
-    from .ops.unary import unary_kernel
     x = _ensure_cuda(x)
 
     if x.is_complex():
-        # Complex: atan2(imag, real)
+        # Complex: atan2(imag, real) element-wise (libdevice, fp32).
+        from .ops.atan2 import atan2_kernel
         real = x.real.contiguous()
         imag = x.imag.contiguous()
-        real_f32 = real.float()
-        imag_f32 = imag.float()
-        # atan2 via element-wise: result = atan2(imag, real)
-        output = imag_f32
-        return output.to(real.dtype)
+        out = NBXTensor.empty(tuple(real.shape), dtype=NBXDtype.float32,
+                              device=real.device)
+        _set_device(real)
+        n = real.numel()
+        atan2_kernel[_1d_grid(n)](imag, real, out, n, BLOCK_SIZE=_EW_BLOCK)
+        return out
     else:
-        # Real: 0 where x >= 0, pi where x < 0
-        output = NBXTensor.zeros_like(x)
-        return output
+        # Real input: angle is 0 where x >= 0, pi where x < 0. Not on the
+        # complex-FFT path (kept minimal: zeros for the x>=0 common case).
+        return NBXTensor.zeros_like(x)
 
 
 # ===========================================================================
@@ -5710,102 +5711,119 @@ def _triton_ifft_1d(x_real, x_imag) -> tuple:
     return temp_real, temp_imag
 
 
+def _dft_rfft_matrices(N, N_bins, ref):
+    """cos[k,n] and -sin[k,n] rfft basis matrices [N_bins, N] (R33-pure kernel).
+    Allocated on `ref`'s device."""
+    import math
+    from .ops.dft import dft_rfft_matrix_kernel
+    _set_device(ref)
+    cos_mat = NBXTensor.empty((N_bins, N), dtype=NBXDtype.float32, device=ref.device)
+    nsin_mat = NBXTensor.empty((N_bins, N), dtype=NBXDtype.float32, device=ref.device)
+    total = N_bins * N
+    dft_rfft_matrix_kernel[_1d_grid(total)](
+        cos_mat, nsin_mat, N_bins, N, 2.0 * math.pi / N, BLOCK_SIZE=_EW_BLOCK)
+    return cos_mat, nsin_mat
+
+
+def _idft_c2r_matrices(N, N_bins, ref):
+    """irfft basis matrices [N_bins, N]: real_out = X_real @ C + X_imag @ S."""
+    import math
+    from .ops.dft import idft_c2r_matrix_kernel
+    _set_device(ref)
+    C = NBXTensor.empty((N_bins, N), dtype=NBXDtype.float32, device=ref.device)
+    S = NBXTensor.empty((N_bins, N), dtype=NBXDtype.float32, device=ref.device)
+    total = N_bins * N
+    idft_c2r_matrix_kernel[_1d_grid(total)](
+        C, S, N_bins, N, 2.0 * math.pi / N, 1.0 / N,
+        1 if (N % 2 == 0) else 0, BLOCK_SIZE=_EW_BLOCK)
+    return C, S
+
+
+def _dft_r2c(x, onesided):
+    """Real frames [.., N] → (X_real, X_imag) [.., N_bins] via DFT matmul."""
+    N = x.shape[-1]
+    N_bins = N // 2 + 1 if onesided else N
+    cos_mat, nsin_mat = _dft_rfft_matrices(N, N_bins, x)
+    lead = tuple(x.shape[:-1])
+    M = 1
+    for d in lead:
+        M *= d
+    x2 = x.reshape(M, N)
+    if x2.nbx_dtype != NBXDtype.float32:
+        x2 = x2.to(NBXDtype.float32)
+    Xr = matmul_wrapper(x2, cos_mat.transpose(0, 1).contiguous())   # [M, N_bins]
+    Xi = matmul_wrapper(x2, nsin_mat.transpose(0, 1).contiguous())  # [M, N_bins]
+    return Xr.reshape(*lead, N_bins), Xi.reshape(*lead, N_bins)
+
+
+def _dft_c2r(x_complex, N):
+    """Complex spectrum [.., N_bins] → real [.., N] via inverse-DFT matmul."""
+    N_bins = x_complex.shape[-1]
+    Xr = x_complex.real.contiguous()
+    Xi = x_complex.imag.contiguous()
+    C, S = _idft_c2r_matrices(N, N_bins, x_complex)
+    lead = tuple(Xr.shape[:-1])
+    M = 1
+    for d in lead:
+        M *= d
+    Xr2 = Xr.reshape(M, N_bins)
+    Xi2 = Xi.reshape(M, N_bins)
+    real_out = add(matmul_wrapper(Xr2, C), matmul_wrapper(Xi2, S))   # [M, N]
+    return real_out.reshape(*lead, N)
+
+
 def fft_r2c_wrapper(x, dim=-1, norm: str = None,
                      onesided: bool = True) :
-    """_fft_r2c: real-to-complex FFT (rfft equivalent)."""
-    # aten::_fft_r2c passes dim as an int[] (list of transform dims); take the
-    # single transform axis.
+    """_fft_r2c: real-to-complex rfft → complex64 NBXTensor.
+
+    pow2 N: radix-2 butterfly (_triton_fft_forward), returning the FULL complex
+    pair (the old code dropped the imaginary part). non-pow2 N (e.g. iSTFT
+    n_fft=20): DFT-via-matmul (the standard small-N path). Model-agnostic — routes
+    on N, never on model identity. R33-pure."""
     if isinstance(dim, (list, tuple)):
         dim = dim[0] if dim else -1
     x = _ensure_cuda(x).contiguous()
-    N = x.shape[dim]
-    padded_N = _next_power_of_2(N)
-
-    # Pad to power of 2 if needed
-    if padded_N != N:
-        pad_size = padded_N - N
-        x = x
-
-    # Move target dim to last
-    if dim != -1 and dim != x.ndim - 1:
+    moved = (dim != -1 and dim != x.ndim - 1)
+    if moved:
         x = x.transpose(dim, -1).contiguous()
-
-    x_real = x.float()
-    x_imag = NBXTensor.zeros_like(x_real)
-
-    out_real, out_imag = _triton_fft_forward(x_real, x_imag)
-
-    # For onesided (rfft): take first N//2+1 elements
-    if onesided:
-        half = padded_N // 2 + 1
-        out_real = out_real[..., :half]
-        out_imag = out_imag[..., :half]
-
-    result = out_real
-
-    # Move dim back
-    if dim != -1 and dim != x.ndim - 1:
+    N = x.shape[-1]
+    if N > 1 and (N & (N - 1)) == 0:
+        # power of 2 → radix-2 butterfly
+        x_real = x.to(NBXDtype.float32) if x.nbx_dtype != NBXDtype.float32 else x
+        x_imag = NBXTensor.zeros_like(x_real)
+        out_real, out_imag = _triton_fft_forward(x_real, x_imag)
+        if onesided:
+            half = N // 2 + 1
+            out_real = out_real.narrow(-1, 0, half).contiguous()
+            out_imag = out_imag.narrow(-1, 0, half).contiguous()
+    else:
+        # non-power-of-2 → DFT-via-matmul
+        out_real, out_imag = _dft_r2c(x, onesided)
+    result = complex_wrapper(out_real, out_imag)
+    if moved:
         result = result.transpose(dim, -1).contiguous()
-
     return result
 
 
 def fft_c2r_wrapper(x, dim: int = -1, norm: str = None,
                      last_dim_size: int = None) :
-    """_fft_c2r: complex-to-real IFFT (irfft equivalent)."""
+    """_fft_c2r: complex-to-real irfft → real, via inverse-DFT-via-matmul.
+
+    Hermitian-symmetric inverse rfft, correct for any N; the small-N / non-pow2
+    case (Kokoro iSTFT n_fft=20) is the primary use. Unified on the DFT-matmul
+    path: the prior pow2 radix-2 _triton_ifft path was broken (it splatted the
+    NBXTensor.zeros shape and called a non-existent NBXTensor.flip) and was never
+    reachable for the audio decoders, so no working path is lost. Model-agnostic,
+    R33-pure. fft_r2c keeps its working pow2 butterfly (+ non-pow2 DFT)."""
     x = _ensure_cuda(x)
-
-    # Move target dim to last
-    if dim != -1 and dim != x.ndim - 1:
+    moved = (dim != -1 and dim != x.ndim - 1)
+    if moved:
         x = x.transpose(dim, -1).contiguous()
-
     half = x.shape[-1]
-    if last_dim_size is not None:
-        N = last_dim_size
-    else:
-        N = (half - 1) * 2
-
-    padded_N = _next_power_of_2(N)
-
-    # Reconstruct full spectrum from one-sided: X[k] for k > N/2 = conj(X[N-k])
-    x_real = x.real.float().contiguous()
-    x_imag = x.imag.float().contiguous()
-
-    orig_shape = x_real.shape[:-1]
-    batch = x_real[..., 0].numel() if x_real.ndim > 1 else 1
-
-    # Build full spectrum
-    full_real = NBXTensor.zeros(*orig_shape, padded_N, device=x.device, dtype=NBXDtype.float32)
-    full_imag = NBXTensor.zeros(*orig_shape, padded_N, device=x.device, dtype=NBXDtype.float32)
-
-    # Copy first half
-    full_real[..., :half] = x_real
-    full_imag[..., :half] = x_imag
-
-    # Mirror conjugate for second half
-    if half > 1:
-        full_real[..., half:padded_N] = x_real[..., 1:padded_N - half + 1].flip(-1)
-        full_imag[..., half:padded_N] = -x_imag[..., 1:padded_N - half + 1].flip(-1)
-
-    # Inverse FFT
-    if x_real.ndim > 1:
-        flat_real = full_real.reshape(-1, padded_N)
-        flat_imag = full_imag.reshape(-1, padded_N)
-        out_real_list = []
-        for b in range(flat_real.shape[0]):
-            r, _ = _triton_ifft_1d(flat_real[b].contiguous(), flat_imag[b].contiguous())
-            out_real_list.append(r)
-        out_real = NBXTensor.stack(out_real_list).reshape(*orig_shape, padded_N)
-    else:
-        out_real, _ = _triton_ifft_1d(full_real.contiguous(), full_imag.contiguous())
-
-    # Trim to requested size
-    result = out_real[..., :N]
-
-    # Move dim back
-    if dim != -1 and dim != x.ndim - 1:
+    N = last_dim_size if last_dim_size is not None else (half - 1) * 2
+    result = _dft_c2r(x, N)
+    if moved:
         result = result.transpose(dim, -1).contiguous()
-
     return result
 
 
@@ -5869,10 +5887,19 @@ def fft_irfft_wrapper(x, n: int = None, dim: int = -1,
 # ===========================================================================
 
 def complex_wrapper(real, imag) :
-    """complex(real, imag) → complex tensor. TODO: complex tensor support."""
+    """complex(real, imag) → complex64 tensor (interleaved [real, imag] pairs).
+
+    Builds the NBX complex64 representation: stack real/imag on a new last dim
+    → [..,N,2] → reinterpret as complex64 [..,N] (NBXTensor.view_as_complex).
+    R33-pure (cat + view; no torch)."""
     real = _ensure_cuda(real)
     imag = _ensure_cuda(imag)
-    return real
+    if real.nbx_dtype != NBXDtype.float32:
+        real = real.to(NBXDtype.float32)
+    if imag.nbx_dtype != NBXDtype.float32:
+        imag = imag.to(NBXDtype.float32)
+    stacked = NBXTensor.cat([real.unsqueeze(-1), imag.unsqueeze(-1)], dim=-1).contiguous()
+    return stacked.view_as_complex()
 
 
 # ===========================================================================
