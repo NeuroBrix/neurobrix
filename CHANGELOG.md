@@ -43,6 +43,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Triton complex arithmetic** (`mul` by the imaginary unit `1j`, `real·complex`,
+  `complex·complex`; complex `exp` = e^a(cos b + i sin b)) and **`unfold_backward`**
+  (overlap-add scatter, pure @triton.jit) — the iSTFT phase-reconstruction +
+  overlap-add. NBXTensor gains a `numpy()` output-boundary method; `save_waveform`
+  duck-types torch vs NBXTensor. All isolation-validated vs torch (mul·1j exact,
+  exp(i·x) 6e-8, mul(mag,e) 1.5e-8, unfold_backward 4.8e-7). Complex branches are
+  no-ops for real operands (R23-safe). `_fft_c2r` now accepts the ATen int[] dim arg.
+
+
 - **NBXTensor complex64/complex128 support** (the declared-but-stubbed complex
   dtype, now completed in the engine): `view_as_real`/`view_as_complex` (zero-copy
   reinterprets, interleaved [real,imag] like numpy `<c8`), `.real`/`.imag` strided
