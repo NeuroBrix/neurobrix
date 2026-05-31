@@ -780,11 +780,12 @@ def _build_op_map() -> Dict[str, Callable]:
         "_local_scalar_dense": _meta_select_item,
         "equal": _meta_equal,
 
-        # Complex views
-        "view_as_real": lambda x: x,  # reinterpret
-        "view_as_complex": lambda x: x,  # reinterpret
-        "real": lambda x: x,  # view
-        "imag": lambda x: x,  # view
+        # Complex views — real reinterprets (complex64 ↔ float[..,2]), see
+        # NBXTensor.view_as_real/view_as_complex/.real/.imag.
+        "view_as_real": lambda x: x.view_as_real(),
+        "view_as_complex": lambda x: x.view_as_complex(),
+        "real": lambda x: x.real,
+        "imag": lambda x: x.imag,
 
         # Queries (return Python scalars, not tensors)
         "size": lambda x, dim=None: x.size(dim) if dim is not None else x.size(),

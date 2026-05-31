@@ -43,6 +43,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **NBXTensor complex64/complex128 support** (the declared-but-stubbed complex
+  dtype, now completed in the engine): `view_as_real`/`view_as_complex` (zero-copy
+  reinterprets, interleaved [real,imag] like numpy `<c8`), `.real`/`.imag` strided
+  views, and a real `complex(real,imag)` builder (`complex_wrapper`, was a stub
+  that dropped the imaginary part). `angle` now computes `atan2(imag,real)` via a
+  new libdevice atan2 kernel (was a stub returning the imag part).
+- **Triton non-power-of-2 FFT (DFT-via-matmul)** for `_fft_r2c` / `_fft_c2r`. The
+  radix-2 butterfly only handles pow2 lengths; an iSTFT head with n_fft=20 needs a
+  DFT computed by matrix multiply (cos/sin basis matrices @ frames → complex pair;
+  Hermitian-symmetric inverse for c2r). New R33-pure `kernels/ops/dft.py` basis
+  kernels. `fft_r2c` now also returns the FULL complex pair on the pow2 path (it
+  dropped the imaginary part before). Model-agnostic (routes on N, never on model
+  identity); validated vs torch.fft on N=20 (non-pow2) and N=16 (pow2): r2c/angle/
+  c2r/round-trip all <=1e-4.
+
+
 - **Triton audio flow: fixed-length-decoder chunking** (`_try_chunked_forward`,
   triton-pure mirror of the compiled `AudioFlow._try_chunked_forward`). An iSTFT
   vocoder / codec decoder bakes its window-norm divisor + `as_strided` framing at
