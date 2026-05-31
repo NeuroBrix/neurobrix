@@ -23,6 +23,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (diffusion) — byte-identical there; fires only on the variable-length case it
   fixes. Restores R30 compiled/triton parity.
 
+### Fixed
+
+- **Triton 1-D ZIP-archive constant loading uses the declared (pickled view) shape,
+  not the raw storage size.** `_load_constant_triton`'s reconciliation "trusted the
+  bytes" for a 1-D constant whose torch.save storage held more elements than the
+  declared shape — but `torch.load` (native path) reconstructs from the pickled
+  shape (a view into the storage), not the storage size. The Kokoro iSTFT window is
+  a [20] view into a 21-float storage; triton yielded [21] (decoder frame*window
+  broadcast failed) vs native [20]. Now: when the storage is at least the declared
+  size, slice to the declared element count (matching torch.load); only a genuinely
+  shorter storage falls back to its length. Restores native/triton parity.
+
 ### Added
 
 - **Triton audio flow: fixed-length-decoder chunking** (`_try_chunked_forward`,
