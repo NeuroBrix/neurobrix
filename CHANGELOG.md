@@ -25,6 +25,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Triton transposed convolution** (`aten::convolution` with `transposed=True`,
+  1D and 2D, groups + dilation aware). `conv2d_wrapper` previously dropped the
+  `transposed`/`output_padding` flags when delegating 1D convs, so a
+  `ConvTranspose1d` was computed as a regular strided conv — *halving* the length
+  instead of *doubling* it (Kokoro F0/N ProsodyPredictor depthwise pool: 62->31
+  instead of 62->124). Wired the existing scatter `conv_transpose2d_kernel`
+  (extended with groups via `C_in_per_g`/`C_out_per_g`, dilation, and a scalar
+  weight-load fix; `groups=1` reduces to the original behaviour) through a new
+  `conv_transpose_wrapper`. Unit-tested vs torch `F.conv_transpose1d/2d`
+  (depthwise + groups=1 + 2D), max|diff| 0.008 (fp16 ULP).
+- **Triton `reflection_pad1d`** — R33-pure narrow+flip+cat, the last-dim case of
+  `reflection_pad2d_wrapper` (vocoder conv/iSTFT pre-pad).
+
+### Fixed
+
+- **Triton `upsample_bilinear2d` kernel crash + `upsample_linear1d` length.** The
+  bilinear kernel called `.to()` on a specialized Python int (`(IH-1).to(...)`),
+  crashing whenever exercised; replaced with arithmetic float promotion robust to
+  both Python-int and tl-scalar args. `upsample_linear1d` now prefers the scale
+  factor over the baked trace `output_size` (recompute from the live input length,
+  like `upsample_nearest2d_wrapper` already does) so a variable-length audio
+  decoder upsamples by the right ratio instead of desyncing from its sibling
+  nearest upsample. Bit-identical when trace == runtime.
+
+
 - **Triton mode now executes LSTM (`aten::lstm`) models** via a pure-Triton LSTM
   kernel — NBXTensor + Triton wrappers (matmul/sigmoid/tanh), zero torch, zero
   NumPy compute; bidirectional, multi-layer, batch-first. Validated bit-close to
