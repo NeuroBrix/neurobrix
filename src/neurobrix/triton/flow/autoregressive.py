@@ -236,6 +236,20 @@ class TritonAutoregressiveHandler:
         sft_format = defaults.get("sft_format")
         special_token_ids = defaults.get("special_token_ids")
 
+        # Resolve chat_mode (CLI override > defaults > False) — mirrors the
+        # compiled TextProcessor.tokenize. Models with chat_mode=False (e.g. the
+        # orpheus / openaudio TTS LMs, whose prompt is the bare templated text)
+        # MUST NOT go through apply_chat_template: that wraps the text in the
+        # full HF chat template (system prompt + role markers), producing a
+        # ~10x longer prompt (orpheus: 39 vs 4 tokens) and a completely
+        # different prefill → garbage decode. Was the orpheus triton bug.
+        _SENT = object()
+        _cli_chat = self.ctx.variable_resolver.resolved.get("global.chat_mode", _SENT)
+        if _cli_chat is not _SENT and _cli_chat is not None:
+            chat_mode = bool(_cli_chat)
+        else:
+            chat_mode = bool(defaults.get("chat_mode", False))
+
         if (is_image_ar and sft_format and special_token_ids
                 and hasattr(tokenizer, "format_generation_prompt")):
             # Priority 1: SFT format (Janus-style image AR). Only taken for
@@ -246,19 +260,28 @@ class TritonAutoregressiveHandler:
                 special_token_ids=special_token_ids,
                 is_unconditional=False,
             )
-        elif (not is_image_ar
-              and hasattr(tokenizer, "apply_chat_template")):
-            # Priority 2: HF chat_template — preserves the long-standing
-            # Triton LLM path exactly (TinyLlama, Qwen3, DeepSeek-MoE).
-            # The is_image_ar exclusion prevents Janus's DeepSeek
-            # tokenizer (which exposes apply_chat_template but has no
-            # configured template) from crashing here.
+        elif (chat_mode and not is_image_ar
+              and hasattr(tokenizer, "apply_chat_template")
+              and (not hasattr(tokenizer, "has_chat_template")
+                   or tokenizer.has_chat_template())):
+            # Priority 2: HF chat_template — ONLY when chat_mode is enabled
+            # (TextProcessor parity). Preserves the Triton chat-LLM path
+            # (TinyLlama, Qwen3, DeepSeek-MoE all set chat_mode=True).
             messages = [{"role": "user", "content": prompt}]
             token_ids = tokenizer.apply_chat_template(
                 messages, add_generation_prompt=True)
+        elif hasattr(tokenizer, "encode_with_mask"):
+            # Priority 3a: basic tokenization WITH special tokens (TextProcessor
+            # parity for chat_mode=False models — orpheus, openaudio).
+            _r = tokenizer.encode_with_mask(
+                prompt, padding=False, add_special_tokens=True)
+            token_ids = _r["input_ids"] if isinstance(_r, dict) else _r
         elif hasattr(tokenizer, "encode"):
-            # Priority 3: basic encode fallback.
-            token_ids = tokenizer.encode(prompt)
+            # Priority 3b: basic encode (with special tokens when supported).
+            try:
+                token_ids = tokenizer.encode(prompt, add_special_tokens=True)
+            except TypeError:
+                token_ids = tokenizer.encode(prompt)
         else:
             raise RuntimeError("Tokenizer has no encode method.")
 

@@ -39,6 +39,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Triton autoregressive `_tokenize` ignored `chat_mode` → wrong prompt for
+  TTS LMs.** The triton flow (`triton/flow/autoregressive.py`) applied the
+  generic HF `apply_chat_template` whenever the tokenizer exposed it, ignoring
+  the model's `chat_mode` flag. Models with `chat_mode=False` (orpheus,
+  openaudio — whose prompt is the bare templated text) got the full chat
+  template (system prompt + role markers): orpheus's "Hello world." became a
+  **39-token** prompt instead of the correct **4 tokens**, so the prefill
+  consumed a different prompt and the entire decode was garbage (degenerate
+  tokens, never reached eos). Gated the chat-template path on `chat_mode` and
+  mirrored the compiled `TextProcessor.tokenize` basic-encode path
+  (`add_special_tokens=True`). orpheus triton now produces a prefill hidden
+  (h_norm 108.06 vs compiled 108.08, head byte-identical) and decode tokens
+  (128009,128260,128261,128257,…) matching the compiled oracle. Shared fix for
+  any `chat_mode=False` autoregressive model in triton.
+
 - **Triton repetition-penalty sampler segfault (H2D cudaMemcpy raw host
   pointer).** `_apply_repetition_penalty` (triton/samplers.py) wrote the
   penalty-adjusted logits back to the GPU with the host source passed as a bare
