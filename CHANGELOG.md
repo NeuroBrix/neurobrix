@@ -36,6 +36,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Triton repetition-penalty sampler segfault (H2D cudaMemcpy raw host
+  pointer).** `_apply_repetition_penalty` (triton/samplers.py) wrote the
+  penalty-adjusted logits back to the GPU with the host source passed as a bare
+  `logits_np.ctypes.data` — a Python int. A ctypes call with no `argtypes`
+  coerces it to a 32-bit C int, truncating the 64-bit host address → invalid
+  source pointer → segfault. Any triton autoregressive model with
+  `repetition_penalty != 1.0` crashed at the first sampling step (orpheus TTS).
+  Wrapped the host src in `ctypes.c_void_p` (the D2H reads already wrapped both
+  ends, which is why only this H2D write crashed). Removed a dead
+  `DeviceAllocator` import at the same site.
+
 - **Triton autoregressive KV-cache interceptor: efficient/flash/cudnn SDPA
   arg-binding crash.** `TritonAttentionInterceptor.intercept` (kv_cache.py) has
   the plain-SDPA signature, but the autoregressive flow registered it for ALL
