@@ -238,9 +238,18 @@ def _compute_logits(ctx, hidden_states, embed_weight, logits_source):
         # matmul: last_hidden @ embed_weight.T
         # Use the graph executor's run for the matmul if available,
         # otherwise fall back to kernel dispatch
-        from neurobrix.kernels.dispatch import dispatch_op
+        from neurobrix.kernels.dispatch import dispatch
         w_t = embed_weight.transpose(0, 1) if embed_weight.ndim == 2 else embed_weight
-        return dispatch_op("mm", last_hidden, w_t)
+        mm = dispatch("mm")
+        if last_hidden.ndim > 2:
+            # lm_head over [..., H]: the 2-D `mm` kernel needs flat [M, H].
+            lead, hdim = last_hidden.shape[:-1], last_hidden.shape[-1]
+            m = 1
+            for d in lead:
+                m *= d
+            out = mm(last_hidden.reshape(m, hdim), w_t)
+            return out.reshape(*lead, out.shape[-1])
+        return mm(last_hidden, w_t)
 
     return last_hidden
 

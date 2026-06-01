@@ -29,6 +29,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Triton `encoder_decoder` flow (whisper): stale `dispatch_op` import + 3-D
+  lm_head.** The flow imported `dispatch_op` (removed; the current API is
+  `dispatch(op)(...)`), and fed a 3-D `[B,T,H]` hidden state to the strictly-2-D
+  `mm` kernel (`too many values to unpack`). Both fixed (flatten leading dims for
+  the lm_head matmul, unflatten the result). whisper-large triton now runs the
+  encode+decode end-to-end; the transcription is still empty (a separate decode
+  issue — next sweep step).
+
 - **Triton `bitwise_not` on a BOOL tensor is the logical NOT, not the bitwise
   complement.** The kernel did `~x`; for bool (0/1) that yields `~1=254` / `~0=255`
   — both non-zero, so the result read back as an **all-True** bool tensor. Bool is
