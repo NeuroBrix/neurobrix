@@ -9,24 +9,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Triton `batch_norm` instance-norm path: null pointers for absent
+  weight/bias/running, never the input tensor.** `batch_norm_wrapper` substituted
+  the input `x` for absent `weight`/`bias`/`running_mean`/`running_var`. The kernel
+  guards each with `if *_pointer:`, so a non-null `x` defeated the guard — it read
+  `x` as the affine scale/shift and wrote momentum-blended running stats back into
+  the input. `instance_norm` / AdaIN (training=True, no affine, no running buffers
+  — the StyleTTS2 AdainResBlk1d norm used throughout the Kokoro predictor and
+  decoder) was silently corrupted; standard `batch_norm` (real buffers) never
+  tripped it. Now passes null pointers and guards the running-stats update with
+  `if running_mean_pointer:`. Eval `batch_norm` (running+affine) stays
+  byte-identical; `instance_norm` is bit-exact vs torch across all Kokoro shapes.
+
+- **Triton float-math unary ops promote integer input to float (PyTorch type
+  promotion).** `rsqrt`/`sqrt`/`log`/`exp2`/`reciprocal`/`erf`/`tan` preserved an
+  integer input dtype through `NBXTensor.empty_like`, computing in int and
+  truncating: `rsqrt(int64 2)` returned `0` instead of `0.7071`. The Kokoro
+  AdainResBlk1d residual `(h + sc) * rsqrt(2)` (the `2` traced as an int64 scalar;
+  torch auto-promotes) collapsed every block output to zero. A shared
+  `_promote_int_unary` upcasts integer/bool input to float32; no-op for floats.
+  With both fixes the Kokoro-82M triton predictor matches the compiled oracle
+  op-for-op (embedding → CNN → BiLSTM → duration → alignment → F0/N blocks).
+
 - **Triton metadata `expand` / `view` / `reshape` now resolve trace-baked shapes
   against the runtime numel** — mirror of the compiled `_make_expand` /
   `_make_view_reshape` runtime fixes that the triton metadata-op port had dropped.
   The graph bakes trace-time shapes; a variable-length model (e.g. the Kokoro
-  predictor) can have a different runtime length on a dimension the tracer left
-  concrete. `expand` now uses the input's actual non-1 dim when it differs from
-  the baked target (the only valid `expand` resolution); `view`/`reshape` infer
-  the single changed dimension when the baked product mismatches the input numel
-  (NBXTensor's `view` re-strides blindly without validating, so the mismatch is
-  detected proactively). Footprint-screened (`NBX_DEBUG_META_RESOLVE`): zero
-  activations on TinyLlama (LLM, runtime seq != trace seq) and Sana 1024
-  (diffusion) — byte-identical there; fires only on the variable-length case it
-  fixes. Restores R30 compiled/triton parity.
+  predictor) can have a different runtime length on a dimension left concrete in
+  the packaged graph. `expand` now uses the input's actual non-1 dim when it
+  differs from the baked target (the only valid `expand` resolution);
+  `view`/`reshape` infer the single changed dimension when the baked product
+  mismatches the input numel (NBXTensor's `view` re-strides blindly without
+  validating, so the mismatch is detected proactively). Footprint-screened
+  (`NBX_DEBUG_META_RESOLVE`): zero activations on TinyLlama (LLM, runtime seq !=
+  trace seq) and Sana 1024 (diffusion) — byte-identical there; fires only on the
+  variable-length case it fixes. Restores R30 compiled/triton parity.
 
 ### Fixed
 
 - **Triton 1-D ZIP-archive constant loading uses the declared (pickled view) shape,
-  not the raw storage size.** `_load_constant_triton`'s reconciliation "trusted the
+  not the raw storage size.** `_load_constant_triton` "trusted the
   bytes" for a 1-D constant whose torch.save storage held more elements than the
   declared shape — but `torch.load` (native path) reconstructs from the pickled
   shape (a view into the storage), not the storage size. The Kokoro iSTFT window is

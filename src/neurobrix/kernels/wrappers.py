@@ -648,8 +648,21 @@ def cos(x) :
     return output
 
 
+def _promote_int_unary(x):
+    """Float-math unary ops (rsqrt/sqrt/log/exp/reciprocal/...) promote integer
+    or bool input to float32, matching PyTorch type promotion. Without it the
+    kernel computes in the integer dtype AND NBXTensor.empty_like keeps the int
+    output — e.g. rsqrt(int64 2) truncates 0.7071 to 0, which silently collapsed
+    the Kokoro AdainResBlk1d residual `(h + sc) * rsqrt(2)` to all-zeros (the
+    rsqrt(2) constant was traced as an int64 scalar; torch auto-promotes it).
+    No-op for tensors already in a floating dtype."""
+    if hasattr(x, "is_floating_point") and not x.is_floating_point():
+        return x.to(NBXDtype.float32)
+    return x
+
+
 def rsqrt(x) :
-    x = x.contiguous()
+    x = _promote_int_unary(x).contiguous()
     output = NBXTensor.empty_like(x)
     _set_device(x)
     rsqrt_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
@@ -657,7 +670,7 @@ def rsqrt(x) :
 
 
 def sqrt_wrapper(x) :
-    x = x.contiguous()
+    x = _promote_int_unary(x).contiguous()
     output = NBXTensor.empty_like(x)
     _set_device(x)
     sqrt_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
@@ -673,7 +686,7 @@ def abs_wrapper(x) :
 
 
 def log_wrapper(x) :
-    x = x.contiguous()
+    x = _promote_int_unary(x).contiguous()
     output = NBXTensor.empty_like(x)
     _set_device(x)
     log_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
@@ -681,7 +694,7 @@ def log_wrapper(x) :
 
 
 def reciprocal(x) :
-    x = x.contiguous()
+    x = _promote_int_unary(x).contiguous()
     output = NBXTensor.empty_like(x)
     _set_device(x)
     reciprocal_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
@@ -712,7 +725,7 @@ def clamp(x, min_val=None, max_val=None) :
 
 
 def erf(x) :
-    x = x.contiguous()
+    x = _promote_int_unary(x).contiguous()
     output = NBXTensor.empty_like(x)
     _set_device(x)
     erf_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
@@ -2813,7 +2826,25 @@ def batch_norm_wrapper(
     running_mean, running_var,
     training: bool = False, momentum: float = 0.1, eps: float = 1e-5,
 ) :
-    """BatchNorm forward (inference mode). Wrapper from FlagGems."""
+    """BatchNorm / InstanceNorm forward (kernel from FlagGems).
+
+    training=False → inference batch_norm using running_mean/running_var.
+    training=True  → statistics computed from the input — covers batch_norm
+                     training AND instance_norm / AdaIN, which the tracer emits
+                     as cudnn_batch_norm(training=True) with no affine and no
+                     running buffers (it reshapes [N,C,L]→[1,N*C,L] first, so
+                     each instance-channel normalises over the spatial axis).
+    Absent weight/bias/running reach the kernel as null pointers, handled by its
+    `if *_pointer:` guards (weight→1, bias→0, running update skipped). Never
+    substitute the input tensor for an absent buffer — that silently corrupted
+    instance_norm (kernel read x as the affine scale and overwrote x with the
+    momentum-blended running stats).
+    """
+    if not training and running_mean is None:
+        raise ValueError(
+            "batch_norm eval mode (training=False) requires running_mean and "
+            "running_var; got None. For statistics-from-input use training=True."
+        )
     if x.ndim == 2:
         x = x.unsqueeze(-1)
     elif x.ndim >= 4:
@@ -2826,16 +2857,22 @@ def batch_norm_wrapper(
     inv_std_out = NBXTensor.empty(C, dtype=NBXDtype.float32, device=x.device)
 
     grid = (C,)
-    _set_device(x.contiguous())
+    xc = x.contiguous()
+    _set_device(xc)
+    # Pass null pointers (None) — NOT x — for absent weight/bias/running. The
+    # kernel guards each with `if *_pointer:`; substituting x defeated the guard
+    # (kernel read x as the affine scale/shift and wrote running stats back into
+    # the input), which silently corrupted instance_norm (AdaIN has no affine
+    # nor running stats). batch_norm callers still pass real buffers unchanged.
     batch_norm_forward_kernel[grid](
-        x.contiguous(),
-        weight.contiguous() if weight is not None else x,
-        bias.contiguous() if bias is not None else x,
+        xc,
+        weight.contiguous() if weight is not None else None,
+        bias.contiguous() if bias is not None else None,
         mean_out, inv_std_out, output,
-        running_mean if running_mean is not None else x,
-        running_var if running_var is not None else x,
+        running_mean if running_mean is not None else None,
+        running_var if running_var is not None else None,
         N, spatial,
-        x.stride(0), x.stride(1), x.stride(2),
+        xc.stride(0), xc.stride(1), xc.stride(2),
         output.stride(0), output.stride(1), output.stride(2),
         momentum, eps,
         is_train=training,
@@ -2888,7 +2925,7 @@ def cumsum_wrapper(x, dim: int = 0) :
 # ===========================================================================
 
 def exp2_wrapper(x) :
-    x = x.contiguous()
+    x = _promote_int_unary(x).contiguous()
     output = NBXTensor.empty_like(x)
     _set_device(x)
     exp2_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
@@ -2896,7 +2933,7 @@ def exp2_wrapper(x) :
 
 
 def tan_wrapper(x) :
-    x = x.contiguous()
+    x = _promote_int_unary(x).contiguous()
     output = NBXTensor.empty_like(x)
     _set_device(x)
     tan_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
