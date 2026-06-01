@@ -29,6 +29,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Triton `--triton`: `aten::_scaled_dot_product_efficient_attention` (and
+  `_flash` / `_cudnn`) dropped the causal mask + used scale=1.0.** These
+  fused-backend SDPA variants have a shifted positional signature vs plain SDPA
+  (an extra `compute_log_sumexp` bool at arg[4] pushes `is_causal` to arg[6],
+  `scale` to arg[7]). The `--triton` dispatch (`dispatch.py`) mapped them
+  *directly* to `scaled_dot_product_attention_wrapper`, so a positional call
+  mis-read `is_causal` (from `dropout_p`→False — causal mask silently dropped)
+  and `scale` (from `is_causal`→1.0). Invisible at seq_len=1 (single-element
+  softmax), it corrupted every seq_len≥2 forward → constant-token garbage on any
+  causal decoder traced with the efficient backend (whisper-large-v3-turbo
+  produced `516` repeated). Fixed with a `_meta_sdpa_efficient` remap shim
+  mirroring `triton_sequential` (sequential.py:198) — closes the R30 asymmetry.
+  Cross-attention (non-causal, 5-arg) and plain `scaled_dot_product_attention`
+  are unchanged; compiled never uses this dispatch (R23-safe). whisper-large-v3-
+  turbo triton now transcribes byte-identical to the compiled oracle.
+
 - **Triton `index_select` / `aten::index`: enforce integer indices.**
   `index_select_wrapper` passed the index tensor straight to the kernel, whose
   pointer arithmetic `inp + (rows*N + indices)` is only valid for integer
