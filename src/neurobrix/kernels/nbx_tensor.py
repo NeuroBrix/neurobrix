@@ -1662,6 +1662,30 @@ class NBXTensor:
     def expand_as(self, other) -> 'NBXTensor':
         return self.expand(*other._shape if isinstance(other, NBXTensor) else other.shape)
 
+    def repeat(self, *sizes) -> 'NBXTensor':
+        """aten::repeat — TILE the tensor `sizes[i]` times along each dim
+        (numpy.tile / torch.Tensor.repeat), NOT element-wise repeat_interleave.
+        When len(sizes) > ndim, leading singleton dims are prepended. R33-pure:
+        view → expand (stride-0 broadcast) → contiguous → reshape; the
+        interleaved `[1,d0,1,d1,…]` view collapses to `[r0*d0, r1*d1, …]`.
+        """
+        if len(sizes) == 1 and isinstance(sizes[0], (list, tuple)):
+            sizes = tuple(sizes[0])
+        sizes = tuple(int(s) for s in sizes)
+        m = len(sizes)
+        assert m >= self.ndim, f"repeat sizes {sizes} fewer than ndim {self.ndim}"
+        x = self.contiguous()
+        base = (1,) * (m - x.ndim) + tuple(x._shape)
+        view_shape, expand_shape, out_shape = [], [], []
+        for i in range(m):
+            view_shape += [1, base[i]]
+            expand_shape += [sizes[i], base[i]]
+            out_shape.append(sizes[i] * base[i])
+        return (x.view(tuple(view_shape))
+                 .expand(tuple(expand_shape))
+                 .contiguous()
+                 .reshape(tuple(out_shape)))
+
     def narrow(self, dim: int, start: int, length: int) -> 'NBXTensor':
         dim = dim % self.ndim
         s = list(self._shape)

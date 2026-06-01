@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`NBXTensor.repeat` (aten::repeat)** — tiling (numpy.tile / torch repeat),
+  R33-pure (view → expand → contiguous → reshape). Was missing entirely
+  (`'NBXTensor' object has no attribute 'repeat'`), crashing any triton model
+  whose graph emits `aten::repeat` — surfaced by the parakeet conformer encoder.
+  Bit-exact vs torch across shapes / extra leading dims.
+
+### Changed
+
+- **parakeet RNNT decoder LSTM runs through the triton-pure `lstm_wrapper`**
+  instead of a hand-rolled NumPy cell — removes the NumPy compute debt in
+  `triton/flow/rnnt.py` (the greedy loop stays Python; only the single-step
+  input + h/c cross the boundary, weights converted once). Per-step
+  unidirectional multi-layer output is bit-exact vs `torch.nn.LSTM`
+  (max|diff|=0). NOTE: parakeet triton end-to-end is still wrong due to a
+  separate, pre-existing conformer-ENCODER bug (only now reachable since the
+  `repeat` fix cleared the crash that previously masked it) — the next
+  triton-sweep step.
+
 ### Fixed
 
 - **Triton `abs` of a complex tensor returns the real magnitude (and stops a
