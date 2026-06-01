@@ -294,6 +294,27 @@ def _meta_sdpa_efficient(*args, **kwargs):
         is_causal=is_causal, scale=scale)
 
 
+def _meta_weight_norm(v, g, dim=0, **kwargs):
+    """aten::_weight_norm(v, g, dim) → w = v * g / ‖v‖, where ‖v‖ is the L2 norm
+    over ALL dims except `dim` (keepdim). Pure-Triton meta-op via the existing
+    mul/sum/sqrt/div wrappers (no dedicated kernel needed). Used by vocoders'
+    weight-normalized convs (chatterbox s3gen, HiFi-GAN-style).
+    """
+    from neurobrix.kernels import wrappers as w
+    nd = v.ndim
+    d = dim % nd if nd else 0
+    vsq = w.mul(v, v)
+    nsq = vsq
+    for rd in range(nd):
+        if rd == d:
+            continue
+        nsq = w.sum_wrapper(nsq, dim=rd, keepdim=True)
+    norm = w.sqrt_wrapper(nsq)
+    # w = v * (g / norm); g and norm share the norm-shape (1s except dim d),
+    # broadcast against the full-shape v.
+    return w.mul(v, w.div(g, norm))
+
+
 # ============================================================================
 # CREATION OPS — ATen signatures, Triton fill kernel, NBXTensor allocation
 #
@@ -683,6 +704,7 @@ def _build_op_map() -> Dict[str, Callable]:
         "dot": w.dot_wrapper,
         "mv": w.mv_wrapper,
         "baddbmm": w.baddbmm_wrapper,
+        "_weight_norm": _meta_weight_norm,
         "addmv": w.addmv_wrapper,
         "linalg_vector_norm": w.vector_norm_wrapper,
         "addr": w.addr_wrapper,
