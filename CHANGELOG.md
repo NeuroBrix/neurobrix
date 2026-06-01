@@ -29,6 +29,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Triton `index_select` / `aten::index`: enforce integer indices.**
+  `index_select_wrapper` passed the index tensor straight to the kernel, whose
+  pointer arithmetic `inp + (rows*N + indices)` is only valid for integer
+  offsets. The whisper decoder reaches `aten::index` (via `_meta_index`) with
+  integer-VALUED `position_ids` tagged float32, so the kernel failed to compile
+  (`pointer<fp16> and float32`). Cast a floating index to int64 at this single
+  choke point both triton modes funnel through (R30-symmetric), matching torch
+  (index_select requires a Long); compiled never touches this wrapper so it is
+  R23-safe. Unblocks the whisper-large-v3-turbo triton decode crash (the
+  transcription is still incorrect — a separate decoder compute bug, under
+  investigation in the same sweep step).
+
 - **Triton `encoder_decoder` flow (whisper): stale `dispatch_op` import + 3-D
   lm_head.** The flow imported `dispatch_op` (removed; the current API is
   `dispatch(op)(...)`), and fed a 3-D `[B,T,H]` hidden state to the strictly-2-D
