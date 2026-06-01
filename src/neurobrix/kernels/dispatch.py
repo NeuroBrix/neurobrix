@@ -263,6 +263,37 @@ def _meta_index(x, indices):
     return w.index_select_wrapper(x, 0, indices)
 
 
+def _meta_sdpa_efficient(*args, **kwargs):
+    """aten::_scaled_dot_product_efficient_attention / _flash_attention.
+
+    These fused-backend SDPA variants have a DIFFERENT positional signature
+    than plain ``scaled_dot_product_attention``: an extra ``compute_log_sumexp``
+    bool sits at arg[4], shifting ``dropout_p``→[5], ``is_causal``→[6],
+    ``scale``→[7]. The plain-SDPA wrapper expects
+    ``(q, k, v, attn_mask, dropout_p, is_causal, scale)``, so a *direct*
+    positional call mis-reads ``is_causal`` (from ``dropout_p``) and ``scale``
+    (from ``is_causal``) — silently dropping the decoder's causal mask and
+    using scale=1.0. Invisible at seq_len=1 (single-element softmax), it
+    corrupts every seq_len>=2 forward (constant-token garbage on whisper).
+
+    Remap explicitly. Mirrors ``triton_sequential`` (sequential.py:198) so the
+    two triton modes stay symmetric (R30).
+    """
+    from neurobrix.kernels import wrappers as w
+    q, k, v = args[0], args[1], args[2]
+    attn_mask = args[3] if len(args) > 3 and args[3] is not None else None
+    dropout_p = args[5] if len(args) > 5 else 0.0
+    is_causal = args[6] if len(args) > 6 else False
+    scale = kwargs.get("scale", args[7] if len(args) > 7 else None)
+    if not isinstance(dropout_p, float):
+        dropout_p = float(dropout_p)
+    if not isinstance(is_causal, bool):
+        is_causal = bool(is_causal)
+    return w.scaled_dot_product_attention_wrapper(
+        q, k, v, attn_mask=attn_mask, dropout_p=dropout_p,
+        is_causal=is_causal, scale=scale)
+
+
 # ============================================================================
 # CREATION OPS — ATen signatures, Triton fill kernel, NBXTensor allocation
 #
@@ -710,9 +741,13 @@ def _build_op_map() -> Dict[str, Callable]:
         # Attention — Dao-AILab Flash Attention v2 Triton kernel
         "scaled_dot_product_attention": w.scaled_dot_product_attention_wrapper,
         "_scaled_dot_product_attention": w.scaled_dot_product_attention_wrapper,
-        "_scaled_dot_product_flash_attention": w.scaled_dot_product_attention_wrapper,
-        "_scaled_dot_product_efficient_attention": w.scaled_dot_product_attention_wrapper,
-        "_scaled_dot_product_cudnn_attention": w.scaled_dot_product_attention_wrapper,
+        # Fused-backend variants have a shifted positional signature
+        # (extra compute_log_sumexp / return_debug_mask arg). Route through the
+        # remap shim so is_causal / scale read from the right slots — mirrors
+        # triton_sequential (sequential.py:198) for R30 symmetry.
+        "_scaled_dot_product_flash_attention": _meta_sdpa_efficient,
+        "_scaled_dot_product_efficient_attention": _meta_sdpa_efficient,
+        "_scaled_dot_product_cudnn_attention": _meta_sdpa_efficient,
         "_scaled_dot_product_flash_attention_for_cpu": w.scaled_dot_product_attention_wrapper,
         "complex": w.complex_wrapper,
         "fold": w.fold_wrapper,
