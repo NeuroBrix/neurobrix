@@ -15,12 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Missing op: aten::_weight_norm`). Implemented in `dispatch.py` as
   `w = v · g / ‖v‖`, with `‖v‖` the L2 norm over all dims except `dim`
   (keepdim), via the existing mul/sum/sqrt/div wrappers — pure-Triton, no new
-  `@triton.jit` kernel. Resolves the P-TRITON-CHATTERBOX missing-op at the
-  dispatch layer. NOTE: not yet exercised end-to-end — the s3gen vocoder (where
-  `_weight_norm` is called) runs only after chatterbox's slow 2048-token t3_cfg
-  decode, which no run has finished reaching the vocoder. chatterbox's `weight_g`
-  is verified `[512,1,1]` (keepdim-shaped), so the meta-op's broadcast is correct
-  by construction; runtime execution + WAV/STT validation are still pending.
+  `@triton.jit` kernel. Resolves the P-TRITON-CHATTERBOX missing-op blocker.
+  **CONFIRMED executing**: a patient run reached `[s3gen] Running vocoder` (after
+  the t3_cfg decode hit eos at 221 tokens) and ran past `_weight_norm` with no
+  error — the meta-op executes correctly (chatterbox's `weight_g` is `[512,1,1]`,
+  broadcast correct). chatterbox's NEXT triton blocker is a separate missing op,
+  `aten::stft` (vocoder STFT) — full WAV/STT still pending that.
 
 - **`NBX_DECODE_PROGRESS=<file>` gated diagnostic** in the compiled + triton
   `encoder_decoder` flows AND the triton `autoregressive` generator
