@@ -215,6 +215,30 @@ class TritonAttentionInterceptor:
             is_causal=use_causal,
             scale=scale)
 
+    def intercept_efficient(self, q, k, v, attn_bias=None, compute_log_sumexp=False,
+                            dropout_p=0.0, is_causal=False, scale=None,
+                            layer_idx=-1, **kwargs):
+        """aten::_scaled_dot_product_efficient_attention / _cudnn_attention.
+
+        Same KV-cache logic as intercept(), but these ATen variants insert a
+        ``compute_log_sumexp`` bool at arg[4], shifting ``is_causal`` to arg[6]
+        and making ``scale`` kwarg-only. Binding intercept()'s plain-SDPA
+        signature directly to those args mis-reads scale (the positional
+        is_causal lands in the scale slot AND a scale kwarg arrives ->
+        "multiple values for 'scale'") and drops the causal flag. Remap
+        explicitly. Mirrors the per-variant interceptors on the compiled side
+        (core/runtime/graph/kv_cache_wrapper.py:622).
+        """
+        return self.intercept(q, k, v, attn_mask=attn_bias, dropout_p=dropout_p,
+                              is_causal=is_causal, scale=scale, layer_idx=layer_idx)
+
+    def intercept_flash(self, q, k, v, dropout_p=0.0, is_causal=False,
+                        return_debug_mask=False, scale=None, layer_idx=-1, **kwargs):
+        """aten::_scaled_dot_product_flash_attention — is_causal at arg[4], no
+        attn_bias, ``scale`` kwarg-only. Remap to intercept()."""
+        return self.intercept(q, k, v, attn_mask=None, dropout_p=dropout_p,
+                              is_causal=is_causal, scale=scale, layer_idx=layer_idx)
+
     def reset(self):
         self.cache.clear()
         self._is_prefill = True
@@ -239,3 +263,5 @@ class TritonAttentionInterceptor:
 # as self-managing dtype. TritonSequence._compile_op walks
 # func.__func__ for bound methods to pick up this flag.
 TritonAttentionInterceptor.intercept.self_manages_dtype = True  # type: ignore[attr-defined]
+TritonAttentionInterceptor.intercept_efficient.self_manages_dtype = True  # type: ignore[attr-defined]
+TritonAttentionInterceptor.intercept_flash.self_manages_dtype = True  # type: ignore[attr-defined]
