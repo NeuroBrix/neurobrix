@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Triton `abs` of a complex tensor returns the real magnitude (and stops a
+  heap corruption).** `abs_wrapper` had no complex branch: for complex64 it ran
+  the element-wise float kernel over the interleaved `[real, imag]` storage —
+  computing `|interleaved float|` instead of `sqrt(re²+im²)`, mis-typing the
+  output as complex, and (numel-vs-byte mismatch) corrupting the host heap
+  ("corrupted double-linked list"). Exposed by the Kokoro iSTFT source STFT
+  (`abs(_fft_r2c(...))`) feeding the generator noise-convolutions. Now computes
+  the magnitude R33-pure from the stride-2 real/imag views; bit-exact vs torch
+  at all batch sizes (`sin`/`cos`/`mul`/`exp`/`angle` already had complex
+  branches — `abs` was the gap).
+
 - **Triton `remainder` (`%`) follows the divisor's sign (torch / Python),
   not C `fmod`.** The kernel used Triton's `%`, which follows the dividend's
   sign, so negative inputs never wrapped into `[0, divisor)` — `remainder(-0.1,

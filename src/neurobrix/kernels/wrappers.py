@@ -678,6 +678,17 @@ def sqrt_wrapper(x) :
 
 
 def abs_wrapper(x) :
+    if x.is_complex():
+        # abs of a complex tensor is the REAL magnitude sqrt(re^2 + im^2). The
+        # element-wise float path below is doubly wrong for complex64: empty_like
+        # keeps the complex dtype AND the kernel runs over x.numel() interleaved
+        # [re,im] floats (|interleaved float|, not the magnitude) — half the
+        # storage, mis-typed output, heap corruption. Exposed by the Kokoro iSTFT
+        # source STFT (abs of _fft_r2c) feeding generator.noise_convs. Computed
+        # R33-pure from the stride-2 real/imag views.
+        re = x.real
+        im = x.imag
+        return sqrt_wrapper(add(mul(re, re), mul(im, im)))
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
     _set_device(x)
