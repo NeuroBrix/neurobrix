@@ -4376,9 +4376,14 @@ def upsample_bilinear2d_wrapper(x, output_size, align_corners=False,
         scale_h = IH / OH
         scale_w = IW / OW
         offset = 0.5
+    # Grid must match the kernel's axis use: program_id(0)→ow (OW, BLOCK_X),
+    # program_id(1)→oh (OH, BLOCK_Y). The OH/OW axes were swapped here, which is
+    # invisible for square outputs (OH==OW, the image-upscaler case) but drops
+    # most output columns when OH != OW — e.g. the 1-D-as-2-D path used by
+    # upsample_linear1d (H=1), which the Kokoro iSTFT SineGen relies on.
     grid = (
-        triton.cdiv(OH, _BILINEAR_BX),
-        triton.cdiv(OW, _BILINEAR_BY),
+        triton.cdiv(OW, _BILINEAR_BX),
+        triton.cdiv(OH, _BILINEAR_BY),
         N * C,
     )
     _set_device(x.contiguous())

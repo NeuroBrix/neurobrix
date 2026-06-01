@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Triton `remainder` (`%`) follows the divisor's sign (torch / Python),
+  not C `fmod`.** The kernel used Triton's `%`, which follows the dividend's
+  sign, so negative inputs never wrapped into `[0, divisor)` — `remainder(-0.1,
+  1)` returned `-0.1` instead of `0.9`. The Kokoro iSTFT SineGen wraps an
+  unconstrained (sometimes negative) phase with `% 1`; the negative phases
+  stayed negative and corrupted the harmonic source. Now `a - floor(a/b)*b`;
+  bit-exact vs torch for floats and integers.
+
+- **Triton `bilinear2d` upsample grid no longer swaps the OH/OW axes.** The
+  launch grid passed `(cdiv(OH,BX), cdiv(OW,BY), …)` while the kernel indexes
+  `program_id(0)→ow`, `program_id(1)→oh`. Invisible for square outputs (the
+  image-upscaler case, OH==OW), but for non-square outputs most output columns
+  never received a program and were left unwritten — breaking every 1-D-as-2-D
+  use (`upsample_linear1d`, H=1), e.g. the Kokoro iSTFT SineGen phase resample
+  (256↔76800). Now `(cdiv(OW,BX), cdiv(OH,BY), …)`; bit-exact for square,
+  non-square, and 1-D. With these two fixes the Kokoro-82M triton decoder
+  produces intelligible speech (whisper STT: "Hello, world.").
+
 - **Triton `batch_norm` instance-norm path: null pointers for absent
   weight/bias/running, never the input tensor.** `batch_norm_wrapper` substituted
   the input `x` for absent `weight`/`bias`/`running_mean`/`running_var`. The kernel
