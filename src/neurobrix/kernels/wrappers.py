@@ -2297,6 +2297,16 @@ def native_group_norm_wrapper(input, weight, bias, N, C, HxW, num_groups, eps):
 
 def index_select_wrapper(x, dim: int, index) :
     """Index select along dimension. Wrapper from FlagGems."""
+    # aten::index / aten::index_select REQUIRE integer indices. The triton path
+    # can present an integer-VALUED index tagged float32 (e.g. the whisper
+    # decoder position_ids reaching aten::index via _meta_index). The kernel
+    # computes a pointer offset `inp + (rows*N + indices)`; a float `indices`
+    # makes that pointer arithmetic illegal (Triton compile error
+    # "pointer<fp16> and float32"). Enforce the integer contract at this single
+    # choke point both modes funnel through — symmetric across triton /
+    # triton_sequential (R30), and matches torch (index_select needs a Long).
+    if hasattr(index, "is_floating_point") and index.is_floating_point():
+        index = index.to(NBXDtype.int64)
     assert dim >= -x.ndim and dim < x.ndim
     if index.ndim == 0:
         index = index.unsqueeze(0)
