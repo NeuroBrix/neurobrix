@@ -39,6 +39,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Triton: `aten::_safe_softmax` was a missing op.** The triton dispatch mapped
+  `softmax` / `_softmax` → `w.softmax` but not `_safe_softmax` (PyTorch's
+  masked-safe softmax — returns 0 for fully-`-inf` rows instead of NaN). Any
+  model whose graph emits it crashed with `[triton] Missing op:
+  aten::_safe_softmax` (granite-speech conformer attention). Mapped it to
+  `w.softmax` and added it to the TRITON op classification. For non-fully-masked
+  attention it is identical to softmax; the `dtype=None` 3rd arg is harmless
+  (mirrors `_softmax`'s `half_to_float`). (Fully-`-inf`-row safety would need a
+  dedicated kernel, deferred until a model exercises that condition.)
+
 - **Triton autoregressive `_tokenize` ignored `chat_mode` → wrong prompt for
   TTS LMs.** The triton flow (`triton/flow/autoregressive.py`) applied the
   generic HF `apply_chat_template` whenever the tokenizer exposed it, ignoring
