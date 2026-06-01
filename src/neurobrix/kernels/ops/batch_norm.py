@@ -96,18 +96,24 @@ def batch_norm_forward_kernel(
         tl.store(feat_pid + mean_pointer, mean)
         tl.store(feat_pid + inv_std_pointer, inv_std)
 
-        running_mean_pointer += feat_pid
-        running_var_pointer += feat_pid
+        # Running-stats update only when running buffers are supplied. The
+        # instance_norm case (AdaIN: training=True, no running mean/var) passes
+        # null running pointers — skip the update so we neither dereference a
+        # null pointer nor write the momentum-blended stats back into the input
+        # tensor (the old x-placeholder corrupted the activations in place).
+        if running_mean_pointer:
+            running_mean_pointer += feat_pid
+            running_var_pointer += feat_pid
 
-        running_mean = tl.load(running_mean_pointer)
-        running_var = tl.load(running_var_pointer)
+            running_mean = tl.load(running_mean_pointer)
+            running_var = tl.load(running_var_pointer)
 
-        n = batch_dim * spatial_dim
-        tl.store(running_mean_pointer, (1 - momentum) * running_mean + momentum * mean)
-        tl.store(
-            running_var_pointer,
-            (1 - momentum) * running_var + momentum * var * n / (n - 1),
-        )
+            n = batch_dim * spatial_dim
+            tl.store(running_mean_pointer, (1 - momentum) * running_mean + momentum * mean)
+            tl.store(
+                running_var_pointer,
+                (1 - momentum) * running_var + momentum * var * n / (n - 1),
+            )
 
     else:
         # Inference mode: use running stats
