@@ -10,11 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **`NBX_DECODE_PROGRESS=<file>` gated diagnostic** in the compiled + triton
-  `encoder_decoder` flows — writes (buffer-immune) the encoder output stats and
-  a per-decode-step last-token-hidden trajectory, for encoder sanity +
-  triton-vs-compiled first-divergence localization. Off by default, zero impact
-  when unset; numpy at the dump boundary only (R33-clean). This is the toolkit
-  that root-caused the whisper efficient-SDPA causal-mask bug.
+  `encoder_decoder` flows AND the triton `autoregressive` generator
+  (`generator.py`) — writes (buffer-immune) the encoder output stats and a
+  per-decode-step trajectory (token count, last token, done flag; last-token
+  hidden for encoder_decoder), for encoder sanity + triton-vs-compiled
+  first-divergence localization + decode liveness/loop detection. Off by
+  default, zero impact when unset; numpy at the dump boundary only (R33-clean).
+  This is the toolkit that root-caused the whisper efficient-SDPA causal-mask
+  bug and is reused across the audio triton sweep.
 
 - **`NBXTensor.repeat` (aten::repeat)** — tiling (numpy.tile / torch repeat),
   R33-pure (view → expand → contiguous → reshape). Was missing entirely
