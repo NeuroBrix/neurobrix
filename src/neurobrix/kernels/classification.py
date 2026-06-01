@@ -93,8 +93,8 @@ _TRITON_OPS = {
     # Attention (1)
     "scaled_dot_product_attention",
 
-    # Linear algebra (3)
-    "linalg_vector_norm", "addr", "trace",
+    # Linear algebra (4)
+    "linalg_vector_norm", "_weight_norm", "addr", "trace",
 
     # RoPE (1)
     "rope",

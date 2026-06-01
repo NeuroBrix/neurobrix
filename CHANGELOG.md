@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`aten::_weight_norm` implemented as a Triton meta-op.** Vocoders' weight-
+  normalized convolutions (chatterbox s3gen, HiFi-GAN-style) emit
+  `aten::_weight_norm(v, g, dim)`, which the triton path lacked (`[triton]
+  Missing op: aten::_weight_norm`). Implemented in `dispatch.py` as
+  `w = v · g / ‖v‖`, with `‖v‖` the L2 norm over all dims except `dim`
+  (keepdim), via the existing mul/sum/sqrt/div wrappers — pure-Triton, no new
+  `@triton.jit` kernel. Closes the P-TRITON-CHATTERBOX missing-op blocker; the
+  chatterbox t3_cfg + vocoder now run past it.
+
 - **`NBX_DECODE_PROGRESS=<file>` gated diagnostic** in the compiled + triton
   `encoder_decoder` flows AND the triton `autoregressive` generator
   (`generator.py`) — writes (buffer-immune) the encoder output stats and a
