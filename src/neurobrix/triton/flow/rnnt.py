@@ -304,47 +304,38 @@ class TritonRNNTEngine:
         return tokens
 
     def _run_lstm_np(self, input_seq, hx, weight_ih, weight_hh, bias_ih, bias_hh, num_layers):
-        """Run LSTM forward using extracted weights (NumPy)."""
-        h, c = hx
-        output = input_seq
-        new_h_list = []
-        new_c_list = []
-        for layer in range(num_layers):
-            h_l = h[layer:layer + 1]
-            c_l = c[layer:layer + 1]
-            output, (h_l, c_l) = self._lstm_cell_np(
-                output, h_l, c_l,
-                weight_ih[layer], weight_hh[layer],
-                bias_ih[layer], bias_hh[layer],
-            )
-            new_h_list.append(h_l)
-            new_c_list.append(c_l)
-        new_h = np.concatenate(new_h_list, axis=0)
-        new_c = np.concatenate(new_c_list, axis=0)
-        return output, (new_h, new_c)
+        """Run the RNNT decoder LSTM through the triton-pure `lstm_wrapper`
+        (NBXTensor + @triton.jit) instead of a hand-rolled NumPy cell — removing
+        the NumPy compute debt (the prior `_lstm_cell_np`). The greedy loop stays
+        in Python (data-dependent control flow); only the single-step input and
+        h/c cross the NBXTensor boundary per call, and the weights are converted
+        once and cached. Unidirectional, multi-layer, batch_first=False — the same
+        kernel validated bit-exact for the Kokoro BiLSTMs.
 
-    @staticmethod
-    def _lstm_cell_np(x, h, c, w_ih, w_hh, b_ih, b_hh):
-        """Run LSTM cell using NumPy ops."""
-        seq_len = x.shape[0]
-        outputs = []
-        for i in range(seq_len):
-            xi = x[i]  # [1, D]
-            h_sq = h[0]  # [1, D]
-            gates = xi @ w_ih.T + b_ih + h_sq @ w_hh.T + b_hh
-            hidden_size = h.shape[2]
-            i_gate = _sigmoid(gates[:, :hidden_size])
-            f_gate = _sigmoid(gates[:, hidden_size:2 * hidden_size])
-            g_gate = np.tanh(gates[:, 2 * hidden_size:3 * hidden_size])
-            o_gate = _sigmoid(gates[:, 3 * hidden_size:])
-            c_sq = c[0]
-            c_new = f_gate * c_sq + i_gate * g_gate
-            h_new = o_gate * np.tanh(c_new)
-            h = h_new[np.newaxis, :, :]
-            c = c_new[np.newaxis, :, :]
-            outputs.append(h_new[np.newaxis, :, :])
-        output = np.concatenate(outputs, axis=0)
-        return output, (h, c)
+        input_seq: [T, 1, D] numpy (T == 1 per RNNT step); hx = (h, c) numpy
+        [num_layers, 1, H]. Returns (output [T,1,H] numpy, (h_n, c_n) numpy).
+        """
+        from neurobrix.kernels import wrappers as _w
+        from neurobrix.kernels.nbx_tensor import NBXTensor
+
+        params = getattr(self, "_dec_lstm_params_nbx", None)
+        if params is None:
+            params = []
+            for layer in range(num_layers):
+                params.append(NBXTensor.from_numpy(np.ascontiguousarray(weight_ih[layer], dtype=np.float32)))
+                params.append(NBXTensor.from_numpy(np.ascontiguousarray(weight_hh[layer], dtype=np.float32)))
+                params.append(NBXTensor.from_numpy(np.ascontiguousarray(bias_ih[layer], dtype=np.float32)))
+                params.append(NBXTensor.from_numpy(np.ascontiguousarray(bias_hh[layer], dtype=np.float32)))
+            self._dec_lstm_params_nbx = params
+
+        x = NBXTensor.from_numpy(np.ascontiguousarray(input_seq, dtype=np.float32))
+        h0 = NBXTensor.from_numpy(np.ascontiguousarray(hx[0], dtype=np.float32))
+        c0 = NBXTensor.from_numpy(np.ascontiguousarray(hx[1], dtype=np.float32))
+        out, h_n, c_n = _w.lstm_wrapper(
+            x, [h0, c0], params, has_biases=True, num_layers=num_layers,
+            bidirectional=False, batch_first=False,
+        )
+        return out.numpy(), (h_n.numpy(), c_n.numpy())
 
     def _run_joint_np(self, enc_frame, dec_frame, jw):
         """Run joint network with NumPy: project enc + dec, add, relu, output linear."""
@@ -487,11 +478,6 @@ class TritonRNNTEngine:
 # -----------------------------------------------------------------
 # Module-level helpers
 # -----------------------------------------------------------------
-
-def _sigmoid(x):
-    """Numerically stable sigmoid for numpy."""
-    return np.where(x >= 0, 1.0 / (1.0 + np.exp(-x)), np.exp(x) / (1.0 + np.exp(x)))
-
 
 def _to_numpy(tensor) -> np.ndarray:
     """Convert any tensor to numpy array."""
