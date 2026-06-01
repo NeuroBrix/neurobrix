@@ -745,6 +745,12 @@ def _build_op_map() -> Dict[str, Callable]:
         # (extra compute_log_sumexp / return_debug_mask arg). Route through the
         # remap shim so is_causal / scale read from the right slots — mirrors
         # triton_sequential (sequential.py:198) for R30 symmetry.
+        # CAVEAT: _meta_sdpa_efficient reads is_causal from arg[6], correct for
+        # efficient + cudnn. The flash variant actually carries is_causal at
+        # arg[4] (no attn_bias slot), so a CAUSAL flash op would lose its mask
+        # here. No flash-backend model is in the current sweep; if one appears,
+        # give flash a dedicated remap that reads arg[4] (cf. the KV-cache path
+        # kv_cache.py::intercept_flash, which already does).
         "_scaled_dot_product_flash_attention": _meta_sdpa_efficient,
         "_scaled_dot_product_efficient_attention": _meta_sdpa_efficient,
         "_scaled_dot_product_cudnn_attention": _meta_sdpa_efficient,
