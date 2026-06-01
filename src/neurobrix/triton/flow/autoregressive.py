@@ -394,6 +394,7 @@ class TritonAutoregressiveHandler:
             "aten::scaled_dot_product_attention",
             "aten::_scaled_dot_product_efficient_attention",
             "aten::_scaled_dot_product_flash_attention",
+            "aten::_scaled_dot_product_cudnn_attention",
         }
         graph_ops = dag.get("ops", {})
         has_sdpa = any(op.get("op_type") in sdpa_types for op in graph_ops.values())
@@ -434,8 +435,18 @@ class TritonAutoregressiveHandler:
             kv_interceptor = TritonAttentionInterceptor(
                 cache=kv_cache, num_heads=num_heads)
 
-            # Register interceptor on executor (applied when triton sequence compiles)
-            interceptors = {st: kv_interceptor.intercept for st in sdpa_types}
+            # Register interceptor on executor (applied when triton sequence compiles).
+            # Per-variant: the efficient/cudnn/flash ATen ops have shifted positional
+            # signatures (extra compute_log_sumexp / return_debug_mask arg) vs plain
+            # SDPA; route each to its matching remap so is_causal / scale bind
+            # correctly (else intercept() raises "multiple values for 'scale'").
+            _variant_intercept = {
+                "aten::_scaled_dot_product_efficient_attention": kv_interceptor.intercept_efficient,
+                "aten::_scaled_dot_product_cudnn_attention": kv_interceptor.intercept_efficient,
+                "aten::_scaled_dot_product_flash_attention": kv_interceptor.intercept_flash,
+            }
+            interceptors = {st: _variant_intercept.get(st, kv_interceptor.intercept)
+                            for st in sdpa_types}
             executor.register_triton_interceptors(interceptors)
 
         return TritonLMSession(

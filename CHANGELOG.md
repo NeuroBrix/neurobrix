@@ -36,6 +36,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Triton autoregressive KV-cache interceptor: efficient/flash/cudnn SDPA
+  arg-binding crash.** `TritonAttentionInterceptor.intercept` (kv_cache.py) has
+  the plain-SDPA signature, but the autoregressive flow registered it for ALL
+  SDPA variants. The efficient/cudnn ops pass `is_causal` at arg[6] and `scale`
+  as a kwarg, so binding them to the plain signature raised
+  `intercept() got multiple values for argument 'scale'` — crashing any
+  efficient-backend causal decoder that uses the KV cache (orpheus / openaudio
+  TTS). Added per-variant `intercept_efficient` / `intercept_flash` remap methods
+  and routed each SDPA op type to the matching one (added cudnn to the
+  intercepted set) — mirrors the compiled side's per-variant interceptors
+  (kv_cache_wrapper.py:622). Plain `scaled_dot_product_attention` routing is
+  unchanged → R30-safe for TinyLlama / Voxtral / canary.
+
 - **Triton `--triton`: `aten::_scaled_dot_product_efficient_attention` (and
   `_flash` / `_cudnn`) dropped the causal mask + used scale=1.0.** These
   fused-backend SDPA variants have a shifted positional signature vs plain SDPA
