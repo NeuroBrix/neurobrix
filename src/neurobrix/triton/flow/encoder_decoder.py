@@ -85,6 +85,19 @@ class TritonEncoderDecoderEngine:
         encoder_output = _get_component_output(self.ctx, enc_name)
         if encoder_output is not None:
             self.ctx.variable_resolver.resolved[f"{enc_name}.output_0"] = encoder_output
+        _prog0 = __import__("os").environ.get("NBX_DECODE_PROGRESS")
+        if _prog0 and encoder_output is not None:  # gated diagnostic — encoder sanity
+            try:
+                import numpy as _np
+                _eo = encoder_output.numpy()
+                with open(_prog0, "w") as _pf:
+                    _pf.write(f"ENCODER shape={_eo.shape} l2={float(_np.linalg.norm(_eo)):.3f} "
+                              f"mean={float(_eo.mean()):.5f} std={float(_eo.std()):.5f} "
+                              f"nan={bool(_np.isnan(_eo).any())} "
+                              f"head={_np.round(_eo.flatten()[:6],4).tolist()}\n")
+                    _pf.flush()
+            except Exception:
+                pass
 
         if not self.ctx.persistent_mode:
             self._unload_component_weights(enc_name)
@@ -158,6 +171,21 @@ class TritonEncoderDecoderEngine:
                 )
 
             generated_ids.append(next_token)
+            _prog = __import__("os").environ.get("NBX_DECODE_PROGRESS")
+            if _prog:  # gated, off by default — file write is immune to stdout buffering
+                _stat = ""
+                try:
+                    import numpy as _np
+                    _do = decoder_output.numpy()
+                    _lt = _do.reshape(-1, _do.shape[-1])[-1]  # last-token hidden (drives logits)
+                    _stat = (f" dec_l2={float(_np.linalg.norm(_lt)):.4f}"
+                             f" dec_mean={float(_lt.mean()):.5f}"
+                             f" dec_head={_np.round(_lt[:4],4).tolist()}")
+                except Exception as _e:
+                    _stat = f" (dec-stat err: {_e})"
+                with open(_prog, "a") as _pf:
+                    _pf.write(f"step={step} last={next_token}{_stat}\n")
+                    _pf.flush()
             if next_token == eos_token_id:
                 break
 
