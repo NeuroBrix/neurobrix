@@ -29,6 +29,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Triton `bitwise_not` on a BOOL tensor is the logical NOT, not the bitwise
+  complement.** The kernel did `~x`; for bool (0/1) that yields `~1=254` / `~0=255`
+  — both non-zero, so the result read back as an **all-True** bool tensor. Bool is
+  now routed through `logical_not` (integer dtypes keep the `~x` complement).
+  Surfaced by the parakeet conformer attention padding mask `~(arange < len)`: an
+  all-True mask made `masked_fill` overwrite every score with -1e4 → uniform
+  softmax → dead self-attention → garbage transcription. With this + the new
+  `aten::repeat` + the LSTM-on-triton switch, **parakeet-tdt-1.1b triton
+  transcribes byte-identical to the compiled oracle** (closed).
+
 - **Triton `abs` of a complex tensor returns the real magnitude (and stops a
   heap corruption).** `abs_wrapper` had no complex branch: for complex64 it ran
   the element-wise float kernel over the interleaved `[real, imag]` storage —

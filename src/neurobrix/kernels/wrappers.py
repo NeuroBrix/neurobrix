@@ -3140,6 +3140,14 @@ def bitwise_or_wrapper(a, b) :
 
 
 def bitwise_not_wrapper(x) :
+    # torch.bitwise_not on a BOOL tensor is the LOGICAL NOT (0<->1), NOT the
+    # bitwise complement: ~True(1)=254, ~False(0)=255 are both non-zero, so the
+    # bitwise kernel yields an all-True bool tensor. Route bool through
+    # logical_not. Surfaced by the parakeet conformer attention padding mask
+    # (`~(arange<len)`): an all-True mask made masked_fill overwrite every score
+    # with -1e4 -> uniform softmax -> dead self-attention -> garbage transcription.
+    if getattr(x, "nbx_dtype", None) == NBXDtype.bool_:
+        return logical_not_wrapper(x)
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
     _set_device(x)
