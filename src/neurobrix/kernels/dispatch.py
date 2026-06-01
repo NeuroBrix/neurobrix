@@ -580,6 +580,7 @@ def _build_op_map() -> Dict[str, Callable]:
         # --- Softmax ---
         "softmax": w.softmax,
         "_softmax": w.softmax,
+        "_safe_softmax": w.softmax,
         "log_softmax": w.log_softmax,
         "_log_softmax": w.log_softmax,
 
