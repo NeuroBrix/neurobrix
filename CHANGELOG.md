@@ -52,6 +52,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Scalar-fill ops (`masked_fill`/`fill`/`index_fill`) overflowed fp16 in the
+  dynamically-dispatched modes.** A graph may carry a bf16/fp32 mask sentinel
+  (e.g. bf16-min ≈ -3.39e38) as the Python scalar fill value; on fp16 hardware
+  the fill tensor is bf16→fp16, and converting that scalar to fp16 raises "value
+  cannot be converted to type at::Half without overflow" (granite-speech
+  conformer attention, in `--sequential` / `--triton`). The scalar is an op
+  attribute, not a tensor input, so the per-input AMP casts never saw it. The
+  DtypeEngine (single dtype authority) now clamps the scalar to
+  `torch.finfo(fill_dtype)` when the fill tensor is fp16/bf16 — numerically inert
+  versus the oracle (masked positions are ~0 after softmax either way) and a
+  no-op for in-range scalars. R23: whisper `--triton` byte-identical.
+
 - **PEFT/LoRA models with unmerged adapters now run, with the runtime kept
   fully LoRA-agnostic.** A model published with unmerged LoRA adapters
   (`canary-qwen-2.5b`: a frozen Qwen base + `q_proj`/`v_proj` adapters,
