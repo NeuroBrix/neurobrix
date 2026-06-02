@@ -1156,15 +1156,7 @@ class GraphExecutor:
                 remapped[wk] = self._weights[wk]
                 continue
 
-            # Strip LoRA wrapper tokens before suffix matching
-            # PEFT wraps layers: base_model.model.X.base_layer.weight → X.weight
-            wk_clean = wk.replace('.base_layer.', '.').replace('base_model.model.', '')
-            if wk_clean != wk and wk_clean in graph_params:
-                remapped[wk_clean] = self._weights[wk]
-                reconciled += 1
-                continue
-
-            parts = wk_clean.split('.')
+            parts = wk.split('.')
             matched_param = None
             for i in range(len(parts)):
                 suffix = '.'.join(parts[i:])
@@ -1451,23 +1443,6 @@ class GraphExecutor:
 
             # NATIVE/COMPILED MODE: torch path
             with torch.inference_mode():
-                # Reconcile weight-dict keys → graph param:: names BEFORE
-                # _prepare_execution captures ctx.weights = self._weights
-                # (line ~2147). The native TensorResolver resolves params
-                # through ctx.weights, and _reconcile_weight_keys reassigns
-                # self._weights to a fresh dict — so it must run first, or
-                # the resolver holds a stale raw-key reference. Covers
-                # compiled AND sequential: a PEFT/LoRA container (canary
-                # ships base_model.model.…base_layer.weight for the adapted
-                # query/value) otherwise raises "param::model.block.N.attn
-                # .query.weight could not be resolved" in --sequential and
-                # leaves a None mm operand in --compiled. (Compiled also
-                # reconciles at the top of _execute_compiled_graph —
-                # idempotent fast path.) The triton/triton_sequential half
-                # lives in _run_triton. Pure dict/str remap → R33-safe; runs
-                # after any flow-handler _weights injection (handlers inject
-                # before run()), mirroring compiled's execute-time timing.
-                self._reconcile_weight_keys()
                 self._ctx = self._prepare_execution(inputs)
                 self._resolver = TensorResolver(self._ctx)
                 stats = self._execute_all_ops()
@@ -1563,49 +1538,6 @@ class GraphExecutor:
                     value.data_ptr(), tuple(value.shape),
                     parse_dtype(str(value.dtype)), 'cuda',
                     owns_data=False, device_idx=didx, base=value)
-
-        # Reconcile weight-dict keys → graph param:: names before the
-        # triton bind, mirroring native's reconcile-before-bind in
-        # _execute_compiled_graph (called there at the top of every
-        # execute). Both triton paths read self._weights by the graph's
-        # weight_name: the hot loop via TritonSequence.bind_weights
-        # (_ensure_triton_compiled) and the op-by-op path via the
-        # `wname in self._weights` store build (_run_triton_sequential).
-        # Neither previously reconciled, so a PEFT/LoRA-wrapped container
-        # (canary-qwen-2.5b ships base_model.model.…base_layer.weight for
-        # the LoRA-adapted query/value projections, while the graph — traced
-        # from the merged forward — wants the clean model.block.N.attn.query
-        # .weight) left those params unbound → None operand at aten::mm::0.
-        # Native strips the wrapper at execute; this is the symmetric triton
-        # half (R30 — covers --triton AND --triton_sequential in one site).
-        # _reconcile_weight_keys only relabels which key points to each
-        # tensor (pure dict/str ops, never a torch op on a value) → R33-safe.
-        # It runs here, after any flow-handler _weights injection (tied
-        # embeddings in encoder_decoder / audio_llm inject before run()),
-        # exactly like native.
-        #
-        # CRITICAL triton-vs-compiled asymmetry: _reconcile_weight_keys was
-        # written for compiled, where self._weights holds ONLY weights. The
-        # triton weight loader additionally stores a non-weight sentinel
-        # `_arenas` — the ComponentArena objects that own the single GPU
-        # block backing every weight NBXTensor (weight_loader.py:217). The
-        # reconcile rebuild keeps only graph-param keys, so it would DROP
-        # `_arenas` → arena refcount hits 0 → finalizer cudaFree → every
-        # weight then points to freed memory ("Pointer argument cannot be
-        # accessed (cpu tensor?)" at the first kernel). Worse, `_arenas` is
-        # never a graph param, so reconcile's keys<=graph_params fast path
-        # never fires in triton and the drop would hit EVERY model, not just
-        # LoRA ones. Fix: re-attach whatever reconcile dropped (the arena
-        # sentinel, model-unused buffers like preprocessor.featurizer.fb/
-        # window, and the now-dead raw LoRA keys). The graph resolves through
-        # the clean remapped keys; the re-attached entries keep the arena
-        # alive at zero cost and never collide with a param:: lookup.
-        _pre_reconcile = dict(self._weights) if self._weights else {}
-        self._reconcile_weight_keys()
-        if self._weights is not None:
-            for _wk, _wv in _pre_reconcile.items():
-                if _wk not in self._weights:
-                    self._weights[_wk] = _wv
 
         if self.mode == "triton_sequential":
             raw_outputs, num_ops = self._run_triton_sequential(
@@ -2620,12 +2552,6 @@ class GraphExecutor:
         # COMPILED MODE (default): uses CompiledSequence with PyTorch ops
         if self.mode == "compiled":
             return self._execute_compiled_graph()
-
-        # SEQUENTIAL (PyTorch op-by-op). Weight-key reconciliation already
-        # ran in run() before _prepare_execution captured ctx.weights, so
-        # the resolver here sees the graph-param-keyed dict (LoRA-wrapped
-        # containers resolve correctly). No reconcile call belongs here —
-        # it would be too late (ctx.weights is already bound).
 
         # Compute last use of each tensor for memory management
         last_use_tid = self._compute_last_use()
