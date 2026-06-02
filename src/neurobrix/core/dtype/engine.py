@@ -241,6 +241,20 @@ AMP_PROMOTE_OPS: FrozenSet[str] = frozenset({
     "tensordot", "scatter_add",
 })
 
+# Ops that take a Python-SCALAR fill value converted to a tensor's dtype.
+# A graph may carry a bf16/fp32 mask sentinel (e.g. bf16-min ≈ -3.39e38) as
+# that scalar; converting it to the tensor's fp16 runtime dtype overflows
+# ("value cannot be converted to type at::Half without overflow"). The scalar
+# is an op ATTRIBUTE, not a tensor input, so the per-input AMP casts never see
+# it — the DtypeEngine clamps it to the fill tensor's finite range (the single
+# dtype authority owns this, not the dispatcher). Masked positions are ~0 after
+# softmax whether the sentinel is fp16-min or bf16-min, so this is numerically
+# inert versus the oracle. Surfaced by granite-speech conformer attention.
+AMP_SCALAR_FILL_OPS: FrozenSet[str] = frozenset({
+    "masked_fill", "masked_fill_", "fill", "fill_",
+    "index_fill", "index_fill_",
+})
+
 
 
 
@@ -578,6 +592,26 @@ class DtypeEngine:
             return args
 
         op_name = strip_aten_prefix(op_type)
+
+        if op_name in AMP_SCALAR_FILL_OPS:
+            # Clamp the Python-scalar fill to the finite range of the tensor it
+            # fills (masked_fill converts the scalar to that tensor's dtype). A
+            # bf16/fp32-min sentinel overflows fp16 otherwise. Tensors are left
+            # untouched — this op is not an AMP cast op.
+            fill_dtype = next(
+                (a.dtype for a in args
+                 if isinstance(a, torch.Tensor) and a.is_floating_point()),
+                None)
+            if fill_dtype in (torch.float16, torch.bfloat16):
+                info = torch.finfo(fill_dtype)
+                return [
+                    max(info.min, min(info.max, float(a)))
+                    if (isinstance(a, float)
+                        or (isinstance(a, int) and not isinstance(a, bool)))
+                    else a
+                    for a in args
+                ]
+            return args
 
         if op_name in AMP_FP32_OPS:
             new_args = [
