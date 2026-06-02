@@ -52,36 +52,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Weight-name → graph-param matching ran in `compiled` mode only → PEFT/LoRA
-  models broke in the other 3 modes (R30 gap).** The pass that maps a
-  container's stored weight names onto the graph's parameter names — which
-  includes unwrapping PEFT-style names (`base_model.model.…attn.query.base_layer
-  .weight` → the clean `model.block.N.attn.query.weight` the graph references) —
-  was invoked only from `_execute_compiled_graph`. So `sequential`, `triton`
-  and `triton_sequential` bound the raw container keys and left LoRA-adapted
-  projections unresolved: `canary-qwen-2.5b` (a LoRA fine-tune) crashed with a
-  `None` operand at `aten::mm::0` (triton) / "param `model.block.0.attn.query
-  .weight` could not be resolved" (sequential). The matching pass now runs in
-  all four modes:
-    - `run()` before `_prepare_execution` — covers `compiled` + `sequential`,
-      ahead of the `ctx.weights = self._weights` capture so the native
-      `TensorResolver` (which resolves params through `ctx.weights`) sees the
-      matched dict;
-    - `_run_triton` before the mode dispatch — covers `triton` +
-      `triton_sequential`, after any flow-handler `_weights` injection (mirrors
-      compiled's execute-time timing).
-  Triton-specific safeguard: the matching pass rebuilds the dict with only
-  graph-param keys, which would drop the triton weight loader's `_arenas`
-  sentinel (the `ComponentArena` objects owning the single GPU block behind
-  every weight `NBXTensor`) → `cudaFree` → "Pointer argument cannot be accessed"
-  at the first kernel. The triton path therefore re-attaches every dropped
-  entry (arena sentinel, model-unused buffers, dead raw LoRA keys); the graph
-  still resolves through the clean matched keys. Pure dict/str remap — no torch
-  op on any value (R33-clean). **Validated:** canary-qwen-2.5b byte-identical
-  across all 4 modes (md5 `8cad3451…`), via the triton_sequential vs sequential
-  kernel-oracle method. **Zero regression** (R23): TinyLlama
-  `compiled`/`sequential`/`triton` → "Paris.", whisper `compiled`==`triton`
-  byte-identical. Shared fix — any PEFT/LoRA model in the non-compiled modes.
+- **PEFT/LoRA models with unmerged adapters now run, with the runtime kept
+  fully LoRA-agnostic.** A model published with unmerged LoRA adapters
+  (`canary-qwen-2.5b`: a frozen Qwen base + `q_proj`/`v_proj` adapters,
+  r=128 α=256) ships three tensors per adapted projection — `base_layer`,
+  `lora_A`, `lora_B` — while its graph references a single clean weight. Such
+  models are now delivered with the adapters already folded into one weight per
+  projection (`W = W_base + (α/r)·(B·A)`, a frozen post-training constant), so
+  the execution engine binds plain weights with **zero** knowledge of LoRA
+  structure. The runtime weight binder accordingly no longer special-cases PEFT
+  wrapper names (`base_layer`/`base_model`); that model-structure knowledge has
+  been removed from the engine, keeping it model-agnostic (the only weight-key
+  helper that remains is the general prefix-hierarchy suffix match). **Validated:**
+  canary-qwen-2.5b produces the byte-identical correct vendor transcript in all
+  four execution modes (compiled / sequential / triton / triton_sequential,
+  transcript md5 `ffcb30ea…`). Folding existing adapters is weight preparation
+  of a frozen constant — **not fine-tuning** (that capability is untouched and
+  reserved for its own future work).
 
 - **Triton: `aten::_safe_softmax` was a missing op.** The triton dispatch mapped
   `softmax` / `_softmax` → `w.softmax` but not `_safe_softmax` (PyTorch's
