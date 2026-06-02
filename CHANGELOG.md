@@ -40,6 +40,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Block-attention windowing (`num_blocks = ceil(seq/W)`) is now resolved from
+  trace-emitted symbolic graph dims in every execution mode**, replacing a
+  compiled-only runtime pre-compilation pass (`_symbolize_data_dependent_attrs`,
+  retired from `compiled_sequence.py`). The graph now arrives with symbolic
+  windowing dims and the shared `SymbolicShapeResolver` resolves them, so flexible
+  frame counts no longer depend on a mode-specific runtime patch. The general
+  cross-branch / seq_len passes are unchanged (they consume whatever symbolic
+  exprs are present). Granite Speech `--compiled` transcribes correctly with a
+  matching re-trace; sequential-path resolution of these dims is in progress.
 - **parakeet RNNT decoder LSTM runs through the triton-pure `lstm_wrapper`**
   instead of a hand-rolled NumPy cell — removes the NumPy compute debt in
   `triton/flow/rnnt.py` (the greedy loop stays Python; only the single-step
