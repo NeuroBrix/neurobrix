@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **SDPA Q/K/V dtype alignment in the efficient/flash sequential path.** The
+  standard `scaled_dot_product_attention` dispatch already cast Q/K/V to the
+  narrowest common dtype, but the `_scaled_dot_product_efficient_attention` /
+  `_scaled_dot_product_flash_attention` branch only cast the attn_mask. When
+  upstream AMP leaves V in fp32 while Q/K are fp16 (openaudio DualAR backbone),
+  torch SDPA rejects the mixed dtypes. Mirrored the alignment into the
+  efficient/flash branch, guarded on mismatch (no-op when uniform, so the
+  efficient-backend models that already pass — whisper, Voxtral, canary — are
+  unchanged). Unblocks openaudio sequential end-to-end.
+
 ### Added
 
 - **`NBX_DECODE_BOUND=N` — universal bounded-decode harness (diagnostics).**
