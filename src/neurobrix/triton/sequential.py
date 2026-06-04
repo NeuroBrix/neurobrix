@@ -138,9 +138,22 @@ class TritonSequentialDispatcher:
         clean = op_type.replace("aten::", "").replace("custom::", "")
         base = clean.split(".")[0]
 
-        # Custom ops — apply AMP wrapping
+        # Custom ops — apply AMP wrapping.
+        # MUST forward graph attribute kwargs (epsilon) — the rms_norm
+        # wrapper defaults to eps=1e-6, but the model's real rms_norm_eps
+        # (e.g. 1e-5 for Llama/TinyLlama) lives in the op's `kwargs`
+        # (graph custom::rms_norm attributes: {"epsilon": 1e-05}). Dropping
+        # it silently fell back to 1e-6, diverging from the other three
+        # modes (PyTorch-seq/compiled + triton-compiled all forward it).
+        # On the first RMSNorm over small-magnitude embeddings mean(x^2)
+        # is near the eps scale, so 1e-5 vs 1e-6 is a ~10% denominator
+        # swing that compounds through every layer. Mirror the generic
+        # path's kwargs forwarding below.
         if op_type == "custom::rms_norm":
+            kwargs = self.resolve_kwargs(attributes)
             func = self._dtype_engine.wrap_op("rms_norm", w.rms_norm)
+            if kwargs:
+                return func(*inputs, **kwargs)
             return func(*inputs)
 
         # SDPA variants → unified wrapper (AMP wrapping via the wrapper itself)
