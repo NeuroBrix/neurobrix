@@ -1876,6 +1876,64 @@ class GraphExecutor:
                 if output_tids:
                     store[output_tids[0]] = result
 
+            # === NBX_OP_FINGERPRINT (sequential path) ===
+            # Symmetric mirror of TritonSequence's fingerprint emit
+            # (triton/sequence.py:2554-2600). Without this hook the
+            # sequential dispatcher cannot be op-diffed against the
+            # compiled hot-loop — an R30 diagnostic asymmetry. Same
+            # record schema {i, op_uid, op_type, tid, shape, dtype,
+            # nbytes, hashed, sha} so the two JSONL files align by
+            # op_uid. Gated, default-off, AFTER store / BEFORE evict so
+            # the output tensor is still live. CAP / MAX semantics match
+            # the compiled path.
+            import os as _os_fp_sq
+            _fp_path_sq = _os_fp_sq.environ.get("NBX_OP_FINGERPRINT", "")
+            if _fp_path_sq and output_tids:
+                try:
+                    import json as _json_fp_sq, hashlib as _hl_sq
+                    import ctypes as _ct_fp_sq
+                    from neurobrix.kernels.nbx_tensor import (
+                        DeviceAllocator as _DA_fp_sq)
+                    _fp_max_sq = int(
+                        _os_fp_sq.environ.get("NBX_OP_FINGERPRINT_MAX", "0"))
+                    _cap_sq = int(
+                        _os_fp_sq.environ.get("NBX_OP_FINGERPRINT_CAP", "8192"))
+                    if not hasattr(self, "_fp_idx_sq"):
+                        self._fp_idx_sq = 0
+                    _recs_sq = []
+                    for _ot in output_tids:
+                        if _fp_max_sq and self._fp_idx_sq >= _fp_max_sq:
+                            break
+                        self._fp_idx_sq += 1
+                        _t = store.get(_ot)
+                        if _t is None or not hasattr(_t, "data_ptr"):
+                            _recs_sq.append({"i": self._fp_idx_sq,
+                                             "op_uid": op_uid,
+                                             "op_type": op_type, "tid": _ot,
+                                             "sha": "none"})
+                            continue
+                        if hasattr(_t, "_device_idx"):
+                            _DA_fp_sq.set_device(_t._device_idx)
+                        _c = _t.contiguous()
+                        _nb = _c._nbytes
+                        _hb = _nb if _cap_sq == 0 else min(_nb, _cap_sq)
+                        _buf = (_ct_fp_sq.c_char * _hb)()
+                        _DA_fp_sq.memcpy(_ct_fp_sq.addressof(_buf),
+                                         _c.data_ptr(), _hb, kind=2)
+                        _recs_sq.append({
+                            "i": self._fp_idx_sq, "op_uid": op_uid,
+                            "op_type": op_type, "tid": _ot,
+                            "shape": list(_t.shape), "dtype": str(_t.dtype),
+                            "nbytes": _nb, "hashed": _hb,
+                            "sha": _hl_sq.sha256(bytes(_buf)).hexdigest()})
+                    with open(_fp_path_sq, "a") as _f_sq:
+                        for _r in _recs_sq:
+                            _json_fp_sq.dump(_r, _f_sq)
+                            _f_sq.write("\n")
+                except Exception as _e_fp_sq:
+                    print(f"[NBX_OP_FINGERPRINT seq] failed at {op_uid}: "
+                          f"{_e_fp_sq}", flush=True)
+
             # Evict tids whose last-use was this op. See the liveness
             # comment before the loop for the motivation.
             for dead_tid in dead_at_op.get(op_idx, ()):
