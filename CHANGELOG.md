@@ -61,6 +61,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`triton_sequential` dropped the `epsilon` kwarg on `custom::rms_norm` →
+  wrong RMSNorm eps (1e-6 instead of the model's 1e-5).** The sequential
+  dispatcher's `custom::rms_norm` special-case called `func(*inputs)`,
+  forwarding only positional tensors and silently discarding the op's
+  attribute kwargs — where the model's real `rms_norm_eps` lives (graph
+  `custom::rms_norm` attributes carry `{"epsilon": 1e-05}` for Llama-family
+  models). The `rms_norm` wrapper then fell back to its `eps=1e-6` default.
+  The other three modes (PyTorch-seq via `sequential_dispatcher`, PyTorch-
+  compiled, and triton-compiled via `compiled_kwargs`) all forward the
+  epsilon correctly, so `triton_sequential` was the lone outlier. On the
+  first RMSNorm over small-magnitude embeddings `mean(x²)` is near the eps
+  scale, making 1e-5 vs 1e-6 a ~10% denominator swing that compounds through
+  every layer: on TinyLlama greedy decode the four modes agreed for steps
+  0-6 then triton_sequential flipped a near-tie argmax at step 7 (2215 vs the
+  reference 2319) and diverged. Localized by an op-fingerprint prefill diff
+  (first diverging op = `custom::rms_norm::0`, identical bit-exact input,
+  divergent fp32 output). Fix: forward the resolved attribute kwargs in the
+  `custom::rms_norm` branch, mirroring the dispatcher's generic path. After
+  the fix all four modes produce byte-identical greedy tokens on TinyLlama.
+  Affects every model carrying `custom::rms_norm` (Llama-family: TinyLlama,
+  orpheus, granite, chatterbox, openaudio, deepseek-moe, Qwen, Sana text
+  encoder); LayerNorm models (whisper, Voxtral, canary) are unaffected,
+  which is why they passed the triton sweep untouched.
+
+- **`NBX_OP_FINGERPRINT` is now emitted by the `triton_sequential` path too**
+  (graph_executor sequential dispatch loop), mirroring the compiled
+  `TritonSequence` emit. Closes an R30 diagnostic asymmetry — the sequential
+  dispatcher previously could not be op-diffed against the compiled hot-loop,
+  the very comparison that root-caused the rms_norm eps bug above. Same record
+  schema (`{i, op_uid, op_type, tid, shape, dtype, sha}`), gated, default-off,
+  zero runtime impact.
+
 - **Scalar-fill ops (`masked_fill`/`fill`/`index_fill`) overflowed fp16 in the
   dynamically-dispatched modes.** A graph may carry a bf16/fp32 mask sentinel
   (e.g. bf16-min ≈ -3.39e38) as the Python scalar fill value; on fp16 hardware
