@@ -85,7 +85,8 @@ class TritonGenerator:
 
     def __iter__(self) -> Iterator[int]:
         self.reset()
-        for step_idx in range(self.max_tokens):
+        from neurobrix.core.runtime.decode_bound import decode_bound  # NBX_DECODE_BOUND harness
+        for step_idx in range(decode_bound(self.max_tokens)):
             if self._state.is_done:
                 break
             self._state.step_idx = step_idx
