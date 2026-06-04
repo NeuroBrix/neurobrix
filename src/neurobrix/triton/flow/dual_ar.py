@@ -62,7 +62,8 @@ class TritonDualAREngine:
         device_idx = _parse_device_idx(self.ctx.primary_device)
         DeviceAllocator.set_device(device_idx)
 
-        max_tokens = defaults.get("max_tokens", 2048)
+        from neurobrix.core.runtime.decode_bound import decode_bound  # NBX_DECODE_BOUND harness
+        max_tokens = decode_bound(defaults.get("max_tokens", 2048))
         temperature = defaults.get("temperature", 0.7)
         top_p = defaults.get("top_p", 0.8)
         eos_token_id = defaults.get("eos_token_id")
