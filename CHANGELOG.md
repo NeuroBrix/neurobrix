@@ -85,6 +85,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   encoder); LayerNorm models (whisper, Voxtral, canary) are unaffected,
   which is why they passed the triton sweep untouched.
 
+- **`NBX_DISABLE_ROPE_FUSION=1` diagnostic gate** (triton-compiled `sequence.py`)
+  — leaves the HF-Llama rotate_half RoPE chain as native ATen ops instead of
+  fusing into `custom::rope_fused`, to isolate fused-rope numerical divergence
+  from other compiled-path effects (parallel to `NBX_DISABLE_AUTOTUNE`). Gated,
+  default-off. Used to rule the fused rope OUT as the cause of the orpheus
+  triton-compiled decode divergence (output was byte-identical fused vs unfused).
+
 - **`NBX_OP_FINGERPRINT` is now emitted by the `triton_sequential` path too**
   (graph_executor sequential dispatch loop), mirroring the compiled
   `TritonSequence` emit. Closes an R30 diagnostic asymmetry — the sequential
