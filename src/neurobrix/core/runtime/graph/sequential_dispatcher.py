@@ -231,6 +231,17 @@ class NativeATenDispatcher:
                 v = inputs[2].contiguous()
                 q, k, v = _fix_sdpa_kv_layout(q, k, v)
 
+                # Align Q/K/V dtypes (same as the standard SDPA path below):
+                # upstream AMP can leave V in fp32 while Q/K are fp16 (openaudio
+                # DualAR), and torch SDPA rejects mixed dtypes. Cast to the
+                # narrowest common dtype. Guarded on mismatch → no-op when already
+                # uniform, so models with consistent dtypes are unchanged.
+                if (hasattr(q, "dtype") and hasattr(k, "dtype") and hasattr(v, "dtype")
+                        and not (q.dtype == k.dtype == v.dtype)):
+                    _t = min((q.dtype, k.dtype, v.dtype),
+                             key=lambda d: torch.tensor([], dtype=d).element_size())
+                    q, k, v = q.to(_t), k.to(_t), v.to(_t)
+
                 # Extract optional args - correct indices from PyTorch internal signature:
                 # _scaled_dot_product_efficient_attention(query, key, value, attn_bias, compute_log_sumexp, dropout_p, is_causal, scale)
                 # inputs[3] = attn_bias (None)
