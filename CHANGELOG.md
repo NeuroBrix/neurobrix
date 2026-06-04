@@ -61,6 +61,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`triton_sequential` dropped SDPA `scale`/`is_causal` kwargs → 8x-wrong
+  attention scale in Whisper-style audio encoders.** `_dispatch_sdpa` read
+  `attn_mask`/`dropout_p`/`is_causal`/`scale` POSITIONALLY from `inputs` and
+  ignored the op's graph kwargs. Whisper-style encoders (Voxtral `audio_tower`)
+  carry `scale=1.0` and `is_causal=false` as **kwargs** with only q/k/v
+  positional (the encoder pre-scales Q, so SDPA scale must be 1.0). Reading
+  positionally only fell back to the wrapper default `scale = 1/sqrt(head_dim)
+  = 0.125` — an 8x-wrong attention scale → garbage encoder output → garbage
+  audio_embeds → the LM emitted a generic answer ("You're welcome!") instead of
+  transcribing. Fix: `_pos_or_kw` (positional-OR-kwarg) in all three SDPA
+  branches, mirroring the compiled path's `compiled_kwargs` forwarding. Same
+  class as the rms_norm-eps bug below (a seq dispatcher special-case dropping
+  the graph's data-driven kwargs); also explains why orpheus's efficient-SDPA
+  seemed fine (its dropped scale default happened to equal the graph's
+  1/sqrt(128)). After the fix Voxtral triton-sequential transcribes correctly
+  (full sentence, matching the PyTorch-seq oracle and whisper ground-truth);
+  the audio_tower SDPA op now matches the compiled path bit-for-bit
+  (NBX_OP_FINGERPRINT). Surfaced by genuinely re-verifying `--triton-sequential`
+  (the prior audio sweep validated `--triton`/compiled only).
+
 - **`triton_sequential` dropped the `epsilon` kwarg on `custom::rms_norm` →
   wrong RMSNorm eps (1e-6 instead of the model's 1e-5).** The sequential
   dispatcher's `custom::rms_norm` special-case called `func(*inputs)`,
