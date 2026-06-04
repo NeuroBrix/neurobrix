@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`NBX_DECODE_BOUND=N` — universal bounded-decode harness (diagnostics).**
+  When set, every autoregressive / TTS / audio_llm / dual_ar / encoder_decoder
+  decode loop hard-caps its step count to N, in BOTH execution modes (core +
+  triton, R30). Lets op-by-op triton-vs-oracle diffs (the 4-mode method) run on
+  a 5-10 token window in seconds instead of the full 2048-token generation
+  (openaudio dual_ar: 8 tokens in 8.5 s vs ~24 min for 2048 op-by-op). New
+  pure-Python helper `core/runtime/decode_bound.py` (`os` only, zero torch —
+  R33-safe to import from `triton/flow/`); applied at the `max_tokens`
+  computation of all 10 decode loops. Gated, default-off, zero semantic/runtime
+  impact unset. NOTE: also fixed a latent asymmetry — `triton/flow/dual_ar.py`
+  read `max_tokens` from defaults only (ignoring the CLI `global.max_tokens`
+  that the core dual_ar honoured); both now flow through `decode_bound`.
+
 - **`aten::_weight_norm` implemented as a Triton meta-op.** Vocoders' weight-
   normalized convolutions (chatterbox s3gen, HiFi-GAN-style) emit
   `aten::_weight_norm(v, g, dim)`, which the triton path lacked (`[triton]
