@@ -315,7 +315,11 @@ class TritonSequence:
         # Collapses 2 elem ops → 1 kernel launch, and the fused kernel reads
         # gate/up once each + writes output once (vs silu writing intermediate
         # + mul reading/writing). Saves ~22 ops/step for Llama-style FFNs.
-        self._fuse_swiglu_ops(tensors, ops_by_uid, exec_order)
+        # NBX_DISABLE_SWIGLU_FUSION=1 — diagnostic gate to isolate fused-swiglu
+        # numerical divergence (custom::swiglu_fused fp32-intermediate vs the
+        # unfused silu→fp16-store→mul chain the op-by-op path runs).
+        if os.environ.get("NBX_DISABLE_SWIGLU_FUSION") != "1":
+            self._fuse_swiglu_ops(tensors, ops_by_uid, exec_order)
 
         # Phase -0.2: Fuse HF-Llama rotate_half RoPE chains on Q+K into a
         # single custom::rope_fused op backed by Liger's rope_forward_kernel.
