@@ -321,7 +321,11 @@ class TritonSequence:
         # single custom::rope_fused op backed by Liger's rope_forward_kernel.
         # Collapses 14 ops per layer (slice×4, neg×2, cat×2, mul×4, add×2).
         # Saves ~308 ops/step for TinyLlama (22 layers).
-        self._fuse_rope_ops(tensors, ops_by_uid, exec_order)
+        # NBX_DISABLE_ROPE_FUSION=1 — diagnostic gate to isolate fused-rope
+        # numerical divergence (custom::rope_fused vs the unfused ATen chain
+        # the op-by-op path runs); leaves the rotate_half ops native.
+        if os.environ.get("NBX_DISABLE_ROPE_FUSION") != "1":
+            self._fuse_rope_ops(tensors, ops_by_uid, exec_order)
 
         # Phase 0: Promote trace-time seq_len scalars to symbolic references.
         # Shared logic in triton/promotion.py — used by both compiled and sequential.
