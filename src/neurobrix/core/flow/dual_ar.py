@@ -74,7 +74,8 @@ class DualAREngine(FlowHandler):
         # CLI sampling overrides (global.*) take precedence over the embedded
         # defaults, mirroring the autoregressive flow — --temperature 0 ⇒ greedy.
         _ov = self.ctx.variable_resolver.resolved
-        max_tokens = _ov.get("global.max_tokens", defaults.get("max_tokens", 2048))
+        from neurobrix.core.runtime.decode_bound import decode_bound  # NBX_DECODE_BOUND harness
+        max_tokens = decode_bound(_ov.get("global.max_tokens", defaults.get("max_tokens", 2048)))
         temperature = _ov.get("global.temperature", defaults.get("temperature", 0.7))
         top_p = _ov.get("global.top_p", defaults.get("top_p", 0.8))
 

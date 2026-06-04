@@ -942,7 +942,8 @@ def _build_generator_config(defaults: Dict, resolver: Any, gen_type: str) -> Dic
     patch_size = defaults.get("patch_size")
     codebook_size = defaults.get("codebook_size")
     codebook_dim = defaults.get("codebook_dim")
-    max_tokens = defaults.get("max_tokens")
+    from neurobrix.core.runtime.decode_bound import decode_bound  # NBX_DECODE_BOUND harness
+    max_tokens = decode_bound(defaults.get("max_tokens"))
 
     if gen_type == "autoregressive_image":
         for required in ("image_size", "patch_size", "codebook_size", "codebook_dim"):

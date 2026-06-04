@@ -155,7 +155,8 @@ class TritonAudioLLMEngine:
         logits_source = ar_stage.get("logits_source", "lm_head")
         dtype = self._compute_dtype()
 
-        max_tokens = defaults.get("max_tokens")
+        from neurobrix.core.runtime.decode_bound import decode_bound  # NBX_DECODE_BOUND harness
+        max_tokens = decode_bound(defaults.get("max_tokens"))
         if max_tokens is None:
             raise RuntimeError(
                 "ZERO FALLBACK: max_tokens missing from defaults.json.")

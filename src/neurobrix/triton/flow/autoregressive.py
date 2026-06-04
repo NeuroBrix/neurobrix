@@ -461,7 +461,8 @@ class TritonAutoregressiveHandler:
                 num_kv_heads = lm_config.get("num_kv_heads") or num_heads
                 head_dim = lm_config.get("head_dim") or (hidden_dim // num_heads)
                 num_layers = lm_config.get("num_layers") or 22
-                max_tokens = self.ctx.pkg.defaults.get("max_tokens", 512)
+                from neurobrix.core.runtime.decode_bound import decode_bound  # NBX_DECODE_BOUND harness
+                max_tokens = decode_bound(self.ctx.pkg.defaults.get("max_tokens", 512))
                 kv_cache = TritonKVCache(
                     num_layers=num_layers,
                     num_kv_heads=num_kv_heads,

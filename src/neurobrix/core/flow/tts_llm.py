@@ -166,7 +166,8 @@ class TTSLLMEngine(FlowHandler):
         lm_name = lm_stage["component"]
         aux_weights_config = lm_stage.get("auxiliary_weights", {})
 
-        max_tokens = defaults.get("max_tokens", 2048)
+        from neurobrix.core.runtime.decode_bound import decode_bound  # NBX_DECODE_BOUND harness
+        max_tokens = decode_bound(defaults.get("max_tokens", 2048))
         temperature = defaults.get("temperature", 0.8)
         eos_token_id = defaults.get("eos_token_id")
         bos_token_id = defaults.get("bos_token_id")
