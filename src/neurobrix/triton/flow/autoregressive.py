@@ -138,6 +138,22 @@ class TritonAutoregressiveHandler:
                       flush=True)
             next_token, is_done = generator.step(logits, step_idx)
 
+            # Per-step token diagnostic (mirrors the compiled flow's NBX_DEBUG_DECODE)
+            # for triton-seq-vs-sequential decode parity. R33-pure scalar read
+            # (ctypes + DeviceAllocator, no torch).
+            if _os_dl.environ.get("NBX_DEBUG_DECODE") == "1" and step_idx < 15:
+                from neurobrix.kernels.nbx_tensor import (
+                    NBXDtype as _NBXdt, DeviceAllocator as _DAdt)
+                import ctypes as _ctdt
+                _tk = next_token
+                while hasattr(_tk, "ndim") and _tk.ndim > 1:
+                    _tk = _tk[0]
+                _tkf = _tk.to(_NBXdt.float32)
+                _b = (_ctdt.c_float * 1)()
+                _DAdt.memcpy(_ctdt.addressof(_b), _tkf.data_ptr(), 4, kind=2)
+                print(f"  [DBG-TRITON] step={step_idx} token={int(round(_b[0]))}",
+                      flush=True)
+
             if is_done:
                 break
 
