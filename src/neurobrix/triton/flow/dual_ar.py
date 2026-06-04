@@ -140,6 +140,11 @@ class TritonDualAREngine:
 
             next_token = _sample_token_np(last_logits, temperature, top_p=top_p)
 
+            import os as _os_dbg
+            if _os_dbg.environ.get("NBX_DEBUG_DECODE") == "1" and step < 16:
+                print(f"  [DBG-DUALAR] step={step} sem_token={int(next_token)}",
+                      flush=True)
+
             if eos_token_id is not None and next_token == eos_token_id:
                 break
 

@@ -179,6 +179,10 @@ class DualAREngine(FlowHandler):
             slow_token = int(sample_token(
                 mask.unsqueeze(1), temperature, top_p=top_p,
                 repetition_penalty=rep_pen, generated_ids=slow_history[-rep_window:]))
+            import os as _os_dbg
+            if _os_dbg.environ.get("NBX_DEBUG_DECODE") == "1" and len(slow_history) < 16:
+                print(f"  [DBG-DUALAR] step={len(slow_history)} sem_token={int(slow_token)}",
+                      flush=True)
             if im_end_id is not None and slow_token == im_end_id:
                 break
             slow_history.append(slow_token)
