@@ -24,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **RNN (LSTM/GRU) dtype mismatch in sequential/triton modes.** The AMP input
+  cast only converted top-level tensor arguments, but `aten::lstm`/`aten::gru`
+  pass their hidden state (`[h0, c0]`) and parameters as nested *lists* of
+  tensors. The input was cast to fp16 while the hidden/weight lists stayed fp32,
+  so PyTorch rejected the op ("input Half × hidden Float"). The cast now recurses
+  into list/tuple arguments; flat-argument ops are unaffected (byte-identical).
 - **Triton DualAR (OpenAudio) generated near-silent audio — full generation port.**
   The triton `dual_ar` flow ran only the slow (semantic) autoregressive pass and
   then fed the decoder semantic token embeddings via a numpy shortcut, never

@@ -640,13 +640,18 @@ class DtypeEngine:
                           and not a.is_contiguous() else a)
                     for a in args
                 ]
-            return [
-                a.to(self.compute_dtype)
-                if isinstance(a, torch.Tensor) and a.is_floating_point()
-                and a.dtype != self.compute_dtype
-                else a
-                for a in args
-            ]
+            # Recurse into list/tuple args: aten::lstm/gru pass hx ([h0, c0]) and
+            # params ([w_ih, w_hh, ...]) as nested tensor lists, not bare tensors.
+            # Casting only the top-level input tensor (and leaving the hidden/weight
+            # lists at fp32) makes cuDNN/PyTorch reject "input Half × hidden Float".
+            def _fp16_cast(a):
+                if (isinstance(a, torch.Tensor) and a.is_floating_point()
+                        and a.dtype != self.compute_dtype):
+                    return a.to(self.compute_dtype)
+                if isinstance(a, (list, tuple)):
+                    return type(a)(_fp16_cast(x) for x in a)
+                return a
+            return [_fp16_cast(a) for a in args]
 
         if op_name in AMP_PROMOTE_OPS:
             max_size = 0
