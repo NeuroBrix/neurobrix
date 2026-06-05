@@ -7,8 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Triton `aten::norm` (L2) kernel** — composed R33-pure from existing kernels
+  (`mul` + `sum` + `sqrt`, with fp32 accumulation so a long-row reduction does
+  not overflow fp16). Unblocks weight-normed convolutions in triton mode (the DAC
+  codec decoder). Only p=2 (the weight-norm case) is wired; other p raise.
+
 ### Fixed
 
+- **Triton audio output not saved.** The decoder output is an `NBXTensor`, but
+  the audio post-processing searched only for `torch.Tensor` waveforms, so it
+  never bound `global.output_audio` and the save raised. The post-processor now
+  converts the chosen waveform candidate to torch at the mode boundary (shape is
+  read without converting, so only the matching waveform is materialised) and
+  also looks under the `codec.decoder.output_0` key. Compiled mode is unchanged.
 - **Triton mode crashed (CUDA error 700) on boolean-mask `masked_fill`.** An
   attention `masked_fill(~mask, value)` is captured as an in-place assignment
   with a boolean mask; the triton scatter wrapper mis-read the 1-byte mask as
