@@ -1563,12 +1563,14 @@ def isin_wrapper(elements, test_elements, *, invert: bool = False,
     out_np = np.isin(elements_np, test_np,
                      assume_unique=bool(assume_unique),
                      invert=bool(invert))
-    # NBXTensor.from_numpy currently doesn't support bool dtype cleanly on
-    # every backend; stage through uint8, the callers (comparisons, masks)
-    # treat non-zero as True. If the consuming op demands bool, NBXDtype
-    # promotion handles it downstream.
-    out_u8 = out_np.astype(np.uint8)
-    return NBXTensor.from_numpy(out_u8)
+    # isin is a boolean membership predicate — return a true bool_ NBXTensor so
+    # downstream bool-aware ops recognise it. Staging through uint8 (the earlier
+    # workaround) lost the bool-ness: bitwise_not's `nbx_dtype == bool_` guard
+    # then missed and did a raw byte complement (~0 -> 255) instead of the LOGICAL
+    # NOT, which corrupted the openaudio DualAR attention mask (op #46 of the slow
+    # backbone, first triton-vs-sequential divergence). from_numpy handles |b1
+    # cleanly now (verified empirically), so the uint8 staging is no longer needed.
+    return NBXTensor.from_numpy(out_np.astype(np.bool_))
 
 
 def _nbx_to_numpy(t):
@@ -2748,6 +2750,7 @@ def conv2d_wrapper(
         kernel_height=kh, kernel_width=kw,
         stride_height=stride_h, stride_width=stride_w,
         padding_height=pad_h, padding_width=pad_w,
+        dilation_height=dil_h, dilation_width=dil_w,
         groups=groups, fp16=fp16,
     )
 
