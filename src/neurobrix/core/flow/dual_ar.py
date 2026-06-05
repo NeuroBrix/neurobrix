@@ -171,6 +171,11 @@ class DualAREngine(FlowHandler):
                 raise RuntimeError("ZERO FALLBACK: slow model must output logits + hidden_states.")
 
             slow_logits = logits[:, pos, :].clone()
+            import os as _osdsl
+            _dsl = _osdsl.environ.get("NBX_DUALAR_DUMP_SLOGITS", "")
+            if _dsl and len(slow_history) == 0:
+                import numpy as _npdsl
+                _npdsl.save(_dsl, slow_logits.detach().float().cpu().numpy())
             # Mask to semantic ids + stop token.
             mask = torch.full_like(slow_logits, float("-inf"))
             mask[:, sem_lo:sem_hi] = slow_logits[:, sem_lo:sem_hi]
