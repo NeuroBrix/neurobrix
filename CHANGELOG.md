@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Sequential (op-by-op) mode silently dropped in-place index assignments,**
+  producing silent/garbage audio for codec models. An assignment such as
+  `dst[:, 0] = value` is captured as an in-place write into a *view* of the
+  destination; sequential mode executed it with the functional copy (which
+  returns a new tensor and never mutates), so the destination kept its original
+  value. The destination of the OpenAudio DAC codec's code tensor stayed all
+  zeros → every codebook lookup hit row 0 → silence. Sequential now performs the
+  write in place (matching compiled mode), so the view-aliased mutation
+  propagates. This affects every model that does `tensor[idx] = value` (OpenAudio,
+  Kokoro, Chatterbox, SANA-Video). OpenAudio sequential mode now produces
+  word-perfect audio, matching compiled mode (the op-by-op reference oracle).
+- **Runtime AMP parity:** the per-op AMP path used by sequential/triton modes now
+  mirrors the compiled path's fp16 squaring guard — a hand-rolled
+  `mean(x*x)` norm variance is upcast to fp32 so it cannot overflow fp16 and
+  collapse the norm to zero.
+
 ### Changed
 
 - **OpenAudio TTS decodes its audio codes in a single pass.** The `dual_ar`
