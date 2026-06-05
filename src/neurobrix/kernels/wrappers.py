@@ -4012,6 +4012,25 @@ def index_put_wrapper(x, indices, values, accumulate: bool = False):
             "non-leading advanced indexing is unwired (follow-up "
             "P-INDEX-PUT-ADVANCED-GENERAL).")
     idx = non_none[0][1]
+    # Boolean-mask index_put = masked_fill semantics: out[mask] = scalar, the
+    # mask broadcasting over x's TRAILING dims. The attention masked_fill
+    # (scores.masked_fill(~mask, value)) functionalises to exactly this form —
+    # a 1-byte mask whose shape is a leading-dim PREFIX of x, with a scalar value.
+    # Route it to the masked_fill kernel instead of the 1-D integer-index path
+    # (which read the mask as garbage indices and wrote far out of bounds → the
+    # OpenAudio DualAR-decode triton CUDA-700). Match the mask dtype by NAME,
+    # robust to whether the index was typed NBXDtype.{bool_,uint8} or left as a
+    # raw triton dtype (tl.uint8) by an upstream bitwise_not/isin. The shape-prefix
+    # + scalar-value test keeps genuine 1-D integer indices on the integer path.
+    _idx_dtn = str(idx.dtype).lower()
+    if (("uint8" in _idx_dtn or "bool" in _idx_dtn)
+            and idx.ndim < x.ndim
+            and list(idx.shape) == list(x.shape[:idx.ndim])
+            and values.numel() == 1):
+        mask_b = idx.reshape([*list(idx.shape),
+                              *([1] * (x.ndim - idx.ndim))])
+        fill_val = _to_scalar(values) if isinstance(values, NBXTensor) else float(values)
+        return masked_fill(x, mask_b, fill_val)
     if idx.dtype == NBXDtype.bool_:
         raise NotImplementedError(
             "aten::index_put with a boolean-mask index is unwired (no "
