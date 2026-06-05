@@ -13,9 +13,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`mul` + `sum` + `sqrt`, with fp32 accumulation so a long-row reduction does
   not overflow fp16). Unblocks weight-normed convolutions in triton mode (the DAC
   codec decoder). Only p=2 (the weight-norm case) is wired; other p raise.
+- **Triton convolution dilation support.** The conv kernel sized the output with
+  the dilation factor (right, smaller output shape) but gathered the kernel taps
+  at contiguous offsets, ignoring dilation — a dilated convolution silently read
+  the wrong receptive field and produced garbage. The kernel now spaces the taps
+  by `dilation` (`tap*dilation` in the input-index math); dilation defaults to 1,
+  so non-dilated convolutions are byte-identical. Unblocks the OpenAudio DAC
+  vocoder, whose residual units use the classic 1/3/9 dilation stack (its triton
+  audio was a low-energy noise wash before — STT "*crickets*", now "Hello world!").
 
 ### Fixed
 
+- **Triton DualAR (OpenAudio) generated near-silent audio — full generation port.**
+  The triton `dual_ar` flow ran only the slow (semantic) autoregressive pass and
+  then fed the decoder semantic token embeddings via a numpy shortcut, never
+  running the fast/depth AR for the residual codebooks nor the RVQ dequantize —
+  the decoder received the wrong features. It now mirrors the reference flow:
+  slow backbone AR + fast/depth AR (9 residual codebooks) + `codec.quantizer`
+  RVQ decode, all on `NBXTensor` (R33-pure; orchestration/sampling in numpy at
+  the boundary). Triton greedy codes are now byte-identical to the PyTorch
+  reference across all positions and codebooks; STT of the audio reads the prompt.
+- **Triton DualAR ignored CLI sampling overrides.** The flow read the embedded
+  `defaults` for temperature/top-p/repetition-penalty/max-tokens, so
+  `--temperature 0` (greedy) silently sampled at the default 0.7. It now reads the
+  `global.*` overrides first (mirroring the reference flow), restoring
+  deterministic greedy decoding.
+- **`isin` returned a non-boolean tensor.** The membership op staged its result
+  through `uint8`, so a downstream boolean negation (`~mask`) missed its "is this
+  a bool?" guard and did a raw byte complement (`~0 → 255`) instead of the logical
+  NOT — corrupting the OpenAudio DualAR attention mask (first triton-vs-reference
+  divergence, localized op-by-op). `isin` now returns a true boolean tensor so
+  every bool-aware consumer (negation, `masked_fill`, `where`) sees it correctly.
 - **Triton audio output not saved.** The decoder output is an `NBXTensor`, but
   the audio post-processing searched only for `torch.Tensor` waveforms, so it
   never bound `global.output_audio` and the save raised. The post-processor now
