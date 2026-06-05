@@ -620,6 +620,7 @@ def _build_op_map() -> Dict[str, Callable]:
         # --- Reductions ---
         "mean": w.mean_wrapper,
         "sum": w.sum_wrapper,
+        "norm": w.norm_wrapper,
         "amax": w.amax_wrapper,
         "argmax": w.argmax_wrapper,
         "argmin": w.argmin_wrapper,

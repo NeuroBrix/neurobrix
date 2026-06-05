@@ -186,20 +186,38 @@ def postprocess_audio_output(ctx: FlowContext) -> None:
             ctx.variable_resolver.resolved["global.output_audio"] = waveform
             return
 
-    # Raw waveform output
+    # Raw waveform output. Triton mode stores the decoder output as an NBXTensor;
+    # convert the chosen candidate to torch at this mode boundary (R33: NBX→torch
+    # only at the boundary) so the CLI save / crop see a torch waveform. Shape is
+    # read WITHOUT converting (NBXTensor exposes `.shape`), so only the matching
+    # waveform is materialised — non-waveform NBX outputs are never copied.
+    def _wave_shape(val):
+        return tuple(getattr(val, "shape", ()) or ())
+
+    def _to_torch_wave(val):
+        if isinstance(val, torch.Tensor):
+            return val
+        try:
+            return torch.from_numpy(val.numpy())  # NBXTensor → torch (boundary)
+        except Exception:
+            return None
+
     waveform = None
     resolved = ctx.variable_resolver.resolved
-    for key in ["decoder.output_0", "global.output_audio"]:
+    for key in ["codec.decoder.output_0", "decoder.output_0", "global.output_audio"]:
         val = resolved.get(key)
-        if isinstance(val, torch.Tensor) and val.dim() >= 2 and val.shape[-1] > 1000:
-            waveform = val
-            break
+        sh = _wave_shape(val)
+        if len(sh) >= 2 and sh[-1] > 1000:
+            waveform = _to_torch_wave(val)
+            if waveform is not None:
+                break
 
     if waveform is None:
         for val in resolved.values():
-            if isinstance(val, torch.Tensor) and val.dim() == 3 and val.shape[1] == 1:
-                if val.shape[2] > 1000:
-                    waveform = val
+            sh = _wave_shape(val)
+            if len(sh) == 3 and sh[1] == 1 and sh[2] > 1000:
+                waveform = _to_torch_wave(val)
+                if waveform is not None:
                     break
 
     if waveform is not None:

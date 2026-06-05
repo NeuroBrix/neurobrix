@@ -2078,6 +2078,23 @@ def sum_wrapper(x, dim=None, keepdim=False) :
     return output.to(x.dtype).view(shape)
 
 
+def norm_wrapper(x, p=2, dim=None, keepdim=False):
+    """aten::norm(self, p, dim, keepdim) — Lp norm reduction over ``dim``.
+
+    The DAC codec's only norm is weight-norm: ``||v|| = sqrt(sum(v*v, dim))``
+    with p=2 over a single dim. Composed from existing triton kernels
+    (mul + sum + sqrt) — R33-pure, no new @triton.jit needed; sum_wrapper
+    accumulates in fp32 so the reduction over a long row does not overflow fp16.
+    Other p raise ZERO-FALLBACK (named follow-up) rather than mis-computing.
+    """
+    pv = _to_scalar(p) if isinstance(p, NBXTensor) else (2 if p is None else p)
+    if float(pv) != 2.0:
+        raise NotImplementedError(
+            f"aten::norm p={pv} unwired (DAC weight-norm uses p=2) — "
+            "follow-up P-TRITON-NORM-GENERAL-P.")
+    return sqrt_wrapper(sum_wrapper(mul(x, x), dim=dim, keepdim=keepdim))
+
+
 def amax_wrapper(x, dim=None, keepdim=False) :
     """Max reduction."""
     if dim is None:
