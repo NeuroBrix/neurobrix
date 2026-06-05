@@ -225,33 +225,22 @@ class DualAREngine(FlowHandler):
                 codes[0, r, t] = v
         self._ensure_weights_loaded("codec.quantizer")
         q_exec = self.ctx.executors["codec.quantizer"]
-        # quantizer.decode is traced at a fixed code-window (q_seq codes -> z);
-        # chunk the variable-length codes into q_seq blocks (the upsample ratio is
-        # captured in each block) and concatenate the feature output.
-        q_seq = 23
-        qdag = getattr(q_exec, "_dag", None)
-        if qdag:
-            for _tid, spec in qdag.get("tensors", {}).items():
-                if spec.get("input_name") == "indices":
-                    sh = spec.get("shape", [])
-                    if len(sh) >= 3 and isinstance(sh[2], int):
-                        q_seq = sh[2]
-                    break
-        z_chunks = []
-        for cs in range(0, T, q_seq):
-            ce = min(cs + q_seq, T)
-            chunk = codes[:, :, cs:ce]
-            if chunk.shape[2] < q_seq:
-                chunk = torch.nn.functional.pad(chunk, (0, q_seq - chunk.shape[2]))
-            zc = q_exec.run({"indices": chunk})
-            zc = zc.get("output") if isinstance(zc, dict) else zc
-            if ce - cs < q_seq:  # trim padded tail proportionally
-                zc = zc[..., : max(1, int(zc.shape[-1] * (ce - cs) / q_seq))]
-            z_chunks.append(zc)
-        z = torch.cat(z_chunks, dim=-1)
+        # codec.quantizer.decode is fully symbolic in the .nbx (born-at-source seq:
+        # the WindowLimitedTransformer mask/positions and the RVQ codebook gather are
+        # symbol-tracked, the SDPA mask alignment slice recovers the seq symbol). The
+        # variable-length code sequence runs in a single pass — no fixed q_seq window
+        # chunking, which would have broken the window_size=128 cross-frame attention.
+        z = q_exec.run({"indices": codes})
+        z = z.get("output") if isinstance(z, dict) else z
         print(f"   [codec.quantizer] decode codes {list(codes.shape)} -> features {list(z.shape)}")
-        # Bind features as the decoder input (graph input name 'x').
-        for key in ("global.x", "x", "codec.decoder.x"):
+        # Bind features as the decoder input. The topology reconcile wires the
+        # decoder input via the connection `model.output_0 -> codec.decoder.x`
+        # (the quantizer is inserted by this handler, so the decoder's InputResolver
+        # follows that connection back to `model.output_0`); bind there too so a
+        # single full-sequence `_execute_component` forward resolves its input
+        # (the old chunked path injected `executor.run({x: chunk})` directly and
+        # bypassed this resolution).
+        for key in ("global.x", "x", "codec.decoder.x", "model.output_0"):
             self.ctx.variable_resolver.resolved[key] = z
         self.ctx.variable_resolver.resolved["global.generated_token_ids"] = [c[0] for c in acoustic_codes]
         if not self.ctx.persistent_mode:
@@ -259,15 +248,17 @@ class DualAREngine(FlowHandler):
             gc.collect()
             device_empty_cache(device)
 
-        # ── Step 4: codec.decoder (features -> waveform), chunked to its trace seq ──
+        # ── Step 4: codec.decoder (features -> waveform), single symbolic-seq pass ──
+        # The DAC decoder is fully symbolic (unpad1d negative-end slice keeps the
+        # upsampled length symbolic), so it runs the whole feature sequence at once —
+        # no trace-seq chunking, no inter-block seams.
         for stage in stages[1:]:
             codec_name = stage["component"]
             if codec_name not in self.ctx.executors:
                 continue
             self._ensure_weights_loaded(codec_name)
             print(f"   [{codec_name}] Running forward pass...")
-            if not self._try_chunked_forward(codec_name):
-                self._execute_component(codec_name, "forward", None)
+            self._execute_component(codec_name, "forward", None)
             if not self.ctx.persistent_mode:
                 self._unload_component_weights(codec_name)
                 gc.collect()
