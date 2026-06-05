@@ -22,8 +22,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   vocoder, whose residual units use the classic 1/3/9 dilation stack (its triton
   audio was a low-energy noise wash before — STT "*crickets*", now "Hello world!").
 
+### Added
+
+- **Triton `aten::stft` / `aten::istft`.** Short-time Fourier transform and its
+  inverse, built on the existing rfft/irfft DFT-matmul path: `stft` =
+  `unfold` framing + window + rfft + transpose; `istft` = irfft + windowed
+  overlap-add (via the existing `unfold_backward` scatter) + window-energy
+  normalisation + centre-trim. Model-agnostic, R33-pure. Unblocks the
+  chatterbox/CosyVoice s3gen HiFiGAN/iSTFTNet vocoder (n_fft=16, hop=4).
+- **Triton `aten::conv_transpose1d`.** Thin adapter over the existing transposed
+  conv kernel (which already handles the 1D case via an H=1 unsqueeze); only the
+  positional-arg order differs from the aten signature. Used by HiFiGAN-style
+  upsamplers.
+
 ### Fixed
 
+- **Triton `aten::matmul` crashed on ≥4-D batched inputs.** The general batched
+  branch passed raw 4-D tensors to `bmm` (which is strictly 3-D → "too many
+  values to unpack"). It now collapses the leading batch dims into one, runs
+  `bmm`, and restores the batch shape (with simple batch broadcasting). 3-D
+  matmul is unchanged (byte-identical); verified exact vs torch on a 4-D case.
+- **Triton `aten::layer_norm` returned a 3-tuple where the graph expects one
+  output.** The high-level `layer_norm` op was dispatched to the
+  `native_layer_norm` wrapper (which also returns mean/rstd); a single-output
+  graph then stored the whole tuple, so a downstream op received a tuple. It now
+  routes to a wrapper returning just the normalised output. `native_layer_norm`
+  (3 outputs) is unchanged.
+- **Triton `aten::clip`** now dispatches to `clamp` (it is an alias).
 - **RNN (LSTM/GRU) dtype mismatch in sequential/triton modes.** The AMP input
   cast only converted top-level tensor arguments, but `aten::lstm`/`aten::gru`
   pass their hidden state (`[h0, c0]`) and parameters as nested *lists* of
