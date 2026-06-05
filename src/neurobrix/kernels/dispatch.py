@@ -565,6 +565,7 @@ def _build_op_map() -> Dict[str, Callable]:
         "reciprocal": w.reciprocal,
         "pow": w.pow_wrapper,
         "clamp": w.clamp,
+        "clip": w.clamp,  # aten::clip is an alias of aten::clamp
         "erf": w.erf,
 
         # --- Binary element-wise ---
@@ -588,7 +589,7 @@ def _build_op_map() -> Dict[str, Callable]:
 
         # --- Normalization ---
         "native_layer_norm": w.native_layer_norm,
-        "layer_norm": w.native_layer_norm,
+        "layer_norm": w.layer_norm_wrapper,
         "rms_norm": w.rms_norm,
         "swiglu_fused": w.swiglu_fused_wrapper,
         "rope_fused": w.rope_fused_wrapper,
@@ -648,6 +649,7 @@ def _build_op_map() -> Dict[str, Callable]:
         "conv2d": w.conv2d_wrapper,
         "convolution": w.conv2d_wrapper,
         "conv1d": w.conv1d_wrapper,
+        "conv_transpose1d": w.conv_transpose1d_wrapper,
         "depthwise_conv2d": w.conv_depthwise2d_wrapper,
         "conv_depthwise2d": w.conv_depthwise2d_wrapper,
         "conv_transpose2d": w.conv_depthwise2d_wrapper,
@@ -758,6 +760,8 @@ def _build_op_map() -> Dict[str, Callable]:
         "_fft_c2c": w.fft_c2c_wrapper,
         "fft_rfft": w.fft_rfft_wrapper,
         "fft_irfft": w.fft_irfft_wrapper,
+        "stft": w.stft_wrapper,
+        "istft": w.istft_wrapper,
 
         # --- Complex ---
         "angle": w.angle_wrapper,

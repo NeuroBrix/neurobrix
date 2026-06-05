@@ -1121,6 +1121,17 @@ def native_layer_norm(x, normalized_shape, weight, bias, eps=1e-5):
     return output_2d.view_as(x), mean, inv_std
 
 
+def layer_norm_wrapper(x, normalized_shape, weight=None, bias=None, eps=1e-5,
+                       cudnn_enable=True) :
+    """aten::layer_norm — the high-level op returns ONLY the normalized output
+    (native_layer_norm also returns mean/rstd). The triton runtime stores a
+    tuple result as out_0=the-whole-tuple when the graph declares a single
+    output, so a downstream op (dropout) then receives a tuple. Return just the
+    output tensor here."""
+    out = native_layer_norm(x, normalized_shape, weight, bias, eps)
+    return out[0] if isinstance(out, (tuple, list)) else out
+
+
 def rms_norm(x, weight, eps=1e-6, epsilon=None):
     """RMSNorm wrapper.
 
@@ -1540,8 +1551,24 @@ def matmul_wrapper(a, b):
         result = bmm(a_3d, b.unsqueeze(0).expand(batch, K, b.shape[1]))
         return result.view(*orig_shape[:-1], b.shape[1])
     if a.ndim >= 3 and b.ndim >= 3:
-        # General batched matmul
-        return bmm(a.contiguous(), b.contiguous())
+        # General batched matmul. bmm is strictly 3D, so collapse the leading
+        # batch dims into one, bmm, then restore the batch shape. Passing raw 4-D
+        # tensors straight to bmm unpacked a 3-tuple → "too many values".
+        a_c = a.contiguous(); b_c = b.contiguous()
+        M, K = a_c.shape[-2], a_c.shape[-1]
+        Kb, N = b_c.shape[-2], b_c.shape[-1]
+        batch_a = a_c.numel() // (M * K)
+        batch_b = b_c.numel() // (Kb * N)
+        a_3d = a_c.view(batch_a, M, K)
+        b_3d = b_c.view(batch_b, Kb, N)
+        lead = list(a_c.shape[:-2])
+        if batch_b == 1 and batch_a != 1:
+            b_3d = b_3d.expand(batch_a, Kb, N)
+        elif batch_a == 1 and batch_b != 1:
+            a_3d = a_3d.expand(batch_b, M, K)
+            lead = list(b_c.shape[:-2])
+        result = bmm(a_3d, b_3d)
+        return result.view(*lead, M, N)
     raise RuntimeError(f"matmul: unsupported shapes {a.shape} × {b.shape}")
 
 
@@ -3240,6 +3267,19 @@ def conv1d_wrapper(
         dilation=(1, dilation), groups=groups)
 
     return out_2d.squeeze(2)  # [N, C_out, L_out]
+
+
+def conv_transpose1d_wrapper(x, weight, bias=None, stride=1, padding=0,
+                             output_padding=0, groups=1, dilation=1) :
+    """aten::conv_transpose1d — 1D transposed convolution. conv_transpose_wrapper
+    already handles the 1D case (weight.ndim == 3, H=1 unsqueeze); this thin
+    adapter only reorders the positional args from the aten signature
+    (stride, padding, output_padding, groups, dilation) to the wrapper's keyword
+    order. Used by the chatterbox/CosyVoice s3gen HiFiGAN-style upsampler."""
+    return conv_transpose_wrapper(
+        x, weight, bias,
+        stride=stride, padding=padding, dilation=dilation,
+        output_padding=output_padding, groups=groups)
 
 
 # ---------------------------------------------------------------------------
@@ -6083,6 +6123,100 @@ def fft_irfft_wrapper(x, n: int = None, dim: int = -1,
                        norm: str = None) :
     """irfft equivalent via Triton kernel."""
     return fft_c2r_wrapper(x, dim=dim, norm=norm, last_dim_size=n)
+
+
+def stft_wrapper(x, n_fft, hop_length=None, win_length=None, window=None,
+                 normalized=False, onesided=None, return_complex=True,
+                 center=False, pad_mode="reflect") :
+    """aten::stft — framing + window + rfft → complex spectrogram
+    [.., n_fft//2+1, num_frames]. Built on the existing rfft (fft_r2c_wrapper,
+    which already covers pow2 and non-pow2 N); framing via NBXTensor.unfold.
+    `center` is applied upstream by the traced graph (an explicit pad op), so the
+    op-level stft frames without re-padding. Model-agnostic, R33-pure.
+
+    Mirrors torch.stft: real input → onesided complex spectrogram. Used by the
+    chatterbox/CosyVoice s3gen vocoder (n_fft=16, hop=4)."""
+    if isinstance(n_fft, (list, tuple)):
+        n_fft = n_fft[0]
+    hop_length = (n_fft // 4) if hop_length in (None, 0) else hop_length
+    win_length = n_fft if win_length in (None, 0) else win_length
+    onesided = True if onesided is None else bool(onesided)
+
+    x = _ensure_cuda(x).contiguous()
+    squeezed = (x.ndim == 1)
+    if squeezed:
+        x = x.unsqueeze(0)                                 # [1, signal]
+
+    # frame: [..., num_frames, win_length]
+    frames = x.unfold(-1, win_length, hop_length).contiguous()
+    if window is not None:
+        frames = mul(frames, window)                       # broadcast [win_length]
+    # centre a short window inside the n_fft buffer (uncommon; here win == n_fft)
+    if win_length < n_fft:
+        pad_total = n_fft - win_length
+        left = pad_total // 2
+        frames = constant_pad_nd(frames, [left, pad_total - left], 0.0)
+
+    spec = fft_r2c_wrapper(frames, dim=-1, onesided=onesided)  # [..., num_frames, freq]
+    spec = spec.transpose(-1, -2).contiguous()             # [..., freq, num_frames]
+    if squeezed:
+        spec = spec.squeeze(0)
+    return spec
+
+
+def istft_wrapper(x, n_fft, hop_length=None, win_length=None, window=None,
+                  center=True, normalized=False, onesided=None, length=None,
+                  return_complex=False) :
+    """aten::istft — inverse STFT: irfft each frame + windowed overlap-add +
+    window-envelope normalisation. Built on fft_c2r_wrapper (irfft) and
+    unfold_backward_wrapper (the overlap-add scatter). Model-agnostic, R33-pure.
+    Used by the chatterbox/CosyVoice s3gen vocoder (n_fft=16, hop=4)."""
+    if isinstance(n_fft, (list, tuple)):
+        n_fft = n_fft[0]
+    hop_length = (n_fft // 4) if hop_length in (None, 0) else hop_length
+    win_length = n_fft if win_length in (None, 0) else win_length
+
+    x = _ensure_cuda(x)
+    squeezed = (x.ndim == 2)
+    if squeezed:
+        x = x.unsqueeze(0)                                 # [1, freq, frames]
+    # [batch, freq, frames] -> [batch, frames, freq]
+    xt = x.transpose(-1, -2).contiguous()
+    n_frames = xt.shape[-2]
+    batch = xt.shape[0]
+    # irfft each frame -> real [batch, frames, n_fft]
+    frames = fft_c2r_wrapper(xt, dim=-1, last_dim_size=n_fft)
+    if window is not None:
+        frames = mul(frames, window)                       # synthesis window
+
+    sig_len = (n_frames - 1) * hop_length + win_length
+    # overlap-add the windowed frames back into the signal
+    signal = unfold_backward_wrapper(frames, [batch, sig_len], 1, win_length, hop_length)
+    # window-energy envelope (sum of squared windows at each position) — torch.istft
+    # divides by this so overlapping windows reconstruct unit gain.
+    if window is not None:
+        win_sq = mul(window, window)
+    else:
+        win_sq = NBXTensor.ones((win_length,), dtype=frames.nbx_dtype, device=frames.device)
+    win_sq_b = win_sq.reshape([1, 1, win_length])
+    win_sq_frames = mul(NBXTensor.ones((batch, n_frames, win_length),
+                                       dtype=frames.nbx_dtype, device=frames.device),
+                        win_sq_b)
+    win_env = unfold_backward_wrapper(win_sq_frames, [batch, sig_len], 1, win_length, hop_length)
+    signal = div(signal, clamp(win_env, 1e-11, None))
+
+    if center:
+        pad = n_fft // 2
+        signal = signal.narrow(-1, pad, sig_len - 2 * pad)
+    if length is not None:
+        cur = signal.shape[-1]
+        if length <= cur:
+            signal = signal.narrow(-1, 0, length)
+        else:
+            signal = constant_pad_nd(signal, [0, length - cur], 0.0)
+    if squeezed:
+        signal = signal.squeeze(0)
+    return signal
 
 
 # ===========================================================================
