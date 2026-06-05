@@ -202,8 +202,9 @@ class TritonDualAREngine:
             codec_start = time.perf_counter()
             self._ensure_weights_loaded(codec_name)
 
-            if not self._try_chunked_forward(codec_name):
-                self._execute_component(codec_name, "forward", None)
+            # DAC decoder is fully symbolic (born-at-source seq) — single pass, no
+            # trace-seq chunking (R30 mirror of core/flow/dual_ar.py).
+            self._execute_component(codec_name, "forward", None)
 
             codec_elapsed = (time.perf_counter() - codec_start) * 1000
             print(f"   [{codec_name}] Done in {codec_elapsed:.0f}ms")

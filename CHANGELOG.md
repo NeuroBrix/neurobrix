@@ -7,7 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **OpenAudio TTS decodes its audio codes in a single pass.** The `dual_ar`
+  flow now dequantizes (`codec.quantizer`) and decodes (`codec.decoder`) the
+  whole generated code sequence at once instead of slicing it into fixed-length
+  blocks, which previously cut the codec transformer's `window_size=128`
+  cross-frame attention and left inter-block seams. The quantizer features are
+  bound to `model.output_0` so the single full-sequence decoder pass resolves
+  its input via the topology connection. Mirrored in compiled and triton modes
+  (`core/flow/dual_ar.py`, `triton/flow/dual_ar.py`, R30). Validated:
+  word-perfect STT at a generation length different from calibration.
+
 ### Fixed
+
+- **Reshape crash in the OpenAudio audio decoder at non-calibration lengths.**
+  A feature/channel dimension whose value happened to equal a length-dependent
+  size at the calibration length was incorrectly treated as variable, so it
+  mis-scaled when the generated audio differed in length and a reshape failed.
+  The runtime now keeps such a dimension fixed only when it is both an
+  architectural constant and fully explained by fixed input dimensions, leaving
+  genuinely variable spatial/sequence dimensions untouched (Sana and
+  granite-speech outputs unchanged).
 
 - **SDPA Q/K/V dtype alignment in the efficient/flash sequential path.** The
   standard `scaled_dot_product_attention` dispatch already cast Q/K/V to the

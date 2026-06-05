@@ -86,6 +86,27 @@ def _has_none_arg(args: tuple) -> bool:
     return False
 
 
+def _concrete_product_match(target: int, sym_dims: list) -> bool:
+    """True if ``target`` equals the product of some contiguous run of CONCRETE
+    (plain-int) entries in ``sym_dims`` — i.e. the value is fully explained by the
+    input's concrete dims, with no symbolic dim contributing. Mirror of Forge
+    windowing.py.
+    """
+    n = len(sym_dims)
+    for a in range(n):
+        prod = 1
+        for b in range(a, n):
+            d = sym_dims[b]
+            if not isinstance(d, int):  # symbolic dim breaks the all-concrete run
+                break
+            prod *= d
+            if prod == target:
+                return True
+            if prod > target:
+                break
+    return False
+
+
 # ============================================================================
 # ARGUMENT TYPES (compile-time only, never seen at runtime)
 # ============================================================================
@@ -1580,6 +1601,16 @@ class CompiledSequence:
         expr_map: Dict[int, Any] = {}  # trace_value → expression dict
         ambiguous: set = set()  # trace_values with multiple expressions
 
+        # Architectural-constant dims from WEIGHT/parameter shapes (mirror of Forge
+        # windowing.py). Used by the collision guard below — kept concrete only when
+        # a value is BOTH a weight dim AND fully explained by concrete input dims.
+        weight_dims: set = set()
+        for _tid, tdata in tensors.items():
+            if tdata.get("is_parameter") or tdata.get("weight_name"):
+                for d in (tdata.get("shape") or []):
+                    if isinstance(d, int) and d > 1:
+                        weight_dims.add(d)
+
         for _tid, tdata in tensors.items():
             sym_shape = tdata.get("symbolic_shape", {})
             dims = sym_shape.get("dims", []) if isinstance(sym_shape, dict) else []
@@ -1680,6 +1711,12 @@ class CompiledSequence:
                     # Get input shape for dim-merge product detection
                     input_shapes = op_data.get("input_shapes", [[]])
                     input_shape = input_shapes[0] if input_shapes else []
+                    in_tids = op_data.get("input_tensor_ids", [])
+                    in_sym_dims = []
+                    if in_tids:
+                        _iss = tensors.get(in_tids[0], {}).get("symbolic_shape", {})
+                        if isinstance(_iss, dict):
+                            in_sym_dims = _iss.get("dims", [])
 
                     changed = False
                     new_shape = list(old_shape)
@@ -1687,6 +1724,18 @@ class CompiledSequence:
                         if not isinstance(dim_val, int) or dim_val <= 1:
                             continue
                         if dim_val in expr_map:
+                            # Trace-value collision guard (mirror of Forge
+                            # windowing.py): keep the dim CONCRETE only when it is BOTH
+                            # a weight/architectural constant AND fully explained by
+                            # concrete input dims. Both required: weight-dim alone
+                            # over-fires on a spatial dim equal to a hidden size (Sana
+                            # VAE s1*2==64); concrete-product alone over-fires on a
+                            # baked windowed dim (granite view::65 num_blocks==6==1*6).
+                            # The conjunction isolates the channel-collision case
+                            # (openaudio decoder 192 == (s1-1)*8+16 at s1=23).
+                            if (dim_val in weight_dims
+                                    and _concrete_product_match(dim_val, in_sym_dims)):
+                                continue
                             # Direct match (no passthrough-safety — an exact known
                             # windowed value is always the windowed value)
                             new_shape[i] = expr_map[dim_val]
