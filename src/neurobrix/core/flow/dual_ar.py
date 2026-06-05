@@ -223,6 +223,28 @@ class DualAREngine(FlowHandler):
         for t, ac in enumerate(acoustic_codes):
             for r, v in enumerate(ac):
                 codes[0, r, t] = v
+
+        # ── Diagnostic harness (default-off, §8 retained-diag class) — fixed-codes
+        # injection for op-level cross-engine (compiled vs sequential) codec diffs.
+        # The backbone emits different codes per engine even at fixed seed, so a
+        # plain fingerprint diff of the codec is confounded; dump once, then replay
+        # IDENTICAL codes into both engines to isolate the codec compute divergence.
+        import os as _os_diag
+        _dump_codes = _os_diag.environ.get("NBX_DUALAR_DUMP_CODES", "")
+        _fixed_codes = _os_diag.environ.get("NBX_DUALAR_FIXED_CODES", "")
+        if _dump_codes:
+            import numpy as _np_d
+            _np_d.save(_dump_codes, codes.detach().cpu().numpy())
+            print(f"   [diag] dumped codes {list(codes.shape)} -> {_dump_codes}")
+        if _fixed_codes:
+            import numpy as _np_f
+            _arr = _np_f.load(_fixed_codes)
+            codes = torch.as_tensor(_arr, dtype=torch.long, device=device)
+            T = codes.shape[2]
+            acoustic_codes = [[int(codes[0, r, t]) for r in range(codes.shape[1])]
+                              for t in range(T)]
+            print(f"   [diag] FIXED codes injected {list(codes.shape)} <- {_fixed_codes}")
+
         self._ensure_weights_loaded("codec.quantizer")
         q_exec = self.ctx.executors["codec.quantizer"]
         # codec.quantizer.decode is fully symbolic in the .nbx (born-at-source seq:
@@ -233,6 +255,13 @@ class DualAREngine(FlowHandler):
         z = q_exec.run({"indices": codes})
         z = z.get("output") if isinstance(z, dict) else z
         print(f"   [codec.quantizer] decode codes {list(codes.shape)} -> features {list(z.shape)}")
+        _dump_z = _os_diag.environ.get("NBX_DUALAR_DUMP_Z", "")
+        if _dump_z:
+            import numpy as _np_z
+            _zc = z.detach().float().cpu().numpy()
+            _np_z.save(_dump_z, _zc)
+            print(f"   [diag] z stats mean={_zc.mean():.5f} std={_zc.std():.5f} "
+                  f"absmax={abs(_zc).max():.5f} -> {_dump_z}")
         # Bind features as the decoder input. The topology reconcile wires the
         # decoder input via the connection `model.output_0 -> codec.decoder.x`
         # (the quantizer is inserted by this handler, so the decoder's InputResolver

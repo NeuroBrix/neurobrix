@@ -3307,6 +3307,39 @@ class GraphExecutor:
         # Also store in op_outputs for stats and legacy code
         self._ctx.op_outputs[op_uid] = current_outputs
 
+        # NBX_DUMP_TIDS (sequential path) — torch-tensor mirror of
+        # CompiledSequence._maybe_dump_tid_native so the two PyTorch engines can be
+        # op-diffed (same {engine, record} schema, match by op_uid+shape). Gated,
+        # default-off. Built for the openaudio sequential-codec divergence hunt.
+        import os as _os_ds
+        _dpath_ds = _os_ds.environ.get("NBX_DUMP_TIDS")
+        if _dpath_ds:
+            import json as _json_ds
+            _filters_ds = [f for f in _os_ds.environ.get(
+                "NBX_DUMP_TIDS_FILTER", "").split(",") if f]
+            _ot_ds = op_data.get("op_type", "unknown")
+            for idx, tid in enumerate(output_tensor_ids):
+                _t = current_outputs[idx]
+                if not isinstance(_t, torch.Tensor):
+                    continue
+                if _filters_ds and not any(f in tid or f in op_uid for f in _filters_ds):
+                    continue
+                try:
+                    _flat = _t.detach().reshape(-1)
+                    _head = _flat[:10].float().cpu().tolist()
+                    _fflat = _flat if _flat.is_floating_point() else _flat.float()
+                    _norm = float(torch.linalg.vector_norm(
+                        _fflat, dtype=torch.float32).item())
+                    with open(_dpath_ds, "a") as _f:
+                        _json_ds.dump({"engine": "sequential", "record": {
+                            "tid": tid, "op_uid": op_uid, "op_type": _ot_ds,
+                            "component": self._component_name,
+                            "shape": list(_t.shape), "dtype": str(_t.dtype),
+                            "head10": _head, "l2_norm": _norm}}, _f)
+                        _f.write("\n")
+                except Exception as _e_ds:
+                    print(f"[NBX_DUMP_TIDS seq] failed on {tid}: {_e_ds}", flush=True)
+
     # =========================================================================
     # Output Gathering
     # =========================================================================

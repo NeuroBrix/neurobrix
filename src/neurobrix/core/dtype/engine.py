@@ -665,6 +665,21 @@ class DtypeEngine:
                     for a in args
                 ]
 
+        # fp16 squaring guard — runtime mirror of compile_op's
+        # _make_square_safe_mul. A hand-rolled RMSNorm/LayerNorm variance
+        # mean(x*x) traces as aten::mul with both operands bound to the SAME
+        # tensor; squaring overflows fp16 (max 65504) for |x|>256 → inf → the
+        # norm collapses to ~0 and the component emits silence/garbage (openaudio
+        # DAC codec sequential mode). Upcast ONLY the square (a is b) to fp32; a
+        # generic x*y stays in compute_dtype. compile_op (compiled mode) already
+        # installs this guard — without it here the sequential/triton dispatch
+        # path diverged from compiled, breaking the 4-mode oracle (R36).
+        if (op_name == "mul" and self.compute_dtype == torch.float16
+                and len(args) >= 2 and args[0] is args[1]
+                and isinstance(args[0], torch.Tensor)
+                and args[0].dtype == torch.float16):
+            return [args[0].float(), args[1].float(), *args[2:]]
+
         return args
 
     def amp_cast_result(self, op_type: str, result: Any) -> Any:

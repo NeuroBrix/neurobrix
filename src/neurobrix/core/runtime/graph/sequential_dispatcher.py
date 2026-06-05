@@ -201,6 +201,22 @@ class NativeATenDispatcher:
             # Case 3: Other shape mismatches - just return input
             return inp
 
+        # [IN-PLACE COPY] aten::copy is the functionalised form of an in-place
+        # index assignment (e.g. ``new_indices[:, 0] = clamp(...)``) — captured
+        # with its output consumed by nobody, because the real effect is the
+        # mutation of the destination VIEW's shared storage. torch.ops.aten.copy
+        # is FUNCTIONAL (returns a new tensor, no mutation), so the assignment is
+        # silently dropped and the parent keeps its pre-assignment value. Compiled
+        # mode maps this to ``x.copy_(src)`` (compiled_ops.py); mirror it here so
+        # the view write propagates to the parent — without this, sequential (the
+        # 4-mode oracle, R36) loses every in-place index assignment. Observed: the
+        # OpenAudio DAC codec zeroed all codebook indices → silence.
+        if base_name == "copy" and len(inputs) >= 2 \
+                and isinstance(inputs[0], torch.Tensor) \
+                and isinstance(inputs[1], torch.Tensor):
+            inputs[0].copy_(inputs[1])
+            return inputs[0]
+
         # [REDIRECTION LAYER] Map device-specific variants to universal ops
         if "scaled_dot_product" in base_name and "attention" in base_name:
             if base_name == "_scaled_dot_product_flash_attention_for_cpu":
