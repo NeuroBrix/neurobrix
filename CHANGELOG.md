@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Triton mode crashed (CUDA error 700) on boolean-mask `masked_fill`.** An
+  attention `masked_fill(~mask, value)` is captured as an in-place assignment
+  with a boolean mask; the triton scatter wrapper mis-read the 1-byte mask as
+  integer positions and wrote far out of bounds, corrupting the CUDA context
+  (surfacing later as a spurious "GPU malloc failed"). A mask whose shape is a
+  leading-dim prefix of the target, with a scalar fill, now routes to the
+  `masked_fill` kernel (detected by dtype name, robust to the mask being typed
+  bool/uint8 or a raw triton dtype). Unblocks the OpenAudio DualAR backbone in
+  triton mode.
 - **Sequential (op-by-op) mode silently dropped in-place index assignments,**
   producing silent/garbage audio for codec models. An assignment such as
   `dst[:, 0] = value` is captured as an in-place write into a *view* of the
