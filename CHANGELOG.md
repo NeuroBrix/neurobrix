@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Triton `gather` out-of-bounds on tensors with ≥2 outer dims (CUDA-700).**
+  `gather_wrapper` passed `stride(0)` as the kernel's flattened-outer stride, but
+  `gather_kernel`'s `outer_idx` flattens *every* dim before the gather dim, so the
+  correct stride is `prod(shape[dim:])` (= `shape[dim]·inner_size`). `stride(0)`
+  over-counts by `prod(shape[1:dim])`; with ≥2 outer dims every `outer_idx≥1`
+  store ran past the buffer end — a destructive out-of-bounds write the driver
+  reported as CUDA error 700 at the next synchronising op. Surfaced by the
+  chatterbox s3gen T5 relative-position gather `[1,8,180,359]` with index dim=3
+  (1440× out of bounds). Byte-identical for `dim≤1` (a single outer dim), so every
+  previously-passing gather is unchanged; verified against `torch.gather` on
+  dim=1, multi-outer dim=2, and the chatterbox shape.
+
 ### Added
 
 - **Triton `aten::norm` (L2) kernel** — composed R33-pure from existing kernels
