@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Triton (zero-torch) `next_token_diffusion` flow handler (VibeVoice).**
+  `triton/flow/next_token_diffusion.py` mirrors the compiled
+  `NextTokenDiffusionEngine` on the NBXTensor substrate: the LM / diffusion head /
+  acoustic+semantic tokenizers / connectors run through their component graphs as
+  NBXTensor, the diffusion sampler is the zero-torch `TritonDPMSolverPPScheduler`
+  + `TritonCFGEngine` guidance, and init noise comes from a seeded numpy RNG
+  uploaded as an NBXTensor (numpy is CPU orchestration glue only — prompt
+  assembly, embedding-table lookups, scalar latent scaling — as in
+  `triton/flow/tts_llm.py`). The executor now dispatches `next_token_diffusion`
+  to this handler in triton / triton_sequential mode instead of raising. Component
+  names and input contracts validated against the VibeVoice .nbx topology.
+
 ### Fixed
 
 - **Triton `clamp` rejected tensor bounds; `addmm` rejected N-D activations.**

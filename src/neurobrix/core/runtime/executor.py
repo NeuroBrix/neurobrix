@@ -634,10 +634,13 @@ class RuntimeExecutor:
             )
         elif flow_type == "next_token_diffusion":
             if ctx.mode in ("triton", "triton_sequential"):
-                raise RuntimeError(
-                    "ZERO FALLBACK: next_token_diffusion has no triton mirror yet "
-                    "(VibeVoice DDPM is a documented pending-forge-support case, "
-                    "see src/neurobrix/CLAUDE.md §0). Run in compiled/sequential mode."
+                from neurobrix.triton.flow.next_token_diffusion import TritonNextTokenDiffusionEngine
+                return TritonNextTokenDiffusionEngine(
+                    ctx=ctx,
+                    execute_component_fn=self._execute_component,
+                    resolve_inputs_fn=self._input_resolver.resolve_component_inputs,
+                    ensure_weights_fn=self._ensure_weights_loaded,
+                    unload_weights_fn=self._unload_component_weights,
                 )
             from neurobrix.core.flow.next_token_diffusion import NextTokenDiffusionEngine
             return NextTokenDiffusionEngine(
