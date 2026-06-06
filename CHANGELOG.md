@@ -78,6 +78,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   separation requirement — the two paths now share only the CLI entry +
   orchestrator executor. (Flow-matching routes through DPM++ with
   `use_flow_sigmas=True`, matching the core factory.)
+- **Triton FlowEuler scheduler + iterative_process rewired off the PyTorch
+  scheduler.** Added `TritonFlowEulerScheduler` (numpy timesteps, Python-float
+  dt, NBXTensor latent) — flow-matching Euler for Sana/Flex, validated
+  bit-equivalent to the core FlowEuler (timesteps 1e-7, trajectory 1.4e-6). The
+  orchestrator (`executor._setup_modules`) now picks the scheduler by mode —
+  triton modes get `TritonSchedulerFactory`, PyTorch gets `SchedulerFactory` —
+  and `triton/flow/iterative_process.py` calls the NBXTensor-native scheduler
+  directly (the `nbx_to_torch → driver.step` / `scale_model_input` crutch is
+  removed). The triton diffusion compute path is now zero-torch end to end.
 - **Triton reflect/replicate `aten::pad` routing + `NBXTensor.ones`/`ones_like`.**
   The generic `pad_wrapper` (for `aten::pad`, which carries its mode as a runtime
   arg rather than lowering to `aten::reflection_padNd`) only handled
