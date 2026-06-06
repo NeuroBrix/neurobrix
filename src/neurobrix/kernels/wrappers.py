@@ -5262,13 +5262,40 @@ def constant_pad_nd_wrapper(x, pad_list, value: float = 0.0) :
 
 def pad_wrapper(x, pad_list, mode: str = "constant",
                 value: float = 0.0) :
-    """F.pad via Triton. constant mode uses kernel, others crash."""
+    """F.pad via Triton — routes by mode + padded-dim count (len(pad_list)//2).
+
+    `aten::pad` is the generic functional pad; PyTorch carries the mode as an
+    arg ('constant'/'reflect'/'replicate') rather than lowering to the
+    `aten::reflection_padNd` op, so the per-rank kernels must be reached from
+    here too. The reflection/replication wrappers below are R33-pure
+    (flip + narrow + NBXTensor.cat — no new kernel), so reflect/replicate are
+    real Triton paths, not torch fallbacks. The padded-dim count is the last-
+    dim-first PyTorch convention: 2 entries → 1 dim, 4 → 2 dims.
+    """
     if mode == "constant":
         return constant_pad_nd_wrapper(x, pad_list, value)
+    ndim_padded = len(pad_list) // 2
+    if mode in ("reflect", "reflection"):
+        if ndim_padded == 1:
+            return reflection_pad1d_wrapper(x, pad_list)
+        if ndim_padded == 2:
+            return reflection_pad2d_wrapper(x, pad_list)
+        raise RuntimeError(
+            f"[--triton mode] reflection pad over {ndim_padded} dims has no "
+            f"Triton wrapper (1D/2D only). pad_list={pad_list}."
+        )
+    if mode in ("replicate", "replication"):
+        if ndim_padded == 1:
+            return replication_pad1d_wrapper(x, pad_list)
+        if ndim_padded == 2:
+            return replication_pad2d_wrapper(x, pad_list)
+        raise RuntimeError(
+            f"[--triton mode] replication pad over {ndim_padded} dims has no "
+            f"Triton wrapper (1D/2D only). pad_list={pad_list}."
+        )
     raise RuntimeError(
         f"[--triton mode] pad mode='{mode}' not implemented. "
-        f"Only 'constant' mode has a Triton kernel. "
-        f"Implement reflection/replication pad kernels if needed."
+        f"Supported: constant, reflect (1D/2D), replicate (1D/2D)."
     )
 
 

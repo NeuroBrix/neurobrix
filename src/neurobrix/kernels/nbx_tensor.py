@@ -1025,6 +1025,35 @@ def _strided_scatter(src: 'NBXTensor', dst: 'NBXTensor'):
     )
 
 
+def _fill_constant(t: 'NBXTensor', value) -> 'NBXTensor':
+    """Fill a contiguous NBXTensor's storage with a scalar constant via the
+    pure-Triton `full_kernel`. Backs `NBXTensor.ones` and the non-zero branch
+    of `fill_` — the zero case stays on the cheaper byte-`memset` path. Flat
+    1-D indexing assumes contiguous storage (the only callers are freshly
+    allocated tensors and the existing full-storage fill_ semantics).
+    """
+    if t._nbytes == 0:
+        return t
+    import triton
+    from neurobrix.kernels.ops.fill_op import fill_kernel
+
+    n = t._numel
+    BLOCK = 1024
+    if not t.is_contiguous():
+        # Flat 1-D indexing assumes contiguous storage; on a strided view it
+        # would write the wrong addresses. Fill a contiguous temp, then scatter
+        # into the view's strided positions.
+        tmp = NBXTensor.empty(t._shape, t._dtype, f"cuda:{t._device_idx}")
+        _set_device(tmp)
+        fill_kernel[(triton.cdiv(n, BLOCK),)](tmp, value, n, BLOCK_SIZE=BLOCK)
+        _strided_scatter(tmp, t)
+        return t
+    grid = (triton.cdiv(n, BLOCK),)
+    _set_device(t)
+    fill_kernel[grid](t, value, n, BLOCK_SIZE=BLOCK)
+    return t
+
+
 # ============================================================================
 # STRIDE COMPUTATION
 # ============================================================================
@@ -1351,6 +1380,10 @@ class NBXTensor:
         return t
 
     @staticmethod
+    def ones(shape, dtype=None, device='cuda') -> 'NBXTensor':
+        return _fill_constant(NBXTensor.empty(shape, dtype, device), 1.0)
+
+    @staticmethod
     def empty_like(other: 'NBXTensor', dtype=None, device=None) -> 'NBXTensor':
         dev = device if device else f"cuda:{other._device_idx}"
         return NBXTensor.empty(other._shape,
@@ -1362,6 +1395,12 @@ class NBXTensor:
         return NBXTensor.zeros(other._shape,
                                dtype if dtype else other._dtype,
                                device if device else other._device)
+
+    @staticmethod
+    def ones_like(other: 'NBXTensor', dtype=None, device=None) -> 'NBXTensor':
+        return NBXTensor.ones(other._shape,
+                              dtype if dtype else other._dtype,
+                              device if device else other._device)
 
     @staticmethod
     def from_numpy(arr) -> 'NBXTensor':
@@ -1926,10 +1965,17 @@ class NBXTensor:
         return self  # no autograd in triton mode
 
     def fill_(self, value) -> 'NBXTensor':
-        if value == 0 and self._nbytes > 0:
+        if self._nbytes == 0:
+            return self
+        # aten::fill carries its value as a 0-dim tensor (e.g. via
+        # aten::lift_fresh); collapse it to a host scalar before the kernel.
+        if isinstance(value, NBXTensor):
+            value = value.item()
+        if value == 0:
             DeviceAllocator.memset_cuda(self.data_ptr(), 0, self._nbytes)
-        # Non-zero fill: needs Triton fill kernel (TODO)
-        return self
+            return self
+        # Non-zero fill via the pure-Triton fill_kernel.
+        return _fill_constant(self, value)
 
     def copy_(self, src, non_blocking: bool = False) -> 'NBXTensor':
         if isinstance(src, NBXTensor):
