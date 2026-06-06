@@ -864,7 +864,7 @@ def _build_op_map() -> Dict[str, Callable]:
         "is_contiguous": lambda x: x.is_contiguous,
 
         # Broadcast
-        "broadcast_tensors": lambda *t: t,
+        "broadcast_tensors": w.broadcast_tensors_wrapper,
 
         # Advanced indexing — aten::index(tensor, [idx0, idx1, ...])
         "index": _meta_index,
