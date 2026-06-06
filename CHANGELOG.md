@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Triton `clamp` rejected tensor bounds; `addmm` rejected N-D activations.**
+  `clamp()` did `float(min_val)` unconditionally, so an `aten::clamp.Tensor`
+  whose min/max BOUND is itself an `NBXTensor` (e.g. the Flex.1-alpha DiT) raised
+  `float() argument must be ... not 'NBXTensor'`. Tensor bounds now route through
+  elementwise `maximum_wrapper`/`minimum_wrapper` (R33-pure); scalar bounds keep
+  the fused kernel; mixed (one tensor, one scalar) handled per side. `addmm()`
+  hard-unpacked `M, K = a.shape`, so a >2-D activation raised "too many values to
+  unpack"; it now flattens the leading dims to 2-D, runs the 2-D kernel, and
+  restores the leading shape (mirror of `matmul()`'s ND×2D path). Both are
+  generic catalogue fixes; the diffusion scheduler-split re-validation is
+  unaffected (Sana / PixArt-XL / PixArt-Sigma triton all produce coherent PNG).
 - **Triton RoPE positions were frozen at 0 during KV-cache decode for models
   with no `position_ids` input (orpheus).** Such models derive RoPE positions
   from an internal `aten::arange(0, seq_len)`; in single-token KV-cache decode

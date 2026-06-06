@@ -723,6 +723,19 @@ def pow_wrapper(x, exponent) :
 
 
 def clamp(x, min_val=None, max_val=None) :
+    # aten::clamp.Tensor: a min/max BOUND may itself be an NBXTensor (e.g. Flex
+    # DiT). The fused scalar kernel can't take a tensor bound, so route tensor
+    # bounds through elementwise maximum/minimum (R33-pure); scalar bounds keep
+    # the fused kernel. Mixed (one tensor, one scalar) handled per side.
+    if isinstance(min_val, NBXTensor) or isinstance(max_val, NBXTensor):
+        out = x
+        if min_val is not None:
+            out = (maximum_wrapper(out, min_val) if isinstance(min_val, NBXTensor)
+                   else clamp(out, min_val=float(min_val), max_val=None))
+        if max_val is not None:
+            out = (minimum_wrapper(out, max_val) if isinstance(max_val, NBXTensor)
+                   else clamp(out, min_val=None, max_val=float(max_val)))
+        return out
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
     _min = float(min_val) if min_val is not None else 0.0
@@ -1704,6 +1717,19 @@ def addmm(bias, a, b,
     # (possibly-fp16) weight.
     if bias.nbx_dtype != a.nbx_dtype:
         bias = bias.to(a.nbx_dtype)
+
+    # N-D activation: addmm is strictly 2-D. Flatten the leading dims of `a`
+    # ([..., M, K] @ [K, N]), addmm in 2-D, restore the leading shape. Mirror
+    # of the matmul() ND×2D path; raw N-D `a` unpacked a 2-tuple → "too many
+    # values to unpack" (Flex DiT feeds a 3-D activation to addmm). Bias is the
+    # Linear bias ([N] or [1, N]) and broadcasts over the flattened rows.
+    if a.ndim > 2:
+        orig_lead = a.shape[:-1]
+        K_ = a.shape[-1]
+        batch = a.numel() // K_
+        a2d = a.contiguous().view(batch, K_)
+        out2d = addmm(bias, a2d, b, beta=beta, alpha=alpha)
+        return out2d.view(*orig_lead, out2d.shape[-1])
 
     M, K = a.shape
     K2, N = b.shape
