@@ -43,7 +43,8 @@ class TritonDPMSolverPPScheduler:
         self.alphas_cumprod = betas_to_alphas_cumprod(betas)  # [T] np.float64
 
         self.num_inference_steps = None
-        self.timesteps = None           # np.int64 [N]
+        self._ts_np = None              # np.int64 [N] — internal indexing/argmin
+        self.timesteps = None           # list[NBXTensor [1]] — exposed to the loop/CFG
         self.sigmas = None              # np.float64 [N+1] (zero appended)
         self._step_index = None
         self.model_outputs = [None] * self.solver_order
@@ -60,22 +61,27 @@ class TritonDPMSolverPPScheduler:
                 self.flow_shift * sigmas / (1 + (self.flow_shift - 1) * sigmas)
             )[:-1].copy()
             timesteps = (sigmas * self.num_train_timesteps).copy()
-            self.timesteps = timesteps.astype(np.int64)
+            self._ts_np = timesteps.astype(np.int64)
             self.sigmas = sigmas.astype(np.float64)
         else:
-            self.timesteps = get_timesteps_linspace(num_inference_steps,
-                                                    self.num_train_timesteps)
-            idx = np.clip(self.timesteps, 0, self.num_train_timesteps - 1)
+            self._ts_np = get_timesteps_linspace(num_inference_steps,
+                                                 self.num_train_timesteps)
+            idx = np.clip(self._ts_np, 0, self.num_train_timesteps - 1)
             self.sigmas = alphas_cumprod_to_sigmas(self.alphas_cumprod[idx])
         # append zero sigma for the final step
         self.sigmas = np.concatenate([self.sigmas, np.zeros(1, dtype=np.float64)])
+        # Expose timesteps as 0/1-dim NBXTensor scalars (the triton pipeline —
+        # loop iterator, CFG, components — expects tensor-like timesteps, the way
+        # the PyTorch path got torch tensors). numpy stays internal (_ts_np).
+        self.timesteps = [NBXTensor.from_numpy(np.array([int(t)], dtype=np.int64))
+                          for t in self._ts_np]
         self._step_index = None
         self.model_outputs = [None] * self.solver_order
         self.lower_order_nums = 0
 
     def _init_step_index(self, timestep):
         ts = int(timestep.item()) if isinstance(timestep, NBXTensor) else int(timestep)
-        diffs = np.abs(self.timesteps - ts)
+        diffs = np.abs(self._ts_np - ts)
         self._step_index = int(diffs.argmin())
 
     @property
@@ -162,7 +168,7 @@ class TritonDPMSolverPPScheduler:
         if self._step_index is None:
             self._init_step_index(timestep)
 
-        n = len(self.timesteps)
+        n = len(self._ts_np)
         lower_order_final = (self._step_index == n - 1) and (
             self.final_sigmas_type == "zero"
             or (self.lower_order_final and n < 15))
