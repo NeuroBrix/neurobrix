@@ -3843,14 +3843,24 @@ def gather_wrapper(input, dim: int, index) :
     out = NBXTensor.empty_like(index, dtype=input.dtype)
     N = index.numel()
 
-    # Pre-compute strides for the kernel
+    # Pre-compute strides for the kernel.
+    # gather_kernel's outer_idx is a ROW-MAJOR FLATTENING of every dim before
+    # `dim` (range [0, outer_size)). For a contiguous tensor that whole outer
+    # block collapses to a single stride = product of the sizes from `dim`
+    # onward = shape[dim] * inner_size (== stride(dim-1)). Using stride(0) is the
+    # stride of dim 0 = prod(shape[1:]); it equals the correct value ONLY when
+    # there is exactly one outer dim (dim == 1). With >= 2 outer dims it
+    # over-counts by prod(shape[1:dim]) and drives `outer_idx * stride` past the
+    # buffer end -> destructive OOB store/load -> CUDA 700 at the next sync
+    # (e.g. chatterbox s3gen T5 rel-pos gather [1,8,180,359] idx dim=3). input,
+    # index and out are all contiguous here, so the flat collapse is exact.
     inp_dim_stride = input.stride(dim)
-    idx_stride_outer = index.stride(0) if dim > 0 else 0
+    idx_stride_outer = dim_size * inner_size if dim > 0 else 0
     idx_stride_dim = index.stride(dim)
     idx_stride_inner = index.stride(-1) if dim < input.ndim - 1 else 0
-    inp_stride_outer = input.stride(0) if dim > 0 else 0
+    inp_stride_outer = input.shape[dim] * inner_size if dim > 0 else 0
     inp_stride_inner = input.stride(-1) if dim < input.ndim - 1 else 0
-    out_stride_outer = out.stride(0) if dim > 0 else 0
+    out_stride_outer = dim_size * inner_size if dim > 0 else 0
     out_stride_dim = out.stride(dim)
     out_stride_inner = out.stride(-1) if dim < input.ndim - 1 else 0
 
