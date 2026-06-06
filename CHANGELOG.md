@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Triton `aten::broadcast_tensors` returned a nested list instead of unpacked
+  outputs.** The handler was `lambda *t: t`, so a `TensorList` input `[a, b]` came
+  back as `([a, b],)` — `out_0` resolved to the whole Python list and a downstream
+  consumer (`lt` / `where` / `stack`) hit `'list' object has no attribute '_dtype'`.
+  Replaced with a real wrapper that broadcasts every input to their common
+  (numpy-style) shape and returns them unpacked, one tensor per output slot.
+- **Triton `aten::upsample_nearest1d` choked on the `.vec` list scale factor.**
+  `upsample_nearest1d.vec` passes `scale_factors` as a 1-element list `[s]`, which
+  the wrapper forwarded into the 2D path's scalar `float(scales_w)` → `TypeError`.
+  Unwrap the single-element list to a scalar; the scale-recompute path then sizes
+  the output from the live input, which is what a variable-length audio vocoder
+  (HiFiGAN/iSTFTNet/DAC/S3Gen) needs. (Both surfaced by chatterbox s3gen.)
 - **Triton `gather` out-of-bounds on tensors with ≥2 outer dims (CUDA-700).**
   `gather_wrapper` passed `stride(0)` as the kernel's flattened-outer stride, but
   `gather_kernel`'s `outer_idx` flattens *every* dim before the gather dim, so the
