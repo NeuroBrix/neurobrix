@@ -62,6 +62,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Separate zero-torch Triton scheduler subtree (`triton/scheduler/`).** The
+  Triton diffusion path previously borrowed the PyTorch scheduler via an
+  `nbx_to_torch → driver.step` round-trip in `triton/flow/iterative_process.py`
+  — the last torch dependency on the Triton compute path. Added a fully separate
+  Triton scheduler (`TritonDPMSolverPPScheduler` + `TritonSchedulerFactory`),
+  a byte-for-byte mirror of `core/module/scheduler/diffusion/dpm_solver_pp.py`
+  with torch replaced by: numpy for the CPU noise schedule (betas/alphas_cumprod/
+  sigmas/timesteps, computed once), Python `math` for the per-step scalar
+  coefficients (sigma_t/alpha_t/lambda/h/r0), and NBXTensor for the per-step
+  latent arithmetic (the only tensor operands). No torch import anywhere in the
+  Triton scheduler. Validated bit-equivalent to the PyTorch DPM++ scheduler:
+  matching timesteps and a per-step latent trajectory within 3.5e-6 (fp32) over a
+  20-step v-prediction/cosine/order-2 run. This is the PyTorch/Triton code-path
+  separation requirement — the two paths now share only the CLI entry +
+  orchestrator executor. (Flow-matching routes through DPM++ with
+  `use_flow_sigmas=True`, matching the core factory.)
 - **Triton reflect/replicate `aten::pad` routing + `NBXTensor.ones`/`ones_like`.**
   The generic `pad_wrapper` (for `aten::pad`, which carries its mode as a runtime
   arg rather than lowering to `aten::reflection_padNd`) only handled
