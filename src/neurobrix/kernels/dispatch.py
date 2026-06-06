@@ -196,7 +196,16 @@ def _meta_alias(x):
     return x
 
 def _meta_fill(x, value):
-    return x.fill_(value)
+    # Functional aten::fill: output is a FRESH tensor shaped like x, all elements
+    # = value (x supplies only shape/dtype/device — its data is irrelevant, and it
+    # may be a non-contiguous view, e.g. a slice). Never mutate x in place: that
+    # would corrupt other consumers of the input and (on a strided view) write the
+    # wrong addresses under flat-indexed fill.
+    from neurobrix.kernels.nbx_tensor import NBXTensor
+    if isinstance(value, NBXTensor):
+        value = value.item()
+    out = NBXTensor.empty(x._shape, x._dtype, f"cuda:{x._device_idx}")
+    return out.fill_(value)
 
 def _meta_as_strided(x, size, stride, storage_offset=None):
     return x.as_strided(size, stride, storage_offset)
