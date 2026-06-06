@@ -664,7 +664,14 @@ class RuntimeExecutor:
             config = mod_data.get("config", {})
 
             if mod_type == "scheduler":
-                self.modules[mod_name] = SchedulerFactory.create(config)
+                # Two totally separate scheduler implementations; the orchestrator
+                # (this shared entry point) picks by mode. Triton gets the
+                # zero-torch NBXTensor scheduler; PyTorch gets the torch one.
+                if self.mode in ("triton", "triton_sequential"):
+                    from neurobrix.triton.scheduler.factory import TritonSchedulerFactory
+                    self.modules[mod_name] = TritonSchedulerFactory.create(config)
+                else:
+                    self.modules[mod_name] = SchedulerFactory.create(config)
             elif mod_type == "tokenizer":
                 self._setup_tokenizer(mod_name, mod_data)
             else:
