@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Triton RoPE positions were frozen at 0 during KV-cache decode for models
+  with no `position_ids` input (orpheus).** Such models derive RoPE positions
+  from an internal `aten::arange(0, seq_len)`; in single-token KV-cache decode
+  `seq_len=1`, so the graph emits `arange(0,1)=[0]` every step — every decoded
+  token is RoPE-encoded at absolute position 0, the cache fills with mis-rotated
+  keys, and generation degrades into a non-terminating ramble (orpheus triton
+  STT "I'm not speaking, but I'm not speaking to you…" vs the correct
+  "Hello world!"). The op-by-op triton-*sequential* oracle recomputes the full
+  growing context (`arange(0,N)`) and so stayed correct, masking the bug behind
+  a passing mode. Fix: `TritonAttentionInterceptor.intercept_arange` shifts the
+  arange window START to `cache_len` during decode (`arange(0,1)` →
+  `arange(cache_len, cache_len+1)`), preserving output SIZE / symbolic shape —
+  the exact mirror of the compiled-core `kv_cache_wrapper.intercept_arange`, the
+  missing R30 half on the triton side. Registered ONLY when `not uses_abs_pos`
+  (no `position_ids` input); models that drive RoPE from a `position_ids` input
+  (TinyLlama, chatterbox t3, MoE LLMs) are untouched (TinyLlama R23
+  byte-identical). Closes orpheus triton 4-mode (whisper STT "Hello world!").
+- **Triton `aten::fill` silently no-op'd for non-zero values and corrupted
+  strided targets.** `NBXTensor.fill_` only handled `value==0` (byte memset);
+  the non-zero branch was a `TODO` that returned the tensor unfilled (= garbage),
+  and `_meta_fill` mutated its input *in place* — which on a non-contiguous slice
+  (e.g. the s3gen `aten.fill` target `aten.slice::…`) wrote the wrong addresses
+  under flat indexing. Fix: `fill_` non-zero now uses the pure-Triton
+  `fill_kernel` (with a contiguity guard that scatters into strided views), 0-dim
+  tensor values are collapsed via `.item()`, and `_meta_fill` returns a FRESH
+  contiguous tensor (correct functional `aten::fill` semantics, no input
+  mutation). Surfaced by chatterbox s3gen.
 - **Triton `aten::broadcast_tensors` returned a nested list instead of unpacked
   outputs.** The handler was `lambda *t: t`, so a `TensorList` input `[a, b]` came
   back as `([a, b],)` — `out_0` resolved to the whole Python list and a downstream
@@ -35,6 +62,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Triton reflect/replicate `aten::pad` routing + `NBXTensor.ones`/`ones_like`.**
+  The generic `pad_wrapper` (for `aten::pad`, which carries its mode as a runtime
+  arg rather than lowering to `aten::reflection_padNd`) only handled
+  `mode='constant'` and raised for `reflect`/`replicate`; it now routes by padded-
+  dim count to the existing R33-pure `reflection_pad1d/2d` (and `replication_*`)
+  wrappers. And `NBXTensor.ones`/`ones_like` were documented in the engine
+  contract but never implemented (only `empty`/`zeros`/`*_like` existed), so the
+  istft window-envelope `NBXTensor.ones(...)` call hit `AttributeError`; added,
+  backed by the pure-Triton `fill_kernel`. Together these take the chatterbox
+  s3gen vocoder from crash (reflect-pad → istft `ones` → `aten::fill`) to full
+  end-to-end execution in triton mode.
 - **Triton `aten::norm` (L2) kernel** — composed R33-pure from existing kernels
   (`mul` + `sum` + `sqrt`, with fp32 accumulation so a long-row reduction does
   not overflow fp16). Unblocks weight-normed convolutions in triton mode (the DAC

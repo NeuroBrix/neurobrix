@@ -487,6 +487,17 @@ class TritonAutoregressiveHandler:
             }
             interceptors = {st: _variant_intercept.get(st, kv_interceptor.intercept)
                             for st in sdpa_types}
+            # RoPE position fix for position_ids-LESS models (e.g. orpheus): RoPE
+            # positions come from an internal aten::arange(0, seq_len), which at
+            # decode (seq_len=1) yields [0] every step → every token encoded at
+            # position 0 → KV cache fills with mis-rotated keys → garbage ramble.
+            # Shift the arange by cache_len during decode. Models WITH a
+            # position_ids input (TinyLlama, chatterbox t3, MoE LLMs) drive RoPE
+            # from that input and MUST NOT have their aranges shifted (R23). This
+            # mirrors the compiled-core kv_cache_wrapper, which registers
+            # intercept_arange — the missing R30 half on the triton side.
+            if not uses_abs_pos:
+                interceptors["aten::arange"] = kv_interceptor.intercept_arange
             executor.register_triton_interceptors(interceptors)
 
         return TritonLMSession(
