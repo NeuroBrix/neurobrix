@@ -18,7 +18,8 @@ class TritonFlowEulerScheduler:
         self.base_image_seq_len = int(config.get("base_image_seq_len", 256))
         self.max_image_seq_len = int(config.get("max_image_seq_len", 4096))
         self.num_inference_steps = None
-        self.timesteps = None       # np.float64 [N]
+        self._ts_np = None          # np.float64 [N] — internal
+        self.timesteps = None       # list[NBXTensor [1]] — exposed to loop/CFG
         self.sigmas = None
         self._step_index = 0
 
@@ -34,8 +35,11 @@ class TritonFlowEulerScheduler:
         ts = np.linspace(1, 0, num_inference_steps + 1, dtype=np.float64)[:-1]
         if mu != 1.0:
             ts = mu * ts / (1 + (mu - 1) * ts)
-        self.timesteps = ts.copy()
+        self._ts_np = ts.copy()
         self.sigmas = ts.copy()
+        # Exposed as NBXTensor [1] floats (tensor-like timesteps for loop/CFG).
+        self.timesteps = [NBXTensor.from_numpy(np.array([float(t)], dtype=np.float32))
+                          for t in self._ts_np]
         self._step_index = 0
 
     @property
@@ -47,8 +51,8 @@ class TritonFlowEulerScheduler:
         if self.num_inference_steps is None:
             raise RuntimeError("ZERO FALLBACK: set_timesteps() before step()")
         t = float(timestep.item()) if isinstance(timestep, NBXTensor) else float(timestep)
-        if self._step_index < len(self.timesteps) - 1:
-            t_next = float(self.timesteps[self._step_index + 1])
+        if self._step_index < len(self._ts_np) - 1:
+            t_next = float(self._ts_np[self._step_index + 1])
         else:
             t_next = 0.0
         dt = t_next - t
