@@ -449,11 +449,8 @@ class TritonIterativeProcessHandler:
                 if DEBUG and step_idx == 0:
                     self._audit_component_inputs(comp_name)
 
-                # Scale model input — scheduler is native PyTorch
-                from neurobrix.kernels.nbx_tensor import nbx_to_torch
-                cs_for_scale = nbx_to_torch(current_state) if isinstance(current_state, NBXTensor) else current_state
-                scaled_state = driver.scale_model_input(cs_for_scale, timestep)
-                scaled_state = _to_nbx(scaled_state)
+                # Scale model input — triton scheduler is NBXTensor-native (zero torch).
+                scaled_state = _to_nbx(driver.scale_model_input(current_state, timestep))
                 self.ctx.variable_resolver.set(state_key, scaled_state)
 
                 # Get timestep scale for component
@@ -505,15 +502,9 @@ class TritonIterativeProcessHandler:
                     if DEBUG:
                         self._print_step_diagnostics(step_idx, timestep, model_output, current_state)
 
-                    # Driver step — scheduler is native PyTorch, convert at boundary
-                    from neurobrix.kernels.nbx_tensor import nbx_to_torch
-                    mo_torch = nbx_to_torch(model_output) if isinstance(model_output, NBXTensor) else model_output
-                    cs_torch = nbx_to_torch(current_state) if isinstance(current_state, NBXTensor) else current_state
-                    step_result = driver.step(mo_torch, timestep, cs_torch)
-                    if isinstance(step_result, dict):
-                        prev = step_result["prev_sample"]
-                    else:
-                        prev = step_result.prev_sample
+                    # Driver step — triton scheduler is NBXTensor-native (zero torch).
+                    step_result = driver.step(model_output, timestep, current_state)
+                    prev = step_result["prev_sample"] if isinstance(step_result, dict) else step_result.prev_sample
                     current_state = _to_nbx(prev)
 
                     self.ctx.variable_resolver.set(state_key, current_state)
