@@ -2232,10 +2232,20 @@ def upsample_nearest1d_wrapper(
     """Upsample nearest 1D via 2D: [N,C,L] → unsqueeze → [N,C,1,L] → upsample2d → squeeze."""
     x_2d = x.unsqueeze(2)  # [N, C, 1, L]
     if isinstance(output_size, (list, tuple)):
-        out_size_2d = [1, output_size[0]]
+        out_size_2d = [1, output_size[0]] if len(output_size) else [1, None]
     else:
         out_size_2d = [1, output_size]
-    out_2d = upsample_nearest2d_wrapper(x_2d, out_size_2d, scales_h=None, scales_w=scales)
+    # aten::upsample_nearest1d.vec passes scale_factors as a 1-element LIST
+    # ([scale]); the 2D wrapper's scalar scales_w path does `float(scales_w)`,
+    # which raises on a list. Unwrap to a scalar. When a scale is present the 2D
+    # wrapper recomputes OW = IW * scale from the LIVE input — exactly what a
+    # variable-length audio vocoder (HiFiGAN/iSTFTNet/DAC/S3Gen) needs so the
+    # output tracks the runtime token count rather than the baked trace length.
+    if isinstance(scales, (list, tuple)):
+        scale_w = scales[0] if len(scales) else None
+    else:
+        scale_w = scales
+    out_2d = upsample_nearest2d_wrapper(x_2d, out_size_2d, scales_h=None, scales_w=scale_w)
     return out_2d.squeeze(2)
 
 
@@ -3824,6 +3834,36 @@ def var_wrapper(x, dim=None, correction=1, keepdim=False) :
 # ---------------------------------------------------------------------------
 # Gather
 # ---------------------------------------------------------------------------
+
+def broadcast_tensors_wrapper(*tensors):
+    """aten::broadcast_tensors(Tensor[] tensors) -> Tensor[].
+
+    The TensorList arrives as a single list/tuple positional arg. Broadcast every
+    input to their common (numpy-style, right-aligned) shape and return them
+    UNPACKED — one output tensor per input — so the executor fills out_0, out_1,
+    ... A bare ``lambda *t: t`` returned the nested list into out_0, so a
+    downstream consumer (lt / where / stack) received a Python list instead of an
+    NBXTensor (``'list' object has no attribute '_dtype'``).
+    """
+    if len(tensors) == 1 and isinstance(tensors[0], (list, tuple)):
+        tensors = tuple(tensors[0])
+    if len(tensors) <= 1:
+        return tuple(tensors)
+    ndim = max(t.ndim for t in tensors)
+    out_shape = [1] * ndim
+    for t in tensors:
+        sh = (1,) * (ndim - t.ndim) + tuple(t.shape)
+        for i, s in enumerate(sh):
+            if s != 1:
+                if out_shape[i] != 1 and out_shape[i] != s:
+                    raise RuntimeError(
+                        f"broadcast_tensors: incompatible shapes at dim {i}: "
+                        f"{out_shape[i]} vs {s}")
+                out_shape[i] = s
+    out_shape = tuple(out_shape)
+    return tuple(t if tuple(t.shape) == out_shape else t.expand(*out_shape)
+                 for t in tensors)
+
 
 def gather_wrapper(input, dim: int, index) :
     """Gather along dimension."""
