@@ -87,6 +87,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `triton/flow/iterative_process.py` calls the NBXTensor-native scheduler
   directly (the `nbx_to_torch → driver.step` / `scale_model_input` crutch is
   removed). The triton diffusion compute path is now zero-torch end to end.
+  Both triton schedulers expose `timesteps` as NBXTensor `[1]` scalars (numpy kept
+  internal for indexing) so the loop iterator / CFG engine / DiT component receive
+  tensor-like timesteps exactly as the PyTorch path did (fixes a `numpy.int64 has
+  no attribute 'dim'` crash in the triton CFG at Sana step 0).
 - **Triton reflect/replicate `aten::pad` routing + `NBXTensor.ones`/`ones_like`.**
   The generic `pad_wrapper` (for `aten::pad`, which carries its mode as a runtime
   arg rather than lowering to `aten::reflection_padNd`) only handled
