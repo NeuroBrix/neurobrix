@@ -298,7 +298,19 @@ class TritonTTSLLMEngine:
 
         generated_ids: list = []
 
-        for step in range(max_tokens):
+        # Diagnostic component-isolation hook (gated, default-off): force a fixed
+        # speech-token sequence (skip decode) so the vocoder can be diffed across
+        # engines on IDENTICAL tokens. Mirror of core (R30). Same class as
+        # NBX_DUMP_TIDS.
+        import os as _os_fsi
+        _force_ids = _os_fsi.environ.get("NBX_FORCE_SPEECH_IDS")
+        if _force_ids:
+            import json as _j_fsi
+            generated_ids = [int(t) for t in _j_fsi.load(open(_force_ids))]
+            print(f"   [{lm_name}] FORCED {len(generated_ids)} speech tokens "
+                  f"from {_force_ids} (decode skipped)")
+
+        for step in range(0 if _force_ids else max_tokens):
             # Conditional (and, under CFG, unconditional) forward(s) -> logits.
             logits_np = _t3_logits(context_np)
             if logits_np is None:
@@ -356,6 +368,13 @@ class TritonTTSLLMEngine:
         speech_ids = [t for t in generated_ids if vocoder_vocab_size is None or t < vocoder_vocab_size]
         if len(speech_ids) < len(generated_ids):
             print(f"   [{lm_name}] Filtered {len(generated_ids) - len(speech_ids)} special tokens")
+
+        if _os_fsi.environ.get("NBX_DUMP_SPEECH_IDS"):
+            import json as _jd_si
+            with open(_os_fsi.environ["NBX_DUMP_SPEECH_IDS"], "w") as _f_si:
+                _jd_si.dump([int(t) for t in speech_ids], _f_si)
+            print(f"   [{lm_name}] Dumped {len(speech_ids)} speech ids -> "
+                  f"{_os_fsi.environ['NBX_DUMP_SPEECH_IDS']}")
 
         self.ctx.variable_resolver.resolved["global.generated_token_ids"] = speech_ids
         speech_tokens_np = np.array([speech_ids], dtype=np.int64)
