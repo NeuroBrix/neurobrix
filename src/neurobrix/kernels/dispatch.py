@@ -163,6 +163,7 @@ def _meta_slice(x, dim, start=None, end=None, step=1):
     start = int(_force_int(start)) if start is not None else 0
     dim_size = x.size(dim) if callable(getattr(x, 'size', None)) else x.shape[dim]
     end = int(_force_int(end)) if end is not None else dim_size
+    step = int(_force_int(step)) if step is not None else 1
     if end > dim_size:
         end = dim_size
     if start < 0:
@@ -170,7 +171,20 @@ def _meta_slice(x, dim, start=None, end=None, step=1):
     if end < 0:
         end = max(0, dim_size + end)
     length = max(0, end - start)
-    return x.narrow(dim, start, length)
+    narrowed = x.narrow(dim, start, length)
+    if step == 1:
+        return narrowed
+    # Strided slice x[..., start:end:step]. narrow() only covers step==1; for a
+    # step>1 slice (chatterbox s3gen CFM downsamples the mel by 2 via a `[::2]`)
+    # build a step-strided view (size=ceil(length/step), stride[dim]*=step) and
+    # materialise it — downstream flat-indexed kernels (split_with_sizes) need a
+    # contiguous buffer (CLAUDE.md contiguous-guard). Without this the step was
+    # silently dropped and the dim kept its full length (348 vs 174).
+    new_size = list(narrowed.shape)
+    new_stride = list(narrowed._strides)
+    new_size[dim] = (length + step - 1) // step
+    new_stride[dim] = narrowed._strides[dim] * step
+    return narrowed.as_strided(new_size, new_stride, narrowed._offset).contiguous()
 
 
 def _force_int(val):
