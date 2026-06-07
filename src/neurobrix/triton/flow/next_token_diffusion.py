@@ -166,6 +166,10 @@ class TritonNextTokenDiffusionEngine:
         audio_chunks: List[NBXTensor] = []
         n_diffusion = 0
         step = -1
+        import os as _os_vv
+        _vv_dump_path = _os_vv.environ.get("NBX_VV_DUMP_LATENTS", "")
+        _vv_dump_k = int(_os_vv.environ.get("NBX_VV_DUMP_K", "4"))
+        _vv_latents: list = []
 
         for step in range(max_steps):
             hidden_np = self._lm_forward_np(inputs_embeds_np)
@@ -205,6 +209,10 @@ class TritonNextTokenDiffusionEngine:
                     pos_cond_np, neg_cond_np, cfg_scale, ddpm_steps, vae_dim, defaults)  # NBXTensor [1,vae]
 
                 latent_np = _to_numpy(speech_latent)                          # [1,vae]
+                # Cross-engine validation dump (mirror of the pytorch handler):
+                # first-K diffusion latents before chaos amplification.
+                if _vv_dump_path and n_diffusion <= _vv_dump_k:
+                    _vv_latents.append(latent_np.astype(np.float32).reshape(-1))
                 scaled_np = (latent_np / scaling - bias)[:, np.newaxis, :]    # [1,1,vae]
                 chunk = self._acoustic_decode(scaled_np)                      # NBXTensor [1,1,3200]
                 if chunk is None:
@@ -223,6 +231,9 @@ class TritonNextTokenDiffusionEngine:
                 neg_inputs_embeds_np = np.concatenate([neg_inputs_embeds_np, next_embed_np], axis=1)
 
         elapsed = (time.perf_counter() - start) * 1000
+        if _vv_dump_path and _vv_latents:
+            np.save(_vv_dump_path, np.stack(_vv_latents))
+            print(f"   [VV-DIAG] dumped {len(_vv_latents)} first-K latents → {_vv_dump_path}")
         print(f"   [{self.LM}] {step + 1} steps, {n_diffusion} speech_diffusion tokens in {elapsed:.0f}ms")
         print(f"   [{self.LM}] emitted histogram: start={emitted_tokens.count(speech_start_id)} "
               f"diff={emitted_tokens.count(speech_diffusion_id)} end={emitted_tokens.count(speech_end_id)} "

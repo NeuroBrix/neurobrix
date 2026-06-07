@@ -27,6 +27,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **VibeVoice cross-engine validation enabler (shared seeded diffusion noise +
+  first-K latent dump).** The pytorch and triton `next_token_diffusion` handlers
+  now both draw diffusion init noise from the SAME `np.random.RandomState(seed)`
+  with the same per-step draw (byte-identical noise across engines, verified
+  max|diff|=0.0) — replacing the pytorch path's `torch.randn(generator=)`. A
+  gated diagnostic (`NBX_VV_DUMP_LATENTS=<path.npy>`, `NBX_VV_DUMP_K`) dumps the
+  first-K diffusion latents per mode. This is the doctrine-correct validation for
+  a numerically-chaotic feedback model: triton-seq must match the pytorch-seq
+  oracle on the first-K latents (before the feedback loop amplifies fp16 diffs),
+  not on the noisy full-decode STT substring. numpy is CPU glue; the pytorch
+  compute path is otherwise untouched.
 - **Triton (zero-torch) `next_token_diffusion` flow handler (VibeVoice).**
   `triton/flow/next_token_diffusion.py` mirrors the compiled
   `NextTokenDiffusionEngine` on the NBXTensor substrate: the LM / diffusion head /
