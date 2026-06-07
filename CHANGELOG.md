@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **openaudio dual_ar sampler is now deterministically seeded (shared across all
+  4 modes).** Both `core/flow/dual_ar.py` and `triton/flow/dual_ar.py` previously
+  sampled with an UNSEEDED RNG (torch `multinomial` / `np.random.choice`), so the
+  4 modes drew different acoustic tokens run-to-run and the STT-substring harness
+  was flaky (triton "Hello, wall" vs the others' "Hello world"). Both paths now
+  use a deterministic `np.random.RandomState` seeded from `global.seed` (default
+  `_DUALAR_SEED=1234`, identical literal in both files) with a byte-identical
+  numpy sampling algorithm — same seed ⇒ same draws ⇒ at fp16-close logits the 4
+  modes sample identical tokens. Result: openaudio **4/4 under sampling** (not
+  just greedy). R27/R28 reproducibility; the pytorch path keeps its compute in
+  torch and only the (CPU, numpy) sampling glue is shared-by-duplication.
+- **Triton path is now torch-free end to end:** removed the last `import torch`
+  from the triton compute path — the `_vram_probe` telemetry in
+  `triton/flow/iterative_process.py` used `torch.cuda.memory_allocated()`; it now
+  reads `DeviceAllocator.memory_allocated()` (the NBX live-bytes watermark).
+
 ### Added
 
 - **Triton (zero-torch) `next_token_diffusion` flow handler (VibeVoice).**
