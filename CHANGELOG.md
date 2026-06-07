@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **chatterbox triton: the TTS-LLM flow handler now mirrors the oracle context
+  assembly instead of hand-rolling it** (was producing `*BANG*`/`*Ballon*`
+  garbage in both triton modes). The triton `tts_llm` handler fabricated the
+  t3 backbone context in numpy — a 2-frame hand-rolled conditioning, plain
+  tokenization (6 vs 9 tokens), no classifier-free guidance, and a zeroed
+  vocoder reference — feeding the backbone a context that did not match the
+  reference path. It now: (1) runs the traced **cond_enc graph** (speaker +
+  Perceiver resampler + emotion) for a `[1,34,1024]` conditioning instead of a
+  2-frame numpy stand-in; (2) reproduces the model's `start_text_token`/
+  `stop_text_token` + space-marker tokenization contract; (3) applies
+  **sequential CFG** via the centralized triton CFG engine (guidance from the
+  data-driven cascade); (4) feeds the embedded reference-voice conditioning to
+  the vocoder instead of zeros. A shared seeded sampler makes both triton modes
+  reproducible. The triton context now byte-matches the reference
+  (`Initial context (1,44,1024)`, cond=34/text=9/speech=1, CFG on). The handler
+  is chatterbox-only, so other TTS models are unaffected; the path stays
+  torch-free (numpy CPU glue + graph execution + NBXTensor).
+
 - **Kokoro-82M closed 4/4 (was 2/4): the pytorch-sequential & triton-sequential
   op-by-op paths now run the full prosody-predictor + istftnet decoder.** Two
   sequential-dispatcher completeness fixes (R30 parity — the compiled/triton
