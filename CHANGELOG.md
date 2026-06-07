@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **chatterbox TTS-LLM core handler now uses the same seeded numpy sampler as the
+  triton handler (reproducible cross-mode speech tokens).** The core path sampled
+  with an unseeded `torch.multinomial` and a top_p formula that differed from the
+  triton handler, so a stochastic TTS at temperature 0.8 produced variable
+  quality (intelligible on a good draw, garbled on a bad one) and the four modes
+  could not be cross-validated. Core now draws from a per-run
+  `numpy.RandomState(_TTS_LLM_SEED)` with the byte-identical algorithm to the
+  triton handler (openaudio dual_ar discipline), so all four modes pick the same
+  tokens from the same logits + seed. With the s3gen kernel fixes, all four modes
+  reproducibly render "Hello world": forced-identical-tokens → "Hello world" in
+  all four (pipeline proof), and free-running under the canonical seed →
+  "Hello world" in all four. chatterbox-only flow; no other model affected.
+
 - **Triton `NBXTensor.contiguous()` on a strided complex tensor no longer
   corrupts the imaginary part.** Complex tensors are stored interleaved
   `[real, imag]`, but Triton sees the pointer as a plain float, so the
