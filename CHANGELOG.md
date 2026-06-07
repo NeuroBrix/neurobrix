@@ -7,7 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Gated cross-engine deterministic RNG (`NBX_FORCE_RAND_SEED`).** Pins every
+  `rand`/`randn`/`*_like` op in both the PyTorch and Triton engines to one shared
+  numpy `RandomState`, so a stochastic vocoder (chatterbox s3gen CFM + NSF/SineGen
+  source draws four random tensors) is reproducible and bit-identical across all
+  four execution modes — the production determinism mechanism (same discipline as
+  openaudio dual_ar / VibeVoice seeded noise) and the diagnostic that makes an
+  op-by-op cross-engine diff meaningful past the first random op. Default-off →
+  unseeded behaviour unchanged. New `kernels/rng_pin.py`; wired into the Triton
+  rand wrappers and the PyTorch `NativeATenDispatcher` (R30).
+
 ### Fixed
+
+- **Triton `aten::slice` now applies the step (strided slice).** `_meta_slice`
+  accepted a `step` argument but always did a step-1 `narrow`, silently dropping
+  the stride. chatterbox s3gen's conditional-flow-matching downsamples the mel
+  with a `[..., ::2]` slice; the triton path kept the full length (348 vs 174),
+  corrupting the decoder. Now builds a step-strided view (size `ceil(len/step)`,
+  stride×step) and materialises it for downstream flat-indexed kernels.
 
 - **Triton `NBXTensor.copy_` now converts dtype like PyTorch `Tensor.copy_`
   (was a raw byte memcpy).** Copying an fp16 source into an fp32 destination

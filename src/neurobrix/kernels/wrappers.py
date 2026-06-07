@@ -5027,6 +5027,7 @@ def repeat_interleave_wrapper(*args, **kwargs):
 def rand_wrapper(*args, **kwargs) :
     """rand(size, ...) → uniform [0, 1) via Triton kernel."""
     from .ops.rand_op import rand_kernel
+    from .rng_pin import pinned_seed, pinned_uniform
     # ATen signature: rand(SymInt[] size, ...)
     size = args[0] if args else kwargs.get('size', [])
     if isinstance(size, NBXTensor):
@@ -5035,6 +5036,8 @@ def rand_wrapper(*args, **kwargs) :
     device = kwargs.get('device', None)
     if device is None:
         device = str('cuda')
+    if pinned_seed() is not None:
+        return NBXTensor.from_numpy(pinned_uniform(size)).to(dtype)
     output = NBXTensor.empty(size, dtype=dtype, device=device)
     n = output.numel()
     if n == 0:
@@ -5083,8 +5086,11 @@ def rand_like_wrapper(x, **kwargs) :
 def randn_like_wrapper(x, **kwargs) :
     """randn_like(tensor) → standard normal N(0,1) same shape/dtype/device."""
     from .ops.rand_op import randn_kernel
+    from .rng_pin import pinned_seed, pinned_normal
     dtype = kwargs.get('dtype', x.dtype)
     device = kwargs.get('device', x.device)
+    if pinned_seed() is not None:
+        return NBXTensor.from_numpy(pinned_normal(x.shape)).to(dtype)
     output = NBXTensor.empty(x.shape, dtype=dtype, device=device)
     n = output.numel()
     if n == 0:
