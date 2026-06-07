@@ -1979,6 +1979,17 @@ class NBXTensor:
 
     def copy_(self, src, non_blocking: bool = False) -> 'NBXTensor':
         if isinstance(src, NBXTensor):
+            # PyTorch Tensor.copy_ converts src to self's dtype. A raw byte
+            # memcpy across a dtype boundary reinterprets the bits — e.g. an
+            # fp16 source written into an fp32 destination decodes the fp16
+            # bit-pairs as fp32 (≈0), and the byte counts differ (the chatterbox
+            # s3gen prompt-feat copy: fp16 src 50240 B into fp32 dst 100480 B).
+            # Cast to self's dtype first, then contiguous-pack the source so the
+            # flat copy of self._nbytes bytes is well-defined.
+            if src.dtype != self.dtype:
+                src = src.to(self.dtype)
+            if not src.is_contiguous():
+                src = src.contiguous()
             DeviceAllocator.memcpy(self.data_ptr(), src.data_ptr(), self._nbytes)
         return self
 
