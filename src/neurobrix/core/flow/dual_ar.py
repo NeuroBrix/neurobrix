@@ -12,9 +12,50 @@ import gc
 from neurobrix.core.device_utils import device_empty_cache
 import time
 import torch
+import numpy as np
 from typing import Any, Callable, Dict, List, Optional
 
 from .base import FlowHandler, FlowContext, register_flow
+
+# Shared default sampler seed (R27/R28) — MUST equal the triton dual_ar literal
+# (triton/flow/dual_ar.py:_DUALAR_SEED) so the two separate code paths draw
+# identical randoms when --seed is not passed.
+_DUALAR_SEED = 1234
+
+
+def _sample_token_np_core(logits_1d, temperature, top_p=1.0,
+                          generated_ids=None, repetition_penalty=1.0, rng=None):
+    """Numpy seeded sampler — byte-for-byte the same algorithm as the triton
+    dual_ar `_sample_token_np`, so that at equal seed + equal (fp16-close) logits
+    the pytorch and triton paths sample identical tokens. The pytorch path feeds
+    it logits converted to fp64 numpy. R30 parity is the whole point; the two
+    implementations are kept deliberately identical, not shared (R33 keeps the
+    triton file torch-free, so it cannot import this torch-importing module)."""
+    _draw = rng if rng is not None else np.random
+    logits = np.asarray(logits_1d, dtype=np.float64).copy()
+    if repetition_penalty != 1.0 and generated_ids:
+        for tid in set(generated_ids):
+            if 0 <= tid < len(logits):
+                if logits[tid] > 0:
+                    logits[tid] /= repetition_penalty
+                else:
+                    logits[tid] *= repetition_penalty
+    if temperature == 0.0:
+        return int(np.argmax(logits))
+    logits = logits / temperature
+    logits -= logits.max()
+    exp_logits = np.exp(logits)
+    probs = exp_logits / exp_logits.sum()
+    if top_p < 1.0:
+        sorted_idx = np.argsort(-probs)
+        sorted_probs = probs[sorted_idx]
+        cumsum = np.cumsum(sorted_probs)
+        cutoff = np.searchsorted(cumsum, top_p) + 1
+        mask = np.ones_like(probs, dtype=bool)
+        mask[sorted_idx[:cutoff]] = False
+        probs[mask] = 0.0
+        probs = probs / probs.sum()
+    return int(_draw.choice(len(probs), p=probs))
 
 
 @register_flow("dual_ar")
@@ -147,6 +188,12 @@ class DualAREngine(FlowHandler):
         rep_pen = _ov.get("global.repetition_penalty", defaults.get("repetition_penalty", 1.2))
         slow_history: List[int] = []
         rep_window = 32
+        # Deterministic shared-seed sampler RNG (R27/R28) — same seed + same numpy
+        # algorithm as the triton dual_ar path, so the 4 modes draw identical
+        # randoms and (at fp16-close logits) sample identical tokens. Greedy
+        # (--temperature 0) remains the deterministic floor.
+        _seed = _ov.get("global.seed")
+        sampler_rng = np.random.RandomState(int(_seed) if _seed is not None else _DUALAR_SEED)
 
         # Constrained decoding: the slow head may only emit semantic tokens or the
         # stop token (vendor masks non-semantic logits). 4096 semantic ids.
@@ -181,9 +228,10 @@ class DualAREngine(FlowHandler):
             mask[:, sem_lo:sem_hi] = slow_logits[:, sem_lo:sem_hi]
             if im_end_id is not None:
                 mask[:, im_end_id] = slow_logits[:, im_end_id]
-            slow_token = int(sample_token(
-                mask.unsqueeze(1), temperature, top_p=top_p,
-                repetition_penalty=rep_pen, generated_ids=slow_history[-rep_window:]))
+            slow_token = _sample_token_np_core(
+                mask[0].detach().float().cpu().numpy(), temperature, top_p=top_p,
+                repetition_penalty=rep_pen, generated_ids=slow_history[-rep_window:],
+                rng=sampler_rng)
             import os as _os_dbg
             if _os_dbg.environ.get("NBX_DEBUG_DECODE") == "1" and len(slow_history) < 16:
                 print(f"  [DBG-DUALAR] step={len(slow_history)} sem_token={int(slow_token)}",
@@ -205,7 +253,9 @@ class DualAREngine(FlowHandler):
                 flogits = fout.get("output") if isinstance(fout, dict) else fout
                 read_pos = len(ctx)  # depth position predicting the next codebook
                 cb_logits = flogits[:, read_pos, :acoustic_cb_size]
-                sampled = int(sample_token(cb_logits.unsqueeze(1), temperature, top_p=top_p))
+                sampled = _sample_token_np_core(
+                    cb_logits[0].detach().float().cpu().numpy(), temperature,
+                    top_p=top_p, rng=sampler_rng)
                 ctx.append(sampled)
 
             acoustic_codes.append(ctx)

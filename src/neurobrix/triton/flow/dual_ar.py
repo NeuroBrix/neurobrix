@@ -14,6 +14,11 @@ from typing import Any, Callable, Dict, List, Optional
 
 from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator
 
+# Shared default sampler seed (R27/R28). The pytorch dual_ar path
+# (core/flow/dual_ar.py) MUST use this same literal so the two separate code
+# paths draw identical randoms when --seed is not passed.
+_DUALAR_SEED = 1234
+
 
 class TritonDualAREngine:
     """
@@ -70,6 +75,12 @@ class TritonDualAREngine:
         max_tokens = decode_bound(_ov.get("global.max_tokens", defaults.get("max_tokens", 2048)))
         temperature = _ov.get("global.temperature", defaults.get("temperature", 0.7))
         top_p = _ov.get("global.top_p", defaults.get("top_p", 0.8))
+        # Deterministic shared-seed sampler RNG (R27/R28). Same seed + identical
+        # numpy sampling algorithm as the pytorch dual_ar path ⇒ all 4 modes draw
+        # the same randoms, so equal (fp16-close) logits sample equal tokens →
+        # reproducible 4/4 under sampling (greedy --temperature 0 is the floor).
+        _seed = _ov.get("global.seed")
+        sampler_rng = np.random.RandomState(int(_seed) if _seed is not None else _DUALAR_SEED)
         eos_token_id = defaults.get("eos_token_id")
 
         print(f"   [{comp_name}] DualAR generation (max_tokens={max_tokens})...")
@@ -179,7 +190,8 @@ class TritonDualAREngine:
                     masked[im_end_id] = slow_logits[im_end_id]
                 slow_token = _sample_token_np(masked, temperature, top_p=top_p,
                                               repetition_penalty=rep_pen,
-                                              generated_ids=slow_history[-rep_window:])
+                                              generated_ids=slow_history[-rep_window:],
+                                              rng=sampler_rng)
                 if _os_dbg.environ.get("NBX_DEBUG_DECODE") == "1" and len(slow_history) < 16:
                     print(f"  [DBG-DUALAR] step={len(slow_history)} sem_token={int(slow_token)}", flush=True)
                 if im_end_id is not None and slow_token == im_end_id:
@@ -198,7 +210,8 @@ class TritonDualAREngine:
                     flogits_np = _to_numpy(flogits)
                     read_pos = len(ctx)
                     cb_logits = flogits_np[0, read_pos, :acoustic_cb_size]
-                    sampled = _sample_token_np(cb_logits, temperature, top_p=top_p)
+                    sampled = _sample_token_np(cb_logits, temperature, top_p=top_p,
+                                               rng=sampler_rng)
                     ctx.append(sampled)
 
                 acoustic_codes.append(ctx)
@@ -387,8 +400,17 @@ def _sample_token_np(
     top_p: float = 1.0,
     generated_ids: Optional[List[int]] = None,
     repetition_penalty: float = 1.0,
+    rng=None,
 ) -> int:
-    """Sample next token from logits (NumPy)."""
+    """Sample next token from logits (NumPy).
+
+    `rng` is a deterministic `np.random.RandomState` seeded once per run from
+    `global.seed` (R27/R28): it makes the decode reproducible per mode AND, since
+    the pytorch dual_ar path seeds an identical RandomState (same seed, same
+    algorithm), the 4 modes draw the same randoms — so at equal (fp16-close)
+    logits they pick the same tokens. Falls back to global np.random only if no
+    rng is threaded (legacy callers)."""
+    _draw = rng if rng is not None else np.random
     logits = logits_1d.copy().astype(np.float64)
 
     if repetition_penalty != 1.0 and generated_ids:
@@ -417,7 +439,7 @@ def _sample_token_np(
         probs[mask] = 0.0
         probs = probs / probs.sum()
 
-    return int(np.random.choice(len(probs), p=probs))
+    return int(_draw.choice(len(probs), p=probs))
 
 
 def _to_numpy(tensor) -> np.ndarray:
