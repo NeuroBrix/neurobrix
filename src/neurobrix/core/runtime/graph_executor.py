@@ -3335,6 +3335,7 @@ class GraphExecutor:
                             "tid": tid, "op_uid": op_uid, "op_type": _ot_ds,
                             "component": self._component_name,
                             "shape": list(_t.shape), "dtype": str(_t.dtype),
+                            "is_complex": bool(_t.is_complex()),
                             "head10": _head, "l2_norm": _norm}}, _f)
                         _f.write("\n")
                 except Exception as _e_ds:
