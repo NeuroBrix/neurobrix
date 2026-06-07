@@ -39,6 +39,26 @@ from .base import FlowHandler, FlowContext, register_flow
 _TTS_LLM_SEED = 1234
 
 
+def _dump_t3_logits(path: str, step: int, cond, uncond, comb) -> None:
+    """Teacher-forcing diagnostic: dump per-step t3 logit stats (l2, head, argmax)
+    for cond / uncond / CFG-combined, so the free-running backbone can be
+    op-diffed across engines on an IDENTICAL forced token path. cond/uncond
+    separated to localise CFG-path drift. torch tensors here (core engine)."""
+    import json as _j
+
+    def _st(t):
+        if t is None:
+            return None
+        f = t.detach().float().reshape(-1)
+        return {"l2": float(torch.linalg.vector_norm(f).item()),
+                "head": [round(float(x), 5) for x in f[:8].cpu().tolist()],
+                "argmax": int(f.argmax().item())}
+    with open(path, "a") as _fh:
+        _j.dump({"step": step, "cond": _st(cond),
+                 "uncond": _st(uncond), "comb": _st(comb)}, _fh)
+        _fh.write("\n")
+
+
 def _sample_token_np_core(
     logits_1d: np.ndarray, temperature: float,
     top_p: float = 1.0, min_p: float = 0.0,
@@ -59,6 +79,11 @@ def _sample_token_np_core(
                     logits[tid] /= repetition_penalty
                 else:
                     logits[tid] *= repetition_penalty
+    if temperature == 0.0:
+        # Greedy floor (dual_ar discipline): deterministic argmax → the four
+        # modes pick identical tokens (logits agree to fp16), i.e. true
+        # cross-mode reconciliation, no runaway. Used by --temperature 0.
+        return int(np.argmax(logits))
     if temperature != 1.0 and temperature > 0:
         logits = logits / temperature
     if min_p > 0:
@@ -220,13 +245,18 @@ class TTSLLMEngine(FlowHandler):
         aux_weights_config = lm_stage.get("auxiliary_weights", {})
 
         from neurobrix.core.runtime.decode_bound import decode_bound  # NBX_DECODE_BOUND harness
-        max_tokens = decode_bound(defaults.get("max_tokens", 2048))
-        temperature = defaults.get("temperature", 0.8)
+        # CLI sampling overrides (global.*) take precedence over embedded
+        # defaults, mirroring dual_ar / the autoregressive flow — --temperature 0
+        # ⇒ deterministic greedy (the cross-mode-reconciling floor; stochastic
+        # temp 0.8 is intelligible-but-not-token-identical across engines).
+        _ov = self.ctx.variable_resolver.resolved
+        max_tokens = decode_bound(_ov.get("global.max_tokens", defaults.get("max_tokens", 2048)))
+        temperature = _ov.get("global.temperature", defaults.get("temperature", 0.8))
         eos_token_id = defaults.get("eos_token_id")
         bos_token_id = defaults.get("bos_token_id")
-        top_p = defaults.get("top_p", 0.95)
-        min_p = defaults.get("min_p", 0.05)
-        repetition_penalty = defaults.get("repetition_penalty", 1.2)
+        top_p = _ov.get("global.top_p", defaults.get("top_p", 0.95))
+        min_p = _ov.get("global.min_p", defaults.get("min_p", 0.05))
+        repetition_penalty = _ov.get("global.repetition_penalty", defaults.get("repetition_penalty", 1.2))
 
         if eos_token_id is None:
             raise RuntimeError("ZERO FALLBACK: eos_token_id missing from defaults.json.")
@@ -332,11 +362,19 @@ class TTSLLMEngine(FlowHandler):
         # engines on IDENTICAL tokens. Same class as NBX_DUMP_TIDS.
         import os as _os_fsi
         _force_ids = _os_fsi.environ.get("NBX_FORCE_SPEECH_IDS")
+        _t3dump = _os_fsi.environ.get("NBX_DUMP_T3_LOGITS")  # teacher-forcing dump
+        _forced_seq = None
         if _force_ids:
             import json as _j_fsi
-            generated_ids = [int(t) for t in _j_fsi.load(open(_force_ids))]
-            print(f"   [{lm_name}] FORCED {len(generated_ids)} speech tokens "
-                  f"from {_force_ids} (decode skipped)")
+            _forced_seq = [int(t) for t in _j_fsi.load(open(_force_ids))]
+            if _t3dump:
+                generated_ids = []  # filled by the teacher-forcing loop below
+                print(f"   [{lm_name}] TEACHER-FORCING {len(_forced_seq)} tokens; "
+                      f"dumping t3 logits → {_t3dump}")
+            else:
+                generated_ids = list(_forced_seq)
+                print(f"   [{lm_name}] FORCED {len(generated_ids)} speech tokens "
+                      f"from {_force_ids} (decode skipped)")
 
         def _t3_logits(ctx_embeds):
             """One batch=1 backbone forward + speech_head → logits [1,1,vocab]."""
@@ -352,35 +390,48 @@ class TTSLLMEngine(FlowHandler):
                 return None
             return torch.matmul(out[:, -1:, :], speech_head_w_typed.T)  # [1,1,vocab]
 
-        # Deterministic sampler shared with the triton handler (same seed +
-        # algorithm) so all four modes draw the same tokens — reproducible
-        # cross-mode validation of a stochastic TTS.
-        _sampler_rng = np.random.RandomState(_TTS_LLM_SEED)
+        # Deterministic sampler shared with the triton handler (same algorithm +
+        # seed) — gives PER-MODE reproducibility. NB: it does NOT make the four
+        # modes pick identical tokens (the per-engine logits differ at the fp16
+        # level, so `choice` flips boundary tokens and the paths diverge). Seed
+        # overridable for diagnostics (seed sweep). Same pattern as dual_ar.
+        _seed = int(_os_fsi.environ.get("NBX_TTS_LLM_SEED", _TTS_LLM_SEED))
+        _sampler_rng = np.random.RandomState(_seed)
 
-        for step in range(0 if _force_ids else max_tokens):
+        _teacher = bool(_force_ids and _t3dump)
+        _nsteps = len(_forced_seq) if _teacher else (0 if _force_ids else max_tokens)
+        for step in range(_nsteps):
             # Conditional (and, under CFG, unconditional) forward(s) → guided logits.
-            logits = _t3_logits(context_embeds)
-            if logits is None:
+            cond_logits = _t3_logits(context_embeds)
+            if cond_logits is None:
                 break
+            uncond_logits = None
+            logits = cond_logits
             if do_cfg:
                 uncond_logits = _t3_logits(uncond_context)
                 if uncond_logits is None:
                     break
                 # Centralized CFG formula (cond=context, uncond=text-zeroed context).
-                logits = CFGEngine.apply_guidance(logits, uncond_logits, guidance_scale)
+                logits = CFGEngine.apply_guidance(cond_logits, uncond_logits, guidance_scale)
 
-            # Sample next token via the shared seeded numpy sampler (identical
-            # algorithm to the triton handler → reconciles top_p across modes).
-            logits_np = logits[:, -1, :].float().detach().cpu().numpy()[0]
-            next_token = _sample_token_np_core(
-                logits_np, temperature, top_p, min_p,
-                generated_ids=generated_ids,
-                repetition_penalty=repetition_penalty,
-                rng=_sampler_rng,
-            )
+            if _teacher:
+                # Teacher-forcing: dump logits, advance along the forced token path
+                # (NOT the sampled one) so all modes see the identical context.
+                _dump_t3_logits(_t3dump, step, cond_logits, uncond_logits, logits)
+                next_token = _forced_seq[step]
+            else:
+                # Sample via the shared seeded numpy sampler (identical algorithm to
+                # the triton handler → reconciles top_p across modes).
+                logits_np = logits[:, -1, :].float().detach().cpu().numpy()[0]
+                next_token = _sample_token_np_core(
+                    logits_np, temperature, top_p, min_p,
+                    generated_ids=generated_ids,
+                    repetition_penalty=repetition_penalty,
+                    rng=_sampler_rng,
+                )
             generated_ids.append(next_token)
 
-            if next_token == eos_token_id:
+            if next_token == eos_token_id and not _teacher:
                 break
 
             # Embed new speech token for next step
