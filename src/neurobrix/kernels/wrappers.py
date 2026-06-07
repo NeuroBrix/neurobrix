@@ -2096,7 +2096,19 @@ def mean_wrapper(x, dim=None, keepdim=False) :
 
 
 def sum_wrapper(x, dim=None, keepdim=False) :
-    """Sum reduction."""
+    """Sum reduction.
+
+    Output dtype follows PyTorch ``torch.sum`` promotion: floating inputs keep
+    their dtype; bool/integer inputs promote to int64. Casting the (fp32-
+    accumulated) result back to a narrow input dtype silently overflows — e.g.
+    summing a bool mask of 354 True elements and casting to uint8 wraps to
+    354 % 256 = 98 (the chatterbox s3gen mel-length mask bug). Accumulation
+    stays fp32 either way (exact for counts well under the 2^24 mantissa).
+    """
+    # x.dtype is a triton dtype handle (not NBXDtype) — gate on the tensor's
+    # own is_floating_point() rather than dtype membership.
+    out_dtype = x.dtype if x.is_floating_point() else NBXDtype.int64
+
     if dim is None:
         x_flat = x.contiguous().view(-1)
         batch_dim = 1
@@ -2123,14 +2135,14 @@ def sum_wrapper(x, dim=None, keepdim=False) :
     )
 
     if dim is None:
-        return output.squeeze(0).to(x.dtype)
+        return output.squeeze(0).to(out_dtype)
 
     shape = list(x.shape)
     if keepdim:
         shape[dim] = 1
     else:
         shape.pop(dim)
-    return output.to(x.dtype).view(shape)
+    return output.to(out_dtype).view(shape)
 
 
 def norm_wrapper(x, p=2, dim=None, keepdim=False):

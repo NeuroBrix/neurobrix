@@ -274,6 +274,17 @@ class TTSLLMEngine(FlowHandler):
         generated_ids: list = []
         speech_head_w_typed = speech_head_w.to(dtype=dtype)
 
+        # Diagnostic component-isolation hook (gated, default-off): force a fixed
+        # speech-token sequence (skip decode) so the vocoder can be diffed across
+        # engines on IDENTICAL tokens. Same class as NBX_DUMP_TIDS.
+        import os as _os_fsi
+        _force_ids = _os_fsi.environ.get("NBX_FORCE_SPEECH_IDS")
+        if _force_ids:
+            import json as _j_fsi
+            generated_ids = [int(t) for t in _j_fsi.load(open(_force_ids))]
+            print(f"   [{lm_name}] FORCED {len(generated_ids)} speech tokens "
+                  f"from {_force_ids} (decode skipped)")
+
         def _t3_logits(ctx_embeds):
             """One batch=1 backbone forward + speech_head → logits [1,1,vocab]."""
             seq_len = ctx_embeds.shape[1]
@@ -288,7 +299,7 @@ class TTSLLMEngine(FlowHandler):
                 return None
             return torch.matmul(out[:, -1:, :], speech_head_w_typed.T)  # [1,1,vocab]
 
-        for step in range(max_tokens):
+        for step in range(0 if _force_ids else max_tokens):
             # Conditional (and, under CFG, unconditional) forward(s) → guided logits.
             logits = _t3_logits(context_embeds)
             if logits is None:
@@ -349,6 +360,13 @@ class TTSLLMEngine(FlowHandler):
         if len(speech_ids) < len(generated_ids):
             print(f"   [{lm_name}] Filtered {len(generated_ids) - len(speech_ids)} special tokens "
                   f"(vocab_size={vocoder_vocab_size})")
+
+        if _os_fsi.environ.get("NBX_DUMP_SPEECH_IDS"):
+            import json as _jd_si
+            with open(_os_fsi.environ["NBX_DUMP_SPEECH_IDS"], "w") as _f_si:
+                _jd_si.dump([int(t) for t in speech_ids], _f_si)
+            print(f"   [{lm_name}] Dumped {len(speech_ids)} speech ids -> "
+                  f"{_os_fsi.environ['NBX_DUMP_SPEECH_IDS']}")
 
         self.ctx.variable_resolver.resolved["global.generated_token_ids"] = speech_ids
         speech_tokens = torch.tensor([speech_ids], dtype=torch.long, device=device)

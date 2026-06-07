@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Triton `sum` reduction no longer overflows on bool/integer inputs (silent
+  wrong result).** `sum_wrapper` accumulated correctly in fp32 but then cast the
+  result back to the *input* dtype — so summing a bool mask of 354 True elements
+  (stored as uint8) wrapped to `354 % 256 = 98`. This is the chatterbox s3gen
+  vocoder bug: the bool mask sum is the mel sequence length fed into
+  `flow.encoder`; a length of 98 instead of 354 truncated the mel and the audio
+  decoded to noise (`*BANG*`). The wrapper now follows PyTorch `torch.sum`
+  promotion — floating inputs keep their dtype, bool/integer inputs promote to
+  int64 — matched against the per-op graph dtype (`int64`). Float reductions are
+  unchanged; this only affects bool/integer reductions (mask lengths, counts).
+  Isolated by an identical-token component diff (oracle s3gen renders the exact
+  same 20 speech tokens to "Hello world", triton rendered "*BANG*"), then walked
+  to the first divergent op. Adds gated `NBX_FORCE_SPEECH_IDS` /
+  `NBX_DUMP_SPEECH_IDS` diagnostic hooks (default-off) for TTS-LLM vocoder
+  component isolation across engines.
+
 - **chatterbox triton: the TTS-LLM flow handler now mirrors the oracle context
   assembly instead of hand-rolling it** (was producing `*BANG*`/`*Ballon*`
   garbage in both triton modes). The triton `tts_llm` handler fabricated the
