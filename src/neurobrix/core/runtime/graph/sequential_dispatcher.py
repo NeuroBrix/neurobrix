@@ -161,6 +161,26 @@ class NativeATenDispatcher:
         # Remove variant suffixes if present (e.g. .default, .int)
         base_name = clean_name.split(".")[0]
 
+        # [PINNED NOISE] Cross-engine deterministic RNG (diagnostic + shared-seed
+        # determinism), gated by NBX_FORCE_RAND_SEED. R30 mirror of the Triton
+        # rand wrappers: both engines draw from one numpy RandomState so a
+        # stochastic vocoder (s3gen CFM + NSF/SineGen source) is reproducible and
+        # bit-identical across modes. Default-off → torch RNG path unchanged.
+        if base_name in ("randn_like", "rand_like", "randn", "rand"):
+            from neurobrix.kernels.rng_pin import (
+                pinned_seed, pinned_normal, pinned_uniform)
+            if pinned_seed() is not None:
+                is_uniform = base_name in ("rand", "rand_like")
+                ref = inputs[0] if (inputs and isinstance(inputs[0], torch.Tensor)) else None
+                if ref is not None:
+                    shp = list(ref.shape); dev = ref.device; dt = ref.dtype
+                else:
+                    out_shapes = attributes.get("output_shapes") or []
+                    shp = list(out_shapes[0]) if out_shapes else list(inputs[0])
+                    dev = "cuda"; dt = torch.float32
+                arr = pinned_uniform(shp) if is_uniform else pinned_normal(shp)
+                return torch.from_numpy(arr).to(device=dev, dtype=dt)
+
         # [IDENTITY OPS] These ops just pass through their input unchanged
         # lift_fresh: Used by FakeTensorMode to mark tensors as "fresh"
         # Note: Graph capture sometimes incorrectly links lift_fresh to wrong tensor.
