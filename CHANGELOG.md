@@ -9,18 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **chatterbox TTS-LLM core handler now uses the same seeded numpy sampler as the
-  triton handler (reproducible cross-mode speech tokens).** The core path sampled
-  with an unseeded `torch.multinomial` and a top_p formula that differed from the
-  triton handler, so a stochastic TTS at temperature 0.8 produced variable
-  quality (intelligible on a good draw, garbled on a bad one) and the four modes
-  could not be cross-validated. Core now draws from a per-run
-  `numpy.RandomState(_TTS_LLM_SEED)` with the byte-identical algorithm to the
-  triton handler (openaudio dual_ar discipline), so all four modes pick the same
-  tokens from the same logits + seed. With the s3gen kernel fixes, all four modes
-  reproducibly render "Hello world": forced-identical-tokens → "Hello world" in
-  all four (pipeline proof), and free-running under the canonical seed →
-  "Hello world" in all four. chatterbox-only flow; no other model affected.
+- **chatterbox TTS-LLM: shared seeded sampler in both handlers + a deterministic
+  `--temperature 0` greedy floor so the four modes agree on one output.** The core path
+  previously sampled with an unseeded `torch.multinomial` and a top_p formula that
+  differed from the triton handler. Both handlers now use a byte-identical seeded
+  numpy sampler (dual_ar discipline) and honour the CLI `global.*` sampling
+  overrides (`--temperature`, `--top_p`, …). Correctness note (correcting an
+  earlier over-claim): a *seeded stochastic* sampler gives **per-mode**
+  reproducibility, NOT cross-mode token identity — the per-engine logits differ at
+  the fp16 level, so `choice(p=probs)` flips boundary tokens and the four modes
+  follow different (each intelligible) token paths. This is the same standard
+  openaudio dual_ar passes under (temp 0.7, seeded). For one deterministic output
+  shared by all four modes, `--temperature 0` selects the
+  greedy floor: argmax of logits that agree to fp16 → all four modes render the
+  same "Hello world" (32 tokens, 1.16 s; tokens near-identical, a couple of late
+  argmax near-ties aside). Validation: free-running default temp across 3 seeds ×
+  4 modes and a long sentence → intelligible "Hello world"/full sentence in every
+  case; `--temperature 0` → identical "Hello world" in all four modes. Teacher-
+  forcing the oracle tokens shows the t3 backbone+CFG logits agree across all four
+  modes at every decode step (argmax matches), so the divergence is purely the
+  stochastic sampler, not the backbone. chatterbox-only flow; no other model
+  affected. (Adds gated `NBX_DUMP_T3_LOGITS` teacher-forcing diagnostic +
+  `NBX_TTS_LLM_SEED` override.)
 
 - **Triton `NBXTensor.contiguous()` on a strided complex tensor no longer
   corrupts the imaginary part.** Complex tensors are stored interleaved
