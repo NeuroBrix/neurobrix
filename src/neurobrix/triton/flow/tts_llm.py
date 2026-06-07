@@ -25,6 +25,11 @@ from typing import Any, Callable, Dict, List, Optional
 
 from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator
 
+# Deterministic sampler seed — shared by both triton modes so triton-seq and
+# triton-compiled produce reproducible (and, given matching logits, identical)
+# speech tokens. Same discipline as core/flow/dual_ar's _DUALAR_SEED.
+_TTS_LLM_SEED = 1234
+
 
 class TritonTTSLLMEngine:
     """
@@ -102,9 +107,35 @@ class TritonTTSLLMEngine:
         if tokenizer is None:
             raise RuntimeError("ZERO FALLBACK: TTS model requires tokenizer module.")
 
-        ids = tokenizer.encode(prompt, padding=False, add_special_tokens=True)
-        if not isinstance(ids, list):
-            ids = list(ids)
+        # Text tokenization — data-driven, scoped via the generation config.
+        # Mirror of core/flow/tts_llm.py (R30): models whose config declares
+        # start_text_token/stop_text_token (chatterbox's t3) reproduce the
+        # vendor EnTokenizer.text_to_tokens contract — substitute a space
+        # marker so spaces survive BPE, then wrap the text with sot/eot. Models
+        # without those keys keep the plain encode path. Without this the t3
+        # backbone is fed a different (shorter) text prefix than the oracle.
+        def _norm_ids(_x):
+            # Tokenizer may return list / np / torch — flatten to a python list
+            # of ints with NO torch import (tolist() returns plain python).
+            if hasattr(_x, "tolist"):
+                _x = _x.tolist()
+            if not isinstance(_x, list):
+                _x = list(_x)
+            if _x and isinstance(_x[0], (list, tuple)):
+                _x = list(_x[0])
+            return [int(t) for t in _x]
+
+        sot = defaults.get("start_text_token")
+        eot = defaults.get("stop_text_token")
+        space_marker = defaults.get("text_space_marker")
+        if sot is not None and eot is not None:
+            _txt = prompt.replace(" ", space_marker) if space_marker else prompt
+            _ids = _norm_ids(tokenizer.encode(
+                _txt, padding=False, add_special_tokens=False))
+            ids = [int(sot)] + _ids + [int(eot)]
+        else:
+            ids = _norm_ids(tokenizer.encode(
+                prompt, padding=False, add_special_tokens=True))
         input_ids_np = np.array([ids], dtype=np.int64)
         input_ids = NBXTensor.from_numpy(input_ids_np)
 
@@ -177,17 +208,46 @@ class TritonTTSLLMEngine:
         speech_pos_emb_np = _to_numpy(speech_pos_emb_w).astype(np.float32) if speech_pos_emb_w is not None else None
         speech_head_np = _to_numpy(speech_head_w).astype(np.float32)
 
-        # -- Build conditioning embeddings --
-        cond_embeds_np = _build_conditioning_np(aux_weights, speaker_emb)
+        # -- CFG detection (DATA-DRIVEN, R30 mirror of core via the centralized
+        #    engine). The t3_cfg backbone is traced batch=1, so CFG runs
+        #    SEQUENTIALLY: two batch=1 forwards (cond / text-zeroed uncond) per
+        #    step, then the pure CFG formula. Models with no guidance_scale ->
+        #    disabled (cond-only path unchanged, R23-safe). --
+        from neurobrix.triton.cfg.engine import TritonCFGEngine
+        do_cfg = False
+        guidance_scale = 1.0
+        try:
+            _cfg_engine = TritonCFGEngine.from_topology(
+                self.ctx, self._execute_component, lambda _c, _o: _o)
+            do_cfg = _cfg_engine.is_enabled
+            guidance_scale = _cfg_engine.guidance_scale
+        except KeyError:
+            do_cfg = False  # no guidance_scale in cascade -> cond-only
+        if do_cfg:
+            print(f"   [{lm_name}] CFG enabled via TritonCFGEngine "
+                  f"(guidance_scale={guidance_scale}, sequential)")
+
+        # -- Build conditioning embeddings (DATA-DRIVEN: run the traced cond_enc
+        #    GRAPH, NOT a hand-rolled perceiver). R30 mirror of core
+        #    _build_conditioning: cond_enc = spkr_enc + Perceiver resampler +
+        #    emotion_adv_fc -> cat -> [1, 34, 1024]. Inputs from the embedded
+        #    default-voice conditioning. --
+        cond_embeds_np = self._build_conditioning_via_graph(
+            speech_emb_np, speech_pos_emb_np, speaker_emb)
         print(f"   [{lm_name}] Conditioning: {cond_embeds_np.shape}")
 
-        # -- Build text embeddings --
-        text_embeds_np = text_emb_np[ids]  # [seq_len, dim]
-        text_embeds_np = text_embeds_np[np.newaxis, :, :]  # [1, seq_len, dim]
+        # -- Build text embeddings (+ CFG uncond = zero TOKEN embedding + learned
+        #    POSITION; vendor order text_emb[1].zero_() THEN += text_pos, so the
+        #    uncond text is position-only, not all-zeros). --
+        text_tok_np = text_emb_np[ids][np.newaxis, :, :]  # [1, seq, dim]
+        uncond_text_np = np.zeros_like(text_tok_np)
         if text_pos_emb_np is not None:
             pos_ids = np.arange(len(ids))
-            text_pos = text_pos_emb_np[pos_ids]  # [seq_len, dim]
-            text_embeds_np = text_embeds_np + text_pos[np.newaxis, :, :]
+            text_pos = text_pos_emb_np[pos_ids][np.newaxis, :, :]  # [1, seq, dim]
+            text_embeds_np = text_tok_np + text_pos
+            uncond_text_np = uncond_text_np + text_pos  # zero-token + position
+        else:
+            text_embeds_np = text_tok_np
 
         print(f"   [{lm_name}] Text embeds: {text_embeds_np.shape}")
 
@@ -198,8 +258,13 @@ class TritonTTSLLMEngine:
             bos_pos = speech_pos_emb_np[0:1]  # [1, dim]
             bos_embed_np = bos_embed_np + bos_pos[np.newaxis, :, :]
 
-        # -- Build initial context: [cond, text, bos_speech] --
-        context_np = np.concatenate([cond_embeds_np, text_embeds_np, bos_embed_np], axis=1)
+        # -- Build initial context: [cond, text, bos_speech] (+ uncond) --
+        context_np = np.concatenate(
+            [cond_embeds_np, text_embeds_np, bos_embed_np], axis=1)
+        uncond_context_np = None
+        if do_cfg:
+            uncond_context_np = np.concatenate(
+                [cond_embeds_np, uncond_text_np, bos_embed_np], axis=1)
         cond_len = cond_embeds_np.shape[1]
         text_len = text_embeds_np.shape[1]
 
@@ -208,37 +273,50 @@ class TritonTTSLLMEngine:
         print(f"   [{lm_name}] Generating speech tokens (max={max_tokens})...")
         start = time.perf_counter()
 
-        generated_ids: list = []
+        # Deterministic sampler — both triton modes share it (reproducible; and
+        # triton-seq vs triton-compiled agree given matching logits). Same
+        # discipline as the openaudio dual_ar seeded sampler.
+        rng = np.random.RandomState(_TTS_LLM_SEED)
 
-        for step in range(max_tokens):
-            seq_len = context_np.shape[1]
+        def _t3_logits(ctx_np):
+            """One batch=1 backbone forward + speech_head -> [1,1,vocab]."""
+            seq_len = ctx_np.shape[1]
             position_ids_np = np.arange(seq_len, dtype=np.int64)[np.newaxis, :]
-
-            # Convert context to NBXTensor for graph execution
-            context_nbx = NBXTensor.from_numpy(context_np.astype(np.float32))
+            context_nbx = NBXTensor.from_numpy(ctx_np.astype(np.float32))
             position_ids_nbx = NBXTensor.from_numpy(position_ids_np)
-
             self.ctx.variable_resolver.resolved["global.inputs_embeds"] = context_nbx
             self.ctx.variable_resolver.resolved["inputs_embeds"] = context_nbx
             self.ctx.variable_resolver.resolved["global.position_ids"] = position_ids_nbx
             self.ctx.variable_resolver.resolved["position_ids"] = position_ids_nbx
-
             self._execute_component(lm_name, "forward", None)
+            out = _get_component_output(self.ctx, lm_name)
+            if out is None:
+                return None
+            out_np = _to_numpy(out)
+            last_hidden = out_np[:, -1:, :]  # [1, 1, dim]
+            return last_hidden @ speech_head_np.T  # [1, 1, speech_vocab]
 
-            output = _get_component_output(self.ctx, lm_name)
-            if output is None:
+        generated_ids: list = []
+
+        for step in range(max_tokens):
+            # Conditional (and, under CFG, unconditional) forward(s) -> logits.
+            logits_np = _t3_logits(context_np)
+            if logits_np is None:
                 break
-
-            # Apply speech_head to last hidden state -> logits
-            output_np = _to_numpy(output)
-            last_hidden = output_np[:, -1:, :]  # [1, 1, dim]
-            logits_np = last_hidden @ speech_head_np.T  # [1, 1, speech_vocab]
+            if do_cfg:
+                uncond_logits_np = _t3_logits(uncond_context_np)
+                if uncond_logits_np is None:
+                    break
+                # Pure CFG formula (cond=context, uncond=text-zeroed context).
+                logits_np = uncond_logits_np + guidance_scale * (
+                    logits_np - uncond_logits_np)
 
             # Sample next token
             next_token = _sample_token_np(
                 logits_np[0, 0, :], temperature, top_p, min_p,
                 generated_ids=generated_ids,
                 repetition_penalty=repetition_penalty,
+                rng=rng,
             )
             generated_ids.append(next_token)
 
@@ -253,7 +331,11 @@ class TritonTTSLLMEngine:
                 pos_emb = speech_pos_emb_np[pos_idx:pos_idx + 1]  # [1, dim]
                 token_embed = token_embed + pos_emb[np.newaxis, :, :]
 
+            # Grow both contexts in lockstep (shared speech sequence).
             context_np = np.concatenate([context_np, token_embed], axis=1)
+            if do_cfg:
+                uncond_context_np = np.concatenate(
+                    [uncond_context_np, token_embed], axis=1)
 
         elapsed = (time.perf_counter() - start) * 1000
         print(f"   [{lm_name}] Generated {len(generated_ids)} speech tokens in {elapsed:.0f}ms")
@@ -295,6 +377,11 @@ class TritonTTSLLMEngine:
 
                 speech_len_np = np.array([len(speech_ids)], dtype=np.int64)
                 voc_executor = self.ctx.executors.get(voc_name)
+                # Reference-voice ref-dict from the embedded conditioning (R30
+                # mirror of core): ref_dict.* <- gen.*. Without it the s3gen
+                # flow-matching gets all-zeros reference and the voice/audio is
+                # wrong even when the speech tokens are correct.
+                conds = _load_default_conditioning_np(self.ctx)
                 comp_inputs: Dict[str, Any] = {}
                 if voc_executor is not None:
                     voc_dag = getattr(voc_executor, '_dag', None)
@@ -307,6 +394,11 @@ class TritonTTSLLMEngine:
                                 comp_inputs[iname] = speech_tokens
                             elif iname == "speech_token_lens":
                                 comp_inputs[iname] = NBXTensor.from_numpy(speech_len_np)
+                            elif iname.startswith("ref_dict.") and conds is not None \
+                                    and f"gen.{iname[len('ref_dict.'):]}" in conds:
+                                _ref = conds[f"gen.{iname[len('ref_dict.'):]}"]
+                                comp_inputs[iname] = NBXTensor.from_numpy(
+                                    np.ascontiguousarray(_ref))
                             else:
                                 shape = tspec.get("shape", [1])
                                 dtype_str = tspec.get("dtype", "float32")
@@ -338,10 +430,98 @@ class TritonTTSLLMEngine:
 
         return self.ctx.variable_resolver.resolve_all()
 
+    def _build_conditioning_via_graph(
+        self, speech_emb_np: np.ndarray,
+        speech_pos_emb_np: Optional[np.ndarray], speaker_emb,
+    ) -> np.ndarray:
+        """Build conditioning by running the traced cond_enc GRAPH (zero torch).
+
+        R30 mirror of core _build_conditioning: cond_enc is the data-driven
+        T3CondEnc graph (spkr_enc + Perceiver resampler + emotion_adv_fc ->
+        cat -> [1, 34, 1024]). Inputs come from the embedded default-voice
+        conditioning, with cond_prompt_speech_tokens embedded via speech_emb +
+        learned speech positions BEFORE T3CondEnc (vendor prepare_conditioning,
+        is_gpt=False — omitting it flattens the t3 distribution). ZERO FALLBACK:
+        no hand-rolled perceiver, no zero-conditioning path.
+        """
+        cond_name = "cond_enc"
+        cond_executor = self.ctx.executors.get(cond_name)
+        if cond_executor is None:
+            raise RuntimeError(
+                "ZERO FALLBACK: tts_llm conditioning requires a traced "
+                "'cond_enc' component. Re-import a build that traces cond_enc.")
+        conds = _load_default_conditioning_np(self.ctx)
+        if conds is None:
+            raise RuntimeError(
+                "ZERO FALLBACK: missing runtime/default_conditioning.safetensors "
+                "(default-voice inputs for cond_enc).")
+
+        cond_tokens_np = conds["t3.cond_prompt_speech_tokens"].astype(np.int64)
+        # Embedding lookup of cond_tokens via speech_emb + learned speech pos.
+        cond_emb_np = speech_emb_np[cond_tokens_np[0]][np.newaxis, :, :]  # [1,L,dim]
+        if speech_pos_emb_np is not None:
+            _L = cond_tokens_np.shape[1]
+            _pos = np.minimum(np.arange(_L), speech_pos_emb_np.shape[0] - 1)
+            cond_emb_np = cond_emb_np + speech_pos_emb_np[_pos][np.newaxis, :, :]
+
+        # Live reference speaker_emb overrides the default voice when present.
+        if speaker_emb is not None:
+            spk_np = _to_numpy(speaker_emb).astype(np.float32).reshape(1, -1)
+        else:
+            spk_np = conds["t3.speaker_emb"].astype(np.float32)
+
+        comp_input_values = {
+            "speaker_emb": NBXTensor.from_numpy(np.ascontiguousarray(spk_np)),
+            "cond_prompt_speech_emb": NBXTensor.from_numpy(
+                np.ascontiguousarray(cond_emb_np.astype(np.float32))),
+            "emotion_adv": NBXTensor.from_numpy(
+                np.ascontiguousarray(conds["t3.emotion_adv"].astype(np.float32))),
+            "cond_prompt_speech_tokens": NBXTensor.from_numpy(
+                np.ascontiguousarray(cond_tokens_np)),
+        }
+        comp_inputs = {n: comp_input_values[n]
+                       for n in _graph_input_names(cond_executor)
+                       if n in comp_input_values}
+
+        self._ensure_weights_loaded(cond_name)
+        output = cond_executor.run(comp_inputs)
+        cond_emb = next(iter(output.values())) if isinstance(output, dict) else output
+        cond_out_np = _to_numpy(cond_emb).astype(np.float32)
+        if not self.ctx.persistent_mode:
+            self._unload_component_weights(cond_name)
+            gc.collect()
+        return cond_out_np
+
 
 # -----------------------------------------------------------------
 # Module-level helpers (zero torch)
 # -----------------------------------------------------------------
+
+def _load_default_conditioning_np(ctx) -> Optional[Dict[str, np.ndarray]]:
+    """Load the embedded default-voice conditioning as numpy (zero torch).
+
+    runtime/default_conditioning.safetensors holds the conds inputs:
+    t3.{speaker_emb, cond_prompt_speech_tokens, emotion_adv} for cond_enc and
+    gen.{prompt_token, prompt_token_len, prompt_feat, embedding} for the s3gen
+    ref-dict. Loaded via safetensors.numpy (NOT safetensors.torch) to stay
+    torch-free. Cached on ctx. Returns None if the build has no default voice.
+    """
+    if hasattr(ctx, "_default_conditioning_np_cache"):
+        return ctx._default_conditioning_np_cache
+    from safetensors.numpy import load_file
+    path = Path(ctx.pkg.cache_path) / "runtime" / "default_conditioning.safetensors"
+    conds = load_file(str(path)) if path.exists() else None
+    ctx._default_conditioning_np_cache = conds
+    return conds
+
+
+def _graph_input_names(executor) -> List[str]:
+    """Return the graph DAG input_name list for a component executor."""
+    dag = getattr(executor, "_dag", None)
+    if not dag:
+        return []
+    return [t["input_name"] for t in dag.get("tensors", {}).values()
+            if t.get("input_name")]
 
 def _get_component_output(ctx, comp_name):
     """Get component output from variable resolver."""
@@ -379,50 +559,14 @@ def _load_auxiliary_weights(ctx, comp_name: str, aux_config: Dict) -> Dict:
     return result
 
 
-def _build_conditioning_np(aux_weights: Dict, speaker_emb) -> np.ndarray:
-    """Build conditioning embeddings from speaker/emotion/prompt info (NumPy)."""
-    parts = []
-    dim = None
-
-    spkr_w = aux_weights.get("cond_enc.spkr_enc.weight")
-    spkr_b = aux_weights.get("cond_enc.spkr_enc.bias")
-    if spkr_w is not None:
-        spkr_w_np = _to_numpy(spkr_w).astype(np.float32)
-        dim = spkr_w_np.shape[0]
-        if speaker_emb is not None:
-            spkr_in = _to_numpy(speaker_emb).astype(np.float32).reshape(1, -1)
-        else:
-            spkr_size = spkr_w_np.shape[1]
-            spkr_in = np.zeros((1, spkr_size), dtype=np.float32)
-
-        cond_spkr = spkr_in @ spkr_w_np.T
-        if spkr_b is not None:
-            cond_spkr = cond_spkr + _to_numpy(spkr_b).astype(np.float32)
-        cond_spkr = cond_spkr[:, np.newaxis, :]  # [1, 1, dim]
-        parts.append(cond_spkr)
-
-    emotion_w = aux_weights.get("cond_enc.emotion_adv_fc.weight")
-    if emotion_w is not None and dim is not None:
-        emotion_w_np = _to_numpy(emotion_w).astype(np.float32)
-        emotion_val = np.array([[[0.5]]], dtype=np.float32)
-        emotion_emb = emotion_val @ emotion_w_np.T if emotion_w_np.ndim == 2 else emotion_val * emotion_w_np
-        parts.append(emotion_emb.reshape(1, 1, -1))
-
-    if not parts:
-        if dim is None:
-            dim = 1024
-        return np.zeros((1, 1, dim), dtype=np.float32)
-
-    return np.concatenate(parts, axis=1)
-
-
 def _sample_token_np(
     logits_1d: np.ndarray, temperature: float,
     top_p: float = 1.0, min_p: float = 0.0,
     generated_ids: Optional[list] = None,
     repetition_penalty: float = 1.0,
+    rng: Optional[np.random.RandomState] = None,
 ) -> int:
-    """Sample next token from logits (NumPy)."""
+    """Sample next token from logits (NumPy). `rng` makes it deterministic."""
     logits = logits_1d.copy().astype(np.float64)
 
     # Repetition penalty
@@ -465,7 +609,8 @@ def _sample_token_np(
     probs = np.maximum(probs, 0)  # Ensure non-negative
     probs = probs / probs.sum()  # Re-normalize
 
-    return int(np.random.choice(len(probs), p=probs))
+    _rng = rng if rng is not None else np.random
+    return int(_rng.choice(len(probs), p=probs))
 
 
 def _save_audio_np(audio_tensor, sample_rate: int) -> None:
