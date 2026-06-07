@@ -151,12 +151,16 @@ class NextTokenDiffusionEngine(FlowHandler):
         else:
             cfg_scale = float(defaults.get("cfg_scale", 1.3))
         # One diffusion-noise generator for the whole run: advances across steps
-        # (fresh init noise per step) yet makes the run reproducible. Seed from
-        # global.seed if the user passed --seed, else a fixed 0.
+        # (fresh init noise per step) yet makes the run reproducible. SHARED with
+        # the triton next_token_diffusion handler: both draw init noise from the
+        # SAME numpy RandomState(seed) with the same per-step draw, so the two
+        # engines see identical noise and the first-K diffusion latents match —
+        # the cross-engine validation BEFORE the chaotic feedback loop amplifies
+        # fp16 differences (STT full-decode is too noisy for a chaotic model).
+        # R27/R28; numpy is CPU glue, the torch compute path is untouched.
+        import numpy as _np_vv
         _seed = _ov.get("global.seed")
-        diffusion_gen = torch.Generator(device=device).manual_seed(
-            int(_seed) if _seed is not None else 0
-        )
+        diffusion_gen = _np_vv.random.RandomState(int(_seed) if _seed is not None else 0)
         scaling = float(defaults.get("speech_scaling_factor", 0.1962890625))
         bias = float(defaults.get("speech_bias_factor", -0.04931640625))
         vae_dim = int(defaults.get("acoustic_vae_dim", 64))
@@ -211,6 +215,10 @@ class NextTokenDiffusionEngine(FlowHandler):
         emitted_tokens: List[int] = []
         n_diffusion = 0
         step = -1  # defensive: bound even if max_steps == 0
+        import os as _os_vv
+        _vv_dump_path = _os_vv.environ.get("NBX_VV_DUMP_LATENTS", "")
+        _vv_dump_k = int(_os_vv.environ.get("NBX_VV_DUMP_K", "4"))
+        _vv_latents: list = []
         # Per-step audio chunks. The acoustic decoder traces at CONCRETE T=1 and we
         # decode exactly ONE latent per step (→ a fixed 3200-sample chunk). Per-step
         # independent T=1 decode is bit-equivalent to a cumulative full decode
@@ -291,6 +299,12 @@ class NextTokenDiffusionEngine(FlowHandler):
                     pos_cond, neg_cond, cfg_scale, ddpm_steps, vae_dim, dtype, device,
                     gen=diffusion_gen,
                 )                                                            # [1, 64]
+                # Cross-engine validation dump (NBX_VV_DUMP_LATENTS=<path.npy>):
+                # the first-K diffusion latents, BEFORE the chaotic feedback loop
+                # amplifies fp16 differences. Same seeded noise as triton ⇒ these
+                # must match the triton dump within fp16 tol = kernels validated.
+                if _vv_dump_path and n_diffusion <= _vv_dump_k:
+                    _vv_latents.append(speech_latent.detach().float().cpu().numpy().reshape(-1))
 
                 # Vendor: scaled_latent = speech_latent / scaling - bias (decoder input scale).
                 scaled = (speech_latent / scaling - bias).unsqueeze(0)       # [1, 1, 64]
@@ -330,6 +344,9 @@ class NextTokenDiffusionEngine(FlowHandler):
                 neg_inputs_embeds = torch.cat([neg_inputs_embeds, next_embed], dim=1)
 
         elapsed = (time.perf_counter() - start) * 1000
+        if _vv_dump_path and _vv_latents:
+            _np_vv.save(_vv_dump_path, _np_vv.stack(_vv_latents))
+            print(f"   [VV-DIAG] dumped {len(_vv_latents)} first-K latents → {_vv_dump_path}")
         print(f"   [{self.LM}] {step + 1} steps, {n_diffusion} speech_diffusion tokens "
               f"in {elapsed:.0f}ms")
         print(f"   [{self.LM}] first 10 emitted token ids: {emitted_tokens[:10]}")
@@ -380,7 +397,12 @@ class NextTokenDiffusionEngine(FlowHandler):
         # for the diffusion feedback loop to keep drifting), while keeping the
         # whole run reproducible (cfg=A run-1 ≡ cfg=A run-2). Reseeding per call
         # would freeze the latent prior and collapse the loop into periodicity.
-        speech = torch.randn(cond.shape[0], vae_dim, device=device, dtype=dtype, generator=gen)  # [2, 64]
+        # Shared numpy-seeded init noise (see execute(): `diffusion_gen`). Same
+        # RandomState + same per-call draw as the triton handler → identical noise.
+        import numpy as _np_vv
+        speech = torch.from_numpy(
+            gen.standard_normal((cond.shape[0], vae_dim)).astype(_np_vv.float32)
+        ).to(device=device, dtype=dtype)                                    # [2, 64]
 
         timesteps = scheduler.timesteps
         if timesteps is None:
