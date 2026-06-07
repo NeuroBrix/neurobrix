@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Kokoro-82M closed 4/4 (was 2/4): the pytorch-sequential & triton-sequential
+  op-by-op paths now run the full prosody-predictor + istftnet decoder.** Two
+  sequential-dispatcher completeness fixes (R30 parity — the compiled/triton
+  paths already handled these op forms):
+  (1) `sequential_dispatcher` now recomputes **1-D** upsample output_size from the
+  scale factor for `upsample_nearest1d`/`upsample_linear1d` (the 2-D
+  multi-resolution recompute already existed). Kokoro's F0/N branches upsample the
+  duration-expanded sequence; the trace-time output_size was `2*trace_len`, so at
+  a different runtime `sum(durations)` it mismatched the actual input (124 vs 68 →
+  add broadcast crash). The scale (2.0 / 300.0 / 1/300) is read positionally per
+  op (linear1d carries an `align_corners` bool before the scale).
+  (2) `tensor_resolver` now parses a **complex scalar** arg (`1j`, the imaginary
+  unit in the istftnet iSTFT `mul`) — PyTorch ATen handles complex natively, the
+  parser just lacked the type.
+
 ### Changed
 
 - **openaudio dual_ar sampler is now deterministically seeded (shared across all

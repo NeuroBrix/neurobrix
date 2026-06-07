@@ -333,6 +333,31 @@ class NativeATenDispatcher:
                         # Replace hardcoded output_size with computed value
                         inputs[1] = [new_h, new_w]
 
+        # [MULTI-RESOLUTION FIX — 1D] Same for 1D upsample (Kokoro prosody
+        # predictor F0/N branches upsample the duration-expanded sequence x2).
+        # The traced output_size froze 2*trace_len (e.g. [68]); at a different
+        # runtime sum(durations) the frozen size mismatches the actual input
+        # (124 vs 68 → add broadcast crash). The compiled/triton paths already
+        # resolve the length from the actual tensor; recompute here from the
+        # scale so the op-by-op pytorch oracle matches them (R30 parity).
+        # aten::upsample_nearest1d(input, output_size, scales).
+        if base_name in ("upsample_nearest1d", "upsample_linear1d"):
+            if len(inputs) >= 3 and isinstance(inputs[0], torch.Tensor) and inputs[0].dim() >= 3:
+                input_tensor = inputs[0]
+                # arg layouts differ: nearest1d(input, output_size, scales) →
+                # scale at idx 2; linear1d(input, output_size, align_corners,
+                # scales) → idx 2 is the align_corners BOOL, scale at idx 3. Pick
+                # the trailing NUMERIC (non-bool) scalar so both layouts work and
+                # fractional (downsample, e.g. 1/300) scales are honoured.
+                scale = None
+                for a in inputs[2:]:
+                    if isinstance(a, (int, float)) and not isinstance(a, bool):
+                        scale = a
+                if scale is not None and scale > 0:
+                    new_l = int(round(input_tensor.shape[2] * scale))
+                    if new_l > 0:
+                        inputs[1] = [new_l]
+
         # [MULTI-RESOLUTION FIX] Expand ops may have hardcoded spatial dimensions
         # When the tensor has non-singleton dimensions that don't match the expand size,
         # we should use the actual tensor dimensions (expand can only broadcast from 1).
