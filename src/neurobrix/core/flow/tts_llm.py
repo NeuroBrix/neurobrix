@@ -22,6 +22,7 @@ ZERO HARDCODE: All parameters from NBX container.
 import gc
 from neurobrix.core.device_utils import device_empty_cache
 import time
+import numpy as np
 import torch
 from neurobrix.core.device_utils import device_multinomial
 import torch.nn.functional as F
@@ -29,6 +30,58 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from .base import FlowHandler, FlowContext, register_flow
+
+# Deterministic sampler seed — duplicated identically in triton/flow/tts_llm.py
+# (_TTS_LLM_SEED) so the two separate code paths draw the SAME speech tokens from
+# the SAME numpy RandomState + algorithm (the openaudio dual_ar discipline). A
+# stochastic TTS (chatterbox t3 temperature sampling) is otherwise non-
+# reproducible and the four modes can't be cross-validated.
+_TTS_LLM_SEED = 1234
+
+
+def _sample_token_np_core(
+    logits_1d: np.ndarray, temperature: float,
+    top_p: float = 1.0, min_p: float = 0.0,
+    generated_ids: Optional[list] = None,
+    repetition_penalty: float = 1.0,
+    rng: Optional[np.random.RandomState] = None,
+) -> int:
+    """Numpy speech-token sampler — byte-identical algorithm to the triton
+    handler's _sample_token_np so both engines pick the same token from the same
+    logits + seed (this is what reconciles top_p/min_p across modes). Replaces
+    the previous torch.multinomial path, which used a different top_p formula and
+    was unseeded (non-reproducible)."""
+    logits = logits_1d.copy().astype(np.float64)
+    if generated_ids and repetition_penalty != 1.0:
+        for tid in set(generated_ids):
+            if 0 <= tid < len(logits):
+                if logits[tid] > 0:
+                    logits[tid] /= repetition_penalty
+                else:
+                    logits[tid] *= repetition_penalty
+    if temperature != 1.0 and temperature > 0:
+        logits = logits / temperature
+    if min_p > 0:
+        logits_shifted = logits - logits.max()
+        exp_logits = np.exp(logits_shifted)
+        probs = exp_logits / exp_logits.sum()
+        threshold = min_p * probs.max()
+        logits[probs < threshold] = -np.inf
+    if top_p < 1.0:
+        sorted_idx = np.argsort(-logits)
+        sorted_logits = logits[sorted_idx]
+        sorted_shifted = sorted_logits - sorted_logits.max()
+        sorted_probs = np.exp(sorted_shifted) / np.exp(sorted_shifted).sum()
+        cumsum = np.cumsum(sorted_probs)
+        cutoff = np.searchsorted(cumsum, top_p) + 1
+        logits[sorted_idx[cutoff:]] = -np.inf
+    logits_shifted = logits - logits.max()
+    exp_logits = np.exp(logits_shifted)
+    probs = exp_logits / exp_logits.sum()
+    probs = np.maximum(probs, 0)
+    probs = probs / probs.sum()
+    _rng = rng if rng is not None else np.random
+    return int(_rng.choice(len(probs), p=probs))
 
 
 @register_flow("tts_llm")
@@ -299,6 +352,11 @@ class TTSLLMEngine(FlowHandler):
                 return None
             return torch.matmul(out[:, -1:, :], speech_head_w_typed.T)  # [1,1,vocab]
 
+        # Deterministic sampler shared with the triton handler (same seed +
+        # algorithm) so all four modes draw the same tokens — reproducible
+        # cross-mode validation of a stochastic TTS.
+        _sampler_rng = np.random.RandomState(_TTS_LLM_SEED)
+
         for step in range(0 if _force_ids else max_tokens):
             # Conditional (and, under CFG, unconditional) forward(s) → guided logits.
             logits = _t3_logits(context_embeds)
@@ -311,11 +369,14 @@ class TTSLLMEngine(FlowHandler):
                 # Centralized CFG formula (cond=context, uncond=text-zeroed context).
                 logits = CFGEngine.apply_guidance(logits, uncond_logits, guidance_scale)
 
-            # Sample next token
-            next_token = self._sample_token(
-                logits, temperature, top_p, min_p,
+            # Sample next token via the shared seeded numpy sampler (identical
+            # algorithm to the triton handler → reconciles top_p across modes).
+            logits_np = logits[:, -1, :].float().detach().cpu().numpy()[0]
+            next_token = _sample_token_np_core(
+                logits_np, temperature, top_p, min_p,
                 generated_ids=generated_ids,
                 repetition_penalty=repetition_penalty,
+                rng=_sampler_rng,
             )
             generated_ids.append(next_token)
 
