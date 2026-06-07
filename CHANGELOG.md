@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Triton `NBXTensor.copy_` now converts dtype like PyTorch `Tensor.copy_`
+  (was a raw byte memcpy).** Copying an fp16 source into an fp32 destination
+  reinterpreted the fp16 bit-pairs as fp32 (≈0) and used mismatched byte counts.
+  In chatterbox s3gen this zeroed the reference mel (`prompt_feat`, fp16) copied
+  into the fp32 conditioning buffer (`padded_feat[:, :prompt_len, :] = prompt_feat`),
+  degrading the vocoder. `copy_` now casts the source to the destination dtype
+  and contiguous-packs it before the device copy; same-dtype copies are
+  unchanged. With this and the `sum` fix the whole s3gen pipeline up to the
+  conditional-flow-matching noise is byte-identical to the reference oracle.
+
 - **Triton `sum` reduction no longer overflows on bool/integer inputs (silent
   wrong result).** `sum_wrapper` accumulated correctly in fp32 but then cast the
   result back to the *input* dtype — so summing a bool mask of 354 True elements
