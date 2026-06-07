@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Triton `NBXTensor.contiguous()` on a strided complex tensor no longer
+  corrupts the imaginary part.** Complex tensors are stored interleaved
+  `[real, imag]`, but Triton sees the pointer as a plain float, so the
+  strided-copy kernel copied one float per element with per-(complex)-element
+  strides applied as float offsets — materialising the real half correctly but
+  scrambling the imaginary half. chatterbox/CosyVoice s3gen's STFT does
+  `rfft → transpose → contiguous`; the transposed-complex `contiguous` mangled
+  the spectrum, so the NSF/SineGen source-filter (conv1d/sin/pow on the spectral
+  features) diverged and the vocoder rendered partial speech. `_strided_copy`
+  now reinterprets complex operands as a float view with a trailing `[2]` re/imag
+  axis (element strides ×2) and copies both floats per element. Single systemic
+  root for the whole NSF cascade; reusable for any HiFiGAN/iSTFTNet/NSF vocoder
+  that transposes a complex spectrogram. Verified: `stft_wrapper` now matches
+  `torch.stft` element-for-element.
+
 ### Added
 
 - **Gated cross-engine deterministic RNG (`NBX_FORCE_RAND_SEED`).** Pins every

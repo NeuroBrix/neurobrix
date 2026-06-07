@@ -2529,6 +2529,7 @@ class TritonSequence:
                     "op_type": op.op_type,
                     "shape": list(tensor.shape),
                     "dtype": str(tensor.dtype),
+                    "is_complex": bool(getattr(tensor, "is_complex", lambda: False)()),
                     "head10": head,
                     "l2_norm": norm,
                 }

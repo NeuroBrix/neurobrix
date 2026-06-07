@@ -967,6 +967,34 @@ def _strided_copy(src: 'NBXTensor', dst: 'NBXTensor'):
     import triton
     from neurobrix.kernels.ops.strided_copy import strided_copy_kernel
 
+    # Complex tensors are stored interleaved [real, imag], but Triton sees the
+    # data_ptr as a plain float (no complex dtype). The strided kernel would copy
+    # ONE float per element with the per-(complex)-element strides applied as
+    # float offsets — corrupting the imaginary half (chatterbox s3gen stft does
+    # fft_r2c -> transpose -> contiguous; the transposed-complex contiguous
+    # mangled the imag spectrum). Reinterpret both as a float view with a
+    # trailing [2] dim (strides * 2 in elements, +1 for the re/imag axis) and
+    # recurse — this copies BOTH floats per complex element with correct strides.
+    # Built manually (NOT view_as_real, which calls .contiguous() on strided
+    # input → would recurse back into this same broken path).
+    if src.is_complex():
+        _fdt = (NBXDtype.float64 if src._dtype == NBXDtype.complex128
+                else NBXDtype.float32)
+        _fsrc = NBXTensor(
+            src._data_ptr, tuple(src._shape) + (2,),
+            tuple(s * 2 for s in src._strides) + (1,),
+            _fdt, src._device, src._offset * 2,
+            device_idx=src._device_idx,
+            base=src._base if src._base is not None else src, pinned=src._pinned)
+        _fdst_shape = tuple(dst._shape) + (2,)
+        _fdst = NBXTensor(
+            dst._data_ptr, _fdst_shape, _contiguous_strides(_fdst_shape),
+            _fdt, dst._device, dst._offset * 2,
+            device_idx=dst._device_idx,
+            base=dst._base if dst._base is not None else dst, pinned=dst._pinned)
+        _strided_copy(_fsrc, _fdst)
+        return
+
     ndim = src.ndim
     if ndim > _MAX_NDIM:
         raise RuntimeError(
