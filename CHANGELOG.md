@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Shared triton kernels: `pow` with a scalar/tensor base, op-localized
+  triton-sequential errors.** `pow_wrapper` now handles all four `aten::pow`
+  forms — `tensor**scalar` (fused kernel), `scalar**tensor` (e.g. the
+  `10000.0 ** (arange/dim)` sinusoidal/RoPE frequency base in Flex/FLUX DiT) and
+  `tensor**tensor` via `exp(b·ln a)` (R33-pure), `scalar**scalar` constant —
+  previously it called `.contiguous()` on a scalar base and crashed. The
+  triton-sequential dispatcher now raises op-localized errors (`Failed at
+  <op_uid> (<op_type>) … None args at positions …`), mirroring the compiled
+  path, so a kernel-oracle failure points straight at the producing op.
+
 ### Added
 
 - **Zero Outsider ZO-3 — Kokoro g2p embedded in the `.nbx`, NeuroBrix-internal
