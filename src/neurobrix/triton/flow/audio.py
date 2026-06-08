@@ -92,29 +92,21 @@ class TritonAudioEngine:
 
             if execution == "forward":
                 self._execute_forward_stage(stage)
-            elif execution == "native_kokoro":
-                # TEMPORARY R33 VIOLATION — this native handler uses torch. Will be
-                # replaced by triton/flow/stages/ once forge can trace this
-                # model. Do NOT add other imports of core/flow/stages/ here.
-                from neurobrix.core.flow.stages.kokoro import execute_native_kokoro
-                execute_native_kokoro(self, stage, audio_config)
-            elif execution == "diffusion":
-                # TEMPORARY R33 VIOLATION — this native handler uses torch. Will be
-                # replaced by triton/flow/stages/ once forge can trace this
-                # model. Do NOT add other imports of core/flow/stages/ here.
-                from neurobrix.core.flow.stages.vibevoice import execute_diffusion_stage
-                execute_diffusion_stage(self, stage, audio_config)
-            elif execution == "native_acoustic_decoder":
-                # TEMPORARY R33 VIOLATION — this native handler uses torch. Will be
-                # replaced by triton/flow/stages/ once forge can trace this
-                # model. Do NOT add other imports of core/flow/stages/ here.
-                from neurobrix.core.flow.stages.vibevoice import execute_native_acoustic_decoder
-                execute_native_acoustic_decoder(self, stage, audio_config)
             else:
+                # The former native_kokoro / diffusion / native_acoustic_decoder
+                # branches (which imported torch via core/flow/stages/) are gone:
+                # Kokoro now runs its prosody-predictor + iSTFTNet decoder through
+                # the graph in triton (all stages execution=forward), and
+                # VibeVoice's diffusion + acoustic decoder run in the self-contained
+                # zero-torch triton/flow/next_token_diffusion.py (flow type
+                # next_token_diffusion, not audio). No flow=audio model reaches a
+                # non-forward execution, so this is a hard ZERO FALLBACK — R33 is
+                # restored for the triton audio stage loop (no core/flow/stages import).
                 raise RuntimeError(
-                    f"ZERO FALLBACK: Unknown execution type '{execution}' "
-                    f"for stage '{comp_name}'. Expected: forward, native_kokoro, "
-                    f"diffusion, native_acoustic_decoder"
+                    f"ZERO FALLBACK: triton audio flow supports only "
+                    f"execution=forward (got '{execution}' for stage "
+                    f"'{comp_name}'). Diffusion/acoustic-decoder TTS routes through "
+                    f"the next_token_diffusion flow; Kokoro routes through the graph."
                 )
 
         # -- Step 3: Output postprocessing --
