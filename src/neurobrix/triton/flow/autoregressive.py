@@ -125,8 +125,10 @@ class TritonAutoregressiveHandler:
                                n * 4, kind=2)
                     vals = list(buf)
                 else:
-                    import torch as _torch_dl
-                    vals = arr.detach().float().reshape(-1).cpu().tolist()
+                    # Triton logits are always NBXTensor (the branch above). A
+                    # non-NBX tensor here would mean a wiring bug, not a torch
+                    # path — skip the diagnostic rather than import torch (R33).
+                    vals = []
                 # top-10
                 idx_sorted = sorted(range(len(vals)), key=lambda i: -vals[i])[:10]
                 top10 = [(i, vals[i]) for i in idx_sorted]
