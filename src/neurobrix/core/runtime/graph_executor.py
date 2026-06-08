@@ -1860,13 +1860,23 @@ class GraphExecutor:
             # so no dtype-engine AMP wrap needed here. R30 (Mode
             # Universality) parity, P-SANA-4KPX-RUNTIME 2026-05-05
             # bisection.
-            if hasattr(self, '_op_uid_interceptors') and op_uid in self._op_uid_interceptors:
-                resolved_kwargs = dispatcher.resolve_kwargs(attrs)
-                result = self._op_uid_interceptors[op_uid](
-                    *resolved_args, **resolved_kwargs)
-            else:
-                # Dispatch
-                result = dispatcher.dispatch(op_type, resolved_args, attrs)
+            try:
+                if hasattr(self, '_op_uid_interceptors') and op_uid in self._op_uid_interceptors:
+                    resolved_kwargs = dispatcher.resolve_kwargs(attrs)
+                    result = self._op_uid_interceptors[op_uid](
+                        *resolved_args, **resolved_kwargs)
+                else:
+                    # Dispatch
+                    result = dispatcher.dispatch(op_type, resolved_args, attrs)
+            except Exception as _e_seq:
+                # Op-localized error (R30 mirror of the compiled "Failed at op"):
+                # name the op_uid + which positional args were None so a
+                # triton-sequential failure points straight at the producer.
+                _none_pos = [i for i, a in enumerate(resolved_args) if a is None]
+                raise RuntimeError(
+                    f"[triton-sequential] Failed at {op_uid} ({op_type}): "
+                    f"{type(_e_seq).__name__}: {_e_seq} | None args at positions "
+                    f"{_none_pos} of {len(resolved_args)}") from _e_seq
 
             # Store outputs
             if isinstance(result, tuple):
