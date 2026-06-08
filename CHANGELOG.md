@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Zero Outsider — RNNT flow (parakeet) vendor-free** (R34): `core/flow/rnnt.py` and `triton/flow/rnnt.py` no longer import `torchaudio` (mel filterbank → `mel_dsp._mel_filters`) or `sentencepiece` (token decode → `PySentencePiece`). Parakeet passes clean-room both modes ("…slushy…").
 - **Zero Outsider ZO-2 — compiled mel front-end is now vendor-free** (R34). The
   numpy mel/feature DSP is consolidated into a shared, mode-neutral
   `core/module/audio/mel_dsp.py` (the single source of truth: `_load_audio`,

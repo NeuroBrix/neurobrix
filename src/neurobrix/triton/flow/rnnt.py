@@ -391,10 +391,12 @@ class TritonRNNTEngine:
         sp_path = self._find_tokenizer_model()
         if sp_path is not None:
             try:
-                import sentencepiece as spm
-                sp = spm.SentencePieceProcessor()
-                sp.Load(str(sp_path))
-                return sp.DecodeIds(tokens)
+                # R34 (Zero Outsider): NeuroBrix-internal SentencePiece, never
+                # the `sentencepiece` vendor lib.
+                from neurobrix.core.module.tokenizer.sp_proto import PySentencePiece
+                with open(sp_path, "rb") as _spf:
+                    sp = PySentencePiece.from_bytes(_spf.read())
+                return sp.decode(tokens)
             except ImportError:
                 pass
 
