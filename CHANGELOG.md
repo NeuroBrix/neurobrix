@@ -31,9 +31,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `_g2p_phonemes`: it drives the **torch-free** `phonemizer`/espeak backend, with
   the espeak-ng shared library supplied by the `espeakng_loader` pip wheel (no
   system `apt install` / sudo needed — `EspeakWrapper.set_library/set_data_path`
-  point phonemizer at the bundled `.so` + data). Falls back to an espeak-ng CLI if
-  one is on PATH, and only as a last resort to kokoro/misaki (lazy torch) with a
-  clear log recommending espeak-ng. Voicepack `.pt` is read torch-free via
+  point phonemizer at the bundled `.so` + data; `espeakng-loader` is now a
+  declared NeuroBrix dependency in `pyproject.toml`). Also accepts a system
+  `espeak-ng` CLI if on PATH. If NO torch-free espeak backend is found the triton
+  path **raises a clean actionable error** — it does NOT silently fall back to the
+  misaki/kokoro g2p (which pulls torch); that would reintroduce torch into the
+  triton compute path invisibly (R33 + no-silent-install doctrine).
+  Voicepack `.pt` is read torch-free via
   `_load_pt_numpy` (zipfile + `np.frombuffer` + pickletools shape recovery).
   Validated by STT in normal command: Kokoro-82M triton-sequential synthesises
   "Hello world" → whisper transcribes "Hello world!". The `triton/flow/audio.py`

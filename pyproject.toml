@@ -54,6 +54,11 @@ dependencies = [
     "torchaudio>=2.1.0",
     "snac>=1.0.0",
     "phonemizer>=3.0.0",
+    # espeak-ng shared library as a pip wheel — supplies the torch-free g2p
+    # backend for the triton Kokoro path (no system apt/sudo). Without it the
+    # triton phonemizer has no torch-free espeak and raises (it never silently
+    # degrades to the misaki/torch path — R33 + no-silent-install).
+    "espeakng-loader>=0.2.0",
     # Video family
     "imageio-ffmpeg>=0.4.0",
     # Registry + CLI

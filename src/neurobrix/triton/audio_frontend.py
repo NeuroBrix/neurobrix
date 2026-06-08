@@ -274,13 +274,20 @@ def _g2p_phonemes(prompt: str, lang: str = "en-us", kokoro_lang: str = "a") -> s
                 return r.stdout.strip()
     except Exception:
         pass
-    # 3) fallback: kokoro/misaki g2p (pulls torch — only when no espeak-ng).
-    print("   [Phonemizer·np] espeak-ng absent → kokoro/misaki g2p fallback "
-          "(pulls torch). Install espeak-ng for a fully torch-free g2p.")
-    from kokoro import KPipeline
-    pipe = KPipeline(lang_code=kokoro_lang)
-    phonemes, _ = pipe.g2p(prompt)
-    return phonemes
+    # 3) No torch-free g2p available. The triton path NEVER silently degrades to
+    #    the misaki/kokoro g2p (which pulls torch) — that would reintroduce torch
+    #    into the triton compute path invisibly (R33 forbids a torch fallback;
+    #    the no-silent-install doctrine forbids auto-fetching a wheel). Raise a
+    #    clean, actionable error instead.
+    raise RuntimeError(
+        "ZERO-TORCH g2p unavailable: the triton Kokoro path needs a torch-free "
+        "espeak backend and none was found. Install one of:\n"
+        "  - `pip install espeakng-loader` (ships the espeak-ng shared library, "
+        "no sudo — this is a declared NeuroBrix dependency), or\n"
+        "  - the system `espeak-ng` binary (`apt install espeak-ng`).\n"
+        "The triton path does NOT fall back to misaki/kokoro g2p (it pulls "
+        "torch, violating R33)."
+    )
 
 
 def _load_pt_numpy(path: str) -> np.ndarray:
