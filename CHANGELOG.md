@@ -23,6 +23,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dynamic thresholding raises ZERO-FALLBACK pending a percentile kernel;
   `clip_sample` is supported.)
 
+### Changed
+
+- **Triton audio flow: removed three dead R33-violating stage branches** (`native_kokoro`,
+  `diffusion`, `native_acoustic_decoder`) that imported torch via `core/flow/stages/`.
+  They are unreachable: Kokoro now runs its prosody-predictor + iSTFTNet decoder
+  through the graph in triton (all stages `execution=forward`), and VibeVoice's
+  diffusion + acoustic decoder run in the self-contained zero-torch
+  `triton/flow/next_token_diffusion.py` (`flow.type=next_token_diffusion`, not
+  `audio`). The triton audio stage loop now accepts only `execution=forward` (hard
+  ZERO FALLBACK otherwise) — no `core/flow/stages` compute import remains in it.
+  Verified the removal is inert: Kokoro triton still STT "Hello world", VibeVoice
+  triton still renders a non-degenerate clip. (The Kokoro g2p phonemizer import
+  stays — external dependency, separately tracked.)
+
 ### Fixed
 
 - **chatterbox TTS-LLM: shared seeded sampler in both handlers + a deterministic
