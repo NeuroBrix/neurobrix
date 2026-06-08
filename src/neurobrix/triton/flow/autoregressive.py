@@ -183,9 +183,42 @@ class TritonAutoregressiveHandler:
         generated_tokens = generator.get_generated_tokens()
         strategy.process_output(generated_tokens, self.ctx)
 
+        # Zero Outsider (ZO-0): SNAC codec traced into the .nbx → run it as a
+        # stage with NBXTensor codes (R30 mirror of the compiled path; no `snac`).
+        self._run_snac_codec_decoder(generated_tokens)
+
         if not is_image:
             session.cleanup()
         return self.ctx.variable_resolver.resolve_all()
+
+    def _run_snac_codec_decoder(self, generated_tokens) -> None:
+        """ZO-0 (triton): decode orpheus SNAC tokens through the TRACED
+        codec.decoder, NBXTensor end-to-end. Redistributes the 7-tokens/frame
+        stream into the 3 SNAC codebooks (pure python) and runs the codec as a
+        stage via _execute_component. No `snac` import."""
+        defaults = self.ctx.pkg.defaults
+        if defaults.get("audio_output_type") != "snac_tokens":
+            return
+        if "codec.decoder" not in self.ctx.executors:
+            return
+        from neurobrix.core.flow.audio_utils import redistribute_snac_codes
+        gen_ids = list(generated_tokens)
+        codes = redistribute_snac_codes(
+            gen_ids, defaults["audio_token_start"], defaults["vocab_size"])
+        if codes is None:
+            return
+        rv = self.ctx.variable_resolver.resolved
+        for key, vals in (("c0", codes[0]), ("c1", codes[1]), ("c2", codes[2])):
+            t = NBXTensor.from_numpy(np.array([vals], dtype=np.int64))
+            rv[f"codec.decoder.{key}"] = t
+            rv[key] = t
+        # triton loads component weights on demand — load codec.decoder before
+        # running it (else the in-graph codebook embedding weight is None).
+        self._ensure_weights_loaded("codec.decoder")
+        self._execute_component("codec.decoder", "forward", None)
+        wav = rv.get("codec.decoder.output_0")
+        if wav is not None:
+            rv["global.output_audio"] = wav
 
     def _graph_lm_prefill(self, input_ids: NBXTensor) -> NBXTensor:
         """Delegate to active session. Required by runtime-guard hook."""
