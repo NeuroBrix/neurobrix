@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Zero Outsider ZO-0 — orpheus SNAC vocoder traced into the `.nbx`** (R34). The
+  orpheus runtime previously decoded audio via `snac.SNAC.from_pretrained(...)` —
+  a vendor neural decoder downloaded from HuggingFace at inference (the gravest
+  R34 breach). SNAC is now a traced `codec.decoder` component inside a new
+  `orpheus-3b-0.1-ft-snac` build (the production orpheus is untouched); the
+  autoregressive flow redistributes the 7-tokens/frame stream into the 3 SNAC
+  codebooks (pure python `redistribute_snac_codes`) and runs the traced codec as
+  a stage via `_execute_component` — no `snac` import, no download. Compiled mode
+  validated in the clean venv (no `snac` installed): orpheus-3b-0.1-ft-snac →
+  whisper STT "Hello world!". (Triton-mode codec integration in progress.)
+
 - **Zero Outsider — RNNT flow (parakeet) vendor-free** (R34): `core/flow/rnnt.py` and `triton/flow/rnnt.py` no longer import `torchaudio` (mel filterbank → `mel_dsp._mel_filters`) or `sentencepiece` (token decode → `PySentencePiece`). Parakeet passes clean-room both modes ("…slushy…").
 - **Zero Outsider ZO-2 — compiled mel front-end is now vendor-free** (R34). The
   numpy mel/feature DSP is consolidated into a shared, mode-neutral
