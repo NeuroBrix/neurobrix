@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Zero Outsider ZO-1 + ZO-4 — pure-Python tokenizers and mel filterbank**
+  (R34 engine import purity). The runtime tokenizer runners no longer import the
+  vendor libraries (`tokenizers`, `sentencepiece`, `tiktoken`, `mistral_common`);
+  four new stdlib-only modules under `core/module/tokenizer/` are byte-exact
+  drop-ins, validated by encode/decode parity against each vendor oracle plus
+  large fuzz batteries: `json_bpe.PyTokenizer` (a full `tokenizer.json` interpreter
+  — BPE byte-level + byte_fallback, normalizers, pre-tokenizers, decoders,
+  TemplateProcessing, added_tokens; 12/12 models 100% parity + a 63k-codepoint
+  sweep), `sp_proto.PySentencePiece` (a `.model` protobuf parser — Unigram Viterbi
+  + BPE + charsmap trie; natural-text byte-exact), `tiktoken_bpe.PyTiktoken` and
+  `tekken_bpe.PyTekken` (byte-level BPE; 100% parity + 4000-fuzz). `sp_tokenizer.py`
+  routes `HFTokenizer`/`SPTokenizer`/`TiktokenTokenizer`/`TekkenTokenizer` to them.
+  The triton mel front-end's filterbank is now pure numpy (no `librosa`): a
+  reimplementation of `librosa.filters.mel` (Slaney + HTK scales, triangular bands,
+  Slaney/None norm), parity vs librosa max|diff| 1.86e-9 (whisper) … 0.0 (htk).
+  Verified in a clean-room with the 14 vendor packages blocked at import: all
+  tokenizer formats round-trip "Hello world"; TinyLlama (compiled + triton) →
+  "…Paris."; PixArt-XL (compiled) → coherent image — zero forbidden-import hits.
+
 - **Zero-torch audio mel front-end for the triton path** (`triton/audio_frontend.py`).
   The triton STT / audio-LLM / RNNT flows previously imported `core/flow/audio_utils`
   (and `rnnt.py` used `torch.stft` + `torchaudio` directly) for mel/feature

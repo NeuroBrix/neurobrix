@@ -54,12 +54,58 @@ def _stft_power(audio: np.ndarray, n_fft: int, win_length: int,
     return (np.abs(spec) ** 2).T                        # [n_freqs, frames]
 
 
+def _hz_to_mel(freqs: np.ndarray, *, htk: bool) -> np.ndarray:
+    """Hz → mel. htk=True: O'Shaughnessy log; htk=False: Slaney auditory toolbox
+    (linear below 1 kHz, log above) — both bit-for-bit as librosa.hz_to_mel."""
+    freqs = np.asarray(freqs, dtype=float)
+    if htk:
+        return 2595.0 * np.log10(1.0 + freqs / 700.0)
+    f_min, f_sp = 0.0, 200.0 / 3.0
+    mels = (freqs - f_min) / f_sp
+    min_log_hz, min_log_mel = 1000.0, (1000.0 - f_min) / f_sp
+    logstep = np.log(6.4) / 27.0
+    log_t = freqs >= min_log_hz
+    mels = np.where(log_t, min_log_mel + np.log(freqs / min_log_hz) / logstep, mels)
+    return mels
+
+
+def _mel_to_hz(mels: np.ndarray, *, htk: bool) -> np.ndarray:
+    """mel → Hz, inverse of _hz_to_mel (librosa.mel_to_hz)."""
+    mels = np.asarray(mels, dtype=float)
+    if htk:
+        return 700.0 * (10.0 ** (mels / 2595.0) - 1.0)
+    f_min, f_sp = 0.0, 200.0 / 3.0
+    freqs = f_min + f_sp * mels
+    min_log_hz, min_log_mel = 1000.0, (1000.0 - f_min) / f_sp
+    logstep = np.log(6.4) / 27.0
+    log_t = mels >= min_log_mel
+    freqs = np.where(log_t, min_log_hz * np.exp(logstep * (mels - min_log_mel)), freqs)
+    return freqs
+
+
 def _mel_filters(sr: int, n_fft: int, n_mels: int, *, htk: bool, norm) -> np.ndarray:
-    """librosa mel filterbank [n_mels, n_freqs] (numpy, torch-free). htk+norm=None
-    matches torchaudio.melscale_fbanks to ~5e-6; slaney/htk=False matches whisper."""
-    from librosa.filters import mel as _lmel
-    return _lmel(sr=sr, n_fft=n_fft, n_mels=n_mels, fmin=0.0,
-                 fmax=sr / 2.0, htk=htk, norm=norm)
+    """Mel filterbank [n_mels, n_freqs] — pure numpy, R34 (no librosa). Bit-for-bit
+    reimplementation of librosa.filters.mel: triangular bands over the rfft grid,
+    Slaney or HTK mel scale, Slaney area-norm or none. htk+norm=None matches
+    torchaudio.melscale_fbanks (~5e-6); slaney/htk=False+norm='slaney' matches whisper."""
+    fmin, fmax = 0.0, sr / 2.0
+    n_freqs = 1 + n_fft // 2
+    fftfreqs = np.linspace(0.0, sr / 2.0, n_freqs)
+    # mel band edges: n_mels+2 points equally spaced in mel
+    min_mel = _hz_to_mel(np.array([fmin]), htk=htk)[0]
+    max_mel = _hz_to_mel(np.array([fmax]), htk=htk)[0]
+    mel_f = _mel_to_hz(np.linspace(min_mel, max_mel, n_mels + 2), htk=htk)
+    fdiff = np.diff(mel_f)
+    ramps = mel_f[:, None] - fftfreqs[None, :]            # [n_mels+2, n_freqs]
+    weights = np.zeros((n_mels, n_freqs), dtype=float)
+    for i in range(n_mels):
+        lower = -ramps[i] / fdiff[i]
+        upper = ramps[i + 2] / fdiff[i + 1]
+        weights[i] = np.maximum(0.0, np.minimum(lower, upper))
+    if norm == "slaney":
+        enorm = 2.0 / (mel_f[2:n_mels + 2] - mel_f[:n_mels])
+        weights *= enorm[:, None]
+    return weights.astype(np.float32)
 
 
 # ---------------------------------------------------------------------------
