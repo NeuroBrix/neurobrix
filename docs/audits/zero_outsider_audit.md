@@ -10,7 +10,7 @@
 | RNNT | parakeet flow mel+decode (drop torchaudio/sentencepiece) | **DONE** |
 | ZO-5 | image processors (Janus/swin2SR) | **N/A** — `preprocessor_config.json` read as JSON, no `AutoImageProcessor` import (already clean) |
 | Manifest | split — 14 vendor libs → `[adapter]` extra; runtime deps = torch/numpy/infra/IO | **DONE** |
-| ZO-0 | orpheus SNAC decoder into the `.nbx` | **OPEN** — needs multi-repo component build (SNAC lives in a separate HF repo) + a GPU re-build; mechanically feasible, no licensing issue. Runtime currently `decode_snac_tokens` → `snac.from_pretrained` (HF download). |
+| ZO-0 | orpheus SNAC decoder into the `.nbx` | **COMPILED DONE** — SNAC traced into a new `orpheus-3b-0.1-ft-snac` build as a `codec.decoder` component (NoiseBlock `randn`→`randn_like` so the noise length stays symbolic); the flow redistributes the 7-tokens/frame stream and runs the traced codec — no `snac`, no HF download. Clean-room compiled → STT "Hello world!". **Triton remaining**: a triton weight-load issue on the model prefill of the 3-component build (the ZO-0 codec mechanism is proven in compiled). Production `orpheus-3b-0.1-ft` untouched. |
 | ZO-3 | Kokoro g2p internal/embedded (drop phonemizer/espeakng_loader) | **OPEN — escalated** — faithful g2p means replacing espeak (compiled binary dict + rule engine; Kokoro trained on espeak IPA) AND espeak-ng is GPL-3.0 (distilling its data into this Apache-2.0 repo is a maintainer licensing decision). The clean-room raises a clean ZERO-TORCH-g2p error rather than silently using torch. |
 
 `TokenizerFactory._load_tokenizer` (`factory.py`) still references `transformers`
