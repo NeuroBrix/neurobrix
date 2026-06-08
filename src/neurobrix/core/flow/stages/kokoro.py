@@ -264,41 +264,15 @@ def preprocess_phonemizer_input(engine, prompt: str, phoneme_vocab: Dict) -> Non
     """
     device = engine.ctx.primary_device
 
-    # Step 1: Phonemize text -> IPA string
-    # Try kokoro g2p first (most accurate for Kokoro models),
-    # then phonemizer library, then espeak-ng subprocess as fallback.
-    phonemes = None
-    try:
-        from kokoro import KPipeline
-        pipe = KPipeline(lang_code=engine.ctx.pkg.defaults.get("phoneme_lang", "a"))
-        phonemes, _ = pipe.g2p(prompt)
-    except Exception:
-        pass
-
-    if phonemes is None:
-        try:
-            from phonemizer import phonemize as ph_fn
-            phonemes = ph_fn(
-                prompt, language='en-us', backend='espeak',
-                strip=True, preserve_punctuation=True, with_stress=True,
-            )
-        except Exception:
-            pass
-
-    if phonemes is None:
-        # Last resort: subprocess espeak-ng
-        import subprocess
-        try:
-            result = subprocess.run(
-                ['espeak-ng', '-q', '--ipa', prompt],
-                capture_output=True, text=True, timeout=10,
-            )
-            phonemes = result.stdout.strip()
-        except Exception:
-            raise RuntimeError(
-                "ZERO FALLBACK: Phonemizer model requires 'kokoro', "
-                "'phonemizer', or 'espeak-ng' CLI."
-            )
+    # Step 1: text -> IPA via the NeuroBrix-internal g2p (ZO-3) — reads the
+    # espeak-distilled lexicon embedded in the .nbx (modules/g2p/en_lexicon.txt.gz)
+    # + a stdlib LTS fallback. NO `kokoro`/`phonemizer`/`espeak-ng` import at
+    # runtime (R34); the embedded lexicon retains espeak's license.
+    _lang_map = {"a": "en-us", "b": "en-gb"}
+    klang = engine.ctx.pkg.defaults.get("phoneme_lang", "a")
+    from neurobrix.core.module.audio.g2p import g2p_phonemes
+    phonemes = g2p_phonemes(prompt, engine.ctx.nbx_path_str,
+                            _lang_map.get(klang, "en-us"), klang)
 
     # Step 2: Map phonemes to IDs
     ids = [0]  # BOS/padding
