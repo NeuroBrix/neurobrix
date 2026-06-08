@@ -7,8 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`aten::im2col` Triton kernel (nn.Unfold).** New `kernels/ops/im2col.py` +
+  `im2col_wrapper` extract sliding NCHW blocks to columns
+  (`[N,C,IH,IW] → [N, C·KH·KW, L]`, PyTorch channel-major order) with the
+  padding halo read via boundary-masked `tl.load` (no `F.pad`; R33-pure).
+  Unblocks HAT's OCAB overlapping-window cross-attention — `hat-l-x4` now runs
+  in `--triton-sequential` and `--triton` (previously "No kernel for
+  aten::im2col"). Index math validated bit-exact vs a numpy reference.
+
 ### Fixed
 
+- **Flex/FLUX triton: `aten::index` multi-tensor advanced indexing.**
+  `_meta_index` returned after the FIRST index tensor, so the CLIP text
+  pooler `last_hidden_state[arange(B), input_ids.argmax(-1)]` (EOS-token
+  select) kept all text tokens (`[1,77,768]`) instead of pooling to `[1,768]`.
+  The leaked token dim then broadcast through the FLUX timestep embed
+  (`silu [1,77,3072] → addmm [1,77,18432] → split(dim=1)` yields 0 chunks →
+  adaLN slice crash). Now performs a joint flat-index select across the
+  consecutive indexed dims (single-index path unchanged). `Flex.1-alpha`
+  `--triton` produces a coherent image.
+- **Orphan scalar constant in `aten::fill` across both triton paths.** An
+  in-forward `mask[slice] = cnt` count is baked as a dataless
+  `param::constant`; the native compiled path defaults it to a 0-dim value
+  (c0a1445). The triton-sequential resolver
+  (`graph_executor._resolve_sequential_arg`) and the triton-compiled
+  `_meta_fill` (None→0) now mirror that default, so `hat-l-x4` runs in both
+  triton modes (HAT OCAB counter; the value is a trace-time artefact).
 - **orpheus-snac triton autoregressive prefill: resolve the LM component via
   `ctx.executors`, not `pkg.components`.** The triton AR handler resolved the
   language-model component against `pkg.components` (populated only from
