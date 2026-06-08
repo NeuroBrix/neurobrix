@@ -152,6 +152,29 @@ def postprocess_text_output(ctx: FlowContext) -> None:
     print(f"   [Output] Transcription: {text[:100]}{'...' if len(text) > 100 else ''}")
 
 
+def redistribute_snac_codes(generated_ids, audio_token_start, vocab_size,
+                            codebook_size: int = 4096):
+    """Zero Outsider (ZO-0): redistribute an orpheus SNAC token stream (7 tokens
+    per frame) into the 3 SNAC codebooks. PURE python (no torch, no `snac`):
+    c0=[0], c1=[1,4], c2=[2,3,5,6] per frame, each modulo codebook_size. Returns
+    (c0, c1, c2) lists or None if there are no full frames. The neural decode of
+    these codes runs through the TRACED codec.decoder component (in the .nbx)."""
+    at = [t - audio_token_start for t in generated_ids
+          if audio_token_start <= t < vocab_size]
+    n = len(at) // 7
+    if n == 0:
+        return None
+    at = at[:n * 7]
+    c0, c1, c2 = [], [], []
+    for i in range(n):
+        b = i * 7
+        c0.append(at[b] % codebook_size)
+        c1.append(at[b + 1] % codebook_size); c1.append(at[b + 4] % codebook_size)
+        c2.append(at[b + 2] % codebook_size); c2.append(at[b + 3] % codebook_size)
+        c2.append(at[b + 5] % codebook_size); c2.append(at[b + 6] % codebook_size)
+    return c0, c1, c2
+
+
 def postprocess_audio_output(ctx: FlowContext) -> None:
     """Process TTS output: decode audio tokens or store raw waveform."""
     device = ctx.primary_device
@@ -171,6 +194,13 @@ def postprocess_audio_output(ctx: FlowContext) -> None:
         vocab_size = defaults.get("vocab_size")
         if vocab_size is None:
             raise RuntimeError("ZERO FALLBACK: vocab_size missing from defaults.json.")
+
+        # Zero Outsider (ZO-0): if the SNAC codec is TRACED into the .nbx as a
+        # `codec.decoder` component, the flow handler runs it as a proper stage
+        # (via _execute_component — needed for symbolic-shape + in-graph randn
+        # setup). Skip the vendor `snac` decode here; the flow binds global.output_audio.
+        if "codec.decoder" in ctx.executors:
+            return
 
         from neurobrix.core.module.audio.output_processor import AudioOutputProcessor
         waveform = AudioOutputProcessor.decode_snac_tokens(

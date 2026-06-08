@@ -570,10 +570,44 @@ class AutoregressiveHandler(FlowHandler):
         generated_tokens = generator.get_generated_tokens()
         strategy.process_output(generated_tokens, self.ctx)
 
+        # Zero Outsider (ZO-0): SNAC codec traced into the .nbx → run it as a stage
+        # (no vendor `snac`, no HF download).
+        self._run_snac_codec_decoder(generated_tokens)
+
         session.cleanup()
         self._unload_non_lm_weights(gen_info)
 
         return self.ctx.variable_resolver.resolve_all()
+
+    def _run_snac_codec_decoder(self, generated_tokens) -> None:
+        """ZO-0: decode orpheus SNAC tokens through the TRACED `codec.decoder`
+        component. Redistributes the 7-tokens/frame stream into the 3 SNAC
+        codebooks (pure python) and runs the codec as a proper stage via
+        `_execute_component` (so symbolic shapes + the in-graph NoiseBlock randn
+        are set up correctly). No `snac` import."""
+        defaults = self.ctx.pkg.defaults
+        if defaults.get("audio_output_type") != "snac_tokens":
+            return
+        if "codec.decoder" not in self.ctx.executors:
+            return
+        from .audio_utils import redistribute_snac_codes
+        gen_ids = (generated_tokens.tolist()
+                   if hasattr(generated_tokens, "tolist") else list(generated_tokens))
+        codes = redistribute_snac_codes(
+            gen_ids, defaults["audio_token_start"], defaults["vocab_size"])
+        if codes is None:
+            return
+        c0, c1, c2 = codes
+        dev = self._parse_device()
+        rv = self.ctx.variable_resolver.resolved
+        for key, vals in (("c0", c0), ("c1", c1), ("c2", c2)):
+            t = torch.tensor([vals], dtype=torch.long, device=dev)
+            rv[f"codec.decoder.{key}"] = t
+            rv[key] = t
+        self._execute_component("codec.decoder", "forward", None)
+        wav = rv.get("codec.decoder.output_0")
+        if wav is not None:
+            rv["global.output_audio"] = wav
 
     # ─── SETUP HELPERS ─────────────────────────────────────────────────────────
 
