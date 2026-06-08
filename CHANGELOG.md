@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Zero Outsider ZO-3 — Kokoro g2p embedded in the `.nbx`, NeuroBrix-internal
+  runner** (R34). Kokoro's text→IPA g2p no longer imports `phonemizer`/
+  `espeakng_loader`/`kokoro`/`misaki` at runtime. The build distills espeak-ng
+  (GPL, license retained) into a 210k-entry pronunciation lexicon embedded as a
+  `.nbx` module (`modules/g2p/en_lexicon.txt.gz`, like the tokenizer vocab — no
+  relicensing); `core/module/audio/g2p.py` (stdlib-only) reads it at runtime with
+  a deterministic LTS fallback for OOV. "Hello world" → `həlˈoʊ wˈɜːld`
+  (byte-identical to espeak); per-word phonemes match espeak (dict-word 100%).
+  Residual: intra-sentence prosody (espeak's text normalizer — word fusion/
+  reduction) is not reproduced by word-level lookup; per-word phonemes remain
+  correct so Kokoro stays intelligible. Validated in the clean venv (no vendor
+  g2p): Kokoro compiled + triton → STT "Hello world".
+
 - **Zero Outsider ZO-0 — orpheus SNAC vocoder traced into the `.nbx`** (R34). The
   orpheus runtime previously decoded audio via `snac.SNAC.from_pretrained(...)` —
   a vendor neural decoder downloaded from HuggingFace at inference (the gravest

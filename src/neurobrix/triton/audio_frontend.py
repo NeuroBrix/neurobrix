@@ -82,59 +82,11 @@ def _model_config_path(ctx) -> Path:
         "modules/tokenizer/ inside the .nbx.")
 
 
-def _g2p_phonemes(prompt: str, lang: str = "en-us", kokoro_lang: str = "a") -> str:
-    """Text → IPA phonemes. Prefers the TORCH-FREE phonemizer/espeak backend; on
-    a host without espeak-ng installed it falls back to kokoro/misaki g2p (which
-    pulls torch) so Kokoro never breaks. The path is fully torch-free wherever
-    espeak-ng is present (`apt install espeak-ng`); the torch import is lazy and
-    only fires in the fallback. Both backends emit IPA mapped via phoneme_vocab."""
-    # 1) torch-free phonemizer (espeak shared lib). espeakng_loader ships the
-    #    espeak-ng shared library + data as a pip wheel, so no system install /
-    #    sudo is needed; we just point phonemizer at the bundled lib.
-    try:
-        try:
-            import espeakng_loader
-            from phonemizer.backend.espeak.wrapper import EspeakWrapper
-            EspeakWrapper.set_library(espeakng_loader.get_library_path())
-            EspeakWrapper.set_data_path(espeakng_loader.get_data_path())
-        except Exception:
-            pass  # fall back to a system-installed espeak if present
-        from phonemizer.backend import EspeakBackend
-        if EspeakBackend.is_available():
-            from phonemizer import phonemize
-            out = phonemize(prompt, language=lang, backend="espeak", strip=True,
-                            preserve_punctuation=True, with_stress=True)
-            phon = out if isinstance(out, str) else " ".join(
-                o if isinstance(o, str) else "".join(o) for o in out)
-            if phon.strip():
-                return phon
-    except Exception:
-        pass
-    # 2) espeak-ng CLI (also torch-free)
-    try:
-        import shutil
-        import subprocess
-        if shutil.which("espeak-ng"):
-            r = subprocess.run(["espeak-ng", "-q", "--ipa", prompt],
-                               capture_output=True, text=True, timeout=10)
-            if r.stdout.strip():
-                return r.stdout.strip()
-    except Exception:
-        pass
-    # 3) No torch-free g2p available. The triton path NEVER silently degrades to
-    #    the misaki/kokoro g2p (which pulls torch) — that would reintroduce torch
-    #    into the triton compute path invisibly (R33 forbids a torch fallback;
-    #    the no-silent-install doctrine forbids auto-fetching a wheel). Raise a
-    #    clean, actionable error instead.
-    raise RuntimeError(
-        "ZERO-TORCH g2p unavailable: the triton Kokoro path needs a torch-free "
-        "espeak backend and none was found. Install one of:\n"
-        "  - `pip install espeakng-loader` (ships the espeak-ng shared library, "
-        "no sudo — this is a declared NeuroBrix dependency), or\n"
-        "  - the system `espeak-ng` binary (`apt install espeak-ng`).\n"
-        "The triton path does NOT fall back to misaki/kokoro g2p (it pulls "
-        "torch, violating R33)."
-    )
+# g2p is NeuroBrix-internal (ZO-3): text→IPA via the espeak-distilled lexicon
+# embedded in the .nbx (modules/g2p/en_lexicon.txt.gz) + a stdlib LTS fallback,
+# read by core.module.audio.g2p — NO `phonemizer`/`espeakng_loader`/`kokoro`
+# import at runtime. The lexicon is byte-identical to espeak per word (incl.
+# "Hello world" → həlˈoʊ wˈɜːld); embedded data retains espeak's license.
 
 
 def _load_pt_numpy(path: str) -> np.ndarray:
@@ -217,7 +169,8 @@ def preprocess_phonemizer_input_np(engine, prompt: str, phoneme_vocab: Dict) -> 
     _lang_map = {"a": "en-us", "b": "en-gb"}
     klang = engine.ctx.pkg.defaults.get("phoneme_lang", "a")
     lang = _lang_map.get(klang, "en-us")
-    phonemes = _g2p_phonemes(prompt, lang, klang)
+    from neurobrix.core.module.audio.g2p import g2p_phonemes
+    phonemes = g2p_phonemes(prompt, engine.ctx.nbx_path_str, lang, klang)
     ids = [0]
     for ch in phonemes:
         if ch in phoneme_vocab:
