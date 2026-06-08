@@ -713,13 +713,31 @@ def reciprocal(x) :
 
 
 def pow_wrapper(x, exponent) :
-    x = x.contiguous()
-    output = NBXTensor.empty_like(x)
-    if isinstance(exponent, NBXTensor):
-        exponent = exponent.item()
-    _set_device(x)
-    pow_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), exponent, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
-    return output
+    # aten::pow has four forms — the base and/or exponent may be a scalar:
+    #   tensor ** scalar  → fused kernel (fast path)
+    #   scalar ** tensor  → e.g. 10000.0 ** (arange/dim), the sinusoidal/RoPE
+    #                       frequency base (Flex DiT) — a**b = exp(b·ln a)
+    #   tensor ** tensor  → exp(b·ln a)
+    #   scalar ** scalar  → constant
+    # All non-fast cases route through exp/mul/log (R33-pure, no torch).
+    import math
+    x_is_t = isinstance(x, NBXTensor)
+    e_is_t = isinstance(exponent, NBXTensor)
+    if x_is_t and not e_is_t:
+        x = x.contiguous()
+        output = NBXTensor.empty_like(x)
+        _set_device(x)
+        pow_forward_kernel[_1d_grid(x.numel())](
+            x, output, x.numel(), float(exponent),
+            BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        return output
+    if (not x_is_t) and e_is_t:
+        # scalar ** tensor = exp(exponent · ln(scalar))
+        return exp(mul(exponent, math.log(float(x))))
+    if x_is_t and e_is_t:
+        # tensor ** tensor = exp(exponent · ln(base))
+        return exp(mul(exponent, log_wrapper(x)))
+    return float(x) ** float(exponent)
 
 
 def clamp(x, min_val=None, max_val=None) :
