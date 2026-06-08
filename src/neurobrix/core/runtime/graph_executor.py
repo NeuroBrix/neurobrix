@@ -1751,6 +1751,17 @@ class GraphExecutor:
             "NBX_LIVENESS_AUDIT_AT_OP_UID", "")
         _liveness_audited = False
 
+        # Multi-device (pipeline_parallel) activation tracker — mirror of the
+        # compiled hot loop's `current_activation_device` (sequence.py
+        # _run_multi_device). Pipeline-parallel shards a component's weights
+        # across GPUs; at a stage boundary the activation must move to the next
+        # stage's weight device before the op runs. Starts on the component's
+        # primary device. See the per-op transfer block below.
+        _seq_current_dev = device_idx
+        from neurobrix.triton.device_transfer import (
+            needs_move as _needs_move_dt, transfer_tensor as _xfer_dt)
+        from neurobrix.kernels.nbx_tensor import DeviceAllocator as _DA_dt
+
         for op_idx, op_uid in enumerate(exec_order):
             op_data = ops_meta.get(op_uid)
             if op_data is None:
@@ -1847,6 +1858,42 @@ class GraphExecutor:
             for arg in raw_args:
                 resolved_args.append(
                     self._resolve_sequential_arg(arg, store, sym_resolver, dispatcher))
+
+            # --- Pipeline-parallel cross-device stage handling (R30 mirror of
+            # TritonSequence._run_multi_device + _set_op_devices). ---
+            # An op's target device is where its weight/param input lives
+            # (pipeline_parallel shards a component's weights per stage; params
+            # are positional tensor args). With no weight, the activation stays
+            # on the running device (_seq_current_dev). Every positional tensor
+            # arg not already on target is moved there via a real D2D memcpy
+            # (NBXTensor.to(device) is a no-op). Inert on single-GPU components
+            # (target == device_idx → needs_move always False → scan only), so
+            # the previously-green triton_sequential models are untouched.
+            _target_dev = None
+            for _a_meta in raw_args:
+                if isinstance(_a_meta, dict) and _a_meta.get("type") in (
+                        "tensor", "tensor_ref"):
+                    _atid = _a_meta.get("tensor_id", "") or ""
+                    if _atid.startswith("param::") or _atid.startswith("buffer::"):
+                        _wt = store.get(_atid)
+                        if _wt is not None and hasattr(_wt, "_device_idx"):
+                            _target_dev = _wt._device_idx
+                            break
+            if _target_dev is None:
+                _target_dev = _seq_current_dev
+            for _i_a, _a in enumerate(resolved_args):
+                if hasattr(_a, "_device_idx"):  # NBXTensor
+                    if _needs_move_dt(_a, _target_dev):
+                        resolved_args[_i_a] = _xfer_dt(_a, _target_dev)
+                elif isinstance(_a, (list, tuple)):
+                    _new = [
+                        _xfer_dt(_x, _target_dev)
+                        if hasattr(_x, "_device_idx") and _needs_move_dt(_x, _target_dev)
+                        else _x for _x in _a]
+                    resolved_args[_i_a] = type(_a)(_new)
+            if _target_dev != _seq_current_dev:
+                _DA_dt.ensure_triton_device(_target_dev)
+                _seq_current_dev = _target_dev
 
             # Op_uid interceptor priority (matches CompiledSequence and
             # TritonSequence: op_uid > op_type > native dispatch). Without

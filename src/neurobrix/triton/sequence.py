@@ -3484,16 +3484,10 @@ class TritonSequence:
 
     @staticmethod
     def _needs_move(t: NBXTensor, target_dev: int) -> bool:
-        """Return True iff tensor must be transferred to land on cuda:target_dev.
-
-        Covers three cases:
-          1. Source is CPU → must H2D (even if _device_idx happens to be 0).
-          2. Source is on a different CUDA device → must D2D.
-          3. Source is on target CUDA device → no-op.
-        """
-        if getattr(t, '_device', 'cuda') == 'cpu':
-            return True
-        return t._device_idx != target_dev
+        """Delegates to the shared cross-device helper (R30: same impl as the
+        op-by-op triton_sequential path)."""
+        from neurobrix.triton.device_transfer import needs_move
+        return needs_move(t, target_dev)
 
     @staticmethod
     def _find_cuda_arg(args) -> 'Optional[int]':
@@ -3594,25 +3588,10 @@ class TritonSequence:
         correctly materialises via strided_copy, matching what the
         native torch.Tensor.to(device) contract does.
         """
-        # Expand views (stride == 0 on a broadcast axis) have
-        # numel * esz > backing bytes. A straight memcpy(nbytes)
-        # would over-read the source allocation and stamp garbage into
-        # the GPU buffer, so materialise first. contiguous() picks the
-        # right CPU/GPU path based on the source device.
-        if tensor.is_expanded():
-            tensor = tensor.contiguous()
-        DeviceAllocator.set_device(target_dev)
-        src_device = getattr(tensor, '_device', 'cuda')
-        kind = 1 if src_device == 'cpu' else 3
-        if tensor._nbytes > 0:
-            dst_raw_ptr = DeviceAllocator.malloc_cuda(tensor._nbytes)
-            DeviceAllocator.memcpy(dst_raw_ptr, tensor.data_ptr(),
-                                   tensor._nbytes, kind=kind)
-        else:
-            dst_raw_ptr = 0
-        return NBXTensor(
-            dst_raw_ptr, tensor._shape, tensor._strides, tensor._dtype,
-            'cuda', owns_data=True, device_idx=target_dev, offset=0)
+        # Delegates to the shared cross-device helper so the compiled and
+        # op-by-op triton_sequential paths share ONE transfer impl (R30).
+        from neurobrix.triton.device_transfer import transfer_tensor
+        return transfer_tensor(tensor, target_dev)
 
     def gather_outputs(self, output_ids: Optional[List[str]] = None) -> Dict[str, Any]:
         """Read output tensors from arena."""

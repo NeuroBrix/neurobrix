@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **triton-sequential pipeline-parallel cross-device (R30 parity with compiled).**
+  When a component's weights are sharded across GPUs (pipeline_parallel: block N
+  on cuda:i, block N+k on cuda:j), the op-by-op `triton_sequential` path crashed
+  at the first stage boundary (`deepseek-moe-16b` `custom.rms_norm::46`:
+  activation cuda:2 vs weight cuda:3) because it ran single-device and
+  `NBXTensor.to(device)` is a no-op. The compiled hot-loop already handles this
+  (`_run_multi_device` + `_set_op_devices`); the sequential path now mirrors it:
+  per op, target device = the op's weight/param input device (else a running
+  activation tracker), and every activation arg not on target is moved with a
+  real D2D `memcpy`. The transfer is extracted to a shared `triton/
+  device_transfer.py` (`needs_move` + `transfer_tensor`) so both modes share ONE
+  implementation; `TritonSequence._needs_move`/`_transfer_tensor` now delegate to
+  it. Inert on single-GPU components (target == device_idx → no move). R33-pure,
+  model-agnostic. `deepseek-moe-16b` is now 4/4 (all modes greedy-identical
+  "The capital of France is Paris.").
+
 ### Added
 
 - **`aten::im2col` Triton kernel (nn.Unfold).** New `kernels/ops/im2col.py` +
