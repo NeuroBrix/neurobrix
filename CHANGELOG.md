@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Triton scheduler subtree completed: zero-torch Euler, Euler-Ancestral and DDIM
+  schedulers** (joining the existing FlowEuler + DPM++). Each is a numpy-schedule +
+  NBXTensor-step port of its `core/module/scheduler/diffusion/*` counterpart, with
+  no torch on the path; the stochastic variants (Euler-Ancestral, DDIM eta>0) draw
+  N(0,1) noise through the NBXTensor randn wrapper (honouring the shared
+  `NBX_FORCE_RAND_SEED` pin). Registered in the triton scheduler factory under the
+  same aliases the core factory uses (`EulerDiscreteScheduler`/`euler`,
+  `EulerAncestralDiscreteScheduler`/`euler_a`, `DDIMScheduler`/`ddim`). Validated
+  by a unit test against the core schedulers: identical timesteps/sigmas and
+  per-step outputs to fp32 (`maxdiff ≤ 1.4e-6`). Added numpy `leading`/`trailing`
+  spacing + Karras-sigma helpers to `triton/scheduler/noise_schedules.py`. (DDIM
+  dynamic thresholding raises ZERO-FALLBACK pending a percentile kernel;
+  `clip_sample` is supported.)
+
 ### Fixed
 
 - **chatterbox TTS-LLM: shared seeded sampler in both handlers + a deterministic
