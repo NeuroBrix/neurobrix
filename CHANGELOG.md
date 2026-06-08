@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Zero Outsider ZO-2 — compiled mel front-end is now vendor-free** (R34). The
+  numpy mel/feature DSP is consolidated into a shared, mode-neutral
+  `core/module/audio/mel_dsp.py` (the single source of truth: `_load_audio`,
+  `_stft_power`, mel filterbank, `_whisper_mel`/`_conformer_mel`/`_nemo_mel`/
+  `_raw_waveform`, `extract_features_np` — numpy + stdlib only). The triton
+  front-end re-exports it; `core/module/audio/input_processor.py` (compiled mode)
+  now computes through it and converts to torch only at the boundary, dropping
+  `transformers.WhisperFeatureExtractor`, `torchaudio` and `librosa`. Parity vs
+  the old vendor extractors on the canonical clip: whisper 1.7e-5, conformer
+  1.35e-5, raw 0.0, nemo 1.4e-3 (dither term zeroed both sides). Clean-room
+  import (vendor packages blocked) passes. Compiled and triton now share the
+  exact same mel DSP.
+
 - **Zero Outsider ZO-1 + ZO-4 — pure-Python tokenizers and mel filterbank**
   (R34 engine import purity). The runtime tokenizer runners no longer import the
   vendor libraries (`tokenizers`, `sentencepiece`, `tiktoken`, `mistral_common`);
