@@ -51,9 +51,9 @@ class TritonEncoderDecoderEngine:
         stages = audio_config.get("stages", [])
         defaults = self.ctx.pkg.defaults
 
-        # -- Step 1: Preprocess audio input (BOUNDARY — uses torch internally) --
-        from neurobrix.core.flow.audio_utils import preprocess_audio_input
-        preprocess_audio_input(self.ctx, audio_config, stages)
+        # -- Step 1: Preprocess audio input (zero-torch numpy front-end) --
+        from neurobrix.triton.audio_frontend import preprocess_audio_input_np
+        preprocess_audio_input_np(self.ctx, audio_config, stages)
 
         # -- Step 2: Forward encoder --
         encoder_stage = None
@@ -199,9 +199,9 @@ class TritonEncoderDecoderEngine:
             self._unload_component_weights(dec_name)
             gc.collect()
 
-        # -- Step 4: Decode tokens to text --
-        from neurobrix.core.flow.audio_utils import postprocess_text_output
-        postprocess_text_output(self.ctx)
+        # -- Step 4: Decode tokens to text (zero-torch) --
+        from neurobrix.triton.audio_frontend import postprocess_text_output_np
+        postprocess_text_output_np(self.ctx)
 
         return self.ctx.variable_resolver.resolve_all()
 

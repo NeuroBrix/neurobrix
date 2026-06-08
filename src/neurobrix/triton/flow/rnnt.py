@@ -111,75 +111,22 @@ class TritonRNNTEngine:
         device_idx = _parse_device_idx(self.ctx.primary_device)
         DeviceAllocator.set_device(device_idx)
 
-        # Load audio with soundfile (no torch)
-        import soundfile as sf
-        audio, sr = sf.read(str(audio_path), dtype="float32")
-        if audio.ndim > 1:
-            audio = audio.mean(axis=1)
-
-        # Resample to 16kHz if needed
-        if sr != 16000:
-            target_len = int(len(audio) * 16000 / sr)
-            indices = np.linspace(0, len(audio) - 1, target_len)
-            audio = np.interp(indices, np.arange(len(audio)), audio).astype(np.float32)
-            sr = 16000
-
         print(f"   [Audio] Loading: {audio_path}")
 
-        # BOUNDARY: NeMo mel preprocessing requires torch STFT + torchaudio mel fbanks.
-        # We import torch only for this boundary computation.
-        import torch as _torch_boundary
-        import torchaudio as _torchaudio_boundary
+        # NeMo mel in PURE NUMPY (zero torch) — bit-close mirror of the
+        # torchaudio path (validated vs torch; STT-confirmed). The extractor
+        # loads + resamples the audio itself.
+        from pathlib import Path as _Path
+        from neurobrix.triton.audio_frontend import _nemo_mel, _model_config_path
+        try:
+            _mp = _model_config_path(self.ctx)
+        except Exception:
+            _mp = _Path(self.ctx.nbx_path_str)
+        features_np = _nemo_mel(str(audio_path), _mp, None)   # [1, n_mels, frames]
+        actual_frames = features_np.shape[2]
+        print(f"   [Audio] Features: {features_np.shape} (nemo_mel·np, {actual_frames} frames)")
 
-        device = _torch_boundary.device(self.ctx.primary_device)
-        waveform = _torch_boundary.from_numpy(audio).to(device=device, dtype=_torch_boundary.float32)
-
-        defaults = self.ctx.pkg.defaults
-        n_fft = 512
-        win_length = 400
-        hop_length = 160
-        n_mels = 80
-        dither = defaults.get("dither", 1e-5)
-
-        # Pre-emphasis filter
-        preemph = defaults.get("preemphasis", 0.97)
-        if preemph > 0:
-            waveform = _torch_boundary.cat([waveform[:1], waveform[1:] - preemph * waveform[:-1]])
-
-        # Apply dither
-        if dither > 0:
-            waveform = waveform + dither * _torch_boundary.randn_like(waveform)
-
-        # STFT
-        window = _torch_boundary.hann_window(win_length, device=device)
-        stft = _torch_boundary.stft(
-            waveform, n_fft=n_fft, hop_length=hop_length, win_length=win_length,
-            window=window, return_complex=True, center=True, pad_mode="reflect",
-        )
-        power_spectrum = stft.abs().pow(2)
-
-        # Mel filterbank
-        mel_fb = _torchaudio_boundary.functional.melscale_fbanks(
-            n_freqs=n_fft // 2 + 1, f_min=0.0, f_max=sr / 2.0,
-            n_mels=n_mels, sample_rate=sr,
-        ).to(device=device)
-
-        mel_spec = power_spectrum.T @ mel_fb
-
-        # Log with guard
-        mel_spec = _torch_boundary.log(mel_spec.clamp(min=1e-5))
-
-        # Per-feature normalization
-        mean = mel_spec.mean(dim=0, keepdim=True)
-        std = mel_spec.std(dim=0, keepdim=True).clamp(min=1e-5)
-        mel_spec = (mel_spec - mean) / std
-
-        # Transpose to [1, n_mels, frames]
-        features = mel_spec.T.unsqueeze(0)
-        actual_frames = features.shape[2]
-        print(f"   [Audio] Features: {features.shape} (nemo_mel, {actual_frames} frames)")
-
-        # Pad to match encoder's traced frame count
+        # Pad/truncate to the encoder's traced frame count (numpy).
         expected_frames = 3000
         encoder_executor = self.ctx.executors.get("encoder")
         if encoder_executor and hasattr(encoder_executor, '_dag'):
@@ -189,15 +136,14 @@ class TritonRNNTEngine:
                 if shape and len(shape) == 3:
                     expected_frames = shape[2]
                     break
-
         if actual_frames < expected_frames:
-            features = _torch_boundary.nn.functional.pad(features, (0, expected_frames - actual_frames))
+            features_np = np.concatenate(
+                [features_np, np.zeros((1, features_np.shape[1],
+                                        expected_frames - actual_frames), np.float32)], axis=2)
         elif actual_frames > expected_frames:
-            features = features[:, :, :expected_frames]
+            features_np = features_np[:, :, :expected_frames]
 
-        # BOUNDARY END: convert to NBXTensor
-        features_np = features.detach().cpu().numpy()
-        features_nbx = NBXTensor.from_numpy(features_np)
+        features_nbx = NBXTensor.from_numpy(np.ascontiguousarray(features_np))
 
         length_np = np.array([min(actual_frames, expected_frames)], dtype=np.int64)
         length_nbx = NBXTensor.from_numpy(length_np)
