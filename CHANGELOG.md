@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **orpheus-snac triton autoregressive prefill: resolve the LM component via
+  `ctx.executors`, not `pkg.components`.** The triton AR handler resolved the
+  language-model component against `pkg.components` (populated only from
+  component dirs shipping a `runtime.json` — partial: empty for the 2-component
+  orpheus-ft build, `{codec.decoder}` for the 3-component SNAC build), so the
+  fallback selected `codec.decoder` as the LM and prefill ran the SNAC codec
+  graph with `input_ids=None`. Now resolves against `ctx.executors` (keyed by
+  every topology component) and excludes `codec.decoder` from the fallback,
+  mirroring the native path (R30, R33-pure). `orpheus-3b-0.1-ft-snac` is now
+  4/4 (all modes transcribe "Hello world!").
 - **Shared triton kernels: `pow` with a scalar/tensor base, op-localized
   triton-sequential errors.** `pow_wrapper` now handles all four `aten::pow`
   forms — `tensor**scalar` (fused kernel), `scalar**tensor` (e.g. the
