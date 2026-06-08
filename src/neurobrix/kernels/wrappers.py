@@ -5493,6 +5493,42 @@ def unfold_backward_wrapper(grad_in, input_sizes, dim, size, step) :
     return out.reshape(*out_shape)
 
 
+def im2col_wrapper(x, kernel_size, dilation, padding, stride):
+    """aten::im2col / nn.Unfold — sliding local blocks of an NCHW tensor.
+
+    x [N, C, IH, IW] -> [N, C*KH*KW, L], L = OH*OW, in PyTorch's channel-major
+    column order (c*KH*KW + kh*KW + kw). R33-pure: one @triton.jit kernel that
+    reads the padding halo via boundary-masked tl.load (no F.pad). Drives HAT's
+    OCAB overlapping-window cross-attention (P-TRITON-IM2COL-KERNEL).
+    """
+    from .ops.im2col import im2col_kernel
+
+    def _pair(v):
+        return tuple(v) if isinstance(v, (list, tuple)) else (v, v)
+
+    x = _ensure_cuda(x).contiguous()
+    N, C, IH, IW = x.shape
+    KH, KW = _pair(kernel_size)
+    dil_h, dil_w = _pair(dilation)
+    pad_h, pad_w = _pair(padding)
+    stride_h, stride_w = _pair(stride)
+    OH = (IH + 2 * pad_h - dil_h * (KH - 1) - 1) // stride_h + 1
+    OW = (IW + 2 * pad_w - dil_w * (KW - 1) - 1) // stride_w + 1
+    L = OH * OW
+    out = NBXTensor.empty((N, C * KH * KW, L), dtype=x.dtype, device=x.device)
+    in_sn, in_sc, in_sh, in_sw = C * IH * IW, IH * IW, IW, 1
+    out_sn, out_sc, out_sl = C * KH * KW * L, L, 1
+    BLOCK_L = min(1024, triton.next_power_of_2(L))
+    grid = (N * C * KH * KW,)
+    _set_device(x)
+    im2col_kernel[grid](
+        x, out, C, IH, IW, OW, L, KH, KW,
+        stride_h, stride_w, pad_h, pad_w, dil_h, dil_w,
+        in_sn, in_sc, in_sh, in_sw, out_sn, out_sc, out_sl,
+        BLOCK_L=BLOCK_L)
+    return out
+
+
 # ===========================================================================
 # ANGLE — atan2(imag, real) for complex tensors
 # ===========================================================================

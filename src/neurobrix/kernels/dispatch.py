@@ -218,6 +218,16 @@ def _meta_fill(x, value):
     from neurobrix.kernels.nbx_tensor import NBXTensor
     if isinstance(value, NBXTensor):
         value = value.item()
+    if value is None:
+        # Orphan scalar constant: an in-forward `mask[slice] = cnt` count baked
+        # as a `param::constant` with NO data in the container, consumed by
+        # aten::fill. The native compiled path materialises it as a 0-dim default
+        # (bind_weights `[]`, commit c0a1445) and the triton-sequential resolver
+        # mirrors that (graph_executor._resolve_sequential_arg) — but the triton
+        # COMPILED arena leaves the slot None, so the value reaches fill as None.
+        # Default to 0 here so both triton paths match the native 0-default (HAT
+        # OCAB counter; the value is a trace-time artefact, not runtime data).
+        value = 0
     out = NBXTensor.empty(x._shape, x._dtype, f"cuda:{x._device_idx}")
     return out.fill_(value)
 
@@ -262,28 +272,72 @@ def _meta_movedim(x, src, dst):
 
 
 def _meta_index(x, indices):
-    """aten::index — advanced indexing with list of optional index tensors.
+    """aten::index — advanced indexing with a list of optional index tensors.
 
-    For single index on dim 0: x[idx] where idx can be multi-dimensional.
-    Output shape = idx.shape + x.shape[1:]
-    Uses index_select internally, then reshapes to match expected output.
+    Single index tensor on dim d: x[..., idx, ...] via index_select; output
+    shape = x.shape[:d] + idx.shape + x.shape[d+1:].
+
+    TWO+ index tensors = advanced ("diagonal"/joint) indexing: PyTorch selects
+    elements jointly, out[k] = x[i0[k], i1[k], ...], NOT the outer product.
+    The CLIP text pooler is exactly this: last_hidden_state[arange(B),
+    input_ids.argmax(-1)] picks the EOS token per batch → [B, hidden]. The old
+    loop returned after the FIRST index tensor, so it kept all 77 text tokens
+    ([1,77,768]) instead of pooling to [1,768] — which then broadcast the 77
+    dim through the FLUX/Flex temb (silu::3 [1,77,3072] → addmm [1,77,18432] →
+    split(dim=1) yields 0 chunks → adaLN slice crash). Implement the joint
+    select via a flat row-major index over the consecutive indexed dims.
     """
-    if isinstance(indices, (list, tuple)):
-        for dim, idx in enumerate(indices):
-            if idx is not None:
-                from neurobrix.kernels import wrappers as w
-                # Flatten idx, index_select, then reshape to idx.shape + remaining
-                orig_idx_shape = idx.shape
-                flat_idx = idx.reshape(-1) if idx.ndim > 1 else idx
-                selected = w.index_select_wrapper(x, dim, flat_idx)
-                # Reshape: flatten selected along indexed dim to match idx shape
-                if idx.ndim > 1:
-                    out_shape = list(orig_idx_shape) + list(x.shape[dim+1:])
-                    selected = selected.reshape(*out_shape)
-                return selected
-        return x
     from neurobrix.kernels import wrappers as w
-    return w.index_select_wrapper(x, 0, indices)
+    if not isinstance(indices, (list, tuple)):
+        return w.index_select_wrapper(x, 0, indices)
+
+    present = [(d, i) for d, i in enumerate(indices) if i is not None]
+    if not present:
+        return x
+
+    if len(present) == 1:
+        # Single advanced index — unchanged behaviour (byte-identical path).
+        dim, idx = present[0]
+        orig_idx_shape = idx.shape
+        flat_idx = idx.reshape(-1) if idx.ndim > 1 else idx
+        selected = w.index_select_wrapper(x, dim, flat_idx)
+        if idx.ndim > 1:
+            out_shape = list(orig_idx_shape) + list(x.shape[dim + 1:])
+            selected = selected.reshape(*out_shape)
+        return selected
+
+    # --- Advanced indexing with >=2 index tensors (joint select) ---
+    dims = [d for d, _ in present]
+    if dims != list(range(dims[0], dims[0] + len(dims))):
+        raise NotImplementedError(
+            f"[--triton] aten::index advanced indexing requires consecutive "
+            f"index dims; got {dims}")
+    first = dims[0]
+    idx_tensors = [i for _, i in present]
+    base_shape = list(idx_tensors[0].shape)
+    if any(list(t.shape) != base_shape for t in idx_tensors[1:]):
+        # PyTorch broadcasts differing index shapes; the pooler/batched-gather
+        # cases use identical shapes. Defer general broadcasting until a model
+        # needs it (fail loud, never silently wrong).
+        raise NotImplementedError(
+            f"[--triton] aten::index advanced indexing with differing index "
+            f"shapes not yet supported: {[t.shape for t in idx_tensors]}")
+    # Row-major flat index across the consecutive indexed dims:
+    # flat = ((i0)*n1 + i1)*n2 + i2 ...   (ni = x.shape[indexed dim])
+    sizes = [x.shape[d] for d in dims]
+    flats = [t.reshape(-1) for t in idx_tensors]
+    flat = flats[0]
+    for k in range(1, len(flats)):
+        flat = flat * sizes[k] + flats[k]
+    flat = flat.long()
+    block = 1
+    for s in sizes:
+        block *= s
+    collapsed = list(x.shape[:first]) + [block] + list(x.shape[first + len(dims):])
+    xc = x.reshape(*collapsed)
+    sel = w.index_select_wrapper(xc, first, flat)
+    out_shape = list(x.shape[:first]) + base_shape + list(x.shape[first + len(dims):])
+    return sel.reshape(*out_shape)
 
 
 def _meta_sdpa_efficient(*args, **kwargs):
@@ -837,6 +891,7 @@ def _build_op_map() -> Dict[str, Callable]:
         "reshape_as": _meta_reshape_as,
         "as_strided": _meta_as_strided,
         "unfold": _meta_unfold,
+        "im2col": w.im2col_wrapper,
         "movedim": _meta_movedim,
 
         # Memory
