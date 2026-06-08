@@ -1,5 +1,29 @@
 # Zero Outsider — full runtime vendor-dependency audit (2026-06-08)
 
+## Resolution status (2026-06-08)
+
+| phase | scope | status |
+|-------|-------|--------|
+| ZO-1 | pure-Python tokenizer runners (drop tokenizers/sentencepiece/tiktoken/mistral_common) | **DONE** — byte-exact vs vendor, clean-room green |
+| ZO-2 | compiled mel via shared numpy `mel_dsp` (drop transformers WhisperFeatureExtractor/torchaudio) | **DONE** |
+| ZO-4 | numpy mel filterbank (drop librosa) | **DONE** — parity 1.86e-9..0.0 |
+| RNNT | parakeet flow mel+decode (drop torchaudio/sentencepiece) | **DONE** |
+| ZO-5 | image processors (Janus/swin2SR) | **N/A** — `preprocessor_config.json` read as JSON, no `AutoImageProcessor` import (already clean) |
+| Manifest | split — 14 vendor libs → `[adapter]` extra; runtime deps = torch/numpy/infra/IO | **DONE** |
+| ZO-0 | orpheus SNAC decoder into the `.nbx` | **OPEN** — needs multi-repo component build (SNAC lives in a separate HF repo) + a GPU re-build; mechanically feasible, no licensing issue. Runtime currently `decode_snac_tokens` → `snac.from_pretrained` (HF download). |
+| ZO-3 | Kokoro g2p internal/embedded (drop phonemizer/espeakng_loader) | **OPEN — escalated** — faithful g2p means replacing espeak (compiled binary dict + rule engine; Kokoro trained on espeak IPA) AND espeak-ng is GPL-3.0 (distilling its data into this Apache-2.0 repo is a maintainer licensing decision). The clean-room raises a clean ZERO-TORCH-g2p error rather than silently using torch. |
+
+`TokenizerFactory._load_tokenizer` (`factory.py`) still references `transformers`
+but is **dead at runtime** (not called by core/cli/serving/triton — the runtime
+uses `load_tokenizer_from_path`); its lazy import never fires in the clean room.
+
+Outcome: ~28/30 models run from their `.nbx` in the clean venv (torch/triton only,
+none of the 14) across compiled + triton. Residuals = orpheus (SNAC, build-side)
+and Kokoro (g2p, GPL/espeak). Full per-model matrix:
+`validation_outputs/zo/matrix/RESULTS.txt`; bilan: `validation_outputs/zo/BILAN.md`.
+
+---
+
 **Goal (R34):** at inference, the NeuroBrix engine depends **only on the `.nbx`**.
 Every model component — backbone, **frontend** (tokenizer / g2p / mel), and
 **decoder** (vocoder / codec / VAE) — is either present in the `.nbx` graph as
