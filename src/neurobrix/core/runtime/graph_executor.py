@@ -1873,6 +1873,15 @@ class GraphExecutor:
                 # name the op_uid + which positional args were None so a
                 # triton-sequential failure points straight at the producer.
                 _none_pos = [i for i, a in enumerate(resolved_args) if a is None]
+                import os as _os_fail
+                if _os_fail.environ.get("NBX_DEVICE_TRACE"):
+                    for _ai, _a in enumerate(resolved_args):
+                        print(f"[DEVTRACE] FAILARG {op_uid} arg{_ai}: "
+                              f"pytype={type(_a).__name__} "
+                              f"device={getattr(_a,'_device',getattr(_a,'device','?'))} "
+                              f"device_idx={getattr(_a,'_device_idx','?')} "
+                              f"dtype={getattr(_a,'dtype','?')} "
+                              f"shape={getattr(_a,'shape','?')}", flush=True)
                 raise RuntimeError(
                     f"[triton-sequential] Failed at {op_uid} ({op_type}): "
                     f"{type(_e_seq).__name__}: {_e_seq} | None args at positions "
@@ -1885,6 +1894,31 @@ class GraphExecutor:
             else:
                 if output_tids:
                     store[output_tids[0]] = result
+
+            # === NBX_DEVICE_TRACE (device-drift diagnosis, default-off) ===
+            # Logs the first op whose output tensor lands on a device_idx !=
+            # the component device, AND whenever the CURRENT cuda device has
+            # drifted after an op (the host-roundtrip source). The earliest
+            # CURDRIFT/DRIFT line names the culprit op for the triton-seq
+            # cross-device "(cpu tensor?)" failure (deepseek-moe MoE routing).
+            import os as _os_dt
+            if _os_dt.environ.get("NBX_DEVICE_TRACE") and output_tids:
+                try:
+                    from neurobrix.kernels.nbx_tensor import DeviceAllocator as _DAdt
+                    _cur = _DAdt.get_device()
+                    if _cur != device_idx:
+                        print(f"[DEVTRACE] CURDRIFT after {op_uid} {op_type}: "
+                              f"cur={_cur} != component {device_idx}", flush=True)
+                    for _ot in output_tids:
+                        _t = store.get(_ot)
+                        _di = getattr(_t, "_device_idx", None) if _t is not None else None
+                        _dev = getattr(_t, "_device", None) if _t is not None else None
+                        if _di is not None and _di != device_idx:
+                            print(f"[DEVTRACE] DRIFT {op_uid} {op_type}: out {_ot} "
+                                  f"device_idx={_di} device={_dev} != component {device_idx}",
+                                  flush=True)
+                except Exception:
+                    pass
 
             # === NBX_OP_FINGERPRINT (sequential path) ===
             # Symmetric mirror of TritonSequence's fingerprint emit
@@ -2007,7 +2041,17 @@ class GraphExecutor:
             atype = arg.get("type")
             if atype in ("tensor", "tensor_ref"):
                 tid = arg.get("tensor_id")
-                return store.get(tid)
+                t = store.get(tid)
+                if t is None and isinstance(tid, str) and tid.startswith("param::constant"):
+                    # Orphan scalar constant with no data in the container (e.g. a
+                    # HAT in-forward `mask[slice]=cnt` count, lifted via aten::lift_fresh
+                    # then consumed by aten::fill). The compiled path materialises it as
+                    # a 0-dim default (bind_weights `[]`, commit c0a1445); mirror that in
+                    # triton-sequential with an R33-pure 0-dim zero NBXTensor (it is
+                    # immediately `.item()`-ed by _meta_fill, so device is irrelevant).
+                    from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype
+                    t = NBXTensor.zeros([], NBXDtype.float32, "cuda:0")
+                return t
             if atype == "tensor_tuple":
                 return [store.get(tid) for tid in arg.get("tensor_ids", [])]
             if atype == "symbol":
