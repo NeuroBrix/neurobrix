@@ -41,3 +41,31 @@ def get_timesteps_linspace(num_inference_steps: int, num_train_timesteps: int) -
     # diffusers "linspace": linspace(0, T-1, n+1).round()[::-1][:-1]
     ts = np.linspace(0, num_train_timesteps - 1, num_inference_steps + 1)
     return ts.round()[::-1][:-1].copy().astype(np.int64)
+
+
+def get_timesteps_leading(num_inference_steps: int, num_train_timesteps: int) -> np.ndarray:
+    # diffusers "leading": (arange(n) * (T // n))[::-1]
+    step_ratio = num_train_timesteps // num_inference_steps
+    return (np.arange(0, num_inference_steps) * step_ratio)[::-1].copy().astype(np.int64)
+
+
+def get_timesteps_np(spacing: str, num_inference_steps: int,
+                     num_train_timesteps: int) -> np.ndarray:
+    """Timestep schedule by spacing — numpy mirror of core get_timesteps
+    (linspace / trailing share diffusers' linspace formula; leading is arange)."""
+    if spacing in ("linspace", "trailing"):
+        return get_timesteps_linspace(num_inference_steps, num_train_timesteps)
+    if spacing == "leading":
+        return get_timesteps_leading(num_inference_steps, num_train_timesteps)
+    raise ValueError(
+        f"ZERO FALLBACK: unknown timestep spacing '{spacing}'. "
+        f"Supported: linspace, leading, trailing")
+
+
+def karras_sigmas(num_inference_steps: int, sigma_min: float,
+                  sigma_max: float, rho: float = 7.0) -> np.ndarray:
+    """Karras sigma schedule (numpy mirror of core karras_sigmas)."""
+    ramp = np.linspace(0, 1, num_inference_steps, dtype=np.float64)
+    min_inv_rho = sigma_min ** (1.0 / rho)
+    max_inv_rho = sigma_max ** (1.0 / rho)
+    return (max_inv_rho + ramp * (min_inv_rho - max_inv_rho)) ** rho
