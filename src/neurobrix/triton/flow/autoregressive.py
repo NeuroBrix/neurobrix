@@ -391,10 +391,24 @@ class TritonAutoregressiveHandler:
         from neurobrix.triton.sequence import TritonSequence
 
         lm_name = gen_info.get("lm_component", "language_model")
-        # For models with 'model' as the main component (e.g., TinyLlama)
-        if lm_name not in self.ctx.pkg.components:
-            for name in self.ctx.pkg.components:
-                if name not in ("lm_head",):
+        # Resolve the LM component name against the live executor map, NOT
+        # `pkg.components`. `pkg.components` is populated only from component
+        # dirs that ship a `runtime.json` (loader.py:72-77) — a forge-side
+        # artefact that is partial/empty for orpheus-class TTS builds: the
+        # 2-component build yields {} (no override, so lm_name stays "model"
+        # by luck) while the 3-component SNAC build yields {"codec.decoder"}.
+        # The old fallback then iterated that partial dict, skipped only
+        # "lm_head", and picked "codec.decoder" as the LM → prefill ran the
+        # SNAC codec graph (inputs c0/c1/c2), so its first aten::embedding
+        # received input::input_ids=None. `self.ctx.executors` is keyed by
+        # EVERY neural component (built from topology.components in
+        # RuntimeExecutor._setup_executors), so membership + fallback against
+        # it is robust regardless of which components carry a runtime.json.
+        # Mirrors the native path (core/flow/autoregressive.py), which never
+        # consults pkg.components for this. (R30: triton + triton_sequential.)
+        if lm_name not in self.ctx.executors:
+            for name in self.ctx.executors:
+                if name not in ("lm_head", "codec.decoder"):
                     lm_name = name
                     break
 
