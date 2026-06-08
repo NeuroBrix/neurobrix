@@ -6,6 +6,9 @@ Two totally separate factories, one config schema.
 """
 from .dpm_solver_pp import TritonDPMSolverPPScheduler
 from .flow_euler import TritonFlowEulerScheduler
+from .euler import (
+    TritonEulerDiscreteScheduler, TritonEulerAncestralDiscreteScheduler)
+from .ddim import TritonDDIMScheduler
 
 # alias -> triton class
 _ALIASES = {
@@ -15,7 +18,17 @@ _ALIASES = {
     "dpm++": TritonDPMSolverPPScheduler,
     "dpm++_2m": TritonDPMSolverPPScheduler,
     "dpm++_2m_karras": TritonDPMSolverPPScheduler,
-    "DDPMScheduler": TritonDPMSolverPPScheduler,  # VibeVoice 'ddpm' alias → DPM++ (matches core)
+    "DDPMScheduler": TritonDPMSolverPPScheduler,  # VibeVoice 'ddpm' alias → DPM++ (working; see note)
+    # Euler family — zero-torch ports of core diffusion/euler.py.
+    "EulerDiscreteScheduler": TritonEulerDiscreteScheduler,
+    "euler": TritonEulerDiscreteScheduler,
+    "euler_discrete": TritonEulerDiscreteScheduler,
+    "EulerAncestralDiscreteScheduler": TritonEulerAncestralDiscreteScheduler,
+    "euler_a": TritonEulerAncestralDiscreteScheduler,
+    "euler_ancestral": TritonEulerAncestralDiscreteScheduler,
+    # DDIM family — zero-torch port of core diffusion/ddim.py.
+    "DDIMScheduler": TritonDDIMScheduler,
+    "ddim": TritonDDIMScheduler,
 }
 
 
