@@ -24,6 +24,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `rnnt`) no longer import torch/torchaudio/audio_utils. Two separate front-ends
   (R30/two-modes): PyTorch flows keep `audio_utils` (torch); triton flows use this.
 
+- **Zero-torch Kokoro g2p phonemizer for the triton path** (`triton/audio_frontend.py`).
+  The triton `audio` flow previously imported `core/flow/stages/kokoro`
+  (`KPipeline`/misaki → torch) for text→phoneme conversion — the last torch in the
+  Kokoro triton compute path. Reimplemented as `preprocess_phonemizer_input_np` +
+  `_g2p_phonemes`: it drives the **torch-free** `phonemizer`/espeak backend, with
+  the espeak-ng shared library supplied by the `espeakng_loader` pip wheel (no
+  system `apt install` / sudo needed — `EspeakWrapper.set_library/set_data_path`
+  point phonemizer at the bundled `.so` + data). Falls back to an espeak-ng CLI if
+  one is on PATH, and only as a last resort to kokoro/misaki (lazy torch) with a
+  clear log recommending espeak-ng. Voicepack `.pt` is read torch-free via
+  `_load_pt_numpy` (zipfile + `np.frombuffer` + pickletools shape recovery).
+  Validated by STT in normal command: Kokoro-82M triton-sequential synthesises
+  "Hello world" → whisper transcribes "Hello world!". The `triton/flow/audio.py`
+  dead audio-input branch (`AudioInputProcessor`, lazy torch) is rerouted to the
+  numpy `preprocess_audio_input_np`, and the `NBX_DUMP_LOGITS` diagnostic in
+  `triton/flow/autoregressive.py` no longer carries a torch fallback — `triton/`
+  now has **zero direct torch imports** (§23 grep clean). Boundary torch that
+  remains is R33-sanctioned (NBX↔torch only at the edges): the text tokenizer
+  (string→ids), the NBX→torch→WAV save materialization, and — the one external
+  neural codec — the orpheus SNAC vocoder decode (`AudioOutputProcessor.decode_snac_tokens`,
+  not part of the .nbx graph), tracked as a follow-up (P-ORPHEUS-SNAC-TRITON).
+
 - **Triton scheduler subtree completed: zero-torch Euler, Euler-Ancestral and DDIM
   schedulers** (joining the existing FlowEuler + DPM++). Each is a numpy-schedule +
   NBXTensor-step port of its `core/module/scheduler/diffusion/*` counterpart, with

@@ -235,6 +235,157 @@ def _model_config_path(ctx) -> Path:
         "modules/tokenizer/ inside the .nbx.")
 
 
+def _g2p_phonemes(prompt: str, lang: str = "en-us", kokoro_lang: str = "a") -> str:
+    """Text → IPA phonemes. Prefers the TORCH-FREE phonemizer/espeak backend; on
+    a host without espeak-ng installed it falls back to kokoro/misaki g2p (which
+    pulls torch) so Kokoro never breaks. The path is fully torch-free wherever
+    espeak-ng is present (`apt install espeak-ng`); the torch import is lazy and
+    only fires in the fallback. Both backends emit IPA mapped via phoneme_vocab."""
+    # 1) torch-free phonemizer (espeak shared lib). espeakng_loader ships the
+    #    espeak-ng shared library + data as a pip wheel, so no system install /
+    #    sudo is needed; we just point phonemizer at the bundled lib.
+    try:
+        try:
+            import espeakng_loader
+            from phonemizer.backend.espeak.wrapper import EspeakWrapper
+            EspeakWrapper.set_library(espeakng_loader.get_library_path())
+            EspeakWrapper.set_data_path(espeakng_loader.get_data_path())
+        except Exception:
+            pass  # fall back to a system-installed espeak if present
+        from phonemizer.backend import EspeakBackend
+        if EspeakBackend.is_available():
+            from phonemizer import phonemize
+            out = phonemize(prompt, language=lang, backend="espeak", strip=True,
+                            preserve_punctuation=True, with_stress=True)
+            phon = out if isinstance(out, str) else " ".join(
+                o if isinstance(o, str) else "".join(o) for o in out)
+            if phon.strip():
+                return phon
+    except Exception:
+        pass
+    # 2) espeak-ng CLI (also torch-free)
+    try:
+        import shutil
+        import subprocess
+        if shutil.which("espeak-ng"):
+            r = subprocess.run(["espeak-ng", "-q", "--ipa", prompt],
+                               capture_output=True, text=True, timeout=10)
+            if r.stdout.strip():
+                return r.stdout.strip()
+    except Exception:
+        pass
+    # 3) fallback: kokoro/misaki g2p (pulls torch — only when no espeak-ng).
+    print("   [Phonemizer·np] espeak-ng absent → kokoro/misaki g2p fallback "
+          "(pulls torch). Install espeak-ng for a fully torch-free g2p.")
+    from kokoro import KPipeline
+    pipe = KPipeline(lang_code=kokoro_lang)
+    phonemes, _ = pipe.g2p(prompt)
+    return phonemes
+
+
+def _load_pt_numpy(path: str) -> np.ndarray:
+    """Read a torch-saved .pt tensor (zip format) as numpy — zero torch. Tensor
+    storage = largest data file; shape = the multi-dim pickle tuple whose product
+    equals the element count."""
+    import zipfile
+    import io as _io
+    import math
+    import pickletools
+    with zipfile.ZipFile(path) as z:
+        names = z.namelist()
+        data_files = sorted([n for n in names if "/data/" in n],
+                            key=lambda n: z.getinfo(n).file_size, reverse=True)
+        arr = np.frombuffer(z.read(data_files[0]), dtype=np.float32).copy()
+        pkl = z.read([n for n in names if n.endswith("data.pkl")][0])
+    shape = None
+    seq = []
+    for op, a, _pos in pickletools.genops(_io.BytesIO(pkl)):
+        if op.name in ("BININT", "BININT1", "BININT2"):
+            seq.append(a)
+        elif op.name.startswith("TUPLE"):
+            k = {"TUPLE1": 1, "TUPLE2": 2, "TUPLE3": 3}.get(op.name, len(seq))
+            t = tuple(seq[-k:]) if k else ()
+            if len(t) >= 2 and math.prod(t) == arr.size and shape is None:
+                shape = t
+            seq = []
+        elif op.name == "MARK":
+            seq = []
+    return arr.reshape(shape if shape is not None else (arr.size,))
+
+
+def _set_device_for(ctx):
+    from neurobrix.kernels.nbx_tensor import DeviceAllocator as _DA
+    dev = str(getattr(ctx, "primary_device", "cuda:0"))
+    try:
+        _DA.set_device(int(dev.split(":")[-1].split(",")[0]) if "cuda" in dev else 0)
+    except (ValueError, IndexError):
+        _DA.set_device(0)
+
+
+def _load_voicepack_np(engine, phoneme_count: int) -> None:
+    """Torch-free Kokoro voicepack load + split (decoder/predictor styles)."""
+    nbx_path = Path(engine.ctx.nbx_path_str)
+    vdir = nbx_path / "modules" / "voices"
+    if not vdir.exists():
+        return
+    vname = engine.ctx.pkg.defaults.get("voice", "af_heart")
+    vp = vdir / f"{vname}.pt"
+    if not vp.exists():
+        files = sorted(vdir.glob("*.pt"))
+        if not files:
+            return
+        vp = files[0]; vname = vp.stem
+    voicepack = _load_pt_numpy(str(vp))
+    if voicepack.ndim == 1:
+        ref_s = voicepack[None]
+    elif voicepack.ndim == 2:
+        idx = min(phoneme_count, voicepack.shape[0] - 1)
+        ref_s = voicepack[idx:idx + 1]
+    elif voicepack.ndim == 3:
+        idx = min(phoneme_count, voicepack.shape[0] - 1)
+        ref_s = voicepack[idx]
+    else:
+        ref_s = voicepack.reshape(-1, voicepack.shape[-1])[0:1]
+    split = ref_s.shape[-1] // 2
+    _set_device_for(engine.ctx)
+    sd = NBXTensor.from_numpy(np.ascontiguousarray(ref_s[:, :split]))
+    sp = NBXTensor.from_numpy(np.ascontiguousarray(ref_s[:, split:]))
+    for k in ["global.decoder_style", "decoder_style"]:
+        engine.ctx.variable_resolver.resolved[k] = sd
+    for k in ["global.predictor_style", "predictor_style"]:
+        engine.ctx.variable_resolver.resolved[k] = sp
+    print(f"   [Voicepack·np] Loaded '{vname}' (ref_s={tuple(ref_s.shape)})")
+
+
+def preprocess_phonemizer_input_np(engine, prompt: str, phoneme_vocab: Dict) -> None:
+    """Zero-torch g2p: text → IPA → phoneme IDs, bound as NBXTensor. Mirror of
+    core/flow/stages/kokoro.preprocess_phonemizer_input (which uses torch)."""
+    _lang_map = {"a": "en-us", "b": "en-gb"}
+    klang = engine.ctx.pkg.defaults.get("phoneme_lang", "a")
+    lang = _lang_map.get(klang, "en-us")
+    phonemes = _g2p_phonemes(prompt, lang, klang)
+    ids = [0]
+    for ch in phonemes:
+        if ch in phoneme_vocab:
+            ids.append(phoneme_vocab[ch])
+    ids.append(0)
+    actual_len = len(ids)
+    _set_device_for(engine.ctx)
+    input_ids = NBXTensor.from_numpy(np.array([ids], dtype=np.int64))
+    engine.ctx.variable_resolver.resolved["global.input_ids"] = input_ids
+    engine.ctx.variable_resolver.resolved["input_ids"] = input_ids
+    print(f"   [Phonemizer·np] '{prompt[:60]}' -> {len(phonemes)} phonemes "
+          f"-> {actual_len} IDs")
+    text_lengths = NBXTensor.from_numpy(np.array([actual_len], dtype=np.int64))
+    for k in ["global.text_lengths", "text_lengths", "input_lengths"]:
+        engine.ctx.variable_resolver.resolved[k] = text_lengths
+    # mask convention: True=PADDING; batch=1 no padding → all-False.
+    text_mask = NBXTensor.from_numpy(np.zeros((1, actual_len), dtype=bool))
+    for k in ["global.text_mask", "text_mask", "m"]:
+        engine.ctx.variable_resolver.resolved[k] = text_mask
+    _load_voicepack_np(engine, actual_len)
+
+
 def postprocess_text_output_np(ctx) -> None:
     """Decode generated token IDs to text (torch-free mirror of audio_utils)."""
     generated_ids = ctx.variable_resolver.resolved.get("global.generated_token_ids")

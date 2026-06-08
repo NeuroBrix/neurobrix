@@ -129,95 +129,16 @@ class TritonAudioEngine:
             self._preprocess_text_input(input_config)
 
     def _preprocess_audio_input(self, input_config: Dict, stages: List) -> None:
-        """Load audio file and extract features.
+        """Load audio file and extract mel/raw features — ZERO TORCH (R33).
 
-        Audio preprocessing (mel spectrogram, FFT) is a BOUNDARY operation.
-        AudioInputProcessor uses torch/torchaudio internally. The output
-        torch.Tensor is converted to NBXTensor at the boundary.
+        Delegates to the numpy/NBX front-end in ``triton.audio_frontend``: it
+        loads the waveform, runs the family-specific extractor (whisper/nemo/
+        conformer/raw), pads/truncates to the trace dims and binds the result
+        as ``NBXTensor`` on the encoder device. No torch / torchaudio anywhere
+        on the triton compute path.
         """
-        audio_path = self.ctx.variable_resolver.resolved.get("global.audio_path")
-        if audio_path is None:
-            raise RuntimeError(
-                "ZERO FALLBACK: Audio model requires global.audio_path.\n"
-                "Use --audio <path> to provide an audio file."
-            )
-
-        preprocessing = input_config.get("preprocessing")
-        if preprocessing is None:
-            raise RuntimeError(
-                "ZERO FALLBACK: topology.flow.audio.input.preprocessing is required.\n"
-                "Types: mel_spectrogram, nemo_mel, conformer, raw_waveform, dac_codec, text_only"
-            )
-        variable = input_config.get("variable", "global.input_features")
-
-        # Read expected input shape from first stage's graph (DATA-DRIVEN)
-        first_comp = stages[0]["component"] if stages else None
-        input_shape = _get_component_input_shape(self.ctx, first_comp)
-
-        # Auto-correct preprocessing type from graph input shape
-        if input_shape and len(input_shape) >= 3:
-            dim1, dim2 = input_shape[1], input_shape[2]
-            if preprocessing == "raw_waveform":
-                if dim1 in (40, 64, 80, 128) and dim2 > dim1:
-                    preprocessing = "mel_spectrogram"
-                elif dim2 in (40, 64, 80, 128, 160, 256) and dim1 > dim2:
-                    preprocessing = "conformer"
-
-        print(f"   [Audio] Loading: {audio_path}")
-        if input_shape:
-            print(f"   [Audio] Expected input shape: {input_shape}")
-
-        # BOUNDARY: AudioInputProcessor uses torch internally.
-        # We import it, run it, then convert the output to NBXTensor.
-        from neurobrix.core.module.audio.input_processor import AudioInputProcessor
-        import torch as _torch_boundary
-
-        device = _torch_boundary.device(self.ctx.primary_device)
-        dtype_str = self.ctx.pkg.manifest.get("dtype", "float16")
-        dtype = {"float16": _torch_boundary.float16, "bfloat16": _torch_boundary.bfloat16,
-                 "float32": _torch_boundary.float32}.get(dtype_str, _torch_boundary.float16)
-
-        features = AudioInputProcessor.process(
-            preprocessing_type=preprocessing,
-            audio_path=str(audio_path),
-            model_path=str(_find_model_config_path(self.ctx)),
-            device=device,
-            dtype=dtype,
-            input_shape=input_shape,
-        )
-
-        # Pad/truncate to match trace-time dimensions
-        if input_shape and len(input_shape) == len(features.shape) and len(input_shape) >= 3:
-            for dim_idx in range(1, len(input_shape)):
-                trace_size = input_shape[dim_idx]
-                actual_size = features.shape[dim_idx]
-                if actual_size != trace_size:
-                    if actual_size > trace_size:
-                        slices = [slice(None)] * len(features.shape)
-                        slices[dim_idx] = slice(None, trace_size)
-                        features = features[tuple(slices)]
-                    else:
-                        pad_shape = list(features.shape)
-                        pad_shape[dim_idx] = trace_size - actual_size
-                        pad = _torch_boundary.zeros(pad_shape, device=features.device, dtype=features.dtype)
-                        features = _torch_boundary.cat([features, pad], dim=dim_idx)
-
-        print(f"   [Audio] Features: {features.shape} ({preprocessing})")
-
-        # BOUNDARY: convert torch tensor to NBXTensor
-        features_nbx = _torch_to_nbx(features)
-
-        # Bind to variable resolver
-        self.ctx.variable_resolver.resolved[variable] = features_nbx
-        short_key = variable.split(".")[-1] if "." in variable else variable
-        self.ctx.variable_resolver.resolved[short_key] = features_nbx
-
-        # Bind audio length
-        actual_frames = features.shape[-1] if preprocessing in ("mel_spectrogram", "nemo_mel") else features.shape[1]
-        length_np = np.array([actual_frames], dtype=np.int64)
-        length_tensor = NBXTensor.from_numpy(length_np)
-        for key in ["global.audio_signal_length", "audio_signal_length", "global.length", "length"]:
-            self.ctx.variable_resolver.resolved[key] = length_tensor
+        from neurobrix.triton.audio_frontend import preprocess_audio_input_np
+        preprocess_audio_input_np(self.ctx, {"input": input_config}, stages)
 
     def _preprocess_text_input(self, input_config: Dict) -> None:
         """Tokenize text prompt for TTS/LLM-audio models."""
@@ -234,14 +155,11 @@ class TritonAudioEngine:
 
         tokenizer = self.ctx.modules.get("tokenizer")
 
-        # Phonemizer path
+        # Phonemizer path (zero-torch: phonemizer/espeak g2p + numpy voicepack).
         phoneme_vocab = self.ctx.pkg.defaults.get("phoneme_vocab")
         if tokenizer is None and phoneme_vocab:
-            # TEMPORARY R33 VIOLATION — this native handler uses torch. Will be
-            # replaced by triton/flow/stages/ once forge can trace this
-            # model. Do NOT add other imports of core/flow/stages/ here.
-            from neurobrix.core.flow.stages.kokoro import preprocess_phonemizer_input
-            preprocess_phonemizer_input(self, prompt, phoneme_vocab)
+            from neurobrix.triton.audio_frontend import preprocess_phonemizer_input_np
+            preprocess_phonemizer_input_np(self, prompt, phoneme_vocab)
             return
 
         if tokenizer is None:
