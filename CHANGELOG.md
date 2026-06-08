@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Zero-torch audio mel front-end for the triton path** (`triton/audio_frontend.py`).
+  The triton STT / audio-LLM / RNNT flows previously imported `core/flow/audio_utils`
+  (and `rnnt.py` used `torch.stft` + `torchaudio` directly) for mel/feature
+  extraction — torch compute in the triton path. Reimplemented all four
+  preprocessing types in pure numpy + librosa (both torch-free): `mel_spectrogram`
+  (Whisper/Voxtral log-mel), `nemo_mel` (Canary/Parakeet — pre-emphasis, dither,
+  per-feature normalize), `conformer` (Granite — log10 + amax norm + frame-stack),
+  `raw_waveform`. Validated bit-close to the torch extractors (whisper 1.7e-5,
+  conformer 1.35e-5, raw 0.0; filterbank vs torchaudio ~5e-6) **and** proven by
+  STT in normal command: whisper-large-v3-turbo, whisper-large, parakeet, Voxtral,
+  canary-qwen, granite-speech all transcribe correctly in triton AND
+  triton-sequential. The triton audio flows (`encoder_decoder`, `audio_llm`,
+  `rnnt`) no longer import torch/torchaudio/audio_utils. Two separate front-ends
+  (R30/two-modes): PyTorch flows keep `audio_utils` (torch); triton flows use this.
+
 - **Triton scheduler subtree completed: zero-torch Euler, Euler-Ancestral and DDIM
   schedulers** (joining the existing FlowEuler + DPM++). Each is a numpy-schedule +
   NBXTensor-step port of its `core/module/scheduler/diffusion/*` counterpart, with

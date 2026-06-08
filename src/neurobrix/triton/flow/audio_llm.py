@@ -125,10 +125,10 @@ class TritonAudioLLMEngine:
                 "'autoregressive' stage."
             )
 
-        # ── Step 1: Preprocess audio (BOUNDARY — torch internally,
-        #    output bound as NBXTensor; sanctioned audio I/O helper) ──
-        from neurobrix.core.flow.audio_utils import (
-            preprocess_audio_input, postprocess_text_output,
+        # ── Step 1: Preprocess audio (zero-torch numpy front-end) ──
+        from neurobrix.triton.audio_frontend import (
+            preprocess_audio_input_np as preprocess_audio_input,
+            postprocess_text_output_np as postprocess_text_output,
         )
         preprocess_audio_input(self.ctx, audio_config, stages)
 
