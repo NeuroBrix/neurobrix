@@ -40,9 +40,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   padding and dilute the conditioning, yielding incoherent (mosaic-like) output.
   The runtime now zeros the text embedding at masked positions (matching the
   reference pipelines that trim to real length and re-pad with zeros), enabled
-  per text encoder via a data-driven flag. This fixed Wan2.1-T2V output from a
-  textured field to a coherent scene. Inert for encoders without the flag, so
-  existing image models are unchanged.
+  per text encoder via a data-driven flag, applied to BOTH the positive and the
+  CFG negative/uncond embeddings (the negative `finalize_embeddings` call now
+  receives its attention mask; previously only the positive branch was zeroed,
+  leaving the uncond conditioning polluted and the CFG guidance term wrong).
+  This took Wan2.1-T2V output from a textured/banded field to a coherent scene.
+  Inert for encoders without the flag, so existing image models are unchanged.
 
 ### Fixed
 
