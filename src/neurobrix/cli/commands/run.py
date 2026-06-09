@@ -299,6 +299,10 @@ def cmd_run(args):
         inputs["global.height"] = args.height
     if args.width is not None:
         inputs["global.width"] = args.width
+    if getattr(args, 'num_frames', None) is not None:
+        inputs["global.num_frames"] = args.num_frames
+    if getattr(args, 'fps', None) is not None:
+        inputs["global.fps"] = args.fps
     if args.cfg is not None:
         inputs["global.guidance_scale"] = args.cfg
     if args.temperature is not None:

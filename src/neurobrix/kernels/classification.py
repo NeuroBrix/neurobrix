@@ -74,8 +74,10 @@ _TRITON_OPS = {
     # Triangular (2)
     "triu", "tril",
 
-    # Spatial (6)
-    "upsample_nearest2d", "upsample_nearest3d", "upsample_bilinear2d",
+    # Spatial (8)
+    "upsample_nearest2d", "_upsample_nearest_exact2d",
+    "upsample_nearest3d", "upsample_bilinear2d",
+    "_upsample_nearest_exact1d",
     "avg_pool2d", "max_pool2d", "adaptive_avg_pool2d",
 
     # Pixel shuffle (2)
