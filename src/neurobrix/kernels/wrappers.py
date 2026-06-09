@@ -2461,6 +2461,17 @@ def index_select_wrapper(x, dim: int, index) :
     # triton_sequential (R30), and matches torch (index_select needs a Long).
     if hasattr(index, "is_floating_point") and index.is_floating_point():
         index = index.to(NBXDtype.int64)
+    # Complex tensors: the kernel copies one real value per element, so it
+    # mishandles the interleaved real/imag storage of complex64/128 (reads half
+    # the bytes / wrong stride -> garbage, e.g. the Wan rotary-embedding freqs
+    # constant indexed per grid axis). Route through the real view: view_as_real
+    # appends the [.,2] real/imag axis AFTER all original dims, so the select
+    # `dim` (resolved on the complex rank) indexes the same axis untouched.
+    if x.is_complex():
+        ndc = x.ndim
+        dd = dim % ndc
+        outr = index_select_wrapper(x.view_as_real(), dd, index)
+        return outr.view_as_complex()
     assert dim >= -x.ndim and dim < x.ndim
     if index.ndim == 0:
         index = index.unsqueeze(0)
