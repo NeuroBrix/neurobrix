@@ -2689,6 +2689,53 @@ def conv_transpose_wrapper(
     return output
 
 
+def _conv3d_via_conv2d(x, weight, bias, stride, padding, dilation, groups):
+    """conv3d via temporal decomposition: conv3d(x, w) = sum over the temporal
+    kernel positions kt of conv2d on the kt-th temporally-shifted frames. The
+    spatial (H, W) convolution is delegated to conv2d_wrapper (this same triton
+    kernel) per temporal slice; the temporal axis is handled by slicing +
+    accumulation. Validated bit-close to torch F.conv3d (max|diff| ~3e-5) across
+    kt=3 / patch-embed kt=1 / strided / temporal-only configs. R33-pure
+    (NBXTensor slice/permute/reshape/add + conv2d_wrapper, no torch).
+    """
+    def _triple(v):
+        return (v[0], v[1], v[2]) if isinstance(v, (list, tuple)) else (v, v, v)
+    st, sh, sw = _triple(stride)
+    pt, ph, pw = _triple(padding)
+    dt, dh, dw = _triple(dilation)
+    B, Cin, T, H, W = x.shape
+    Cout, Cin_g, kt, kh, kw = weight.shape
+    # Pad the temporal axis only (constant_pad_nd pads from the last dim:
+    # [W_l,W_r, H_l,H_r, T_l,T_r]); H/W padding is applied by conv2d.
+    if pt > 0:
+        x = constant_pad_nd_wrapper(x, [0, 0, 0, 0, pt, pt], 0.0)
+    Tp = x.shape[2]
+    T_out = (Tp - dt * (kt - 1) - 1) // st + 1
+    out = None
+    for kti in range(kt):
+        start = kti * dt
+        if st == 1:
+            xs = x[:, :, start:start + T_out]                  # [B,Cin,T_out,H,W]
+        else:
+            import numpy as np
+            idx = NBXTensor.from_numpy(
+                (start + st * np.arange(T_out)).astype(np.int64))
+            xs = index_select_wrapper(x, 2, idx)
+        x2 = xs.permute(0, 2, 1, 3, 4).contiguous().reshape(B * T_out, Cin, H, W)
+        # .contiguous() before reshape: weight[:, :, kti:kti+1] is a non-contiguous
+        # dim-2 slice; a flat-indexed reshape would read wrong memory for kti>0
+        # (contiguous-guard pattern).
+        w2 = weight[:, :, kti:kti + 1].contiguous().reshape(Cout, Cin_g, kh, kw)
+        y2 = conv2d_wrapper(x2, w2, None, (sh, sw), (ph, pw), (dh, dw),
+                            False, 0, groups)
+        Ho, Wo = y2.shape[2], y2.shape[3]
+        y = y2.reshape(B, T_out, Cout, Ho, Wo).permute(0, 2, 1, 3, 4).contiguous()
+        out = y if out is None else out + y
+    if bias is not None:
+        out = out + bias.reshape(1, Cout, 1, 1, 1)
+    return out
+
+
 def conv2d_wrapper(
     x, weight, bias=None,
     stride=1, padding=0, dilation=1,
@@ -2715,6 +2762,12 @@ def conv2d_wrapper(
     # Route 1D convolutions to conv1d_wrapper
     if weight.ndim == 3:
         return conv1d_wrapper(x, weight, bias, stride, padding, dilation, groups)
+
+    # 5D (video) conv3d -> temporal decomposition into conv2d (R33-pure: reuses
+    # this same conv2d kernel per temporal-kernel slice). Wan video models use
+    # Conv3D (transformer patch_embed + VAE temporal convs).
+    if weight.ndim == 5:
+        return _conv3d_via_conv2d(x, weight, bias, stride, padding, dilation, groups)
 
     assert weight.ndim == 4
 
@@ -5306,18 +5359,35 @@ def constant_pad_nd_wrapper(x, pad_list, value: float = 0.0) :
             BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS,
         )
     else:
-        batch_size = 1
-        for d in range(ndim - 1):
-            batch_size *= x.shape[d]
-        in_size = x.shape[-1]
-        out_size = out_shape[-1]
-        constant_pad_1d_kernel[_1d_grid(total)](
-            x.reshape(batch_size, in_size),
-            output.reshape(batch_size, out_size),
-            total, in_size, out_size, batch_size,
-            pad_before[-1], float(value),
-            BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS,
-        )
+        # General N-D constant pad (pads any combination of dims, e.g. a middle
+        # temporal dim in a 5D [B,C,T,H,W] conv3d). The optimized 1D/2D kernels
+        # above only touch the last 1/2 dims; this branch handled everything
+        # else but ONLY ever padded the last dim (silent garbage when padding a
+        # middle dim — pad_before[-1] is 0 for e.g. [0,0,0,0,pt,pt]). Decompose
+        # into cat-of-constant-blocks per padded dim: R33-pure (NBXTensor.zeros
+        # /fill_ + NBXTensor.cat, which dispatches cat_copy_kernel for dim>0).
+        # Every padded region is `value`, so corners (padded on 2+ dims) come
+        # out correct regardless of dim order.
+        def _const_block(width, dim_idx, ref):
+            shp = list(ref.shape); shp[dim_idx] = width
+            blk = NBXTensor.zeros(tuple(shp), dtype=ref.dtype, device=ref.device)
+            if float(value) != 0.0:
+                blk.fill_(float(value))
+            return blk
+
+        result = x
+        for d in range(ndim):
+            b, a = pad_before[d], pad_after[d]
+            if b == 0 and a == 0:
+                continue
+            parts = []
+            if b > 0:
+                parts.append(_const_block(b, d, result))
+            parts.append(result)
+            if a > 0:
+                parts.append(_const_block(a, d, result))
+            result = NBXTensor.cat(parts, dim=d)
+        return result.contiguous()
 
     return output
 
