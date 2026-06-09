@@ -9,9 +9,14 @@ from .flow_euler import TritonFlowEulerScheduler
 from .euler import (
     TritonEulerDiscreteScheduler, TritonEulerAncestralDiscreteScheduler)
 from .ddim import TritonDDIMScheduler
+from .unipc_multistep import TritonUniPCMultistepScheduler
 
 # alias -> triton class
 _ALIASES = {
+    # UniPC multistep — zero-torch port of core diffusion/unipc_multistep.py
+    # (order<=2). Used by Wan video (flow_prediction + use_flow_sigmas).
+    "UniPCMultistepScheduler": TritonUniPCMultistepScheduler,
+    "unipc": TritonUniPCMultistepScheduler,
     "DPMSolverMultistepScheduler": TritonDPMSolverPPScheduler,
     "DPMSolverSinglestepScheduler": TritonDPMSolverPPScheduler,
     "dpmsolver++": TritonDPMSolverPPScheduler,
