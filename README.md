@@ -203,6 +203,44 @@ neurobrix run --model Kokoro-82M \
 | `--temperature` | Sampling variation (lower = more consistent) | Model-dependent (0.6) |
 | `--output` | Output audio file path | `output.wav` |
 
+### Audio — Speech Understanding (audio_llm)
+
+Audio-conditioned LLMs take **both** an audio file and a text instruction — they answer questions or transcribe-on-demand, not blind transcription.
+
+```bash
+neurobrix run --model Voxtral-Mini-3B-2507 \
+    --audio meeting.wav \
+    --prompt "Transcribe this audio." \
+    --output transcript.txt
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--audio` | Path to audio file | Required |
+| `--prompt` | Instruction (e.g. "Transcribe this audio.", "Summarize the call.") | Required |
+| `--output` | Save the text answer to file | stdout |
+
+> **STT vs audio_llm:** plain STT models (Whisper, Parakeet) need only `--audio`. audio_llm models (Voxtral, Canary-Qwen, Granite-Speech) need `--audio` **and** `--prompt`.
+
+### Image Upscaling (Super-Resolution)
+
+Upscalers take an input image and emit a higher-resolution one (the scale factor is per-model). Use the dedicated `upscale` command, which also exposes `--mode` directly:
+
+```bash
+neurobrix upscale --model hat-l-x4 \
+    --input photo.png --output photo_4x.png \
+    --mode compiled
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--model` | Upscaler model name (e.g. `hat-l-x4`, `real-esrgan-x4`, `swinir-classical-x4`) | Required |
+| `--input` | Input image path (PNG/JPEG) | Required |
+| `--output` | Output image path (PNG) | Required |
+| `--mode` | Execution mode: `compiled` / `sequential` / `triton` / `triton-sequential` | `compiled` |
+
+> Via the universal `run` command, the same models take `--input-image` instead of `--input`.
+
 ### Video Generation
 
 ```bash
@@ -219,6 +257,41 @@ neurobrix run --model SANA-Video_2B_720p \
 | `--cfg` | Guidance scale | Model-dependent (5.0) |
 | `--seed` | Random seed | Random |
 | `--output` | Output file path | `output.mp4` |
+
+---
+
+## Execution Modes — Two Branches, Four Modes
+
+Every model in NeuroBrix can run through **two fully independent compute branches**, each in a **sequential** (op-by-op) and a **compiled** (fused hot-loop) variant — four modes in total. The branches share the same `.nbx` container and the same Prism placement plan, but they do **not** share compute code. They are deliberately kept as parallel paths.
+
+| Flag | Branch | Variant | Compute substrate |
+|------|--------|---------|-------------------|
+| `--compiled` *(default)* | PyTorch | compiled hot-loop | `torch` + cuDNN / cuBLAS / cuFFT |
+| `--sequential` | PyTorch | op-by-op | `torch` ATen, one op at a time |
+| `--triton` | Triton | compiled hot-loop | NeuroBrix `@triton.jit` kernels + `NBXTensor` |
+| `--triton-sequential` | Triton | op-by-op | NeuroBrix `@triton.jit` kernels, one op at a time |
+
+If you pass no mode flag, NeuroBrix runs `--compiled`.
+
+**The PyTorch branch** is the pragmatic bridge to the mature PyTorch + NVIDIA-library ecosystem. `--sequential` is the **oracle**: it dispatches each ATen op to native PyTorch one at a time, so it is the reference that proves a model's graph and trace are sound. `--compiled` fuses that same graph into a zero-overhead execution sequence (pre-resolved tensor slots, direct SDPA, integer-indexed memory arena) — this is the production path.
+
+**The Triton branch** is the NeuroBrix value-add: 100% NeuroBrix Triton kernels through `NBXTensor`, with **no `torch.*`, no cuDNN/cuBLAS** on the compute path — hardware-universal and vendor-agnostic. `--triton-sequential` is the kernel oracle (op-by-op, diffed against the PyTorch oracle to validate each kernel in isolation); `--triton` is its fused, zero-overhead form.
+
+**Which to use:**
+
+- **Just run a model →** the default (`--compiled`). Fastest PyTorch path.
+- **Vendor-agnostic / no NVIDIA-library lock-in →** `--triton`.
+- **Debugging a numerical discrepancy →** compare `--sequential` (PyTorch oracle) against `--triton-sequential` (kernel oracle) op-by-op.
+
+```bash
+# Same model, four ways:
+neurobrix run --model Sana_1600M_1024px_MultiLing --prompt "a red fox" --output fox.png                      # compiled (default)
+neurobrix run --model Sana_1600M_1024px_MultiLing --prompt "a red fox" --sequential        --output fox.png  # PyTorch oracle
+neurobrix run --model Sana_1600M_1024px_MultiLing --prompt "a red fox" --triton            --output fox.png  # Triton compiled
+neurobrix run --model Sana_1600M_1024px_MultiLing --prompt "a red fox" --triton-sequential --output fox.png  # Triton oracle
+```
+
+> All four modes are validated to produce the same output (modulo numerics) for the models in the matrix below. The four mode flags are also available on `neurobrix serve` and `neurobrix upscale`.
 
 ---
 
@@ -320,13 +393,23 @@ NeuroBrix is a **runtime engine** — it executes models but does **not train or
 | Whisper Large | OpenAI | MIT | 6 GB | STT |
 | Whisper Large V3 Turbo | OpenAI | MIT | 3 GB | STT |
 | Parakeet TDT 1.1B | NVIDIA | CC-BY-4.0 | 4 GB | STT |
-| Canary-Qwen 2.5B | NVIDIA | CC-BY-4.0 | 10 GB | STT |
-| Voxtral Mini 3B | Mistral AI | Apache 2.0 | 7 GB | STT |
-| Orpheus 3B | Canopy Labs | Apache 2.0 | 7 GB | TTS |
+| Voxtral Mini 3B | Mistral AI | Apache 2.0 | 7 GB | audio_llm |
+| Canary-Qwen 2.5B | NVIDIA | CC-BY-4.0 | 10 GB | audio_llm |
+| Granite-Speech 3.3 8B | IBM | Apache 2.0 | 16 GB | audio_llm |
+| Orpheus 3B (SNAC) | Canopy Labs | Apache 2.0 | 7 GB | TTS |
 | Kokoro 82M | Hexgrad | Apache 2.0 | 0.3 GB | TTS |
-| VibeVoice 1.5B | Will Held | Apache 2.0 | 6 GB | TTS |
+| VibeVoice 1.5B | Microsoft | MIT | 6 GB | TTS |
 | OpenAudio S1 Mini | Fish Audio | CC-BY-NC-SA-4.0 | 2 GB | TTS |
 | Chatterbox | Resemble AI | MIT | 1 GB | TTS |
+
+### Image Upscalers (Super-Resolution)
+
+| Model | Author | License | Scale |
+|-------|--------|---------|------:|
+| HAT-L x4 | XPixelGroup | Apache 2.0 | 4x |
+| Real-ESRGAN x4 | Xintao Wang et al. | BSD-3-Clause | 4x |
+| SwinIR Classical x4 | Jingyun Liang et al. | Apache 2.0 | 4x |
+| Swin2SR Classical x4 | Marcos V. Conde et al. | Apache 2.0 | 4x |
 
 ### Large Language Models
 
@@ -419,7 +502,8 @@ The runtime compiles the entire execution graph at load time into a **CompiledSe
 - [x] **Prism solver** — automatic multi-GPU hardware allocation (7 strategies)
 - [x] **Image family** — 6 diffusion models (PixArt, Sana, Flex, Janus)
 - [x] **LLM family** — MoE (DeepSeek), dense (TinyLlama, Qwen3)
-- [x] **Audio family** — 11 models, 5 flow handlers (STT + TTS)
+- [x] **Audio family** — 11 models across STT, audio_llm, and TTS (5 flow handlers)
+- [x] **Upscalers** — 4 super-resolution families (HAT, Real-ESRGAN, SwinIR, Swin2SR)
 - [x] **Video family** — SANA-Video 720p (first of 10 planned)
 - [x] **Cross-platform** — Linux, Windows, macOS support
 - [x] **Hardware auto-detection** — 10 GPU vendors, CPU-only fallback
@@ -434,7 +518,6 @@ The runtime compiles the entire execution graph at load time into a **CompiledSe
 - [ ] **Vision-Language Models** — multimodal understanding at scale
 - [ ] **Quantization** — INT8/INT4 with NBX-native support
 - [ ] **Apple Silicon** — Metal/MPS backend
-- [ ] **Upscalers** — super-resolution models
 - [ ] **3D generation** — mesh and NeRF models
 - [ ] **Embeddings** — text and image embedding models
 - [ ] **NeuroBrix Studio** — desktop GUI for model management
@@ -452,6 +535,23 @@ neurobrix stop
 
 # Single-shot — hardware auto-detected
 neurobrix run --model <name> --prompt <text> [options]
+
+# Execution mode (default: --compiled). See "Execution Modes" above.
+neurobrix run --model <name> --prompt <text> [--compiled | --sequential | --triton | --triton-sequential]
+
+# Image upscaling (super-resolution)
+neurobrix upscale --model <name> --input <img> --output <img> [--mode compiled|sequential|triton|triton-sequential]
+
+# Per-family inputs:
+#   llm        --prompt
+#   image      --prompt [--steps --cfg --height --width --input-image --mask-image]
+#   tts        --prompt --output out.wav
+#   stt        --audio
+#   audio_llm  --audio --prompt
+#   vlm        --prompt --input-image
+#   multimodal --prompt --mode text|image
+#   upscaler   --input-image   (or: upscale --input)
+#   video      --prompt [--num-frames --fps]
 
 # Model management
 neurobrix hub [--category IMAGE|LLM|AUDIO|VIDEO]
