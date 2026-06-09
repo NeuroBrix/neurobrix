@@ -1312,7 +1312,8 @@ class GraphExecutor:
         # Find the dim to shrink so that the shape matches byte count.
         dtype_bytes = {"float16": 2, "bfloat16": 2, "float32": 4,
                        "float64": 8, "int32": 4, "int64": 8,
-                       "int8": 1, "uint8": 1, "bool": 1}.get(dtype_str, 4)
+                       "int8": 1, "uint8": 1, "bool": 1,
+                       "complex64": 8, "complex128": 16}.get(dtype_str, 4)
         declared_elems = 1
         for d in shape:
             declared_elems *= d
@@ -1380,6 +1381,7 @@ class GraphExecutor:
                      "float64": np.float64, "int32": np.int32,
                      "int64": np.int64, "int8": np.int8,
                      "uint8": np.uint8, "bool": np.bool_,
+                     "complex64": np.complex64, "complex128": np.complex128,
                      }.get(dtype_str, np.float32)
             arr = np.frombuffer(tensor_bytes, dtype=np_dt).reshape(shape)
             arr = np.ascontiguousarray(arr)
