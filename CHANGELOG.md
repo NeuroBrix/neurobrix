@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`graph_executor` `NBX_DEVICE_TRACE` diagnostic no longer swallows its own
+  errors.** The device-drift diagnostic block (active only when the
+  `NBX_DEVICE_TRACE` env var is set) caught all exceptions with a bare `pass`,
+  so a failure in the diagnostic itself was silent — useless precisely when an
+  operator had enabled tracing to investigate a cross-device issue. It now
+  prints the failure and continues (the block runs only when tracing is
+  explicitly enabled, so the op loop is never affected). Resolves the
+  static-analysis empty-except finding on the `main` integration PR.
+
 ## [0.2.1] - 2026-06-09
 
 First publicly usable release of the universal runtime (not final — usable). The

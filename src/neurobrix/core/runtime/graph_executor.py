@@ -1964,8 +1964,13 @@ class GraphExecutor:
                             print(f"[DEVTRACE] DRIFT {op_uid} {op_type}: out {_ot} "
                                   f"device_idx={_di} device={_dev} != component {device_idx}",
                                   flush=True)
-                except Exception:
-                    pass
+                except Exception as _e_dt:
+                    # Diagnostics must never affect execution. This block only runs
+                    # when NBX_DEVICE_TRACE is explicitly set, so surface the
+                    # diagnostic's own failure (so it isn't silently useless when
+                    # enabled) and continue the op loop unchanged.
+                    print(f"[DEVTRACE] diagnostic failed at {op_uid} "
+                          f"({op_type}): {type(_e_dt).__name__}: {_e_dt}", flush=True)
 
             # === NBX_OP_FINGERPRINT (sequential path) ===
             # Symmetric mirror of TritonSequence's fingerprint emit
