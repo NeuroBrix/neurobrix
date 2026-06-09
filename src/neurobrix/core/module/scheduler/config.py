@@ -56,6 +56,11 @@ class SchedulerConfig:
         "variance_type": None,
         "trained_betas": None,
         "steps_offset": 0,
+
+        # UniPC-specific keys (diffusers UniPCMultistepScheduler defaults).
+        # Only consumed by UniPCMultistepScheduler; inert for DPM++ / DDIM / Euler.
+        "predict_x0": True,
+        "disable_corrector": [],
     }
 
     @classmethod

@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   split reads channels from axis 1 for both 4D and 5D (the non-4D branch had
   mistaken the time axis for channels) — fixed symmetrically in the compiled and
   triton flow handlers (R30).
+- **`UniPCMultistepScheduler`** (runtime-pure, no diffusers import — R39) in the
+  scheduler registry, with the flow-matching branch (`use_flow_sigmas`,
+  `flow_shift`, `flow_prediction`) used by Wan video models. Predictor/corrector
+  B(h) math ported faithfully; a dev unit test asserts bit-exact equivalence
+  with diffusers (max|diff|=0.0) across standard + flow configs and 4D + 5D
+  latent shapes.
 
 ### Removed
 

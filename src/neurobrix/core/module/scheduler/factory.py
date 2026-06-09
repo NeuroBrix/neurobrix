@@ -41,6 +41,11 @@ class SchedulerFactory:
         "dpm++_2m": ("diffusion.dpm_solver_pp", "DPMSolverPPScheduler"),
         "dpm++_2m_karras": ("diffusion.dpm_solver_pp", "DPMSolverPPScheduler"),
 
+        # UniPC family (Wan2.1-T2V flow_prediction, and any UniPC scheduler)
+        "UniPCMultistepScheduler": ("diffusion.unipc_multistep", "UniPCMultistepScheduler"),
+        "unipc": ("diffusion.unipc_multistep", "UniPCMultistepScheduler"),
+        "unipc_multistep": ("diffusion.unipc_multistep", "UniPCMultistepScheduler"),
+
         # =========================================================================
         # DDIM family (also handles DDPM — DDIM generalizes DDPM with eta parameter)
         # =========================================================================
