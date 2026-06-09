@@ -22,7 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `flow_shift`, `flow_prediction`) used by Wan video models. Predictor/corrector
   B(h) math ported faithfully; a dev unit test asserts bit-exact equivalence
   with diffusers (max|diff|=0.0) across standard + flow configs and 4D + 5D
-  latent shapes.
+  latent shapes. A triton (NBXTensor, zero-torch — R33) mirror is also provided
+  in the triton scheduler registry for `--triton`/`--triton-sequential` modes
+  (order ≤ 2 closed-form predictor/corrector; the order-2 corrector `rhos`
+  solved via Cramer's rule, verified bit-accurate vs the PyTorch
+  `torch.linalg.solve` path in fp64).
 - **`_upsample_nearest_exact{1,2}d` multi-resolution support (4 sites, R30).**
   The nearest-exact upsample variants (used by Wan video VAE decoders) now
   recompute their output size from the live input × scale, like the plain
