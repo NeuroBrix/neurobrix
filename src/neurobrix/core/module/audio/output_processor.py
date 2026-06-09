@@ -31,7 +31,12 @@ class AudioOutputProcessor:
         """Save waveform tensor as .wav file (TTS)."""
         import soundfile as sf
 
-        audio_np = waveform.cpu().float().numpy()
+        # torch.Tensor (compiled) → .cpu(); NBXTensor (triton) has no .cpu() but a
+        # numpy() boundary method. Duck-type so this single save point serves both.
+        if hasattr(waveform, "cpu"):
+            audio_np = waveform.cpu().float().numpy()
+        else:
+            audio_np = waveform.float().numpy()
 
         while audio_np.ndim > 1 and audio_np.shape[0] == 1:
             audio_np = audio_np.squeeze(0)
@@ -72,8 +77,14 @@ class AudioOutputProcessor:
         if len(audio_tokens) < 7:
             return torch.zeros(1, 1, 1)
 
-        # SNAC has 3 codebook levels: level 0 (1 token), level 1 (2 tokens), level 2 (4 tokens)
-        # Each frame = 7 tokens in order: [L0, L1a, L1b, L2a, L2b, L2c, L2d]
+        # SNAC has 3 codebook levels: level 0 (1/frame), level 1 (2/frame),
+        # level 2 (4/frame). Orpheus interleaves the 7 per-frame tokens in a
+        # SPECIFIC hierarchical order (canopylabs reference redistribute_codes):
+        #   pos 0          → level 0
+        #   pos 1, 4       → level 1
+        #   pos 2, 3, 5, 6 → level 2
+        # A naive contiguous split ([1,2]→L1, [3,4,5,6]→L2) scrambles the
+        # hierarchy (pos 2 belongs to L2, pos 4 to L1) and yields noise.
         n_frames = len(audio_tokens) // 7
         audio_tokens = audio_tokens[:n_frames * 7]
 
@@ -84,9 +95,13 @@ class AudioOutputProcessor:
 
         for i in range(n_frames):
             base = i * 7
-            codes_0.append(audio_tokens[base])
-            codes_1.extend(audio_tokens[base + 1:base + 3])
-            codes_2.extend(audio_tokens[base + 3:base + 7])
+            codes_0.append(audio_tokens[base + 0])
+            codes_1.append(audio_tokens[base + 1])
+            codes_2.append(audio_tokens[base + 2])
+            codes_2.append(audio_tokens[base + 3])
+            codes_1.append(audio_tokens[base + 4])
+            codes_2.append(audio_tokens[base + 5])
+            codes_2.append(audio_tokens[base + 6])
 
         # Each level has its own codebook with 4096 entries
         # Tokens are offset: level 0 = [0, 4096), level 1 = [4096, 8192), level 2 = [8192, 12288)

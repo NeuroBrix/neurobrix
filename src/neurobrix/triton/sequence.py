@@ -139,7 +139,20 @@ class ExprArg:
 # COMPILED OP
 # ============================================================================
 
-_ACCUMULATOR_OPS = frozenset({"add", "mul"})
+# NOP-propagation accumulator ops (deactivated-MoE-expert path: when
+# args[0] is None the op passes the base accumulator through instead of
+# nulling the output slot). R30: must mirror the semantics of
+# core/runtime/graph/compiled_sequence.py:_ACCUMULATOR_OPS (the
+# reference oracle), which lists the aten:: MoE-aggregation ops
+# {scatter_reduce, scatter_add, index_add, scatter, index_put}. The
+# triton NOP check compares the BARE op name (op_type.split("::")[-1]),
+# so the compiled set is mirrored here as bare names. `add`/`mul` are
+# kept (triton-specific accumulator NOP handling — extend, do not
+# replace, to avoid regressing models that rely on them).
+_ACCUMULATOR_OPS = frozenset({
+    "add", "mul",
+    "scatter_reduce", "scatter_add", "index_add", "scatter", "index_put",
+})
 
 
 @dataclass
@@ -302,13 +315,21 @@ class TritonSequence:
         # Collapses 2 elem ops → 1 kernel launch, and the fused kernel reads
         # gate/up once each + writes output once (vs silu writing intermediate
         # + mul reading/writing). Saves ~22 ops/step for Llama-style FFNs.
-        self._fuse_swiglu_ops(tensors, ops_by_uid, exec_order)
+        # NBX_DISABLE_SWIGLU_FUSION=1 — diagnostic gate to isolate fused-swiglu
+        # numerical divergence (custom::swiglu_fused fp32-intermediate vs the
+        # unfused silu→fp16-store→mul chain the op-by-op path runs).
+        if os.environ.get("NBX_DISABLE_SWIGLU_FUSION") != "1":
+            self._fuse_swiglu_ops(tensors, ops_by_uid, exec_order)
 
         # Phase -0.2: Fuse HF-Llama rotate_half RoPE chains on Q+K into a
         # single custom::rope_fused op backed by Liger's rope_forward_kernel.
         # Collapses 14 ops per layer (slice×4, neg×2, cat×2, mul×4, add×2).
         # Saves ~308 ops/step for TinyLlama (22 layers).
-        self._fuse_rope_ops(tensors, ops_by_uid, exec_order)
+        # NBX_DISABLE_ROPE_FUSION=1 — diagnostic gate to isolate fused-rope
+        # numerical divergence (custom::rope_fused vs the unfused ATen chain
+        # the op-by-op path runs); leaves the rotate_half ops native.
+        if os.environ.get("NBX_DISABLE_ROPE_FUSION") != "1":
+            self._fuse_rope_ops(tensors, ops_by_uid, exec_order)
 
         # Phase 0: Promote trace-time seq_len scalars to symbolic references.
         # Shared logic in triton/promotion.py — used by both compiled and sequential.
@@ -2508,6 +2529,7 @@ class TritonSequence:
                     "op_type": op.op_type,
                     "shape": list(tensor.shape),
                     "dtype": str(tensor.dtype),
+                    "is_complex": bool(getattr(tensor, "is_complex", lambda: False)()),
                     "head10": head,
                     "l2_norm": norm,
                 }
@@ -2521,6 +2543,72 @@ class TritonSequence:
                     f.write("\n")
             except Exception as e:
                 print(f"[NBX_DUMP_TIDS] failed on {tid}: {e}", flush=True)
+
+    def _maybe_fingerprint(self, op: 'CompiledOp', arena, path: str) -> None:
+        """Run-to-run op-output fingerprint (P-TRITON-MOE-DETERMINISM-RESIDUAL,
+        P-SANA differential methodology). Gated by env NBX_OP_FINGERPRINT=
+        <jsonl-path>. Appends one line per op output:
+        {op_idx, op_uid, op_type, shape, dtype, sha256(full raw bytes)}.
+        Diff the JSONL across 3 runs: the FIRST op whose sha256 differs is
+        the causal non-determinism site. Diagnostic only, same retained
+        class as NBX_DUMP_TIDS / NBX_TRITON_TRACE_NAN."""
+        import os as _os_f, json as _json_f, hashlib as _hl
+        import ctypes as _ct_f
+        if not hasattr(self, "_fp_idx"):
+            self._fp_idx = 0
+        # Optional global cap on number of fingerprinted op-outputs
+        # (NBX_OP_FINGERPRINT_MAX). Lets a full-hash (CAP=0) run stay
+        # cheap by stopping after the suspect region. Shared across all
+        # TritonSequence instances via the class.
+        _fp_max = int(_os_f.environ.get("NBX_OP_FINGERPRINT_MAX", "0"))
+        if _fp_max:
+            _cls = type(self)
+            _g = getattr(_cls, "_fp_global", 0)
+            if _g >= _fp_max:
+                return
+        if not hasattr(self, "_slot_to_tid"):
+            self._slot_to_tid = {s: t for t, s in self._tid_to_slot.items()}
+        try:
+            from neurobrix.kernels.nbx_tensor import DeviceAllocator
+            recs = []
+            for out_slot in op.output_slots:
+                t = arena[out_slot] if arena else None
+                self._fp_idx += 1
+                _clsg = type(self)
+                _clsg._fp_global = getattr(_clsg, "_fp_global", 0) + 1
+                tid = self._slot_to_tid.get(out_slot, f"slot::{out_slot}")
+                if t is None or not hasattr(t, "data_ptr"):
+                    recs.append({"i": self._fp_idx, "op_uid": op.op_uid,
+                                 "op_type": op.op_type, "tid": tid,
+                                 "sha": "none"})
+                    continue
+                if hasattr(t, "_device_idx"):
+                    DeviceAllocator.set_device(t._device_idx)
+                c = t.contiguous()
+                nb = c._nbytes
+                # Byte-cap (default 8 KiB): non-deterministic-reduction
+                # bit-noise is distributed across the tensor, so the
+                # leading bytes reflect any divergence while keeping
+                # 115k-op model traces feasible. NBX_OP_FINGERPRINT_CAP=0
+                # disables the cap (full hash).
+                cap = int(_os_f.environ.get("NBX_OP_FINGERPRINT_CAP", "8192"))
+                hb = nb if cap == 0 else min(nb, cap)
+                buf = (_ct_f.c_char * hb)()
+                DeviceAllocator.memcpy(_ct_f.addressof(buf), c.data_ptr(),
+                                       hb, kind=2)
+                recs.append({
+                    "i": self._fp_idx, "op_uid": op.op_uid,
+                    "op_type": op.op_type, "tid": tid,
+                    "shape": list(t.shape), "dtype": str(t.dtype),
+                    "nbytes": nb, "hashed": hb,
+                    "sha": _hl.sha256(bytes(buf)).hexdigest()})
+            with open(path, "a") as f:
+                for r in recs:
+                    _json_f.dump(r, f)
+                    f.write("\n")
+        except Exception as e:
+            print(f"[NBX_OP_FINGERPRINT] failed at {op.op_uid}: {e}",
+                  flush=True)
 
     def _run_single_device(self, skip_kills: bool = False,
                             pre_op_callback: Optional[Callable[[int, 'CompiledOp'], None]] = None):
@@ -3081,6 +3169,14 @@ class TritonSequence:
                 self._maybe_trace_nan(op, arena)
             # =============================================================
 
+            # === NBX_OP_FINGERPRINT=<jsonl> : run-to-run op-output hash
+            #     (P-TRITON-MOE-DETERMINISM-RESIDUAL differential) ===
+            import os as _os_fp
+            _fp_path = _os_fp.environ.get("NBX_OP_FINGERPRINT", "")
+            if _fp_path and op.output_slots:
+                self._maybe_fingerprint(op, arena, _fp_path)
+            # =============================================================
+
             # === TEMP TID DUMP: compare triton vs native per-op output ===
             import os as _os_tid
             _dump_tids_env = _os_tid.environ.get("NBX_DUMP_TIDS")
@@ -3338,6 +3434,13 @@ class TritonSequence:
                 self._maybe_dump_tid(op, _dtids)
             # ===========================================
 
+            # === NBX_OP_FINGERPRINT (multi-device branch) ===
+            import os as _os_fp_md
+            _fp_path_md = _os_fp_md.environ.get("NBX_OP_FINGERPRINT", "")
+            if _fp_path_md and op.output_slots:
+                self._maybe_fingerprint(op, arena, _fp_path_md)
+            # ================================================
+
             if not skip_kills:
                 for s in op.kill_slots:
                     old = arena[s]
@@ -3381,16 +3484,10 @@ class TritonSequence:
 
     @staticmethod
     def _needs_move(t: NBXTensor, target_dev: int) -> bool:
-        """Return True iff tensor must be transferred to land on cuda:target_dev.
-
-        Covers three cases:
-          1. Source is CPU → must H2D (even if _device_idx happens to be 0).
-          2. Source is on a different CUDA device → must D2D.
-          3. Source is on target CUDA device → no-op.
-        """
-        if getattr(t, '_device', 'cuda') == 'cpu':
-            return True
-        return t._device_idx != target_dev
+        """Delegates to the shared cross-device helper (R30: same impl as the
+        op-by-op triton_sequential path)."""
+        from neurobrix.triton.device_transfer import needs_move
+        return needs_move(t, target_dev)
 
     @staticmethod
     def _find_cuda_arg(args) -> 'Optional[int]':
@@ -3491,25 +3588,10 @@ class TritonSequence:
         correctly materialises via strided_copy, matching what the
         native torch.Tensor.to(device) contract does.
         """
-        # Expand views (stride == 0 on a broadcast axis) have
-        # numel * esz > backing bytes. A straight memcpy(nbytes)
-        # would over-read the source allocation and stamp garbage into
-        # the GPU buffer, so materialise first. contiguous() picks the
-        # right CPU/GPU path based on the source device.
-        if tensor.is_expanded():
-            tensor = tensor.contiguous()
-        DeviceAllocator.set_device(target_dev)
-        src_device = getattr(tensor, '_device', 'cuda')
-        kind = 1 if src_device == 'cpu' else 3
-        if tensor._nbytes > 0:
-            dst_raw_ptr = DeviceAllocator.malloc_cuda(tensor._nbytes)
-            DeviceAllocator.memcpy(dst_raw_ptr, tensor.data_ptr(),
-                                   tensor._nbytes, kind=kind)
-        else:
-            dst_raw_ptr = 0
-        return NBXTensor(
-            dst_raw_ptr, tensor._shape, tensor._strides, tensor._dtype,
-            'cuda', owns_data=True, device_idx=target_dev, offset=0)
+        # Delegates to the shared cross-device helper so the compiled and
+        # op-by-op triton_sequential paths share ONE transfer impl (R30).
+        from neurobrix.triton.device_transfer import transfer_tensor
+        return transfer_tensor(tensor, target_dev)
 
     def gather_outputs(self, output_ids: Optional[List[str]] = None) -> Dict[str, Any]:
         """Read output tensors from arena."""

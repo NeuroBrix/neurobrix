@@ -1091,6 +1091,47 @@ class GraphExecutor:
         if weight_keys <= graph_params:
             return
 
+        # Pass 0: EXACT direct + prefix-strip binding. Every graph param is bound
+        # to the weight key that EXACTLY equals it (direct), or to the unique
+        # weight key whose trailing dotted-suffix exactly equals it (prefix
+        # strip — e.g. graph `decoder.X` vs weight `model.acoustic_tok.decoder.X`).
+        # Exact match cannot mis-assign the way the ambiguous-suffix index below
+        # can: for a component with many structurally-repeated layers (VibeVoice
+        # acoustic/semantic tokenizers — upsample_layers.{i}.0.conv.conv.weight
+        # collide on the trailing suffix), the legacy suffix index drops them as
+        # ambiguous and the Pass-2 prefix heuristic mis-binds conv::0 to a convtr
+        # weight. We also tolerate EXTRA weight keys (the acoustic tokenizer ships
+        # encoder weights unused by the decode-only graph) — they're simply not
+        # bound. Accept Pass 0 only when it covers EVERY graph param; otherwise
+        # fall through to the legacy suffix passes (zero behavior change).
+        gp_to_wk: dict = {}
+        for gp in graph_params:
+            if gp in self._weights:
+                gp_to_wk[gp] = gp
+        if set(gp_to_wk.keys()) < graph_params:
+            # Some graph params not exact-present — try unique prefix-strip.
+            suffix_index: dict = {}
+            suffix_dupe: set = set()
+            for wk in weight_keys:
+                parts = wk.split('.')
+                for i in range(1, len(parts)):
+                    cand = '.'.join(parts[i:])
+                    if cand in suffix_dupe:
+                        continue
+                    if cand in suffix_index:
+                        del suffix_index[cand]
+                        suffix_dupe.add(cand)
+                    else:
+                        suffix_index[cand] = wk
+            for gp in graph_params:
+                if gp in gp_to_wk:
+                    continue
+                if gp in suffix_index:
+                    gp_to_wk[gp] = suffix_index[gp]
+        if set(gp_to_wk.keys()) >= graph_params:
+            self._weights = {gp: self._weights[wk] for gp, wk in gp_to_wk.items()}
+            return
+
         # Build suffix index from graph params (unique suffixes only)
         suffix_to_param: dict = {}
         suffix_ambiguous: set = set()
@@ -1115,15 +1156,7 @@ class GraphExecutor:
                 remapped[wk] = self._weights[wk]
                 continue
 
-            # Strip LoRA wrapper tokens before suffix matching
-            # PEFT wraps layers: base_model.model.X.base_layer.weight → X.weight
-            wk_clean = wk.replace('.base_layer.', '.').replace('base_model.model.', '')
-            if wk_clean != wk and wk_clean in graph_params:
-                remapped[wk_clean] = self._weights[wk]
-                reconciled += 1
-                continue
-
-            parts = wk_clean.split('.')
+            parts = wk.split('.')
             matched_param = None
             for i in range(len(parts)):
                 suffix = '.'.join(parts[i:])
@@ -1309,15 +1342,22 @@ class GraphExecutor:
                         fixed = list(shape)
                         fixed[axis] = trace_seq_len
                         break
-            # Strategy B: 1-D constant where the bytes simply hold a few more
-            # (or fewer) elements than the declared shape — happens on TTS
-            # models like Kokoro whose graphs do not carry a seq_len symbol
-            # but where the tracer wrote a slightly off-by-one length on a
-            # 1-D table. Trust the bytes (mirrors what torch.load does on the
-            # native path; it ignores the JSON shape and uses the pickled
-            # tensor's metadata).
+            # Strategy B: 1-D constant whose ZIP storage holds a different element
+            # count than the declared shape. torch.load (native path) reconstructs
+            # the tensor from its pickled SHAPE — a view into the storage — NOT the
+            # storage's raw size. So the declared 1-D shape is authoritative when the
+            # storage is at least that large: the tensor is a view into a shared /
+            # padded buffer (e.g. the Kokoro iSTFT window — a [20] view into a
+            # 21-float storage; the native torch.load path yields [20], so triton
+            # must too). Slice the storage to the declared element count (offset 0,
+            # matching torch.load). Only when the storage is genuinely SHORTER than
+            # declared do we fall back to trusting its length.
             if fixed is None and len(shape) == 1:
-                fixed = [actual_elems]
+                if actual_elems >= declared_elems:
+                    fixed = list(shape)
+                    tensor_bytes = tensor_bytes[:declared_elems * dtype_bytes]
+                else:
+                    fixed = [actual_elems]
             if fixed is None:
                 raise RuntimeError(
                     f"Constant '{weight_name}' declared shape {shape} "
@@ -1711,6 +1751,17 @@ class GraphExecutor:
             "NBX_LIVENESS_AUDIT_AT_OP_UID", "")
         _liveness_audited = False
 
+        # Multi-device (pipeline_parallel) activation tracker — mirror of the
+        # compiled hot loop's `current_activation_device` (sequence.py
+        # _run_multi_device). Pipeline-parallel shards a component's weights
+        # across GPUs; at a stage boundary the activation must move to the next
+        # stage's weight device before the op runs. Starts on the component's
+        # primary device. See the per-op transfer block below.
+        _seq_current_dev = device_idx
+        from neurobrix.triton.device_transfer import (
+            needs_move as _needs_move_dt, transfer_tensor as _xfer_dt)
+        from neurobrix.kernels.nbx_tensor import DeviceAllocator as _DA_dt
+
         for op_idx, op_uid in enumerate(exec_order):
             op_data = ops_meta.get(op_uid)
             if op_data is None:
@@ -1808,6 +1859,42 @@ class GraphExecutor:
                 resolved_args.append(
                     self._resolve_sequential_arg(arg, store, sym_resolver, dispatcher))
 
+            # --- Pipeline-parallel cross-device stage handling (R30 mirror of
+            # TritonSequence._run_multi_device + _set_op_devices). ---
+            # An op's target device is where its weight/param input lives
+            # (pipeline_parallel shards a component's weights per stage; params
+            # are positional tensor args). With no weight, the activation stays
+            # on the running device (_seq_current_dev). Every positional tensor
+            # arg not already on target is moved there via a real D2D memcpy
+            # (NBXTensor.to(device) is a no-op). Inert on single-GPU components
+            # (target == device_idx → needs_move always False → scan only), so
+            # the previously-green triton_sequential models are untouched.
+            _target_dev = None
+            for _a_meta in raw_args:
+                if isinstance(_a_meta, dict) and _a_meta.get("type") in (
+                        "tensor", "tensor_ref"):
+                    _atid = _a_meta.get("tensor_id", "") or ""
+                    if _atid.startswith("param::") or _atid.startswith("buffer::"):
+                        _wt = store.get(_atid)
+                        if _wt is not None and hasattr(_wt, "_device_idx"):
+                            _target_dev = _wt._device_idx
+                            break
+            if _target_dev is None:
+                _target_dev = _seq_current_dev
+            for _i_a, _a in enumerate(resolved_args):
+                if hasattr(_a, "_device_idx"):  # NBXTensor
+                    if _needs_move_dt(_a, _target_dev):
+                        resolved_args[_i_a] = _xfer_dt(_a, _target_dev)
+                elif isinstance(_a, (list, tuple)):
+                    _new = [
+                        _xfer_dt(_x, _target_dev)
+                        if hasattr(_x, "_device_idx") and _needs_move_dt(_x, _target_dev)
+                        else _x for _x in _a]
+                    resolved_args[_i_a] = type(_a)(_new)
+            if _target_dev != _seq_current_dev:
+                _DA_dt.ensure_triton_device(_target_dev)
+                _seq_current_dev = _target_dev
+
             # Op_uid interceptor priority (matches CompiledSequence and
             # TritonSequence: op_uid > op_type > native dispatch). Without
             # this branch, triton_sequential silently bypasses Prism's
@@ -1820,13 +1907,32 @@ class GraphExecutor:
             # so no dtype-engine AMP wrap needed here. R30 (Mode
             # Universality) parity, P-SANA-4KPX-RUNTIME 2026-05-05
             # bisection.
-            if hasattr(self, '_op_uid_interceptors') and op_uid in self._op_uid_interceptors:
-                resolved_kwargs = dispatcher.resolve_kwargs(attrs)
-                result = self._op_uid_interceptors[op_uid](
-                    *resolved_args, **resolved_kwargs)
-            else:
-                # Dispatch
-                result = dispatcher.dispatch(op_type, resolved_args, attrs)
+            try:
+                if hasattr(self, '_op_uid_interceptors') and op_uid in self._op_uid_interceptors:
+                    resolved_kwargs = dispatcher.resolve_kwargs(attrs)
+                    result = self._op_uid_interceptors[op_uid](
+                        *resolved_args, **resolved_kwargs)
+                else:
+                    # Dispatch
+                    result = dispatcher.dispatch(op_type, resolved_args, attrs)
+            except Exception as _e_seq:
+                # Op-localized error (R30 mirror of the compiled "Failed at op"):
+                # name the op_uid + which positional args were None so a
+                # triton-sequential failure points straight at the producer.
+                _none_pos = [i for i, a in enumerate(resolved_args) if a is None]
+                import os as _os_fail
+                if _os_fail.environ.get("NBX_DEVICE_TRACE"):
+                    for _ai, _a in enumerate(resolved_args):
+                        print(f"[DEVTRACE] FAILARG {op_uid} arg{_ai}: "
+                              f"pytype={type(_a).__name__} "
+                              f"device={getattr(_a,'_device',getattr(_a,'device','?'))} "
+                              f"device_idx={getattr(_a,'_device_idx','?')} "
+                              f"dtype={getattr(_a,'dtype','?')} "
+                              f"shape={getattr(_a,'shape','?')}", flush=True)
+                raise RuntimeError(
+                    f"[triton-sequential] Failed at {op_uid} ({op_type}): "
+                    f"{type(_e_seq).__name__}: {_e_seq} | None args at positions "
+                    f"{_none_pos} of {len(resolved_args)}") from _e_seq
 
             # Store outputs
             if isinstance(result, tuple):
@@ -1835,6 +1941,94 @@ class GraphExecutor:
             else:
                 if output_tids:
                     store[output_tids[0]] = result
+
+            # === NBX_DEVICE_TRACE (device-drift diagnosis, default-off) ===
+            # Logs the first op whose output tensor lands on a device_idx !=
+            # the component device, AND whenever the CURRENT cuda device has
+            # drifted after an op (the host-roundtrip source). The earliest
+            # CURDRIFT/DRIFT line names the culprit op for the triton-seq
+            # cross-device "(cpu tensor?)" failure (deepseek-moe MoE routing).
+            import os as _os_dt
+            if _os_dt.environ.get("NBX_DEVICE_TRACE") and output_tids:
+                try:
+                    from neurobrix.kernels.nbx_tensor import DeviceAllocator as _DAdt
+                    _cur = _DAdt.get_device()
+                    if _cur != device_idx:
+                        print(f"[DEVTRACE] CURDRIFT after {op_uid} {op_type}: "
+                              f"cur={_cur} != component {device_idx}", flush=True)
+                    for _ot in output_tids:
+                        _t = store.get(_ot)
+                        _di = getattr(_t, "_device_idx", None) if _t is not None else None
+                        _dev = getattr(_t, "_device", None) if _t is not None else None
+                        if _di is not None and _di != device_idx:
+                            print(f"[DEVTRACE] DRIFT {op_uid} {op_type}: out {_ot} "
+                                  f"device_idx={_di} device={_dev} != component {device_idx}",
+                                  flush=True)
+                except Exception as _e_dt:
+                    # Diagnostics must never affect execution. This block only runs
+                    # when NBX_DEVICE_TRACE is explicitly set, so surface the
+                    # diagnostic's own failure (so it isn't silently useless when
+                    # enabled) and continue the op loop unchanged.
+                    print(f"[DEVTRACE] diagnostic failed at {op_uid} "
+                          f"({op_type}): {type(_e_dt).__name__}: {_e_dt}", flush=True)
+
+            # === NBX_OP_FINGERPRINT (sequential path) ===
+            # Symmetric mirror of TritonSequence's fingerprint emit
+            # (triton/sequence.py:2554-2600). Without this hook the
+            # sequential dispatcher cannot be op-diffed against the
+            # compiled hot-loop — an R30 diagnostic asymmetry. Same
+            # record schema {i, op_uid, op_type, tid, shape, dtype,
+            # nbytes, hashed, sha} so the two JSONL files align by
+            # op_uid. Gated, default-off, AFTER store / BEFORE evict so
+            # the output tensor is still live. CAP / MAX semantics match
+            # the compiled path.
+            import os as _os_fp_sq
+            _fp_path_sq = _os_fp_sq.environ.get("NBX_OP_FINGERPRINT", "")
+            if _fp_path_sq and output_tids:
+                try:
+                    import json as _json_fp_sq, hashlib as _hl_sq
+                    import ctypes as _ct_fp_sq
+                    from neurobrix.kernels.nbx_tensor import (
+                        DeviceAllocator as _DA_fp_sq)
+                    _fp_max_sq = int(
+                        _os_fp_sq.environ.get("NBX_OP_FINGERPRINT_MAX", "0"))
+                    _cap_sq = int(
+                        _os_fp_sq.environ.get("NBX_OP_FINGERPRINT_CAP", "8192"))
+                    if not hasattr(self, "_fp_idx_sq"):
+                        self._fp_idx_sq = 0
+                    _recs_sq = []
+                    for _ot in output_tids:
+                        if _fp_max_sq and self._fp_idx_sq >= _fp_max_sq:
+                            break
+                        self._fp_idx_sq += 1
+                        _t = store.get(_ot)
+                        if _t is None or not hasattr(_t, "data_ptr"):
+                            _recs_sq.append({"i": self._fp_idx_sq,
+                                             "op_uid": op_uid,
+                                             "op_type": op_type, "tid": _ot,
+                                             "sha": "none"})
+                            continue
+                        if hasattr(_t, "_device_idx"):
+                            _DA_fp_sq.set_device(_t._device_idx)
+                        _c = _t.contiguous()
+                        _nb = _c._nbytes
+                        _hb = _nb if _cap_sq == 0 else min(_nb, _cap_sq)
+                        _buf = (_ct_fp_sq.c_char * _hb)()
+                        _DA_fp_sq.memcpy(_ct_fp_sq.addressof(_buf),
+                                         _c.data_ptr(), _hb, kind=2)
+                        _recs_sq.append({
+                            "i": self._fp_idx_sq, "op_uid": op_uid,
+                            "op_type": op_type, "tid": _ot,
+                            "shape": list(_t.shape), "dtype": str(_t.dtype),
+                            "nbytes": _nb, "hashed": _hb,
+                            "sha": _hl_sq.sha256(bytes(_buf)).hexdigest()})
+                    with open(_fp_path_sq, "a") as _f_sq:
+                        for _r in _recs_sq:
+                            _json_fp_sq.dump(_r, _f_sq)
+                            _f_sq.write("\n")
+                except Exception as _e_fp_sq:
+                    print(f"[NBX_OP_FINGERPRINT seq] failed at {op_uid}: "
+                          f"{_e_fp_sq}", flush=True)
 
             # Evict tids whose last-use was this op. See the liveness
             # comment before the loop for the motivation.
@@ -1899,7 +2093,17 @@ class GraphExecutor:
             atype = arg.get("type")
             if atype in ("tensor", "tensor_ref"):
                 tid = arg.get("tensor_id")
-                return store.get(tid)
+                t = store.get(tid)
+                if t is None and isinstance(tid, str) and tid.startswith("param::constant"):
+                    # Orphan scalar constant with no data in the container (e.g. a
+                    # HAT in-forward `mask[slice]=cnt` count, lifted via aten::lift_fresh
+                    # then consumed by aten::fill). The compiled path materialises it as
+                    # a 0-dim default (bind_weights `[]`, commit c0a1445); mirror that in
+                    # triton-sequential with an R33-pure 0-dim zero NBXTensor (it is
+                    # immediately `.item()`-ed by _meta_fill, so device is irrelevant).
+                    from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype
+                    t = NBXTensor.zeros([], NBXDtype.float32, "cuda:0")
+                return t
             if atype == "tensor_tuple":
                 return [store.get(tid) for tid in arg.get("tensor_ids", [])]
             if atype == "symbol":
@@ -3099,8 +3303,10 @@ class GraphExecutor:
         _dump_n("gate_scores_in", gate_scores)
         _dump_n("hidden_states_in", hidden_states)
 
-        # ROUTING IN FP32 (same as compiled path)
-        gate_scores = gate_scores.float()
+        # ROUTING IN FP32 (same as compiled path). The fp32-upcast policy is
+        # owned by the dtype engine (single source); see routing_upcast_fp32.
+        from neurobrix.core.dtype.engine import routing_upcast_fp32
+        gate_scores = routing_upcast_fp32(gate_scores)
         _compute_dev = hidden_states.device
         if gate_scores.device != _compute_dev:
             gate_scores = gate_scores.to(_compute_dev)
@@ -3206,6 +3412,40 @@ class GraphExecutor:
 
         # Also store in op_outputs for stats and legacy code
         self._ctx.op_outputs[op_uid] = current_outputs
+
+        # NBX_DUMP_TIDS (sequential path) — torch-tensor mirror of
+        # CompiledSequence._maybe_dump_tid_native so the two PyTorch engines can be
+        # op-diffed (same {engine, record} schema, match by op_uid+shape). Gated,
+        # default-off. Built for the openaudio sequential-codec divergence hunt.
+        import os as _os_ds
+        _dpath_ds = _os_ds.environ.get("NBX_DUMP_TIDS")
+        if _dpath_ds:
+            import json as _json_ds
+            _filters_ds = [f for f in _os_ds.environ.get(
+                "NBX_DUMP_TIDS_FILTER", "").split(",") if f]
+            _ot_ds = op_data.get("op_type", "unknown")
+            for idx, tid in enumerate(output_tensor_ids):
+                _t = current_outputs[idx]
+                if not isinstance(_t, torch.Tensor):
+                    continue
+                if _filters_ds and not any(f in tid or f in op_uid for f in _filters_ds):
+                    continue
+                try:
+                    _flat = _t.detach().reshape(-1)
+                    _head = _flat[:10].float().cpu().tolist()
+                    _fflat = _flat if _flat.is_floating_point() else _flat.float()
+                    _norm = float(torch.linalg.vector_norm(
+                        _fflat, dtype=torch.float32).item())
+                    with open(_dpath_ds, "a") as _f:
+                        _json_ds.dump({"engine": "sequential", "record": {
+                            "tid": tid, "op_uid": op_uid, "op_type": _ot_ds,
+                            "component": self._component_name,
+                            "shape": list(_t.shape), "dtype": str(_t.dtype),
+                            "is_complex": bool(_t.is_complex()),
+                            "head10": _head, "l2_norm": _norm}}, _f)
+                        _f.write("\n")
+                except Exception as _e_ds:
+                    print(f"[NBX_DUMP_TIDS seq] failed on {tid}: {_e_ds}", flush=True)
 
     # =========================================================================
     # Output Gathering

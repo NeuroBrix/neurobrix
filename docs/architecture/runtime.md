@@ -17,11 +17,16 @@ The runtime has **zero domain knowledge**. It does not know what an "image", "to
 
 ## Execution Modes
 
-| Mode | Flag | Implementation | Use Case |
-|------|------|----------------|----------|
-| **Compiled** | (default) | CompiledSequence + DtypeEngine AMP | Production (80-95% GPU utilization) |
-| **Native** | `--sequential` | Sequential ATen dispatcher | Debugging |
-| **Triton** | `--triton` | TritonSequence (zero PyTorch) | Production — zero-torch inference |
+Two independent compute branches (PyTorch and Triton), each in a sequential
+(op-by-op) and a compiled (fused hot-loop) variant — four modes. The branches
+share the `.nbx` container and the Prism plan but no compute code.
+
+| Mode | Flag | Branch | Implementation | Use Case |
+|------|------|--------|----------------|----------|
+| **Compiled** | (default) | PyTorch | CompiledSequence + DtypeEngine AMP | Production (80-95% GPU utilization) |
+| **Native** | `--sequential` | PyTorch | Sequential ATen dispatcher | Reference oracle (proves graph/trace) |
+| **Triton** | `--triton` | Triton | TritonSequence (zero PyTorch) | Production — zero-torch, vendor-agnostic |
+| **Triton sequential** | `--triton-sequential` | Triton | TritonSequentialDispatcher (op-by-op) | Kernel oracle (op-by-op vs PyTorch oracle) |
 
 ### Compiled Mode (Default)
 

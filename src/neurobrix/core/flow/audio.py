@@ -88,9 +88,6 @@ class AudioEngine(FlowHandler):
 
             if execution == "forward":
                 self._execute_forward_stage(stage)
-            elif execution == "native_kokoro":
-                from .stages.kokoro import execute_native_kokoro
-                execute_native_kokoro(self, stage, audio_config)
             elif execution == "diffusion":
                 from .stages.vibevoice import execute_diffusion_stage
                 execute_diffusion_stage(self, stage, audio_config)
@@ -98,9 +95,18 @@ class AudioEngine(FlowHandler):
                 from .stages.vibevoice import execute_native_acoustic_decoder
                 execute_native_acoustic_decoder(self, stage, audio_config)
             else:
+                # NOTE: `native_kokoro` was removed from the COMPILED dispatch —
+                # Kokoro's predictor now runs the traced forward graph
+                # (registry execution: forward), validated element-wise vs the
+                # vendor oracle. The `execute_native_kokoro` band-aid is retained
+                # ONLY for the TRITON path (triton/flow/audio.py), which cannot
+                # yet run the LSTM forward graph (no Triton LSTM kernel) — a
+                # separate chantier (P-KOKORO-TRITON-LSTM-KERNEL + R33). The
+                # removal here is scoped to compiled so an untested triton path
+                # is not broken.
                 raise RuntimeError(
                     f"ZERO FALLBACK: Unknown execution type '{execution}' "
-                    f"for stage '{comp_name}'. Expected: forward, native_kokoro, "
+                    f"for stage '{comp_name}'. Expected: forward, "
                     f"diffusion, native_acoustic_decoder"
                 )
 
@@ -254,11 +260,17 @@ class AudioEngine(FlowHandler):
             # LLM-style: direct encode (Orpheus, Voxtral TTS, etc.)
             # Use add_special_tokens=False when template already includes BOS
             add_special = tts_template is None
+            # padding=False: the LLM / autoregressive path must use the ACTUAL
+            # prompt length. The NeuroBrix tokenizer's encode() defaults to
+            # padding=True up to model_max_length; for an LM that left the seq
+            # symbolic, padding to max_position_embeddings inflates the causal
+            # mask to max_len² (VibeVoice: 131072² bool = 16 GiB tril OOM).
             try:
                 input_ids = tokenizer.encode(prompt, return_tensors="pt",
                                              add_special_tokens=add_special)
             except TypeError:
-                ids = tokenizer.encode(prompt, add_special_tokens=add_special)
+                ids = tokenizer.encode(prompt, add_special_tokens=add_special,
+                                       padding=False)
                 input_ids = torch.tensor([ids], dtype=torch.long)
             if isinstance(input_ids, list):
                 input_ids = torch.tensor([input_ids], dtype=torch.long)
@@ -385,6 +397,15 @@ class AudioEngine(FlowHandler):
         variable = output_config.get("variable", "global.output_audio")
         device = self.ctx.primary_device
 
+        # Read-and-clear the per-request content fraction. A stage that feeds a
+        # fixed-window decoder a partially-filled input (e.g. the Kokoro
+        # predictor, whose asr/F0/N tail is zero) sets this so the synthesised
+        # silent tail is cropped here. Popping it prevents a stale ratio from
+        # cropping a later warm-mode request routed through a different model.
+        content_ratio = self.ctx.variable_resolver.resolved.pop(
+            "global.audio_content_ratio", None
+        )
+
         # Check if output is audio token IDs or raw waveform
         # Detection is DATA-DRIVEN: defaults.json audio_output_type and audio_token_start
         defaults = self.ctx.pkg.defaults
@@ -412,12 +433,15 @@ class AudioEngine(FlowHandler):
                 generated_ids, vocab_size=vocab_size, device=device,
             )
             if waveform.numel() > 1:
+                # Output saving is the CLI's responsibility via
+                # `output_dispatch.save_audio` (reads `global.output_audio`
+                # from outputs and writes to args.output / family-aware
+                # default). The flow handler must NOT write directly —
+                # that produced a stray `output_<model>.wav` in cwd
+                # regardless of --output (the actual save then ran twice
+                # for harness/--output users). Store the waveform in the
+                # resolver and let the CLI handle the file.
                 self.ctx.variable_resolver.resolved[variable] = waveform
-                model_name = self.ctx.pkg.manifest.get("model_name", "model")
-                sample_rate = self._get_sample_rate()
-                output_path = f"output_{model_name}.wav"
-                AudioOutputProcessor.save_waveform(waveform, output_path, sample_rate=sample_rate)
-                print(f"\n{'='*70}\nSAVED: {output_path}\n{'='*70}")
                 return
 
         # Raw waveform: find output tensor from last stage (Kokoro, VibeVoice, etc.)
@@ -436,13 +460,15 @@ class AudioEngine(FlowHandler):
                         break
 
         if waveform is not None:
+            # Crop the synthesised silent tail when the decoder ran on a
+            # partially-filled fixed window (content_ratio < 1.0). Shared with
+            # the triton output path so the crop is symmetric across modes.
+            from .audio_utils import crop_waveform_to_content_ratio
+            waveform = crop_waveform_to_content_ratio(waveform, content_ratio)
+            # Output saving is the CLI's responsibility — see comment
+            # in the SNAC branch above. Flow handler stores the waveform
+            # in the resolver and stops.
             self.ctx.variable_resolver.resolved[variable] = waveform
-            model_name = self.ctx.pkg.manifest.get("model_name", "model")
-            sample_rate = self._get_sample_rate()
-            output_path = f"output_{model_name}.wav"
-            from neurobrix.core.module.audio.output_processor import AudioOutputProcessor
-            AudioOutputProcessor.save_waveform(waveform, output_path, sample_rate=sample_rate)
-            print(f"\n{'='*70}\nSAVED: {output_path}\n{'='*70}")
 
     # ─────────────────────────────────────────────────────────────
     # Shared helpers
@@ -505,8 +531,52 @@ class AudioEngine(FlowHandler):
             return False
 
         actual_seq = actual_input.shape[2]
-        if actual_seq <= graph_seq_len:
-            return False  # Fits in single pass, no chunking needed
+        if actual_seq == graph_seq_len:
+            return False  # exact trace length → single pass, window-norm matches
+        # actual_seq != graph_seq_len: the iSTFT window-norm divisor is baked at the
+        # trace frame count, so every decoder block must run at EXACTLY graph_seq_len.
+        # A shorter utterance runs as one block padded up to graph_seq_len (then the
+        # waveform is trimmed proportionally); a longer one as multiple blocks.
+
+        # Resolve the component's OTHER inputs so each chunk carries them too. A
+        # multi-input decoder (Kokoro: asr is chunked by frames; F0_curve/N are
+        # frame-dependent and chunked synchronously; s is the static style) otherwise
+        # loses every input but the primary one -> UNKNOWN_SCALAR at the first op.
+        # Frame-dependent vs static is detected per input (runtime dim > graph dim).
+        connections_all = self.ctx.pkg.topology.get("connections", [])
+
+        def _resolve_aux(iname):
+            for c in connections_all:
+                if c.get("to") == f"{comp_name}.{iname}":
+                    v = resolved.get(c.get("from"))
+                    if isinstance(v, torch.Tensor):
+                        return v
+            for key in (f"global.{iname}", iname, f"{comp_name}.{iname}"):
+                v = resolved.get(key)
+                if isinstance(v, torch.Tensor):
+                    return v
+            return None
+
+        aux_inputs = {}
+        for _tid2, spec2 in dag.get("tensors", {}).items():
+            iname2 = spec2.get("input_name")
+            if not iname2 or iname2 == graph_input_name:
+                continue
+            val2 = _resolve_aux(iname2)
+            if val2 is None:
+                continue
+            cdim2 = glen2 = None
+            gshape2 = spec2.get("shape", [])
+            for d in range(min(len(gshape2), val2.dim())):
+                gd = gshape2[d]
+                if isinstance(gd, dict):
+                    gd = gd.get("trace_value", gd)
+                if isinstance(gd, int) and val2.shape[d] != gd:
+                    # frame-dependent: chunk (runtime>graph) OR pad (runtime<graph)
+                    # to exactly graph_len so the decoder runs at the trace shape
+                    cdim2, glen2 = d, gd
+                    break
+            aux_inputs[iname2] = (val2, cdim2, glen2)
 
         # Chunk and execute
         print(f"   [{comp_name}] Chunked: {actual_seq} frames -> {graph_seq_len}-frame blocks")
@@ -522,6 +592,21 @@ class AudioEngine(FlowHandler):
                 chunk = torch.nn.functional.pad(chunk, (0, pad_size))
 
             comp_inputs = {graph_input_name: chunk}
+            block_idx = chunk_start // graph_seq_len
+            for iname2, (val2, cdim2, glen2) in aux_inputs.items():
+                if cdim2 is None:
+                    comp_inputs[iname2] = val2  # static (e.g. the style vector)
+                else:
+                    s2 = block_idx * glen2
+                    take = max(0, min(glen2, val2.shape[cdim2] - s2))
+                    c2 = val2.narrow(cdim2, s2, take)
+                    if c2.shape[cdim2] < glen2:
+                        pad_shape = list(c2.shape)
+                        pad_shape[cdim2] = glen2 - c2.shape[cdim2]
+                        c2 = torch.cat(
+                            [c2, torch.zeros(pad_shape, dtype=c2.dtype, device=c2.device)],
+                            dim=cdim2)
+                    comp_inputs[iname2] = c2
             output = executor.run(comp_inputs)
 
             if isinstance(output, dict):
@@ -698,8 +783,6 @@ class AudioEngine(FlowHandler):
         return None
 
     def _get_compute_dtype(self) -> torch.dtype:
-        """Get compute dtype from manifest."""
-        dtype_str = self.ctx.pkg.manifest.get("dtype", "float16")
-        return {"float16": torch.float16, "bfloat16": torch.bfloat16, "float32": torch.float32}.get(
-            dtype_str, torch.float16
-        )
+        """Get compute dtype from manifest (string→torch.dtype via the dtype engine)."""
+        from neurobrix.core.dtype.config import get_torch_dtype
+        return get_torch_dtype(self.ctx.pkg.manifest.get("dtype", "float16"))

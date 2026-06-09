@@ -85,7 +85,8 @@ class TritonGenerator:
 
     def __iter__(self) -> Iterator[int]:
         self.reset()
-        for step_idx in range(self.max_tokens):
+        from neurobrix.core.runtime.decode_bound import decode_bound  # NBX_DECODE_BOUND harness
+        for step_idx in range(decode_bound(self.max_tokens)):
             if self._state.is_done:
                 break
             self._state.step_idx = step_idx
@@ -128,6 +129,13 @@ class TritonGenerator:
             self._state.is_done = True
         if len(self._state.generated_tokens) >= self.max_tokens:
             self._state.is_done = True
+
+        _prog = __import__("os").environ.get("NBX_DECODE_PROGRESS")
+        if _prog:  # gated decode-trajectory dump (autoregressive); buffer-immune
+            with open(_prog, "a") as _pf:
+                _pf.write(f"step={step_idx} n={len(self._state.generated_tokens)} "
+                          f"last={token_id} done={self._state.is_done}\n")
+                _pf.flush()
 
         return next_token, self._state.is_done
 

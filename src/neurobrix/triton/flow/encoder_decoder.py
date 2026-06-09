@@ -51,9 +51,9 @@ class TritonEncoderDecoderEngine:
         stages = audio_config.get("stages", [])
         defaults = self.ctx.pkg.defaults
 
-        # -- Step 1: Preprocess audio input (BOUNDARY — uses torch internally) --
-        from neurobrix.core.flow.audio_utils import preprocess_audio_input
-        preprocess_audio_input(self.ctx, audio_config, stages)
+        # -- Step 1: Preprocess audio input (zero-torch numpy front-end) --
+        from neurobrix.triton.audio_frontend import preprocess_audio_input_np
+        preprocess_audio_input_np(self.ctx, audio_config, stages)
 
         # -- Step 2: Forward encoder --
         encoder_stage = None
@@ -85,13 +85,27 @@ class TritonEncoderDecoderEngine:
         encoder_output = _get_component_output(self.ctx, enc_name)
         if encoder_output is not None:
             self.ctx.variable_resolver.resolved[f"{enc_name}.output_0"] = encoder_output
+        _prog0 = __import__("os").environ.get("NBX_DECODE_PROGRESS")
+        if _prog0 and encoder_output is not None:  # gated diagnostic — encoder sanity
+            try:
+                import numpy as _np
+                _eo = encoder_output.numpy()
+                with open(_prog0, "w") as _pf:
+                    _pf.write(f"ENCODER shape={_eo.shape} l2={float(_np.linalg.norm(_eo)):.3f} "
+                              f"mean={float(_eo.mean()):.5f} std={float(_eo.std()):.5f} "
+                              f"nan={bool(_np.isnan(_eo).any())} "
+                              f"head={_np.round(_eo.flatten()[:6],4).tolist()}\n")
+                    _pf.flush()
+            except Exception:
+                pass
 
         if not self.ctx.persistent_mode:
             self._unload_component_weights(enc_name)
             gc.collect()
 
         # -- Step 3: Autoregressive decode with cross-attention --
-        max_tokens = defaults.get("max_tokens")
+        from neurobrix.core.runtime.decode_bound import decode_bound  # NBX_DECODE_BOUND harness
+        max_tokens = decode_bound(defaults.get("max_tokens"))
         if max_tokens is None:
             raise RuntimeError("ZERO FALLBACK: max_tokens missing from defaults.json.")
         temperature = defaults.get("temperature")
@@ -158,6 +172,21 @@ class TritonEncoderDecoderEngine:
                 )
 
             generated_ids.append(next_token)
+            _prog = __import__("os").environ.get("NBX_DECODE_PROGRESS")
+            if _prog:  # gated, off by default — file write is immune to stdout buffering
+                _stat = ""
+                try:
+                    import numpy as _np
+                    _do = decoder_output.numpy()
+                    _lt = _do.reshape(-1, _do.shape[-1])[-1]  # last-token hidden (drives logits)
+                    _stat = (f" dec_l2={float(_np.linalg.norm(_lt)):.4f}"
+                             f" dec_mean={float(_lt.mean()):.5f}"
+                             f" dec_head={_np.round(_lt[:4],4).tolist()}")
+                except Exception as _e:
+                    _stat = f" (dec-stat err: {_e})"
+                with open(_prog, "a") as _pf:
+                    _pf.write(f"step={step} last={next_token}{_stat}\n")
+                    _pf.flush()
             if next_token == eos_token_id:
                 break
 
@@ -170,9 +199,9 @@ class TritonEncoderDecoderEngine:
             self._unload_component_weights(dec_name)
             gc.collect()
 
-        # -- Step 4: Decode tokens to text --
-        from neurobrix.core.flow.audio_utils import postprocess_text_output
-        postprocess_text_output(self.ctx)
+        # -- Step 4: Decode tokens to text (zero-torch) --
+        from neurobrix.triton.audio_frontend import postprocess_text_output_np
+        postprocess_text_output_np(self.ctx)
 
         return self.ctx.variable_resolver.resolve_all()
 
@@ -238,9 +267,18 @@ def _compute_logits(ctx, hidden_states, embed_weight, logits_source):
         # matmul: last_hidden @ embed_weight.T
         # Use the graph executor's run for the matmul if available,
         # otherwise fall back to kernel dispatch
-        from neurobrix.kernels.dispatch import dispatch_op
+        from neurobrix.kernels.dispatch import dispatch
         w_t = embed_weight.transpose(0, 1) if embed_weight.ndim == 2 else embed_weight
-        return dispatch_op("mm", last_hidden, w_t)
+        mm = dispatch("mm")
+        if last_hidden.ndim > 2:
+            # lm_head over [..., H]: the 2-D `mm` kernel needs flat [M, H].
+            lead, hdim = last_hidden.shape[:-1], last_hidden.shape[-1]
+            m = 1
+            for d in lead:
+                m *= d
+            out = mm(last_hidden.reshape(m, hdim), w_t)
+            return out.reshape(*lead, out.shape[-1])
+        return mm(last_hidden, w_t)
 
     return last_hidden
 

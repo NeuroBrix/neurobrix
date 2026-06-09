@@ -333,9 +333,18 @@ def promote_seq_len_scalars(dag: dict, tensors: dict, ops_meta: dict):
                             args[shape_idx] = items
 
         elif op_type == "aten::expand" and len(args) >= 2:
+            # Handle BOTH the raw-list and the wrapped {"type":"list"} forms.
+            # The wrapped form was previously skipped (the isinstance(list) check
+            # fails on the dict), leaving a seq_len element concrete — the same
+            # bug already handled for view/reshape just below and for zeros/full
+            # (compiled `84e05e1`). Kokoro's bert token_type expand uses the
+            # wrapped form `{"type":"list","value":[1,23]}`, so the seq dim stayed
+            # 23 at a runtime seq_len of 14 → aten.add broadcast failure in triton.
             size_arg = args[1]
-            if isinstance(size_arg, (list, tuple)):
-                size_list = list(size_arg)
+            is_wrapped = isinstance(size_arg, dict) and size_arg.get("type") == "list"
+            size_list = size_arg.get("value", []) if is_wrapped else size_arg
+            if isinstance(size_list, (list, tuple)):
+                size_list = list(size_list)
                 changed = False
                 for i, elem in enumerate(size_list):
                     if isinstance(elem, dict):
@@ -349,7 +358,8 @@ def promote_seq_len_scalars(dag: dict, tensors: dict, ops_meta: dict):
                             size_list[i] = r
                             changed = True
                 if changed:
-                    args[1] = size_list
+                    args[1] = ({"type": "list", "value": size_list}
+                               if is_wrapped else size_list)
 
         elif op_type in ("aten::view", "aten::reshape", "aten::_unsafe_view") and len(args) >= 2:
             shape_arg = args[1]

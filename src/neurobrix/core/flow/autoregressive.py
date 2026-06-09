@@ -362,7 +362,11 @@ class ImageStrategy(GenerationStrategy):
             # Run head separately for cond/uncond (head traced with batch=1)
             logits_cond = self._run_head(last_hidden[0:1, ...], step_idx)
             logits_uncond = self._run_head(last_hidden[1:2, ...], step_idx)
-            return logits_uncond + self._cfg_weight * (logits_cond - logits_uncond)
+            # CFG guidance via the unified CFGEngine (single formula authority).
+            # Identical to the prior inline `uncond + scale*(cond - uncond)`.
+            # Lazy import avoids the cfg.engine<->flow circular import at load.
+            from neurobrix.core.cfg.engine import CFGEngine
+            return CFGEngine.apply_guidance(logits_cond, logits_uncond, self._cfg_weight)
         return self._run_head(last_hidden, step_idx)
 
     def embed_token(self, next_token: torch.Tensor, step_idx: int) -> torch.Tensor:
@@ -566,10 +570,44 @@ class AutoregressiveHandler(FlowHandler):
         generated_tokens = generator.get_generated_tokens()
         strategy.process_output(generated_tokens, self.ctx)
 
+        # Zero Outsider (ZO-0): SNAC codec traced into the .nbx → run it as a stage
+        # (no vendor `snac`, no HF download).
+        self._run_snac_codec_decoder(generated_tokens)
+
         session.cleanup()
         self._unload_non_lm_weights(gen_info)
 
         return self.ctx.variable_resolver.resolve_all()
+
+    def _run_snac_codec_decoder(self, generated_tokens) -> None:
+        """ZO-0: decode orpheus SNAC tokens through the TRACED `codec.decoder`
+        component. Redistributes the 7-tokens/frame stream into the 3 SNAC
+        codebooks (pure python) and runs the codec as a proper stage via
+        `_execute_component` (so symbolic shapes + the in-graph NoiseBlock randn
+        are set up correctly). No `snac` import."""
+        defaults = self.ctx.pkg.defaults
+        if defaults.get("audio_output_type") != "snac_tokens":
+            return
+        if "codec.decoder" not in self.ctx.executors:
+            return
+        from .audio_utils import redistribute_snac_codes
+        gen_ids = (generated_tokens.tolist()
+                   if hasattr(generated_tokens, "tolist") else list(generated_tokens))
+        codes = redistribute_snac_codes(
+            gen_ids, defaults["audio_token_start"], defaults["vocab_size"])
+        if codes is None:
+            return
+        c0, c1, c2 = codes
+        dev = self._parse_device()
+        rv = self.ctx.variable_resolver.resolved
+        for key, vals in (("c0", c0), ("c1", c1), ("c2", c2)):
+            t = torch.tensor([vals], dtype=torch.long, device=dev)
+            rv[f"codec.decoder.{key}"] = t
+            rv[key] = t
+        self._execute_component("codec.decoder", "forward", None)
+        wav = rv.get("codec.decoder.output_0")
+        if wav is not None:
+            rv["global.output_audio"] = wav
 
     # ─── SETUP HELPERS ─────────────────────────────────────────────────────────
 
@@ -938,7 +976,8 @@ def _build_generator_config(defaults: Dict, resolver: Any, gen_type: str) -> Dic
     patch_size = defaults.get("patch_size")
     codebook_size = defaults.get("codebook_size")
     codebook_dim = defaults.get("codebook_dim")
-    max_tokens = defaults.get("max_tokens")
+    from neurobrix.core.runtime.decode_bound import decode_bound  # NBX_DECODE_BOUND harness
+    max_tokens = decode_bound(defaults.get("max_tokens"))
 
     if gen_type == "autoregressive_image":
         for required in ("image_size", "patch_size", "codebook_size", "codebook_dim"):

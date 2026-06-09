@@ -187,8 +187,13 @@ class CompiledOpResolver:
             return self._make_rms_norm(attrs)
         if "scaled_dot_product" in op_name and "attention" in op_name:
             return self._make_attention(op_name, attrs)
-        if op_name in ("upsample_nearest2d", "upsample_bilinear2d", "upsample_bicubic2d"):
+        if op_name in ("upsample_nearest2d", "upsample_bilinear2d", "upsample_bicubic2d",
+                       "upsample_nearest1d", "upsample_linear1d"):
             return self._make_upsample(op_name)
+        if op_name == "as_strided":
+            return self._make_as_strided()
+        if op_name == "unfold_backward":
+            return self._make_unfold_backward()
         return self._get_standard_op(op_name)
 
     # ========================================================================
@@ -395,15 +400,12 @@ class CompiledOpResolver:
         where args = (x_tensor, weight_tensor) and kwargs may include epsilon.
         Epsilon is captured in closure at compile time.
         """
-        import torch
+        from neurobrix.core.dtype.engine import rms_norm_fp32
         epsilon = attrs.get("epsilon", attrs.get("kwargs", {}).get("epsilon", 1e-6))
 
         def _rms_norm_fn(x, weight, **kwargs):
-            # Compute in fp32 for numerical stability (matches decomposed pattern)
-            x_fp32 = x.to(torch.float32)
-            variance = x_fp32.pow(2).mean(-1, keepdim=True)
-            x_normed = x_fp32 * torch.rsqrt(variance + epsilon)
-            return x_normed.to(weight.dtype) * weight
+            # fp32-variance RMSNorm; the dtype-upcast policy lives in the engine.
+            return rms_norm_fp32(x, weight, epsilon)
 
         return _rms_norm_fn
 
@@ -421,6 +423,15 @@ class CompiledOpResolver:
         """
         raw_name = op_name.replace("aten::", "")
         base_name = raw_name.split(".")[0]
+
+        # The captured `is_causal` lives in the op attributes. Some transformers
+        # versions call SDPA with is_causal=True + attn_mask=None (chatterbox t3),
+        # while others ship an explicit causal mask (is_causal=None, mask tensor).
+        # The runtime kwargs at call time may not carry the flag, so default to the
+        # traced attribute — otherwise a causal attention silently runs bidirectional
+        # (future-token leakage). Mask-based models trace is_causal=None and keep the
+        # explicit-mask path below; non-causal encoders trace is_causal=None too.
+        _attr_is_causal = _safe_is_causal(attrs.get("is_causal", False))
 
         if base_name == "_scaled_dot_product_flash_attention_for_cpu":
             def flash_cpu_attention(q, k, v, dropout_p=0.0, is_causal=False, **kwargs):
@@ -468,11 +479,16 @@ class CompiledOpResolver:
         # Standard SDPA — handles pattern-reassembled ops + native SDPA
         def standard_attention(q, k, v, *args, **kwargs):
             q, k, v = _align_qkv_dtypes(q, k, v)
-            # K may be transposed [B,H,D,S] from pattern reassembly — fix to [B,H,S,D]
-            if k.ndim == 4 and q.ndim == 4 and k.shape[-2] != q.shape[-2]:
+            # K may be transposed [B,H,D,S] from pattern reassembly — fix to [B,H,S,D].
+            # Detect via head_dim (last axis), NOT seq (axis -2): cross-attention
+            # legitimately has seq_q != seq_k (Perceiver: 32 latent queries over 150
+            # prompt keys), so a seq-axis comparison wrongly transposes a correct K.
+            # A genuinely transposed [B,H,D,S] K carries head_dim in axis -2 == q[-1].
+            if (k.ndim == 4 and q.ndim == 4
+                    and k.shape[-1] != q.shape[-1] and k.shape[-2] == q.shape[-1]):
                 k = k.transpose(-2, -1)
 
-            is_causal = _safe_is_causal(kwargs.pop('is_causal', False))
+            is_causal = _safe_is_causal(kwargs.pop('is_causal', _attr_is_causal))
             kwargs.pop('dropout_p', None)
             scale = kwargs.pop('scale', None)
 
@@ -492,6 +508,9 @@ class CompiledOpResolver:
 
             if attn_mask is not None:
                 attn_mask = _cast_attn_mask(attn_mask, q)
+                # SDPA rejects an explicit mask together with is_causal=True; the
+                # mask already encodes causality, so the flag is redundant here.
+                is_causal = False
 
             return F.scaled_dot_product_attention(
                 q, k, v, attn_mask=attn_mask,
@@ -506,15 +525,42 @@ class CompiledOpResolver:
         Graph contains hardcoded output_size from trace time. When scale factors
         are available, we recompute output_size from actual input dimensions.
         """
-        if op_name == "upsample_nearest2d":
-            raw_op = F.interpolate
+        raw_op = F.interpolate
+        is_1d = op_name.endswith("1d")
+        if "nearest" in op_name:
             mode = "nearest"
-        elif op_name == "upsample_bilinear2d":
-            raw_op = F.interpolate
-            mode = "bilinear"
+        elif "linear" in op_name:  # upsample_linear1d or upsample_bilinear2d
+            mode = "linear" if is_1d else "bilinear"
         else:  # upsample_bicubic2d
-            raw_op = F.interpolate
             mode = "bicubic"
+
+        if is_1d:
+            # The trace bakes a fixed output_size that won't track a dynamic input
+            # length (Kokoro F0/N prosody + decoder resample on the variable
+            # acoustic frame axis). Recompute the length from the LIVE input ×
+            # scale, mirroring the 2D fix below. The scale's arg position differs:
+            #   nearest1d(input, output_size, scales)             → scales = arg[2]
+            #   linear1d (input, output_size, align_corners, scales) → scales = arg[3]
+            nearest = (mode == "nearest")
+
+            def upsample_wrapper_1d(input_tensor, output_size=None, a2=None, a3=None, *args, **kwargs):
+                if nearest:
+                    scales, align = a2, None
+                else:
+                    scales, align = a3, a2  # a2 is align_corners (a bool)
+                # bool is an int subclass — exclude it so align_corners can't be
+                # mistaken for a scale (that produced int(W*False)=0).
+                if isinstance(scales, (int, float)) and not isinstance(scales, bool):
+                    size = int(round(input_tensor.shape[-1] * scales))
+                elif isinstance(output_size, (list, tuple)):
+                    size = output_size[0]
+                else:
+                    size = output_size
+                ac = None if nearest else bool(align) if align is not None else False
+                if size is not None and size > 0:
+                    return raw_op(input_tensor, size=size, mode=mode, align_corners=ac)
+                return raw_op(input_tensor, scale_factor=scales, mode=mode, align_corners=ac)
+            return upsample_wrapper_1d
 
         def upsample_wrapper(input_tensor, output_size=None, scales_h=None, scales_w=None, *args, **kwargs):
             # Multi-resolution fix: if scales are provided, recompute output_size
@@ -532,6 +578,49 @@ class CompiledOpResolver:
                 return raw_op(input_tensor, scale_factor=(scales_h, scales_w), mode=mode,
                              align_corners=False if mode != "nearest" else None)
         return upsample_wrapper
+
+    def _make_unfold_backward(self) -> Callable:
+        """aten::unfold_backward(grad, input_sizes, dim, size, step) is the iSTFT
+        overlap-add reconstruction (inverse of the as_strided framing): it scatters
+        the `grad` windows back into a signal of `input_sizes`. The trace bakes
+        input_sizes at the trace frame count; recompute the reconstructed length
+        from the LIVE window count so it tracks variable audio:
+            input_sizes[dim] = (n_windows - 1) * step + size.
+        Mirror of the as_strided framing recompute.
+        """
+        def unfold_backward_wrapper(grad, input_sizes, dim, size, step, *args, **kwargs):
+            input_sizes = list(input_sizes)
+            if (isinstance(dim, int) and isinstance(size, int) and isinstance(step, int)
+                    and hasattr(grad, "shape") and 0 <= dim < len(input_sizes)
+                    and dim < grad.dim()):
+                n_windows = grad.shape[dim]
+                input_sizes[dim] = (n_windows - 1) * step + size
+            return torch.ops.aten.unfold_backward(grad, input_sizes, dim, size, step)
+        return unfold_backward_wrapper
+
+    def _make_as_strided(self) -> Callable:
+        """as_strided used as an overlap-add framing view (iSTFT in the istftnet
+        vocoder) bakes the trace frame count into size[-2] and the full signal
+        length into stride[0]. At a different runtime audio length the baked view
+        over-reads storage. Recompute the window count and signal stride from the
+        LIVE input so the framing tracks the variable frame axis. Non-framing
+        as_strided (stride[-1] != 1 or non-3D) passes through unchanged.
+        """
+        def as_strided_wrapper(input_tensor, size=None, stride=None,
+                               storage_offset=0, *args, **kwargs):
+            if (isinstance(size, (list, tuple)) and isinstance(stride, (list, tuple))
+                    and len(size) == 3 and len(stride) == 3 and stride[-1] == 1):
+                B, _, W = size
+                L0, H, _ = stride
+                if B and H and B > 0 and H > 0:
+                    live_L = input_tensor.numel() // B
+                    if L0 != live_L:               # trace length ≠ runtime length
+                        N = (live_L - W) // H + 1
+                        size = [B, N, W]
+                        stride = [live_L, H, 1]
+            return torch.as_strided(input_tensor, list(size), list(stride),
+                                    storage_offset or 0)
+        return as_strided_wrapper
 
     def _make_expand(self) -> Callable:
         """

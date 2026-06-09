@@ -104,7 +104,8 @@ class AudioLLMEngine(FlowHandler):
         dtype = get_compute_dtype(self.ctx)
         device = self.ctx.primary_device
 
-        max_tokens = defaults.get("max_tokens")
+        from neurobrix.core.runtime.decode_bound import decode_bound  # NBX_DECODE_BOUND harness
+        max_tokens = decode_bound(defaults.get("max_tokens"))
         if max_tokens is None:
             raise RuntimeError("ZERO FALLBACK: max_tokens missing from defaults.json.")
         temperature = defaults.get("temperature")

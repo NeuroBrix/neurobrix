@@ -967,6 +967,34 @@ def _strided_copy(src: 'NBXTensor', dst: 'NBXTensor'):
     import triton
     from neurobrix.kernels.ops.strided_copy import strided_copy_kernel
 
+    # Complex tensors are stored interleaved [real, imag], but Triton sees the
+    # data_ptr as a plain float (no complex dtype). The strided kernel would copy
+    # ONE float per element with the per-(complex)-element strides applied as
+    # float offsets — corrupting the imaginary half (chatterbox s3gen stft does
+    # fft_r2c -> transpose -> contiguous; the transposed-complex contiguous
+    # mangled the imag spectrum). Reinterpret both as a float view with a
+    # trailing [2] dim (strides * 2 in elements, +1 for the re/imag axis) and
+    # recurse — this copies BOTH floats per complex element with correct strides.
+    # Built manually (NOT view_as_real, which calls .contiguous() on strided
+    # input → would recurse back into this same broken path).
+    if src.is_complex():
+        _fdt = (NBXDtype.float64 if src._dtype == NBXDtype.complex128
+                else NBXDtype.float32)
+        _fsrc = NBXTensor(
+            src._data_ptr, tuple(src._shape) + (2,),
+            tuple(s * 2 for s in src._strides) + (1,),
+            _fdt, src._device, src._offset * 2,
+            device_idx=src._device_idx,
+            base=src._base if src._base is not None else src, pinned=src._pinned)
+        _fdst_shape = tuple(dst._shape) + (2,)
+        _fdst = NBXTensor(
+            dst._data_ptr, _fdst_shape, _contiguous_strides(_fdst_shape),
+            _fdt, dst._device, dst._offset * 2,
+            device_idx=dst._device_idx,
+            base=dst._base if dst._base is not None else dst, pinned=dst._pinned)
+        _strided_copy(_fsrc, _fdst)
+        return
+
     ndim = src.ndim
     if ndim > _MAX_NDIM:
         raise RuntimeError(
@@ -1023,6 +1051,35 @@ def _strided_scatter(src: 'NBXTensor', dst: 'NBXTensor'):
         BLOCK_SIZE=BLOCK,
         NDIM=ndim,
     )
+
+
+def _fill_constant(t: 'NBXTensor', value) -> 'NBXTensor':
+    """Fill a contiguous NBXTensor's storage with a scalar constant via the
+    pure-Triton `full_kernel`. Backs `NBXTensor.ones` and the non-zero branch
+    of `fill_` — the zero case stays on the cheaper byte-`memset` path. Flat
+    1-D indexing assumes contiguous storage (the only callers are freshly
+    allocated tensors and the existing full-storage fill_ semantics).
+    """
+    if t._nbytes == 0:
+        return t
+    import triton
+    from neurobrix.kernels.ops.fill_op import fill_kernel
+
+    n = t._numel
+    BLOCK = 1024
+    if not t.is_contiguous():
+        # Flat 1-D indexing assumes contiguous storage; on a strided view it
+        # would write the wrong addresses. Fill a contiguous temp, then scatter
+        # into the view's strided positions.
+        tmp = NBXTensor.empty(t._shape, t._dtype, f"cuda:{t._device_idx}")
+        _set_device(tmp)
+        fill_kernel[(triton.cdiv(n, BLOCK),)](tmp, value, n, BLOCK_SIZE=BLOCK)
+        _strided_scatter(tmp, t)
+        return t
+    grid = (triton.cdiv(n, BLOCK),)
+    _set_device(t)
+    fill_kernel[grid](t, value, n, BLOCK_SIZE=BLOCK)
+    return t
 
 
 # ============================================================================
@@ -1229,6 +1286,53 @@ class NBXTensor:
         return self._dtype in _COMPLEX_DTYPES
 
     # ========================================================================
+    # COMPLEX SUPPORT — complex64/128 stored as interleaved [real, imag] pairs
+    # (numpy '<c8'/'<c16', torch convention). Reinterprets are zero-copy when
+    # contiguous: the complex storage IS the float [..,N,2] storage. _offset is
+    # in elements of _dtype, so the complex↔float offset converts ×2 / ÷2.
+    # ========================================================================
+
+    def view_as_real(self) -> 'NBXTensor':
+        """complex [..,N] → float [..,N,2] (interleaved real/imag)."""
+        if not self.is_complex():
+            return self
+        x = self if self.is_contiguous() else self.contiguous()
+        fdt = NBXDtype.float64 if x._dtype == NBXDtype.complex128 else NBXDtype.float32
+        new_shape = x._shape + (2,)
+        return NBXTensor(x._data_ptr, new_shape, _contiguous_strides(new_shape),
+                         fdt, x._device, x._offset * 2,
+                         device_idx=x._device_idx,
+                         base=x._base if x._base is not None else x, pinned=x._pinned)
+
+    def view_as_complex(self) -> 'NBXTensor':
+        """float [..,N,2] → complex [..,N] (interleaved real/imag)."""
+        assert self._shape and self._shape[-1] == 2, \
+            f"view_as_complex expects last dim == 2, got {self._shape}"
+        x = self if self.is_contiguous() else self.contiguous()
+        cdt = NBXDtype.complex128 if x._dtype == NBXDtype.float64 else NBXDtype.complex64
+        new_shape = x._shape[:-1]
+        return NBXTensor(x._data_ptr, new_shape, _contiguous_strides(new_shape),
+                         cdt, x._device, x._offset // 2,
+                         device_idx=x._device_idx,
+                         base=x._base if x._base is not None else x, pinned=x._pinned)
+
+    @property
+    def real(self) -> 'NBXTensor':
+        """Real part (strided view, stride 2) of a complex tensor; self if real."""
+        if not self.is_complex():
+            return self
+        vr = self.view_as_real()
+        return vr.select(vr.ndim - 1, 0)
+
+    @property
+    def imag(self) -> 'NBXTensor':
+        """Imaginary part (strided view, stride 2) of a complex tensor."""
+        if not self.is_complex():
+            return NBXTensor.zeros(self._shape, dtype=self._dtype, device=self._device)
+        vr = self.view_as_real()
+        return vr.select(vr.ndim - 1, 1)
+
+    # ========================================================================
     # SHAPE QUERY METHODS
     # ========================================================================
 
@@ -1304,6 +1408,10 @@ class NBXTensor:
         return t
 
     @staticmethod
+    def ones(shape, dtype=None, device='cuda') -> 'NBXTensor':
+        return _fill_constant(NBXTensor.empty(shape, dtype, device), 1.0)
+
+    @staticmethod
     def empty_like(other: 'NBXTensor', dtype=None, device=None) -> 'NBXTensor':
         dev = device if device else f"cuda:{other._device_idx}"
         return NBXTensor.empty(other._shape,
@@ -1315,6 +1423,12 @@ class NBXTensor:
         return NBXTensor.zeros(other._shape,
                                dtype if dtype else other._dtype,
                                device if device else other._device)
+
+    @staticmethod
+    def ones_like(other: 'NBXTensor', dtype=None, device=None) -> 'NBXTensor':
+        return NBXTensor.ones(other._shape,
+                              dtype if dtype else other._dtype,
+                              device if device else other._device)
 
     @staticmethod
     def from_numpy(arr) -> 'NBXTensor':
@@ -1475,6 +1589,19 @@ class NBXTensor:
                                    self._nbytes, kind=kind)
         return dst
 
+    def numpy(self):
+        """Host numpy array (boundary conversion — copies to CPU). Used at the
+        triton output boundary (e.g. saving a waveform). float/int dtypes only;
+        bf16 has no numpy dtype (cast to float32 first)."""
+        import numpy as np
+        import ctypes
+        f = self.contiguous()
+        if f._device != 'cpu':
+            f = f.to_cpu()
+        typestr = _DTYPE_TYPESTR.get(f._dtype, '<f4')
+        raw = ctypes.string_at(f.data_ptr(), f.numel() * dtype_size(f._dtype))
+        return np.frombuffer(raw, dtype=np.dtype(typestr)).reshape(tuple(self._shape)).copy()
+
     def pin_host(self) -> 'NBXTensor':
         """Promote an unpinned CPU tensor to pinned host memory.
 
@@ -1601,6 +1728,30 @@ class NBXTensor:
 
     def expand_as(self, other) -> 'NBXTensor':
         return self.expand(*other._shape if isinstance(other, NBXTensor) else other.shape)
+
+    def repeat(self, *sizes) -> 'NBXTensor':
+        """aten::repeat — TILE the tensor `sizes[i]` times along each dim
+        (numpy.tile / torch.Tensor.repeat), NOT element-wise repeat_interleave.
+        When len(sizes) > ndim, leading singleton dims are prepended. R33-pure:
+        view → expand (stride-0 broadcast) → contiguous → reshape; the
+        interleaved `[1,d0,1,d1,…]` view collapses to `[r0*d0, r1*d1, …]`.
+        """
+        if len(sizes) == 1 and isinstance(sizes[0], (list, tuple)):
+            sizes = tuple(sizes[0])
+        sizes = tuple(int(s) for s in sizes)
+        m = len(sizes)
+        assert m >= self.ndim, f"repeat sizes {sizes} fewer than ndim {self.ndim}"
+        x = self.contiguous()
+        base = (1,) * (m - x.ndim) + tuple(x._shape)
+        view_shape, expand_shape, out_shape = [], [], []
+        for i in range(m):
+            view_shape += [1, base[i]]
+            expand_shape += [sizes[i], base[i]]
+            out_shape.append(sizes[i] * base[i])
+        return (x.view(tuple(view_shape))
+                 .expand(tuple(expand_shape))
+                 .contiguous()
+                 .reshape(tuple(out_shape)))
 
     def narrow(self, dim: int, start: int, length: int) -> 'NBXTensor':
         dim = dim % self.ndim
@@ -1842,13 +1993,31 @@ class NBXTensor:
         return self  # no autograd in triton mode
 
     def fill_(self, value) -> 'NBXTensor':
-        if value == 0 and self._nbytes > 0:
+        if self._nbytes == 0:
+            return self
+        # aten::fill carries its value as a 0-dim tensor (e.g. via
+        # aten::lift_fresh); collapse it to a host scalar before the kernel.
+        if isinstance(value, NBXTensor):
+            value = value.item()
+        if value == 0:
             DeviceAllocator.memset_cuda(self.data_ptr(), 0, self._nbytes)
-        # Non-zero fill: needs Triton fill kernel (TODO)
-        return self
+            return self
+        # Non-zero fill via the pure-Triton fill_kernel.
+        return _fill_constant(self, value)
 
     def copy_(self, src, non_blocking: bool = False) -> 'NBXTensor':
         if isinstance(src, NBXTensor):
+            # PyTorch Tensor.copy_ converts src to self's dtype. A raw byte
+            # memcpy across a dtype boundary reinterprets the bits — e.g. an
+            # fp16 source written into an fp32 destination decodes the fp16
+            # bit-pairs as fp32 (≈0), and the byte counts differ (the chatterbox
+            # s3gen prompt-feat copy: fp16 src 50240 B into fp32 dst 100480 B).
+            # Cast to self's dtype first, then contiguous-pack the source so the
+            # flat copy of self._nbytes bytes is well-defined.
+            if src.dtype != self.dtype:
+                src = src.to(self.dtype)
+            if not src.is_contiguous():
+                src = src.contiguous()
             DeviceAllocator.memcpy(self.data_ptr(), src.data_ptr(), self._nbytes)
         return self
 

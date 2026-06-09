@@ -16,10 +16,76 @@ Source of truth: PyTorch aten/src/ATen/autocast_mode.h
 PRISM IS THE MASTER: compute_dtype comes from Prism. We apply it.
 ZERO SEMANTIC: No model/family knowledge. Only tensor dtype math.
 """
+import os
 import torch
 from typing import Callable, Optional, Dict, Any, FrozenSet
 
 from neurobrix.core.dtype.config import parse_dtype, strip_aten_prefix
+
+
+def rms_norm_fp32(x: torch.Tensor, weight: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+    """RMSNorm with fp32 variance accumulation — the single source for the
+    fp32-upcast policy that reassembled / hand-rolled RMSNorm ops need.
+
+    Hand-rolled RMSNorm computes the variance as ``mean(x * x)``; on fp16
+    hardware the square overflows (|x| > 256 → inf → the norm collapses) — the
+    vendor protects this with an explicit ``x.float()`` and so do we. The upcast
+    is a dtype-protection decision, owned by the engine. This consolidates three
+    formerly byte-duplicated copies (the compiled reassembled ``custom::rms_norm``
+    op, the sequential dispatcher, and the VibeVoice stage handler) into one
+    source — an R30 divergence-by-copy risk removed. Currently an unconditional
+    fp32 upcast (numerically safe on all hardware); a hardware-aware variant
+    (skip the upcast on bf16, whose exponent range equals fp32's) is a future
+    refinement, not a behaviour change here.
+    """
+    x_fp32 = x.to(torch.float32)
+    variance = x_fp32.pow(2).mean(-1, keepdim=True)
+    x_normed = x_fp32 * torch.rsqrt(variance + eps)
+    return x_normed.to(weight.dtype) * weight
+
+
+def routing_upcast_fp32(x: torch.Tensor) -> torch.Tensor:
+    """MoE-router gate-score upcast to fp32 — the single source for the
+    fp32-upcast policy the fused MoE dispatch needs before topk / normalize.
+
+    MoE expert selection is precision-critical: bf16/fp16 routing degrades
+    quality through precision loss in the softmax / topk / normalization
+    chain (vLLM PR #14027). The vendor computes routing in fp32 regardless
+    of the weight dtype, and so do we. The upcast is a dtype-protection
+    decision, owned by the engine — consolidating the two formerly
+    byte-duplicated copies (the compiled fused-dispatch op and the
+    sequential native path) into one source, removing an R30
+    divergence-by-copy risk. The body is a pure dtype op, byte-identical to
+    the inline ``gate_scores.float()`` it replaces; device placement stays
+    at the call sites (it is placement, not dtype). Currently an
+    unconditional fp32 upcast (numerically safe on all hardware); a
+    hardware-aware variant (skip on bf16, whose exponent range equals
+    fp32's) is a future refinement, not a behaviour change here.
+    """
+    return x.float()
+
+
+# Diagnostic: when NBX_DTYPE_CLAMP_DIAG=1, log the first fp32→fp16
+# narrowing where the source actually exceeds the fp16 range. Empirical
+# witness that the _to_copy clamp protects a real overflow (the comment
+# in _make_to_copy cites OpenAudio DualAR pre-projection activations and
+# certain attention bias paths as the motivating sites). Default-off,
+# zero runtime cost; one-shot per call site.
+_CLAMP_DIAG_ENABLED = os.environ.get("NBX_DTYPE_CLAMP_DIAG", "0") == "1"
+_CLAMP_DIAG_FIRED: Dict[str, bool] = {}
+
+
+def _maybe_log_clamp(site: str, inp: torch.Tensor) -> None:
+    if not _CLAMP_DIAG_ENABLED or _CLAMP_DIAG_FIRED.get(site):
+        return
+    try:
+        max_abs = float(inp.abs().max().item())
+    except Exception:
+        return
+    if max_abs > 65504.0:
+        _CLAMP_DIAG_FIRED[site] = True
+        print(f"[NBX_DTYPE_CLAMP_DIAG] site={site} max_abs={max_abs:.2f} "
+              f"src_dtype={inp.dtype} shape={tuple(inp.shape)}")
 
 
 
@@ -147,6 +213,12 @@ AMP_FP16_OPS: FrozenSet[str] = frozenset({
     # RNN cells (PyTorch 100% match)
     "_thnn_fused_lstm_cell", "_thnn_fused_gru_cell",
     "lstm_cell", "gru_cell", "rnn_tanh_cell", "rnn_relu_cell",
+    # High-level RNN ops. PyTorch hides these behind cuDNN's own fp16 path;
+    # the RNN-reassembly pass emits a clean aten::lstm/gru, so the engine must
+    # cast its inputs (incl. hx/params lists) to compute_dtype itself —
+    # otherwise cuDNN rejects fp32-input × fp16-weights. cuDNN RNN accumulates
+    # in fp32 internally, so fp16 IO is safe (no _FP16_NEED_FP32 entry).
+    "lstm", "gru", "rnn_tanh", "rnn_relu",
     # DEVIATION: SDPA ops EXCLUDED (PyTorch classifies as LOWER_PRECISION_FP).
     # compiled_ops._make_attention() calls F.sdpa directly.
     # DtypeEngine must not double-wrap SDPA inputs.
@@ -167,6 +239,20 @@ AMP_PROMOTE_OPS: FrozenSet[str] = frozenset({
     "addcdiv", "addcmul", "atan2", "bilinear", "cross",
     "dot", "vdot", "grid_sampler", "index_put",
     "tensordot", "scatter_add",
+})
+
+# Ops that take a Python-SCALAR fill value converted to a tensor's dtype.
+# A graph may carry a bf16/fp32 mask sentinel (e.g. bf16-min ≈ -3.39e38) as
+# that scalar; converting it to the tensor's fp16 runtime dtype overflows
+# ("value cannot be converted to type at::Half without overflow"). The scalar
+# is an op ATTRIBUTE, not a tensor input, so the per-input AMP casts never see
+# it — the DtypeEngine clamps it to the fill tensor's finite range (the single
+# dtype authority owns this, not the dispatcher). Masked positions are ~0 after
+# softmax whether the sentinel is fp16-min or bf16-min, so this is numerically
+# inert versus the oracle. Surfaced by granite-speech conformer attention.
+AMP_SCALAR_FILL_OPS: FrozenSet[str] = frozenset({
+    "masked_fill", "masked_fill_", "fill", "fill_",
+    "index_fill", "index_fill_",
 })
 
 
@@ -242,6 +328,13 @@ class DtypeEngine:
             if op_name in AMP_PROMOTE_OPS:
                 return self._make_promote_wrapper(func)
 
+            # fp16-only: guard the squaring pattern x*x (RMSNorm/LayerNorm
+            # variance: mean(x*x)) against fp16 overflow. On bf16 the exponent
+            # range equals fp32's, so no guard is installed. See
+            # _make_square_safe_mul.
+            if op_name == "mul" and self.compute_dtype == torch.float16:
+                return self._make_square_safe_mul(func)
+
         return func
 
     # ========================================================================
@@ -298,6 +391,32 @@ class DtypeEngine:
             return func(*new_args, **kwargs)
         return fp32_func
 
+    def _make_square_safe_mul(self, func: Callable) -> Callable:
+        """
+        fp16-ONLY overflow guard for the squaring pattern ``x * x``.
+
+        Hand-written RMSNorm / LayerNorm compute the variance as
+        ``mean(x * x)`` — a self-multiplication captured as aten::mul with both
+        operands bound to the same tensor. Squaring overflows fp16 (max 65504)
+        for any |x| > 256 → inf → the norm collapses to ~0 and the model emits
+        garbage (observed: openaudio dual-AR depth transformer). The vendor
+        protects this with an explicit ``x.float()`` before the square; we apply
+        the same upcast here, data-driven, so it holds regardless of what the
+        trace captured (an fp32 trace no-op-elides the vendor's ``.float()``).
+
+        Only the SQUARE (``a is b``) is upcast — a generic ``x * y`` stays in
+        compute_dtype. Output stays fp32; the downstream mean/rsqrt are already
+        AMP_FP32 and the next FP16 op casts back to compute_dtype.
+
+        Installed only on fp16 hardware (compile_op gates this): bf16's exponent
+        range equals fp32's, so ``x * x`` never overflows there.
+        """
+        def square_safe_mul(a, b, *args, **kwargs):
+            if a is b and isinstance(a, torch.Tensor) and a.dtype == torch.float16:
+                return func(a.float(), b.float(), *args, **kwargs)
+            return func(a, b, *args, **kwargs)
+        return square_safe_mul
+
     def _make_lower_precision_wrapper(self, func: Callable) -> Callable:
         """
         AMP FP16: Cast float inputs to compute_dtype for performance.
@@ -309,13 +428,18 @@ class DtypeEngine:
         assert self.compute_dtype is not None  # Guaranteed by caller check
         compute: torch.dtype = self.compute_dtype
 
+        def _cast(a):
+            if isinstance(a, torch.Tensor):
+                return a.to(compute) if a.is_floating_point() and a.dtype != compute else a
+            # RNN ops pass hx/params as lists of tensors (and linalg_multi_dot
+            # takes a tensor list) — recurse so every nested float tensor is
+            # cast, keeping input/hx/params at one dtype for cuDNN.
+            if isinstance(a, (list, tuple)):
+                return type(a)(_cast(x) for x in a)
+            return a
+
         def lower_precision_func(*args, **kwargs):
-            new_args = tuple(
-                a.to(compute) if isinstance(a, torch.Tensor) and a.is_floating_point() and a.dtype != compute
-                else a
-                for a in args
-            )
-            return func(*new_args, **kwargs)
+            return func(*(_cast(a) for a in args), **kwargs)
         return lower_precision_func
 
     def _make_promote_wrapper(self, func: Callable) -> Callable:
@@ -417,6 +541,7 @@ class DtypeEngine:
                 if (target_dtype == torch.float16
                         and inp.dtype in (torch.float32, torch.float64,
                                           torch.bfloat16)):
+                    _maybe_log_clamp("to_copy_target", inp)
                     return inp.clamp(-65504.0, 65504.0).to(target_dtype)
                 return inp.to(target_dtype)
             return to_copy_with_dtype
@@ -443,6 +568,7 @@ class DtypeEngine:
                 if (dtype == torch.float16
                         and inp.dtype in (torch.float32, torch.float64,
                                           torch.bfloat16)):
+                    _maybe_log_clamp("to_copy_passthrough", inp)
                     return inp.clamp(-65504.0, 65504.0).to(dtype)
                 return inp.to(dtype)
             return inp
@@ -466,6 +592,26 @@ class DtypeEngine:
             return args
 
         op_name = strip_aten_prefix(op_type)
+
+        if op_name in AMP_SCALAR_FILL_OPS:
+            # Clamp the Python-scalar fill to the finite range of the tensor it
+            # fills (masked_fill converts the scalar to that tensor's dtype). A
+            # bf16/fp32-min sentinel overflows fp16 otherwise. Tensors are left
+            # untouched — this op is not an AMP cast op.
+            fill_dtype = next(
+                (a.dtype for a in args
+                 if isinstance(a, torch.Tensor) and a.is_floating_point()),
+                None)
+            if fill_dtype in (torch.float16, torch.bfloat16):
+                info = torch.finfo(fill_dtype)
+                return [
+                    max(info.min, min(info.max, float(a)))
+                    if (isinstance(a, float)
+                        or (isinstance(a, int) and not isinstance(a, bool)))
+                    else a
+                    for a in args
+                ]
+            return args
 
         if op_name in AMP_FP32_OPS:
             new_args = [
@@ -494,13 +640,18 @@ class DtypeEngine:
                           and not a.is_contiguous() else a)
                     for a in args
                 ]
-            return [
-                a.to(self.compute_dtype)
-                if isinstance(a, torch.Tensor) and a.is_floating_point()
-                and a.dtype != self.compute_dtype
-                else a
-                for a in args
-            ]
+            # Recurse into list/tuple args: aten::lstm/gru pass hx ([h0, c0]) and
+            # params ([w_ih, w_hh, ...]) as nested tensor lists, not bare tensors.
+            # Casting only the top-level input tensor (and leaving the hidden/weight
+            # lists at fp32) makes cuDNN/PyTorch reject "input Half × hidden Float".
+            def _fp16_cast(a):
+                if (isinstance(a, torch.Tensor) and a.is_floating_point()
+                        and a.dtype != self.compute_dtype):
+                    return a.to(self.compute_dtype)
+                if isinstance(a, (list, tuple)):
+                    return type(a)(_fp16_cast(x) for x in a)
+                return a
+            return [_fp16_cast(a) for a in args]
 
         if op_name in AMP_PROMOTE_OPS:
             max_size = 0
@@ -518,6 +669,21 @@ class DtypeEngine:
                     else a
                     for a in args
                 ]
+
+        # fp16 squaring guard — runtime mirror of compile_op's
+        # _make_square_safe_mul. A hand-rolled RMSNorm/LayerNorm variance
+        # mean(x*x) traces as aten::mul with both operands bound to the SAME
+        # tensor; squaring overflows fp16 (max 65504) for |x|>256 → inf → the
+        # norm collapses to ~0 and the component emits silence/garbage (openaudio
+        # DAC codec sequential mode). Upcast ONLY the square (a is b) to fp32; a
+        # generic x*y stays in compute_dtype. compile_op (compiled mode) already
+        # installs this guard — without it here the sequential/triton dispatch
+        # path diverged from compiled, breaking the 4-mode oracle (R36).
+        if (op_name == "mul" and self.compute_dtype == torch.float16
+                and len(args) >= 2 and args[0] is args[1]
+                and isinstance(args[0], torch.Tensor)
+                and args[0].dtype == torch.float16):
+            return [args[0].float(), args[1].float(), *args[2:]]
 
         return args
 

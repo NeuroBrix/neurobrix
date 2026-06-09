@@ -2933,33 +2933,48 @@ class PrismSolver:
     # DTYPE RESOLUTION
     # =========================================================================
 
-    def _components_force_fp32(self, container: "NBXContainer") -> set:
-        """Per-component opt-in set: components whose registry flag
-        `requires_fp32_compute` pins them to float32 regardless of the
-        hardware `preferred_dtype`.
+    def _components_force_fp32(self, container: "NBXContainer",
+                               profile: Optional["PrismProfile"] = None) -> set:
+        """Per-component fp32 pin set. Composes two sources by additive union:
 
-        For architectures whose activation range structurally exceeds
-        the fp16 representable range (e.g. deep transformer-SR stacks
-        with no inter-block normalisation — SwinIR's RSTB cascade hits
-        NaN by conv_after_body in pure fp16), running at the hardware's
-        preferred fp16 produces NaN/garbage. Dtype is a property of the
-        MODEL as well as the hardware (dtype-engine doctrine); this is
-        the data-driven seam for the model side.
+        (1) MANUAL (Ch6-era): the `requires_fp32_compute` registry flag.
+            For architectures whose activation range structurally exceeds
+            the fp16 representable range (e.g. deep transformer-SR stacks
+            with no inter-block normalisation — SwinIR's RSTB cascade hits
+            NaN by conv_after_body in pure fp16). Read via
+            `registry_flags.get_component_flag`, env-overridable by
+            `NBX_FORCE_FP32_COMPUTE`. No .nbx field added (R18 preserved).
 
-        Read through `registry_flags.get_component_flag` — no .nbx
-        field added (R18 preserved), takes effect without a container
-        rebuild. Default-absent ⇒ empty set ⇒ ZERO behaviour change
-        for every existing model (anti-régression guarantee). Env
-        override `NBX_FORCE_FP32_COMPUTE` forces it on for dev
-        iteration without a YAML edit.
+        (2) AUTO (Ch8 P-LAYER7-AUTO-FP32-FAMILY-AWARE): family-aware
+            structural detection of fp16-conv-overflow risk. Reads
+            `config/families/<family>.yml dtype_policy.auto_fp32_on_overflow_risk`
+            (R10 data-driven). Discriminator (R34 strict, no model-name
+            branching): family ∈ {image, video} AND component graph
+            torch_dtype matches require_graph_dtype AND hardware is
+            fp16-preferring AND the component is conv-cascade-dominant
+            (`conv2d_count >= min_conv2d_count` and `conv2d_count >=
+            conv2d_to_sdpa_ratio_min × sdpa_count`). Selects VAE-class
+            encoders/decoders, excludes patch-embed transformers and
+            hybrid linear-attention DiTs. Bypassable for diagnosis via
+            `NBX_DISABLE_AUTO_FP32=1` (manual still honored).
+
+        Manual ⊕ auto by set union: manual entries always end up in the
+        result (manual > auto by construction; no conflict surface). Both
+        sources default-absent ⇒ empty set ⇒ ZERO behaviour change for
+        any model not matching the criteria (anti-régression guarantee).
         """
         from neurobrix.core.runtime.registry_flags import get_component_flag
         try:
             manifest = container.get_manifest() or {}
             model_name = manifest.get("model_name")
+            family = manifest.get("family")
         except Exception:
             model_name = None
+            family = None
+
         forced = set()
+
+        # (1) Manual flag (Ch6-era).
         try:
             for comp in container.get_neural_components():
                 if get_component_flag(model_name, comp.name,
@@ -2968,14 +2983,89 @@ class PrismSolver:
                     forced.add(comp.name)
         except Exception:
             pass
-        return forced
+
+        # (2) Auto-detect (Ch8). Bypassable for diagnosis.
+        if os.environ.get("NBX_DISABLE_AUTO_FP32", "0") == "1":
+            return forced
+        auto = self._auto_fp32_components(container, profile, family)
+        return forced | auto
+
+    def _auto_fp32_components(self, container: "NBXContainer",
+                              profile: "Optional[PrismProfile]",
+                              family: "Optional[str]") -> set:
+        """Family-aware structural auto-fp32 detection (Ch8).
+
+        Policy and thresholds live in `config/families/<family>.yml`
+        under `dtype_policy.auto_fp32_on_overflow_risk`. Default-absent
+        ⇒ disabled ⇒ empty set. See _components_force_fp32 docstring
+        for the full rule.
+        """
+        if family is None:
+            return set()
+        try:
+            from neurobrix.core.config.loader import get_family_config
+            fcfg = get_family_config(family) or {}
+        except Exception:
+            return set()
+
+        policy = ((fcfg.get("dtype_policy") or {})
+                  .get("auto_fp32_on_overflow_risk") or {})
+        if not policy.get("enabled"):
+            return set()
+
+        # Hardware gate: skip on bf16-capable hardware (bf16 exponent
+        # range = fp32, no conv-storage saturation).
+        if policy.get("skip_when_hw_supports_bf16", True) and profile is not None:
+            try:
+                if profile.devices_support_dtype("bfloat16"):
+                    return set()
+            except Exception:
+                pass
+
+        require_dtype = policy.get("require_graph_dtype", "float32")
+        min_conv = int(policy.get("min_conv2d_count", 20))
+        ratio = float(policy.get("conv2d_to_sdpa_ratio_min", 10))
+
+        # Op-type markers (NeuroBrix canonical aten::op format,
+        # src/neurobrix/CLAUDE.md §6).
+        _CONV_OPS = {"aten::conv2d", "aten::convolution",
+                     "aten::_convolution"}
+        _SDPA_OPS = {"aten::scaled_dot_product_attention",
+                     "aten::_scaled_dot_product_efficient_attention",
+                     "aten::_scaled_dot_product_flash_attention",
+                     "aten::_scaled_dot_product_attention_math"}
+
+        auto = set()
+        try:
+            comps = container.get_neural_components()
+        except Exception:
+            return set()
+        for comp in comps:
+            graph = getattr(comp, "graph", None) or {}
+            if graph.get("torch_dtype") != require_dtype:
+                continue
+            ops = graph.get("ops") or {}
+            if not ops:
+                continue
+            conv = 0
+            sdpa = 0
+            for op_data in ops.values():
+                ot = op_data.get("op_type", "")
+                if ot in _CONV_OPS:
+                    conv += 1
+                elif ot in _SDPA_OPS:
+                    sdpa += 1
+            if conv >= min_conv and conv >= ratio * sdpa:
+                auto.add(comp.name)
+        return auto
 
     def _resolve_dtype(self, container: "NBXContainer", profile: PrismProfile) -> str:
         """Resolve target dtype. bf16 → fp16 if weights fit in range, else fp32."""
-        # Model-side opt-in: a component flagged requires_fp32_compute
-        # overrides the hardware preferred_dtype. Checked FIRST so the
-        # fp16 preference below cannot win for fp16-unsafe architectures.
-        if self._components_force_fp32(container):
+        # Model-side opt-in (manual `requires_fp32_compute`) + Ch8
+        # auto-detect (family-aware fp16-conv-overflow). Checked FIRST
+        # so the fp16 preference below cannot win for fp16-unsafe
+        # architectures or for VAE-class components on V100.
+        if self._components_force_fp32(container, profile):
             return "float32"
 
         # Find model's dominant dtype
@@ -3005,7 +3095,7 @@ class PrismSolver:
         """Resolve dtype per component. Returns dtype strings."""
         result = {}
 
-        forced_fp32 = self._components_force_fp32(container) if container is not None else set()
+        forced_fp32 = self._components_force_fp32(container, profile) if container is not None else set()
 
         for comp in components:
             if comp.name in forced_fp32:

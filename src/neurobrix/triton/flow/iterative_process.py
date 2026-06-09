@@ -21,9 +21,10 @@ from neurobrix.triton.cfg import TritonCFGEngine
 
 
 def _vram_probe(tag: str) -> None:
-    """Print free/total CUDA VRAM via cudaMemGetInfo. Includes the raw
-    cudaMalloc pool that NBXTensor uses (torch.cuda.memory_allocated would
-    miss it). Cheap — only fires when NBX_UNLOAD_DIAG=1."""
+    """Print free/total CUDA VRAM via cudaMemGetInfo, plus the NBX live-bytes
+    watermark from the DeviceAllocator (the raw cudaMalloc pool NBXTensor uses).
+    Zero torch — the triton path is torch-free end to end. Cheap — only fires
+    when NBX_UNLOAD_DIAG=1."""
     import ctypes as _ct
     try:
         _libname = "libcudart.so"
@@ -46,12 +47,11 @@ def _vram_probe(tag: str) -> None:
         _total_gb = _total.value / 1e9
         _used_gb = _total_gb - _free_gb
         try:
-            import torch as _torch
-            _torch_alloc_gb = _torch.cuda.memory_allocated() / 1e9
+            _nbx_alloc_gb = DeviceAllocator.memory_allocated() / 1e9
         except Exception:
-            _torch_alloc_gb = -1.0
+            _nbx_alloc_gb = -1.0
         print(f"[VRAM_PROBE {tag}] used={_used_gb:.2f}GB free={_free_gb:.2f}GB "
-              f"total={_total_gb:.2f}GB torch_alloc={_torch_alloc_gb:.2f}GB",
+              f"total={_total_gb:.2f}GB nbx_alloc={_nbx_alloc_gb:.2f}GB",
               flush=True)
     except Exception as _e:
         print(f"[VRAM_PROBE {tag}] failed: {_e}", flush=True)
@@ -449,11 +449,8 @@ class TritonIterativeProcessHandler:
                 if DEBUG and step_idx == 0:
                     self._audit_component_inputs(comp_name)
 
-                # Scale model input — scheduler is native PyTorch
-                from neurobrix.kernels.nbx_tensor import nbx_to_torch
-                cs_for_scale = nbx_to_torch(current_state) if isinstance(current_state, NBXTensor) else current_state
-                scaled_state = driver.scale_model_input(cs_for_scale, timestep)
-                scaled_state = _to_nbx(scaled_state)
+                # Scale model input — triton scheduler is NBXTensor-native (zero torch).
+                scaled_state = _to_nbx(driver.scale_model_input(current_state, timestep))
                 self.ctx.variable_resolver.set(state_key, scaled_state)
 
                 # Get timestep scale for component
@@ -505,15 +502,9 @@ class TritonIterativeProcessHandler:
                     if DEBUG:
                         self._print_step_diagnostics(step_idx, timestep, model_output, current_state)
 
-                    # Driver step — scheduler is native PyTorch, convert at boundary
-                    from neurobrix.kernels.nbx_tensor import nbx_to_torch
-                    mo_torch = nbx_to_torch(model_output) if isinstance(model_output, NBXTensor) else model_output
-                    cs_torch = nbx_to_torch(current_state) if isinstance(current_state, NBXTensor) else current_state
-                    step_result = driver.step(mo_torch, timestep, cs_torch)
-                    if isinstance(step_result, dict):
-                        prev = step_result["prev_sample"]
-                    else:
-                        prev = step_result.prev_sample
+                    # Driver step — triton scheduler is NBXTensor-native (zero torch).
+                    step_result = driver.step(model_output, timestep, current_state)
+                    prev = step_result["prev_sample"] if isinstance(step_result, dict) else step_result.prev_sample
                     current_state = _to_nbx(prev)
 
                     self.ctx.variable_resolver.set(state_key, current_state)

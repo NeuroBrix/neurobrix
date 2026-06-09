@@ -8,9 +8,19 @@ Dependencies: wrappers.py, NBXTensor. Used exclusively in --triton mode.
 """
 
 from typing import Optional, Callable, Dict
+import os
 import triton
 
 from .nbx_tensor import _set_device
+
+# Diagnostic (default-off): log when the metadata expand/view runtime-resolution
+# fixes actually fire. Used for R23 footprint screening (does a fix fire on a
+# trace==runtime model like an LLM?). Zero cost when unset.
+_META_RESOLVE_DEBUG = os.environ.get("NBX_DEBUG_META_RESOLVE")
+def _meta_resolve_log(msg):
+    if _META_RESOLVE_DEBUG:
+        import sys
+        sys.stderr.write(f"[META_RESOLVE] {msg}\n")
 
 _OP_MAP: Optional[Dict[str, Callable]] = None
 
@@ -45,14 +55,62 @@ def _tensor_to_int_or_none(val):
 # METADATA OPS — pure Python, NBXTensor methods, CPU stride math
 # ============================================================================
 
+def _resolve_view_shape(x, shape):
+    """Reconcile a trace-baked view/reshape shape with the runtime numel.
+
+    NBXTensor.view does NOT validate numel — it re-strides blindly over the same
+    data_ptr, so a baked trace dim that differs at runtime becomes a silent
+    out-of-bounds view (not an error, unlike torch). The graph bakes trace-time
+    shapes; a variable-length model's runtime numel can differ (Kokoro predictor
+    view::9: input [1,640,14], baked shape [1,640,23]). Mirror of compiled_ops.py
+    view_or_reshape's -1 inference: when the baked product mismatches the input
+    numel, infer the single changed dim, preferring the axis whose inferred size
+    matches the input's actual dim there. Bit-identical when product == numel
+    (trace==runtime) → returns the shape unchanged. Returns a list.
+    """
+    shape = list(shape)
+    if -1 in shape or len(shape) < 2:
+        return shape  # explicit infer dim, or scalar/1D — view handles it
+    numel = 1
+    for d in x.shape:
+        numel *= d
+    prod = 1
+    for d in shape:
+        prod *= d
+    if prod == numel:
+        return shape  # exact (trace==runtime) — no change, byte-identical
+    # numel mismatch: collect positions whose -1 inference divides evenly
+    candidates = []
+    for i in range(len(shape)):
+        rest = 1
+        for j, d in enumerate(shape):
+            if j != i:
+                rest *= d
+        if rest > 0 and numel % rest == 0:
+            candidates.append((i, numel // rest))
+    if not candidates:
+        return shape  # unresolvable (≥2 dims changed) — leave to caller
+    _orig = tuple(shape)
+    # prefer the axis whose inferred size matches the input's actual dim
+    for i, inferred in candidates:
+        if i < len(x.shape) and inferred == x.shape[i]:
+            shape[i] = inferred
+            _meta_resolve_log(f"view infer: in={tuple(x.shape)} baked={_orig} -> {tuple(shape)} (axis {i}, match)")
+            return shape
+    i, inferred = candidates[0]
+    shape[i] = inferred
+    _meta_resolve_log(f"view infer: in={tuple(x.shape)} baked={_orig} -> {tuple(shape)} (axis {i}, first)")
+    return shape
+
+
 def _meta_view(x, shape):
     if isinstance(shape, (list, tuple)):
-        return x.view(*shape)
+        return x.view(*_resolve_view_shape(x, shape))
     return x.view(shape)
 
 def _meta_reshape(x, shape):
     if isinstance(shape, (list, tuple)):
-        return x.reshape(*shape)
+        return x.reshape(*_resolve_view_shape(x, shape))
     return x.reshape(shape)
 
 def _meta_flatten(x, start_dim=0, end_dim=-1):
@@ -77,6 +135,21 @@ def _meta_contiguous(x, *args, **kwargs):
     return x.contiguous()
 
 def _meta_expand(x, size):
+    # Multi-resolution fix — mirror of compiled_ops.py _make_expand. The graph
+    # bakes trace-time expand sizes; at runtime a variable-length model's actual
+    # input dim can differ (Kokoro predictor: d.T seq 23->14, alignment frames
+    # 34->62). expand can only broadcast from 1, so when the input's actual dim is
+    # non-1 and differs from the baked target, the actual dim is the only valid
+    # size — use it. Bit-identical for trace==runtime models (actual == target →
+    # no override); restores R30 parity with compiled.
+    if isinstance(size, (list, tuple)) and len(size) == len(x.shape):
+        new_size = list(size)
+        for i, (actual, target) in enumerate(zip(x.shape, size)):
+            if actual != 1 and actual != target and target != -1:
+                new_size[i] = actual
+        if _META_RESOLVE_DEBUG and new_size != list(size):
+            _meta_resolve_log(f"expand override: in={tuple(x.shape)} baked={tuple(size)} -> {tuple(new_size)}")
+        return x.expand(*new_size)
     return x.expand(*size) if isinstance(size, (list, tuple)) else x.expand(size)
 
 def _meta_expand_as(x, other):
@@ -90,6 +163,7 @@ def _meta_slice(x, dim, start=None, end=None, step=1):
     start = int(_force_int(start)) if start is not None else 0
     dim_size = x.size(dim) if callable(getattr(x, 'size', None)) else x.shape[dim]
     end = int(_force_int(end)) if end is not None else dim_size
+    step = int(_force_int(step)) if step is not None else 1
     if end > dim_size:
         end = dim_size
     if start < 0:
@@ -97,7 +171,20 @@ def _meta_slice(x, dim, start=None, end=None, step=1):
     if end < 0:
         end = max(0, dim_size + end)
     length = max(0, end - start)
-    return x.narrow(dim, start, length)
+    narrowed = x.narrow(dim, start, length)
+    if step == 1:
+        return narrowed
+    # Strided slice x[..., start:end:step]. narrow() only covers step==1; for a
+    # step>1 slice (chatterbox s3gen CFM downsamples the mel by 2 via a `[::2]`)
+    # build a step-strided view (size=ceil(length/step), stride[dim]*=step) and
+    # materialise it — downstream flat-indexed kernels (split_with_sizes) need a
+    # contiguous buffer (CLAUDE.md contiguous-guard). Without this the step was
+    # silently dropped and the dim kept its full length (348 vs 174).
+    new_size = list(narrowed.shape)
+    new_stride = list(narrowed._strides)
+    new_size[dim] = (length + step - 1) // step
+    new_stride[dim] = narrowed._strides[dim] * step
+    return narrowed.as_strided(new_size, new_stride, narrowed._offset).contiguous()
 
 
 def _force_int(val):
@@ -123,7 +210,26 @@ def _meta_alias(x):
     return x
 
 def _meta_fill(x, value):
-    return x.fill_(value)
+    # Functional aten::fill: output is a FRESH tensor shaped like x, all elements
+    # = value (x supplies only shape/dtype/device — its data is irrelevant, and it
+    # may be a non-contiguous view, e.g. a slice). Never mutate x in place: that
+    # would corrupt other consumers of the input and (on a strided view) write the
+    # wrong addresses under flat-indexed fill.
+    from neurobrix.kernels.nbx_tensor import NBXTensor
+    if isinstance(value, NBXTensor):
+        value = value.item()
+    if value is None:
+        # Orphan scalar constant: an in-forward `mask[slice] = cnt` count baked
+        # as a `param::constant` with NO data in the container, consumed by
+        # aten::fill. The native compiled path materialises it as a 0-dim default
+        # (bind_weights `[]`, commit c0a1445) and the triton-sequential resolver
+        # mirrors that (graph_executor._resolve_sequential_arg) — but the triton
+        # COMPILED arena leaves the slot None, so the value reaches fill as None.
+        # Default to 0 here so both triton paths match the native 0-default (HAT
+        # OCAB counter; the value is a trace-time artefact, not runtime data).
+        value = 0
+    out = NBXTensor.empty(x._shape, x._dtype, f"cuda:{x._device_idx}")
+    return out.fill_(value)
 
 def _meta_as_strided(x, size, stride, storage_offset=None):
     return x.as_strided(size, stride, storage_offset)
@@ -166,28 +272,124 @@ def _meta_movedim(x, src, dst):
 
 
 def _meta_index(x, indices):
-    """aten::index — advanced indexing with list of optional index tensors.
+    """aten::index — advanced indexing with a list of optional index tensors.
 
-    For single index on dim 0: x[idx] where idx can be multi-dimensional.
-    Output shape = idx.shape + x.shape[1:]
-    Uses index_select internally, then reshapes to match expected output.
+    Single index tensor on dim d: x[..., idx, ...] via index_select; output
+    shape = x.shape[:d] + idx.shape + x.shape[d+1:].
+
+    TWO+ index tensors = advanced ("diagonal"/joint) indexing: PyTorch selects
+    elements jointly, out[k] = x[i0[k], i1[k], ...], NOT the outer product.
+    The CLIP text pooler is exactly this: last_hidden_state[arange(B),
+    input_ids.argmax(-1)] picks the EOS token per batch → [B, hidden]. The old
+    loop returned after the FIRST index tensor, so it kept all 77 text tokens
+    ([1,77,768]) instead of pooling to [1,768] — which then broadcast the 77
+    dim through the FLUX/Flex temb (silu::3 [1,77,3072] → addmm [1,77,18432] →
+    split(dim=1) yields 0 chunks → adaLN slice crash). Implement the joint
+    select via a flat row-major index over the consecutive indexed dims.
     """
-    if isinstance(indices, (list, tuple)):
-        for dim, idx in enumerate(indices):
-            if idx is not None:
-                from neurobrix.kernels import wrappers as w
-                # Flatten idx, index_select, then reshape to idx.shape + remaining
-                orig_idx_shape = idx.shape
-                flat_idx = idx.reshape(-1) if idx.ndim > 1 else idx
-                selected = w.index_select_wrapper(x, dim, flat_idx)
-                # Reshape: flatten selected along indexed dim to match idx shape
-                if idx.ndim > 1:
-                    out_shape = list(orig_idx_shape) + list(x.shape[dim+1:])
-                    selected = selected.reshape(*out_shape)
-                return selected
-        return x
     from neurobrix.kernels import wrappers as w
-    return w.index_select_wrapper(x, 0, indices)
+    if not isinstance(indices, (list, tuple)):
+        return w.index_select_wrapper(x, 0, indices)
+
+    present = [(d, i) for d, i in enumerate(indices) if i is not None]
+    if not present:
+        return x
+
+    if len(present) == 1:
+        # Single advanced index — unchanged behaviour (byte-identical path).
+        dim, idx = present[0]
+        orig_idx_shape = idx.shape
+        flat_idx = idx.reshape(-1) if idx.ndim > 1 else idx
+        selected = w.index_select_wrapper(x, dim, flat_idx)
+        if idx.ndim > 1:
+            out_shape = list(orig_idx_shape) + list(x.shape[dim + 1:])
+            selected = selected.reshape(*out_shape)
+        return selected
+
+    # --- Advanced indexing with >=2 index tensors (joint select) ---
+    dims = [d for d, _ in present]
+    if dims != list(range(dims[0], dims[0] + len(dims))):
+        raise NotImplementedError(
+            f"[--triton] aten::index advanced indexing requires consecutive "
+            f"index dims; got {dims}")
+    first = dims[0]
+    idx_tensors = [i for _, i in present]
+    base_shape = list(idx_tensors[0].shape)
+    if any(list(t.shape) != base_shape for t in idx_tensors[1:]):
+        # PyTorch broadcasts differing index shapes; the pooler/batched-gather
+        # cases use identical shapes. Defer general broadcasting until a model
+        # needs it (fail loud, never silently wrong).
+        raise NotImplementedError(
+            f"[--triton] aten::index advanced indexing with differing index "
+            f"shapes not yet supported: {[t.shape for t in idx_tensors]}")
+    # Row-major flat index across the consecutive indexed dims:
+    # flat = ((i0)*n1 + i1)*n2 + i2 ...   (ni = x.shape[indexed dim])
+    sizes = [x.shape[d] for d in dims]
+    flats = [t.reshape(-1) for t in idx_tensors]
+    flat = flats[0]
+    for k in range(1, len(flats)):
+        flat = flat * sizes[k] + flats[k]
+    flat = flat.long()
+    block = 1
+    for s in sizes:
+        block *= s
+    collapsed = list(x.shape[:first]) + [block] + list(x.shape[first + len(dims):])
+    xc = x.reshape(*collapsed)
+    sel = w.index_select_wrapper(xc, first, flat)
+    out_shape = list(x.shape[:first]) + base_shape + list(x.shape[first + len(dims):])
+    return sel.reshape(*out_shape)
+
+
+def _meta_sdpa_efficient(*args, **kwargs):
+    """aten::_scaled_dot_product_efficient_attention / _flash_attention.
+
+    These fused-backend SDPA variants have a DIFFERENT positional signature
+    than plain ``scaled_dot_product_attention``: an extra ``compute_log_sumexp``
+    bool sits at arg[4], shifting ``dropout_p``→[5], ``is_causal``→[6],
+    ``scale``→[7]. The plain-SDPA wrapper expects
+    ``(q, k, v, attn_mask, dropout_p, is_causal, scale)``, so a *direct*
+    positional call mis-reads ``is_causal`` (from ``dropout_p``) and ``scale``
+    (from ``is_causal``) — silently dropping the decoder's causal mask and
+    using scale=1.0. Invisible at seq_len=1 (single-element softmax), it
+    corrupts every seq_len>=2 forward (constant-token garbage on whisper).
+
+    Remap explicitly. Mirrors ``triton_sequential`` (sequential.py:198) so the
+    two triton modes stay symmetric (R30).
+    """
+    from neurobrix.kernels import wrappers as w
+    q, k, v = args[0], args[1], args[2]
+    attn_mask = args[3] if len(args) > 3 and args[3] is not None else None
+    dropout_p = args[5] if len(args) > 5 else 0.0
+    is_causal = args[6] if len(args) > 6 else False
+    scale = kwargs.get("scale", args[7] if len(args) > 7 else None)
+    if not isinstance(dropout_p, float):
+        dropout_p = float(dropout_p)
+    if not isinstance(is_causal, bool):
+        is_causal = bool(is_causal)
+    return w.scaled_dot_product_attention_wrapper(
+        q, k, v, attn_mask=attn_mask, dropout_p=dropout_p,
+        is_causal=is_causal, scale=scale)
+
+
+def _meta_weight_norm(v, g, dim=0, **kwargs):
+    """aten::_weight_norm(v, g, dim) → w = v * g / ‖v‖, where ‖v‖ is the L2 norm
+    over ALL dims except `dim` (keepdim). Pure-Triton meta-op via the existing
+    mul/sum/sqrt/div wrappers (no dedicated kernel needed). Used by vocoders'
+    weight-normalized convs (chatterbox s3gen, HiFi-GAN-style).
+    """
+    from neurobrix.kernels import wrappers as w
+    nd = v.ndim
+    d = dim % nd if nd else 0
+    vsq = w.mul(v, v)
+    nsq = vsq
+    for rd in range(nd):
+        if rd == d:
+            continue
+        nsq = w.sum_wrapper(nsq, dim=rd, keepdim=True)
+    norm = w.sqrt_wrapper(nsq)
+    # w = v * (g / norm); g and norm share the norm-shape (1s except dim d),
+    # broadcast against the full-shape v.
+    return w.mul(v, w.div(g, norm))
 
 
 # ============================================================================
@@ -335,12 +537,37 @@ def _create_full_like(x, fill_value, *, dtype=None, layout=None, device=None,
 
 def _create_linspace(start, end, steps, *, dtype=None, layout=None,
                      device=None, pin_memory=None, **kwargs):
-    """aten::linspace — evenly spaced values."""
+    """aten::linspace — evenly spaced values via Triton kernel.
+
+    Reference: FlagGems ops/linspace.py — bidirectional kernel
+    (`kernels/ops/linspace_op.py`), forward from start for the first
+    half and backward from end for the second half so both endpoints
+    are exact (matches torch.linspace semantics).
+
+    steps == 1 degenerates to a single `start` value (torch returns
+    [start], not [end]); the bidirectional formula would yield `end`
+    for that lone element, so it is special-cased through fill_kernel.
+    """
     from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype
+    from neurobrix.kernels.ops.linspace_op import linspace_kernel
     from neurobrix.kernels.ops.fill_op import fill_kernel
     steps = int(steps)
-    out = NBXTensor.empty((steps,), dtype=dtype or NBXDtype.float32, device=device or 'cuda')
-    # TODO: proper Triton linspace kernel
+    start = float(start)
+    end = float(end)
+    out = NBXTensor.empty((steps,), dtype=dtype or NBXDtype.float32,
+                          device=device or 'cuda')
+    if steps <= 0:
+        return out
+    BLOCK_SIZE = 128
+    grid = (triton.cdiv(steps, BLOCK_SIZE),)
+    _set_device(out)
+    if steps == 1:
+        fill_kernel[grid](out, start, 1, BLOCK_SIZE=BLOCK_SIZE)
+        return out
+    step_size = (end - start) / (steps - 1)
+    mid = steps // 2
+    linspace_kernel[grid](out, out.stride(0), start, mid, end,
+                          step_size, steps, BLOCK_SIZE=BLOCK_SIZE)
     return out
 
 
@@ -400,6 +627,9 @@ def _build_op_map() -> Dict[str, Callable]:
         "mish": w.mish,
         "selu": w.selu_wrapper,
 
+        # --- Recurrent (triton-pure assembly; self-manages dtype) ---
+        "lstm": w.lstm_wrapper,
+
         # --- Unary element-wise ---
         "neg": w.neg,
         "exp": w.exp,
@@ -412,6 +642,7 @@ def _build_op_map() -> Dict[str, Callable]:
         "reciprocal": w.reciprocal,
         "pow": w.pow_wrapper,
         "clamp": w.clamp,
+        "clip": w.clamp,  # aten::clip is an alias of aten::clamp
         "erf": w.erf,
 
         # --- Binary element-wise ---
@@ -435,7 +666,7 @@ def _build_op_map() -> Dict[str, Callable]:
 
         # --- Normalization ---
         "native_layer_norm": w.native_layer_norm,
-        "layer_norm": w.native_layer_norm,
+        "layer_norm": w.layer_norm_wrapper,
         "rms_norm": w.rms_norm,
         "swiglu_fused": w.swiglu_fused_wrapper,
         "rope_fused": w.rope_fused_wrapper,
@@ -448,6 +679,7 @@ def _build_op_map() -> Dict[str, Callable]:
         # --- Softmax ---
         "softmax": w.softmax,
         "_softmax": w.softmax,
+        "_safe_softmax": w.softmax,
         "log_softmax": w.log_softmax,
         "_log_softmax": w.log_softmax,
 
@@ -466,6 +698,7 @@ def _build_op_map() -> Dict[str, Callable]:
         # --- Reductions ---
         "mean": w.mean_wrapper,
         "sum": w.sum_wrapper,
+        "norm": w.norm_wrapper,
         "amax": w.amax_wrapper,
         "argmax": w.argmax_wrapper,
         "argmin": w.argmin_wrapper,
@@ -493,6 +726,7 @@ def _build_op_map() -> Dict[str, Callable]:
         "conv2d": w.conv2d_wrapper,
         "convolution": w.conv2d_wrapper,
         "conv1d": w.conv1d_wrapper,
+        "conv_transpose1d": w.conv_transpose1d_wrapper,
         "depthwise_conv2d": w.conv_depthwise2d_wrapper,
         "conv_depthwise2d": w.conv_depthwise2d_wrapper,
         "conv_transpose2d": w.conv_depthwise2d_wrapper,
@@ -550,6 +784,7 @@ def _build_op_map() -> Dict[str, Callable]:
         "dot": w.dot_wrapper,
         "mv": w.mv_wrapper,
         "baddbmm": w.baddbmm_wrapper,
+        "_weight_norm": _meta_weight_norm,
         "addmv": w.addmv_wrapper,
         "linalg_vector_norm": w.vector_norm_wrapper,
         "addr": w.addr_wrapper,
@@ -574,7 +809,7 @@ def _build_op_map() -> Dict[str, Callable]:
 
         # --- Weight norm ---
         "_weight_norm_interface": w.weight_norm_interface_wrapper,
-        "repeat_interleave": w.repeat_interleave_self_int_wrapper,
+        "repeat_interleave": w.repeat_interleave_wrapper,
 
         # --- RNG ---
         "rand": w.rand_wrapper,
@@ -602,6 +837,8 @@ def _build_op_map() -> Dict[str, Callable]:
         "_fft_c2c": w.fft_c2c_wrapper,
         "fft_rfft": w.fft_rfft_wrapper,
         "fft_irfft": w.fft_irfft_wrapper,
+        "stft": w.stft_wrapper,
+        "istft": w.istft_wrapper,
 
         # --- Complex ---
         "angle": w.angle_wrapper,
@@ -609,9 +846,19 @@ def _build_op_map() -> Dict[str, Callable]:
         # Attention — Dao-AILab Flash Attention v2 Triton kernel
         "scaled_dot_product_attention": w.scaled_dot_product_attention_wrapper,
         "_scaled_dot_product_attention": w.scaled_dot_product_attention_wrapper,
-        "_scaled_dot_product_flash_attention": w.scaled_dot_product_attention_wrapper,
-        "_scaled_dot_product_efficient_attention": w.scaled_dot_product_attention_wrapper,
-        "_scaled_dot_product_cudnn_attention": w.scaled_dot_product_attention_wrapper,
+        # Fused-backend variants have a shifted positional signature
+        # (extra compute_log_sumexp / return_debug_mask arg). Route through the
+        # remap shim so is_causal / scale read from the right slots — mirrors
+        # triton_sequential (sequential.py:198) for R30 symmetry.
+        # CAVEAT: _meta_sdpa_efficient reads is_causal from arg[6], correct for
+        # efficient + cudnn. The flash variant actually carries is_causal at
+        # arg[4] (no attn_bias slot), so a CAUSAL flash op would lose its mask
+        # here. No flash-backend model is in the current sweep; if one appears,
+        # give flash a dedicated remap that reads arg[4] (cf. the KV-cache path
+        # kv_cache.py::intercept_flash, which already does).
+        "_scaled_dot_product_flash_attention": _meta_sdpa_efficient,
+        "_scaled_dot_product_efficient_attention": _meta_sdpa_efficient,
+        "_scaled_dot_product_cudnn_attention": _meta_sdpa_efficient,
         "_scaled_dot_product_flash_attention_for_cpu": w.scaled_dot_product_attention_wrapper,
         "complex": w.complex_wrapper,
         "fold": w.fold_wrapper,
@@ -644,6 +891,7 @@ def _build_op_map() -> Dict[str, Callable]:
         "reshape_as": _meta_reshape_as,
         "as_strided": _meta_as_strided,
         "unfold": _meta_unfold,
+        "im2col": w.im2col_wrapper,
         "movedim": _meta_movedim,
 
         # Memory
@@ -679,11 +927,12 @@ def _build_op_map() -> Dict[str, Callable]:
         "_local_scalar_dense": _meta_select_item,
         "equal": _meta_equal,
 
-        # Complex views
-        "view_as_real": lambda x: x,  # reinterpret
-        "view_as_complex": lambda x: x,  # reinterpret
-        "real": lambda x: x,  # view
-        "imag": lambda x: x,  # view
+        # Complex views — real reinterprets (complex64 ↔ float[..,2]), see
+        # NBXTensor.view_as_real/view_as_complex/.real/.imag.
+        "view_as_real": lambda x: x.view_as_real(),
+        "view_as_complex": lambda x: x.view_as_complex(),
+        "real": lambda x: x.real,
+        "imag": lambda x: x.imag,
 
         # Queries (return Python scalars, not tensors)
         "size": lambda x, dim=None: x.size(dim) if dim is not None else x.size(),
@@ -693,12 +942,12 @@ def _build_op_map() -> Dict[str, Callable]:
         "is_contiguous": lambda x: x.is_contiguous,
 
         # Broadcast
-        "broadcast_tensors": lambda *t: t,
+        "broadcast_tensors": w.broadcast_tensors_wrapper,
 
         # Advanced indexing — aten::index(tensor, [idx0, idx1, ...])
         "index": _meta_index,
-        "index_put": lambda x, indices, values, acc=False: x,  # TODO
-        "index_put_": lambda x, indices, values, acc=False: x,  # TODO
+        "index_put": w.index_put_wrapper,
+        "index_put_": w.index_put_wrapper,
 
         # Split/chunk (use narrow internally)
         "split": lambda x, size, dim=0: tuple(x.narrow(dim, i * size, size) for i in range(x.shape[dim] // size)),

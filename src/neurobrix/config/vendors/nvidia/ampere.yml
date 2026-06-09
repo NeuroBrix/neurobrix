@@ -1,0 +1,116 @@
+# NVIDIA Ampere Architecture Compute Configuration
+# A100, A30, A10, RTX 30xx series, Quadro RTX A-series
+# Compute Capability: 8.0 (A100), 8.6 (RTX 30xx)
+#
+# validation_status: hand_curated_from_docs
+#   No Ampere hardware available locally (V100 only). Pre-existing
+#   keys are hand-curated from NVIDIA Ampere/A100 documentation and
+#   were NOT empirically validated here. The
+#   `memory.sdpa_math_max_scores_bytes` key was added 2026-05-19
+#   (P-TRITON-MOE-DETERMINISM-RESIDUAL) for R10 schema parity with
+#   volta.yml; its value/rationale is documented inline.
+
+architecture: ampere
+compute_capability: "8.0"
+
+# Device string mapping
+device_prefix: "cuda"
+
+# Kernel block sizes - Ampere-optimized (larger tiles, more parallelism)
+block_sizes:
+  # Default block size for simple kernels
+  default: 1024
+
+  # GEMM configuration - larger tiles for A100
+  gemm:
+    block_m: 128         # Larger tiles for Ampere
+    block_n: 128
+    block_k: 32
+    num_warps: 8         # More warps for higher parallelism
+    num_stages: 3        # More pipeline stages
+
+  # Batched Matrix Multiply configuration
+  bmm:
+    block_m: 64
+    block_n: 64
+    block_k: 32
+    num_warps: 4
+
+  # Convolution configuration
+  conv2d:
+    block_h: 16
+    block_w: 16
+    num_warps: 4
+
+  # Resize/interpolation block size
+  resize: 256
+
+  # Softmax maximum reduction width
+  softmax_cap: 8192
+
+  # LayerNorm tile width
+  layernorm_tile: 1024
+
+  # GroupNorm maximum elements per group
+  groupnorm_cap: 65536
+
+  # Generic reduction block size
+  reduction: 1024
+
+# Scaled Dot-Product Attention block size thresholds.
+# Schema documented in volta.yml. Decode entries first.
+# Ampere values not yet empirically calibrated against per-LLM
+# golden text; values mirror legacy structure with decode/prefill
+# split. Run benches and update if needed.
+sdpa_thresholds:
+  # Decode path (seqlen_q ≤ 16)
+  - seqlen_q_le: 16
+    head_dim_ge: 256
+    block_m: 16
+    block_n: 32
+    num_warps: 4
+  - seqlen_q_le: 16
+    block_m: 16
+    block_n: 64
+    num_warps: 4
+  # Prefill path (seqlen_q > 16)
+  - head_dim_ge: 256
+    block_m: 32
+    block_n: 32
+    num_warps: 4
+  - head_dim_ge: 128
+    block_m: 64
+    block_n: 64
+    num_warps: 4
+  - head_dim_lt: 128
+    block_m: 128
+    block_n: 64
+    num_warps: 4
+
+# Memory constraints. A100 SMEM/SM = 167936 (164 KB). Other Ampere
+# parts (A30, A10, RTX 30xx) have less SMEM but the picker's safety
+# factor + cascade fallback keeps them safe.
+memory:
+  max_shared_memory_per_block: 167936   # 164 KB (A100 SXM4/PCIe)
+  max_registers_per_block: 65536
+  warp_size: 32
+  # SDPA deterministic-routing budget (R10 schema parity with
+  # volta.yml). 0 = DISABLED BY DESIGN: the flash-attention Triton
+  # non-determinism is a Volta-SIMT issue (pre-Ampere MMA path);
+  # Ampere has proper async tensor-core MMA and the flash kernel is
+  # deterministic here. Routing to the slower _math_attention
+  # fallback on Ampere would be a pure perf regression with zero
+  # determinism benefit, so the runtime never takes it when this is
+  # 0 (scores_bytes <= 0 is always False). The key's VALUE, not its
+  # presence, is the gate. hand_curated_from_docs.
+  sdpa_math_max_scores_bytes: 0
+
+# SMEM budget safety factor — see volta.yml comment.
+sdpa_smem_safety: 0.7
+
+# Ampere has broader precision support
+precision:
+  supports_fp16: true
+  supports_bf16: true    # Ampere supports BF16
+  supports_tf32: true    # Ampere supports TF32
+  supports_fp8: false    # Ampere does not support FP8

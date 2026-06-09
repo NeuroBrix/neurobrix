@@ -160,7 +160,8 @@ from .ops.mse_loss import mse_loss_partial_kernel, mse_loss_reduce_kernel, mse_l
 from .ops.nllloss import nll_loss_forward_kernel
 from .ops.std import std_map_kernel, std_reduce_kernel, std_dim_kernel
 from .ops.var import var_kernel_1, var_kernel_2, var_welford_kernel
-from .ops.index_add import index_add_kernel
+from .ops.index_add import index_add_gather_kernel
+from .ops.index_put_op import index_put_kernel
 from .ops.sort_op import radix_sort_histogram_kernel, radix_sort_sweep_kernel
 
 # === Phase 5: RoPE, spatial, RNG, remaining ===
@@ -618,6 +619,12 @@ def neg(x) :
 
 
 def exp(x) :
+    if isinstance(x, NBXTensor) and x.is_complex():
+        # exp(a + bi) = e^a (cos b + i sin b)
+        a = x.real.contiguous()
+        b = x.imag.contiguous()
+        ea = exp(a)
+        return complex_wrapper(mul(ea, cos(b)), mul(ea, sin(b)))
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
     _set_device(x)
@@ -641,8 +648,21 @@ def cos(x) :
     return output
 
 
+def _promote_int_unary(x):
+    """Float-math unary ops (rsqrt/sqrt/log/exp/reciprocal/...) promote integer
+    or bool input to float32, matching PyTorch type promotion. Without it the
+    kernel computes in the integer dtype AND NBXTensor.empty_like keeps the int
+    output — e.g. rsqrt(int64 2) truncates 0.7071 to 0, which silently collapsed
+    the Kokoro AdainResBlk1d residual `(h + sc) * rsqrt(2)` to all-zeros (the
+    rsqrt(2) constant was traced as an int64 scalar; torch auto-promotes it).
+    No-op for tensors already in a floating dtype."""
+    if hasattr(x, "is_floating_point") and not x.is_floating_point():
+        return x.to(NBXDtype.float32)
+    return x
+
+
 def rsqrt(x) :
-    x = x.contiguous()
+    x = _promote_int_unary(x).contiguous()
     output = NBXTensor.empty_like(x)
     _set_device(x)
     rsqrt_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
@@ -650,7 +670,7 @@ def rsqrt(x) :
 
 
 def sqrt_wrapper(x) :
-    x = x.contiguous()
+    x = _promote_int_unary(x).contiguous()
     output = NBXTensor.empty_like(x)
     _set_device(x)
     sqrt_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
@@ -658,6 +678,17 @@ def sqrt_wrapper(x) :
 
 
 def abs_wrapper(x) :
+    if x.is_complex():
+        # abs of a complex tensor is the REAL magnitude sqrt(re^2 + im^2). The
+        # element-wise float path below is doubly wrong for complex64: empty_like
+        # keeps the complex dtype AND the kernel runs over x.numel() interleaved
+        # [re,im] floats (|interleaved float|, not the magnitude) — half the
+        # storage, mis-typed output, heap corruption. Exposed by the Kokoro iSTFT
+        # source STFT (abs of _fft_r2c) feeding generator.noise_convs. Computed
+        # R33-pure from the stride-2 real/imag views.
+        re = x.real
+        im = x.imag
+        return sqrt_wrapper(add(mul(re, re), mul(im, im)))
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
     _set_device(x)
@@ -666,7 +697,7 @@ def abs_wrapper(x) :
 
 
 def log_wrapper(x) :
-    x = x.contiguous()
+    x = _promote_int_unary(x).contiguous()
     output = NBXTensor.empty_like(x)
     _set_device(x)
     log_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
@@ -674,7 +705,7 @@ def log_wrapper(x) :
 
 
 def reciprocal(x) :
-    x = x.contiguous()
+    x = _promote_int_unary(x).contiguous()
     output = NBXTensor.empty_like(x)
     _set_device(x)
     reciprocal_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
@@ -682,16 +713,47 @@ def reciprocal(x) :
 
 
 def pow_wrapper(x, exponent) :
-    x = x.contiguous()
-    output = NBXTensor.empty_like(x)
-    if isinstance(exponent, NBXTensor):
-        exponent = exponent.item()
-    _set_device(x)
-    pow_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), exponent, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
-    return output
+    # aten::pow has four forms — the base and/or exponent may be a scalar:
+    #   tensor ** scalar  → fused kernel (fast path)
+    #   scalar ** tensor  → e.g. 10000.0 ** (arange/dim), the sinusoidal/RoPE
+    #                       frequency base (Flex DiT) — a**b = exp(b·ln a)
+    #   tensor ** tensor  → exp(b·ln a)
+    #   scalar ** scalar  → constant
+    # All non-fast cases route through exp/mul/log (R33-pure, no torch).
+    import math
+    x_is_t = isinstance(x, NBXTensor)
+    e_is_t = isinstance(exponent, NBXTensor)
+    if x_is_t and not e_is_t:
+        x = x.contiguous()
+        output = NBXTensor.empty_like(x)
+        _set_device(x)
+        pow_forward_kernel[_1d_grid(x.numel())](
+            x, output, x.numel(), float(exponent),
+            BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+        return output
+    if (not x_is_t) and e_is_t:
+        # scalar ** tensor = exp(exponent · ln(scalar))
+        return exp(mul(exponent, math.log(float(x))))
+    if x_is_t and e_is_t:
+        # tensor ** tensor = exp(exponent · ln(base))
+        return exp(mul(exponent, log_wrapper(x)))
+    return float(x) ** float(exponent)
 
 
 def clamp(x, min_val=None, max_val=None) :
+    # aten::clamp.Tensor: a min/max BOUND may itself be an NBXTensor (e.g. Flex
+    # DiT). The fused scalar kernel can't take a tensor bound, so route tensor
+    # bounds through elementwise maximum/minimum (R33-pure); scalar bounds keep
+    # the fused kernel. Mixed (one tensor, one scalar) handled per side.
+    if isinstance(min_val, NBXTensor) or isinstance(max_val, NBXTensor):
+        out = x
+        if min_val is not None:
+            out = (maximum_wrapper(out, min_val) if isinstance(min_val, NBXTensor)
+                   else clamp(out, min_val=float(min_val), max_val=None))
+        if max_val is not None:
+            out = (minimum_wrapper(out, max_val) if isinstance(max_val, NBXTensor)
+                   else clamp(out, min_val=None, max_val=float(max_val)))
+        return out
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
     _min = float(min_val) if min_val is not None else 0.0
@@ -705,7 +767,7 @@ def clamp(x, min_val=None, max_val=None) :
 
 
 def erf(x) :
-    x = x.contiguous()
+    x = _promote_int_unary(x).contiguous()
     output = NBXTensor.empty_like(x)
     _set_device(x)
     erf_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
@@ -858,7 +920,61 @@ def add_inplace_nbx(target, other, alpha: float = 1.0):
     return target
 
 
+def _as_complex_scalar(v):
+    """Parse a complex literal ('1j', '(1+2j)', a Python complex) → complex, else None.
+    The tracer serializes complex constants like the imaginary unit as an
+    'unknown'-typed string ('1j')."""
+    if isinstance(v, complex):
+        return v
+    if isinstance(v, str):
+        try:
+            return complex(v.strip())
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
+def _cmul_scalar(x, c):
+    """x (real or complex NBXTensor) * complex scalar c → complex64."""
+    cr, ci = c.real, c.imag
+    if isinstance(x, NBXTensor) and x.is_complex():
+        xr, xi = x.real, x.imag
+        return complex_wrapper(sub(mul(xr, cr), mul(xi, ci)),
+                               add(mul(xr, ci), mul(xi, cr)))
+    real = mul(x, cr) if cr != 0.0 else NBXTensor.zeros_like(x)
+    imag = mul(x, ci) if ci != 0.0 else NBXTensor.zeros_like(x)
+    return complex_wrapper(real, imag)
+
+
+def _complex_mul(a, b):
+    """Handle a mul involving a complex scalar/tensor. Returns the complex result,
+    or None to fall through to the real elementwise mul (the common case)."""
+    ca = _as_complex_scalar(a)
+    cb = _as_complex_scalar(b)
+    a_t = isinstance(a, NBXTensor) and a.is_complex()
+    b_t = isinstance(b, NBXTensor) and b.is_complex()
+    if ca is None and cb is None and not a_t and not b_t:
+        return None  # purely real → real mul
+    if cb is not None and isinstance(a, NBXTensor):
+        return _cmul_scalar(a, cb)
+    if ca is not None and isinstance(b, NBXTensor):
+        return _cmul_scalar(b, ca)
+    # complex tensor * (real or complex) tensor
+    if a_t or b_t:
+        if a_t and not b_t:
+            return complex_wrapper(mul(a.real, b), mul(a.imag, b))
+        if b_t and not a_t:
+            return complex_wrapper(mul(b.real, a), mul(b.imag, a))
+        ar, ai, br, bi = a.real, a.imag, b.real, b.imag
+        return complex_wrapper(sub(mul(ar, br), mul(ai, bi)),
+                               add(mul(ar, bi), mul(ai, br)))
+    return None
+
+
 def mul(a, b) :
+    cr = _complex_mul(a, b)
+    if cr is not None:
+        return cr
     a, b, output, n, dev_ctx, scalar = _prepare_binary(a, b)
     if scalar:
         # Contract: tensor is always `a`, scalar is always `b`
@@ -1034,6 +1150,17 @@ def native_layer_norm(x, normalized_shape, weight, bias, eps=1e-5):
         num_warps=4,
     )
     return output_2d.view_as(x), mean, inv_std
+
+
+def layer_norm_wrapper(x, normalized_shape, weight=None, bias=None, eps=1e-5,
+                       cudnn_enable=True) :
+    """aten::layer_norm — the high-level op returns ONLY the normalized output
+    (native_layer_norm also returns mean/rstd). The triton runtime stores a
+    tuple result as out_0=the-whole-tuple when the graph declares a single
+    output, so a downstream op (dropout) then receives a tuple. Return just the
+    output tensor here."""
+    out = native_layer_norm(x, normalized_shape, weight, bias, eps)
+    return out[0] if isinstance(out, (tuple, list)) else out
 
 
 def rms_norm(x, weight, eps=1e-6, epsilon=None):
@@ -1391,7 +1518,7 @@ def bmm(a, b) :
 
     B, M, K = a.shape
     B2, K2, N = b.shape
-    assert B == B2 and K == K2
+    assert B == B2 and K == K2, f"bmm shape mismatch: {tuple(a.shape)} @ {tuple(b.shape)}"
 
     if M <= 4:
         a = a.contiguous()
@@ -1455,8 +1582,24 @@ def matmul_wrapper(a, b):
         result = bmm(a_3d, b.unsqueeze(0).expand(batch, K, b.shape[1]))
         return result.view(*orig_shape[:-1], b.shape[1])
     if a.ndim >= 3 and b.ndim >= 3:
-        # General batched matmul
-        return bmm(a.contiguous(), b.contiguous())
+        # General batched matmul. bmm is strictly 3D, so collapse the leading
+        # batch dims into one, bmm, then restore the batch shape. Passing raw 4-D
+        # tensors straight to bmm unpacked a 3-tuple → "too many values".
+        a_c = a.contiguous(); b_c = b.contiguous()
+        M, K = a_c.shape[-2], a_c.shape[-1]
+        Kb, N = b_c.shape[-2], b_c.shape[-1]
+        batch_a = a_c.numel() // (M * K)
+        batch_b = b_c.numel() // (Kb * N)
+        a_3d = a_c.view(batch_a, M, K)
+        b_3d = b_c.view(batch_b, Kb, N)
+        lead = list(a_c.shape[:-2])
+        if batch_b == 1 and batch_a != 1:
+            b_3d = b_3d.expand(batch_a, Kb, N)
+        elif batch_a == 1 and batch_b != 1:
+            a_3d = a_3d.expand(batch_b, M, K)
+            lead = list(b_c.shape[:-2])
+        result = bmm(a_3d, b_3d)
+        return result.view(*lead, M, N)
     raise RuntimeError(f"matmul: unsupported shapes {a.shape} × {b.shape}")
 
 
@@ -1478,12 +1621,14 @@ def isin_wrapper(elements, test_elements, *, invert: bool = False,
     out_np = np.isin(elements_np, test_np,
                      assume_unique=bool(assume_unique),
                      invert=bool(invert))
-    # NBXTensor.from_numpy currently doesn't support bool dtype cleanly on
-    # every backend; stage through uint8, the callers (comparisons, masks)
-    # treat non-zero as True. If the consuming op demands bool, NBXDtype
-    # promotion handles it downstream.
-    out_u8 = out_np.astype(np.uint8)
-    return NBXTensor.from_numpy(out_u8)
+    # isin is a boolean membership predicate — return a true bool_ NBXTensor so
+    # downstream bool-aware ops recognise it. Staging through uint8 (the earlier
+    # workaround) lost the bool-ness: bitwise_not's `nbx_dtype == bool_` guard
+    # then missed and did a raw byte complement (~0 -> 255) instead of the LOGICAL
+    # NOT, which corrupted the openaudio DualAR attention mask (op #46 of the slow
+    # backbone, first triton-vs-sequential divergence). from_numpy handles |b1
+    # cleanly now (verified empirically), so the uint8 staging is no longer needed.
+    return NBXTensor.from_numpy(out_np.astype(np.bool_))
 
 
 def _nbx_to_numpy(t):
@@ -1590,6 +1735,19 @@ def addmm(bias, a, b,
     # (possibly-fp16) weight.
     if bias.nbx_dtype != a.nbx_dtype:
         bias = bias.to(a.nbx_dtype)
+
+    # N-D activation: addmm is strictly 2-D. Flatten the leading dims of `a`
+    # ([..., M, K] @ [K, N]), addmm in 2-D, restore the leading shape. Mirror
+    # of the matmul() ND×2D path; raw N-D `a` unpacked a 2-tuple → "too many
+    # values to unpack" (Flex DiT feeds a 3-D activation to addmm). Bias is the
+    # Linear bias ([N] or [1, N]) and broadcasts over the flattened rows.
+    if a.ndim > 2:
+        orig_lead = a.shape[:-1]
+        K_ = a.shape[-1]
+        batch = a.numel() // K_
+        a2d = a.contiguous().view(batch, K_)
+        out2d = addmm(bias, a2d, b, beta=beta, alpha=alpha)
+        return out2d.view(*orig_lead, out2d.shape[-1])
 
     M, K = a.shape
     K2, N = b.shape
@@ -1956,7 +2114,19 @@ def mean_wrapper(x, dim=None, keepdim=False) :
 
 
 def sum_wrapper(x, dim=None, keepdim=False) :
-    """Sum reduction."""
+    """Sum reduction.
+
+    Output dtype follows PyTorch ``torch.sum`` promotion: floating inputs keep
+    their dtype; bool/integer inputs promote to int64. Casting the (fp32-
+    accumulated) result back to a narrow input dtype silently overflows — e.g.
+    summing a bool mask of 354 True elements and casting to uint8 wraps to
+    354 % 256 = 98 (the chatterbox s3gen mel-length mask bug). Accumulation
+    stays fp32 either way (exact for counts well under the 2^24 mantissa).
+    """
+    # x.dtype is a triton dtype handle (not NBXDtype) — gate on the tensor's
+    # own is_floating_point() rather than dtype membership.
+    out_dtype = x.dtype if x.is_floating_point() else NBXDtype.int64
+
     if dim is None:
         x_flat = x.contiguous().view(-1)
         batch_dim = 1
@@ -1983,14 +2153,31 @@ def sum_wrapper(x, dim=None, keepdim=False) :
     )
 
     if dim is None:
-        return output.squeeze(0).to(x.dtype)
+        return output.squeeze(0).to(out_dtype)
 
     shape = list(x.shape)
     if keepdim:
         shape[dim] = 1
     else:
         shape.pop(dim)
-    return output.to(x.dtype).view(shape)
+    return output.to(out_dtype).view(shape)
+
+
+def norm_wrapper(x, p=2, dim=None, keepdim=False):
+    """aten::norm(self, p, dim, keepdim) — Lp norm reduction over ``dim``.
+
+    The DAC codec's only norm is weight-norm: ``||v|| = sqrt(sum(v*v, dim))``
+    with p=2 over a single dim. Composed from existing triton kernels
+    (mul + sum + sqrt) — R33-pure, no new @triton.jit needed; sum_wrapper
+    accumulates in fp32 so the reduction over a long row does not overflow fp16.
+    Other p raise ZERO-FALLBACK (named follow-up) rather than mis-computing.
+    """
+    pv = _to_scalar(p) if isinstance(p, NBXTensor) else (2 if p is None else p)
+    if float(pv) != 2.0:
+        raise NotImplementedError(
+            f"aten::norm p={pv} unwired (DAC weight-norm uses p=2) — "
+            "follow-up P-TRITON-NORM-GENERAL-P.")
+    return sqrt_wrapper(sum_wrapper(mul(x, x), dim=dim, keepdim=keepdim))
 
 
 def amax_wrapper(x, dim=None, keepdim=False) :
@@ -2101,10 +2288,20 @@ def upsample_nearest1d_wrapper(
     """Upsample nearest 1D via 2D: [N,C,L] → unsqueeze → [N,C,1,L] → upsample2d → squeeze."""
     x_2d = x.unsqueeze(2)  # [N, C, 1, L]
     if isinstance(output_size, (list, tuple)):
-        out_size_2d = [1, output_size[0]]
+        out_size_2d = [1, output_size[0]] if len(output_size) else [1, None]
     else:
         out_size_2d = [1, output_size]
-    out_2d = upsample_nearest2d_wrapper(x_2d, out_size_2d, scales_h=None, scales_w=scales)
+    # aten::upsample_nearest1d.vec passes scale_factors as a 1-element LIST
+    # ([scale]); the 2D wrapper's scalar scales_w path does `float(scales_w)`,
+    # which raises on a list. Unwrap to a scalar. When a scale is present the 2D
+    # wrapper recomputes OW = IW * scale from the LIVE input — exactly what a
+    # variable-length audio vocoder (HiFiGAN/iSTFTNet/DAC/S3Gen) needs so the
+    # output tracks the runtime token count rather than the baked trace length.
+    if isinstance(scales, (list, tuple)):
+        scale_w = scales[0] if len(scales) else None
+    else:
+        scale_w = scales
+    out_2d = upsample_nearest2d_wrapper(x_2d, out_size_2d, scales_h=None, scales_w=scale_w)
     return out_2d.squeeze(2)
 
 
@@ -2212,6 +2409,16 @@ def native_group_norm_wrapper(input, weight, bias, N, C, HxW, num_groups, eps):
 
 def index_select_wrapper(x, dim: int, index) :
     """Index select along dimension. Wrapper from FlagGems."""
+    # aten::index / aten::index_select REQUIRE integer indices. The triton path
+    # can present an integer-VALUED index tagged float32 (e.g. the whisper
+    # decoder position_ids reaching aten::index via _meta_index). The kernel
+    # computes a pointer offset `inp + (rows*N + indices)`; a float `indices`
+    # makes that pointer arithmetic illegal (Triton compile error
+    # "pointer<fp16> and float32"). Enforce the integer contract at this single
+    # choke point both modes funnel through — symmetric across triton /
+    # triton_sequential (R30), and matches torch (index_select needs a Long).
+    if hasattr(index, "is_floating_point") and index.is_floating_point():
+        index = index.to(NBXDtype.int64)
     assert dim >= -x.ndim and dim < x.ndim
     if index.ndim == 0:
         index = index.unsqueeze(0)
@@ -2408,13 +2615,88 @@ def _conv2d_should_band_stream(N, out_c, out_h, out_w, dtype_bytes):
     return out_bytes > _NBX_CONV2D_BAND_BYTES
 
 
+def conv_transpose_wrapper(
+    x, weight, bias=None,
+    stride=1, padding=0, dilation=1, output_padding=0, groups=1,
+):
+    """Transposed convolution — aten::convolution(transposed=True).
+
+    Handles 1D (3D tensors, via H=1 unsqueeze) and 2D (4D tensors). Weight layout
+    matches PyTorch ConvTranspose: (C_in, C_out/groups, *K). Scatter-based
+    @triton.jit kernel (kernels/ops/conv_transpose2d.py), fp32 accumulation.
+    R33-pure: NBXTensor + Triton only.
+
+    A regular strided conv DOWNSAMPLES (out = in // stride); a transposed conv
+    UPSAMPLES: out = (in-1)*stride - 2*pad + dil*(k-1) + output_padding + 1. The
+    Kokoro F0/N ProsodyPredictor pool is a depthwise ConvTranspose1d (stride 2)
+    that doubles the frame axis (62->124). conv2d_wrapper routes here when
+    transposed=True (which it previously dropped when delegating 1D convs).
+    """
+    is_1d = (weight.ndim == 3)
+    if is_1d:
+        x = x.unsqueeze(2)            # [N, C_in, 1, L]
+        weight = weight.unsqueeze(2)  # [C_in, C_out/g, 1, K]
+        def _s(v):
+            return v[0] if isinstance(v, (list, tuple)) else v
+        sh, sw = 1, _s(stride)
+        ph, pw = 0, _s(padding)
+        dh, dw = 1, _s(dilation)
+        oph, opw = 0, _s(output_padding)
+    else:
+        def _hw(v):
+            if isinstance(v, (list, tuple)):
+                return (v[0], v[1] if len(v) > 1 else v[0])
+            return (v, v)
+        sh, sw = _hw(stride); ph, pw = _hw(padding)
+        dh, dw = _hw(dilation); oph, opw = _hw(output_padding)
+
+    # dtype alignment NARROWING (mirror conv2d_wrapper; fp32 accum in-kernel)
+    x_nbx = x.nbx_dtype if hasattr(x, 'nbx_dtype') else x.dtype
+    w_nbx = weight.nbx_dtype if hasattr(weight, 'nbx_dtype') else weight.dtype
+    if x_nbx != w_nbx:
+        _order = (NBXDtype.float16, NBXDtype.bfloat16, NBXDtype.float32)
+        narrowest = next(d for d in _order if d in (x_nbx, w_nbx))
+        if x_nbx != narrowest:
+            x = x.to(narrowest)
+        if w_nbx != narrowest:
+            weight = weight.to(narrowest)
+
+    x_c = x.contiguous()
+    w_c = weight.contiguous()
+    out_dtype = _NBX_COMPUTE_DTYPE if _NBX_COMPUTE_DTYPE is not None else x.dtype
+
+    N, C_in, IH, IW = x_c.shape
+    _, C_out_per_g, KH, KW = w_c.shape
+    C_out = C_out_per_g * groups
+    C_in_per_g = C_in // groups
+    OH = (IH - 1) * sh - 2 * ph + dh * (KH - 1) + oph + 1
+    OW = (IW - 1) * sw - 2 * pw + dw * (KW - 1) + opw + 1
+
+    output = NBXTensor.empty((N, C_out, OH, OW), device=x_c.device, dtype=out_dtype)
+    _set_device(x_c)
+    BLOCK = 256
+    grid = (N * C_out, triton.cdiv(OH * OW, BLOCK))
+    conv_transpose2d_kernel[grid](
+        x_c, w_c, output,
+        N, C_in, IH, IW, C_out, KH, KW, OH, OW,
+        sh, sw, ph, pw, dh, dw, C_in_per_g, C_out_per_g,
+        BLOCK_SIZE=BLOCK,
+    )
+    if bias is not None:
+        output = add(output, bias.view(1, C_out, 1, 1))
+    if is_1d:
+        output = output.squeeze(2)
+    return output
+
+
 def conv2d_wrapper(
     x, weight, bias=None,
     stride=1, padding=0, dilation=1,
     transposed=False, output_padding=0, groups=1,
 ) :
     """Convolution forward. Handles both 1D (3D tensors) and 2D (4D tensors).
-    Routes to conv1d_wrapper for 3D inputs.
+    Routes to conv1d_wrapper for 3D inputs, and to conv_transpose_wrapper when
+    transposed=True (1D or 2D).
 
     Spatial band-streaming (P-SANA-4KPX-RUNTIME Étape 1): when the output
     tensor would exceed _NBX_CONV2D_BAND_BYTES (default 4 GiB), the wrapper
@@ -2422,6 +2704,14 @@ def conv2d_wrapper(
     re-enters this same wrapper with a smaller H, so the recursion bottoms
     out automatically. The full output stays allocated for downstream
     consumers."""
+    # Transposed convolutions (1D or 2D) — route BEFORE the 1D delegation, which
+    # historically dropped the transposed/output_padding flags (Kokoro F0/N
+    # ConvTranspose1d was computed as a regular strided conv → halved instead of
+    # doubled the frame axis).
+    if transposed:
+        return conv_transpose_wrapper(x, weight, bias, stride, padding, dilation,
+                                      output_padding, groups)
+
     # Route 1D convolutions to conv1d_wrapper
     if weight.ndim == 3:
         return conv1d_wrapper(x, weight, bias, stride, padding, dilation, groups)
@@ -2553,6 +2843,7 @@ def conv2d_wrapper(
         kernel_height=kh, kernel_width=kw,
         stride_height=stride_h, stride_width=stride_w,
         padding_height=pad_h, padding_width=pad_w,
+        dilation_height=dil_h, dilation_width=dil_w,
         groups=groups, fp16=fp16,
     )
 
@@ -2669,7 +2960,25 @@ def batch_norm_wrapper(
     running_mean, running_var,
     training: bool = False, momentum: float = 0.1, eps: float = 1e-5,
 ) :
-    """BatchNorm forward (inference mode). Wrapper from FlagGems."""
+    """BatchNorm / InstanceNorm forward (kernel from FlagGems).
+
+    training=False → inference batch_norm using running_mean/running_var.
+    training=True  → statistics computed from the input — covers batch_norm
+                     training AND instance_norm / AdaIN, which the tracer emits
+                     as cudnn_batch_norm(training=True) with no affine and no
+                     running buffers (it reshapes [N,C,L]→[1,N*C,L] first, so
+                     each instance-channel normalises over the spatial axis).
+    Absent weight/bias/running reach the kernel as null pointers, handled by its
+    `if *_pointer:` guards (weight→1, bias→0, running update skipped). Never
+    substitute the input tensor for an absent buffer — that silently corrupted
+    instance_norm (kernel read x as the affine scale and overwrote x with the
+    momentum-blended running stats).
+    """
+    if not training and running_mean is None:
+        raise ValueError(
+            "batch_norm eval mode (training=False) requires running_mean and "
+            "running_var; got None. For statistics-from-input use training=True."
+        )
     if x.ndim == 2:
         x = x.unsqueeze(-1)
     elif x.ndim >= 4:
@@ -2682,16 +2991,22 @@ def batch_norm_wrapper(
     inv_std_out = NBXTensor.empty(C, dtype=NBXDtype.float32, device=x.device)
 
     grid = (C,)
-    _set_device(x.contiguous())
+    xc = x.contiguous()
+    _set_device(xc)
+    # Pass null pointers (None) — NOT x — for absent weight/bias/running. The
+    # kernel guards each with `if *_pointer:`; substituting x defeated the guard
+    # (kernel read x as the affine scale/shift and wrote running stats back into
+    # the input), which silently corrupted instance_norm (AdaIN has no affine
+    # nor running stats). batch_norm callers still pass real buffers unchanged.
     batch_norm_forward_kernel[grid](
-        x.contiguous(),
-        weight.contiguous() if weight is not None else x,
-        bias.contiguous() if bias is not None else x,
+        xc,
+        weight.contiguous() if weight is not None else None,
+        bias.contiguous() if bias is not None else None,
         mean_out, inv_std_out, output,
-        running_mean if running_mean is not None else x,
-        running_var if running_var is not None else x,
+        running_mean if running_mean is not None else None,
+        running_var if running_var is not None else None,
         N, spatial,
-        x.stride(0), x.stride(1), x.stride(2),
+        xc.stride(0), xc.stride(1), xc.stride(2),
         output.stride(0), output.stride(1), output.stride(2),
         momentum, eps,
         is_train=training,
@@ -2744,7 +3059,7 @@ def cumsum_wrapper(x, dim: int = 0) :
 # ===========================================================================
 
 def exp2_wrapper(x) :
-    x = x.contiguous()
+    x = _promote_int_unary(x).contiguous()
     output = NBXTensor.empty_like(x)
     _set_device(x)
     exp2_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
@@ -2752,7 +3067,7 @@ def exp2_wrapper(x) :
 
 
 def tan_wrapper(x) :
-    x = x.contiguous()
+    x = _promote_int_unary(x).contiguous()
     output = NBXTensor.empty_like(x)
     _set_device(x)
     tan_forward_kernel[_1d_grid(x.numel())](x, output, x.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
@@ -2948,6 +3263,14 @@ def bitwise_or_wrapper(a, b) :
 
 
 def bitwise_not_wrapper(x) :
+    # torch.bitwise_not on a BOOL tensor is the LOGICAL NOT (0<->1), NOT the
+    # bitwise complement: ~True(1)=254, ~False(0)=255 are both non-zero, so the
+    # bitwise kernel yields an all-True bool tensor. Route bool through
+    # logical_not. Surfaced by the parakeet conformer attention padding mask
+    # (`~(arange<len)`): an all-True mask made masked_fill overwrite every score
+    # with -1e4 -> uniform softmax -> dead self-attention -> garbage transcription.
+    if getattr(x, "nbx_dtype", None) == NBXDtype.bool_:
+        return logical_not_wrapper(x)
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
     _set_device(x)
@@ -3010,6 +3333,19 @@ def conv1d_wrapper(
         dilation=(1, dilation), groups=groups)
 
     return out_2d.squeeze(2)  # [N, C_out, L_out]
+
+
+def conv_transpose1d_wrapper(x, weight, bias=None, stride=1, padding=0,
+                             output_padding=0, groups=1, dilation=1) :
+    """aten::conv_transpose1d — 1D transposed convolution. conv_transpose_wrapper
+    already handles the 1D case (weight.ndim == 3, H=1 unsqueeze); this thin
+    adapter only reorders the positional args from the aten signature
+    (stride, padding, output_padding, groups, dilation) to the wrapper's keyword
+    order. Used by the chatterbox/CosyVoice s3gen HiFiGAN-style upsampler."""
+    return conv_transpose_wrapper(
+        x, weight, bias,
+        stride=stride, padding=padding, dilation=dilation,
+        output_padding=output_padding, groups=groups)
 
 
 # ---------------------------------------------------------------------------
@@ -3555,6 +3891,36 @@ def var_wrapper(x, dim=None, correction=1, keepdim=False) :
 # Gather
 # ---------------------------------------------------------------------------
 
+def broadcast_tensors_wrapper(*tensors):
+    """aten::broadcast_tensors(Tensor[] tensors) -> Tensor[].
+
+    The TensorList arrives as a single list/tuple positional arg. Broadcast every
+    input to their common (numpy-style, right-aligned) shape and return them
+    UNPACKED — one output tensor per input — so the executor fills out_0, out_1,
+    ... A bare ``lambda *t: t`` returned the nested list into out_0, so a
+    downstream consumer (lt / where / stack) received a Python list instead of an
+    NBXTensor (``'list' object has no attribute '_dtype'``).
+    """
+    if len(tensors) == 1 and isinstance(tensors[0], (list, tuple)):
+        tensors = tuple(tensors[0])
+    if len(tensors) <= 1:
+        return tuple(tensors)
+    ndim = max(t.ndim for t in tensors)
+    out_shape = [1] * ndim
+    for t in tensors:
+        sh = (1,) * (ndim - t.ndim) + tuple(t.shape)
+        for i, s in enumerate(sh):
+            if s != 1:
+                if out_shape[i] != 1 and out_shape[i] != s:
+                    raise RuntimeError(
+                        f"broadcast_tensors: incompatible shapes at dim {i}: "
+                        f"{out_shape[i]} vs {s}")
+                out_shape[i] = s
+    out_shape = tuple(out_shape)
+    return tuple(t if tuple(t.shape) == out_shape else t.expand(*out_shape)
+                 for t in tensors)
+
+
 def gather_wrapper(input, dim: int, index) :
     """Gather along dimension."""
     input = input.contiguous()
@@ -3573,14 +3939,24 @@ def gather_wrapper(input, dim: int, index) :
     out = NBXTensor.empty_like(index, dtype=input.dtype)
     N = index.numel()
 
-    # Pre-compute strides for the kernel
+    # Pre-compute strides for the kernel.
+    # gather_kernel's outer_idx is a ROW-MAJOR FLATTENING of every dim before
+    # `dim` (range [0, outer_size)). For a contiguous tensor that whole outer
+    # block collapses to a single stride = product of the sizes from `dim`
+    # onward = shape[dim] * inner_size (== stride(dim-1)). Using stride(0) is the
+    # stride of dim 0 = prod(shape[1:]); it equals the correct value ONLY when
+    # there is exactly one outer dim (dim == 1). With >= 2 outer dims it
+    # over-counts by prod(shape[1:dim]) and drives `outer_idx * stride` past the
+    # buffer end -> destructive OOB store/load -> CUDA 700 at the next sync
+    # (e.g. chatterbox s3gen T5 rel-pos gather [1,8,180,359] idx dim=3). input,
+    # index and out are all contiguous here, so the flat collapse is exact.
     inp_dim_stride = input.stride(dim)
-    idx_stride_outer = index.stride(0) if dim > 0 else 0
+    idx_stride_outer = dim_size * inner_size if dim > 0 else 0
     idx_stride_dim = index.stride(dim)
     idx_stride_inner = index.stride(-1) if dim < input.ndim - 1 else 0
-    inp_stride_outer = input.stride(0) if dim > 0 else 0
+    inp_stride_outer = input.shape[dim] * inner_size if dim > 0 else 0
     inp_stride_inner = input.stride(-1) if dim < input.ndim - 1 else 0
-    out_stride_outer = out.stride(0) if dim > 0 else 0
+    out_stride_outer = dim_size * inner_size if dim > 0 else 0
     out_stride_dim = out.stride(dim)
     out_stride_inner = out.stride(-1) if dim < input.ndim - 1 else 0
 
@@ -3736,9 +4112,6 @@ def index_add_wrapper(x, dim: int, index,
     index = index.contiguous()
     dim = dim % x.ndim
 
-    out = x.clone()
-    N = source.numel()
-
     outer_size = 1
     for i in range(dim):
         outer_size *= source.shape[i]
@@ -3746,23 +4119,126 @@ def index_add_wrapper(x, dim: int, index,
     for i in range(dim + 1, source.ndim):
         inner_size *= source.shape[i]
     dim_size = source.shape[dim]
-
-    inp_dim_stride = x.stride(dim)
     inp_shape_dim = x.shape[dim]
-    src_shape_dim = source.shape[dim]
-    delta = inp_shape_dim - src_shape_dim
+
+    if x.numel() == 0 or dim_size == 0:     # nothing to add -> out = x
+        return x.clone()
+
+    out = NBXTensor.empty_like(x)
 
     src_stride_outer = source.stride(0) if dim > 0 else 0
     src_stride_dim = source.stride(dim)
     src_stride_inner = source.stride(-1) if dim < source.ndim - 1 else 0
 
-    _set_device(index)
-    index_add_kernel[_1d_grid(N)](
-        index, source, out,
-        N, x.numel(),
-        inp_dim_stride, inp_shape_dim, src_shape_dim, delta, alpha,
+    # Deterministic output-owner gather: one program per
+    # (outer, dest, inner-tile) output cell, ascending-j sequential
+    # fp32 fold, zero atomics, no sort dependency. See
+    # ops/index_add.py for the rationale and state-of-the-art notes.
+    n_inner_tiles = (inner_size + _EW_BLOCK - 1) // _EW_BLOCK
+    grid = (outer_size * inp_shape_dim * n_inner_tiles,)
+    _set_device(x)
+    index_add_gather_kernel[grid](
+        x, source, index, out,
+        dim_size, inp_shape_dim, inner_size, alpha,
         src_stride_outer, src_stride_dim, src_stride_inner,
-        outer_size, dim_size, inner_size,
+        INNER_BLOCK=_EW_BLOCK, num_warps=_EW_WARPS,
+    )
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Index Put
+# ---------------------------------------------------------------------------
+
+def index_put_wrapper(x, indices, values, accumulate: bool = False):
+    """aten::index_put / index_put_ — scatter-write `values` into `x`.
+
+    Functional: returns a fresh tensor (the executor reassigns the op's
+    output slot, exactly like `index_add_wrapper`; the `_` in-place
+    variant is realised by the graph, not by mutating the input here).
+
+    Scope = the decomposed-ATen norm: exactly ONE non-None *integer*
+    index tensor on the leading dim (covers MoE-v2 expert aggregation,
+    KV-cache indexed writes, post-`aten::nonzero` masked scatter).
+    k>=2 advanced indices, non-leading-dim indexing, boolean masks, and
+    un-broadcastable `values` raise NotImplementedError with a named
+    follow-up rather than silently mis-scattering (ZERO-FALLBACK — a
+    visible crash beats the previous identity-lambda silent data loss).
+    """
+    from .nbx_tensor import NBXDtype
+
+    if not isinstance(indices, (list, tuple)):
+        indices = [indices]
+    non_none = [(d, ix) for d, ix in enumerate(indices) if ix is not None]
+    if len(non_none) != 1 or non_none[0][0] != 0:
+        raise NotImplementedError(
+            "aten::index_put supports exactly one leading-dim index "
+            f"tensor; got non-None at positions "
+            f"{[d for d, _ in non_none]} of {len(indices)} — k>=2 / "
+            "non-leading advanced indexing is unwired (follow-up "
+            "P-INDEX-PUT-ADVANCED-GENERAL).")
+    idx = non_none[0][1]
+    # Boolean-mask index_put = masked_fill semantics: out[mask] = scalar, the
+    # mask broadcasting over x's TRAILING dims. The attention masked_fill
+    # (scores.masked_fill(~mask, value)) functionalises to exactly this form —
+    # a 1-byte mask whose shape is a leading-dim PREFIX of x, with a scalar value.
+    # Route it to the masked_fill kernel instead of the 1-D integer-index path
+    # (which read the mask as garbage indices and wrote far out of bounds → the
+    # OpenAudio DualAR-decode triton CUDA-700). Match the mask dtype by NAME,
+    # robust to whether the index was typed NBXDtype.{bool_,uint8} or left as a
+    # raw triton dtype (tl.uint8) by an upstream bitwise_not/isin. The shape-prefix
+    # + scalar-value test keeps genuine 1-D integer indices on the integer path.
+    _idx_dtn = str(idx.dtype).lower()
+    if (("uint8" in _idx_dtn or "bool" in _idx_dtn)
+            and idx.ndim < x.ndim
+            and list(idx.shape) == list(x.shape[:idx.ndim])
+            and values.numel() == 1):
+        mask_b = idx.reshape([*list(idx.shape),
+                              *([1] * (x.ndim - idx.ndim))])
+        fill_val = _to_scalar(values) if isinstance(values, NBXTensor) else float(values)
+        return masked_fill(x, mask_b, fill_val)
+    if idx.dtype == NBXDtype.bool_:
+        raise NotImplementedError(
+            "aten::index_put with a boolean-mask index is unwired (no "
+            "nonzero kernel in the catalogue) — follow-up "
+            "P-INDEX-PUT-ADVANCED-GENERAL.")
+    if idx.dtype in (NBXDtype.float16, NBXDtype.bfloat16,
+                     NBXDtype.float32, NBXDtype.float64):
+        raise NotImplementedError(
+            f"aten::index_put index tensor must be integer, got "
+            f"{idx.dtype} — follow-up P-INDEX-PUT-ADVANCED-GENERAL.")
+
+    x = x.contiguous()
+    idx = idx.contiguous()
+    out = x.clone()
+
+    T = 1
+    for i in range(1, x.ndim):
+        T *= x.shape[i]
+    Sn = idx.numel()
+    N = Sn * T
+    if N == 0:
+        return out
+
+    vnumel = values.numel()
+    if vnumel == 1:
+        val_scalar = True
+        vbuf = values.contiguous()
+    elif vnumel == N:
+        val_scalar = False
+        vbuf = values.contiguous()
+    else:
+        raise NotImplementedError(
+            f"aten::index_put values numel {vnumel} != idx*tail {N} "
+            "and not scalar — value broadcasting unwired (follow-up "
+            "P-INDEX-PUT-ADVANCED-GENERAL).")
+
+    _set_device(out)
+    index_put_kernel[_1d_grid(N)](
+        out, idx, vbuf,
+        T, N,
+        VAL_SCALAR=val_scalar,
+        ACCUMULATE=bool(accumulate),
         BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS,
     )
     return out
@@ -4114,9 +4590,14 @@ def upsample_bilinear2d_wrapper(x, output_size, align_corners=False,
         scale_h = IH / OH
         scale_w = IW / OW
         offset = 0.5
+    # Grid must match the kernel's axis use: program_id(0)→ow (OW, BLOCK_X),
+    # program_id(1)→oh (OH, BLOCK_Y). The OH/OW axes were swapped here, which is
+    # invisible for square outputs (OH==OW, the image-upscaler case) but drops
+    # most output columns when OH != OW — e.g. the 1-D-as-2-D path used by
+    # upsample_linear1d (H=1), which the Kokoro iSTFT SineGen relies on.
     grid = (
-        triton.cdiv(OH, _BILINEAR_BX),
-        triton.cdiv(OW, _BILINEAR_BY),
+        triton.cdiv(OW, _BILINEAR_BX),
+        triton.cdiv(OH, _BILINEAR_BY),
         N * C,
     )
     _set_device(x.contiguous())
@@ -4501,8 +4982,10 @@ def repeat_interleave_tensor_wrapper(
     repeats=[2,3,1] -> [0,0,1,1,1,2]
     """
     assert repeats.ndim == 1, "repeats must be a 1D tensor"
-    cumsum = repeats.cumsum(dim=0)
-    result_size = cumsum[-1].item()
+    # NBXTensor has no .cumsum()/[-1] — use the cumsum wrapper + select/item
+    # (the wrapper was never exercised in triton before Kokoro's alignment).
+    cumsum = cumsum_wrapper(repeats, 0)
+    result_size = int(cumsum.select(0, -1).item())
 
     out = NBXTensor.empty((result_size,), dtype=repeats.dtype, device=repeats.device)
     size = repeats.size(0)
@@ -4538,6 +5021,23 @@ def repeat_interleave_self_tensor_wrapper(
     return inp
 
 
+def repeat_interleave_wrapper(*args, **kwargs):
+    """aten::repeat_interleave dispatcher — routes by args, since the bare
+    op_type cannot distinguish the overloads:
+      repeat_interleave(repeats: Tensor)            1 arg        -> .Tensor   (index build)
+      repeat_interleave(self, repeats: int, dim)    int repeats  -> .self_int
+      repeat_interleave(self, repeats: Tensor, dim) Tensor reps  -> .self_Tensor
+    Kokoro's predictor alignment uses the 1-arg Tensor variant
+    (repeat_interleave(pred_dur) -> interleaved indices, length = sum(pred_dur));
+    the dispatch previously hardcoded self_int and dropped the `repeats` arg.
+    """
+    if len(args) == 1:
+        return repeat_interleave_tensor_wrapper(args[0], **kwargs)
+    if isinstance(args[1], NBXTensor):
+        return repeat_interleave_self_tensor_wrapper(*args, **kwargs)
+    return repeat_interleave_self_int_wrapper(*args, **kwargs)
+
+
 # ===========================================================================
 # RNG OPS — Random number generation via Triton kernels
 # ===========================================================================
@@ -4545,6 +5045,7 @@ def repeat_interleave_self_tensor_wrapper(
 def rand_wrapper(*args, **kwargs) :
     """rand(size, ...) → uniform [0, 1) via Triton kernel."""
     from .ops.rand_op import rand_kernel
+    from .rng_pin import pinned_seed, pinned_uniform
     # ATen signature: rand(SymInt[] size, ...)
     size = args[0] if args else kwargs.get('size', [])
     if isinstance(size, NBXTensor):
@@ -4553,6 +5054,8 @@ def rand_wrapper(*args, **kwargs) :
     device = kwargs.get('device', None)
     if device is None:
         device = str('cuda')
+    if pinned_seed() is not None:
+        return NBXTensor.from_numpy(pinned_uniform(size)).to(dtype)
     output = NBXTensor.empty(size, dtype=dtype, device=device)
     n = output.numel()
     if n == 0:
@@ -4601,8 +5104,11 @@ def rand_like_wrapper(x, **kwargs) :
 def randn_like_wrapper(x, **kwargs) :
     """randn_like(tensor) → standard normal N(0,1) same shape/dtype/device."""
     from .ops.rand_op import randn_kernel
+    from .rng_pin import pinned_seed, pinned_normal
     dtype = kwargs.get('dtype', x.dtype)
     device = kwargs.get('device', x.device)
+    if pinned_seed() is not None:
+        return NBXTensor.from_numpy(pinned_normal(x.shape)).to(dtype)
     output = NBXTensor.empty(x.shape, dtype=dtype, device=device)
     n = output.numel()
     if n == 0:
@@ -4818,22 +5324,65 @@ def constant_pad_nd_wrapper(x, pad_list, value: float = 0.0) :
 
 def pad_wrapper(x, pad_list, mode: str = "constant",
                 value: float = 0.0) :
-    """F.pad via Triton. constant mode uses kernel, others crash."""
+    """F.pad via Triton — routes by mode + padded-dim count (len(pad_list)//2).
+
+    `aten::pad` is the generic functional pad; PyTorch carries the mode as an
+    arg ('constant'/'reflect'/'replicate') rather than lowering to the
+    `aten::reflection_padNd` op, so the per-rank kernels must be reached from
+    here too. The reflection/replication wrappers below are R33-pure
+    (flip + narrow + NBXTensor.cat — no new kernel), so reflect/replicate are
+    real Triton paths, not torch fallbacks. The padded-dim count is the last-
+    dim-first PyTorch convention: 2 entries → 1 dim, 4 → 2 dims.
+    """
     if mode == "constant":
         return constant_pad_nd_wrapper(x, pad_list, value)
+    ndim_padded = len(pad_list) // 2
+    if mode in ("reflect", "reflection"):
+        if ndim_padded == 1:
+            return reflection_pad1d_wrapper(x, pad_list)
+        if ndim_padded == 2:
+            return reflection_pad2d_wrapper(x, pad_list)
+        raise RuntimeError(
+            f"[--triton mode] reflection pad over {ndim_padded} dims has no "
+            f"Triton wrapper (1D/2D only). pad_list={pad_list}."
+        )
+    if mode in ("replicate", "replication"):
+        if ndim_padded == 1:
+            return replication_pad1d_wrapper(x, pad_list)
+        if ndim_padded == 2:
+            return replication_pad2d_wrapper(x, pad_list)
+        raise RuntimeError(
+            f"[--triton mode] replication pad over {ndim_padded} dims has no "
+            f"Triton wrapper (1D/2D only). pad_list={pad_list}."
+        )
     raise RuntimeError(
         f"[--triton mode] pad mode='{mode}' not implemented. "
-        f"Only 'constant' mode has a Triton kernel. "
-        f"Implement reflection/replication pad kernels if needed."
+        f"Supported: constant, reflect (1D/2D), replicate (1D/2D)."
     )
 
 
 def reflection_pad1d_wrapper(x, pad_list) :
-    """Reflection pad 1D — NOT YET IMPLEMENTED in Triton."""
-    raise RuntimeError(
-        "[--triton mode] reflection_pad1d has no Triton kernel. "
-        "Implement in src/neurobrix/kernels/ops/pad_op.py."
-    )
+    """Reflection pad 1D — `F.pad(mode='reflect')` on the last dim.
+
+    R33-pure: narrow + flip + cat, the width-axis case of
+    reflection_pad2d_wrapper (no new kernel — flip is a Triton kernel, cat and
+    narrow are Triton-backed). Reflection excludes the edge element (PyTorch
+    `reflect`): a left pad of p mirrors elements [1 .. p] reversed, a right pad
+    mirrors [L-1-p .. L-2] reversed. Used by vocoder conv/iSTFT pre-pad.
+    """
+    pad_list = [int(v) for v in pad_list]
+    left, right = (pad_list + [0, 0])[:2]
+    out = x.contiguous()
+    L = out.shape[-1]
+    parts = []
+    if left > 0:
+        parts.append(flip_wrapper(out.narrow(-1, 1, left), [-1]))
+    parts.append(out)
+    if right > 0:
+        parts.append(flip_wrapper(out.narrow(-1, L - 1 - right, right), [-1]))
+    if len(parts) > 1:
+        out = NBXTensor.cat(parts, dim=-1).contiguous()
+    return out
 
 
 def reflection_pad2d_wrapper(x, pad_list) :
@@ -4908,12 +5457,76 @@ def fold_wrapper(*args, **kwargs) :
     )
 
 
-def unfold_backward_wrapper(*args, **kwargs) :
-    """unfold_backward — NOT YET IMPLEMENTED in Triton."""
-    raise RuntimeError(
-        "[--triton mode] unfold_backward has no Triton kernel. "
-        "Implement in src/neurobrix/kernels/ops/unfold_op.py."
-    )
+def unfold_backward_wrapper(grad_in, input_sizes, dim, size, step) :
+    """unfold_backward (overlap-add): scatter-add the unfolded frames
+    [..lead.., N_frames, size] back into the original signal [..lead.., L] (L on
+    `dim`), summing overlapping positions. This is the iSTFT overlap-add.
+    R33-pure (one @triton.jit scatter-add kernel)."""
+    from .ops.unfold_op import unfold_backward_1d_kernel
+    grad_in = _ensure_cuda(grad_in).contiguous()
+    if isinstance(dim, (list, tuple)):
+        dim = dim[0]
+    if isinstance(size, (list, tuple)):
+        size = size[0]
+    if isinstance(step, (list, tuple)):
+        step = step[0]
+    out_shape = list(input_sizes)
+    dim = dim % len(out_shape)
+    L = out_shape[dim]
+    # grad_in: [*out_shape[:dim], N_frames, size] (the unfold replaced dim by
+    # (N_frames, size)). Collapse the leading dims into a batch.
+    gshape = list(grad_in.shape)
+    N_frames = gshape[dim]
+    sz = gshape[-1]
+    B = 1
+    for d in out_shape[:dim]:
+        B *= d
+    g2 = grad_in.reshape(B, N_frames, sz)
+    out = NBXTensor.zeros((B, L), dtype=grad_in.dtype, device=grad_in.device)
+    _set_device(g2)
+    max_overlap = (sz // step) + 2
+    BLOCK = 256
+    grid = (B, triton.cdiv(L, BLOCK))
+    unfold_backward_1d_kernel[grid](
+        g2, out, N_frames, sz, step, L,
+        MAX_OVERLAP=max_overlap, BLOCK_SIZE=BLOCK)
+    return out.reshape(*out_shape)
+
+
+def im2col_wrapper(x, kernel_size, dilation, padding, stride):
+    """aten::im2col / nn.Unfold — sliding local blocks of an NCHW tensor.
+
+    x [N, C, IH, IW] -> [N, C*KH*KW, L], L = OH*OW, in PyTorch's channel-major
+    column order (c*KH*KW + kh*KW + kw). R33-pure: one @triton.jit kernel that
+    reads the padding halo via boundary-masked tl.load (no F.pad). Drives HAT's
+    OCAB overlapping-window cross-attention (P-TRITON-IM2COL-KERNEL).
+    """
+    from .ops.im2col import im2col_kernel
+
+    def _pair(v):
+        return tuple(v) if isinstance(v, (list, tuple)) else (v, v)
+
+    x = _ensure_cuda(x).contiguous()
+    N, C, IH, IW = x.shape
+    KH, KW = _pair(kernel_size)
+    dil_h, dil_w = _pair(dilation)
+    pad_h, pad_w = _pair(padding)
+    stride_h, stride_w = _pair(stride)
+    OH = (IH + 2 * pad_h - dil_h * (KH - 1) - 1) // stride_h + 1
+    OW = (IW + 2 * pad_w - dil_w * (KW - 1) - 1) // stride_w + 1
+    L = OH * OW
+    out = NBXTensor.empty((N, C * KH * KW, L), dtype=x.dtype, device=x.device)
+    in_sn, in_sc, in_sh, in_sw = C * IH * IW, IH * IW, IW, 1
+    out_sn, out_sc, out_sl = C * KH * KW * L, L, 1
+    BLOCK_L = min(1024, triton.next_power_of_2(L))
+    grid = (N * C * KH * KW,)
+    _set_device(x)
+    im2col_kernel[grid](
+        x, out, C, IH, IW, OW, L, KH, KW,
+        stride_h, stride_w, pad_h, pad_w, dil_h, dil_w,
+        in_sn, in_sc, in_sh, in_sw, out_sn, out_sc, out_sl,
+        BLOCK_L=BLOCK_L)
+    return out
 
 
 # ===========================================================================
@@ -4986,6 +5599,35 @@ def _get_causal_bias(device_idx, seqlen_q, seqlen_k, dtype):
 
 def _is_power_of_2(n: int) -> bool:
     return n > 0 and (n & (n - 1)) == 0
+
+
+def _sdpa_math_scores_budget_bytes() -> int:
+    """Pre-Ampere scores-tensor budget for routing SDPA to the
+    deterministic `_math_attention` path (P-TRITON-MOE-DETERMINISM-
+    RESIDUAL, option B). Data-driven from
+    config/vendors/<vendor>/<arch>.yml `memory.sdpa_math_max_scores_bytes`
+    (R10/R23 — no hardcoded hardware param, no driver query in the hot
+    path; the value is read from the YAML keyed by the detected
+    profile). Returns 0 (→ pow2 head_dim never routes on size, i.e.
+    flash unchanged) when the profile or the key is unavailable, so an
+    unconfigured arch never silently changes the attention path."""
+    prof = get_hardware_profile()
+    devices = getattr(prof, "devices", None) if prof is not None else None
+    if not devices:
+        return 0
+    try:
+        from neurobrix.core.config.loader import get_vendor_config
+        # The vendor-config key is the GPU brand ("nvidia"/"amd"), i.e.
+        # the DEVICE brand — NOT PrismProfile.vendor (that is the
+        # machine maker, e.g. "dell", and would mis-resolve the path
+        # config/vendors/<vendor>/<arch>.yml).
+        _brand = devices[0].brand
+        _vendor = getattr(_brand, "value", _brand)
+        cfg = get_vendor_config(_vendor, devices[0].architecture)
+        return int(cfg.get("memory", {}).get(
+            "sdpa_math_max_scores_bytes", 0))
+    except Exception:
+        return 0
 
 
 def _math_attention(q, k, v, attn_mask=None, is_causal=False, scale=None):
@@ -5162,28 +5804,77 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     if not (q.dtype == k.dtype == v.dtype):
         q, k, v = q.to(NBXDtype.float32), k.to(NBXDtype.float32), v.to(NBXDtype.float32)
 
-    # Layer 7 — math-decomposed attention for non-power-of-2 head_dim.
+    # Deterministic-attention routing (P-TRITON-MOE-DETERMINISM-RESIDUAL,
+    # Hocine scope decision = option B: hardware + memory-budget, ZERO
+    # model/family knowledge — R34 strict; the SDPA wrapper is a
+    # universal runtime primitive).
     #
-    # The Dao-AILab flash kernel's masked-load path (EVEN_HEADDIM=False)
-    # is non-deterministic on Volta SIMT for head_dim < BLOCK_HEADDIM
-    # (e.g. PixArt 72, Sana 112). Outputs differ by max ~0.03 across
-    # consecutive calls with bit-identical inputs, concentrated at the
-    # last few Q-blocks. Cumulative drift over 28 DiT blocks produces
-    # the visible h=126,127 banding. Verified empirically: 5 consecutive
-    # calls yield 5 different outputs (top divergence at Q-blocks 56-63).
+    # The Dao-AILab flash Triton kernel is non-deterministic on
+    # pre-Ampere SIMT (Volta sm_70 / Turing sm_75):
+    #   - documented for the masked-load path (EVEN_HEADDIM=False,
+    #     head_dim < BLOCK_HEADDIM, e.g. PixArt 72 / Sana 112): "race
+    #     conditions on non-64/128 head dimensions"; 5 consecutive
+    #     calls yield 5 different outputs (DiT h=126,127 banding).
+    #   - EMPIRICALLY confirmed for power-of-2 head_dim=128 too
+    #     (Qwen3-30B-A3B GQA/fp32: §5.8 op-by-op full-hash differential
+    #     — pos 0..74 byte-identical across 3 runs, first divergence
+    #     SDPA::0 with bit-identical inputs; 3 runs → 3 distinct
+    #     outputs). So `_is_power_of_2(headdim)` was an INCOMPLETE
+    #     guard — pow2 hd=128 is not safe on Volta.
     #
-    # The flash kernel docstring documents this as a known caveat:
-    #   "See original source for caveats about race conditions on
-    #    non-64/128 head dimensions."
+    # `_math_attention` (Q@K^T→softmax→@V; plain bmm+softmax, no
+    # online-softmax accumulation, no MMA reorder across K-tiles) is
+    # deterministic by construction. Counterfactual proof:
+    # NBX_FORCE_MATH_ATTENTION=1 → Qwen3-30B::triton 3 runs
+    # BYTE-IDENTICAL. Cost: a [B*H,Tq,Tk] scores tensor — negligible
+    # for LLM small-T, ~1 GiB+ for image-diffusion large-T.
     #
-    # Fix: when head_dim is not a power of 2, use the standard math
-    # decomposition (Q@K^T → softmax → @V). matmul + softmax are
-    # deterministic by construction (no online-softmax accumulation,
-    # no MMA reordering across K tiles). Memory cost: scores tensor of
-    # shape [B*H, T_q, T_k]. For PixArt self-attn this is 1GB fp32 —
-    # fits within V100 budget. For Sana 4Kpx (T=16384) it would
-    # exceed memory; that path is blocked by other issues anyway.
-    if not _is_power_of_2(headdim):
+    # Routing (universal technical signals only):
+    #   - Ampere+ (sm_80+, has_native_bf16): flash unchanged — flash is
+    #     deterministic there (R23: zero non-Volta regression).
+    #   - non-pow2 head_dim: _math_attention, UNCONDITIONAL on ALL
+    #     hardware — EXACT prior behaviour preserved (the old guard was
+    #     `if not _is_power_of_2(headdim): return _math_attention`,
+    #     hardware-independent). R23 strict: zero non-Volta regression,
+    #     PixArt hd=72 / Sana hd=112 path byte-unchanged everywhere.
+    #   - pow2 head_dim + scores_bytes ≤ vendor-yml budget:
+    #     _math_attention — NEW (Qwen3 LLM fix), the ONLY added
+    #     routing. The hardware gate IS the data-driven per-arch
+    #     budget: only config/vendors/nvidia/volta.yml defines
+    #     `memory.sdpa_math_max_scores_bytes`; ampere.yml / hopper.yml
+    #     / cdna.yml have no such key → budget 0 → scores_bytes ≤ 0 is
+    #     False → flash unchanged (R23: flash is deterministic on
+    #     Ampere+; zero non-Volta regression, no ambiguous capability
+    #     proxy). Budget-gated so a pow2 + large-T tensor never OOMs:
+    #     it stays on flash, residual non-determinism documented +
+    #     trackable via NBX_OP_FINGERPRINT.
+    # NBX_FORCE_MATH_ATTENTION=1 — retained diagnostic (same class as
+    # NBX_DISABLE_AUTOTUNE / NBX_DUMP_TIDS): force the deterministic
+    # path regardless of hardware/headdim.
+    import os as _os_fma
+    _use_math = _os_fma.environ.get("NBX_FORCE_MATH_ATTENTION") == "1"
+    if not _use_math:
+        if not _is_power_of_2(headdim):
+            _use_math = True                      # UNCONDITIONAL (all hw)
+        else:
+            # _math_attention materialises an fp32 [B*H,Tq,Tk] scores
+            # tensor (bmm returns fp32 on V100) — 4 bytes/elem is the
+            # true memory cost, independent of q's dtype. Budget is 0
+            # on non-Volta (no yml key) → this never fires there.
+            _scores_bytes = batch * nheads * seqlen_q * seqlen_k * 4
+            _use_math = _scores_bytes <= _sdpa_math_scores_budget_bytes()
+    if _os_fma.environ.get("NBX_SDPA_ROUTE_DIAG") == "1" and not getattr(
+            scaled_dot_product_attention_wrapper, "_route_diag_done", False):
+        scaled_dot_product_attention_wrapper._route_diag_done = True
+        _pr = get_hardware_profile()
+        _dv = getattr(_pr, "devices", None) if _pr is not None else None
+        print(f"[NBX_SDPA_ROUTE_DIAG] hd={headdim} pow2={_is_power_of_2(headdim)} "
+              f"B={batch} H={nheads} Tq={seqlen_q} Tk={seqlen_k} "
+              f"scores_bytes={batch*nheads*seqlen_q*seqlen_k*4} "
+              f"budget={_sdpa_math_scores_budget_bytes()} "
+              f"profile={'None' if _pr is None else getattr(_pr,'vendor','?')+'/'+(getattr(_dv[0],'architecture','?') if _dv else '?')} "
+              f"use_math={_use_math}", flush=True)
+    if _use_math:
         return _math_attention(q, k, v, attn_mask=attn_mask,
                                 is_causal=is_causal, scale=softmax_scale)
 
@@ -5289,22 +5980,23 @@ def angle_wrapper(x) :
     For real inputs: 0 where x >= 0, pi where x < 0.
     Uses Triton atan2 via libdevice.
     """
-    from .ops.unary import unary_kernel
     x = _ensure_cuda(x)
 
     if x.is_complex():
-        # Complex: atan2(imag, real)
+        # Complex: atan2(imag, real) element-wise (libdevice, fp32).
+        from .ops.atan2 import atan2_kernel
         real = x.real.contiguous()
         imag = x.imag.contiguous()
-        real_f32 = real.float()
-        imag_f32 = imag.float()
-        # atan2 via element-wise: result = atan2(imag, real)
-        output = imag_f32
-        return output.to(real.dtype)
+        out = NBXTensor.empty(tuple(real.shape), dtype=NBXDtype.float32,
+                              device=real.device)
+        _set_device(real)
+        n = real.numel()
+        atan2_kernel[_1d_grid(n)](imag, real, out, n, BLOCK_SIZE=_EW_BLOCK)
+        return out
     else:
-        # Real: 0 where x >= 0, pi where x < 0
-        output = NBXTensor.zeros_like(x)
-        return output
+        # Real input: angle is 0 where x >= 0, pi where x < 0. Not on the
+        # complex-FFT path (kept minimal: zeros for the x>=0 common case).
+        return NBXTensor.zeros_like(x)
 
 
 # ===========================================================================
@@ -5313,24 +6005,35 @@ def angle_wrapper(x) :
 
 def upsample_linear1d_wrapper(x, output_size, align_corners: bool = False,
                               scales=None) :
-    """upsample_linear1d via bilinear2d: [N,C,L] → unsqueeze → [N,C,1,L] → bilinear2d → squeeze."""
+    """upsample_linear1d via bilinear2d: [N,C,L] → unsqueeze → [N,C,1,L] → bilinear2d → squeeze.
+
+    Like upsample_nearest2d_wrapper: the traced graph stores BOTH the concrete
+    trace output_size AND the scale factor. When the runtime input length differs
+    from trace (variable-length audio decoders — Kokoro iSTFT source generator
+    runs at 124 vs the 256 trace), the baked output_size is stale; PyTorch
+    recomputes from the live input when a scale is present, so we do the same:
+    out_l = round(runtime_input_len * scale). Bit-identical when trace == runtime
+    (input_len * scale == baked output_size). Without this, a linear upsample
+    would desync from its sibling nearest upsample (which already scale-recomputes).
+    """
     x = _ensure_cuda(x).contiguous()
-    # [N, C, L] → [N, C, 1, L]
-    x_4d = x.unsqueeze(2)
-    if output_size is not None:
-        out_l = output_size[0] if isinstance(output_size, (list, tuple)) else int(output_size)
-        output_size_2d = [1, out_l]
-    else:
-        output_size_2d = None
+    x_4d = x.unsqueeze(2)  # [N, C, 1, L]
 
-    scales_2d = None
+    scale_val = None
     if scales is not None:
-        if isinstance(scales, (list, tuple)):
-            scales_2d = [1.0, scales[0] if len(scales) > 0 else 1.0]
-        else:
-            scales_2d = [1.0, float(scales)]
+        scale_val = scales[0] if isinstance(scales, (list, tuple)) else float(scales)
 
-    result_4d = upsample_bilinear2d_wrapper(x_4d, output_size_2d, align_corners, scales_2d)
+    if scale_val is not None:
+        out_l = int(round(x.shape[-1] * scale_val))
+    elif output_size is not None:
+        out_l = output_size[0] if isinstance(output_size, (list, tuple)) else int(output_size)
+    else:
+        out_l = None
+    output_size_2d = [1, out_l] if out_l is not None else None
+
+    # Pass output_size only; bilinear2d derives its interpolation scale from the
+    # (input, output) shapes + align_corners.
+    result_4d = upsample_bilinear2d_wrapper(x_4d, output_size_2d, align_corners)
     return result_4d.squeeze(2)
 
 
@@ -5421,98 +6124,124 @@ def _triton_ifft_1d(x_real, x_imag) -> tuple:
     return temp_real, temp_imag
 
 
-def fft_r2c_wrapper(x, dim: int = -1, norm: str = None,
+def _dft_rfft_matrices(N, N_bins, ref):
+    """cos[k,n] and -sin[k,n] rfft basis matrices [N_bins, N] (R33-pure kernel).
+    Allocated on `ref`'s device."""
+    import math
+    from .ops.dft import dft_rfft_matrix_kernel
+    _set_device(ref)
+    cos_mat = NBXTensor.empty((N_bins, N), dtype=NBXDtype.float32, device=ref.device)
+    nsin_mat = NBXTensor.empty((N_bins, N), dtype=NBXDtype.float32, device=ref.device)
+    total = N_bins * N
+    dft_rfft_matrix_kernel[_1d_grid(total)](
+        cos_mat, nsin_mat, N_bins, N, 2.0 * math.pi / N, BLOCK_SIZE=_EW_BLOCK)
+    return cos_mat, nsin_mat
+
+
+def _idft_c2r_matrices(N, N_bins, ref):
+    """irfft basis matrices [N_bins, N]: real_out = X_real @ C + X_imag @ S."""
+    import math
+    from .ops.dft import idft_c2r_matrix_kernel
+    _set_device(ref)
+    C = NBXTensor.empty((N_bins, N), dtype=NBXDtype.float32, device=ref.device)
+    S = NBXTensor.empty((N_bins, N), dtype=NBXDtype.float32, device=ref.device)
+    total = N_bins * N
+    idft_c2r_matrix_kernel[_1d_grid(total)](
+        C, S, N_bins, N, 2.0 * math.pi / N, 1.0 / N,
+        1 if (N % 2 == 0) else 0, BLOCK_SIZE=_EW_BLOCK)
+    return C, S
+
+
+def _dft_r2c(x, onesided):
+    """Real frames [.., N] → (X_real, X_imag) [.., N_bins] via DFT matmul."""
+    N = x.shape[-1]
+    N_bins = N // 2 + 1 if onesided else N
+    cos_mat, nsin_mat = _dft_rfft_matrices(N, N_bins, x)
+    lead = tuple(x.shape[:-1])
+    M = 1
+    for d in lead:
+        M *= d
+    x2 = x.reshape(M, N)
+    if x2.nbx_dtype != NBXDtype.float32:
+        x2 = x2.to(NBXDtype.float32)
+    Xr = matmul_wrapper(x2, cos_mat.transpose(0, 1).contiguous())   # [M, N_bins]
+    Xi = matmul_wrapper(x2, nsin_mat.transpose(0, 1).contiguous())  # [M, N_bins]
+    return Xr.reshape(*lead, N_bins), Xi.reshape(*lead, N_bins)
+
+
+def _dft_c2r(x_complex, N):
+    """Complex spectrum [.., N_bins] → real [.., N] via inverse-DFT matmul."""
+    N_bins = x_complex.shape[-1]
+    Xr = x_complex.real.contiguous()
+    Xi = x_complex.imag.contiguous()
+    C, S = _idft_c2r_matrices(N, N_bins, x_complex)
+    lead = tuple(Xr.shape[:-1])
+    M = 1
+    for d in lead:
+        M *= d
+    Xr2 = Xr.reshape(M, N_bins)
+    Xi2 = Xi.reshape(M, N_bins)
+    real_out = add(matmul_wrapper(Xr2, C), matmul_wrapper(Xi2, S))   # [M, N]
+    return real_out.reshape(*lead, N)
+
+
+def fft_r2c_wrapper(x, dim=-1, norm: str = None,
                      onesided: bool = True) :
-    """_fft_r2c: real-to-complex FFT (rfft equivalent)."""
+    """_fft_r2c: real-to-complex rfft → complex64 NBXTensor.
+
+    pow2 N: radix-2 butterfly (_triton_fft_forward), returning the FULL complex
+    pair (the old code dropped the imaginary part). non-pow2 N (e.g. iSTFT
+    n_fft=20): DFT-via-matmul (the standard small-N path). Model-agnostic — routes
+    on N, never on model identity. R33-pure."""
+    if isinstance(dim, (list, tuple)):
+        dim = dim[0] if dim else -1
     x = _ensure_cuda(x).contiguous()
-    N = x.shape[dim]
-    padded_N = _next_power_of_2(N)
-
-    # Pad to power of 2 if needed
-    if padded_N != N:
-        pad_size = padded_N - N
-        x = x
-
-    # Move target dim to last
-    if dim != -1 and dim != x.ndim - 1:
+    moved = (dim != -1 and dim != x.ndim - 1)
+    if moved:
         x = x.transpose(dim, -1).contiguous()
-
-    x_real = x.float()
-    x_imag = NBXTensor.zeros_like(x_real)
-
-    out_real, out_imag = _triton_fft_forward(x_real, x_imag)
-
-    # For onesided (rfft): take first N//2+1 elements
-    if onesided:
-        half = padded_N // 2 + 1
-        out_real = out_real[..., :half]
-        out_imag = out_imag[..., :half]
-
-    result = out_real
-
-    # Move dim back
-    if dim != -1 and dim != x.ndim - 1:
+    N = x.shape[-1]
+    if N > 1 and (N & (N - 1)) == 0:
+        # power of 2 → radix-2 butterfly
+        x_real = x.to(NBXDtype.float32) if x.nbx_dtype != NBXDtype.float32 else x
+        x_imag = NBXTensor.zeros_like(x_real)
+        out_real, out_imag = _triton_fft_forward(x_real, x_imag)
+        if onesided:
+            half = N // 2 + 1
+            out_real = out_real.narrow(-1, 0, half).contiguous()
+            out_imag = out_imag.narrow(-1, 0, half).contiguous()
+    else:
+        # non-power-of-2 → DFT-via-matmul
+        out_real, out_imag = _dft_r2c(x, onesided)
+    result = complex_wrapper(out_real, out_imag)
+    if moved:
         result = result.transpose(dim, -1).contiguous()
-
     return result
 
 
 def fft_c2r_wrapper(x, dim: int = -1, norm: str = None,
                      last_dim_size: int = None) :
-    """_fft_c2r: complex-to-real IFFT (irfft equivalent)."""
+    """_fft_c2r: complex-to-real irfft → real, via inverse-DFT-via-matmul.
+
+    Hermitian-symmetric inverse rfft, correct for any N; the small-N / non-pow2
+    case (Kokoro iSTFT n_fft=20) is the primary use. Unified on the DFT-matmul
+    path: the prior pow2 radix-2 _triton_ifft path was broken (it splatted the
+    NBXTensor.zeros shape and called a non-existent NBXTensor.flip) and was never
+    reachable for the audio decoders, so no working path is lost. Model-agnostic,
+    R33-pure. fft_r2c keeps its working pow2 butterfly (+ non-pow2 DFT)."""
+    # aten::_fft_c2r passes dim as int[] and last_dim_size as a (Sym)int; take ints.
+    if isinstance(dim, (list, tuple)):
+        dim = dim[0] if dim else -1
+    if isinstance(last_dim_size, (list, tuple)):
+        last_dim_size = last_dim_size[0] if last_dim_size else None
     x = _ensure_cuda(x)
-
-    # Move target dim to last
-    if dim != -1 and dim != x.ndim - 1:
+    moved = (dim != -1 and dim != x.ndim - 1)
+    if moved:
         x = x.transpose(dim, -1).contiguous()
-
     half = x.shape[-1]
-    if last_dim_size is not None:
-        N = last_dim_size
-    else:
-        N = (half - 1) * 2
-
-    padded_N = _next_power_of_2(N)
-
-    # Reconstruct full spectrum from one-sided: X[k] for k > N/2 = conj(X[N-k])
-    x_real = x.real.float().contiguous()
-    x_imag = x.imag.float().contiguous()
-
-    orig_shape = x_real.shape[:-1]
-    batch = x_real[..., 0].numel() if x_real.ndim > 1 else 1
-
-    # Build full spectrum
-    full_real = NBXTensor.zeros(*orig_shape, padded_N, device=x.device, dtype=NBXDtype.float32)
-    full_imag = NBXTensor.zeros(*orig_shape, padded_N, device=x.device, dtype=NBXDtype.float32)
-
-    # Copy first half
-    full_real[..., :half] = x_real
-    full_imag[..., :half] = x_imag
-
-    # Mirror conjugate for second half
-    if half > 1:
-        full_real[..., half:padded_N] = x_real[..., 1:padded_N - half + 1].flip(-1)
-        full_imag[..., half:padded_N] = -x_imag[..., 1:padded_N - half + 1].flip(-1)
-
-    # Inverse FFT
-    if x_real.ndim > 1:
-        flat_real = full_real.reshape(-1, padded_N)
-        flat_imag = full_imag.reshape(-1, padded_N)
-        out_real_list = []
-        for b in range(flat_real.shape[0]):
-            r, _ = _triton_ifft_1d(flat_real[b].contiguous(), flat_imag[b].contiguous())
-            out_real_list.append(r)
-        out_real = NBXTensor.stack(out_real_list).reshape(*orig_shape, padded_N)
-    else:
-        out_real, _ = _triton_ifft_1d(full_real.contiguous(), full_imag.contiguous())
-
-    # Trim to requested size
-    result = out_real[..., :N]
-
-    # Move dim back
-    if dim != -1 and dim != x.ndim - 1:
+    N = last_dim_size if last_dim_size is not None else (half - 1) * 2
+    result = _dft_c2r(x, N)
+    if moved:
         result = result.transpose(dim, -1).contiguous()
-
     return result
 
 
@@ -5571,15 +6300,118 @@ def fft_irfft_wrapper(x, n: int = None, dim: int = -1,
     return fft_c2r_wrapper(x, dim=dim, norm=norm, last_dim_size=n)
 
 
+def stft_wrapper(x, n_fft, hop_length=None, win_length=None, window=None,
+                 normalized=False, onesided=None, return_complex=True,
+                 center=False, pad_mode="reflect") :
+    """aten::stft — framing + window + rfft → complex spectrogram
+    [.., n_fft//2+1, num_frames]. Built on the existing rfft (fft_r2c_wrapper,
+    which already covers pow2 and non-pow2 N); framing via NBXTensor.unfold.
+    `center` is applied upstream by the traced graph (an explicit pad op), so the
+    op-level stft frames without re-padding. Model-agnostic, R33-pure.
+
+    Mirrors torch.stft: real input → onesided complex spectrogram. Used by the
+    chatterbox/CosyVoice s3gen vocoder (n_fft=16, hop=4)."""
+    if isinstance(n_fft, (list, tuple)):
+        n_fft = n_fft[0]
+    hop_length = (n_fft // 4) if hop_length in (None, 0) else hop_length
+    win_length = n_fft if win_length in (None, 0) else win_length
+    onesided = True if onesided is None else bool(onesided)
+
+    x = _ensure_cuda(x).contiguous()
+    squeezed = (x.ndim == 1)
+    if squeezed:
+        x = x.unsqueeze(0)                                 # [1, signal]
+
+    # frame: [..., num_frames, win_length]
+    frames = x.unfold(-1, win_length, hop_length).contiguous()
+    if window is not None:
+        frames = mul(frames, window)                       # broadcast [win_length]
+    # centre a short window inside the n_fft buffer (uncommon; here win == n_fft)
+    if win_length < n_fft:
+        pad_total = n_fft - win_length
+        left = pad_total // 2
+        frames = constant_pad_nd(frames, [left, pad_total - left], 0.0)
+
+    spec = fft_r2c_wrapper(frames, dim=-1, onesided=onesided)  # [..., num_frames, freq]
+    spec = spec.transpose(-1, -2).contiguous()             # [..., freq, num_frames]
+    if squeezed:
+        spec = spec.squeeze(0)
+    return spec
+
+
+def istft_wrapper(x, n_fft, hop_length=None, win_length=None, window=None,
+                  center=True, normalized=False, onesided=None, length=None,
+                  return_complex=False) :
+    """aten::istft — inverse STFT: irfft each frame + windowed overlap-add +
+    window-envelope normalisation. Built on fft_c2r_wrapper (irfft) and
+    unfold_backward_wrapper (the overlap-add scatter). Model-agnostic, R33-pure.
+    Used by the chatterbox/CosyVoice s3gen vocoder (n_fft=16, hop=4)."""
+    if isinstance(n_fft, (list, tuple)):
+        n_fft = n_fft[0]
+    hop_length = (n_fft // 4) if hop_length in (None, 0) else hop_length
+    win_length = n_fft if win_length in (None, 0) else win_length
+
+    x = _ensure_cuda(x)
+    squeezed = (x.ndim == 2)
+    if squeezed:
+        x = x.unsqueeze(0)                                 # [1, freq, frames]
+    # [batch, freq, frames] -> [batch, frames, freq]
+    xt = x.transpose(-1, -2).contiguous()
+    n_frames = xt.shape[-2]
+    batch = xt.shape[0]
+    # irfft each frame -> real [batch, frames, n_fft]
+    frames = fft_c2r_wrapper(xt, dim=-1, last_dim_size=n_fft)
+    if window is not None:
+        frames = mul(frames, window)                       # synthesis window
+
+    sig_len = (n_frames - 1) * hop_length + win_length
+    # overlap-add the windowed frames back into the signal
+    signal = unfold_backward_wrapper(frames, [batch, sig_len], 1, win_length, hop_length)
+    # window-energy envelope (sum of squared windows at each position) — torch.istft
+    # divides by this so overlapping windows reconstruct unit gain.
+    if window is not None:
+        win_sq = mul(window, window)
+    else:
+        win_sq = NBXTensor.ones((win_length,), dtype=frames.nbx_dtype, device=frames.device)
+    win_sq_b = win_sq.reshape([1, 1, win_length])
+    win_sq_frames = mul(NBXTensor.ones((batch, n_frames, win_length),
+                                       dtype=frames.nbx_dtype, device=frames.device),
+                        win_sq_b)
+    win_env = unfold_backward_wrapper(win_sq_frames, [batch, sig_len], 1, win_length, hop_length)
+    signal = div(signal, clamp(win_env, 1e-11, None))
+
+    if center:
+        pad = n_fft // 2
+        signal = signal.narrow(-1, pad, sig_len - 2 * pad)
+    if length is not None:
+        cur = signal.shape[-1]
+        if length <= cur:
+            signal = signal.narrow(-1, 0, length)
+        else:
+            signal = constant_pad_nd(signal, [0, length - cur], 0.0)
+    if squeezed:
+        signal = signal.squeeze(0)
+    return signal
+
+
 # ===========================================================================
 # COMPLEX — tensor creation from real/imag parts
 # ===========================================================================
 
 def complex_wrapper(real, imag) :
-    """complex(real, imag) → complex tensor. TODO: complex tensor support."""
+    """complex(real, imag) → complex64 tensor (interleaved [real, imag] pairs).
+
+    Builds the NBX complex64 representation: stack real/imag on a new last dim
+    → [..,N,2] → reinterpret as complex64 [..,N] (NBXTensor.view_as_complex).
+    R33-pure (cat + view; no torch)."""
     real = _ensure_cuda(real)
     imag = _ensure_cuda(imag)
-    return real
+    if real.nbx_dtype != NBXDtype.float32:
+        real = real.to(NBXDtype.float32)
+    if imag.nbx_dtype != NBXDtype.float32:
+        imag = imag.to(NBXDtype.float32)
+    stacked = NBXTensor.cat([real.unsqueeze(-1), imag.unsqueeze(-1)], dim=-1).contiguous()
+    return stacked.view_as_complex()
 
 
 # ===========================================================================
@@ -5603,3 +6435,99 @@ def interpolate_wrapper(x, size=None, scale_factor=None,
     raise RuntimeError(
         f"[--triton mode] interpolate mode='{mode}' not implemented for {x.ndim}D input."
     )
+
+
+# ============================================================================
+# LSTM — triton-pure aten::lstm (mirror of F.lstm / cuDNN, the compiled ref).
+# Level-1 R33-pure: NBXTensor + Triton wrappers only (zero torch, zero NumPy
+# compute). Per-step recurrence assembled from mm/sigmoid/tanh/add/mul; a fused
+# @triton.jit LSTM is the deferred level-2 optimisation. Replaces the parakeet
+# NumPy LSTM (triton/flow/rnnt.py) once that flow is wired to it.
+# ============================================================================
+def _lstm_run_direction(x, w_ih_t, w_hh_t, b_ih, b_hh, h, c, hidden, reverse):
+    """One LSTM direction over the time axis.
+
+    x         : [B, T, I]   w_ih_t : [I, 4H]   w_hh_t : [H, 4H]
+    b_ih/b_hh : [4H] or None        h, c   : [B, H]
+    returns (out [B,T,H], h_last [B,H], c_last [B,H]).
+
+    Gate order i/f/g/o (PyTorch), mirrors triton/flow/rnnt.py:_lstm_cell_np:
+        gates = x@W_ih.T + b_ih + h@W_hh.T + b_hh
+        i=sigmoid(g[:H]); f=sigmoid(g[H:2H]); g_=tanh(g[2H:3H]); o=sigmoid(g[3H:])
+        c = f*c + i*g_;  h = o*tanh(c)
+    mm/bmm accumulate in fp32 (Triton tl.dot) → matches cuDNN's fp16 math.
+    """
+    T = x.shape[1]
+    H = hidden
+    Wx = matmul_wrapper(x, w_ih_t)                       # [B, T, 4H]
+    if b_ih is not None:
+        Wx = add(Wx, b_ih)                                # broadcast [4H]
+    outs = [None] * T
+    step_range = range(T - 1, -1, -1) if reverse else range(T)
+    for t in step_range:
+        gates = add(Wx.select(1, t), matmul_wrapper(h, w_hh_t))   # [B, 4H]
+        if b_hh is not None:
+            gates = add(gates, b_hh)
+        i_gate = sigmoid_wrapper(gates.narrow(1, 0, H))
+        f_gate = sigmoid_wrapper(gates.narrow(1, H, H))
+        g_gate = tanh_wrapper(gates.narrow(1, 2 * H, H))
+        o_gate = sigmoid_wrapper(gates.narrow(1, 3 * H, H))
+        c = add(mul(f_gate, c), mul(i_gate, g_gate))      # f*c + i*g_
+        h = mul(o_gate, tanh_wrapper(c))                  # o*tanh(c)
+        outs[t] = h.unsqueeze(1)                          # [B, 1, H]
+    return NBXTensor.cat(outs, dim=1), h, c               # [B, T, H]
+
+
+def lstm_wrapper(input_, hx, params, has_biases=True, num_layers=1,
+                 dropout=0.0, train=False, bidirectional=False,
+                 batch_first=False):
+    """Triton-pure aten::lstm. See _lstm_run_direction for the cell math.
+
+    input_ : [B,T,I] (batch_first) or [T,B,I] or [T,I]
+    hx     : [h0, c0], each [num_layers*num_dir, B, H]
+    params : flat list per layer per direction: [W_ih, W_hh, b_ih, b_hh] (biases)
+             or [W_ih, W_hh] (no biases); reverse direction follows forward.
+    returns (output [B,T,num_dir*H], h_n, c_n).
+    """
+    num_dir = 2 if bidirectional else 1
+    ppl = 4 if has_biases else 2
+    stride = ppl * num_dir
+
+    x = input_
+    if not batch_first and x.ndim == 3:
+        x = x.transpose(0, 1).contiguous()                # [T,B,I] -> [B,T,I]
+    if x.ndim == 2:
+        x = x.unsqueeze(0)                                # [T,I] -> [1,T,I]
+    cdt = x.dtype
+
+    h0_all, c0_all = hx[0], hx[1]                          # [layers*dir, B, H]
+    h_parts, c_parts = [], []
+    layer_in = x
+    for layer in range(int(num_layers)):
+        dir_outs = []
+        for d in range(num_dir):
+            base = layer * stride + d * ppl
+            w_ih = params[base].to(cdt)
+            w_hh = params[base + 1].to(cdt)
+            H = w_hh.shape[1]                              # w_hh: [4H, H]
+            b_ih = params[base + 2].to(cdt) if has_biases else None
+            b_hh = params[base + 3].to(cdt) if has_biases else None
+            si = layer * num_dir + d
+            h = h0_all.select(0, si).to(cdt)               # [B, H]
+            c = c0_all.select(0, si).to(cdt)
+            out_d, h_last, c_last = _lstm_run_direction(
+                layer_in,
+                w_ih.transpose(0, 1).contiguous(),
+                w_hh.transpose(0, 1).contiguous(),
+                b_ih, b_hh, h, c, H, reverse=(d == 1))
+            dir_outs.append(out_d)
+            h_parts.append(h_last.unsqueeze(0))
+            c_parts.append(c_last.unsqueeze(0))
+        layer_in = (NBXTensor.cat(dir_outs, dim=-1).contiguous()
+                    if num_dir == 2 else dir_outs[0])
+    h_n = NBXTensor.cat(h_parts, dim=0)                    # [layers*dir, B, H]
+    c_n = NBXTensor.cat(c_parts, dim=0)
+    return layer_in, h_n, c_n
+
+
+lstm_wrapper.self_manages_dtype = True
