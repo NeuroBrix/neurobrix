@@ -259,6 +259,7 @@ class IterativeProcessHandler(FlowHandler):
         if handler and hasattr(handler, 'finalize_embeddings'):
             finalized = handler.finalize_embeddings(
                 hidden_state=neg_hidden_state,
+                attention_mask=neg_attention_mask,  # REQUIRED for zero_pad_embeddings
                 tokenizer_config=tokenizer_vals
             )
             neg_hidden_state = finalized["hidden_state"]
