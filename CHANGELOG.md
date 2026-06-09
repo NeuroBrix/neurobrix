@@ -58,6 +58,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   legitimately omit it. Moved from the validator's REQUIRED set to the optional
   defaults (default `dpmsolver++`, honored when present), so a Wan UniPC `.nbx`
   loads without a spurious "missing REQUIRED keys" crash.
+- **5D (video) convolution on the triton path (R33-pure).** `conv2d_wrapper` now
+  routes rank-5 weights (Conv3D — Wan transformer patch-embed + VAE temporal
+  causal convs) through a temporal-decomposition helper: `conv3d(x,w)` = the sum
+  over the temporal kernel positions of a `conv2d` on each temporally-shifted
+  set of frames, reusing the existing triton conv2d kernel per slice (slice +
+  accumulate over the time axis; no new kernel). Validated bit-close to the
+  reference `conv3d` (max|diff| 3.05e-05).
+- **`constant_pad_nd` general N-D path silently padded only the last dim.** The
+  fallback branch (any pad beyond the optimized last-1/last-2-dims kernels)
+  computed the correct output *shape* but its kernel only ever applied the
+  last-dimension padding — so padding a middle axis (e.g. the temporal axis of a
+  5D `[B,C,T,H,W]` tensor) produced silent garbage that the right-shaped output
+  masked. Rewritten as cat-of-constant-blocks per padded dim (NBXTensor-pure,
+  R33), correct for any combination of padded axes; the optimized last-dim(s)
+  kernels are retained for the hot image paths and are unchanged.
 
 ### Removed
 
