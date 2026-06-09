@@ -152,12 +152,40 @@ def postprocess_text_output(ctx: FlowContext) -> None:
     print(f"   [Output] Transcription: {text[:100]}{'...' if len(text) > 100 else ''}")
 
 
+def redistribute_snac_codes(generated_ids, audio_token_start, vocab_size,
+                            codebook_size: int = 4096):
+    """Zero Outsider (ZO-0): redistribute an orpheus SNAC token stream (7 tokens
+    per frame) into the 3 SNAC codebooks. PURE python (no torch, no `snac`):
+    c0=[0], c1=[1,4], c2=[2,3,5,6] per frame, each modulo codebook_size. Returns
+    (c0, c1, c2) lists or None if there are no full frames. The neural decode of
+    these codes runs through the TRACED codec.decoder component (in the .nbx)."""
+    at = [t - audio_token_start for t in generated_ids
+          if audio_token_start <= t < vocab_size]
+    n = len(at) // 7
+    if n == 0:
+        return None
+    at = at[:n * 7]
+    c0, c1, c2 = [], [], []
+    for i in range(n):
+        b = i * 7
+        c0.append(at[b] % codebook_size)
+        c1.append(at[b + 1] % codebook_size); c1.append(at[b + 4] % codebook_size)
+        c2.append(at[b + 2] % codebook_size); c2.append(at[b + 3] % codebook_size)
+        c2.append(at[b + 5] % codebook_size); c2.append(at[b + 6] % codebook_size)
+    return c0, c1, c2
+
+
 def postprocess_audio_output(ctx: FlowContext) -> None:
     """Process TTS output: decode audio tokens or store raw waveform."""
     device = ctx.primary_device
     defaults = ctx.pkg.defaults
     audio_output_type = defaults.get("audio_output_type")
     generated_ids = ctx.variable_resolver.resolved.get("global.generated_token_ids")
+
+    # Read-and-clear the per-request content fraction so a stale ratio cannot
+    # crop a later warm-mode request routed through a different model (R30:
+    # the kokoro stage sets this in both modes; both must consume it).
+    content_ratio = ctx.variable_resolver.resolved.pop("global.audio_content_ratio", None)
 
     if audio_output_type == "snac_tokens" and generated_ids and isinstance(generated_ids, list):
         audio_token_start = defaults.get("audio_token_start")
@@ -167,51 +195,95 @@ def postprocess_audio_output(ctx: FlowContext) -> None:
         if vocab_size is None:
             raise RuntimeError("ZERO FALLBACK: vocab_size missing from defaults.json.")
 
+        # Zero Outsider (ZO-0): if the SNAC codec is TRACED into the .nbx as a
+        # `codec.decoder` component, the flow handler runs it as a proper stage
+        # (via _execute_component — needed for symbolic-shape + in-graph randn
+        # setup). Skip the vendor `snac` decode here; the flow binds global.output_audio.
+        if "codec.decoder" in ctx.executors:
+            return
+
         from neurobrix.core.module.audio.output_processor import AudioOutputProcessor
         waveform = AudioOutputProcessor.decode_snac_tokens(
             generated_ids, vocab_size=vocab_size, device=device,
         )
         if waveform.numel() > 1:
-            model_name = ctx.pkg.manifest.get("model_name", "model")
-            sample_rate = get_sample_rate(ctx)
-            output_path = f"output_{model_name}.wav"
-            AudioOutputProcessor.save_waveform(waveform, output_path, sample_rate=sample_rate)
-            print(f"\n{'='*70}\nSAVED: {output_path}\n{'='*70}")
+            # Output saving is the CLI's responsibility via
+            # `output_dispatch.save_audio` — it reads
+            # `global.output_audio` from outputs and writes to
+            # args.output / family-aware default. The flow handler
+            # must NOT write directly (that produced a stray
+            # `output_<model>.wav` in cwd regardless of --output).
+            ctx.variable_resolver.resolved["global.output_audio"] = waveform
             return
 
-    # Raw waveform output
+    # Raw waveform output. Triton mode stores the decoder output as an NBXTensor;
+    # convert the chosen candidate to torch at this mode boundary (R33: NBX→torch
+    # only at the boundary) so the CLI save / crop see a torch waveform. Shape is
+    # read WITHOUT converting (NBXTensor exposes `.shape`), so only the matching
+    # waveform is materialised — non-waveform NBX outputs are never copied.
+    def _wave_shape(val):
+        return tuple(getattr(val, "shape", ()) or ())
+
+    def _to_torch_wave(val):
+        if isinstance(val, torch.Tensor):
+            return val
+        try:
+            return torch.from_numpy(val.numpy())  # NBXTensor → torch (boundary)
+        except Exception:
+            return None
+
     waveform = None
     resolved = ctx.variable_resolver.resolved
-    for key in ["decoder.output_0", "global.output_audio"]:
+    for key in ["codec.decoder.output_0", "decoder.output_0", "global.output_audio"]:
         val = resolved.get(key)
-        if isinstance(val, torch.Tensor) and val.dim() >= 2 and val.shape[-1] > 1000:
-            waveform = val
-            break
+        sh = _wave_shape(val)
+        if len(sh) >= 2 and sh[-1] > 1000:
+            waveform = _to_torch_wave(val)
+            if waveform is not None:
+                break
 
     if waveform is None:
         for val in resolved.values():
-            if isinstance(val, torch.Tensor) and val.dim() == 3 and val.shape[1] == 1:
-                if val.shape[2] > 1000:
-                    waveform = val
+            sh = _wave_shape(val)
+            if len(sh) == 3 and sh[1] == 1 and sh[2] > 1000:
+                waveform = _to_torch_wave(val)
+                if waveform is not None:
                     break
 
     if waveform is not None:
-        model_name = ctx.pkg.manifest.get("model_name", "model")
-        sample_rate = get_sample_rate(ctx)
-        output_path = f"output_{model_name}.wav"
-        from neurobrix.core.module.audio.output_processor import AudioOutputProcessor
-        AudioOutputProcessor.save_waveform(waveform, output_path, sample_rate=sample_rate)
-        print(f"\n{'='*70}\nSAVED: {output_path}\n{'='*70}")
+        waveform = crop_waveform_to_content_ratio(waveform, content_ratio)
+        # CLI handles the actual save — see comment in SNAC branch above.
+        ctx.variable_resolver.resolved["global.output_audio"] = waveform
 
 
 # ─── Shared helpers ──────────────────────────────────────────────────────────
 
+def crop_waveform_to_content_ratio(waveform, ratio):
+    """Crop a synthesised waveform to the spoken-content fraction.
+
+    A stage that fed a fixed-window decoder a partially-filled input (e.g. the
+    Kokoro predictor, whose asr/F0/N tail is zero) sets the per-request float
+    `global.audio_content_ratio`; this crops the synthesised silent tail to
+    `ratio` of the sample length. No-op when `ratio` is absent or >= 1.0.
+
+    Shared by the compiled (`AudioEngine`) and triton output paths so the crop
+    is symmetric across modes (R30). Works for both `torch.Tensor` and
+    `NBXTensor` — only `.shape` and a trailing-axis slice are used.
+    """
+    if not isinstance(ratio, (int, float)) or not (0.0 < ratio < 1.0):
+        return waveform
+    crop_len = max(1, int(waveform.shape[-1] * ratio))
+    if crop_len >= waveform.shape[-1]:
+        return waveform
+    print(f"   [Output] Cropped to spoken content: {crop_len} samples "
+          f"(ratio={ratio:.3f})")
+    return waveform[..., :crop_len]
+
+
 def get_compute_dtype(ctx: FlowContext) -> torch.dtype:
-    """Get compute dtype from manifest."""
-    dtype_str = ctx.pkg.manifest.get("dtype", "float16")
-    return {"float16": torch.float16, "bfloat16": torch.bfloat16, "float32": torch.float32}.get(
-        dtype_str, torch.float16
-    )
+    """Get compute dtype from manifest (string→torch.dtype via the dtype engine)."""
+    from neurobrix.core.dtype.config import get_torch_dtype
+    return get_torch_dtype(ctx.pkg.manifest.get("dtype", "float16"))
 
 
 def get_sample_rate(ctx: FlowContext) -> int:

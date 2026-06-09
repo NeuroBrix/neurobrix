@@ -54,8 +54,8 @@ _TRITON_OPS = {
     # Normalization (5)
     "native_layer_norm", "rms_norm", "native_group_norm", "group_norm", "batch_norm",
 
-    # Softmax (4)
-    "softmax", "_softmax", "log_softmax", "_log_softmax",
+    # Softmax (5)
+    "softmax", "_softmax", "_safe_softmax", "log_softmax", "_log_softmax",
 
     # Matmul/conv (9)
     "mm", "bmm", "addmm", "conv2d", "conv1d", "convolution",
@@ -93,8 +93,8 @@ _TRITON_OPS = {
     # Attention (1)
     "scaled_dot_product_attention",
 
-    # Linear algebra (3)
-    "linalg_vector_norm", "addr", "trace",
+    # Linear algebra (4)
+    "linalg_vector_norm", "_weight_norm", "addr", "trace",
 
     # RoPE (1)
     "rope",

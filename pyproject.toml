@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "neurobrix"
-version = "0.2.0"
+version = "0.2.1"
 description = "Universal Deep Learning Inference Engine — execute any AI model without model-specific code"
 readme = "README.md"
 license = "Apache-2.0"
@@ -32,29 +32,23 @@ classifiers = [
     "Operating System :: MacOS",
 ]
 dependencies = [
-    # Core runtime
+    # Zero Outsider / R34: the runtime engine needs ONLY these to RUN any model
+    # from its .nbx — torch (+ the cuDNN/cuBLAS/cuFFT it bridges; triton arrives
+    # transitively via torch) for compute, numpy as CPU glue, and pure
+    # container / config / file-I/O infra. NO vendor model/tokenizer/codec/DSP
+    # library is a runtime dependency (those moved to the `adapter` extra below).
+    # Core compute
     "torch>=2.1.0",
-    "safetensors>=0.4.0",
     "numpy>=1.24.0",
+    # .nbx container + config + schema
+    "safetensors>=0.4.0",
     "pyyaml>=6.0",
     "pydantic>=2.0.0",
     "packaging>=21.0",
-    # Tokenizers — vendor libraries loaded per model
-    "sentencepiece>=0.1.99",
-    "tokenizers>=0.14.0",
-    "jinja2>=3.0.0",
-    "tiktoken>=0.5.0",
-    "mistral-common>=1.0.0",
-    "transformers>=4.30.0",
-    # Image family
+    "jinja2>=3.0.0",          # chat-template rendering (prompt string only)
+    # Media file I/O at the CLI boundary (read input / write output — not compute)
     "Pillow>=10.0.0",
-    # Audio family — codec/signal processing
     "soundfile>=0.12.0",
-    "librosa>=0.10.0",
-    "torchaudio>=2.1.0",
-    "snac>=1.0.0",
-    "phonemizer>=3.0.0",
-    # Video family
     "imageio-ffmpeg>=0.4.0",
     # Registry + CLI
     "requests>=2.28.0",
@@ -63,6 +57,24 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0.0", "ruff>=0.1.0"]
+# Vendor adapter libraries — used by the OFFLINE build/trace pipeline and by the
+# legacy pre-Zero-Outsider runtime fallbacks, NOT by the Zero Outsider runtime
+# engine. Installing NeuroBrix to RUN models does NOT require these (R34): the
+# runtime reads tokenizers / mel / g2p / codecs from the .nbx and NeuroBrix-
+# internal pure-Python/numpy code. `pip install neurobrix[adapter]` pulls them
+# only when you need the vendor path (e.g. comparing against an oracle).
+adapter = [
+    "transformers>=4.30.0",
+    "tokenizers>=0.14.0",
+    "sentencepiece>=0.1.99",
+    "tiktoken>=0.5.0",
+    "mistral-common>=1.0.0",
+    "torchaudio>=2.1.0",
+    "librosa>=0.10.0",
+    "snac>=1.0.0",
+    "phonemizer>=3.0.0",
+    "espeakng-loader>=0.2.0",
+]
 
 [project.urls]
 Homepage = "https://neurobrix.es"

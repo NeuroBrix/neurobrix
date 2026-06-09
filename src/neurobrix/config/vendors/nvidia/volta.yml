@@ -1,0 +1,143 @@
+# NVIDIA Volta Architecture Compute Configuration
+# V100 (Tesla, PCIe, SXM2), Titan V, Quadro GV100
+# Compute Capability: 7.0
+#
+# validation_status: validated_empirical
+#   This is the only architecture with hardware available
+#   (4x V100). Empirically validated end-to-end in
+#   P-TRITON-MOE-DETERMINISM-RESIDUAL (2026-05-19): Qwen3-30B-A3B,
+#   TinyLlama-1.1B, DeepSeek-MoE-16b, Sana_1600M_1024px (R29 PNG).
+#   The `memory.sdpa_math_max_scores_bytes` key is the empirically-
+#   derived Ch4bis budget (see its inline justification below).
+#   Pre-existing keys (block_sizes / sdpa_thresholds) carry their
+#   own inline provenance comments and were not re-audited this
+#   chantier.
+
+architecture: volta
+compute_capability: "7.0"
+
+# Device string mapping - maps vendor to torch device prefix
+device_prefix: "cuda"
+
+# Kernel block sizes - architecture-optimized values
+block_sizes:
+  # Default block size for simple kernels
+  default: 1024
+
+  # GEMM (General Matrix Multiply) configuration
+  gemm:
+    block_m: 64          # Tile size in M dimension
+    block_n: 64          # Tile size in N dimension
+    block_k: 32          # Tile size in K dimension
+    num_warps: 4         # Number of warps per block
+    num_stages: 2        # Pipeline stages
+
+  # Batched Matrix Multiply configuration
+  bmm:
+    block_m: 64
+    block_n: 64
+    block_k: 32
+    num_warps: 4
+
+  # Convolution configuration
+  conv2d:
+    block_h: 16          # Tile height
+    block_w: 16          # Tile width
+    num_warps: 4
+
+  # Resize/interpolation block size
+  resize: 256
+
+  # Softmax maximum reduction width
+  softmax_cap: 8192
+
+  # LayerNorm tile width
+  layernorm_tile: 1024
+
+  # GroupNorm maximum elements per group
+  groupnorm_cap: 65536
+
+  # Generic reduction block size
+  reduction: 1024
+
+# Scaled Dot-Product Attention block size thresholds.
+#
+# Schema: each entry is a (BLOCK_M, BLOCK_N) selection rule. Optional
+# constraints — first entry whose constraints all match AND whose
+# footprint fits the SMEM budget wins. Decode entries (seqlen_q ≤ 16)
+# come first so they take precedence over prefill entries on the
+# autoregressive hot path.
+#
+# Volta values are bit-perfect with the table that produced the
+# regression-harness golden text on TinyLlama-1.1B / Qwen3-30B since
+# Layer 5 (commit 06d26c2). Reordering or resizing any of these
+# entries will drift the LLM logits → drift greedy argmax → break
+# golden match. Keep the legacy values until a future calibration
+# campaign re-validates.
+sdpa_thresholds:
+  # ── Decode path (seqlen_q ≤ 16) ────────────────────────────────
+  - seqlen_q_le: 16
+    head_dim_ge: 256
+    block_m: 16
+    block_n: 32
+    num_warps: 4
+  - seqlen_q_le: 16        # head_dim < 256 decode
+    block_m: 16
+    block_n: 64
+    num_warps: 4
+  # ── Prefill / spatial-attention path (seqlen_q > 16) ───────────
+  - head_dim_ge: 256
+    block_m: 32
+    block_n: 32
+    num_warps: 4
+  - head_dim_ge: 128
+    block_m: 64
+    block_n: 64
+    num_warps: 4
+  - head_dim_lt: 128
+    block_m: 128
+    block_n: 64
+    num_warps: 4
+
+# Memory constraints.
+#
+# max_shared_memory_per_block is the V100 OPT-IN value (96 KB). The
+# default per-block SMEM on Volta without opt-in is 48 KB, but Triton
+# uses cudaFuncSetAttribute to request the opt-in extended SMEM for
+# kernels that need it. Flash-attention is exactly such a kernel —
+# our wrapper sizes its tile against the opt-in value. PixArt VAE
+# head_dim=512 needs the full 96 KB; the 48 KB default crashes.
+memory:
+  max_shared_memory_per_block: 98304    # 96 KB (Volta opt-in)
+  max_registers_per_block: 65536
+  warp_size: 32
+  # SDPA deterministic-routing budget (P-TRITON-MOE-DETERMINISM-RESIDUAL).
+  # The Dao-AILab flash Triton kernel is non-deterministic on pre-Ampere
+  # SIMT. The deterministic _math_attention path is routed for pow2
+  # head_dim only when its [B*H,Tq,Tk] scores tensor is within this
+  # budget (non-pow2 head_dim is routed unconditionally — preserved
+  # PixArt/Sana path). 128 MiB covers all LLM determinism cases:
+  # Qwen3-30B-A3B test (B1*H32*Tq15*Tk15*fp32 = 28 KiB), every decode
+  # step (Tq=1*Tk<=4096*H32*fp32 <= 512 KiB), prefill up to seqlen~1024
+  # (H32*fp32 = 128 MiB). Stays well below image-diffusion self-attn
+  # (PixArt 512 ~ 1 GiB, Sana >>) so those keep the flash path with no
+  # OOM / no path change. Very-long-prompt LLM prefill (seqlen >~ 1152
+  # @ 32 heads fp32) exceeds the budget -> flash for that prefill only
+  # (decode stays deterministic); documented residual.
+  sdpa_math_max_scores_bytes: 134217728  # 128 MiB
+
+# SMEM budget safety factor — fraction of max_shared_memory_per_block
+# that the picker considers usable. Triton's compiler inflates the
+# analytical Q+K+V+bias tile footprint by ~1.3× via double-buffered
+# pipelining and softmax statistics scratch; 0.7 absorbs that overhead
+# with margin. Empirically derived: head_dim=512 fp16 (32, 32) yields
+# formula 102 KB while Triton reports 131 KB → factor 1.28 → safety
+# 1/1.43 = 0.7.
+sdpa_smem_safety: 0.7
+
+# FP16 capabilities
+precision:
+  supports_fp16: true
+  supports_bf16: false   # Volta does not support BF16
+  supports_tf32: true   # Volta does not support TF32
+  supports_fp8: false    # Volta does not support FP8

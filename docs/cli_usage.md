@@ -18,6 +18,23 @@ open-source models. Run `neurobrix run --help` for the full flag list.
 | `--seed <int>` | Deterministic seed |
 | `--triton` / `--triton-sequential` / `--sequential` | Execution backend (default: compiled native) |
 
+## Execution modes — two branches, four modes
+
+Every family runs through two independent compute branches, each in a
+sequential (op-by-op) and a compiled (fused hot-loop) variant. No flag =
+`--compiled`.
+
+| Flag | Branch | Substrate | Role |
+|------|--------|-----------|------|
+| `--compiled` *(default)* | PyTorch | `torch` + cuDNN/cuBLAS | production path |
+| `--sequential` | PyTorch | `torch` ATen, op-by-op | reference oracle (proves graph/trace) |
+| `--triton` | Triton | NeuroBrix `@triton.jit` + `NBXTensor`, no `torch.*`/cuDNN | vendor-agnostic production |
+| `--triton-sequential` | Triton | NeuroBrix kernels, op-by-op | kernel oracle |
+
+Use the default to just run a model, `--triton` for a vendor-agnostic path,
+and the two `*-sequential` oracles op-by-op to debug a numerical discrepancy.
+The flags are also accepted by `neurobrix serve` and `neurobrix upscale`.
+
 ## llm — Text Generation
 
 References: TinyLlama, DeepSeek-MoE, Qwen3 (Alibaba), Llama, Mistral.

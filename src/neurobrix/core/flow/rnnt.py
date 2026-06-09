@@ -157,12 +157,16 @@ class RNNTEngine(FlowHandler):
         )
         power_spectrum = stft.abs().pow(2)  # [n_fft//2+1, frames]
 
-        # Mel filterbank
-        import torchaudio
-        mel_fb = torchaudio.functional.melscale_fbanks(
-            n_freqs=n_fft // 2 + 1, f_min=0.0, f_max=sr / 2.0,
-            n_mels=n_mels, sample_rate=sr,
-        ).to(device=device)  # [n_fft//2+1, n_mels]
+        # Mel filterbank — R34 (Zero Outsider): NeuroBrix-internal numpy
+        # filterbank (htk, no norm) instead of torchaudio.melscale_fbanks.
+        # mel_dsp._mel_filters returns [n_mels, n_freqs]; transpose to
+        # [n_freqs, n_mels] to match the torchaudio layout (~5e-6 identical).
+        from neurobrix.core.module.audio.mel_dsp import _mel_filters as _nbx_mel_fb
+        import numpy as _np_fb
+        mel_fb = torch.from_numpy(
+            _np_fb.ascontiguousarray(
+                _nbx_mel_fb(sr, n_fft, n_mels, htk=True, norm=None).T)
+        ).to(device=device, dtype=power_spectrum.dtype)  # [n_fft//2+1, n_mels]
 
         mel_spec = power_spectrum.T @ mel_fb  # [frames, n_mels]
 
@@ -495,14 +499,16 @@ class RNNTEngine(FlowHandler):
         """Decode token IDs to text using sentencepiece tokenizer from NBX cache."""
         cache_path = self.ctx.pkg.cache_path
 
-        # Look for sentencepiece model in NBX cache
+        # Look for sentencepiece model in NBX cache — R34 (Zero Outsider):
+        # decode via the NeuroBrix-internal PySentencePiece (.model protobuf
+        # parser), never the `sentencepiece` vendor lib.
         sp_path = self._find_tokenizer_model()
         if sp_path is not None:
             try:
-                import sentencepiece as spm
-                sp = spm.SentencePieceProcessor()
-                sp.Load(str(sp_path))
-                return sp.DecodeIds(tokens)
+                from neurobrix.core.module.tokenizer.sp_proto import PySentencePiece
+                with open(sp_path, "rb") as _spf:
+                    sp = PySentencePiece.from_bytes(_spf.read())
+                return sp.decode(tokens)
             except ImportError:
                 pass
 

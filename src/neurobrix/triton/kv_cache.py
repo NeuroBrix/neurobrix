@@ -110,6 +110,8 @@ class TritonAttentionInterceptor:
         self._num_heads = num_heads
         self._num_kv_heads = cache.num_kv_heads
         self._gqa_group_size = 0
+        # Absolute decode position for RoPE arange shifting (see intercept_arange).
+        self._position_offset = 0
 
     def intercept(self, q, k, v, attn_mask=None, dropout_p=0.0,
                   is_causal=True, scale=None, layer_idx=-1):
@@ -215,6 +217,30 @@ class TritonAttentionInterceptor:
             is_causal=use_causal,
             scale=scale)
 
+    def intercept_efficient(self, q, k, v, attn_bias=None, compute_log_sumexp=False,
+                            dropout_p=0.0, is_causal=False, scale=None,
+                            layer_idx=-1, **kwargs):
+        """aten::_scaled_dot_product_efficient_attention / _cudnn_attention.
+
+        Same KV-cache logic as intercept(), but these ATen variants insert a
+        ``compute_log_sumexp`` bool at arg[4], shifting ``is_causal`` to arg[6]
+        and making ``scale`` kwarg-only. Binding intercept()'s plain-SDPA
+        signature directly to those args mis-reads scale (the positional
+        is_causal lands in the scale slot AND a scale kwarg arrives ->
+        "multiple values for 'scale'") and drops the causal flag. Remap
+        explicitly. Mirrors the per-variant interceptors on the compiled side
+        (core/runtime/graph/kv_cache_wrapper.py:622).
+        """
+        return self.intercept(q, k, v, attn_mask=attn_bias, dropout_p=dropout_p,
+                              is_causal=is_causal, scale=scale, layer_idx=layer_idx)
+
+    def intercept_flash(self, q, k, v, dropout_p=0.0, is_causal=False,
+                        return_debug_mask=False, scale=None, layer_idx=-1, **kwargs):
+        """aten::_scaled_dot_product_flash_attention — is_causal at arg[4], no
+        attn_bias, ``scale`` kwarg-only. Remap to intercept()."""
+        return self.intercept(q, k, v, attn_mask=None, dropout_p=dropout_p,
+                              is_causal=is_causal, scale=scale, layer_idx=layer_idx)
+
     def reset(self):
         self.cache.clear()
         self._is_prefill = True
@@ -225,8 +251,43 @@ class TritonAttentionInterceptor:
         self._call_count = 0
 
     def update_position_offset(self):
-        """Called before each decode step. Resets per-step call counter."""
+        """Called before each decode step. Resets per-step call counter and
+        captures the current cache length as the absolute RoPE position offset
+        (mirror of core kv_cache_wrapper.update_position_offset)."""
         self._call_count = 0
+        if not self._is_prefill:
+            self._position_offset = self.get_cache_len()
+
+    def intercept_arange(self, *args, **kwargs):
+        """Intercept aten::arange to fix RoPE positions during decode.
+
+        For RoPE models with NO position_ids input (orpheus), positions come
+        from an internal aten::arange(0, seq_len). At decode seq_len=1 so the
+        graph emits arange(0, 1) = [0] — every decoded token is RoPE-encoded at
+        position 0, the KV cache fills with mis-rotated keys, and generation
+        degrades into a non-terminating ramble. Shift the window START to
+        cache_len so it yields [cache_len, ..., cache_len+seq_len-1], i.e. the
+        token's true absolute position, while keeping the output SIZE (symbolic
+        shape) unchanged. Exact mirror of
+        core/runtime/graph/kv_cache_wrapper.py:intercept_arange — the missing
+        R30 half that left triton-compiled decode broken while the op-by-op
+        triton-sequential oracle (full-context recompute, correct arange) passed.
+        R33-pure: returns NBXTensor via the triton _create_arange dispatch.
+        """
+        from neurobrix.kernels.dispatch import _create_arange
+        if self._is_prefill:
+            return _create_arange(*args, **kwargs)
+        cache_len = self._position_offset
+        if cache_len > 0 and args and isinstance(args[0], (int, float)):
+            # arange(end)        → [cache_len, cache_len+end)
+            # arange(start, end) → [cache_len+start, cache_len+end)
+            if len(args) == 1:
+                return _create_arange(cache_len, cache_len + args[0], **kwargs)
+            if isinstance(args[1], (int, float)):
+                start, end = args[0], args[1]
+                return _create_arange(cache_len + start, cache_len + end,
+                                      *args[2:], **kwargs)
+        return _create_arange(*args, **kwargs)
 
     def get_cache_len(self) -> int:
         """Return current cache length from first layer."""
@@ -239,3 +300,5 @@ class TritonAttentionInterceptor:
 # as self-managing dtype. TritonSequence._compile_op walks
 # func.__func__ for bound methods to pick up this flag.
 TritonAttentionInterceptor.intercept.self_manages_dtype = True  # type: ignore[attr-defined]
+TritonAttentionInterceptor.intercept_efficient.self_manages_dtype = True  # type: ignore[attr-defined]
+TritonAttentionInterceptor.intercept_flash.self_manages_dtype = True  # type: ignore[attr-defined]

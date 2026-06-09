@@ -494,6 +494,17 @@ class TensorResolver:
                 resolved = getattr(torch, attr_name, None)
                 if resolved is not None:
                     return resolved
+            # Complex scalar (e.g. the imaginary unit '1j' in the istftnet iSTFT
+            # `mul`/`exp`). PyTorch ATen handles complex natively; the other
+            # engines already parse it, so the op-by-op sequential dispatcher must
+            # too (R30). Serialized as a Python complex or a complex-literal str.
+            if isinstance(val, complex):
+                return val
+            if isinstance(val, str) and val.endswith("j"):
+                try:
+                    return complex(val)
+                except (ValueError, TypeError):
+                    pass
             raise RuntimeError(
                 f"ZERO FALLBACK: Unknown argument type in {op_type} ({op_uid}) "
                 f"value={val!r}")

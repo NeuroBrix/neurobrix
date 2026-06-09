@@ -7,7 +7,1248 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`graph_executor` `NBX_DEVICE_TRACE` diagnostic no longer swallows its own
+  errors.** The device-drift diagnostic block (active only when the
+  `NBX_DEVICE_TRACE` env var is set) caught all exceptions with a bare `pass`,
+  so a failure in the diagnostic itself was silent — useless precisely when an
+  operator had enabled tracing to investigate a cross-device issue. It now
+  prints the failure and continues (the block runs only when tracing is
+  explicitly enabled, so the op loop is never affected). Resolves the
+  static-analysis empty-except finding on the `main` integration PR.
+
+## [0.2.1] - 2026-06-09
+
+First publicly usable release of the universal runtime (not final — usable). The
+4-mode execution matrix — PyTorch (`--sequential` op-by-op oracle, `--compiled`
+fused torch+cuDNN/cuBLAS) and Triton (`--triton-sequential`, `--triton`,
+NeuroBrix kernels, zero torch) — is **green** on **orpheus-snac**, **hat-l-x4**,
+**Flex.1-alpha**, and **deepseek-moe-16b**: each validated in a clean-room venv
+(none of the 14 vendor libraries installed), greedy and cross-mode-consistent
+(proofs under `validation_outputs/`). The audio, LLM, image, and upscaler
+families run end-to-end; engine docs were aligned to the real CLI.
+
+**Documented debt — Qwen3-30B-A3B `--sequential` (validated by construction,
+NOT executed):** the original crash (a frozen seq-dim view) is eliminated by
+re-tracing the model (the `.nbx` graph now carries `{mul,s0,s1}`, 0 frozen
+views — verified), and correctness is established via the **compiled** mode
+(same graph, "Paris.") plus the `SymbolicShapeResolver` shared by both paths.
+But the op-by-op sequential oracle was **not run to completion** on 30B
+(≈115k ops × per-op Python dispatch is impractically slow at that scale). This
+is recorded as honest debt — it is **not** counted as a 4/4 pass. Qwen3 is
+shipped/validated in **compiled** mode. The other four matrix models are 4/4.
+
+### Fixed
+
+- **triton-sequential pipeline-parallel cross-device (R30 parity with compiled).**
+  When a component's weights are sharded across GPUs (pipeline_parallel: block N
+  on cuda:i, block N+k on cuda:j), the op-by-op `triton_sequential` path crashed
+  at the first stage boundary (`deepseek-moe-16b` `custom.rms_norm::46`:
+  activation cuda:2 vs weight cuda:3) because it ran single-device and
+  `NBXTensor.to(device)` is a no-op. The compiled hot-loop already handles this
+  (`_run_multi_device` + `_set_op_devices`); the sequential path now mirrors it:
+  per op, target device = the op's weight/param input device (else a running
+  activation tracker), and every activation arg not on target is moved with a
+  real D2D `memcpy`. The transfer is extracted to a shared `triton/
+  device_transfer.py` (`needs_move` + `transfer_tensor`) so both modes share ONE
+  implementation; `TritonSequence._needs_move`/`_transfer_tensor` now delegate to
+  it. Inert on single-GPU components (target == device_idx → no move). R33-pure,
+  model-agnostic. `deepseek-moe-16b` is now 4/4 (all modes greedy-identical
+  "The capital of France is Paris.").
+
 ### Added
+
+- **`aten::im2col` Triton kernel (nn.Unfold).** New `kernels/ops/im2col.py` +
+  `im2col_wrapper` extract sliding NCHW blocks to columns
+  (`[N,C,IH,IW] → [N, C·KH·KW, L]`, PyTorch channel-major order) with the
+  padding halo read via boundary-masked `tl.load` (no `F.pad`; R33-pure).
+  Unblocks HAT's OCAB overlapping-window cross-attention — `hat-l-x4` now runs
+  in `--triton-sequential` and `--triton` (previously "No kernel for
+  aten::im2col"). Index math validated bit-exact vs a numpy reference.
+
+### Fixed
+
+- **Flex/FLUX triton: `aten::index` multi-tensor advanced indexing.**
+  `_meta_index` returned after the FIRST index tensor, so the CLIP text
+  pooler `last_hidden_state[arange(B), input_ids.argmax(-1)]` (EOS-token
+  select) kept all text tokens (`[1,77,768]`) instead of pooling to `[1,768]`.
+  The leaked token dim then broadcast through the FLUX timestep embed
+  (`silu [1,77,3072] → addmm [1,77,18432] → split(dim=1)` yields 0 chunks →
+  adaLN slice crash). Now performs a joint flat-index select across the
+  consecutive indexed dims (single-index path unchanged). `Flex.1-alpha`
+  `--triton` produces a coherent image.
+- **Orphan scalar constant in `aten::fill` across both triton paths.** An
+  in-forward `mask[slice] = cnt` count is baked as a dataless
+  `param::constant`; the native compiled path defaults it to a 0-dim value
+  (c0a1445). The triton-sequential resolver
+  (`graph_executor._resolve_sequential_arg`) and the triton-compiled
+  `_meta_fill` (None→0) now mirror that default, so `hat-l-x4` runs in both
+  triton modes (HAT OCAB counter; the value is a trace-time artefact).
+- **orpheus-snac triton autoregressive prefill: resolve the LM component via
+  `ctx.executors`, not `pkg.components`.** The triton AR handler resolved the
+  language-model component against `pkg.components` (populated only from
+  component dirs shipping a `runtime.json` — partial: empty for the 2-component
+  orpheus-ft build, `{codec.decoder}` for the 3-component SNAC build), so the
+  fallback selected `codec.decoder` as the LM and prefill ran the SNAC codec
+  graph with `input_ids=None`. Now resolves against `ctx.executors` (keyed by
+  every topology component) and excludes `codec.decoder` from the fallback,
+  mirroring the native path (R30, R33-pure). `orpheus-3b-0.1-ft-snac` is now
+  4/4 (all modes transcribe "Hello world!").
+- **Shared triton kernels: `pow` with a scalar/tensor base, op-localized
+  triton-sequential errors.** `pow_wrapper` now handles all four `aten::pow`
+  forms — `tensor**scalar` (fused kernel), `scalar**tensor` (e.g. the
+  `10000.0 ** (arange/dim)` sinusoidal/RoPE frequency base in Flex/FLUX DiT) and
+  `tensor**tensor` via `exp(b·ln a)` (R33-pure), `scalar**scalar` constant —
+  previously it called `.contiguous()` on a scalar base and crashed. The
+  triton-sequential dispatcher now raises op-localized errors (`Failed at
+  <op_uid> (<op_type>) … None args at positions …`), mirroring the compiled
+  path, so a kernel-oracle failure points straight at the producing op.
+
+### Added
+
+- **Zero Outsider ZO-3 — Kokoro g2p embedded in the `.nbx`, NeuroBrix-internal
+  runner** (R34). Kokoro's text→IPA g2p no longer imports `phonemizer`/
+  `espeakng_loader`/`kokoro`/`misaki` at runtime. The build distills espeak-ng
+  (GPL, license retained) into a 210k-entry pronunciation lexicon embedded as a
+  `.nbx` module (`modules/g2p/en_lexicon.txt.gz`, like the tokenizer vocab — no
+  relicensing); `core/module/audio/g2p.py` (stdlib-only) reads it at runtime with
+  a deterministic LTS fallback for OOV. "Hello world" → `həlˈoʊ wˈɜːld`
+  (byte-identical to espeak); per-word phonemes match espeak (dict-word 100%).
+  Residual: intra-sentence prosody (espeak's text normalizer — word fusion/
+  reduction) is not reproduced by word-level lookup; per-word phonemes remain
+  correct so Kokoro stays intelligible. Validated in the clean venv (no vendor
+  g2p): Kokoro compiled + triton → STT "Hello world".
+
+- **Zero Outsider ZO-0 — orpheus SNAC vocoder traced into the `.nbx`** (R34). The
+  orpheus runtime previously decoded audio via `snac.SNAC.from_pretrained(...)` —
+  a vendor neural decoder downloaded from HuggingFace at inference (the gravest
+  R34 breach). SNAC is now a traced `codec.decoder` component inside a new
+  `orpheus-3b-0.1-ft-snac` build (the production orpheus is untouched); the
+  autoregressive flow redistributes the 7-tokens/frame stream into the 3 SNAC
+  codebooks (pure python `redistribute_snac_codes`) and runs the traced codec as
+  a stage via `_execute_component` — no `snac` import, no download. Compiled mode
+  validated in the clean venv (no `snac` installed): orpheus-3b-0.1-ft-snac →
+  whisper STT "Hello world!". (Triton-mode codec integration in progress.)
+
+- **Zero Outsider — RNNT flow (parakeet) vendor-free** (R34): `core/flow/rnnt.py` and `triton/flow/rnnt.py` no longer import `torchaudio` (mel filterbank → `mel_dsp._mel_filters`) or `sentencepiece` (token decode → `PySentencePiece`). Parakeet passes clean-room both modes ("…slushy…").
+- **Zero Outsider ZO-2 — compiled mel front-end is now vendor-free** (R34). The
+  numpy mel/feature DSP is consolidated into a shared, mode-neutral
+  `core/module/audio/mel_dsp.py` (the single source of truth: `_load_audio`,
+  `_stft_power`, mel filterbank, `_whisper_mel`/`_conformer_mel`/`_nemo_mel`/
+  `_raw_waveform`, `extract_features_np` — numpy + stdlib only). The triton
+  front-end re-exports it; `core/module/audio/input_processor.py` (compiled mode)
+  now computes through it and converts to torch only at the boundary, dropping
+  `transformers.WhisperFeatureExtractor`, `torchaudio` and `librosa`. Parity vs
+  the old vendor extractors on the canonical clip: whisper 1.7e-5, conformer
+  1.35e-5, raw 0.0, nemo 1.4e-3 (dither term zeroed both sides). Clean-room
+  import (vendor packages blocked) passes. Compiled and triton now share the
+  exact same mel DSP.
+
+- **Zero Outsider ZO-1 + ZO-4 — pure-Python tokenizers and mel filterbank**
+  (R34 engine import purity). The runtime tokenizer runners no longer import the
+  vendor libraries (`tokenizers`, `sentencepiece`, `tiktoken`, `mistral_common`);
+  four new stdlib-only modules under `core/module/tokenizer/` are byte-exact
+  drop-ins, validated by encode/decode parity against each vendor oracle plus
+  large fuzz batteries: `json_bpe.PyTokenizer` (a full `tokenizer.json` interpreter
+  — BPE byte-level + byte_fallback, normalizers, pre-tokenizers, decoders,
+  TemplateProcessing, added_tokens; 12/12 models 100% parity + a 63k-codepoint
+  sweep), `sp_proto.PySentencePiece` (a `.model` protobuf parser — Unigram Viterbi
+  + BPE + charsmap trie; natural-text byte-exact), `tiktoken_bpe.PyTiktoken` and
+  `tekken_bpe.PyTekken` (byte-level BPE; 100% parity + 4000-fuzz). `sp_tokenizer.py`
+  routes `HFTokenizer`/`SPTokenizer`/`TiktokenTokenizer`/`TekkenTokenizer` to them.
+  The triton mel front-end's filterbank is now pure numpy (no `librosa`): a
+  reimplementation of `librosa.filters.mel` (Slaney + HTK scales, triangular bands,
+  Slaney/None norm), parity vs librosa max|diff| 1.86e-9 (whisper) … 0.0 (htk).
+  Verified in a clean-room with the 14 vendor packages blocked at import: all
+  tokenizer formats round-trip "Hello world"; TinyLlama (compiled + triton) →
+  "…Paris."; PixArt-XL (compiled) → coherent image — zero forbidden-import hits.
+
+- **Zero-torch audio mel front-end for the triton path** (`triton/audio_frontend.py`).
+  The triton STT / audio-LLM / RNNT flows previously imported `core/flow/audio_utils`
+  (and `rnnt.py` used `torch.stft` + `torchaudio` directly) for mel/feature
+  extraction — torch compute in the triton path. Reimplemented all four
+  preprocessing types in pure numpy + librosa (both torch-free): `mel_spectrogram`
+  (Whisper/Voxtral log-mel), `nemo_mel` (Canary/Parakeet — pre-emphasis, dither,
+  per-feature normalize), `conformer` (Granite — log10 + amax norm + frame-stack),
+  `raw_waveform`. Validated bit-close to the torch extractors (whisper 1.7e-5,
+  conformer 1.35e-5, raw 0.0; filterbank vs torchaudio ~5e-6) **and** proven by
+  STT in normal command: whisper-large-v3-turbo, whisper-large, parakeet, Voxtral,
+  canary-qwen, granite-speech all transcribe correctly in triton AND
+  triton-sequential. The triton audio flows (`encoder_decoder`, `audio_llm`,
+  `rnnt`) no longer import torch/torchaudio/audio_utils. Two separate front-ends
+  (R30/two-modes): PyTorch flows keep `audio_utils` (torch); triton flows use this.
+
+- **Zero-torch Kokoro g2p phonemizer for the triton path** (`triton/audio_frontend.py`).
+  The triton `audio` flow previously imported `core/flow/stages/kokoro`
+  (`KPipeline`/misaki → torch) for text→phoneme conversion — the last torch in the
+  Kokoro triton compute path. Reimplemented as `preprocess_phonemizer_input_np` +
+  `_g2p_phonemes`: it drives the **torch-free** `phonemizer`/espeak backend, with
+  the espeak-ng shared library supplied by the `espeakng_loader` pip wheel (no
+  system `apt install` / sudo needed — `EspeakWrapper.set_library/set_data_path`
+  point phonemizer at the bundled `.so` + data; `espeakng-loader` is now a
+  declared NeuroBrix dependency in `pyproject.toml`). Also accepts a system
+  `espeak-ng` CLI if on PATH. If NO torch-free espeak backend is found the triton
+  path **raises a clean actionable error** — it does NOT silently fall back to the
+  misaki/kokoro g2p (which pulls torch); that would reintroduce torch into the
+  triton compute path invisibly (R33 + no-silent-install doctrine).
+  Voicepack `.pt` is read torch-free via
+  `_load_pt_numpy` (zipfile + `np.frombuffer` + pickletools shape recovery).
+  Validated by STT in normal command: Kokoro-82M triton-sequential synthesises
+  "Hello world" → whisper transcribes "Hello world!". The `triton/flow/audio.py`
+  dead audio-input branch (`AudioInputProcessor`, lazy torch) is rerouted to the
+  numpy `preprocess_audio_input_np`, and the `NBX_DUMP_LOGITS` diagnostic in
+  `triton/flow/autoregressive.py` no longer carries a torch fallback — `triton/`
+  now has **zero direct torch imports** (§23 grep clean). Boundary torch that
+  remains is R33-sanctioned (NBX↔torch only at the edges): the text tokenizer
+  (string→ids), the NBX→torch→WAV save materialization, and — the one external
+  neural codec — the orpheus SNAC vocoder decode (`AudioOutputProcessor.decode_snac_tokens`,
+  not part of the .nbx graph), tracked as a follow-up (P-ORPHEUS-SNAC-TRITON).
+
+- **Triton scheduler subtree completed: zero-torch Euler, Euler-Ancestral and DDIM
+  schedulers** (joining the existing FlowEuler + DPM++). Each is a numpy-schedule +
+  NBXTensor-step port of its `core/module/scheduler/diffusion/*` counterpart, with
+  no torch on the path; the stochastic variants (Euler-Ancestral, DDIM eta>0) draw
+  N(0,1) noise through the NBXTensor randn wrapper (honouring the shared
+  `NBX_FORCE_RAND_SEED` pin). Registered in the triton scheduler factory under the
+  same aliases the core factory uses (`EulerDiscreteScheduler`/`euler`,
+  `EulerAncestralDiscreteScheduler`/`euler_a`, `DDIMScheduler`/`ddim`). Validated
+  by a unit test against the core schedulers: identical timesteps/sigmas and
+  per-step outputs to fp32 (`maxdiff ≤ 1.4e-6`). Added numpy `leading`/`trailing`
+  spacing + Karras-sigma helpers to `triton/scheduler/noise_schedules.py`. (DDIM
+  dynamic thresholding raises ZERO-FALLBACK pending a percentile kernel;
+  `clip_sample` is supported.)
+
+### Changed
+
+- **Triton audio flow: removed three dead R33-violating stage branches** (`native_kokoro`,
+  `diffusion`, `native_acoustic_decoder`) that imported torch via `core/flow/stages/`.
+  They are unreachable: Kokoro now runs its prosody-predictor + iSTFTNet decoder
+  through the graph in triton (all stages `execution=forward`), and VibeVoice's
+  diffusion + acoustic decoder run in the self-contained zero-torch
+  `triton/flow/next_token_diffusion.py` (`flow.type=next_token_diffusion`, not
+  `audio`). The triton audio stage loop now accepts only `execution=forward` (hard
+  ZERO FALLBACK otherwise) — no `core/flow/stages` compute import remains in it.
+  Verified the removal is inert: Kokoro triton still STT "Hello world", VibeVoice
+  triton still renders a non-degenerate clip. (The Kokoro g2p phonemizer import
+  stays — external dependency, separately tracked.)
+
+### Fixed
+
+- **chatterbox TTS-LLM: shared seeded sampler in both handlers + a deterministic
+  `--temperature 0` greedy floor so the four modes agree on one output.** The core path
+  previously sampled with an unseeded `torch.multinomial` and a top_p formula that
+  differed from the triton handler. Both handlers now use a byte-identical seeded
+  numpy sampler (dual_ar discipline) and honour the CLI `global.*` sampling
+  overrides (`--temperature`, `--top_p`, …). Correctness note (correcting an
+  earlier over-claim): a *seeded stochastic* sampler gives **per-mode**
+  reproducibility, NOT cross-mode token identity — the per-engine logits differ at
+  the fp16 level, so `choice(p=probs)` flips boundary tokens and the four modes
+  follow different (each intelligible) token paths. This is the same standard
+  openaudio dual_ar passes under (temp 0.7, seeded). For one deterministic output
+  shared by all four modes, `--temperature 0` selects the
+  greedy floor: argmax of logits that agree to fp16 → all four modes render the
+  same "Hello world" (32 tokens, 1.16 s; tokens near-identical, a couple of late
+  argmax near-ties aside). Validation: free-running default temp across 3 seeds ×
+  4 modes and a long sentence → intelligible "Hello world"/full sentence in every
+  case; `--temperature 0` → identical "Hello world" in all four modes. Teacher-
+  forcing the oracle tokens shows the t3 backbone+CFG logits agree across all four
+  modes at every decode step (argmax matches), so the divergence is purely the
+  stochastic sampler, not the backbone. chatterbox-only flow; no other model
+  affected. (Adds gated `NBX_DUMP_T3_LOGITS` teacher-forcing diagnostic +
+  `NBX_TTS_LLM_SEED` override.)
+
+- **Triton `NBXTensor.contiguous()` on a strided complex tensor no longer
+  corrupts the imaginary part.** Complex tensors are stored interleaved
+  `[real, imag]`, but Triton sees the pointer as a plain float, so the
+  strided-copy kernel copied one float per element with per-(complex)-element
+  strides applied as float offsets — materialising the real half correctly but
+  scrambling the imaginary half. chatterbox/CosyVoice s3gen's STFT does
+  `rfft → transpose → contiguous`; the transposed-complex `contiguous` mangled
+  the spectrum, so the NSF/SineGen source-filter (conv1d/sin/pow on the spectral
+  features) diverged and the vocoder rendered partial speech. `_strided_copy`
+  now reinterprets complex operands as a float view with a trailing `[2]` re/imag
+  axis (element strides ×2) and copies both floats per element. Single systemic
+  root for the whole NSF cascade; reusable for any HiFiGAN/iSTFTNet/NSF vocoder
+  that transposes a complex spectrogram. Verified: `stft_wrapper` now matches
+  `torch.stft` element-for-element.
+
+### Added
+
+- **Gated cross-engine deterministic RNG (`NBX_FORCE_RAND_SEED`).** Pins every
+  `rand`/`randn`/`*_like` op in both the PyTorch and Triton engines to one shared
+  numpy `RandomState`, so a stochastic vocoder (chatterbox s3gen CFM + NSF/SineGen
+  source draws four random tensors) is reproducible and bit-identical across all
+  four execution modes — the production determinism mechanism (same discipline as
+  openaudio dual_ar / VibeVoice seeded noise) and the diagnostic that makes an
+  op-by-op cross-engine diff meaningful past the first random op. Default-off →
+  unseeded behaviour unchanged. New `kernels/rng_pin.py`; wired into the Triton
+  rand wrappers and the PyTorch `NativeATenDispatcher` (R30).
+
+### Fixed
+
+- **Triton `aten::slice` now applies the step (strided slice).** `_meta_slice`
+  accepted a `step` argument but always did a step-1 `narrow`, silently dropping
+  the stride. chatterbox s3gen's conditional-flow-matching downsamples the mel
+  with a `[..., ::2]` slice; the triton path kept the full length (348 vs 174),
+  corrupting the decoder. Now builds a step-strided view (size `ceil(len/step)`,
+  stride×step) and materialises it for downstream flat-indexed kernels.
+
+- **Triton `NBXTensor.copy_` now converts dtype like PyTorch `Tensor.copy_`
+  (was a raw byte memcpy).** Copying an fp16 source into an fp32 destination
+  reinterpreted the fp16 bit-pairs as fp32 (≈0) and used mismatched byte counts.
+  In chatterbox s3gen this zeroed the reference mel (`prompt_feat`, fp16) copied
+  into the fp32 conditioning buffer (`padded_feat[:, :prompt_len, :] = prompt_feat`),
+  degrading the vocoder. `copy_` now casts the source to the destination dtype
+  and contiguous-packs it before the device copy; same-dtype copies are
+  unchanged. With this and the `sum` fix the whole s3gen pipeline up to the
+  conditional-flow-matching noise is byte-identical to the reference oracle.
+
+- **Triton `sum` reduction no longer overflows on bool/integer inputs (silent
+  wrong result).** `sum_wrapper` accumulated correctly in fp32 but then cast the
+  result back to the *input* dtype — so summing a bool mask of 354 True elements
+  (stored as uint8) wrapped to `354 % 256 = 98`. This is the chatterbox s3gen
+  vocoder bug: the bool mask sum is the mel sequence length fed into
+  `flow.encoder`; a length of 98 instead of 354 truncated the mel and the audio
+  decoded to noise (`*BANG*`). The wrapper now follows PyTorch `torch.sum`
+  promotion — floating inputs keep their dtype, bool/integer inputs promote to
+  int64 — matched against the per-op graph dtype (`int64`). Float reductions are
+  unchanged; this only affects bool/integer reductions (mask lengths, counts).
+  Isolated by an identical-token component diff (oracle s3gen renders the exact
+  same 20 speech tokens to "Hello world", triton rendered "*BANG*"), then walked
+  to the first divergent op. Adds gated `NBX_FORCE_SPEECH_IDS` /
+  `NBX_DUMP_SPEECH_IDS` diagnostic hooks (default-off) for TTS-LLM vocoder
+  component isolation across engines.
+
+- **chatterbox triton: the TTS-LLM flow handler now mirrors the oracle context
+  assembly instead of hand-rolling it** (was producing `*BANG*`/`*Ballon*`
+  garbage in both triton modes). The triton `tts_llm` handler fabricated the
+  t3 backbone context in numpy — a 2-frame hand-rolled conditioning, plain
+  tokenization (6 vs 9 tokens), no classifier-free guidance, and a zeroed
+  vocoder reference — feeding the backbone a context that did not match the
+  reference path. It now: (1) runs the traced **cond_enc graph** (speaker +
+  Perceiver resampler + emotion) for a `[1,34,1024]` conditioning instead of a
+  2-frame numpy stand-in; (2) reproduces the model's `start_text_token`/
+  `stop_text_token` + space-marker tokenization contract; (3) applies
+  **sequential CFG** via the centralized triton CFG engine (guidance from the
+  data-driven cascade); (4) feeds the embedded reference-voice conditioning to
+  the vocoder instead of zeros. A shared seeded sampler makes both triton modes
+  reproducible. The triton context now byte-matches the reference
+  (`Initial context (1,44,1024)`, cond=34/text=9/speech=1, CFG on). The handler
+  is chatterbox-only, so other TTS models are unaffected; the path stays
+  torch-free (numpy CPU glue + graph execution + NBXTensor).
+
+- **Kokoro-82M closed 4/4 (was 2/4): the pytorch-sequential & triton-sequential
+  op-by-op paths now run the full prosody-predictor + istftnet decoder.** Two
+  sequential-dispatcher completeness fixes (R30 parity — the compiled/triton
+  paths already handled these op forms):
+  (1) `sequential_dispatcher` now recomputes **1-D** upsample output_size from the
+  scale factor for `upsample_nearest1d`/`upsample_linear1d` (the 2-D
+  multi-resolution recompute already existed). Kokoro's F0/N branches upsample the
+  duration-expanded sequence; the trace-time output_size was `2*trace_len`, so at
+  a different runtime `sum(durations)` it mismatched the actual input (124 vs 68 →
+  add broadcast crash). The scale (2.0 / 300.0 / 1/300) is read positionally per
+  op (linear1d carries an `align_corners` bool before the scale).
+  (2) `tensor_resolver` now parses a **complex scalar** arg (`1j`, the imaginary
+  unit in the istftnet iSTFT `mul`) — PyTorch ATen handles complex natively, the
+  parser just lacked the type.
+
+### Changed
+
+- **openaudio dual_ar sampler is now deterministically seeded (shared across all
+  4 modes).** Both `core/flow/dual_ar.py` and `triton/flow/dual_ar.py` previously
+  sampled with an UNSEEDED RNG (torch `multinomial` / `np.random.choice`), so the
+  4 modes drew different acoustic tokens run-to-run and the STT-substring harness
+  was flaky (triton "Hello, wall" vs the others' "Hello world"). Both paths now
+  use a deterministic `np.random.RandomState` seeded from `global.seed` (default
+  `_DUALAR_SEED=1234`, identical literal in both files) with a byte-identical
+  numpy sampling algorithm — same seed ⇒ same draws ⇒ at fp16-close logits the 4
+  modes sample identical tokens. Result: openaudio **4/4 under sampling** (not
+  just greedy). R27/R28 reproducibility; the pytorch path keeps its compute in
+  torch and only the (CPU, numpy) sampling glue is shared-by-duplication.
+- **Triton path is now torch-free end to end:** removed the last `import torch`
+  from the triton compute path — the `_vram_probe` telemetry in
+  `triton/flow/iterative_process.py` used `torch.cuda.memory_allocated()`; it now
+  reads `DeviceAllocator.memory_allocated()` (the NBX live-bytes watermark).
+
+### Added
+
+- **VibeVoice cross-engine validation enabler (shared seeded diffusion noise +
+  first-K latent dump).** The pytorch and triton `next_token_diffusion` handlers
+  now both draw diffusion init noise from the SAME `np.random.RandomState(seed)`
+  with the same per-step draw (byte-identical noise across engines, verified
+  max|diff|=0.0) — replacing the pytorch path's `torch.randn(generator=)`. A
+  gated diagnostic (`NBX_VV_DUMP_LATENTS=<path.npy>`, `NBX_VV_DUMP_K`) dumps the
+  first-K diffusion latents per mode. This is the doctrine-correct validation for
+  a numerically-chaotic feedback model: triton-seq must match the pytorch-seq
+  oracle on the first-K latents (before the feedback loop amplifies fp16 diffs),
+  not on the noisy full-decode STT substring. numpy is CPU glue; the pytorch
+  compute path is otherwise untouched.
+- **Triton (zero-torch) `next_token_diffusion` flow handler (VibeVoice).**
+  `triton/flow/next_token_diffusion.py` mirrors the compiled
+  `NextTokenDiffusionEngine` on the NBXTensor substrate: the LM / diffusion head /
+  acoustic+semantic tokenizers / connectors run through their component graphs as
+  NBXTensor, the diffusion sampler is the zero-torch `TritonDPMSolverPPScheduler`
+  + `TritonCFGEngine` guidance, and init noise comes from a seeded numpy RNG
+  uploaded as an NBXTensor (numpy is CPU orchestration glue only — prompt
+  assembly, embedding-table lookups, scalar latent scaling — as in
+  `triton/flow/tts_llm.py`). The executor now dispatches `next_token_diffusion`
+  to this handler in triton / triton_sequential mode instead of raising. Component
+  names and input contracts validated against the VibeVoice .nbx topology.
+
+### Fixed
+
+- **Triton `clamp` rejected tensor bounds; `addmm` rejected N-D activations.**
+  `clamp()` did `float(min_val)` unconditionally, so an `aten::clamp.Tensor`
+  whose min/max BOUND is itself an `NBXTensor` (e.g. the Flex.1-alpha DiT) raised
+  `float() argument must be ... not 'NBXTensor'`. Tensor bounds now route through
+  elementwise `maximum_wrapper`/`minimum_wrapper` (R33-pure); scalar bounds keep
+  the fused kernel; mixed (one tensor, one scalar) handled per side. `addmm()`
+  hard-unpacked `M, K = a.shape`, so a >2-D activation raised "too many values to
+  unpack"; it now flattens the leading dims to 2-D, runs the 2-D kernel, and
+  restores the leading shape (mirror of `matmul()`'s ND×2D path). Both are
+  generic catalogue fixes; the diffusion scheduler-split re-validation is
+  unaffected (Sana / PixArt-XL / PixArt-Sigma triton all produce coherent PNG).
+- **Triton RoPE positions were frozen at 0 during KV-cache decode for models
+  with no `position_ids` input (orpheus).** Such models derive RoPE positions
+  from an internal `aten::arange(0, seq_len)`; in single-token KV-cache decode
+  `seq_len=1`, so the graph emits `arange(0,1)=[0]` every step — every decoded
+  token is RoPE-encoded at absolute position 0, the cache fills with mis-rotated
+  keys, and generation degrades into a non-terminating ramble (orpheus triton
+  STT "I'm not speaking, but I'm not speaking to you…" vs the correct
+  "Hello world!"). The op-by-op triton-*sequential* oracle recomputes the full
+  growing context (`arange(0,N)`) and so stayed correct, masking the bug behind
+  a passing mode. Fix: `TritonAttentionInterceptor.intercept_arange` shifts the
+  arange window START to `cache_len` during decode (`arange(0,1)` →
+  `arange(cache_len, cache_len+1)`), preserving output SIZE / symbolic shape —
+  the exact mirror of the compiled-core `kv_cache_wrapper.intercept_arange`, the
+  missing R30 half on the triton side. Registered ONLY when `not uses_abs_pos`
+  (no `position_ids` input); models that drive RoPE from a `position_ids` input
+  (TinyLlama, chatterbox t3, MoE LLMs) are untouched (TinyLlama R23
+  byte-identical). Closes orpheus triton 4-mode (whisper STT "Hello world!").
+- **Triton `aten::fill` silently no-op'd for non-zero values and corrupted
+  strided targets.** `NBXTensor.fill_` only handled `value==0` (byte memset);
+  the non-zero branch was a `TODO` that returned the tensor unfilled (= garbage),
+  and `_meta_fill` mutated its input *in place* — which on a non-contiguous slice
+  (e.g. the s3gen `aten.fill` target `aten.slice::…`) wrote the wrong addresses
+  under flat indexing. Fix: `fill_` non-zero now uses the pure-Triton
+  `fill_kernel` (with a contiguity guard that scatters into strided views), 0-dim
+  tensor values are collapsed via `.item()`, and `_meta_fill` returns a FRESH
+  contiguous tensor (correct functional `aten::fill` semantics, no input
+  mutation). Surfaced by chatterbox s3gen.
+- **Triton `aten::broadcast_tensors` returned a nested list instead of unpacked
+  outputs.** The handler was `lambda *t: t`, so a `TensorList` input `[a, b]` came
+  back as `([a, b],)` — `out_0` resolved to the whole Python list and a downstream
+  consumer (`lt` / `where` / `stack`) hit `'list' object has no attribute '_dtype'`.
+  Replaced with a real wrapper that broadcasts every input to their common
+  (numpy-style) shape and returns them unpacked, one tensor per output slot.
+- **Triton `aten::upsample_nearest1d` choked on the `.vec` list scale factor.**
+  `upsample_nearest1d.vec` passes `scale_factors` as a 1-element list `[s]`, which
+  the wrapper forwarded into the 2D path's scalar `float(scales_w)` → `TypeError`.
+  Unwrap the single-element list to a scalar; the scale-recompute path then sizes
+  the output from the live input, which is what a variable-length audio vocoder
+  (HiFiGAN/iSTFTNet/DAC/S3Gen) needs. (Both surfaced by chatterbox s3gen.)
+- **Triton `gather` out-of-bounds on tensors with ≥2 outer dims (CUDA-700).**
+  `gather_wrapper` passed `stride(0)` as the kernel's flattened-outer stride, but
+  `gather_kernel`'s `outer_idx` flattens *every* dim before the gather dim, so the
+  correct stride is `prod(shape[dim:])` (= `shape[dim]·inner_size`). `stride(0)`
+  over-counts by `prod(shape[1:dim])`; with ≥2 outer dims every `outer_idx≥1`
+  store ran past the buffer end — a destructive out-of-bounds write the driver
+  reported as CUDA error 700 at the next synchronising op. Surfaced by the
+  chatterbox s3gen T5 relative-position gather `[1,8,180,359]` with index dim=3
+  (1440× out of bounds). Byte-identical for `dim≤1` (a single outer dim), so every
+  previously-passing gather is unchanged; verified against `torch.gather` on
+  dim=1, multi-outer dim=2, and the chatterbox shape.
+
+### Added
+
+- **Separate zero-torch Triton scheduler subtree (`triton/scheduler/`).** The
+  Triton diffusion path previously borrowed the PyTorch scheduler via an
+  `nbx_to_torch → driver.step` round-trip in `triton/flow/iterative_process.py`
+  — the last torch dependency on the Triton compute path. Added a fully separate
+  Triton scheduler (`TritonDPMSolverPPScheduler` + `TritonSchedulerFactory`),
+  a byte-for-byte mirror of `core/module/scheduler/diffusion/dpm_solver_pp.py`
+  with torch replaced by: numpy for the CPU noise schedule (betas/alphas_cumprod/
+  sigmas/timesteps, computed once), Python `math` for the per-step scalar
+  coefficients (sigma_t/alpha_t/lambda/h/r0), and NBXTensor for the per-step
+  latent arithmetic (the only tensor operands). No torch import anywhere in the
+  Triton scheduler. Validated bit-equivalent to the PyTorch DPM++ scheduler:
+  matching timesteps and a per-step latent trajectory within 3.5e-6 (fp32) over a
+  20-step v-prediction/cosine/order-2 run. This is the PyTorch/Triton code-path
+  separation requirement — the two paths now share only the CLI entry +
+  orchestrator executor. (Flow-matching routes through DPM++ with
+  `use_flow_sigmas=True`, matching the core factory.)
+- **Triton FlowEuler scheduler + iterative_process rewired off the PyTorch
+  scheduler.** Added `TritonFlowEulerScheduler` (numpy timesteps, Python-float
+  dt, NBXTensor latent) — flow-matching Euler for Sana/Flex, validated
+  bit-equivalent to the core FlowEuler (timesteps 1e-7, trajectory 1.4e-6). The
+  orchestrator (`executor._setup_modules`) now picks the scheduler by mode —
+  triton modes get `TritonSchedulerFactory`, PyTorch gets `SchedulerFactory` —
+  and `triton/flow/iterative_process.py` calls the NBXTensor-native scheduler
+  directly (the `nbx_to_torch → driver.step` / `scale_model_input` crutch is
+  removed). The triton diffusion compute path is now zero-torch end to end.
+  Both triton schedulers expose `timesteps` as NBXTensor `[1]` scalars (numpy kept
+  internal for indexing) so the loop iterator / CFG engine / DiT component receive
+  tensor-like timesteps exactly as the PyTorch path did (fixes a `numpy.int64 has
+  no attribute 'dim'` crash in the triton CFG at Sana step 0).
+- **Triton reflect/replicate `aten::pad` routing + `NBXTensor.ones`/`ones_like`.**
+  The generic `pad_wrapper` (for `aten::pad`, which carries its mode as a runtime
+  arg rather than lowering to `aten::reflection_padNd`) only handled
+  `mode='constant'` and raised for `reflect`/`replicate`; it now routes by padded-
+  dim count to the existing R33-pure `reflection_pad1d/2d` (and `replication_*`)
+  wrappers. And `NBXTensor.ones`/`ones_like` were documented in the engine
+  contract but never implemented (only `empty`/`zeros`/`*_like` existed), so the
+  istft window-envelope `NBXTensor.ones(...)` call hit `AttributeError`; added,
+  backed by the pure-Triton `fill_kernel`. Together these take the chatterbox
+  s3gen vocoder from crash (reflect-pad → istft `ones` → `aten::fill`) to full
+  end-to-end execution in triton mode.
+- **Triton `aten::norm` (L2) kernel** — composed R33-pure from existing kernels
+  (`mul` + `sum` + `sqrt`, with fp32 accumulation so a long-row reduction does
+  not overflow fp16). Unblocks weight-normed convolutions in triton mode (the DAC
+  codec decoder). Only p=2 (the weight-norm case) is wired; other p raise.
+- **Triton convolution dilation support.** The conv kernel sized the output with
+  the dilation factor (right, smaller output shape) but gathered the kernel taps
+  at contiguous offsets, ignoring dilation — a dilated convolution silently read
+  the wrong receptive field and produced garbage. The kernel now spaces the taps
+  by `dilation` (`tap*dilation` in the input-index math); dilation defaults to 1,
+  so non-dilated convolutions are byte-identical. Unblocks the OpenAudio DAC
+  vocoder, whose residual units use the classic 1/3/9 dilation stack (its triton
+  audio was a low-energy noise wash before — STT "*crickets*", now "Hello world!").
+
+### Added
+
+- **Triton `aten::stft` / `aten::istft`.** Short-time Fourier transform and its
+  inverse, built on the existing rfft/irfft DFT-matmul path: `stft` =
+  `unfold` framing + window + rfft + transpose; `istft` = irfft + windowed
+  overlap-add (via the existing `unfold_backward` scatter) + window-energy
+  normalisation + centre-trim. Model-agnostic, R33-pure. Unblocks the
+  chatterbox/CosyVoice s3gen HiFiGAN/iSTFTNet vocoder (n_fft=16, hop=4).
+- **Triton `aten::conv_transpose1d`.** Thin adapter over the existing transposed
+  conv kernel (which already handles the 1D case via an H=1 unsqueeze); only the
+  positional-arg order differs from the aten signature. Used by HiFiGAN-style
+  upsamplers.
+
+### Fixed
+
+- **Triton `aten::matmul` crashed on ≥4-D batched inputs.** The general batched
+  branch passed raw 4-D tensors to `bmm` (which is strictly 3-D → "too many
+  values to unpack"). It now collapses the leading batch dims into one, runs
+  `bmm`, and restores the batch shape (with simple batch broadcasting). 3-D
+  matmul is unchanged (byte-identical); verified exact vs torch on a 4-D case.
+- **Triton `aten::layer_norm` returned a 3-tuple where the graph expects one
+  output.** The high-level `layer_norm` op was dispatched to the
+  `native_layer_norm` wrapper (which also returns mean/rstd); a single-output
+  graph then stored the whole tuple, so a downstream op received a tuple. It now
+  routes to a wrapper returning just the normalised output. `native_layer_norm`
+  (3 outputs) is unchanged.
+- **Triton `aten::clip`** now dispatches to `clamp` (it is an alias).
+- **RNN (LSTM/GRU) dtype mismatch in sequential/triton modes.** The AMP input
+  cast only converted top-level tensor arguments, but `aten::lstm`/`aten::gru`
+  pass their hidden state (`[h0, c0]`) and parameters as nested *lists* of
+  tensors. The input was cast to fp16 while the hidden/weight lists stayed fp32,
+  so PyTorch rejected the op ("input Half × hidden Float"). The cast now recurses
+  into list/tuple arguments; flat-argument ops are unaffected (byte-identical).
+- **Triton DualAR (OpenAudio) generated near-silent audio — full generation port.**
+  The triton `dual_ar` flow ran only the slow (semantic) autoregressive pass and
+  then fed the decoder semantic token embeddings via a numpy shortcut, never
+  running the fast/depth AR for the residual codebooks nor the RVQ dequantize —
+  the decoder received the wrong features. It now mirrors the reference flow:
+  slow backbone AR + fast/depth AR (9 residual codebooks) + `codec.quantizer`
+  RVQ decode, all on `NBXTensor` (R33-pure; orchestration/sampling in numpy at
+  the boundary). Triton greedy codes are now byte-identical to the PyTorch
+  reference across all positions and codebooks; STT of the audio reads the prompt.
+- **Triton DualAR ignored CLI sampling overrides.** The flow read the embedded
+  `defaults` for temperature/top-p/repetition-penalty/max-tokens, so
+  `--temperature 0` (greedy) silently sampled at the default 0.7. It now reads the
+  `global.*` overrides first (mirroring the reference flow), restoring
+  deterministic greedy decoding.
+- **`isin` returned a non-boolean tensor.** The membership op staged its result
+  through `uint8`, so a downstream boolean negation (`~mask`) missed its "is this
+  a bool?" guard and did a raw byte complement (`~0 → 255`) instead of the logical
+  NOT — corrupting the OpenAudio DualAR attention mask (first triton-vs-reference
+  divergence, localized op-by-op). `isin` now returns a true boolean tensor so
+  every bool-aware consumer (negation, `masked_fill`, `where`) sees it correctly.
+- **Triton audio output not saved.** The decoder output is an `NBXTensor`, but
+  the audio post-processing searched only for `torch.Tensor` waveforms, so it
+  never bound `global.output_audio` and the save raised. The post-processor now
+  converts the chosen waveform candidate to torch at the mode boundary (shape is
+  read without converting, so only the matching waveform is materialised) and
+  also looks under the `codec.decoder.output_0` key. Compiled mode is unchanged.
+- **Triton mode crashed (CUDA error 700) on boolean-mask `masked_fill`.** An
+  attention `masked_fill(~mask, value)` is captured as an in-place assignment
+  with a boolean mask; the triton scatter wrapper mis-read the 1-byte mask as
+  integer positions and wrote far out of bounds, corrupting the CUDA context
+  (surfacing later as a spurious "GPU malloc failed"). A mask whose shape is a
+  leading-dim prefix of the target, with a scalar fill, now routes to the
+  `masked_fill` kernel (detected by dtype name, robust to the mask being typed
+  bool/uint8 or a raw triton dtype). Unblocks the OpenAudio DualAR backbone in
+  triton mode.
+- **Sequential (op-by-op) mode silently dropped in-place index assignments,**
+  producing silent/garbage audio for codec models. An assignment such as
+  `dst[:, 0] = value` is captured as an in-place write into a *view* of the
+  destination; sequential mode executed it with the functional copy (which
+  returns a new tensor and never mutates), so the destination kept its original
+  value. The destination of the OpenAudio DAC codec's code tensor stayed all
+  zeros → every codebook lookup hit row 0 → silence. Sequential now performs the
+  write in place (matching compiled mode), so the view-aliased mutation
+  propagates. This affects every model that does `tensor[idx] = value` (OpenAudio,
+  Kokoro, Chatterbox, SANA-Video). OpenAudio sequential mode now produces
+  word-perfect audio, matching compiled mode (the op-by-op reference oracle).
+- **Runtime AMP parity:** the per-op AMP path used by sequential/triton modes now
+  mirrors the compiled path's fp16 squaring guard — a hand-rolled
+  `mean(x*x)` norm variance is upcast to fp32 so it cannot overflow fp16 and
+  collapse the norm to zero.
+
+### Changed
+
+- **OpenAudio TTS decodes its audio codes in a single pass.** The `dual_ar`
+  flow now dequantizes (`codec.quantizer`) and decodes (`codec.decoder`) the
+  whole generated code sequence at once instead of slicing it into fixed-length
+  blocks, which previously cut the codec transformer's `window_size=128`
+  cross-frame attention and left inter-block seams. The quantizer features are
+  bound to `model.output_0` so the single full-sequence decoder pass resolves
+  its input via the topology connection. Mirrored in compiled and triton modes
+  (`core/flow/dual_ar.py`, `triton/flow/dual_ar.py`, R30). Validated:
+  word-perfect STT at a generation length different from calibration.
+
+### Fixed
+
+- **Reshape crash in the OpenAudio audio decoder at non-calibration lengths.**
+  A feature/channel dimension whose value happened to equal a length-dependent
+  size at the calibration length was incorrectly treated as variable, so it
+  mis-scaled when the generated audio differed in length and a reshape failed.
+  The runtime now keeps such a dimension fixed only when it is both an
+  architectural constant and fully explained by fixed input dimensions, leaving
+  genuinely variable spatial/sequence dimensions untouched (Sana and
+  granite-speech outputs unchanged).
+
+- **SDPA Q/K/V dtype alignment in the efficient/flash sequential path.** The
+  standard `scaled_dot_product_attention` dispatch already cast Q/K/V to the
+  narrowest common dtype, but the `_scaled_dot_product_efficient_attention` /
+  `_scaled_dot_product_flash_attention` branch only cast the attn_mask. When
+  upstream AMP leaves V in fp32 while Q/K are fp16 (openaudio DualAR backbone),
+  torch SDPA rejects the mixed dtypes. Mirrored the alignment into the
+  efficient/flash branch, guarded on mismatch (no-op when uniform, so the
+  efficient-backend models that already pass — whisper, Voxtral, canary — are
+  unchanged). Unblocks openaudio sequential end-to-end.
+
+### Added
+
+- **`NBX_DECODE_BOUND=N` — universal bounded-decode harness (diagnostics).**
+  When set, every autoregressive / TTS / audio_llm / dual_ar / encoder_decoder
+  decode loop hard-caps its step count to N, in BOTH execution modes (core +
+  triton, R30). Lets op-by-op triton-vs-oracle diffs (the 4-mode method) run on
+  a 5-10 token window in seconds instead of the full 2048-token generation
+  (openaudio dual_ar: 8 tokens in 8.5 s vs ~24 min for 2048 op-by-op). New
+  pure-Python helper `core/runtime/decode_bound.py` (`os` only, zero torch —
+  R33-safe to import from `triton/flow/`); applied at the `max_tokens`
+  computation of all 10 decode loops. Gated, default-off, zero semantic/runtime
+  impact unset. NOTE: also fixed a latent asymmetry — `triton/flow/dual_ar.py`
+  read `max_tokens` from defaults only (ignoring the CLI `global.max_tokens`
+  that the core dual_ar honoured); both now flow through `decode_bound`.
+
+- **`aten::_weight_norm` implemented as a Triton meta-op.** Vocoders' weight-
+  normalized convolutions (chatterbox s3gen, HiFi-GAN-style) emit
+  `aten::_weight_norm(v, g, dim)`, which the triton path lacked (`[triton]
+  Missing op: aten::_weight_norm`). Implemented in `dispatch.py` as
+  `w = v · g / ‖v‖`, with `‖v‖` the L2 norm over all dims except `dim`
+  (keepdim), via the existing mul/sum/sqrt/div wrappers — pure-Triton, no new
+  `@triton.jit` kernel. Resolves the P-TRITON-CHATTERBOX missing-op blocker.
+  **CONFIRMED executing**: a patient run reached `[s3gen] Running vocoder` (after
+  the t3_cfg decode hit eos at 221 tokens) and ran past `_weight_norm` with no
+  error — the meta-op executes correctly (chatterbox's `weight_g` is `[512,1,1]`,
+  broadcast correct). chatterbox's NEXT triton blocker is a separate missing op,
+  `aten::stft` (vocoder STFT) — full WAV/STT still pending that.
+
+- **`NBX_DECODE_PROGRESS=<file>` gated diagnostic** in the compiled + triton
+  `encoder_decoder` flows AND the triton `autoregressive` generator
+  (`generator.py`) — writes (buffer-immune) the encoder output stats and a
+  per-decode-step trajectory (token count, last token, done flag; last-token
+  hidden for encoder_decoder), for encoder sanity + triton-vs-compiled
+  first-divergence localization + decode liveness/loop detection. Off by
+  default, zero impact when unset; numpy at the dump boundary only (R33-clean).
+  This is the toolkit that root-caused the whisper efficient-SDPA causal-mask
+  bug and is reused across the audio triton sweep.
+
+- **`NBXTensor.repeat` (aten::repeat)** — tiling (numpy.tile / torch repeat),
+  R33-pure (view → expand → contiguous → reshape). Was missing entirely
+  (`'NBXTensor' object has no attribute 'repeat'`), crashing any triton model
+  whose graph emits `aten::repeat` — surfaced by the parakeet conformer encoder.
+  Bit-exact vs torch across shapes / extra leading dims.
+
+### Changed
+
+- **Block-attention windowing (`num_blocks = ceil(seq/W)`) is now resolved from
+  trace-emitted symbolic graph dims in every execution mode**, replacing a
+  compiled-only runtime pre-compilation pass (`_symbolize_data_dependent_attrs`,
+  retired from `compiled_sequence.py`). The graph now arrives with symbolic
+  windowing dims and the shared `SymbolicShapeResolver` resolves them, so flexible
+  frame counts no longer depend on a mode-specific runtime patch. The general
+  cross-branch / seq_len passes are unchanged (they consume whatever symbolic
+  exprs are present). Granite Speech `--compiled` transcribes correctly with a
+  matching re-trace; sequential-path resolution of these dims is in progress.
+- **parakeet RNNT decoder LSTM runs through the triton-pure `lstm_wrapper`**
+  instead of a hand-rolled NumPy cell — removes the NumPy compute debt in
+  `triton/flow/rnnt.py` (the greedy loop stays Python; only the single-step
+  input + h/c cross the boundary, weights converted once). Per-step
+  unidirectional multi-layer output is bit-exact vs `torch.nn.LSTM`
+  (max|diff|=0). NOTE: parakeet triton end-to-end is still wrong due to a
+  separate, pre-existing conformer-ENCODER bug (only now reachable since the
+  `repeat` fix cleared the crash that previously masked it) — the next
+  triton-sweep step.
+
+### Fixed
+
+- **`triton_sequential` dropped SDPA `scale`/`is_causal` kwargs → 8x-wrong
+  attention scale in Whisper-style audio encoders.** `_dispatch_sdpa` read
+  `attn_mask`/`dropout_p`/`is_causal`/`scale` POSITIONALLY from `inputs` and
+  ignored the op's graph kwargs. Whisper-style encoders (Voxtral `audio_tower`)
+  carry `scale=1.0` and `is_causal=false` as **kwargs** with only q/k/v
+  positional (the encoder pre-scales Q, so SDPA scale must be 1.0). Reading
+  positionally only fell back to the wrapper default `scale = 1/sqrt(head_dim)
+  = 0.125` — an 8x-wrong attention scale → garbage encoder output → garbage
+  audio_embeds → the LM emitted a generic answer ("You're welcome!") instead of
+  transcribing. Fix: `_pos_or_kw` (positional-OR-kwarg) in all three SDPA
+  branches, mirroring the compiled path's `compiled_kwargs` forwarding. Same
+  class as the rms_norm-eps bug below (a seq dispatcher special-case dropping
+  the graph's data-driven kwargs); also explains why orpheus's efficient-SDPA
+  seemed fine (its dropped scale default happened to equal the graph's
+  1/sqrt(128)). After the fix Voxtral triton-sequential transcribes correctly
+  (full sentence, matching the PyTorch-seq oracle and whisper ground-truth);
+  the audio_tower SDPA op now matches the compiled path bit-for-bit
+  (NBX_OP_FINGERPRINT). Surfaced by genuinely re-verifying `--triton-sequential`
+  (the prior audio sweep validated `--triton`/compiled only).
+
+- **`triton_sequential` dropped the `epsilon` kwarg on `custom::rms_norm` →
+  wrong RMSNorm eps (1e-6 instead of the model's 1e-5).** The sequential
+  dispatcher's `custom::rms_norm` special-case called `func(*inputs)`,
+  forwarding only positional tensors and silently discarding the op's
+  attribute kwargs — where the model's real `rms_norm_eps` lives (graph
+  `custom::rms_norm` attributes carry `{"epsilon": 1e-05}` for Llama-family
+  models). The `rms_norm` wrapper then fell back to its `eps=1e-6` default.
+  The other three modes (PyTorch-seq via `sequential_dispatcher`, PyTorch-
+  compiled, and triton-compiled via `compiled_kwargs`) all forward the
+  epsilon correctly, so `triton_sequential` was the lone outlier. On the
+  first RMSNorm over small-magnitude embeddings `mean(x²)` is near the eps
+  scale, making 1e-5 vs 1e-6 a ~10% denominator swing that compounds through
+  every layer: on TinyLlama greedy decode the four modes agreed for steps
+  0-6 then triton_sequential flipped a near-tie argmax at step 7 (2215 vs the
+  reference 2319) and diverged. Localized by an op-fingerprint prefill diff
+  (first diverging op = `custom::rms_norm::0`, identical bit-exact input,
+  divergent fp32 output). Fix: forward the resolved attribute kwargs in the
+  `custom::rms_norm` branch, mirroring the dispatcher's generic path. After
+  the fix all four modes produce byte-identical greedy tokens on TinyLlama.
+  Affects every model carrying `custom::rms_norm` (Llama-family: TinyLlama,
+  orpheus, granite, chatterbox, openaudio, deepseek-moe, Qwen, Sana text
+  encoder); LayerNorm models (whisper, Voxtral, canary) are unaffected,
+  which is why they passed the triton sweep untouched.
+
+- **`NBX_DISABLE_ROPE_FUSION=1` diagnostic gate** (triton-compiled `sequence.py`)
+  — leaves the HF-Llama rotate_half RoPE chain as native ATen ops instead of
+  fusing into `custom::rope_fused`, to isolate fused-rope numerical divergence
+  from other compiled-path effects (parallel to `NBX_DISABLE_AUTOTUNE`). Gated,
+  default-off. Used to rule the fused rope OUT as the cause of the orpheus
+  triton-compiled decode divergence (output was byte-identical fused vs unfused).
+
+- **`NBX_OP_FINGERPRINT` is now emitted by the `triton_sequential` path too**
+  (graph_executor sequential dispatch loop), mirroring the compiled
+  `TritonSequence` emit. Closes an R30 diagnostic asymmetry — the sequential
+  dispatcher previously could not be op-diffed against the compiled hot-loop,
+  the very comparison that root-caused the rms_norm eps bug above. Same record
+  schema (`{i, op_uid, op_type, tid, shape, dtype, sha}`), gated, default-off,
+  zero runtime impact.
+
+- **Scalar-fill ops (`masked_fill`/`fill`/`index_fill`) overflowed fp16 in the
+  dynamically-dispatched modes.** A graph may carry a bf16/fp32 mask sentinel
+  (e.g. bf16-min ≈ -3.39e38) as the Python scalar fill value; on fp16 hardware
+  the fill tensor is bf16→fp16, and converting that scalar to fp16 raises "value
+  cannot be converted to type at::Half without overflow" (granite-speech
+  conformer attention, in `--sequential` / `--triton`). The scalar is an op
+  attribute, not a tensor input, so the per-input AMP casts never saw it. The
+  DtypeEngine (single dtype authority) now clamps the scalar to
+  `torch.finfo(fill_dtype)` when the fill tensor is fp16/bf16 — numerically inert
+  versus the oracle (masked positions are ~0 after softmax either way) and a
+  no-op for in-range scalars. R23: whisper `--triton` byte-identical.
+
+- **PEFT/LoRA models with unmerged adapters now run, with the runtime kept
+  fully LoRA-agnostic.** A model published with unmerged LoRA adapters
+  (`canary-qwen-2.5b`: a frozen Qwen base + `q_proj`/`v_proj` adapters,
+  r=128 α=256) ships three tensors per adapted projection — `base_layer`,
+  `lora_A`, `lora_B` — while its graph references a single clean weight. Such
+  models are now delivered with the adapters already folded into one weight per
+  projection (`W = W_base + (α/r)·(B·A)`, a frozen post-training constant), so
+  the execution engine binds plain weights with **zero** knowledge of LoRA
+  structure. The runtime weight binder accordingly no longer special-cases PEFT
+  wrapper names (`base_layer`/`base_model`); that model-structure knowledge has
+  been removed from the engine, keeping it model-agnostic (the only weight-key
+  helper that remains is the general prefix-hierarchy suffix match). **Validated:**
+  canary-qwen-2.5b produces the byte-identical correct vendor transcript in all
+  four execution modes (compiled / sequential / triton / triton_sequential,
+  transcript md5 `ffcb30ea…`). Folding existing adapters is weight preparation
+  of a frozen constant — **not fine-tuning** (that capability is untouched and
+  reserved for its own future work).
+
+- **Triton: `aten::_safe_softmax` was a missing op.** The triton dispatch mapped
+  `softmax` / `_softmax` → `w.softmax` but not `_safe_softmax` (PyTorch's
+  masked-safe softmax — returns 0 for fully-`-inf` rows instead of NaN). Any
+  model whose graph emits it crashed with `[triton] Missing op:
+  aten::_safe_softmax` (granite-speech conformer attention). Mapped it to
+  `w.softmax` and added it to the TRITON op classification. For non-fully-masked
+  attention it is identical to softmax; the `dtype=None` 3rd arg is harmless
+  (mirrors `_softmax`'s `half_to_float`). (Fully-`-inf`-row safety would need a
+  dedicated kernel, deferred until a model exercises that condition.)
+
+- **Triton autoregressive `_tokenize` ignored `chat_mode` → wrong prompt for
+  TTS LMs.** The triton flow (`triton/flow/autoregressive.py`) applied the
+  generic HF `apply_chat_template` whenever the tokenizer exposed it, ignoring
+  the model's `chat_mode` flag. Models with `chat_mode=False` (orpheus,
+  openaudio — whose prompt is the bare templated text) got the full chat
+  template (system prompt + role markers): orpheus's "Hello world." became a
+  **39-token** prompt instead of the correct **4 tokens**, so the prefill
+  consumed a different prompt and the entire decode was garbage (degenerate
+  tokens, never reached eos). Gated the chat-template path on `chat_mode` and
+  mirrored the compiled `TextProcessor.tokenize` basic-encode path
+  (`add_special_tokens=True`). orpheus triton now produces a prefill hidden
+  (h_norm 108.06 vs compiled 108.08, head byte-identical) and decode tokens
+  (128009,128260,128261,128257,…) matching the compiled oracle. Shared fix for
+  any `chat_mode=False` autoregressive model in triton.
+
+- **Triton repetition-penalty sampler segfault (H2D cudaMemcpy raw host
+  pointer).** `_apply_repetition_penalty` (triton/samplers.py) wrote the
+  penalty-adjusted logits back to the GPU with the host source passed as a bare
+  `logits_np.ctypes.data` — a Python int. A ctypes call with no `argtypes`
+  coerces it to a 32-bit C int, truncating the 64-bit host address → invalid
+  source pointer → segfault. Any triton autoregressive model with
+  `repetition_penalty != 1.0` crashed at the first sampling step (orpheus TTS).
+  Wrapped the host src in `ctypes.c_void_p` (the D2H reads already wrapped both
+  ends, which is why only this H2D write crashed). Removed a dead
+  `DeviceAllocator` import at the same site.
+
+- **Triton autoregressive KV-cache interceptor: efficient/flash/cudnn SDPA
+  arg-binding crash.** `TritonAttentionInterceptor.intercept` (kv_cache.py) has
+  the plain-SDPA signature, but the autoregressive flow registered it for ALL
+  SDPA variants. The efficient/cudnn ops pass `is_causal` at arg[6] and `scale`
+  as a kwarg, so binding them to the plain signature raised
+  `intercept() got multiple values for argument 'scale'` — crashing any
+  efficient-backend causal decoder that uses the KV cache (orpheus / openaudio
+  TTS). Added per-variant `intercept_efficient` / `intercept_flash` remap methods
+  and routed each SDPA op type to the matching one (added cudnn to the
+  intercepted set) — mirrors the compiled side's per-variant interceptors
+  (kv_cache_wrapper.py:622). Plain `scaled_dot_product_attention` routing is
+  unchanged → R30-safe for TinyLlama / Voxtral / canary.
+
+- **Triton `--triton`: `aten::_scaled_dot_product_efficient_attention` (and
+  `_flash` / `_cudnn`) dropped the causal mask + used scale=1.0.** These
+  fused-backend SDPA variants have a shifted positional signature vs plain SDPA
+  (an extra `compute_log_sumexp` bool at arg[4] pushes `is_causal` to arg[6],
+  `scale` to arg[7]). The `--triton` dispatch (`dispatch.py`) mapped them
+  *directly* to `scaled_dot_product_attention_wrapper`, so a positional call
+  mis-read `is_causal` (from `dropout_p`→False — causal mask silently dropped)
+  and `scale` (from `is_causal`→1.0). Invisible at seq_len=1 (single-element
+  softmax), it corrupted every seq_len≥2 forward → constant-token garbage on any
+  causal decoder traced with the efficient backend (whisper-large-v3-turbo
+  produced `516` repeated). Fixed with a `_meta_sdpa_efficient` remap shim
+  mirroring `triton_sequential` (sequential.py:198) — closes the R30 asymmetry.
+  Cross-attention (non-causal, 5-arg) and plain `scaled_dot_product_attention`
+  are unchanged; compiled never uses this dispatch (R23-safe). whisper-large-v3-
+  turbo triton now transcribes byte-identical to the compiled oracle.
+
+- **Triton `index_select` / `aten::index`: enforce integer indices.**
+  `index_select_wrapper` passed the index tensor straight to the kernel, whose
+  pointer arithmetic `inp + (rows*N + indices)` is only valid for integer
+  offsets. The whisper decoder reaches `aten::index` (via `_meta_index`) with
+  integer-VALUED `position_ids` tagged float32, so the kernel failed to compile
+  (`pointer<fp16> and float32`). Cast a floating index to int64 at this single
+  choke point both triton modes funnel through (R30-symmetric), matching torch
+  (index_select requires a Long); compiled never touches this wrapper so it is
+  R23-safe. Unblocks the whisper-large-v3-turbo triton decode crash (the
+  transcription is still incorrect — a separate decoder compute bug, under
+  investigation in the same sweep step).
+
+- **Triton `encoder_decoder` flow (whisper): stale `dispatch_op` import + 3-D
+  lm_head.** The flow imported `dispatch_op` (removed; the current API is
+  `dispatch(op)(...)`), and fed a 3-D `[B,T,H]` hidden state to the strictly-2-D
+  `mm` kernel (`too many values to unpack`). Both fixed (flatten leading dims for
+  the lm_head matmul, unflatten the result). whisper-large triton now runs the
+  encode+decode end-to-end; the transcription is still empty (a separate decode
+  issue — next sweep step).
+
+- **Triton `bitwise_not` on a BOOL tensor is the logical NOT, not the bitwise
+  complement.** The kernel did `~x`; for bool (0/1) that yields `~1=254` / `~0=255`
+  — both non-zero, so the result read back as an **all-True** bool tensor. Bool is
+  now routed through `logical_not` (integer dtypes keep the `~x` complement).
+  Surfaced by the parakeet conformer attention padding mask `~(arange < len)`: an
+  all-True mask made `masked_fill` overwrite every score with -1e4 → uniform
+  softmax → dead self-attention → garbage transcription. With this + the new
+  `aten::repeat` + the LSTM-on-triton switch, **parakeet-tdt-1.1b triton
+  transcribes byte-identical to the compiled oracle** (closed).
+
+- **Triton `abs` of a complex tensor returns the real magnitude (and stops a
+  heap corruption).** `abs_wrapper` had no complex branch: for complex64 it ran
+  the element-wise float kernel over the interleaved `[real, imag]` storage —
+  computing `|interleaved float|` instead of `sqrt(re²+im²)`, mis-typing the
+  output as complex, and (numel-vs-byte mismatch) corrupting the host heap
+  ("corrupted double-linked list"). Exposed by the Kokoro iSTFT source STFT
+  (`abs(_fft_r2c(...))`) feeding the generator noise-convolutions. Now computes
+  the magnitude R33-pure from the stride-2 real/imag views; bit-exact vs torch
+  at all batch sizes (`sin`/`cos`/`mul`/`exp`/`angle` already had complex
+  branches — `abs` was the gap).
+
+- **Triton `remainder` (`%`) follows the divisor's sign (torch / Python),
+  not C `fmod`.** The kernel used Triton's `%`, which follows the dividend's
+  sign, so negative inputs never wrapped into `[0, divisor)` — `remainder(-0.1,
+  1)` returned `-0.1` instead of `0.9`. The Kokoro iSTFT SineGen wraps an
+  unconstrained (sometimes negative) phase with `% 1`; the negative phases
+  stayed negative and corrupted the harmonic source. Now `a - floor(a/b)*b`;
+  bit-exact vs torch for floats and integers.
+
+- **Triton `bilinear2d` upsample grid no longer swaps the OH/OW axes.** The
+  launch grid passed `(cdiv(OH,BX), cdiv(OW,BY), …)` while the kernel indexes
+  `program_id(0)→ow`, `program_id(1)→oh`. Invisible for square outputs (the
+  image-upscaler case, OH==OW), but for non-square outputs most output columns
+  never received a program and were left unwritten — breaking every 1-D-as-2-D
+  use (`upsample_linear1d`, H=1), e.g. the Kokoro iSTFT SineGen phase resample
+  (256↔76800). Now `(cdiv(OW,BX), cdiv(OH,BY), …)`; bit-exact for square,
+  non-square, and 1-D. With these two fixes the Kokoro-82M triton decoder
+  produces intelligible speech (whisper STT: "Hello, world.").
+
+- **Triton `batch_norm` instance-norm path: null pointers for absent
+  weight/bias/running, never the input tensor.** `batch_norm_wrapper` substituted
+  the input `x` for absent `weight`/`bias`/`running_mean`/`running_var`. The kernel
+  guards each with `if *_pointer:`, so a non-null `x` defeated the guard — it read
+  `x` as the affine scale/shift and wrote momentum-blended running stats back into
+  the input. `instance_norm` / AdaIN (training=True, no affine, no running buffers
+  — the StyleTTS2 AdainResBlk1d norm used throughout the Kokoro predictor and
+  decoder) was silently corrupted; standard `batch_norm` (real buffers) never
+  tripped it. Now passes null pointers and guards the running-stats update with
+  `if running_mean_pointer:`. Eval `batch_norm` (running+affine) stays
+  byte-identical; `instance_norm` is bit-exact vs torch across all Kokoro shapes.
+
+- **Triton float-math unary ops promote integer input to float (PyTorch type
+  promotion).** `rsqrt`/`sqrt`/`log`/`exp2`/`reciprocal`/`erf`/`tan` preserved an
+  integer input dtype through `NBXTensor.empty_like`, computing in int and
+  truncating: `rsqrt(int64 2)` returned `0` instead of `0.7071`. The Kokoro
+  AdainResBlk1d residual `(h + sc) * rsqrt(2)` (the `2` traced as an int64 scalar;
+  torch auto-promotes) collapsed every block output to zero. A shared
+  `_promote_int_unary` upcasts integer/bool input to float32; no-op for floats.
+  With both fixes the Kokoro-82M triton predictor matches the compiled oracle
+  op-for-op (embedding → CNN → BiLSTM → duration → alignment → F0/N blocks).
+
+- **Triton metadata `expand` / `view` / `reshape` now resolve trace-baked shapes
+  against the runtime numel** — mirror of the compiled `_make_expand` /
+  `_make_view_reshape` runtime fixes that the triton metadata-op port had dropped.
+  The graph bakes trace-time shapes; a variable-length model (e.g. the Kokoro
+  predictor) can have a different runtime length on a dimension left concrete in
+  the packaged graph. `expand` now uses the input's actual non-1 dim when it
+  differs from the baked target (the only valid `expand` resolution);
+  `view`/`reshape` infer the single changed dimension when the baked product
+  mismatches the input numel (NBXTensor's `view` re-strides blindly without
+  validating, so the mismatch is detected proactively). Footprint-screened
+  (`NBX_DEBUG_META_RESOLVE`): zero activations on TinyLlama (LLM, runtime seq !=
+  trace seq) and Sana 1024 (diffusion) — byte-identical there; fires only on the
+  variable-length case it fixes. Restores R30 compiled/triton parity.
+
+### Fixed
+
+- **Triton 1-D ZIP-archive constant loading uses the declared (pickled view) shape,
+  not the raw storage size.** `_load_constant_triton` "trusted the
+  bytes" for a 1-D constant whose torch.save storage held more elements than the
+  declared shape — but `torch.load` (native path) reconstructs from the pickled
+  shape (a view into the storage), not the storage size. The Kokoro iSTFT window is
+  a [20] view into a 21-float storage; triton yielded [21] (decoder frame*window
+  broadcast failed) vs native [20]. Now: when the storage is at least the declared
+  size, slice to the declared element count (matching torch.load); only a genuinely
+  shorter storage falls back to its length. Restores native/triton parity.
+
+### Fixed
+
+- **Triton `_fft_r2c` accepts the ATen `int[]` `dim` argument** (was indexing a
+  tuple with the list). Partial — the FFT wrappers remain radix-2 pow2-only; the
+  Kokoro iSTFT (n_fft=20, non-pow2) needs a DFT-via-matmul path (next).
+
+### Added
+
+- **Triton complex arithmetic** (`mul` by the imaginary unit `1j`, `real·complex`,
+  `complex·complex`; complex `exp` = e^a(cos b + i sin b)) and **`unfold_backward`**
+  (overlap-add scatter, pure @triton.jit) — the iSTFT phase-reconstruction +
+  overlap-add. NBXTensor gains a `numpy()` output-boundary method; `save_waveform`
+  duck-types torch vs NBXTensor. All isolation-validated vs torch (mul·1j exact,
+  exp(i·x) 6e-8, mul(mag,e) 1.5e-8, unfold_backward 4.8e-7). Complex branches are
+  no-ops for real operands (R23-safe). `_fft_c2r` now accepts the ATen int[] dim arg.
+
+
+- **NBXTensor complex64/complex128 support** (the declared-but-stubbed complex
+  dtype, now completed in the engine): `view_as_real`/`view_as_complex` (zero-copy
+  reinterprets, interleaved [real,imag] like numpy `<c8`), `.real`/`.imag` strided
+  views, and a real `complex(real,imag)` builder (`complex_wrapper`, was a stub
+  that dropped the imaginary part). `angle` now computes `atan2(imag,real)` via a
+  new libdevice atan2 kernel (was a stub returning the imag part).
+- **Triton non-power-of-2 FFT (DFT-via-matmul)** for `_fft_r2c` / `_fft_c2r`. The
+  radix-2 butterfly only handles pow2 lengths; an iSTFT head with n_fft=20 needs a
+  DFT computed by matrix multiply (cos/sin basis matrices @ frames → complex pair;
+  Hermitian-symmetric inverse for c2r). New R33-pure `kernels/ops/dft.py` basis
+  kernels. `fft_r2c` now also returns the FULL complex pair on the pow2 path (it
+  dropped the imaginary part before). Model-agnostic (routes on N, never on model
+  identity); validated vs torch.fft on N=20 (non-pow2) and N=16 (pow2): r2c/angle/
+  c2r/round-trip all <=1e-4.
+
+
+- **Triton audio flow: fixed-length-decoder chunking** (`_try_chunked_forward`,
+  triton-pure mirror of the compiled `AudioFlow._try_chunked_forward`). An iSTFT
+  vocoder / codec decoder bakes its window-norm divisor + `as_strided` framing at
+  the trace frame count, so it must run at exactly the graph seq_len. A longer
+  runtime input is split into trace-length blocks (the primary frame input chunked;
+  frame-dependent aux inputs chunked synchronously, detected by runtime-dim !=
+  graph-dim; static inputs like the style vector passed whole), each block decoded,
+  and the waveforms concatenated. Data-driven (triggers only on a 3D input whose
+  runtime seq_len differs from the trace seq_len) — no model-name branching. R33:
+  NBXTensor narrow/zeros/cat + the existing boundary `_torch_to_nbx` for the torch
+  voicepack style; zero torch compute.
+
+
+- **Triton transposed convolution** (`aten::convolution` with `transposed=True`,
+  1D and 2D, groups + dilation aware). `conv2d_wrapper` previously dropped the
+  `transposed`/`output_padding` flags when delegating 1D convs, so a
+  `ConvTranspose1d` was computed as a regular strided conv — *halving* the length
+  instead of *doubling* it (Kokoro F0/N ProsodyPredictor depthwise pool: 62->31
+  instead of 62->124). Wired the existing scatter `conv_transpose2d_kernel`
+  (extended with groups via `C_in_per_g`/`C_out_per_g`, dilation, and a scalar
+  weight-load fix; `groups=1` reduces to the original behaviour) through a new
+  `conv_transpose_wrapper`. Unit-tested vs torch `F.conv_transpose1d/2d`
+  (depthwise + groups=1 + 2D), max|diff| 0.008 (fp16 ULP).
+- **Triton `reflection_pad1d`** — R33-pure narrow+flip+cat, the last-dim case of
+  `reflection_pad2d_wrapper` (vocoder conv/iSTFT pre-pad).
+
+### Fixed
+
+- **Triton `upsample_bilinear2d` kernel crash + `upsample_linear1d` length.** The
+  bilinear kernel called `.to()` on a specialized Python int (`(IH-1).to(...)`),
+  crashing whenever exercised; replaced with arithmetic float promotion robust to
+  both Python-int and tl-scalar args. `upsample_linear1d` now prefers the scale
+  factor over the baked trace `output_size` (recompute from the live input length,
+  like `upsample_nearest2d_wrapper` already does) so a variable-length audio
+  decoder upsamples by the right ratio instead of desyncing from its sibling
+  nearest upsample. Bit-identical when trace == runtime.
+
+
+- **Triton mode now executes LSTM (`aten::lstm`) models** via a pure-Triton LSTM
+  kernel — NBXTensor + Triton wrappers (matmul/sigmoid/tanh), zero torch, zero
+  NumPy compute; bidirectional, multi-layer, batch-first. Validated bit-close to
+  the compiled reference (max|diff| ~3e-4) and end-to-end on Kokoro (per-phoneme
+  durations match the reference implementation element-wise).
+
+### Fixed
+
+- **Triton `round` and `repeat_interleave` now work.** `round` referenced a Triton
+  math symbol absent in the installed version (it was crashing); it now uses the
+  round-half-to-even libdevice primitive (matches the reference). `repeat_interleave`
+  is now dispatched by argument shape — the single-tensor "interleaved indices"
+  overload (used by Kokoro's duration→alignment build) was misrouted to the
+  scalar-repeats path — and its tensor path no longer calls non-existent tensor
+  methods.
+
+- **VibeVoice-1.5B text-to-speech is now supported** via a next-token-diffusion
+  generation flow. An autoregressive language model emits a control token per
+  step; on each speech step a diffusion head samples one acoustic latent
+  (classifier-free guidance, prompt-faithful by default), which is decoded to a
+  waveform chunk and re-encoded as semantic feedback to the model. Produces
+  24 kHz speech that transcribes back to the input text (STT-validated).
+
+### Fixed
+
+- **Triton mode now promotes sequence-length-dependent `expand` sizes given in
+  the wrapped-list form, matching compiled mode.** The triton symbolic-promotion
+  pass handled only raw-list expand sizes, leaving the wrapped form's trace-time
+  length literal — so models with such an expand (e.g. a BERT-style token-type
+  embedding, or a RoPE position expand) failed or diverged at a runtime length
+  different from the trace length. Triton now mirrors the compiled promotion,
+  restoring four-mode parity.
+
+- **Kokoro-82M text-to-speech now runs end-to-end on the native forward path for
+  prompts of any length.** The runtime previously padded or truncated every
+  prompt to a fixed 23-phoneme length — collapsing every prompt to one fixed
+  duration and silently cutting longer text — and ran the prosody predictor via a
+  hand-rolled fallback. It now feeds the true phoneme sequence so the sequence
+  length is bound per utterance, and chunks the iSTFT decoder across fixed frame
+  blocks so utterances of any length synthesize. Combined with corrected
+  prosody-predictor durations, the output now matches the reference
+  implementation in per-phoneme duration and total length, and is STT-correct for
+  short and long prompts (validated for 12-, 48-, and 172-phoneme inputs).
+
+- **Models with structurally-repeated layers** (e.g. tokenizer stacks whose
+  layers share identical per-layer names) could silently load some weights into
+  the wrong positions, corrupting their output. Such models now load their
+  weights correctly; models that already loaded correctly are unaffected.
+
+- **Windowed-attention projectors (Q-Former style) now compute the correct
+  number of windows for input sequences whose length is not a multiple of the
+  window size.** Such a projector pads its sequence up to a multiple of a window
+  size and reshapes into `ceil(seq / window)` windows. The runtime previously
+  derived the window count from a floor of the trace-time padding, so the query
+  and key attention branches disagreed on the window count and the projector
+  attention failed with a tensor-size mismatch on any input whose length was not
+  a multiple of the window size. The window count and the dynamic pad are now
+  modelled consistently, and the windowed dimension propagates correctly through
+  the projector's output reshapes.
+
+### Changed
+
+- **RMSNorm fp32-precision handling is now centralized and shared across
+  execution modes.** The fp32 variance upcast that protects RMSNorm against
+  fp16 overflow was previously duplicated in three places (the compiled fused
+  path, the op-by-op sequential path, and the VibeVoice speech path); the three
+  copies are now a single source, guaranteeing identical numerical behaviour in
+  every mode. Compute-dtype resolution in the audio flows likewise now reads
+  through the dtype engine instead of local copies of the dtype map. No change
+  to output for any model.
+
+- **Kokoro-82M no longer pads short-prompt audio to a fixed ~10 s
+  window.** The native predictor stage previously force-scaled the
+  predicted phoneme durations so they summed to exactly the traced
+  128-frame decoder window, stretching a short prompt several-fold
+  (e.g. "Hello world." filled ~3 s of elongated phonemes). Durations
+  that already fit the window are now kept as predicted and the
+  synthesised silent tail is cropped to the spoken content, in both
+  compiled and `--triton` modes.
+
+### Changed
+
+- **Chatterbox TTS conditioning now runs the model's speaker + Perceiver
+  conditioning encoder instead of a hand-rolled approximation.** The runtime
+  previously hand-rolled the conditioning and skipped the Perceiver resampler,
+  producing a 2-token conditioning instead of the model's 34-token one (1
+  speaker + 32 Perceiver + 1 emotion); the speech model then over-generated
+  (1000+ tokens of garbage). The conditioning is now produced by running the
+  embedded conditioning-encoder component end-to-end on the default voice,
+  matching the vendor reference, so the speech model generates the correct
+  ~1 s of tokens. The vocoder is fed the reference voice from the same embedded
+  conditioning, and `--reference-audio` is wired through the CLI. Coherent
+  vocoder audio is still blocked on a separate sequence-length symbolic
+  limitation (tracked as P-SYMBOLIC-ARANGE-SUM-FROM-ITEM).
+
+### Fixed
+
+- **Orpheus TTS now produces intelligible speech instead of noise.** The SNAC
+  audio codec expects each 7-token frame de-interleaved into its three
+  hierarchical codebook levels in a specific order (level 0: position 0; level
+  1: positions 1 and 4; level 2: positions 2, 3, 5, 6). The decoder split the
+  frame contiguously (positions 1-2 to level 1, 3-6 to level 2), scrambling the
+  hierarchy and producing noise. The de-interleaving now matches the model's
+  layout, and the synthesized speech transcribes back correctly.
+
+- **A sequence length frozen inside an `expand` size is now made dynamic at
+  runtime, like it already was for `view`/`reshape`.** The symbolic-shape
+  promotion unwrapped the `{type:list,value:[...]}` size form for
+  `view`/`reshape` but not for `expand`, so an `expand` whose size carried the
+  trace-time sequence length (e.g. the rotary-embedding position expansion
+  `[1, 1, seq]`) kept that length literal. At decode the single new position
+  was then broadcast back to the full trace length, corrupting the rotary
+  embeddings and the per-step query/key. `expand` now unwraps and promotes the
+  same way; non-sequence models are unaffected (the path only runs when the
+  graph has sequence-length symbols).
+
+- **Autoregressive models whose graph computes positions with a two-argument
+  range (`arange(0, seq_len)`, the Llama `cache_position` form) no longer
+  produce an empty position range at decode.** The KV-cache decode position
+  shift assumed the single-argument `arange(seq_len)` form and mis-read the
+  two-argument form's first argument as the length, yielding an empty range
+  that collapsed the rotary-embedding table and the per-step query/key. The
+  shift now handles both forms; single-argument behaviour is unchanged.
+
+- **Models with cross-attention (different query and key/value sequence
+  lengths) no longer crash with a shape-mismatch error inside attention.**
+  The runtime's attention layout-fixup keyed its "is this key transposed?"
+  decision on the sequence axis, which is only reliable for self-attention
+  (equal query/key lengths). For cross-attention — a Perceiver resampler with
+  32 latent queries over 150 prompt keys, or any encoder/decoder cross-attend
+  — it wrongly reshaped a correctly-laid-out tensor and aborted. The decision
+  now keys on the head-dimension axis, which is invariant across both cases;
+  self-attention behaviour is unchanged.
+
+- **Audio TTS models with an LLM backbone no longer crash with an
+  out-of-memory error on the text prompt.** The text was tokenized with
+  padding up to the model's full context length, so a short prompt was
+  expanded to tens of thousands of tokens; a language model whose attention
+  mask scales with sequence length then tried to allocate a mask of
+  `context_length²` (VibeVoice: a 131072×131072 mask ≈ 16 GiB) and ran out of
+  memory before producing anything. The prompt is now tokenized at its actual
+  length.
+
+- **Models with hand-written RMSNorm/LayerNorm no longer produce garbage on
+  fp16 hardware (V100) from variance overflow.** Such norms compute the
+  variance as `mean(x * x)`; the `x * x` squaring overflows fp16 (max 65504)
+  for any activation magnitude above ~256, collapsing the normalisation to
+  zero. The dtype engine now upcasts the squaring to fp32 on fp16 hardware
+  (and leaves it untouched on bf16 hardware, where the exponent range matches
+  fp32 and overflow cannot occur). This is the protection that lets OpenAudio
+  generate correct speech (below), and pre-empts the same failure in any other
+  model that squares large activations.
+
+- **OpenAudio (Fish-Speech dual-AR) TTS now produces correct speech.**
+  Previously the model emitted a constant carrier tone and never stopped
+  (running to the token limit); once stopping was corrected it then drifted
+  to unrelated words. The dual-AR generation path is fixed end to end: the
+  slow backbone now sees the full generated context each step and emits the
+  stop token on time, the fast/depth transformer generates the residual
+  acoustic codebooks correctly, and a half-precision overflow in the depth
+  transformer's normalisation (which collapsed the codebooks) was eliminated.
+  "Hello world." now transcribes back as "Hello world!" via STT, in compiled
+  mode. The CLI `--temperature` flag (and `--top-p` / `--repetition-penalty`)
+  is now honoured for this model — `--temperature 0` gives deterministic
+  greedy decoding — instead of always using the embedded defaults.
+
+- **Kokoro-82M now produces intelligible speech.** Previously the
+  output was babbling / unintelligible (e.g. "Hello world." came out
+  as garbled vowels). Two bugs in the native predictor/text-encoder
+  path were corrected: the phoneme padding mask was inverted (so the
+  model ran on padding instead of the real tokens), and the text
+  encoder's convolution block applied its normalisation and activation
+  in the wrong order and with the wrong activation slope. "Hello world."
+  now transcribes back as "Hello world." via STT. Prompts longer than
+  the model's traced ~23-phoneme input window are still truncated
+  (their surviving words are correct); lifting that limit is tracked
+  separately.
+
+- **Audio TTS runs no longer write a duplicate `output_<model>.wav`
+  in the current working directory.** The compiled-mode and
+  shared triton-mode audio flow handlers (`core/flow/audio.py`,
+  `core/flow/audio_utils.py`) each saved the waveform directly to
+  a hardcoded `output_<model>.wav` path relative to cwd in
+  addition to the CLI's family-aware `save_audio` writer at
+  `--output`. With `--output` passed, this produced two files
+  (the requested one and the stray); without `--output`, it
+  produced the legacy default-name file. The flow handlers now
+  only deposit the waveform into the variable resolver; the CLI
+  is the single writer (`output_dispatch.save_audio`). One
+  `SAVED:` print instead of two.
+
+### Added
+
+- **PixArt and Sana now run in `--triton` mode without manual
+  per-component flags.** The hardware allocator detects components
+  at structural risk of fp16 overflow (build-time graph dtype is
+  fp32, the model family is image or video, the conv2d-cascade
+  count and conv2d-vs-attention ratio mark the component as VAE-class,
+  and the target hardware does not natively support bf16) and pins
+  those components to fp32 automatically. PixArt-XL-2 / PixArt-Sigma /
+  Sana 1024 produce coherent images in `--triton` out of the box;
+  previously the VAE saturated to NaN. Other families (LLM, audio,
+  upscaler, multimodal, …) are unaffected by design; manual
+  `requires_fp32_compute` continues to work as an explicit override
+  and is honored on top of the auto-detect. `NBX_DISABLE_AUTO_FP32=1`
+  bypasses the auto-detect for diagnosis (manual flag remains
+  honored).
+
+- **`NBX_DTYPE_CLAMP_DIAG=1` diagnostic.** When the dtype engine
+  narrows an fp32/fp64/bf16 value to fp16 at an `aten::_to_copy`
+  boundary cast and the source actually exceeds the fp16
+  representable range (±65504), the engine clips pre-cast to ±65504
+  to avoid the alternative of saturating to ±Inf and propagating
+  NaN downstream. Enabling this env var logs a one-shot line per
+  call site (target / passthrough branch) the first time the clamp
+  is actually exercised, with the source dtype, shape, and max-abs
+  value — useful when investigating activation-overflow symptoms
+  on a new model. Default-off, zero runtime cost.
 
 - **SwinIR classical super-resolution (x2 / x4)** is now supported
   via `neurobrix upscale`, across all four execution modes
@@ -22,7 +1263,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   producing NaN/garbage at fp16. Strictly opt-in — existing
   models are unaffected.
 
+### Added
+
+- **Audio-conditioned LLM models now run in `--triton` mode.** Models
+  that transcribe/answer from audio via an encoder→projector→LLM
+  pipeline (e.g. Voxtral) previously only worked in the default
+  engine. The `--triton` path now produces output byte-identical to
+  the default engine for Voxtral (validated on a reference clip,
+  greedy decoding).
+
 ### Fixed
+
+- **LLM/MoE models in `--triton` are now deterministic run-to-run on
+  V100-class GPUs.** Greedy generation of the same model and prompt
+  could produce different text on consecutive runs: the attention
+  kernel used on these GPUs was not bit-reproducible for some model
+  shapes. Attention now routes to a bit-reproducible computation on
+  the affected hardware whenever it is memory-affordable, so repeated
+  runs are byte-identical. Larger image-diffusion models are
+  unaffected (unchanged path).
+
+- **MoE models in `--triton` now handle deactivated experts the same
+  way as the default engine.** When a Mixture-of-Experts router
+  skips an expert, that expert's accumulation into the combined
+  output was being dropped in `--triton` mode (the deactivated-path
+  was nulled instead of passing the running accumulator through),
+  diverging from the default engine. Triton MoE output now mirrors
+  the default-engine semantics for skipped experts.
+
+- **MoE models in `--triton` are now deterministic run-to-run.**
+  Mixture-of-Experts expert aggregation accumulated through a
+  non-deterministic atomic add, so two identical greedy runs of the
+  same model and prompt could produce different text. Aggregation is
+  now a fixed-order deterministic reduction: repeated runs are
+  byte-identical, matching the default engine.
+
+- **Prefetch queue saturation is now logged, and is interruptible.**
+  The component prefetch wrapped its enqueue in a bare `except:`
+  that swallowed everything — including `KeyboardInterrupt` /
+  `SystemExit` — and silently served the component uncached. It now
+  catches only queue-full, logs a warning, and lets every other
+  exception (and Ctrl-C) propagate.
+
+- **An unknown input-synthesis method is now a clear error instead
+  of a silently missing input.** A synthesis rule naming an
+  unregistered method was skipped silently, leaving the input slot
+  unset so the downstream component consumed garbage and produced
+  silently wrong output. It now raises a descriptive ZERO-FALLBACK
+  error listing the known methods.
+
+- **A corrupt VAE profile is now a clear error instead of a silently
+  wrong image.** When a model's VAE `profile.json` existed but failed
+  to parse, the output processor silently fell back to
+  `clamp_before_normalize=False`, producing an out-of-range image
+  with no diagnostic. It now raises a descriptive error; an absent
+  profile remains a legitimate defaults path.
+
+- **`index_put` / `index_put_` scatter writes are no longer silently
+  dropped in Triton modes.** Both ops were mapped to identity
+  functions, so any model whose graph performs an indexed scatter
+  write (MoE-v2 expert-output aggregation, KV-cache indexed writes,
+  masked scatter) produced silently wrong output in `--triton` /
+  `--triton-sequential` — no crash, no warning. A real Triton
+  scatter kernel is now wired for the common case (one integer
+  index on the leading dim, with/without accumulate). Unsupported
+  advanced-indexing forms now raise a clear error instead of
+  silently mis-scattering. Compiled mode was unaffected.
+
+- **`linspace` now returns correct values in Triton modes.**
+  Models whose graph contains `aten::linspace` (diffusion / video
+  timestep schedules, positional grids) silently received
+  uninitialised memory in `--triton` / `--triton-sequential` —
+  no crash, no NaN, just wrong output. The Triton linspace kernel
+  is now wired (bit-exact vs the reference in fp32, ≤1 ULP in
+  fp16/bf16, exact endpoints). Compiled mode was unaffected.
 
 - **Compiled mode no longer crashes on models with trace-time
   orphan scalar constants.** The constant-slot pre-population in
@@ -267,7 +1581,7 @@ divergence reduction), contiguous-guard pattern documented as
 architectural rule. Full pipeline 4Kpx remains blocked by live-watermark
 memory gap — separate chantier `P-TRITON-LIVE-WATERMARK-AUDIT`.
 
-## [Unreleased]
+## [0.2.0] - 2026-05-18
 
 ### Fixed
 

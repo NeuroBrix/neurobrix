@@ -77,3 +77,31 @@ output:
     img2img: ".png"
     inpainting: ".png"
 
+# ============================================================================
+# DTYPE POLICY — auto-detect components that need fp32 to avoid the documented
+# fp16 conv-cascade overflow (Layer-7 follow-up: PixArt VAE 512x512x512 conv2d
+# output saturates to ±Inf when storage dtype is fp16, then propagates NaN).
+# Composes additively with the manual `requires_fp32_compute` registry flag —
+# manual entries always win. NBX_DISABLE_AUTO_FP32=1 bypasses the auto-detect
+# without touching the manual flag.
+# ============================================================================
+dtype_policy:
+  auto_fp32_on_overflow_risk:
+    enabled: true
+    # The component's build-time recorded dtype. Native fp16/bf16 components
+    # are not at this overflow site (bf16 covers the magnitude; native fp16
+    # components were already designed to fit).
+    require_graph_dtype: "float32"
+    # Only fire on fp16-preferring hardware. On bf16-capable hardware
+    # (A100/H100, RTX 30xx/40xx, ROCm CDNA) the conv output saturation
+    # does not occur because bf16 has fp32 exponent range. Pinning to
+    # fp32 there would waste VRAM with no numeric benefit.
+    skip_when_hw_supports_bf16: true
+    # Conv-cascade-dominance gate. Selects VAE-class encoders/decoders;
+    # excludes the DiT patch-embed transformer (1 conv2d) and hybrid
+    # linear-attention transformers (Sana DiT: 61 conv2d but 20 sdpa
+    # so ratio = 3 << 10). Thresholds derived from the cached-matrix
+    # empirical audit (Ch8 audit doc).
+    min_conv2d_count: 20
+    conv2d_to_sdpa_ratio_min: 10
+

@@ -161,6 +161,26 @@ class NativeATenDispatcher:
         # Remove variant suffixes if present (e.g. .default, .int)
         base_name = clean_name.split(".")[0]
 
+        # [PINNED NOISE] Cross-engine deterministic RNG (diagnostic + shared-seed
+        # determinism), gated by NBX_FORCE_RAND_SEED. R30 mirror of the Triton
+        # rand wrappers: both engines draw from one numpy RandomState so a
+        # stochastic vocoder (s3gen CFM + NSF/SineGen source) is reproducible and
+        # bit-identical across modes. Default-off → torch RNG path unchanged.
+        if base_name in ("randn_like", "rand_like", "randn", "rand"):
+            from neurobrix.kernels.rng_pin import (
+                pinned_seed, pinned_normal, pinned_uniform)
+            if pinned_seed() is not None:
+                is_uniform = base_name in ("rand", "rand_like")
+                ref = inputs[0] if (inputs and isinstance(inputs[0], torch.Tensor)) else None
+                if ref is not None:
+                    shp = list(ref.shape); dev = ref.device; dt = ref.dtype
+                else:
+                    out_shapes = attributes.get("output_shapes") or []
+                    shp = list(out_shapes[0]) if out_shapes else list(inputs[0])
+                    dev = "cuda"; dt = torch.float32
+                arr = pinned_uniform(shp) if is_uniform else pinned_normal(shp)
+                return torch.from_numpy(arr).to(device=dev, dtype=dt)
+
         # [IDENTITY OPS] These ops just pass through their input unchanged
         # lift_fresh: Used by FakeTensorMode to mark tensors as "fresh"
         # Note: Graph capture sometimes incorrectly links lift_fresh to wrong tensor.
@@ -201,6 +221,22 @@ class NativeATenDispatcher:
             # Case 3: Other shape mismatches - just return input
             return inp
 
+        # [IN-PLACE COPY] aten::copy is the functionalised form of an in-place
+        # index assignment (e.g. ``new_indices[:, 0] = clamp(...)``) — captured
+        # with its output consumed by nobody, because the real effect is the
+        # mutation of the destination VIEW's shared storage. torch.ops.aten.copy
+        # is FUNCTIONAL (returns a new tensor, no mutation), so the assignment is
+        # silently dropped and the parent keeps its pre-assignment value. Compiled
+        # mode maps this to ``x.copy_(src)`` (compiled_ops.py); mirror it here so
+        # the view write propagates to the parent — without this, sequential (the
+        # 4-mode oracle, R36) loses every in-place index assignment. Observed: the
+        # OpenAudio DAC codec zeroed all codebook indices → silence.
+        if base_name == "copy" and len(inputs) >= 2 \
+                and isinstance(inputs[0], torch.Tensor) \
+                and isinstance(inputs[1], torch.Tensor):
+            inputs[0].copy_(inputs[1])
+            return inputs[0]
+
         # [REDIRECTION LAYER] Map device-specific variants to universal ops
         if "scaled_dot_product" in base_name and "attention" in base_name:
             if base_name == "_scaled_dot_product_flash_attention_for_cpu":
@@ -230,6 +266,17 @@ class NativeATenDispatcher:
                 k = inputs[1].contiguous()
                 v = inputs[2].contiguous()
                 q, k, v = _fix_sdpa_kv_layout(q, k, v)
+
+                # Align Q/K/V dtypes (same as the standard SDPA path below):
+                # upstream AMP can leave V in fp32 while Q/K are fp16 (openaudio
+                # DualAR), and torch SDPA rejects mixed dtypes. Cast to the
+                # narrowest common dtype. Guarded on mismatch → no-op when already
+                # uniform, so models with consistent dtypes are unchanged.
+                if (hasattr(q, "dtype") and hasattr(k, "dtype") and hasattr(v, "dtype")
+                        and not (q.dtype == k.dtype == v.dtype)):
+                    _t = min((q.dtype, k.dtype, v.dtype),
+                             key=lambda d: torch.tensor([], dtype=d).element_size())
+                    q, k, v = q.to(_t), k.to(_t), v.to(_t)
 
                 # Extract optional args - correct indices from PyTorch internal signature:
                 # _scaled_dot_product_efficient_attention(query, key, value, attn_bias, compute_log_sumexp, dropout_p, is_causal, scale)
@@ -269,6 +316,14 @@ class NativeATenDispatcher:
             # Fix K/V layout for standard SDPA path (Gemma-2 text encoder K transposition)
             if len(inputs) >= 3:
                 q, k, v = _fix_sdpa_kv_layout(inputs[0], inputs[1], inputs[2])
+                # Align Q/K/V dtypes (mirror the compiled _align_qkv_dtypes): upstream
+                # AMP upcasts (bmm→fp32 on fp16 hw) can leave V in fp16 while Q/K are
+                # fp32, which torch SDPA rejects. Cast to the narrowest common dtype.
+                if (hasattr(q, "dtype") and hasattr(k, "dtype") and hasattr(v, "dtype")
+                        and not (q.dtype == k.dtype == v.dtype)):
+                    _t = min((q.dtype, k.dtype, v.dtype),
+                             key=lambda d: torch.tensor([], dtype=d).element_size())
+                    q, k, v = q.to(_t), k.to(_t), v.to(_t)
                 inputs = [q, k, v] + list(inputs[3:])
 
         # [MULTI-RESOLUTION FIX] Upsample ops have hardcoded output_size from trace time.
@@ -297,6 +352,31 @@ class NativeATenDispatcher:
 
                         # Replace hardcoded output_size with computed value
                         inputs[1] = [new_h, new_w]
+
+        # [MULTI-RESOLUTION FIX — 1D] Same for 1D upsample (Kokoro prosody
+        # predictor F0/N branches upsample the duration-expanded sequence x2).
+        # The traced output_size froze 2*trace_len (e.g. [68]); at a different
+        # runtime sum(durations) the frozen size mismatches the actual input
+        # (124 vs 68 → add broadcast crash). The compiled/triton paths already
+        # resolve the length from the actual tensor; recompute here from the
+        # scale so the op-by-op pytorch oracle matches them (R30 parity).
+        # aten::upsample_nearest1d(input, output_size, scales).
+        if base_name in ("upsample_nearest1d", "upsample_linear1d"):
+            if len(inputs) >= 3 and isinstance(inputs[0], torch.Tensor) and inputs[0].dim() >= 3:
+                input_tensor = inputs[0]
+                # arg layouts differ: nearest1d(input, output_size, scales) →
+                # scale at idx 2; linear1d(input, output_size, align_corners,
+                # scales) → idx 2 is the align_corners BOOL, scale at idx 3. Pick
+                # the trailing NUMERIC (non-bool) scalar so both layouts work and
+                # fractional (downsample, e.g. 1/300) scales are honoured.
+                scale = None
+                for a in inputs[2:]:
+                    if isinstance(a, (int, float)) and not isinstance(a, bool):
+                        scale = a
+                if scale is not None and scale > 0:
+                    new_l = int(round(input_tensor.shape[2] * scale))
+                    if new_l > 0:
+                        inputs[1] = [new_l]
 
         # [MULTI-RESOLUTION FIX] Expand ops may have hardcoded spatial dimensions
         # When the tensor has non-singleton dimensions that don't match the expand size,
@@ -578,10 +658,9 @@ class NativeATenDispatcher:
         epsilon = attributes.get("epsilon", 1e-6)
         if not epsilon:
             epsilon = attributes.get("kwargs", {}).get("epsilon", 1e-6)
-        x_fp32 = x.to(torch.float32)
-        variance = x_fp32.pow(2).mean(-1, keepdim=True)
-        x_normed = x_fp32 * torch.rsqrt(variance + epsilon)
-        return x_normed.to(weight.dtype) * weight
+        # fp32-variance RMSNorm; the dtype-upcast policy lives in the engine.
+        from neurobrix.core.dtype.engine import rms_norm_fp32
+        return rms_norm_fp32(x, weight, epsilon)
 
 
 # ===========================================================================
