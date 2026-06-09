@@ -818,7 +818,40 @@ def copy_to(x, dtype: object) :
 # BINARY ELEMENT-WISE WRAPPERS — use universal launch layer
 # ===========================================================================
 
+def _complex_addsub(a, b, alpha: float, is_sub: bool):
+    """Complex elementwise add/sub with correct broadcasting.
+
+    The plain float add/sub kernels broadcast the interleaved [re,im] storage of
+    a complex tensor on the wrong stride (they treat it as flat floats, so re/im
+    misalign across operands when shapes differ — e.g. the Wan rotary-embedding
+    freqs grid, built by broadcasting complex per-axis freqs [T,1,1,d]+[T,H,W,1]).
+    Routing through view_as_real appends the [.,2] real/imag axis (broadcasts as
+    2==2), keeping re aligned with re and im with im. R33-pure.
+    """
+    ac = isinstance(a, NBXTensor) and a.is_complex()
+    bc = isinstance(b, NBXTensor) and b.is_complex()
+    if ac and bc:
+        ar, br = a.view_as_real(), b.view_as_real()
+        out = sub(ar, br, alpha) if is_sub else add(ar, br, alpha)
+        return out.view_as_complex()
+    # Mixed complex + real: the real operand affects only the real part. Rare in
+    # current models; route via the real-view interior and leave imag untouched.
+    cplx, real = (a, b) if ac else (b, a)
+    vr = cplx.view_as_real().contiguous()
+    re = vr.select(vr.ndim - 1, 0)
+    im = vr.select(vr.ndim - 1, 1)
+    if is_sub and not ac:        # real - complex = (real-re) + i(-im)
+        re2 = sub(real, re, 1.0); im2 = mul(im, -1.0)
+    elif is_sub:                 # complex - real
+        re2 = sub(re, real, alpha); im2 = im
+    else:                        # complex + real
+        re2 = add(re, real, alpha); im2 = im
+    return complex_wrapper(re2.contiguous(), im2.contiguous())
+
+
 def add(a, b, alpha: float = 1.0) :
+    if (isinstance(a, NBXTensor) and a.is_complex()) or (isinstance(b, NBXTensor) and b.is_complex()):
+        return _complex_addsub(a, b, alpha, is_sub=False)
     # Bias-broadcast fast path: when `b` is a 1D tensor matching `a`'s
     # last dim and `a` is already contiguous, route to the broadcast-aware
     # kernel that reads `bias[offset % feat_dim]` instead of materializing
@@ -994,6 +1027,8 @@ def div(a, b) :
 
 
 def sub(a, b, alpha: float = 1.0) :
+    if (isinstance(a, NBXTensor) and a.is_complex()) or (isinstance(b, NBXTensor) and b.is_complex()):
+        return _complex_addsub(a, b, alpha, is_sub=True)
     a, b, output, n, dev_ctx, scalar = _prepare_binary(a, b)
     if scalar:
         add_scalar_kernel[_1d_grid(n)](a, output, n, -float(b) * alpha, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
@@ -2163,6 +2198,15 @@ def sum_wrapper(x, dim=None, keepdim=False) :
     """
     if isinstance(dim, (list, tuple)) and len(dim) > 1:
         return _reduce_over_dims(sum_wrapper, x, dim, keepdim)
+    # Complex sum = (sum real, sum imag), summed over the same dim. The flat
+    # kernel would reduce the interleaved re/im storage on the wrong stride.
+    # Route via the real view: the appended [.,2] axis is NOT reduced (dim is
+    # resolved on the complex rank), so re/im are summed independently.
+    if isinstance(x, NBXTensor) and x.is_complex():
+        d = (dim[0] if isinstance(dim, (list, tuple)) else dim)
+        d = d % x.ndim
+        outr = sum_wrapper(x.view_as_real(), d, keepdim)
+        return outr.view_as_complex()
     # x.dtype is a triton dtype handle (not NBXDtype) — gate on the tensor's
     # own is_floating_point() rather than dtype membership.
     out_dtype = x.dtype if x.is_floating_point() else NBXDtype.int64

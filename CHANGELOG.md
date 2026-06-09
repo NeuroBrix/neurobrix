@@ -123,6 +123,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     (`view_as_real` → select → `view_as_complex`); the element-wise kernel
     otherwise copied one real value per complex element, reading the wrong stride
     and returning garbage (the per-axis gather of the rotary frequency table).
+  - `add`/`sub`/`sum` on complex tensors route through the real view. The flat
+    elementwise/reduction kernels are correct for same-shape complex add (re+re,
+    im+im on the interleaved storage) but misalign the real/imag pairs when
+    **broadcasting** or **reducing** (they treat `[re,im,re,im,…]` as flat
+    floats on the wrong stride) — the rotary frequency grid is built by
+    broadcasting and summing per-axis complex frequencies, so this corrupted it.
+  - `cat` of complex tensors along an **inner** dim routes through the real view.
+    `cat(dim=0)` was correct (whole element-blocks stay contiguous) but an inner
+    concat split the interleaved pairs at the boundary, pairing one operand's
+    real with the next's imaginary — the rotary grid concatenates the three
+    per-axis (T/H/W) frequency blocks along the last dim.
   - The triton path narrows `float64 → float32` and `complex128 → complex64`
     (in the op-dtype parser and the embedded-constant loader), since the
     NeuroBrix triton kernels are fp32-max (no native fp64 on Volta). A graph that
