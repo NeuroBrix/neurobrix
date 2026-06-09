@@ -85,6 +85,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   count). The single-dim / 1-element-list fast path is unchanged, so existing
   models are byte-identical. Validated against the reference across `sum`/`mean`
   /`amax`/`var`/`std` with keepdim on/off (max|diff| 1.1e-04, fp32 accumulation).
+- **Triton UniPC scheduler aborted on the final flow-matching step.** The
+  zero-torch UniPC port computes its per-step `lambda = log(alpha) - log(sigma)`
+  in scalar Python; flow-matching drives `sigma -> 0` at the last step, where
+  Python's `math.log(0)` raises `ValueError: math domain error` (the PyTorch
+  reference uses `torch.log`, which yields `-inf` and does not raise). The
+  `-inf` is load-bearing: it makes the predictor coefficients collapse so the
+  step returns the predicted clean sample — the intended denoised output. A
+  `_safelog` helper now mirrors `torch.log` at the domain edge (`log(0) = -inf`)
+  so the final step completes instead of crashing.
 
 ### Removed
 
