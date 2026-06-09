@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-06-09
+
+First publicly usable release of the universal runtime (not final — usable). The
+4-mode execution matrix — PyTorch (`--sequential` op-by-op oracle, `--compiled`
+fused torch+cuDNN/cuBLAS) and Triton (`--triton-sequential`, `--triton`,
+NeuroBrix kernels, zero torch) — is **green** on **orpheus-snac**, **hat-l-x4**,
+**Flex.1-alpha**, and **deepseek-moe-16b**: each validated in a clean-room venv
+(none of the 14 vendor libraries installed), greedy and cross-mode-consistent
+(proofs under `validation_outputs/`). The audio, LLM, image, and upscaler
+families run end-to-end; engine docs were aligned to the real CLI.
+
+**Documented debt — Qwen3-30B-A3B `--sequential` (validated by construction,
+NOT executed):** the original crash (a frozen seq-dim view) is eliminated by
+re-tracing the model (the `.nbx` graph now carries `{mul,s0,s1}`, 0 frozen
+views — verified), and correctness is established via the **compiled** mode
+(same graph, "Paris.") plus the `SymbolicShapeResolver` shared by both paths.
+But the op-by-op sequential oracle was **not run to completion** on 30B
+(≈115k ops × per-op Python dispatch is impractically slow at that scale). This
+is recorded as honest debt — it is **not** counted as a 4/4 pass. Qwen3 is
+shipped/validated in **compiled** mode. The other four matrix models are 4/4.
+
 ### Fixed
 
 - **triton-sequential pipeline-parallel cross-device (R30 parity with compiled).**
@@ -1549,7 +1570,7 @@ divergence reduction), contiguous-guard pattern documented as
 architectural rule. Full pipeline 4Kpx remains blocked by live-watermark
 memory gap — separate chantier `P-TRITON-LIVE-WATERMARK-AUDIT`.
 
-## [Unreleased]
+## [0.2.0] - 2026-05-18
 
 ### Fixed
 
