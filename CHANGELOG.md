@@ -23,6 +23,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   B(h) math ported faithfully; a dev unit test asserts bit-exact equivalence
   with diffusers (max|diff|=0.0) across standard + flow configs and 4D + 5D
   latent shapes.
+- **`_upsample_nearest_exact{1,2}d` multi-resolution support (4 sites, R30).**
+  The nearest-exact upsample variants (used by Wan video VAE decoders) now
+  recompute their output size from the live input × scale, like the plain
+  `upsample_*` variants already did — previously they pinned the spatial extent
+  to a single resolution, so a video VAE could only decode at one frame size.
+  Mirrored across the compiled (`mode="nearest-exact"`, `align_corners=None`),
+  sequential, and triton paths (routed to the nearest wrappers — bit-identical
+  for integer ×2), so every execution mode tracks the runtime latent size
+  identically. Wan2.1-T2V is the only affected model; all others are unchanged.
+- **Video CLI: `--num-frames` / `--fps`** injected into the runtime inputs for
+  the video family.
 
 ### Fixed
 

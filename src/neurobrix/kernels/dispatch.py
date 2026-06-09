@@ -714,6 +714,10 @@ def _build_op_map() -> Dict[str, Callable]:
         # --- Spatial ---
         "upsample_nearest1d": w.upsample_nearest1d_wrapper,
         "upsample_nearest2d": w.upsample_nearest2d_wrapper,
+        # nearest-exact variants: bit-identical to nearest for integer ×2
+        # (every Wan VAE upsample); reuse the nearest wrappers.
+        "_upsample_nearest_exact1d": w.upsample_nearest1d_wrapper,
+        "_upsample_nearest_exact2d": w.upsample_nearest2d_wrapper,
         "upsample_nearest3d": w.upsample_nearest3d_wrapper,
         "upsample_bilinear2d": w.upsample_bilinear2d_wrapper,
         "upsample_linear1d": w.upsample_linear1d_wrapper,

@@ -77,6 +77,21 @@ class VAEComponentHandler(ComponentHandler):
         if not _is_tensor(latent):
             return inputs
 
+        # Seam diagnostic (NBX_DEBUG): confirm latent denormalization actually
+        # fires for this VAE and moves the per-channel std toward config
+        # latents_std (a coherent video needs the loop output un-normalized
+        # before decode; a silently-skipped denorm decodes mis-scaled latents
+        # into texture).
+        import os as _os
+        _dbg = _os.environ.get("NBX_DEBUG") == "1"
+        if _dbg and isinstance(latent, torch.Tensor):
+            print(f"[VAE-SEAM] pre-denorm  key={latent_key} shape={list(latent.shape)} "
+                  f"mean={latent.float().mean().item():.4f} std={latent.float().std().item():.4f}")
+        _dump = _os.environ.get("NBX_DUMP_LATENT")
+        if _dump and isinstance(latent, torch.Tensor):
+            torch.save(latent.detach().cpu(), _dump)
+            print(f"[VAE-SEAM] dumped pre-denorm latent -> {_dump}")
+
         # Step 1: Per-channel latent denormalization (DATA-DRIVEN)
         # Some VAEs (LTX2Video, etc.) train with normalized latent space.
         # The pipeline must denormalize before decoding.
@@ -108,6 +123,13 @@ class VAEComponentHandler(ComponentHandler):
         scaling_factor = self.config.scaling_factor
         if scaling_factor is not None and scaling_factor != 0 and scaling_factor != 1.0:
             latent = latent / scaling_factor
+
+        if _dbg and isinstance(latent, torch.Tensor):
+            _ls = self.config.get("latents_std")
+            print(f"[VAE-SEAM] post-denorm shape={list(latent.shape)} "
+                  f"mean={latent.float().mean().item():.4f} std={latent.float().std().item():.4f} "
+                  f"(config latents_std[0:3]={_ls[:3] if isinstance(_ls, list) else _ls}, "
+                  f"scaling_factor={self.config.scaling_factor})")
 
         inputs[latent_key] = latent
         return inputs

@@ -329,11 +329,13 @@ class NativeATenDispatcher:
         # [MULTI-RESOLUTION FIX] Upsample ops have hardcoded output_size from trace time.
         # When scale factors (scales_h, scales_w) are available, recompute output_size
         # from actual input tensor dimensions to support multi-resolution inference.
-        if base_name in ("upsample_nearest2d", "upsample_bilinear2d", "upsample_bicubic2d"):
+        if base_name in ("upsample_nearest2d", "upsample_bilinear2d", "upsample_bicubic2d",
+                         "_upsample_nearest_exact2d"):
             # inputs[0] = input tensor
             # inputs[1] = output_size (hardcoded from trace time)
             # inputs[2] = scales_h (if available)
             # inputs[3] = scales_w (if available)
+            # _upsample_nearest_exact2d shares this exact arg layout.
             if len(inputs) >= 4 and isinstance(inputs[0], torch.Tensor):
                 input_tensor = inputs[0]
                 scales_h = inputs[2]
@@ -361,7 +363,8 @@ class NativeATenDispatcher:
         # resolve the length from the actual tensor; recompute here from the
         # scale so the op-by-op pytorch oracle matches them (R30 parity).
         # aten::upsample_nearest1d(input, output_size, scales).
-        if base_name in ("upsample_nearest1d", "upsample_linear1d"):
+        if base_name in ("upsample_nearest1d", "upsample_linear1d",
+                         "_upsample_nearest_exact1d"):
             if len(inputs) >= 3 and isinstance(inputs[0], torch.Tensor) and inputs[0].dim() >= 3:
                 input_tensor = inputs[0]
                 # arg layouts differ: nearest1d(input, output_size, scales) →

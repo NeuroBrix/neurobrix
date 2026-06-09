@@ -188,7 +188,8 @@ class CompiledOpResolver:
         if "scaled_dot_product" in op_name and "attention" in op_name:
             return self._make_attention(op_name, attrs)
         if op_name in ("upsample_nearest2d", "upsample_bilinear2d", "upsample_bicubic2d",
-                       "upsample_nearest1d", "upsample_linear1d"):
+                       "upsample_nearest1d", "upsample_linear1d",
+                       "_upsample_nearest_exact2d", "_upsample_nearest_exact1d"):
             return self._make_upsample(op_name)
         if op_name == "as_strided":
             return self._make_as_strided()
@@ -527,12 +528,20 @@ class CompiledOpResolver:
         """
         raw_op = F.interpolate
         is_1d = op_name.endswith("1d")
-        if "nearest" in op_name:
+        # "_upsample_nearest_exact{1,2}d" → F.interpolate mode "nearest-exact"
+        # (half-pixel source sampling). For integer ×2 (every Wan VAE upsample)
+        # nearest and nearest-exact are bit-identical; they only diverge for
+        # non-integer scales — but routing to the faithful mode keeps parity.
+        if "nearest_exact" in op_name:
+            mode = "nearest-exact"
+        elif "nearest" in op_name:
             mode = "nearest"
         elif "linear" in op_name:  # upsample_linear1d or upsample_bilinear2d
             mode = "linear" if is_1d else "bilinear"
         else:  # upsample_bicubic2d
             mode = "bicubic"
+        # Both nearest modes reject align_corners; linear/bicubic require it.
+        _is_nearest = mode.startswith("nearest")
 
         if is_1d:
             # The trace bakes a fixed output_size that won't track a dynamic input
@@ -541,7 +550,7 @@ class CompiledOpResolver:
             # scale, mirroring the 2D fix below. The scale's arg position differs:
             #   nearest1d(input, output_size, scales)             → scales = arg[2]
             #   linear1d (input, output_size, align_corners, scales) → scales = arg[3]
-            nearest = (mode == "nearest")
+            nearest = _is_nearest
 
             def upsample_wrapper_1d(input_tensor, output_size=None, a2=None, a3=None, *args, **kwargs):
                 if nearest:
@@ -572,11 +581,11 @@ class CompiledOpResolver:
 
             if output_size is not None:
                 return raw_op(input_tensor, size=output_size, mode=mode,
-                             align_corners=False if mode != "nearest" else None)
+                             align_corners=None if _is_nearest else False)
             else:
                 # Fallback: use scale_factor
                 return raw_op(input_tensor, scale_factor=(scales_h, scales_w), mode=mode,
-                             align_corners=False if mode != "nearest" else None)
+                             align_corners=None if _is_nearest else False)
         return upsample_wrapper
 
     def _make_unfold_backward(self) -> Callable:
