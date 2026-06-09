@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Video family — 5D rank generalization (in progress).** Generalize rank-4
+  `[B,C,H,W]` assumptions to 5D `[B,C,T,H,W]`, discriminating on tensor rank
+  (never on model family, R34): the Prism conv workspace estimator now handles
+  Conv1D/2D/3D (the `n, in_c, _, _ = in_shape` 4-tuple unpack was the documented
+  "expected 4" crash on a Conv3D), and the diffusion-loop variance-prediction
+  split reads channels from axis 1 for both 4D and 5D (the non-4D branch had
+  mistaken the time axis for channels) — fixed symmetrically in the compiled and
+  triton flow handlers (R30).
+
 ### Removed
 
 - **Redundant `RELEASE_NOTES_v0.2.0.md` and the `RELEASE_NOTES_*.md` sdist glob.**

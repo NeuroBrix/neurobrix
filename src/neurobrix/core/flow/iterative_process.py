@@ -377,8 +377,12 @@ class IterativeProcessHandler(FlowHandler):
                     # Extract primary output
                     model_output = self._extract_primary_output(comp_name, output)
 
-                    # Handle variance prediction split (4D only, not packed 3D)
-                    if current_state.dim() == 4:
+                    # Handle variance prediction split. Channels are axis 1 for
+                    # both 4D image [B,C,H,W] and 5D video [B,C,T,H,W]; only the
+                    # 3D packed (Flux) layout carries channels on axis 2. Branch
+                    # on tensor rank, never on model family (R34) — for 5D the
+                    # naive `dim()==4` path mistook axis 2 (T) for channels.
+                    if current_state.dim() in (4, 5):
                         state_channels = current_state.shape[1]
                         model_channels = model_output.shape[1]
                     else:
