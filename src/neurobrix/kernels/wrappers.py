@@ -2074,8 +2074,42 @@ def embedding(weight, indices, padding_idx=-1, **kwargs) :
 # REDUCTION WRAPPERS
 # ===========================================================================
 
+def _reduce_over_dims(single_fn, x, dims, keepdim, **kw):
+    """Reduce ``x`` over MULTIPLE dims via one single-dim reduction.
+
+    The per-reduction wrappers below each handle a single ``dim`` (or a 1-elem
+    list) by movedim+flatten to 2D; a list of dims used to collapse to its
+    first element (``dim = dim[0]``), silently reducing only one axis. This
+    helper makes the multi-dim case correct: permute the reduced dims to the
+    end, flatten them into ONE axis, reduce that axis with ``single_fn`` (the
+    same wrapper, called with an int dim). Correct for separable reductions
+    (sum/mean/amax) AND non-separable ones (std/var — the correction divides
+    by the TOTAL reduced count, which the single flattened axis preserves).
+    R33-pure: permute/contiguous/reshape + the wrapper's own kernel.
+    """
+    nd = x.ndim
+    dims = sorted(int(d) % nd for d in dims)
+    kept = [d for d in range(nd) if d not in dims]
+    red = 1
+    for d in dims:
+        red *= x.shape[d]
+    xp = x.permute(*(kept + dims)).contiguous()
+    flat_shape = [x.shape[d] for d in kept] + [red]
+    xf = xp.reshape(*flat_shape)                     # [...kept..., prod(reduced)]
+    out = single_fn(xf, dim=len(kept), keepdim=False, **kw)
+    if keepdim:
+        full = list(x.shape)
+        for d in dims:
+            full[d] = 1
+        out = out.reshape(*full)                     # kept dims keep original order
+    return out
+
+
 def mean_wrapper(x, dim=None, keepdim=False) :
-    """Mean reduction. Currently supports reducing over last dim."""
+    """Mean reduction. Reduces over one dim, a 1-elem list, or (via
+    _reduce_over_dims) an arbitrary list of dims."""
+    if isinstance(dim, (list, tuple)) and len(dim) > 1:
+        return _reduce_over_dims(mean_wrapper, x, dim, keepdim)
     if dim is None:
         # Full reduction — flatten and reduce
         x_flat = x.contiguous().view(-1)
@@ -2122,7 +2156,13 @@ def sum_wrapper(x, dim=None, keepdim=False) :
     summing a bool mask of 354 True elements and casting to uint8 wraps to
     354 % 256 = 98 (the chatterbox s3gen mel-length mask bug). Accumulation
     stays fp32 either way (exact for counts well under the 2^24 mantissa).
+
+    A multi-dim reduction (``dim`` a list with >1 entry, e.g. the Wan RoPE
+    grid-size sum over [0,1,2,4]) is reduced atomically via _reduce_over_dims;
+    a single dim / 1-elem list keeps the fast path below unchanged.
     """
+    if isinstance(dim, (list, tuple)) and len(dim) > 1:
+        return _reduce_over_dims(sum_wrapper, x, dim, keepdim)
     # x.dtype is a triton dtype handle (not NBXDtype) — gate on the tensor's
     # own is_floating_point() rather than dtype membership.
     out_dtype = x.dtype if x.is_floating_point() else NBXDtype.int64
@@ -2181,7 +2221,9 @@ def norm_wrapper(x, p=2, dim=None, keepdim=False):
 
 
 def amax_wrapper(x, dim=None, keepdim=False) :
-    """Max reduction."""
+    """Max reduction (one dim, a 1-elem list, or an arbitrary list of dims)."""
+    if isinstance(dim, (list, tuple)) and len(dim) > 1:
+        return _reduce_over_dims(amax_wrapper, x, dim, keepdim)
     if dim is None:
         x_flat = x.contiguous().view(-1)
         batch_dim = 1
@@ -3854,9 +3896,13 @@ def cross_entropy_wrapper(input, target,
 # ---------------------------------------------------------------------------
 
 def std_wrapper(x, dim=None, correction=1, keepdim=False) :
-    """Standard deviation. Global (map-reduce) or dim-specific."""
+    """Standard deviation. Global (map-reduce), single-dim, or multi-dim (the
+    reduced dims are flattened to one axis so the correction divides by the
+    total reduced count — matching torch.std over a list of dims)."""
     import math
     x = x.contiguous()
+    if isinstance(dim, (list, tuple)) and len(dim) > 1:
+        return _reduce_over_dims(std_wrapper, x, dim, keepdim, correction=correction)
     if dim is None:
         N = x.numel()
         BLOCK_N = min(triton.next_power_of_2(math.ceil(math.sqrt(N))), 4096)
@@ -3899,9 +3945,12 @@ def std_wrapper(x, dim=None, correction=1, keepdim=False) :
 
 
 def var_wrapper(x, dim=None, correction=1, keepdim=False) :
-    """Variance. Global (Welford) or dim-specific."""
+    """Variance. Global (Welford), single-dim, or multi-dim (reduced dims
+    flattened to one axis → correction over the total reduced count)."""
     import math
     x = x.contiguous()
+    if isinstance(dim, (list, tuple)) and len(dim) > 1:
+        return _reduce_over_dims(var_wrapper, x, dim, keepdim, correction=correction)
     if dim is None:
         N = x.numel()
         BLOCK_N = min(triton.next_power_of_2(math.ceil(math.sqrt(N))), 4096)

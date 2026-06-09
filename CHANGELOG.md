@@ -73,6 +73,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   masked. Rewritten as cat-of-constant-blocks per padded dim (NBXTensor-pure,
   R33), correct for any combination of padded axes; the optimized last-dim(s)
   kernels are retained for the hot image paths and are unchanged.
+- **Multi-dim reductions on the triton path silently reduced only one axis.**
+  `sum`/`mean`/`amax`/`std`/`var` collapsed a list of reduction dims to its
+  first element (`dim = dim[0]`), so a reduction over several axes (e.g. the Wan
+  RoPE grid-size `sum` over dims `[0,1,2,4]`, which must collapse a 5D latent to
+  a 1D coordinate vector) reduced only the first axis and left the wrong rank —
+  here a spurious extra dimension that propagated into a downstream convolution
+  and crashed it. A shared helper now flattens all reduced dims into one axis
+  and performs a single reduction (NBXTensor-pure), correct for separable
+  reductions and for `std`/`var` (the correction divides by the total reduced
+  count). The single-dim / 1-element-list fast path is unchanged, so existing
+  models are byte-identical. Validated against the reference across `sum`/`mean`
+  /`amax`/`var`/`std` with keepdim on/off (max|diff| 1.1e-04, fp32 accumulation).
 
 ### Removed
 
