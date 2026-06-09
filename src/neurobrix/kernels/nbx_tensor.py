@@ -2164,6 +2164,18 @@ class NBXTensor:
         if len(valid) == 1:
             return valid[0]
         tensors = valid
+        # Complex cat: the copy kernel concatenates the interleaved [re,im] float
+        # storage as if it were flat floats. For dim==0 that is correct (whole
+        # element-blocks stay contiguous), but for any inner dim it splits the
+        # boundary mid-pair, pairing re of one operand with im of the next
+        # (the Wan rotary freqs concat per-axis along the last dim). Route via
+        # the real view: cat on the same element dim with the [.,2] pair axis
+        # appended (untouched), then reinterpret as complex.
+        if valid[0].is_complex():
+            ndc = valid[0].ndim
+            dd = dim % ndc
+            real_parts = [t.view_as_real() for t in valid]
+            return NBXTensor.cat(real_parts, dd).view_as_complex()
         dim = dim % tensors[0].ndim
         # Align dtypes — cat_copy_kernel requires all inputs same type
         target_dtype = tensors[0]._dtype
