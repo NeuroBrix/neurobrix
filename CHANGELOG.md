@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **Redundant `RELEASE_NOTES_v0.2.0.md` and the `RELEASE_NOTES_*.md` sdist glob.**
+  Release notes are kept in `CHANGELOG.md` (the single source) and in the
+  GitHub/GitLab Release objects. The stand-alone file duplicated the 0.2.0
+  changelog entry and no 0.2.1 equivalent was ever produced, so the convention
+  was dropped rather than perpetuated.
+
 ### Fixed
 
 - **`graph_executor` `NBX_DEVICE_TRACE` diagnostic no longer swallows its own
