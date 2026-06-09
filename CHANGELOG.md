@@ -34,6 +34,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   identically. Wan2.1-T2V is the only affected model; all others are unchanged.
 - **Video CLI: `--num-frames` / `--fps`** injected into the runtime inputs for
   the video family.
+- **Text-embedding padding mask for cross-attention (`zero_pad_embeddings`).**
+  T5/UMT5 text encoders emit non-zero embeddings for padding tokens; a diffusion
+  transformer that cross-attends to the full text sequence would attend to that
+  padding and dilute the conditioning, yielding incoherent (mosaic-like) output.
+  The runtime now zeros the text embedding at masked positions (matching the
+  reference pipelines that trim to real length and re-pad with zeros), enabled
+  per text encoder via a data-driven flag. This fixed Wan2.1-T2V output from a
+  textured field to a coherent scene. Inert for encoders without the flag, so
+  existing image models are unchanged.
 
 ### Fixed
 

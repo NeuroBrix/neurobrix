@@ -135,7 +135,7 @@ class IterativeProcessHandler(FlowHandler):
                         hidden_state = self.ctx.variable_resolver.resolved[candidate]
                         break
                 if hidden_state is not None and hidden_key is not None:
-                    tokenizer_vals = self.ctx.pkg.topology.get("extracted_values", {}).get("tokenizer", {})
+                    tokenizer_vals = self._tokenizer_config_with_flags(comp_name, "tokenizer")
                     pos_mask = self.ctx.variable_resolver.get("global.attention_mask")
 
                     finalized = handler.finalize_embeddings(
@@ -167,6 +167,23 @@ class IterativeProcessHandler(FlowHandler):
             # per request, so force-unload even in eager mode to free
             # VRAM for the main loop. Matches the triton path.
             self._unload_component(comp_name, force=True)
+
+    def _tokenizer_config_with_flags(self, encoder_name: str, tokenizer_name: str) -> Dict[str, Any]:
+        """Tokenizer extracted_values augmented with runtime text-conditioning
+        flags from the registry. Currently `zero_pad_embeddings` (T5/UMT5
+        encoders emit non-zero pad embeddings; a DiT that cross-attends to the
+        full sequence must have them zeroed — the vendor pipelines trim+zero-pad).
+        Read at runtime via registry_flags (no .nbx rebuild); inert for encoders
+        without the flag, so image models are untouched (R23)."""
+        cfg = dict(self.ctx.pkg.topology.get("extracted_values", {}).get(tokenizer_name, {}) or {})
+        try:
+            from neurobrix.core.runtime.registry_flags import get_component_flag
+            model_name = self.ctx.pkg.manifest.get("model_name")
+            if get_component_flag(model_name, encoder_name, "zero_pad_embeddings", default=False):
+                cfg["zero_pad_embeddings"] = True
+        except Exception:
+            pass
+        return cfg
 
     def _execute_negative_encoding(self, text_encoder_name: str) -> None:
         """
@@ -219,7 +236,7 @@ class IterativeProcessHandler(FlowHandler):
         neg_input_ids, neg_attention_mask = tp.tokenize_negative(
             device, encoder_name=text_encoder_name, negative_prompt=negative_prompt
         )
-        tokenizer_vals = self.ctx.pkg.topology.get("extracted_values", {}).get(tokenizer_name, {})
+        tokenizer_vals = self._tokenizer_config_with_flags(text_encoder_name, tokenizer_name)
 
         # Save original inputs AND positive embeddings (per-encoder variables)
         orig_input_ids = self.ctx.variable_resolver.get(input_ids_var)
@@ -393,6 +410,37 @@ class IterativeProcessHandler(FlowHandler):
                         split_dim = 2 if current_state.dim() == 3 else 1
                         model_output = model_output.chunk(2, dim=split_dim)[0]
 
+                    # DiT velocity-diff capture (NBX_DUMP_DIT): step-0 transformer
+                    # inputs + raw velocity, for a matched-input comparison against
+                    # the vendored WanTransformer3DModel. Run with --cfg 1.0 so this
+                    # is the un-guided single forward (batch 1).
+                    import os as _os
+                    _dd = _os.environ.get("NBX_DUMP_DIT")
+                    if _dd and step_idx == 0 and self._is_loop_component(comp_name):
+                        _cap = {"velocity": model_output.detach().cpu()}
+                        if isinstance(scaled_timestep, torch.Tensor):
+                            _cap["timestep"] = scaled_timestep.detach().cpu()
+                        else:
+                            _cap["timestep"] = scaled_timestep
+                        _ci = self.ctx.pkg.topology.get("components", {}).get(comp_name, {})
+                        _conns = self.ctx.pkg.topology.get("connections", [])
+                        _res = self.ctx.variable_resolver.resolved
+                        for _in in _ci.get("interface", {}).get("inputs", []):
+                            # Try direct keys, then resolve the topology connection
+                            # (e.g. transformer.encoder_hidden_states <- text_encoder.last_hidden_state).
+                            _cands = [f"{comp_name}.{_in}", f"global.{_in}"]
+                            for _c in _conns:
+                                if _c.get("to") == f"{comp_name}.{_in}":
+                                    _cands.append(_c.get("from"))
+                            for _k in _cands:
+                                _v = _res.get(_k)
+                                if isinstance(_v, torch.Tensor):
+                                    _cap[_in] = _v.detach().cpu()
+                                    break
+                        torch.save(_cap, _dd)
+                        print(f"[DIT-DUMP] keys={list(_cap.keys())} "
+                              f"velocity std={model_output.float().std().item():.4f} -> {_dd}")
+
                     # Handle cross-device transfer
                     if self.ctx.strategy is not None and hasattr(self.ctx.strategy, 'transfer_model_output'):
                         # Type guard: ensure the method exists (pipeline strategy)
@@ -411,6 +459,16 @@ class IterativeProcessHandler(FlowHandler):
                         current_state = step_result["prev_sample"]
                     else:
                         current_state = step_result.prev_sample
+
+                    # Lightweight trajectory probe (NBX_TRAJ): per-step latent std,
+                    # to compare collapse-vs-recover against the vendor U-curve
+                    # (0.99->0.72->1.02). Cheaper than full NBX_DEBUG (one sync/step).
+                    import os as _ost
+                    if _ost.environ.get("NBX_TRAJ") == "1":
+                        _ts = timestep.item() if hasattr(timestep, "item") else timestep
+                        print(f"[TRAJ] step {step_idx+1:2d} t={float(_ts):.1f} "
+                              f"velocity_std={model_output.float().std().item():.4f} "
+                              f"latent_std={current_state.float().std().item():.4f}", flush=True)
 
 
                     if DEBUG:

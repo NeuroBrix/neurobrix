@@ -241,6 +241,20 @@ class TextEncoderComponentHandler(ComponentHandler):
                 mask_last = attention_mask.narrow(1, tail_start, tail_len)
                 attention_mask = _cat([mask_first, mask_last], dim=1)
 
+        # Zero the padded text embeddings (data-driven via tokenizer_config flag).
+        # T5/UMT5 encoders emit NON-ZERO embeddings for pad tokens; a DiT that
+        # cross-attends to the full sequence without masking would attend to that
+        # padding and dilute the conditioning. The vendor pipelines trim each
+        # prompt to its real length and re-pad with ZEROS (diffusers Wan
+        # `_get_t5_prompt_embeds`). Reproduce that by masking the embedding with
+        # the attention_mask. Gated by `zero_pad_embeddings` so models whose DiT
+        # already masks (or that slice via CHI) are untouched (R23).
+        if (tokenizer_config.get("zero_pad_embeddings")
+                and attention_mask is not None
+                and attention_mask.shape[1] == hidden_state.shape[1]):
+            _m = attention_mask.to(hidden_state.dtype).unsqueeze(-1)
+            hidden_state = hidden_state * _m
+
         result["hidden_state"] = hidden_state
         if attention_mask is not None:
             result["attention_mask"] = attention_mask
