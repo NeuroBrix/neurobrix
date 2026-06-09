@@ -1386,6 +1386,17 @@ class GraphExecutor:
             arr = np.frombuffer(tensor_bytes, dtype=np_dt).reshape(shape)
             arr = np.ascontiguousarray(arr)
 
+        # Narrow fp64/complex128 constants to fp32/complex64 — the triton kernels
+        # are fp32-max (see TritonSequence._parse_dtype). Loading the constant
+        # already-narrowed makes the graph's explicit fp64/complex128 _to_copy
+        # (which _parse_dtype also narrows) an identity, avoiding a fragile
+        # complex128→complex64 kernel cast. e.g. the Wan rotary-embedding freqs
+        # constant (complex128 [seq, head_dim/2]).
+        if arr.dtype == np.complex128:
+            arr = arr.astype(np.complex64)
+        elif arr.dtype == np.float64:
+            arr = arr.astype(np.float32)
+
         DeviceAllocator.set_device(device_idx)
         self._weights[weight_name] = NBXTensor.from_numpy(arr)
 

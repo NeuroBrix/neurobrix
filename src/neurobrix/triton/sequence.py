@@ -2172,6 +2172,17 @@ class TritonSequence:
             return NBXDtype.float16
         if parsed == NBXDtype.float16 and self._compute_dtype == NBXDtype.bfloat16:
             return NBXDtype.bfloat16
+        # Narrow fp64/complex128 to the triton-supported fp32/complex64. The
+        # NeuroBrix triton kernels are fp32-max (no native fp64 on V100, and the
+        # elementwise/index kernels read at fp32 stride); an explicit fp64 cast
+        # in the graph (e.g. the Wan rotary-embedding chain, which the vendor
+        # runs in float64/complex128 for precision) must be honoured at fp32
+        # precision, which is numerically ample for RoPE. complex128 → complex64
+        # keeps the interleaved-pair invariant the complex kernels rely on.
+        if parsed == NBXDtype.float64:
+            return NBXDtype.float32
+        if parsed == NBXDtype.complex128:
+            return NBXDtype.complex64
         return parsed
 
     # ========================================================================
@@ -2432,7 +2443,12 @@ class TritonSequence:
             try:
                 from neurobrix.kernels.nbx_tensor import NBXDtype, DeviceAllocator
                 import ctypes as _ct
-                full = t if t.dtype == NBXDtype.float32 else t.to(NBXDtype.float32)
+                # Complex tensors: check finiteness on the real VIEW (interleaved
+                # real/imag floats), not by casting the complex elements to a
+                # single fp32 (which reads half the bytes -> false NaN/Inf). The
+                # view_as_real path reads all real+imag components correctly.
+                src = t.view_as_real() if t.is_complex() else t
+                full = src if src._dtype == NBXDtype.float32 else src.to(NBXDtype.float32)
                 full = full.contiguous()
                 DeviceAllocator.set_device(full._device_idx)
                 n = full.numel()
