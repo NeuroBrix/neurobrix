@@ -20,6 +20,20 @@ import numpy as np
 from neurobrix.kernels.nbx_tensor import NBXTensor
 
 
+def _safelog(v: float) -> float:
+    """log mirroring torch.log at the domain edge: log(0) = -inf (Python's
+    math.log raises instead). The flow-matching schedule drives sigma_t -> 0 at
+    the final step; torch propagates the resulting -inf so the predictor
+    coefficients collapse (h -> +inf, h_phi_1 = expm1(-inf) = -1) and the step
+    returns the predicted clean sample x0 — the intended behaviour. The scalar
+    port must reproduce that, not abort on it."""
+    if v > 0.0:
+        return math.log(v)
+    if v == 0.0:
+        return float("-inf")
+    return float("nan")
+
+
 class TritonUniPCMultistepScheduler:
     """Zero-torch UniPC multistep scheduler (NBXTensor latents), order <= 2."""
 
@@ -150,8 +164,8 @@ class TritonUniPCMultistepScheduler:
         s_s0 = float(self.sigmas[self._step_index])
         alpha_t, sigma_t = self._sigma_to_alpha_sigma_t(s_t)
         alpha_s0, sigma_s0 = self._sigma_to_alpha_sigma_t(s_s0)
-        lambda_t = math.log(alpha_t) - math.log(sigma_t)
-        lambda_s0 = math.log(alpha_s0) - math.log(sigma_s0)
+        lambda_t = _safelog(alpha_t) - _safelog(sigma_t)
+        lambda_s0 = _safelog(alpha_s0) - _safelog(sigma_s0)
         h = lambda_t - lambda_s0
         _, h_phi_1, B_h = self._bh_scalars(h)
 
@@ -161,7 +175,7 @@ class TritonUniPCMultistepScheduler:
             mi = self.model_outputs[-2]
             si = self._step_index - 1
             alpha_si, sigma_si = self._sigma_to_alpha_sigma_t(float(self.sigmas[si]))
-            lambda_si = math.log(alpha_si) - math.log(sigma_si)
+            lambda_si = _safelog(alpha_si) - _safelog(sigma_si)
             rk = (lambda_si - lambda_s0) / h
             D1 = (mi - m0) * (1.0 / rk)         # NBXTensor
 
@@ -186,8 +200,8 @@ class TritonUniPCMultistepScheduler:
         s_s0 = float(self.sigmas[self._step_index - 1])
         alpha_t, sigma_t = self._sigma_to_alpha_sigma_t(s_t)
         alpha_s0, sigma_s0 = self._sigma_to_alpha_sigma_t(s_s0)
-        lambda_t = math.log(alpha_t) - math.log(sigma_t)
-        lambda_s0 = math.log(alpha_s0) - math.log(sigma_s0)
+        lambda_t = _safelog(alpha_t) - _safelog(sigma_t)
+        lambda_s0 = _safelog(alpha_s0) - _safelog(sigma_s0)
         h = lambda_t - lambda_s0
         _, h_phi_1, B_h = self._bh_scalars(h)
 
@@ -196,7 +210,7 @@ class TritonUniPCMultistepScheduler:
             mi = self.model_outputs[-2]
             si = self._step_index - 2
             alpha_si, sigma_si = self._sigma_to_alpha_sigma_t(float(self.sigmas[si]))
-            lambda_si = math.log(alpha_si) - math.log(sigma_si)
+            lambda_si = _safelog(alpha_si) - _safelog(sigma_si)
             rk = (lambda_si - lambda_s0) / h
             D1 = (mi - m0) * (1.0 / rk)
 
