@@ -31,7 +31,6 @@ class SchedulerConfig:
         "beta_end",
         "beta_schedule",
         "prediction_type",
-        "algorithm_type",
         "solver_type",
         "solver_order",
         "timestep_spacing",
@@ -61,6 +60,12 @@ class SchedulerConfig:
         # Only consumed by UniPCMultistepScheduler; inert for DPM++ / DDIM / Euler.
         "predict_x0": True,
         "disable_corrector": [],
+
+        # algorithm_type is DPM++-specific (dpmsolver++ / dpmsolver / sde-*).
+        # DPM++ diffusers configs always carry it (so its value is honored);
+        # UniPC / flow configs legitimately omit it, so default it here instead
+        # of forcing it REQUIRED across all schedulers.
+        "algorithm_type": "dpmsolver++",
     }
 
     @classmethod

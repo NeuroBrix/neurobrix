@@ -24,6 +24,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with diffusers (max|diff|=0.0) across standard + flow configs and 4D + 5D
   latent shapes.
 
+### Fixed
+
+- **Scheduler config: `algorithm_type` is no longer universally required.** It is
+  a DPM++-specific key (dpmsolver++/dpmsolver/sde-*); UniPC and flow schedulers
+  legitimately omit it. Moved from the validator's REQUIRED set to the optional
+  defaults (default `dpmsolver++`, honored when present), so a Wan UniPC `.nbx`
+  loads without a spurious "missing REQUIRED keys" crash.
+
 ### Removed
 
 - **Redundant `RELEASE_NOTES_v0.2.0.md` and the `RELEASE_NOTES_*.md` sdist glob.**
