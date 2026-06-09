@@ -157,6 +157,14 @@ _NUMPY_DTYPE_MAP = {
     'int16': NBXDtype.int16, 'int32': NBXDtype.int32,
     'int64': NBXDtype.int64, 'uint8': NBXDtype.uint8,
     'bool': NBXDtype.bool_,
+    # Complex: numpy stores complex as interleaved [real, imag] pairs — exactly
+    # the NBXTensor complex storage convention (complex64 = fp32 pairs,
+    # complex128 = fp64 pairs). Tagging the raw-byte copy with the complex dtype
+    # therefore yields a valid complex NBXTensor (view_as_real/_complex reinterpret
+    # the same bytes). Without these entries from_numpy fell through to float32,
+    # mistagging complex constants (e.g. Wan RoPE freqs, complex128 [seq, hd/2])
+    # as garbage floats -> NaN through the RoPE rotation -> dead output.
+    'complex64': NBXDtype.complex64, 'complex128': NBXDtype.complex128,
 }
 
 # __cuda_array_interface__ typestr
@@ -1305,10 +1313,22 @@ class NBXTensor:
                          base=x._base if x._base is not None else x, pinned=x._pinned)
 
     def view_as_complex(self) -> 'NBXTensor':
-        """float [..,N,2] → complex [..,N] (interleaved real/imag)."""
-        assert self._shape and self._shape[-1] == 2, \
-            f"view_as_complex expects last dim == 2, got {self._shape}"
+        """float [..,N,2] → complex [..,N] (interleaved real/imag).
+
+        complex64 requires fp32 real/imag pairs and complex128 requires fp64
+        pairs — there is no complex32. A half-precision input (fp16/bf16, e.g.
+        a rotary-embedding q/k narrowed to the V100 compute dtype) therefore
+        CANNOT be reinterpreted as complex64 in place: the storage is half the
+        size the complex64 tag implies, so the downstream complex kernels read
+        past the data and produce garbage/Inf. Promote fp16/bf16 to fp32 first
+        (a real copy), then tag complex64. fp32→complex64 and fp64→complex128
+        stay zero-copy views.
+        """
         x = self if self.is_contiguous() else self.contiguous()
+        if x._dtype in (NBXDtype.float16, NBXDtype.bfloat16):
+            x = x.to(NBXDtype.float32)
+        assert x._shape and x._shape[-1] == 2, \
+            f"view_as_complex expects last dim == 2, got {x._shape}"
         cdt = NBXDtype.complex128 if x._dtype == NBXDtype.float64 else NBXDtype.complex64
         new_shape = x._shape[:-1]
         return NBXTensor(x._data_ptr, new_shape, _contiguous_strides(new_shape),
@@ -2070,6 +2090,16 @@ class NBXTensor:
             d = kwargs['dtype']
             target = d if isinstance(d, NBXDtype) else parse_dtype(str(d))
         if target is None or target == self._dtype:
+            return self
+        # Complex tensors must never be downcast to a REAL dtype via .to():
+        # PyTorch itself raises on complex->real .to() (real conversions go via
+        # .real / view_as_real). When it appears here it is always a spurious
+        # compute-dtype downcast of a complex tensor (e.g. the RoPE frequency
+        # table, stored complex128) by the AMP/Prism dtype pipeline — which would
+        # reinterpret the interleaved real/imag bytes as a single real array and
+        # poison the value with NaN. Preserve the complex tensor. complex<->complex
+        # casts (complex128<->complex64) still proceed below.
+        if self.is_complex() and target not in _COMPLEX_DTYPES:
             return self
         # Cast via Triton copy kernel (tl.store auto-converts dtype)
         new = NBXTensor.empty(self._shape, target, f"cuda:{self._device_idx}")

@@ -94,6 +94,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   step returns the predicted clean sample — the intended denoised output. A
   `_safelog` helper now mirrors `torch.log` at the domain edge (`log(0) = -inf`)
   so the final step completes instead of crashing.
+- **`NBXTensor.from_numpy` mistagged complex arrays as float32.** The numpy→NBX
+  dtype map had no `complex64`/`complex128` entries, so a complex array fell
+  through to `float32`: the raw interleaved real/imag bytes were copied but
+  labelled as floats, producing garbage. This corrupted complex constants loaded
+  on the triton path — notably the rotary-embedding frequency table (stored as
+  `complex128 [seq, head_dim/2]`), which became non-finite and propagated NaN
+  through the whole transformer, so the triton video output decoded to a fully
+  black frame. numpy already stores complex as the interleaved real/imag pairs
+  that NBXTensor's complex storage expects, so mapping the two complex dtypes
+  makes `from_numpy` yield a correct complex tensor (`view_as_real`/`view_as_complex`
+  reinterpret the same bytes). Validated by a from_numpy round-trip for complex64
+  and complex128 (correct dtype, element size, and real/imag view).
+- **Complex-dtype handling across the triton path (rotary embeddings).** Beyond
+  `from_numpy`, several triton-path operations silently dropped or mishandled the
+  complex dtype, which collectively turned the Wan video output black (the model
+  applies rotary position embeddings as a complex multiply on a `complex128`
+  frequency table):
+  - `NBXTensor.to(...)` no longer downcasts a complex tensor to a real dtype
+    (PyTorch itself forbids `complex→real` via `.to`; it only arose from the
+    compute-dtype pipeline narrowing a complex tensor, which would reinterpret
+    the interleaved real/imag bytes as a single real array → NaN). complex↔complex
+    casts still proceed.
+  - `view_as_complex` promotes an `fp16`/`bf16` input to `fp32` before tagging
+    `complex64` (there is no complex32; a half-precision input cannot back a
+    valid complex64 view, and reading it as fp32 pairs over-runs the storage).
+  - `index_select` on a complex tensor now routes through the real view
+    (`view_as_real` → select → `view_as_complex`); the element-wise kernel
+    otherwise copied one real value per complex element, reading the wrong stride
+    and returning garbage (the per-axis gather of the rotary frequency table).
+  - The triton path narrows `float64 → float32` and `complex128 → complex64`
+    (in the op-dtype parser and the embedded-constant loader), since the
+    NeuroBrix triton kernels are fp32-max (no native fp64 on Volta). A graph that
+    explicitly casts to `float64`/`complex128` for precision (the rotary chain
+    runs in fp64 in the reference) is honoured at fp32, which is numerically
+    ample for rotary embeddings, and keeps the whole chain on kernels that
+    support it. Inert for models without fp64/complex dtypes.
+  Together these make the triton rotary multiply produce unit-magnitude
+  frequencies and a finite latent (previously the frequency table read as
+  ~2.6e38 garbage → Inf → all-NaN latent → uniform black frame).
+- **The Inf/NaN debug check (`NBX_TRITON_TRACE_NAN`) mis-flagged complex tensors.**
+  It cast each op output to fp32 to scan it, which on a complex tensor read half
+  the bytes and reported false positives. It now scans complex tensors via their
+  real view (all real+imag components), so the first genuine non-finite op is
+  reported.
 
 ### Removed
 
