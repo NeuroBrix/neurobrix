@@ -14,6 +14,11 @@ from typing import Any, Callable, Dict, List, Optional
 
 from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator
 
+# Shared default sampler seed (R27/R28). The pytorch dual_ar path
+# (core/flow/dual_ar.py) MUST use this same literal so the two separate code
+# paths draw identical randoms when --seed is not passed.
+_DUALAR_SEED = 1234
+
 
 class TritonDualAREngine:
     """
@@ -62,9 +67,20 @@ class TritonDualAREngine:
         device_idx = _parse_device_idx(self.ctx.primary_device)
         DeviceAllocator.set_device(device_idx)
 
-        max_tokens = defaults.get("max_tokens", 2048)
-        temperature = defaults.get("temperature", 0.7)
-        top_p = defaults.get("top_p", 0.8)
+        from neurobrix.core.runtime.decode_bound import decode_bound  # NBX_DECODE_BOUND harness
+        # CLI sampling overrides (global.*) take precedence over the embedded
+        # defaults, mirroring the compiled dual_ar flow (R30) — --temperature 0 ⇒
+        # greedy. Without this the triton flow silently sampled at the default 0.7.
+        _ov = self.ctx.variable_resolver.resolved
+        max_tokens = decode_bound(_ov.get("global.max_tokens", defaults.get("max_tokens", 2048)))
+        temperature = _ov.get("global.temperature", defaults.get("temperature", 0.7))
+        top_p = _ov.get("global.top_p", defaults.get("top_p", 0.8))
+        # Deterministic shared-seed sampler RNG (R27/R28). Same seed + identical
+        # numpy sampling algorithm as the pytorch dual_ar path ⇒ all 4 modes draw
+        # the same randoms, so equal (fp16-close) logits sample equal tokens →
+        # reproducible 4/4 under sampling (greedy --temperature 0 is the floor).
+        _seed = _ov.get("global.seed")
+        sampler_rng = np.random.RandomState(int(_seed) if _seed is not None else _DUALAR_SEED)
         eos_token_id = defaults.get("eos_token_id")
 
         print(f"   [{comp_name}] DualAR generation (max_tokens={max_tokens})...")
@@ -73,19 +89,17 @@ class TritonDualAREngine:
         self._ensure_weights_loaded(comp_name)
         executor = self.ctx.executors[comp_name]
 
-        # Get graph input shape: [B, N+1, T]
+        # Slow model input shape [B, N+1, T] — read the codebook-row count (N+1).
+        # The full-grid generation feeds variable length, so the trace seq dim is
+        # not needed (symbolic seq); only the row count is structural.
         dag = getattr(executor, '_dag', None)
         n_codebooks = 11
-        trace_seq_len = 64
         if dag:
-            for _tid, spec in dag.get("tensors", {}).items():
+            for spec in dag.get("tensors", {}).values():
                 if spec.get("input_name") == "inp":
                     shape = spec.get("shape", [])
-                    if len(shape) >= 3:
-                        n_val = shape[1]
-                        n_codebooks = n_val if isinstance(n_val, int) else 11
-                        t_val = shape[2]
-                        trace_seq_len = t_val if isinstance(t_val, int) else 64
+                    if len(shape) >= 2 and isinstance(shape[1], int):
+                        n_codebooks = shape[1]
                     break
 
         # Get tokenized input
@@ -96,93 +110,165 @@ class TritonDualAREngine:
         input_ids_np = _to_numpy(input_ids).astype(np.int64)
         if input_ids_np.ndim > 1:
             input_ids_np = input_ids_np.squeeze(0)
-        prompt_len = len(input_ids_np)
 
-        # Generate semantic tokens autoregressively
-        generated_semantic: List[int] = []
+        # Full DualAR generation (slow backbone + fast/depth transformer) — R30
+        # mirror of core/flow/dual_ar.py (replaces the slow-AR-only + numpy
+        # embedding shortcut). Orchestration in numpy, COMPUTE via executor.run on
+        # NBXTensors (R33 — the flow handler may use numpy, never torch).
+        import json as _json
+        from pathlib import Path as _Path
+        n_rows = n_codebooks                 # grid rows: 1 semantic + N acoustic
+        num_codebooks = n_rows - 1           # acoustic codebooks (codec quantizer)
+        acoustic_cb_size = 1024
 
-        for step in range(max_tokens):
-            cur_len = prompt_len + len(generated_semantic)
-            if cur_len <= trace_seq_len:
-                padded = np.zeros((1, n_codebooks, trace_seq_len), dtype=np.int64)
-                padded[0, 0, :prompt_len] = input_ids_np[:prompt_len]
-                for i, tok in enumerate(generated_semantic):
-                    padded[0, 0, prompt_len + i] = tok
-            else:
-                # Sliding window
-                all_semantic = list(input_ids_np[:prompt_len]) + generated_semantic
-                window = all_semantic[-trace_seq_len:]
-                padded = np.zeros((1, n_codebooks, trace_seq_len), dtype=np.int64)
-                for i, tok in enumerate(window):
-                    padded[0, 0, i] = tok
+        st_path = _Path(self.ctx.nbx_path_str) / "modules" / "tokenizer" / "special_tokens.json"
+        special = _json.load(open(st_path)) if st_path.exists() else {}
+        semantic_begin_id = special.get("<|semantic:0|>")
+        if semantic_begin_id is None:
+            raise RuntimeError("ZERO FALLBACK: '<|semantic:0|>' missing from tokenizer special_tokens.")
+        im_end_id = special.get("<|im_end|>", eos_token_id)
 
-            padded_nbx = NBXTensor.from_numpy(padded)
-            output = executor.run({"inp": padded_nbx})
+        fast_exec = self.ctx.executors.get("model.fast")
+        if fast_exec is None:
+            raise RuntimeError("ZERO FALLBACK: DualAR requires 'model.fast' (re-trace with the fast split).")
+        self._ensure_weights_loaded("model.fast")
 
-            if isinstance(output, dict):
-                logits = next(iter(output.values()))
-            elif _is_tensor(output):
-                logits = output
-            else:
-                logits = None
+        prompt_ids = [int(x) for x in np.asarray(input_ids_np).reshape(-1)]
+        bos_id = defaults.get("bos_token_id")
+        if bos_id is not None and prompt_ids and prompt_ids[0] == bos_id:
+            prompt_ids = prompt_ids[1:]
+        interleave_id = special.get("<|interleave|>")
+        tok = self.ctx.modules.get("tokenizer")
+        speaker_ids = []
+        if tok is not None:
+            try:
+                _s = tok.encode("<|speaker:0|>", add_special_tokens=False)
+            except TypeError:
+                _s = tok.encode("<|speaker:0|>")
+            speaker_ids = [int(x) for x in (_s.tolist() if hasattr(_s, "tolist") else _s)]
+        prompt_ids = ([interleave_id] if interleave_id is not None else []) + speaker_ids + prompt_ids
+        print(f"   [{comp_name}] prompt tokens ({len(prompt_ids)}): {prompt_ids[:16]}")
 
-            if logits is None:
-                break
+        rep_pen = _ov.get("global.repetition_penalty", defaults.get("repetition_penalty", 1.2))
+        rep_window = 32
+        sem_lo, sem_hi = semantic_begin_id, semantic_begin_id + 4096
 
-            # Get logits at last real token position
-            logits_np = _to_numpy(logits)
-            pos = min(cur_len - 1, trace_seq_len - 1)
-            if logits_np.ndim == 3:
-                last_logits = logits_np[0, pos, :]
-            else:
-                last_logits = logits_np.flatten()
+        import os as _os_dbg
+        _fixed_codes_env = _os_dbg.environ.get("NBX_DUALAR_FIXED_CODES", "")
 
-            next_token = _sample_token_np(last_logits, temperature, top_p=top_p)
+        grid_cols = [[pid] + [0] * num_codebooks for pid in prompt_ids]
+        acoustic_codes: List[List[int]] = []
+        slow_history: List[int] = []
 
-            if eos_token_id is not None and next_token == eos_token_id:
-                break
+        if _fixed_codes_env:
+            # Codec-isolation diagnostic: skip slow+fast AR; codes injected in Step 3.
+            # The codec path is then validated independently of the generation (the
+            # 4-mode kernel-oracle method — verify each half against its own oracle).
+            print(f"   [{comp_name}] FIXED codes mode — generation skipped (codec isolation).")
+        else:
+            for _ in range(max_tokens):
+                clen = len(grid_cols)
+                inp = np.zeros((1, n_rows, clen), dtype=np.int64)
+                for ci, col in enumerate(grid_cols):
+                    for ri, val in enumerate(col):
+                        inp[0, ri, ci] = val
+                pos = clen - 1
+                out = executor.run({"inp": NBXTensor.from_numpy(inp)})
+                logits = out.get("logits") if isinstance(out, dict) else None
+                hidden = out.get("hidden_states") if isinstance(out, dict) else None
+                if logits is None or hidden is None:
+                    raise RuntimeError("ZERO FALLBACK: slow model must output logits + hidden_states.")
+                logits_np = _to_numpy(logits)
+                hidden_np = _to_numpy(hidden)            # [1, clen, dim]
+                slow_logits = logits_np[0, pos, :].astype(np.float64)
+                _dsl = _os_dbg.environ.get("NBX_DUALAR_DUMP_SLOGITS", "")
+                if _dsl and len(slow_history) == 0:
+                    np.save(_dsl, slow_logits)
+                masked = np.full_like(slow_logits, -np.inf)
+                masked[sem_lo:sem_hi] = slow_logits[sem_lo:sem_hi]
+                if im_end_id is not None:
+                    masked[im_end_id] = slow_logits[im_end_id]
+                slow_token = _sample_token_np(masked, temperature, top_p=top_p,
+                                              repetition_penalty=rep_pen,
+                                              generated_ids=slow_history[-rep_window:],
+                                              rng=sampler_rng)
+                if _os_dbg.environ.get("NBX_DEBUG_DECODE") == "1" and len(slow_history) < 16:
+                    print(f"  [DBG-DUALAR] step={len(slow_history)} sem_token={int(slow_token)}", flush=True)
+                if im_end_id is not None and slow_token == im_end_id:
+                    break
+                slow_history.append(slow_token)
 
-            generated_semantic.append(next_token)
+                hidden_pos = hidden_np[:, pos, :]        # [1, dim], keep its dtype
+                ctx = [max(0, slow_token - semantic_begin_id)]
+                for _ in range(1, num_codebooks):
+                    ctx_arr = np.zeros((1, num_codebooks - 1), dtype=np.int64)
+                    for j, v in enumerate(ctx):
+                        ctx_arr[0, j] = v
+                    fout = fast_exec.run({"hidden": NBXTensor.from_numpy(hidden_pos),
+                                          "codebook_context": NBXTensor.from_numpy(ctx_arr)})
+                    flogits = fout.get("output") if isinstance(fout, dict) else fout
+                    flogits_np = _to_numpy(flogits)
+                    read_pos = len(ctx)
+                    cb_logits = flogits_np[0, read_pos, :acoustic_cb_size]
+                    sampled = _sample_token_np(cb_logits, temperature, top_p=top_p,
+                                               rng=sampler_rng)
+                    ctx.append(sampled)
+
+                acoustic_codes.append(ctx)
+                grid_cols.append([slow_token] + ctx)
 
         elapsed = (time.perf_counter() - start) * 1000
-        print(f"   [{comp_name}] Generated {len(generated_semantic)} semantic tokens in {elapsed:.0f}ms")
+        print(f"   [{comp_name}] Generated {len(acoustic_codes)} positions in {elapsed:.0f}ms")
+        if not acoustic_codes and not _fixed_codes_env:
+            raise RuntimeError("ZERO FALLBACK: DualAR produced no audio frames.")
 
-        # -- Step 3: Embed semantic tokens -> codec input --
-        embed_weight = None
-        if hasattr(executor, '_weights'):
-            best_vocab = 0
-            for wname, wtensor in executor._weights.items():
-                if 'embed' in wname and wname.endswith('.weight'):
-                    if 'codebook' in wname or 'fast' in wname:
-                        continue
-                    w_shape = wtensor.shape if hasattr(wtensor, 'shape') else (0,)
-                    if w_shape[0] > best_vocab:
-                        best_vocab = w_shape[0]
-                        embed_weight = wtensor
+        # -- Step 3: acoustic codes -> codec.quantizer.decode (RVQ) -> features --
+        # Build the code grid [1, num_codebooks, T] and dequantize via the codec's
+        # residual-VQ decoder (R30 mirror of core/flow/dual_ar.py). Replaces the old
+        # numpy embedding shortcut that fed *semantic embeddings* to the decoder
+        # instead of true RVQ features — the root of the near-silent triton audio.
+        import os as _os_diag
+        T = len(acoustic_codes)
+        codes_np = np.zeros((1, num_codebooks, T), dtype=np.int64)
+        for t, ac in enumerate(acoustic_codes):
+            for r, v in enumerate(ac):
+                codes_np[0, r, t] = int(v)
 
-        if embed_weight is None:
-            raise RuntimeError("ZERO FALLBACK: DualAR model must have embed.weight.")
+        _dump_codes = _os_diag.environ.get("NBX_DUALAR_DUMP_CODES", "")
+        if _dump_codes:
+            np.save(_dump_codes, codes_np)
+            print(f"   [diag] dumped codes {list(codes_np.shape)} -> {_dump_codes}")
+        _fixed_codes = _os_diag.environ.get("NBX_DUALAR_FIXED_CODES", "")
+        if _fixed_codes:
+            codes_np = np.load(_fixed_codes).astype(np.int64)
+            T = codes_np.shape[2]
+            print(f"   [diag] FIXED codes injected {list(codes_np.shape)} <- {_fixed_codes}")
 
-        embed_np = _to_numpy(embed_weight).astype(np.float32)
-        token_ids_np = np.array(generated_semantic, dtype=np.int64)
-        max_id = int(token_ids_np.max()) if len(token_ids_np) > 0 else 0
-        print(f"   [{comp_name}] Token range: 0..{max_id}, embed vocab: {embed_np.shape[0]}")
-        if max_id >= embed_np.shape[0]:
-            print(f"   [{comp_name}] WARNING: token {max_id} >= vocab {embed_np.shape[0]}, clamping")
-            token_ids_np = np.clip(token_ids_np, 0, embed_np.shape[0] - 1)
+        codec_q = "codec.quantizer"
+        if codec_q not in self.ctx.executors:
+            raise RuntimeError(f"ZERO FALLBACK: DualAR requires '{codec_q}' for RVQ decode.")
+        self._ensure_weights_loaded(codec_q)
+        q_out = self.ctx.executors[codec_q].run({"indices": NBXTensor.from_numpy(codes_np)})
+        z = q_out.get("output") if isinstance(q_out, dict) else q_out
+        if z is None:
+            raise RuntimeError("ZERO FALLBACK: codec.quantizer.decode produced no features.")
+        print(f"   [{codec_q}] decode codes {list(codes_np.shape)} -> features {list(z.shape)}")
 
-        token_embeds = embed_np[token_ids_np]  # [T_gen, dim]
-        codec_input_np = token_embeds[np.newaxis, :, :].transpose(0, 2, 1)  # [1, dim, T_gen]
-        codec_input = NBXTensor.from_numpy(codec_input_np.astype(np.float32))
-        print(f"   [{comp_name}] Embedded -> {list(codec_input.shape)} for codec.decoder")
+        _dump_z = _os_diag.environ.get("NBX_DUALAR_DUMP_Z", "")
+        if _dump_z:
+            np.save(_dump_z, _to_numpy(z).astype(np.float32))
+            print(f"   [diag] dumped z {list(z.shape)} -> {_dump_z}")
 
-        # Store for downstream
-        self.ctx.variable_resolver.resolved[f"{comp_name}.output_0"] = codec_input
-        self.ctx.variable_resolver.resolved["global.generated_codes"] = NBXTensor.from_numpy(token_ids_np)
-        self.ctx.variable_resolver.resolved["global.generated_token_ids"] = generated_semantic
+        # Bind RVQ features to the decoder input (topology connects
+        # model.output_0 -> codec.decoder.x; mirror the compiled binding set).
+        for key in ("global.x", "x", "codec.decoder.x", "model.output_0", f"{comp_name}.output_0"):
+            self.ctx.variable_resolver.resolved[key] = z
+        self.ctx.variable_resolver.resolved["global.generated_token_ids"] = [int(c[0]) for c in acoustic_codes]
 
         if not self.ctx.persistent_mode:
             self._unload_component_weights(comp_name)
+            self._unload_component_weights("model.fast")
+            self._unload_component_weights(codec_q)
             gc.collect()
 
         # -- Step 4: Codec decoder (forward stages) --
@@ -196,8 +282,9 @@ class TritonDualAREngine:
             codec_start = time.perf_counter()
             self._ensure_weights_loaded(codec_name)
 
-            if not self._try_chunked_forward(codec_name):
-                self._execute_component(codec_name, "forward", None)
+            # DAC decoder is fully symbolic (born-at-source seq) — single pass, no
+            # trace-seq chunking (R30 mirror of core/flow/dual_ar.py).
+            self._execute_component(codec_name, "forward", None)
 
             codec_elapsed = (time.perf_counter() - codec_start) * 1000
             print(f"   [{codec_name}] Done in {codec_elapsed:.0f}ms")
@@ -313,8 +400,17 @@ def _sample_token_np(
     top_p: float = 1.0,
     generated_ids: Optional[List[int]] = None,
     repetition_penalty: float = 1.0,
+    rng=None,
 ) -> int:
-    """Sample next token from logits (NumPy)."""
+    """Sample next token from logits (NumPy).
+
+    `rng` is a deterministic `np.random.RandomState` seeded once per run from
+    `global.seed` (R27/R28): it makes the decode reproducible per mode AND, since
+    the pytorch dual_ar path seeds an identical RandomState (same seed, same
+    algorithm), the 4 modes draw the same randoms — so at equal (fp16-close)
+    logits they pick the same tokens. Falls back to global np.random only if no
+    rng is threaded (legacy callers)."""
+    _draw = rng if rng is not None else np.random
     logits = logits_1d.copy().astype(np.float64)
 
     if repetition_penalty != 1.0 and generated_ids:
@@ -343,7 +439,7 @@ def _sample_token_np(
         probs[mask] = 0.0
         probs = probs / probs.sum()
 
-    return int(np.random.choice(len(probs), p=probs))
+    return int(_draw.choice(len(probs), p=probs))
 
 
 def _to_numpy(tensor) -> np.ndarray:

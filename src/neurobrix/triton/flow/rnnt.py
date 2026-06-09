@@ -111,75 +111,22 @@ class TritonRNNTEngine:
         device_idx = _parse_device_idx(self.ctx.primary_device)
         DeviceAllocator.set_device(device_idx)
 
-        # Load audio with soundfile (no torch)
-        import soundfile as sf
-        audio, sr = sf.read(str(audio_path), dtype="float32")
-        if audio.ndim > 1:
-            audio = audio.mean(axis=1)
-
-        # Resample to 16kHz if needed
-        if sr != 16000:
-            target_len = int(len(audio) * 16000 / sr)
-            indices = np.linspace(0, len(audio) - 1, target_len)
-            audio = np.interp(indices, np.arange(len(audio)), audio).astype(np.float32)
-            sr = 16000
-
         print(f"   [Audio] Loading: {audio_path}")
 
-        # BOUNDARY: NeMo mel preprocessing requires torch STFT + torchaudio mel fbanks.
-        # We import torch only for this boundary computation.
-        import torch as _torch_boundary
-        import torchaudio as _torchaudio_boundary
+        # NeMo mel in PURE NUMPY (zero torch) — bit-close mirror of the
+        # torchaudio path (validated vs torch; STT-confirmed). The extractor
+        # loads + resamples the audio itself.
+        from pathlib import Path as _Path
+        from neurobrix.triton.audio_frontend import _nemo_mel, _model_config_path
+        try:
+            _mp = _model_config_path(self.ctx)
+        except Exception:
+            _mp = _Path(self.ctx.nbx_path_str)
+        features_np = _nemo_mel(str(audio_path), _mp, None)   # [1, n_mels, frames]
+        actual_frames = features_np.shape[2]
+        print(f"   [Audio] Features: {features_np.shape} (nemo_mel·np, {actual_frames} frames)")
 
-        device = _torch_boundary.device(self.ctx.primary_device)
-        waveform = _torch_boundary.from_numpy(audio).to(device=device, dtype=_torch_boundary.float32)
-
-        defaults = self.ctx.pkg.defaults
-        n_fft = 512
-        win_length = 400
-        hop_length = 160
-        n_mels = 80
-        dither = defaults.get("dither", 1e-5)
-
-        # Pre-emphasis filter
-        preemph = defaults.get("preemphasis", 0.97)
-        if preemph > 0:
-            waveform = _torch_boundary.cat([waveform[:1], waveform[1:] - preemph * waveform[:-1]])
-
-        # Apply dither
-        if dither > 0:
-            waveform = waveform + dither * _torch_boundary.randn_like(waveform)
-
-        # STFT
-        window = _torch_boundary.hann_window(win_length, device=device)
-        stft = _torch_boundary.stft(
-            waveform, n_fft=n_fft, hop_length=hop_length, win_length=win_length,
-            window=window, return_complex=True, center=True, pad_mode="reflect",
-        )
-        power_spectrum = stft.abs().pow(2)
-
-        # Mel filterbank
-        mel_fb = _torchaudio_boundary.functional.melscale_fbanks(
-            n_freqs=n_fft // 2 + 1, f_min=0.0, f_max=sr / 2.0,
-            n_mels=n_mels, sample_rate=sr,
-        ).to(device=device)
-
-        mel_spec = power_spectrum.T @ mel_fb
-
-        # Log with guard
-        mel_spec = _torch_boundary.log(mel_spec.clamp(min=1e-5))
-
-        # Per-feature normalization
-        mean = mel_spec.mean(dim=0, keepdim=True)
-        std = mel_spec.std(dim=0, keepdim=True).clamp(min=1e-5)
-        mel_spec = (mel_spec - mean) / std
-
-        # Transpose to [1, n_mels, frames]
-        features = mel_spec.T.unsqueeze(0)
-        actual_frames = features.shape[2]
-        print(f"   [Audio] Features: {features.shape} (nemo_mel, {actual_frames} frames)")
-
-        # Pad to match encoder's traced frame count
+        # Pad/truncate to the encoder's traced frame count (numpy).
         expected_frames = 3000
         encoder_executor = self.ctx.executors.get("encoder")
         if encoder_executor and hasattr(encoder_executor, '_dag'):
@@ -189,15 +136,14 @@ class TritonRNNTEngine:
                 if shape and len(shape) == 3:
                     expected_frames = shape[2]
                     break
-
         if actual_frames < expected_frames:
-            features = _torch_boundary.nn.functional.pad(features, (0, expected_frames - actual_frames))
+            features_np = np.concatenate(
+                [features_np, np.zeros((1, features_np.shape[1],
+                                        expected_frames - actual_frames), np.float32)], axis=2)
         elif actual_frames > expected_frames:
-            features = features[:, :, :expected_frames]
+            features_np = features_np[:, :, :expected_frames]
 
-        # BOUNDARY END: convert to NBXTensor
-        features_np = features.detach().cpu().numpy()
-        features_nbx = NBXTensor.from_numpy(features_np)
+        features_nbx = NBXTensor.from_numpy(np.ascontiguousarray(features_np))
 
         length_np = np.array([min(actual_frames, expected_frames)], dtype=np.int64)
         length_nbx = NBXTensor.from_numpy(length_np)
@@ -304,47 +250,38 @@ class TritonRNNTEngine:
         return tokens
 
     def _run_lstm_np(self, input_seq, hx, weight_ih, weight_hh, bias_ih, bias_hh, num_layers):
-        """Run LSTM forward using extracted weights (NumPy)."""
-        h, c = hx
-        output = input_seq
-        new_h_list = []
-        new_c_list = []
-        for layer in range(num_layers):
-            h_l = h[layer:layer + 1]
-            c_l = c[layer:layer + 1]
-            output, (h_l, c_l) = self._lstm_cell_np(
-                output, h_l, c_l,
-                weight_ih[layer], weight_hh[layer],
-                bias_ih[layer], bias_hh[layer],
-            )
-            new_h_list.append(h_l)
-            new_c_list.append(c_l)
-        new_h = np.concatenate(new_h_list, axis=0)
-        new_c = np.concatenate(new_c_list, axis=0)
-        return output, (new_h, new_c)
+        """Run the RNNT decoder LSTM through the triton-pure `lstm_wrapper`
+        (NBXTensor + @triton.jit) instead of a hand-rolled NumPy cell — removing
+        the NumPy compute debt (the prior `_lstm_cell_np`). The greedy loop stays
+        in Python (data-dependent control flow); only the single-step input and
+        h/c cross the NBXTensor boundary per call, and the weights are converted
+        once and cached. Unidirectional, multi-layer, batch_first=False — the same
+        kernel validated bit-exact for the Kokoro BiLSTMs.
 
-    @staticmethod
-    def _lstm_cell_np(x, h, c, w_ih, w_hh, b_ih, b_hh):
-        """Run LSTM cell using NumPy ops."""
-        seq_len = x.shape[0]
-        outputs = []
-        for i in range(seq_len):
-            xi = x[i]  # [1, D]
-            h_sq = h[0]  # [1, D]
-            gates = xi @ w_ih.T + b_ih + h_sq @ w_hh.T + b_hh
-            hidden_size = h.shape[2]
-            i_gate = _sigmoid(gates[:, :hidden_size])
-            f_gate = _sigmoid(gates[:, hidden_size:2 * hidden_size])
-            g_gate = np.tanh(gates[:, 2 * hidden_size:3 * hidden_size])
-            o_gate = _sigmoid(gates[:, 3 * hidden_size:])
-            c_sq = c[0]
-            c_new = f_gate * c_sq + i_gate * g_gate
-            h_new = o_gate * np.tanh(c_new)
-            h = h_new[np.newaxis, :, :]
-            c = c_new[np.newaxis, :, :]
-            outputs.append(h_new[np.newaxis, :, :])
-        output = np.concatenate(outputs, axis=0)
-        return output, (h, c)
+        input_seq: [T, 1, D] numpy (T == 1 per RNNT step); hx = (h, c) numpy
+        [num_layers, 1, H]. Returns (output [T,1,H] numpy, (h_n, c_n) numpy).
+        """
+        from neurobrix.kernels import wrappers as _w
+        from neurobrix.kernels.nbx_tensor import NBXTensor
+
+        params = getattr(self, "_dec_lstm_params_nbx", None)
+        if params is None:
+            params = []
+            for layer in range(num_layers):
+                params.append(NBXTensor.from_numpy(np.ascontiguousarray(weight_ih[layer], dtype=np.float32)))
+                params.append(NBXTensor.from_numpy(np.ascontiguousarray(weight_hh[layer], dtype=np.float32)))
+                params.append(NBXTensor.from_numpy(np.ascontiguousarray(bias_ih[layer], dtype=np.float32)))
+                params.append(NBXTensor.from_numpy(np.ascontiguousarray(bias_hh[layer], dtype=np.float32)))
+            self._dec_lstm_params_nbx = params
+
+        x = NBXTensor.from_numpy(np.ascontiguousarray(input_seq, dtype=np.float32))
+        h0 = NBXTensor.from_numpy(np.ascontiguousarray(hx[0], dtype=np.float32))
+        c0 = NBXTensor.from_numpy(np.ascontiguousarray(hx[1], dtype=np.float32))
+        out, h_n, c_n = _w.lstm_wrapper(
+            x, [h0, c0], params, has_biases=True, num_layers=num_layers,
+            bidirectional=False, batch_first=False,
+        )
+        return out.numpy(), (h_n.numpy(), c_n.numpy())
 
     def _run_joint_np(self, enc_frame, dec_frame, jw):
         """Run joint network with NumPy: project enc + dec, add, relu, output linear."""
@@ -454,10 +391,12 @@ class TritonRNNTEngine:
         sp_path = self._find_tokenizer_model()
         if sp_path is not None:
             try:
-                import sentencepiece as spm
-                sp = spm.SentencePieceProcessor()
-                sp.Load(str(sp_path))
-                return sp.DecodeIds(tokens)
+                # R34 (Zero Outsider): NeuroBrix-internal SentencePiece, never
+                # the `sentencepiece` vendor lib.
+                from neurobrix.core.module.tokenizer.sp_proto import PySentencePiece
+                with open(sp_path, "rb") as _spf:
+                    sp = PySentencePiece.from_bytes(_spf.read())
+                return sp.decode(tokens)
             except ImportError:
                 pass
 
@@ -487,11 +426,6 @@ class TritonRNNTEngine:
 # -----------------------------------------------------------------
 # Module-level helpers
 # -----------------------------------------------------------------
-
-def _sigmoid(x):
-    """Numerically stable sigmoid for numpy."""
-    return np.where(x >= 0, 1.0 / (1.0 + np.exp(-x)), np.exp(x) / (1.0 + np.exp(x)))
-
 
 def _to_numpy(tensor) -> np.ndarray:
     """Convert any tensor to numpy array."""

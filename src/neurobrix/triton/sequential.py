@@ -138,9 +138,22 @@ class TritonSequentialDispatcher:
         clean = op_type.replace("aten::", "").replace("custom::", "")
         base = clean.split(".")[0]
 
-        # Custom ops — apply AMP wrapping
+        # Custom ops — apply AMP wrapping.
+        # MUST forward graph attribute kwargs (epsilon) — the rms_norm
+        # wrapper defaults to eps=1e-6, but the model's real rms_norm_eps
+        # (e.g. 1e-5 for Llama/TinyLlama) lives in the op's `kwargs`
+        # (graph custom::rms_norm attributes: {"epsilon": 1e-05}). Dropping
+        # it silently fell back to 1e-6, diverging from the other three
+        # modes (PyTorch-seq/compiled + triton-compiled all forward it).
+        # On the first RMSNorm over small-magnitude embeddings mean(x^2)
+        # is near the eps scale, so 1e-5 vs 1e-6 is a ~10% denominator
+        # swing that compounds through every layer. Mirror the generic
+        # path's kwargs forwarding below.
         if op_type == "custom::rms_norm":
+            kwargs = self.resolve_kwargs(attributes)
             func = self._dtype_engine.wrap_op("rms_norm", w.rms_norm)
+            if kwargs:
+                return func(*inputs, **kwargs)
             return func(*inputs)
 
         # SDPA variants → unified wrapper (AMP wrapping via the wrapper itself)
@@ -178,16 +191,36 @@ class TritonSequentialDispatcher:
 
     def _dispatch_sdpa(self, base: str, inputs: List[Any],
                        attributes: Dict[str, Any]) -> Any:
-        """Handle SDPA variants — route to our unified wrapper."""
+        """Handle SDPA variants — route to our unified wrapper.
+
+        SDPA's `attn_mask` / `dropout_p` / `is_causal` / `scale` may arrive
+        EITHER positionally OR as graph kwargs. Whisper-style encoders carry
+        `scale=1.0` and `is_causal=False` as kwargs with only q/k/v positional
+        (the encoder pre-scales Q so SDPA scale must be 1.0, not the wrapper's
+        1/sqrt(head_dim) default). Reading these positionally only — as this
+        path used to — silently fell back to the wrapper defaults: e.g.
+        scale=1/sqrt(64)=0.125 instead of 1.0 → 8x-wrong attention → garbage
+        encoder output (Voxtral audio_tower → generic "You're welcome!"
+        transcription). The compiled path forwards compiled_kwargs, so seq MUST
+        honour the kwargs too (same data-driven discipline as the custom::rms_norm
+        epsilon forwarding above). `_pos_or_kw` takes the positional value when
+        present, else the resolved kwarg, else the default."""
         q = inputs[0].contiguous() if hasattr(inputs[0], 'contiguous') else inputs[0]
         k = inputs[1].contiguous() if hasattr(inputs[1], 'contiguous') else inputs[1]
         v = inputs[2].contiguous() if hasattr(inputs[2], 'contiguous') else inputs[2]
 
+        kw = self.resolve_kwargs(attributes)
+
+        def _pos_or_kw(idx, key, default):
+            if len(inputs) > idx and inputs[idx] is not None:
+                return inputs[idx]
+            return kw.get(key, default)
+
         if base == "_scaled_dot_product_flash_attention_for_cpu":
             attn_mask = None
-            dropout_p = float(inputs[3]) if len(inputs) > 3 else 0.0
-            is_causal = bool(inputs[4]) if len(inputs) > 4 else False
-            scale = None
+            dropout_p = float(_pos_or_kw(3, "dropout_p", 0.0))
+            is_causal = bool(_pos_or_kw(4, "is_causal", False))
+            scale = kw.get("scale", None)
             output = w.scaled_dot_product_attention_wrapper(
                 q, k, v, dropout_p=dropout_p, is_causal=is_causal, scale=scale)
             lse = NBXTensor.zeros((q.shape[0], q.shape[1], q.shape[2]),
@@ -197,10 +230,14 @@ class TritonSequentialDispatcher:
 
         if base in ("_scaled_dot_product_efficient_attention",
                      "_scaled_dot_product_flash_attention"):
-            attn_mask = inputs[3] if len(inputs) > 3 and inputs[3] is not None else None
-            dropout_p = inputs[5] if len(inputs) > 5 else 0.0
-            is_causal = inputs[6] if len(inputs) > 6 else False
-            scale = inputs[7] if len(inputs) > 7 else None
+            # ATen efficient/flash signature has an extra compute_log_sumexp at
+            # arg[4]: (q,k,v,attn_bias,compute_log_sumexp,dropout_p,is_causal,scale)
+            attn_mask = _pos_or_kw(3, "attn_bias", None)
+            if attn_mask is None:
+                attn_mask = kw.get("attn_mask")
+            dropout_p = _pos_or_kw(5, "dropout_p", 0.0)
+            is_causal = _pos_or_kw(6, "is_causal", False)
+            scale = _pos_or_kw(7, "scale", None)
             output = w.scaled_dot_product_attention_wrapper(
                 q, k, v, attn_mask=attn_mask,
                 dropout_p=float(dropout_p) if not isinstance(dropout_p, float) else dropout_p,
@@ -214,10 +251,11 @@ class TritonSequentialDispatcher:
             return output, lse, seed, offset
 
         # Standard scaled_dot_product_attention
-        attn_mask = inputs[3] if len(inputs) > 3 else None
-        dropout_p = inputs[4] if len(inputs) > 4 else 0.0
-        is_causal = inputs[5] if len(inputs) > 5 else False
-        scale = inputs[6] if len(inputs) > 6 else None
+        # (q,k,v,attn_mask,dropout_p,is_causal,scale)
+        attn_mask = _pos_or_kw(3, "attn_mask", None)
+        dropout_p = _pos_or_kw(4, "dropout_p", 0.0)
+        is_causal = _pos_or_kw(5, "is_causal", False)
+        scale = _pos_or_kw(6, "scale", None)
         return w.scaled_dot_product_attention_wrapper(
             q, k, v, attn_mask=attn_mask,
             dropout_p=float(dropout_p) if not isinstance(dropout_p, float) else dropout_p,

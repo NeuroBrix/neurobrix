@@ -55,6 +55,7 @@ _CONV2D_AUTOTUNE_VOLTA = [
          'kernel_height', 'kernel_width',
          'stride_height', 'stride_width',
          'padding_height', 'padding_width',
+         'dilation_height', 'dilation_width',
          'groups', 'fp16'],
     cache_results=True,
 )
@@ -70,6 +71,7 @@ def conv2d_forward_kernel(
     stride_height: tl.constexpr, stride_width: tl.constexpr,
     padding_height: tl.constexpr, padding_width: tl.constexpr,
     groups: tl.constexpr, fp16: tl.constexpr,
+    dilation_height: tl.constexpr = 1, dilation_width: tl.constexpr = 1,
     BLOCK_SIZE_BHW: tl.constexpr = 64,
     BLOCK_SIZE_INF: tl.constexpr = 32,
     BLOCK_SIZE_OUTF: tl.constexpr = 64,
@@ -100,8 +102,8 @@ def conv2d_forward_kernel(
         for w in range(kernel_width):
             for c in range(0, in_group_dim, BLOCK_SIZE_INF):
                 inf_offset = c + tl.arange(0, BLOCK_SIZE_INF)
-                ih_offset = h - padding_height + stride_height * oh_offset
-                iw_offset = w - padding_width + stride_width * ow_offset
+                ih_offset = h * dilation_height - padding_height + stride_height * oh_offset
+                iw_offset = w * dilation_width - padding_width + stride_width * ow_offset
 
                 curr_inp = (input_pointer +
                             (input_in_feat_stride * inf_offset)[None, :] +

@@ -125,8 +125,10 @@ class TritonAutoregressiveHandler:
                                n * 4, kind=2)
                     vals = list(buf)
                 else:
-                    import torch as _torch_dl
-                    vals = arr.detach().float().reshape(-1).cpu().tolist()
+                    # Triton logits are always NBXTensor (the branch above). A
+                    # non-NBX tensor here would mean a wiring bug, not a torch
+                    # path — skip the diagnostic rather than import torch (R33).
+                    vals = []
                 # top-10
                 idx_sorted = sorted(range(len(vals)), key=lambda i: -vals[i])[:10]
                 top10 = [(i, vals[i]) for i in idx_sorted]
@@ -137,6 +139,22 @@ class TritonAutoregressiveHandler:
                 print(f"[NBX_DUMP_LOGITS] triton dumped top10 to {_dump_path}",
                       flush=True)
             next_token, is_done = generator.step(logits, step_idx)
+
+            # Per-step token diagnostic (mirrors the compiled flow's NBX_DEBUG_DECODE)
+            # for triton-seq-vs-sequential decode parity. R33-pure scalar read
+            # (ctypes + DeviceAllocator, no torch).
+            if _os_dl.environ.get("NBX_DEBUG_DECODE") == "1" and step_idx < 15:
+                from neurobrix.kernels.nbx_tensor import (
+                    NBXDtype as _NBXdt, DeviceAllocator as _DAdt)
+                import ctypes as _ctdt
+                _tk = next_token
+                while hasattr(_tk, "ndim") and _tk.ndim > 1:
+                    _tk = _tk[0]
+                _tkf = _tk.to(_NBXdt.float32)
+                _b = (_ctdt.c_float * 1)()
+                _DAdt.memcpy(_ctdt.addressof(_b), _tkf.data_ptr(), 4, kind=2)
+                print(f"  [DBG-TRITON] step={step_idx} token={int(round(_b[0]))}",
+                      flush=True)
 
             if is_done:
                 break
@@ -165,9 +183,42 @@ class TritonAutoregressiveHandler:
         generated_tokens = generator.get_generated_tokens()
         strategy.process_output(generated_tokens, self.ctx)
 
+        # Zero Outsider (ZO-0): SNAC codec traced into the .nbx → run it as a
+        # stage with NBXTensor codes (R30 mirror of the compiled path; no `snac`).
+        self._run_snac_codec_decoder(generated_tokens)
+
         if not is_image:
             session.cleanup()
         return self.ctx.variable_resolver.resolve_all()
+
+    def _run_snac_codec_decoder(self, generated_tokens) -> None:
+        """ZO-0 (triton): decode orpheus SNAC tokens through the TRACED
+        codec.decoder, NBXTensor end-to-end. Redistributes the 7-tokens/frame
+        stream into the 3 SNAC codebooks (pure python) and runs the codec as a
+        stage via _execute_component. No `snac` import."""
+        defaults = self.ctx.pkg.defaults
+        if defaults.get("audio_output_type") != "snac_tokens":
+            return
+        if "codec.decoder" not in self.ctx.executors:
+            return
+        from neurobrix.core.flow.audio_utils import redistribute_snac_codes
+        gen_ids = list(generated_tokens)
+        codes = redistribute_snac_codes(
+            gen_ids, defaults["audio_token_start"], defaults["vocab_size"])
+        if codes is None:
+            return
+        rv = self.ctx.variable_resolver.resolved
+        for key, vals in (("c0", codes[0]), ("c1", codes[1]), ("c2", codes[2])):
+            t = NBXTensor.from_numpy(np.array([vals], dtype=np.int64))
+            rv[f"codec.decoder.{key}"] = t
+            rv[key] = t
+        # triton loads component weights on demand — load codec.decoder before
+        # running it (else the in-graph codebook embedding weight is None).
+        self._ensure_weights_loaded("codec.decoder")
+        self._execute_component("codec.decoder", "forward", None)
+        wav = rv.get("codec.decoder.output_0")
+        if wav is not None:
+            rv["global.output_audio"] = wav
 
     def _graph_lm_prefill(self, input_ids: NBXTensor) -> NBXTensor:
         """Delegate to active session. Required by runtime-guard hook."""
@@ -236,6 +287,20 @@ class TritonAutoregressiveHandler:
         sft_format = defaults.get("sft_format")
         special_token_ids = defaults.get("special_token_ids")
 
+        # Resolve chat_mode (CLI override > defaults > False) — mirrors the
+        # compiled TextProcessor.tokenize. Models with chat_mode=False (e.g. the
+        # orpheus / openaudio TTS LMs, whose prompt is the bare templated text)
+        # MUST NOT go through apply_chat_template: that wraps the text in the
+        # full HF chat template (system prompt + role markers), producing a
+        # ~10x longer prompt (orpheus: 39 vs 4 tokens) and a completely
+        # different prefill → garbage decode. Was the orpheus triton bug.
+        _SENT = object()
+        _cli_chat = self.ctx.variable_resolver.resolved.get("global.chat_mode", _SENT)
+        if _cli_chat is not _SENT and _cli_chat is not None:
+            chat_mode = bool(_cli_chat)
+        else:
+            chat_mode = bool(defaults.get("chat_mode", False))
+
         if (is_image_ar and sft_format and special_token_ids
                 and hasattr(tokenizer, "format_generation_prompt")):
             # Priority 1: SFT format (Janus-style image AR). Only taken for
@@ -246,19 +311,28 @@ class TritonAutoregressiveHandler:
                 special_token_ids=special_token_ids,
                 is_unconditional=False,
             )
-        elif (not is_image_ar
-              and hasattr(tokenizer, "apply_chat_template")):
-            # Priority 2: HF chat_template — preserves the long-standing
-            # Triton LLM path exactly (TinyLlama, Qwen3, DeepSeek-MoE).
-            # The is_image_ar exclusion prevents Janus's DeepSeek
-            # tokenizer (which exposes apply_chat_template but has no
-            # configured template) from crashing here.
+        elif (chat_mode and not is_image_ar
+              and hasattr(tokenizer, "apply_chat_template")
+              and (not hasattr(tokenizer, "has_chat_template")
+                   or tokenizer.has_chat_template())):
+            # Priority 2: HF chat_template — ONLY when chat_mode is enabled
+            # (TextProcessor parity). Preserves the Triton chat-LLM path
+            # (TinyLlama, Qwen3, DeepSeek-MoE all set chat_mode=True).
             messages = [{"role": "user", "content": prompt}]
             token_ids = tokenizer.apply_chat_template(
                 messages, add_generation_prompt=True)
+        elif hasattr(tokenizer, "encode_with_mask"):
+            # Priority 3a: basic tokenization WITH special tokens (TextProcessor
+            # parity for chat_mode=False models — orpheus, openaudio).
+            _r = tokenizer.encode_with_mask(
+                prompt, padding=False, add_special_tokens=True)
+            token_ids = _r["input_ids"] if isinstance(_r, dict) else _r
         elif hasattr(tokenizer, "encode"):
-            # Priority 3: basic encode fallback.
-            token_ids = tokenizer.encode(prompt)
+            # Priority 3b: basic encode (with special tokens when supported).
+            try:
+                token_ids = tokenizer.encode(prompt, add_special_tokens=True)
+            except TypeError:
+                token_ids = tokenizer.encode(prompt)
         else:
             raise RuntimeError("Tokenizer has no encode method.")
 
@@ -317,10 +391,24 @@ class TritonAutoregressiveHandler:
         from neurobrix.triton.sequence import TritonSequence
 
         lm_name = gen_info.get("lm_component", "language_model")
-        # For models with 'model' as the main component (e.g., TinyLlama)
-        if lm_name not in self.ctx.pkg.components:
-            for name in self.ctx.pkg.components:
-                if name not in ("lm_head",):
+        # Resolve the LM component name against the live executor map, NOT
+        # `pkg.components`. `pkg.components` is populated only from component
+        # dirs that ship a `runtime.json` (loader.py:72-77) — a forge-side
+        # artefact that is partial/empty for orpheus-class TTS builds: the
+        # 2-component build yields {} (no override, so lm_name stays "model"
+        # by luck) while the 3-component SNAC build yields {"codec.decoder"}.
+        # The old fallback then iterated that partial dict, skipped only
+        # "lm_head", and picked "codec.decoder" as the LM → prefill ran the
+        # SNAC codec graph (inputs c0/c1/c2), so its first aten::embedding
+        # received input::input_ids=None. `self.ctx.executors` is keyed by
+        # EVERY neural component (built from topology.components in
+        # RuntimeExecutor._setup_executors), so membership + fallback against
+        # it is robust regardless of which components carry a runtime.json.
+        # Mirrors the native path (core/flow/autoregressive.py), which never
+        # consults pkg.components for this. (R30: triton + triton_sequential.)
+        if lm_name not in self.ctx.executors:
+            for name in self.ctx.executors:
+                if name not in ("lm_head", "codec.decoder"):
                     lm_name = name
                     break
 
@@ -394,6 +482,7 @@ class TritonAutoregressiveHandler:
             "aten::scaled_dot_product_attention",
             "aten::_scaled_dot_product_efficient_attention",
             "aten::_scaled_dot_product_flash_attention",
+            "aten::_scaled_dot_product_cudnn_attention",
         }
         graph_ops = dag.get("ops", {})
         has_sdpa = any(op.get("op_type") in sdpa_types for op in graph_ops.values())
@@ -421,7 +510,8 @@ class TritonAutoregressiveHandler:
                 num_kv_heads = lm_config.get("num_kv_heads") or num_heads
                 head_dim = lm_config.get("head_dim") or (hidden_dim // num_heads)
                 num_layers = lm_config.get("num_layers") or 22
-                max_tokens = self.ctx.pkg.defaults.get("max_tokens", 512)
+                from neurobrix.core.runtime.decode_bound import decode_bound  # NBX_DECODE_BOUND harness
+                max_tokens = decode_bound(self.ctx.pkg.defaults.get("max_tokens", 512))
                 kv_cache = TritonKVCache(
                     num_layers=num_layers,
                     num_kv_heads=num_kv_heads,
@@ -434,8 +524,29 @@ class TritonAutoregressiveHandler:
             kv_interceptor = TritonAttentionInterceptor(
                 cache=kv_cache, num_heads=num_heads)
 
-            # Register interceptor on executor (applied when triton sequence compiles)
-            interceptors = {st: kv_interceptor.intercept for st in sdpa_types}
+            # Register interceptor on executor (applied when triton sequence compiles).
+            # Per-variant: the efficient/cudnn/flash ATen ops have shifted positional
+            # signatures (extra compute_log_sumexp / return_debug_mask arg) vs plain
+            # SDPA; route each to its matching remap so is_causal / scale bind
+            # correctly (else intercept() raises "multiple values for 'scale'").
+            _variant_intercept = {
+                "aten::_scaled_dot_product_efficient_attention": kv_interceptor.intercept_efficient,
+                "aten::_scaled_dot_product_cudnn_attention": kv_interceptor.intercept_efficient,
+                "aten::_scaled_dot_product_flash_attention": kv_interceptor.intercept_flash,
+            }
+            interceptors = {st: _variant_intercept.get(st, kv_interceptor.intercept)
+                            for st in sdpa_types}
+            # RoPE position fix for position_ids-LESS models (e.g. orpheus): RoPE
+            # positions come from an internal aten::arange(0, seq_len), which at
+            # decode (seq_len=1) yields [0] every step → every token encoded at
+            # position 0 → KV cache fills with mis-rotated keys → garbage ramble.
+            # Shift the arange by cache_len during decode. Models WITH a
+            # position_ids input (TinyLlama, chatterbox t3, MoE LLMs) drive RoPE
+            # from that input and MUST NOT have their aranges shifted (R23). This
+            # mirrors the compiled-core kv_cache_wrapper, which registers
+            # intercept_arange — the missing R30 half on the triton side.
+            if not uses_abs_pos:
+                interceptors["aten::arange"] = kv_interceptor.intercept_arange
             executor.register_triton_interceptors(interceptors)
 
         return TritonLMSession(

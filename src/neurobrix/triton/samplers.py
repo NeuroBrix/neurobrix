@@ -203,11 +203,14 @@ class CombinedSampler:
                 else:
                     logits_np[token_id] *= self.repetition_penalty
 
-        # Write back to GPU
-        from neurobrix.kernels.nbx_tensor import DeviceAllocator
+        # Write back to GPU. BOTH pointers must be wrapped in c_void_p: a
+        # bare numpy `.ctypes.data` is a Python int, which a no-argtypes ctypes
+        # call coerces to a 32-bit C int → the 64-bit host address is truncated
+        # → invalid src pointer → segfault. (The D2H reads above already wrap
+        # both ends, which is why only this H2D write crashed.)
         ctypes.cdll.LoadLibrary('libcudart.so').cudaMemcpy(
             ctypes.c_void_p(logits.data_ptr()),
-            logits_np.ctypes.data,
+            ctypes.c_void_p(logits_np.ctypes.data),
             logits_bytes, 1)  # H2D
         return logits
 

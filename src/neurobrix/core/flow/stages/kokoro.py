@@ -69,7 +69,19 @@ def _coerce_torch_dtype(dt) -> torch.dtype:
 # ─────────────────────────────────────────────────────────────
 
 def execute_native_kokoro(engine, stage: Dict, audio_config: Dict) -> None:
-    """Native execution for Kokoro components that can't run through CompiledSequence.
+    """Native (hand-rolled) execution for Kokoro's LSTM components.
+
+    TRITON-ONLY band-aid as of 2026-05-30. The COMPILED path no longer uses this:
+    Forge now traces the LSTM forward correctly (parent_module weight-resolution
+    fix for the cuDNN flatten_parameters data_ptr aliasing), so the compiled
+    registry runs the predictor + text_encoder via `execution: forward` (the
+    traced graph), validated element-wise vs the vendor oracle. The COMPILED
+    dispatch branch for `native_kokoro` was removed (core/flow/audio.py).
+
+    This function is retained for the TRITON path only (triton/flow/audio.py),
+    which cannot yet run the `aten::lstm` forward graph (no Triton LSTM kernel) —
+    a separate chantier (P-KOKORO-TRITON-LSTM-KERNEL, R33). Removing it now would
+    break the untested triton path; the removal is deliberately scoped to compiled.
 
     Handles:
     - text_encoder: embedding -> WeightNorm Conv1d x 3 -> BiLSTM (pack_padded_sequence)
@@ -191,6 +203,16 @@ def execute_native_kokoro(engine, stage: Dict, audio_config: Dict) -> None:
                 alignment[0, i, pos:end] = 1.0
                 pos = end
 
+        # Real content occupies frames [0, pos); the alignment loop left the
+        # tail [pos, target) zero, so asr/en are zero there too. The decoder
+        # still synthesises all target_asr_frames, so record the content
+        # fraction (generic, semantic-free key) for the post-decode waveform
+        # crop in the audio flow handler. Stretching short prompts to fill the
+        # whole window was the P0a babbling bug — see _scale_kokoro_durations.
+        content_ratio = (float(pos) / float(target_asr_frames)
+                         if target_asr_frames > 0 else 1.0)
+        engine.ctx.variable_resolver.resolved["global.audio_content_ratio"] = content_ratio
+
         # -- Step 4: Compute en and asr --
         # Vendor: en = d.transpose(-1, -2) @ pred_aln_trg
         en = d.transpose(-1, -2) @ alignment  # [B, 640, T_frames]
@@ -206,17 +228,17 @@ def execute_native_kokoro(engine, stage: Dict, audio_config: Dict) -> None:
         F0_raw = _run_kokoro_f0n_blocks(shared_out, style_pred, w, "F0", device, dtype)
         N_raw = _run_kokoro_f0n_blocks(shared_out, style_pred, w, "N", device, dtype)
 
-        # Expand F0/N to decoder target shapes via interpolation
-        F0_curve = torch.nn.functional.interpolate(
-            F0_raw, size=target_f0_len, mode='linear', align_corners=False
-        ).squeeze(1)  # [B, target_f0_len]
-        N_curve = torch.nn.functional.interpolate(
-            N_raw, size=target_n_len, mode='linear', align_corners=False
-        ).squeeze(1)  # [B, target_n_len]
+        # Expand F0/N to decoder target shapes, interpolating only the spoken
+        # content prefix and zero-padding the tail (content_ratio == 1.0 when
+        # the prompt fills the whole traced window).
+        F0_curve = _expand_kokoro_curve(F0_raw, target_f0_len, content_ratio)
+        N_curve = _expand_kokoro_curve(N_raw, target_n_len, content_ratio)
 
     elapsed = (time.perf_counter() - start) * 1000
     print(f"   [{comp_name}] Native done in {elapsed:.0f}ms  "
-          f"asr={asr.shape} F0={F0_curve.shape} N={N_curve.shape}")
+          f"asr={list(asr.shape)} F0={list(F0_curve.shape)} N={list(N_curve.shape)}  "
+          f"content={pos}/{target_asr_frames} (ratio={content_ratio:.3f}) "
+          f"F0_raw={list(F0_raw.shape)}")
 
     # Bind all decoder inputs to variable resolver
     for key in ["global.asr", "asr", f"{comp_name}.asr"]:
@@ -242,41 +264,15 @@ def preprocess_phonemizer_input(engine, prompt: str, phoneme_vocab: Dict) -> Non
     """
     device = engine.ctx.primary_device
 
-    # Step 1: Phonemize text -> IPA string
-    # Try kokoro g2p first (most accurate for Kokoro models),
-    # then phonemizer library, then espeak-ng subprocess as fallback.
-    phonemes = None
-    try:
-        from kokoro import KPipeline
-        pipe = KPipeline(lang_code=engine.ctx.pkg.defaults.get("phoneme_lang", "a"))
-        phonemes, _ = pipe.g2p(prompt)
-    except Exception:
-        pass
-
-    if phonemes is None:
-        try:
-            from phonemizer import phonemize as ph_fn
-            phonemes = ph_fn(
-                prompt, language='en-us', backend='espeak',
-                strip=True, preserve_punctuation=True, with_stress=True,
-            )
-        except Exception:
-            pass
-
-    if phonemes is None:
-        # Last resort: subprocess espeak-ng
-        import subprocess
-        try:
-            result = subprocess.run(
-                ['espeak-ng', '-q', '--ipa', prompt],
-                capture_output=True, text=True, timeout=10,
-            )
-            phonemes = result.stdout.strip()
-        except Exception:
-            raise RuntimeError(
-                "ZERO FALLBACK: Phonemizer model requires 'kokoro', "
-                "'phonemizer', or 'espeak-ng' CLI."
-            )
+    # Step 1: text -> IPA via the NeuroBrix-internal g2p (ZO-3) — reads the
+    # espeak-distilled lexicon embedded in the .nbx (modules/g2p/en_lexicon.txt.gz)
+    # + a stdlib LTS fallback. NO `kokoro`/`phonemizer`/`espeak-ng` import at
+    # runtime (R34); the embedded lexicon retains espeak's license.
+    _lang_map = {"a": "en-us", "b": "en-gb"}
+    klang = engine.ctx.pkg.defaults.get("phoneme_lang", "a")
+    from neurobrix.core.module.audio.g2p import g2p_phonemes
+    phonemes = g2p_phonemes(prompt, engine.ctx.nbx_path_str,
+                            _lang_map.get(klang, "en-us"), klang)
 
     # Step 2: Map phonemes to IDs
     ids = [0]  # BOS/padding
@@ -285,46 +281,30 @@ def preprocess_phonemizer_input(engine, prompt: str, phoneme_vocab: Dict) -> Non
             ids.append(phoneme_vocab[ch])
     ids.append(0)  # EOS/padding
 
-    # Step 3: Pad/truncate to graph's expected length
-    # Get expected length from first component's input shape
-    first_stage = engine.ctx.pkg.topology.get("flow", {}).get("audio", {}).get("stages", [])
-    max_len = None
-    if first_stage:
-        first_comp = first_stage[0].get("component", "")
-        executor = engine.ctx.executors.get(first_comp)
-        if executor and hasattr(executor, '_dag') and executor._dag:
-            for _tid, tinfo in executor._dag.get("tensors", {}).items():
-                if tinfo.get("is_input") and tinfo.get("input_name") in ("input_ids", "input", "inp"):
-                    shape = tinfo.get("shape", [])
-                    if len(shape) >= 2:
-                        max_len = shape[1]
-                    break
-
-    if max_len is None:
-        raise RuntimeError(
-            "ZERO FALLBACK: Cannot determine input_ids length from first stage graph.\n"
-            "Expected a graph input named 'input_ids', 'input', or 'inp' with a 2D shape."
-        )
-
+    # Step 3: Feed the ACTUAL phoneme sequence — no padding to the trace seq_len.
+    # The bert/text_encoder/predictor/decoder graphs carry a symbolic seq_len that
+    # the runtime binds from the input_ids shape, so every stage runs at the true
+    # length and the audio duration tracks the text. The previous code padded AND
+    # truncated every utterance to the trace's 23-phoneme length, which froze the
+    # output to a fixed duration (identical bytes for any prompt) and silently cut
+    # any text longer than 23 phonemes.
     actual_len = len(ids)
-    if len(ids) > max_len:
-        ids = ids[:max_len]
-        actual_len = max_len
-    else:
-        ids = ids + [0] * (max_len - len(ids))
-
     input_ids = torch.tensor([ids], dtype=torch.long, device=device)
     engine.ctx.variable_resolver.resolved["global.input_ids"] = input_ids
     engine.ctx.variable_resolver.resolved["input_ids"] = input_ids
-    print(f"   [Phonemizer] '{prompt}' -> {len(phonemes)} phonemes -> {actual_len} IDs (padded to {max_len})")
+    print(f"   [Phonemizer] '{prompt[:60]}' -> {len(phonemes)} phonemes "
+          f"-> {actual_len} IDs (dynamic seq_len)")
 
     # Bind text length and mask for downstream stages (text_encoder, predictor)
     text_lengths = torch.tensor([actual_len], dtype=torch.long, device=device)
     for key in ["global.text_lengths", "text_lengths", "input_lengths"]:
         engine.ctx.variable_resolver.resolved[key] = text_lengths
 
-    text_mask = torch.zeros(1, max_len, dtype=torch.bool, device=device)
-    text_mask[0, :actual_len] = True
+    # batch=1, no padding → every position is a real token. The mask convention is
+    # True = PADDING (vendor uses gt(arange+1, input_lengths)); with no padding the
+    # mask is all-False. (Consumers: masked_fill_(text_mask, 0) in the
+    # DurationEncoder / text_encoder, inv_mask = ~text_mask for durations.)
+    text_mask = torch.zeros(1, actual_len, dtype=torch.bool, device=device)
     for key in ["global.text_mask", "text_mask", "m"]:
         engine.ctx.variable_resolver.resolved[key] = text_mask
 
@@ -425,23 +405,32 @@ def _execute_native_text_encoder(engine, comp_name: str) -> None:
         # x: [B, seq, 512]
         x = x.transpose(1, 2)  # [B, 512, seq]
 
-        # 3x (WeightNorm Conv1d + LeakyReLU + LayerNorm)
+        # Mask padding after embedding (vendor TextEncoder: x.masked_fill_(m, 0)).
+        # text_mask is True=padding; m broadcasts over the channel dim.
+        m = text_mask.unsqueeze(1).to(device) if text_mask is not None else None
+        if m is not None:
+            x = x.masked_fill(m, 0.0)
+
+        # 3x vendor block: WeightNorm Conv1d -> LayerNorm -> LeakyReLU(0.2),
+        # then mask padding. Op order and slope must match vendor exactly
+        # (was conv -> LeakyReLU(0.01) -> LayerNorm, no per-block mask).
         for i in range(3):
-            # WeightNorm: weight = g * v / ||v||
+            # WeightNorm: weight = g * v / ||v|| (dim=0, norm over in/kernel)
             wg = w[f"cnn.{i}.0.weight_g"].to(device=device, dtype=dtype)
             wv = w[f"cnn.{i}.0.weight_v"].to(device=device, dtype=dtype)
             bias = w[f"cnn.{i}.0.bias"].to(device=device, dtype=dtype)
-            # Compute weight_norm: w = g * v / ||v||_2
             norm = wv.norm(dim=(1, 2), keepdim=True)
             conv_w = wg * wv / (norm + 1e-12)
             x = torch.nn.functional.conv1d(x, conv_w, bias, padding=2)
-            x = torch.nn.functional.leaky_relu(x, negative_slope=0.01)
-            # LayerNorm over last dim (channel dim after transpose)
+            # LayerNorm over the channel dim (vendor custom LayerNorm on [B,C,T])
             gamma = w[f"cnn.{i}.1.gamma"].to(device=device, dtype=dtype)
             beta = w[f"cnn.{i}.1.beta"].to(device=device, dtype=dtype)
             x_t = x.transpose(1, 2)  # [B, seq, C]
             x_t = torch.nn.functional.layer_norm(x_t, [gamma.shape[0]], gamma, beta)
             x = x_t.transpose(1, 2)  # [B, 512, seq]
+            x = torch.nn.functional.leaky_relu(x, negative_slope=0.2)
+            if m is not None:
+                x = x.masked_fill(m, 0.0)
 
         # BiLSTM with pack_padded_sequence
         x = x.transpose(1, 2)  # [B, seq, 512]
@@ -651,8 +640,49 @@ def _run_kokoro_adain_resblock(
     return (h + sc) * torch.rsqrt(torch.tensor(2.0, device=device, dtype=dtype))
 
 
+def _expand_kokoro_curve(
+    raw: torch.Tensor, target_len: int, content_ratio: float,
+) -> torch.Tensor:
+    """Interpolate a per-frame F0/N curve to the decoder target length.
+
+    When ``content_ratio < 1.0`` the alignment matrix left the asr tail zero,
+    so only the leading ``content_ratio`` fraction of ``raw`` carries real
+    prosody. Interpolate that prefix to ``round(content_ratio * target_len)``
+    and zero-pad the rest, keeping the iSTFTNet harmonic source silent past the
+    spoken content (the post-decode crop removes the silent tail). The fraction
+    is length-agnostic, so it holds whether the F0/N blocks upsample ``raw`` or
+    not. ``raw`` is ``[B, 1, L]``; returns ``[B, target_len]``.
+    """
+    if content_ratio >= 1.0:
+        return torch.nn.functional.interpolate(
+            raw, size=target_len, mode="linear", align_corners=False
+        ).squeeze(1)
+
+    raw_len = raw.shape[-1]
+    content_raw = max(1, round(content_ratio * raw_len))
+    content_target = max(1, round(content_ratio * target_len))
+    interp = torch.nn.functional.interpolate(
+        raw[:, :, :content_raw], size=content_target, mode="linear", align_corners=False
+    ).squeeze(1)  # [B, content_target]
+
+    out = torch.zeros(raw.shape[0], target_len, device=raw.device, dtype=raw.dtype)
+    out[:, :content_target] = interp
+    return out
+
+
 def _scale_kokoro_durations(raw: torch.Tensor, target: int) -> torch.Tensor:
-    """Scale predicted durations so they sum to exactly target frames."""
+    """Map predicted durations to integer per-phoneme frame counts.
+
+    When the natural rounded durations already fit within ``target`` decoder
+    frames, they are returned unchanged: the alignment loop leaves the unused
+    tail frames zero and ``execute_native_kokoro`` crops the waveform after the
+    decoder. Stretching short prompts to fill the trace-time fixed ``target``
+    window was the P0a "babbling / hey hey hey" bug (each phoneme elongated
+    3-5x beyond natural speech). Only when the natural sum overflows ``target``
+    (prompt longer than the traced decoder window) are durations compressed to
+    fit — a long-prompt fallback; the proper fix is the build-side dynamic asr
+    frame count (follow-up P-BUILD-KOKORO-DYNAMIC-FRAMES).
+    """
     durations = torch.round(raw).clamp(min=0)
     active = durations > 0
     if active.sum() == 0:
@@ -660,10 +690,13 @@ def _scale_kokoro_durations(raw: torch.Tensor, target: int) -> torch.Tensor:
         result[0] = target
         return result
 
-    current_sum = durations[active].sum()
-    if current_sum > 0:
-        scale = target / current_sum.item()
-        durations[active] = torch.round(durations[active] * scale).clamp(min=1)
+    natural_sum = int(durations[active].sum().item())
+    if natural_sum <= target:
+        return durations.long()
+
+    # Overflow path: compress the natural durations to exactly target frames.
+    scale = target / natural_sum
+    durations[active] = torch.round(durations[active] * scale).clamp(min=1)
 
     result = durations.long()
     diff = int(target - result.sum().item())

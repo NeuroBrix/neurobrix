@@ -50,21 +50,14 @@ class SPTokenizer:
         Raises:
             RuntimeError: If required config values are missing
         """
-        import sentencepiece as spm
-        self._sp = spm.SentencePieceProcessor()
-
-        # SentencePiece requires file path, use temp file
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".model") as f:
-            f.write(spiece_model_bytes)
-            tmp_path = f.name
-
-        try:
-            self._sp.Load(tmp_path)
-        finally:
-            os.unlink(tmp_path)
+        # R34 (Zero Outsider): pure-Python SentencePiece — no `sentencepiece` lib.
+        # PySentencePiece parses the .model protobuf directly from bytes (Unigram
+        # Viterbi + BPE), byte-exact vs sentencepiece on natural text.
+        from .sp_proto import PySentencePiece
+        self._sp = PySentencePiece.from_bytes(spiece_model_bytes)
 
         self._config = config or {}
-        self._vocab_size = self._sp.GetPieceSize()
+        self._vocab_size = self._sp.get_piece_size()
 
         # EMBEDDED VARIABLE: Special token IDs from config
         # Use SentencePiece defaults if not in config (SP standard: pad=0, eos=1, unk=2)
@@ -186,7 +179,7 @@ class SPTokenizer:
         assert isinstance(max_length, int), "max_length must be int"
 
         # Encode with SentencePiece
-        ids = self._sp.EncodeAsIds(text)
+        ids = self._sp.encode(text)
 
         # DATA-DRIVEN: Add BOS if config says add_bos_token=true
         if add_special_tokens and self._add_bos_token:
@@ -244,7 +237,7 @@ class SPTokenizer:
         assert isinstance(max_length, int), "max_length must be int"
 
         # Encode with SentencePiece
-        ids = self._sp.EncodeAsIds(text)
+        ids = self._sp.encode(text)
 
         # DATA-DRIVEN: Add BOS if config says add_bos_token=true
         if add_special_tokens and self._add_bos_token:
@@ -296,7 +289,7 @@ class SPTokenizer:
             # Remove PAD and EOS tokens
             ids = [i for i in ids if i not in (self._pad_id, self._eos_id)]
 
-        return self._sp.DecodeIds(ids)
+        return self._sp.decode(ids)
 
     def batch_encode(
         self,
@@ -750,9 +743,13 @@ class HFTokenizer:
             tokenizer_path: Path to tokenizer.json file
             config: Optional config from tokenizer_config.json
         """
-        from tokenizers import Tokenizer
+        # R34 (Zero Outsider): pure-Python tokenizer.json interpreter — no Rust
+        # `tokenizers` lib. PyTokenizer is byte-exact vs tokenizers.Tokenizer
+        # (BPE byte-level + byte_fallback, normalizers, pre-tokenizers, decoders,
+        # TemplateProcessing, added_tokens) across all embedded models.
+        from .json_bpe import PyTokenizer
 
-        self._tokenizer = Tokenizer.from_file(tokenizer_path)
+        self._tokenizer = PyTokenizer.from_file(tokenizer_path)
         self._config = config if config is not None else {}
 
         # Max length from config
@@ -1219,56 +1216,16 @@ class TiktokenTokenizer:
             with open(st_path) as f:
                 special_tokens = json.load(f)
 
-        # Try tiktoken library first
-        try:
-            import tiktoken
-            # Load BPE ranks from .tiktoken file
-            with open(tiktoken_path, "rb") as f:
-                contents = f.read()
-            import base64
-            bpe_ranks = {}
-            for line in contents.splitlines():
-                if line:
-                    parts = line.split()
-                    if len(parts) == 2:
-                        token = base64.b64decode(parts[0])
-                        rank = int(parts[1])
-                        bpe_ranks[token] = rank
-            # Build special token mapping
-            special_token_map = {}
-            for token_name, token_info in special_tokens.items():
-                if isinstance(token_info, dict):
-                    content = token_info.get("content", token_name)
-                    token_id = token_info.get("id")
-                    if token_id is not None:
-                        special_token_map[content] = token_id
-                elif isinstance(token_info, int):
-                    special_token_map[token_name] = token_info
-
-            self._enc = tiktoken.Encoding(
-                name="fish_speech",
-                pat_str=r"""(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+""",
-                mergeable_ranks=bpe_ranks,
-                special_tokens=special_token_map,
-            )
-            self._use_tiktoken = True
-        except (ImportError, Exception):
-            # Fallback: basic tokenization
-            self._enc = None
-            self._use_tiktoken = False
-            self._vocab = {}
-            # Build vocab from tiktoken file
-            import base64
-            with open(tiktoken_path, "rb") as f:
-                for line in f:
-                    parts = line.strip().split()
-                    if len(parts) == 2:
-                        try:
-                            token = base64.b64decode(parts[0]).decode("utf-8", errors="replace")
-                            rank = int(parts[1])
-                            self._vocab[token] = rank
-                        except Exception:
-                            pass
+        # R34 (Zero Outsider): pure-Python tiktoken BPE — no `tiktoken` lib.
+        # PyTiktoken parses the .tiktoken ranks + special_tokens.json and runs
+        # the Qwen2 byte-level BPE, byte-exact vs tiktoken.
+        from .tiktoken_bpe import PyTiktoken
+        st_json = tokenizer_dir / "special_tokens.json"
+        self._enc = PyTiktoken.from_file(
+            str(tiktoken_path),
+            special_tokens_path=str(st_json) if st_json.exists() else None,
+        )
+        self._use_tiktoken = True
 
         # Store special tokens for encode/decode
         self._special_tokens = special_tokens
@@ -1337,9 +1294,11 @@ class TekkenTokenizer:
         config = config or {}
         self.max_length = config.get("model_max_length", 2048)
 
-        from mistral_common.tokens.tokenizers.mistral import MistralTokenizer
-        self._tok = MistralTokenizer.from_file(str(tekken_path))
-        self._inner = self._tok.instruct_tokenizer.tokenizer
+        # R34 (Zero Outsider): pure-Python Tekken BPE — no `mistral_common`.
+        # PyTekken reproduces Tekkenizer id semantics (special-token offset,
+        # vocab truncation) and is byte-exact vs mistral_common.
+        from .tekken_bpe import PyTekken
+        self._inner = PyTekken.from_file(str(tekken_path))
 
         # Extract special token IDs from tekken.json
         with open(tekken_path) as f:

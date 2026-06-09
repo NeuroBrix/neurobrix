@@ -63,6 +63,24 @@ test-*.json
 test-*.png
 test-*.txt
 test_*.py
+
+# Stray run/upscale outputs at repo root — the CLI defaults to writing
+# `output_<model>.<ext>` in cwd when `--output` is not provided. The
+# regression harness now passes an explicit --output under /tmp (see
+# tests/regression/test_all_models.py:_run_out_path), but any other
+# invocation that forgets --output must not leak into the repo root.
+output_*.png
+output_*.wav
+output_*.txt
+output_*.mp4
+output_*.jpg
+output_*.jpeg
+
+# macOS resource-fork "shadow" files. These appear when the project
+# tree is browsed from macOS (NFS / SMB share) and are never useful
+# in a Linux repo.
+._*
+.DS_Store
 tests/*
 # Regression harness — tracked explicitly. Everything else under tests/
 # (scratch, __pycache__, etc.) stays ignored via the `tests/*` rule above,
@@ -72,12 +90,29 @@ tests/*
 !tests/regression/conftest.py
 !tests/regression/test_all_models.py
 !tests/regression/pytest.ini
+# Unit tests — tracked explicitly (same policy as the regression harness).
+!tests/unit/
+!tests/unit/__init__.py
+!tests/unit/kernels/
+!tests/unit/kernels/__init__.py
+!tests/unit/kernels/test_linspace.py
+!tests/unit/kernels/test_index_put.py
+!tests/unit/dtype/
+!tests/unit/dtype/__init__.py
+!tests/unit/dtype/test_engine_doctrine.py
+!tests/unit/dtype/test_auto_fp32_family_aware.py
 !tests/regression/README.md
 !tests/regression/golden/
 !tests/regression/golden/*.txt
 tmp/
 todos/
 vendors/
+# Track the runtime data-driven hardware configs (R10) — same status
+# as the already-tracked config/families/*.yml. Any OTHER vendors/
+# tree (per-model build vendoring, R25) stays ignored by the line
+# above.
+!src/neurobrix/config/vendors/
+!src/neurobrix/config/vendors/**
 venv/
 wandb/
 
@@ -89,3 +124,12 @@ output_*.wav
 output_*.png
 output_*.mp4
 test_speech_ref.*
+test_upscale_input.*
+.zo_cleanroom/
+
+# Root-level development reports / diagnostics — never committed (archive or
+# delete locally; they are not part of the public engine).
+/audit_*.md
+/*_signature.md
+/*_diagnostic*.md
+/*_chain_signature.md

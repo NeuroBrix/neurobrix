@@ -92,29 +92,21 @@ class TritonAudioEngine:
 
             if execution == "forward":
                 self._execute_forward_stage(stage)
-            elif execution == "native_kokoro":
-                # TEMPORARY R33 VIOLATION — this native handler uses torch. Will be
-                # replaced by triton/flow/stages/ once forge can trace this
-                # model. Do NOT add other imports of core/flow/stages/ here.
-                from neurobrix.core.flow.stages.kokoro import execute_native_kokoro
-                execute_native_kokoro(self, stage, audio_config)
-            elif execution == "diffusion":
-                # TEMPORARY R33 VIOLATION — this native handler uses torch. Will be
-                # replaced by triton/flow/stages/ once forge can trace this
-                # model. Do NOT add other imports of core/flow/stages/ here.
-                from neurobrix.core.flow.stages.vibevoice import execute_diffusion_stage
-                execute_diffusion_stage(self, stage, audio_config)
-            elif execution == "native_acoustic_decoder":
-                # TEMPORARY R33 VIOLATION — this native handler uses torch. Will be
-                # replaced by triton/flow/stages/ once forge can trace this
-                # model. Do NOT add other imports of core/flow/stages/ here.
-                from neurobrix.core.flow.stages.vibevoice import execute_native_acoustic_decoder
-                execute_native_acoustic_decoder(self, stage, audio_config)
             else:
+                # The former native_kokoro / diffusion / native_acoustic_decoder
+                # branches (which imported torch via core/flow/stages/) are gone:
+                # Kokoro now runs its prosody-predictor + iSTFTNet decoder through
+                # the graph in triton (all stages execution=forward), and
+                # VibeVoice's diffusion + acoustic decoder run in the self-contained
+                # zero-torch triton/flow/next_token_diffusion.py (flow type
+                # next_token_diffusion, not audio). No flow=audio model reaches a
+                # non-forward execution, so this is a hard ZERO FALLBACK — R33 is
+                # restored for the triton audio stage loop (no core/flow/stages import).
                 raise RuntimeError(
-                    f"ZERO FALLBACK: Unknown execution type '{execution}' "
-                    f"for stage '{comp_name}'. Expected: forward, native_kokoro, "
-                    f"diffusion, native_acoustic_decoder"
+                    f"ZERO FALLBACK: triton audio flow supports only "
+                    f"execution=forward (got '{execution}' for stage "
+                    f"'{comp_name}'). Diffusion/acoustic-decoder TTS routes through "
+                    f"the next_token_diffusion flow; Kokoro routes through the graph."
                 )
 
         # -- Step 3: Output postprocessing --
@@ -137,95 +129,16 @@ class TritonAudioEngine:
             self._preprocess_text_input(input_config)
 
     def _preprocess_audio_input(self, input_config: Dict, stages: List) -> None:
-        """Load audio file and extract features.
+        """Load audio file and extract mel/raw features — ZERO TORCH (R33).
 
-        Audio preprocessing (mel spectrogram, FFT) is a BOUNDARY operation.
-        AudioInputProcessor uses torch/torchaudio internally. The output
-        torch.Tensor is converted to NBXTensor at the boundary.
+        Delegates to the numpy/NBX front-end in ``triton.audio_frontend``: it
+        loads the waveform, runs the family-specific extractor (whisper/nemo/
+        conformer/raw), pads/truncates to the trace dims and binds the result
+        as ``NBXTensor`` on the encoder device. No torch / torchaudio anywhere
+        on the triton compute path.
         """
-        audio_path = self.ctx.variable_resolver.resolved.get("global.audio_path")
-        if audio_path is None:
-            raise RuntimeError(
-                "ZERO FALLBACK: Audio model requires global.audio_path.\n"
-                "Use --audio <path> to provide an audio file."
-            )
-
-        preprocessing = input_config.get("preprocessing")
-        if preprocessing is None:
-            raise RuntimeError(
-                "ZERO FALLBACK: topology.flow.audio.input.preprocessing is required.\n"
-                "Types: mel_spectrogram, nemo_mel, conformer, raw_waveform, dac_codec, text_only"
-            )
-        variable = input_config.get("variable", "global.input_features")
-
-        # Read expected input shape from first stage's graph (DATA-DRIVEN)
-        first_comp = stages[0]["component"] if stages else None
-        input_shape = _get_component_input_shape(self.ctx, first_comp)
-
-        # Auto-correct preprocessing type from graph input shape
-        if input_shape and len(input_shape) >= 3:
-            dim1, dim2 = input_shape[1], input_shape[2]
-            if preprocessing == "raw_waveform":
-                if dim1 in (40, 64, 80, 128) and dim2 > dim1:
-                    preprocessing = "mel_spectrogram"
-                elif dim2 in (40, 64, 80, 128, 160, 256) and dim1 > dim2:
-                    preprocessing = "conformer"
-
-        print(f"   [Audio] Loading: {audio_path}")
-        if input_shape:
-            print(f"   [Audio] Expected input shape: {input_shape}")
-
-        # BOUNDARY: AudioInputProcessor uses torch internally.
-        # We import it, run it, then convert the output to NBXTensor.
-        from neurobrix.core.module.audio.input_processor import AudioInputProcessor
-        import torch as _torch_boundary
-
-        device = _torch_boundary.device(self.ctx.primary_device)
-        dtype_str = self.ctx.pkg.manifest.get("dtype", "float16")
-        dtype = {"float16": _torch_boundary.float16, "bfloat16": _torch_boundary.bfloat16,
-                 "float32": _torch_boundary.float32}.get(dtype_str, _torch_boundary.float16)
-
-        features = AudioInputProcessor.process(
-            preprocessing_type=preprocessing,
-            audio_path=str(audio_path),
-            model_path=str(_find_model_config_path(self.ctx)),
-            device=device,
-            dtype=dtype,
-            input_shape=input_shape,
-        )
-
-        # Pad/truncate to match trace-time dimensions
-        if input_shape and len(input_shape) == len(features.shape) and len(input_shape) >= 3:
-            for dim_idx in range(1, len(input_shape)):
-                trace_size = input_shape[dim_idx]
-                actual_size = features.shape[dim_idx]
-                if actual_size != trace_size:
-                    if actual_size > trace_size:
-                        slices = [slice(None)] * len(features.shape)
-                        slices[dim_idx] = slice(None, trace_size)
-                        features = features[tuple(slices)]
-                    else:
-                        pad_shape = list(features.shape)
-                        pad_shape[dim_idx] = trace_size - actual_size
-                        pad = _torch_boundary.zeros(pad_shape, device=features.device, dtype=features.dtype)
-                        features = _torch_boundary.cat([features, pad], dim=dim_idx)
-
-        print(f"   [Audio] Features: {features.shape} ({preprocessing})")
-
-        # BOUNDARY: convert torch tensor to NBXTensor
-        features_nbx = _torch_to_nbx(features)
-
-        # Bind to variable resolver
-        self.ctx.variable_resolver.resolved[variable] = features_nbx
-        short_key = variable.split(".")[-1] if "." in variable else variable
-        self.ctx.variable_resolver.resolved[short_key] = features_nbx
-
-        # Bind audio length
-        actual_frames = features.shape[-1] if preprocessing in ("mel_spectrogram", "nemo_mel") else features.shape[1]
-        length_np = np.array([actual_frames], dtype=np.int64)
-        length_tensor = NBXTensor.from_numpy(length_np)
-        for key in ["global.audio_signal_length", "audio_signal_length", "global.length", "length"]:
-            self.ctx.variable_resolver.resolved[key] = length_tensor
+        from neurobrix.triton.audio_frontend import preprocess_audio_input_np
+        preprocess_audio_input_np(self.ctx, {"input": input_config}, stages)
 
     def _preprocess_text_input(self, input_config: Dict) -> None:
         """Tokenize text prompt for TTS/LLM-audio models."""
@@ -242,14 +155,11 @@ class TritonAudioEngine:
 
         tokenizer = self.ctx.modules.get("tokenizer")
 
-        # Phonemizer path
+        # Phonemizer path (zero-torch: phonemizer/espeak g2p + numpy voicepack).
         phoneme_vocab = self.ctx.pkg.defaults.get("phoneme_vocab")
         if tokenizer is None and phoneme_vocab:
-            # TEMPORARY R33 VIOLATION — this native handler uses torch. Will be
-            # replaced by triton/flow/stages/ once forge can trace this
-            # model. Do NOT add other imports of core/flow/stages/ here.
-            from neurobrix.core.flow.stages.kokoro import preprocess_phonemizer_input
-            preprocess_phonemizer_input(self, prompt, phoneme_vocab)
+            from neurobrix.triton.audio_frontend import preprocess_phonemizer_input_np
+            preprocess_phonemizer_input_np(self, prompt, phoneme_vocab)
             return
 
         if tokenizer is None:
@@ -344,7 +254,14 @@ class TritonAudioEngine:
         start = time.perf_counter()
 
         self._ensure_weights_loaded(comp_name)
-        self._execute_component(comp_name, "forward", None)
+        # Fixed-length decoders (codec / iSTFT vocoder: the window-norm divisor and
+        # the as_strided framing are baked at the trace frame count) must run at
+        # EXACTLY the graph seq_len. Chunk a longer runtime input into trace-length
+        # blocks — triton mirror of compiled AudioFlow._try_chunked_forward.
+        # Data-driven: triggers only when the runtime 3D input seq_len differs from
+        # the graph's trace seq_len; otherwise the normal single pass runs.
+        if not self._try_chunked_forward(comp_name):
+            self._execute_component(comp_name, "forward", None)
 
         elapsed = (time.perf_counter() - start) * 1000
         print(f"   [{comp_name}] Done in {elapsed:.0f}ms")
@@ -352,6 +269,137 @@ class TritonAudioEngine:
         if not self.ctx.persistent_mode:
             self._unload_component_weights(comp_name)
             gc.collect()
+
+    def _try_chunked_forward(self, comp_name: str) -> bool:
+        """Run a fixed-length decoder in trace-length chunks (triton-pure mirror of
+        compiled AudioFlow._try_chunked_forward).
+
+        The graph expects [1, C, graph_seq_len]; the runtime input may be longer
+        (or shorter). The iSTFT window-norm divisor + as_strided framing are baked
+        at graph_seq_len, so each block must run at EXACTLY that length. The primary
+        frame input is chunked; frame-dependent aux inputs are chunked synchronously
+        (detected by runtime dim != graph dim); static inputs (style) pass whole.
+        Waveform chunks are concatenated. Returns True if chunking ran.
+        R33-pure: NBXTensor narrow/zeros/cat only.
+        """
+        executor = self.ctx.executors.get(comp_name)
+        dag = getattr(executor, '_dag', None) if executor else None
+        if dag is None:
+            return False
+
+        graph_input_name = None
+        graph_seq_len = None
+        for _tid, spec in dag.get("tensors", {}).items():
+            iname = spec.get("input_name")
+            if iname:
+                shape = spec.get("shape", [])
+                if len(shape) == 3:
+                    graph_seq_len = shape[2]
+                    if isinstance(graph_seq_len, dict):
+                        graph_seq_len = graph_seq_len.get("trace_value", graph_seq_len)
+                    graph_input_name = iname
+                break
+        if graph_input_name is None or not isinstance(graph_seq_len, int):
+            return False
+
+        resolved = self.ctx.variable_resolver.resolved
+        connections_all = self.ctx.pkg.topology.get("connections", [])
+
+        def _resolve(iname):
+            # Accept NBXTensor (frame inputs from upstream triton components) AND
+            # torch boundary tensors (e.g. the voicepack style vector) — convert
+            # the latter to NBXTensor so all chunking stays NBX-pure.
+            for c in connections_all:
+                if c.get("to") == f"{comp_name}.{iname}":
+                    v = resolved.get(c.get("from"))
+                    if _is_tensor(v):
+                        return _torch_to_nbx(v)
+            for key in (f"global.{iname}", iname, f"{comp_name}.{iname}"):
+                v = resolved.get(key)
+                if _is_tensor(v):
+                    return _torch_to_nbx(v)
+            return None
+
+        actual_input = _resolve(graph_input_name)
+        if actual_input is None or actual_input.ndim != 3:
+            return False
+        actual_seq = actual_input.shape[2]
+        if actual_seq == graph_seq_len:
+            return False  # exact trace length → single pass
+
+        # Frame-dependent aux inputs (runtime dim != graph dim) chunk synchronously;
+        # static ones pass whole.
+        aux_inputs = {}
+        for _tid2, spec2 in dag.get("tensors", {}).items():
+            iname2 = spec2.get("input_name")
+            if not iname2 or iname2 == graph_input_name:
+                continue
+            val2 = _resolve(iname2)
+            if val2 is None:
+                continue
+            cdim2 = glen2 = None
+            gshape2 = spec2.get("shape", [])
+            for d in range(min(len(gshape2), val2.ndim)):
+                gd = gshape2[d]
+                if isinstance(gd, dict):
+                    gd = gd.get("trace_value", gd)
+                if isinstance(gd, int) and val2.shape[d] != gd:
+                    cdim2, glen2 = d, gd
+                    break
+            aux_inputs[iname2] = (val2, cdim2, glen2)
+
+        def _pad_to(t, dim, length):
+            if t.shape[dim] >= length:
+                return t
+            pad_shape = list(t.shape)
+            pad_shape[dim] = length - t.shape[dim]
+            z = NBXTensor.zeros(tuple(pad_shape), dtype=t.dtype, device=t.device)
+            return NBXTensor.cat([t, z], dim=dim)
+
+        print(f"   [{comp_name}] Chunked: {actual_seq} frames -> {graph_seq_len}-frame blocks")
+        waveform_chunks = []
+        for chunk_start in range(0, actual_seq, graph_seq_len):
+            chunk_end = min(chunk_start + graph_seq_len, actual_seq)
+            chunk = actual_input.narrow(2, chunk_start, chunk_end - chunk_start)
+            chunk = _pad_to(chunk, 2, graph_seq_len)
+
+            comp_inputs = {graph_input_name: chunk}
+            block_idx = chunk_start // graph_seq_len
+            for iname2, (val2, cdim2, glen2) in aux_inputs.items():
+                if cdim2 is None:
+                    comp_inputs[iname2] = val2
+                else:
+                    s2 = block_idx * glen2
+                    take = max(0, min(glen2, val2.shape[cdim2] - s2))
+                    c2 = val2.narrow(cdim2, s2, take) if take > 0 else val2.narrow(cdim2, 0, 0)
+                    comp_inputs[iname2] = _pad_to(c2, cdim2, glen2)
+
+            output = executor.run(comp_inputs)
+            if isinstance(output, dict):
+                out_tensor = next(iter(output.values()), None)
+            elif isinstance(output, NBXTensor):
+                out_tensor = output
+            else:
+                out_tensor = None
+            if out_tensor is None:
+                continue
+            # Trim a padded last chunk proportionally.
+            if chunk_end - chunk_start < graph_seq_len and out_tensor.ndim >= 2:
+                ratio = (chunk_end - chunk_start) / graph_seq_len
+                last = out_tensor.ndim - 1
+                trim_len = int(out_tensor.shape[last] * ratio)
+                out_tensor = out_tensor.narrow(last, 0, trim_len)
+            waveform_chunks.append(out_tensor.contiguous())
+
+        if not waveform_chunks:
+            return False
+        last = waveform_chunks[0].ndim - 1
+        full_output = (waveform_chunks[0] if len(waveform_chunks) == 1
+                       else NBXTensor.cat(waveform_chunks, dim=last).contiguous())
+        resolved[f"{comp_name}.output_0"] = full_output
+        resolved["global.output_audio"] = full_output
+        print(f"   [{comp_name}] Waveform: {list(full_output.shape)}")
+        return True
 
     # -----------------------------------------------------------------
     # Output postprocessing

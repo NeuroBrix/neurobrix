@@ -579,6 +579,15 @@ class RuntimeExecutor:
                 unload_weights_fn=self._unload_component_weights,
             )
         elif flow_type == "audio_llm":
+            if ctx.mode in ("triton", "triton_sequential"):
+                from neurobrix.triton.flow.audio_llm import TritonAudioLLMEngine
+                return TritonAudioLLMEngine(
+                    ctx=ctx,
+                    execute_component_fn=self._execute_component,
+                    resolve_inputs_fn=self._input_resolver.resolve_component_inputs,
+                    ensure_weights_fn=self._ensure_weights_loaded,
+                    unload_weights_fn=self._unload_component_weights,
+                )
             from neurobrix.core.flow.audio_llm import AudioLLMEngine
             return AudioLLMEngine(
                 ctx=ctx,
@@ -623,11 +632,30 @@ class RuntimeExecutor:
                 ensure_weights_fn=self._ensure_weights_loaded,
                 unload_weights_fn=self._unload_component_weights,
             )
+        elif flow_type == "next_token_diffusion":
+            if ctx.mode in ("triton", "triton_sequential"):
+                from neurobrix.triton.flow.next_token_diffusion import TritonNextTokenDiffusionEngine
+                return TritonNextTokenDiffusionEngine(
+                    ctx=ctx,
+                    execute_component_fn=self._execute_component,
+                    resolve_inputs_fn=self._input_resolver.resolve_component_inputs,
+                    ensure_weights_fn=self._ensure_weights_loaded,
+                    unload_weights_fn=self._unload_component_weights,
+                )
+            from neurobrix.core.flow.next_token_diffusion import NextTokenDiffusionEngine
+            return NextTokenDiffusionEngine(
+                ctx=ctx,
+                execute_component_fn=self._execute_component,
+                resolve_inputs_fn=self._input_resolver.resolve_component_inputs,
+                ensure_weights_fn=self._ensure_weights_loaded,
+                unload_weights_fn=self._unload_component_weights,
+            )
 
         raise RuntimeError(
             f"ZERO FALLBACK: Unsupported flow type '{flow_type}'.\n"
             f"Supported: iterative_process, static_graph, forward_pass, "
-            f"autoregressive_generation, audio, rnnt, encoder_decoder, audio_llm, dual_ar, tts_llm"
+            f"autoregressive_generation, audio, rnnt, encoder_decoder, audio_llm, "
+            f"dual_ar, tts_llm, next_token_diffusion"
         )
 
     # ========== SETUP METHODS ==========
@@ -639,7 +667,14 @@ class RuntimeExecutor:
             config = mod_data.get("config", {})
 
             if mod_type == "scheduler":
-                self.modules[mod_name] = SchedulerFactory.create(config)
+                # Two totally separate scheduler implementations; the orchestrator
+                # (this shared entry point) picks by mode. Triton gets the
+                # zero-torch NBXTensor scheduler; PyTorch gets the torch one.
+                if self.mode in ("triton", "triton_sequential"):
+                    from neurobrix.triton.scheduler.factory import TritonSchedulerFactory
+                    self.modules[mod_name] = TritonSchedulerFactory.create(config)
+                else:
+                    self.modules[mod_name] = SchedulerFactory.create(config)
             elif mod_type == "tokenizer":
                 self._setup_tokenizer(mod_name, mod_data)
             else:
