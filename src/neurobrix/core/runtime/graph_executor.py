@@ -1748,6 +1748,19 @@ class GraphExecutor:
                 _collect_arg_tids(arg, seen)
             for t in seen:
                 last_use[t] = op_idx
+        # Dead outputs — tids produced but never referenced by any later op
+        # have no entry above and were never freed (R30 mirror of the native
+        # sequential and compiled dead-output rules; the CogVideoX VAE
+        # all-at-once decode accumulates ~27 GB of never-consumed conv-cache
+        # clones at full pixel resolution otherwise). Their last use is the
+        # producing op.
+        for op_idx, op_uid in enumerate(exec_order):
+            op_data = ops_meta.get(op_uid)
+            if op_data is None:
+                continue
+            for out_tid in op_data.get("output_tensor_ids", []):
+                if out_tid not in last_use:
+                    last_use[out_tid] = op_idx
         dead_at_op: Dict[int, list] = {}
         for tid, li in last_use.items():
             if tid in protected:

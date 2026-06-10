@@ -88,6 +88,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Dead-output liveness in the zero-torch op-by-op and hot-loop paths
+  (completing the R30 set).** Both built their last-use maps from consumed
+  tensors only; never-consumed outputs survived for the whole component pass
+  (the same ~27 GiB conv-cache accumulation; the arena variant plausibly
+  contributes to the long-standing live-watermark gap vs the torch path).
+  Verified: CogVideoX-2b renders coherently in both modes; Wan runs; TinyLlama
+  greedy stays byte-identical.
 - **Compiled mode kills dead arena slots and recomputes `native_group_norm`
   scalars (mirrors of the sequential fixes below, R30).** The compiled
   liveness analysis tracked only slots read as inputs, so never-consumed
