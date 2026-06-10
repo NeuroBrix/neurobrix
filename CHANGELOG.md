@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **CogVideoX DDIM scheduler support (both engines).** The CogVideoX DDIM
+  variant maps to the existing DDIM brick: its deltas are two config-driven
+  init-time alphas_cumprod transforms (`snr_shift_scale`,
+  `rescale_betas_zero_snr` — zero-terminal-SNR, arXiv:2305.08891 Algorithm 1),
+  now implemented in the core scheduler and its zero-torch mirror, plus the
+  factory mapping. Two latent DDIM gaps surfaced by the vendor-oracle test and
+  fixed on the previously unused trailing path (legacy DDIM/DDPM untouched):
+  "trailing" spacing now uses the DDIM-standard formula
+  (`round(arange(T,0,-T/N)) − 1`; the shared helper implements the DPM++
+  trailing convention, off by ±1 on most entries), and the previous-timestep
+  convention under trailing uses the constant stride `t − T//N` (next-list-entry
+  drifted ~one table row per step). Gated by a dev unit test against the
+  vendored scheduler source: 30-step v-prediction trajectory max|diff|
+  4.1e-6 (core, fp32 schedule table) / 1.8e-15 (zero-torch table, fp64), and
+  the plain-DDIM schedule stays bit-identical with the new keys absent.
 - **Video family — 5D rank generalization (in progress).** Generalize rank-4
   `[B,C,H,W]` assumptions to 5D `[B,C,T,H,W]`, discriminating on tensor rank
   (never on model family, R34): the Prism conv workspace estimator now handles
