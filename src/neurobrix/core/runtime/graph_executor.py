@@ -1955,6 +1955,47 @@ class GraphExecutor:
                 if output_tids:
                     store[output_tids[0]] = result
 
+            # === NBX_DUMP_TIDS (triton-sequential path, default-off) ===
+            # Symmetric mirror of TritonSequence._maybe_dump_tid (compiled
+            # hot loop) — same record schema via the shared nbx_tid_stats so
+            # engine-vs-engine diffs align. Without this hook the
+            # triton-sequential path was blind to the per-op dump diagnostic
+            # (NBX_DUMP_TIDS produced no file at all in this mode).
+            import os as _os_td
+            _td_path = _os_td.environ.get("NBX_DUMP_TIDS")
+            if _td_path and output_tids:
+                if not hasattr(self, "_seq_dump_seen"):
+                    self._seq_dump_seen = set()
+                _td_filters = [f for f in _os_td.environ.get(
+                    "NBX_DUMP_TIDS_FILTER", "").split(",") if f]
+                for _ot in output_tids:
+                    if _td_filters and not any(
+                            f in _ot or f in op_uid for f in _td_filters):
+                        continue
+                    if _ot in self._seq_dump_seen:
+                        continue
+                    self._seq_dump_seen.add(_ot)
+                    _t = store.get(_ot)
+                    if _t is None or not hasattr(_t, "data_ptr"):
+                        continue
+                    try:
+                        import json as _json_td
+                        from neurobrix.triton.sequence import TritonSequence as _TS
+                        _rec = {
+                            "component": self._component_name,
+                            "tid": _ot,
+                            "op_uid": op_uid,
+                            "op_type": op_type,
+                            **_TS.nbx_tid_stats(_t),
+                        }
+                        with open(_td_path, "a") as _f_td:
+                            _json_td.dump({"engine": "triton_seq",
+                                           "record": _rec}, _f_td)
+                            _f_td.write("\n")
+                    except Exception as _e_td:
+                        print(f"[NBX_DUMP_TIDS triton-seq] failed on {_ot}: "
+                              f"{_e_td}", flush=True)
+
             # === NBX_DEVICE_TRACE (device-drift diagnosis, default-off) ===
             # Logs the first op whose output tensor lands on a device_idx !=
             # the component device, AND whenever the CURRENT cuda device has

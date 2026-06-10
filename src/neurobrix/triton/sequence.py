@@ -2481,6 +2481,64 @@ class TritonSequence:
                       file=_sys_tn.stderr, flush=True)
                 return
 
+    @staticmethod
+    def nbx_tid_stats(tensor) -> dict:
+        """Stats for one NBXTensor output for the NBX_DUMP_TIDS diagnostic:
+        {shape, dtype, is_complex, head10, l2_norm, batch_norms}.
+
+        Single source of truth shared by the compiled hot loop
+        (_maybe_dump_tid below) and the triton-sequential op loop in
+        graph_executor — same record schema in every engine so cross-engine
+        diffs align. Complex tensors are read via the real view ([...,2]
+        re/im) so l2/head cover BOTH components; memcpy'ing a complex buffer
+        as N floats would read only the real parts (half the energy).
+        """
+        from neurobrix.kernels.nbx_tensor import NBXDtype, DeviceAllocator
+        import ctypes as _ct
+        # Multi-device: switch to the tensor's device before D2H memcpy.
+        if hasattr(tensor, '_device_idx'):
+            DeviceAllocator.set_device(tensor._device_idx)
+        src = tensor.view_as_real() if getattr(
+            tensor, "is_complex", lambda: False)() else tensor
+        flat = src
+        while flat.ndim > 1:
+            flat = flat[0]
+        # Cast to fp32 for comparable dumps across engines.
+        if flat.dtype != NBXDtype.float32:
+            flat = flat.to(NBXDtype.float32)
+        flat = flat.contiguous()
+        n = min(10, flat.numel())
+        buf = (_ct.c_float * n)()
+        DeviceAllocator.memcpy(_ct.addressof(buf), flat.data_ptr(),
+                               n * 4, kind=2)
+        head = list(buf)
+        # L2 norm over the full (flattened) tensor.
+        full = src
+        if full.dtype != NBXDtype.float32:
+            full = full.to(NBXDtype.float32)
+        full = full.contiguous()
+        N = full.numel()
+        fbuf = (_ct.c_float * N)()
+        DeviceAllocator.memcpy(_ct.addressof(fbuf), full.data_ptr(),
+                               N * 4, kind=2)
+        vals = list(fbuf)
+        norm = (sum(v * v for v in vals)) ** 0.5
+        _batch_norms = None
+        _shp = list(tensor.shape)
+        if len(_shp) >= 2 and _shp[0] in (2, 3) and N % _shp[0] == 0:
+            _per = N // _shp[0]
+            _batch_norms = [
+                (sum(v * v for v in vals[bi * _per:(bi + 1) * _per])) ** 0.5
+                for bi in range(_shp[0])]
+        return {
+            "shape": _shp,
+            "dtype": str(tensor.dtype),
+            "is_complex": bool(getattr(tensor, "is_complex", lambda: False)()),
+            "head10": head,
+            "l2_norm": norm,
+            "batch_norms": _batch_norms,
+        }
+
     def _maybe_dump_tid(self, op: 'CompiledOp', dump_path: str) -> None:
         """TEMP diagnostic: dump op output tensor to JSON if its tid matches.
 
@@ -2511,58 +2569,12 @@ class TritonSequence:
                 continue
             # NBXTensor → first 10 floats + norm + shape
             try:
-                from neurobrix.kernels.nbx_tensor import NBXDtype, DeviceAllocator
-                import ctypes as _ct
-                # Multi-device: switch to the tensor's device before D2H memcpy.
-                if hasattr(tensor, '_device_idx'):
-                    DeviceAllocator.set_device(tensor._device_idx)
-                # Complex tensors: read via the real view ([...,2] re/im) so the
-                # l2/head cover BOTH components. memcpy'ing a complex buffer as N
-                # floats would read only the real parts (half the energy) and
-                # make engine-vs-engine complex diffs meaningless.
-                src = tensor.view_as_real() if getattr(
-                    tensor, "is_complex", lambda: False)() else tensor
-                flat = src
-                while flat.ndim > 1:
-                    flat = flat[0]
-                # Cast to fp32 for comparable dumps across engines.
-                if flat.dtype != NBXDtype.float32:
-                    flat = flat.to(NBXDtype.float32)
-                flat = flat.contiguous()
-                n = min(10, flat.numel())
-                buf = (_ct.c_float * n)()
-                DeviceAllocator.memcpy(_ct.addressof(buf), flat.data_ptr(),
-                                       n * 4, kind=2)
-                head = list(buf)
-                # L2 norm over the full (flattened) tensor.
-                full = src
-                if full.dtype != NBXDtype.float32:
-                    full = full.to(NBXDtype.float32)
-                full = full.contiguous()
-                N = full.numel()
-                fbuf = (_ct.c_float * N)()
-                DeviceAllocator.memcpy(_ct.addressof(fbuf), full.data_ptr(),
-                                       N * 4, kind=2)
-                vals = list(fbuf)
-                norm = (sum(v * v for v in vals)) ** 0.5
-                _batch_norms = None
-                _shp = list(tensor.shape)
-                if len(_shp) >= 2 and _shp[0] in (2, 3) and N % _shp[0] == 0:
-                    _per = N // _shp[0]
-                    _batch_norms = [
-                        (sum(v * v for v in vals[bi * _per:(bi + 1) * _per])) ** 0.5
-                        for bi in range(_shp[0])]
                 new_record = {
                     "component": self.dag.get("component_name", "?"),
                     "tid": tid,
                     "op_uid": op.op_uid,
                     "op_type": op.op_type,
-                    "shape": _shp,
-                    "dtype": str(tensor.dtype),
-                    "is_complex": bool(getattr(tensor, "is_complex", lambda: False)()),
-                    "head10": head,
-                    "l2_norm": norm,
-                    "batch_norms": _batch_norms,
+                    **self.nbx_tid_stats(tensor),
                 }
                 self._dump_records.append(new_record)
                 # JSONL append-mode write — O(1) IO per call vs the

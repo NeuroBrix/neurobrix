@@ -53,6 +53,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Triton-sequential dtype attrs narrow fp64/complex128 to fp32/complex64
+  (R30 parity with the triton compiled hot loop).** The triton compiled path
+  narrows double-precision dtype attributes at compile time (triton kernels are
+  fp32-max; the constant loader already narrows stored complex128 tables to
+  complex64), but the sequential dispatcher's attribute resolver parsed dtype
+  kwargs verbatim. A graph `_to_copy` to complex128 on the Wan RoPE freqs table
+  then reinterpreted the interleaved fp32 [re,im] pairs as fp64 — the
+  unit-magnitude table collapsed to near-zero garbage (l2 256.0 → 0.5), every
+  downstream rotary application was corrupted, and `--triton-sequential`
+  produced a uniform gray video while running "successfully" end to end. Both
+  dtype-parsing branches of the resolver now apply the same narrowing; the
+  freqs chain matches the coherent `--triton` values exactly and the
+  triton-sequential video is coherent. TinyLlama greedy `--triton-sequential`
+  stays byte-identical to `--compiled` (no regression; inert for graphs
+  without fp64/complex128 attrs).
+- **`NBX_DUMP_TIDS` now covers the triton-sequential op loop.** The per-op dump
+  diagnostic existed only in the compiled hot loops; in `--triton-sequential`
+  it silently produced no file, leaving the mode blind to cross-engine per-op
+  diffs (this gap is what delayed localizing the gray-video bug above). The
+  stats computation is factored into a shared helper so all engines emit the
+  same record schema.
 - **Sequential mode view-shape inference picks the axis that actually changed
   (R30 parity with compiled `_make_view_reshape`).** When a `view`/`reshape`
   target's element count no longer matches the runtime input (a dim moved
