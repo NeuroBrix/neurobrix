@@ -438,7 +438,74 @@ class TensorResolver:
                             if isinstance(dim, int) and dim > 0:
                                 target_numel *= dim
                         if target_numel != input_numel and target_numel > 0:
-                            # Infer last dimension (spatial flattening)
+                            # Infer the axis that ACTUALLY changed between trace and
+                            # runtime, not blindly the last one. Mirror of the
+                            # compiled _make_view_reshape fallback (R30 parity):
+                            # try each axis as -1; a position is a valid candidate
+                            # when the product of the OTHER dims divides the input
+                            # numel. Selection order: (1) input-dim-match with a
+                            # change guard, (2) legacy last-dim when valid,
+                            # (3) first valid axis.
+                            #
+                            # Blind last-dim inference broke two Wan sequential
+                            # cases: (1) modulation views — input [2,9216], frozen
+                            # target [1,6,1536] gave [1,6,3072] (CFG batch folded
+                            # into features) instead of [2,6,1536]; (2) hidden-state
+                            # views whose traced shape duplicated the seq expression
+                            # into the batch slot ([seq,seq,1536]) — last-dim gave
+                            # the invalid [4680,4680,-1] instead of [2,4680,1536].
+                            candidates = []  # (axis, inferred_value)
+                            for i in range(len(resolved_list)):
+                                rest, ok = 1, True
+                                for j, d in enumerate(resolved_list):
+                                    if j == i:
+                                        continue
+                                    if isinstance(d, int) and d > 0:
+                                        rest *= d
+                                    else:
+                                        ok = False
+                                        break
+                                if ok and rest > 0 and input_numel % rest == 0:
+                                    candidates.append((i, input_numel // rest))
+                            if candidates:
+                                chosen = None
+                                # 1. Prefer an axis whose recovered value matches
+                                #    the input tensor's real dim AND differs from
+                                #    the frozen target dim — that axis is the
+                                #    changed (e.g. CFG batch 1→2) one. The change
+                                #    guard keeps this from firing on dims that did
+                                #    not actually move.
+                                for i, inferred in candidates:
+                                    if (i < input_tensor.ndim
+                                            and inferred == input_tensor.shape[i]
+                                            and inferred != resolved_list[i]):
+                                        chosen = i
+                                        break
+                                # 2. Else keep the legacy LAST-dim inference when it
+                                #    is itself a valid split — the common spatial-
+                                #    flatten / LLM attention-reshape case the
+                                #    sequential decode path has always used. This
+                                #    keeps the fix strictly additive: behavior
+                                #    changes ONLY where the old default was provably
+                                #    wrong (rule 1 fired) or impossible (rule 3).
+                                #    Verified: TinyLlama greedy sequential stays
+                                #    byte-identical to compiled.
+                                if chosen is None:
+                                    last = len(resolved_list) - 1
+                                    if any(c[0] == last for c in candidates):
+                                        chosen = last
+                                    else:
+                                        # 3. Last-dim is not inferable (e.g. the
+                                        #    traced shape duplicated the seq expr
+                                        #    into the batch slot → [4680,4680,-1]
+                                        #    invalid); take the first valid axis
+                                        #    (mirrors compiled candidates[0]).
+                                        chosen = candidates[0][0]
+                                trial = list(resolved_list)
+                                trial[chosen] = -1
+                                return trial
+                            # No single -1 yields an integer split — fall back to
+                            # the legacy last-dim inference (spatial flattening).
                             inferred_shape = list(resolved_list)
                             inferred_shape[-1] = -1
                             return inferred_shape
