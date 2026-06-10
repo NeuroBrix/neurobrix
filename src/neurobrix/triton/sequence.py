@@ -2516,7 +2516,13 @@ class TritonSequence:
                 # Multi-device: switch to the tensor's device before D2H memcpy.
                 if hasattr(tensor, '_device_idx'):
                     DeviceAllocator.set_device(tensor._device_idx)
-                flat = tensor
+                # Complex tensors: read via the real view ([...,2] re/im) so the
+                # l2/head cover BOTH components. memcpy'ing a complex buffer as N
+                # floats would read only the real parts (half the energy) and
+                # make engine-vs-engine complex diffs meaningless.
+                src = tensor.view_as_real() if getattr(
+                    tensor, "is_complex", lambda: False)() else tensor
+                flat = src
                 while flat.ndim > 1:
                     flat = flat[0]
                 # Cast to fp32 for comparable dumps across engines.
@@ -2529,7 +2535,7 @@ class TritonSequence:
                                        n * 4, kind=2)
                 head = list(buf)
                 # L2 norm over the full (flattened) tensor.
-                full = tensor
+                full = src
                 if full.dtype != NBXDtype.float32:
                     full = full.to(NBXDtype.float32)
                 full = full.contiguous()
@@ -2539,15 +2545,24 @@ class TritonSequence:
                                        N * 4, kind=2)
                 vals = list(fbuf)
                 norm = (sum(v * v for v in vals)) ** 0.5
+                _batch_norms = None
+                _shp = list(tensor.shape)
+                if len(_shp) >= 2 and _shp[0] in (2, 3) and N % _shp[0] == 0:
+                    _per = N // _shp[0]
+                    _batch_norms = [
+                        (sum(v * v for v in vals[bi * _per:(bi + 1) * _per])) ** 0.5
+                        for bi in range(_shp[0])]
                 new_record = {
+                    "component": self.dag.get("component_name", "?"),
                     "tid": tid,
                     "op_uid": op.op_uid,
                     "op_type": op.op_type,
-                    "shape": list(tensor.shape),
+                    "shape": _shp,
                     "dtype": str(tensor.dtype),
                     "is_complex": bool(getattr(tensor, "is_complex", lambda: False)()),
                     "head10": head,
                     "l2_norm": norm,
+                    "batch_norms": _batch_norms,
                 }
                 self._dump_records.append(new_record)
                 # JSONL append-mode write — O(1) IO per call vs the
