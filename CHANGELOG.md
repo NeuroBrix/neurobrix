@@ -53,6 +53,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Prism activation profiling resolves video (5D) runtime dims.** Three
+  compounding gaps made every video activation estimate meaningless: the CLI
+  never passed `num_frames` to the profiler's `InputConfig`; the symbol map
+  used the image positional convention (`s1=latent_h, s2=latent_w`) while
+  video graphs name their symbols (`s1=time, s2=height, s3=width`); and
+  graphs traced with a frugal stimulus store tiny concrete trace values in
+  `shape`, with the real dims as symbolic expression trees. The Wan 81-frame
+  VAE upsample — a single 23.14 GiB fp32 tensor at runtime — was estimated at
+  a few MB, so the op-level tiling cascade never fired and the run OOM'd.
+  Now: `InputConfig` carries `num_frames` + `temporal_compression` (from
+  defaults.json, data-driven); the profiler builds a per-graph symbol map
+  binding named symbols from runtime dims (batch stays at its trace value —
+  the trace bakes each component's true batch semantics, and binding the CFG
+  batch doubled Sana VAE estimates and flipped its validated plan); and shape
+  resolution evaluates the symbolic expression trees, gated on the
+  expression's own trace annotation reproducing the concrete trace dim (some
+  image graphs carry mis-associated product expressions whose evaluation
+  exploded estimates to absurdity — inconsistent-at-trace expressions fall
+  back to the concrete value, the legacy behavior). Anti-regression: Sana
+  1024 and Sana 4Kpx solve to byte-identical plans vs the previous code
+  (4Kpx keeps `single_gpu` + its validated VAE op-tiling plan: 3 fusion
+  pairs, 23 tiled ops, 9 residual chains). With truthful estimates the Wan
+  81-frame solve now degrades to `lazy_sequential` with the VAE on CPU
+  instead of a mid-run CUDA OOM; full GPU-resident 81-frame decode
+  additionally needs op-level tiling coverage of the VAE tail chain at full
+  5D resolution (follow-up).
 - **Triton-sequential dtype attrs narrow fp64/complex128 to fp32/complex64
   (R30 parity with the triton compiled hot loop).** The triton compiled path
   narrows double-precision dtype attributes at compile time (triton kernels are

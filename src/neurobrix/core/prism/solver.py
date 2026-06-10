@@ -813,6 +813,9 @@ class PrismSolver:
             # Look for upsample→conv adjacency in execution_order
             ops = comp.graph.get("ops", {})
             order = comp.graph.get("execution_order", [])
+            # Graph-aware symbol map (name-driven video/time overrides) —
+            # same map estimate_peak_memory used to produce ap.overflow_ops.
+            comp_symbol_map = profiler.build_symbol_map(input_config)
             uid_to_step = {uid: i for i, uid in enumerate(order)}
             # Build consumer map: tensor_id -> list of (consumer_uid, step)
             consumers = {}
@@ -848,11 +851,11 @@ class PrismSolver:
                 for tid in up_in_tids[:1]:
                     meta = comp.graph["tensors"].get(tid, {})
                     up_in_shape.append(profiler._resolve_shape(
-                        meta, input_config.to_symbol_map()
+                        meta, comp_symbol_map
                     ))
                 up_out_meta = comp.graph["tensors"].get(out_tids[0], {})
                 up_out_shape = profiler._resolve_shape(
-                    up_out_meta, input_config.to_symbol_map()
+                    up_out_meta, comp_symbol_map
                 )
                 up_out_bytes = profiler._compute_size(up_out_shape, up_out_meta, dtype_bytes)
                 # Threshold: upsample output that exceeds 25% of VRAM is
@@ -874,13 +877,13 @@ class PrismSolver:
                 for tid in conv_op.get("input_tensor_ids", []):
                     meta = comp.graph["tensors"].get(tid, {})
                     conv_in_shapes.append(profiler._resolve_shape(
-                        meta, input_config.to_symbol_map()
+                        meta, comp_symbol_map
                     ))
                 conv_out_shapes = []
                 conv_out_bytes = 0
                 for tid in conv_op.get("output_tensor_ids", []):
                     meta = comp.graph["tensors"].get(tid, {})
-                    sh = profiler._resolve_shape(meta, input_config.to_symbol_map())
+                    sh = profiler._resolve_shape(meta, comp_symbol_map)
                     conv_out_shapes.append(sh)
                     conv_out_bytes += profiler._compute_size(sh, meta, dtype_bytes)
                 cudnn_ws_bytes = estimate_op_workspace_bytes(
@@ -966,7 +969,7 @@ class PrismSolver:
                     continue
                 out_meta = comp.graph["tensors"].get(out_tids[0], {})
                 out_sh = profiler._resolve_shape(
-                    out_meta, input_config.to_symbol_map()
+                    out_meta, comp_symbol_map
                 )
                 out_b = profiler._compute_size(out_sh, out_meta, dtype_bytes)
                 if out_b <= ovf_threshold:
@@ -1265,7 +1268,7 @@ class PrismSolver:
         overflow_conv_uids = set()
         if overflow_ops:
             overflow_conv_uids = {o[0] for o in overflow_ops}
-        symbol_map = input_config.to_symbol_map()
+        symbol_map = profiler.build_symbol_map(input_config)
         fusion_uids = set()
         for uid in order:
             op = ops.get(uid, {})
