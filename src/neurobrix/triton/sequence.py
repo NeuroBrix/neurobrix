@@ -1467,6 +1467,22 @@ class TritonSequence:
             for s in self._extract_input_slots(op_data):
                 slot_last_use[s] = op_idx
 
+        # Step 1b: Dead outputs — slots produced but never read by any op
+        # have no entry above and were NEVER killed, surviving in the arena
+        # for the whole pass (R30 mirror of the other engines' dead-output
+        # rules; the CogVideoX VAE all-at-once decode accumulates ~27 GB of
+        # never-consumed conv-cache clones at full pixel resolution, and the
+        # same class plausibly contributes to the long-standing triton
+        # live-watermark gap vs compiled). Their last use is the producing op.
+        for op_idx, op_uid in enumerate(exec_order):
+            op_data = ops_meta.get(op_uid)
+            if op_data is None:
+                continue
+            for tid in op_data.get("output_tensor_ids", []):
+                s = self._tid_to_slot.get(tid)
+                if s is not None and s not in slot_last_use:
+                    slot_last_use[s] = op_idx
+
         # Step 2: Protected slots (never freed)
         protected = set()
         for i in range(self._num_weights):
