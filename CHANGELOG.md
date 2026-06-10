@@ -88,6 +88,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Sequential mode frees dead op outputs (the producing op is their last
+  use).** The native op-by-op path freed tensors only when consumed as a
+  later op's input; outputs never consumed anywhere — `native_layer_norm`
+  statistics, and most acutely the never-consumed per-conv cache clones a
+  functional video VAE decode captures at full pixel resolution — accumulated
+  for the whole component pass (~28 GiB on the CogVideoX-2b 9-frame decode,
+  OOM). Mirrors the zero-torch sequential path's liveness rule (R30);
+  verified inert on Wan sequential and TinyLlama greedy (byte-identical).
+- **Sequential mode recomputes `native_group_norm`'s derived scalar args.**
+  The functional signature carries N, C, HxW as scalars; the graph bakes
+  their trace values, but they are fully derived from the input tensor — for
+  a video VAE, HxW is the flattened T·H·W product frozen at the tiny trace
+  size (550 = 5·10·11 against a runtime 3·60·90).
+- **Prism op-level tiling skips 5D (video) convolutions.** The spatial
+  band-streaming wrappers are rank-4 only; registering an interceptor on a
+  conv3d crashed at dispatch. 5D convs run native until the 5D tiling work
+  lands (they fit at proof sizes and fail visibly, not corruptly, beyond).
 - **Prism activation profiling resolves video (5D) runtime dims.** Three
   compounding gaps made every video activation estimate meaningless: the CLI
   never passed `num_frames` to the profiler's `InputConfig`; the symbol map

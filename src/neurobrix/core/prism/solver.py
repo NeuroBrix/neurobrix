@@ -935,6 +935,14 @@ class PrismSolver:
                         and int(_in_shapes[1][1]) == 1):
                     # Depthwise — skip tiling.
                     continue
+                # 5D (video conv3d) — the spatial band-streaming wrappers are
+                # rank-4 only; registering an interceptor here crashes at
+                # dispatch (CogVideoX VAE: 'too many values to unpack' in
+                # _tiled_conv2d_spatial_torch). Skip until the 5D tiling
+                # chantier lands; the op then runs native, which fits at
+                # proof sizes and OOMs visibly (not corruptly) beyond.
+                if _in_shapes and len(_in_shapes[0]) == 5:
+                    continue
                 # Diagnostic gate: NBX_S5_SKIP_CONV_TILE=1 skips all
                 # remaining standalone convolution tiling.
                 import os as _os_skipc
