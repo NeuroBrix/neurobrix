@@ -31,6 +31,21 @@ class TritonDDIMScheduler:
         betas = get_beta_schedule(self.beta_schedule, self.num_train_timesteps,
                                   self.beta_start, self.beta_end)
         self.alphas_cumprod = betas_to_alphas_cumprod(betas)   # [T] np.float64
+
+        # CogVideoX DDIM variant — R30 mirror of core diffusion/ddim.py:
+        # init-time alphas_cumprod transforms (SNR shift + zero-terminal-SNR
+        # rescale, arXiv:2305.08891 Algorithm 1). Inert when keys absent.
+        snr_shift_scale = config.get("snr_shift_scale")
+        if snr_shift_scale:
+            self.alphas_cumprod = self.alphas_cumprod / (
+                snr_shift_scale + (1 - snr_shift_scale) * self.alphas_cumprod)
+        if config.get("rescale_betas_zero_snr"):
+            ab_sqrt = np.sqrt(self.alphas_cumprod)
+            ab_0 = ab_sqrt[0].copy()
+            ab_T = ab_sqrt[-1].copy()
+            ab_sqrt = (ab_sqrt - ab_T) * (ab_0 / (ab_0 - ab_T))
+            self.alphas_cumprod = ab_sqrt ** 2
+
         self.final_alpha_cumprod = 1.0
 
         self.num_inference_steps = None
@@ -40,8 +55,16 @@ class TritonDDIMScheduler:
 
     def set_timesteps(self, num_inference_steps: int, device=None, **kwargs):
         self.num_inference_steps = num_inference_steps
-        self._ts_np = get_timesteps_np(self.timestep_spacing, num_inference_steps,
-                                       self.num_train_timesteps).astype(np.int64)
+        if self.timestep_spacing == "trailing":
+            # DDIM-standard trailing — R30 mirror of core diffusion/ddim.py
+            # (round(arange(T, 0, -T/N)) - 1; the shared helper's trailing is
+            # the DPM++ convention, off by ±1 on most entries).
+            step_ratio = self.num_train_timesteps / num_inference_steps
+            self._ts_np = (np.round(np.arange(
+                self.num_train_timesteps, 0, -step_ratio)).astype(np.int64) - 1)
+        else:
+            self._ts_np = get_timesteps_np(self.timestep_spacing, num_inference_steps,
+                                           self.num_train_timesteps).astype(np.int64)
         self.timesteps = [NBXTensor.from_numpy(np.array([float(t)], dtype=np.float32))
                           for t in self._ts_np]
         self._step_index = None
@@ -78,13 +101,25 @@ class TritonDDIMScheduler:
             self._init_step_index(timestep)
 
         t = int(timestep.item()) if isinstance(timestep, NBXTensor) else int(timestep)
-        if self._step_index == len(self._ts_np) - 1:
-            prev_t = 0
+        if self.timestep_spacing == "trailing":
+            # Diffusers-DDIM convention (DDIM/CogVideoX): constant stride
+            # prev = t - T // N (prev < 0 → final_alpha; prev == 0 → table[0]).
+            # R30 mirror of core diffusion/ddim.py — under trailing the list
+            # gaps alternate (rounding), so next-list-entry drifts off the
+            # vendor trajectory. Legacy non-trailing path untouched.
+            prev_t = t - self.num_train_timesteps // self.num_inference_steps
+            a_t = float(self.alphas_cumprod[int(t)])
+            a_prev = (float(self.alphas_cumprod[int(prev_t)])
+                      if prev_t >= 0 else self.final_alpha_cumprod)
         else:
-            prev_t = int(self._ts_np[self._step_index + 1])
+            if self._step_index == len(self._ts_np) - 1:
+                prev_t = 0
+            else:
+                prev_t = int(self._ts_np[self._step_index + 1])
 
-        a_t = float(self.alphas_cumprod[int(t)])
-        a_prev = float(self.alphas_cumprod[int(prev_t)]) if prev_t > 0 else self.final_alpha_cumprod
+            a_t = float(self.alphas_cumprod[int(t)])
+            a_prev = (float(self.alphas_cumprod[int(prev_t)])
+                      if prev_t > 0 else self.final_alpha_cumprod)
         sqrt_a_t = a_t ** 0.5
         sqrt_1m_a_t = (1.0 - a_t) ** 0.5
         sqrt_a_prev = a_prev ** 0.5

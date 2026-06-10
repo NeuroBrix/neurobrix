@@ -513,6 +513,29 @@ class IterativeProcessHandler(FlowHandler):
                 )
                 self.ctx.variable_resolver.set(state_key, current_state)
 
+        # Name-driven latent axis alignment (5D): video models do not share
+        # one latent layout — Wan is [B,C,T,H,W] end-to-end while CogVideoX
+        # denoises in [B,T,C,H,W] and decodes in [B,C,T,H,W]; the vendor
+        # pipeline permutes between the loop and the VAE, outside both traced
+        # components. Derive the permutation from existing contract data
+        # (variables.json shape_source roles vs the consumer graph's named
+        # symbol axes); identical layouts (Wan) derive None and nothing
+        # changes (R23).
+        if state_key and post_loop:
+            from neurobrix.core.runtime.resolution.axis_alignment import (
+                latent_permutation_for)
+            executor = self.ctx.executors.get(post_loop[0])
+            dag = getattr(executor, "_dag", None) if executor else None
+            if dag:
+                perm = latent_permutation_for(self.ctx.pkg.variables, dag)
+                if perm is not None:
+                    current_state = self.ctx.variable_resolver.get(state_key)
+                    if (isinstance(current_state, torch.Tensor)
+                            and current_state.dim() == len(perm)):
+                        self.ctx.variable_resolver.set(
+                            state_key,
+                            current_state.permute(*perm).contiguous())
+
         # ZERO FALLBACK: Validate latent shape before VAE
         if state_key:
             from neurobrix.core.validators import TensorValidator

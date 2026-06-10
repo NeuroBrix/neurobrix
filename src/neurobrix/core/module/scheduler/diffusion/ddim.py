@@ -65,6 +65,26 @@ class DDIMScheduler(DiffusionSchedulerBase):
             beta_end
         )
         self.alphas, self.alphas_cumprod = betas_to_alphas(betas)
+
+        # CogVideoX DDIM variant (CogVideoXDDIMScheduler) — two init-time
+        # alphas_cumprod transforms, faithful to the vendor source
+        # (diffusers schedulers/scheduling_ddim_cogvideox.py); the step math
+        # itself is algebraically standard DDIM eta=0 (their a_t/b_t form
+        # expands to it), so only the schedule table differs. Inert when the
+        # config keys are absent (plain DDIM/DDPM unchanged).
+        snr_shift_scale = validated.get("snr_shift_scale")
+        if snr_shift_scale:
+            self.alphas_cumprod = self.alphas_cumprod / (
+                snr_shift_scale + (1 - snr_shift_scale) * self.alphas_cumprod)
+        if validated.get("rescale_betas_zero_snr"):
+            # Zero-terminal-SNR rescale (arXiv:2305.08891 Algorithm 1),
+            # applied directly on alphas_cumprod as the vendor does.
+            ab_sqrt = self.alphas_cumprod.sqrt()
+            ab_0 = ab_sqrt[0].clone()
+            ab_T = ab_sqrt[-1].clone()
+            ab_sqrt = (ab_sqrt - ab_T) * (ab_0 / (ab_0 - ab_T))
+            self.alphas_cumprod = ab_sqrt ** 2
+
         self.final_alpha_cumprod = torch.tensor(1.0)
 
         # State
@@ -80,11 +100,23 @@ class DDIMScheduler(DiffusionSchedulerBase):
     ) -> None:
         """Set timesteps for inference."""
         self.num_inference_steps = num_inference_steps
-        self.timesteps = get_timesteps(
-            self.timestep_spacing,
-            num_inference_steps,
-            self.num_train_timesteps
-        )
+        if self.timestep_spacing == "trailing":
+            # DDIM-standard trailing (diffusers DDIM/CogVideoX):
+            # round(arange(T, 0, -T/N)) - 1. The shared trailing_timesteps
+            # helper implements the DPM++ trailing convention
+            # (linspace(0,T-1,N+1).round()[::-1][:-1]) which differs by ±1 on
+            # most entries — the DDIM family must use the DDIM formula.
+            step_ratio = self.num_train_timesteps / num_inference_steps
+            import numpy as _np
+            ts = _np.round(_np.arange(self.num_train_timesteps, 0, -step_ratio)
+                           ).astype(_np.int64) - 1
+            self.timesteps = torch.from_numpy(ts)
+        else:
+            self.timesteps = get_timesteps(
+                self.timestep_spacing,
+                num_inference_steps,
+                self.num_train_timesteps
+            )
 
         if device is not None:
             self.timesteps = self.timesteps.to(device)
@@ -140,18 +172,35 @@ class DDIMScheduler(DiffusionSchedulerBase):
         # Previous timestep
         assert self._step_index is not None
         assert self.timesteps is not None
-        if self._step_index == len(self.timesteps) - 1:
-            prev_timestep = 0
+        if self.timestep_spacing == "trailing":
+            # Diffusers-DDIM convention (DDIM/CogVideoX): constant stride
+            # prev = t - T // N, with prev < 0 → final_alpha and prev == 0 →
+            # alphas_cumprod[0]. Under trailing the list gaps alternate 33/34
+            # (rounding), so the next-list-entry convention below drifts off
+            # the vendor trajectory by ~1 table row per step (0.022 over a
+            # 30-step v-pred denoise). Gated on the (previously unused)
+            # trailing path so legacy DDIM/DDPM behavior is untouched.
+            prev_timestep = int(timestep_val) - (
+                self.num_train_timesteps // self.num_inference_steps)
+            alpha_prod_t = self.alphas_cumprod[int(timestep_val)]
+            alpha_prod_t_prev = (
+                self.alphas_cumprod[int(prev_timestep)]
+                if prev_timestep >= 0
+                else self.final_alpha_cumprod
+            )
         else:
-            prev_timestep = int(self.timesteps[self._step_index + 1].item())
+            if self._step_index == len(self.timesteps) - 1:
+                prev_timestep = 0
+            else:
+                prev_timestep = int(self.timesteps[self._step_index + 1].item())
 
-        # Alpha values
-        alpha_prod_t = self.alphas_cumprod[int(timestep_val)]
-        alpha_prod_t_prev = (
-            self.alphas_cumprod[int(prev_timestep)]
-            if prev_timestep > 0
-            else self.final_alpha_cumprod
-        )
+            # Alpha values
+            alpha_prod_t = self.alphas_cumprod[int(timestep_val)]
+            alpha_prod_t_prev = (
+                self.alphas_cumprod[int(prev_timestep)]
+                if prev_timestep > 0
+                else self.final_alpha_cumprod
+            )
 
         # Ensure on same device
         if alpha_prod_t.device != sample.device:

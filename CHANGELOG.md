@@ -66,6 +66,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   This took Wan2.1-T2V output from a textured/banded field to a coherent scene.
   Inert for encoders without the flag, so existing image models are unchanged.
 
+### Added
+
+- **Name-driven 5D latent axis alignment at the loop→decode boundary.** Video
+  models do not share one latent layout: Wan denoises and decodes in
+  `[B,C,T,H,W]`, while CogVideoX denoises in `[B,T,C,H,W]` and decodes in
+  `[B,C,T,H,W]` — the vendor pipeline permutes between the loop and the VAE,
+  outside both traced components. The runtime now derives that permutation
+  purely from existing contract data (the latent variable's `shape_source`
+  axis roles against the decoder graph's named symbol axes; the single
+  concrete 5D dim is the channel axis) and applies it before post-loop
+  execution, symmetrically in the compiled and zero-torch flow handlers.
+  Identical layouts derive no permutation and the boundary is untouched —
+  verified by derivation (Wan → identity) and by a Wan sequential
+  anti-regression run.
+- **`traced_buffer` computable-buffer method.** Init-computed buffers absent
+  from the shipped weight files that are not 2D-interpolable (e.g. a composite
+  `[1, text_len + T·H·W, dim]` learned position table) now load verbatim from
+  the data embedded in their spec; dynamic-length handling stays with the
+  graph's own symbolic slicing.
+
 ### Fixed
 
 - **Prism activation profiling resolves video (5D) runtime dims.** Three
