@@ -575,6 +575,27 @@ class TritonIterativeProcessHandler:
                 )
                 self.ctx.variable_resolver.set(state_key, current_state)
 
+        # Name-driven latent axis alignment (5D) — R30 mirror of the compiled
+        # flow: video models do not share one latent layout (Wan [B,C,T,H,W]
+        # end-to-end; CogVideoX denoises [B,T,C,H,W], decodes [B,C,T,H,W]).
+        # The permutation derives from existing contract data; identical
+        # layouts derive None and nothing changes (R23). NBXTensor.permute +
+        # contiguous are R33-pure.
+        if state_key and post_loop:
+            from neurobrix.core.runtime.resolution.axis_alignment import (
+                latent_permutation_for)
+            executor = self.ctx.executors.get(post_loop[0])
+            dag = getattr(executor, "_dag", None) if executor else None
+            if dag:
+                perm = latent_permutation_for(self.ctx.pkg.variables, dag)
+                if perm is not None:
+                    current_state = self._resolve_as_nbx(state_key)
+                    if (isinstance(current_state, NBXTensor)
+                            and current_state.dim() == len(perm)):
+                        self.ctx.variable_resolver.set(
+                            state_key,
+                            current_state.permute(*perm).contiguous())
+
         # ZERO FALLBACK: Validate latent shape before VAE
         if state_key:
             current_state = self._resolve_as_nbx(state_key)

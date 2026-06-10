@@ -53,6 +53,11 @@ class SchedulerFactory:
         "ddim": ("diffusion.ddim", "DDIMScheduler"),
         "DDPMScheduler": ("diffusion.ddim", "DDIMScheduler"),
         "ddpm": ("diffusion.ddim", "DDIMScheduler"),
+        # CogVideoX DDIM — same DDIM brick; the variant's deltas are two
+        # config-driven init transforms (snr_shift_scale +
+        # rescale_betas_zero_snr) read from the scheduler config, and its
+        # a_t/b_t step form is algebraically standard DDIM eta=0.
+        "CogVideoXDDIMScheduler": ("diffusion.ddim", "DDIMScheduler"),
 
         # =========================================================================
         # Euler family

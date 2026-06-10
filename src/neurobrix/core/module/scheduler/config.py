@@ -157,6 +157,14 @@ class DDIMSchedulerConfig:
         "clip_sample": True,
         "clip_sample_range": 1.0,
         "eta": 0.0,
+        # CogVideoX DDIM variant — init-time alphas_cumprod transforms,
+        # config-driven and inert when absent/None (plain DDIM unchanged):
+        # snr_shift_scale shifts the SNR curve (CogVideoX trains at 3.0);
+        # rescale_betas_zero_snr applies the zero-terminal-SNR rescale
+        # (arXiv:2305.08891 Algorithm 1) v-prediction models require so the
+        # terminal step is pure noise.
+        "snr_shift_scale": None,
+        "rescale_betas_zero_snr": False,
     }
 
     @classmethod

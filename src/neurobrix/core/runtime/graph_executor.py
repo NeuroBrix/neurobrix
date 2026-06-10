@@ -457,6 +457,27 @@ class GraphExecutor:
                 )
                 self._weights[weight_name] = self._maybe_to_nbx(tensor)
                 computed_count += 1
+            elif method == "traced_buffer":
+                # Init-computed buffer absent from the snapshot weights,
+                # shipped verbatim as traced data (e.g. CogVideoX's composite
+                # learned pos embedding [1, text_len + T*H*W, dim] — not
+                # 2D-interpolable; the graph's own symbolic slicing handles
+                # dynamic lengths).
+                import base64
+                import numpy as np
+                traced_shape = spec.get("traced_shape")
+                traced_data = spec.get("traced_data")
+                if not traced_data or not traced_shape:
+                    raise RuntimeError(
+                        f"ZERO FALLBACK: traced_buffer spec for '{weight_name}' "
+                        f"missing traced_data/traced_shape.")
+                arr = np.frombuffer(
+                    base64.b64decode(traced_data), dtype=np.float32
+                ).reshape(traced_shape)
+                tensor = torch.from_numpy(arr.copy()).to(
+                    dtype=get_torch_dtype(self.dtype), device=self.device)
+                self._weights[weight_name] = self._maybe_to_nbx(tensor)
+                computed_count += 1
             elif method == "interpolate_learned_pos_embed":
                 # Bilinearly interpolate learned positional embeddings
                 tensor = self._interpolate_learned_pos_embed(
