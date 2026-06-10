@@ -2973,19 +2973,30 @@ class CompiledSequence:
         # e.g. all custom.rms_norm outputs across the network).
         if filters and not any(f in tid or f in op.op_uid for f in filters):
             return
-        if tid in state["seen"]:
+        # Dedup by op_uid, NOT tid: CompiledSequence reuses arena slots, so many
+        # distinct ops share one slot → one tid. Keying by tid silently dropped
+        # every reused-slot op (the whole patch-embed/modulation/RoPE chain),
+        # making cross-engine diffs blind. op_uid is unique per op.
+        if op.op_uid in state["seen"]:
             return
-        state["seen"].add(tid)
+        state["seen"].add(op.op_uid)
         try:
             if not isinstance(tensor, torch.Tensor):
                 return
+            # Complex tensors: read via the real view ([...,2] re/im) so head
+            # casting to float succeeds and the l2 covers BOTH components. Mirrors
+            # the triton dump convention so engine-vs-engine complex diffs align;
+            # without this, `flat[:10].float()` throws on complex and the whole
+            # record is silently skipped (compiled was missing every complex
+            # transformer op — RoPE q/k — making cross-engine RoPE diffs blind).
+            src = torch.view_as_real(tensor) if tensor.is_complex() else tensor
             # Memory-safe: avoid `tensor.detach().float()` which
             # would materialize a 2× fp32 copy of large bf16/fp16
             # tensors (would OOM on 16g for [1,128,4096,4096]
             # = 4 GiB bf16 → 8 GiB fp32). Sample head in-place,
             # compute L2 norm with fp32 accumulator without
             # casting the full tensor.
-            flat = tensor.detach().reshape(-1)
+            flat = src.detach().reshape(-1)
             head = flat[:10].float().cpu().tolist()
             try:
                 norm = float(torch.linalg.vector_norm(
@@ -2993,10 +3004,19 @@ class CompiledSequence:
             except Exception:
                 # Fallback for older torch / unsupported dtype.
                 norm = float(flat[:1024].float().norm().item())
+            _bn = None
+            if src.dim() >= 2 and src.shape[0] in (2, 3):
+                try:
+                    _bn = [float(torch.linalg.vector_norm(
+                        src[bi].detach().reshape(-1), dtype=torch.float32).item())
+                        for bi in range(src.shape[0])]
+                except Exception:
+                    _bn = None
             new_record = {
+                "component": self.dag.get("component_name", "?"),
                 "tid": tid, "op_uid": op.op_uid, "op_type": op.op_type,
                 "shape": list(tensor.shape), "dtype": str(tensor.dtype),
-                "head10": head, "l2_norm": norm,
+                "head10": head, "l2_norm": norm, "batch_norms": _bn,
             }
             state["records"].append(new_record)
             # JSONL append-mode write — O(1) IO per call vs the

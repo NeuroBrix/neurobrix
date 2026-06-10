@@ -231,7 +231,7 @@ class TritonIterativeProcessHandler:
                         hidden_state = _to_nbx(self.ctx.variable_resolver.resolved[candidate])
                         break
                 if hidden_state is not None and hidden_key is not None:
-                    tokenizer_vals = self.ctx.pkg.topology.get("extracted_values", {}).get("tokenizer", {})
+                    tokenizer_vals = self._tokenizer_config_with_flags(comp_name, "tokenizer")
                     pos_mask = self._resolve_as_nbx("global.attention_mask")
 
                     finalized = handler.finalize_embeddings(
@@ -270,6 +270,24 @@ class TritonIterativeProcessHandler:
             # resident across requests, persistent_mode (serve mode)
             # short-circuits this at the top of _unload_component.
             self._unload_component(comp_name, force=True)
+
+    def _tokenizer_config_with_flags(self, encoder_name: str, tokenizer_name: str) -> Dict[str, Any]:
+        """Tokenizer extracted_values augmented with runtime text-conditioning
+        flags from the registry. Currently `zero_pad_embeddings` (T5/UMT5
+        encoders emit non-zero pad embeddings; a DiT that cross-attends to the
+        full sequence must have them zeroed — the vendor pipelines trim+zero-pad).
+        Read at runtime via registry_flags (no .nbx rebuild); inert for encoders
+        without the flag, so image models are untouched (R23). Mirror of the
+        compiled handler (R30) so triton zeroes the UMT5 padding identically."""
+        cfg = dict(self.ctx.pkg.topology.get("extracted_values", {}).get(tokenizer_name, {}) or {})
+        try:
+            from neurobrix.core.runtime.registry_flags import get_component_flag
+            model_name = self.ctx.pkg.manifest.get("model_name")
+            if get_component_flag(model_name, encoder_name, "zero_pad_embeddings", default=False):
+                cfg["zero_pad_embeddings"] = True
+        except Exception:
+            pass
+        return cfg
 
     def _execute_negative_encoding(self, text_encoder_name: str) -> None:
         """
@@ -322,7 +340,7 @@ class TritonIterativeProcessHandler:
         neg_input_ids, neg_attention_mask = tp.tokenize_negative(
             device, encoder_name=text_encoder_name, negative_prompt=negative_prompt
         )
-        tokenizer_vals = self.ctx.pkg.topology.get("extracted_values", {}).get(tokenizer_name, {})
+        tokenizer_vals = self._tokenizer_config_with_flags(text_encoder_name, tokenizer_name)
 
         # Save original inputs AND positive embeddings (per-encoder variables)
         orig_input_ids = self.ctx.variable_resolver.get(input_ids_var)
@@ -345,6 +363,7 @@ class TritonIterativeProcessHandler:
         if handler and hasattr(handler, 'finalize_embeddings'):
             finalized = handler.finalize_embeddings(
                 hidden_state=neg_hidden_state,
+                attention_mask=_to_nbx(neg_attention_mask),  # REQUIRED for zero_pad_embeddings
                 tokenizer_config=tokenizer_vals
             )
             neg_hidden_state = finalized["hidden_state"]

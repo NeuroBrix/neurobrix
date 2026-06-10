@@ -53,6 +53,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Triton diffusion flow applies `zero_pad_embeddings` symmetrically with the
+  compiled flow (R30).** The compiled `iterative_process` handler reads the
+  per-encoder `zero_pad_embeddings` flag from the registry and passes the
+  `attention_mask` into `finalize_embeddings`, so UMT5/T5 encoders' non-zero
+  padding embeddings are zeroed before the DiT cross-attends to them (the vendor
+  pipelines trim+zero-pad). The triton handler never mirrored this: both the
+  positive and negative finalize sites read the raw tokenizer config without the
+  flag, and the negative finalize did not pass the `attention_mask` at all — so
+  in `--triton`/`--triton-sequential` the text padding stayed non-zero and the
+  DiT condition diverged from the oracle. Added `_tokenizer_config_with_flags`
+  to the triton handler (mirror of compiled) and pass the negative
+  `attention_mask`; the text-condition `condition_embedder` activation now
+  matches the compiled oracle. Inert for encoders without the registry flag, so
+  image diffusion models are untouched (R23).
 - **Scheduler config: `algorithm_type` is no longer universally required.** It is
   a DPM++-specific key (dpmsolver++/dpmsolver/sde-*); UniPC and flow schedulers
   legitimately omit it. Moved from the validator's REQUIRED set to the optional
