@@ -34,6 +34,9 @@ _ALIASES = {
     # DDIM family — zero-torch port of core diffusion/ddim.py.
     "DDIMScheduler": TritonDDIMScheduler,
     "ddim": TritonDDIMScheduler,
+    # CogVideoX DDIM — same brick, config-driven init transforms (R30 mirror
+    # of the core factory mapping).
+    "CogVideoXDDIMScheduler": TritonDDIMScheduler,
 }
 
 
