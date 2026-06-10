@@ -195,6 +195,8 @@ class CompiledOpResolver:
             return self._make_as_strided()
         if op_name == "unfold_backward":
             return self._make_unfold_backward()
+        if op_name == "native_group_norm":
+            return self._make_native_group_norm()
         return self._get_standard_op(op_name)
 
     # ========================================================================
@@ -606,6 +608,25 @@ class CompiledOpResolver:
                 input_sizes[dim] = (n_windows - 1) * step + size
             return torch.ops.aten.unfold_backward(grad, input_sizes, dim, size, step)
         return unfold_backward_wrapper
+
+    def _make_native_group_norm(self) -> Callable:
+        """native_group_norm with derived scalars recomputed from the input.
+
+        The functional signature carries N, C, HxW as SCALAR args — the graph
+        bakes their trace values, but they are fully derived from the input
+        tensor (HxW especially: for a video VAE it is the flattened T*H*W
+        product, frozen at the frugal trace size, e.g. 550 = 5*10*11 against
+        a runtime 3*60*90). Mirror of the sequential dispatcher's fix (R30).
+        """
+        def native_group_norm(x, weight, bias, n, c, hxw, groups, eps,
+                              *args, **kwargs):
+            if isinstance(x, torch.Tensor):
+                n = int(x.shape[0])
+                c = int(x.shape[1])
+                hxw = x.numel() // max(n * c, 1)
+            return torch.ops.aten.native_group_norm(
+                x, weight, bias, n, c, hxw, groups, eps, *args, **kwargs)
+        return native_group_norm
 
     def _make_as_strided(self) -> Callable:
         """as_strided used as an overlap-add framing view (iSTFT in the istftnet

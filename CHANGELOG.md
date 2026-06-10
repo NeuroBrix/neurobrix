@@ -88,6 +88,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Compiled mode kills dead arena slots and recomputes `native_group_norm`
+  scalars (mirrors of the sequential fixes below, R30).** The compiled
+  liveness analysis tracked only slots read as inputs, so never-consumed
+  outputs stayed in the arena for the whole pass (same ~28 GiB dead
+  conv-cache accumulation, OOM), and the compiled op factory passed the
+  baked N/C/HxW scalars through. Anti-regressions: Wan compiled f9 runs;
+  TinyLlama compiled greedy stays byte-identical.
 - **Sequential mode frees dead op outputs (the producing op is their last
   use).** The native op-by-op path freed tensors only when consumed as a
   later op's input; outputs never consumed anywhere — `native_layer_norm`
