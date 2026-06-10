@@ -251,6 +251,10 @@ def cmd_run(args):
     height = getattr(args, 'height', None) or cached_defaults.get("height", 1024)
     width = getattr(args, 'width', None) or cached_defaults.get("width", 1024)
     vae_scale = cached_defaults.get("vae_scale_factor", 8)
+    # Video (5D) runtime dims — None/absent for image/LLM models, where the
+    # profiler's video symbol overrides stay inert.
+    num_frames = getattr(args, 'num_frames', None) or cached_defaults.get("num_frames")
+    temporal_compression = cached_defaults.get("temporal_compression_ratio", 4)
 
     input_config = InputConfig(
         batch_size=2,  # CFG effectively doubles batch
@@ -258,6 +262,8 @@ def cmd_run(args):
         width=width,
         dtype="float16",
         vae_scale=vae_scale,
+        num_frames=num_frames,
+        temporal_compression=temporal_compression,
     )
 
     solver = PrismSolver()

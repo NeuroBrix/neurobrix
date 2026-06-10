@@ -29,6 +29,12 @@ class InputConfig:
     seq_len: Optional[int] = None
     dtype: str = "float16"
     vae_scale: int = 8
+    # Video (5D) runtime dims — None for image/LLM models. latent_T is
+    # derived as (num_frames - 1) // temporal_compression + 1 (causal video
+    # VAE convention); temporal_compression comes from the model's
+    # defaults.json (`temporal_compression_ratio`), data-driven.
+    num_frames: Optional[int] = None
+    temporal_compression: int = 4
 
     def to_symbol_map(self) -> Dict[str, int]:
         """
@@ -187,6 +193,62 @@ class ActivationProfiler:
 
         return last_use
 
+    def build_symbol_map(self, input_config: InputConfig) -> Dict[str, int]:
+        """Symbol map for THIS graph: positional base + name-driven overrides.
+
+        The positional convention in InputConfig.to_symbol_map (s1=latent_h,
+        s2=latent_w) is the image legacy. Graphs that carry a
+        `symbolic_context.symbols` table with NAMED symbols (video: s1=time,
+        s2=height, s3=width; image: height/width; LLM: seq_len) get each
+        symbol id bound by NAME from the runtime input config — the only
+        correct mapping for video, where the positional guess binds the time
+        axis to latent_h and mis-sizes every activation. Unnamed/legacy
+        graphs keep the positional map untouched (R23); for image graphs the
+        named values coincide with the positional ones, so the override is
+        value-identical there.
+        """
+        symbol_map = input_config.to_symbol_map()
+        syms = (self.dag.get("symbolic_context") or {}).get("symbols") or {}
+        if not isinstance(syms, dict) or not syms:
+            return symbol_map
+        vae_scale = input_config.vae_scale or 8
+        latent_h = input_config.height // vae_scale
+        latent_w = input_config.width // vae_scale
+        latent_t = None
+        if input_config.num_frames:
+            tc = input_config.temporal_compression or 4
+            latent_t = (input_config.num_frames - 1) // tc + 1
+        for sid, info in syms.items():
+            if not isinstance(info, dict):
+                continue
+            name = info.get("name")
+            trace = info.get("trace_value")
+            if name == "batch":
+                # Trace value, NOT input_config.batch_size: the trace baked
+                # each component's true batch semantics (VAE decode batch=1,
+                # CFG-traced transformers batch=2). Binding the CFG batch here
+                # doubled every Sana 4Kpx VAE activation estimate and flipped
+                # its validated single_gpu+tiling plan to weight_sharding
+                # (R23 regression caught by the legacy-vs-new plan probe).
+                # Matches the legacy concrete-shape behavior exactly.
+                symbol_map[sid] = trace if isinstance(trace, int) else (
+                    input_config.batch_size)
+            elif name == "time":
+                symbol_map[sid] = latent_t if latent_t is not None else (
+                    trace if isinstance(trace, int) else 1)
+            elif name == "height":
+                symbol_map[sid] = latent_h
+            elif name == "width":
+                symbol_map[sid] = latent_w
+            elif name in ("seq_len", "sequence_length"):
+                symbol_map[sid] = input_config.seq_len or (
+                    trace if isinstance(trace, int) else 128)
+            elif isinstance(trace, int):
+                # Unknown named symbol: trace value (matches the trace, never
+                # worse than the legacy positional guess).
+                symbol_map[sid] = trace
+        return symbol_map
+
     def estimate_peak_memory(
         self,
         input_config: Optional[InputConfig] = None,
@@ -225,8 +287,9 @@ class ActivationProfiler:
         if dtype_bytes is None:
             dtype_bytes = get_dtype_bytes_per_element(input_config.dtype)
 
-        # Build symbol map for shape resolution
-        symbol_map = input_config.to_symbol_map()
+        # Build symbol map for shape resolution (positional base + this
+        # graph's name-driven symbol overrides — video time/height/width).
+        symbol_map = self.build_symbol_map(input_config)
 
         # Initialize tracking
         peak_bytes = 0
@@ -405,6 +468,48 @@ class ActivationProfiler:
         """
         shape = tensor_meta.get("shape", [])
 
+        # Symbolic expression trees take precedence over the concrete shape.
+        # Graphs traced with a frugal stimulus (video VAEs at [1,16,T0,h0,w0])
+        # store the TINY trace values in `shape` and the real symbolic dims as
+        # expression trees in `symbolic_shape.dims` ({symbol,mul,add,floordiv,
+        # ...} nodes). Estimating from the concrete trace shape made every
+        # video activation look like a few MB — the 23 GiB Wan f81 VAE
+        # upsample never reached overflow_ops and op-level tiling never
+        # fired. Per-dim fallback to the concrete value keeps non-symbolic
+        # graphs byte-identical (R23).
+        sym_shape = tensor_meta.get("symbolic_shape")
+        if isinstance(sym_shape, dict):
+            dims = sym_shape.get("dims")
+            if isinstance(dims, list) and dims:
+                resolved = []
+                for i, d in enumerate(dims):
+                    cv = shape[i] if i < len(shape) else 1
+                    if not isinstance(cv, int):
+                        cv = 1
+                    # TRUST GATE: an expression is only used if its own trace
+                    # annotation reproduces the concrete trace dim. Some image
+                    # graphs carry mis-associated product expressions (e.g. a
+                    # Sana _unsafe_view dim whose expr trace is 8.4e14 against
+                    # a concrete dim of 1) — evaluating those exploded peak
+                    # estimates to absurdity. Self-consistency at trace is the
+                    # discriminator: valid exprs (video frugal-trace graphs)
+                    # evaluate at runtime dims; invalid or unannotated ones
+                    # fall back to the concrete value (legacy behavior, R23).
+                    if isinstance(d, dict):
+                        tv = d.get("trace", d.get("trace_value"))
+                        if not (isinstance(tv, int) and tv == cv):
+                            resolved.append(cv)
+                            continue
+                    v = None
+                    try:
+                        v = self._eval_dim_expr(d, symbol_map)
+                    except Exception:
+                        v = None
+                    if not isinstance(v, int) or v < 0:
+                        v = cv
+                    resolved.append(v)
+                return resolved
+
         resolved = []
         for dim in shape:
             if isinstance(dim, int):
@@ -424,6 +529,50 @@ class ActivationProfiler:
                 resolved.append(1)
 
         return resolved
+
+    def _eval_dim_expr(self, node: Any, symbol_map: Dict[str, int]) -> int:
+        """Evaluate one `symbolic_shape.dims` expression node.
+
+        Node grammar (same set the runtime symbol resolvers handle):
+        int — literal; {"type":"symbol","id":sN,"trace":v} — runtime symbol;
+        {"type": mul|add|sub|floordiv|mod, "left":node, "right":node} —
+        arithmetic; {"type":"neg","left":node}. Unknown nodes fall back to
+        their recorded trace value.
+        """
+        if isinstance(node, int):
+            return node
+        if isinstance(node, str):
+            if node in symbol_map:
+                return symbol_map[node]
+            return self._infer_symbol(node, symbol_map)
+        if isinstance(node, dict):
+            ntype = node.get("type")
+            if ntype == "symbol":
+                sid = node.get("id") or node.get("symbol_id")
+                if sid in symbol_map:
+                    return int(symbol_map[sid])
+                tv = node.get("trace", node.get("trace_value"))
+                if isinstance(tv, int):
+                    return tv
+                raise ValueError(f"unbound symbol {sid}")
+            if ntype in ("mul", "add", "sub", "floordiv", "mod"):
+                left = self._eval_dim_expr(node.get("left"), symbol_map)
+                right = self._eval_dim_expr(node.get("right"), symbol_map)
+                if ntype == "mul":
+                    return left * right
+                if ntype == "add":
+                    return left + right
+                if ntype == "sub":
+                    return left - right
+                if ntype == "floordiv":
+                    return left // right
+                return left % right
+            if ntype == "neg":
+                return -self._eval_dim_expr(node.get("left"), symbol_map)
+            tv = node.get("trace", node.get("trace_value"))
+            if isinstance(tv, int):
+                return tv
+        raise ValueError(f"unsupported dim expression node: {node!r}")
 
     def _infer_symbol(self, symbol: str, symbol_map: Dict[str, int]) -> int:
         """
