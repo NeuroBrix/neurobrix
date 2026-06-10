@@ -449,6 +449,21 @@ class NativeATenDispatcher:
                             # Update inputs with filtered tensors
                             inputs = [valid_tensors] + list(inputs[1:])
 
+            # [DERIVED SCALARS] native_group_norm's functional signature
+            # carries N, C, HxW as SCALAR args — the graph bakes their trace
+            # values, but they are fully derived from the input tensor (HxW
+            # especially: for a video VAE it is the flattened T*H*W product,
+            # frozen at the frugal trace size, e.g. 550 = 5*10*11 against a
+            # runtime 3*60*90). Recompute from the live input so the op
+            # tracks the runtime shape.
+            if (base_name == "native_group_norm" and len(inputs) >= 7
+                    and isinstance(inputs[0], torch.Tensor)):
+                _x = inputs[0]
+                _n, _c = int(_x.shape[0]), int(_x.shape[1])
+                _hxw = _x.numel() // max(_n * _c, 1)
+                inputs = ([inputs[0], inputs[1], inputs[2], _n, _c, _hxw]
+                          + list(inputs[6:]))
+
             # [UNIVERSAL KWARGS] Extract kwargs from graph attributes (SOURCE OF TRUTH)
             # This handles dtype, device, layout, memory_format for ALL ops universally
             kwargs = self._extract_kwargs(attributes)

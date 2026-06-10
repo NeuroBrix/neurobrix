@@ -3065,6 +3065,20 @@ class GraphExecutor:
             for tid in op_data.get("input_tensor_ids", []):
                 last_use_tid[tid] = i
 
+        # Pass 1b: Dead outputs — free immediately at the producing op.
+        # Outputs never consumed as any op's input have no entry from pass 1
+        # and were NEVER freed. R30 mirror of the triton-sequential liveness
+        # (its Step 3): the CogVideoX VAE all-at-once decode captures a
+        # never-consumed conv-cache clone per causal conv at full pixel
+        # resolution — ~28 GB of dead tensors accumulated and OOM'd the f9
+        # proof run; native_layer_norm mean/rstd are the same class.
+        graph_outputs = set(self._ctx.output_tensor_ids or [])
+        for i, op_uid in enumerate(execution_order):
+            op_data = ops[op_uid]
+            for out_tid in op_data.get("output_tensor_ids", []):
+                if out_tid not in last_use_tid and out_tid not in graph_outputs:
+                    last_use_tid[out_tid] = i
+
         # Pass 2: Extend chain source lifetime to cover all derived views
         # When stride skip is enabled, views share storage with chain source
         stride_skip_enabled = os.environ.get("NBX_STRIDE_SKIP", "0") == "1"
@@ -3181,8 +3195,11 @@ class GraphExecutor:
             last_use_tid: Dict mapping tensor_id -> last use index
         """
         # Check inputs of current op - if this was their last use, delete them
+        # (output_tensor_ids included: a dead output's last use IS its
+        # producing op — see _compute_last_use pass 1b).
         assert self._ctx is not None
-        for tid in op_data.get("input_tensor_ids", []):
+        for tid in (list(op_data.get("input_tensor_ids", []))
+                    + list(op_data.get("output_tensor_ids", []))):
             if tid in last_use_tid and last_use_tid[tid] <= op_idx:
                 # Check if this is NOT a model output and NOT persistent
                 if tid not in self._ctx.output_tensor_ids and tid not in self._persistent_tensor_ids:
