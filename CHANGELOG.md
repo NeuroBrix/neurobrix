@@ -53,6 +53,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Sequential mode view-shape inference picks the axis that actually changed
+  (R30 parity with compiled `_make_view_reshape`).** When a `view`/`reshape`
+  target's element count no longer matches the runtime input (a dim moved
+  between trace and runtime), the sequential resolver previously inferred the
+  LAST dim as `-1` unconditionally. That folded the CFG batch into the feature
+  dim on Wan modulation views (input `[2,9216]`, frozen target `[1,6,1536]` gave
+  `[1,6,3072]` instead of `[2,6,1536]`) and produced an invalid `[4680,4680,-1]`
+  on hidden-state views whose traced shape duplicated the sequence expression
+  into the batch slot. Now it tries each axis as `-1` and (1) prefers the axis
+  whose recovered value equals the input tensor's real dim at that axis and
+  differs from the frozen target (the moved/batch axis), (2) else keeps the
+  legacy last-dim inference when that is a valid split (the spatial-flatten and
+  LLM attention-reshape case sequential decode relies on), (3) else takes the
+  first valid axis. Verified: Wan2.1-T2V-1.3B `--sequential` now produces a
+  coherent video; TinyLlama greedy `--sequential` stays byte-identical to
+  `--compiled` (no regression).
 - **Triton diffusion flow applies `zero_pad_embeddings` symmetrically with the
   compiled flow (R30).** The compiled `iterative_process` handler reads the
   per-encoder `zero_pad_embeddings` flag from the registry and passes the
