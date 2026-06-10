@@ -1429,6 +1429,22 @@ class CompiledSequence:
             for slot in input_slots:
                 slot_last_use[slot] = op_idx  # Update to latest usage
 
+        # Step 1b: Dead outputs — slots produced but never read by any op
+        # have no entry above and were NEVER killed. Their last use IS the
+        # producing op (freed right after production). R30 mirror of the
+        # sequential paths' dead-output liveness: the CogVideoX VAE
+        # all-at-once decode captures a never-consumed conv-cache clone per
+        # causal conv at full pixel resolution — ~28 GiB of dead arena slots
+        # accumulated and OOM'd the compiled f9 decode.
+        for op_idx, op_uid in enumerate(execution_order):
+            op_data = ops_metadata.get(op_uid)
+            if op_data is None:
+                continue
+            for out_tid in op_data.get("output_tensor_ids", []):
+                slot = self._tensor_id_to_slot.get(out_tid)
+                if slot is not None and slot not in slot_last_use:
+                    slot_last_use[slot] = op_idx
+
         # Step 2: Define protected slots (never freed)
         # - Weight slots: needed across executions
         # - Input slots: managed externally
