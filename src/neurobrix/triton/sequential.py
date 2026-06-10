@@ -85,6 +85,17 @@ class TritonSequentialDispatcher:
                         return NBXDtype.float16
                     if parsed == NBXDtype.float16 and self.compute_dtype == NBXDtype.bfloat16:
                         return NBXDtype.bfloat16
+                    # Narrow fp64/complex128 to the triton-supported
+                    # fp32/complex64 — R30 mirror of the compiled hot loop
+                    # (TritonSequence._parse_dtype). The constant loader
+                    # already narrows stored complex128 tables to complex64;
+                    # honouring a graph `_to_copy` to complex128 here would
+                    # reinterpret the interleaved fp32 pairs as fp64 (Wan
+                    # RoPE freqs became near-zero garbage → gray output).
+                    if parsed == NBXDtype.float64:
+                        return NBXDtype.float32
+                    if parsed == NBXDtype.complex128:
+                        return NBXDtype.complex64
                     return parsed
                 except Exception:
                     return None
@@ -112,7 +123,13 @@ class TritonSequentialDispatcher:
             if isinstance(value, str) and value.startswith("torch."):
                 s = value.replace("torch.", "")
                 try:
-                    return parse_dtype(s)
+                    parsed = parse_dtype(s)
+                    # Same fp64/complex128 narrowing as the "dtype" branch.
+                    if parsed == NBXDtype.float64:
+                        return NBXDtype.float32
+                    if parsed == NBXDtype.complex128:
+                        return NBXDtype.complex64
+                    return parsed
                 except Exception:
                     pass
             return value
