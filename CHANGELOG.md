@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Diagnostics: failing-op context and raw tensor capture.** Op
+  execution errors in the sequential engine now print the op uid, its
+  position, trace shapes, and live input shapes before re-raising.
+  New default-off `NBX_DUMP_RAW="<dir>:<filters>"` saves matching op
+  outputs as `.pt` for value-level oracle comparisons (component-scoped
+  filenames). The step-0 model-input capture now also includes inputs
+  fed purely by topology connections (e.g. image-to-video latents).
+
 ### Changed
 
 - **Tensor-name parser: video-family vocabulary.** The container
