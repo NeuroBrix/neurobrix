@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Sequential engine: alias-preserving `aten::copy` destination.**
+  `aten::copy` is the functionalised in-place slice/index assignment and the
+  sequential dispatcher mirrors it as `dst.copy_(src)` — but the tensor
+  resolver forced non-contiguous tensors contiguous and replaced the store
+  entry with the clone, permanently detaching a strided destination view
+  (e.g. `out[..., 0::2]` rotate-half RoPE writes in SanaVideo's linear
+  attention) from its base buffer. The write landed in a dead tensor and
+  every consumer of the base read uninitialized `empty_like` memory
+  (uniform-noise video at exit 0; matched-input microtest vs the vendored
+  transformer read cosine 0.014). The copy destination now resolves RAW and
+  is re-pinned past input normalization — `copy_` handles non-contiguous
+  destinations natively. Gated on `aten::copy` only: structurally inert for
+  graphs without copy ops (TinyLlama/Wan/CogVideoX verified to have none);
+  for graphs with them (kokoro/chatterbox/openaudio) base-buffer consumers
+  now see the write, matching compiled-mode `copy_` semantics (R30).
+  First model proven: SANA-Video_2B_720p sequential f9 704×1280 coherent.
+
 ### Added
 
 - **CogVideoX DDIM scheduler support (both engines).** The CogVideoX DDIM

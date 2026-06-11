@@ -3306,6 +3306,20 @@ class GraphExecutor:
         resolved_inputs = self._resolver.resolve_args(op_uid, attrs, op_type, op_data)
         normalized_inputs = self._resolver.normalize_inputs(resolved_inputs)
 
+        # [ALIAS-PRESERVING COPY] aten::copy mutates its destination VIEW's
+        # shared storage (functionalised in-place slice/index assignment; the
+        # dispatcher mirrors it as ``dst.copy_(src)``). normalize_inputs forces
+        # non-contiguous tensors contiguous — a CLONE that detaches a strided
+        # destination view (e.g. ``out[..., 0::2]`` of the rotate-half RoPE
+        # buffer in SanaVideo's linear attention) from its base buffer, so the
+        # write lands in a dead tensor and every consumer of the base reads
+        # uninitialized empty_like memory. torch ``copy_`` handles
+        # non-contiguous destinations natively; keep the ORIGINAL resolved
+        # destination object.
+        if op_type.startswith("aten::copy") and resolved_inputs \
+                and isinstance(resolved_inputs[0], torch.Tensor):
+            normalized_inputs[0] = resolved_inputs[0]
+
         # AMP: Cast inputs per DtypeEngine rules (fp32 for pow/rsqrt/softmax, etc.)
         normalized_inputs = self._dtype_engine.amp_cast_inputs(op_type, normalized_inputs)
 
