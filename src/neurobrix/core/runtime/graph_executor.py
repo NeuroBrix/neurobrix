@@ -2030,6 +2030,26 @@ class GraphExecutor:
                         print(f"[NBX_DUMP_TIDS triton-seq] failed on {_ot}: "
                               f"{_e_td}", flush=True)
 
+            # === NBX_DUMP_RAW (raw tensor capture, default-off) ===
+            # "<dir>:<csv of tid/op_uid substrings>" — saves matching output
+            # tensors as .pt for value-level oracle diffs (rope tables etc.).
+            _raw_spec = _os_td.environ.get("NBX_DUMP_RAW")
+            if _raw_spec and output_tids:
+                _raw_dir, _, _raw_csv = _raw_spec.partition(":")
+                _raw_filters = [f for f in _raw_csv.split(",") if f]
+                for _ot in output_tids:
+                    if not any(f in _ot or f in op_uid for f in _raw_filters):
+                        continue
+                    _t = store.get(_ot)
+                    if _t is not None and hasattr(_t, "data_ptr"):
+                        import os as _os_raw
+                        _fn = _os_raw.path.join(
+                            _raw_dir, _ot.replace(":", "_").replace("/", "_") + ".pt")
+                        if not _os_raw.path.exists(_fn):
+                            torch.save(_t.detach().cpu(), _fn)
+                            print(f"[NBX_DUMP_RAW] {_ot} {list(_t.shape)} -> {_fn}",
+                                  flush=True)
+
             # === NBX_DEVICE_TRACE (device-drift diagnosis, default-off) ===
             # Logs the first op whose output tensor lands on a device_idx !=
             # the component device, AND whenever the CURRENT cuda device has
@@ -3188,6 +3208,13 @@ class GraphExecutor:
         error: Exception
     ) -> None:
         """Handle and re-raise op execution errors with context."""
+        live = []
+        for tid in op_data.get("input_tensor_ids", []):
+            t = self._tensor_store.get(tid) if hasattr(self, "_tensor_store") else None
+            live.append(f"{tid}={list(t.shape) if hasattr(t, 'shape') else '?'}")
+        print(f"[OP-FAIL] {op_uid} ({op_type}) op {op_idx + 1}/{total_ops} "
+              f"trace_in={op_data.get('input_shapes')} live_in=[{', '.join(live)}]",
+              flush=True)
         raise error
 
     def _cleanup_finished_tensors(
@@ -3353,6 +3380,30 @@ class GraphExecutor:
 
         # AMP: Post-process result (overflow protection, inf clamping)
         result = self._dtype_engine.amp_cast_result(op_type, result)
+
+        # === NBX_DUMP_RAW (sequential path, default-off) ===
+        # "<dir>:<csv of tid/op_uid substrings>" — saves matching outputs as
+        # .pt for value-level oracle diffs (rope tables etc.).
+        import os as _os_raw
+        _raw_spec = _os_raw.environ.get("NBX_DUMP_RAW")
+        if _raw_spec:
+            _raw_dir, _, _raw_csv = _raw_spec.partition(":")
+            _raw_filters = [f for f in _raw_csv.split(",") if f]
+            _comp = getattr(self, "_component_name", "")
+            for _oi, _ot in enumerate(op_data.get("output_tensor_ids", [])):
+                _scoped = f"{_comp}/{_ot}"
+                if not any(f in _scoped or f in f"{_comp}/{op_uid}"
+                           for f in _raw_filters):
+                    continue
+                _t = result[_oi] if isinstance(result, (list, tuple)) else result
+                if _t is not None and hasattr(_t, "data_ptr"):
+                    _fn = _os_raw.path.join(
+                        _raw_dir,
+                        f"{_comp}_" + _ot.replace(":", "_").replace("/", "_") + ".pt")
+                    if not _os_raw.path.exists(_fn):
+                        torch.save(_t.detach().cpu(), _fn)
+                        print(f"[NBX_DUMP_RAW] {_ot} {list(_t.shape)} -> {_fn}",
+                              flush=True)
 
         # Store outputs
         self._store_op_outputs(op_uid, op_data, result)

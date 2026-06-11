@@ -426,7 +426,16 @@ class IterativeProcessHandler(FlowHandler):
                         _ci = self.ctx.pkg.topology.get("components", {}).get(comp_name, {})
                         _conns = self.ctx.pkg.topology.get("connections", [])
                         _res = self.ctx.variable_resolver.resolved
-                        for _in in _ci.get("interface", {}).get("inputs", []):
+                        # Interface inputs + connection-fed inputs (e.g. I2V
+                        # image_latents arrives via a connection only).
+                        _in_names = list(_ci.get("interface", {}).get("inputs", []))
+                        for _c in _conns:
+                            _to = str(_c.get("to", ""))
+                            if _to.startswith(f"{comp_name}."):
+                                _nm = _to.split(".", 1)[1]
+                                if _nm not in _in_names:
+                                    _in_names.append(_nm)
+                        for _in in _in_names:
                             # Try direct keys, then resolve the topology connection
                             # (e.g. transformer.encoder_hidden_states <- text_encoder.last_hidden_state).
                             _cands = [f"{comp_name}.{_in}", f"global.{_in}"]
