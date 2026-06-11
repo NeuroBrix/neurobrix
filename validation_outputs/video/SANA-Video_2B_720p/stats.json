@@ -1,0 +1,30 @@
+{
+ "model": "SANA-Video_2B_720p_diffusers",
+ "proof": "f9 704x1280 30-step seed 42, cfg default 6.0",
+ "dtype": "registry requires_fp32_compute on transformer; fp16 text_encoder + VAE",
+ "modes": {
+  "sequential": {
+   "f0_mean": 0.4462,
+   "f0_std": 0.237,
+   "verdict": "COHERENT fox"
+  },
+  "compiled": {
+   "f0_mean": 0.4462,
+   "f0_std": 0.2365,
+   "vs_oracle_mean_abs_255": 0.94,
+   "verdict": "COHERENT fox"
+  },
+  "triton_sequential": {
+   "f0_mean": 0.446,
+   "f0_std": 0.2369,
+   "vs_oracle_mean_abs_255": 0.99,
+   "verdict": "COHERENT fox"
+  },
+  "triton": {
+   "f0_mean": 0.4463,
+   "f0_std": 0.2365,
+   "vs_oracle_mean_abs_255": 0.95,
+   "verdict": "COHERENT fox"
+  }
+ }
+}
