@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Tensor-name parser: video-family vocabulary.** The container
+  inspection parser now recognizes video-model module names — causal 3D
+  VAE normalization branches, temporal convolutions, gated linear
+  convolution FFNs, and T5-style attention projections — and reports
+  their canonical names, consistent with containers built for the video
+  family. No effect on weight binding, which matches container keys
+  exactly.
+
 ### Fixed
 
 - **Compiled engine: true strided slice (step>1).** The compiled slice
