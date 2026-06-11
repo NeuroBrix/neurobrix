@@ -42,6 +42,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **I2V conditioning input (`--input-image`).** The conditioning image is
+  plumbed to `global.image` as a single `[1, 3, 1, H, W]` frame (resize to
+  the run height/width, [-1, 1] normalize — the vendor VideoProcessor
+  contract). Consumed by the build-injected `vae_encoder` component in
+  pre_loop; the denoiser's traced forward broadcasts/pads/concats the
+  conditioning latents internally, so the flow and CFG engines needed no
+  changes. First model: CogVideoX-5b-I2V (frame 0 reconstructs the
+  conditioning image faithfully).
+
 - **CogVideoX DDIM scheduler support (both engines).** The CogVideoX DDIM
   variant maps to the existing DDIM brick: its deltas are two config-driven
   init-time alphas_cumprod transforms (`snr_shift_scale`,

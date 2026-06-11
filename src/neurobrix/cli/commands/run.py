@@ -309,6 +309,22 @@ def cmd_run(args):
         inputs["global.num_frames"] = args.num_frames
     if getattr(args, 'fps', None) is not None:
         inputs["global.fps"] = args.fps
+    if getattr(args, 'input_image', None):
+        # I2V conditioning image -> global.image [1, 3, 1, H, W] in [-1, 1]
+        # (the vendor VideoProcessor.preprocess contract: resize to the run
+        # height/width, normalize to [-1, 1], single conditioning frame).
+        # Boundary I/O per R34 — PIL here is file reading, not compute.
+        import torch as _torch
+        import numpy as _np
+        from PIL import Image as _PILImage
+        _img = _PILImage.open(args.input_image).convert("RGB")
+        _h = int(args.height) if args.height else _img.height
+        _w = int(args.width) if args.width else _img.width
+        if (_img.width, _img.height) != (_w, _h):
+            _img = _img.resize((_w, _h), _PILImage.LANCZOS)
+        _arr = _np.asarray(_img, dtype="float32") / 127.5 - 1.0
+        inputs["global.image"] = (_torch.from_numpy(_arr)
+                                  .permute(2, 0, 1).unsqueeze(0).unsqueeze(2))
     if args.cfg is not None:
         inputs["global.guidance_scale"] = args.cfg
     if args.temperature is not None:
