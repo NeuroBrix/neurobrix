@@ -628,23 +628,41 @@ def _spatial_promotion_pass(dag, tensors, ops_meta, symbols,
         if t not in ("mul", "add", "sub", "floordiv", "mod", "product", "neg"):
             return expr, False
 
-        # Don't override if any operand already references a spatial symbol.
-        def _references_spatial(e):
+        # Don't override if any operand already references an
+        # INFORMATION-BEARING symbol — spatial OR any symbol with trace
+        # value > 1. The override exists for the degenerate Forge
+        # mis-attribution `mul(s_batch=1, 64)` (Sana 4Kpx), where the only
+        # referenced symbol has trace 1 and carries no shape information.
+        # An expression anchored to a meaningful symbol (e.g. SANA-Video's
+        # VAE temporal chain `2*(1+s_time)-1-...`, trace 9) is already
+        # resolvable at runtime; stomping it with a value-matched spatial
+        # guess (trace 10 == height(10) - 1 by stimulus-dim coincidence)
+        # rewrote T' into `height - 1` and exploded the depth-to-space
+        # view at runtime T != trace (compiled SANA-Video f9: target 21
+        # where the data said 3).
+        def _references_meaningful_symbol(e):
             if isinstance(e, dict):
                 if e.get("type") == "symbol":
                     sid = e.get("symbol_id") or e.get("id")
-                    return sid in ((h_sym[0] if h_sym else None),
-                                   (w_sym[0] if w_sym else None))
+                    if sid in ((h_sym[0] if h_sym else None),
+                               (w_sym[0] if w_sym else None)):
+                        return True
+                    tv = e.get("trace") if e.get("trace") is not None \
+                        else e.get("trace_value")
+                    if tv is None:
+                        sym_info = symbols.get(sid) or {}
+                        tv = sym_info.get("trace_value")
+                    return tv is None or (isinstance(tv, int) and tv > 1)
                 # Recurse into nested
                 for k in ("left", "right", "operand"):
-                    if k in e and _references_spatial(e[k]):
+                    if k in e and _references_meaningful_symbol(e[k]):
                         return True
                 for f in e.get("factors", []):
-                    if _references_spatial(f):
+                    if _references_meaningful_symbol(f):
                         return True
             return False
 
-        if _references_spatial(expr):
+        if _references_meaningful_symbol(expr):
             return expr, False
 
         # Look up trace value

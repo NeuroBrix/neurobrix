@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Compiled engine: true strided slice (step>1).** The compiled slice
+  wrapper applied `step` by TRUNCATING to the first `ceil(length/step)`
+  contiguous elements instead of strided indexing — `cos[..., 0::2]`
+  silently became `cos[..., 0:56]` and the rotate-half RoPE consumed the
+  wrong table halves (SANA-Video compiled: noise/banded output while the
+  assembled tables matched the oracle exactly). Fixed with real
+  `[start:end:step]` indexing. First model to exercise step>1 slices in
+  compiled; chatterbox (2 such slices) becomes ATen-correct.
+- **Shared promotion pass: never stomp symbol-anchored expressions.** The
+  spatial mis-attribution override replaced a fully-symbolic temporal
+  expression (`2*(1+s_time)-1-...`, trace 9) with `height-1` because of a
+  trace-value coincidence (9 == 10-1). The override now fires only for
+  expressions whose symbols are ALL trace-1 (information-free, the original
+  Sana-4Kpx `mul(s_batch=1, 64)` case) — verified both directions offline.
 - **Sequential engine: alias-preserving `aten::copy` destination.**
   `aten::copy` is the functionalised in-place slice/index assignment and the
   sequential dispatcher mirrors it as `dst.copy_(src)` — but the tensor
