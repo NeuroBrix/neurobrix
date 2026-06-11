@@ -195,6 +195,12 @@ class SymbolicShapeResolver:
 
         self._bound = True
         logger.debug(f"Bound symbols: {self._runtime_values}")
+        import os as _os_dbg
+        if _os_dbg.environ.get("NBX_DEBUG") == "1":
+            _shapes = {k: tuple(v.shape) for k, v in inputs.items()
+                       if hasattr(v, "shape")}
+            print(f"[SYMBOLS] bound={self._runtime_values} from inputs={_shapes}",
+                  flush=True)
 
     def _bind_symbol(
         self,

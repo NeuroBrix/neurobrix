@@ -284,12 +284,21 @@ class CompiledOpResolver:
                 end = max(0, dim_size + end)
             length = max(0, end - start)
             result = input_tensor.narrow(dim, start, length)
-            if step != 1 and step is not None:
+            if step is not None:
                 step = _tensor_to_int(step)
-                # Apply step via indexing on the sliced dim
-                indices = list(range(0, length, step))
-                if len(indices) < length:
-                    result = result.narrow(dim, 0, len(indices))
+                if step != 1:
+                    # TRUE strided slice: narrow(start, end) then ::step is
+                    # exactly x[start:end:step]. The previous code only
+                    # narrowed to ceil(length/step) CONTIGUOUS elements —
+                    # cos[..., 0::2] silently became cos[..., 0:56] and the
+                    # rotate-half RoPE consumed wrong table halves
+                    # (SANA-Video compiled: sin slice off by a full half,
+                    # mul l2 695 vs oracle 460 while the cat'd tables matched
+                    # exactly). No earlier model used step>1 slices in
+                    # compiled, so the truncation never fired.
+                    pdim = dim if dim >= 0 else dim + result.dim()
+                    idx = (slice(None),) * pdim + (slice(None, None, step),)
+                    result = result[idx]
             return result
         return slice_wrapper
 

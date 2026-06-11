@@ -3131,6 +3131,19 @@ class CompiledSequence:
                     else:
                         raise RuntimeError(f"Failed at op {op.op_uid} ({op.op_type}): {e}") from e
                 else:
+                    import os as _os_fe
+                    if _os_fe.environ.get("NBX_DEBUG") == "1":
+                        _rb = (self._shape_resolver.get_bound_symbols()
+                               if self._shape_resolver is not None else None)
+                        try:
+                            _ra = op.args_resolver(arena)
+                            _ras = [(tuple(a.shape) if hasattr(a, "shape") else a)
+                                    for a in _ra]
+                        except Exception as _e_ra:
+                            _ras = f"<resolver raised {_e_ra}>"
+                        print(f"[FAIL-CTX] op={op.op_uid} resolver_bound={_rb} "
+                              f"resolver_is={id(self._shape_resolver)} "
+                              f"re-resolved_args={_ras}", flush=True)
                     raise RuntimeError(f"Failed at op {op.op_uid} ({op.op_type}): {e}") from e
 
             # ================================================================
@@ -3217,6 +3230,24 @@ class CompiledSequence:
 
             # Store output(s)
             slots = op.output_slots
+            # === NBX_OPLOG: every-op execution log (None vs l2) — covers the
+            # tid-dump's blind spots (NOP'd ops, aliases). Gated, append-only.
+            import os as _os_ol1
+            _olp1 = _os_ol1.environ.get("NBX_OPLOG")
+            if _olp1:
+                try:
+                    if result is None:
+                        _ols1 = "None"
+                    elif isinstance(result, torch.Tensor):
+                        _ols1 = (f"l2={float(torch.linalg.vector_norm(result.detach().reshape(-1), dtype=torch.float32)):.4f}"
+                                 if result.is_floating_point() else f"dtype={result.dtype}")
+                    else:
+                        _ols1 = type(result).__name__
+                    with open(_olp1, "a") as _olf1:
+                        _olf1.write(f"{op.op_uid}\t{op.op_type}\t{_ols1}\n")
+                except Exception:
+                    pass
+            # ============================================================
             if len(slots) == 1:
                 # ================================================================
                 # NaN-GUARD for single tensor output (handled above)
@@ -3575,6 +3606,24 @@ class CompiledSequence:
                         raise RuntimeError(f"Failed at op {op.op_uid} ({op.op_type}): {e}") from e
 
             slots = op.output_slots
+            # === NBX_OPLOG: every-op execution log (None vs l2) — covers the
+            # tid-dump's blind spots (NOP'd ops, aliases). Gated, append-only.
+            import os as _os_ol
+            _olp = _os_ol.environ.get("NBX_OPLOG")
+            if _olp:
+                try:
+                    if result is None:
+                        _ols = "None"
+                    elif isinstance(result, torch.Tensor):
+                        _ols = (f"l2={float(torch.linalg.vector_norm(result.detach().reshape(-1), dtype=torch.float32)):.4f}"
+                                if result.is_floating_point() else f"dtype={result.dtype}")
+                    else:
+                        _ols = type(result).__name__
+                    with open(_olp, "a") as _olf:
+                        _olf.write(f"{op.op_uid}\t{op.op_type}\t{_ols}\n")
+                except Exception:
+                    pass
+            # ============================================================
             if len(slots) == 1:
                 arena[slots[0]] = result
                 # === TEMP TID DUMP (multi-device branch) ===
