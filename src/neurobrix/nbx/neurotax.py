@@ -42,6 +42,7 @@ class SynonymRegistry:
         "transformer_blocks": "block",
         "single_transformer_blocks": "single_block",
         "layers": "block",
+        "fast_layers": "fast_block",     # Fish-Speech dual AR fast transformer
         "block": "block",
         "blocks": "block",
         "h": "block",                    # GPT-2 style
@@ -89,6 +90,8 @@ class SynonymRegistry:
         "v_proj": "value",
         "o_proj": "out",
         "out_proj": "out",
+        "wo": "down",                    # Fish-Speech/LLaMA attn output projection
+        "wqkv": "wqkv",                 # Fish-Speech combined QKV
         "qkv": "qkv",
         "qkv_proj": "qkv",
 
@@ -119,9 +122,9 @@ class SynonymRegistry:
         "up_proj": "up",
         "down_proj": "down",
         "gate_proj": "gate",
-        "w1": "up",
-        "w2": "down",
-        "w3": "gate",
+        "w1": "gate",                    # LLaMA SwiGLU: w1 = gate_proj
+        "w2": "down",                    # LLaMA SwiGLU: w2 = down_proj
+        "w3": "up",                      # LLaMA SwiGLU: w3 = up_proj
         "c_fc": "up",                    # GPT-2
         "c_proj": "down",                # GPT-2
 
@@ -235,7 +238,15 @@ class SynonymRegistry:
         # ===========================================
         # ENCODERS (CLIP/T5)
         # ===========================================
-        "shared": "shared",
+        # `shared` is the T5/UMT5/CLIP TIED input embedding: the model ties one
+        # weight as both the encoder input embedding and (in full enc-dec T5) the
+        # output head. By intrinsic identity it IS the canonical input token
+        # embedding — same role as `embed_tokens` / `wte` — so it normalizes to
+        # `token_embed` (NOT to itself). Structural vendor token, model-agnostic.
+        # Was self-mapped (`shared`->`shared`), which left `shared.weight`
+        # unbindable to the graph param `encoder.token_embed.weight` (Wan UMT5
+        # text encoder; recurs on CogVideoX / Allegro / SANA-Video / Open-Sora).
+        "shared": "token_embed",
         "text_model": "text",
         "vision_model": "vision",
         "text_projection": "text_proj",
@@ -284,6 +295,108 @@ class SynonymRegistry:
         # ===========================================
         "act_mlp": "act_mlp",
         "act": "act",
+
+        # ===========================================
+        # AUDIO — NeMo Conformer / RNNT / TDT
+        # ===========================================
+        "pre_encode": "pre_encode",
+        "dec_rnn": "rnn",
+        "lstm": "lstm",
+        "prediction": "prediction",
+        "joint_net": "joint",
+        "jointnet": "joint",
+        "subsampling": "subsample",
+        "conformer": "conformer",
+
+        # ===========================================
+        # AUDIO — Whisper
+        # ===========================================
+        "encoder_attn": "cross_attn",
+        "encoder_attn_layer_norm": "cross_attn_norm",
+
+        # ===========================================
+        # AUDIO — Kokoro / StyleTTS
+        # ===========================================
+        "plbert": "bert",
+        "istftnet": "vocoder",
+        "duration_proj": "dur_proj",
+        "pitch_proj": "pitch_proj",
+
+        # ===========================================
+        # AUDIO — Fish-speech / OpenAudio (DualAR)
+        # ===========================================
+        "fast_layers": "fast_block",
+        "codebook": "codebook",
+        "wq": "query",
+        "wk": "key",
+        "wv": "value",
+        "wo": "down",                    # Fish-Speech: attn output proj = attn.down
+
+        # ===========================================
+        # AUDIO — Chatterbox
+        # ===========================================
+        "s3gen": "s3gen",
+        "ve": "voice_encoder",
+        "t3": "t3",
+
+        # ===========================================
+        # AUDIO — VibeVoice
+        # ===========================================
+        "acoustic_tokenizer": "acoustic_tok",
+        "semantic_tokenizer": "semantic_tok",
+        "acoustic_connector": "acoustic_proj",
+        "semantic_connector": "semantic_proj",
+        "prediction_head": "pred_head",
+        "diffusion_head": "diff_head",
+
+        # ===========================================
+        # VIDEO — T5/UMT5 atomic projections (Wan / CogVideoX text encoders)
+        # T5 names its attention projections with bare letters; map them to
+        # the same canonical targets as to_q / q_proj.
+        # ===========================================
+        "q": "query",
+        "k": "key",
+        "v": "value",
+        "o": "out",
+
+        # ===========================================
+        # VIDEO — CogVideoX (DiT + causal 3D VAE)
+        # ===========================================
+        "norm_final": "final_norm",
+        "pos_embedding": "pos_embed",
+        "conv_y": "scale_conv",          # SpatialNorm3D scale branch
+        "conv_b": "shift_conv",          # SpatialNorm3D shift branch
+        "norm_layer": "norm",            # SpatialNorm3D inner GroupNorm
+        "conv_shortcut": "skip_conv",    # ResNet residual 1x1 conv
+
+        # ===========================================
+        # VIDEO — Wan (DiT + causal 3D VAE)
+        # ===========================================
+        "patch_embedding": "patch_embed",
+        "condition_embedder": "cond_embed",
+        "time_embedder": "time_embed",
+        "time_proj": "time_proj",
+        "resample": "resample",          # spatial up/down resampler (canonical)
+        "time_conv": "temporal_conv",
+        "to_qkv": "qkv",
+
+        # ===========================================
+        # VIDEO — SANA-Video (linear DiT GLUMB-Conv + Gemma text encoder)
+        # ===========================================
+        "conv_inverted": "expand_conv",      # MBConv inverted-bottleneck expand
+        "conv_depth": "depthwise_conv",
+        "conv_point": "pointwise_conv",
+        "conv_temp": "temporal_conv",
+        "caption_norm": "caption_norm",
+        "rope": "rotary_embed",
+        "freqs_cos": "freqs_cos",            # rope table buffers (canonical)
+        "freqs_sin": "freqs_sin",
+        "post_feedforward_layernorm": "post_ffn_norm",
+        "original_inv_freq": "original_inv_freq",
+
+        # VIDEO — VAE latent statistics buffers (SANA-Video / LTX-class)
+        "latents_mean": "latents_mean",
+        "latents_std": "latents_std",
     }
 
     # Patterns that should NEVER be modified
