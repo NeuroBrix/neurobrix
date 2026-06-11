@@ -225,7 +225,24 @@ class TensorResolver:
         args_list = attrs.get("args")
         if args_list is None:
             raise RuntimeError(f"ZERO FALLBACK: Op '{op_uid}' ({op_type}) has no attributes.args.")
-        return [self._resolve_arg_info(op_uid, op_type, arg, op_data) for arg in args_list]
+        resolved = []
+        for i, arg in enumerate(args_list):
+            # [ALIAS-PRESERVING COPY] aten::copy's first arg is the mutation
+            # DESTINATION — a strided view (functionalised in-place slice
+            # assignment, e.g. ``out[..., 0::2] = ...`` in SanaVideo's
+            # rotate-half RoPE). resolve_normalized() would .contiguous() the
+            # non-contiguous view AND replace the store entry with the clone,
+            # permanently detaching it from its base buffer — the write then
+            # lands in a dead tensor and every consumer of the base reads
+            # uninitialized empty_like memory. Resolve RAW: torch ``copy_``
+            # handles non-contiguous destinations natively, and the base
+            # buffer is engine-produced (already on-device, compute dtype).
+            if (i == 0 and op_type.startswith("aten::copy")
+                    and isinstance(arg, dict) and arg.get("type") == "tensor"):
+                resolved.append(self.resolve(arg["tensor_id"]))
+                continue
+            resolved.append(self._resolve_arg_info(op_uid, op_type, arg, op_data))
+        return resolved
 
     def resolve_kwargs(
         self,
