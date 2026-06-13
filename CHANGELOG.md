@@ -15,7 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that carries no PyTorch. Strategy selection routes by execution mode;
   ported strategies run torch-free, while not-yet-ported ones transparently
   reuse the existing implementation. Behaviour is byte-identical (greedy
-  decode verified compiled == triton).
+  decode verified compiled == triton). Ported so far: single-GPU and
+  multi-GPU component placement (whole-component distribution across GPUs).
 
 ### Fixed
 
