@@ -405,6 +405,26 @@ class RuntimeExecutor:
             except (FileNotFoundError, ValueError) as e:
                 logger.debug(f"Tiling not available for {comp_name}: {e}")
 
+        # Prism-driven component-level tiling — overrides the auto-detect above.
+        # Emitted when Prism kept a spatial-overflow component (e.g. a high-res
+        # video VAE) on GPU by tiling its decode instead of host offload
+        # (solver Strategy 3.5). The auto-detect from_component_config declines
+        # symbolic / spatial-adaptive graphs, so this is how a symbolic VAE
+        # gets a TilingEngine with the Prism-chosen tile_size.
+        for comp_name, spec in (getattr(self.plan, 'component_tiling', None) or {}).items():
+            self._component_tiling[comp_name] = TilingEngine(
+                trace_size=spec["trace_size"],
+                overlap=spec["overlap"],
+                scale_factor=spec["scale_factor"],
+                window_alignment=spec.get("window_alignment", 1),
+                tile_size=spec["tile_size"],
+            )
+            logger.info(
+                f"[TilingEngine] {comp_name}: Prism component-tiling "
+                f"tile_size={spec['tile_size']} scale={spec['scale_factor']} "
+                f"(kept on GPU instead of host offload)"
+            )
+
         # Op-level tiling — wires per-op_uid interceptors on the component's
         # GraphExecutor so upsample→conv fusion pairs stream band-by-band
         # without materializing the OOM intermediate. Plan emitted by Prism
@@ -1011,13 +1031,15 @@ class RuntimeExecutor:
     # ========== TILING HELPERS ==========
 
     def _find_spatial_input(self, comp_inputs: Dict[str, Any]) -> Optional[Any]:
-        """Find the first 4D spatial tensor in component inputs for tiling.
+        """Find the first spatial tensor in component inputs for tiling.
 
-        Returns either torch.Tensor or NBXTensor — both expose .dim() and
-        are usable downstream by the tiling engine.
+        Accepts 4D images [B, C, H, W] and 5D video [B, C, T, H, W] — the
+        TilingEngine tiles the trailing (H, W) pair for both. Returns either
+        torch.Tensor or NBXTensor; both expose .dim() and are usable
+        downstream by the tiling engine.
         """
         for value in comp_inputs.values():
-            if _is_tensor(value) and value.dim() == 4:
+            if _is_tensor(value) and value.dim() in (4, 5):
                 return value
         return None
 

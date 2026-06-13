@@ -196,6 +196,16 @@ class ExecutionPlan:
     # up by RuntimeExecutor to wire op_uid interceptors on the component's
     # GraphExecutor. Empty dict when no op-level tiling is required.
     runtime_op_tiling: Dict = field(default_factory=dict)
+    # Component-level spatial tiling — per-component plan emitted when a
+    # spatial component (4D/5D input + scale config) would NOT fit a GPU
+    # untiled (so it would otherwise be offloaded to host RAM) but DOES fit
+    # when its decode is run on overlapping spatial tiles. Picked up by
+    # RuntimeExecutor to instantiate a TilingEngine with the Prism-chosen
+    # tile_size, keeping the component on GPU. Empty dict when no
+    # component-level tiling is required (e.g. the video VAE at high
+    # resolution; reuses the R31 TilingEngine brick). Each entry:
+    # {"tile_size", "scale_factor", "overlap", "window_alignment"}.
+    component_tiling: Dict = field(default_factory=dict)
 
     @property
     def primary_device(self) -> str:
@@ -514,6 +524,14 @@ class PrismSolver:
         component_dtypes = self._resolve_component_dtypes(
             neural_components, profile, container)
 
+        # Component-level spatial tiling accumulator. Populated by
+        # _place_component when a spatial-overflow component is kept on GPU
+        # via tiling instead of host offload; surfaced on the plan for the
+        # executor to instantiate a TilingEngine. _input_config is stashed so
+        # the tile sizer can read the runtime spatial extent.
+        self._component_tiling = {}
+        self._input_config = input_config
+
         # Step 2: Compute memory requirements (tiling-aware via profile)
         component_memory = self._compute_memory(
             container, neural_components, input_config, target_dtype_str,
@@ -750,6 +768,18 @@ class PrismSolver:
         # Step 7: Build plan
         plan = self._build_plan(allocations, component_memory, devices, component_dtypes, profile, chosen_strategy)
         plan.kv_cache_plan = kv_cache_plan
+
+        # Component-level spatial tiling decided during placement (Strategy 3.5
+        # in _place_component) — keep only entries whose final allocation
+        # actually landed on a GPU (drop any stale flag from a rejected
+        # strategy attempt where the component ended up elsewhere).
+        _ct = getattr(self, "_component_tiling", {}) or {}
+        if _ct:
+            plan.component_tiling = {
+                cn: spec for cn, spec in _ct.items()
+                if cn in plan.components
+                and str(plan.components[cn].device).startswith("cuda")
+            }
 
         # Step 7b: Op-level tiling — detect upsample→conv fusion pairs whose
         # intermediate tensor would OOM the assigned GPU. Decision happens
@@ -2284,6 +2314,10 @@ class PrismSolver:
         if not devices:
             return None
 
+        # Reset component-tiling flags for this placement pass so a rejected
+        # attempt never leaves stale entries (the chosen pass repopulates).
+        self._component_tiling = {}
+
         fresh = self._fresh_devices(devices)
         allocations = {}
 
@@ -2300,6 +2334,96 @@ class PrismSolver:
     # =========================================================================
     # RECURSIVE CASCADE — Component & Block Level
     # =========================================================================
+
+    def _spatial_component_tiling(
+        self, container: "NBXContainer", comp_name: str,
+        mem: ComponentMemory, budget_bytes: int,
+    ) -> Optional[Dict[str, Any]]:
+        """Return a TilingEngine spec when a spatial component (4D/5D input +
+        scale config) overflows `budget_bytes` untiled but fits when its
+        decode runs on overlapping spatial tiles — else None.
+
+        REUSES the R31 TilingEngine brick: here Prism only SIZES the tile so
+        the per-tile activation fits, then keeps the component on GPU instead
+        of routing it to host RAM (the CogVideoX-5b VAE at 480x720x49 frames
+        peaks at ~82 GB untiled — 5 live full-res feature maps — and was being
+        offloaded to cpu). The runtime instantiates a TilingEngine from this
+        spec. Activation scales ~quadratically with the tiled spatial area, so
+        tile_size = sqrt(latent_area * budget / full_activation).
+        """
+        import json, math
+        cache_path = getattr(container, "_cache_path", None)
+        ic = getattr(self, "_input_config", None)
+        if cache_path is None or ic is None:
+            return None
+        gpath = cache_path / "components" / comp_name / "graph.json"
+        ppath = cache_path / "components" / comp_name / "profile.json"
+        if not gpath.exists() or not ppath.exists():
+            return None
+        try:
+            graph = json.load(open(gpath))
+            profile_j = json.load(open(ppath))
+        except Exception:
+            return None
+
+        # Spatial input: 4D NCHW or 5D NCDHW; trace_size = H (index -2).
+        tensors = graph.get("tensors", {})
+        trace_size = None
+        for iid in graph.get("input_tensor_ids", []):
+            shape = tensors.get(str(iid), {}).get("shape", [])
+            if isinstance(shape, list) and len(shape) in (4, 5):
+                trace_size = shape[-2]
+                break
+        if not trace_size:
+            return None
+
+        # Scale factor: upscale (upscalers) or VAE compression ratio.
+        config = profile_j.get("config", {})
+        scale_factor = config.get("upscale")
+        if scale_factor is None:
+            # Spatial compression ratio = 2^(num_blocks-1). VAE configs spell
+            # the block list as decoder_block_out_channels (Sana/DC-AE) OR the
+            # generic block_out_channels (CogVideoX / most diffusers VAEs).
+            db = (config.get("decoder_block_out_channels")
+                  or config.get("block_out_channels"))
+            if db:
+                scale_factor = 2 ** (len(db) - 1)
+        if not scale_factor:
+            return None
+
+        full_act = mem.activation_bytes
+        if full_act <= budget_bytes or full_act <= 0:
+            return None  # fits untiled — no tiling needed
+
+        # Runtime latent spatial extent (the input space the tiles cover).
+        vae_scale = getattr(ic, "vae_scale", None) or 8
+        latent_h = max(1, (getattr(ic, "height", None) or 1024) // vae_scale)
+        latent_w = max(1, (getattr(ic, "width", None) or 1024) // vae_scale)
+
+        window_alignment = config.get("window_size", 1) or 1
+        frac = budget_bytes / full_act
+        tile_size = int(math.sqrt(latent_h * latent_w * frac))
+        if window_alignment > 1:
+            tile_size = (tile_size // window_alignment) * window_alignment
+        tile_size = max(window_alignment if window_alignment > 1 else 8,
+                        min(tile_size, latent_h, latent_w))
+
+        overlap = max(4, tile_size // 8)
+        if window_alignment > 1:
+            overlap = ((overlap + window_alignment - 1) // window_alignment) * window_alignment
+
+        tiled_act = full_act * (tile_size * tile_size) / float(latent_h * latent_w)
+        if tiled_act > budget_bytes:
+            return None  # even the clamped tile doesn't fit
+
+        return {
+            "tile_size": int(tile_size),
+            "scale_factor": int(scale_factor),
+            "overlap": int(overlap),
+            "window_alignment": int(window_alignment),
+            "trace_size": int(trace_size),
+            "tiled_activation_bytes": int(tiled_act),
+        }
 
     def _place_component(
         self,
@@ -2356,6 +2480,25 @@ class PrismSolver:
         if mem.activation_mb <= effective_capacity * 0.92:
             shard_map = {s: "cpu" for s in shard_sizes.get(comp_name, {})}
             return (f"zero3:{largest.device_string}", shard_map)
+
+        # Strategy 3.5: spatial component tiling — keep a spatial-overflow
+        # component (4D/5D input + scale config) on GPU by tiling its decode
+        # (reuses the R31 TilingEngine) instead of offloading compute to host
+        # RAM. Fires ONLY when the untiled activation fits no GPU even with
+        # zero3, but the per-tile activation does — strictly additive
+        # (non-spatial components, and ones that already fit, never reach
+        # here). The CogVideoX-5b VAE (82 GB untiled at 480x720x49) stays on
+        # GPU as overlapping spatial tiles instead of cpu.
+        tile_budget = int(effective_capacity * 0.85 * 1024 * 1024)
+        tiling = self._spatial_component_tiling(
+            container, comp_name, mem, tile_budget)
+        if tiling is not None:
+            tiled_total_mb = real_weight + tiling["tiled_activation_bytes"] / (1024 * 1024)
+            if tiled_total_mb <= effective_capacity * 0.92:
+                self._component_tiling[comp_name] = tiling
+                shard_map = {s: largest.device_string
+                             for s in shard_sizes.get(comp_name, {})}
+                return (largest.device_string, shard_map)
 
         # Strategy 4: cpu — both weights AND compute on CPU.
         # Last-resort placement for a single component whose activations
