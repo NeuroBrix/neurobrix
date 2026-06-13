@@ -2489,7 +2489,14 @@ class PrismSolver:
         # (non-spatial components, and ones that already fit, never reach
         # here). The CogVideoX-5b VAE (82 GB untiled at 480x720x49) stays on
         # GPU as overlapping spatial tiles instead of cpu.
-        tile_budget = int(effective_capacity * 0.85 * 1024 * 1024)
+        # Budget the tile conservatively (0.40 of the GPU): the quadratic
+        # area-scaling estimate undercounts the true per-tile live set (the
+        # resnet keeps several full-res feature maps live), and the triton
+        # arena's live watermark runs ~1.3x the compiled caching allocator
+        # for the same tile. CogVideoX-5b at 0.85 sized tile=39 → 24 GB
+        # compiled (fit) but 31 GB+ triton (OOM at conv::90); 0.40 sizes a
+        # tile that fits both. tiled_activation re-checked below.
+        tile_budget = int(effective_capacity * 0.40 * 1024 * 1024)
         tiling = self._spatial_component_tiling(
             container, comp_name, mem, tile_budget)
         if tiling is not None:
