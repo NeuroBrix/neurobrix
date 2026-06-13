@@ -29,6 +29,13 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+def _is_nbx_tensor(t: Any) -> bool:
+    """Duck-typed NBXTensor check (no torch/NBX import needed here). The
+    triton path feeds NBXTensors; the compiled path feeds torch.Tensors.
+    Lets the tiling brick stay mode-polymorphic without a hard dependency."""
+    return hasattr(t, "to_cuda") and hasattr(t, "_device")
+
+
 class TilingEngine:
     """
     Universal tiled execution engine for spatial components.
@@ -272,27 +279,40 @@ class TilingEngine:
         out_h = height * sf
         out_w = width * sf
         lead_dims = list(first_result.shape[:-2])          # [B, C_out] | [B, C_out, T_out]
-        output = torch.zeros(
-            *lead_dims, out_h, out_w,
-            device=input_tensor.device, dtype=first_result.dtype,
-        )
-        weight = torch.zeros(
-            lead_dims[0], 1, *lead_dims[2:], out_h, out_w,
-            device=input_tensor.device, dtype=first_result.dtype,
-        )
+        out_shape = [*lead_dims, out_h, out_w]
+        weight_shape = [lead_dims[0], 1, *lead_dims[2:], out_h, out_w]
+        out_ndim = len(out_shape)
+
+        # Mode-polymorphic accumulators: NBXTensor on the triton path
+        # (R33: no torch), torch.zeros on the compiled path (byte-identical).
+        if _is_nbx_tensor(input_tensor):
+            from neurobrix.kernels.nbx_tensor import NBXTensor
+            dev = (f"cuda:{getattr(input_tensor, '_device_idx', 0)}"
+                   if input_tensor._device == "cuda" else input_tensor._device)
+            output = NBXTensor.zeros(out_shape, dtype=first_result.dtype, device=dev)
+            weight = NBXTensor.zeros(weight_shape, dtype=first_result.dtype, device=dev)
+        else:
+            output = torch.zeros(
+                *out_shape, device=input_tensor.device, dtype=first_result.dtype)
+            weight = torch.zeros(
+                *weight_shape, device=input_tensor.device, dtype=first_result.dtype)
 
         rh = ts * sf
         rw = ts * sf
 
-        def _accumulate(res: torch.Tensor, ty: int, tx: int) -> None:
-            # Ellipsis slice == [:, :, oy:.., ox:..] for 4D and carries the
-            # extra T axis for 5D. Clamp to the actual output extent at edges.
+        def _accumulate(res, ty: int, tx: int) -> None:
+            # Explicit per-rank slice (NBXTensor-safe); the read-add-write
+            # form works for both torch and NBXTensor (avoids relying on
+            # NBXTensor.__iadd__). weight's size-1 channel axis is selected
+            # by slice(None) and broadcasts on the final divide.
             oy = ty * sf
             ox = tx * sf
             arh = min(rh, out_h - oy)
             arw = min(rw, out_w - ox)
-            output[..., oy:oy + arh, ox:ox + arw] += res[..., :arh, :arw]
-            weight[..., oy:oy + arh, ox:ox + arw] += 1
+            osl = (slice(None),) * (out_ndim - 2) + (slice(oy, oy + arh), slice(ox, ox + arw))
+            rsl = (slice(None),) * (out_ndim - 2) + (slice(0, arh), slice(0, arw))
+            output[osl] = output[osl] + res[rsl]
+            weight[osl] = weight[osl] + 1
 
         _accumulate(first_result, first_h, first_w)
 
@@ -360,23 +380,30 @@ class TilingEngine:
             Tile tensor [B, C, tile_size, tile_size]
         """
         ts = self.tile_size
+        ndim = input_tensor.dim()
         # Trailing two dims are H, W for both 4D NCHW and 5D NCDHW.
         height, width = input_tensor.shape[-2], input_tensor.shape[-1]
 
         y_end = min(y + ts, height)
         x_end = min(x + ts, width)
-        # Ellipsis slice: identical to [:, :, y:y_end, x:x_end] for 4D,
-        # and correctly carries the extra T axis for 5D video.
-        tile = input_tensor[..., y:y_end, x:x_end]
+        # Explicit per-rank slice tuple (NBXTensor-safe; equals
+        # [:, :, y:y_end, x:x_end] for 4D and carries the extra T axis for 5D).
+        sl = (slice(None),) * (ndim - 2) + (slice(y, y_end), slice(x, x_end))
+        tile = input_tensor[sl]
 
-        # Pad to full trace_size if at edge (pads the trailing H, W; a 4-tuple
-        # replicate pad applies to the last two dims for both 4D and 5D).
+        # Pad to full trace_size if at edge (pads the trailing H, W). Mode-
+        # polymorphic: NBXTensor → pad_wrapper (Triton-pure replicate),
+        # torch → F.pad.
         actual_h = y_end - y
         actual_w = x_end - x
         if actual_h < ts or actual_w < ts:
             pad_h = ts - actual_h
             pad_w = ts - actual_w
-            tile = torch.nn.functional.pad(tile, (0, pad_w, 0, pad_h), mode='replicate')
+            if _is_nbx_tensor(input_tensor):
+                from neurobrix.kernels.wrappers import pad_wrapper
+                tile = pad_wrapper(tile, [0, pad_w, 0, pad_h], mode='replicate')
+            else:
+                tile = torch.nn.functional.pad(tile, (0, pad_w, 0, pad_h), mode='replicate')
 
         return tile
 
