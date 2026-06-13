@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Triton-native execution strategies (zero-torch placement layer).** The
+  triton execution path can now run NBXTensor-native placement strategies
+  with no torch dependency, the first step toward a triton-only install
+  that carries no PyTorch. Strategy selection routes by execution mode;
+  ported strategies run torch-free, while not-yet-ported ones transparently
+  reuse the existing implementation. Behaviour is byte-identical (greedy
+  decode verified compiled == triton).
+
 ### Fixed
 
 - **Triton mode: cross-GPU tensor transfer in placement strategies.** The

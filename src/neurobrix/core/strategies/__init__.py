@@ -74,13 +74,27 @@ def get_strategy(strategy_name: str, context: StrategyContext) -> ExecutionStrat
     """
     Get strategy instance based on Prism's decision.
 
-    ZERO FALLBACK: Crash if unknown strategy
+    Mode dispatch (two-modes doctrine): on the triton path
+    (context.mode in {"triton", "triton_sequential"}) a NBXTensor-native
+    strategy from `triton/TRITON_REGISTRY` is used when the strategy has
+    been ported there; otherwise the PyTorch class is used (it already runs
+    on the triton path via the polymorphic transfer helper). The compiled
+    path always uses the PyTorch registry — byte-identical legacy behaviour.
+
+    ZERO FALLBACK: Crash if the strategy name is unknown to BOTH registries.
     """
     if strategy_name not in STRATEGY_REGISTRY:
         raise RuntimeError(
             f"ZERO FALLBACK: Unknown strategy '{strategy_name}'. "
             f"Available: {sorted(STRATEGY_REGISTRY.keys())}"
         )
+
+    mode = getattr(context, "mode", "compiled")
+    if mode in ("triton", "triton_sequential"):
+        from .triton import TRITON_REGISTRY
+        triton_class = TRITON_REGISTRY.get(strategy_name)
+        if triton_class is not None:
+            return triton_class(context, strategy_name)
 
     strategy_class = STRATEGY_REGISTRY[strategy_name]
     return strategy_class(context, strategy_name)

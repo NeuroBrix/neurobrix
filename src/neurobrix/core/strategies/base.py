@@ -48,6 +48,12 @@ class StrategyContext:
     # Note: "persistent" is an alias for "eager" for backward compatibility
     loading_mode: str = "lazy"
 
+    # Execution mode: "compiled" | "triton" | "triton_sequential". Drives
+    # get_strategy()'s pytorch-vs-triton dispatch so the triton branch can
+    # run NBXTensor-native strategies (zero torch) while compiled keeps the
+    # torch path. Default "compiled" = byte-identical legacy behaviour.
+    mode: str = "compiled"
+
     # Active component tracking (for lazy loading)
     _active_component: Optional[str] = None
 
