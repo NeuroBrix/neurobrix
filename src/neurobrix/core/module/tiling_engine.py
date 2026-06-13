@@ -147,13 +147,15 @@ class TilingEngine:
         for input_id in input_ids:
             tensor = tensors.get(str(input_id), {})
             shape = tensor.get("shape", [])
-            # Spatial input is [B, C, H, W] — get H
-            if len(shape) == 4:
-                trace_size = shape[2]
+            # Spatial input is [B, C, H, W] (4D) or [B, C, T, H, W] (5D video).
+            # H is the second-to-last axis in both layouts — tiling is over the
+            # trailing (H, W) pair, the temporal axis carried through.
+            if len(shape) in (4, 5):
+                trace_size = shape[-2]
                 break
 
         if trace_size is None:
-            # No 4D spatial input — tiling not applicable
+            # No 4D/5D spatial input — tiling not applicable
             return None
 
         # --- Step 2: Read scale factor and window config from profile ---
@@ -209,15 +211,20 @@ class TilingEngine:
         tiles that eliminate grid artifacts via accumulate-and-divide blending.
 
         Args:
-            input_tensor: Input tensor [B, C, H, W]
+            input_tensor: Input tensor [B, C, H, W] (4D) or [B, C, T, H, W]
+                (5D video — spatial tiling over the trailing H, W; the temporal
+                axis T is carried through each tile unchanged, the only safe
+                option for a causal 3D VAE where frames have cross-dependencies).
 
         Returns:
-            True if input is larger than tile size on either axis
+            True if input is larger than tile size on either spatial axis
         """
-        if input_tensor.dim() != 4:
+        if input_tensor.dim() not in (4, 5):
             return False
 
-        _, _, height, width = input_tensor.shape
+        # Spatial axes are always the trailing two (H, W) for both 4D NCHW
+        # and 5D NCDHW. Tiling is dimension-agnostic on the trailing pair.
+        height, width = input_tensor.shape[-2], input_tensor.shape[-1]
         return height > self.tile_size or width > self.tile_size
 
     def tiled_execute(
@@ -242,41 +249,52 @@ class TilingEngine:
         Returns:
             Blended output tensor [B, C_out, H*scale, W*scale]
         """
-        batch_size, _, height, width = input_tensor.shape
+        # Trailing two dims are H, W (4D NCHW or 5D NCDHW). Leading dims
+        # (B, C[, T]) are carried through each tile unchanged.
+        height, width = input_tensor.shape[-2], input_tensor.shape[-1]
         sf = self.scale_factor
         ts = self.tile_size
 
         # Compute tile positions
         h_positions, w_positions = self._compute_tile_positions(height, width)
 
-        # Execute first tile to determine output channels
+        # Execute first tile to determine the output's leading dims: C_out
+        # for 4D, (C_out, T_out) for 5D video — the graph produces the full
+        # temporal extent per spatial tile (a spatial tile is a full causal
+        # decode at reduced H, W).
         first_h, first_w = h_positions[0], w_positions[0]
         first_tile = self._extract_tile(input_tensor, first_h, first_w)
         first_result = execute_fn(first_tile)
-        out_channels = first_result.shape[1]
 
-        # Output accumulators
+        # Output accumulators. lead_dims = first_result minus its trailing
+        # (h, w); spatial replaced by the full output (out_h, out_w). Weight
+        # carries C=1 so it broadcasts across the channel (and temporal) axes.
         out_h = height * sf
         out_w = width * sf
+        lead_dims = list(first_result.shape[:-2])          # [B, C_out] | [B, C_out, T_out]
         output = torch.zeros(
-            batch_size, out_channels, out_h, out_w,
+            *lead_dims, out_h, out_w,
             device=input_tensor.device, dtype=first_result.dtype,
         )
         weight = torch.zeros(
-            batch_size, 1, out_h, out_w,
+            lead_dims[0], 1, *lead_dims[2:], out_h, out_w,
             device=input_tensor.device, dtype=first_result.dtype,
         )
 
-        # Accumulate first tile
         rh = ts * sf
         rw = ts * sf
-        oh = first_h * sf
-        ow = first_w * sf
-        # Clamp output region to actual output size
-        actual_rh = min(rh, out_h - oh)
-        actual_rw = min(rw, out_w - ow)
-        output[:, :, oh:oh + actual_rh, ow:ow + actual_rw] += first_result[:, :, :actual_rh, :actual_rw]
-        weight[:, :, oh:oh + actual_rh, ow:ow + actual_rw] += 1
+
+        def _accumulate(res: torch.Tensor, ty: int, tx: int) -> None:
+            # Ellipsis slice == [:, :, oy:.., ox:..] for 4D and carries the
+            # extra T axis for 5D. Clamp to the actual output extent at edges.
+            oy = ty * sf
+            ox = tx * sf
+            arh = min(rh, out_h - oy)
+            arw = min(rw, out_w - ox)
+            output[..., oy:oy + arh, ox:ox + arw] += res[..., :arh, :arw]
+            weight[..., oy:oy + arh, ox:ox + arw] += 1
+
+        _accumulate(first_result, first_h, first_w)
 
         # Process remaining tiles
         tile_count = 1
@@ -284,16 +302,9 @@ class TilingEngine:
             for x in w_positions:
                 if y == first_h and x == first_w:
                     continue  # Already processed
-
                 tile = self._extract_tile(input_tensor, y, x)
                 result = execute_fn(tile)
-
-                oy = y * sf
-                ox = x * sf
-                actual_rh = min(rh, out_h - oy)
-                actual_rw = min(rw, out_w - ox)
-                output[:, :, oy:oy + actual_rh, ox:ox + actual_rw] += result[:, :, :actual_rh, :actual_rw]
-                weight[:, :, oy:oy + actual_rh, ox:ox + actual_rw] += 1
+                _accumulate(result, y, x)
                 tile_count += 1
 
         logger.debug(f"[TilingEngine] Processed {tile_count} tiles, output shape {output.shape}")
@@ -349,13 +360,17 @@ class TilingEngine:
             Tile tensor [B, C, tile_size, tile_size]
         """
         ts = self.tile_size
-        _, _, height, width = input_tensor.shape
+        # Trailing two dims are H, W for both 4D NCHW and 5D NCDHW.
+        height, width = input_tensor.shape[-2], input_tensor.shape[-1]
 
         y_end = min(y + ts, height)
         x_end = min(x + ts, width)
-        tile = input_tensor[:, :, y:y_end, x:x_end]
+        # Ellipsis slice: identical to [:, :, y:y_end, x:x_end] for 4D,
+        # and correctly carries the extra T axis for 5D video.
+        tile = input_tensor[..., y:y_end, x:x_end]
 
-        # Pad to full trace_size if at edge
+        # Pad to full trace_size if at edge (pads the trailing H, W; a 4-tuple
+        # replicate pad applies to the last two dims for both 4D and 5D).
         actual_h = y_end - y
         actual_w = x_end - x
         if actual_h < ts or actual_w < ts:
