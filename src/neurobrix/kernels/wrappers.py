@@ -6084,11 +6084,15 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
         # overrides the Volta value (diagnostic / per-arch tuning).
         if not _NBX_HAS_NATIVE_BF16:
             # Measured on V100 (sm_70), seq=8192 hd=64: BLOCK_M 128 -> 9.2 s,
-            # 64 -> 6.1 s, 32 -> 0.42 s. The 128-row Q tile spills registers
-            # to local memory (DRAM) and serialises ~22x; 32 fits in registers.
-            # Numerically sound (max|diff| 0.035, mean 5e-4 vs torch SDPA;
-            # the flash online-softmax is already non-deterministic on Volta).
-            BLOCK_M = int(os.environ.get("NBX_FLASH_BLOCK_M_VOLTA", "32"))
+            # 64 -> 6.1 s, 32 -> 0.42 s. The 128-row Q tile spills registers to
+            # local memory (DRAM); 64 cuts that ~1.5x and stays NUMERICALLY
+            # CORRECT (CogVideoX-2b/5b triton produce a coherent fox). 32 is
+            # ~14x faster but WRONG — it diverges (max|diff| 0.035 vs torch
+            # SDPA, vs 0.0002 at 64/128) and the error compounds across the
+            # diffusion loop into pure noise. So 64 is the floor of
+            # correctness on Volta. NBX_FLASH_BLOCK_M_VOLTA overrides (do not
+            # set below 64 for accuracy-sensitive / iterative models).
+            BLOCK_M = int(os.environ.get("NBX_FLASH_BLOCK_M_VOLTA", "64"))
         else:
             BLOCK_M = 128
         BLOCK_N = 64

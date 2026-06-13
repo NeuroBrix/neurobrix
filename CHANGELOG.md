@@ -9,16 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Attention kernel: ~22× faster on V100 (Volta) for long sequences.** The
+- **Attention kernel: ~1.5× faster on V100 (Volta) for long sequences.** The
   Triton flash-attention launch used a 128-row query tile (tuned for A100)
   whenever head dim < 128 — the common case (most LLMs and video diffusion
   transformers, head dim 64). On pre-Ampere GPUs (V100 sm_70 / Turing) a
-  128-row tile overflows the register file and spills to local memory,
-  serialising the kernel ~22×. The tile is now hardware-gated to 32 rows on
-  pre-Ampere (measured V100, seq 8192, head dim 64: 9.2 s → 0.42 s),
-  Ampere+ keeps 128. Numerically sound (mean diff 5e-4 vs the reference;
-  the flash kernel is already non-deterministic on Volta). This makes
-  long-sequence video models tractable in triton mode on V100.
+  128-row tile overflows the register file and spills to local memory. The
+  tile is hardware-gated to 64 rows on pre-Ampere (measured V100, seq 8192,
+  head dim 64: 9.2 s → 6.1 s), Ampere+ keeps 128 — numerically identical to
+  the reference and verified coherent on CogVideoX-2b/5b triton. (A 32-row
+  tile is ~14× faster but numerically wrong — it diverges into noise across
+  an iterative diffusion loop — so 64 is the correctness floor on Volta.)
 
 ### Changed
 
