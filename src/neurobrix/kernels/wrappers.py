@@ -6075,7 +6075,22 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
         BLOCK_M = 64
         BLOCK_N = 64
     else:
-        BLOCK_M = 128
+        # head_dim < 128 (the common case: hd=64 LLMs, hd=64 video DiTs).
+        # BLOCK_M=128 is the Dao A100 default; on pre-Ampere (Volta sm_70 /
+        # Turing sm_75: 96 KB SMEM, fewer registers) a 128-row Q tile spills
+        # registers and serialises — arch-gate to a smaller tile. Data-driven
+        # via the hardware capability flag (same single source of truth as
+        # the dtype-protection path); Ampere+ keeps 128. NBX_FLASH_BLOCK_M_VOLTA
+        # overrides the Volta value (diagnostic / per-arch tuning).
+        if not _NBX_HAS_NATIVE_BF16:
+            # Measured on V100 (sm_70), seq=8192 hd=64: BLOCK_M 128 -> 9.2 s,
+            # 64 -> 6.1 s, 32 -> 0.42 s. The 128-row Q tile spills registers
+            # to local memory (DRAM) and serialises ~22x; 32 fits in registers.
+            # Numerically sound (max|diff| 0.035, mean 5e-4 vs torch SDPA;
+            # the flash online-softmax is already non-deterministic on Volta).
+            BLOCK_M = int(os.environ.get("NBX_FLASH_BLOCK_M_VOLTA", "32"))
+        else:
+            BLOCK_M = 128
         BLOCK_N = 64
 
     # Output allocation. seqlen_q_rounded must align with actual BLOCK_M.
