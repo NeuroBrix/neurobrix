@@ -845,6 +845,7 @@ class RuntimeExecutor:
             topology=self.pkg.topology,
             runtime_package=self.pkg,
             loading_mode=loading_mode,
+            mode=self.mode,
         )
 
         self.strategy = get_strategy(self._strategy_name, context)
