@@ -285,7 +285,16 @@ class ExecutionStrategy(ABC):
         """
         result = {}
         for key, value in tensors.items():
-            if isinstance(value, torch.Tensor):
+            # torch.Tensor OR NBXTensor (duck-typed: exposes to_cuda + _device).
+            # transfer_tensor is already polymorphic over both; transfer_dict
+            # previously matched only torch.Tensor, so in triton mode every
+            # NBXTensor fell through to the pass-through branch and was NEVER
+            # moved across devices — silently breaking component_placement /
+            # pipeline_parallel multi-GPU on the triton path. For single-GPU
+            # (target == current device) transfer_tensor is a no-op
+            # (NBXTensor.to_cuda returns self), so this is regression-free.
+            if isinstance(value, torch.Tensor) or (
+                    hasattr(value, 'to_cuda') and hasattr(value, '_device')):
                 result[key] = self.transfer_tensor(value, target_device, async_transfer)
             elif isinstance(value, dict):
                 result[key] = self.transfer_dict(value, target_device, async_transfer)
