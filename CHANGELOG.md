@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Prism memory estimate: per-component dtype.** The placement estimator
+  sized every component at the model-wide dtype, which collapsed to
+  float32 as soon as any single component required fp32 (e.g. a VAE-class
+  component on V100). Every fp16 component was then over-counted 2× — a
+  5B video transformer estimated at 21 GB against 11 GB real — which could
+  push a component that comfortably fits onto a slower placement. The
+  estimator now sizes each component at the dtype it actually runs, matching
+  execution. Mixed-dtype models (fp32 VAE + fp16 transformer) get accurate
+  per-component budgets; single-dtype models are unaffected.
+
 ### Added
 
 - **Diagnostics: failing-op context and raw tensor capture.** Op
