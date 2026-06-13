@@ -13,10 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   triton execution path can now run NBXTensor-native placement strategies
   with no torch dependency, the first step toward a triton-only install
   that carries no PyTorch. Strategy selection routes by execution mode;
-  ported strategies run torch-free, while not-yet-ported ones transparently
-  reuse the existing implementation. Behaviour is byte-identical (greedy
-  decode verified compiled == triton). Ported so far: single-GPU and
-  multi-GPU component placement (whole-component distribution across GPUs).
+  ported strategies run torch-free. ALL placement strategies are now ported
+  (single-GPU, component placement + lazy, pipeline parallel, block scatter,
+  weight sharding, lazy sequential, zero3 CPU-offload, CPU execution), so any
+  model routed through the triton branch gets a zero-torch placement strategy.
+  Behaviour is byte-identical (greedy decode verified compiled == triton).
 
 ### Fixed
 
