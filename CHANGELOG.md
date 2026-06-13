@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Spatial tiling: 5D video support.** The universal spatial tiling engine
+  now handles 5D video tensors `[B, C, T, H, W]` (tiling over the trailing
+  H, W while carrying the temporal axis T through each tile — the only safe
+  split for a causal 3D VAE) in addition to 4D images. This is the
+  foundation for tiling large video-VAE activations that exceed VRAM on
+  GPU instead of offloading the component to host RAM. The 4D
+  image/upscaler path is byte-identical (verified by exact tile-and-blend
+  reconstruction).
+
 - **Triton-native execution strategies (zero-torch placement layer).** The
   triton execution path can now run NBXTensor-native placement strategies
   with no torch dependency, the first step toward a triton-only install
