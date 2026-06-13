@@ -10,12 +10,24 @@ transfer helper) — so migration is incremental and regression-free.
 
 from .base import TritonStrategy
 from .single_gpu import SingleGPUStrategy
+from .component_placement import (
+    ComponentPlacementStrategy,
+    ComponentPlacementLazyStrategy,
+)
 
 # Triton-native strategies, keyed by the same Prism strategy names as the
 # PyTorch registry. Add entries here as each strategy is ported.
 TRITON_REGISTRY = {
     "single_gpu": SingleGPUStrategy,
     "single_gpu_lifecycle": SingleGPUStrategy,
+    "component_placement": ComponentPlacementStrategy,
+    "component_placement_lazy": ComponentPlacementLazyStrategy,
 }
 
-__all__ = ["TritonStrategy", "SingleGPUStrategy", "TRITON_REGISTRY"]
+__all__ = [
+    "TritonStrategy",
+    "SingleGPUStrategy",
+    "ComponentPlacementStrategy",
+    "ComponentPlacementLazyStrategy",
+    "TRITON_REGISTRY",
+]
