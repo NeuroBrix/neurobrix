@@ -21,6 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Spatial tiling: triton (NBXTensor) path.** The tiling engine now
+  accumulates in NBXTensor when fed NBXTensor inputs, so the triton engine
+  can tile spatial components on GPU with zero torch — not just the compiled
+  engine. Verified by exact tile-and-blend reconstruction on both 4D and 5D
+  NBXTensor inputs.
+
 - **Spatial tiling: 5D video support.** The universal spatial tiling engine
   now handles 5D video tensors `[B, C, T, H, W]` (tiling over the trailing
   H, W while carrying the temporal axis T through each tile — the only safe
