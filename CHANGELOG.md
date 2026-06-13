@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Large video VAEs decode on GPU via spatial tiling instead of host
+  offload.** When a spatial component (e.g. a video VAE) would not fit a GPU
+  with its full activation — the CogVideoX-5b VAE peaks at ~82 GB decoding
+  49 frames at 480×720 — the placement engine previously moved it to host
+  RAM (very slow). It now keeps the component on GPU and runs its decode on
+  overlapping spatial tiles sized to fit VRAM, reusing the universal tiling
+  engine. Verified: the tiled-on-GPU decode produces output visually
+  identical to the host path (coherent video, no seam artifacts). Models
+  that already fit, and non-spatial components, are unaffected.
+
 ### Added
 
 - **Spatial tiling: 5D video support.** The universal spatial tiling engine
