@@ -496,15 +496,28 @@ class PrismSolver:
 
         self._needs_kv_cache = self._model_category in ("llm", "image_vq")
 
-        # Step 1: Resolve target dtype
+        # Step 1: Resolve target dtype (model-level — used for KV-cache sizing
+        # and the genuine all-fp32 fallback below).
         target_dtype = self._resolve_dtype(container, profile)
         target_dtype_str = str(target_dtype).split('.')[-1]
         self._target_dtype_str = target_dtype_str
 
+        # Step 1.5: Resolve PER-COMPONENT dtype for the memory estimate.
+        # `_resolve_dtype` collapses the WHOLE model to float32 as soon as a
+        # single component is fp32-forced (e.g. a VAE-class component on
+        # V100). Estimating every component at that model-wide float32
+        # over-counts each fp16 component 2x (CogVideoX-5b transformer:
+        # 21 GB estimated vs 11 GB real fp16) and can wrongly offload a
+        # component that fits. Estimate each component at the dtype it
+        # ACTUALLY runs — the same per-component map the executor uses
+        # downstream (`_resolve_component_dtypes`, Step 5).
+        component_dtypes = self._resolve_component_dtypes(
+            neural_components, profile, container)
+
         # Step 2: Compute memory requirements (tiling-aware via profile)
         component_memory = self._compute_memory(
             container, neural_components, input_config, target_dtype_str,
-            profile=profile,
+            profile=profile, component_dtypes=component_dtypes,
         )
         sorted_components = sorted(component_memory.items(), key=lambda x: -x[1].total_bytes)
 
@@ -1309,6 +1322,7 @@ class PrismSolver:
         self, container: "NBXContainer", components: List["ComponentData"],
         input_config: InputConfig, target_dtype_str: str,
         profile: Optional["PrismProfile"] = None,
+        component_dtypes: Optional[Dict[str, str]] = None,
     ) -> Dict[str, ComponentMemory]:
         """Compute Total = Weights + Activations + Overhead with full intelligence.
 
@@ -1361,7 +1375,12 @@ class PrismSolver:
 
         for comp in components:
             source_dtype = comp.get_dominant_dtype()
-            dtype_mult = compute_dtype_factor(source_dtype, target_dtype_str)
+            # Per-component runtime dtype (the dtype this component ACTUALLY
+            # runs at), not the model-wide worst-case. Falls back to the
+            # model-level dtype for legacy callers / the fp32 fallback path.
+            comp_dtype_str = (component_dtypes or {}).get(
+                comp.name, target_dtype_str)
+            dtype_mult = compute_dtype_factor(source_dtype, comp_dtype_str)
 
             # Weight memory
             weight_bytes = sum(int(s * dtype_mult) for s in shard_sizes.get(comp.name, {}).values())
@@ -1377,7 +1396,7 @@ class PrismSolver:
             if comp.graph is not None:
                 try:
                     profiler = ActivationProfiler(comp.graph)
-                    dtype_bytes = get_dtype_bytes_per_element(target_dtype_str)
+                    dtype_bytes = get_dtype_bytes_per_element(comp_dtype_str)
                     # Tiling-aware budget: smallest GPU in the profile.
                     # When profile is None (legacy callers), this stays 0
                     # and the two-pass logic short-circuits to worst-case.
