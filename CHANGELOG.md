@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Triton mode: cross-GPU tensor transfer in placement strategies.** The
+  strategy transfer helper moved only PyTorch tensors between devices;
+  NBXTensor activations (triton mode) fell through untransferred, so the
+  multi-GPU placement strategies (component placement, pipeline parallel)
+  could not actually move data across GPUs in triton mode. NBXTensors are
+  now transferred via the same polymorphic path the per-tensor helper
+  already used. Single-GPU placements are byte-identical (transfer is a
+  no-op when the tensor is already on the target device; greedy
+  compiled==triton verified).
+
 - **Prism memory estimate: per-component dtype.** The placement estimator
   sized every component at the model-wide dtype, which collapsed to
   float32 as soon as any single component required fp32 (e.g. a VAE-class
