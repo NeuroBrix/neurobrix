@@ -66,6 +66,18 @@ def _to_nbx(tensor, device_idx: int = 0) -> NBXTensor:
     if isinstance(tensor, NBXTensor):
         return tensor
     if hasattr(tensor, 'data_ptr'):
+        # Contiguous-guard at the torch->NBXTensor boundary. The CUDA path
+        # (from_raw) wraps the data_ptr with CONTIGUOUS strides derived from
+        # shape alone, and the CPU path reads the buffer flat — both ignore a
+        # non-contiguous torch input's real strides. A non-contiguous input
+        # (e.g. run.py's --input-image `.permute(2,0,1)` channels-last view fed
+        # as global.image to an I2V vae_encoder) would then be read as if NCHW-
+        # contiguous, interleaving the RGB channels -> the VAE encoder encodes
+        # garbage -> wrong I2V conditioning (blue-cast). Materialise first.
+        # Zero-cost for already-contiguous tensors; triton-only (compiled
+        # unaffected). Mirror of the CLAUDE.md contiguous-guard pattern.
+        if hasattr(tensor, 'is_contiguous') and not tensor.is_contiguous():
+            tensor = tensor.contiguous()
         if hasattr(tensor, 'is_cuda') and not tensor.is_cuda:
             # CPU → CUDA via numpy path (zero torch)
             DeviceAllocator.set_device(device_idx)
