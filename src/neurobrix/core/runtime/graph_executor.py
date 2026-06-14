@@ -1029,7 +1029,19 @@ class GraphExecutor:
         from neurobrix.kernels.nbx_tensor import parse_dtype, DeviceAllocator
         from neurobrix.kernels import wrappers as _w
 
-        device_idx = int(self.device.split(':')[1]) if ':' in str(self.device) else 0
+        if ':' in str(self.device):
+            device_idx = int(self.device.split(':')[1])
+        else:
+            # CPU-staged lazy component (plan device carries no GPU index):
+            # NBX kernels are GPU-only, so pick the device with the most
+            # free VRAM at load time — the loop GPU just unloaded. A fixed
+            # default of 0 sent the CogVideoX-5b f49 VAE decode (~19 GB
+            # working set) to a 16 GB card while two 32 GB cards sat idle.
+            # Persist the choice so constants and downstream loads follow.
+            device_idx = DeviceAllocator.most_free_device()
+            self.device = f"cuda:{device_idx}"
+            print(f"   [Triton] CPU-staged '{component}' -> cuda:{device_idx} "
+                  f"(most free VRAM)", flush=True)
         compute_dtype = parse_dtype(self.dtype)
 
         DeviceAllocator.set_device(device_idx)
@@ -1568,6 +1580,19 @@ class GraphExecutor:
                         or str(value.device) == "cpu":
                     value = value.to(f"cuda:{device_idx}")
                 didx = value.device.index if isinstance(getattr(value.device, 'index', None), int) else device_idx
+                # Contiguous-guard at the torch->NBXTensor input boundary.
+                # from_raw wraps the data_ptr with CONTIGUOUS strides derived
+                # from shape alone, ignoring value's real strides. A non-
+                # contiguous torch input — e.g. run.py's --input-image
+                # `.permute(2,0,1)` channels-last view fed as global.image to an
+                # I2V vae_encoder — would then be read as if NCHW-contiguous,
+                # interleaving the RGB channels (period-3 garbage). The VAE
+                # encoder then encodes noise -> wrong I2V conditioning ->
+                # blue-cast video. `.to(cuda)` above preserves non-contiguity, so
+                # materialise here. No-op if already contiguous; shared by triton
+                # AND triton_sequential (both reach _run_triton_* below).
+                if hasattr(value, 'is_contiguous') and not value.is_contiguous():
+                    value = value.contiguous()
                 input_map[tid] = NBXTensor.from_raw(
                     value.data_ptr(), tuple(value.shape),
                     parse_dtype(str(value.dtype)), 'cuda',
