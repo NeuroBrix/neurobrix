@@ -325,6 +325,37 @@ def cmd_run(args):
         _arr = _np.asarray(_img, dtype="float32") / 127.5 - 1.0
         inputs["global.image"] = (_torch.from_numpy(_arr)
                                   .permute(2, 0, 1).unsqueeze(0).unsqueeze(2))
+        # CLIP pixel_values for a separate vision image_encoder (Wan-I2V, etc.):
+        # a CLIP-preprocessed view of the SAME input image, distinct from the
+        # VAE-conditioning global.image above. Data-driven from the embedded
+        # modules/image_processor/preprocessor_config.json (resize shortest side
+        # to `size`, center-crop `crop_size`, scale to [0,1], normalize by CLIP
+        # mean/std). Boundary I/O per R34. .contiguous() before the NBXTensor
+        # boundary (channels-last permute view).
+        _proc_cfg = cache_path / "modules" / "image_processor" / "preprocessor_config.json"
+        if _proc_cfg.exists():
+            _pc = json.loads(_proc_cfg.read_text())
+            def _dim(d, k, default):
+                v = d.get(k)
+                if isinstance(v, dict):
+                    return int(v.get("height", v.get("shortest_edge", default)))
+                return int(v) if v is not None else default
+            _rs = _dim(_pc, "size", 224)
+            _cs = _dim(_pc, "crop_size", _rs)
+            _mean = _np.asarray(_pc.get("image_mean", [0.48145466, 0.4578275, 0.40821073]), dtype="float32")
+            _std = _np.asarray(_pc.get("image_std", [0.26862954, 0.26130258, 0.27577711]), dtype="float32")
+            _ci = _PILImage.open(args.input_image).convert("RGB")
+            if _pc.get("do_resize", True):
+                _scale = _rs / min(_ci.width, _ci.height)
+                _ci = _ci.resize((max(1, round(_ci.width * _scale)), max(1, round(_ci.height * _scale))), _PILImage.BICUBIC)
+            _l = (_ci.width - _cs) // 2
+            _t = (_ci.height - _cs) // 2
+            _ci = _ci.crop((_l, _t, _l + _cs, _t + _cs))
+            _ca = _np.asarray(_ci, dtype="float32") / 255.0
+            if _pc.get("do_normalize", True):
+                _ca = (_ca - _mean) / _std
+            inputs["global.pixel_values"] = (_torch.from_numpy(_ca)
+                                             .permute(2, 0, 1).unsqueeze(0).contiguous())
     if args.cfg is not None:
         inputs["global.guidance_scale"] = args.cfg
     if args.temperature is not None:
