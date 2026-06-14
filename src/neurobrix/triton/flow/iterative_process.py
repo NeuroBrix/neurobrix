@@ -497,6 +497,50 @@ class TritonIterativeProcessHandler:
                     # Extract primary output
                     model_output = self._extract_primary_output(comp_name, output)
 
+                    # DiT step-0 capture (NBX_DUMP_DIT): raw velocity + the
+                    # connection-fed transformer inputs (I2V image_latents arrives
+                    # via a connection only). R30 mirror of core/flow/
+                    # iterative_process.py, saved as numpy .npz — R33 forbids
+                    # torch.save on the triton path. Run with --cfg 1.0 for the
+                    # un-guided single forward (batch 1).
+                    import os as _os_dit
+                    _dd = _os_dit.environ.get("NBX_DUMP_DIT")
+                    if _dd and step_idx == 0 and self._is_loop_component(comp_name):
+                        import numpy as _np_dit
+
+                        def _np_of(_t):
+                            try:
+                                return _t.float().numpy() if hasattr(_t, "numpy") else None
+                            except Exception:
+                                return None
+
+                        _cap = {}
+                        _mo = _np_of(model_output)
+                        if _mo is not None:
+                            _cap["velocity"] = _mo
+                        _ci = self.ctx.pkg.topology.get("components", {}).get(comp_name, {})
+                        _conns = self.ctx.pkg.topology.get("connections", [])
+                        _res = self.ctx.variable_resolver.resolved
+                        _in_names = list(_ci.get("interface", {}).get("inputs", []))
+                        for _c in _conns:
+                            _to = str(_c.get("to", ""))
+                            if _to.startswith(f"{comp_name}."):
+                                _nm = _to.split(".", 1)[1]
+                                if _nm not in _in_names:
+                                    _in_names.append(_nm)
+                        for _in in _in_names:
+                            _cands = [f"{comp_name}.{_in}", f"global.{_in}"]
+                            for _c in _conns:
+                                if _c.get("to") == f"{comp_name}.{_in}":
+                                    _cands.append(_c.get("from"))
+                            for _k in _cands:
+                                _arr = _np_of(_res.get(_k))
+                                if _arr is not None:
+                                    _cap[_in] = _arr
+                                    break
+                        _np_dit.savez(_dd if _dd.endswith(".npz") else _dd + ".npz", **_cap)
+                        print(f"[DIT-DUMP-TRITON] keys={list(_cap.keys())} -> {_dd}")
+
                     # Handle variance prediction split. Channels are axis 1 for
                     # both 4D image [B,C,H,W] and 5D video [B,C,T,H,W]; only the
                     # 3D packed (Flux) layout carries channels on axis 2. Branch
