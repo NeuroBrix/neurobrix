@@ -6144,6 +6144,18 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
 
     grid = (triton.cdiv(seqlen_q, BLOCK_M), batch * nheads)
 
+    # Launch meta (num_warps / num_stages). Triton auto-selects when not
+    # given; on Volta the auto-pick for a small Q tile under-parallelises the
+    # softmax reduction (the BLOCK_M=32 wrongness probe). NBX_FLASH_NUM_WARPS
+    # / NBX_FLASH_NUM_STAGES let us pin them for diagnosis / per-arch tuning.
+    _flash_launch_meta = {}
+    _fnw = os.environ.get("NBX_FLASH_NUM_WARPS")
+    if _fnw:
+        _flash_launch_meta["num_warps"] = int(_fnw)
+    _fns = os.environ.get("NBX_FLASH_NUM_STAGES")
+    if _fns:
+        _flash_launch_meta["num_stages"] = int(_fns)
+
     # Ensure CUDA runtime is on the correct device before kernel launch
     _set_device(q)
 
@@ -6163,6 +6175,7 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
         BLOCK_M=BLOCK_M,
         BLOCK_N=BLOCK_N,
         GQA_GROUPS=gqa_groups,
+        **_flash_launch_meta,
     )
     return o
 
