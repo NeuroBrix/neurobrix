@@ -24,18 +24,32 @@ class SchedulerConfig:
     - Only truly optional features can have defaults
     """
 
-    # Keys that MUST be in NBX config - no defaults allowed
+    # Keys that MUST be in NBX config for EVERY diffusion scheduler.
     REQUIRED_KEYS: Set[str] = {
         "num_train_timesteps",
         "beta_start",
         "beta_end",
         "beta_schedule",
         "prediction_type",
+        "timestep_spacing",
+    }
+
+    # Multistep-solver-only required keys. solver_type / solver_order /
+    # lower_order_final parameterise the multistep predictor-corrector solvers
+    # (DPM-Solver(++), UniPC, DEIS). Single-step schedulers — Euler,
+    # EulerAncestral, DDIM, DDPM, PNDM, Heun, LMS, FlowMatchEuler — legitimately
+    # omit them (their diffusers config never carries these keys), so requiring
+    # them globally wrongly rejected e.g. Allegro's EulerAncestralDiscrete-
+    # Scheduler. Required only when the scheduler is a multistep solver.
+    SOLVER_REQUIRED_KEYS: Set[str] = {
         "solver_type",
         "solver_order",
-        "timestep_spacing",
         "lower_order_final",
     }
+
+    # Scheduler types (by class name) that consume the multistep solver keys.
+    # Substring-matched so version/variant suffixes still resolve.
+    MULTISTEP_SOLVER_MARKERS = ("DPMSolver", "UniPC", "DEIS")
 
     # Keys that can have SAFE defaults (only features that can be disabled)
     # These defaults DISABLE functionality, they don't change core behavior
@@ -89,8 +103,13 @@ class SchedulerConfig:
             if not k.startswith("_")  # Remove _class_name, _diffusers_version, etc.
         }
 
-        # 2. Check required keys
-        missing = cls.REQUIRED_KEYS - set(clean_config.keys())
+        # 2. Check required keys — CORE for every scheduler, plus the multistep
+        #    solver keys only when the scheduler is a multistep solver (DPM/UniPC/
+        #    DEIS). Single-step schedulers (Euler/DDIM/Flow/...) never carry them.
+        required = set(cls.REQUIRED_KEYS)
+        if any(marker in scheduler_type for marker in cls.MULTISTEP_SOLVER_MARKERS):
+            required |= cls.SOLVER_REQUIRED_KEYS
+        missing = required - set(clean_config.keys())
         if missing:
             available = sorted(clean_config.keys())
             raise SchedulerConfigError(
