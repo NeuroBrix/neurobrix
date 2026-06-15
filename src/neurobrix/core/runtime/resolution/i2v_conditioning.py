@@ -54,9 +54,15 @@ def _vae_latent_stats(ctx: Any) -> tuple:
     """
     prof_path = ctx.pkg.cache_path / "components" / "vae" / "profile.json"
     prof = json.loads(prof_path.read_text())
-    mean = prof.get("latents_mean")
-    std = prof.get("latents_std")
-    ch = prof.get("latent_channels") or (len(mean) if mean else 16)
+    # profile.json nests the vendor config under "config"; fall back to
+    # top-level for older layouts. (Reading top-level only silently returned
+    # None -> normalization skipped -> the unnormalized condition poisoned the
+    # denoiser into a uniform/checkerboard output.)
+    cfg = prof.get("config") if isinstance(prof.get("config"), dict) else prof
+    mean = cfg.get("latents_mean") or prof.get("latents_mean")
+    std = cfg.get("latents_std") or prof.get("latents_std")
+    ch = (cfg.get("latent_channels") or prof.get("latent_channels")
+          or (len(mean) if mean else 16))
     return mean, std, int(ch)
 
 
@@ -92,6 +98,14 @@ def build_condition(ctx: Any, spec: dict, num_frames: int) -> Optional[torch.Ten
     latent = _to_channels_first(latent, latent_channels)  # [B, C, T, H, W]
     device, dtype = latent.device, latent.dtype
 
+    import os as _os
+    _diag = _os.environ.get("NBX_DIAG_I2V") == "1"
+    if _diag:
+        _lf = latent.float()
+        print(f"   [NBX-DIAG-I2V] RAW vae_latent shape={list(latent.shape)} "
+              f"mean={_lf.mean():.3f} std={_lf.std():.3f} "
+              f"min={_lf.min():.3f} max={_lf.max():.3f}")
+
     # Normalize exactly as the vendor pipeline: (x - mean) * (1/std).
     if mean is not None and std is not None:
         mean_t = torch.tensor(mean, device=device, dtype=dtype).view(1, -1, 1, 1, 1)
@@ -102,11 +116,12 @@ def build_condition(ctx: Any, spec: dict, num_frames: int) -> Optional[torch.Ten
     mask = _build_frame_mask(num_frames, latent_t, lh, lw,
                              spec["mask_channels"], device, dtype)
     condition = torch.cat([mask, latent], dim=1)  # [B, mask_ch + C, T, H, W]
-    import os as _os
-    if _os.environ.get("NBX_DIAG_I2V") == "1":
-        print(f"   [NBX-DIAG-I2V] vae_latent(ch-first)={list(latent.shape)} "
-              f"mask={list(mask.shape)} condition={list(condition.shape)} "
-              f"num_frames={num_frames}")
+    if _diag:
+        _nf = latent.float()
+        print(f"   [NBX-DIAG-I2V] NORMALIZED latent mean={_nf.mean():.3f} "
+              f"std={_nf.std():.3f} min={_nf.min():.3f} max={_nf.max():.3f} | "
+              f"condition shape={list(condition.shape)} num_frames={num_frames} | "
+              f"latents_mean[0:3]={mean[:3] if mean else None} latents_std[0:3]={std[:3] if std else None}")
     return condition
 
 

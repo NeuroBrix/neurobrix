@@ -474,6 +474,12 @@ class IterativeProcessHandler(FlowHandler):
                                 if isinstance(_v, torch.Tensor):
                                     _cap[_in] = _v.detach().cpu()
                                     break
+                        # I2V latent-concat condition (20ch) so the exact 36ch
+                        # transformer input can be reconstructed offline for the
+                        # vendor bit-equal microtest: 36ch = cat([state16, cond20]).
+                        _cond = _res.get("global.i2v_condition")
+                        if isinstance(_cond, torch.Tensor):
+                            _cap["i2v_condition"] = _cond.detach().cpu()
                         torch.save(_cap, _dd)
                         print(f"[DIT-DUMP] keys={list(_cap.keys())} "
                               f"velocity std={model_output.float().std().item():.4f} -> {_dd}")
