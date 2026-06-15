@@ -515,6 +515,32 @@ class TensorResolver:
                                             and inferred != resolved_list[i]):
                                         chosen = i
                                         break
+                                # 1b. Unflatten with a PRESERVED trailing dim: the
+                                #    input was flattened by a prior view (e.g.
+                                #    [B*tokens, dim] feeding an addmm), so the batch
+                                #    that changed is folded into the input's leading
+                                #    axis and is NOT visible as a distinct input dim
+                                #    (rule 1 cannot see it). But the target's last dim
+                                #    still equals the input's last dim — features were
+                                #    not touched — so the changed axis must be a
+                                #    LEADING one, never the preserved last dim. Legacy
+                                #    last-dim inference would fold the batch into
+                                #    features here ([1,18720,5120] -> [1,18720,10240]
+                                #    under CFG 1->2, crashing norm_q). Prefer the
+                                #    earliest candidate (the batch) whose inferred
+                                #    value differs from its frozen target dim. Guarded
+                                #    by the preserved-last-dim test, so spatial multi-
+                                #    resolution (last dim genuinely changed) still
+                                #    falls through to rule 2. R30 parity with compiled.
+                                if (chosen is None
+                                        and input_tensor.ndim >= 1
+                                        and isinstance(resolved_list[-1], int)
+                                        and resolved_list[-1] == input_tensor.shape[-1]):
+                                    last = len(resolved_list) - 1
+                                    for i, inferred in candidates:
+                                        if i != last and inferred != resolved_list[i]:
+                                            chosen = i
+                                            break
                                 # 2. Else keep the legacy LAST-dim inference when it
                                 #    is itself a valid split — the common spatial-
                                 #    flatten / LLM attention-reshape case the

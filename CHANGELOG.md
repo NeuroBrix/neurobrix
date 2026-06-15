@@ -20,6 +20,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Op-by-op (sequential) reshape infers the batch axis, not the feature axis,
+  when a classifier-free-guidance run changes the batch size.** When a reshape
+  unflattens a tensor whose batch was already folded into a leading axis (an
+  attention query reshape fed by a flattened matmul), and guidance has doubled
+  the batch, the shape-inference fallback chose the trailing (feature) axis to
+  recover — folding the extra batch into the feature dimension and crashing the
+  next norm. It now detects that the feature dimension is unchanged and recovers
+  a leading axis instead, matching the compiled path. Image-to-video models now
+  run in op-by-op mode under guidance, not just single-batch.
+
 - **Op-by-op (sequential) execution resolves weights stored under a shorter name
   than the graph references.** When a build stores a weight without a prefix that
   the graph param carries (a text encoder whose embedding is `token_embed.weight`
