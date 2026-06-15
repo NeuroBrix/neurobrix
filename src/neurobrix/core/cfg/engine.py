@@ -399,7 +399,13 @@ class CFGEngine:
                 from_comp = from_port.split(".")[0]
                 to_comp, to_input = to_port.split(".", 1)
                 if from_comp in pre_loop and to_comp in loop_components:
-                    if "hidden_state" in to_input.lower():
+                    # The CFG split-key is the TEXT condition (encoder_hidden_states),
+                    # which has a negative. NEVER the image condition
+                    # (encoder_hidden_states_image, Wan-I2V) — it is shared across
+                    # cond/uncond and has no negative, so picking it would look for a
+                    # nonexistent image_encoder.negative_hidden_state.
+                    ti = to_input.lower()
+                    if "hidden_state" in ti and "image" not in ti:
                         return from_port
         # Pass 2: GLOBAL-variable indirection. The I2V builds (Wan-I2V) wire the
         # text condition as `global.encoder_hidden_states -> transformer.
