@@ -1329,6 +1329,18 @@ class CompiledSequence:
             for out_id in op_data.get("output_tensor_ids", []):
                 if out_id not in tensors and out_id not in self._tensor_id_to_slot:
                     intermediates.append(out_id)
+                # An op output that IS a graph output but is absent from the
+                # `tensors` dict — e.g. a pattern-reassembled custom::rms_norm
+                # whose output keeps the ORIGINAL `aten.mul::N::out_0` tid (the
+                # tensors entry belongs to the eliminated mul) — never reached the
+                # is_output/graph_output_ids branch above, so it was assigned a
+                # slot but NOT registered as a protected output. Liveness GC then
+                # frees its slot before gather_outputs (component output never
+                # consumed by a downstream op). Register it here so its slot joins
+                # protected_slots. Surfaced by Wan UMT5 text_encoder (final_norm
+                # = custom.rms_norm::48 -> aten.mul::266::out_0).
+                if out_id in graph_output_ids and out_id not in self._output_tensor_ids:
+                    self._output_tensor_ids.append(out_id)
 
         # Assign slots in order: weights, inputs, intermediates
         slot = 0
