@@ -33,6 +33,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Triton weight-sharding distributes a component across GPUs instead of
+  collapsing it onto one.** When Prism shards a component's weight files
+  round-robin across GPUs, it produces a shard map keyed by shard-file path. The
+  Triton loader looked those up by individual weight/tensor name, missed every
+  time, and placed the entire component on its default GPU — a 31 GB transformer
+  meant to span two 32 GB GPUs landed on one and ran out of memory. The loader
+  now resolves each shard file's device and places all of that file's weights
+  there (per-weight keys still honored), so the component is correctly split
+  (~16 GB per GPU) with room for activations.
+
+- **Triton multi-GPU execution detects an operation's devices across all its
+  weights.** The Triton per-op device assignment inspected only the first weight
+  of an operation. A projection whose weight matrix is one shard and whose bias
+  is another could be classed single-device, so the cross-device path never
+  engaged and the operation failed reading the other shard. It now considers
+  every weight (running the op on its largest weight's device), matching the
+  compiled path.
+
 - **Triton inputs are moved to their component's device before execution.** The
   Triton component-input binder cast input dtypes but never moved inputs onto the
   component's device. When a component is placed on a non-default GPU (a large
