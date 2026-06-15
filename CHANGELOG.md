@@ -33,6 +33,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Pipeline-parallel placement estimates block sizes at the compute dtype, not
+  the on-disk dtype.** The block-wise multi-GPU strategy sized each transformer
+  layer from its on-disk weights (e.g. fp32, 65.6 GB for a 14 B video
+  transformer) while the runtime loads them at the compute dtype (fp16,
+  32.8 GB). So it judged the model too large for the GPUs and refused
+  ("cannot fit"), even though the fp16 weights fit with headroom — forcing the
+  slower round-robin fallback. The estimate is now scaled to the compute dtype
+  (consistent with the other multi-GPU strategy), so block-wise placement is
+  available whenever the loaded weights actually fit. No-op when the on-disk and
+  compute dtypes match.
+
 - **Triton weight-sharding distributes a component across GPUs instead of
   collapsing it onto one.** When Prism shards a component's weight files
   round-robin across GPUs, it produces a shard map keyed by shard-file path. The
