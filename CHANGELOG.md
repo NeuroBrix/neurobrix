@@ -18,7 +18,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   conditional, unconditional, and CFG-batched paths. Driven entirely by a
   registry flag on the denoiser; inert for every model without it.
 
+### Added
+
+- **Image-to-video latent conditioning for the Triton execution branch
+  (NBXTensor, zero-torch).** The Triton branch now has its own i2v
+  channel-concat conditioning brick — built end-to-end with NBXTensor, mirroring
+  the semantics of the compiled-branch conditioning but living entirely in the
+  Triton branch (the two branches stay separate; each reuses its own bricks). It
+  builds the per-step-invariant condition once (VAE-encoded first frame +
+  deterministic frame mask, normalized with the VAE statistics) and channel-
+  concats it onto the noise latents — on the non-CFG loop path and inside the
+  Triton CFG engine for the batched path. Inert for every model without the
+  registry flag.
+
 ### Fixed
+
+- **Triton inputs are moved to their component's device before execution.** The
+  Triton component-input binder cast input dtypes but never moved inputs onto the
+  component's device. When a component is placed on a non-default GPU (a large
+  transformer on the second GPU while the upstream noise/embeddings were created
+  on the default GPU), the first operation's kernel could not read the input from
+  the component's device context (it surfaced as a "pointer cannot be accessed"
+  error at the patch-embedding convolution). Inputs are now transferred to the
+  component device; inert when already co-located (the common single-GPU case).
 
 - **Triton (NBXTensor) execution resolves weights stored under a shorter name
   than the graph references.** The Triton weight binder matched parameters by

@@ -2413,6 +2413,21 @@ class TritonSequence:
         for tid, tensor in cast.items():
             slot = self._tid_to_slot.get(tid)
             if slot is not None:
+                # Inputs must live on THIS component's device. When the component
+                # is placed on a non-default GPU (e.g. a 31 GB transformer placed
+                # on cuda:2 while the upstream noise/embeddings were created on the
+                # default cuda:0), the input tensor is on the wrong device and the
+                # first op's Triton kernel cannot read it from the component's CUDA
+                # context (surfaces as "Pointer argument cannot be accessed from
+                # Triton (cpu tensor?)" at the patch-embed conv). Move it D2D to the
+                # component device. Inert when already co-located (single-GPU on the
+                # default device) and for CPU sources (zero3 handles those). R30
+                # mirror of the compiled cross-device input handling.
+                if (hasattr(tensor, "_device_idx")
+                        and tensor._device_idx != self.device_idx
+                        and getattr(tensor, "_device", "cuda") != "cpu"):
+                    from neurobrix.triton.device_transfer import transfer_tensor
+                    tensor = transfer_tensor(tensor, self.device_idx)
                 self._arena[slot] = tensor
 
     def bind_symbols(self, inputs: dict):
