@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Classifier-free guidance picks the text condition as its split key, never an
+  image condition.** Image-to-video models that feed the denoiser two conditioning
+  streams (a text embedding and a separate image embedding) could, depending on
+  connection order, select the image stream for the [negative, positive] CFG
+  batch — which has no negative counterpart — and fail. Guidance now always pairs
+  the negative/positive batch on the text condition; image conditioning is shared
+  unchanged across both halves.
+
 - **Attention kernel: ~1.5× faster on V100 (Volta) for long sequences.** The
   Triton flash-attention launch used a 128-row query tile (tuned for A100)
   whenever head dim < 128 — the common case (most LLMs and video diffusion
