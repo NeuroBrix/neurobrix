@@ -2564,17 +2564,31 @@ class CompiledSequence:
         arena = self._arena
         devices_seen = set()
 
-        # Phase 1: Assign device to weighted ops from weight placement
+        # Phase 1: Assign device to weighted ops from weight placement.
+        # Scan ALL weight slots (NOT just the first): an op can consume weights
+        # on DIFFERENT devices under weight_sharding — e.g. a Linear whose weight
+        # matrix is on cuda:3 (round-robin shard) while its bias landed on cuda:2.
+        # Stopping at the first slot recorded only one device and could pick the
+        # small bias, so the op's device and the multi-device detection were
+        # wrong → the cross-device activation transfer never fired and the op
+        # crashed (addmm: mat2 on cuda:3 vs input on cuda:2). The op must run on
+        # its LARGEST weight's device (the compute-dominant matrix, not the bias)
+        # and every weight device must be seen so _is_multi_device is correct.
         for op in self._ops:
             if not op.weight_input_slots:
                 continue
+            best_dev = None
+            best_numel = -1
             for ws in op.weight_input_slots:
                 tensor = arena[ws]
                 if tensor is not None and hasattr(tensor, 'device'):
-                    dev = tensor.device
-                    op.device = dev
-                    devices_seen.add(str(dev))
-                    break
+                    devices_seen.add(str(tensor.device))
+                    _numel = tensor.numel() if hasattr(tensor, 'numel') else 0
+                    if _numel > best_numel:
+                        best_numel = _numel
+                        best_dev = tensor.device
+            if best_dev is not None:
+                op.device = best_dev
 
         # Multi-device if weights span >1 device, OR if any weight is on a
         # different device than the executor (e.g., weights on CPU, compute on CUDA)

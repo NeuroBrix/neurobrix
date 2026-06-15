@@ -283,6 +283,36 @@ class CFGEngine:
         if isinstance(_cond, torch.Tensor):
             batched_state = _i2v_apply(batched_state, _cond)
         self._ctx.variable_resolver.set(state_key, batched_state)
+
+        # Batch every OTHER shared conditioning input the denoiser consumes to
+        # batch=2. The text encoder_hidden_states is the [neg, pos] split above;
+        # everything else (e.g. Wan-I2V encoder_hidden_states_image from the CLIP
+        # image_encoder) is SHARED across cond/uncond — the vendor pipeline passes
+        # the SAME tensor to both forward calls, so in batched mode it must be
+        # repeated [v, v] to match the batch=2 hidden_states (the denoiser
+        # concatenates image+text conditioning and mismatches the batch otherwise).
+        # Restored after the batched forward. Inert when there is no such input.
+        extra_restore = {}
+        _handled_from = {encoder_key, state_key}
+        for conn in self._ctx.pkg.topology.get("connections", []):
+            to_port = conn.get("to", "")
+            from_port = conn.get("from", "")
+            if not to_port.startswith(f"{comp_name}."):
+                continue
+            if from_port in _handled_from or from_port.startswith(f"{comp_name}."):
+                continue
+            to_input = to_port.split(".", 1)[1]
+            if to_input in ("timestep", "attention_mask", "encoder_attention_mask"):
+                continue
+            try:
+                _v = self._ctx.variable_resolver.get(from_port)
+            except Exception:
+                continue
+            if isinstance(_v, torch.Tensor) and _v.dim() >= 1 and _v.shape[0] == 1:
+                extra_restore[from_port] = _v
+                self._ctx.variable_resolver.set(
+                    from_port, torch.cat([_v, _v], dim=0))
+
         if batched_mask is not None:
             self._ctx.variable_resolver.set("global.encoder_attention_mask", batched_mask)
         self._ctx.variable_resolver.loop_state[self._ctx.loop_id] = batched_timestep
@@ -308,6 +338,8 @@ class CFGEngine:
         if batched_mask is not None:
             self._ctx.variable_resolver.set("global.encoder_attention_mask", pos_mask)
         self._ctx.variable_resolver.loop_state[self._ctx.loop_id] = orig_timestep
+        for _k, _v in extra_restore.items():
+            self._ctx.variable_resolver.set(_k, _v)
 
         return {"output_0": noise_pred}
 
