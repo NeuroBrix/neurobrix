@@ -103,8 +103,25 @@ class TensorResolver:
         # 3. Check weights/parameters (if not already stored)
         if tensor_data.get("is_parameter") and tensor_data.get("producer_op_uid") is None:
             weight_name = tensor_data.get("weight_name")
-            if weight_name in self._ctx.weights:
-                tensor = self._ctx.weights[weight_name]
+            tensor = self._ctx.weights.get(weight_name) if weight_name else None
+            if tensor is None and weight_name:
+                # Trailing-suffix fallback (mirror of graph_executor._resolve_weight,
+                # the compiled-path bind): a build can store a weight under a SHORTER
+                # name than the graph param when the `encoder.`/`model.` prefix is
+                # applied inconsistently across a component (Wan UMT5: graph param
+                # `encoder.token_embed.weight` vs `token_embed.weight` in the .nbx).
+                # _reconcile_weight_keys can miss it when the trailing suffix was
+                # ambiguous at reconcile time; strip leading prefix segments,
+                # longest-suffix first (each trailing suffix is unique per tensor so
+                # this cannot mis-bind). Without this the op-by-op (sequential) path
+                # left the embed unbound and NOP-propagated the whole encoder to None,
+                # while the compiled path bound it correctly (R30 asymmetry).
+                _parts = weight_name.split('.')
+                for _i in range(1, len(_parts)):
+                    tensor = self._ctx.weights.get('.'.join(_parts[_i:]))
+                    if tensor is not None:
+                        break
+            if tensor is not None:
                 self._ctx.tensor_store[tensor_id] = tensor
                 return tensor
 

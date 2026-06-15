@@ -20,6 +20,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Op-by-op (sequential) execution resolves weights stored under a shorter name
+  than the graph references.** When a build stores a weight without a prefix that
+  the graph param carries (a text encoder whose embedding is `token_embed.weight`
+  in the package while the graph references `encoder.token_embed.weight`), the
+  compiled path already fell back to trailing-suffix matching but the sequential
+  op-by-op path did not — it left the embedding unbound and propagated the whole
+  encoder to empty, failing the run. The sequential resolver now applies the same
+  trailing-suffix fallback, so both execution modes bind identically.
+
 - **Text embeddings are padded to the model's full conditioning length for
   denoisers that cross-attend unmasked.** Some video diffusion transformers
   cross-attend to the text embedding over the full padded sequence length with
