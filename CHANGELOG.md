@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Image-to-video latent channel-concat conditioning (data-driven).** Some I2V
+  denoisers condition by channel-concatenating a per-step-invariant signal —
+  built from the VAE-encoded first frame plus a frame mask — onto the noise
+  latents before the transformer (the denoiser's input channels exceed the
+  latent channels). The runtime now builds that signal once (VAE-encode → vendor
+  normalization → frame mask → concat) and applies it each step on the
+  conditional, unconditional, and CFG-batched paths. Driven entirely by a
+  registry flag on the denoiser; inert for every model without it.
+
 ### Fixed
 
 - **Classifier-free guidance picks the text condition as its split key, never an

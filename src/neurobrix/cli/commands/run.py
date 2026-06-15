@@ -325,6 +325,24 @@ def cmd_run(args):
         _arr = _np.asarray(_img, dtype="float32") / 127.5 - 1.0
         inputs["global.image"] = (_torch.from_numpy(_arr)
                                   .permute(2, 0, 1).unsqueeze(0).unsqueeze(2))
+        # I2V temporal-VAE conditioning: some denoisers (Wan-I2V) encode the
+        # first frame WITHIN the full clip, so the VAE sees [1,3,num_frames,H,W]
+        # (frame0=image, rest=zeros). Pad global.image to num_frames when the
+        # model's vae_encoder declares pad_image_to_num_frames. CogVideoX (single-
+        # frame encode) leaves it at 1 frame. Data-driven via registry flag.
+        try:
+            from neurobrix.core.runtime.registry_flags import get_component_flag
+            if get_component_flag(getattr(args, "model", None), "vae_encoder",
+                                  "pad_image_to_num_frames", default=False):
+                _nf = int(getattr(args, "num_frames", 0) or 0)
+                _img5d = inputs["global.image"]
+                if _nf > 1 and _img5d.shape[2] == 1:
+                    _zeros = _torch.zeros(
+                        _img5d.shape[0], _img5d.shape[1], _nf - 1,
+                        _img5d.shape[3], _img5d.shape[4], dtype=_img5d.dtype)
+                    inputs["global.image"] = _torch.cat([_img5d, _zeros], dim=2)
+        except Exception:
+            pass
         # CLIP pixel_values for a separate vision image_encoder (Wan-I2V, etc.):
         # a CLIP-preprocessed view of the SAME input image, distinct from the
         # VAE-conditioning global.image above. Data-driven from the embedded

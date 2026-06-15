@@ -18,6 +18,10 @@ from typing import Any, Callable, Dict, Optional, TYPE_CHECKING, Union
 
 from neurobrix.core.runtime.debug import DEBUG
 from neurobrix.core.dtype.config import get_torch_dtype
+from neurobrix.core.runtime.resolution.i2v_conditioning import (
+    CONDITION_VAR as _I2V_CONDITION_VAR,
+    apply as _i2v_apply,
+)
 
 if TYPE_CHECKING:
     from neurobrix.core.flow.base import FlowContext
@@ -271,6 +275,13 @@ class CFGEngine:
 
         # Set batched inputs
         self._ctx.variable_resolver.set(encoder_key, batched_hidden)
+        # I2V channel-concat conditioning: concat the per-step-invariant
+        # condition (built once by the flow, stored in global.i2v_condition)
+        # onto the batched state for the denoiser. Shared across cond/uncond, so
+        # apply() repeats it to the batch=2 state. Inert when absent (R23).
+        _cond = self._ctx.variable_resolver.resolved.get(_I2V_CONDITION_VAR)
+        if isinstance(_cond, torch.Tensor):
+            batched_state = _i2v_apply(batched_state, _cond)
         self._ctx.variable_resolver.set(state_key, batched_state)
         if batched_mask is not None:
             self._ctx.variable_resolver.set("global.encoder_attention_mask", batched_mask)
@@ -344,7 +355,11 @@ class CFGEngine:
 
         # Pass 1: unconditional
         self._ctx.variable_resolver.set(encoder_key, neg_hidden)
-        self._ctx.variable_resolver.set(state_key, current_state)
+        # I2V channel-concat conditioning (shared by both passes; batch=1 here).
+        _cond = self._ctx.variable_resolver.resolved.get(_I2V_CONDITION_VAR)
+        _seq_state = (_i2v_apply(current_state, _cond)
+                      if isinstance(_cond, torch.Tensor) else current_state)
+        self._ctx.variable_resolver.set(state_key, _seq_state)
         self._ctx.variable_resolver.set("global.encoder_attention_mask", neg_mask)
         self._ctx.variable_resolver.loop_state[self._ctx.loop_id] = timestep
 
