@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional, Callable
 
 from neurobrix.core.runtime.debug import DEBUG
 from neurobrix.core.device_utils import device_empty_cache
+from neurobrix.core.runtime.resolution import i2v_conditioning
 from .base import FlowHandler, FlowContext, register_flow
 
 
@@ -325,6 +326,24 @@ class IterativeProcessHandler(FlowHandler):
         else:
             self._packing_info = None
 
+        # I2V latent channel-concat conditioning (data-driven, R23-gated). When
+        # the denoiser's in_channels exceed the latent channels (Wan-I2V: 36 vs
+        # 16) the runtime builds a per-step-invariant condition (VAE-encoded
+        # first frame + frame mask) and channel-concats it onto the state before
+        # the transformer. Built ONCE here; applied each step (non-CFG below,
+        # CFG-batched/sequential inside the CFG engine via global.i2v_condition).
+        self._i2v_condition = None
+        loop_comp0 = components[0] if components else None
+        _cond_spec = (i2v_conditioning.conditioning_spec(self.ctx, loop_comp0)
+                      if loop_comp0 else None)
+        if _cond_spec is not None:
+            _nf = self.ctx.variable_resolver.get("global.num_frames")
+            self._i2v_condition = i2v_conditioning.build_condition(
+                self.ctx, _cond_spec, int(_nf))
+            if self._i2v_condition is not None:
+                self.ctx.variable_resolver.set(
+                    i2v_conditioning.CONDITION_VAR, self._i2v_condition)
+
         # Initialize driver — pass image_seq_len for dynamic shifting
         if hasattr(driver, "set_timesteps"):
             kwargs = {}
@@ -381,6 +400,14 @@ class IterativeProcessHandler(FlowHandler):
                         encoder_dtype=encoder_dtype
                     )
                 else:
+                    # I2V channel-concat conditioning on the denoiser's state
+                    # (non-CFG path; the CFG engine applies it on its own batched/
+                    # sequential paths via global.i2v_condition).
+                    if (self._i2v_condition is not None
+                            and self._is_loop_component(comp_name)):
+                        self.ctx.variable_resolver.set(
+                            state_key,
+                            i2v_conditioning.apply(scaled_state, self._i2v_condition))
                     # Type guard: scaled_timestep may be int/float, convert to tensor if needed
                     timestep_arg: Optional[torch.Tensor] = None
                     if isinstance(scaled_timestep, torch.Tensor):
