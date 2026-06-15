@@ -2137,13 +2137,26 @@ class PrismSolver:
             n_blocks = len(blocks['blocks'])
             act_per_block = mem.activation_mb / n_blocks
 
+            # _parse_blocks reports ON-DISK sizes (safetensors header dtype, e.g.
+            # F32 for Wan = 65.6GB), but the runtime loads each weight at the
+            # COMPUTE dtype (fp16 on V100 = 32.8GB). Scale the block/non-block
+            # estimates to the compute size so the fit matches what is actually
+            # loaded — weight_sharding already uses the compute-dtype mem.weight_mb
+            # (31.27GB); pipeline_parallel must be consistent, otherwise a model
+            # whose F32 shards exceed 2x a GPU is wrongly rejected ("cannot fit")
+            # though its fp16 weights fit with headroom (Wan-I2V-14B: 32.8GB F32/2
+            # = 16.4GB/GPU fits, but the F32 estimate 65.6/2=32.8 > 30.4 rejected).
+            # Data-driven, no-op when disk dtype == compute dtype (scale ~1.0).
+            _disk_mb = sum(blocks['block_sizes'].values()) + blocks['non_block_mb']
+            _dtype_scale = (mem.weight_mb / _disk_mb) if _disk_mb > 0 else 1.0
+
             shard_map = {}
 
             # Allocate non-block weights on current device
             if blocks['non_block_mb'] > 0:
                 while current_dev_idx < len(fresh):
                     dev = fresh[current_dev_idx]
-                    real_size = dev.get_real_block_size(blocks['non_block_mb'], model_dtype) * packing_overhead
+                    real_size = dev.get_real_block_size(blocks['non_block_mb'] * _dtype_scale, model_dtype) * packing_overhead
                     if dev.can_fit(real_size):
                         dev.used_mb += real_size
                         dev.components.append(f"{comp_name}.non_block")
@@ -2157,7 +2170,7 @@ class PrismSolver:
             # SEQUENTIAL FILL: layers go to current GPU until full, then next GPU
             for block_num in sorted(blocks['blocks'].keys()):
                 block_keys = blocks['blocks'][block_num]
-                base_block = blocks['block_sizes'][block_num]
+                base_block = blocks['block_sizes'][block_num] * _dtype_scale
                 real_block = fresh[0].get_real_block_size(base_block, model_dtype)
                 total_block = (real_block + act_per_block) * packing_overhead
 
