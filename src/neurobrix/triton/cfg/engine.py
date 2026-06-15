@@ -19,6 +19,7 @@ from typing import Any, Callable, Dict, Optional, TYPE_CHECKING
 
 from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, parse_dtype
 from neurobrix.core.runtime.debug import DEBUG
+from neurobrix.triton import i2v_conditioning as _i2v
 
 
 def _ensure_nbx(tensor) -> NBXTensor:
@@ -283,6 +284,40 @@ class TritonCFGEngine:
             if batched_state._dtype != target_dt:
                 batched_state = batched_state.to(target_dt)
 
+        # I2V channel-concat conditioning on the batched (uncond+cond) state: the
+        # triton brick repeats the shared per-step-invariant condition to batch=2
+        # and channel-concats it (16->36ch for Wan-I2V) before the denoiser. R30
+        # mirror of core/cfg/engine.py; inert when there is no condition (R23).
+        _cond = self._ctx.variable_resolver.resolved.get(_i2v.CONDITION_VAR)
+        if isinstance(_cond, NBXTensor):
+            batched_state = _i2v.apply(batched_state, _cond)
+
+        # Batch every OTHER shared conditioning input the denoiser consumes to
+        # batch=2 (e.g. Wan-I2V encoder_hidden_states_image from the CLIP image
+        # encoder): the vendor passes the SAME image embeds to both cond/uncond,
+        # so in batched mode it must be repeated [v, v] to match the batch=2
+        # hidden_states (the denoiser concats image+text conditioning and would
+        # mismatch the batch otherwise). Restored after. R30 mirror of core CFG.
+        extra_restore: Dict[str, NBXTensor] = {}
+        _handled_from = {encoder_key, state_key}
+        for conn in self._ctx.pkg.topology.get("connections", []):
+            to_port = conn.get("to", "")
+            from_port = conn.get("from", "")
+            if not to_port.startswith(f"{comp_name}."):
+                continue
+            if from_port in _handled_from or from_port.startswith(f"{comp_name}."):
+                continue
+            to_input = to_port.split(".", 1)[1]
+            if to_input in ("timestep", "attention_mask", "encoder_attention_mask"):
+                continue
+            try:
+                _v = _ensure_nbx(self._ctx.variable_resolver.get(from_port))
+            except Exception:
+                continue
+            if isinstance(_v, NBXTensor) and _v.dim() >= 1 and _v.shape[0] == 1:
+                extra_restore[from_port] = _v
+                self._ctx.variable_resolver.set(from_port, NBXTensor.cat([_v, _v], dim=0))
+
         # Batch timestep
         if timestep.dim() == 0:
             timestep = timestep.unsqueeze(0)
@@ -323,6 +358,8 @@ class TritonCFGEngine:
         if batched_mask is not None:
             self._ctx.variable_resolver.set("global.encoder_attention_mask", pos_mask)
         self._ctx.variable_resolver.loop_state[self._ctx.loop_id] = orig_timestep
+        for _k, _v in extra_restore.items():
+            self._ctx.variable_resolver.set(_k, _v)
 
         # Persist the post-CFG noise_pred as the component's effective
         # output. Without this, RuntimeExecutor.store_component_outputs

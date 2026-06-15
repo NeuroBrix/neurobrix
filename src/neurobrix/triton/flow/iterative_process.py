@@ -18,6 +18,7 @@ from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, p
 from neurobrix.core.runtime.debug import DEBUG
 from neurobrix.core.flow.base import FlowContext
 from neurobrix.triton.cfg import TritonCFGEngine
+from neurobrix.triton import i2v_conditioning
 
 
 def _vram_probe(tag: str) -> None:
@@ -470,6 +471,24 @@ class TritonIterativeProcessHandler:
 
         encoder_dtype = self._get_encoder_dtype()
 
+        # I2V latent channel-concat conditioning (triton brick, NBXTensor): build
+        # the per-step-invariant 20ch condition once (VAE-encoded first frame +
+        # frame mask) and store it; applied each step below on the non-CFG path
+        # and inside the triton CFG engine (batched/sequential) via
+        # global.i2v_condition. R30 mirror of the compiled core flow; inert
+        # without the i2v_latent_conditioning registry flag (R23).
+        self._i2v_condition = None
+        _loop_comp0 = components[0] if components else None
+        _cond_spec = (i2v_conditioning.conditioning_spec(self.ctx, _loop_comp0)
+                      if _loop_comp0 else None)
+        if _cond_spec is not None:
+            _nf = self.ctx.variable_resolver.get("global.num_frames")
+            self._i2v_condition = i2v_conditioning.build_condition(
+                self.ctx, _cond_spec, int(_nf))
+            if self._i2v_condition is not None:
+                self.ctx.variable_resolver.set(
+                    i2v_conditioning.CONDITION_VAR, self._i2v_condition)
+
         # Main loop
         for step_idx, timestep in enumerate(iterator):
             if DEBUG:
@@ -501,6 +520,14 @@ class TritonIterativeProcessHandler:
                         encoder_dtype=encoder_dtype
                     )
                 else:
+                    # I2V channel-concat conditioning on the denoiser state
+                    # (non-CFG path; the triton CFG engine applies it on its own
+                    # batched/sequential paths via global.i2v_condition).
+                    if (getattr(self, "_i2v_condition", None) is not None
+                            and self._is_loop_component(comp_name)):
+                        self.ctx.variable_resolver.set(
+                            state_key,
+                            i2v_conditioning.apply(scaled_state, self._i2v_condition))
                     # Type guard: scaled_timestep may be int/float, convert to NBXTensor if needed
                     timestep_arg: Optional[NBXTensor] = None
                     if isinstance(scaled_timestep, NBXTensor):
