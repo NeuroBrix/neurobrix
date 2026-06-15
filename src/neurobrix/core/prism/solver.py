@@ -2211,6 +2211,15 @@ class PrismSolver:
         largest_cap = devices[0].capacity_mb
         needs_tp = [(n, m) for n, m in sorted_comps if m.weight_mb + m.activation_mb > largest_cap]
 
+        import os as _os
+        if _os.environ.get("NBX_DIAG_TRITON_PRELOOP") == "1":
+            print(f"   [NBX-DIAG-PRISM] _try_weight_sharding largest_cap={largest_cap:.0f}MB "
+                  f"ndev={len(devices)} devs={[d.device_string for d in devices]}", flush=True)
+            for _n, _m in sorted_comps:
+                print(f"   [NBX-DIAG-PRISM]   {_n}: weight={_m.weight_mb:.0f}MB "
+                      f"act={_m.activation_mb:.0f}MB sum={_m.weight_mb+_m.activation_mb:.0f}MB "
+                      f"needs_tp={_m.weight_mb+_m.activation_mb > largest_cap}", flush=True)
+
         if not needs_tp:
             return None
 
