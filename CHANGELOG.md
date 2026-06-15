@@ -20,6 +20,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Text embeddings are padded to the model's full conditioning length for
+  denoisers that cross-attend unmasked.** Some video diffusion transformers
+  cross-attend to the text embedding over the full padded sequence length with
+  no attention mask, so the count of trailing zero-pad tokens is part of the
+  trained conditioning. The runtime traced its text encoder at a shorter
+  stimulus length and fed that shorter sequence, diluting the conditioning into
+  a degenerate, structure-free output. Text embeddings are now zero-extended to
+  the model's declared maximum sequence length (data-driven, gated by a registry
+  flag, inert for every model whose denoiser masks or slices its text). Restores
+  coherent image-to-video output; works in compiled and Triton modes.
+
+- **Multi-GPU op placement scans all of an op's weights, not just the first.**
+  When a model is sharded across GPUs, a single operation can read weights that
+  landed on different devices (a projection whose weight matrix is one shard and
+  whose bias is another). Inspecting only the first weight could record the wrong
+  device and miss the cross-device case entirely, so the activation transfer
+  never ran and the op failed with a device mismatch. Placement now considers
+  every weight, detects the multi-device case correctly, and runs the op on its
+  largest weight's device. Single-GPU placement is unchanged.
+
+- **Image-to-video conditioning latent is normalized with the VAE's published
+  statistics.** The per-channel mean/scale used to normalize the VAE-encoded
+  conditioning frame were read from the wrong location and silently skipped,
+  feeding an unnormalized latent that poisoned the denoiser. They are now read
+  from the VAE profile's config section, matching the vendor pipeline.
+
+- **Classifier-free guidance shares image conditioning across both batch halves.**
+  Under batched CFG, image-to-video models that feed the denoiser a separate
+  image-embedding stream now repeat that stream across the [negative, positive]
+  batch so it lines up with the batched text and latents, instead of failing on a
+  batch-size mismatch.
+
 - **Classifier-free guidance picks the text condition as its split key, never an
   image condition.** Image-to-video models that feed the denoiser two conditioning
   streams (a text embedding and a separate image embedding) could, depending on

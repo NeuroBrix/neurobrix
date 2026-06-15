@@ -255,6 +255,29 @@ class TextEncoderComponentHandler(ComponentHandler):
             _m = attention_mask.to(hidden_state.dtype).unsqueeze(-1)
             hidden_state = hidden_state * _m
 
+        # Extend the (zeroed) sequence up to max_sequence_length with zeros, to
+        # match the vendor's trim+re-pad-to-max contract. The Wan I2V/T2V DiTs
+        # cross-attend to the FULL max_sequence_length UNMASKED (no attention_mask
+        # reaches the transformer blocks), so the COUNT of trailing zero-pad
+        # tokens is part of the trained conditioning — diffusers Wan
+        # `_get_t5_prompt_embeds` pads every prompt to max_sequence_length. The
+        # text-encoder graph was traced at a shorter stimulus length (e.g. 226),
+        # so the runtime output is shorter than the model's design length; pad it
+        # up. Safe because the DiT's encoder_hidden_states seq dim is symbolic
+        # (verified in the Wan transformer graph). Gated by `zero_pad_embeddings`
+        # (R23 inert for every other model); `.new_zeros` works for both
+        # torch.Tensor and NBXTensor, so this holds in compiled AND triton (R30).
+        if (tokenizer_config.get("zero_pad_embeddings")
+                and hidden_state.shape[1] < max_sequence_length):
+            pad_len = max_sequence_length - hidden_state.shape[1]
+            b, _seq, d = hidden_state.shape
+            hidden_state = _cat(
+                [hidden_state, hidden_state.new_zeros((b, pad_len, d))], dim=1)
+            if (attention_mask is not None
+                    and attention_mask.shape[1] < max_sequence_length):
+                attention_mask = _cat(
+                    [attention_mask, attention_mask.new_zeros((b, pad_len))], dim=1)
+
         result["hidden_state"] = hidden_state
         if attention_mask is not None:
             result["attention_mask"] = attention_mask
