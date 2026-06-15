@@ -390,6 +390,8 @@ class CFGEngine:
             return None
 
         connections = topology.get("connections", [])
+        # Pass 1: a pre_loop encoder feeds a loop component's *hidden_state*
+        # input directly (text_encoder -> transformer.encoder_hidden_states).
         for conn in connections:
             from_port = conn.get("from", "")
             to_port = conn.get("to", "")
@@ -398,6 +400,22 @@ class CFGEngine:
                 to_comp, to_input = to_port.split(".", 1)
                 if from_comp in pre_loop and to_comp in loop_components:
                     if "hidden_state" in to_input.lower():
+                        return from_port
+        # Pass 2: GLOBAL-variable indirection. The I2V builds (Wan-I2V) wire the
+        # text condition as `global.encoder_hidden_states -> transformer.
+        # encoder_hidden_states` (the text_encoder output is finalized into the
+        # global by the resolution engine) rather than a direct pre_loop->loop
+        # edge. Target the TEXT condition specifically (`encoder_hidden_state`) so
+        # the batched-CFG variable is the prompt embedding, NEVER the latent
+        # `hidden_states` input that also carries the `hidden_state` substring.
+        for conn in connections:
+            from_port = conn.get("from", "")
+            to_port = conn.get("to", "")
+            if "." in from_port and "." in to_port:
+                from_comp = from_port.split(".")[0]
+                to_comp, to_input = to_port.split(".", 1)
+                if from_comp == "global" and to_comp in loop_components:
+                    if "encoder_hidden_state" in to_input.lower():
                         return from_port
         return None
 

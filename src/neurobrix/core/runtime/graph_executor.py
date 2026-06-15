@@ -948,6 +948,19 @@ class GraphExecutor:
         for tid in self._persistent_tensor_ids:
             self._compiled_seq.protect_tensor(tid)
 
+        # Storage-chain protection for graph outputs. The compile-time
+        # protected_slots set only pins each output's SLOT, not the underlying
+        # STORAGE: when an output tid aliases an eliminated/view sibling that
+        # shares storage (UMT5 final_norm reassembled to custom.rms_norm whose
+        # output keeps the `aten.mul::N` tid sharing slot with `aten.view::N`),
+        # the view's storage chain is freed by liveness GC even though the
+        # output slot is "protected" -> None at gather. protect_tensor traces
+        # the view chain and pins every storage source. Data-driven from the
+        # authoritative DAG outputs; no-op when the output already stands alone.
+        if self._ctx is not None:
+            for tid in (self._ctx.output_tensor_ids or []):
+                self._compiled_seq.protect_tensor(tid)
+
     def load_graph_from_dict(self, dag: Dict[str, Any]) -> None:
         """
         Load TensorDAG from dict (already parsed).
@@ -2992,17 +3005,35 @@ class GraphExecutor:
         # Reconcile weight key names with graph param names.
         self._reconcile_weight_keys()
 
-        # Bind weights to arena slots (uses tensor IDs from DAG)
+        # Bind weights to arena slots (uses tensor IDs from DAG).
+        # _reconcile_weight_keys remapped most names; a robust trailing-suffix
+        # fallback covers any residual prefix mismatch it missed (e.g. a build
+        # that stored `token_embed.weight` while the rest of the component carries
+        # the `encoder.` prefix and the graph param is `encoder.token_embed.weight`
+        # — surfaced by the Wan UMT5 text_encoder, whose embed left unbound
+        # cascaded the whole encoder to None via NOP propagation). Match the graph
+        # param by stripping its leading prefix segments, longest-suffix first; the
+        # trailing suffix is unique per tensor so this cannot mis-bind.
+        def _resolve_weight(name: str):
+            t = self._weights.get(name)
+            if t is not None:
+                return t
+            _parts = name.split('.')
+            for _i in range(1, len(_parts)):
+                _t = self._weights.get('.'.join(_parts[_i:]))
+                if _t is not None:
+                    return _t
+            return None
         weight_map = {}
         for tid in tensors:
             if tid.startswith("param::"):
-                weight_name = tid[7:]
-                if weight_name in self._weights:
-                    weight_map[tid] = self._weights[weight_name]
+                t = _resolve_weight(tid[7:])
+                if t is not None:
+                    weight_map[tid] = t
             elif tid.startswith("buffer::"):
-                buffer_name = tid[8:]
-                if buffer_name in self._weights:
-                    weight_map[tid] = self._weights[buffer_name]
+                t = _resolve_weight(tid[8:])
+                if t is not None:
+                    weight_map[tid] = t
 
         assert self._compiled_seq is not None
         self._compiled_seq.bind_weights(weight_map)
