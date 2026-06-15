@@ -20,6 +20,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Triton (NBXTensor) execution resolves weights stored under a shorter name
+  than the graph references.** The Triton weight binder matched parameters by
+  exact name only, so a build that stored a weight without a prefix the graph
+  param carries (a text encoder whose embedding is `token_embed.weight` while the
+  graph references `encoder.token_embed.weight`) left the embedding unbound; the
+  whole encoder then propagated empties and produced no output, failing guidance
+  with a missing text embedding. The Triton binder now applies the same
+  trailing-suffix fallback as the compiled and op-by-op paths, so all three
+  execution modes bind identically.
+
 - **Op-by-op (sequential) reshape infers the batch axis, not the feature axis,
   when a classifier-free-guidance run changes the batch size.** When a reshape
   unflattens a tensor whose batch was already folded into a leading axis (an

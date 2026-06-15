@@ -226,6 +226,12 @@ class TritonIterativeProcessHandler:
         for comp_name in pre_loop:
             self._execute_component(comp_name, "pre_loop", None)
 
+            import os as _os
+            if _os.environ.get("NBX_DIAG_TRITON_PRELOOP") == "1":
+                _keys = [k for k in self.ctx.variable_resolver.resolved
+                         if k.startswith(f"{comp_name}.")]
+                print(f"   [NBX-DIAG-PRELOOP] {comp_name} stored keys: {_keys}", flush=True)
+
             # PURIFICATION: Finalize POSITIVE embeddings immediately after encoding
             # This handles Sana CHI slicing BEFORE we store the result for CFG
             executor = self.ctx.executors.get(comp_name)

@@ -2374,8 +2374,25 @@ class TritonSequence:
         for tid in self._weight_ids:
             tdata = self.dag.get("tensors", {}).get(tid, {})
             wname = tdata.get("weight_name", "")
-            if wname in weights:
-                tensor = weights[wname]
+            tensor = weights.get(wname) if wname else None
+            if tensor is None and wname:
+                # Trailing-suffix fallback (mirror of compiled graph_executor
+                # _resolve_weight and the sequential resolver, R30): a build can
+                # store a weight under a SHORTER name than the graph param when
+                # an `encoder.`/`model.` prefix is applied inconsistently across a
+                # component (Wan UMT5: graph param `encoder.token_embed.weight` vs
+                # `token_embed.weight` in the .nbx). Without this the embed bound
+                # to nothing and the whole encoder NOP-propagated to empty -> the
+                # triton gather returned no outputs at all (text_encoder produced
+                # []), failing CFG with a missing last_hidden_state. Strip leading
+                # prefix segments, longest-suffix first; the trailing suffix is
+                # unique per tensor so this cannot mis-bind.
+                _parts = wname.split('.')
+                for _i in range(1, len(_parts)):
+                    tensor = weights.get('.'.join(_parts[_i:]))
+                    if tensor is not None:
+                        break
+            if tensor is not None:
                 # Pre-transpose weights whose aten::t was eliminated.
                 # .t() is a stride-only view (no copy) on NBXTensor.
                 if tid in self._pretranspose_weights and tensor.ndim == 2:
