@@ -55,6 +55,38 @@ _SF_DTYPE_INFO = {
 }
 
 
+def _resolve_shard_device(shard_path: str, weight_device: Dict[str, int]):
+    """Device for a filesystem shard FILE from a shard-PATH-keyed shard_map.
+
+    Prism's weight_sharding produces a shard_map keyed by .nbx rel-paths
+    (e.g. "components/transformer/weights/shard_000.safetensors") with one
+    "cuda:N" per shard file — every weight in that file goes to that device.
+    The loader iterates filesystem shard paths, so match the shard_map key as
+    a suffix of the filesystem path. Returns None when no shard-path key
+    matches (weight-name-keyed FGP style, or unsharded). Without this the
+    loader looked up by WEIGHT name against a shard-PATH-keyed map, missed
+    every time, and collapsed the whole component onto device_idx — the 14B
+    transformer landed entirely on one GPU and OOMed instead of sharding.
+    """
+    p = shard_path.replace("\\", "/")
+    for k, dv in weight_device.items():
+        if isinstance(k, str) and k.endswith(".safetensors") and p.endswith(k):
+            return dv
+    return None
+
+
+def _weight_target_dev(key: str, shard_dev, weight_device: Dict[str, int],
+                       device_idx: int) -> int:
+    """Per-weight device: weight-name key (FGP) first, else the shard file's
+    device (weight_sharding), else the component's default device."""
+    dv = weight_device.get(key)
+    if dv is not None:
+        return dv
+    if shard_dev is not None:
+        return shard_dev
+    return device_idx
+
+
 def load_component_weights(
     cache_path: str,
     component: str,
@@ -147,6 +179,10 @@ def load_component_weights(
     for shard_path in shard_files:
         header, data_offset = _read_header(str(shard_path))
         shard_headers.append((str(shard_path), header, data_offset))
+        # All weights in a shard FILE share the file's target device under
+        # weight_sharding (shard-path-keyed map); FGP weight-name keys override
+        # per weight inside _weight_target_dev.
+        shard_dev = _resolve_shard_device(str(shard_path), weight_device)
 
         for key, info in header.items():
             if key == '__metadata__':
@@ -161,7 +197,7 @@ def load_component_weights(
                 # Non-block → GPU sizing continues below.
                 target_dev = device_idx
             else:
-                target_dev = weight_device.get(key, device_idx)
+                target_dev = _weight_target_dev(key, shard_dev, weight_device, device_idx)
             regular = _target_nbytes(info, compute_dtype)
             upcast = _target_nbytes(info, compute_dtype,
                                     upcast_fp16_to_fp32=True)
@@ -191,6 +227,12 @@ def load_component_weights(
         upcast_effective = False
 
     dev_bytes = dev_bytes_upcast if upcast_effective else dev_bytes_regular
+
+    import os as _os
+    if _os.environ.get("NBX_DIAG_TRITON_PRELOOP") == "1":
+        _dist = {f"cuda:{d}": f"{b/1e9:.2f}GB" for d, b in sorted(dev_bytes.items())}
+        print(f"   [NBX-DIAG-SHARD] {component}: shard_map_entries={len(shard_map or {})} "
+              f"per-device={_dist}", flush=True)
 
     if upcast_effective:
         total_up = sum(dev_bytes_upcast.values())
@@ -380,6 +422,9 @@ def _load_shard_into_arenas(
     native dtype (post-remap) to save host RAM. The runtime slow path
     handles CPU→GPU transfer per op.
     """
+    # Device for every weight in THIS shard file (weight_sharding); FGP
+    # weight-name keys still override per weight in _weight_target_dev.
+    shard_dev = _resolve_shard_device(path, weight_device)
     with open(path, 'rb') as f:
         for key, info in header.items():
             if key == '__metadata__':
@@ -427,7 +472,7 @@ def _load_shard_into_arenas(
             # integer types, and already-fp32 weights pass through unchanged.
             upcast_this = upcast_effective and target_dtype == NBXDtype.float16
 
-            target_dev = weight_device.get(key, device_idx)
+            target_dev = _weight_target_dev(key, shard_dev, weight_device, device_idx)
             arena = arenas[target_dev]
             DeviceAllocator.set_device(target_dev)
 

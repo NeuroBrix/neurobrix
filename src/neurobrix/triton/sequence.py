@@ -1724,18 +1724,35 @@ class TritonSequence:
         devices_seen = set()
         has_cpu_weight = False
 
-        # Phase 1: assign device to weighted ops
+        # Phase 1: assign device to weighted ops. Scan ALL weight slots (NOT
+        # just the first): under weight_sharding an op can read weights on
+        # DIFFERENT devices — a Linear whose weight matrix is a round-robin shard
+        # on cuda:3 while its bias landed on cuda:2. Stopping at the first slot
+        # recorded only one device (and could pick the small bias), so
+        # devices_seen was incomplete -> _is_multi_device wrong -> the op ran
+        # single-device and crashed reading the other shard ("Pointer argument
+        # cannot be accessed from Triton" on addmm's mat2). Run the op on its
+        # LARGEST weight's device (the compute matrix, not the bias) and record
+        # every weight device. R30 mirror of the compiled compute_op_devices fix.
         for op in self._ops:
             if not op.weight_input_slots:
                 continue
+            best_dev = None
+            best_numel = -1
             for ws in op.weight_input_slots:
                 tensor = arena[ws]
                 if tensor is not None and hasattr(tensor, '_device_idx'):
-                    op.device_idx = tensor._device_idx
                     devices_seen.add(tensor._device_idx)
                     if getattr(tensor, '_device', 'cuda') == 'cpu':
                         has_cpu_weight = True
-                    break
+                    _numel = getattr(tensor, '_numel', None)
+                    if _numel is None:
+                        _numel = tensor.numel() if hasattr(tensor, 'numel') else 0
+                    if _numel > best_numel:
+                        best_numel = _numel
+                        best_dev = tensor._device_idx
+            if best_dev is not None:
+                op.device_idx = best_dev
 
         devices_seen.add(self.device_idx)
         # Multi-device iff we have more than one distinct device idx OR
