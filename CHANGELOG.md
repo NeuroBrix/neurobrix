@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **VACE control conditioning for video diffusion (compiled + Triton,
+  data-driven).** WanVACE denoisers take two extra step-invariant inputs the
+  standard video denoiser does not: a multi-channel latent control signal
+  (`cat[inactive_latent, reactive_latent, reshaped_mask]`) and a per-injection-
+  layer scale vector. The runtime now builds both once from a VAE-encode pass
+  over a control video — the all-generate (unconditional, pure text→video) mode
+  uses a zeros control clip with an all-white mask, which collapses to a single
+  encode. Mirrored across both execution branches (the compiled branch and a
+  zero-torch NBXTensor Triton brick), wired through the diffusion flow and the
+  CFG engine (the control is repeated to the guidance batch; its scale is
+  batch-invariant). Driven entirely by a registry flag on the denoiser; inert
+  for every model without it.
+
 - **Image-to-video latent channel-concat conditioning (data-driven).** Some I2V
   denoisers condition by channel-concatenating a per-step-invariant signal —
   built from the VAE-encoded first frame plus a frame mask — onto the noise

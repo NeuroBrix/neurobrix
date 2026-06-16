@@ -374,6 +374,25 @@ def cmd_run(args):
                 _ca = (_ca - _mean) / _std
             inputs["global.pixel_values"] = (_torch.from_numpy(_ca)
                                              .permute(2, 0, 1).unsqueeze(0).contiguous())
+
+    # VACE control conditioning with no explicit control video: the all-generate
+    # (unconditional / pure text→video) path. The vae_encoder encodes a zeros
+    # control clip [1,3,num_frames,H,W]; the brick builds control_hidden_states
+    # = cat([encode(0), encode(0), ones_mask]). Data-driven via the transformer's
+    # vace_control_conditioning flag; only synthesized when global.image is absent.
+    if "global.image" not in inputs:
+        from neurobrix.core.runtime.registry_flags import get_component_flag as _gcf
+        if _gcf(getattr(args, "model", None), "transformer",
+                "vace_control_conditioning", default=None):
+            import torch as _torch
+            _nf = int(getattr(args, "num_frames", 0) or 1)
+            _h = int(args.height) if args.height else 480
+            _w = int(args.width) if args.width else 832
+            inputs["global.image"] = _torch.zeros(1, 3, _nf, _h, _w,
+                                                  dtype=_torch.float32)
+            print(f"   VACE all-generate control: zeros clip "
+                  f"[1,3,{_nf},{_h},{_w}] -> vae_encoder")
+
     if args.cfg is not None:
         inputs["global.guidance_scale"] = args.cfg
     if args.temperature is not None:
