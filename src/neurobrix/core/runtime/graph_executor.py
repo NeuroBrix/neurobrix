@@ -1726,8 +1726,23 @@ class GraphExecutor:
         for tid, tdata in tensors.items():
             if tid.startswith("param::") or tid.startswith("buffer::"):
                 wname = tdata.get("weight_name", "")
-                if wname in self._weights:
-                    store[tid] = self._weights[wname]
+                _w = self._weights.get(wname) if wname else None
+                if _w is None and wname:
+                    # Trailing-suffix fallback (R30 mirror of TritonSequence
+                    # bind_weights and the sequential resolver): a build can
+                    # store a weight under a SHORTER name than the graph param
+                    # when an `encoder.`/`model.` prefix is applied inconsistently
+                    # (Wan UMT5: graph `encoder.token_embed.weight` vs
+                    # `token_embed.weight` in the .nbx). Without this the embed
+                    # bound to nothing and the whole encoder propagated empty.
+                    # Strip leading prefix segments, longest-suffix first.
+                    _parts = wname.split('.')
+                    for _i in range(1, len(_parts)):
+                        _w = self._weights.get('.'.join(_parts[_i:]))
+                        if _w is not None:
+                            break
+                if _w is not None:
+                    store[tid] = _w
 
         # Load inputs into store (POINT 1: cast through TritonDtypeEngine
         # to mirror DtypeEngine path at component entry — graph metadata

@@ -33,6 +33,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Triton op-by-op (triton_sequential) execution binds weights stored under a
+  shorter name than the graph references.** The op-by-op Triton path bound graph
+  parameters by exact name only, so a build that stored a weight without a prefix
+  the graph param carries (a text encoder whose embedding is `token_embed.weight`
+  while the graph references `encoder.token_embed.weight`) left the embedding
+  unbound and propagated the whole encoder to empty. It now applies the same
+  trailing-suffix fallback as the other three execution modes — all four bind
+  identically.
+
 - **Pipeline-parallel placement spreads transformer layers evenly across GPUs
   instead of packing the first one full.** The block-wise multi-GPU strategy
   filled each GPU to capacity with layers before moving to the next, leaving the
