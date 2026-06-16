@@ -22,6 +22,9 @@ from neurobrix.core.runtime.resolution.i2v_conditioning import (
     CONDITION_VAR as _I2V_CONDITION_VAR,
     apply as _i2v_apply,
 )
+from neurobrix.core.runtime.resolution.vace_control_conditioning import (
+    CONTROL_VAR as _VACE_CONTROL_VAR,
+)
 
 if TYPE_CHECKING:
     from neurobrix.core.flow.base import FlowContext
@@ -284,6 +287,20 @@ class CFGEngine:
             batched_state = _i2v_apply(batched_state, _cond)
         self._ctx.variable_resolver.set(state_key, batched_state)
 
+        # VACE control conditioning: control_hidden_states is a SEPARATE denoiser
+        # input (not concat onto state) resolved by the global.<name> fallback, so
+        # it is NOT in topology.connections and the connection-driven extra-input
+        # batching below cannot see it. Repeat the batch-1 control to batch=2 here
+        # to match the batched state; the per-layer scale is batch-invariant.
+        # Restored after the forward. Inert when absent (R23).
+        _vace_ctrl = self._ctx.variable_resolver.resolved.get(_VACE_CONTROL_VAR)
+        if isinstance(_vace_ctrl, torch.Tensor) and _vace_ctrl.shape[0] == 1:
+            extra_restore_vace = (_VACE_CONTROL_VAR, _vace_ctrl)
+            self._ctx.variable_resolver.set(
+                _VACE_CONTROL_VAR, torch.cat([_vace_ctrl, _vace_ctrl], dim=0))
+        else:
+            extra_restore_vace = None
+
         # Batch every OTHER shared conditioning input the denoiser consumes to
         # batch=2. The text encoder_hidden_states is the [neg, pos] split above;
         # everything else (e.g. Wan-I2V encoder_hidden_states_image from the CLIP
@@ -340,6 +357,8 @@ class CFGEngine:
         self._ctx.variable_resolver.loop_state[self._ctx.loop_id] = orig_timestep
         for _k, _v in extra_restore.items():
             self._ctx.variable_resolver.set(_k, _v)
+        if extra_restore_vace is not None:
+            self._ctx.variable_resolver.set(*extra_restore_vace)
 
         return {"output_0": noise_pred}
 

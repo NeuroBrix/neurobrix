@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional, Callable
 from neurobrix.core.runtime.debug import DEBUG
 from neurobrix.core.device_utils import device_empty_cache
 from neurobrix.core.runtime.resolution import i2v_conditioning
+from neurobrix.core.runtime.resolution import vace_control_conditioning
 from .base import FlowHandler, FlowContext, register_flow
 
 
@@ -343,6 +344,28 @@ class IterativeProcessHandler(FlowHandler):
             if self._i2v_condition is not None:
                 self.ctx.variable_resolver.set(
                     i2v_conditioning.CONDITION_VAR, self._i2v_condition)
+
+        # VACE control conditioning (data-driven, R23-gated). The denoiser takes
+        # control_hidden_states (96ch latent control) + control_hidden_states_scale
+        # (ones(len(vace_layers))) as separate inputs each step. Built ONCE here
+        # from the vae_encoder pass (control video latents) and stored as globals
+        # the InputResolver binds by the global.<name> fallback. CFG batches the
+        # control to batch=2 inside the CFG engine (the scale is batch-invariant).
+        _vace_spec = (vace_control_conditioning.conditioning_spec(self.ctx, loop_comp0)
+                      if loop_comp0 else None)
+        if _vace_spec is not None:
+            _ctrl = vace_control_conditioning.build_control(self.ctx, _vace_spec)
+            if _ctrl is not None:
+                _scale = vace_control_conditioning.build_scale(
+                    _vace_spec, _ctrl.device, _ctrl.dtype)
+                self.ctx.variable_resolver.set(
+                    vace_control_conditioning.CONTROL_VAR, _ctrl)
+                self.ctx.variable_resolver.set(
+                    vace_control_conditioning.SCALE_VAR, _scale)
+                self.ctx.variable_resolver.resolved[
+                    vace_control_conditioning.CONTROL_VAR] = _ctrl
+                self.ctx.variable_resolver.resolved[
+                    vace_control_conditioning.SCALE_VAR] = _scale
 
         # Initialize driver — pass image_seq_len for dynamic shifting
         if hasattr(driver, "set_timesteps"):
