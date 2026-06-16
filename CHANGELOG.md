@@ -33,6 +33,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Pipeline-parallel placement spreads transformer layers evenly across GPUs
+  instead of packing the first one full.** The block-wise multi-GPU strategy
+  filled each GPU to capacity with layers before moving to the next, leaving the
+  first GPU with almost no room for runtime activations or the (unmodeled)
+  autotune workspace — so a guided (batch-2) run stalled or ran out of memory.
+  Layers are now distributed evenly across the minimum number of GPUs whose even
+  share leaves a headroom reserve (scaled from the profiled activation peak, with
+  a hardware-universal floor). For the 14 B video transformer this balances to
+  ~16 GB per GPU with ~13 GB free each, so guided generation has room. Still a
+  pipeline — one cross-device transfer per GPU boundary, not per op.
+
 - **Pipeline-parallel placement estimates block sizes at the compute dtype, not
   the on-disk dtype.** The block-wise multi-GPU strategy sized each transformer
   layer from its on-disk weights (e.g. fp32, 65.6 GB for a 14 B video
