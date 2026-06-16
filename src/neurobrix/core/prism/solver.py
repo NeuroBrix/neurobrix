@@ -2167,24 +2167,50 @@ class PrismSolver:
                 if current_dev_idx >= len(fresh):
                     return None
 
-            # SEQUENTIAL FILL: layers go to current GPU until full, then next GPU
+            # BALANCED PIPELINE FILL: contiguous layer ranges, spread EVENLY so
+            # each GPU keeps headroom for runtime activations + triton autotune
+            # workspace (neither fully modeled in the trace-time activation peak).
+            # A greedy "pack GPU0 to capacity" fill leaves the first GPU with no
+            # room and OOMs/stalls under CFG batch=2 (Wan-I2V-14B: 27 GB weights on
+            # cuda:2, ~2 GB free). Pick the minimum #GPUs whose EVEN weight share
+            # leaves a headroom reserve, then fill each to its even share (the last
+            # pipeline GPU takes the remainder). Still a pipeline: one cross-device
+            # transfer per GPU boundary, not per op.
+            total_block_mb = sum(blocks['block_sizes'].values()) * _dtype_scale
+            # CFG doubles the activation batch; the capacity floor also reserves for
+            # the triton autotune workspace, which the activation profile does not
+            # model. Data-driven (peak activation) with a hardware-universal floor.
+            act_reserve_mb = max(mem.activation_mb * 2.0, fresh[0].capacity_mb * 0.18)
+            n_pp = len(fresh)
+            for ng in range(1, len(fresh) + 1):
+                if (total_block_mb / ng) * packing_overhead + act_reserve_mb <= fresh[ng - 1].capacity_mb:
+                    n_pp = ng
+                    break
+            target_per_gpu = total_block_mb / n_pp if n_pp > 0 else total_block_mb
+
+            gpu_weight_mb = 0.0
             for block_num in sorted(blocks['blocks'].keys()):
                 block_keys = blocks['blocks'][block_num]
                 base_block = blocks['block_sizes'][block_num] * _dtype_scale
                 real_block = fresh[0].get_real_block_size(base_block, model_dtype)
                 total_block = (real_block + act_per_block) * packing_overhead
 
-                # Try current GPU first (sequential fill)
                 while current_dev_idx < len(fresh):
                     dev = fresh[current_dev_idx]
-                    if dev.can_fit(total_block):
+                    # Advance to the next GPU once this one has its even share
+                    # (never on the last pipeline GPU, which holds the remainder).
+                    over_share = (gpu_weight_mb + real_block > target_per_gpu
+                                  and current_dev_idx < n_pp - 1)
+                    if dev.can_fit(total_block) and not over_share:
                         dev.used_mb += total_block
+                        gpu_weight_mb += real_block
                         dev.components.append(f"{comp_name}.block.{block_num}")
                         for key in block_keys:
                             shard_map[key] = dev.device_string
                         break
-                    # Current GPU full — move to next
+                    # GPU full or even share reached — move to next
                     current_dev_idx += 1
+                    gpu_weight_mb = 0.0
                 else:
                     # No GPU can fit this block
                     return None
