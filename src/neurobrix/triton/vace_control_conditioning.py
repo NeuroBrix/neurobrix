@@ -27,7 +27,7 @@ from typing import Any, Optional
 
 import numpy as np
 
-from neurobrix.kernels.nbx_tensor import NBXTensor, DeviceAllocator
+from neurobrix.kernels.nbx_tensor import NBXTensor, DeviceAllocator, NBXDtype
 from neurobrix.core.runtime.registry_flags import get_component_flag
 
 CONTROL_VAR = "global.control_hidden_states"
@@ -116,7 +116,17 @@ def build_control(ctx: Any, spec: dict) -> Optional[NBXTensor]:
     video_latents = NBXTensor.cat([latent, latent], dim=1)  # [B, 2*z_dim, T, H, W]
     mask_np = np.ones((b, int(spec["mask_channels"]), lt, lh, lw), dtype=np.float32)
     mask_t = _nbx_on(mask_np, dev_idx)
-    return NBXTensor.cat([video_latents, mask_t], dim=1)  # [B, 2*z_dim+mask_ch, ...]
+    control = NBXTensor.cat([video_latents, mask_t], dim=1)  # [B, 2*z_dim+mask_ch, ...]
+
+    import os as _os
+    if _os.environ.get("NBX_DIAG_VACE") == "1":
+        _ln = latent.to(NBXDtype.float32) if latent.nbx_dtype != NBXDtype.float32 else latent
+        _ln_np = _ln.numpy()
+        print(f"   [NBX-DIAG-VACE-TRITON] vae_latent shape={list(latent.shape)} "
+              f"norm mean={float(_ln_np.mean()):.3f} std={float(_ln_np.std()):.3f} | "
+              f"control shape={list(control.shape)} "
+              f"(expect C={2 * latent_channels + int(spec['mask_channels'])})")
+    return control
 
 
 def build_scale(spec: dict, dev_idx: int) -> NBXTensor:
