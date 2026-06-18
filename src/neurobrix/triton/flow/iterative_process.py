@@ -19,6 +19,7 @@ from neurobrix.core.runtime.debug import DEBUG
 from neurobrix.core.flow.base import FlowContext
 from neurobrix.triton.cfg import TritonCFGEngine
 from neurobrix.triton import i2v_conditioning
+from neurobrix.triton import vace_control_conditioning
 
 
 def _vram_probe(tag: str) -> None:
@@ -488,6 +489,29 @@ class TritonIterativeProcessHandler:
             if self._i2v_condition is not None:
                 self.ctx.variable_resolver.set(
                     i2v_conditioning.CONDITION_VAR, self._i2v_condition)
+
+        # VACE control conditioning (triton brick, NBXTensor): build the denoiser's
+        # two extra step-invariant inputs once — control_hidden_states (96ch latent
+        # control from the vae_encoder pass) and control_hidden_states_scale
+        # (ones(vace_layers)) — and store them as the globals the InputResolver binds
+        # by the global.<name> fallback. R30 mirror of core/flow/iterative_process.py;
+        # the triton CFG engine repeats the control to batch=2 (scale is batch-
+        # invariant). Inert without the vace_control_conditioning registry flag (R23).
+        _vace_spec = (vace_control_conditioning.conditioning_spec(self.ctx, _loop_comp0)
+                      if _loop_comp0 else None)
+        if _vace_spec is not None:
+            _ctrl = vace_control_conditioning.build_control(self.ctx, _vace_spec)
+            if _ctrl is not None:
+                _scale = vace_control_conditioning.build_scale(
+                    _vace_spec, _ctrl._device_idx)
+                self.ctx.variable_resolver.set(
+                    vace_control_conditioning.CONTROL_VAR, _ctrl)
+                self.ctx.variable_resolver.set(
+                    vace_control_conditioning.SCALE_VAR, _scale)
+                self.ctx.variable_resolver.resolved[
+                    vace_control_conditioning.CONTROL_VAR] = _ctrl
+                self.ctx.variable_resolver.resolved[
+                    vace_control_conditioning.SCALE_VAR] = _scale
 
         # Main loop
         for step_idx, timestep in enumerate(iterator):
