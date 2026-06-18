@@ -978,13 +978,19 @@ class PrismSolver:
                         and int(_in_shapes[1][1]) == 1):
                     # Depthwise — skip tiling.
                     continue
-                # 5D (video conv3d) — the spatial band-streaming wrappers are
-                # rank-4 only; registering an interceptor here crashes at
-                # dispatch (CogVideoX VAE: 'too many values to unpack' in
-                # _tiled_conv2d_spatial_torch). Skip until the 5D tiling
-                # chantier lands; the op then runs native, which fits at
-                # proof sizes and OOMs visibly (not corruptly) beyond.
-                if _in_shapes and len(_in_shapes[0]) == 5:
+                # The spatial band-streaming wrappers (tiled_conv2d_spatial /
+                # _pair) are rank-4 ONLY — they tile a 2D conv [B, C, H, W].
+                # Any other input rank crashes at dispatch:
+                #   - 5D conv3d (CogVideoX VAE): 'too many values to unpack'
+                #     in _tiled_conv2d_spatial_torch (waits on the 5D tiling
+                #     chantier; runs native, fits at proof sizes, OOMs visibly).
+                #   - 3D conv1d (Kokoro iSTFTNet vocoder noise_convs / the audio
+                #     decoders generally): _pair reads stride[1] on a 1-element
+                #     stride list -> IndexError. A 1D audio conv is never a
+                #     2D-spatial overflow anyway — it runs native (small).
+                # Only 2D convs (rank-4 input) get spatial tiling.
+                if (_in_shapes and _in_shapes[0] is not None
+                        and len(_in_shapes[0]) != 4):
                     continue
                 # Diagnostic gate: NBX_S5_SKIP_CONV_TILE=1 skips all
                 # remaining standalone convolution tiling.
