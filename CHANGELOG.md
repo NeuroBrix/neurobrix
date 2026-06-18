@@ -46,6 +46,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Triton execution branch now builds the VACE control conditioning (R30
+  mirror).** WanVACE denoisers consume two extra step-invariant inputs the
+  standard denoiser does not — a multi-channel latent control signal and a
+  per-injection-layer scale. The compiled branch already built these; the Triton
+  branch did not wire its (already-present) NBXTensor control brick into the
+  diffusion flow, so a guided Triton run failed to resolve
+  `control_hidden_states`. The Triton flow now builds the control once from the
+  vae_encoder pass and the Triton CFG engine repeats it to the guidance batch
+  (the scale is batch-invariant) — mirroring the compiled branch exactly, with no
+  cross-branch reach. The control value is byte-equivalent to the compiled
+  branch's. Inert for every model without the registry flag.
+
 - **Op-level convolution tiling no longer mis-fires on 1D audio convolutions.**
   The Prism op-level spatial tiling routes an over-budget convolution to a
   band-streaming wrapper that tiles a 2D conv (`[B, C, H, W]`) only. The detector

@@ -20,6 +20,7 @@ from typing import Any, Callable, Dict, Optional, TYPE_CHECKING
 from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, parse_dtype
 from neurobrix.core.runtime.debug import DEBUG
 from neurobrix.triton import i2v_conditioning as _i2v
+from neurobrix.triton import vace_control_conditioning as _vace
 
 
 def _ensure_nbx(tensor) -> NBXTensor:
@@ -292,6 +293,19 @@ class TritonCFGEngine:
         if isinstance(_cond, NBXTensor):
             batched_state = _i2v.apply(batched_state, _cond)
 
+        # VACE control conditioning: control_hidden_states is a SEPARATE denoiser
+        # input resolved by the global.<name> fallback (NOT in topology.connections),
+        # so the connection-driven extra-input batching below cannot see it. Repeat
+        # the batch-1 control to batch=2 to match the batched state; the per-layer
+        # scale is batch-invariant. Restored after the forward. R30 mirror of
+        # core/cfg/engine.py; inert when absent (R23).
+        _vace_ctrl = self._ctx.variable_resolver.resolved.get(_vace.CONTROL_VAR)
+        _vace_restore = None
+        if isinstance(_vace_ctrl, NBXTensor) and _vace_ctrl.shape[0] == 1:
+            _vace_restore = _vace_ctrl
+            self._ctx.variable_resolver.set(
+                _vace.CONTROL_VAR, _vace.batch_for_cfg(_vace_ctrl))
+
         # Batch every OTHER shared conditioning input the denoiser consumes to
         # batch=2 (e.g. Wan-I2V encoder_hidden_states_image from the CLIP image
         # encoder): the vendor passes the SAME image embeds to both cond/uncond,
@@ -360,6 +374,8 @@ class TritonCFGEngine:
         self._ctx.variable_resolver.loop_state[self._ctx.loop_id] = orig_timestep
         for _k, _v in extra_restore.items():
             self._ctx.variable_resolver.set(_k, _v)
+        if _vace_restore is not None:
+            self._ctx.variable_resolver.set(_vace.CONTROL_VAR, _vace_restore)
 
         # Persist the post-CFG noise_pred as the component's effective
         # output. Without this, RuntimeExecutor.store_component_outputs
