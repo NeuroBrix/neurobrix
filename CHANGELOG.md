@@ -46,6 +46,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Op-level convolution tiling no longer mis-fires on 1D audio convolutions.**
+  The Prism op-level spatial tiling routes an over-budget convolution to a
+  band-streaming wrapper that tiles a 2D conv (`[B, C, H, W]`) only. The detector
+  already skipped 5D `conv3d` but still flagged 1D `conv1d`, so the Kokoro
+  iSTFTNet vocoder's noise convolutions (a 3D `[B, C, T]` activation with a
+  single-element stride) were sent into the 2D path and crashed the decoder in
+  every execution mode. The rank guard is generalized so only genuine 2D
+  convolutions are spatially tiled; 1D audio convolutions run native (they are
+  never a 2D-spatial overflow). Kokoro now synthesizes coherent speech across all
+  four modes.
+
 - **Triton op-by-op (triton_sequential) execution binds weights stored under a
   shorter name than the graph references.** The op-by-op Triton path bound graph
   parameters by exact name only, so a build that stored a weight without a prefix
