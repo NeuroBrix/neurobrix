@@ -46,6 +46,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Spatial tiling accumulator now lives on the tiled component's device, not the
+  input's.** When a component is placed on a different GPU than the tensor feeding
+  it (component_placement — e.g. CogVideoX's transformer on one GPU, VAE on
+  another), the TilingEngine allocated its accumulate-and-blend buffer on the
+  input tensor's device while the per-tile results computed on the component's
+  device, so the blend add mixed two devices and raised "Expected all tensors to
+  be on the same device". The accumulator is now allocated on the tile-result
+  device (where the tiles actually compute); for single-device placement the two
+  devices coincide, so this is a no-op there.
+
 - **The Triton execution branch now builds the VACE control conditioning (R30
   mirror).** WanVACE denoisers consume two extra step-invariant inputs the
   standard denoiser does not — a multi-channel latent control signal and a

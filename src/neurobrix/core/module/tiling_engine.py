@@ -285,17 +285,24 @@ class TilingEngine:
 
         # Mode-polymorphic accumulators: NBXTensor on the triton path
         # (R33: no torch), torch.zeros on the compiled path (byte-identical).
+        # The accumulator MUST live on the device where the tiles actually
+        # compute — the tiled component's device, i.e. first_result.device —
+        # NOT the input tensor's device. Under component_placement the input
+        # can sit on a different GPU than the tiled component (CogVideoX:
+        # transformer on cuda:0, VAE on cuda:2), so allocating on
+        # input_tensor.device then mixed cuda:0 + cuda:2 in the accumulate add.
+        # For single-device placement the two devices coincide -> no-op.
         if _is_nbx_tensor(input_tensor):
             from neurobrix.kernels.nbx_tensor import NBXTensor
-            dev = (f"cuda:{getattr(input_tensor, '_device_idx', 0)}"
-                   if input_tensor._device == "cuda" else input_tensor._device)
+            dev = (f"cuda:{getattr(first_result, '_device_idx', 0)}"
+                   if first_result._device == "cuda" else first_result._device)
             output = NBXTensor.zeros(out_shape, dtype=first_result.dtype, device=dev)
             weight = NBXTensor.zeros(weight_shape, dtype=first_result.dtype, device=dev)
         else:
             output = torch.zeros(
-                *out_shape, device=input_tensor.device, dtype=first_result.dtype)
+                *out_shape, device=first_result.device, dtype=first_result.dtype)
             weight = torch.zeros(
-                *weight_shape, device=input_tensor.device, dtype=first_result.dtype)
+                *weight_shape, device=first_result.device, dtype=first_result.dtype)
 
         rh = ts * sf
         rw = ts * sf
