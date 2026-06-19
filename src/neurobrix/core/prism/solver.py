@@ -2446,6 +2446,13 @@ class PrismSolver:
             return None
 
         full_act = mem.activation_bytes
+        import os as _os_diag
+        if _os_diag.environ.get("NBX_PRISM_TILE_DIAG") == "1":
+            print(f"[PRISM-TILE-DIAG] {comp_name}: full_act={full_act/1024**3:.2f}GB "
+                  f"budget={budget_bytes/1024**3:.2f}GB "
+                  f"ic(h={getattr(ic,'height',None)},w={getattr(ic,'width',None)},"
+                  f"nf={getattr(ic,'num_frames',None)},bs={getattr(ic,'batch_size',None)}) "
+                  f"-> {'TILE' if full_act > budget_bytes else 'native'}", flush=True)
         if full_act <= budget_bytes or full_act <= 0:
             return None  # fits untiled — no tiling needed
 
