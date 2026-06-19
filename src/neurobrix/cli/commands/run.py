@@ -248,8 +248,21 @@ def cmd_run(args):
     else:
         cached_defaults = {}
 
-    height = getattr(args, 'height', None) or cached_defaults.get("height", 1024)
-    width = getattr(args, 'width', None) or cached_defaults.get("width", 1024)
+    # Resolution for the Prism activation estimate MUST match the resolution the
+    # executor actually generates at — otherwise Prism over/under-estimates the VAE
+    # activation and mis-decides tiling/placement. The executor's merged_defaults
+    # fall back to the FAMILY config (config/families/<family>.yml), not just the
+    # per-model defaults.json. run.py read only defaults.json + a hardcoded 1024
+    # fallback, so for video (family default 512x512) Prism estimated the VAE at
+    # 1024x1024 (8x the real activation) and force-tiled a VAE that fits natively
+    # — producing tile seams. Mirror the executor's fallback chain: args ->
+    # defaults.json -> family config -> 1024.
+    from neurobrix.core.config import get_family_defaults as _get_family_defaults
+    _fam_defaults = _get_family_defaults(family) if family else {}
+    height = (getattr(args, 'height', None) or cached_defaults.get("height")
+              or _fam_defaults.get("height") or 1024)
+    width = (getattr(args, 'width', None) or cached_defaults.get("width")
+             or _fam_defaults.get("width") or 1024)
     vae_scale = cached_defaults.get("vae_scale_factor", 8)
     # Video (5D) runtime dims — None/absent for image/LLM models, where the
     # profiler's video symbol overrides stay inert.
