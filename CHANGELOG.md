@@ -46,6 +46,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Hardware planning now estimates at the resolution the model actually generates
+  at.** The CLI built the Prism activation-profiling resolution from the per-model
+  defaults plus a hardcoded 1024×1024 fallback, but the runtime executor falls back
+  to the *family* config (`config/families/<family>.yml`, e.g. 512×512 for video)
+  when a model's defaults omit height/width. The two diverged: for a video model
+  without explicit dimensions, Prism profiled the VAE at 1024×1024 (≈8× the real
+  activation, counting the guidance batch) and force-tiled — or distributed — a VAE
+  that decodes natively at the real 512×512 in a few GB. The CLI now mirrors the
+  executor's fallback chain (args → model defaults → family config → 1024), so the
+  plan reflects the actual generation: such models drop from a tiled/sharded plan to
+  plain single-GPU placement, with no behavioural change to models that already
+  specify their resolution.
+
 - **Spatial tiling accumulator now lives on the tiled component's device, not the
   input's.** When a component is placed on a different GPU than the tensor feeding
   it (component_placement — e.g. CogVideoX's transformer on one GPU, VAE on
