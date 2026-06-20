@@ -77,17 +77,27 @@ def estimate_op_workspace_bytes(
         return int(workspace_upper)
 
     if "scaled_dot_product_attention" in cl:
-        # Softmax temp = scores [B, H, T_q, T_k] in fp32 (always promoted).
+        # Forge forces the MEM-EFFICIENT SDPA backend at trace (R20:
+        # enable_flash=False, enable_mem_efficient=True, enable_math=True), so the
+        # runtime executes aten::_scaled_dot_product_efficient_attention. That
+        # backend STREAMS attention block-wise and NEVER materialises the full
+        # [B, H, T_q, T_k] score matrix — its only extra scratch is an
+        # O(B*H*T_q) fp32 logsumexp (+ a tiny per-CUDA-block tile, negligible at
+        # estimate granularity). The previous full-score estimate
+        # (B*H*T_q*T_k*4) over-counted by T_k× and forced unnecessary
+        # block_scatter / tiling on large-sequence video DiTs (Mochi masked
+        # attention over ~2.4k tokens at batch=2 -> ~2.8 GB phantom workspace per
+        # block, pushing a 20 GB transformer past a 32 GB GPU). Model the real
+        # mem-efficient workspace instead. R34: branch on op semantics + the
+        # doctrine-fixed backend, never on model family.
         if not input_shapes:
             return 0
         q_shape = input_shapes[0]
-        k_shape = input_shapes[1] if len(input_shapes) > 1 else q_shape
-        if len(q_shape) < 4 or len(k_shape) < 4:
+        if len(q_shape) < 4:
             return 0
         b, h, t_q = q_shape[0], q_shape[1], q_shape[2]
-        t_k = k_shape[2]
-        # fp32 scores
-        return int(b * h * t_q * t_k * 4)
+        # mem-efficient inference workspace: fp32 logsumexp [B, H, T_q].
+        return int(b * h * t_q * 4)
 
     # upsample / element-wise / norms: kernels stream output, ~no workspace
     return 0
