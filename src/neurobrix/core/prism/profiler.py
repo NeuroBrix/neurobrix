@@ -365,7 +365,20 @@ class ActivationProfiler:
 
             # 1. ALLOCATE: Add output tensors
             output_tids = op.get("output_tensor_ids", [])
-            op_is_zero_alloc = op_uid in zero_set
+            # aten::expand / broadcast_to return STRIDE-0 broadcast VIEWS — they
+            # allocate NOTHING at runtime. A consumer that needs a dense copy
+            # emits its own op (contiguous / the compute kernel), counted
+            # separately; the broadcast view itself is free. Counting it as a
+            # real allocation falsely inflated the peak: Mochi's masked attention
+            # broadcasts the [B,1,1,T] key-padding mask to [2,24,16156,16156]
+            # (25 GB EACH, ×8 live) for the mem-efficient SDPA, which reads it
+            # block-wise and never materialises it -> a phantom 24 GB activation
+            # that forced spurious block_scatter. Same zero-alloc treatment as
+            # the existing stride-0 proxy set. R34: branch on op semantics, not
+            # model family.
+            op_is_zero_alloc = (op_uid in zero_set or
+                                op.get("op_type") in ("aten::expand",
+                                                      "aten::broadcast_to"))
             for out_tid in output_tids:
                 tensor_meta = self.tensors.get(out_tid, {})
                 shape = self._resolve_shape(tensor_meta, symbol_map)
