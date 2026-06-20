@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Prism activation estimator: stride-0 broadcast views and mem-efficient SDPA
+  are not real allocations.** `aten::expand` / `broadcast_to` outputs are
+  stride-0 broadcast views that allocate nothing at runtime, but the activation
+  liveness simulation counted them as dense tensors. A masked-attention video
+  DiT's `[B, 1, 1, T]` key-padding mask broadcasts to `[B, H, T, T]` (tens of GB)
+  for the mem-efficient SDPA, which reads it block-wise and never materialises
+  it — a phantom multi-GB activation that forced large-sequence video
+  transformers into spurious `block_scatter` on heterogeneous multi-GPU boxes
+  (placing a transformer onto an undersized GPU and crashing cross-device).
+  Expand/broadcast-view outputs are now zero-alloc, and the SDPA workspace is
+  modelled as the mem-efficient backend's `O(B·H·T)` logsumexp rather than the
+  full `O(B·H·T²)` score matrix. Restores correct single-GPU placement.
+
 ### Added
 
 - **VACE control conditioning for video diffusion (compiled + Triton,
