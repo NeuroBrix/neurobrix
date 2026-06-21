@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Flow-matching scheduler: honour `invert_sigmas`, and video FlowEuler
+  denoisers scale the timestep by `num_train_timesteps`.** Two coupled
+  correctness bugs left Mochi (and any inverted-sigma flow model) producing
+  pure noise, then a coherent-but-unconditioned frame. (1) `FlowEulerScheduler`
+  read the `invert_sigmas` config flag but never applied it — the sigma
+  schedule ran `1 → 0` (terminal 0) instead of the inverted `0 → 1` (terminal
+  1), reversing the denoising direction so the latents never left the noise
+  distribution. (2) Mochi's vendor pipeline passes the scheduler's RAW
+  `[0, num_train_timesteps]` timesteps to the transformer (unlike Flux's
+  in-pipeline `t/1000` normalisation), and the Mochi DiT embeds them directly
+  with no in-graph scaling; NeuroBrix's FlowEuler emits `[0,1]` sigmas, so the
+  sinusoidal timestep embedding collapsed toward 0 and the AdaLN modulation
+  barely conditioned the generation. The loop now derives `timestep_scale =
+  num_train_timesteps` for video FlowEuler denoisers that carry no explicit
+  scale (gated on `family == video` + FlowEuler, so Wan/CogVideoX non-flow
+  schedulers and Flux/SD3 are untouched). Both fixes gated → zero regression on
+  non-inverted / non-flow models.
 - **Prism activation estimator: stride-0 broadcast views and mem-efficient SDPA
   are not real allocations.** `aten::expand` / `broadcast_to` outputs are
   stride-0 broadcast views that allocate nothing at runtime, but the activation
