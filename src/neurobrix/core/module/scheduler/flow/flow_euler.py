@@ -84,6 +84,18 @@ class FlowEulerScheduler(FlowSchedulerBase):
         if mu != 1.0:
             timesteps = self._apply_shift(timesteps, mu)
 
+        # Inverted-sigma flow (Mochi: invert_sigmas=True). Diffusers'
+        # FlowMatchEulerDiscreteScheduler flips the schedule with
+        # `sigmas = 1 - sigmas` and a TERMINAL sigma of 1 (not 0):
+        # the trajectory runs 0 -> 1 and the velocity convention is reversed.
+        # Without this, the denoising direction is wrong and the latents never
+        # leave the noise distribution (uniform-noise output). Gated on
+        # invert_sigmas, so non-inverted flow models (Flux/SD3/Wan) are
+        # untouched. The model's own timestep scaling is inside the traced graph
+        # (see _get_component_timestep_scale), so we invert the raw [0,1] value.
+        if self.invert_sigmas:
+            timesteps = 1.0 - timesteps
+
         self.timesteps = timesteps
         self.sigmas = timesteps.clone()  # For flow, sigma = t
 
@@ -130,11 +142,13 @@ class FlowEulerScheduler(FlowSchedulerBase):
         else:
             t = timestep
 
-        # Get next timestep
+        # Get next timestep. The terminal sigma is 1.0 for inverted flow
+        # (Mochi) and 0.0 otherwise — mirrors the torch.cat([sigmas, ones/zeros])
+        # terminal append in diffusers FlowMatchEulerDiscreteScheduler.
         if self._step_index < len(self.timesteps) - 1:
             t_next = self.timesteps[self._step_index + 1].item()
         else:
-            t_next = 0.0
+            t_next = 1.0 if self.invert_sigmas else 0.0
 
         # dt is negative (going from 1 to 0)
         dt = t_next - t

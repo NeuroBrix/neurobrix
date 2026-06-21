@@ -367,6 +367,10 @@ class IterativeProcessHandler(FlowHandler):
                 self.ctx.variable_resolver.resolved[
                     vace_control_conditioning.SCALE_VAR] = _scale
 
+        # Expose the active scheduler to _get_component_timestep_scale (video
+        # FlowEuler denoisers need num_train_timesteps as their timestep scale).
+        self._active_driver = driver
+
         # Initialize driver — pass image_seq_len for dynamic shifting
         if hasattr(driver, "set_timesteps"):
             kwargs = {}
@@ -804,6 +808,22 @@ class IterativeProcessHandler(FlowHandler):
         explicit = attrs.get("timestep_scale")
         if explicit is not None:
             return float(explicit)
+
+        # Video flow-match denoisers (e.g. Mochi) consume the scheduler's RAW
+        # [0, num_train_timesteps] timesteps: the vendor pipeline passes
+        # `scheduler.timesteps` (= sigma * num_train) to the transformer
+        # un-normalized, and the transformer embeds them directly (no in-graph
+        # scaling). NeuroBrix's FlowEuler produces [0,1] sigmas, so the loop must
+        # scale by num_train_timesteps or the timestep embedding collapses to
+        # near-zero -> a coherent-but-unconditioned frame. Image flow models
+        # (Flux) normalize in-pipeline (t/1000) and scale in-graph, so they stay
+        # at 1.0. Gated on video + FlowEuler so non-flow video schedulers (Wan
+        # UniPC, CogVideoX DDIM — already at [0,1000]) are untouched.
+        driver = getattr(self, "_active_driver", None)
+        if (self.ctx.pkg.manifest.get("family") == "video"
+                and type(driver).__name__ == "FlowEulerScheduler"
+                and getattr(driver, "num_train_timesteps", None)):
+            return float(driver.num_train_timesteps)
 
         return 1.0
 
