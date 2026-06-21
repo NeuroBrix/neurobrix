@@ -428,6 +428,24 @@ class TensorResolver:
             # Fallback to trace value if no shape resolver
             return trace_value
 
+        elif arg_type in ("add", "sub", "mul", "floordiv", "div", "mod", "neg"):
+            # Symbolic ARITHMETIC expression as a scalar arg — e.g. the
+            # MochiRoPE positional-grid `linspace` steps = ((s2 - 2)//2 + 2),
+            # an expression over the symbolic height/width dim s2. The compiled
+            # sequence folds such expressions to a concrete int at compile time,
+            # but the per-op sequential path resolves args LIVE and must evaluate
+            # the expression here. The shape_resolver already implements the
+            # add/sub/mul/floordiv/mod/neg algebra over runtime symbol bindings
+            # (it is the same evaluator used for symbolic dims), so we reuse it —
+            # no duplicate arithmetic. Without this the raw expr dict reaches the
+            # torch op (linspace steps) and fails the schema cast (dict -> int).
+            # R30: mirrors the compiled-mode fold; pure fix (only fires on
+            # arithmetic-expr scalar args, which previously crashed).
+            if self._ctx.symbolic_shapes_enabled and self._ctx.shape_resolver:
+                return self._ctx.shape_resolver.resolve(arg_info)
+            # No resolver: fall back to the trace value baked into the expr node.
+            return arg_info.get("trace")
+
         elif arg_type == "list":
             # For view/reshape, check if OUTPUT tensor has symbolic_shape
             # This handles unflatten patterns where trace-time shape differs from runtime

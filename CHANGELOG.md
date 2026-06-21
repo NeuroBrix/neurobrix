@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Sequential dispatcher: evaluate symbolic arithmetic expressions in scalar
+  args.** The op-by-op PyTorch-sequential arg resolver
+  (`TensorResolver._resolve_arg_info`) handled `symbol` scalar args but not
+  composite arithmetic expressions (`add`/`sub`/`mul`/`floordiv`/`mod`/`neg`)
+  over symbols. Mochi's `MochiRoPE` builds its positional grid with
+  `aten::linspace` whose `steps` is `((s2 - 2)//2 + 2)` — an expression over the
+  symbolic height/width dim. The raw expression dict reached `torch.linspace`,
+  which cannot cast a dict to `int`, failing the op schema. Compiled mode folds
+  such expressions to a concrete int at compile time, masking the gap; the
+  triton-sequential path already evaluated them. The PyTorch-sequential resolver
+  now routes arithmetic-expression scalar args to the `shape_resolver` (the same
+  evaluator used for symbolic dims), restoring R30 parity. Pure fix — only fires
+  on arithmetic-expression scalar args, which previously crashed.
 - **Flow-matching scheduler: honour `invert_sigmas`, and video FlowEuler
   denoisers scale the timestep by `num_train_timesteps`.** Two coupled
   correctness bugs left Mochi (and any inverted-sigma flow model) producing
