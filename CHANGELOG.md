@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **TilingEngine: never component-tile a VAE encoder (downsampler).**
+  CogVideoX-5b-I2V crashed in `TilingEngine._accumulate` ("size of tensor a
+  (264) must match b (4) at dim 4"): the `vae_encoder` (image → compressed
+  latent, downsamples 112→14) was assigned a component TilingEngine, whose
+  accumulate path assembles tiles at the component's UPSCALE (output > input) —
+  the small encoded tiles cannot fill an upscale-sized accumulator. The encoder
+  aliases the VAE module, so its `ComponentMemory` carries the decode-side
+  activation and wrongly trips Prism's tile budget. Fixed at both decision
+  points (data-driven, no name/family match): read the component's output
+  spatial extent from the graph; if smaller than the input it is a downsampler
+  and not a component-tiling target (its peak is the input-resolution conv,
+  owned by op-level tiling). `tiling_engine.from_component_config` + Prism
+  `solver._spatial_component_tiling` (the path that emits the spec). Guard fires
+  for exactly the 3 downsampler encoders (CogVideoX-5b-I2V, Wan-I2V-14B, VACE);
+  all 24 tiled upsamplers (every VAE decoder, Swin2SR, HAT, real-esrgan)
+  provably unchanged (output > input); Sana 1024 runtime PASS (coherent,
+  VAE-decoder tiling path intact).
 - **Sequential dispatcher: evaluate symbolic arithmetic expressions in scalar
   args.** The op-by-op PyTorch-sequential arg resolver
   (`TensorResolver._resolve_arg_info`) handled `symbol` scalar args but not
