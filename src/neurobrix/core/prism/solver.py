@@ -2431,6 +2431,26 @@ class PrismSolver:
         if not trace_size:
             return None
 
+        # Downsampler guard (data-driven, no name/family match): a component
+        # whose OUTPUT spatial extent is smaller than its INPUT (a VAE *encoder*:
+        # image -> compressed latent) is NOT a component-tiling target. The
+        # TilingEngine accumulate path assembles tiles at the UPSCALE
+        # (output > input); a downsampler's small encoded tiles cannot fill an
+        # upscale-sized accumulator -> runtime shape mismatch (CogVideoX-5b-I2V
+        # vae_encoder: 264 vs 4 at the W axis). A downsampler's peak is its
+        # input-resolution conv, owned by op-level tiling, not this path. The
+        # encoder also aliases the VAE module, so its ComponentMemory carries the
+        # decode-side activation — exactly what would (wrongly) trip the budget
+        # test below. Mirror of the TilingEngine.from_component_config guard.
+        out_spatial = None
+        for oid in graph.get("output_tensor_ids", []):
+            osh = tensors.get(str(oid), {}).get("shape", [])
+            if isinstance(osh, list) and len(osh) in (4, 5):
+                out_spatial = osh[-2]
+                break
+        if out_spatial is not None and out_spatial < trace_size:
+            return None  # downsampler (encoder) — not a component-tiling target
+
         # Scale factor: upscale (upscalers) or VAE compression ratio.
         config = profile_j.get("config", {})
         scale_factor = config.get("upscale")
