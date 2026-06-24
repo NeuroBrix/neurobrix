@@ -165,6 +165,25 @@ class TilingEngine:
             # No 4D/5D spatial input — tiling not applicable
             return None
 
+        # --- Downsampler guard (data-driven, no name/family match) ---
+        # A component whose OUTPUT spatial extent is smaller than its INPUT
+        # (a VAE *encoder*: image -> compressed latent) does not overflow VRAM
+        # on its output and must never be driven by this engine. The accumulate
+        # path assembles tiles at the component's UPSCALE (output > input); fed
+        # a downsampler it tries to fill an upscale-sized accumulator with the
+        # small encoded tiles -> shape mismatch (CogVideoX-5b-I2V vae_encoder:
+        # 264 vs 4 at the W axis). Tiling reduces an UPSAMPLER's output-side
+        # peak; a downsampler's peak is its input-resolution conv, owned by
+        # op-level tiling (Prism), not this component tiler.
+        out_spatial = None
+        for oid in graph.get("output_tensor_ids", []):
+            osh = tensors.get(str(oid), {}).get("shape", [])
+            if len(osh) in (4, 5):
+                out_spatial = osh[-2]
+                break
+        if out_spatial is not None and out_spatial < trace_size:
+            return None  # downsampler (encoder) — not a tiling target
+
         # --- Step 2: Read scale factor and window config from profile ---
         with open(profile_path) as f:
             profile = json.load(f)
