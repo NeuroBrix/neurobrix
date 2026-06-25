@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **i2v_conditioning brick generalized to multi-style (Wan + CogVideoX).**
+  The shared I2V channel-concat conditioning brick
+  (`core/runtime/resolution/i2v_conditioning.py`) handled only the Wan-I2V style
+  (frame-mask + mean/std norm, channels-first). CogVideoX-I2V is structurally
+  different — scalar `vae scaling_factor` norm (no mask, no mean/std), image latent
+  temporally padded (frame 0 = image, rest zeros), frames-first layout (channel-
+  concat on dim 2). The brick is now multi-style, selected data-driven by the
+  registry flag `i2v_latent_conditioning.style` (never a model-name branch);
+  `apply()` takes a `channel_dim` (default 1 = Wan). The Wan path is byte-identical
+  (2-pass byte-diff GREEN: cond + out bit-equal new vs old). CogVideoX-5b-I2V CFG
+  batch=2 now builds the 32ch hidden_states correctly. Pays forward for
+  Wan2.2-I2V-A14B and any future I2V.
+
 - **TilingEngine: never component-tile a VAE encoder (downsampler).**
   CogVideoX-5b-I2V crashed in `TilingEngine._accumulate` ("size of tensor a
   (264) must match b (4) at dim 4"): the `vae_encoder` (image → compressed
