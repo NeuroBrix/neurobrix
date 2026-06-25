@@ -273,6 +273,8 @@ _GPU_BACKENDS = {
         "malloc": "cudaMalloc", "free": "cudaFree",
         "memcpy": "cudaMemcpy", "memset": "cudaMemset",
         "set_device": "cudaSetDevice", "get_device": "cudaGetDevice",
+        "device_count": "cudaGetDeviceCount",
+        "mem_get_info": "cudaMemGetInfo",
         "sync": "cudaDeviceSynchronize",
         "malloc_host": "cudaMallocHost", "free_host": "cudaFreeHost",
         # Stream-ordered memory allocator (CUDA 11.2+). The driver
@@ -300,6 +302,8 @@ _GPU_BACKENDS = {
         "malloc": "hipMalloc", "free": "hipFree",
         "memcpy": "hipMemcpy", "memset": "hipMemset",
         "set_device": "hipSetDevice", "get_device": "hipGetDevice",
+        "device_count": "hipGetDeviceCount",
+        "mem_get_info": "hipMemGetInfo",
         "sync": "hipDeviceSynchronize",
         "malloc_host": "hipHostMalloc", "free_host": "hipHostFree",
         # ROCm 4.3+ exposes the same stream-ordered API under hip*
@@ -372,6 +376,47 @@ class DeviceAllocator:
         rt = _gpu_runtime()
         getattr(rt, _active_backend()["get_device"])(ctypes.byref(dev))
         return dev.value
+
+    @staticmethod
+    def most_free_device() -> int:
+        """Return the GPU index with the most driver-free VRAM.
+
+        Used by the triton weight loader to place a CPU-staged lazy
+        component on the emptiest card (the loop GPU may have just
+        unloaded). Pure runtime-API — cudaGetDeviceCount + cudaSetDevice +
+        cudaMemGetInfo via ctypes; no torch (R33). The previously-current
+        device is restored before returning. Falls back to device 0 on any
+        query failure or a single-GPU host.
+        """
+        rt = _gpu_runtime()
+        backend = _active_backend()
+        count = ctypes.c_int(0)
+        try:
+            getattr(rt, backend["device_count"])(ctypes.byref(count))
+        except Exception:
+            return 0
+        ndev = count.value
+        if ndev <= 1:
+            return 0
+        prev = DeviceAllocator.get_device()
+        mem_fn = backend.get("mem_get_info", "cudaMemGetInfo")
+        set_fn = backend["set_device"]
+        best_idx, best_free = 0, -1
+        for i in range(ndev):
+            try:
+                getattr(rt, set_fn)(ctypes.c_int(i))
+                free_b = ctypes.c_size_t()
+                total_b = ctypes.c_size_t()
+                getattr(rt, mem_fn)(ctypes.byref(free_b), ctypes.byref(total_b))
+                if free_b.value > best_free:
+                    best_free, best_idx = free_b.value, i
+            except Exception:
+                continue
+        try:
+            getattr(rt, set_fn)(ctypes.c_int(prev))
+        except Exception:
+            pass
+        return best_idx
 
     @staticmethod
     def _maybe_init_pool() -> None:
