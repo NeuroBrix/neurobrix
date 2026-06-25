@@ -21,6 +21,7 @@ from neurobrix.core.dtype.config import get_torch_dtype
 from neurobrix.core.runtime.resolution.i2v_conditioning import (
     CONDITION_VAR as _I2V_CONDITION_VAR,
     apply as _i2v_apply,
+    condition_channel_dim as _i2v_channel_dim,
 )
 from neurobrix.core.runtime.resolution.vace_control_conditioning import (
     CONTROL_VAR as _VACE_CONTROL_VAR,
@@ -284,7 +285,8 @@ class CFGEngine:
         # apply() repeats it to the batch=2 state. Inert when absent (R23).
         _cond = self._ctx.variable_resolver.resolved.get(_I2V_CONDITION_VAR)
         if isinstance(_cond, torch.Tensor):
-            batched_state = _i2v_apply(batched_state, _cond)
+            batched_state = _i2v_apply(batched_state, _cond,
+                                       _i2v_channel_dim(self._ctx, comp_name))
         self._ctx.variable_resolver.set(state_key, batched_state)
 
         # VACE control conditioning: control_hidden_states is a SEPARATE denoiser
@@ -408,7 +410,8 @@ class CFGEngine:
         self._ctx.variable_resolver.set(encoder_key, neg_hidden)
         # I2V channel-concat conditioning (shared by both passes; batch=1 here).
         _cond = self._ctx.variable_resolver.resolved.get(_I2V_CONDITION_VAR)
-        _seq_state = (_i2v_apply(current_state, _cond)
+        _seq_state = (_i2v_apply(current_state, _cond,
+                                 _i2v_channel_dim(self._ctx, comp_name))
                       if isinstance(_cond, torch.Tensor) else current_state)
         self._ctx.variable_resolver.set(state_key, _seq_state)
         self._ctx.variable_resolver.set("global.encoder_attention_mask", neg_mask)

@@ -41,9 +41,61 @@ def conditioning_spec(ctx: Any, loop_comp: str) -> Optional[dict]:
     if not flag:
         return None
     spec = dict(flag) if isinstance(flag, dict) else {}
+    style = spec.setdefault("style", "wan")
     spec.setdefault("condition_component", "vae_encoder")
-    spec.setdefault("mask_channels", 4)
+    if style == "wan":
+        # Wan-I2V: frame-mask + per-channel mean/std norm. State is channels-
+        # first [B, C, T, H, W], so the channel-concat is dim 1.
+        spec.setdefault("mask_channels", 4)
+        spec.setdefault("channel_dim", 1)
+    elif style == "cogvideox":
+        # CogVideoX-I2V: scalar-scaled, temporally-padded image latent, no mask.
+        # State is frames-first [B, T, C, H, W], so the channel-concat is dim 2.
+        spec.setdefault("channel_dim", 2)
     return spec
+
+
+def condition_channel_dim(ctx: Any, loop_comp: str) -> int:
+    """Channel axis for apply()'s concat, data-driven from the spec.
+
+    Returns 1 (Wan channels-first default) when there is no spec, so callers
+    that channel-concat the condition stay correct for the default style.
+    """
+    spec = conditioning_spec(ctx, loop_comp)
+    return int(spec.get("channel_dim", 1)) if spec else 1
+
+
+def _vae_scaling(ctx: Any) -> tuple:
+    """Read (scaling_factor, invert_scale_latents) from the vae profile.
+
+    Scalar latent scaling for VAEs without per-channel mean/std (CogVideoX):
+    `latent = scaling_factor * latent` (or `1/scaling_factor` when inverted),
+    mirroring the vendor pipeline. Data-driven, never hardcoded.
+    """
+    prof_path = ctx.pkg.cache_path / "components" / "vae" / "profile.json"
+    prof = json.loads(prof_path.read_text())
+    cfg = prof.get("config") if isinstance(prof.get("config"), dict) else prof
+    sf = cfg.get("scaling_factor") or prof.get("scaling_factor")
+    invert = bool(cfg.get("invert_scale_latents") or prof.get("invert_scale_latents"))
+    return (float(sf) if sf else None), invert
+
+
+def _target_latent_frames(ctx: Any) -> Optional[int]:
+    """The denoiser's latent frame count (frames-first state dim 1).
+
+    Read from the initialized noise latent so the conditioning's temporal
+    extent matches the state exactly (no num_frames recompute).
+    """
+    for var in ("global.latents", "global.hidden_states"):
+        st = ctx.variable_resolver.resolved.get(var)
+        if st is None:
+            try:
+                st = ctx.variable_resolver.get(var)
+            except Exception:
+                st = None
+        if isinstance(st, torch.Tensor) and st.dim() == 5:
+            return int(st.shape[1])
+    return None
 
 
 def _vae_latent_stats(ctx: Any) -> tuple:
@@ -82,6 +134,51 @@ def _to_channels_first(latent: torch.Tensor, latent_channels: int) -> torch.Tens
 
 
 def build_condition(ctx: Any, spec: dict, num_frames: int) -> Optional[torch.Tensor]:
+    """Build the per-step-invariant conditioning tensor for the active style.
+
+    Multi-style, data-driven (spec["style"]): "wan" (frame-mask + per-channel
+    mean/std norm, channels-first) or "cogvideox" (scalar-scaled, temporally-
+    padded image latent, no mask, frames-first). Returns None if the
+    vae_encoder output is not yet resolved.
+    """
+    if spec.get("style") == "cogvideox":
+        return _build_condition_cogvideox(ctx, spec)
+    return _build_condition_wan(ctx, spec, num_frames)
+
+
+def _build_condition_cogvideox(ctx: Any, spec: dict) -> Optional[torch.Tensor]:
+    """CogVideoX-I2V conditioning: scalar-scaled VAE image latent, temporally
+    padded (frame 0 = image, rest zeros) to the denoiser's latent frame count,
+    NO mask, frames-first [B, T, C, H, W]. Mirrors
+    CogVideoXImageToVideoPipeline.prepare_latents (the patch_size_t branch is a
+    no-op for models with patch_size_t=None, e.g. CogVideoX-5b-I2V).
+    """
+    cond_comp = spec["condition_component"]
+    img = ctx.variable_resolver.resolved.get(f"{cond_comp}.output_0")
+    if img is None:
+        img = ctx.variable_resolver.get(f"{cond_comp}.output_0")
+    if not isinstance(img, torch.Tensor):
+        return None
+    _, _, latent_channels = _vae_latent_stats(ctx)
+    img = _to_channels_first(img, latent_channels)  # [B, C, F, H, W], F=1
+    sf, invert = _vae_scaling(ctx)
+    if sf:
+        img = (img / sf) if invert else (img * sf)
+    b, c, f, h, w = img.shape
+    t_target = _target_latent_frames(ctx)
+    if t_target and t_target > f:
+        pad = torch.zeros(b, c, t_target - f, h, w, device=img.device, dtype=img.dtype)
+        img = torch.cat([img, pad], dim=2)  # [B, C, T, H, W], frame 0 = image
+    import os as _os
+    if _os.environ.get("NBX_DIAG_I2V") == "1":
+        _f = img.float()
+        print(f"   [NBX-DIAG-I2V] cogvideox condition shape={list(img.shape)} "
+              f"scaling={sf} invert={invert} mean={_f.mean():.3f} std={_f.std():.3f}")
+    # frames-first to match the CogVideoX state layout [B, T, C, H, W]
+    return img.permute(0, 2, 1, 3, 4).contiguous()
+
+
+def _build_condition_wan(ctx: Any, spec: dict, num_frames: int) -> Optional[torch.Tensor]:
     """Build the per-step-invariant conditioning tensor (channels dim 1).
 
     condition = cat([frame_mask(mask_channels), normalized_vae_latent(C)], dim=1)
@@ -145,11 +242,14 @@ def _build_frame_mask(num_frames: int, latent_t: int, lh: int, lw: int,
     return mask
 
 
-def apply(state: torch.Tensor, condition: torch.Tensor) -> torch.Tensor:
+def apply(state: torch.Tensor, condition: torch.Tensor,
+          channel_dim: int = 1) -> torch.Tensor:
     """Channel-concat the condition onto the state, batch-aware.
 
     The condition is shared across CFG cond/uncond, so it is repeated to the
     state's batch (e.g. CFG-batched state [2, ...] vs condition [1, ...]).
+    `channel_dim` is the concat axis: 1 for Wan channels-first [B, C, T, H, W],
+    2 for CogVideoX frames-first [B, T, C, H, W]. Default 1 keeps Wan unchanged.
     """
     if condition.shape[0] != state.shape[0] and state.shape[0] % condition.shape[0] == 0:
         condition = condition.repeat(state.shape[0] // condition.shape[0], 1, 1, 1, 1)
@@ -157,4 +257,4 @@ def apply(state: torch.Tensor, condition: torch.Tensor) -> torch.Tensor:
         condition = condition.to(state.dtype)
     if condition.device != state.device:
         condition = condition.to(state.device)
-    return torch.cat([state, condition], dim=1)
+    return torch.cat([state, condition], dim=channel_dim)
