@@ -479,10 +479,12 @@ class TritonIterativeProcessHandler:
         # global.i2v_condition. R30 mirror of the compiled core flow; inert
         # without the i2v_latent_conditioning registry flag (R23).
         self._i2v_condition = None
+        self._i2v_channel_dim = 1
         _loop_comp0 = components[0] if components else None
         _cond_spec = (i2v_conditioning.conditioning_spec(self.ctx, _loop_comp0)
                       if _loop_comp0 else None)
         if _cond_spec is not None:
+            self._i2v_channel_dim = int(_cond_spec.get("channel_dim", 1))
             _nf = self.ctx.variable_resolver.get("global.num_frames")
             self._i2v_condition = i2v_conditioning.build_condition(
                 self.ctx, _cond_spec, int(_nf))
@@ -551,7 +553,8 @@ class TritonIterativeProcessHandler:
                             and self._is_loop_component(comp_name)):
                         self.ctx.variable_resolver.set(
                             state_key,
-                            i2v_conditioning.apply(scaled_state, self._i2v_condition))
+                            i2v_conditioning.apply(scaled_state, self._i2v_condition,
+                                                   self._i2v_channel_dim))
                     # Type guard: scaled_timestep may be int/float, convert to NBXTensor if needed
                     timestep_arg: Optional[NBXTensor] = None
                     if isinstance(scaled_timestep, NBXTensor):

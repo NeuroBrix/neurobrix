@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Triton i2v_conditioning multi-style (Wan + CogVideoX) — R30 mirror of the compiled
+  brick.** `triton/i2v_conditioning.py` now dispatches on the registry `style` flag: the
+  Wan path is unchanged (frame-mask + mean/std, channels-first), and a new CogVideoX path
+  builds the condition NBXTensor-pure (scalar `scaling_factor`, temporal-pad, frames-first,
+  `apply(..., channel_dim=2)`); `triton/cfg/engine.py` and `triton/flow/iterative_process.py`
+  pass the data-driven `channel_dim`. **Status: transformer-output-validated, triton mode
+  PENDING (not a closed mode).** Drift-gate on CogVideoX-5b-I2V shows the i2v condition +
+  batch=2 are correct (transformer batch-2 noise_pred matches the oracle), but the full
+  triton mode is blocked on a *pre-existing, shared* CogVideoX-triton kernel divergence
+  (batch-2 per-branch CFG; batch-1 cfg=1.0 NaN) — tracked as P-TRITON-COGVIDEOX
+  (`validation_outputs/cogvideox_5b_i2v/triton_divergence_report.md`), independent of this mirror.
+
 ### Fixed
 
 - **DeviceAllocator.most_free_device() implemented (triton CPU-staged weight load).**
