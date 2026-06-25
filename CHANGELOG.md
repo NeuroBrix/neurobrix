@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **DeviceAllocator.most_free_device() implemented (triton CPU-staged weight load).**
+  `graph_executor.py` (`_load_weights_triton`) called
+  `DeviceAllocator.most_free_device()` to place a CPU-staged lazy component on the
+  emptiest GPU, but the method was never defined — every triton run that staged a
+  component through CPU (plan device with no GPU index) crashed with
+  `AttributeError` (surfaced on CogVideoX-5b-I2V `--triton`, vae_encoder load).
+  Implemented R33-pure via the ctypes runtime backend (`cudaGetDeviceCount` +
+  `cudaSetDevice` + `cudaMemGetInfo`, no torch), restoring the prior current
+  device and falling back to device 0 on any query failure / single-GPU host.
+
 - **i2v_conditioning brick generalized to multi-style (Wan + CogVideoX).**
   The shared I2V channel-concat conditioning brick
   (`core/runtime/resolution/i2v_conditioning.py`) handled only the Wan-I2V style
