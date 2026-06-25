@@ -291,7 +291,8 @@ class TritonCFGEngine:
         # mirror of core/cfg/engine.py; inert when there is no condition (R23).
         _cond = self._ctx.variable_resolver.resolved.get(_i2v.CONDITION_VAR)
         if isinstance(_cond, NBXTensor):
-            batched_state = _i2v.apply(batched_state, _cond)
+            batched_state = _i2v.apply(batched_state, _cond,
+                                       _i2v.condition_channel_dim(self._ctx, comp_name))
 
         # VACE control conditioning: control_hidden_states is a SEPARATE denoiser
         # input resolved by the global.<name> fallback (NOT in topology.connections),
