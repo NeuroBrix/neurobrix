@@ -17,6 +17,17 @@ class TritonFlowEulerScheduler:
         self.max_shift = float(config.get("max_shift", 1.15))
         self.base_image_seq_len = int(config.get("base_image_seq_len", 256))
         self.max_image_seq_len = int(config.get("max_image_seq_len", 4096))
+        # Inverted-sigma flow (Mochi: invert_sigmas=True) — R30 mirror of core
+        # flow_euler.py (commit 3770103). Diffusers FlowMatchEulerDiscrete flips
+        # the schedule `sigmas = 1 - sigmas` with a TERMINAL sigma of 1 (not 0).
+        # Without it the denoising direction is reversed and the latents never
+        # leave the noise distribution (divergent / uniform-noise output). Gated
+        # on invert_sigmas, so non-inverted flow (Flux/SD3/Wan) is untouched.
+        self.invert_sigmas = bool(config.get("invert_sigmas", False))
+        # Video flow-match denoisers (Mochi) consume RAW [0, num_train_timesteps]
+        # timesteps; the loop scales the [0,1] sigma by this (R30 mirror of core
+        # _get_component_timestep_scale, commit 3770103 part 2).
+        self.num_train_timesteps = int(config.get("num_train_timesteps", 1000))
         self.num_inference_steps = None
         self._ts_np = None          # np.float64 [N] — internal
         self.timesteps = None       # list[NBXTensor [1]] — exposed to loop/CFG
@@ -35,6 +46,8 @@ class TritonFlowEulerScheduler:
         ts = np.linspace(1, 0, num_inference_steps + 1, dtype=np.float64)[:-1]
         if mu != 1.0:
             ts = mu * ts / (1 + (mu - 1) * ts)
+        if self.invert_sigmas:
+            ts = 1.0 - ts
         self._ts_np = ts.copy()
         self.sigmas = ts.copy()
         # Exposed as NBXTensor [1] floats (tensor-like timesteps for loop/CFG).
@@ -54,7 +67,9 @@ class TritonFlowEulerScheduler:
         if self._step_index < len(self._ts_np) - 1:
             t_next = float(self._ts_np[self._step_index + 1])
         else:
-            t_next = 0.0
+            # Terminal sigma: 1.0 for inverted flow (Mochi), 0.0 otherwise —
+            # mirrors core flow_euler.py + diffusers' torch.cat([sigmas, 1/0]).
+            t_next = 1.0 if self.invert_sigmas else 0.0
         dt = t_next - t
         prev = sample + model_output * dt
         self._step_index += 1
