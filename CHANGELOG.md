@@ -31,6 +31,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Triton video VAE single-GPU OOM: `_conv3d_via_conv2d` materialised too many
+  full-resolution copies (`kernels/wrappers.py`).** The conv3d→conv2d temporal
+  decomposition kept the input, the per-temporal-slice contiguous input copy,
+  the conv2d output, the permuted output, and the accumulator live
+  simultaneously — for CogVideoX-5b-I2V's `(1,256,13,480,720)` fp32 VAE
+  intermediates that is 6×4.4 GB ≈ 28 GB live, OOM-ing a 32 GB V100 at
+  `aten.convolution`. Fixed by **size-gated eager-free** of the dead per-slice
+  intermediates the moment each is consumed (new `_NBX_CONV3D_EAGER_FREE_BYTES`,
+  default 1 GiB): the live set falls to input + accumulator + one transient.
+  `cudaFree` blocks until the device is idle for the relevant stream, so the
+  early drop is async-safe (no use-after-free). Gated so small convs keep the
+  exact prior path — Mochi's full triton render is **byte-identical** with the
+  fix (md5 match on the mp4 and frames; the gate fires on Mochi's 3.75-5.63 GB
+  convs yet changes nothing computed), confirming a pure memory optimisation.
+  CogVideoX-5b-I2V triton VAE peak dropped 28379→12302 MB and now renders the
+  full video single-GPU at the established 13f config (504s, coherent). Benefits
+  every video model sharing the wrapper (Wan / Mochi / SANA-Video / CogVideoX).
 - **CogVideoX-I2V triton: per-branch CFG divergence — the i2v image condition
   reached only the uncond branch (`triton/i2v_conditioning.py`).** The triton
   `_build_condition_cogvideox` produced a single-frame condition `[B,1,C,H,W]`
