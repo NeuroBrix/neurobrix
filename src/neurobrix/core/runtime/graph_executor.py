@@ -3743,6 +3743,18 @@ class GraphExecutor:
                                 _hasym = round(_rdh / max(_cdh, 1e-8), 3)
                         except Exception:
                             _hasym = None
+                    # Per-batch L2 split (cond/uncond for CFG batch=2) — mirror
+                    # of compiled _maybe_dump_tid_native + triton nbx_tid_stats so
+                    # cross-engine per-branch diffs align (P-TRITON-COGVIDEOX).
+                    _bn = None
+                    if _t.dim() >= 2 and _t.shape[0] in (2, 3):
+                        try:
+                            _bn = [float(torch.linalg.vector_norm(
+                                _t[bi].detach().reshape(-1),
+                                dtype=torch.float32).item())
+                                for bi in range(_t.shape[0])]
+                        except Exception:
+                            _bn = None
                     with open(_dpath_ds, "a") as _f:
                         _json_ds.dump({"engine": "sequential", "record": {
                             "tid": tid, "op_uid": op_uid, "op_type": _ot_ds,
@@ -3750,6 +3762,7 @@ class GraphExecutor:
                             "shape": list(_t.shape), "dtype": str(_t.dtype),
                             "is_complex": bool(_t.is_complex()),
                             "head10": _head, "l2_norm": _norm,
+                            "batch_norms": _bn,
                             "hasym": _hasym}}, _f)
                         _f.write("\n")
                 except Exception as _e_ds:
