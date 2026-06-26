@@ -234,4 +234,25 @@ def apply(state: NBXTensor, condition: NBXTensor,
         condition = transfer_tensor(condition, state._device_idx)
     if condition._dtype != state._dtype:
         condition = condition.to(state._dtype)
+    # Extent guard: the condition must span every non-batch, non-channel dim of
+    # the state so the channel-concat is well-formed. CogVideoX-I2V builds a
+    # single-frame image condition (frame 0 = image latent); it must be zero-
+    # padded along the latent frame axis to the state's frame count (frame 0 =
+    # image, frames 1..T-1 = zeros). The compiled mirror does this at build time
+    # via _target_latent_frames, but that lookup returns None in the triton
+    # resolution order (the latent is not yet under global.latents when
+    # build_condition runs before the loop), leaving a 1-frame condition. Pad
+    # here against the LIVE state — timing-independent, semantically identical to
+    # the compiled temporal pad, and a no-op for Wan (its condition is already
+    # full-extent). Without it, the downstream cat silently mis-lays the batch
+    # and only branch 0 receives the condition → CFG per-branch divergence.
+    for d in range(state.ndim):
+        if d == 0 or d == channel_dim:
+            continue
+        if condition.shape[d] < state.shape[d]:
+            pad_shape = list(condition.shape)
+            pad_shape[d] = state.shape[d] - condition.shape[d]
+            pad = NBXTensor.zeros(tuple(pad_shape), dtype=condition._dtype,
+                                  device=f"cuda:{condition._device_idx}")
+            condition = NBXTensor.cat([condition, pad], dim=d)
     return NBXTensor.cat([state, condition], dim=channel_dim)

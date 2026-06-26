@@ -322,6 +322,14 @@ class DtypeEngine:
                 # fp16 hardware: certain FP16 ops need fp32 for numerical safety.
                 # bf16 hardware: all FP16 ops run clean (bf16 range = fp32 range).
                 if self.compute_dtype == torch.float16 and op_name in _FP16_NEED_FP32:
+                    # Diagnostic, read-only (default off): NBX_DISABLE_MATMUL_FP32=1
+                    # runs mm/bmm/addmm/div in fp16 (vendor-equivalent — a plain
+                    # torch_dtype=float16 forward keeps matmul in fp16, only
+                    # layer_norm/softmax get torch-internal fp32). Isolates whether
+                    # the matmul fp32 upcast (not the norm fp32) drives a divergence.
+                    import os as _os_mm
+                    if _os_mm.environ.get("NBX_DISABLE_MATMUL_FP32") == "1":
+                        return self._make_lower_precision_wrapper(func)
                     return self._make_fp32_wrapper(func)
                 return self._make_lower_precision_wrapper(func)
 
