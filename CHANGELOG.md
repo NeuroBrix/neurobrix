@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`NBX_DUMP_TIDS` sequential dump now records `batch_norms`** (per-batch L2
+  split), matching the compiled and triton dumps — enables cross-engine
+  per-branch (cond/uncond CFG batch=2) comparison from the pytorch op-by-op
+  oracle. Default-off diagnostic, zero runtime impact. Surfaced the
+  P-TRITON-COGVIDEOX root: the sequential transformer split at step 0 is
+  ~equal (uncond 402.5 / cond 404.1) while triton is spread (415/374), so the
+  triton transformer mis-distributes the CFG branches — the divergence is
+  inside the transformer, not the CFG combine or scheduler.
+
 ### Fixed
 
 - **Triton FlowEuler scheduler: `invert_sigmas` + video timestep-scale (R30
