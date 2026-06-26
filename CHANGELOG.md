@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Diagnostic env vars for cross-engine per-branch debugging (default-off,
+  read-only, zero runtime impact when unset).** `NBX_FIXED_LATENT=<path>` loads
+  the initial noise latent from a file (shape-matched) so two engines run on a
+  BIT-IDENTICAL initial latent for a same-input op-by-op divergence diff —
+  this was the harness that drift-gated the CogVideoX-I2V per-branch root cause.
+  `NBX_DISABLE_MATMUL_FP32=1` runs `mm`/`bmm`/`addmm`/`div` in fp16
+  (vendor-equivalent) to isolate whether the matmul fp32 upcast drives a
+  divergence (vs the layer_norm/softmax fp32).
+
 ### Changed
 
 - **`NBX_DUMP_TIDS` sequential dump now records `batch_norms`** (per-batch L2
@@ -20,6 +31,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **CogVideoX-I2V triton: per-branch CFG divergence — the i2v image condition
+  reached only the uncond branch (`triton/i2v_conditioning.py`).** The triton
+  `_build_condition_cogvideox` produced a single-frame condition `[B,1,C,H,W]`
+  because the temporal pad was skipped (`_target_latent_frames` returns `None`
+  in the triton resolution order — the latent is not yet under `global.latents`
+  when `build_condition` runs before the loop). `NBXTensor.cat` then silently
+  accepted the frame-dim mismatch against the 4-frame state and mis-laid the
+  batch, so only batch 0 received the condition (`result[1]` L2 == state L2).
+  That per-branch asymmetry seeded the value tensor (V per-branch split 333 vs
+  oracle 9) and the joint attention amplified it (block-0 output
+  `[2124.8, 1422.6]` vs oracle `[1800.3, 1808.4]`), blowing the CFG-guided latent
+  ~6x. Fix: `apply()` now zero-pads the condition along every non-batch,
+  non-channel axis to the live state's extent (frame 0 = image, frames 1..T-1 =
+  zeros) — timing-independent, semantically identical to the compiled temporal
+  pad, and a byte-identical no-op for Wan-I2V (full-extent condition). End-to-end
+  verification: every leak point now matches the pytorch oracle per-branch
+  (patchified-latent / modulated-hidden splits 5.89% / 1.55% → 0; block-0 SDPA
+  output matches to 0.1%). Flash-attention, conv2d, `repeat` and 5D `cat` were
+  each proven batch-independent by microtest — no kernel was at fault.
 - **Triton FlowEuler scheduler: `invert_sigmas` + video timestep-scale (R30
   mirror of commit `3770103`).** The triton FlowEuler lacked both halves of the
   compiled fix, so every inverted-flow video model (Mochi: `invert_sigmas=True`)

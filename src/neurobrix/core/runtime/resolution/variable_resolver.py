@@ -223,6 +223,16 @@ class VariableResolver:
                 return torch.ones(shape_tuple, dtype=dtype, device=self.device)
 
             elif init_type == "randn":
+                # Diagnostic, read-only (default off): NBX_FIXED_LATENT=<path>
+                # loads the initial noise latent from a file (matching shape) so
+                # NeuroBrix and a vendor pipeline can be run on a BIT-IDENTICAL
+                # initial latent for a same-input op-by-op divergence diff.
+                import os as _os_fl
+                _fl = _os_fl.environ.get("NBX_FIXED_LATENT")
+                if _fl and _os_fl.path.exists(_fl):
+                    _ft = torch.load(_fl, map_location=self.device, weights_only=True)
+                    if tuple(_ft.shape) == tuple(shape_tuple):
+                        return _ft.to(dtype=dtype, device=self.device)
                 # Gaussian noise - use seed for reproducibility if available
                 seed = self.defaults.get("seed")
                 if seed is not None:
