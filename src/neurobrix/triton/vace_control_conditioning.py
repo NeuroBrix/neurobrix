@@ -131,6 +131,18 @@ def build_control(ctx: Any, spec: dict) -> Optional[NBXTensor]:
 
 def build_scale(spec: dict, dev_idx: int) -> NBXTensor:
     """control_hidden_states_scale = ones(len(vace_layers)) as NBXTensor."""
+    import os as _os
+    # Diagnostic (default-off, zero impact when unset): NBX_VACE_SCALE_ZERO=1
+    # forces the per-layer injection scale to zeros, so the vace-block "hints"
+    # are not injected into the main hidden — the VACE forward collapses to its
+    # pure T2V base (coherent in triton). A differential to localize the triton
+    # vace GRAY degeneracy: coherent at scale=0 => bug is in the vace-block
+    # hints / injection; still gray => bug is in the main path's response to
+    # the vace inputs (e.g. patch-embedding side effect).
+    if _os.environ.get("NBX_VACE_SCALE_ZERO") == "1":
+        print("   [NBX-VACE-SCALE] forced to ZEROS (NBX_VACE_SCALE_ZERO=1) — "
+              "vace injection disabled (pure-T2V differential)", flush=True)
+        return _nbx_on(np.zeros((int(spec["vace_layers"]),), dtype=np.float32), dev_idx)
     return _nbx_on(np.ones((int(spec["vace_layers"]),), dtype=np.float32), dev_idx)
 
 
