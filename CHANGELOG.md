@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Triton flash-attention: key-padding bias passed as a broadcast view, not a
+  materialized matrix.** `scaled_dot_product_attention_wrapper` did
+  `bias = attn_mask.contiguous()`, which for a `[B,1,1,Sk]` key-padding mask kept
+  unit-size H/Sq dims with NON-ZERO contiguous strides (=Sk). The kernel iterates
+  `off_h<nheads` and `offs_m<seqlen_q`, so it indexed PAST those size-1 dims →
+  out-of-bounds illegal memory access (CUDA error 700). On large video
+  self-attention the alternative — expanding to the full `[B,H,Sq,Sk]` — is tens
+  of GB (Mochi `[2,24,~16k,~16k]` ≈ 25 GB). Fix: expand to a stride-0 broadcast
+  view and DON'T materialize it; the kernel reads the bias through its strides
+  (memory-resident `tl.load`, bit-equivalent). Mochi-1-preview triton now runs
+  the full attention/loop; anti-reg GREEN (Wan2.1-T2V-1.3B triton coherent).
+  General to every large-attention triton model.
+- **Triton `replication_pad3d` (+ real `1d`/`2d`) wrappers — R33-pure.** The
+  decoder edge-pad of 5D video VAEs (Mochi) lowers to `aten::replication_pad3d`,
+  which had no triton path (the stub raised, and `dispatch.py` mis-routed `3d` to
+  the `2d` stub). Implemented `replication_pad{1,2,3}d_wrapper` via a shared
+  `_replicate_pad_axis` (narrow + expand + `NBXTensor.cat` — no new `@triton.jit`
+  kernel, same decomposition discipline as `reflection_pad2d_wrapper`) and fixed
+  the `replication_pad3d` dispatch mapping. General to 5D-video VAE decoders.
+
 - **Sequential (pytorch op-by-op) mode now gets the spatial-symbol promotion (R30).**
   The compiled (`CompiledSequence`) and triton/triton_sequential paths apply
   `triton/promotion.py:_spatial_promotion_pass` to rewrite frozen trace-time

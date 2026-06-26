@@ -833,7 +833,7 @@ def _build_op_map() -> Dict[str, Callable]:
         "reflection_pad3d": w.reflection_pad2d_wrapper,
         "replication_pad1d": w.replication_pad1d_wrapper,
         "replication_pad2d": w.replication_pad2d_wrapper,
-        "replication_pad3d": w.replication_pad2d_wrapper,
+        "replication_pad3d": w.replication_pad3d_wrapper,
 
         # --- FFT ---
         "_fft_r2c": w.fft_r2c_wrapper,
