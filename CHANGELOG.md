@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `NBX_DISABLE_MATMUL_FP32=1` runs `mm`/`bmm`/`addmm`/`div` in fp16
   (vendor-equivalent) to isolate whether the matmul fp32 upcast drives a
   divergence (vs the layer_norm/softmax fp32).
+  `NBX_VACE_SCALE_ZERO=1` forces the VACE per-layer injection scale
+  (`control_hidden_states_scale`) to zeros, collapsing the VACE forward to its
+  pure-T2V base — a differential to localize the triton VACE GRAY degeneracy
+  (finding: scale=0 is still gray, so the bug is the vace *computation*
+  corrupting the main path, not the injection value).
 
 ### Changed
 
