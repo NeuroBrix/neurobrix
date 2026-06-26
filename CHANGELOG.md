@@ -28,6 +28,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `_replicate_pad_axis` (narrow + expand + `NBXTensor.cat` — no new `@triton.jit`
   kernel, same decomposition discipline as `reflection_pad2d_wrapper`) and fixed
   the `replication_pad3d` dispatch mapping. General to 5D-video VAE decoders.
+- **Triton `reflection_pad3d` wrapper — R33-pure (same mis-route class).**
+  `aten::reflection_pad3d` (SANA-Video's 5D VAE) was mis-routed in `dispatch.py`
+  to the 2D wrapper — correct only when the depth pad is 0, silently wrong
+  otherwise. Implemented `reflection_pad3d_wrapper` via a shared
+  `_reflect_pad_axis` (narrow + flip + `NBXTensor.cat`, no new kernel) and fixed
+  the mapping + the generic `pad`-mode dispatch. Both pad families unit-tested
+  bit-exact vs `torch.nn.functional.pad` (max|diff|=0.0 across asymmetric 3D
+  configs). General to 5D-video VAE decoders.
 
 - **Sequential (pytorch op-by-op) mode now gets the spatial-symbol promotion (R30).**
   The compiled (`CompiledSequence`) and triton/triton_sequential paths apply

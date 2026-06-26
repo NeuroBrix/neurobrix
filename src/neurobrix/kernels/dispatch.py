@@ -830,7 +830,7 @@ def _build_op_map() -> Dict[str, Callable]:
         "pad": w.pad_wrapper,
         "reflection_pad1d": w.reflection_pad1d_wrapper,
         "reflection_pad2d": w.reflection_pad2d_wrapper,
-        "reflection_pad3d": w.reflection_pad2d_wrapper,
+        "reflection_pad3d": w.reflection_pad3d_wrapper,
         "replication_pad1d": w.replication_pad1d_wrapper,
         "replication_pad2d": w.replication_pad2d_wrapper,
         "replication_pad3d": w.replication_pad3d_wrapper,
