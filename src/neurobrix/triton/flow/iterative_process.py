@@ -421,6 +421,9 @@ class TritonIterativeProcessHandler:
                 f"Available modules: {list(self.ctx.modules.keys())}"
             )
         driver = self.ctx.modules[driver_name]
+        # Expose the active scheduler to _get_component_timestep_scale (video
+        # FlowEuler denoisers need num_train_timesteps as their timestep scale).
+        self._active_driver = driver
 
         # Get control variables
         num_steps = self.ctx.variable_resolver.get("global.num_inference_steps")
@@ -901,6 +904,20 @@ class TritonIterativeProcessHandler:
         explicit = attrs.get("timestep_scale")
         if explicit is not None:
             return float(explicit)
+
+        # Video flow-match denoisers (e.g. Mochi) consume the scheduler's RAW
+        # [0, num_train_timesteps] timesteps: the transformer embeds them
+        # directly (no in-graph scaling). NeuroBrix's FlowEuler emits [0,1]
+        # sigmas, so the loop must scale by num_train_timesteps or the timestep
+        # embedding collapses to ~0 → an unconditioned (divergent) latent. R30
+        # mirror of core _get_component_timestep_scale (commit 3770103 part 2),
+        # gated on video + FlowEuler so non-flow video schedulers (Wan UniPC,
+        # CogVideoX DDIM — already [0,1000]) and image flow (Flux) are untouched.
+        driver = getattr(self, "_active_driver", None)
+        if (self.ctx.pkg.manifest.get("family") == "video"
+                and type(driver).__name__ == "TritonFlowEulerScheduler"
+                and getattr(driver, "num_train_timesteps", None)):
+            return float(driver.num_train_timesteps)
 
         return 1.0
 

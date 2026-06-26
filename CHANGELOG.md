@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Triton FlowEuler scheduler: `invert_sigmas` + video timestep-scale (R30
+  mirror of commit `3770103`).** The triton FlowEuler lacked both halves of the
+  compiled fix, so every inverted-flow video model (Mochi: `invert_sigmas=True`)
+  ran the wrong denoising trajectory in triton mode. (1) `set_timesteps` now does
+  `ts = 1 - ts` and `step` uses terminal `t_next = 1.0` when inverted (was the
+  non-inverted `0→`/`0.0`). (2) `_get_component_timestep_scale` now returns the
+  driver's `num_train_timesteps` for video FlowEuler denoisers with no explicit
+  scale (was 1.0), so the transformer gets the raw `[0, num_train]` timestep it
+  was traced with instead of the collapsed `[0,1]` (which un-conditions the
+  timestep embedding). Validated by cross-engine drift gate on Mochi-1-preview:
+  the triton denoised latent went `l2=10561 → 12184 (invert) → 12870 (both)` vs
+  the compiled oracle `12874` (~0.03%, within DtypeEngine tolerance). Both gated
+  (`invert_sigmas` / `family==video & FlowEuler`), so non-inverted flow
+  (Sana/Flex/SD3) and non-flow video (Wan UniPC, CogVideoX DDIM) are byte-
+  identical no-ops. **Mochi triton drift-gated correct (3/4); coherent frame
+  deferred — V100 conv3d throughput, redundant since triton mirrors compiled.**
+
 - **Triton flash-attention: key-padding bias passed as a broadcast view, not a
   materialized matrix.** `scaled_dot_product_attention_wrapper` did
   `bias = attn_mask.contiguous()`, which for a `[B,1,1,Sk]` key-padding mask kept
