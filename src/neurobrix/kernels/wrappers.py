@@ -2694,6 +2694,23 @@ def argmin_wrapper(x, dim=None, keepdim=False) :
 # NBX_CONV2D_BAND_BYTES if needed for non-Volta hardware.
 _NBX_CONV2D_BAND_BYTES = int(os.environ.get("NBX_CONV2D_BAND_BYTES", str(4 * 1024 * 1024 * 1024)))
 
+# P-TRITON-LIVE-SET-AUDIT (#37) — conv3d-via-conv2d eager-free threshold.
+# The temporal decomposition in _conv3d_via_conv2d materialises several full-
+# resolution copies per temporal-kernel slice (input contiguous-copy, conv2d
+# output, permuted output, accumulator). For large video VAE conv3d (CogVideoX
+# 5D decode at (1,256,13,480,720) = 4.4 GB per copy in fp32), 5-6 of these are
+# live simultaneously → 26-30 GB → single-GPU OOM at aten.convolution. When a
+# per-slice intermediate is at least this many bytes, it is dropped the moment
+# it is consumed so the live set falls to input + accumulator + one transient.
+# free_cuda is cudaFree, which blocks until the device is idle for the relevant
+# stream, so dropping a tensor whose producing/consuming kernel just ran is
+# async-safe (no UAF). GATED so small convs (Wan/Mochi/SANA at their validated
+# configs) keep the EXACT prior code path — no relocated free, byte- and
+# timing-identical. Numerics are unchanged (frees sooner only). 1 GiB default
+# fires only on the multi-GB video-VAE convs.
+_NBX_CONV3D_EAGER_FREE_BYTES = int(
+    os.environ.get("NBX_CONV3D_EAGER_FREE_BYTES", str(1 * 1024 * 1024 * 1024)))
+
 # Diagnostic trace — when set, every conv2d_wrapper call prints the
 # (in_shape, out_shape, kernel, groups, output_MB) so we can see the actual
 # spatial workload arriving in triton mode. Used by P-SANA-4KPX-RUNTIME
@@ -2809,6 +2826,7 @@ def _conv3d_via_conv2d(x, weight, bias, stride, padding, dilation, groups):
     Tp = x.shape[2]
     T_out = (Tp - dt * (kt - 1) - 1) // st + 1
     out = None
+    _ef = _NBX_CONV3D_EAGER_FREE_BYTES  # #37 size-gated eager-free threshold
     for kti in range(kt):
         start = kti * dt
         if st == 1:
@@ -2825,9 +2843,23 @@ def _conv3d_via_conv2d(x, weight, bias, stride, padding, dilation, groups):
         w2 = weight[:, :, kti:kti + 1].contiguous().reshape(Cout, Cin_g, kh, kw)
         y2 = conv2d_wrapper(x2, w2, None, (sh, sw), (ph, pw), (dh, dw),
                             False, 0, groups)
+        # #37: conv2d has produced y2, so the input contiguous-copy x2 is dead.
+        # Drop it now for large (video-VAE) slices so the live set does not
+        # accumulate input + x2 + y2 + y + out simultaneously (CogVideoX 5D
+        # decode OOM at aten.convolution). Gated → small convs keep the exact
+        # prior path. cudaFree blocks until the conv2d kernel is idle (async-safe).
+        if x2._nbytes >= _ef:
+            x2 = None
         Ho, Wo = y2.shape[2], y2.shape[3]
         y = y2.reshape(B, T_out, Cout, Ho, Wo).permute(0, 2, 1, 3, 4).contiguous()
-        out = y if out is None else out + y
+        if y2._nbytes >= _ef:
+            y2 = None  # conv output pre-permute copy is dead once y is materialised
+        if out is None:
+            out = y
+        else:
+            out = out + y  # old accumulator auto-frees on reassignment
+            if y._nbytes >= _ef:
+                y = None   # addend is dead once out+y is allocated
     if bias is not None:
         out = out + bias.reshape(1, Cout, 1, 1, 1)
     return out
