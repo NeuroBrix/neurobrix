@@ -5516,9 +5516,11 @@ def pad_wrapper(x, pad_list, mode: str = "constant",
             return reflection_pad1d_wrapper(x, pad_list)
         if ndim_padded == 2:
             return reflection_pad2d_wrapper(x, pad_list)
+        if ndim_padded == 3:
+            return reflection_pad3d_wrapper(x, pad_list)
         raise RuntimeError(
             f"[--triton mode] reflection pad over {ndim_padded} dims has no "
-            f"Triton wrapper (1D/2D only). pad_list={pad_list}."
+            f"Triton wrapper (1D/2D/3D only). pad_list={pad_list}."
         )
     if mode in ("replicate", "replication"):
         if ndim_padded == 1:
@@ -5603,6 +5605,36 @@ def reflection_pad2d_wrapper(x, pad_list) :
         out = NBXTensor.cat(parts, dim=-2).contiguous()
 
     return out
+
+
+def _reflect_pad_axis(out, axis, before, after):
+    """Reflect (mirror, excluding the edge element — PyTorch `reflect`)
+    `before`/`after` slices along `axis` and cat. R33-pure: narrow + flip +
+    NBXTensor.cat (no new kernel), the per-axis core of reflection_pad2d_wrapper.
+    """
+    if before <= 0 and after <= 0:
+        return out
+    L = out.shape[axis]
+    parts = []
+    if before > 0:
+        parts.append(flip_wrapper(out.narrow(axis, 1, before), [axis]))
+    parts.append(out)
+    if after > 0:
+        parts.append(flip_wrapper(out.narrow(axis, L - 1 - after, after), [axis]))
+    return NBXTensor.cat(parts, dim=axis).contiguous()
+
+
+def reflection_pad3d_wrapper(x, pad_list) :
+    """Reflection pad 3D (last three dims) — F.pad(mode='reflect'). R33-pure
+    narrow+flip+cat (no new kernel). Used by the SANA-Video / 5D-video VAE
+    reflection pad on [B, C, D, H, W]; previously mis-routed to the 2D wrapper
+    (correct only when the depth pad is 0)."""
+    pad_list = [int(v) for v in pad_list]
+    # torch convention: [W_left, W_right, H_top, H_bot, D_front, D_back]
+    wl, wr, ht, hb, df, db = (pad_list + [0, 0, 0, 0, 0, 0])[:6]
+    out = _reflect_pad_axis(x.contiguous(), -1, wl, wr)
+    out = _reflect_pad_axis(out, -2, ht, hb)
+    return _reflect_pad_axis(out, -3, df, db)
 
 
 def _replicate_pad_axis(out, axis, before, after):
