@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Sequential (pytorch op-by-op) mode now gets the spatial-symbol promotion (R30).**
+  The compiled (`CompiledSequence`) and triton/triton_sequential paths apply
+  `triton/promotion.py:_spatial_promotion_pass` to rewrite frozen trace-time
+  height/width literals in view/reshape/expand shape args into scaled
+  height/width symbols, so the graph adapts to any runtime resolution. The
+  pytorch `--sequential` path (`graph_executor` + `sequential_dispatcher`) was
+  the one mode missing it, so a video VAE whose unflatten froze the trace spatial
+  dims crashed at any non-trace resolution — e.g. Mochi's VAE `_unsafe_view`
+  target `[1, T, 28, 44, 2048]` (28 = 2·s_height(14), 44 = 2·s_width(22)) failed
+  with `shape [1,9,28,44,-1] invalid for input of size …` at 848×480 while
+  compiled/triton decoded fine. `GraphExecutor._apply_sequential_spatial_promotion()`
+  now mirrors the same single-source pass for `mode=="sequential"`. Idempotent,
+  inert on graphs without height/width symbols (LLM/audio), bit-perfect at
+  trace==runtime (resolver substitutes the trace value). Mochi-1-preview
+  sequential now decodes coherent; anti-reg GREEN (Wan2.1-T2V-1.3B sequential
+  unchanged-coherent). General to every video model's sequential VAE.
+
 ### Added
 
 - **Triton i2v_conditioning multi-style (Wan + CogVideoX) — R30 mirror of the compiled

@@ -770,6 +770,8 @@ class GraphExecutor:
             norm_topk_prob=getattr(self, '_moe_norm_topk_prob', True)
         )
 
+        self._apply_sequential_spatial_promotion()
+
         # Pre-compile dispatch table for Triton mode
         # Only needed for Triton mode — native mode bypasses classification entirely
         # _precompile_dispatch_table removed — old triton dispatch path eliminated
@@ -797,6 +799,12 @@ class GraphExecutor:
         which cast inputs to compute_dtype. fp32 only flows through
         single-input ops (pow, mean, rsqrt) where no dtype mismatch occurs.
         """
+        # Diagnostic, read-only (default off): NBX_DISABLE_AMP=1 runs the
+        # component in uniform compute_dtype (no AMP fp32 upcast) to mirror a
+        # vendor pipeline executed with a plain torch_dtype=float16 forward.
+        import os as _os_amp
+        if _os_amp.environ.get("NBX_DISABLE_AMP") == "1":
+            return False
         return True
 
     def _normalize_sdpa_scaling(self) -> None:
@@ -969,7 +977,38 @@ class GraphExecutor:
         Useful when DAG is already loaded by caller.
         """
         self._dag = dag
+        self._apply_sequential_spatial_promotion()
         self._init_from_dag()
+
+    def _apply_sequential_spatial_promotion(self) -> None:
+        """R30: give the pytorch op-by-op sequential dispatcher the same
+        spatial-symbol promotion that CompiledSequence (compiled) and
+        triton/promotion.py (triton / triton_sequential) already apply.
+
+        Without it, view/reshape/expand/_unsafe_view shape args keep the FROZEN
+        trace spatial dims (e.g. the Mochi VAE unflatten target
+        [1, T, 28, 44, 2048] where 28 = 2*s_height(14), 44 = 2*s_width(22)),
+        so at any runtime resolution != trace the op-by-op oracle crashes
+        ("shape [1,9,28,44,-1] invalid for input of size ...") while the other
+        three modes adapt. _spatial_promotion_pass rewrites those literals to
+        the scaled height/width symbols, so the resolver substitutes the runtime
+        value. Idempotent (skips args already carrying symbol refs) and inert on
+        graphs with no height/width symbols (LLMs, audio), so it only changes
+        multi-resolution diffusion sequential runs. Scoped to mode=="sequential":
+        the compiled/triton paths run their own copy of the same single-source
+        pass, kept untouched here for byte-identical anti-reg.
+        """
+        if self.mode != "sequential" or not isinstance(self._dag, dict):
+            return
+        from neurobrix.triton.promotion import _spatial_promotion_pass
+        sc = self._dag.get("symbolic_context", {}) or {}
+        _spatial_promotion_pass(
+            self._dag,
+            self._dag.get("tensors", {}),
+            self._dag.get("ops", {}),
+            sc.get("symbols", {}),
+            set(), set(),
+        )
 
     # =========================================================================
     # Weight Loading
@@ -3677,13 +3716,41 @@ class GraphExecutor:
                     _fflat = _flat if _flat.is_floating_point() else _flat.float()
                     _norm = float(torch.linalg.vector_norm(
                         _fflat, dtype=torch.float32).item())
+                    # H-asymmetry diagnostic (native scanline hunt, read-only):
+                    # for token tensors [B,N,F] with N==T*H*W (env NBX_HASYM_THW),
+                    # reshape -> [T,H,W], avg feature+batch, mid-T, row/col diff ratio.
+                    _hasym = None
+                    _thw = _os_ds.environ.get("NBX_HASYM_THW")
+                    if _thw:
+                        try:
+                            _Th, _Hh, _Wh = (int(x) for x in _thw.split(","))
+                            _ntok = _Th * _Hh * _Wh
+                            _gg = None
+                            if _t.dim() == 3 and _t.shape[1] == _ntok:
+                                # [B, N, F] token tensor
+                                _gg = _t.detach().float().reshape(
+                                    _t.shape[0], _Th, _Hh, _Wh, _t.shape[2]
+                                ).mean(dim=(0, 4))[_Th // 2]
+                            elif _t.dim() == 4 and _t.shape[2] == _ntok:
+                                # [B, heads, N, head_dim] multi-head (q/k/v/attn-out)
+                                _gg = _t.detach().float().reshape(
+                                    _t.shape[0], _t.shape[1], _Th, _Hh, _Wh,
+                                    _t.shape[3]
+                                ).mean(dim=(0, 1, 5))[_Th // 2]
+                            if _gg is not None:
+                                _rdh = (_gg[1:, :] - _gg[:-1, :]).abs().mean().item()
+                                _cdh = (_gg[:, 1:] - _gg[:, :-1]).abs().mean().item()
+                                _hasym = round(_rdh / max(_cdh, 1e-8), 3)
+                        except Exception:
+                            _hasym = None
                     with open(_dpath_ds, "a") as _f:
                         _json_ds.dump({"engine": "sequential", "record": {
                             "tid": tid, "op_uid": op_uid, "op_type": _ot_ds,
                             "component": self._component_name,
                             "shape": list(_t.shape), "dtype": str(_t.dtype),
                             "is_complex": bool(_t.is_complex()),
-                            "head10": _head, "l2_norm": _norm}}, _f)
+                            "head10": _head, "l2_norm": _norm,
+                            "hasym": _hasym}}, _f)
                         _f.write("\n")
                 except Exception as _e_ds:
                     print(f"[NBX_DUMP_TIDS seq] failed on {tid}: {_e_ds}", flush=True)
