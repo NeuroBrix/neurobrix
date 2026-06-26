@@ -5525,9 +5525,11 @@ def pad_wrapper(x, pad_list, mode: str = "constant",
             return replication_pad1d_wrapper(x, pad_list)
         if ndim_padded == 2:
             return replication_pad2d_wrapper(x, pad_list)
+        if ndim_padded == 3:
+            return replication_pad3d_wrapper(x, pad_list)
         raise RuntimeError(
             f"[--triton mode] replication pad over {ndim_padded} dims has no "
-            f"Triton wrapper (1D/2D only). pad_list={pad_list}."
+            f"Triton wrapper (1D/2D/3D only). pad_list={pad_list}."
         )
     raise RuntimeError(
         f"[--triton mode] pad mode='{mode}' not implemented. "
@@ -5603,20 +5605,56 @@ def reflection_pad2d_wrapper(x, pad_list) :
     return out
 
 
+def _replicate_pad_axis(out, axis, before, after):
+    """Replicate the edge slice `before`/`after` times along `axis` and cat.
+
+    R33-pure: narrow + expand + NBXTensor.cat — no new Triton kernel (same
+    decomposition discipline as reflection_pad2d_wrapper). Replication repeats
+    the EDGE element (PyTorch `replicate`), unlike reflection which mirrors the
+    interior — so a left pad of p is the first slice broadcast p times, a right
+    pad of p is the last slice broadcast p times.
+    """
+    if before <= 0 and after <= 0:
+        return out
+    L = out.shape[axis]
+    parts = []
+    if before > 0:
+        shp = list(out.shape); shp[axis] = before
+        parts.append(out.narrow(axis, 0, 1).expand(*shp).contiguous())
+    parts.append(out)
+    if after > 0:
+        shp = list(out.shape); shp[axis] = after
+        parts.append(out.narrow(axis, L - 1, 1).expand(*shp).contiguous())
+    return NBXTensor.cat(parts, dim=axis).contiguous()
+
+
 def replication_pad1d_wrapper(x, pad_list) :
-    """Replication pad 1D — NOT YET IMPLEMENTED in Triton."""
-    raise RuntimeError(
-        "[--triton mode] replication_pad1d has no Triton kernel. "
-        "Implement in src/neurobrix/kernels/ops/pad_op.py."
-    )
+    """Replication pad 1D (last dim) — F.pad(mode='replicate'). R33-pure
+    narrow+expand+cat (no new kernel)."""
+    pad_list = [int(v) for v in pad_list]
+    left, right = (pad_list + [0, 0])[:2]
+    return _replicate_pad_axis(x.contiguous(), -1, left, right)
 
 
 def replication_pad2d_wrapper(x, pad_list) :
-    """Replication pad 2D — NOT YET IMPLEMENTED in Triton."""
-    raise RuntimeError(
-        "[--triton mode] replication_pad2d has no Triton kernel. "
-        "Implement in src/neurobrix/kernels/ops/pad_op.py."
-    )
+    """Replication pad 2D (last two dims) — F.pad(mode='replicate'). R33-pure."""
+    pad_list = [int(v) for v in pad_list]
+    # torch convention: last-dim-first → [W_left, W_right, H_top, H_bot]
+    wl, wr, ht, hb = (pad_list + [0, 0, 0, 0])[:4]
+    out = _replicate_pad_axis(x.contiguous(), -1, wl, wr)
+    return _replicate_pad_axis(out, -2, ht, hb)
+
+
+def replication_pad3d_wrapper(x, pad_list) :
+    """Replication pad 3D (last three dims) — F.pad(mode='replicate'). R33-pure
+    narrow+expand+cat (no new kernel). Used by the Mochi / 5D-video VAE decoder
+    edge pad on [B, C, D, H, W]."""
+    pad_list = [int(v) for v in pad_list]
+    # torch convention: [W_left, W_right, H_top, H_bot, D_front, D_back]
+    wl, wr, ht, hb, df, db = (pad_list + [0, 0, 0, 0, 0, 0])[:6]
+    out = _replicate_pad_axis(x.contiguous(), -1, wl, wr)
+    out = _replicate_pad_axis(out, -2, ht, hb)
+    return _replicate_pad_axis(out, -3, df, db)
 
 
 # ===========================================================================
@@ -6123,7 +6161,22 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
             attn_mask = attn_mask.unsqueeze(1).expand(
                 batch, nheads, seqlen_q, seqlen_k
             )
-        bias = attn_mask.contiguous()
+        elif attn_mask.ndim == 4:
+            attn_mask = attn_mask.expand(batch, nheads, seqlen_q, seqlen_k)
+        # Pass the bias as a BROADCAST view: keep stride-0 on every axis the
+        # mask is constant over (H and/or the query axis for a key-padding
+        # mask). The kernel reads the bias through its strides, so a key-pad
+        # mask stays a few-MB [.., Sk] buffer (stride_bm=0) instead of a
+        # materialized [B,H,Sq,Sk] matrix — for video self-attention that
+        # matrix is tens of GB (Mochi [2,24,~16k,~16k] ≈ 25 GB). The previous
+        # .contiguous() on a [B,1,1,Sk] mask kept unit-size H/Sq dims with
+        # NON-ZERO contiguous strides (=Sk), which the kernel then indexed
+        # PAST at off_h<nheads / offs_m<seqlen_q → out-of-bounds illegal
+        # access (Mochi triton "error 700"). The bias is still memory-resident
+        # (a real tl.load, bit-equivalent — only the strides change). Only
+        # materialize if the key axis is not unit-stride (kernel reads offs_n
+        # with implicit stride 1).
+        bias = attn_mask if attn_mask.stride(-1) == 1 else attn_mask.contiguous()
     elif is_causal:
         causal_base = _get_causal_bias(device_idx, seqlen_q, seqlen_k, q.dtype)
         bias = causal_base.unsqueeze(0).unsqueeze(0).expand(
