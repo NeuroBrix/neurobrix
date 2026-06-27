@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Dual-denoiser boundary switch (Wan2.2-A14B MoE-of-experts, compiled).** The
+  iterative_process flow runs ONE denoiser expert per step: the high-noise expert
+  for t >= boundary_timestep (= boundary_ratio x num_train_timesteps), the low-noise
+  expert for t < boundary (`_setup_dual_denoiser`, role-preferred ordering with
+  loop-order fallback). Gated on boundary_ratio + >= 2 loop denoisers -> inert for
+  every single-denoiser model. Wan2.2-I2V-A14B end-to-end support is in progress —
+  the i2v image-encode + numerical close remain (see the model verdict).
+
 - **FLUX-video packed-latent flow (Open-Sora-v2, compiled).** Runtime support for
   FLUX-style packed-latent video denoisers: a `flux_video_conditioning` brick
   synthesizes the 3-axis positional `img_ids` (over the T,H/p,W/p latent grid),
