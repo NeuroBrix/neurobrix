@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **FLUX-video packed-latent flow (Open-Sora-v2, compiled).** Runtime support for
+  FLUX-style packed-latent video denoisers: a `flux_video_conditioning` brick
+  synthesizes the 3-axis positional `img_ids` (over the T,H/p,W/p latent grid),
+  `txt_ids`, and the T2V `cond`; the iterative_process flow gains 5D
+  pack/unpack (`[B,C,T,H,W]<->[B,T*(H/2)*(W/2),C*4]`) and a state-variable alias.
+  All gated on the denoiser declaring an `img_ids` input (FLUX-family only) —
+  inert for every other diffusion model (anti-reg: CogVideoX-2b unchanged).
+  Structurally validated through the MMDiT entry; remaining residual (RoPE/pe
+  shape, VAE numerical, CFG `txt`-naming, triton mirror) tracked in the
+  Open-Sora-v2 verdict.
+
 - **Diagnostic env vars for cross-engine per-branch debugging (default-off,
   read-only, zero runtime impact when unset).** `NBX_FIXED_LATENT=<path>` loads
   the initial noise latent from a file (shape-matched) so two engines run on a
