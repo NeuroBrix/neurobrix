@@ -30,6 +30,18 @@ Entry format: `ID · title · root cause / fix · scope · status`.
   `config/hardware/*.yml` profiles: single-GPU, homogeneous multi-GPU,
   heterogeneous multi-GPU, variable VRAM.
 - **Scope.** All multi-GPU placement; every model that does not fit on one GPU.
+- **Concrete sub-gap (added 2026-06-27, Wan-I2V-14B batch=2):**
+  `triton/sequential.py` is **single-device only** — it takes one `device_idx`
+  and routes every allocation to `cuda:{device_idx}`, with **none** of the
+  cross-device machinery that `triton/sequence.py` already has
+  (`compute_op_devices`, `_run_multi_device`, `device_transfer.transfer_tensor`).
+  Any model whose component does not fit one GPU therefore cannot run in
+  `triton_sequential`. First blocker: **Wan-I2V-14B at CFG batch=2** (31.25 GB
+  transformer > 32 GB at batch=2 → needs multi-GPU placement; the other 3 modes
+  run, triton_seq cannot). Fix = port the `sequence.py` multi-device path into
+  `sequential.py` (R30 mirror), as part of this general Prism multi-GPU capability.
+  NOTE: `triton` (compiled) is NOT blocked — it runs multi-GPU via
+  `pipeline_parallel` (proven on Wan-I2V-14B batch=2, 2026-06-27).
 - **Status.** `DEFERRED` — final pass, as the general Prism capability (with D2).
 
 ### D2 · VAE-5D long-clip / native-resolution OOM single-GPU (task #5)
