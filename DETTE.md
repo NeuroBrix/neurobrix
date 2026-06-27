@@ -42,6 +42,12 @@ Entry format: `ID · title · root cause / fix · scope · status`.
   `sequential.py` (R30 mirror), as part of this general Prism multi-GPU capability.
   NOTE: `triton` (compiled) is NOT blocked — it runs multi-GPU via
   `pipeline_parallel` (proven on Wan-I2V-14B batch=2, 2026-06-27).
+- **Also under this debt (added 2026-06-27): Wan2.2-I2V-A14B** — dual-denoiser
+  (2× 14B = 28B total). The compiled-mode close is single-GPU-feasible via expert
+  lifecycle (one expert resident per boundary stage); the `triton`/`triton_seq`
+  axes need the same multi-GPU/multi-device capability as Wan-I2V-14B → deferred
+  here. (Its compiled close is itself OPEN on the i2v vae_encoder encode-pass — a
+  chantier residual, not debt; see validation_outputs/video/Wan2.2-I2V-A14B/verdict.md.)
 - **Status.** `DEFERRED` — final pass, as the general Prism capability (with D2).
 
 ### D2 · VAE-5D long-clip / native-resolution OOM single-GPU (task #5)
