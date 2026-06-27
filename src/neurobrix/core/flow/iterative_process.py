@@ -430,6 +430,9 @@ class IterativeProcessHandler(FlowHandler):
 
         encoder_dtype = self._get_encoder_dtype()
 
+        # Dual-denoiser (Wan2.2-A14B) boundary switch — one expert per step.
+        dual = self._setup_dual_denoiser(components, driver)
+
         # Main loop
         for step_idx, timestep in enumerate(iterator):
             if DEBUG:
@@ -441,7 +444,18 @@ class IterativeProcessHandler(FlowHandler):
                 timestep = timestep.unsqueeze(0)
             self.ctx.variable_resolver.loop_state[self.ctx.loop_id] = timestep
 
-            for comp_name in components:
+            # Dual-denoiser: run ONLY the active expert this step (high-noise for
+            # t >= boundary, low-noise for t < boundary); non-denoiser loop
+            # components (if any) always run. Single-denoiser models: unchanged.
+            step_components = components
+            if dual is not None:
+                _t = (timestep.item() if isinstance(timestep, torch.Tensor)
+                      else float(timestep))
+                _active = dual["high"] if _t >= dual["boundary"] else dual["low"]
+                step_components = [c for c in components
+                                  if c == _active or not self._is_loop_component(c)]
+
+            for comp_name in step_components:
                 if DEBUG and step_idx == 0:
                     self._audit_component_inputs(comp_name)
 
@@ -698,6 +712,40 @@ class IterativeProcessHandler(FlowHandler):
         """Check if component is in the main loop."""
         loop_def = self.ctx.pkg.topology.get("flow", {}).get("loop", {})
         return comp_name in loop_def.get("components", [])
+
+    def _setup_dual_denoiser(self, components: List[str], driver: Any) -> Optional[dict]:
+        """Dual-denoiser (Wan2.2-A14B MoE-of-experts) boundary switch.
+
+        Returns {high, low, boundary} or None for single-denoiser models.
+
+        boundary_ratio (defaults.json, from the registry dual-expert config) gives
+        boundary_timestep = ratio * num_train_timesteps. The HIGH-noise expert runs
+        for timesteps >= boundary, the LOW-noise expert for timesteps < boundary
+        (diffusers WanImageToVideoPipeline two-stage denoising). Expert ordering
+        prefers the component role (denoiser = high-noise, denoiser_low_noise =
+        low-noise); falls back to topology loop order (the registry declares the
+        high-noise expert first). GATED: None unless boundary_ratio is set AND
+        >= 2 loop denoisers exist -> inert for every single-denoiser model.
+        """
+        br = self.ctx.pkg.defaults.get("boundary_ratio")
+        if not br:
+            return None
+        loop_denoisers = [c for c in components if self._is_loop_component(c)]
+        if len(loop_denoisers) < 2:
+            return None
+        comp_meta = self.ctx.pkg.topology.get("components", {})
+        roles = {c: comp_meta.get(c, {}).get("role") for c in loop_denoisers}
+        high = next((c for c in loop_denoisers if roles.get(c) == "denoiser"), None)
+        low = next((c for c in loop_denoisers
+                    if roles.get(c) in ("denoiser_low_noise", "denoiser_2")), None)
+        if high is None or low is None:
+            high, low = loop_denoisers[0], loop_denoisers[1]
+        num_train = float(getattr(driver, "num_train_timesteps", 1000) or 1000)
+        boundary = float(br) * num_train
+        if DEBUG:
+            print(f"[DualDenoiser] high={high} low={low} "
+                  f"boundary={boundary:.1f} (ratio={br} x {num_train})")
+        return {"high": high, "low": low, "boundary": boundary}
 
     def _get_encoder_dtype(self) -> Any:
         """
