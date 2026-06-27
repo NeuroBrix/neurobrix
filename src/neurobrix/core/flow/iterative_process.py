@@ -18,6 +18,7 @@ from neurobrix.core.runtime.debug import DEBUG
 from neurobrix.core.device_utils import device_empty_cache
 from neurobrix.core.runtime.resolution import i2v_conditioning
 from neurobrix.core.runtime.resolution import vace_control_conditioning
+from neurobrix.core.runtime.resolution import flux_video_conditioning
 from .base import FlowHandler, FlowContext, register_flow
 
 
@@ -311,11 +312,36 @@ class IterativeProcessHandler(FlowHandler):
             raise RuntimeError(
                 "ZERO FALLBACK: 'state_variable' not defined in topology.flow.loop."
             )
+        # FLUX-video (Open-Sora) declares a non-standard state_variable (global.img)
+        # that the builder does not directly allocate; alias it to the allocated 5D
+        # latent so the loop state resolves. Gated on the denoiser taking an img_ids
+        # input (FLUX-family only) — inert for every other model.
+        self._flux_video = flux_video_conditioning.is_flux_video(self.ctx, components)
+        if self._flux_video:
+            try:
+                _st = self.ctx.variable_resolver.get(state_key)
+            except Exception:
+                _st = None
+            if _st is None:
+                _latent = self.ctx.variable_resolver.get("global.latents")
+                self.ctx.variable_resolver.set(state_key, _latent)
+
         current_state = self.ctx.variable_resolver.get(state_key)
 
         # DATA-DRIVEN: Detect if Flux-style packing is needed
         packing_shape = self._detect_packing(components)
-        if packing_shape is not None and current_state.dim() == 4:
+        if self._flux_video and current_state.dim() == 5:
+            # FLUX-video pack: [B,C,T,H,W] -> [B, T*(H/p)*(W/p), C*p^2]
+            self._packing_info = {
+                'channels': current_state.shape[1],
+                'frames': current_state.shape[2],
+                'height': current_state.shape[3],
+                'width': current_state.shape[4],
+                'ndim': 5,
+            }
+            current_state = self._pack_latents_5d(current_state)
+            self.ctx.variable_resolver.set(state_key, current_state)
+        elif packing_shape is not None and current_state.dim() == 4:
             # Save original spatial dims for unpacking later
             self._packing_info = {
                 'channels': current_state.shape[1],
@@ -326,6 +352,11 @@ class IterativeProcessHandler(FlowHandler):
             self.ctx.variable_resolver.set(state_key, current_state)
         else:
             self._packing_info = None
+
+        # FLUX-video positional ids + cond (Open-Sora T2V): synthesize img_ids /
+        # txt_ids / cond into the resolver now that the packed dims are known.
+        if self._flux_video and self._packing_info is not None:
+            flux_video_conditioning.prepare(self.ctx, current_state, self._packing_info)
 
         # I2V latent channel-concat conditioning (data-driven, R23-gated). When
         # the denoiser's in_channels exceed the latent channels (Wan-I2V: 36 vs
@@ -581,9 +612,16 @@ class IterativeProcessHandler(FlowHandler):
             if current_state is not None and isinstance(current_state, torch.Tensor) and current_state.dim() == 3:
                 pi = self._packing_info
                 assert pi is not None  # Type guard for pyright
-                current_state = self._unpack_latents(
-                    current_state, pi['height'], pi['width'], pi['channels']
-                )
+                if pi.get('ndim') == 5:
+                    # FLUX-video: 3D packed -> 5D [B, C, T, H, W]
+                    current_state = self._unpack_latents_5d(
+                        current_state, pi['frames'], pi['height'], pi['width'],
+                        pi['channels']
+                    )
+                else:
+                    current_state = self._unpack_latents(
+                        current_state, pi['height'], pi['width'], pi['channels']
+                    )
                 self.ctx.variable_resolver.set(state_key, current_state)
 
         # Name-driven latent axis alignment (5D): video models do not share
@@ -793,6 +831,38 @@ class IterativeProcessHandler(FlowHandler):
         latents = latents.view(batch_size, height // 2, width // 2, channels, 2, 2)
         latents = latents.permute(0, 3, 1, 4, 2, 5)
         latents = latents.reshape(batch_size, channels, height, width)
+        return latents
+
+    @staticmethod
+    def _pack_latents_5d(latents: torch.Tensor) -> torch.Tensor:
+        """Pack a 5D video latent to 3D for FLUX-style video transformers.
+
+        [B, C, T, H, W] -> [B, T*(H/2)*(W/2), C*4]
+
+        Matches the Open-Sora-v2 vendor `pack`:
+            rearrange("b c t (h ph) (w pw) -> b (t h w) (c ph pw)", ph=2, pw=2)
+        Token order (t h w) matches the FLUX img_ids grid; channel block (c ph pw).
+        H, W are the LATENT spatial dims.
+        """
+        b, c, t, h, w = latents.shape
+        latents = latents.view(b, c, t, h // 2, 2, w // 2, 2)
+        latents = latents.permute(0, 2, 3, 5, 1, 4, 6)  # b t (h/2) (w/2) c ph pw
+        latents = latents.reshape(b, t * (h // 2) * (w // 2), c * 4)
+        return latents
+
+    @staticmethod
+    def _unpack_latents_5d(
+        latents: torch.Tensor, frames: int, height: int, width: int, channels: int
+    ) -> torch.Tensor:
+        """Unpack 3D back to 5D video latent (inverse of _pack_latents_5d).
+
+        [B, T*(H/2)*(W/2), C*4] -> [B, C, T, H, W]   (H, W = latent spatial)
+        """
+        b = latents.shape[0]
+        hh, ww = height // 2, width // 2
+        latents = latents.view(b, frames, hh, ww, channels, 2, 2)
+        latents = latents.permute(0, 4, 1, 2, 5, 3, 6)  # b c t (h/2) ph (w/2) pw
+        latents = latents.reshape(b, channels, frames, height, width)
         return latents
 
     def _get_component_timestep_scale(self, comp_name: str) -> float:
