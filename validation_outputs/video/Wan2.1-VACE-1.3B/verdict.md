@@ -1,4 +1,4 @@
-# Wan2.1-VACE-1.3B — VERDICT: compiled + sequential CLOSED; triton OPEN (washed-out). REFUTED so far: text-context-512, vace injection, flash attention. Localized to a 34% self-attn output divergence from identical inputs (math==flash) — compiled-hot-loop vs kernel/baseline split in flight.
+# Wan2.1-VACE-1.3B — VERDICT: compiled + sequential CLOSED; triton ROOT-CAUSED (fix pending validation). Root = `NBXTensor.copy_` flat-memcpy ignores destination strides → Wan RoPE's empty_like+slice-copy buffer leaves self-attn Q/K zero → washed-out. (Refuted en route: text-512, vace injection, flash attention.)
 
 **Date:** 2026-06-28 (supersedes the 2026-06-16 bring-up note and the earlier
 2026-06-28 "text-context length" localization, now refuted) · **Family:** video
@@ -107,7 +107,39 @@ NOT the kernel choice.
   degenerate near-uniform latent → VAE checkerboard mesh. T2V at 0% does not
   compound → coherent.)
 
-## RULED OUT for the 34% self-attn divergence
+## ✅ ROOT CAUSE FOUND — `NBXTensor.copy_` ignores destination strides
+
+Instrumenting the SDPA wrapper entry revealed the transformer self-attention
+receives **Q = K = all-zeros** (l2=0) while V is correct — in ALL 45 self-attn
+calls; cross-attention (Q not RoPE'd) is fine. Walking the rope chain in the dump:
+the Wan RoPE builds the rotated Q/K via an **`empty_like` buffer + in-place
+slice-assignment** (`buf[...,:64] = real_part; buf[...,64:] = imag_part`), which
+dispatches to `NBXTensor.copy_` on **strided slice-views** of the buffer.
+
+`copy_` (nbx_tensor.py:2073) did a **flat contiguous memcpy**:
+`DeviceAllocator.memcpy(self.data_ptr(), src.data_ptr(), self._nbytes)` — correct
+only when `self` is contiguous. When `self` is a non-contiguous slice-view, the
+flat memcpy writes the source data to the WRONG (contiguous) addresses, ignoring
+the view's strides, so the rope buffer never receives the rotated halves in their
+strided positions → the rope'd self-attn Q/K are garbage → zero scores → uniform
+softmax → output = mean(V) → washed-out.
+
+**Reproducer (zero GPU render):** `buf=zeros[2,4,3,8]; buf[:,:,:,:4].copy_(7)` →
+both halves end up mean 3.5 (data memcpy'd flat) instead of `[...,:4]=7,[...,4:]=0`.
+Contiguous full-copy works (mean 7.0).
+
+**Why VACE-specific:** V (no rope) and cross-attn Q (no rope) skip the buffer
+pattern; T2V's traced rope does not use the `empty_like`+slice-copy form, so its
+self-attn is bit-perfect. Both triton modes share `copy_`, which is why
+triton_sequential is washed-out too. This is a **core runtime bug** (any graph
+with `aten.copy_` into a strided destination), surfacing here via VACE's rope.
+
+**Fix:** in `copy_`, when `self` is non-contiguous, scatter the contiguous src
+into self's strided layout via the existing `_strided_scatter` primitive (the
+inverse of `_strided_copy`, already used by `__setitem__` and `_fill_constant`)
+instead of the flat memcpy. Shared-infra change → full-zoo anti-reg required.
+
+## RULED OUT for the 34% self-attn divergence (during localization)
 - permute kernel correctness: NBXTensor `permute(0,2,1,3).contiguous()` is bit-exact
   vs numpy (microtest [2,23,12,128]).
 - contiguity: the SDPA wrapper already calls `q/k/v.contiguous()` (wrappers.py:6071).
