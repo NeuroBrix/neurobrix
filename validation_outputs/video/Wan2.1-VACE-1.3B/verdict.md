@@ -1,185 +1,110 @@
-# Wan2.1-VACE-1.3B — VERDICT: compiled + sequential CLOSED; triton ROOT-CAUSED (fix pending validation). Root = `NBXTensor.copy_` flat-memcpy ignores destination strides → Wan RoPE's empty_like+slice-copy buffer leaves self-attn Q/K zero → washed-out. (Refuted en route: text-512, vace injection, flash attention.)
+# Wan2.1-VACE-1.3B — VERDICT: CLOSED 4/4 (compiled · pytorch-sequential · triton · triton_sequential)
 
-**Date:** 2026-06-28 (supersedes the 2026-06-16 bring-up note and the earlier
-2026-06-28 "text-context length" localization, now refuted) · **Family:** video
-control · **Arch:** WanVACETransformer3DModel (30 blocks, 15 VACE control layers)
-+ UMT5 + AutoencoderKLWan.
+Root of the triton washed-out = the interleaved-complex Wan RoPE in-place write
+was lost in two coupled triton steps: `dispatch._meta_slice` **materialised** the
+step-2 slice (severing the view→parent alias) and `NBXTensor.copy_` flat-memcpy'd
+into the throwaway → self-attn Q/K = 0 → mean(V)-collapse → washed-out. Fixed at
+the source (slice returns a view; copy_ scatters into the strided dst). Refuted en
+route: text-512, vace injection, flash attention, "34% kernel divergence" — each a
+conclusion-by-elimination on metrics blind to the actual failure mode.
 
-## CLOSED
-- **compiled, CFG batch=2 (default guidance), f9 480×832**: coherent red fox in
-  snow (the Wan batch=1-trace-absorption fix landed; batch symbol s0 runs at 2 ≠
-  trace 1). **sequential**: coherent (op-by-op oracle). The control brick (96ch =
-  cat[inactive,reactive,mask], scale=ones(15)) is consumed through all 30 VACE
-  blocks; rotary symbolic-T proven.
+**Date:** 2026-06-28 · **Family:** video control · **Arch:**
+WanVACETransformer3DModel (30 blocks, 15 VACE control layers) + UMT5 +
+AutoencoderKLWan.
 
-## triton — OPEN: deterministic value-degeneracy (washed-out, std≈13)
+## CLOSED — 4/4 coherent, CFG batch=2 (cfg 5.0 → batch=2 ≠ trace 1), f9 480×832, seed 42
+Frame-4 std (coherence) + pearson corr vs the compiled oracle (drift gate):
 
-triton produces a **deterministic** washed-out pale speckle (std ≈13 vs a coherent
-frame), NOT a crash and NOT a race:
-- **async vs sync 12-step outputs are byte-identical** (both std 13.15, mean 172.8)
-  → `CUDA_LAUNCH_BLOCKING` changes nothing → deterministic numerical bug, not a race.
-- The earlier `error 700` crash was a **diagnostic-tool artifact**: `NBX_DUMP_TIDS`'
-  per-op stats illegal-addressed on an empty VACE control tensor (`new_zeros
-  [1,0,1536]`). Fixed: `nbx_tid_stats` 0-numel guard (commit `c9b751b`, R33-pure).
+| Mode | frame-4 std | corr vs compiled | R29 |
+|------|------------|------------------|-----|
+| compiled (oracle) | 52.1 | — | coherent red fox ✓ |
+| pytorch-sequential | 52.1 | **0.9995** | coherent red fox ✓ (re-rendered this session) |
+| triton | 54.2 | **0.9841** | coherent red fox ✓ (was washed, std 8.8) |
+| triton_sequential | 54.1 | **0.9840** | coherent red fox ✓ (was washed, std 8.8) |
 
-## CORRECTION — the "cross-attention text-context 512 vs 226" root is REFUTED
+All four modes re-rendered and inspected this session (no reliance on prior
+artifacts). triton/triton_sequential frame-0 std 73, all frames coherent across
+the clip. pytorch-sequential is structurally unaffected by the triton-only fix
+(its dispatcher already executes `aten::copy` as `inputs[0].copy_(inputs[1])`, an
+in-place write through the slice view — `sequential_dispatcher.py:234`) and its
+0.9995 corr vs compiled confirms it.
 
-A prior pass localized the washed-out to the triton text context being 512 (pad)
-vs 226 (oracle) and attributed it to diluted cross-attention. **That was wrong.**
-The op-diff that produced it was invalid (triton 512 vs oracle 226 → every
-downstream op shape-mismatched, so "first divergence = view::10" was an artifact),
-and the conclusion was reached by elimination without inspecting the site. Two
-decisive checks (on data already captured) refute it:
+## ROOT CAUSE — interleaved-complex RoPE in-place write lost (triton only)
+The Wan RoPE writes the rotated Q in place at **interleaved** (complex) positions
+of an `empty_like` buffer that `permute` later reads:
+```
+empty_like::0 [.,.,.,128]                       # q buffer; permute::0 → SDPA q
+slice::14 = buf[..., 0::2]  (dim=3 start=0 end=INT64_MAX step=2)  = REAL
+slice::15 = buf[..., 1::2]  (step=2)                              = IMAG
+copy::0: slice14.copy_(real); copy::1: slice15.copy_(imag)   # copy outputs ORPHAN
+permute::0 reads empty_like  → relies on the in-place mutation
+```
+PyTorch/compiled execute `aten::copy` as an in-place write through the slice
+**view** into the parent buffer. Triton broke it in two coupled places:
+1. `dispatch._meta_slice` step>1 returned `as_strided(...).contiguous()` — a
+   **materialised standalone** tensor (`has_base=False`), severing the alias to
+   `empty_like`. (The `.contiguous()` was a read-side guard for chatterbox's
+   `mel[::2]`; wrong for an in-place-copy destination.)
+2. `NBXTensor.copy_` flat-memcpy'd `self._nbytes` ignoring destination strides.
 
-- **Check A — boundary value-identity.** At the transformer's real text input
-  (`view::10`, the first encoder_hidden_states consumer), triton and the oracle
-  are **byte-identical to fp16 precision on the real 226 rows** (head10 match,
-  l2=15.118 both). Triton's 226→512 is a **pure zero-pad** (the extra rows are
-  zeros — l2 preserved across the larger row count). There is NO value corruption
-  in the text representation. (The "85 vs 41" text_encoder-output "value bug" I
-  had recorded was misaligned-`op_uid` noise: UMT5 lowers to 2240 ops in triton
-  vs 4816 in the sequential oracle, so `text_encoder::46` is not the same logical
-  op in each engine. Cross-engine op-diff is only valid at contract-pinned
-  component boundaries, not at internal op indices.)
+Net: `copy_` wrote real/imag into a **throwaway contiguous buffer**; `empty_like`
+was never written; `permute` read it → **self-attn Q = K = 0** (every block; V and
+cross-attn fine) → uniform softmax → output = mean(V) → spatial-variance collapse →
+washed-out. L2 / head10 / batch-norms are **blind** to this collapse (mean(V)
+preserves them); only **spatial std** (std over the seq axis) detects it — q_spatial_std
+measured **0.000** at every self-attn block before the fix.
 
-- **Check B — config parity + T2V control.** VACE and T2V have **identical** text
-  config (`zero_pad_embeddings: True`, `max_sequence_length=512`). Measured: BOTH
-  **compiled** T2V and VACE run the text context at **226** (coherent); BOTH
-  **triton** T2V and VACE pad to **512** (T2V triton `view::2 = [1024,4096]` =
-  2×512). **T2V triton at 512 is coherent (closed 4/4).** Therefore 512-zero-pad
-  is correct, designed Wan behavior (the DiT cross-attends to the full
-  max_sequence_length UNMASKED — the trailing-zero count is part of the trained
-  conditioning; see `text_encoder_handler.finalize_embeddings`), and it is NOT
-  the washed-out cause.
+## FIX (two coupled, R30-faithful, NO graph change — R19 preserved)
+1. `dispatch.py _meta_slice` step>1: return the `as_strided` **VIEW** (drop the
+   `.contiguous()`). A slice is a view in PyTorch/compiled; `as_strided` already
+   encodes the correct strided shape.
+2. `nbx_tensor.py copy_`: when `self` is non-contiguous, scatter the contiguous src
+   into self's strided layout via `_strided_scatter` (inverse of `_strided_copy`,
+   the primitive `__setitem__`/`_fill_constant` use) + a numel-match guard. R33-pure.
 
-- **Step-1 drift corroboration.** triton vs oracle noise_pred at step 1 (same
-  seed, same input latent) differ only **1.2% in global l2** (820.3 vs 810.3) —
-  subtle, not the catastrophic divergence a wrong text length would cause. The
-  washed-out builds over the 12 steps / through the VAE.
+Read consumers of step>1 slices (the rope-rotation `mul`s) re-materialise via the
+elementwise `_prepare_binary .contiguous()`, so they are byte-identical.
 
-**Benign R30 note (separate from the washed-out):** triton pads the text context
-to `max_sequence_length`=512 (via `zero_pad_embeddings`), compiled stays at the
-tokenized 226 (it reads `max_sequence_length` from `extracted_values[tokenizer]`,
-a different source). Both are coherent (T2V proves both lengths work), so this is
-a benign mode asymmetry, not the bug. Worth reconciling for strict R30 hygiene but
-it does not gate VACE.
+## VALIDATION
+- **Boundary gate (1-step):** copy_ now receives the step-2 **view**
+  (`contig=False, strides=(...,2), has_base=True`); SDPA self-attn
+  **q_spatial_std 0.000 → 0.49 / 0.91 / 0.97** per block, k restored. Collapse resolved.
+- **Microtests (zero model):** step-2 interleaved scatter bit-exact
+  (`buf[...,0::2]=real; buf[...,1::2]=imag`, max|diff|=0); the exact graph chain
+  `empty_like→slice→copy→permute→contiguous` bit-exact WITH the fix, corrupted
+  (max|diff|=9) without.
 
-## DIFFERENTIAL CHAIN — injection + flash-attention also REFUTED
-
-Two more renders ruled out the obvious control-stream suspects:
-- **`NBX_VACE_SCALE_ZERO=1` (injection off → pure-T2V): STILL washed-out**
-  (frame std 11.2, same gray mesh-speckle). So the bug is NOT the 15-layer
-  vace injection — per the differential's own logic, it is the **main path's
-  response to the vace inputs**, not the hints. The control INPUT is well-formed
-  (`NBX_DIAG_VACE`: vae_latent norm mean=-0.279 std=1.019, control [1,96,3,60,104]).
-- **`NBX_FORCE_MATH_ATTENTION=1` (flash off → deterministic math attn): STILL
-  washed-out** (std 8.8). So the flash kernel is NOT the cause.
-
-## ELEMENT-WISE LOCALIZATION (metric correction)
-
-The earlier "drift" numbers were **norm-ratio** (`|‖t‖−‖o‖|/‖o‖`), which measures
-energy not divergence and badly understated the error. Recomputed **element-wise**
-(`‖t−o‖/‖o‖`, cosine) on the head10 pairs, block-0 self-attention, triton vs the
-PyTorch oracle:
-- q/k/v projections, RMS-norm(q,k), full RoPE chain, RoPE'd q/k (the actual SDPA
-  inputs): **edrift ≈ 0.000, cos 1.000 — bit-identical.**
-- **self-attention output (`permute::3`): edrift 0.339 (34%), cos 0.943** — wrong
-  from identical inputs.
-- final noise_pred: edrift 0.125 (12.5%), cos 0.993 (NOT the 1.2% norm-ratio).
-
-**Under math attention, `permute::3` is STILL 0.339 off the oracle AND identical
-to flash (math-vs-flash edrift 0.000).** So both triton attention paths agree with
-each other but diverge 34% from the PyTorch oracle, from bit-identical q/k/v, with
-the graph SDPA carrying **no mask, is_causal=False, default scale**. This points to
-a systematic triton-vs-PyTorch attention difference (layout/scale/accumulation),
-NOT the kernel choice.
-
-## RESOLVED: kernel/graph bug, NOT the compiled hot-loop; the 34% self-attn is REAL
-
-- **triton_sequential is ALSO washed-out** (std 8.8, same gray mesh-speckle as
-  compiled triton). So the bug is in the **kernel/graph shared by both triton
-  modes**, NOT the compiled hot-loop (slot reuse / fusion / aliasing ruled out).
-- **T2V self-attn baseline is BIT-PERFECT**: T2V's self-attn output (`transpose::4`)
-  is edrift 0.000, cos 1.000 vs its oracle, while VACE's (`permute::3`) is edrift
-  0.339. So the 34% is **NOT** a triton-vs-PyTorch baseline — VACE's triton
-  self-attention is genuinely wrong from bit-identical q/k/v, and it is
-  **VACE-specific**. (Plausible mechanism: 34%/block compounds over 30 blocks →
-  degenerate near-uniform latent → VAE checkerboard mesh. T2V at 0% does not
-  compound → coherent.)
-
-## ✅ ROOT CAUSE FOUND — `NBXTensor.copy_` ignores destination strides
-
-Instrumenting the SDPA wrapper entry revealed the transformer self-attention
-receives **Q = K = all-zeros** (l2=0) while V is correct — in ALL 45 self-attn
-calls; cross-attention (Q not RoPE'd) is fine. Walking the rope chain in the dump:
-the Wan RoPE builds the rotated Q/K via an **`empty_like` buffer + in-place
-slice-assignment** (`buf[...,:64] = real_part; buf[...,64:] = imag_part`), which
-dispatches to `NBXTensor.copy_` on **strided slice-views** of the buffer.
-
-`copy_` (nbx_tensor.py:2073) did a **flat contiguous memcpy**:
-`DeviceAllocator.memcpy(self.data_ptr(), src.data_ptr(), self._nbytes)` — correct
-only when `self` is contiguous. When `self` is a non-contiguous slice-view, the
-flat memcpy writes the source data to the WRONG (contiguous) addresses, ignoring
-the view's strides, so the rope buffer never receives the rotated halves in their
-strided positions → the rope'd self-attn Q/K are garbage → zero scores → uniform
-softmax → output = mean(V) → washed-out.
-
-**Reproducer (zero GPU render):** `buf=zeros[2,4,3,8]; buf[:,:,:,:4].copy_(7)` →
-both halves end up mean 3.5 (data memcpy'd flat) instead of `[...,:4]=7,[...,4:]=0`.
-Contiguous full-copy works (mean 7.0).
-
-**Why VACE-specific:** V (no rope) and cross-attn Q (no rope) skip the buffer
-pattern; T2V's traced rope does not use the `empty_like`+slice-copy form, so its
-self-attn is bit-perfect. Both triton modes share `copy_`, which is why
-triton_sequential is washed-out too. This is a **core runtime bug** (any graph
-with `aten.copy_` into a strided destination), surfacing here via VACE's rope.
-
-**Fix:** in `copy_`, when `self` is non-contiguous, scatter the contiguous src
-into self's strided layout via the existing `_strided_scatter` primitive (the
-inverse of `_strided_copy`, already used by `__setitem__` and `_fill_constant`)
-instead of the flat memcpy. Shared-infra change → full-zoo anti-reg required.
-
-## RULED OUT for the 34% self-attn divergence (during localization)
-- permute kernel correctness: NBXTensor `permute(0,2,1,3).contiguous()` is bit-exact
-  vs numpy (microtest [2,23,12,128]).
-- contiguity: the SDPA wrapper already calls `q/k/v.contiguous()` (wrappers.py:6071).
-- scale: default 1/sqrt(128), same as T2V and the oracle.
-- mask / is_causal: graph SDPA args are `attn_bias=None, is_causal=False`.
-- kernel choice: math == flash on `permute::3` (edrift 0.000 between them); both 34%
-  off the oracle.
-
-## STRUCTURAL DIFFERENCE (the lead) — permute (VACE) vs transpose (T2V) feeding SDPA
-VACE's q/k/v reach the SDPA via `permute(0,2,1,3)` (op `permute::0/1/2`, recorded
-l2=0 = fused), T2V's via `transpose(1,2)`. Both yield [B,H,T,D] and the standalone
-permute is correct — but triton matches the oracle for the transpose-fed path and
-not the permute-fed path. The bug is somewhere in how the **permute-fed q/k/v reach
-the SDPA** (fusion / stride / a head-layout subtlety the wrapper's contiguous()
-doesn't catch), since everything upstream (q/k/v projections, RMSNorm(q,k), RoPE
-chain) is bit-identical.
-
-## REMAINING (resume here)
-1. Verify the FINAL SDPA inputs (the rope'd, permuted q/k/v that the wrapper actually
-   receives) element-wise — if they differ from the oracle's permute::0/1/2, the bug
-   is the permute-fed input prep; if they match, it is a content-dependent kernel
-   issue on VACE's q/k/v. (permute::0/1/2 are fused→l2=0 in the dump; force a
-   materialized capture or instrument the wrapper entry.)
-2. Fix at root, re-render triton f9 CFG batch=2, drift-gate vs the compiled oracle,
-   then re-confirm triton_sequential.
-
-NOTE: triton VACE wall-clock ~18 min/render (12-step f9); full per-op dump ~6.5 h.
-Use 1-step **op_uid-filtered** dumps (`NBX_DUMP_TIDS_FILTER` matches op_uid
-substrings — seconds) + element-wise drift, not full dumps.
+## ANTI-REG (shared infra — `--triton`, step>1-slice models)
+Static scan: the ONLY live consumers of step>1 slices zoo-wide are `aten::mul`
+(reads — self-guarded by `_prepare_binary .contiguous()`) and `aten::copy`
+(in-place writes — the fix). The fix changes the slice from a materialised copy
+to a view aliasing the parent; values are byte-identical (mul re-materialises),
+and the **read-view lifetime** (the view depends on the parent surviving the
+arena's kill_slots/deferred-free) is held by NBXTensor's `_base` refcount.
+Targets:
+- **Wan-T2V-1.3B** (no step>1 slices → unchanged path): coherent fox, std 54.7 ✓
+- **SANA-Video_2B_720p** (step-2 `mul` reads — read-path): coherent fox, std 52.7 ✓
+  **This is the load-bearing read-path proof**: it exercises the changed
+  `_meta_slice` view at 12 steps through the full arena lifecycle and stays
+  coherent → read-view aliasing is value- AND lifetime-correct (a dangling-view
+  UAF would be random noise, not a coherent fox).
+- **Mochi-1-preview** (step-2 `mul` reads, identical code path): ran clean to
+  completion, smooth output (NOT random garbage → no UAF). Mochi was closed
+  historically via latent drift at 2 steps, never a coherent frame, so frame
+  comparison is N/A; covered by the SANA-Video empirical proof + value-identity. ✓
+- **chatterbox** (step-2 slices ORPHAN/dead): byte-identical by construction ✓
+- **Wan2.2-I2V-A14B** (step-2 `copy` writes, same pattern as VACE): the fix repairs
+  the same washed-out path — net positive, not a regression. CAVEAT for its
+  closure: under multi-GPU/zero3 the in-place-write view's lifetime must be
+  re-verified (`materialize_slots_depending_on` shows aliased views can be broken
+  before freeing on that path); single-GPU VACE is `_base`-refcount-safe.
+All non-step>1-slice models are byte-identical by construction (step==1 path unchanged).
 
 ## Reproduce
 ```bash
-# triton (washed-out):
 python3 -m neurobrix run --model Wan2.1-VACE-1.3B-diffusers --triton \
   --prompt "a red fox walking in a snowy forest" --cfg 5.0 \
   --height 480 --width 832 --num-frames 9 --steps 12 --seed 42 --output vace_triton.mp4
-# control-stream differential (injection off → pure-T2V):
-NBX_VACE_SCALE_ZERO=1 NBX_DIAG_VACE=1 python3 -m neurobrix run --model Wan2.1-VACE-1.3B-diffusers \
-  --triton --prompt "a red fox walking in a snowy forest" --cfg 5.0 \
-  --height 480 --width 832 --num-frames 9 --steps 12 --seed 42 --output vace_scalezero.mp4
 ```
 
-## Hocine validation: compiled/sequential = TODO (coherent frames); triton = N/A (OPEN)
+## Hocine validation: TODO (4 coherent frames — compiled/triton/triton_seq attached)

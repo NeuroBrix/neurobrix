@@ -175,16 +175,29 @@ def _meta_slice(x, dim, start=None, end=None, step=1):
     if step == 1:
         return narrowed
     # Strided slice x[..., start:end:step]. narrow() only covers step==1; for a
-    # step>1 slice (chatterbox s3gen CFM downsamples the mel by 2 via a `[::2]`)
-    # build a step-strided view (size=ceil(length/step), stride[dim]*=step) and
-    # materialise it — downstream flat-indexed kernels (split_with_sizes) need a
-    # contiguous buffer (CLAUDE.md contiguous-guard). Without this the step was
-    # silently dropped and the dim kept its full length (348 vs 174).
+    # step>1 slice build a step-strided VIEW (size=ceil(length/step),
+    # stride[dim]*=step) and return it as a view — NOT materialised. A slice is
+    # a view in PyTorch/compiled (sequential_dispatcher maps aten::copy to
+    # inputs[0].copy_(inputs[1]) so an in-place write through the slice reaches
+    # the parent buffer). The interleaved-complex Wan RoPE relies on exactly
+    # that: `buf[...,0::2] = real; buf[...,1::2] = imag` lowers to step-2 slice
+    # + copy with the copy output orphaned — the real effect is mutation of the
+    # empty_like buffer that permute reads. Materialising the slice here made
+    # copy_ write into a throwaway contiguous tensor, leaving the buffer unwritten
+    # → zero self-attn Q/K → washed-out VACE/Wan2.2 (2026-06-28). The
+    # as_strided VIEW makes copy_ route through NBXTensor.copy_'s strided-dst
+    # branch (_strided_scatter) and scatter into the parent at the right stride.
+    # Read consumers of a step>1 slice are flat-indexed kernels that already
+    # self-guard with .contiguous() (the binary/elementwise _prepare_binary
+    # path — the rope-rotation muls — and the CLAUDE.md contiguous-guard at
+    # split/matmul wrappers). The as_strided encodes the correct strided shape
+    # (the historical "348 vs 174" bug was the MISSING as_strided, not the
+    # missing materialisation).
     new_size = list(narrowed.shape)
     new_stride = list(narrowed._strides)
     new_size[dim] = (length + step - 1) // step
     new_stride[dim] = narrowed._strides[dim] * step
-    return narrowed.as_strided(new_size, new_stride, narrowed._offset).contiguous()
+    return narrowed.as_strided(new_size, new_stride, narrowed._offset)
 
 
 def _force_int(val):

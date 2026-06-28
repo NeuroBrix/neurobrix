@@ -2083,6 +2083,54 @@ class NBXTensor:
                 src = src.to(self.dtype)
             if not src.is_contiguous():
                 src = src.contiguous()
+            if not self.is_contiguous():
+                # Destination is a STRIDED view, e.g. an in-place slice-assignment
+                # `buf[..., :k] = src` that the tracer lowers to slice + copy_.
+                # A flat memcpy of self._nbytes would write the source CONTIGUOUSLY
+                # at self.data_ptr(), ignoring the view's strides — scattering the
+                # data to the wrong addresses. (Wan RoPE builds the rotated Q/K via
+                # an empty_like buffer + slice-copy; the flat memcpy left the buffer
+                # garbage → zero self-attn Q/K → washed-out VACE.) Scatter the
+                # contiguous src into self's strided layout via the same dedicated
+                # kernel `__setitem__` and `_fill_constant` use. R33-pure.
+                #
+                # The scatter maps flat src index i -> dst's strided position of
+                # multi-index i, so it requires equal element counts. A broadcast
+                # copy_ (src smaller than dst) into a strided view is unsupported
+                # — surface it loudly rather than silently under-writing. The old
+                # flat memcpy was already broken for that case (it read past src),
+                # so this raises no previously-working path.
+                if src._numel != self._numel:
+                    raise RuntimeError(
+                        "NBXTensor.copy_ into a strided (non-contiguous) "
+                        "destination requires matching element counts; "
+                        "broadcast copy_ into a strided view is unsupported "
+                        f"(src._numel={src._numel} dst._numel={self._numel}).")
+                if self.is_complex():
+                    # The scatter kernel sees a plain float ptr; reinterpret both
+                    # as a float view with a trailing [2] (re/imag) so each complex
+                    # element's two floats land at the correct strided positions.
+                    # Mirrors _strided_copy's complex handling.
+                    _fdt = (NBXDtype.float64 if self._dtype == NBXDtype.complex128
+                            else NBXDtype.float32)
+                    _src_shape2 = tuple(src._shape) + (2,)
+                    _fsrc = NBXTensor(
+                        src._data_ptr, _src_shape2, _contiguous_strides(_src_shape2),
+                        _fdt, src._device, src._offset * 2,
+                        device_idx=src._device_idx,
+                        base=src._base if src._base is not None else src,
+                        pinned=src._pinned)
+                    _fdst = NBXTensor(
+                        self._data_ptr, tuple(self._shape) + (2,),
+                        tuple(s * 2 for s in self._strides) + (1,),
+                        _fdt, self._device, self._offset * 2,
+                        device_idx=self._device_idx,
+                        base=self._base if self._base is not None else self,
+                        pinned=self._pinned)
+                    _strided_scatter(_fsrc, _fdst)
+                else:
+                    _strided_scatter(src, self)
+                return self
             DeviceAllocator.memcpy(self.data_ptr(), src.data_ptr(), self._nbytes)
         return self
 
