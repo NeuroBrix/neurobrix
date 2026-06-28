@@ -63,6 +63,18 @@ Entry format: `ID · title · root cause / fix · scope · status`.
   any large-VAE video model at native length/resolution. NOTE: CogVideoX-2b VAE
   **seams at 13f are correctness to close now** (not debt) — only its long-clip
   tiling is deferred here.
+- **Also under this debt (added 2026-06-28): Allegro (T2V) — native-config locked.**
+  Allegro is **out-of-distribution at 13f** (both NeuroBrix and the diffusers vendor
+  degenerate at reduced frame counts; the model is native-720×1280×88-frame only).
+  Its VAE decode already uses **~28 GB at latent T=4** and exceeds one 32 GB GPU at
+  the native latent T=22. Therefore Allegro **cannot close at 13f-class** — its
+  coherent frame needs the native 88-frame regime = this debt. The **#30 odd-H
+  scanline** is NOT a symbolic-shape bug (proven: shapes resolve correctly at odd-H,
+  no frozen literals, RoPE tables resize symbolically — see
+  `validation_outputs/video/Allegro/verdict.md`); it is a **frame-count-dependent
+  numerical artifact that only reproduces in this native regime**, so both its
+  op-localization and its coherent verdict are deferred here with D2. Allegro-TI2V
+  (same VAE/family) inherits the same native-regime constraint.
 - **Status.** `DEFERRED` — final pass, together with D1.
 
 ---

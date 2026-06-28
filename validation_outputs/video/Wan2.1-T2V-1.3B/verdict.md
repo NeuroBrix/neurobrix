@@ -1,5 +1,18 @@
 # Wan2.1-T2V-1.3B — R29 verdict (compiled mode)
 
+**REOPENED 2026-06-16 (closure criterion now includes batch/CFG).** The prior
+"4-mode CLOSED" was at cfg=1.0 / batch=1 — the batch symbol s0 traced at 1 and
+ran at 1, so it was NEVER exercised. The model's NORMAL CFG batch=2 path was
+broken by the general Wan batch=1-trace-absorption (now FIXED in the forge
+symbolic rules). **compiled re-validated at CFG batch=2 (default guidance): COHERENT
+red fox in snow (compiled_cfg_frames.png, 57 s, f9 480x832).** Graph anti-reg:
+GREEN (byte-equiv at batch=1 — the fix only corrects the wrongly-absorbed batch
+symbol, never changes concrete shapes or ops). REMAINING for true 4/4 closure:
+sequential / triton / triton_sequential at CFG batch=2 (the same rebuilt .nbx).
+
+---
+(historical — the cfg=1.0/batch=1 verdict below is the DEGENERATE path)
+
 **Verdict: COMPILED = COHERENT (fp16, shippable default).**
 
 `compiled_coherent.mp4` (= fp16_negfix.mp4): 33 frames, 832x480, a SHARP red fox
