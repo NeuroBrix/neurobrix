@@ -94,16 +94,45 @@ the graph SDPA carrying **no mask, is_causal=False, default scale**. This points
 a systematic triton-vs-PyTorch attention difference (layout/scale/accumulation),
 NOT the kernel choice.
 
-## OPEN QUESTION (resume here) — is the 34% the bug, or a triton-vs-PyTorch baseline?
+## RESOLVED: kernel/graph bug, NOT the compiled hot-loop; the 34% self-attn is REAL
 
-T2V uses the same triton attention and is coherent, so the 34% may be a tolerated
-baseline and the washed-out a separate cause. Two tests decide it:
-1. **triton vs triton_sequential** (same kernels, same graph, same 512 pad, aligned
-   op_uids) — IN FLIGHT. triton_seq **coherent** ⇒ bug is the **compiled hot-loop**
-   (slot reuse / kill_slots / fusion / a vace-block output slot aliasing a main-path
-   slot — fits scale-zero staying broken). triton_seq **washed-out** ⇒ kernel/graph.
-2. **T2V triton self-attn baseline**: if T2V's self-attn output is also ~34% off its
-   own oracle (and T2V is coherent), 34% is baseline ⇒ look past attention.
+- **triton_sequential is ALSO washed-out** (std 8.8, same gray mesh-speckle as
+  compiled triton). So the bug is in the **kernel/graph shared by both triton
+  modes**, NOT the compiled hot-loop (slot reuse / fusion / aliasing ruled out).
+- **T2V self-attn baseline is BIT-PERFECT**: T2V's self-attn output (`transpose::4`)
+  is edrift 0.000, cos 1.000 vs its oracle, while VACE's (`permute::3`) is edrift
+  0.339. So the 34% is **NOT** a triton-vs-PyTorch baseline — VACE's triton
+  self-attention is genuinely wrong from bit-identical q/k/v, and it is
+  **VACE-specific**. (Plausible mechanism: 34%/block compounds over 30 blocks →
+  degenerate near-uniform latent → VAE checkerboard mesh. T2V at 0% does not
+  compound → coherent.)
+
+## RULED OUT for the 34% self-attn divergence
+- permute kernel correctness: NBXTensor `permute(0,2,1,3).contiguous()` is bit-exact
+  vs numpy (microtest [2,23,12,128]).
+- contiguity: the SDPA wrapper already calls `q/k/v.contiguous()` (wrappers.py:6071).
+- scale: default 1/sqrt(128), same as T2V and the oracle.
+- mask / is_causal: graph SDPA args are `attn_bias=None, is_causal=False`.
+- kernel choice: math == flash on `permute::3` (edrift 0.000 between them); both 34%
+  off the oracle.
+
+## STRUCTURAL DIFFERENCE (the lead) — permute (VACE) vs transpose (T2V) feeding SDPA
+VACE's q/k/v reach the SDPA via `permute(0,2,1,3)` (op `permute::0/1/2`, recorded
+l2=0 = fused), T2V's via `transpose(1,2)`. Both yield [B,H,T,D] and the standalone
+permute is correct — but triton matches the oracle for the transpose-fed path and
+not the permute-fed path. The bug is somewhere in how the **permute-fed q/k/v reach
+the SDPA** (fusion / stride / a head-layout subtlety the wrapper's contiguous()
+doesn't catch), since everything upstream (q/k/v projections, RMSNorm(q,k), RoPE
+chain) is bit-identical.
+
+## REMAINING (resume here)
+1. Verify the FINAL SDPA inputs (the rope'd, permuted q/k/v that the wrapper actually
+   receives) element-wise — if they differ from the oracle's permute::0/1/2, the bug
+   is the permute-fed input prep; if they match, it is a content-dependent kernel
+   issue on VACE's q/k/v. (permute::0/1/2 are fused→l2=0 in the dump; force a
+   materialized capture or instrument the wrapper entry.)
+2. Fix at root, re-render triton f9 CFG batch=2, drift-gate vs the compiled oracle,
+   then re-confirm triton_sequential.
 
 NOTE: triton VACE wall-clock ~18 min/render (12-step f9); full per-op dump ~6.5 h.
 Use 1-step **op_uid-filtered** dumps (`NBX_DUMP_TIDS_FILTER` matches op_uid
