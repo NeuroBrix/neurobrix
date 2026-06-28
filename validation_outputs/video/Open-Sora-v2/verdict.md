@@ -39,9 +39,20 @@ coherent. Recorded honestly per "closure = verdict, never prose".
 
 ## REMAINING (named sub-chantier — resume here)
 
-1. **MMDiT RoPE/pe shape residual** — at `aten.mul::11` the positional-embedding
-   multiply mismatches (312 vs 64 at dim 3): the T5 seq-alignment × the FLUX
-   3-axis `pe` (likely another trace dim to de-collide, or a txt-seq/pe interaction).
+1. **MMDiT RoPE/pe shape residual — forge symbolic-shape collision (head_dim).**
+   `aten.mul::11` is the FLUX RoPE complex multiply: `pe` (select::3, trace
+   `[1,1,76,64,2]`) × `q` (select::4, trace `[1,24,76,64,1]`) — dim 3 = **64 =
+   head_dim** for both at trace. At runtime (confirmed 2026-06-28, repro below)
+   the `pe` operand's head_dim resolves to **312** while `q`'s stays 64 → "size
+   of tensor a (312) must match b (64) at non-singleton dimension 3". So the
+   **head_dim 64 was SYMBOLIZED** (collided at trace with another dim that is 64
+   there but resolves to ~312 — a token-count — at runtime) and the FLUX `pe`
+   inherits the wrong symbol. This is a **forge-side de-collision** (born-at-
+   source in the tracer, same class as the `27b5949` T·H·W=64 vs in_channels=64
+   fix): pick a trace stimulus where head_dim is distinct from the colliding
+   dim so the SymbolicShapeTracker keeps head_dim concrete (64). NOT a runtime
+   fix. Next: in Forge, diff the MMDiT trace symbols to find which token/seq dim
+   = 64 at trace and de-collide it from head_dim.
 2. **Rest of the 40-block MMDiT + VAE decode** — numerical correctness + a
    coherent frame (scheduler shift: the *√num_frames video factor is deferred).
 3. **CFG-engine `txt` naming** — at cfg>1 the CFG engine can't determine the
