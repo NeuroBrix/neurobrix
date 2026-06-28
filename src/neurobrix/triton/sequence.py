@@ -2560,6 +2560,23 @@ class TritonSequence:
         """
         from neurobrix.kernels.nbx_tensor import NBXDtype, DeviceAllocator
         import ctypes as _ct
+        # Zero-numel guard: an empty tensor (e.g. a VACE all-generate control
+        # prefix new_zeros [1,0,1536]) has a 0-size dim. The reduction path below
+        # would index into that 0-dim (`flat[0]`) and launch contiguous/cast
+        # kernels over 0 elements → CUDA illegal address (error 700) that, async,
+        # corrupts the context and only surfaces at a later op's malloc — making
+        # the dump itself crash a run that computes fine without it. Empty
+        # tensors carry no values to diff, so return a trivial record.
+        if getattr(tensor, "_numel", None) == 0 or 0 in list(tensor.shape):
+            return {
+                "shape": list(tensor.shape),
+                "dtype": str(tensor.dtype),
+                "is_complex": bool(getattr(
+                    tensor, "is_complex", lambda: False)()),
+                "head10": [],
+                "l2_norm": 0.0,
+                "batch_norms": None,
+            }
         # Multi-device: switch to the tensor's device before D2H memcpy.
         if hasattr(tensor, '_device_idx'):
             DeviceAllocator.set_device(tensor._device_idx)
