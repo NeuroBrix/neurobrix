@@ -55,6 +55,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Wan video washed-out frames in Triton mode (Wan2.1-VACE-1.3B, Wan2.2-I2V).**
+  The Wan transformer's rotary embedding writes the rotated query in place at the
+  interleaved (even/odd) positions of a scratch buffer. In Triton mode a strided
+  (`step>1`) slice was materialised into a standalone copy, so the in-place write
+  landed in a throwaway and the buffer the attention actually read stayed zero —
+  collapsing self-attention to a constant and producing washed-out video. Strided
+  slices now stay views and in-place copies scatter into them, matching the
+  PyTorch path. Wan2.1-VACE-1.3B renders a coherent clip across all four execution
+  modes; SANA-Video, Mochi and Wan2.1-T2V are unaffected.
+
 - **Triton video VAE single-GPU OOM: `_conv3d_via_conv2d` materialised too many
   full-resolution copies (`kernels/wrappers.py`).** The conv3d→conv2d temporal
   decomposition kept the input, the per-temporal-slice contiguous input copy,
