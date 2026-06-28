@@ -1,4 +1,4 @@
-# Wan2.1-VACE-1.3B — VERDICT: compiled + sequential CLOSED; triton OPEN (root = vace control stream; text-context length REFUTED as cause)
+# Wan2.1-VACE-1.3B — VERDICT: compiled + sequential CLOSED; triton OPEN (washed-out). REFUTED so far: text-context-512, vace injection, flash attention. Localized to a 34% self-attn output divergence from identical inputs (math==flash) — compiled-hot-loop vs kernel/baseline split in flight.
 
 **Date:** 2026-06-28 (supersedes the 2026-06-16 bring-up note and the earlier
 2026-06-28 "text-context length" localization, now refuted) · **Family:** video
@@ -64,31 +64,50 @@ a different source). Both are coherent (T2V proves both lengths work), so this i
 a benign mode asymmetry, not the bug. Worth reconciling for strict R30 hygiene but
 it does not gate VACE.
 
-## CURRENT ROOT — the VACE control stream (the directive's target)
+## DIFFERENTIAL CHAIN — injection + flash-attention also REFUTED
 
-The conditioning bricks are R30-mirrored (`triton/vace_control_conditioning.py`
-≡ `core/runtime/resolution/vace_control_conditioning.py`, same semantics — one
-minor diff: triton normalizes the latent in fp32 via `.float()`). The degeneracy
-is therefore either (a) the vae_encoder encode-of-zeros control INPUT, or (b) the
-transformer's vace-block INJECTION (the 15 vace layers add `scale[i] · hint[i]`
-to the main hidden). Differential in flight (`NBX_VACE_SCALE_ZERO=1`, commit
-`284fca1`): injection-off → pure-T2V. **coherent at scale=0 ⇒ bug is in the
-vace-block hints/injection; still washed-out ⇒ bug is in the main path's response
-to the vace inputs (e.g. patch-embed of control).** `NBX_DIAG_VACE=1` captures
-the control-input stats to compare triton vs compiled.
+Two more renders ruled out the obvious control-stream suspects:
+- **`NBX_VACE_SCALE_ZERO=1` (injection off → pure-T2V): STILL washed-out**
+  (frame std 11.2, same gray mesh-speckle). So the bug is NOT the 15-layer
+  vace injection — per the differential's own logic, it is the **main path's
+  response to the vace inputs**, not the hints. The control INPUT is well-formed
+  (`NBX_DIAG_VACE`: vae_latent norm mean=-0.279 std=1.019, control [1,96,3,60,104]).
+- **`NBX_FORCE_MATH_ATTENTION=1` (flash off → deterministic math attn): STILL
+  washed-out** (std 8.8). So the flash kernel is NOT the cause.
 
-## REMAINING (resume here)
-1. Read the `NBX_VACE_SCALE_ZERO=1` triton render (R29 visual): coherent ⇒ localize
-   to the vace-block injection ops (op-diff the vace-block kernels triton vs
-   oracle); washed-out ⇒ localize to the control patch-embed / main-path response.
-2. Compare `NBX_DIAG_VACE=1` control-input stats (triton vs compiled) — rules in/out
-   the vae_encoder encode-of-zeros as the corruption source.
-3. Fix at root, re-render triton f9 CFG batch=2, drift-gate vs the compiled oracle,
-   then triton_sequential mirror.
+## ELEMENT-WISE LOCALIZATION (metric correction)
 
-NOTE: triton VACE wall-clock is heavy (~18 min/render at f9 12-step; a full per-op
-dump run is ~6.5 h). Iterate with 1-step drift + the scale-zero differential, not
-full dumps.
+The earlier "drift" numbers were **norm-ratio** (`|‖t‖−‖o‖|/‖o‖`), which measures
+energy not divergence and badly understated the error. Recomputed **element-wise**
+(`‖t−o‖/‖o‖`, cosine) on the head10 pairs, block-0 self-attention, triton vs the
+PyTorch oracle:
+- q/k/v projections, RMS-norm(q,k), full RoPE chain, RoPE'd q/k (the actual SDPA
+  inputs): **edrift ≈ 0.000, cos 1.000 — bit-identical.**
+- **self-attention output (`permute::3`): edrift 0.339 (34%), cos 0.943** — wrong
+  from identical inputs.
+- final noise_pred: edrift 0.125 (12.5%), cos 0.993 (NOT the 1.2% norm-ratio).
+
+**Under math attention, `permute::3` is STILL 0.339 off the oracle AND identical
+to flash (math-vs-flash edrift 0.000).** So both triton attention paths agree with
+each other but diverge 34% from the PyTorch oracle, from bit-identical q/k/v, with
+the graph SDPA carrying **no mask, is_causal=False, default scale**. This points to
+a systematic triton-vs-PyTorch attention difference (layout/scale/accumulation),
+NOT the kernel choice.
+
+## OPEN QUESTION (resume here) — is the 34% the bug, or a triton-vs-PyTorch baseline?
+
+T2V uses the same triton attention and is coherent, so the 34% may be a tolerated
+baseline and the washed-out a separate cause. Two tests decide it:
+1. **triton vs triton_sequential** (same kernels, same graph, same 512 pad, aligned
+   op_uids) — IN FLIGHT. triton_seq **coherent** ⇒ bug is the **compiled hot-loop**
+   (slot reuse / kill_slots / fusion / a vace-block output slot aliasing a main-path
+   slot — fits scale-zero staying broken). triton_seq **washed-out** ⇒ kernel/graph.
+2. **T2V triton self-attn baseline**: if T2V's self-attn output is also ~34% off its
+   own oracle (and T2V is coherent), 34% is baseline ⇒ look past attention.
+
+NOTE: triton VACE wall-clock ~18 min/render (12-step f9); full per-op dump ~6.5 h.
+Use 1-step **op_uid-filtered** dumps (`NBX_DUMP_TIDS_FILTER` matches op_uid
+substrings — seconds) + element-wise drift, not full dumps.
 
 ## Reproduce
 ```bash
