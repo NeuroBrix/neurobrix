@@ -3239,8 +3239,10 @@ class TritonSequence:
                                 print(f"[BIG_TENSORS scan failed: {_ge}]", flush=True)
                         except Exception as _dump_e:
                             print(f"[LIVE_DUMP failed: {_dump_e}]", flush=True)
+                    _none_pos = [i for i, a in enumerate(args) if a is None]
                     raise RuntimeError(
-                        f"Failed at {op.op_uid} ({op.op_type}): {e}") from e
+                        f"Failed at {op.op_uid} ({op.op_type}): {e} | None args at "
+                        f"positions {_none_pos} of {len(args)}") from e
                 if _PROF:
                     DeviceAllocator.sync_device()
                     _dt = _time.perf_counter() - _t0
@@ -3523,8 +3525,10 @@ class TritonSequence:
                 try:
                     result = op.func(*args, **kwargs)
                 except Exception as e:
+                    _none_pos = [i for i, a in enumerate(args) if a is None]
                     raise RuntimeError(
-                        f"Failed at {op.op_uid} ({op.op_type}): {e}") from e
+                        f"Failed at {op.op_uid} ({op.op_type}): {e} | None args at "
+                        f"positions {_none_pos} of {len(args)}") from e
             else:
                 # SLOW PATH: transfer inputs to target device
                 target = op.device_idx
