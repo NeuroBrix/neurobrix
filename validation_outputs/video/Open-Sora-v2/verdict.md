@@ -1,4 +1,57 @@
-# Open-Sora-v2 — VERDICT: OPEN (transformer executes end-to-end; VAE SDPA-mask product-freeze is the residual)
+# Open-Sora-v2 — VERDICT: OPEN (timestep double-scale + split-tuple fixed → pipeline runs on FINITE data for the first time; 2 residuals: RoPE empty-fill + VAE split symbol-binding)
+
+## UPDATE 2026-06-30 (b) — the latent was NaN all along; timestep double-scale was the real transformer blocker
+
+The "transformer executes end-to-end" reading (update (a) below) meant only that
+it *ran* to the VAE — the **latent was NaN the whole time**, masked because the
+diagnosis was chasing the symbolic-shape crash, not numerics. First-NaN tracing
+(`NBX_OPLOG`) localised it to `cos::0`←`mul::0=inf` at the MMDiT's **timestep
+embedding**: the runtime `_get_component_timestep_scale` applied the Mochi-style
+`×num_train` ([0,1000]) scale, but Open-Sora's MMDiT *also* scales in-graph
+(`mul(input::timesteps, 1000)`, the FLUX `time_factor`). **Double-scaled** →
+`1e6` → fp16 `inf` → `cos/sin = NaN` → dead latent → NaN VAE.
+
+Fixes (runtime, no re-trace — the graph + scheduler are faithful, only the
+family heuristic was wrong):
+- **`iterative_process._get_component_timestep_scale`**: data-driven discriminator
+  — if the component graph already up-scales the timestep by ~num_train (detected
+  by inspecting the captured DAG), return 1.0 (the model expects raw [0,1] sigmas).
+  Provably touches ONLY Open-Sora: a cross-model scan confirmed Mochi / Allegro /
+  CogVideoX / Wan have **no** in-graph timestep mul.
+- **single-chunk `split`/`chunk` tuple unwrap** (`compiled_sequence` ×2 sites +
+  `triton/sequence` ×2, R30): HunyuanVAE `chunk_nearest_interpolate` does
+  `x.chunk(n_chunks, dim=1)` with `n_chunks==1` at runtime res → `torch.chunk`
+  returns `(x,)`; the `len(slots)==1` branch stored the tuple whole → downstream
+  "Expected Tensor, found tuple". Now unwrapped (single-tensor ops never return a
+  tuple, so unambiguous).
+
+After both: `mul::0=1000` (fp16-exact), `cos/sin` finite (l2≈8), run advances
+PAST the upsample. **Regression GREEN (recorded):** Mochi-1-preview coherent
+(std=25.6, finite VAE output — the one at-risk FlowEuler closed model) and
+Wan2.1-T2V-1.3B coherent (std=26.8, non-FlowEuler sanity).
+
+**Two residuals remain (each its own investigation, the pipeline now on finite data):**
+1. **MMDiT RoPE empty-fill** — `empty::0` [1440,128] (img Q/K in the FLUX
+   concat-attention `apply_rope`) is **uninitialised** and read by `view::19`
+   while `view::18` (the real projected data, same shape) is **orphaned**. The
+   fill op (a `copy`/materialisation of the interleaved-complex reshape) is absent
+   from the captured DAG (`copy_` count 0; orphan present in the raw trace, not a
+   build strip). Root candidates: R19 copy-elision without dst→src rewiring / a
+   GraphBuilder `data_ptr` orphan-capture / a custom-Function (`LigerRopeFunction`)
+   trace gap — being discriminated by an instrumented re-trace. Same class as the
+   VACE interleaved-complex RoPE fix (`a0ddeff`), compiled side.
+2. **VAE `split_with_sizes::1` symbol-binding** — `sizes=[1, s1−1]`, `input=s1`
+   (self-consistent), yet resolved `[1,3]` with runtime input `9`: `s1` binds to 4
+   in the sizes arg but 9 in the tensor — a grown-temporal-dim binding
+   inconsistency in the causal-3D decoder. Separate from residual #1.
+
+This update **supersedes** the "VAE SDPA-mask product-freeze is the residual"
+header; that freeze (`7b65216`) and the temporal split-residual were real and
+landed, but they were validated against an all-NaN latent.
+
+---
+
+# (prior header) Open-Sora-v2 — transformer executes end-to-end; VAE SDPA-mask product-freeze
 
 **Date:** 2026-06-27 (transformer-execution update 2026-06-30) · **Family:** video T2V · **Arch:** MMDiT (FLUX-style packed-latent video, non-diffusers) + HunyuanVAE + T5 + CLIP
 

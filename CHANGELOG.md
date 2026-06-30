@@ -55,6 +55,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Timestep over-scaling on video diffusion models that normalise the timestep
+  internally (FLUX-style packed-latent denoisers, compiled).** When a denoiser
+  already scales the diffusion timestep inside its own graph (the FLUX
+  `time_factor`), the runtime was *also* applying the flow-matching
+  `[0, num_train_timesteps]` scale — double-scaling the timestep past fp16 range,
+  which produced an all-NaN denoiser output and an empty video. The flow now
+  detects in-graph timestep scaling and feeds the raw normalised timestep in that
+  case. Detected per component (no model-name branch); models that do not scale
+  internally (e.g. Mochi) are unchanged.
+
+- **Single-piece tensor splits mishandled in the compiled and Triton runtimes.**
+  A `split`/`chunk` whose size yields a single piece at runtime returns a
+  one-element tuple; the single-output path stored the tuple instead of the
+  tensor, so the next op received a tuple and failed. The runtime now unwraps a
+  one-element split/chunk result in both execution modes.
+
 - **Wan video washed-out frames in Triton mode (Wan2.1-VACE-1.3B, Wan2.2-I2V).**
   The Wan transformer's rotary embedding writes the rotated query in place at the
   interleaved (even/odd) positions of a scratch buffer. In Triton mode a strided

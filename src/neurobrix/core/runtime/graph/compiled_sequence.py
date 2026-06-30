@@ -3278,6 +3278,16 @@ class CompiledSequence:
                 # ================================================================
                 # NaN-GUARD for single tensor output (handled above)
                 # ================================================================
+                # A multi-output op (split / chunk / unbind) can return a
+                # 1-element tuple when a data-dependent split yields a single
+                # chunk at the runtime resolution (e.g. HunyuanVAE
+                # chunk_nearest_interpolate -> n_chunks == 1 -> torch.chunk
+                # returns `(x,)`). The trace recorded one output slot, so the
+                # tuple must be unwrapped to the tensor — single-tensor ops never
+                # return a tuple/list, so this is unambiguous. Reassign `result`
+                # so the downstream NaN/range trace sees the real tensor.
+                if isinstance(result, (tuple, list)):
+                    result = result[0] if len(result) >= 1 else None
                 arena[slots[0]] = result
                 # === TEMP TID DUMP: compare native vs triton per-op output ===
                 import os as _os_d
@@ -3651,6 +3661,11 @@ class CompiledSequence:
                     pass
             # ============================================================
             if len(slots) == 1:
+                # Single-chunk multi-output op (split/chunk/unbind) returns a
+                # 1-element tuple for one traced slot — unwrap (see single-device
+                # branch above). Multi-device mirror.
+                if isinstance(result, (tuple, list)):
+                    result = result[0] if len(result) >= 1 else None
                 arena[slots[0]] = result
                 # === TEMP TID DUMP (multi-device branch) ===
                 import os as _os_d2
