@@ -191,11 +191,22 @@ class TensorResolver:
         if needs_cache_update:
             self._ctx.tensor_store[tensor_id] = tensor
 
-        # 3. Dtype alignment
-        # Prism compute_dtype (e.g., fp16) overrides graph dtype (e.g., bf16).
-        # Convert fp32 weights down to compute_dtype, but NEVER convert compute_dtype
-        # tensors to a different half-precision format (bf16→fp16 or vice versa).
-        if tensor.is_floating_point():
+        # 3. Dtype alignment — WEIGHTS / CONSTANTS / INPUTS (leaves) ONLY.
+        # An op-output INTERMEDIATE carries the dtype the execution engine
+        # (DtypeEngine AMP) deliberately produced — e.g. an mm/bmm/addmm/div
+        # output upcast to fp32 for fp16-overflow protection. The graph-recorded
+        # dtype is the STALE trace dtype (fp16) and must NOT override the live
+        # AMP dtype: downcasting an AMP-upcast fp32 intermediate back to fp16
+        # re-introduces the very overflow the upcast prevented. Witnessed on
+        # Open-Sora-v2: double_blocks.18 modulation (scale × hidden ~1.0e4 → mul
+        # ~1.0e5) overflowed fp16 → inf → black video, because the fp32 addmm
+        # output was downcast back to fp16 at the consuming view::594. Compiled
+        # mode (arena slots, no per-op resolver) keeps the fp32 through view→mul
+        # and renders correctly — this guard makes sequential mirror it. Only
+        # LEAVES (producer_op_uid is None) get aligned to the Prism compute dtype.
+        _meta_align = self._ctx.tensors_metadata.get(tensor_id) or {}
+        _is_op_output = _meta_align.get("producer_op_uid") is not None
+        if tensor.is_floating_point() and not _is_op_output:
             prism_dtype = self._ctx.dtype
             if prism_dtype is not None:
                 # If tensor is in graph's half-precision but Prism wants different half,

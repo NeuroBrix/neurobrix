@@ -55,6 +55,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Sequential execution mode now preserves fp16-overflow protection on
+  op-output intermediates.** On fp16 hardware the dtype engine upcasts
+  `mm`/`bmm`/`addmm`/`div` to fp32 to prevent accumulation/overflow. In
+  sequential mode the per-op input resolver then realigned every resolved
+  tensor to its graph-recorded (trace-time) dtype, downcasting those fp32
+  intermediates back to fp16 and silently undoing the guard. On models whose
+  activations reach fp16's range this overflowed to Inf -> NaN -> black/empty
+  output (Open-Sora-v2 sequential, at a deep-block modulation). The dtype
+  realignment now applies only to leaves (weights/constants/inputs);
+  op-output intermediates keep the dtype the execution engine produced,
+  mirroring compiled mode. Bit-identical for models that stay within fp16
+  range (verified: Sana-1024 and CogVideoX-2b sequential vs compiled 0.000%).
+
 - **Classifier-free guidance now finds the text condition on FLUX/MMDiT
   denoisers (Open-Sora-v2, all modes).** A FLUX/MMDiT denoiser names its
   text-condition input `txt`, not `encoder_hidden_states`/`*hidden_state`, so
