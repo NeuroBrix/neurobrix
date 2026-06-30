@@ -25,14 +25,20 @@ scalar-promotion crutch** (the graph is fully symbolic).
 Regression: Wan2.1-T2V trace bit-inert; CogVideoX-2b coherent at 50 steps (only
 its own latent frozen-seq dims symbolize, trace-preserving).
 
-**Residual blocker (now the VAE, not the transformer):** the HunyuanVAE
-mid-attention SDPA mask align-pad slices back to an **absolute** key length that
-froze at the trace `T*H*W` product (2772 = 9·14·22); at a runtime resolution the
-spatial seq is larger (4096) so the mask key-dim (2772) mismatches the query
-(4096). This is a **3-way product** freeze — distinct from the transformer's
-single/sum textures (the seq-leaf recovery handles single values and pairwise
-sums, not products) and lives in a `slice` end, not a shape-producing op. Named
-next chantier.
+**VAE SDPA-mask product freeze — RESOLVED (`7b65216`).** The mid-attention mask
+key length froze at the trace `T*H*W` product (2772 = 9·14·22). Fixed by extending
+seq-leaf recovery to DISTINCT-symbol products (2- and 3-way) + a slice-end reinject
+from the now-symbolic output dim. The run now advances **past the VAE
+mid-attention**. Regression: Wan inert, CogVideoX product-inert.
+
+**Residual blocker (the VAE temporal cluster — active).** Past the mid-attention
+the run hits `aten.split_with_sizes::0` in `decoder.up.0.up_sample.0`:
+`split_sizes=[1, 8]` where `8 = s1−1` (temporal `T−1`, the causal-3D "first-frame +
+rest" split) froze; runtime `T=4` ⇒ `[1,8]` overshoots. ~308 temporal slices in the
+decoder carry the same `s1`/`s1−1` class. This is a NEW freeze texture
+(`symbol − small_const`, split-sizes-summing-to-a-dim) — the causal-3D-VAE temporal
+handling, its own multi-freeze cluster (cf. CogVideoX/Mochi/Allegro VAE temporal
+work). Next chantier.
 
 ## DONE + committed (both remotes)
 
@@ -70,12 +76,10 @@ next chantier.
    "head_dim symbolized" reading was WRONG; the real root was the frozen-seq
    cluster (FLUX concat-attention reading `shape[i]` into Python arithmetic). See
    the "UPDATE 2026-06-30" section above. The entire transformer now executes.
-2. **VAE SDPA-mask 3-way-product freeze (NEW residual — the active blocker).**
-   `_scaled_dot_product_efficient_attention::0` in `decoder.mid.attn.0`: the
-   align-pad mask slices back to an absolute `T*H*W` key length frozen at the
-   trace product (2772 = 9·14·22) while the query scales to the runtime spatial
-   seq (4096). A product, not a single value or pairwise sum, in a `slice` end —
-   the next chantier extends seq-leaf recovery to products / slice-end positions.
+2. **VAE SDPA-mask product freeze — RESOLVED (`7b65216`).** Seq-leaf recovery
+   extended to products + slice-end reinject; run advances past the mid-attention.
+   New active blocker = the **VAE temporal cluster** (`split[1,T−1]` +
+   ~308 temporal slices in the causal-3D decoder, `symbol − small_const` texture).
 3. **CFG-engine `txt` naming** — at cfg>1 the CFG engine can't determine the
    `encoder_hidden_states` variable (MMDiT names it `txt`); needs data-driven
    handling for batch=2 closure.
