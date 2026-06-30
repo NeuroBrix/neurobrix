@@ -1,11 +1,38 @@
-# Open-Sora-v2 — VERDICT: OPEN (forge custom-pipeline DONE; runtime FLUX-video flow structurally validated)
+# Open-Sora-v2 — VERDICT: OPEN (transformer executes end-to-end; VAE SDPA-mask product-freeze is the residual)
 
-**Date:** 2026-06-27 · **Family:** video T2V · **Arch:** MMDiT (FLUX-style packed-latent video, non-diffusers) + HunyuanVAE + T5 + CLIP
+**Date:** 2026-06-27 (transformer-execution update 2026-06-30) · **Family:** video T2V · **Arch:** MMDiT (FLUX-style packed-latent video, non-diffusers) + HunyuanVAE + T5 + CLIP
 
-This is a **strong-OPEN**, not a closure. The forge side (the directive's gaps
-①②③) is **done and committed**; the runtime is a FLUX-video packed-latent flow
-bring-up that is **structurally validated through the MMDiT entry** but not yet
-coherent. Recorded honestly per "closure = verdict, never prose".
+This is an **OPEN with the whole transformer now executing**. As of 2026-06-30
+the complete MMDiT denoiser (all 4164 ops, double- + single-blocks) runs in
+compiled mode; the failure point has moved out of the transformer into the VAE
+decoder. Recorded honestly per "closure = verdict, never prose".
+
+## UPDATE 2026-06-30 — MMDiT transformer executes end-to-end
+
+The 2026-06-28 diagnosis of `mul::11` as a **head_dim symbolization collision**
+was **WRONG** and is retracted. The true root was a **cluster of frozen
+sequence lengths** in the FLUX concat-attention: the model reads `tensor.shape[i]`
+into Python arithmetic (`txt_len + img_len`, `seq * heads`, `full - txt`) which
+the trace dispatcher never observes symbolically, so the text/image seq lengths
+(31 / 60) baked as concrete literals into downstream op shape-args. Five textures,
+all recovered born-at-source in the trace (build commit `b36da6d`):
+`(A+B)-A → B` algebra · concat-split suffix-slice start · cat re-propagation ·
+deep seq-leaf recovery (single trace + sum). After the fix the complete static
+invariant — **zero frozen seq leaf in any shape-arg or dim** — is 0, and the run
+advances `mul::11 → mul::238 → all single-blocks → VAE`. The engine needs **no
+scalar-promotion crutch** (the graph is fully symbolic).
+
+Regression: Wan2.1-T2V trace bit-inert; CogVideoX-2b coherent at 50 steps (only
+its own latent frozen-seq dims symbolize, trace-preserving).
+
+**Residual blocker (now the VAE, not the transformer):** the HunyuanVAE
+mid-attention SDPA mask align-pad slices back to an **absolute** key length that
+froze at the trace `T*H*W` product (2772 = 9·14·22); at a runtime resolution the
+spatial seq is larger (4096) so the mask key-dim (2772) mismatches the query
+(4096). This is a **3-way product** freeze — distinct from the transformer's
+single/sum textures (the seq-leaf recovery handles single values and pairwise
+sums, not products) and lives in a `slice` end, not a shape-producing op. Named
+next chantier.
 
 ## DONE + committed (both remotes)
 
@@ -39,29 +66,23 @@ coherent. Recorded honestly per "closure = verdict, never prose".
 
 ## REMAINING (named sub-chantier — resume here)
 
-1. **MMDiT RoPE/pe shape residual — forge symbolic-shape collision (head_dim).**
-   `aten.mul::11` is the FLUX RoPE complex multiply: `pe` (select::3, trace
-   `[1,1,76,64,2]`) × `q` (select::4, trace `[1,24,76,64,1]`) — dim 3 = **64 =
-   head_dim** for both at trace. At runtime (confirmed 2026-06-28, repro below)
-   the `pe` operand's head_dim resolves to **312** while `q`'s stays 64 → "size
-   of tensor a (312) must match b (64) at non-singleton dimension 3". So the
-   **head_dim 64 was SYMBOLIZED** (collided at trace with another dim that is 64
-   there but resolves to ~312 — a token-count — at runtime) and the FLUX `pe`
-   inherits the wrong symbol. This is a **forge-side de-collision** (born-at-
-   source in the tracer, same class as the `27b5949` T·H·W=64 vs in_channels=64
-   fix): pick a trace stimulus where head_dim is distinct from the colliding
-   dim so the SymbolicShapeTracker keeps head_dim concrete (64). NOT a runtime
-   fix. Next: in Forge, diff the MMDiT trace symbols to find which token/seq dim
-   = 64 at trace and de-collide it from head_dim.
-2. **Rest of the 40-block MMDiT + VAE decode** — numerical correctness + a
-   coherent frame (scheduler shift: the *√num_frames video factor is deferred).
+1. **MMDiT RoPE/pe shape residual — RESOLVED 2026-06-30 (`b36da6d`).** The
+   "head_dim symbolized" reading was WRONG; the real root was the frozen-seq
+   cluster (FLUX concat-attention reading `shape[i]` into Python arithmetic). See
+   the "UPDATE 2026-06-30" section above. The entire transformer now executes.
+2. **VAE SDPA-mask 3-way-product freeze (NEW residual — the active blocker).**
+   `_scaled_dot_product_efficient_attention::0` in `decoder.mid.attn.0`: the
+   align-pad mask slices back to an absolute `T*H*W` key length frozen at the
+   trace product (2772 = 9·14·22) while the query scales to the runtime spatial
+   seq (4096). A product, not a single value or pairwise sum, in a `slice` end —
+   the next chantier extends seq-leaf recovery to products / slice-end positions.
 3. **CFG-engine `txt` naming** — at cfg>1 the CFG engine can't determine the
    `encoder_hidden_states` variable (MMDiT names it `txt`); needs data-driven
    handling for batch=2 closure.
 4. **triton mirror** — port the brick + 5D packing to `triton/` (R30) after
    compiled is coherent.
 
-## Reproduce (current state — fails at mul::11)
+## Reproduce (current state — transformer passes, fails in VAE at sdpa::0)
 
 ```bash
 python3 -m neurobrix run --model Open-Sora-v2 --compiled --mode t2v \
