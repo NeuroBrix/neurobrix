@@ -153,8 +153,18 @@ class OutputExtractor:
             if from_port.startswith(f"{comp_name}."):
                 if "." in to_port:
                     to_comp, to_input = to_port.split(".", 1)
-                    if to_comp in loop_components and "hidden_state" in to_input.lower():
-                        return True
+                    if to_comp in loop_components:
+                        ti = to_input.lower()
+                        # A FLUX/MMDiT denoiser names its text-condition input `txt`,
+                        # not `encoder_hidden_states`, so the to-input check misses
+                        # it. Fall back to the from-OUTPUT side: a `*_hidden_state`
+                        # output feeding the denoiser is the text condition (it has a
+                        # negative). The pooled vector condition (CLIP pooler_output)
+                        # has no `hidden_state` in its from-port, so it is excluded.
+                        from_out = from_port.split(".", 1)[1].lower()
+                        if (("hidden_state" in ti or "hidden_state" in from_out)
+                                and "image" not in ti and "image" not in from_out):
+                            return True
 
         return False
 
