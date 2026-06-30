@@ -55,6 +55,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Classifier-free guidance now finds the text condition on FLUX/MMDiT
+  denoisers (Open-Sora-v2, all modes).** A FLUX/MMDiT denoiser names its
+  text-condition input `txt`, not `encoder_hidden_states`/`*hidden_state`, so
+  guidance could not locate the text condition and the run aborted. CFG now
+  falls back to the encoder-output side: a text encoder whose `*_hidden_state`
+  output feeds the denoiser is the text condition (the pooled-vector and image
+  conditions are excluded). The fallback runs only after the existing
+  to-input match, so models naming the input `encoder_hidden_states` keep an
+  unchanged, byte-identical detection path. Mirrored in compiled and triton.
+
 - **Timestep over-scaling on video diffusion models that normalise the timestep
   internally (FLUX-style packed-latent denoisers, compiled).** When a denoiser
   already scales the diffusion timestep inside its own graph (the FLUX

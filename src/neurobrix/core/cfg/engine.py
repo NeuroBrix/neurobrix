@@ -476,6 +476,26 @@ class CFGEngine:
                     ti = to_input.lower()
                     if "hidden_state" in ti and "image" not in ti:
                         return from_port
+        # Pass 1b: a FLUX/MMDiT denoiser NAMES its text-condition input `txt`
+        # (not `*hidden_state`), so Pass 1 misses it. Fall back to the OUTPUT
+        # side: a pre_loop text-encoder whose `*_hidden_state` output feeds a
+        # loop component is the text condition (it has a negative). The pooled
+        # vector condition (CLIP pooler_output -> y_vec) has no `hidden_state`
+        # in its from-port, so it is excluded here; the image condition is
+        # excluded as in Pass 1. Runs only after Pass 1, so models that name the
+        # input `encoder_hidden_states` keep their exact Pass-1 match (byte-id).
+        for conn in connections:
+            from_port = conn.get("from", "")
+            to_port = conn.get("to", "")
+            if "." in from_port and "." in to_port:
+                from_comp = from_port.split(".")[0]
+                from_out = from_port.split(".", 1)[1].lower()
+                to_comp, to_input = to_port.split(".", 1)
+                if from_comp in pre_loop and to_comp in loop_components:
+                    ti = to_input.lower()
+                    if ("hidden_state" in from_out and "image" not in from_out
+                            and "image" not in ti):
+                        return from_port
         # Pass 2: GLOBAL-variable indirection. The I2V builds (Wan-I2V) wire the
         # text condition as `global.encoder_hidden_states -> transformer.
         # encoder_hidden_states` (the text_encoder output is finalized into the
