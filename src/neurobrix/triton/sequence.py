@@ -3281,6 +3281,14 @@ class TritonSequence:
             if not op.output_slots:
                 pass
             elif len(op.output_slots) == 1:
+                # A multi-output op (split / chunk / unbind) can return a
+                # 1-element tuple when a data-dependent split yields a single
+                # chunk at the runtime resolution (e.g. HunyuanVAE
+                # chunk_nearest_interpolate -> n_chunks == 1). One traced output
+                # slot => unwrap; single-tensor ops never return a tuple/list, so
+                # this is unambiguous. Mirrors compiled_sequence (R30).
+                if isinstance(result, (tuple, list)):
+                    result = result[0] if len(result) >= 1 else None
                 arena[op.output_slots[0]] = result
             elif isinstance(result, tuple):
                 for i, s in enumerate(op.output_slots):
@@ -3545,6 +3553,14 @@ class TritonSequence:
             if not op.output_slots:
                 pass
             elif len(op.output_slots) == 1:
+                # A multi-output op (split / chunk / unbind) can return a
+                # 1-element tuple when a data-dependent split yields a single
+                # chunk at the runtime resolution (e.g. HunyuanVAE
+                # chunk_nearest_interpolate -> n_chunks == 1). One traced output
+                # slot => unwrap; single-tensor ops never return a tuple/list, so
+                # this is unambiguous. Mirrors compiled_sequence (R30).
+                if isinstance(result, (tuple, list)):
+                    result = result[0] if len(result) >= 1 else None
                 arena[op.output_slots[0]] = result
             elif isinstance(result, tuple):
                 for i, s in enumerate(op.output_slots):
