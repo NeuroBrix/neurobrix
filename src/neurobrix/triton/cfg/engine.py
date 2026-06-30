@@ -507,6 +507,26 @@ class TritonCFGEngine:
                 if from_comp in pre_loop and to_comp in loop_components:
                     if "hidden_state" in to_input.lower():
                         return from_port
+        # Pass 1b (R30 mirror of core/cfg/engine.py): a FLUX/MMDiT denoiser NAMES
+        # its text-condition input `txt` (not `*hidden_state`), so Pass 1 misses
+        # it. Fall back to the OUTPUT side: a pre_loop text-encoder whose
+        # `*_hidden_state` output feeds a loop component is the text condition.
+        # The pooled vector condition (CLIP pooler_output -> y_vec) has no
+        # `hidden_state` in its from-port and the image condition is excluded, so
+        # only the real text condition is picked. Byte-identical for models that
+        # name the input `encoder_hidden_states` (Pass 1 returns first).
+        for conn in connections:
+            from_port = conn.get("from", "")
+            to_port = conn.get("to", "")
+            if "." in from_port and "." in to_port:
+                from_comp = from_port.split(".")[0]
+                from_out = from_port.split(".", 1)[1].lower()
+                to_comp, to_input = to_port.split(".", 1)
+                if from_comp in pre_loop and to_comp in loop_components:
+                    ti = to_input.lower()
+                    if ("hidden_state" in from_out and "image" not in from_out
+                            and "image" not in ti):
+                        return from_port
         return None
 
     @staticmethod
