@@ -1,4 +1,4 @@
-# Open-Sora-v2 — VERDICT: compiled + sequential + triton coherent (3/4); triton_sequential pending (shares the same fixes)
+# Open-Sora-v2 — VERDICT: 4/4 (compiled + sequential + triton coherent fox; triton_sequential drift-proven, same kernels)
 
 T2V video, FLUX-style MMDiT (double + single stream) + HunyuanVAE causal-3D.
 Config: 256×256, 13 frames, 50 steps, guidance 7.5, seed 42, prompt
@@ -114,8 +114,15 @@ without it; a separate LLM-sequential gap, out of scope here.)
     fox; (2) the `double_blocks.18` fp16 overflow did NOT recur in triton (dumped
     fp32/clean, matching compiled) — the residual NaN was the VAE attention, not a
     transformer overflow.
-- **triton_sequential**: shares the same kernels + flow (the four fixes apply);
-  op-by-op validation pending (slow cold-compile).
+- **triton_sequential**: PASS (drift-proven) — the op-by-op path routes SDPA
+  through the SAME `scaled_dot_product_attention_wrapper` (sequential.py:248,
+  extracting the VAE's -inf bias from arg[3]), so the fully-masked-row guard
+  fires here too. 1-step `add::5` = 836.1 (finite, matches compiled 834.4 /
+  triton 834.4 within 0.2 %); VAE output 488.8; frame std 36.4 (= triton). Same
+  kernels as the foxing triton-compiled mode; the slow 50-step op-by-op coherent
+  frame is deferred per the drift-gate doctrine (drift-prove, defer the slow
+  frame). Discriminating check per the oracle: op-by-op reaches the mask the same
+  way → guard fires → finite, NOT a hidden divergence.
 
 ### Anti-regression (shared SDPA guard)
 
@@ -125,9 +132,18 @@ Both attention kernels are byte-identical to before. Evidence the guard is inert
 for every model without a fully-masked row: `nan_to_num(finite)==input` bit-exact
 (fp16+fp32, maxdiff 0); the wrapper flash guard is gated on `attn_mask` (skipped
 for causal/no-mask); CogVideoX-2b triton renders a coherent snow scene; TinyLlama
-triton emits coherent English. (Note: triton greedy LLM decoding is run-to-run
+triton emits coherent English; Sana-1600M triton (math path, non-pow2 head_dim —
+hits the ungated `_math_attention` nan_to_num on EVERY attention) renders a sharp
+photorealistic fox. (Note: triton greedy LLM decoding is run-to-run
 NON-deterministic — two identical-code runs differ — so single-run byte-diff is
 not a valid gate; the value-identity proof is.)
+
+Tripwire note (non-blocking, future): the math-path `nan_to_num` in
+`_math_attention` is ungated, so it would silently turn ANY future NaN in a math
+attention into 0 (a real overflow would surface as a black-ish output, not a loud
+NaN). Correct today — it matches PyTorch and is a proven value-identity — but a
+`NBX_DEBUG`-gated assert that the only zeroed rows are fully-masked would restore
+the tripwire without changing behaviour. Do NOT churn the tested path to add it.
 
 ## Relaunch
 
