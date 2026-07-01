@@ -1,4 +1,4 @@
-# Open-Sora-v2 — VERDICT: compiled + sequential coherent (2/4); triton/triton_sequential = mode escalation (FLUX-video flow port)
+# Open-Sora-v2 — VERDICT: compiled + sequential + triton coherent (3/4); triton_sequential pending (shares the same fixes)
 
 T2V video, FLUX-style MMDiT (double + single stream) + HunyuanVAE causal-3D.
 Config: 256×256, 13 frames, 50 steps, guidance 7.5, seed 42, prompt
@@ -75,13 +75,59 @@ without it; a separate LLM-sequential gap, out of scope here.)
 - **compiled**: PASS — coherent fox (output_compiled.png / .mp4, frame std ~88).
 - **sequential**: PASS — coherent fox (output_sequential.png / .mp4, frame std ~98);
   transformer overflow eliminated; NaN probe ran clean through all 50 denoise steps.
-- **triton / triton_sequential**: ESCALATION — the triton flow does not yet
-  synthesize the FLUX-video packed latent / img_ids (`global.img`); the
-  `flux_video_conditioning` stage the compiled flow uses is not mirrored in
-  `triton/flow/iterative_process.py`. This is an R30 flow-port (NBXTensor-pure),
-  a bounded but non-trivial piece tracked as the next step. The rotary fix and the
-  sequential dtype fix are mode-agnostic and carry into triton once the flow port
-  lands.
+- **triton (compiled-triton)**: PASS — coherent fox (output_triton.png / .mp4,
+  frame std ~93), real config cfg=7.5 (CFG batch=2), rope fusion ENABLED. Reached
+  via a chain of three root fixes on the triton branch:
+  1. *Flow port (Milestone 1)*: NBXTensor-pure `triton/flux_video_conditioning.py`
+     + 5D pack/unpack + `is_flux_video` state-alias in `triton/flow/
+     iterative_process.py` (R30 mirror, gated on the denoiser's `img_ids` input →
+     inert for every non-FLUX model). Synthesizes all 7 MMDiT inputs.
+  2. *Fused-rope scheduling* (`triton/sequence.py _fuse_rope_ops`): the single
+     fused Q+K rope op was anchored at the LATER of the two branch adds — an
+     HF-Llama-specific heuristic. Open-Sora's MMDiT feeds one rope output into the
+     joint-attention `cat` before the OTHER branch's rope add runs, so the fused
+     op produced its first output AFTER a consumer already read the (unwritten =
+     None) slot → NOP-cascade → crash. Fixed with a topology-general scheduling
+     window `[max_input_pos, min_consumer_pos)`: insert the fused op just before
+     the earliest consumer of either output; if a consumer precedes an input the
+     pair is left unfused (correct, unoptimised). Never a consumer without its
+     producer.
+  3. *Timestep double-scale* (`triton/flow/iterative_process.py`): the triton
+     flow always applied the flow-matching `[0, num_train]` scale, but FLUX/MMDiT
+     scales the timestep INTERNALLY (in-graph `time_factor`) → double-scale past
+     fp16 → Inf timestep embedding → NaN. Fixed by the R30 mirror of compiled's
+     `_graph_scales_timestep_internally` graph-inspection gate.
+  4. *VAE fully-masked-row attention* (`kernels/wrappers.py`) — the black-frame
+     root cause. The HunyuanVAE mid-block self-attention (`decoder.mid.attn.0`)
+     passes an all-`-inf` additive bias (a fully-masked query row). PyTorch's
+     fused SDPA backend (which compiled mode uses) emits 0 for such a row; the
+     triton math path (the VAE's route: headdim 512, 64 MB scores ≤ 128 MB budget)
+     and flash path computed `exp(-inf - -inf) = NaN`, which propagated through
+     the VAE (conv::9 → conv::35) and blackened the video. Cross-engine dump:
+     compiled `add::5` finite (l2 834, mask ALSO all `-inf`) vs triton NaN. Fixed
+     with a fully-masked-row guard (`nan_to_num`) at the SDPA math + wrapper level,
+     matching PyTorch. **Provably a value-identity** (`nan_to_num(finite)==input`,
+     bit-exact) for every attention with no fully-masked row → inert for the whole
+     zoo. Triton `add::5` = 834.4 now matches compiled 834.4.
+  - Predictions from the prior verdict RESOLVED: (1) `img_ids`/rotary is correct —
+    the transformer output is finite and rope fusion ENABLED renders a coherent
+    fox; (2) the `double_blocks.18` fp16 overflow did NOT recur in triton (dumped
+    fp32/clean, matching compiled) — the residual NaN was the VAE attention, not a
+    transformer overflow.
+- **triton_sequential**: shares the same kernels + flow (the four fixes apply);
+  op-by-op validation pending (slow cold-compile).
+
+### Anti-regression (shared SDPA guard)
+
+The fully-masked-row guard is `nan_to_num` at the SDPA-op level, NOT inside the
+`@triton.jit` kernels (an in-kernel guard perturbs Triton register allocation).
+Both attention kernels are byte-identical to before. Evidence the guard is inert
+for every model without a fully-masked row: `nan_to_num(finite)==input` bit-exact
+(fp16+fp32, maxdiff 0); the wrapper flash guard is gated on `attn_mask` (skipped
+for causal/no-mask); CogVideoX-2b triton renders a coherent snow scene; TinyLlama
+triton emits coherent English. (Note: triton greedy LLM decoding is run-to-run
+NON-deterministic — two identical-code runs differ — so single-run byte-diff is
+not a valid gate; the value-identity proof is.)
 
 ## Relaunch
 

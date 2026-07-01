@@ -55,6 +55,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Triton attention now matches PyTorch for a fully-masked query row (both the
+  math and flash attention paths).** A query row whose every key is masked — an
+  additive attention bias of `-inf` on all keys, produced e.g. by the Open-Sora-v2
+  video VAE's mid-block self-attention — is a degenerate softmax: PyTorch's fused
+  attention backends emit `0` for such a row, but the Triton paths computed
+  `exp(-inf - -inf) = NaN`, which propagated through the VAE and turned the whole
+  decoded video black. Both Triton attention paths now emit `0` for a fully-masked
+  row, matching PyTorch. The guard is inert — bit-identical — for every attention
+  that has no fully-masked row (i.e. every model that already rendered correctly),
+  so it only changes output that was previously NaN. Open-Sora-v2 in Triton mode
+  now decodes a finite frame; other models are unaffected.
+
 - **Sequential execution mode now preserves fp16-overflow protection on
   op-output intermediates.** On fp16 hardware the dtype engine upcasts
   `mm`/`bmm`/`addmm`/`div` to fp32 to prevent accumulation/overflow. In
@@ -79,14 +91,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unchanged, byte-identical detection path. Mirrored in compiled and triton.
 
 - **Timestep over-scaling on video diffusion models that normalise the timestep
-  internally (FLUX-style packed-latent denoisers, compiled).** When a denoiser
-  already scales the diffusion timestep inside its own graph (the FLUX
+  internally (FLUX-style packed-latent denoisers, compiled and triton).** When a
+  denoiser already scales the diffusion timestep inside its own graph (the FLUX
   `time_factor`), the runtime was *also* applying the flow-matching
   `[0, num_train_timesteps]` scale — double-scaling the timestep past fp16 range,
   which produced an all-NaN denoiser output and an empty video. The flow now
   detects in-graph timestep scaling and feeds the raw normalised timestep in that
   case. Detected per component (no model-name branch); models that do not scale
-  internally (e.g. Mochi) are unchanged.
+  internally (e.g. Mochi) are unchanged. The triton flow mirrors the same
+  graph-inspection gate (R30).
+
+- **Rope-fusion scheduling dropped an output on non-adjacent Q/K rope (triton).**
+  The triton fused-rope pass collapses a layer's Q and K rotary chains into one
+  op, and anchored it at the later of the two branch adds — valid only when Q and
+  K rope are applied back-to-back (HF-Llama). A denoiser that consumes one rope
+  output before the other branch's rope completes (Open-Sora-v2's MMDiT joint
+  attention) then read a not-yet-written slot and crashed. The pass now schedules
+  the fused op inside the valid window (after all its inputs, before the earliest
+  consumer of either output) and leaves a pair unfused when no such position
+  exists — correct, just unoptimised. Fusion-enabled and fusion-disabled paths
+  render the same coherent output.
 
 - **Single-piece tensor splits mishandled in the compiled and Triton runtimes.**
   A `split`/`chunk` whose size yields a single piece at runtime returns a
