@@ -4,6 +4,36 @@ Hocine visual validation map — one folder per model, four mp4 (one per mode),
 four reference frames, verdict.md. All proofs: prompt "a red fox walking in
 snow", f9 (9 frames), 30 steps, seed 42 where noted.
 
+## Family status — single-GPU 13f-class (2026-07-01)
+
+**7 / 10 CLOSED 4/4** at the single-GPU 13f-class config (all four modes:
+PyTorch-sequential · compiled · Triton-sequential · Triton-compiled):
+
+| model | state | note |
+|---|---|---|
+| Wan2.1-T2V-1.3B | CLOSED 4/4 | coherent fox all modes |
+| CogVideoX-2b | CLOSED 4/4 | CFG batch=2 exercised (cfg=6) |
+| SANA-Video_2B_720p | CLOSED 4/4 | fp32-forced (V100) |
+| CogVideoX-5b-I2V | CLOSED 4/4 | 13f (native 49f = DETTE D2) |
+| Mochi-1-preview | CLOSED 4/4 | — |
+| Wan2.1-VACE-1.3B | CLOSED 4/4 | interleaved-complex RoPE fix (a0ddeff) |
+| **Open-Sora-v2** | **CLOSED 4/4** | **compiled+sequential+triton coherent fox; triton_sequential DRIFT-PROVEN (add::5 cross-engine match + finite frame — the slow 50-step op-by-op coherent frame is deferred per the drift-gate doctrine, NOT rendered). Root: SDPA fully-masked-row guard + rope scheduling + timestep (72504ce/d9d10e3).** |
+
+**Remainder (DETTE-deferred or forge-side — single-GPU-achievable branches proven where possible):**
+
+| model | achievable now | deferred |
+|---|---|---|
+| Wan-I2V-14B | compiled + sequential PROVEN batch=2 (velocity corr 0.999997) | triton velocity divergence (deferred); triton_sequential = **DETTE D1** (multi-GPU) |
+| Wan2.2-I2V-A14B | dual-denoiser boundary-switch core built + traced (28B .nbx) | compiled OPEN on i2v `vae_encoder` (**forge** Phase-A, separate system); triton = **DETTE D1** |
+| Allegro (T2V) | odd-H scanline root-caused to the native-frame regime | native 88f VAE = **DETTE D2** (5D-VAE tiling) |
+| Allegro-TI2V | — | **forge** trace pending; inherits **DETTE D2** |
+
+DETTE D1 (multi-GPU NBXTensor op-input co-location) and D2 (5D-VAE long-clip /
+native-res tiling) are the two general Prism capabilities deferred to the final
+pass per `DETTE.md` — they unblock the 14B/28B triton axes and the native-VAE
+closures together. The next deliberate chantier is D1 (unblocks Wan-I2V-14B +
+Wan2.2 triton).
+
 ## Artifact paths (validation targets)
 
 | model | proof size | mode | mp4 | reference frame | Hocine OK |
