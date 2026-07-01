@@ -6,8 +6,9 @@ snow", f9 (9 frames), 30 steps, seed 42 where noted.
 
 ## Family status — single-GPU 13f-class (2026-07-01)
 
-**7 / 10 CLOSED 4/4** at the single-GPU 13f-class config (all four modes:
-PyTorch-sequential · compiled · Triton-sequential · Triton-compiled):
+**8 / 10 CLOSED 4/4** (all four modes: PyTorch-sequential · compiled ·
+Triton-sequential · Triton-compiled). Wan-I2V-14B is multi-GPU (component
+placement cuda:2/cuda:3), the rest single-GPU 13f-class:
 
 | model | state | note |
 |---|---|---|
@@ -18,21 +19,22 @@ PyTorch-sequential · compiled · Triton-sequential · Triton-compiled):
 | Mochi-1-preview | CLOSED 4/4 | — |
 | Wan2.1-VACE-1.3B | CLOSED 4/4 | interleaved-complex RoPE fix (a0ddeff) |
 | **Open-Sora-v2** | **CLOSED 4/4** | **compiled+sequential+triton coherent fox; triton_sequential DRIFT-PROVEN at cfg=7.5/CFG batch=2 (transformer `view::1052` shape [2,1024,64] finite + VAE finite + frame std 86.5 — batch dim ≠ trace exercised; the slow 50-step op-by-op coherent frame is deferred per the drift-gate doctrine, NOT rendered). Root: SDPA fully-masked-row guard + rope scheduling + timestep (72504ce/d9d10e3).** |
+| **Wan-I2V-14B** | **CLOSED 4/4** | **multi-GPU (pipeline_parallel component placement cuda:2/cuda:3), CFG batch=2 (cfg=5.0). compiled+sequential PROVEN (velocity corr 0.999997); triton coherent fox (matched R29 10-step); triton_sequential runs multi-GPU + per-branch clean, drift-proven. The batch=2 "23% divergence" was a metric artifact — CFG amplification (6.4×) of clean per-branch fp16 error (2.4–4.5%), not a defect. NO code fix. D1 (co-location) refuted as the blocker: transformer fits one 32GB card, cross-device is component-boundary handoff (handled).** |
 
-**Remainder (DETTE-deferred or forge-side — single-GPU-achievable branches proven where possible):**
+**Remainder (2 / 10):**
 
 | model | achievable now | deferred |
 |---|---|---|
-| Wan-I2V-14B | compiled + sequential PROVEN batch=2 (velocity corr 0.999997) | triton velocity divergence (deferred); triton_sequential = **DETTE D1** (multi-GPU) |
-| Wan2.2-I2V-A14B | dual-denoiser boundary-switch core built + traced (28B .nbx) | compiled OPEN on i2v `vae_encoder` (**forge** Phase-A, separate system); triton = **DETTE D1** |
-| Allegro (T2V) | odd-H scanline root-caused to the native-frame regime | native 88f VAE = **DETTE D2** (5D-VAE tiling) |
-| Allegro-TI2V | — | **forge** trace pending; inherits **DETTE D2** |
+| Wan2.2-I2V-A14B | dual-denoiser boundary-switch core built + traced (28B .nbx) | compiled OPEN on i2v `vae_encoder` (**forge** Phase-A, separate system); triton axes to validate (same TritonDtypeEngine as the now-coherent Wan-I2V-14B) — check if experts genuinely intra-split at runtime (may be component-level via expert lifecycle) |
+| Allegro (T2V) + Allegro-TI2V | odd-H scanline root-caused to the native-frame regime | native 88f VAE = **DETTE D2** (5D-VAE tiling); Allegro-TI2V **forge** trace pending, inherits D2 |
 
-DETTE D1 (multi-GPU NBXTensor op-input co-location) and D2 (5D-VAE long-clip /
-native-res tiling) are the two general Prism capabilities deferred to the final
-pass per `DETTE.md` — they unblock the 14B/28B triton axes and the native-VAE
-closures together. The next deliberate chantier is D1 (unblocks Wan-I2V-14B +
-Wan2.2 triton).
+**D1 (multi-GPU co-location) is REFUTED as a video-family blocker** (empirically:
+Wan-I2V-14B runs multi-GPU without it — component placement, not intra-component
+split; Allegro is single-GPU/D2). The intra-component co-location gaps are real in
+code but UNTRIGGERED by any in-family model at runtime; kept as latent debt in
+`DETTE.md` for the general Prism capability / Qwen3-class models. **D2 (5D-VAE
+tiling)** remains the genuine deferred capability for the Allegro native-frame
+closures. Wan2.2's triton axes ride the same (now-validated) TritonDtypeEngine.
 
 ## Artifact paths (validation targets)
 

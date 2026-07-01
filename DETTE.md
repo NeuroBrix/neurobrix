@@ -81,6 +81,16 @@ Entry format: `ID · title · root cause / fix · scope · status`.
   from Triton (cpu tensor?)" when Prism falls to `cpu_execution` (a weight stays
   CPU-resident but the fused-rope kernel is launched on it). triton_sequential
   handles cpu_execution fine. Named sub-item; off the GPU↔GPU critical path.
+- **Sequential-CFG combine precision (low priority, SYMMETRIC — not R30):** the
+  `_execute_sequential_cfg` combine skips the fp32 upcast that the BATCHED path
+  does — in BOTH engines (`core/cfg/engine.py:443` and `triton/cfg/engine.py:458`
+  both do `uncond + scale*(cond-uncond)` without a `.float()`). Because it is
+  symmetric, there is NO cross-engine divergence (both modes match each other);
+  it is only a shared "should upcast for stability" note for TP-strategy models
+  (sequential CFG only fires under `tp_components`), which are rare. The BATCHED
+  path (used by Wan and every pipeline_parallel model) DOES upcast to fp32 in both
+  engines. Fix both sequential paths to `.float()` before the combine when the TP
+  chantier lands.
 - **Status.** `DEFERRED` + REFRAMED — the co-location capability is real but not on
   the video-family critical path (refuted for Wan-I2V-14B + Allegro; open for
   Wan2.2 pending a runtime check). Kept for the general Prism capability / Qwen3-class

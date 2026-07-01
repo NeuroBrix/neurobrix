@@ -1,6 +1,50 @@
 # Wan2.1-I2V-14B-480P — 4-mode validation (R29 + drift gate)
 
-## UPDATE 2026-07-01 — D1 (multi-GPU placement) REFUTED as the blocker; real blocker = shared triton batch=2 numerical divergence
+## CLOSED 4/4 — 2026-07-01 (D1 refuted; the "23% triton divergence" was a metric artifact, no defect — R29 renders coherent)
+
+**Verdict: Wan-I2V-14B CLOSED 4/4 at CFG batch=2 (cfg=5.0), no code fix.** The
+batch=2 "numerical divergence" that had this model OPEN was root-caused to a
+**measurement artifact, not a defect**, and the triton render is a coherent fox
+comparable to the compiled oracle.
+
+- **compiled** — coherent sharp fox (505 s / 20-step; matched 10-step fox). Oracle.
+- **sequential** — PROVEN batch=2, velocity corr **0.999997** vs compiled (below).
+- **triton** — **coherent fox**, matched-config R29 (10-step, cfg=5.0, seed 42) vs
+  the compiled 10-step: same scene, comparable quality (artifacts
+  `triton_cfg5_batch2_10step*`). Per-branch drift 3.6 %.
+- **triton_sequential** — runs multi-GPU (component placement cuda:2/cuda:3, 550 s,
+  finite, NaN-clean) + per-branch clean (measured pre-combine) + SAME kernels as the
+  coherent triton → drift-proven; the slow 20-step op-by-op render is deferred per
+  the drift-gate doctrine.
+
+**Root cause of the false alarm (the methodology lesson).** The guided-velocity
+drift-gate (post-CFG) reported triton corr 0.97 / relL2 0.23 at batch=2 and this was
+read as a numerical bug. It is NOT. Decomposition (NBX_DUMP_CFG_BATCH per-branch
+capture, seed 42, cfg=5.0, step 0):
+
+| quantity | corr vs oracle | relL2 |
+|---|---|---|
+| per-branch cond (pre-combine) | 0.9997 | **0.024** |
+| per-branch uncond (pre-combine) | 0.9990 | **0.045** |
+| per-branch whole batch=2 | 0.9994 | 0.036 |
+| **guided (post-combine, ×5 CFG)** | 0.975 | **0.227** |
+
+The transformer per-branch output is clean (2.4–4.5 %, no overflow — |max| 5.5 vs
+fp16 65504; both combines are fp32 in core AND triton). The 23 % is the fp32-correct
+CFG combine `uncond + 5·(cond − uncond)` **amplifying** the small per-branch fp16
+error: `‖5εc − 4εu‖ ≈ √(25+16)·ε = 6.4·ε`, and 0.036 × 6.4 = 0.23 — exact. Step 0 is
+the WORST case (at t_max cond≈uncond → `cond−uncond` minimal → amplification maximal);
+later steps differentiate and amplify less. Confirmations: **clean at cfg=1.0/batch=1**
+(triton relL2 0.021), and the R29 render is coherent. **The correct cross-engine
+correctness gate for a CFG model is the PER-BRANCH drift, not the guided velocity at
+step 0.** The user's AMP-overflow hypothesis is refuted by measurement: no overflow,
+the TritonDtypeEngine AMP protection is present (mm/bmm/addmm self-manage fp32
+accumulation; AMP_FP32_OPS in fp32).
+
+Note (minor, deferred): uncond per-branch (4.5 %) is ~2× cond (2.4 %). Small, render
+coherent — not blocking; if a future Wan variant degrades, op-bisect the uncond path.
+
+### Earlier this session — D1 (multi-GPU placement) REFUTED as the blocker
 
 Ran **batch=2 (cfg=5.0) triton_sequential** on the real 4-GPU box (auto-detect):
 it RUNS (exit 0, 550 s, finite output, NBX_TRITON_TRACE_NAN clean). Prism chose
