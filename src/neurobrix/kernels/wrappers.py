@@ -5979,6 +5979,20 @@ def _math_attention(q, k, v, attn_mask=None, is_causal=False, scale=None):
     # returns same dtype as input. Score is fp32 from bmm so softmax
     # output is fp32.
     p = softmax(scores, dim=-1)
+    # Fully-masked-row guard — parity with PyTorch's fused SDPA backends
+    # (memory-efficient / flash), which NeuroBrix compiled mode uses as the
+    # numerical oracle. A query row whose every key is masked (additive bias
+    # = -inf on ALL keys — e.g. the Open-Sora HunyuanVAE mid-block attention
+    # passes an all-(-inf) bias) makes softmax(all -inf) = NaN in this
+    # plain-softmax math path, whereas the efficient backend emits 0 for such
+    # a row. Scrub NaN -> 0 so triton math attention matches compiled and the
+    # NaN does not blacken the whole VAE. In this fp32 score path (bmm is
+    # fp32-accumulated on V100, softmax of any finite row is finite) a NaN can
+    # ONLY originate from a fully-masked row, so this is inert — bit-identical
+    # — for every attention that has no fully-masked row. Mirror of the flash
+    # kernel's fully-masked-row guard in kernels/ops/flash_attention.py (the
+    # two SDPA paths, math and flash, stay symmetric under R30).
+    p = nan_to_num_wrapper(p, nan=0.0)
     # Cast back to value dtype for the second bmm
     if p.nbx_dtype != v_3d.nbx_dtype:
         p = p.to(v_3d.nbx_dtype)
@@ -6294,6 +6308,24 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
         GQA_GROUPS=gqa_groups,
         **_flash_launch_meta,
     )
+    # Fully-masked-row guard at the SDPA-op level — parity with PyTorch's fused
+    # SDPA backends (which NeuroBrix compiled mode uses as the numerical oracle).
+    # A query row whose every key is masked (an additive attn_mask of -inf on ALL
+    # keys — e.g. the Open-Sora-v2 VAE mid-block self-attention) has no finite
+    # score, so the online-softmax flash kernel emits NaN/-inf for that row while
+    # the efficient backend emits 0. Scrub it -> 0 HERE at the wrapper, NOT inside
+    # the kernel: editing the @triton.jit body perturbs Triton register
+    # allocation and changes the bit-exact result of EVERY attention (measured:
+    # TinyLlama greedy output drifted with an in-kernel guard, byte-identical with
+    # this one). Only an explicit additive mask can fully-mask a row (causal /
+    # no-mask attention never does), so gate on attn_mask: inert (skipped) for
+    # causal + plain self-attention, and a value-identity (nan_to_num on a finite
+    # tensor) for any masked attention with no fully-masked row. posinf/neginf ->
+    # 0 so a fully-masked row that resolves to -inf rather than NaN is also
+    # zeroed. Behaviour-symmetric (R30) with the math path guard in
+    # _math_attention.
+    if attn_mask is not None:
+        o = nan_to_num_wrapper(o, nan=0.0, posinf=0.0, neginf=0.0)
     return o
 
 

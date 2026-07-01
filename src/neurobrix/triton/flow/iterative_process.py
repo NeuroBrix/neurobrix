@@ -1000,9 +1000,73 @@ class TritonIterativeProcessHandler:
         if (self.ctx.pkg.manifest.get("family") == "video"
                 and type(driver).__name__ == "TritonFlowEulerScheduler"
                 and getattr(driver, "num_train_timesteps", None)):
-            return float(driver.num_train_timesteps)
+            num_train = float(getattr(driver, "num_train_timesteps"))
+            # Data-driven discriminator (R30 mirror of compiled, commit 1ad14c1):
+            # FLUX/MMDiT denoisers scale the timestep INTERNALLY (in-graph
+            # `time_factor` mul ~num_train on the timestep tensor) and expect the
+            # scheduler's raw [0,1] sigmas. Applying the [0,num_train] scale here
+            # too DOUBLE-scales (sigma*num_train then *time_factor in-graph),
+            # blowing past fp16 range → Inf timestep embedding → NaN latent →
+            # black (Open-Sora-v2). Mochi-style denoisers have NO in-graph
+            # scaling and genuinely need [0,num_train]. Detect per component,
+            # never branch on model name.
+            if self._graph_scales_timestep_internally(comp_name, num_train):
+                return 1.0
+            return num_train
 
         return 1.0
+
+    def _graph_scales_timestep_internally(self, comp_name: str, num_train: float) -> bool:
+        """True if the component graph already up-scales the timestep input by
+        ~num_train (in-graph `time_factor` mul/div on a 'timestep' tensor).
+
+        R30 mirror of the compiled flow. Pure graph inspection (reads the
+        component's graph.json / the loaded DAG) — no execution, no torch, no
+        model-name branch. Result cached per component. See
+        _get_component_timestep_scale for why this gates the [0,num_train] scale.
+        """
+        cache = getattr(self, "_ts_inscale_cache", None)
+        if cache is None:
+            cache = {}
+            self._ts_inscale_cache = cache
+        if comp_name in cache:
+            return cache[comp_name]
+
+        result = False
+        try:
+            ops = None
+            executor = self.ctx.executors.get(comp_name) if getattr(
+                self.ctx, "executors", None) else None
+            dag = getattr(executor, "_dag", None) if executor is not None else None
+            if isinstance(dag, dict):
+                ops = dag.get("ops")
+            if not ops:
+                import json as _json
+                gp = self.ctx.pkg.cache_path / "components" / comp_name / "graph.json"
+                if gp.exists():
+                    with open(gp) as _f:
+                        ops = _json.load(_f).get("ops", {})
+            if ops:
+                lo, hi = num_train * 0.5, num_train * 2.0
+                for op in ops.values():
+                    if op.get("op_type") not in ("aten::mul", "aten::div"):
+                        continue
+                    ins = op.get("inputs", op.get("input_tensor_ids", [])) or []
+                    if not any("timestep" in str(t).lower() for t in ins):
+                        continue
+                    for a in op.get("attributes", {}).get("args", []) or []:
+                        if isinstance(a, dict) and a.get("type") == "scalar":
+                            v = abs(float(a.get("value", 0.0)))
+                            if lo <= v <= hi:
+                                result = True
+                                break
+                    if result:
+                        break
+        except Exception:
+            result = False
+
+        cache[comp_name] = result
+        return result
 
     def _preprocess_inputs(self) -> None:
         """

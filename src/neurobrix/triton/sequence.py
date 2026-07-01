@@ -1064,8 +1064,13 @@ class TritonSequence:
 
         fuse_idx = 0
         to_drop: set = set()
-        mul_to_new: Dict[str, str] = {}  # last chain op → fused op uid
-        new_ops_to_register: List[Tuple[str, Dict[str, Any]]] = []
+        # Position of each op in the ORIGINAL order — used to schedule the fused
+        # op strictly after its inputs and before its outputs' consumers.
+        pos = {uid: i for i, uid in enumerate(execution_order)}
+        insert_before: Dict[str, List[str]] = defaultdict(list)
+        new_ops_by_uid: Dict[str, Dict[str, Any]] = {}
+        import os as _os_rs
+        _RS_DIAG = _os_rs.environ.get("NBX_ROPE_SCHED_DIAG")
 
         for (cos_tid, sin_tid), group in pair_map.items():
             if len(group) != 2:
@@ -1114,18 +1119,42 @@ class TritonSequence:
                 b_q, b_k = b_k, b_q
                 q_shape, k_shape = k_shape, q_shape
 
-            # Both adds are the "last" ops of their branches. Schedule the
-            # fused op at the position of the LATER of the two adds in
-            # execution_order — both x/cos/sin are guaranteed ready then.
-            idx_q_add = execution_order.index(b_q["add_uid"])
-            idx_k_add = execution_order.index(b_k["add_uid"])
-            later_add = (b_q["add_uid"] if idx_q_add > idx_k_add
-                         else b_k["add_uid"])
-
             new_uid = f"custom.rope_fused::{fuse_idx}"
-            fuse_idx += 1
             q_out_tid = b_q["add_out_tid"]
             k_out_tid = b_k["add_out_tid"]
+
+            # SCHEDULING (data-driven, topology-general). The single fused op
+            # replaces BOTH branches' chains, so it must run strictly AFTER all
+            # four inputs are produced and strictly BEFORE any consumer of either
+            # output. HF-Llama applies Q and K rope adjacently, so the later of
+            # the two adds happens to satisfy both — but that heuristic is not
+            # general: Open-Sora's MMDiT feeds one rope output into the joint-
+            # attention cat before the OTHER branch's rope add completes, so a
+            # fused op anchored at the later add produces the first output AFTER
+            # its consumer already ran → the consumer reads a not-yet-written
+            # slot = None (NOP-cascades the whole attention chain). Compute the
+            # valid window [max_input_pos, min_consumer_pos) from real positions;
+            # if a consumer precedes an input the pair is UNFUSABLE as one op →
+            # leave it unfused (correct, just unoptimized). Never a consumer
+            # without its producer.
+            _in_prod = [producer.get(t) for t in
+                        (b_q["x_tid"], b_k["x_tid"], cos_tid, sin_tid)]
+            _max_in = max((pos[p] for p in _in_prod if p in pos), default=-1)
+            _out_cons = [c for c in (consumers.get(q_out_tid, [])
+                                     + consumers.get(k_out_tid, []))
+                         if c in pos and c not in chain_all]
+            _min_con = min((pos[c] for c in _out_cons),
+                           default=len(execution_order))
+            if _max_in >= _min_con or _min_con >= len(execution_order):
+                # A consumer precedes an input, or no in-order consumer exists —
+                # unfusable as one op; leave the chain unfused (correct, slower).
+                if _RS_DIAG:
+                    print(f"[ROPE_SCHED] UNFUSABLE cos={cos_tid[:24]} "
+                          f"max_in={_max_in} min_con={_min_con} — left unfused",
+                          flush=True)
+                continue
+            anchor = execution_order[_min_con]  # insert fused op just before it
+            fuse_idx += 1
 
             fused_op: Dict[str, Any] = {
                 "op_uid": new_uid,
@@ -1166,23 +1195,25 @@ class TritonSequence:
             }
 
             to_drop.update(chain_all)
-            mul_to_new[later_add] = new_uid
-            new_ops_to_register.append((later_add, fused_op))
+            insert_before[anchor].append(new_uid)
+            new_ops_by_uid[new_uid] = fused_op
 
-        if not new_ops_to_register:
+        if not new_ops_by_uid:
             return
 
-        for _, fused_op in new_ops_to_register:
-            ops_metadata[fused_op["op_uid"]] = fused_op
+        for _uid, fused_op in new_ops_by_uid.items():
+            ops_metadata[_uid] = fused_op
 
+        # Rebuild the order: drop the fused chain ops, and insert each fused op
+        # immediately before the earliest consumer of its outputs (the window
+        # check above guarantees all its inputs are already produced by then).
         new_order: List[str] = []
         for uid in execution_order:
-            if uid in mul_to_new:
-                new_order.append(mul_to_new[uid])
-            elif uid in to_drop:
+            for _fu in insert_before.get(uid, ()):
+                new_order.append(_fu)
+            if uid in to_drop:
                 continue
-            else:
-                new_order.append(uid)
+            new_order.append(uid)
         execution_order.clear()
         execution_order.extend(new_order)
 
