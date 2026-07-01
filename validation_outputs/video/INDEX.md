@@ -25,7 +25,7 @@ placement cuda:2/cuda:3), the rest single-GPU 13f-class:
 
 | model | achievable now | deferred |
 |---|---|---|
-| Wan2.2-I2V-A14B | dual-denoiser boundary-switch core built + traced (28B .nbx) | compiled OPEN on i2v `vae_encoder` (**forge** Phase-A, separate system); triton axes to validate (same TritonDtypeEngine as the now-coherent Wan-I2V-14B) — check if experts genuinely intra-split at runtime (may be component-level via expert lifecycle) |
+| Wan2.2-I2V-A14B | dual-denoiser core + ALL runtime infra DONE; **D1 REFUTED** (experts placed component-level cuda:2/cuda:0, no intra-split); triton axis is the SAME false-alarm shape as closed Wan-I2V-14B (per-branch gate) | **SOLE blocker = forge `vae_encoder` trace gap** (dual-denoiser static_graph Phase-A dropped the i2v encode component; fails BOTH modes upstream of the transformer). **Build-side escalation** — runtime ready, cannot hand-roll (R34) |
 | Allegro (T2V) + Allegro-TI2V | odd-H scanline root-caused to the native-frame regime | native 88f VAE = **DETTE D2** (5D-VAE tiling); Allegro-TI2V **forge** trace pending, inherits D2 |
 
 **D1 (multi-GPU co-location) is REFUTED as a video-family blocker** (empirically:
