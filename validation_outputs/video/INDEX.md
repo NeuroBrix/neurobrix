@@ -17,7 +17,7 @@ PyTorch-sequential · compiled · Triton-sequential · Triton-compiled):
 | CogVideoX-5b-I2V | CLOSED 4/4 | 13f (native 49f = DETTE D2) |
 | Mochi-1-preview | CLOSED 4/4 | — |
 | Wan2.1-VACE-1.3B | CLOSED 4/4 | interleaved-complex RoPE fix (a0ddeff) |
-| **Open-Sora-v2** | **CLOSED 4/4** | **compiled+sequential+triton coherent fox; triton_sequential DRIFT-PROVEN (add::5 cross-engine match + finite frame — the slow 50-step op-by-op coherent frame is deferred per the drift-gate doctrine, NOT rendered). Root: SDPA fully-masked-row guard + rope scheduling + timestep (72504ce/d9d10e3).** |
+| **Open-Sora-v2** | **CLOSED 4/4** | **compiled+sequential+triton coherent fox; triton_sequential DRIFT-PROVEN at cfg=7.5/CFG batch=2 (transformer `view::1052` shape [2,1024,64] finite + VAE finite + frame std 86.5 — batch dim ≠ trace exercised; the slow 50-step op-by-op coherent frame is deferred per the drift-gate doctrine, NOT rendered). Root: SDPA fully-masked-row guard + rope scheduling + timestep (72504ce/d9d10e3).** |
 
 **Remainder (DETTE-deferred or forge-side — single-GPU-achievable branches proven where possible):**
 

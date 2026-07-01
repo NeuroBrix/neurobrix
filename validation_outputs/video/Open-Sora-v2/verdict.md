@@ -114,15 +114,22 @@ without it; a separate LLM-sequential gap, out of scope here.)
     fox; (2) the `double_blocks.18` fp16 overflow did NOT recur in triton (dumped
     fp32/clean, matching compiled) — the residual NaN was the VAE attention, not a
     transformer overflow.
-- **triton_sequential**: PASS (drift-proven) — the op-by-op path routes SDPA
-  through the SAME `scaled_dot_product_attention_wrapper` (sequential.py:248,
-  extracting the VAE's -inf bias from arg[3]), so the fully-masked-row guard
-  fires here too. 1-step `add::5` = 836.1 (finite, matches compiled 834.4 /
-  triton 834.4 within 0.2 %); VAE output 488.8; frame std 36.4 (= triton). Same
-  kernels as the foxing triton-compiled mode; the slow 50-step op-by-op coherent
-  frame is deferred per the drift-gate doctrine (drift-prove, defer the slow
-  frame). Discriminating check per the oracle: op-by-op reaches the mask the same
-  way → guard fires → finite, NOT a hidden divergence.
+- **triton_sequential**: PASS (drift-proven, batch/CFG exercised) — the op-by-op
+  path routes SDPA through the SAME `scaled_dot_product_attention_wrapper`
+  (sequential.py:248, extracting the VAE's -inf bias from arg[3]), so the
+  fully-masked-row guard fires here too. Validated at the REAL operating point
+  **cfg=7.5 → CFG batch=2** (batch dim ≠ trace, per the closure criterion — a
+  cfg=1.0 run would only exercise batch=1): the transformer final output
+  `view::1052` = shape **[2, 1024, 64]** (batch=2), l2 421.8 **finite** (a
+  batch=2 transformer NaN would blacken the frame); VAE `add::5` finite; VAE
+  output `conv::35` = [1,3,13,256,256] finite; frame std 86.5 (structured, not
+  black). Same kernels as the foxing triton-compiled mode; the slow 50-step
+  op-by-op coherent frame is deferred per the drift-gate doctrine (drift-prove,
+  defer the slow frame). Discriminating check per the oracle: op-by-op reaches
+  the mask the same way at batch=2 → guard fires → finite, NOT a hidden
+  divergence. (Note: `add::5` is in the VAE, which runs batch=1 post-CFG in every
+  mode — the batch=2 proof is the TRANSFORMER `view::1052` shape[0]=2, not the
+  VAE op.)
 
 ### Anti-regression (shared SDPA guard)
 
