@@ -1,5 +1,33 @@
 # Wan2.1-I2V-14B-480P — 4-mode validation (R29 + drift gate)
 
+## UPDATE 2026-07-01 — D1 (multi-GPU placement) REFUTED as the blocker; real blocker = shared triton batch=2 numerical divergence
+
+Ran **batch=2 (cfg=5.0) triton_sequential** on the real 4-GPU box (auto-detect):
+it RUNS (exit 0, 550 s, finite output, NBX_TRITON_TRACE_NAN clean). Prism chose
+`pipeline_parallel` **component-level** placement (transformer + vae + encoders →
+cuda:2, text_encoder → cuda:3): the 31.25 GB transformer FITS one 32 GB card at
+batch=2, so the cross-device move is a component-boundary handoff (handled), NOT an
+intra-component split. **The prior "triton_seq cannot run batch=2 → DETTE D1" was
+INFERRED, never observed — it is false.**
+
+Velocity drift-gate vs the sequential oracle (NBX_DUMP_DIT, seed 42, cfg=5.0,
+step 0), full-tensor corr/relL2:
+
+| mode | corr vs seq-oracle | relL2 | velocity std |
+|---|---|---|---|
+| sequential (oracle) | — | — | 1.1776 |
+| triton_sequential | 0.9753 | 0.227 | 1.2098 |
+| triton (compiled) | 0.9696 | 0.254 | 1.2195 |
+
+**Both triton modes diverge ~identically (~0.97 corr, ~23 % relL2, +2.7 % std)** —
+they use different placement code paths yet drift the same way, so this is a
+**SHARED triton transformer numerical bug at batch=2** (TritonDtypeEngine or a
+kernel), NOT multi-GPU/placement. 23 % relL2 is not fp16 noise; it will produce
+visible artifacts over 20 steps. **This numerical divergence — not D1 — is the
+Wan-I2V-14B triton 4/4 blocker.** Next: localize whether it is CFG-batch=2-specific
+(vs clean at cfg=1.0 batch=1) and root-cause in the triton transformer. See
+DETTE.md D1 EMPIRICAL REFRAME (2026-07-01).
+
 ## VERDICT 2026-06-27: CFG batch=2 re-validation — OPEN (NOT counted), absorption DISSOLVED
 
 Re-traced + rebuilt from the post-batch-fix forge graphs (fresh 90.66 GB `.nbx`,

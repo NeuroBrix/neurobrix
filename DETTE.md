@@ -48,7 +48,43 @@ Entry format: `ID · title · root cause / fix · scope · status`.
   axes need the same multi-GPU/multi-device capability as Wan-I2V-14B → deferred
   here. (Its compiled close is itself OPEN on the i2v vae_encoder encode-pass — a
   chantier residual, not debt; see validation_outputs/video/Wan2.2-I2V-A14B/verdict.md.)
-- **Status.** `DEFERRED` — final pass, as the general Prism capability (with D2).
+- **EMPIRICAL REFRAME (2026-07-01) — the D1 premise for Wan-I2V-14B is REFUTED by
+  test.** Ran Wan-I2V-14B **batch=2 (cfg=5.0) triton_sequential** on the real 4-GPU
+  box. It RUNS (exit 0, 550s, finite output, NBX_TRITON_TRACE_NAN clean): Prism
+  chose `pipeline_parallel` **component-level** placement (transformer+vae+encoders
+  → cuda:2, text_encoder → cuda:3) — the 31.25 GB transformer FITS one 32 GB card
+  at batch=2, so the cross-device move is a COMPONENT-boundary handoff (handled by
+  the driver's 2026-06-08 co-location block), NOT an intra-component split. The
+  earlier "triton_seq cannot run batch=2" was INFERRED (the verdict row had
+  dashes), never observed. **The real blocker is numerical, not placement:** a
+  step-0 velocity drift-gate vs the sequential oracle (NBX_DUMP_DIT, seed 42,
+  cfg=5.0) shows BOTH triton modes diverge ~identically — triton_seq corr 0.9753 /
+  relL2 0.227, triton corr 0.9696 / relL2 0.254 (std 1.21 vs oracle 1.1776). Same
+  divergence in both triton modes = a SHARED triton transformer numerical bug at
+  batch=2 (TritonDtypeEngine / a kernel), unrelated to multi-GPU. So D1 is NOT the
+  Wan-I2V-14B unblocker; the numerical bug is.
+- **The intra-component co-location gaps ARE real in code but UNTRIGGERED:** the
+  driver picks the FIRST weight (not largest) for `_target_dev`
+  (graph_executor.py ~2016) and never updates `dispatcher.device_idx`
+  (triton/sequential.py device attr + lse/cat-empty allocs pinned to a fixed
+  device). These bite ONLY when a single component's weights span >1 GPU. Six
+  proxy attempts (TinyLlama ×4 budgets, deepseek ×2) proved Prism strongly PREFERS
+  single-GPU / component-placement / zero3-cpu and AVOIDS intra-component GPU
+  splits — none triggered the gap. The gaps are latent; a fix is currently
+  UNVALIDATABLE (no in-family model exercises them at single-GPU-per-component
+  scale). Candidate genuine triggers: Wan2.2-I2V-A14B (solver shows intra-split of
+  the 14B experts — but the dual-denoiser expert-lifecycle may make the RUNTIME
+  component-level; needs a runtime run to confirm) and Qwen3-30B (57 GB > 32 GB,
+  non-family). Do NOT implement the co-location fix until a real run triggers it.
+- **Also seen (separate D1 facet, zero3/CPU-offload, NOT GPU↔GPU):** triton
+  (compiled) crashes `custom.rope_fused::0` "Pointer argument cannot be accessed
+  from Triton (cpu tensor?)" when Prism falls to `cpu_execution` (a weight stays
+  CPU-resident but the fused-rope kernel is launched on it). triton_sequential
+  handles cpu_execution fine. Named sub-item; off the GPU↔GPU critical path.
+- **Status.** `DEFERRED` + REFRAMED — the co-location capability is real but not on
+  the video-family critical path (refuted for Wan-I2V-14B + Allegro; open for
+  Wan2.2 pending a runtime check). Kept for the general Prism capability / Qwen3-class
+  models. The Wan-I2V-14B triton 4/4 blocker moved to the numerical chantier below.
 
 ### D2 · VAE-5D long-clip / native-resolution OOM single-GPU (task #5)
 
