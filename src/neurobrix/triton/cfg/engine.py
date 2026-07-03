@@ -355,6 +355,21 @@ class TritonCFGEngine:
         if noise_pred_batched._dtype != NBXDtype.float32:
             noise_pred_batched = noise_pred_batched.to(NBXDtype.float32)
 
+        # Pre-combine batch=2 capture (NBX_DUMP_CFG_BATCH): raw transformer
+        # output BEFORE the CFG combine, [2, ...] = [uncond; cond]. R30 mirror of
+        # core/cfg/engine.py, saved as numpy .npz (R33 forbids torch.save here).
+        # Gated, zero-overhead when off. Distinguishes a per-branch transformer
+        # divergence from CFG-combine amplification (the combine here is fp32).
+        import os as _os_cfgb
+        _cfgb = _os_cfgb.environ.get("NBX_DUMP_CFG_BATCH")
+        if _cfgb:
+            import numpy as _np_cfgb
+            _arr = noise_pred_batched.float().numpy() if hasattr(noise_pred_batched, "numpy") else None
+            if _arr is not None:
+                _np_cfgb.savez(_cfgb if _cfgb.endswith(".npz") else _cfgb + ".npz",
+                               noise_pred_batched=_arr)
+                print(f"[CFG-BATCH-DUMP-TRITON] shape={tuple(noise_pred_batched.shape)} -> {_cfgb}")
+
         # Split: chunk(2, dim=0) → narrow(0, 0, half) and narrow(0, half, half)
         half = noise_pred_batched.shape[0] // 2
         noise_pred_uncond = noise_pred_batched.narrow(0, 0, half)

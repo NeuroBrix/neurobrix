@@ -344,6 +344,18 @@ class CFGEngine:
         if noise_pred_batched.dtype != torch.float32:
             noise_pred_batched = noise_pred_batched.float()
 
+        # Pre-combine batch=2 capture (NBX_DUMP_CFG_BATCH): the raw transformer
+        # output BEFORE the CFG combine, [2, ...] = [uncond; cond]. Lets a
+        # per-branch drift-gate distinguish a transformer per-branch divergence
+        # from CFG-combine amplification (the combine here is fp32). Gated,
+        # zero-overhead when off; R30 mirror in triton/cfg/engine.py.
+        import os as _os_cfgb
+        _cfgb = _os_cfgb.environ.get("NBX_DUMP_CFG_BATCH")
+        if _cfgb:
+            torch.save({"noise_pred_batched": noise_pred_batched.detach().cpu()},
+                       _cfgb if _cfgb.endswith(".pt") else _cfgb + ".pt")
+            print(f"[CFG-BATCH-DUMP] shape={tuple(noise_pred_batched.shape)} -> {_cfgb}")
+
         noise_pred_uncond, noise_pred_cond = noise_pred_batched.chunk(2)
         noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_cond - noise_pred_uncond)
 
