@@ -1801,6 +1801,14 @@ class TritonSequence:
                 if tensor is not None and hasattr(tensor, '_device_idx'):
                     slot_device[ws] = tensor._device_idx
 
+        # Runtime-bound INPUT slots (flow globals) occupy the contiguous range
+        # [num_weights, num_weights + num_inputs). Their device is unknowable
+        # at compile time, so any op consuming one takes the slow path in a
+        # multi-device sequence. R30 mirror of the compiled Phase-4 fix (the
+        # DETTE D1 op-input co-location gap, first real trigger: Wan2.2
+        # dual-denoiser prologue mul(timestep, freq) across GPUs, 2026-07-03).
+        input_slot_lo = self._num_weights
+        input_slot_hi = self._num_weights + self._num_inputs
         current_activation_device = None
         for op in self._ops:
             if op.device_idx is not None:
@@ -1812,12 +1820,16 @@ class TritonSequence:
             else:
                 op.device_idx = current_activation_device
 
-            if op.all_input_slots and current_activation_device is not None:
+            if op.all_input_slots:
                 for s in op.all_input_slots:
-                    src_dev = slot_device.get(s)
-                    if src_dev is not None and src_dev != current_activation_device:
+                    if input_slot_lo <= s < input_slot_hi:
                         op.needs_transfer = True
                         break
+                    if current_activation_device is not None:
+                        src_dev = slot_device.get(s)
+                        if src_dev is not None and src_dev != current_activation_device:
+                            op.needs_transfer = True
+                            break
 
             out_dev = op.device_idx or current_activation_device or self.device_idx
             if out_dev is not None:

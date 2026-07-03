@@ -418,11 +418,16 @@ class RuntimeExecutor:
                 scale_factor=spec["scale_factor"],
                 window_alignment=spec.get("window_alignment", 1),
                 tile_size=spec["tile_size"],
+                t_tile=spec.get("t_tile"),
+                t_overlap=spec.get("t_overlap", 0),
+                t_scale=spec.get("t_scale", 1),
             )
             logger.info(
                 f"[TilingEngine] {comp_name}: Prism component-tiling "
-                f"tile_size={spec['tile_size']} scale={spec['scale_factor']} "
-                f"(kept on GPU instead of host offload)"
+                f"tile_size={spec['tile_size']} scale={spec['scale_factor']}"
+                + (f" t_tile={spec['t_tile']} t_scale={spec['t_scale']}"
+                   if spec.get("t_tile") else "")
+                + " (kept on GPU instead of host offload)"
             )
 
         # Op-level tiling — wires per-op_uid interceptors on the component's

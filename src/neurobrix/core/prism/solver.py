@@ -2158,12 +2158,21 @@ class PrismSolver:
 
             shard_map = {}
 
-            # Allocate non-block weights on current device
+            # Activation headroom reserve (computed BEFORE any placement so
+            # both the non_block and the block fills enforce it per device).
+            # CFG doubles the activation batch; the capacity floor also reserves
+            # for the triton autotune workspace, which the activation profile
+            # does not model. Data-driven (peak activation) with a
+            # hardware-universal floor.
+            act_reserve_mb = max(mem.activation_mb * 2.0, fresh[0].capacity_mb * 0.18)
+
+            # Allocate non-block weights on current device (same per-device
+            # activation headroom as the block fill below).
             if blocks['non_block_mb'] > 0:
                 while current_dev_idx < len(fresh):
                     dev = fresh[current_dev_idx]
                     real_size = dev.get_real_block_size(blocks['non_block_mb'] * _dtype_scale, model_dtype) * packing_overhead
-                    if dev.can_fit(real_size):
+                    if dev.can_fit(real_size + act_reserve_mb):
                         dev.used_mb += real_size
                         dev.components.append(f"{comp_name}.non_block")
                         for key in blocks['non_block_keys']:
@@ -2183,10 +2192,6 @@ class PrismSolver:
             # pipeline GPU takes the remainder). Still a pipeline: one cross-device
             # transfer per GPU boundary, not per op.
             total_block_mb = sum(blocks['block_sizes'].values()) * _dtype_scale
-            # CFG doubles the activation batch; the capacity floor also reserves for
-            # the triton autotune workspace, which the activation profile does not
-            # model. Data-driven (peak activation) with a hardware-universal floor.
-            act_reserve_mb = max(mem.activation_mb * 2.0, fresh[0].capacity_mb * 0.18)
             n_pp = len(fresh)
             for ng in range(1, len(fresh) + 1):
                 if (total_block_mb / ng) * packing_overhead + act_reserve_mb <= fresh[ng - 1].capacity_mb:
@@ -2207,7 +2212,17 @@ class PrismSolver:
                     # (never on the last pipeline GPU, which holds the remainder).
                     over_share = (gpu_weight_mb + real_block > target_per_gpu
                                   and current_dev_idx < n_pp - 1)
-                    if dev.can_fit(total_block) and not over_share:
+                    # PER-DEVICE activation headroom: the reserve is an
+                    # ABSOLUTE working-set floor (hidden states + attention
+                    # workspace + triton arena/autotune overhead are the same
+                    # wherever the segment lives — they do NOT scale with card
+                    # size). The comment above always stated "each GPU keeps
+                    # headroom"; the reserve was only used to pick n_pp, so a
+                    # 16 GB card could be packed to 13.1/16 GB of weights and
+                    # the resident segment OOMed at its SDPA under the triton
+                    # arena (Wan2.2 transformer_2 block 36 on cuda:0,
+                    # 2026-07-03). Enforce it in the per-device fit test.
+                    if dev.can_fit(total_block + act_reserve_mb) and not over_share:
                         dev.used_mb += total_block
                         gpu_weight_mb += real_block
                         dev.components.append(f"{comp_name}.block.{block_num}")
@@ -2489,15 +2504,65 @@ class PrismSolver:
         tile_size = max(window_alignment if window_alignment > 1 else 8,
                         min(tile_size, latent_h, latent_w))
 
-        overlap = max(4, tile_size // 8)
+        # ── D2: balanced (T, H, W) tiling for 5D video VAEs with a LINEAR
+        # temporal map — else spatial-only (the pre-D2 law, byte-identical).
+        #
+        # CORRECTNESS GATE — read from the graph symbolics, never a model
+        # name: the component's temporal input->output map must be LINEAR
+        # (t_out = a * t_in, e.g. Allegro 4*s1) for independent temporal
+        # tiles to place exactly (out = a*pos, same law as spatial). The
+        # affine causal class (a*(t-1)+1: CogVideoX/Wan/Mochi — the first
+        # latent frame decodes to ONE pixel frame) canNOT be temporally
+        # tiled: a mid-clip tile re-applies the clip-start semantics and
+        # misaligns by a-1 frames. That class needs conv-cache streaming
+        # (DETTE), so it keeps the spatial-only path.
+        #
+        # SIZING POLICY (linear class): spatial-only collapse minimizes tile
+        # area and maximizes seam count (Allegro native: 26-latent tiles =
+        # 32 patches of 208px, full T each). The vendor practice tiles T
+        # together with space (small temporal windows, large spatial
+        # patches). Balance the shrink across the three axes — cube-root of
+        # the needed volume fraction per axis — then re-derive the spatial
+        # tile from what the temporal tile leaves. Data-driven, no
+        # per-model constants.
+        t_spec = None
+        tmap = self._temporal_affine_map(graph)
+        num_frames = getattr(ic, "num_frames", None)
+        if tmap is not None and tmap[1] == 0 and tmap[0] > 1 and num_frames:
+            t_a = tmap[0]
+            t_lat = max(1, int(round(num_frames / t_a)))
+            frac = budget_bytes / full_act
+            if t_lat > 2 and frac < 1.0:
+                g = frac ** (1.0 / 3.0)
+                t_tile = max(2, int(t_lat * g))
+                if t_tile < t_lat:
+                    t_overlap = max(1, t_tile // 4)
+                    # Spatial fraction left after the temporal shrink
+                    sp_frac = frac / (t_tile / float(t_lat))
+                    sp_tile = int(math.sqrt(latent_h * latent_w * min(1.0, sp_frac)))
+                    if window_alignment > 1:
+                        sp_tile = (sp_tile // window_alignment) * window_alignment
+                    sp_tile = max(window_alignment if window_alignment > 1 else 8,
+                                  min(sp_tile, latent_h, latent_w))
+                    t_act = full_act * (sp_tile * sp_tile) / float(latent_h * latent_w) \
+                        * t_tile / float(t_lat)
+                    if t_act <= budget_bytes:
+                        t_spec = {
+                            "tile_size": int(sp_tile),
+                            "t_tile": int(t_tile),
+                            "t_overlap": int(t_overlap),
+                            "t_scale": int(t_a),
+                            "tiled_activation_bytes": int(t_act),
+                        }
+
+        overlap_src = t_spec["tile_size"] if t_spec else tile_size
+        overlap = max(4, overlap_src // 8)
         if window_alignment > 1:
             overlap = ((overlap + window_alignment - 1) // window_alignment) * window_alignment
 
         tiled_act = full_act * (tile_size * tile_size) / float(latent_h * latent_w)
-        if tiled_act > budget_bytes:
-            return None  # even the clamped tile doesn't fit
 
-        return {
+        spec = {
             "tile_size": int(tile_size),
             "scale_factor": int(scale_factor),
             "overlap": int(overlap),
@@ -2505,6 +2570,76 @@ class PrismSolver:
             "trace_size": int(trace_size),
             "tiled_activation_bytes": int(tiled_act),
         }
+        if t_spec is not None:
+            spec.update(t_spec)
+            return spec
+
+        if tiled_act <= budget_bytes:
+            return spec
+
+        return None  # spatial-only insufficient; causal/4D class — no temporal axis
+
+    @staticmethod
+    def _temporal_affine_map(graph: Dict) -> Optional[Tuple[int, int]]:
+        """Read the component's temporal input->output map from the graph
+        symbolics as an affine form (a, b): t_out = a * t_in + b.
+
+        Returns None when the graph has no rank-5 input with a symbolic T
+        (dim 2), no rank-5 output, or the output T expression is not affine
+        in the input's temporal symbol (multi-symbol / non-linear trees).
+        DATA-DRIVEN: this is the discriminator between the linear class
+        (b == 0, independent temporal tiles valid) and the causal class
+        (b != 0, first-frame-special — declined).
+        """
+        tensors = graph.get("tensors", {})
+
+        def _dims(tid) -> List:
+            return (tensors.get(str(tid), {})
+                    .get("symbolic_shape", {}).get("dims", []) or [])
+
+        t_symbol = None
+        for iid in graph.get("input_tensor_ids", []):
+            dims = _dims(iid)
+            if len(dims) == 5 and isinstance(dims[2], dict) \
+                    and dims[2].get("type") == "symbol":
+                t_symbol = dims[2].get("id")
+                break
+        if t_symbol is None:
+            return None
+
+        def _affine(node) -> Optional[Tuple[float, float]]:
+            # (a, b) such that node == a * t_symbol + b; None if not affine
+            # in t_symbol alone.
+            if isinstance(node, (int, float)):
+                return (0.0, float(node))
+            if not isinstance(node, dict):
+                return None
+            ntype = node.get("type")
+            if ntype == "symbol":
+                return (1.0, 0.0) if node.get("id") == t_symbol else None
+            left = _affine(node.get("left"))
+            right = _affine(node.get("right"))
+            if left is None or right is None:
+                return None
+            if ntype == "add":
+                return (left[0] + right[0], left[1] + right[1])
+            if ntype == "mul":
+                if left[0] == 0.0:   # const * affine
+                    return (left[1] * right[0], left[1] * right[1])
+                if right[0] == 0.0:  # affine * const
+                    return (left[0] * right[1], left[1] * right[1])
+                return None          # symbol * symbol — non-linear
+            return None
+
+        for oid in graph.get("output_tensor_ids", []):
+            dims = _dims(oid)
+            if len(dims) != 5:
+                continue
+            aff = _affine(dims[2])
+            if aff is not None and aff[0] > 0 \
+                    and aff[0] == int(aff[0]) and aff[1] == int(aff[1]):
+                return (int(aff[0]), int(aff[1]))
+        return None
 
     def _place_component(
         self,

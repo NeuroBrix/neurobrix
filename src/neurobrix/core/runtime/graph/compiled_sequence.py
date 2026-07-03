@@ -2643,6 +2643,23 @@ class CompiledSequence:
         # Track which device each slot's tensor lives on, then mark ANY op
         # (weighted or weightless) that has inputs from multiple devices.
         # This catches residual connections that cross device boundaries.
+        #
+        # Runtime-bound INPUT slots (flow globals: timestep, hidden_states,
+        # encoder_hidden_states…) occupy the contiguous slot range
+        # [num_weights, num_weights + num_inputs). Their device is unknowable
+        # at compile time — the flow creates them wherever the previous
+        # component ran — so any op consuming one must take the slow path
+        # (per-op device alignment) in a multi-device sequence. Without this,
+        # a prologue op whose op.device came from a shard placed off the
+        # primary device (pipeline_parallel non-block fill) fast-paths a
+        # cross-device compute and crashes (Wan2.2 dual-denoiser 14B expert:
+        # cond_embed.timesteps_proj mul(timestep@cuda:0, freq@cuda:3) — the
+        # DETTE D1 op-input co-location gap, first real trigger 2026-07-03).
+        # Single-device sequences never reach Phase 4; same-device .to() in
+        # the slow path is the identity, so already-closed multi-GPU models
+        # are numerically untouched.
+        input_slot_lo = self._num_weights
+        input_slot_hi = self._num_weights + self._num_inputs
         current_activation_device = None
         for op in self._ops:
             if op.device is not None:
@@ -2655,13 +2672,18 @@ class CompiledSequence:
                 # Weightless op: inherit current activation device
                 op.device = current_activation_device
 
-            # Check ALL input slots for cross-device inputs (catches residuals)
-            if op.all_input_slots and current_activation_device is not None:
+            # Check ALL input slots for cross-device inputs (catches residuals
+            # and runtime-bound flow globals)
+            if op.all_input_slots:
                 for s in op.all_input_slots:
-                    src_dev = slot_device.get(s)
-                    if src_dev is not None and src_dev != current_activation_device:
+                    if input_slot_lo <= s < input_slot_hi:
                         op.needs_transfer = True
                         break
+                    if current_activation_device is not None:
+                        src_dev = slot_device.get(s)
+                        if src_dev is not None and src_dev != current_activation_device:
+                            op.needs_transfer = True
+                            break
 
             # Record output device for downstream ops.
             # Tensor-creation ops (arange, scalar_tensor) may run before any
