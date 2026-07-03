@@ -452,6 +452,18 @@ class IterativeProcessHandler(FlowHandler):
                 _t = (timestep.item() if isinstance(timestep, torch.Tensor)
                       else float(timestep))
                 _active = dual["high"] if _t >= dual["boundary"] else dual["low"]
+                # Expert lifecycle: the boundary transition is ONE-WAY (diffusion
+                # timesteps decrease monotonically), so the moment the low-noise
+                # expert takes over, the high-noise expert never runs again in
+                # this request — evict its weights so the low expert executes
+                # with the retired expert's VRAM freed (the two 14B experts
+                # share shard GPUs under pipeline_parallel; co-residency during
+                # the low stage OOMed the triton arena at SDPA block 36).
+                # Reuses the post_loop _unload_component brick; fires once.
+                if (_active == dual["low"] and not dual.get("high_evicted")
+                        and dual["high"] in components):
+                    self._unload_component(dual["high"], force=True)
+                    dual["high_evicted"] = True
                 step_components = [c for c in components
                                   if c == _active or not self._is_loop_component(c)]
 

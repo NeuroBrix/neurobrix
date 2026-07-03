@@ -9,13 +9,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Wan2.2-I2V-A14B end-to-end support — CLOSED 4/4.** The dual-denoiser 28B
+  i2v pipeline (2× 14B experts, boundary switch 0.9, 36ch VAE-latent
+  conditioning) now runs in all four modes with recorded gates: compiled
+  bit-exact vs the PyTorch-sequential oracle on both experts; Triton per-branch
+  drift 0.4–0.9 % (high expert) / ≤ 4.8 % (low expert, compounding included);
+  coherent matched renders in compiled AND triton. See
+  `validation_outputs/video/Wan2.2-I2V-A14B/verdict.md`.
+- **Dual-denoiser boundary switch — Triton mirror + expert lifecycle.** The
+  Triton flow now runs ONE expert per step (previously both experts executed
+  every step in Triton mode → out-of-memory), and BOTH engines evict the
+  retired high-noise expert at the boundary transition (the switch is one-way:
+  timesteps decrease monotonically), so the low-noise stage runs with the
+  retired expert's VRAM freed. Gated on boundary_ratio + ≥ 2 loop denoisers —
+  inert for single-denoiser models.
+- **Temporal (T-axis) video-VAE tiling.** The component TilingEngine
+  generalizes from (H, W) to (T, H, W) tiles with per-axis overlap and N-d
+  accumulate/divide blending. Prism sizes tiles cube-root-balanced across the
+  three axes from the activation profile and gates the temporal axis on the
+  component's temporal input→output map read from the graph shape algebra:
+  linear maps (t_out = a·t_in, e.g. Allegro) tile temporally; affine causal
+  maps (a·(t−1)+1: CogVideoX / Wan / Mochi — first latent frame decodes to one
+  pixel frame) keep spatial-only tiling. Untiled and spatial-only paths are
+  byte-identical to before; no existing model configuration changes plan.
+
+### Fixed
+
+- **Multi-GPU: runtime-input device alignment (both engines).** In
+  multi-device sequences, ops consuming runtime-bound inputs (timestep and
+  other flow globals) could execute with operands on different GPUs when the
+  op had no weights to derive its device from (first trigger: the Wan2.2
+  expert's timestep projection under an intra-split placement). Such ops now
+  take the per-op device-alignment path in both the compiled and the Triton
+  sequence. Single-device components are unaffected; already-supported
+  multi-GPU models are numerically unchanged (same-device moves are the
+  identity).
+- **Multi-GPU: pipeline placement now enforces its activation headroom per
+  device.** The pipeline strategy reserved activation headroom only when
+  choosing HOW MANY GPUs to span, not when filling each device, so a 16 GB
+  card could be packed with weights to 13.1/16 GB and the resident attention
+  block ran out of memory at runtime. The per-device fit test now includes the
+  reserve (an absolute working-set floor — activations do not scale with card
+  size). Verified: placements of all previously supported multi-GPU and
+  single-GPU models are byte-identical; only the previously-failing
+  Wan2.2-I2V-A14B plan changes (to its design-intent component lifecycle).
+
 - **Dual-denoiser boundary switch (Wan2.2-A14B MoE-of-experts, compiled).** The
   iterative_process flow runs ONE denoiser expert per step: the high-noise expert
   for t >= boundary_timestep (= boundary_ratio x num_train_timesteps), the low-noise
   expert for t < boundary (`_setup_dual_denoiser`, role-preferred ordering with
   loop-order fallback). Gated on boundary_ratio + >= 2 loop denoisers -> inert for
-  every single-denoiser model. Wan2.2-I2V-A14B end-to-end support is in progress —
-  the i2v image-encode + numerical close remain (see the model verdict).
+  every single-denoiser model. (Superseded 2026-07-03: Wan2.2-I2V-A14B is now
+  CLOSED 4/4 — see the entries above and the model verdict.)
 
 - **FLUX-video packed-latent flow (Open-Sora-v2, compiled).** Runtime support for
   FLUX-style packed-latent video denoisers: a `flux_video_conditioning` brick

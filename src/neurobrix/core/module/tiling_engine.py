@@ -53,6 +53,9 @@ class TilingEngine:
         scale_factor: int,
         window_alignment: int = 1,
         tile_size: Optional[int] = None,
+        t_tile: Optional[int] = None,
+        t_overlap: int = 0,
+        t_scale: int = 1,
     ):
         """
         Initialize tiling engine.
@@ -64,12 +67,27 @@ class TilingEngine:
             window_alignment: Tile positions must align to this (e.g., 8 for window_size=8)
             tile_size: Actual tile size for execution. When graph has symbolic spatial
                       dims, this can be smaller than trace_size. Defaults to trace_size.
+            t_tile: Temporal tile extent (input/latent frames) for 5D video inputs.
+                    None (default) = temporal axis carried through unchanged — the
+                    pre-D2 behavior, byte-identical. Only valid for components whose
+                    temporal input->output map is LINEAR (t_out = t_scale * t_in,
+                    e.g. Allegro 4*s1): independent temporal tiles then place at
+                    t_scale*pos exactly like spatial tiles at scale_factor*pos.
+                    Components with an AFFINE causal map (f*(t-1)+1: CogVideoX/Wan/
+                    Mochi — the first latent frame decodes to ONE pixel frame) must
+                    NOT get a t_tile: a mid-clip tile would re-apply the clip-start
+                    semantics and misalign by f-1 frames. Prism reads the map from
+                    the graph symbolics and only emits t_tile for the linear class.
+            t_overlap: Temporal overlap between tiles in input frames.
+            t_scale: Temporal output/input ratio (e.g. 4 for Allegro).
         """
         self.trace_size = trace_size
         self.tile_size = tile_size if tile_size is not None else trace_size
         self.overlap = overlap
         self.scale_factor = scale_factor
         self.window_alignment = window_alignment
+        self.t_tile = t_tile
+        self.t_scale = t_scale
 
         # Stride = tile_size - overlap
         self.stride = self.tile_size - overlap
@@ -82,6 +100,14 @@ class TilingEngine:
 
         # Recalculate effective overlap from aligned stride
         self.overlap = self.tile_size - self.stride
+
+        # Temporal stride (no window alignment on the T axis)
+        if t_tile is not None:
+            self.t_stride = max(1, t_tile - t_overlap)
+            self.t_overlap = t_tile - self.t_stride
+        else:
+            self.t_stride = None
+            self.t_overlap = 0
 
     @classmethod
     def from_component_config(
@@ -251,7 +277,12 @@ class TilingEngine:
         # Spatial axes are always the trailing two (H, W) for both 4D NCHW
         # and 5D NCDHW. Tiling is dimension-agnostic on the trailing pair.
         height, width = input_tensor.shape[-2], input_tensor.shape[-1]
-        return height > self.tile_size or width > self.tile_size
+        if height > self.tile_size or width > self.tile_size:
+            return True
+        # Temporal axis (5D only, when Prism sized a temporal tile — D2)
+        if self.t_tile is not None and input_tensor.dim() == 5:
+            return input_tensor.shape[2] > self.t_tile
+        return False
 
     def tiled_execute(
         self,
@@ -276,30 +307,52 @@ class TilingEngine:
             Blended output tensor [B, C_out, H*scale, W*scale]
         """
         # Trailing two dims are H, W (4D NCHW or 5D NCDHW). Leading dims
-        # (B, C[, T]) are carried through each tile unchanged.
+        # (B, C[, T]) are carried through each tile unchanged — except the
+        # temporal axis when a t_tile is set (D2): T is then tiled like the
+        # spatial axes, valid only for the LINEAR temporal map class
+        # (t_out = t_scale * t_in; Prism gates on the graph symbolics).
         height, width = input_tensor.shape[-2], input_tensor.shape[-1]
         sf = self.scale_factor
         ts = self.tile_size
+        temporal = self.t_tile is not None and input_tensor.dim() == 5
+        t_extent = input_tensor.shape[2] if temporal else None
 
         # Compute tile positions
         h_positions, w_positions = self._compute_tile_positions(height, width)
+        t_positions = (
+            self._compute_axis_positions(t_extent, self.t_tile, self.t_stride)
+            if temporal else [None]
+        )
 
         # Execute first tile to determine the output's leading dims: C_out
         # for 4D, (C_out, T_out) for 5D video — the graph produces the full
         # temporal extent per spatial tile (a spatial tile is a full causal
-        # decode at reduced H, W).
+        # decode at reduced H, W). Under temporal tiling the first tile's
+        # T_out covers t_scale * t_tile only; the accumulator's temporal
+        # extent is the full t_scale * T.
+        first_t = t_positions[0]
         first_h, first_w = h_positions[0], w_positions[0]
-        first_tile = self._extract_tile(input_tensor, first_h, first_w)
+        first_tile = self._extract_tile(input_tensor, first_h, first_w, first_t)
         first_result = execute_fn(first_tile)
 
         # Output accumulators. lead_dims = first_result minus its trailing
         # (h, w); spatial replaced by the full output (out_h, out_w). Weight
         # carries C=1 so it broadcasts across the channel (and temporal) axes.
+        # Under temporal tiling the T axis of both accumulators is the FULL
+        # output extent and the weight carries the real T (tiles overlap on T,
+        # so the weight must count per-frame contributions — it cannot
+        # broadcast a size-1 T).
         out_h = height * sf
         out_w = width * sf
         lead_dims = list(first_result.shape[:-2])          # [B, C_out] | [B, C_out, T_out]
-        out_shape = [*lead_dims, out_h, out_w]
-        weight_shape = [lead_dims[0], 1, *lead_dims[2:], out_h, out_w]
+        if temporal:
+            out_t = t_extent * self.t_scale
+            lead_dims[2] = out_t                           # full temporal extent
+            out_shape = [*lead_dims, out_h, out_w]
+            weight_shape = [lead_dims[0], 1, out_t, out_h, out_w]
+        else:
+            out_shape = [*lead_dims, out_h, out_w]
+            weight_shape = [lead_dims[0], 1, *lead_dims[2:], out_h, out_w]
         out_ndim = len(out_shape)
 
         # Mode-polymorphic accumulators: NBXTensor on the triton path
@@ -325,8 +378,9 @@ class TilingEngine:
 
         rh = ts * sf
         rw = ts * sf
+        rt = self.t_tile * self.t_scale if temporal else None
 
-        def _accumulate(res, ty: int, tx: int) -> None:
+        def _accumulate(res, ty: int, tx: int, tt=None) -> None:
             # Explicit per-rank slice (NBXTensor-safe); the read-add-write
             # form works for both torch and NBXTensor (avoids relying on
             # NBXTensor.__iadd__). weight's size-1 channel axis is selected
@@ -335,23 +389,34 @@ class TilingEngine:
             ox = tx * sf
             arh = min(rh, out_h - oy)
             arw = min(rw, out_w - ox)
-            osl = (slice(None),) * (out_ndim - 2) + (slice(oy, oy + arh), slice(ox, ox + arw))
-            rsl = (slice(None),) * (out_ndim - 2) + (slice(0, arh), slice(0, arw))
+            if tt is not None:
+                # Temporal placement: linear map — tile at input frame tt
+                # lands at output frame tt * t_scale (same law as spatial).
+                ot = tt * self.t_scale
+                art = min(rt, out_t - ot)
+                osl = ((slice(None), slice(None), slice(ot, ot + art))
+                       + (slice(oy, oy + arh), slice(ox, ox + arw)))
+                rsl = ((slice(None), slice(None), slice(0, art))
+                       + (slice(0, arh), slice(0, arw)))
+            else:
+                osl = (slice(None),) * (out_ndim - 2) + (slice(oy, oy + arh), slice(ox, ox + arw))
+                rsl = (slice(None),) * (out_ndim - 2) + (slice(0, arh), slice(0, arw))
             output[osl] = output[osl] + res[rsl]
             weight[osl] = weight[osl] + 1
 
-        _accumulate(first_result, first_h, first_w)
+        _accumulate(first_result, first_h, first_w, first_t)
 
         # Process remaining tiles
         tile_count = 1
-        for y in h_positions:
-            for x in w_positions:
-                if y == first_h and x == first_w:
-                    continue  # Already processed
-                tile = self._extract_tile(input_tensor, y, x)
-                result = execute_fn(tile)
-                _accumulate(result, y, x)
-                tile_count += 1
+        for t in t_positions:
+            for y in h_positions:
+                for x in w_positions:
+                    if t == first_t and y == first_h and x == first_w:
+                        continue  # Already processed
+                    tile = self._extract_tile(input_tensor, y, x, t)
+                    result = execute_fn(tile)
+                    _accumulate(result, y, x, t)
+                    tile_count += 1
 
         logger.debug(f"[TilingEngine] Processed {tile_count} tiles, output shape {output.shape}")
 
@@ -374,23 +439,23 @@ class TilingEngine:
         """
         ts = self.tile_size
         stride = self.stride
-
-        # Height positions
-        h_positions = list(range(0, max(1, height - ts + 1), stride))
-        # Ensure last tile reaches boundary
-        last_h = max(0, height - ts)
-        if not h_positions or h_positions[-1] != last_h:
-            h_positions.append(last_h)
-
-        # Width positions
-        w_positions = list(range(0, max(1, width - ts + 1), stride))
-        last_w = max(0, width - ts)
-        if not w_positions or w_positions[-1] != last_w:
-            w_positions.append(last_w)
-
+        h_positions = self._compute_axis_positions(height, ts, stride)
+        w_positions = self._compute_axis_positions(width, ts, stride)
         return h_positions, w_positions
 
-    def _extract_tile(self, input_tensor: torch.Tensor, y: int, x: int) -> torch.Tensor:
+    @staticmethod
+    def _compute_axis_positions(extent: int, tile: int, stride: int) -> List[int]:
+        """Start positions along one axis: stride-spaced grid with the last
+        tile snapped to the boundary (same law for H, W and T)."""
+        positions = list(range(0, max(1, extent - tile + 1), stride))
+        last = max(0, extent - tile)
+        if not positions or positions[-1] != last:
+            positions.append(last)
+        return positions
+
+    def _extract_tile(
+        self, input_tensor: torch.Tensor, y: int, x: int, t: Optional[int] = None,
+    ) -> torch.Tensor:
         """
         Extract a tile from input tensor, padding if at edge.
 
@@ -398,12 +463,17 @@ class TilingEngine:
         tile_size can be smaller than trace_size. Otherwise tiles match trace_size.
 
         Args:
-            input_tensor: Input tensor [B, C, H, W]
+            input_tensor: Input tensor [B, C, H, W] or [B, C, T, H, W]
             y: Start row
             x: Start column
+            t: Start frame (5D temporal tiling only; None = full T carried).
+               Temporal edge tiles are boundary-snapped by position (never
+               padded): temporal tiling requires a symbolic-T graph, which
+               accepts any tile extent — and t_positions guarantees
+               t + t_tile <= T by construction.
 
         Returns:
-            Tile tensor [B, C, tile_size, tile_size]
+            Tile tensor [B, C, tile_size, tile_size] (+ leading T slice for 5D)
         """
         ts = self.tile_size
         ndim = input_tensor.dim()
@@ -414,7 +484,12 @@ class TilingEngine:
         x_end = min(x + ts, width)
         # Explicit per-rank slice tuple (NBXTensor-safe; equals
         # [:, :, y:y_end, x:x_end] for 4D and carries the extra T axis for 5D).
-        sl = (slice(None),) * (ndim - 2) + (slice(y, y_end), slice(x, x_end))
+        if t is not None:
+            t_end = min(t + self.t_tile, input_tensor.shape[2])
+            sl = (slice(None), slice(None), slice(t, t_end),
+                  slice(y, y_end), slice(x, x_end))
+        else:
+            sl = (slice(None),) * (ndim - 2) + (slice(y, y_end), slice(x, x_end))
         tile = input_tensor[sl]
 
         # Pad to full trace_size if at edge (pads the trailing H, W). Mode-
@@ -441,7 +516,10 @@ class TilingEngine:
             f"stride={self.stride}, "
             f"overlap={self.overlap}, "
             f"scale_factor={self.scale_factor}, "
-            f"window_alignment={self.window_alignment})"
+            f"window_alignment={self.window_alignment}"
+            + (f", t_tile={self.t_tile}, t_stride={self.t_stride}, "
+               f"t_scale={self.t_scale}" if self.t_tile is not None else "")
+            + ")"
         )
 
 
