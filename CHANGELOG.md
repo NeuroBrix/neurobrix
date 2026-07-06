@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`state_video_mask` I2V conditioning layout (Allegro-TI2V).** The I2V
+  latent channel-concat brick gains a third data-driven style: the denoiser
+  input is `cat([latents, masked_video, mask], dim=1)` where masked_video is
+  the VAE-encoded conditioning image(s) (image at its frame index, zeros
+  elsewhere) and mask is the vendor-exact pixel-space inverted frame mask
+  (1 = not conditioned) temporally folded into `vae_temporal_ratio` latent
+  channels. The registry flag's `layout:` key is now accepted as an alias of
+  `style:`. Ratio and channels are profile/registry-driven; the existing
+  `wan` and `cogvideox` styles are unchanged.
+
 ### Fixed
 
 - **Euler-family schedulers: vendor-parity `linspace` ladder + fp32 step
