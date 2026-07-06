@@ -2472,6 +2472,36 @@ class GraphExecutor:
 
         for input_name, val in inputs.items():
             if isinstance(val, torch.Tensor):
+                # Rank-align to the graph input contract. A custom component
+                # class may take an input with an extra STRUCTURAL unit dim vs
+                # the standard flow tensor (Allegro-TI2V caption_projection:
+                # encoder_hidden_states is [B, 1, S, D]; the flow provides the
+                # standard 3D [B, S, D]) — the vendor pipeline unsqueezes at
+                # the boundary and so must we. Data-driven from graph.json,
+                # zero model knowledge: insert a unit dim ONLY where the trace
+                # shape is concretely 1 AND no shape symbol sources from that
+                # dim (symbol-sourced dims — batch, seq — legitimately vary
+                # and are never insertion points). Ambiguity (≠1 candidate)
+                # leaves the tensor untouched; the shape resolver then reports
+                # as before.
+                if self._dag is not None and val.ndim > 0:
+                    _spec = self._dag.get("tensors", {}).get(f"input::{input_name}")
+                    _sshape = _spec.get("shape") if isinstance(_spec, dict) else None
+                    if (isinstance(_sshape, list)
+                            and len(_sshape) == val.ndim + 1
+                            and self._shape_resolver is not None):
+                        _sym_dims = set()
+                        for _si in getattr(self._shape_resolver, "_symbols", {}).values():
+                            _src = _si.get("source", "")
+                            if _src.startswith(f"input::{input_name}::dim_"):
+                                try:
+                                    _sym_dims.add(int(_src.rsplit("dim_", 1)[1]))
+                                except ValueError:
+                                    pass
+                        _cands = [i for i, d in enumerate(_sshape)
+                                  if d == 1 and i not in _sym_dims]
+                        if len(_cands) == 1:
+                            val = val.unsqueeze(_cands[0])
                 # Convert to expected dtype from graph
                 expected_dtype = dtype_resolver.get_input_dtype(input_name)
                 if expected_dtype is not None and val.dtype != expected_dtype:

@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Graph-driven input rank alignment at the executor boundary.** Components
+  whose graph declares an input with an extra structural unit dim vs the
+  standard flow tensor (e.g. a caption projection taking
+  `encoder_hidden_states` as `[B, 1, S, D]`) now receive the correctly
+  unsqueezed tensor automatically — driven purely by the graph contract
+  (insertion only at a concretely-unit, non-symbol-sourced dim; ambiguity
+  changes nothing). Inert for all models whose input ranks already match.
+
+
+### Added
+
 - **`state_video_mask` I2V conditioning layout (Allegro-TI2V).** The I2V
   latent channel-concat brick gains a third data-driven style: the denoiser
   input is `cat([latents, masked_video, mask], dim=1)` where masked_video is
