@@ -5231,6 +5231,21 @@ def repeat_interleave_wrapper(*args, **kwargs):
 # RNG OPS — Random number generation via Triton kernels
 # ===========================================================================
 
+def _draw_seed() -> int:
+    """Per-draw Philox kernel seed for the random wrappers.
+
+    Run-scoped stream when armed (reproducible, --seed-driven; the Triton
+    mirror of the compiled engine's run-scoped generator — see
+    kernels/rng_stream.py), else the historical unseeded fallback. The
+    NBX_FORCE_RAND_SEED pin (rng_pin) is checked by the callers BEFORE any
+    kernel draw and keeps precedence over this stream.
+    """
+    from . import rng_stream
+    if rng_stream.active():
+        return rng_stream.next_seed()
+    return __import__("random").randint(0, 2**31 - 1)
+
+
 def rand_wrapper(*args, **kwargs) :
     """rand(size, ...) → uniform [0, 1) via Triton kernel."""
     from .ops.rand_op import rand_kernel
@@ -5249,7 +5264,7 @@ def rand_wrapper(*args, **kwargs) :
     n = output.numel()
     if n == 0:
         return output
-    seed = __import__("random").randint(0, 2**31 - 1)
+    seed = _draw_seed()
     _set_device(output)
     rand_kernel[_1d_grid(n)](output, n, seed, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
@@ -5269,7 +5284,7 @@ def randn_wrapper(*args, **kwargs) :
     n = output.numel()
     if n == 0:
         return output
-    seed = __import__("random").randint(0, 2**31 - 1)
+    seed = _draw_seed()
     _set_device(output)
     randn_kernel[_1d_grid(n)](output, n, seed, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
@@ -5284,7 +5299,7 @@ def rand_like_wrapper(x, **kwargs) :
     n = output.numel()
     if n == 0:
         return output
-    seed = __import__("random").randint(0, 2**31 - 1)
+    seed = _draw_seed()
     _set_device(output)
     rand_kernel[_1d_grid(n)](output, n, seed, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
@@ -5302,7 +5317,7 @@ def randn_like_wrapper(x, **kwargs) :
     n = output.numel()
     if n == 0:
         return output
-    seed = __import__("random").randint(0, 2**31 - 1)
+    seed = _draw_seed()
     _set_device(output)
     randn_kernel[_1d_grid(n)](output, n, seed, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
@@ -5327,7 +5342,7 @@ def normal_wrapper(*args, **kwargs) :
     n = output.numel()
     if n == 0:
         return output
-    seed = __import__("random").randint(0, 2**31 - 1)
+    seed = _draw_seed()
     _set_device(output)
     randn_kernel[_1d_grid(n)](output, n, seed, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     # Transform N(0,1) → N(mean, std)
@@ -5346,7 +5361,7 @@ def uniform_wrapper(x, low: float = 0.0, high: float = 1.0,
     n = x.numel()
     if n == 0:
         return x
-    seed = __import__("random").randint(0, 2**31 - 1)
+    seed = _draw_seed()
     rand_kernel[_1d_grid(n)](x, n, seed, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     # Transform [0,1) → [low, high)
     if high - low != 1.0:
@@ -5366,7 +5381,7 @@ def bernoulli_wrapper(x, p: float = 0.5, **kwargs) :
     n = temp.numel()
     if n == 0:
         return output
-    seed = __import__("random").randint(0, 2**31 - 1)
+    seed = _draw_seed()
     rand_kernel[_1d_grid(n)](temp, n, seed, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     # Compare with probability: if rand < p → 1.0, else → 0.0
     # If x is the probability tensor, compare temp < x
@@ -5402,7 +5417,7 @@ def multinomial_wrapper(x, num_samples: int,
         # gumbel = -log(-log(uniform(0,1)))
         gumbel = NBXTensor.empty_like(probs)
         n = gumbel.numel()
-        seed = __import__("random").randint(0, 2**31 - 1)
+        seed = _draw_seed()
         rand_kernel[_1d_grid(n)](gumbel, n, seed, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
         gumbel = clamp(gumbel, min_val=1e-10)
         gumbel = neg(log_wrapper(neg(log_wrapper(gumbel))))
@@ -5415,7 +5430,7 @@ def multinomial_wrapper(x, num_samples: int,
         for _ in range(num_samples):
             gumbel = NBXTensor.empty_like(probs)
             n = gumbel.numel()
-            seed = __import__("random").randint(0, 2**31 - 1)
+            seed = _draw_seed()
             rand_kernel[_1d_grid(n)](gumbel, n, seed, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
             gumbel = clamp(gumbel, min_val=1e-10)
             gumbel = neg(log_wrapper(neg(log_wrapper(gumbel))))
@@ -5831,13 +5846,24 @@ _causal_bias_cache: dict = {}
 
 
 def _get_zero_bias(device_idx, seqlen_q, seqlen_k, dtype):
+    """Zero additive bias for the no-mask flash path, as a STRIDE-0
+    BROADCAST view over the query axis: physical storage is a single
+    [1, seqlen_k] zero row, expanded to [seqlen_q, seqlen_k] with
+    stride_q = 0. The kernel reads the bias through its strides and only
+    requires unit stride on the KEY axis (offs_n is indexed with implicit
+    stride 1), so the query axis can broadcast freely — exactly the same
+    trick the wrapper already uses for key-padding masks. A materialized
+    [Sq, Sk] zero matrix is fatal at video-native scale: Allegro 720p×88f
+    self-attention is 79200×79200 fp32 = 25 GB for a tensor of ZEROS
+    (first real trigger of this path at native scale, 2026-07-04)."""
     key = (device_idx, seqlen_q, seqlen_k, dtype)
     cached = _zero_bias_cache.get(key)
     if cached is not None:
         return cached
     DeviceAllocator.set_device(device_idx)
-    bias = NBXTensor.zeros((seqlen_q, seqlen_k), dtype=dtype,
-                            device=f"cuda:{device_idx}")
+    row = NBXTensor.zeros((1, seqlen_k), dtype=dtype,
+                          device=f"cuda:{device_idx}")
+    bias = row.expand(seqlen_q, seqlen_k)
     _zero_bias_cache[key] = bias
     return bias
 
@@ -6144,14 +6170,28 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     import os as _os_fma
     _use_math = _os_fma.environ.get("NBX_FORCE_MATH_ATTENTION") == "1"
     if not _use_math:
+        _scores_bytes = batch * nheads * seqlen_q * seqlen_k * 4
         if not _is_power_of_2(headdim):
-            _use_math = True                      # UNCONDITIONAL (all hw)
+            # Non-pow2 head_dim: math WHILE the fp32 scores tensor fits a
+            # sane memory bound; FLASH beyond it. The flash kernel fully
+            # supports non-pow2 head dims (BLOCK_HEADDIM = next_power_of_2 +
+            # masked d-axis loads `offs_d < headdim, other=0.0` — the Dao
+            # EVEN_HEADDIM pattern), so the old UNCONDITIONAL math guard was
+            # conservatism, and at video-native scale it is fatal: Allegro
+            # 720p×88f = 79200 tokens, hd=96 → math scores [2,24,79200²]
+            # fp32 = 1.204 TB (guaranteed OOM — no behavior existed to
+            # regress on that branch). Bound = the per-arch vendor-yml
+            # budget where defined (Volta 128 MB), else a universal 2 GiB
+            # sanity floor — PixArt hd=72 / Sana hd=112 image-scale scores
+            # stay ≤ the floor on every arch → their math path is
+            # byte-unchanged (R23).
+            _bound = _sdpa_math_scores_budget_bytes() or (2 << 30)
+            _use_math = _scores_bytes <= _bound
         else:
             # _math_attention materialises an fp32 [B*H,Tq,Tk] scores
             # tensor (bmm returns fp32 on V100) — 4 bytes/elem is the
             # true memory cost, independent of q's dtype. Budget is 0
             # on non-Volta (no yml key) → this never fires there.
-            _scores_bytes = batch * nheads * seqlen_q * seqlen_k * 4
             _use_math = _scores_bytes <= _sdpa_math_scores_budget_bytes()
     if _os_fma.environ.get("NBX_SDPA_ROUTE_DIAG") == "1" and not getattr(
             scaled_dot_product_attention_wrapper, "_route_diag_done", False):

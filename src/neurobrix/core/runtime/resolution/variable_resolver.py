@@ -25,6 +25,29 @@ class VariableResolver:
         self.device = device
         self.resolved: Dict[str, Any] = {}
         self.module_handlers: Dict[str, Any] = {}
+        self._sampling_generator: Any = None
+
+    def sampling_generator(self):
+        """Run-scoped sampling RNG stream (vendor semantics), or None if seedless.
+
+        Diffusers pipelines thread ONE `torch.Generator(device).manual_seed(seed)`
+        from `prepare_latents` (init draw) through every `scheduler.step()`
+        (ancestral / SDE / eta-variance draws). Creating a fresh generator per
+        draw — or letting scheduler noise fall back to the GLOBAL RNG seeded
+        with the SAME seed — re-emits the init sequence: the step-0 ancestral
+        noise comes out BIT-IDENTICAL to the init latent, a deterministic
+        correlated injection along the state's own direction instead of
+        independent noise (Allegro 20-step degeneracy / 100-step saturation
+        root cause). One lazily-created, run-scoped generator restores the
+        vendor stream exactly: init = draw 1, step-k ancestral = draw k+2.
+        """
+        if self._sampling_generator is None:
+            seed = self.defaults.get("seed")
+            if seed is None:
+                return None
+            self._sampling_generator = torch.Generator(
+                device=self.device).manual_seed(int(seed))
+        return self._sampling_generator
 
     def register_module_handler(self, module_name: str, handler: Any):
         """Registers a custom handler for a module (e.g. neural component executor)."""
@@ -233,18 +256,18 @@ class VariableResolver:
                     _ft = torch.load(_fl, map_location=self.device, weights_only=True)
                     if tuple(_ft.shape) == tuple(shape_tuple):
                         return _ft.to(dtype=dtype, device=self.device)
-                # Gaussian noise - use seed for reproducibility if available
-                seed = self.defaults.get("seed")
-                if seed is not None:
-                    generator = torch.Generator(device=self.device).manual_seed(int(seed))
+                # Gaussian noise from the run-scoped sampling stream (vendor
+                # semantics: ONE seeded generator drives init + every later
+                # stochastic scheduler draw, in consumption order).
+                generator = self.sampling_generator()
+                if generator is not None:
                     return torch.randn(shape_tuple, dtype=dtype, device=self.device, generator=generator)
                 return torch.randn(shape_tuple, dtype=dtype, device=self.device)
 
             elif init_type == "uniform":
-                # Uniform [0, 1) - use seed for reproducibility if available
-                seed = self.defaults.get("seed")
-                if seed is not None:
-                    generator = torch.Generator(device=self.device).manual_seed(int(seed))
+                # Uniform [0, 1) from the run-scoped sampling stream
+                generator = self.sampling_generator()
+                if generator is not None:
                     return torch.rand(shape_tuple, dtype=dtype, device=self.device, generator=generator)
                 return torch.rand(shape_tuple, dtype=dtype, device=self.device)
 

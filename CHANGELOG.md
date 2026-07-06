@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Euler-family schedulers: vendor-parity `linspace` ladder + fp32 step
+  arithmetic (both engines).** The Euler/EulerAncestral `linspace` spacing now
+  matches the reference implementation exactly: FLOAT timesteps down to t=0
+  inclusive with sigmas interpolated at fractional positions (previously the
+  DPM/DDIM integer convention was applied, leaving every intermediate sigma
+  15–40 % off the trained schedule and ending the schedule at t≈125 with a
+  violent σ=0.43→0 final jump — the root of Allegro's native-regime
+  degeneration). Step arithmetic now upcasts to fp32 (reference "Upcast to
+  avoid precision issues"), avoiding catastrophic cancellation of
+  (sample−denoised)/σ at low sigma in fp16. Verified bit-identical timesteps
+  and sigmas vs the reference at 20 and 100 steps. Affects only EulerAncestral/Euler
+  models (Allegro in the current zoo); UniPC/DDIM/DPM/FlowMatch models are
+  untouched.
+- **Run-scoped sampling RNG stream (both engines).** Seeded runs now thread
+  ONE run-scoped generator through the init draw AND every stochastic
+  scheduler draw, in consumption order — the reference `generator` contract.
+  Previously the init came from a dedicated seeded generator while the
+  per-step ancestral noise fell back to the GLOBAL RNG seeded with the same
+  seed: the step-0 ancestral noise was bit-identical to the init latent (a
+  deterministic correlated injection along the state's own direction), and
+  every later draw was the reference sequence shifted by one — degenerating
+  EulerAncestral sampling (Allegro: mosaic at 20 steps, saturation at 100).
+  In Triton mode the random wrappers additionally drew every kernel seed
+  from an unseeded source, making stochastic sampling non-reproducible
+  regardless of `--seed`; all nine draw sites (rand/randn/*_like/normal/
+  uniform/bernoulli/multinomial) now consume a reproducible run-scoped
+  stream armed from the same seed. Deterministic schedulers are unaffected;
+  seeded init draws are bit-unchanged.
+
 ### Added
 
 - **Wan2.2-I2V-A14B end-to-end support — CLOSED 4/4.** The dual-denoiser 28B

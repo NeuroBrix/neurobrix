@@ -58,18 +58,29 @@ class _EulerBase:
                                 self.sigma_max, rho=7.0)
             ts = np.array([int(np.abs(self._all_sigmas - s).argmin()) for s in sig],
                           dtype=np.int64)
+        elif self.timestep_spacing == "linspace":
+            # Euler-family linspace — VENDOR PARITY, R30 mirror of the core
+            # fix (Allegro #30 root cause): FLOAT timesteps down to t=0
+            # inclusive, sigmas interpolated at the fractional positions.
+            # The DPM/DDIM integer n+1-drop-last convention stays in
+            # get_timesteps_np for its own users.
+            ts = np.linspace(0, self.num_train_timesteps - 1,
+                             num_inference_steps, dtype=np.float64)[::-1].copy()
+            _all_sig = alphas_cumprod_to_sigmas(self.alphas_cumprod)
+            sig = np.interp(ts, np.arange(self.num_train_timesteps,
+                                          dtype=np.float64), _all_sig)
         else:
             ts = get_timesteps_np(self.timestep_spacing, num_inference_steps,
                                   self.num_train_timesteps)
             idx = np.clip(ts.astype(np.int64), 0, self.num_train_timesteps - 1)
             sig = alphas_cumprod_to_sigmas(self.alphas_cumprod[idx])
-        self._ts_np = ts.astype(np.int64)
+        self._ts_np = ts.astype(np.float64)
         self.sigmas = np.concatenate([sig.astype(np.float64), np.zeros(1)])
         self.timesteps = _to_nbx_timesteps(self._ts_np)
         self._step_index = None
 
     def _init_step_index(self, timestep):
-        t = int(timestep.item()) if isinstance(timestep, NBXTensor) else int(timestep)
+        t = float(timestep.item()) if isinstance(timestep, NBXTensor) else float(timestep)
         # nearest timestep in the schedule (mirror core init_step_index)
         self._step_index = int(np.abs(self._ts_np - t).argmin())
 
@@ -118,13 +129,24 @@ class TritonEulerDiscreteScheduler(_EulerBase):
              return_dict: bool = True, **kwargs):
         if self.num_inference_steps is None:
             raise RuntimeError("ZERO FALLBACK: set_timesteps() before step()")
+        from neurobrix.kernels.nbx_tensor import NBXDtype
         model_output = self._maybe_chunk_variance(model_output, sample)
         if self._step_index is None:
             self._init_step_index(timestep)
         sigma = float(self.sigmas[self._step_index])
         sigma_next = float(self.sigmas[self._step_index + 1])
+        # fp32 step arithmetic — VENDOR PARITY / R30 mirror of the core Euler
+        # fix: the fp16 derivative (sample - denoised)/sigma cancels
+        # catastrophically at low sigma. Cast back to the model dtype at exit.
+        _out_dtype = model_output._dtype
+        if _out_dtype != NBXDtype.float32:
+            sample = sample.to(NBXDtype.float32)
+            model_output = model_output.to(NBXDtype.float32)
         denoised, d = self._denoised_and_derivative(model_output, sample, sigma)
         prev = sample + d * (sigma_next - sigma)
+        if _out_dtype != NBXDtype.float32:
+            prev = prev.to(_out_dtype)
+            denoised = denoised.to(_out_dtype)
         self._step_index += 1
         return {"prev_sample": prev, "denoised": denoised} if return_dict else prev
 
@@ -135,11 +157,21 @@ class TritonEulerAncestralDiscreteScheduler(_EulerBase):
         if self.num_inference_steps is None:
             raise RuntimeError("ZERO FALLBACK: set_timesteps() before step()")
         from neurobrix.kernels.wrappers import randn_like_wrapper
+        from neurobrix.kernels.nbx_tensor import NBXDtype
         model_output = self._maybe_chunk_variance(model_output, sample)
         if self._step_index is None:
             self._init_step_index(timestep)
         sigma = float(self.sigmas[self._step_index])
         sigma_next = float(self.sigmas[self._step_index + 1])
+        # fp32 step arithmetic — VENDOR PARITY / R30 mirror of the core
+        # EulerAncestral fix (see core/module/scheduler/diffusion/euler.py).
+        # Noise stays generated at the MODEL dtype (vendor randn_tensor
+        # semantics), then joins the fp32 accumulation.
+        _out_dtype = model_output._dtype
+        _noise_ref = sample  # model-dtype reference for randn_like
+        if _out_dtype != NBXDtype.float32:
+            sample = sample.to(NBXDtype.float32)
+            model_output = model_output.to(NBXDtype.float32)
         denoised, _ = self._denoised_and_derivative(model_output, sample, sigma)
         # Ancestral split of sigma_next into deterministic + stochastic parts.
         sigma_up = (max(sigma_next ** 2 * (sigma ** 2 - sigma_next ** 2)
@@ -148,7 +180,12 @@ class TritonEulerAncestralDiscreteScheduler(_EulerBase):
         d = (sample - denoised) * (1.0 / max(sigma, 1e-8))
         prev = sample + d * (sigma_down - sigma)
         if sigma_next > 0:
-            noise = randn_like_wrapper(sample)
+            noise = randn_like_wrapper(_noise_ref)
+            if noise._dtype != NBXDtype.float32:
+                noise = noise.to(NBXDtype.float32)
             prev = prev + noise * sigma_up
+        if _out_dtype != NBXDtype.float32:
+            prev = prev.to(_out_dtype)
+            denoised = denoised.to(_out_dtype)
         self._step_index += 1
         return {"prev_sample": prev, "denoised": denoised} if return_dict else prev
