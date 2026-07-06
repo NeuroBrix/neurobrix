@@ -21,6 +21,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Triton `NBXTensor.new_ones` returned UNINITIALIZED memory (leftover
+  TODO) — Allegro `--triton` positive-prompt conditioning washed out.**
+  The T5 text-encoder extended-attention-mask chain opens with
+  `aten::new_ones([], dtype=bool) & (positions >= 0)`; the uninitialized
+  0-dim byte read as 0 → False → the AND zeroed the q-side validity →
+  the extended mask resolved to -3.4e38 on ALL keys for ALL queries →
+  every T5 self-attention row went UNIFORM (softmax of a constant row,
+  measured l2 exactly 8.0 = sqrt(heads) on `[1,64,512,512]`), so
+  positive-prompt embeddings washed toward the pad-token mean. Observable
+  as the CFG cond-branch per-branch drift corr 0.9288 / relL2 35.8% vs the
+  PyTorch oracle at step-0 (scale-invariant: identical at 13f and native
+  88f), while the uncond branch stayed clean (corr 0.99996 — the empty
+  negative prompt has one real token whose rel-pos row is degenerate).
+  `new_ones` now fills ones for every shape/dtype (0-dim included).
+  Post-fix per-branch drift gate (13f, 720x1280, step-0, seed 42, vs the
+  compiled capture): cond corr 0.999992 / relL2 0.35%, uncond corr
+  0.999983 / relL2 0.51%; guided (x7.5 CFG combine) corr 0.999863 —
+  both branches clean, branch stds bit-matched (0.1412 / 0.1508).
+- **Triton bool binary wrappers now broadcast (`bitwise_and`/`bitwise_or`/
+  `logical_and`/`logical_or`).** The wrappers ran the flat elementwise
+  kernel over the first operand's element count with no shape alignment,
+  silently ignoring broadcasting: `bitwise_and([1,1,S,1], [1,1,1,S])` (the
+  T5 extended-mask combine) returned the elementwise diagonal `[1,1,S,1]`
+  (same element count — no crash, silently wrong), and a 0-dim operand
+  (`new_ones([]) & q_valid`) collapsed the output to 0-dim after an
+  out-of-bounds flat read past the 0-dim tensor's one-element allocation.
+  With `new_ones` fixed, this second defect alone would have turned the T5
+  extended mask all-True (no pad masking — pad leak into every real
+  token). The four wrappers now route through the universal binary-op
+  preparation (dtype align, device align, broadcast, contiguous); scalar /
+  0-dim operands are materialized exactly.
 - **Triton conv3d no longer OOMs on native-resolution video-VAE encodes
   (temporal chunk-streaming).** The temporal decomposition of conv3d needed
   ~4-5 full folded transients simultaneously (temporal pad copy, frame fold,

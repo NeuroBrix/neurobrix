@@ -3567,18 +3567,36 @@ def any_wrapper(x, dim=None, keepdim=False) :
 # ---------------------------------------------------------------------------
 
 def bitwise_and_wrapper(a, b) :
-    a, b = a.contiguous(), b.contiguous()
-    output = NBXTensor.empty_like(a)
-    _set_device(a)
-    bitwise_and_forward_kernel[_1d_grid(a.numel())](a, b, output, a.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    # _prepare_binary = the universal binary contract (dtype align, device
+    # align, BROADCAST, contiguous). The former `a.contiguous(); empty_like(a)`
+    # form silently ignored broadcasting: bitwise_and([1,1,S,1], [1,1,1,S])
+    # (the T5 extended-attention-mask outer product q_valid & k_valid, Allegro
+    # text_encoder) returned the elementwise diagonal [1,1,S,1] instead of
+    # [1,1,S,S] — same numel, so no OOB crash — and the downstream expand
+    # stretched the q-valid column over the key axis: NO key masking, every
+    # real token attended all pad tokens in every T5 layer (triton cond-branch
+    # 35.8% drift vs compiled at native, uncond clean because the empty-prompt
+    # mask is all-ones = inert).
+    a, b, output, n, dev_ctx, scalar = _prepare_binary(a, b)
+    if scalar:
+        # 0-dim / python-scalar operand (e.g. the traced `mask.all() & qside`
+        # opening the T5 extended-mask chain): materialize to a full tensor of
+        # a's dtype and run the tensor kernel. Cold path, exact for every
+        # dtype. The former code fed the 0-dim tensor straight to the flat
+        # kernel, reading a.numel() elements past its 1-element allocation
+        # (out-of-bounds, undefined values).
+        b = NBXTensor.empty_like(a).fill_(b)
+    bitwise_and_forward_kernel[_1d_grid(n)](a, b, output, n, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
 
 def bitwise_or_wrapper(a, b) :
-    a, b = a.contiguous(), b.contiguous()
-    output = NBXTensor.empty_like(a)
-    _set_device(a)
-    bitwise_or_forward_kernel[_1d_grid(a.numel())](a, b, output, a.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    # Same universal binary contract as bitwise_and_wrapper (broadcast fix).
+    a, b, output, n, dev_ctx, scalar = _prepare_binary(a, b)
+    if scalar:
+        # Scalar operand: materialize (see bitwise_and_wrapper).
+        b = NBXTensor.empty_like(a).fill_(b)
+    bitwise_or_forward_kernel[_1d_grid(n)](a, b, output, n, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
 
@@ -3603,18 +3621,24 @@ def bitwise_not_wrapper(x) :
 # ---------------------------------------------------------------------------
 
 def logical_and_wrapper(a, b) :
-    a, b = a.contiguous(), b.contiguous()
-    output = NBXTensor.empty(a.shape, dtype=NBXDtype.bool_, device=a.device)
-    _set_device(a)
-    logical_and_forward_kernel[_1d_grid(a.numel())](a, b, output, a.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    # _prepare_comparison = the universal binary contract with a bool output
+    # (dtype align, device align, BROADCAST, contiguous). Same broadcast fix
+    # as bitwise_and_wrapper — the former form silently ignored broadcasting.
+    a, b, output, n, dev_ctx, scalar = _prepare_comparison(a, b)
+    if scalar:
+        # Scalar operand: materialize (see bitwise_and_wrapper).
+        b = NBXTensor.empty_like(a).fill_(b)
+    logical_and_forward_kernel[_1d_grid(n)](a, b, output, n, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
 
 def logical_or_wrapper(a, b) :
-    a, b = a.contiguous(), b.contiguous()
-    output = NBXTensor.empty(a.shape, dtype=NBXDtype.bool_, device=a.device)
-    _set_device(a)
-    logical_or_forward_kernel[_1d_grid(a.numel())](a, b, output, a.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    # Same universal binary contract as logical_and_wrapper (broadcast fix).
+    a, b, output, n, dev_ctx, scalar = _prepare_comparison(a, b)
+    if scalar:
+        # Scalar operand: materialize (see bitwise_and_wrapper).
+        b = NBXTensor.empty_like(a).fill_(b)
+    logical_or_forward_kernel[_1d_grid(n)](a, b, output, n, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
 
