@@ -70,6 +70,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `style:`. Ratio and channels are profile/registry-driven; the existing
   `wan` and `cogvideox` styles are unchanged.
 
+- **`state_video_mask` I2V conditioning in `--triton` /
+  `--triton-sequential` modes.** The Triton-branch I2V conditioning brick
+  gains the same Allegro-TI2V style, NBXTensor end-to-end (no torch): host-
+  built folded pixel mask uploaded once, channel-concatenated onto the
+  VAE-encoded masked-video latent, bit-identical to the compiled engine's
+  condition tensor (unit-tested, including the mask-fold and latent-frame
+  agreement guards). Same registry/profile-driven configuration keys as the
+  compiled path; `wan` and `cogvideox` triton styles are unchanged.
+
 ### Fixed
 
 - **Compiled engine: synthetic combined seq-length symbols now match exactly.**
