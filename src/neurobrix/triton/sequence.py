@@ -14,7 +14,10 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from neurobrix.kernels.dispatch import dispatch
-from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, parse_dtype
+from neurobrix.kernels.nbx_tensor import (
+    NBXTensor, NBXDtype, DeviceAllocator, parse_dtype,
+    invalidate_current_device_cache,
+)
 
 from .arena import Arena
 from .symbols import SymbolResolver
@@ -2513,6 +2516,14 @@ class TritonSequence:
                 path; single-device skips (zero3 is always multi-device-
                 classified because CPU weights differ from the exec GPU).
         """
+        # C2: drop the ensure_triton_device fast-path cache at run
+        # entry so the line below performs the FULL runtime + Triton
+        # sync exactly as it always did — this neutralises any device
+        # change made outside NeuroBrix control between forward passes.
+        # Inside the run the cache then legitimately skips redundant
+        # per-launch switches (all in-run device changes go through
+        # DeviceAllocator and maintain the cache invariant).
+        invalidate_current_device_cache()
         DeviceAllocator.ensure_triton_device(self.device_idx)
 
         # Phase 1 — set per-component dtype context for self-managed wrappers
@@ -2801,6 +2812,22 @@ class TritonSequence:
         _drain_diag = os.environ.get("NBX_DEFERRED_DRAIN_DIAG") == "1"
         _drain_stats = [0, 0, 0] if _drain_diag else None  # [drains, bytes-trig, count-trig]
 
+        # C1 (P-KERNEL-LAUNCH-HYGIENE): diagnostic env gates hoisted out
+        # of the per-op hot loop — read ONCE per run. Same gate
+        # semantics as the previous per-op reads (diagnostics are set
+        # before launch; changing an env var mid-run no longer applies).
+        _live_dump_env = os.environ.get("NBX_LIVE_DUMP_EVERY", "0")
+        _live_dump_n = int(_live_dump_env) if _live_dump_env != "0" else 0
+        _wm_path = os.environ.get("NBX_LIVE_WATERMARK_TRACE", "")
+        _trace_nan_on = os.environ.get("NBX_TRITON_TRACE_NAN") == "1"
+        _fp_path = os.environ.get("NBX_OP_FINGERPRINT", "")
+        _dump_tids_env = os.environ.get("NBX_DUMP_TIDS")
+        _trace_tids_env = os.environ.get("NBX_TRACE_TIDS", "")
+        _trace_tids = (set(t.strip() for t in _trace_tids_env.split(","))
+                       if _trace_tids_env else set())
+        _gc_env = os.environ.get("NBX_FORCE_GC", "0")
+        _gc_int = int(_gc_env) if _gc_env != "0" else 0
+
         # ===== TEMP PROFILING INSTRUMENTATION =====
         import time as _time
         _PROF = os.environ.get("NBX_TRITON_PROF") == "1"
@@ -2862,15 +2889,12 @@ class TritonSequence:
                 # Periodic live tracking — every NBX_LIVE_DUMP_EVERY ops,
                 # log the NBX live_tracked counter so we can scrub a log to
                 # find when leakage begins. Cheap: just a counter read.
-                import os as _os_per
-                _per = _os_per.environ.get("NBX_LIVE_DUMP_EVERY", "0")
-                if _per != "0":
-                    _per_n = int(_per)
-                    if _per_n > 0 and op_idx % _per_n == 0:
-                        from neurobrix.kernels.nbx_tensor import DeviceAllocator as _DA_p
-                        _live = _DA_p._cuda_live_bytes.get(_DA_p.get_device(), 0)
-                        print(f"[LIVE_TRACK op_idx={op_idx} {op.op_uid}] live={_live/1024/1024:.0f}MB",
-                              flush=True)
+                # Gate hoisted to run start (C1).
+                if _live_dump_n > 0 and op_idx % _live_dump_n == 0:
+                    from neurobrix.kernels.nbx_tensor import DeviceAllocator as _DA_p
+                    _live = _DA_p._cuda_live_bytes.get(_DA_p.get_device(), 0)
+                    print(f"[LIVE_TRACK op_idx={op_idx} {op.op_uid}] live={_live/1024/1024:.0f}MB",
+                          flush=True)
                 # P-TRITON-LIVE-WATERMARK-AUDIT 2026-05-14 L1: extended
                 # periodic trace. NBX_LIVE_WATERMARK_TRACE=path/to/file.jsonl
                 # samples every NBX_LIVE_WATERMARK_EVERY ops (default 50)
@@ -2880,9 +2904,9 @@ class TritonSequence:
                 # gap is what we need to identify and reduce on 16g
                 # triton where conv::64 OOMs at driver_free=208MB while
                 # nbx_live=12898MB on a 16151MB GPU.
-                _wm_path = _os_per.environ.get("NBX_LIVE_WATERMARK_TRACE", "")
+                # _wm_path hoisted to run start (C1).
                 if _wm_path:
-                    _wm_every = int(_os_per.environ.get(
+                    _wm_every = int(os.environ.get(
                         "NBX_LIVE_WATERMARK_EVERY", "50"))
                     if _wm_every > 0 and op_idx % _wm_every == 0:
                         try:
@@ -3342,22 +3366,20 @@ class TritonSequence:
                 arena[op.output_slots[0]] = result
 
             # === TEMP NBX_TRITON_TRACE_NAN=1 : log first Inf/NaN op ===
-            import os as _os_tn
-            if _os_tn.environ.get("NBX_TRITON_TRACE_NAN") == "1" and op.output_slots:
+            # Gate hoisted to run start (C1).
+            if _trace_nan_on and op.output_slots:
                 self._maybe_trace_nan(op, arena)
             # =============================================================
 
             # === NBX_OP_FINGERPRINT=<jsonl> : run-to-run op-output hash
             #     (P-TRITON-MOE-DETERMINISM-RESIDUAL differential) ===
-            import os as _os_fp
-            _fp_path = _os_fp.environ.get("NBX_OP_FINGERPRINT", "")
+            # Gate hoisted to run start (C1).
             if _fp_path and op.output_slots:
                 self._maybe_fingerprint(op, arena, _fp_path)
             # =============================================================
 
             # === TEMP TID DUMP: compare triton vs native per-op output ===
-            import os as _os_tid
-            _dump_tids_env = _os_tid.environ.get("NBX_DUMP_TIDS")
+            # Gate hoisted to run start (C1).
             if _dump_tids_env and op.output_slots:
                 self._maybe_dump_tid(op, _dump_tids_env)
             # =============================================================
@@ -3369,10 +3391,7 @@ class TritonSequence:
             # tells us whether the NBXTensor is held only by the arena
             # (refcount==2: 1 from arena, 1 from sys.getrefcount's own
             # arg) or by some other reference too (refcount>2 = leak).
-            import os as _os_tt
-            _trace_tids_env = _os_tt.environ.get("NBX_TRACE_TIDS", "")
-            _trace_tids = (set(t.strip() for t in _trace_tids_env.split(","))
-                           if _trace_tids_env else set())
+            # Gate + tid set hoisted to run start (C1).
             if _trace_tids:
                 import sys as _sys_tt
                 if not hasattr(self, '_slot_to_tid'):
@@ -3431,13 +3450,10 @@ class TritonSequence:
             # ops to test if the live_tracked watermark gap is from stale
             # Python references holding NBXTensor __del__ from firing.
             # Per-op (N=1) is too slow for production but useful for diag.
-            import os as _os_gc
-            _gc_n = _os_gc.environ.get("NBX_FORCE_GC", "0")
-            if _gc_n != "0":
-                _gc_int = int(_gc_n)
-                if _gc_int > 0 and op_idx % _gc_int == 0:
-                    import gc as _gc_force
-                    _gc_force.collect()
+            # Gate hoisted to run start (C1).
+            if _gc_int > 0 and op_idx % _gc_int == 0:
+                import gc as _gc_force
+                _gc_force.collect()
 
             # Route A — periodic drain. OR of bytes and count thresholds.
             # Same correctness as the final drain (sync before free),
@@ -3531,6 +3547,12 @@ class TritonSequence:
         _drain_diag = os.environ.get("NBX_DEFERRED_DRAIN_DIAG") == "1"
         _drain_stats = [0, 0, 0] if _drain_diag else None
 
+        # C1 (P-KERNEL-LAUNCH-HYGIENE): diagnostic env gates hoisted out
+        # of the per-op hot loop — read ONCE per run (same gate
+        # semantics; env changes mid-run no longer apply).
+        _dtids = os.environ.get("NBX_DUMP_TIDS")
+        _fp_path_md = os.environ.get("NBX_OP_FINGERPRINT", "")
+
         for op_idx, op in enumerate(self._ops):
             if pre_op_callback is not None:
                 pre_op_callback(op_idx, op)
@@ -3562,6 +3584,11 @@ class TritonSequence:
             # FAST PATH: no transfer needed
             if not op.needs_transfer:
                 if op.device_idx is not None and op.device_idx != _current_dev:
+                    # _current_dev only gates WHEN this pair fires; the
+                    # C2 device cache in nbx_tensor stays coherent by
+                    # construction (set_device invalidates on switch,
+                    # ensure_triton_device re-syncs + recaches), so the
+                    # two trackers cannot desynchronize.
                     DeviceAllocator.set_device(op.device_idx)
                     DeviceAllocator.ensure_triton_device(op.device_idx)
                     _current_dev = op.device_idx
@@ -3616,15 +3643,13 @@ class TritonSequence:
                 arena[op.output_slots[0]] = result
 
             # === TEMP TID DUMP (multi-device branch) ===
-            import os as _os_tid_md
-            _dtids = _os_tid_md.environ.get("NBX_DUMP_TIDS")
+            # Gate hoisted to run start (C1).
             if _dtids and op.output_slots:
                 self._maybe_dump_tid(op, _dtids)
             # ===========================================
 
             # === NBX_OP_FINGERPRINT (multi-device branch) ===
-            import os as _os_fp_md
-            _fp_path_md = _os_fp_md.environ.get("NBX_OP_FINGERPRINT", "")
+            # Gate hoisted to run start (C1).
             if _fp_path_md and op.output_slots:
                 self._maybe_fingerprint(op, arena, _fp_path_md)
             # ================================================

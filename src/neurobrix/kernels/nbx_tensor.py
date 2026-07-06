@@ -60,6 +60,20 @@ _MALLOC_TRACE_FILE: Optional[str] = os.environ.get("NBX_MALLOC_TRACE") or None
 _MALLOC_TRACE_EVENTS: List[Tuple[int, str, int, int, str]] = []  # (eid, kind, ptr, nbytes, site)
 _MALLOC_TRACE_COUNTER: List[int] = [0]
 
+# NBX_TRACE_DEL_BIG_MB=N (default off): NBXTensor.__del__ logs every
+# free of an owns_data tensor >= N MB. Read ONCE at import
+# (P-KERNEL-LAUNCH-HYGIENE C4) — __del__ fires per tensor, and an
+# environ.get there is pure overhead on the free path. Consequence:
+# changing the env var mid-process no longer applies; acceptable for a
+# diagnostic that is set before launch. None == trace disabled.
+try:
+    _TRACE_DEL_BIG_ENV = os.environ.get("NBX_TRACE_DEL_BIG_MB", "0")
+    _TRACE_DEL_BIG_THRESH: Optional[int] = (
+        int(_TRACE_DEL_BIG_ENV) * 1024 * 1024
+        if _TRACE_DEL_BIG_ENV != "0" else None)
+except Exception:
+    _TRACE_DEL_BIG_THRESH = None
+
 
 def _extract_neurobrix_site(max_frames: int = 12) -> str:
     """Return nearest neurobrix/ frame as 'file:line func', skipping this file.
@@ -322,6 +336,44 @@ _GPU_BACKENDS = {
 }
 
 
+# ============================================================================
+# CURRENT-DEVICE CACHE (P-KERNEL-LAUNCH-HYGIENE C2)
+# ============================================================================
+#
+# `ensure_triton_device` is called before every Triton kernel launch
+# (via `_set_device`). The cudaSetDevice + triton set_current_device
+# pair is pure overhead when the device is already current, so we cache
+# the last device index that was fully synchronised (runtime device AND
+# Triton driver device both pointing at it) and skip the pair on a hit.
+#
+# Cache invariant: `_CURRENT_DEVICE_IDX == idx` implies the CUDA/HIP
+# runtime current device is `idx` AND Triton's active driver device is
+# `idx`. Every NeuroBrix-side device change maintains the invariant:
+#   - `ensure_triton_device` refreshes the cache after a full sync;
+#   - `DeviceAllocator.set_device` (the single choke point for runtime-
+#     only switches) invalidates the cache when it switches to a device
+#     that differs from the cached one (it does not touch Triton's
+#     driver device, so the pair is no longer known-coherent);
+#   - `most_free_device` (raw per-device probe loop) invalidates
+#     unconditionally before returning.
+# Device changes that bypass NBX entirely (torch.cuda.set_device on the
+# compiled-mode path) cannot interleave with a warm cache inside a
+# triton run (R33: no torch in triton paths); triton run entry points
+# invalidate the cache defensively (see triton/sequence.py run()).
+_CURRENT_DEVICE_IDX: Optional[int] = None
+
+
+def invalidate_current_device_cache() -> None:
+    """Drop the ensure_triton_device fast-path cache.
+
+    Call after any device switch that does not go through
+    `DeviceAllocator.set_device` / `ensure_triton_device`, so the next
+    `ensure_triton_device` performs the full runtime + Triton sync.
+    """
+    global _CURRENT_DEVICE_IDX
+    _CURRENT_DEVICE_IDX = None
+
+
 class DeviceAllocator:
     """GPU + pinned-host memory allocator via raw runtime API.
 
@@ -368,6 +420,15 @@ class DeviceAllocator:
         """
         rt = _gpu_runtime()
         getattr(rt, _active_backend()["set_device"])(ctypes.c_int(device_id))
+        # C2 cache maintenance: a runtime-only switch to a device other
+        # than the cached one breaks the "runtime AND Triton both point
+        # at the cached idx" invariant — invalidate so the next
+        # ensure_triton_device performs the full sync. Switching to the
+        # cached device itself keeps the pair coherent (Triton's driver
+        # device is untouched here).
+        global _CURRENT_DEVICE_IDX
+        if device_id != _CURRENT_DEVICE_IDX:
+            _CURRENT_DEVICE_IDX = None
 
     @staticmethod
     def get_device() -> int:
@@ -416,6 +477,10 @@ class DeviceAllocator:
             getattr(rt, set_fn)(ctypes.c_int(prev))
         except Exception:
             pass
+        # C2: the probe loop above issued raw cudaSetDevice calls (and
+        # the restore may have failed silently) — drop the fast-path
+        # cache so the next ensure_triton_device re-syncs fully.
+        invalidate_current_device_cache()
         return best_idx
 
     @staticmethod
@@ -490,7 +555,7 @@ class DeviceAllocator:
         return DeviceAllocator._pool_flush()
 
     @staticmethod
-    def malloc_cuda(nbytes: int) -> int:
+    def malloc_cuda(nbytes: int, dev_idx: Optional[int] = None) -> int:
         """Allocate GPU memory.
 
         Default path: synchronous cudaMalloc. The stream-ordered allocator
@@ -508,11 +573,17 @@ class DeviceAllocator:
         release_cached_blocks → retry). Mitigates fragmentation when
         many small/medium allocs precede a large alloc, which was the
         Sana 4Kpx VAE conv::62 8 GiB OOM pattern.
+
+        dev_idx (C3): the CURRENT device index, when the caller already
+        knows it — skips the cudaGetDevice round-trip used purely for
+        pool/accounting bookkeeping. The caller MUST guarantee the
+        runtime current device equals dev_idx (cudaMalloc allocates on
+        the current device). None (default) keeps the internal query.
         """
         if nbytes == 0:
             return 0
         DeviceAllocator._maybe_init_pool()
-        dev = DeviceAllocator.get_device()
+        dev = dev_idx if dev_idx is not None else DeviceAllocator.get_device()
 
         # Pool fast path
         if DeviceAllocator._pool_enabled:
@@ -926,7 +997,18 @@ class DeviceAllocator:
         Uses cudaSetDevice (runtime) + Triton's own driver API.
         Does NOT call cuCtxSetCurrent — that conflicts with the runtime
         context on multi-GPU systems.
+
+        C2 fast path: called before every kernel launch, so when the
+        requested device is already fully current (see the
+        _CURRENT_DEVICE_IDX invariant at module level) the pair of
+        driver calls is skipped. Any device change outside this
+        function must invalidate the cache (set_device does so
+        automatically; raw switches call
+        invalidate_current_device_cache()).
         """
+        global _CURRENT_DEVICE_IDX
+        if device_idx == _CURRENT_DEVICE_IDX:
+            return
         # 1. Set runtime device (cudaSetDevice / hipSetDevice)
         backend = _active_backend()
         rt = _gpu_runtime()
@@ -934,6 +1016,8 @@ class DeviceAllocator:
         # 2. Tell Triton which device to target
         import triton.runtime.driver
         triton.runtime.driver.active.set_current_device(device_idx)
+        # Cache only after BOTH calls succeeded.
+        _CURRENT_DEVICE_IDX = device_idx
 
 
 def _set_device(t):
@@ -1221,6 +1305,8 @@ class NBXTensor:
                               # also holds the numpy buffer for unpinned CPU tensors
                  '_pinned',   # True for pinned host memory (cudaMallocHost); used by __del__
                               # to dispatch to free_host_pinned instead of free_cuda
+                 '_elem_size',  # C6b: dtype_size(_dtype) cached at construction
+                 '_contig',     # C6a: contiguity flag cached at construction
                  )
 
     def __init__(self, data_ptr: int, shape: Tuple[int, ...],
@@ -1238,21 +1324,33 @@ class NBXTensor:
         self._base = base  # keep parent alive to prevent use-after-free on views
         self._pinned = pinned
         self._numel = math.prod(shape) if shape else 1
-        self._nbytes = self._numel * dtype_size(dtype)
+        # C6b: element size cached once — shape/strides/dtype are fixed at
+        # construction (every view/reshape builds a NEW NBXTensor; __init__
+        # is the single construction path). The one dtype retag in the tree
+        # (triton/constants.py bf16 constants, uint16-tagged buffer) happens
+        # at _offset == 0, where data_ptr() does not consume _elem_size.
+        self._elem_size = dtype_size(dtype)
+        self._nbytes = self._numel * self._elem_size
+        # C6a: contiguity is a pure function of the (immutable) shape and
+        # strides — compute the flag once instead of per is_contiguous()
+        # call in the hot loops.
+        self._contig = self._strides == _contiguous_strides(self._shape)
 
     def __del__(self):
         # Targeted lifecycle trace: NBX_TRACE_DEL_BIG_MB=N (default off)
         # logs every __del__ on owns=True NBXTensors >= N MB. Lets us
         # tell whether a leaked NBXTensor is actually freed and when.
+        # Gate is the module-level constant read once at import (C4) —
+        # zero env lookup on the per-tensor free path. The try/except
+        # keeps the free below unconditional (same as before), including
+        # at interpreter shutdown when module globals may be gone.
         try:
-            import os as _os_td
-            _big = _os_td.environ.get("NBX_TRACE_DEL_BIG_MB", "0")
-            if _big != "0" and self._owns_data and self._data_ptr:
-                _thresh = int(_big) * 1024 * 1024
-                if self._nbytes >= _thresh:
-                    print(f"[NBX_DEL data_ptr={self._data_ptr} "
-                          f"shape={self._shape} nbytes={self._nbytes/1024/1024:.0f}MB]",
-                          flush=True)
+            if (_TRACE_DEL_BIG_THRESH is not None and self._owns_data
+                    and self._data_ptr
+                    and self._nbytes >= _TRACE_DEL_BIG_THRESH):
+                print(f"[NBX_DEL data_ptr={self._data_ptr} "
+                      f"shape={self._shape} nbytes={self._nbytes/1024/1024:.0f}MB]",
+                      flush=True)
         except Exception:
             pass
 
@@ -1271,7 +1369,7 @@ class NBXTensor:
 
     def data_ptr(self) -> int:
         """Raw CUDA pointer. Triton kernels read this."""
-        return self._data_ptr + self._offset * dtype_size(self._dtype)
+        return self._data_ptr + self._offset * self._elem_size
 
     @property
     def shape(self) -> Tuple[int, ...]:
@@ -1321,8 +1419,10 @@ class NBXTensor:
         return dtype_size(self._dtype)
 
     def is_contiguous(self) -> bool:
-        """Method for ATen API compat."""
-        return self._strides == _contiguous_strides(self._shape)
+        """Method for ATen API compat. Returns the flag computed at
+        construction (C6a): _shape/_strides are never mutated after
+        __init__ — every view/reshape/slice constructs a new NBXTensor."""
+        return self._contig
 
     def is_expanded(self) -> bool:
         """True when the view replays elements along a broadcast axis.
@@ -1466,7 +1566,11 @@ class NBXTensor:
             shape = tuple(shape)
         nbx_dt = dtype if isinstance(dtype, NBXDtype) else parse_dtype(str(dtype)) if dtype else NBXDtype.float32
         dev_str = 'cuda'
-        dev_idx = DeviceAllocator.get_device()  # default: current CUDA device
+        # C3: resolve an explicit device index WITHOUT touching the
+        # driver; cudaGetDevice fires at most once per allocation, and
+        # not at all on the hot path (explicit device matching the
+        # cached current device).
+        dev_idx = None
         if isinstance(device, str):
             if ':' in device:
                 dev_idx = int(device.split(':')[1])
@@ -1478,15 +1582,32 @@ class NBXTensor:
         numel = math.prod(shape) if shape else 1
         nbytes = numel * dtype_size(nbx_dt)
         if nbytes == 0:
+            if dev_idx is None:
+                dev_idx = DeviceAllocator.get_device()
             return NBXTensor(0, shape, _contiguous_strides(shape), nbx_dt, dev_str, device_idx=dev_idx)
 
-        # Multi-GPU: allocate on correct device
-        cur = DeviceAllocator.get_device()
-        if cur != dev_idx:
-            DeviceAllocator.set_device(dev_idx)
-        ptr = DeviceAllocator.malloc_cuda(nbytes)
-        if cur != dev_idx:
-            DeviceAllocator.set_device(cur)
+        if dev_idx is None:
+            # No explicit device: allocate on the current one. Single
+            # query, no switch, and the resolved idx is threaded into
+            # malloc_cuda so it does not re-query.
+            dev_idx = DeviceAllocator.get_device()
+            ptr = DeviceAllocator.malloc_cuda(nbytes, dev_idx=dev_idx)
+        elif dev_idx == _CURRENT_DEVICE_IDX:
+            # Explicit device already fully current (C2 cache invariant
+            # guarantees the runtime device equals the cached idx): no
+            # driver query, no switch.
+            ptr = DeviceAllocator.malloc_cuda(nbytes, dev_idx=dev_idx)
+        else:
+            # Multi-GPU: allocate on the requested device, restore the
+            # previous one after. The restore target comes from a real
+            # driver query (never from the cache) so a cold/invalidated
+            # cache can never misdirect the restore.
+            cur = DeviceAllocator.get_device()
+            if cur != dev_idx:
+                DeviceAllocator.set_device(dev_idx)
+            ptr = DeviceAllocator.malloc_cuda(nbytes, dev_idx=dev_idx)
+            if cur != dev_idx:
+                DeviceAllocator.set_device(cur)
 
         return NBXTensor(ptr, shape, _contiguous_strides(shape), nbx_dt, dev_str,
                          owns_data=True, device_idx=dev_idx)

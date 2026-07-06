@@ -224,6 +224,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Triton mode: per-kernel-launch overhead trimmed (no behavior change).**
+  The device switch before every Triton kernel launch is now skipped when the
+  device is already current (cached, re-synced at every run entry and on any
+  cross-device switch); `NBXTensor.empty` queries the current device at most
+  once per allocation instead of three times; the per-op diagnostic env-var
+  gates in the Triton hot loops are read once per run instead of per op; and
+  `NBXTensor` caches its contiguity flag and element size at construction.
+  Enabled diagnostics behave exactly as before, with one caveat: changing a
+  diagnostic env var mid-process no longer applies (they are read at run/import
+  time).
+
 - **`NBX_DUMP_TIDS` sequential dump now records `batch_norms`** (per-batch L2
   split), matching the compiled and triton dumps — enables cross-engine
   per-branch (cond/uncond CFG batch=2) comparison from the pytorch op-by-op
