@@ -282,6 +282,13 @@ class CompiledOpResolver:
                 start = max(0, dim_size + start)
             if end < 0:
                 end = max(0, dim_size + end)
+            # ATen slice semantics clamp START to the dim size as well: an
+            # out-of-range start yields an EMPTY slice, never an error
+            # (x[:, 88:] on a 3-sized dim is legal and empty — a traced dead
+            # branch, e.g. a patch-embed image path traced past the clip
+            # length, must replay as the same empty chain the sequential
+            # oracle produces; narrow() alone rejects start > size).
+            start = min(start, dim_size)
             length = max(0, end - start)
             result = input_tensor.narrow(dim, start, length)
             if step is not None:
