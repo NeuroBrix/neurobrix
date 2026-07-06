@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   changes nothing). Inert for all models whose input ranks already match.
   Disambiguation is completed by batch coherence (the leading dim after
   insertion must match the component-wide batch) and tolerates
-  tracer-symbolized structural unit dims.
+  symbol-annotated structural unit dims.
 
 
 ### Added
@@ -35,6 +35,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Compiled engine: synthetic combined seq-length symbols now match exactly.**
+  The compiled-mode scalar promotion pass synthesizes combined (sum-of-pair)
+  sequence-length symbols for models that concatenate two token streams. The
+  ±1 offset tolerance — meant for single-symbol `seq_len + 1` slicing — no
+  longer applies to these synthetic sums: two small sequence symbols (e.g.
+  trace 14 and 1) could otherwise capture a structural model constant one
+  above their sum (16, the rotate-half half-width of a per-axis 3D-RoPE
+  chunk), rebinding per-block rotary slice bounds to the runtime sequence
+  length and crashing compiled runs at the first rotary multiply
+  (`48 vs 32` shape mismatch) while sequential runs passed. Exact matching
+  also restores the weight-dims collision guard for sums. Unit-tested;
+  single-symbol promotions are unchanged.
+- **Compiled engine: out-of-range slice starts replay as empty slices.** The
+  compiled slice op now clamps the start index to the dimension size, matching
+  eager semantics (`x[:, 88:]` on a 3-sized dim is legal and empty). Traced
+  dead branches — e.g. a conditioning path traced past the runtime clip
+  length — previously crashed compiled mode where sequential mode correctly
+  produced an empty chain.
 - **Euler-family schedulers: vendor-parity `linspace` ladder + fp32 step
   arithmetic (both engines).** The Euler/EulerAncestral `linspace` spacing now
   matches the reference implementation exactly: FLOAT timesteps down to t=0

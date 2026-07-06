@@ -947,6 +947,24 @@ class CompiledSequence:
         # Promote scalar args in shape-manipulating ops to symbolic references
         promoted = 0
 
+        # Offset tolerance policy:
+        # - Real tracer symbols match with offset 0..1 (the +1 covers the
+        #   `seq_len + 1` pattern in causal-mask / BOS slicing).
+        # - Synthetic `_sum_sA_sB` symbols match EXACTLY (offset 0 only).
+        #   The sum is itself a heuristic guess (no tracer backing); stacking
+        #   the +1 fuzz on top compounds two guesses and starts matching small
+        #   structural constants. Concrete case: two seq_len symbols traced at
+        #   14 and 1 synthesize a sum of 15, whose +1 fuzz captured the
+        #   rotate-half half-width constant 16 in per-axis RoPE slices —
+        #   at runtime the slice end rebound to runtime_seq+1 and widened the
+        #   rotated q/k chunk. Concatenated-sequence slicing (the reason sum
+        #   symbols exist, e.g. img+txt = 256+512 = 768) matches the sum
+        #   exactly. Exact matching also restores the weight-dims collision
+        #   guard for sums: the candidate then equals the sum trace value,
+        #   which was collision-checked at synthesis.
+        def _max_offset(sym_id: str) -> int:
+            return 0 if sym_id.startswith("_sum_") else 1
+
         def _try_promote_scalar(arg: dict) -> Optional[dict]:
             """Try to promote a scalar arg to a symbolic reference. Returns new arg or None."""
             if not isinstance(arg, dict) or arg.get("type") != "scalar":
@@ -956,7 +974,7 @@ class CompiledSequence:
                 return None
             for sym_id, trace_val in safe_symbols.items():
                 offset = val - trace_val
-                if 0 <= offset <= 1:
+                if 0 <= offset <= _max_offset(sym_id):
                     return {
                         "type": "symbol",
                         "symbol_id": sym_id,
@@ -971,7 +989,7 @@ class CompiledSequence:
                 return None
             for sym_id, trace_val in safe_symbols.items():
                 offset = val - trace_val
-                if 0 <= offset <= 1:
+                if 0 <= offset <= _max_offset(sym_id):
                     return {
                         "type": "symbol",
                         "symbol_id": sym_id,
