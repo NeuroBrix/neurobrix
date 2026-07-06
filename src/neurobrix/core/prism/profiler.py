@@ -75,6 +75,154 @@ class InputConfig:
         return symbol_map
 
 
+# ---------------------------------------------------------------------------
+# D2-ENCODER — linear-downscale graph classifier (shared Prism machinery)
+#
+# A VAE *encoder* consumes PIXEL-space video and produces LATENT-space
+# output (output extents = input extents / compression). Its symbols are
+# named time/height/width exactly like a decoder's, but they live in the
+# OPPOSITE space — so the name-driven latent binding in build_symbol_map
+# under-sizes every encoder activation by the compression volume (Allegro
+# encoder at 88f 720x1280: 0.62 GiB bound latent-side vs 156 GiB real).
+#
+# These helpers classify the graph DIRECTION and its temporal map class
+# from the graph symbolics alone (data-driven, no model/family names):
+#   - temporal_downscale_ratio: LINEAR-DOWN class (t_out = t_in / r exactly
+#     on the r-lattice, no first-frame offset) vs the causal/affine class
+#     ((t-1)/r + 1: first frame encodes alone) which is DECLINED — the
+#     identical doctrine to the decode-side `_temporal_affine_map` gate
+#     (LINEAR tiles, AFFINE/CAUSAL declines).
+#   - is_linear_downscale_graph: the conjunction used to gate pixel-space
+#     symbol binding and encoder component-tiling.
+# ---------------------------------------------------------------------------
+
+
+def _symbolic_dims(tensors: Dict, tid) -> List:
+    """symbolic_shape dims list for a tensor id ([] when absent)."""
+    return (tensors.get(str(tid), {})
+            .get("symbolic_shape", {}).get("dims", []) or [])
+
+
+def _eval_symbolic_expr(node, sym_id: str, value: int) -> Optional[int]:
+    """Evaluate a symbolic dim expression tree at `sym_id = value`.
+
+    Returns None when the tree references any OTHER symbol or an unknown
+    node type — multi-symbol / exotic trees are declined, mirroring the
+    decode-side `_affine` reader's conservatism.
+    """
+    if isinstance(node, (int, float)):
+        return int(node)
+    if not isinstance(node, dict):
+        return None
+    ntype = node.get("type")
+    if ntype == "symbol":
+        return value if node.get("id") == sym_id else None
+    left = _eval_symbolic_expr(node.get("left"), sym_id, value)
+    right = _eval_symbolic_expr(node.get("right"), sym_id, value)
+    if left is None or right is None:
+        return None
+    if ntype == "add":
+        return left + right
+    if ntype == "sub":
+        return left - right
+    if ntype == "mul":
+        return left * right
+    if ntype == "floordiv":
+        return left // right if right != 0 else None
+    if ntype == "mod":
+        return left % right if right != 0 else None
+    return None
+
+
+def temporal_downscale_ratio(dag: Dict) -> Optional[tuple]:
+    """LINEAR-DOWN temporal map classifier for downsampler (encoder) graphs.
+
+    Reads the rank-5 input's temporal symbol (dim 2, NCTHW) and searches the
+    rank-5 outputs for a dim expression f(t) that is an exact linear
+    downscale: f(k*r) == k AND f(k*r + 1) == k over a probe set, with
+    r = trace_t_in / trace_t_out an exact integer > 1.
+
+    The second probe rejects the causal/affine class ((t-1)//r + 1 —
+    CogVideoX/Wan/Mochi encoders): it agrees with linear at exact multiples
+    of r but jumps to k+1 at k*r + 1 (the first frame encodes alone).
+    A mid-clip tile under that class would re-apply the clip-start
+    semantics — identical doctrine to the decode-side b != 0 decline.
+
+    Returns (ratio, out_t_axis) — out_t_axis is the OUTPUT dim index that
+    carries the temporal expression (encoders may permute the latent layout,
+    e.g. [B, T, C, H, W]) — or None when the graph is not in the class.
+    """
+    tensors = dag.get("tensors", {})
+    t_symbol = None
+    t_in_trace = None
+    for iid in dag.get("input_tensor_ids", []):
+        dims = _symbolic_dims(tensors, iid)
+        if len(dims) == 5 and isinstance(dims[2], dict) \
+                and dims[2].get("type") == "symbol":
+            t_symbol = dims[2].get("id")
+            t_in_trace = dims[2].get("trace")
+            break
+    if t_symbol is None or not isinstance(t_in_trace, int) or t_in_trace <= 1:
+        return None
+
+    for oid in dag.get("output_tensor_ids", []):
+        dims = _symbolic_dims(tensors, oid)
+        if len(dims) != 5:
+            continue
+        for axis in range(1, 5):
+            expr = dims[axis]
+            if not isinstance(expr, dict):
+                continue
+            if _eval_symbolic_expr(expr, t_symbol, t_in_trace) is None:
+                continue  # not a function of the temporal symbol alone
+            t_out_trace = _eval_symbolic_expr(expr, t_symbol, t_in_trace)
+            if not isinstance(t_out_trace, int) or t_out_trace <= 0 \
+                    or t_out_trace >= t_in_trace:
+                continue  # not a downscale along this axis
+            if t_in_trace % t_out_trace != 0:
+                return None  # non-integral trace ratio — declined
+            ratio = t_in_trace // t_out_trace
+            if ratio <= 1:
+                return None
+            linear = all(
+                _eval_symbolic_expr(expr, t_symbol, k * ratio) == k
+                for k in (2, 3, 5, 7, 11, 25, 64))
+            no_lead_frame = all(
+                _eval_symbolic_expr(expr, t_symbol, k * ratio + 1) == k
+                for k in (3, 11, 25))
+            if linear and no_lead_frame:
+                return (ratio, axis)
+            return None  # causal / other class — declined
+    return None
+
+
+def is_linear_downscale_graph(dag: Dict) -> bool:
+    """True iff the graph is a rank-5 spatial DOWNSAMPLER (output spatial
+    trace extent < input's — a VAE encoder) whose temporal map is in the
+    LINEAR-DOWN class. This is the gate for pixel-space symbol binding
+    (build_symbol_map) and for encoder component-tiling (Prism solver).
+    Anything else — upsamplers, causal encoders, 4D graphs — is untouched.
+    """
+    tensors = dag.get("tensors", {})
+    in_spatial = None
+    for iid in dag.get("input_tensor_ids", []):
+        shape = tensors.get(str(iid), {}).get("shape", [])
+        if isinstance(shape, list) and len(shape) == 5:
+            in_spatial = shape[-2]
+            break
+    if not in_spatial:
+        return False
+    out_spatial = None
+    for oid in dag.get("output_tensor_ids", []):
+        shape = tensors.get(str(oid), {}).get("shape", [])
+        if isinstance(shape, list) and len(shape) == 5:
+            out_spatial = shape[-2]
+            break
+    if out_spatial is None or out_spatial >= in_spatial:
+        return False
+    return temporal_downscale_ratio(dag) is not None
+
+
 @dataclass
 class ActivationProfile:
     """Result of activation profiling."""
@@ -218,11 +366,31 @@ class ActivationProfiler:
         if input_config.num_frames:
             tc = input_config.temporal_compression or 4
             latent_t = (input_config.num_frames - 1) // tc + 1
+        # D2-ENCODER: a linear-downscale graph (VAE encoder class) consumes
+        # PIXEL-space video — its time/height/width symbols must bind to the
+        # runtime pixel extents, not the latent ones (which under-size every
+        # activation by the compression volume and hide the encoder's real
+        # overflow from the placement cascade). Strictly additive: False for
+        # every non-downsampler / causal-encoder graph, whose bindings are
+        # byte-identical to before.
+        pixel_space = is_linear_downscale_graph(self.dag)
         for sid, info in syms.items():
             if not isinstance(info, dict):
                 continue
             name = info.get("name")
             trace = info.get("trace_value")
+            if pixel_space and name in ("time", "height", "width"):
+                if name == "time" and input_config.num_frames:
+                    symbol_map[sid] = input_config.num_frames
+                    continue
+                if name == "height":
+                    symbol_map[sid] = input_config.height
+                    continue
+                if name == "width":
+                    symbol_map[sid] = input_config.width
+                    continue
+                # "time" without a runtime num_frames: fall through to the
+                # standard binding below (trace value).
             if name == "batch":
                 # Trace value, NOT input_config.batch_size: the trace baked
                 # each component's true batch semantics (VAE decode batch=1,
