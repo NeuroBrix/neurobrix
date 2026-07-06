@@ -761,6 +761,15 @@ def _build_op_map() -> Dict[str, Callable]:
         "adaptive_avg_pool2d": w.adaptive_avg_pool2d_wrapper,
         "avg_pool2d": w.avg_pool2d_wrapper,
         "max_pool2d": w.max_pool2d_wrapper,
+        # with_indices variants return (values, indices) tuples — the
+        # sequence binds them to ::out_0 / ::out_1.
+        "max_pool2d_with_indices": (
+            lambda x, kernel_size, stride=None, padding=0, dilation=1,
+                   ceil_mode=False:
+            w.max_pool2d_wrapper(x, kernel_size, stride, padding, dilation,
+                                 ceil_mode, return_indices=True)),
+        "max_pool3d": w.max_pool3d_wrapper,
+        "max_pool3d_with_indices": w.max_pool3d_with_indices_wrapper,
 
         # --- Conv ---
         "conv2d": w.conv2d_wrapper,

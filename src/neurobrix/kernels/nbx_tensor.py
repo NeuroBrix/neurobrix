@@ -724,6 +724,32 @@ class DeviceAllocator:
         return DeviceAllocator._cuda_peak_bytes.get(device_idx, 0)
 
     @staticmethod
+    def device_free_bytes(device_idx: Optional[int] = None) -> int:
+        """Driver-free bytes on `device_idx` (None = current device), via
+        cudaMemGetInfo/hipMemGetInfo through ctypes (R33: no torch).
+
+        Returns -1 when the query is unavailable (CPU-only host, runtime
+        load failure) so callers can distinguish "unknown" from "0 bytes
+        free". Read-only feasibility probe for wrapper-internal memory
+        streaming gates (conv3d temporal chunk-streaming) — deliberately
+        NOT an accounting API (device-wide, includes other processes) and
+        NOT a per-launch kernel-config source (hardware params stay in the
+        vendor YAMLs)."""
+        try:
+            rt = _gpu_runtime()
+            backend = _active_backend()
+            if (device_idx is not None
+                    and DeviceAllocator.get_device() != device_idx):
+                DeviceAllocator.set_device(device_idx)
+            free_b = ctypes.c_size_t(0)
+            total_b = ctypes.c_size_t(0)
+            getattr(rt, backend.get("mem_get_info", "cudaMemGetInfo"))(
+                ctypes.byref(free_b), ctypes.byref(total_b))
+            return int(free_b.value)
+        except Exception:
+            return -1
+
+    @staticmethod
     def reset_peak_memory(device_idx: Optional[int] = None) -> None:
         """Reset the peak watermark to the current live value.
         With device_idx=None, resets all devices."""
