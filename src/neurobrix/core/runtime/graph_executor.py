@@ -2470,6 +2470,13 @@ class GraphExecutor:
         # Avoid creating new TensorResolver for each input (was O(N) allocations)
         dtype_resolver = TensorResolver(ctx)
 
+        # Batch hint for rank alignment: the modal leading dim across the
+        # component's tensor inputs (CFG batching doubles dim0 EVERYWHERE, so
+        # any input whose alignment would break batch coherence is wrong).
+        _dim0s = [int(v.shape[0]) for v in inputs.values()
+                  if isinstance(v, torch.Tensor) and v.ndim >= 1]
+        _batch_hint = max(set(_dim0s), key=_dim0s.count) if _dim0s else None
+
         for input_name, val in inputs.items():
             if isinstance(val, torch.Tensor):
                 # Rank-align to the graph input contract. A custom component
@@ -2498,8 +2505,37 @@ class GraphExecutor:
                                     _sym_dims.add(int(_src.rsplit("dim_", 1)[1]))
                                 except ValueError:
                                     pass
-                        _cands = [i for i, d in enumerate(_sshape)
-                                  if d == 1 and i not in _sym_dims]
+                        _cands = []
+                        for _pos, _d in enumerate(_sshape):
+                            # A symbolized dim can still be a structural unit
+                            # (the tracer symbolizes trace-value-1 dims too);
+                            # candidacy is decided by the simulation checks
+                            # below (concrete-unit facing + batch coherence),
+                            # not by symbol presence alone.
+                            if _d != 1:
+                                continue
+                            # Simulate the insertion and validate against the
+                            # trace shape: every spec dim that is CONCRETELY 1
+                            # must face a runtime 1 — a structural unit dim
+                            # never varies — EXCEPT position 0 (batch-first
+                            # convention: a batch traced at 1 legitimately
+                            # becomes 2 under CFG batching). Symbolic/non-unit
+                            # dims vary freely. Exactly one surviving
+                            # candidate = unambiguous insertion.
+                            _sim = list(val.shape[:_pos]) + [1] + list(val.shape[_pos:])
+                            # Batch coherence: dim0 after insertion must match
+                            # the component-wide batch (CFG batches ALL inputs).
+                            if _batch_hint is not None and _sim[0] != _batch_hint:
+                                continue
+                            _ok = True
+                            for _i, _sd in enumerate(_sshape):
+                                if _i == _pos or _i in _sym_dims or _i == 0:
+                                    continue
+                                if _sd == 1 and _sim[_i] != 1:
+                                    _ok = False
+                                    break
+                            if _ok:
+                                _cands.append(_pos)
                         if len(_cands) == 1:
                             val = val.unsqueeze(_cands[0])
                 # Convert to expected dtype from graph

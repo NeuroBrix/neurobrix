@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unsqueezed tensor automatically — driven purely by the graph contract
   (insertion only at a concretely-unit, non-symbol-sourced dim; ambiguity
   changes nothing). Inert for all models whose input ranks already match.
+  Disambiguation is completed by batch coherence (the leading dim after
+  insertion must match the component-wide batch) and tolerates
+  tracer-symbolized structural unit dims.
 
 
 ### Added
