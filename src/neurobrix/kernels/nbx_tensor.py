@@ -2381,10 +2381,18 @@ class NBXTensor:
                                kwargs.get('device', self._device))
 
     def new_ones(self, size, **kwargs) -> 'NBXTensor':
-        # TODO: fill kernel for ones
-        return NBXTensor.empty(tuple(size) if isinstance(size, list) else size,
-                               kwargs.get('dtype', self._dtype),
-                               kwargs.get('device', self._device))
+        # Must actually FILL ones — the former `NBXTensor.empty` returned
+        # uninitialized memory (a leftover TODO). The Allegro/T5 extended
+        # attention mask opens with `aten::new_ones([]) & (positions >= 0)`;
+        # the uninitialized 0-dim byte read as 0 -> False -> the AND zeroed the
+        # whole [1,1,S,1] q-side -> extended mask = -inf on ALL keys -> every
+        # T5 self-attention row went UNIFORM (softmax of a constant row), so
+        # positive-prompt embeddings washed toward the pad-token mean (cond
+        # branch corr 0.9288 vs the sequential oracle while the empty-prompt
+        # uncond branch stayed clean).
+        return NBXTensor.ones(tuple(size) if isinstance(size, list) else size,
+                              kwargs.get('dtype', self._dtype),
+                              kwargs.get('device', self._device))
 
     def new_empty(self, size, **kwargs) -> 'NBXTensor':
         return NBXTensor.empty(tuple(size) if isinstance(size, list) else size,
