@@ -10,7 +10,10 @@ Wan-I2V is the motivating case: hidden_states = cat([noise(16), mask(4),
 vae_encoded_image(16)]) = 36ch. The triton flow builds the 20ch condition once
 from the vae_encoder NBXTensor output plus a deterministic frame mask, and the
 triton flow / triton CFG engine channel-concat it onto the (possibly batched)
-NBXTensor state before the transformer.
+NBXTensor state before the transformer. Allegro-TI2V (`layout:
+state_video_mask`) is the third style: hidden_states = cat([latents(4),
+masked_video(4), folded_pixel_mask(4)]) = 12ch, with the pixel-space frame
+mask temporally folded into vae_temporal_ratio channels.
 
 Allowed imports here: NBXTensor + triton device glue (R33), numpy for the
 host-side deterministic mask / per-channel stats (R34 CPU glue), and the shared
@@ -42,13 +45,22 @@ def conditioning_spec(ctx: Any, loop_comp: str) -> Optional[dict]:
     if not flag:
         return None
     spec = dict(flag) if isinstance(flag, dict) else {}
-    style = spec.setdefault("style", "wan")
+    # `layout` is the registry alias for `style` (Allegro-TI2V declares
+    # `layout: state_video_mask`); both feed the same style switch.
+    style = spec.setdefault("style", spec.get("layout") or "wan")
     spec.setdefault("condition_component", "vae_encoder")
     if style == "wan":
         spec.setdefault("mask_channels", 4)
         spec.setdefault("channel_dim", 1)
     elif style == "cogvideox":
         spec.setdefault("channel_dim", 2)
+    elif style == "state_video_mask":
+        # Allegro-TI2V: transformer input = cat([latents, masked_video, mask],
+        # dim=1); state is channels-first [B, C, T, H, W] -> concat dim 1.
+        spec.setdefault("channel_dim", 1)
+        # Frame indices carrying a conditioning image (vendor
+        # conditional_images_indices); a single first-frame image by default.
+        spec.setdefault("cond_frame_indices", [0])
     return spec
 
 
@@ -71,6 +83,26 @@ def _vae_scaling(ctx: Any) -> tuple:
     sf = cfg.get("scaling_factor") or prof.get("scaling_factor")
     invert = bool(cfg.get("invert_scale_latents") or prof.get("invert_scale_latents"))
     return (float(sf) if sf else None), invert
+
+
+def _vae_temporal_ratio(ctx: Any) -> Optional[int]:
+    """Read the VAE temporal compression ratio (pixel frames per latent frame).
+
+    From the vae profile config: `temporal_compression_ratio` (diffusers-style
+    configs, e.g. AutoencoderKLAllegro) or `vae_scale_factor[0]` (vendor
+    pipelines expose a (t, h, w) tuple). Data-driven, never hardcoded — the
+    same fallback chain as the compiled brick (config read, not compute).
+    """
+    prof_path = ctx.pkg.cache_path / "components" / "vae" / "profile.json"
+    prof = json.loads(prof_path.read_text())
+    cfg = prof.get("config") if isinstance(prof.get("config"), dict) else prof
+    ratio = (cfg.get("temporal_compression_ratio")
+             or prof.get("temporal_compression_ratio"))
+    if not ratio:
+        vsf = cfg.get("vae_scale_factor") or prof.get("vae_scale_factor")
+        if isinstance(vsf, (list, tuple)) and vsf:
+            ratio = vsf[0]
+    return int(ratio) if ratio else None
 
 
 def _target_latent_frames(ctx: Any) -> Optional[int]:
@@ -130,6 +162,47 @@ def _frame_mask_np(num_frames: int, latent_t: int, lh: int, lw: int,
     return np.ascontiguousarray(mask)
 
 
+def _state_video_mask_np(b: int, num_frames: int, ratio: int, lh: int, lw: int,
+                         cond_indices: list) -> np.ndarray:
+    """Allegro-TI2V folded pixel mask -> np[b, ratio, latent_T, lh, lw].
+
+    Host-side deterministic mask (same numpy CPU-glue allowance as
+    `_frame_mask_np`), bit-mirror of the compiled brick's torch build:
+
+    - PIXEL-space frame mask with INVERTED semantics (1 = NOT conditioned,
+      0 = conditioned; vendor pipeline_allegro_ti2v.py:901-902), 1 channel,
+      built directly at the LATENT spatial grid: the vendor
+      F.interpolate(bilinear) resizes per-frame CONSTANT fields (each pixel
+      frame is all-0 or all-1), and bilinear resampling of a constant field
+      is the identity — value-identical to building at (lh, lw). (Documented
+      shortcut shared with the compiled brick.)
+    - Temporally FOLDED into `ratio` channels via the flat view
+      (b, ratio, latent_T, lh, lw) (vendor line 916): folded channel k at
+      latent frame t covers PIXEL frame k * latent_T + t — a block split of
+      the temporal axis, NOT an interleaved grouping of consecutive frames.
+
+    Raises on the same constraints the compiled brick (and the vendor's flat
+    view) enforces: num_frames must equal ratio * latent_T.
+    """
+    # Latent temporal extent from PIXEL num_frames (vendor lines 910-914).
+    if num_frames % 2 == 1:
+        latent_size_t = (num_frames - 1) // ratio + 1
+    else:
+        latent_size_t = num_frames // ratio
+    if num_frames != ratio * latent_size_t:
+        # The vendor's flat view (line 916) enforces the same equality — it
+        # would raise an opaque view error on the identical constraint.
+        raise ValueError(
+            f"state_video_mask mask fold needs num_frames == "
+            f"vae_temporal_ratio * latent_T ({num_frames} != "
+            f"{ratio} * {latent_size_t})")
+    mask = np.ones((b, 1, num_frames, lh, lw), dtype=np.float32)
+    mask[:, :, cond_indices] = 0.0
+    # Fold the pixel-temporal axis into `ratio` channels (flat reshape ==
+    # torch .view on the contiguous mask).
+    return np.ascontiguousarray(mask.reshape(b, ratio, latent_size_t, lh, lw))
+
+
 def _nbx_on(arr: np.ndarray, dev_idx: int) -> NBXTensor:
     """from_numpy onto a specific device (from_numpy uses the current device)."""
     prev = DeviceAllocator.get_device()
@@ -142,12 +215,16 @@ def _nbx_on(arr: np.ndarray, dev_idx: int) -> NBXTensor:
 
 def build_condition(ctx: Any, spec: dict, num_frames: int) -> Optional[NBXTensor]:
     """Build the per-step-invariant condition for the active style (R30 mirror
-    of the compiled brick). "wan" (frame-mask + mean/std, channels-first) or
+    of the compiled brick). "wan" (frame-mask + mean/std, channels-first),
     "cogvideox" (scalar-scaled, temporally-padded image latent, no mask,
-    frames-first). Returns None if the vae_encoder output is not yet resolved.
+    frames-first) or "state_video_mask" (Allegro-TI2V: VAE-encoded masked
+    video + temporally-folded pixel mask, channels-first). Returns None if the
+    vae_encoder output is not yet resolved.
     """
     if spec.get("style") == "cogvideox":
         return _build_condition_cogvideox(ctx, spec)
+    if spec.get("style") == "state_video_mask":
+        return _build_condition_state_video_mask(ctx, spec, num_frames)
     return _build_condition_wan(ctx, spec, num_frames)
 
 
@@ -179,6 +256,72 @@ def _build_condition_cogvideox(ctx: Any, spec: dict) -> Optional[NBXTensor]:
         img = NBXTensor.cat([img, pad], dim=2)  # [B, C, T, H, W], frame 0 = image
     # frames-first to match the CogVideoX state layout [B, T, C, H, W]
     return img.permute(0, 2, 1, 3, 4).contiguous()
+
+
+def _build_condition_state_video_mask(ctx: Any, spec: dict,
+                                      num_frames: int) -> Optional[NBXTensor]:
+    """Allegro-TI2V conditioning (NBXTensor): cat([masked_video_latent(C),
+    folded_mask(R)], dim=1) -> [B, C + ratio, T, lh, lw]. R33-pure mirror of
+    the compiled _build_condition_state_video_mask.
+
+    Mirrors AllegroTI2VPipeline.prepare_mask_masked_video (vendor
+    pipeline_allegro_ti2v.py:895-921) and the denoise-loop concat
+    cat([latents, masked_video, mask], dim=1) (vendor line 787):
+
+    - masked_video: the conditioning image(s) at their frame indices, zeros
+      elsewhere, VAE-encoded and latent-scaled. In this runtime the
+      vae_encoder COMPONENT output IS that latent — its traced graph
+      internalizes encoder -> quant_conv -> moments -> mode * scaling_factor
+      -> permute to frames-first [B, F, C, H, W]. The CLI synthesizes its
+      pixel input (image at frame 0, zeros padded to num_frames) via the
+      vae_encoder `pad_image_to_num_frames` flag.
+    - mask: host-built folded pixel mask (`_state_video_mask_np`, numpy CPU
+      glue like the wan `_frame_mask_np`), uploaded once and cast to the
+      latent's dtype (0/1 values are exact in every float dtype).
+
+    apply() appends the condition after the state, so the transformer input
+    is [state, masked_video, mask] — the vendor's exact order (hence the
+    layout name). Returns None if the vae_encoder output is not yet resolved.
+    """
+    cond_comp = spec["condition_component"]
+    res = ctx.variable_resolver.resolved
+    latent = res.get(f"{cond_comp}.output_0")
+    if latent is None:
+        latent = res.get(f"{cond_comp}.output")
+    if not isinstance(latent, NBXTensor):
+        return None
+
+    _, _, latent_channels = _vae_latent_stats(ctx)
+    latent = _to_channels_first(latent, latent_channels)  # [B, C, T, lh, lw]
+    dev_idx = latent._device_idx
+    b, _c, latent_t, lh, lw = latent.shape
+
+    # Pixel frames folded per latent frame; profile-driven, with the flag's
+    # mask_channels as fallback (the fold width IS the temporal ratio).
+    ratio = _vae_temporal_ratio(ctx) or int(spec.get("mask_channels") or 0)
+    if not ratio:
+        raise ValueError(
+            "state_video_mask conditioning needs the vae temporal compression "
+            "ratio (vae profile temporal_compression_ratio / "
+            "vae_scale_factor[0], or the flag's mask_channels)")
+
+    cond_indices = list(spec.get("cond_frame_indices") or [0])
+    mask_np = _state_video_mask_np(b, num_frames, ratio, lh, lw, cond_indices)
+
+    # Latent_T agreement between the encoded latent and the folded mask: the
+    # compiled brick gets this from torch.cat (which validates non-cat dims);
+    # NBXTensor.cat sizes the output from tensors[0] without validating, so
+    # the mirror enforces the same contract explicitly.
+    if mask_np.shape[2] != latent_t:
+        raise ValueError(
+            f"state_video_mask latent_T mismatch: encoded latent has "
+            f"{latent_t} latent frames but the folded mask has "
+            f"{mask_np.shape[2]} (num_frames={num_frames}, ratio={ratio})")
+
+    mask_t = _nbx_on(mask_np, dev_idx)
+    if mask_t._dtype != latent._dtype:
+        mask_t = mask_t.to(latent._dtype)
+    return NBXTensor.cat([latent, mask_t], dim=1)  # [B, C + ratio, T, lh, lw]
 
 
 def _build_condition_wan(ctx: Any, spec: dict, num_frames: int) -> Optional[NBXTensor]:
