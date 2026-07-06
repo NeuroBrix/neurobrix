@@ -1650,6 +1650,58 @@ class GraphExecutor:
                     parse_dtype(str(value.dtype)), 'cuda',
                     owns_data=False, device_idx=didx, base=value)
 
+        # Rank-align inputs to the graph input contract — R30 mirror of the
+        # compiled bind path (graph-driven input rank alignment, commits
+        # 0795ad3 + 3059f9d). A custom component class may take an input with
+        # an extra STRUCTURAL unit dim vs the standard flow tensor
+        # (Allegro-TI2V caption_projection: encoder_hidden_states is
+        # [B, 1, S, D]; the flow provides the standard 3D [B, S, D]) — without
+        # the mirror, triton symbol binding reads dims past the runtime rank
+        # (`tensor.shape[dim]` IndexError at bind_symbols). Data-driven from
+        # graph.json, zero model knowledge; candidacy is validated by
+        # simulation (every concretely-unit spec dim must face a runtime 1,
+        # batch dim 0 excepted) + batch coherence (CFG batching doubles dim0
+        # on EVERY input). Ambiguity leaves the tensor untouched. Inert for
+        # every input whose rank already matches its graph contract.
+        # NBXTensor.unsqueeze is a metadata view (R33-pure). Applies to BOTH
+        # triton and triton_sequential (shared boundary below).
+        _symbols = (self._dag.get("symbolic_context", {}) or {}).get("symbols", {})
+        _dim0s = [int(v.shape[0]) for v in input_map.values()
+                  if hasattr(v, 'shape') and len(v.shape) >= 1]
+        _batch_hint = max(set(_dim0s), key=_dim0s.count) if _dim0s else None
+        for tid, val in list(input_map.items()):
+            _spec = tensors_meta.get(tid)
+            _sshape = _spec.get("shape") if isinstance(_spec, dict) else None
+            if not (isinstance(_sshape, list) and hasattr(val, 'shape')
+                    and len(_sshape) == len(val.shape) + 1):
+                continue
+            _sym_dims = set()
+            for _si in _symbols.values():
+                _src = _si.get("source", "")
+                if isinstance(_src, str) and _src.startswith(f"{tid}::dim_"):
+                    try:
+                        _sym_dims.add(int(_src.rsplit("dim_", 1)[1]))
+                    except ValueError:
+                        pass
+            _cands = []
+            for _pos, _d in enumerate(_sshape):
+                if _d != 1:
+                    continue
+                _sim = list(val.shape[:_pos]) + [1] + list(val.shape[_pos:])
+                if _batch_hint is not None and _sim[0] != _batch_hint:
+                    continue
+                _ok = True
+                for _i, _sd in enumerate(_sshape):
+                    if _i == _pos or _i in _sym_dims or _i == 0:
+                        continue
+                    if _sd == 1 and _sim[_i] != 1:
+                        _ok = False
+                        break
+                if _ok:
+                    _cands.append(_pos)
+            if len(_cands) == 1:
+                input_map[tid] = val.unsqueeze(_cands[0])
+
         if self.mode == "triton_sequential":
             raw_outputs, num_ops = self._run_triton_sequential(
                 input_map, device_idx, skip_kills=skip_kills)

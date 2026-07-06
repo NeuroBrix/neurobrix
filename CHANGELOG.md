@@ -9,6 +9,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Triton `aten::max_pool3d_with_indices` kernel.** Video conditioning
+  masks pooled to the latent grid (e.g. Allegro-TI2V's `state_video_mask`
+  via `F.max_pool3d`) previously crashed `--triton` runs with
+  `[triton] Missing op`. New dedicated `@triton.jit` kernel
+  (`kernels/ops/max_pool3d.py`, temporal extension of the 2D pool kernel)
+  returns values bit-exact vs the PyTorch reference and exact indices
+  (flattened `(T, H, W)` offsets, first-max tie rule).
+  `aten::max_pool3d` and `aten::max_pool2d_with_indices` are dispatched
+  too.
+
+### Fixed
+
+- **Triton conv3d no longer OOMs on native-resolution video-VAE encodes
+  (temporal chunk-streaming).** The temporal decomposition of conv3d needed
+  ~4-5 full folded transients simultaneously (temporal pad copy, frame fold,
+  conv output, permuted copy, accumulator), so a component correctly sized
+  as "fits" for the compiled engine could OOM in triton only — Allegro-TI2V
+  vae_encoder at 720x1280x12f fp32 hit 30.4 GB live at the second
+  convolution on a 32 GB V100. The conv wrapper now streams over temporal
+  output chunks (bounded per-transient size, identical math and kt
+  accumulation order) when — and only when — the one-shot path's exact
+  allocation peak cannot fit the driver-free bytes (probe:
+  `DeviceAllocator.device_free_bytes`); every run that fits keeps the
+  byte-identical one-shot path. Floor and chunk bound configurable via
+  `NBX_CONV3D_CHUNK_BYTES` (default 1 GiB).
+- **Triton input rank alignment (R30 mirror of the compiled bind path).**
+  Components declaring an input with an extra structural unit dim vs the
+  standard flow tensor (e.g. a caption projection taking
+  `encoder_hidden_states` as `[B, 1, S, D]`) crashed `--triton` /
+  `--triton-sequential` at symbol binding (`IndexError: tuple index out of
+  range`) because only the compiled engine rank-aligned inputs. The same
+  graph-driven alignment (simulation checks + batch coherence, ambiguity
+  changes nothing) now runs at the shared triton input boundary; inert for
+  every input whose rank already matches its graph contract.
+
+### Added
+
 - **Graph-driven input rank alignment at the executor boundary.** Components
   whose graph declares an input with an extra structural unit dim vs the
   standard flow tensor (e.g. a caption projection taking

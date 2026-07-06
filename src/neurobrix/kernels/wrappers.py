@@ -116,6 +116,7 @@ from .ops.scatter_op import scatter_kernel, scatter_add_kernel, scatter_reduce_a
 from .ops.gather_op import gather_kernel
 from .ops.avg_pool2d import avg_pool2d_forward_kernel
 from .ops.max_pool2d import max_pool2d_forward_kernel
+from .ops.max_pool3d import max_pool3d_forward_kernel
 from .ops.cross_entropy import cross_entropy_loss_forward_kernel
 
 # === Simple element-wise (Phase 3) ===
@@ -2711,6 +2712,30 @@ _NBX_CONV2D_BAND_BYTES = int(os.environ.get("NBX_CONV2D_BAND_BYTES", str(4 * 102
 _NBX_CONV3D_EAGER_FREE_BYTES = int(
     os.environ.get("NBX_CONV3D_EAGER_FREE_BYTES", str(1 * 1024 * 1024 * 1024)))
 
+# Conv3d temporal chunk-streaming — kernel-level tiling INSIDE the wrapper,
+# same lever as the conv2d band-streaming above (P-SANA-4KPX Étape 1 class).
+# Even with the #37 eager frees, the one-shot temporal decomposition needs
+# several FULL folded transients simultaneously (temporal pad copy, x2 fold,
+# conv2d output incl. band-streaming machinery, permuted copy, accumulator +
+# accumulate transient) — ~4-5x the activation bytes. cuDNN in compiled mode
+# needs input + output + a bounded workspace for the same op, so a component
+# Prism correctly sized as "fits" for compiled can OOM in triton only
+# (Allegro-TI2V vae_encoder at 720x1280x12f fp32: 5.66 GB per plane →
+# 30.4 GB live at aten.convolution::1 on a 32 GB V100). Gate, two stages:
+#   1. deterministic floor — the folded transient must exceed this many
+#      bytes, so small/validated convs never even query the driver;
+#   2. exact-fit check — the one-shot path's real allocation peak is
+#      compared to driver-free bytes; when it fits, the EXACT one-shot
+#      path runs (byte-identical behavior for every config that is green
+#      today, on any hardware — R23), when it cannot fit (guaranteed OOM)
+#      the wrapper streams over temporal output chunks whose per-transient
+#      size is bounded by this same value.
+# Chunking splits the folded batch axis (B*T frames): spatial conv2d is
+# independent per frame and the per-frame kt accumulation order is
+# preserved, so the math is unchanged.
+_NBX_CONV3D_CHUNK_BYTES = int(
+    os.environ.get("NBX_CONV3D_CHUNK_BYTES", str(1 * 1024 * 1024 * 1024)))
+
 # Diagnostic trace — when set, every conv2d_wrapper call prints the
 # (in_shape, out_shape, kernel, groups, output_MB) so we can see the actual
 # spatial workload arriving in triton mode. Used by P-SANA-4KPX-RUNTIME
@@ -2819,6 +2844,52 @@ def _conv3d_via_conv2d(x, weight, bias, stride, padding, dilation, groups):
     dt, dh, dw = _triple(dilation)
     B, Cin, T, H, W = x.shape
     Cout, Cin_g, kt, kh, kw = weight.shape
+
+    # Temporal chunk-streaming gate (see _NBX_CONV3D_CHUNK_BYTES). Evaluated
+    # BEFORE the temporal pad so the pad copy counts toward the one-shot
+    # path's allocation peak. Fires ONLY when the folded transient exceeds
+    # the deterministic floor AND the one-shot peak cannot fit the driver-
+    # free bytes — every run that fits keeps the exact path below.
+    # NOTE: x.device returns the tensor itself (NBX device-context pattern);
+    # the raw device string lives in _device.
+    if str(getattr(x, '_device', '')).startswith('cuda'):
+        T_out_est = (T + 2 * pt - dt * (kt - 1) - 1) // st + 1
+        if T_out_est > 0:
+            ds_in = dtype_size(x.nbx_dtype if hasattr(x, 'nbx_dtype') else x._dtype)
+            ds_out = (dtype_size(_NBX_COMPUTE_DTYPE)
+                      if _NBX_COMPUTE_DTYPE is not None else ds_in)
+            oh_est = (H + 2 * ph - dh * (kh - 1) - 1) // sh + 1
+            ow_est = (W + 2 * pw - dw * (kw - 1) - 1) // sw + 1
+            fold_in = B * T_out_est * Cin * H * W * ds_in
+            fold_out = B * T_out_est * Cout * oh_est * ow_est * ds_out
+            if max(fold_in, fold_out) > _NBX_CONV3D_CHUNK_BYTES:
+                # One-shot allocation peak (mirrors the loop below with the
+                # #37 eager frees active — all transients are >= 1 GiB here):
+                #  - during the folded conv2d at kti>=1:
+                #      pad + accumulator + x2 + y2 (+ band machinery)
+                #  - during the accumulate add at kti>=1:
+                #      pad + out_old + y + out_new
+                pad_bytes = (B * Cin * (T + 2 * pt) * H * W * ds_in
+                             if pt > 0 else 0)
+                band_extra = (_NBX_CONV2D_BAND_BYTES
+                              if fold_out > _NBX_CONV2D_BAND_BYTES else 0)
+                acc_extra = fold_out if kt >= 2 else 0
+                need = pad_bytes + max(
+                    fold_out + fold_in + band_extra + acc_extra,
+                    2 * fold_out + acc_extra,
+                ) + 256 * 1024 * 1024
+                free = DeviceAllocator.device_free_bytes(
+                    getattr(x, '_device_idx', None))
+                if free >= 0 and need > free:
+                    if _NBX_CONV2D_TRACE:
+                        print(f"[CONV3D] CHUNK-STREAM in=({B},{Cin},{T},{H},{W}) "
+                              f"kt={kt} need={need/1e9:.2f}GB free={free/1e9:.2f}GB",
+                              flush=True)
+                    return _conv3d_via_conv2d_chunked(
+                        x, weight, bias, st, sh, sw, pt, ph, pw, dt, dh, dw,
+                        groups,
+                        max(fold_in, fold_out) // max(1, T_out_est))
+
     # Pad the temporal axis only (constant_pad_nd pads from the last dim:
     # [W_l,W_r, H_l,H_r, T_l,T_r]); H/W padding is applied by conv2d.
     if pt > 0:
@@ -2862,6 +2933,73 @@ def _conv3d_via_conv2d(x, weight, bias, stride, padding, dilation, groups):
                 y = None   # addend is dead once out+y is allocated
     if bias is not None:
         out = out + bias.reshape(1, Cout, 1, 1, 1)
+    return out
+
+
+def _conv3d_via_conv2d_chunked(x, weight, bias, st, sh, sw, pt, ph, pw,
+                               dt, dh, dw, groups, frame_bytes):
+    """Temporal chunk-streaming variant of _conv3d_via_conv2d — identical
+    math, bounded live set (see _NBX_CONV3D_CHUNK_BYTES for the gate).
+
+    Streams the folded batch axis (B*T_out frames) in chunks sized so each
+    transient stays under _NBX_CONV3D_CHUNK_BYTES. Per output frame the
+    spatial conv2d is independent and the kt accumulation runs in the same
+    kti order with the same operand values as the one-shot path, so the
+    result is numerically equivalent (launch shapes differ, which may pick
+    different autotune configs — same class of variation as the conv2d
+    band-streaming). Live set: temporal pad copy + final 5D output +
+    ~3 chunk-sized transients, vs ~4-5 full folds for the one-shot path.
+    R33-pure (NBXTensor slice/permute/reshape/add + conv2d_wrapper +
+    strided-scatter __setitem__, no torch).
+
+    `frame_bytes` = max folded bytes per output frame (input-side fold vs
+    conv2d output), computed by the caller's gate.
+    """
+    B, Cin, T, H, W = x.shape
+    Cout, Cin_g, kt, kh, kw = weight.shape
+    if pt > 0:
+        x = constant_pad_nd_wrapper(x, [0, 0, 0, 0, pt, pt], 0.0)
+    Tp = x.shape[2]
+    T_out = (Tp - dt * (kt - 1) - 1) // st + 1
+    tc = max(1, int(_NBX_CONV3D_CHUNK_BYTES // max(1, frame_bytes)))
+    # Per-kt 2D weight slices, materialised once (tiny; contiguous-guard on
+    # the non-contiguous dim-2 slice, same as the one-shot path).
+    w2s = [weight[:, :, kti:kti + 1].contiguous().reshape(Cout, Cin_g, kh, kw)
+           for kti in range(kt)]
+    bias4 = bias.reshape(1, Cout, 1, 1) if bias is not None else None
+    out = None
+    for t0 in range(0, T_out, tc):
+        n = min(tc, T_out - t0)
+        acc = None
+        for kti in range(kt):
+            start = t0 * st + kti * dt
+            if st == 1:
+                xs = x[:, :, start:start + n]              # [B,Cin,n,H,W] view
+            else:
+                import numpy as np
+                idx = NBXTensor.from_numpy(
+                    (start + st * np.arange(n)).astype(np.int64))
+                xs = index_select_wrapper(x, 2, idx)
+            x2 = xs.permute(0, 2, 1, 3, 4).contiguous().reshape(
+                B * n, Cin, H, W)
+            y2 = conv2d_wrapper(x2, w2s[kti], None, (sh, sw), (ph, pw),
+                                (dh, dw), False, 0, groups)
+            x2 = None  # fold copy dead once conv2d returned
+            acc = y2 if acc is None else acc + y2
+            y2 = None
+        if bias4 is not None:
+            # Elementwise-identical to the one-shot path's 5D bias add
+            # (broadcast over the folded batch axis), chunk-sized transient.
+            acc = acc + bias4
+        Ho, Wo = acc.shape[2], acc.shape[3]
+        y = acc.reshape(B, n, Cout, Ho, Wo).permute(0, 2, 1, 3, 4).contiguous()
+        acc = None
+        if out is None:
+            out_dt = y.nbx_dtype if hasattr(y, 'nbx_dtype') else y.dtype
+            out = NBXTensor.empty((B, Cout, T_out, Ho, Wo),
+                                  device=y.device, dtype=out_dt)
+        out[:, :, t0:t0 + n] = y  # strided-scatter into the temporal slice
+        y = None
     return out
 
 
@@ -4570,6 +4708,74 @@ def max_pool2d_wrapper(
     if return_indices:
         return output, indices
     return output
+
+
+def max_pool3d_with_indices_wrapper(
+    x, kernel_size, stride=None, padding=0,
+    dilation=1, ceil_mode=False,
+):
+    """Max pooling 3D forward — aten::max_pool3d_with_indices.
+
+    Returns (values, indices); indices are int64 flattened (T, H, W)
+    offsets per (N, C) plane (PyTorch convention). Dedicated
+    @triton.jit kernel (kernels/ops/max_pool3d.py), temporal extension
+    of the 2D pool kernel. Video conditioning masks (e.g. Allegro-TI2V
+    state_video_mask downsampled to the latent grid) trace to this op.
+    """
+    assert x.ndim == 5
+    N, C, T, H, W = x.shape
+
+    def _t3(v, default):
+        if v is None:
+            return default
+        if isinstance(v, int):
+            return (v, v, v)
+        return (v[0], v[1], v[2]) if len(v) >= 3 else (v[0], v[0], v[0])
+
+    kt, kh, kw = _t3(kernel_size, None)
+    st_, sh, sw = _t3(stride, (kt, kh, kw)) if stride not in (None, [], ()) \
+        else (kt, kh, kw)
+    pt, ph, pw = _t3(padding, (0, 0, 0))
+    dt_, dh, dw = _t3(dilation, (1, 1, 1))
+
+    def _odim(inp, k, s, p, d):
+        if ceil_mode:
+            return (inp + 2 * p - d * (k - 1) - 1 + s - 1) // s + 1
+        return (inp + 2 * p - d * (k - 1) - 1) // s + 1
+
+    ot = _odim(T, kt, st_, pt, dt_)
+    oh = _odim(H, kh, sh, ph, dh)
+    ow = _odim(W, kw, sw, pw, dw)
+
+    x_c = x.contiguous()
+    output = NBXTensor.empty((N, C, ot, oh, ow), device=x_c.device, dtype=x_c.dtype)
+    indices = NBXTensor.empty((N, C, ot, oh, ow), device=x_c.device,
+                              dtype=NBXDtype.int64)
+
+    grid = (
+        N * C * ot,
+        triton.cdiv(oh, _POOL_BH) * triton.cdiv(ow, _POOL_BW),
+    )
+    _set_device(x_c)
+    max_pool3d_forward_kernel[grid](
+        x_c, output, indices,
+        x_c.stride(0), x_c.stride(1), x_c.stride(2), x_c.stride(3), x_c.stride(4),
+        C, T, H, W,
+        ot, oh, ow,
+        kt, kh, kw, st_, sh, sw, pt, ph, pw, dt_, dh, dw,
+        BLOCK_H=_POOL_BH, BLOCK_W=_POOL_BW,
+        num_warps=4,
+    )
+    return output, indices
+
+
+def max_pool3d_wrapper(
+    x, kernel_size, stride=None, padding=0,
+    dilation=1, ceil_mode=False,
+):
+    """aten::max_pool3d — values-only variant."""
+    return max_pool3d_with_indices_wrapper(
+        x, kernel_size, stride, padding, dilation, ceil_mode)[0]
 
 
 # ---------------------------------------------------------------------------
