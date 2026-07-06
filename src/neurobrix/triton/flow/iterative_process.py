@@ -154,6 +154,15 @@ class TritonIterativeProcessHandler:
         Returns:
             Dict of resolved variables/outputs
         """
+        # Arm the run-scoped RNG stream for the Triton random wrappers from
+        # the same data-driven seed source the compiled engine reads
+        # (defaults.seed) — R30 mirror of VariableResolver.sampling_generator.
+        # Stochastic scheduler draws (EulerAncestral noise, DDIM eta>0) become
+        # reproducible per run; seedless runs keep the unseeded fallback.
+        from neurobrix.kernels import rng_stream
+        rng_stream.set_run_seed(
+            self.ctx.variable_resolver.defaults.get("seed"))
+
         # 0. Preprocess inputs (tokenization)
         self._preprocess_inputs()
 

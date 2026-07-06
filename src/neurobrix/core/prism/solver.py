@@ -791,6 +791,26 @@ class PrismSolver:
             target_dtype_str,
         )
 
+        # COHERENCE: a component that Strategy 3.5 already tiles at the
+        # COMPONENT level must not ALSO carry full-extent op-level tiling.
+        # The overflow analysis above ran on full-extent shapes, but the
+        # component executes on (T,)H,W tiles whose per-op extents are the
+        # tile fraction of full — Strategy 3.5's budget check already
+        # guaranteed the whole per-tile activation fits, so no per-op band
+        # streaming is needed or wanted. Stacking both produced H-band
+        # streaming INSIDE each spatial tile with non-integer band extents
+        # (Allegro native VAE: factor-64 bands over H=720 → ~11 px bands →
+        # the #30 horizontal-scanline artifact; frame-count-dependent because
+        # the interceptors only install when the NATIVE-extent profile
+        # overflows). Component-tiled components drop their op-tiling plan.
+        if plan.component_tiling and plan.runtime_op_tiling:
+            for _cn in list(plan.runtime_op_tiling.keys()):
+                if _cn in plan.component_tiling:
+                    del plan.runtime_op_tiling[_cn]
+                    print(f"   [OpTiling] {_cn}: dropped full-extent op-level "
+                          f"tiling (component-level tiling active — per-tile "
+                          f"extents fit without band streaming)")
+
         # Step 8: Summary
         self._print_summary(devices, plan, profile)
         return plan

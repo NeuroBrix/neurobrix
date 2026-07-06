@@ -329,12 +329,35 @@ def _meta_index(x, indices):
     idx_tensors = [i for _, i in present]
     base_shape = list(idx_tensors[0].shape)
     if any(list(t.shape) != base_shape for t in idx_tensors[1:]):
-        # PyTorch broadcasts differing index shapes; the pooler/batched-gather
-        # cases use identical shapes. Defer general broadcasting until a model
-        # needs it (fail loud, never silently wrong).
-        raise NotImplementedError(
-            f"[--triton] aten::index advanced indexing with differing index "
-            f"shapes not yet supported: {[t.shape for t in idx_tensors]}")
+        # PyTorch broadcasts differing index shapes together (right-aligned,
+        # size-1 dims stretch). First real consumer: the T5 attention-mask
+        # application traced with a pad-realistic stimulus (Allegro) —
+        # extended_mask indexing uses [(1,1,1,1), (1,1,1,512)]. Compute the
+        # common broadcast shape, expand every index (NBXTensor.expand is a
+        # zero-copy stride view), and fall through to the joint flat-select.
+        ndim = max(t.ndim for t in idx_tensors)
+        shapes = []
+        for t in idx_tensors:
+            s = [1] * (ndim - t.ndim) + list(t.shape)
+            shapes.append(s)
+        bshape = []
+        for ax in range(ndim):
+            sizes_ax = {s[ax] for s in shapes} - {1}
+            if len(sizes_ax) > 1:
+                raise NotImplementedError(
+                    f"[--triton] aten::index index shapes not broadcastable: "
+                    f"{[t.shape for t in idx_tensors]}")
+            bshape.append(sizes_ax.pop() if sizes_ax else 1)
+        # contiguous() after expand: the stride-0 view feeds reshape(-1)
+        # below (flat-indexed path) — the mandatory contiguous-guard
+        # (no-op for already-contiguous tensors via the early-return).
+        idx_tensors = [
+            t.reshape(*([1] * (ndim - t.ndim) + list(t.shape)))
+             .expand(*bshape).contiguous()
+            if list(t.shape) != bshape else t
+            for t in idx_tensors
+        ]
+        base_shape = bshape
     # Row-major flat index across the consecutive indexed dims:
     # flat = ((i0)*n1 + i1)*n2 + i2 ...   (ni = x.shape[indexed dim])
     sizes = [x.shape[d] for d in dims]

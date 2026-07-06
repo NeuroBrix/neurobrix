@@ -91,6 +91,27 @@ class EulerDiscreteScheduler(DiffusionSchedulerBase):
                 idx = (self._all_sigmas - sigma).abs().argmin()
                 timesteps.append(idx.item())
             self.timesteps = torch.tensor(timesteps)
+        elif self.timestep_spacing == "linspace":
+            # Euler-family linspace — VENDOR PARITY (diffusers EulerDiscrete /
+            # EulerAncestral): FLOAT timesteps linspace(0, T-1, n) reversed,
+            # INCLUDING t=0, with sigmas INTERPOLATED at the fractional
+            # positions. The shared get_timesteps keeps the DPM/DDIM integer
+            # n+1-drop-last convention — the two families genuinely differ in
+            # diffusers, and conflating them was the Allegro #30 root cause:
+            # the ladder never reached t=0 (last DiT call at t=125, sigma
+            # 0.43 -> 0 in ONE Euler jump) and every intermediate sigma sat
+            # 15-40% off the trained schedule -> structured residual noise
+            # (the native "scanline"), at every step count and both engines.
+            import numpy as _np
+            _ts = _np.linspace(0, self.num_train_timesteps - 1,
+                               num_inference_steps,
+                               dtype=_np.float32)[::-1].copy()
+            _all_sigmas = alphas_to_sigmas(self.alphas_cumprod).numpy()
+            _sig = _np.interp(
+                _ts, _np.arange(self.num_train_timesteps, dtype=_np.float32),
+                _all_sigmas).astype(_np.float32)
+            self.timesteps = torch.from_numpy(_ts)
+            self.sigmas = torch.from_numpy(_sig)
         else:
             # Standard timesteps
             self.timesteps = get_timesteps(
@@ -155,6 +176,18 @@ class EulerDiscreteScheduler(DiffusionSchedulerBase):
         sigma = self.sigmas[self._step_index]
         sigma_next = self.sigmas[self._step_index + 1]
 
+        # Upcast to fp32 for the step arithmetic — VENDOR PARITY (diffusers
+        # "Upcast to avoid precision issues when computing prev_sample").
+        # At low sigma, (sample - denoised) / sigma is a catastrophic
+        # cancellation amplified by 1/sigma: in fp16 the rounding of
+        # sigma*model_output inside `denoised` re-emerges divided by sigma
+        # (error ~ eps_fp16 * |sample| / sigma — tens of percent of the
+        # derivative in the final steps). prev_sample is cast back to the
+        # model dtype at the end, exactly like the vendor.
+        _out_dtype = model_output.dtype
+        sample = sample.to(torch.float32)
+        model_output = model_output.to(torch.float32)
+
         # Convert model output to denoised prediction
         if self.prediction_type == PredictionType.EPSILON:
             # x0 = x - sigma * epsilon
@@ -173,7 +206,8 @@ class EulerDiscreteScheduler(DiffusionSchedulerBase):
 
         # Euler step: x_{t-1} = x_t + (sigma_{t-1} - sigma_t) * d
         dt = sigma_next - sigma
-        prev_sample = sample + dt * d
+        prev_sample = (sample + dt * d).to(_out_dtype)
+        denoised = denoised.to(_out_dtype)
 
         # Increment step index
         assert self._step_index is not None, "step_index must be initialized"
@@ -278,15 +312,30 @@ class EulerAncestralDiscreteScheduler(DiffusionSchedulerBase):
     ) -> None:
         """Set timesteps for inference."""
         self.num_inference_steps = num_inference_steps
-        self.timesteps = get_timesteps(
-            self.timestep_spacing,
-            num_inference_steps,
-            self.num_train_timesteps
-        )
-
-        timestep_indices = self.timesteps.long().clamp(0, self.num_train_timesteps - 1)
-        alphas_cumprod = self.alphas_cumprod[timestep_indices]
-        self.sigmas = alphas_to_sigmas(alphas_cumprod)
+        if self.timestep_spacing == "linspace":
+            # Euler-family linspace — VENDOR PARITY (see the EulerDiscrete
+            # set_timesteps comment; the Allegro #30 root cause): FLOAT
+            # timesteps down to t=0 inclusive, sigmas interpolated at the
+            # fractional positions.
+            import numpy as _np
+            _ts = _np.linspace(0, self.num_train_timesteps - 1,
+                               num_inference_steps,
+                               dtype=_np.float32)[::-1].copy()
+            _all_sigmas = alphas_to_sigmas(self.alphas_cumprod).numpy()
+            _sig = _np.interp(
+                _ts, _np.arange(self.num_train_timesteps, dtype=_np.float32),
+                _all_sigmas).astype(_np.float32)
+            self.timesteps = torch.from_numpy(_ts)
+            self.sigmas = torch.from_numpy(_sig)
+        else:
+            self.timesteps = get_timesteps(
+                self.timestep_spacing,
+                num_inference_steps,
+                self.num_train_timesteps
+            )
+            timestep_indices = self.timesteps.long().clamp(0, self.num_train_timesteps - 1)
+            alphas_cumprod = self.alphas_cumprod[timestep_indices]
+            self.sigmas = alphas_to_sigmas(alphas_cumprod)
         self.sigmas = torch.cat([self.sigmas, torch.zeros(1)])
 
         if device is not None:
@@ -332,6 +381,17 @@ class EulerAncestralDiscreteScheduler(DiffusionSchedulerBase):
         sigma = self.sigmas[self._step_index]
         sigma_next = self.sigmas[self._step_index + 1]
 
+        # Upcast to fp32 for the step arithmetic — VENDOR PARITY (diffusers
+        # EulerAncestralDiscreteScheduler.step: "Upcast to avoid precision
+        # issues when computing prev_sample"). The fp16 derivative
+        # (sample - denoised) / sigma cancels catastrophically at low sigma
+        # (error ~ eps_fp16 * |sample| / sigma), which compounds over the
+        # many low-t steps of a long schedule (Allegro native 20-step).
+        # prev_sample is cast back to the model dtype at the end (vendor).
+        _out_dtype = model_output.dtype
+        sample = sample.to(torch.float32)
+        model_output = model_output.to(torch.float32)
+
         # Convert model output to denoised
         if self.prediction_type == PredictionType.EPSILON:
             denoised = sample - sigma * model_output
@@ -352,15 +412,40 @@ class EulerAncestralDiscreteScheduler(DiffusionSchedulerBase):
         dt = sigma_down - sigma
         prev_sample = sample + dt * d
 
-        # Add noise
+        # Add noise (generated at the MODEL dtype, exactly like the vendor
+        # randn_tensor(dtype=model_output.dtype) — keeps the noise stream
+        # bit-comparable with vendor sampling for a given generator)
         if sigma_next > 0:
+            # Diagnostic ancestral-stream pinning (NBX_ANCESTRAL_SEED):
+            # draw from a DEDICATED generator seeded like the vendor
+            # pipeline's, burning one init-shaped draw first (the vendor
+            # generator's first draw is prepare_latents' init). Makes our
+            # ancestral sequence bit-equal to the vendor run's, so same-init
+            # trajectories are exactly comparable end-to-end. Gated,
+            # diagnosis-only.
+            import os as _osa
+            _aseed = _osa.environ.get("NBX_ANCESTRAL_SEED")
+            if _aseed and generator is None:
+                if getattr(self, "_diag_gen", None) is None:
+                    self._diag_gen = torch.Generator(device=sample.device)
+                    self._diag_gen.manual_seed(int(_aseed))
+                    torch.randn(sample.shape, generator=self._diag_gen,
+                                device=sample.device, dtype=_out_dtype)  # burn init draw
+                generator = self._diag_gen
+            # Draw on the generator's device then move — diffusers
+            # randn_tensor semantics (a torch.Generator is device-bound; on a
+            # multi-device plan the sample may live elsewhere).
+            _rand_device = generator.device if generator is not None else sample.device
             noise = torch.randn(
                 sample.shape,
                 generator=generator,
-                device=sample.device,
-                dtype=sample.dtype
-            )
-            prev_sample = prev_sample + sigma_up * noise
+                device=_rand_device,
+                dtype=_out_dtype
+            ).to(sample.device)
+            prev_sample = prev_sample + sigma_up * noise.to(torch.float32)
+
+        prev_sample = prev_sample.to(_out_dtype)
+        denoised = denoised.to(_out_dtype)
 
         assert self._step_index is not None, "step_index must be initialized"
         self._step_index += 1

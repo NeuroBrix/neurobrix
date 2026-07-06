@@ -412,6 +412,22 @@ class IterativeProcessHandler(FlowHandler):
                 kwargs["image_seq_len"] = current_state.shape[1]
             driver.set_timesteps(num_steps, **kwargs)
 
+        # Diagnostic init injection (NBX_INIT_LATENTS=<pt file with {'init_unit'}>):
+        # replace the initial UNIT-scale noise with a captured/vendor draw so
+        # same-init cross-stack trajectories are comparable (Allegro 20-step
+        # init-lottery diagnosis). Gated, zero overhead when unset.
+        import os as _osi
+        _inj = _osi.environ.get("NBX_INIT_LATENTS")
+        if _inj:
+            _blob = torch.load(_inj, map_location="cpu", weights_only=True)
+            _u = _blob["init_unit"].to(current_state.device, current_state.dtype)
+            assert list(_u.shape) == list(current_state.shape), \
+                f"NBX_INIT_LATENTS shape {list(_u.shape)} != state {list(current_state.shape)}"
+            current_state = _u
+            self.ctx.variable_resolver.set(state_key, current_state)
+            print(f"[InitInject] replaced initial latents from {_inj} "
+                  f"(std={current_state.float().std().item():.4f})", flush=True)
+
         # Scale initial noise
         if hasattr(driver, "init_noise_sigma"):
             noise_scale = driver.init_noise_sigma
@@ -584,8 +600,14 @@ class IterativeProcessHandler(FlowHandler):
                     if DEBUG:
                         self._print_step_diagnostics(step_idx, timestep, model_output, current_state)
 
-                    # Driver step
-                    step_result = driver.step(model_output, timestep, current_state)
+                    # Driver step — thread the run-scoped sampling generator
+                    # (vendor semantics: the SAME seeded stream that drew the
+                    # init supplies the scheduler's stochastic draws, in order;
+                    # see VariableResolver.sampling_generator). Deterministic
+                    # schedulers ignore it.
+                    step_result = driver.step(
+                        model_output, timestep, current_state,
+                        generator=self.ctx.variable_resolver.sampling_generator())
                     if isinstance(step_result, dict):
                         current_state = step_result["prev_sample"]
                     else:
@@ -600,6 +622,21 @@ class IterativeProcessHandler(FlowHandler):
                         print(f"[TRAJ] step {step_idx+1:2d} t={float(_ts):.1f} "
                               f"velocity_std={model_output.float().std().item():.4f} "
                               f"latent_std={current_state.float().std().item():.4f}", flush=True)
+                    # Full per-step latent dump (NBX_DUMP_STEP_LATENTS=<dir>):
+                    # step-by-step trajectory diff against a vendor pipeline run
+                    # seeded with the IDENTICAL initial latent (callback dump on
+                    # the vendor side) — locates the FIRST diverging step.
+                    # Diagnosis-only, gated, zero overhead when unset.
+                    _dsl = _ost.environ.get("NBX_DUMP_STEP_LATENTS")
+                    if _dsl:
+                        _ost.makedirs(_dsl, exist_ok=True)
+                        _tval = float(timestep.item() if hasattr(timestep, "item")
+                                      else timestep)
+                        torch.save(
+                            {"latent": current_state.detach().cpu(),
+                             "velocity": model_output.detach().cpu(),
+                             "timestep": _tval},
+                            f"{_dsl}/step_{step_idx:03d}.pt")
 
 
                     if DEBUG:
