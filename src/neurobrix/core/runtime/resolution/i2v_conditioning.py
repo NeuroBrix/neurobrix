@@ -9,7 +9,10 @@ Wan-I2V is the motivating case: hidden_states = cat([noise(16), mask(4),
 vae_encoded_image(16)]) = 36ch. Unlike CogVideoX — whose transformer.forward
 concatenates a separate `image_latents` input internally, so the runtime only
 feeds it via a connection — the Wan transformer takes the pre-concatenated
-tensor, so the runtime builds the condition channels here.
+tensor, so the runtime builds the condition channels here. Allegro-TI2V
+(`layout: state_video_mask`) is the third style: hidden_states =
+cat([latents(4), masked_video(4), folded_pixel_mask(4)]) = 12ch, with the
+pixel-space frame mask temporally folded into vae_temporal_ratio channels.
 
 Driven entirely by the `i2v_latent_conditioning` registry flag on the denoiser
 component. Returns None / no-ops for every model without the flag (R23 inert).
@@ -41,7 +44,9 @@ def conditioning_spec(ctx: Any, loop_comp: str) -> Optional[dict]:
     if not flag:
         return None
     spec = dict(flag) if isinstance(flag, dict) else {}
-    style = spec.setdefault("style", "wan")
+    # `layout` is the registry alias for `style` (Allegro-TI2V declares
+    # `layout: state_video_mask`); both feed the same style switch.
+    style = spec.setdefault("style", spec.get("layout") or "wan")
     spec.setdefault("condition_component", "vae_encoder")
     if style == "wan":
         # Wan-I2V: frame-mask + per-channel mean/std norm. State is channels-
@@ -52,6 +57,15 @@ def conditioning_spec(ctx: Any, loop_comp: str) -> Optional[dict]:
         # CogVideoX-I2V: scalar-scaled, temporally-padded image latent, no mask.
         # State is frames-first [B, T, C, H, W], so the channel-concat is dim 2.
         spec.setdefault("channel_dim", 2)
+    elif style == "state_video_mask":
+        # Allegro-TI2V: transformer input = cat([latents, masked_video, mask],
+        # dim=1) (vendor pipeline_allegro_ti2v.py:787). State is channels-first
+        # [B, C, T, H, W] (topology hidden_states = [2, 4, 1, 90, 160]), so the
+        # channel-concat is dim 1.
+        spec.setdefault("channel_dim", 1)
+        # Frame indices carrying a conditioning image (vendor
+        # conditional_images_indices); a single first-frame image by default.
+        spec.setdefault("cond_frame_indices", [0])
     return spec
 
 
@@ -78,6 +92,25 @@ def _vae_scaling(ctx: Any) -> tuple:
     sf = cfg.get("scaling_factor") or prof.get("scaling_factor")
     invert = bool(cfg.get("invert_scale_latents") or prof.get("invert_scale_latents"))
     return (float(sf) if sf else None), invert
+
+
+def _vae_temporal_ratio(ctx: Any) -> Optional[int]:
+    """Read the VAE temporal compression ratio (pixel frames per latent frame).
+
+    From the vae profile config: `temporal_compression_ratio` (diffusers-style
+    configs, e.g. AutoencoderKLAllegro) or `vae_scale_factor[0]` (vendor
+    pipelines expose a (t, h, w) tuple). Data-driven, never hardcoded.
+    """
+    prof_path = ctx.pkg.cache_path / "components" / "vae" / "profile.json"
+    prof = json.loads(prof_path.read_text())
+    cfg = prof.get("config") if isinstance(prof.get("config"), dict) else prof
+    ratio = (cfg.get("temporal_compression_ratio")
+             or prof.get("temporal_compression_ratio"))
+    if not ratio:
+        vsf = cfg.get("vae_scale_factor") or prof.get("vae_scale_factor")
+        if isinstance(vsf, (list, tuple)) and vsf:
+            ratio = vsf[0]
+    return int(ratio) if ratio else None
 
 
 def _target_latent_frames(ctx: Any) -> Optional[int]:
@@ -137,12 +170,16 @@ def build_condition(ctx: Any, spec: dict, num_frames: int) -> Optional[torch.Ten
     """Build the per-step-invariant conditioning tensor for the active style.
 
     Multi-style, data-driven (spec["style"]): "wan" (frame-mask + per-channel
-    mean/std norm, channels-first) or "cogvideox" (scalar-scaled, temporally-
-    padded image latent, no mask, frames-first). Returns None if the
-    vae_encoder output is not yet resolved.
+    mean/std norm, channels-first), "cogvideox" (scalar-scaled, temporally-
+    padded image latent, no mask, frames-first) or "state_video_mask"
+    (Allegro-TI2V: VAE-encoded masked video + temporally-folded pixel mask,
+    channels-first). Returns None if the vae_encoder output is not yet
+    resolved.
     """
     if spec.get("style") == "cogvideox":
         return _build_condition_cogvideox(ctx, spec)
+    if spec.get("style") == "state_video_mask":
+        return _build_condition_state_video_mask(ctx, spec, num_frames)
     return _build_condition_wan(ctx, spec, num_frames)
 
 
@@ -176,6 +213,95 @@ def _build_condition_cogvideox(ctx: Any, spec: dict) -> Optional[torch.Tensor]:
               f"scaling={sf} invert={invert} mean={_f.mean():.3f} std={_f.std():.3f}")
     # frames-first to match the CogVideoX state layout [B, T, C, H, W]
     return img.permute(0, 2, 1, 3, 4).contiguous()
+
+
+def _build_condition_state_video_mask(ctx: Any, spec: dict,
+                                      num_frames: int) -> Optional[torch.Tensor]:
+    """Allegro-TI2V conditioning: cat([masked_video_latent(C), folded_mask(R)], dim=1).
+
+    Mirrors AllegroTI2VPipeline.prepare_mask_masked_video (vendor
+    pipeline_allegro_ti2v.py:895-921) and the denoise-loop concat
+    cat([latents, masked_video, mask], dim=1) (vendor line 787):
+
+    - masked_video: the conditioning image(s) at their frame indices, zeros
+      elsewhere, VAE-encoded and latent-scaled (vendor lines 897-904,
+      `input_video * (mask < 0.5)` then vae.encode * scale_factor). In this
+      runtime the vae_encoder COMPONENT output IS that latent — its traced
+      graph internalizes encoder -> quant_conv -> moments -> mode *
+      scaling_factor -> permute to frames-first [B, F, C, H, W] (mode instead
+      of the vendor's generator-driven .sample(): deterministic, baked into
+      the graph). The CLI synthesizes its pixel input (image at frame 0,
+      zeros padded to num_frames — exactly the vendor's masked video for
+      cond index 0) via the vae_encoder `pad_image_to_num_frames` flag.
+    - mask: PIXEL-space frame mask with INVERTED semantics (1 = NOT
+      conditioned, 0 = conditioned; vendor lines 901-902), 1 channel,
+      spatially resized to the latent grid, then temporally FOLDED into
+      vae_temporal_ratio channels via view(B, ratio, latent_T, lh, lw)
+      (vendor lines 905-916). The fold is a flat view: folded channel k at
+      latent frame t covers PIXEL frame k * latent_T + t — a block split of
+      the temporal axis, NOT an interleaved grouping of consecutive frames.
+
+    apply() appends the condition after the state, so the transformer input
+    is [state, masked_video, mask] — the vendor's exact order (hence the
+    layout name). Returns None if the vae_encoder output is not yet resolved.
+    """
+    cond_comp = spec["condition_component"]
+    latent = ctx.variable_resolver.resolved.get(f"{cond_comp}.output_0")
+    if latent is None:
+        latent = ctx.variable_resolver.get(f"{cond_comp}.output_0")
+    if not isinstance(latent, torch.Tensor):
+        return None
+
+    _, _, latent_channels = _vae_latent_stats(ctx)
+    latent = _to_channels_first(latent, latent_channels)  # [B, C, T, lh, lw]
+    b, _c, _latent_t, lh, lw = latent.shape
+    device, dtype = latent.device, latent.dtype
+
+    # Pixel frames folded per latent frame; profile-driven, with the flag's
+    # mask_channels as fallback (the fold width IS the temporal ratio).
+    ratio = _vae_temporal_ratio(ctx) or int(spec.get("mask_channels") or 0)
+    if not ratio:
+        raise ValueError(
+            "state_video_mask conditioning needs the vae temporal compression "
+            "ratio (vae profile temporal_compression_ratio / "
+            "vae_scale_factor[0], or the flag's mask_channels)")
+
+    # Latent temporal extent from PIXEL num_frames (vendor lines 910-914).
+    if num_frames % 2 == 1:
+        latent_size_t = (num_frames - 1) // ratio + 1
+    else:
+        latent_size_t = num_frames // ratio
+    if num_frames != ratio * latent_size_t:
+        # The vendor's flat view (line 916) enforces the same equality — it
+        # would raise an opaque view error on the identical constraint.
+        raise ValueError(
+            f"state_video_mask mask fold needs num_frames == "
+            f"vae_temporal_ratio * latent_T ({num_frames} != "
+            f"{ratio} * {latent_size_t})")
+
+    cond_indices = list(spec.get("cond_frame_indices") or [0])
+
+    # Pixel-space inverted frame mask, built directly at the LATENT spatial
+    # grid: the vendor F.interpolate(bilinear) (line 915) resizes per-frame
+    # CONSTANT fields (each pixel frame is all-0 or all-1), and bilinear
+    # resampling of a constant field is the identity — value-identical to
+    # building at (lh, lw).
+    mask = torch.ones(b, 1, num_frames, lh, lw, device=device, dtype=dtype)
+    mask[:, :, cond_indices] = 0
+    # Fold the pixel-temporal axis into `ratio` channels (vendor line 916).
+    mask = mask.view(b, ratio, latent_size_t, lh, lw)
+
+    # torch.cat enforces latent_T agreement between the encoded latent and
+    # the folded mask (dim 2), exactly as the vendor concat does.
+    condition = torch.cat([latent, mask], dim=1)  # [B, C + ratio, T, lh, lw]
+    import os as _os
+    if _os.environ.get("NBX_DIAG_I2V") == "1":
+        _lf = latent.float()
+        print(f"   [NBX-DIAG-I2V] state_video_mask condition "
+              f"shape={list(condition.shape)} video mean={_lf.mean():.3f} "
+              f"std={_lf.std():.3f} | mask zeros={int((mask == 0).sum())} "
+              f"cond_indices={cond_indices} ratio={ratio}")
+    return condition
 
 
 def _build_condition_wan(ctx: Any, spec: dict, num_frames: int) -> Optional[torch.Tensor]:
