@@ -43,8 +43,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   graph-driven alignment (simulation checks + batch coherence, ambiguity
   changes nothing) now runs at the shared triton input boundary; inert for
   every input whose rank already matches its graph contract.
-
-### Added
+- **Component-level VAE ENCODER tiling (downsampling direction, D2-encoder).**
+  Oversized video-VAE *encode* passes can now run tiled on a single GPU: the
+  placement solver lifts the downsampler guard specifically for encoders whose
+  temporal input→output map is exactly linear (t_out = t_in / ratio; causal
+  first-frame-special encoders still decline, same doctrine as the decode
+  gate) and whose profiled activation overflows the GPU budget. Tiles live in
+  input (pixel) space on the compression-ratio lattice, sized by the same
+  balanced cube-root (T, H, W) policy as decode; latent outputs land exactly
+  on the global latent grid (position / ratio) and blend by the existing
+  accumulate/divide averaging over the input-halo overlap. Encoder activation
+  estimates now bind time/height/width symbols to pixel extents for this class
+  (previously latent-bound, hiding the overflow — Allegro-TI2V encoder at 88f
+  720×1280: 156 GiB real vs 0.62 GiB estimated). Allegro-TI2V's native encode
+  now plans as 24 tiles of ~10.6 GiB instead of an unplaceable 156 GiB pass;
+  every existing model's plan is byte-identical (verified across 8 video/image
+  models × 2 hardware profiles).
 
 - **Graph-driven input rank alignment at the executor boundary.** Components
   whose graph declares an input with an extra structural unit dim vs the

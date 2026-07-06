@@ -421,12 +421,18 @@ class RuntimeExecutor:
                 t_tile=spec.get("t_tile"),
                 t_overlap=spec.get("t_overlap", 0),
                 t_scale=spec.get("t_scale", 1),
+                # D2-ENCODER: downscale direction (VAE encoder) — absent
+                # from decode specs, so defaults keep them byte-identical.
+                downscale=spec.get("downscale", False),
+                t_axis_out=spec.get("t_axis_out", 2),
             )
             logger.info(
                 f"[TilingEngine] {comp_name}: Prism component-tiling "
                 f"tile_size={spec['tile_size']} scale={spec['scale_factor']}"
                 + (f" t_tile={spec['t_tile']} t_scale={spec['t_scale']}"
                    if spec.get("t_tile") else "")
+                + (" direction=encode(downscale)"
+                   if spec.get("downscale") else "")
                 + " (kept on GPU instead of host offload)"
             )
 

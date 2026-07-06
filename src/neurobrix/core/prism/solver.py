@@ -2484,7 +2484,18 @@ class PrismSolver:
                 out_spatial = osh[-2]
                 break
         if out_spatial is not None and out_spatial < trace_size:
-            return None  # downsampler (encoder) — not a component-tiling target
+            # D2-ENCODER: the guard is lifted ONLY for the class the engine
+            # can tile exactly — 5D encoders whose temporal map is
+            # LINEAR-DOWN (t_out = t_in / r on the r-lattice, no causal
+            # first-frame offset) and whose profiled activation overflows
+            # the budget. Everything else (4D downsamplers, causal encoders,
+            # encoders that fit untiled) keeps the original decline: their
+            # peak is the input-resolution conv owned by op-level tiling,
+            # and causal maps cannot be tiled mid-clip (identical doctrine
+            # to the decode-side AFFINE decline).
+            return self._encode_component_tiling(
+                graph, profile_j, mem, budget_bytes,
+                trace_size, out_spatial)
 
         # Scale factor: upscale (upscalers) or VAE compression ratio.
         config = profile_j.get("config", {})
@@ -2598,6 +2609,146 @@ class PrismSolver:
             return spec
 
         return None  # spatial-only insufficient; causal/4D class — no temporal axis
+
+    def _encode_component_tiling(
+        self, graph: Dict, profile_j: Dict, mem: ComponentMemory,
+        budget_bytes: int, trace_size: int, out_spatial: int,
+    ) -> Optional[Dict[str, Any]]:
+        """D2-ENCODER: TilingEngine spec for a DOWNSAMPLING component (VAE
+        encoder: pixel video -> compressed latent) that overflows the budget
+        untiled — else None (the downsampler guard's decline, unchanged for
+        every component outside the class).
+
+        Geometry (mirror of the decode law, downscale direction):
+        - Tiles live in the component's INPUT (pixel) space; the input-space
+          overlap is the receptive-field halo. Tile sizes, strides and
+          positions are kept on the compression-ratio lattice so every
+          tile's latent output lands EXACTLY on the global latent grid
+          (output position = input position / ratio, the same placement law
+          as decode's `* ratio`).
+        - Each tile encodes fully; outputs accumulate into a latent-space
+          buffer and the final divide averages the (small) latent overlap —
+          the decode accumulate/divide brick reused verbatim, only the
+          placement direction changes.
+        - Sizing reuses the decode cube-root balanced (T, H, W) policy on
+          the activation profile, computed on the INPUT extents (activation
+          scales with the pixel volume a tile covers).
+
+        Gates (all data-driven, no model/family names):
+        - temporal map must be LINEAR-DOWN (see temporal_downscale_ratio);
+          causal ((t-1)/r + 1) declines — a mid-clip tile would re-apply
+          the clip-start semantics, identical doctrine to the decode gate.
+        - spatial ratio from the profile's block channel list
+          (2^(len-1), the same law as decode) and verified against the
+          graph traces (trace_in / trace_out must equal it exactly).
+        - runtime extents must sit on the ratio lattices (an input that
+          violates the compression divisibility is invalid for the untiled
+          encoder too).
+        """
+        import math
+        from neurobrix.core.prism.profiler import temporal_downscale_ratio
+
+        ic = getattr(self, "_input_config", None)
+        if ic is None:
+            return None
+
+        full_act = mem.activation_bytes
+        if full_act <= budget_bytes or full_act <= 0:
+            return None  # fits untiled — guard's decline stands
+
+        tmap = temporal_downscale_ratio(graph)
+        if tmap is None:
+            return None  # causal / 4D / unreadable temporal map — declined
+        t_ratio, t_axis_out = tmap
+
+        config = profile_j.get("config", {})
+        blocks = (config.get("encoder_block_out_channels")
+                  or config.get("block_out_channels")
+                  or config.get("decoder_block_out_channels"))
+        if not blocks:
+            return None
+        sp_ratio = 2 ** (len(blocks) - 1)
+        # Trace coherence: the graph's own in/out spatial traces must agree
+        # with the config-derived ratio, else decline (never guess geometry).
+        if sp_ratio <= 1 or trace_size % sp_ratio != 0 \
+                or trace_size // sp_ratio != out_spatial:
+            return None
+
+        height = getattr(ic, "height", None)
+        width = getattr(ic, "width", None)
+        num_frames = getattr(ic, "num_frames", None)
+        if not height or not width or not num_frames:
+            return None
+        if height % sp_ratio or width % sp_ratio or num_frames % t_ratio:
+            return None  # off-lattice runtime extents — invalid untiled too
+
+        window_alignment = config.get("window_size", 1) or 1
+        # Spatial tile lattice: multiples of the compression ratio (latent
+        # grid exactness) and of any window alignment.
+        lat = sp_ratio * window_alignment // math.gcd(sp_ratio, window_alignment)
+
+        frac = budget_bytes / full_act
+
+        def _snap_down(v: int, unit: int, floor: int) -> int:
+            return max(floor, (int(v) // unit) * unit)
+
+        # Balanced cube-root split across (T, H, W) — decode's sizing policy
+        # applied in INPUT (pixel) space.
+        g = frac ** (1.0 / 3.0)
+        t_tile = _snap_down(int(num_frames * g), t_ratio, 2 * t_ratio)
+        t_tile = min(t_tile, num_frames)
+        if t_tile < num_frames:
+            sp_frac = min(1.0, frac / (t_tile / float(num_frames)))
+        else:
+            t_tile = num_frames  # temporal axis carried whole
+            sp_frac = frac
+        sp_tile = _snap_down(int(math.sqrt(height * width * sp_frac)),
+                             lat, 2 * lat)
+        sp_tile = min(sp_tile, _snap_down(min(height, width), sp_ratio, sp_ratio))
+
+        def _tiled_act(sp: int, tt: int) -> float:
+            return (full_act * (sp * sp) / float(height * width)
+                    * tt / float(num_frames))
+
+        # Floor effects can leave the estimate above budget — shrink on the
+        # lattice, spatial first (cheapest seams), then temporal. Bounded.
+        while _tiled_act(sp_tile, t_tile) > budget_bytes and sp_tile > 2 * lat:
+            sp_tile -= lat
+        while _tiled_act(sp_tile, t_tile) > budget_bytes \
+                and t_tile > 2 * t_ratio:
+            t_tile -= t_ratio
+        tiled_act = _tiled_act(sp_tile, t_tile)
+        if tiled_act > budget_bytes:
+            return None  # even the minimum lattice tile overflows
+
+        # Input-space halos on the ratio lattices (stride = tile - overlap
+        # stays lattice-exact so every position maps to an integral latent
+        # position). Same proportional law as decode (extent // 8, min one
+        # lattice step).
+        overlap = max(sp_ratio,
+                      ((sp_tile // 8 + sp_ratio - 1) // sp_ratio) * sp_ratio)
+        if overlap >= sp_tile:
+            overlap = sp_ratio
+        spec: Dict[str, Any] = {
+            "tile_size": int(sp_tile),
+            "scale_factor": int(sp_ratio),
+            "overlap": int(overlap),
+            "window_alignment": int(window_alignment),
+            "trace_size": int(trace_size),
+            "tiled_activation_bytes": int(tiled_act),
+            "downscale": True,
+            "t_axis_out": int(t_axis_out),
+        }
+        if t_tile < num_frames:
+            t_overlap = max(t_ratio, ((t_tile // 4) // t_ratio) * t_ratio)
+            if t_overlap >= t_tile:
+                t_overlap = t_ratio
+            spec.update({
+                "t_tile": int(t_tile),
+                "t_overlap": int(t_overlap),
+                "t_scale": int(t_ratio),
+            })
+        return spec
 
     @staticmethod
     def _temporal_affine_map(graph: Dict) -> Optional[Tuple[int, int]]:

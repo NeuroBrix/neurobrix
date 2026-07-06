@@ -56,6 +56,8 @@ class TilingEngine:
         t_tile: Optional[int] = None,
         t_overlap: int = 0,
         t_scale: int = 1,
+        downscale: bool = False,
+        t_axis_out: int = 2,
     ):
         """
         Initialize tiling engine.
@@ -80,6 +82,22 @@ class TilingEngine:
                     the graph symbolics and only emits t_tile for the linear class.
             t_overlap: Temporal overlap between tiles in input frames.
             t_scale: Temporal output/input ratio (e.g. 4 for Allegro).
+            downscale: D2-ENCODER direction. False (default) = the upsampling
+                    law above, byte-identical. True = the component DOWNSAMPLES
+                    (VAE encoder: pixel video -> latent, output = input /
+                    ratio). Tiles still live in INPUT space and outputs still
+                    blend by accumulate/divide; only the placement law flips
+                    (output position = input position // ratio). Tile size,
+                    stride and overlap are kept on the ratio lattice so every
+                    tile's latent lands exactly on the global latent grid.
+                    scale_factor / t_scale are then the input/output
+                    compression ratios (e.g. 8 and 4 for a 3D video VAE).
+                    Prism emits this only for the LINEAR-DOWN temporal class
+                    (t_out = t_in / t_scale exactly — causal encoders decline,
+                    same doctrine as the decode-side gate).
+            t_axis_out: Output axis carrying the temporal extent (downscale
+                    mode only; encoders may permute the latent layout, e.g.
+                    Allegro's [B, T, C, H, W]). Default 2 = the NCTHW law.
         """
         self.trace_size = trace_size
         self.tile_size = tile_size if tile_size is not None else trace_size
@@ -88,26 +106,48 @@ class TilingEngine:
         self.window_alignment = window_alignment
         self.t_tile = t_tile
         self.t_scale = t_scale
+        self.downscale = downscale
+        self.t_axis_out = t_axis_out
 
-        # Stride = tile_size - overlap
-        self.stride = self.tile_size - overlap
+        if downscale:
+            # D2-ENCODER: stride and overlap must stay on the compression-
+            # ratio lattice so every tile position maps to an INTEGRAL
+            # latent position (output = position // scale_factor). Prism
+            # already sizes tile/overlap on the lattice; this snap is the
+            # defensive mirror of the window alignment below.
+            unit = max(1, int(scale_factor))
+            self.stride = self.tile_size - overlap
+            self.stride = max(unit, (self.stride // unit) * unit)
+            self.overlap = self.tile_size - self.stride
 
-        # Align stride to window_alignment
-        if window_alignment > 1:
-            self.stride = (self.stride // window_alignment) * window_alignment
-            if self.stride == 0:
-                self.stride = window_alignment
-
-        # Recalculate effective overlap from aligned stride
-        self.overlap = self.tile_size - self.stride
-
-        # Temporal stride (no window alignment on the T axis)
-        if t_tile is not None:
-            self.t_stride = max(1, t_tile - t_overlap)
-            self.t_overlap = t_tile - self.t_stride
+            if t_tile is not None:
+                t_unit = max(1, int(t_scale))
+                self.t_stride = max(
+                    t_unit, ((t_tile - t_overlap) // t_unit) * t_unit)
+                self.t_overlap = t_tile - self.t_stride
+            else:
+                self.t_stride = None
+                self.t_overlap = 0
         else:
-            self.t_stride = None
-            self.t_overlap = 0
+            # Stride = tile_size - overlap
+            self.stride = self.tile_size - overlap
+
+            # Align stride to window_alignment
+            if window_alignment > 1:
+                self.stride = (self.stride // window_alignment) * window_alignment
+                if self.stride == 0:
+                    self.stride = window_alignment
+
+            # Recalculate effective overlap from aligned stride
+            self.overlap = self.tile_size - self.stride
+
+            # Temporal stride (no window alignment on the T axis)
+            if t_tile is not None:
+                self.t_stride = max(1, t_tile - t_overlap)
+                self.t_overlap = t_tile - self.t_stride
+            else:
+                self.t_stride = None
+                self.t_overlap = 0
 
     @classmethod
     def from_component_config(
@@ -201,6 +241,13 @@ class TilingEngine:
         # 264 vs 4 at the W axis). Tiling reduces an UPSAMPLER's output-side
         # peak; a downsampler's peak is its input-resolution conv, owned by
         # op-level tiling (Prism), not this component tiler.
+        #
+        # D2-ENCODER: the ENCODE direction (downscale=True, output = input /
+        # ratio) is supported by this engine but is PLAN-GATED ONLY — Prism's
+        # solver emits a component_tiling spec when the encoder's profiled
+        # activation overflows the budget AND its temporal map is in the
+        # LINEAR-DOWN class. This auto-detect path has no overflow knowledge
+        # (an encoder that fits must run untiled), so the guard stays.
         out_spatial = None
         for oid in graph.get("output_tensor_ids", []):
             osh = tensors.get(str(oid), {}).get("shape", [])
@@ -262,6 +309,11 @@ class TilingEngine:
         tiling even when input matches trace size — producing overlapping
         tiles that eliminate grid artifacts via accumulate-and-divide blending.
 
+        Both directions trigger on the INPUT extents: tile_size / t_tile are
+        input-space in upscale AND downscale (D2-ENCODER) modes — for an
+        encoder the oversized side IS the pixel input, so no direction
+        branch is needed here.
+
         Args:
             input_tensor: Input tensor [B, C, H, W] (4D) or [B, C, T, H, W]
                 (5D video — spatial tiling over the trailing H, W; the temporal
@@ -316,6 +368,22 @@ class TilingEngine:
         ts = self.tile_size
         temporal = self.t_tile is not None and input_tensor.dim() == 5
         t_extent = input_tensor.shape[2] if temporal else None
+        down = self.downscale
+
+        if down:
+            # ZERO FALLBACK: encoder inputs must sit on the compression
+            # lattice — the same divisibility the untiled encoder requires.
+            # Off-lattice extents would shift every tile's latent grid.
+            if height % sf or width % sf:
+                raise ValueError(
+                    f"[TilingEngine] downscale input spatial extents "
+                    f"({height}, {width}) are not multiples of the "
+                    f"compression ratio {sf}")
+            if temporal and t_extent % self.t_scale:
+                raise ValueError(
+                    f"[TilingEngine] downscale input temporal extent "
+                    f"{t_extent} is not a multiple of the temporal "
+                    f"compression ratio {self.t_scale}")
 
         # Compute tile positions
         h_positions, w_positions = self._compute_tile_positions(height, width)
@@ -342,10 +410,27 @@ class TilingEngine:
         # output extent and the weight carries the real T (tiles overlap on T,
         # so the weight must count per-frame contributions — it cannot
         # broadcast a size-1 T).
-        out_h = height * sf
-        out_w = width * sf
+        if down:
+            out_h = height // sf
+            out_w = width // sf
+        else:
+            out_h = height * sf
+            out_w = width * sf
         lead_dims = list(first_result.shape[:-2])          # [B, C_out] | [B, C_out, T_out]
-        if temporal:
+        if temporal and down:
+            # D2-ENCODER: latent temporal extent = input frames / ratio; the
+            # output layout may permute T off axis 2 (t_axis_out from the
+            # graph symbolics — Allegro encodes to [B, T, C, H, W]). The
+            # weight carries the real T at that axis and size-1 everywhere
+            # else in the lead so it broadcasts on the final divide.
+            out_t = t_extent // self.t_scale
+            lead_dims[self.t_axis_out] = out_t             # full latent extent
+            out_shape = [*lead_dims, out_h, out_w]
+            weight_shape = ([lead_dims[0]]
+                            + [lead_dims[i] if i == self.t_axis_out else 1
+                               for i in range(1, len(lead_dims))]
+                            + [out_h, out_w])
+        elif temporal:
             out_t = t_extent * self.t_scale
             lead_dims[2] = out_t                           # full temporal extent
             out_shape = [*lead_dims, out_h, out_w]
@@ -376,20 +461,48 @@ class TilingEngine:
             weight = torch.zeros(
                 *weight_shape, device=first_result.device, dtype=first_result.dtype)
 
-        rh = ts * sf
-        rw = ts * sf
-        rt = self.t_tile * self.t_scale if temporal else None
+        if down:
+            rh = ts // sf
+            rw = ts // sf
+            rt = self.t_tile // self.t_scale if temporal else None
+        else:
+            rh = ts * sf
+            rw = ts * sf
+            rt = self.t_tile * self.t_scale if temporal else None
 
         def _accumulate(res, ty: int, tx: int, tt=None) -> None:
             # Explicit per-rank slice (NBXTensor-safe); the read-add-write
             # form works for both torch and NBXTensor (avoids relying on
             # NBXTensor.__iadd__). weight's size-1 channel axis is selected
             # by slice(None) and broadcasts on the final divide.
-            oy = ty * sf
-            ox = tx * sf
+            if down:
+                # D2-ENCODER placement: the tile at input position p lands
+                # at latent position p // ratio — exact because positions,
+                # tile and stride live on the ratio lattice (ctor snap).
+                oy = ty // sf
+                ox = tx // sf
+            else:
+                oy = ty * sf
+                ox = tx * sf
             arh = min(rh, out_h - oy)
             arw = min(rw, out_w - ox)
-            if tt is not None:
+            if tt is not None and down:
+                # Temporal placement, downscale: latent frame = tt // ratio
+                # at the output's temporal axis (t_axis_out — encoders may
+                # permute the latent layout off axis 2).
+                ot = tt // self.t_scale
+                art = min(rt, out_t - ot)
+                osl_l = [slice(None)] * out_ndim
+                osl_l[self.t_axis_out] = slice(ot, ot + art)
+                osl_l[-2] = slice(oy, oy + arh)
+                osl_l[-1] = slice(ox, ox + arw)
+                rsl_l = [slice(None)] * out_ndim
+                rsl_l[self.t_axis_out] = slice(0, art)
+                rsl_l[-2] = slice(0, arh)
+                rsl_l[-1] = slice(0, arw)
+                osl = tuple(osl_l)
+                rsl = tuple(rsl_l)
+            elif tt is not None:
                 # Temporal placement: linear map — tile at input frame tt
                 # lands at output frame tt * t_scale (same law as spatial).
                 ot = tt * self.t_scale
@@ -519,6 +632,8 @@ class TilingEngine:
             f"window_alignment={self.window_alignment}"
             + (f", t_tile={self.t_tile}, t_stride={self.t_stride}, "
                f"t_scale={self.t_scale}" if self.t_tile is not None else "")
+            + (f", downscale=True, t_axis_out={self.t_axis_out}"
+               if self.downscale else "")
             + ")"
         )
 
