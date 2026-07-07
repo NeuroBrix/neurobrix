@@ -51,7 +51,7 @@ Examples:
   # Inspect a .nbx file
   neurobrix inspect ~/.neurobrix/cache/Flex.1-alpha/model.nbx
 
-For more information: https://gitlab.com/neurobrix/Neurobrix
+For more information: https://neurobrix.es
         """
     )
 
