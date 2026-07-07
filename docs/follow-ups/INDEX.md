@@ -283,6 +283,23 @@ queue retention.
 **Repro**: Sana 4Kpx triton SIGTERM at >3h budget.
 **Surfaced**: P-SANA-4KPX-RUNTIME.
 
+### P-TRITON-LIVE-SET-ESTIMATOR — P2
+**Scope**: continuation of P-TRITON-LIVE-SET (D5.1). The capacity core
+landed (F1 data-driven drain policy, F2 no-cache-decode retention, F7
+attention-bias-cache eviction); the Prism estimator-fidelity + margin
+findings are deferred because the plan is SHARED across engines
+(`solve_smart` takes no mode), so an estimator change is plan-flip-risky
+on both engines and needs a full-zoo plan-diff gate, not the watermark
+gate. F1 already bounds the residual under-prediction to ~650 MiB
+(inside the existing reserves), lowering urgency. F3 per-engine retention
+model, F4 op-workspace-in-peak, F5/F6 margin consolidation (only jointly —
+over/under-reserves partially cancel), F8 `_base`-view pinning audit.
+**Site**: `core/prism/profiler.py:531-620`, `core/prism/solver.py:357-360,
+1474-1554,1754,1832`.
+**Repro**: n/a (fidelity/architecture; no functional defect after F1).
+**Existing file**: `docs/follow-ups/p-triton-live-set-estimator.md`.
+**Surfaced**: engine audit #2 (2026-07-05), P-TRITON-LIVE-SET closure.
+
 ---
 
 ## Volta / SDPA non-determinism residue

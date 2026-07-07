@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Lower GPU memory use in the Triton engine when a model is close to
+  running out of memory.** The Triton execution engine now reclaims the
+  memory of already-finished intermediate results sooner when the GPU is
+  near its capacity, keeping the memory high-water mark down so memory-heavy
+  models are less likely to hit an out-of-memory error. Crucially this is
+  pressure-sensitive: when the GPU has plenty of free memory the engine
+  keeps its fast batched-release behavior unchanged, so models that already
+  fit comfortably see no change in speed. The point at which it starts
+  reclaiming early is read from the hardware profile (not hardcoded), so it
+  adapts per GPU. Two related reclamation gaps were also closed: a
+  rarely-used no-cache text-decode path that kept every step's intermediates
+  alive for the whole pass, and an attention mask cache that grew without
+  bound across many sequence lengths in a long-running server (now released
+  at model-unload boundaries).
+
 ### Fixed
 
 - **Language models now decode correctly in the op-by-op reference mode
