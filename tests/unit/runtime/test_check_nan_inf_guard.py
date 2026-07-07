@@ -1,16 +1,22 @@
-"""P-ZERO-FALLBACK-SWEEP — op-output NaN/Inf guard blind spots.
+"""P-ZERO-FALLBACK-SWEEP — op-output NaN/Inf guard contract.
 
-Pins the MED finding of engine audit #2 (2026-07-05) on
-`GraphExecutor._check_nan_inf`:
-  - the historical guard missed -inf entirely (`has_pos_inf` only), so
-    -inf saturation (e.g. fp16 log-underflow) sailed through;
-  - ±inf IS legitimate for mask-materialising ops (full(-inf),
-    masked_fill(-inf), where(mask, -inf, x)) — those are allowlisted
-    via `_INF_LEGITIMATE_OPS`; NaN has NO allowlist;
-  - METADATA-class ops stay exempt by design (views alias storage
-    already checked at its producing compute op; aten::empty
-    legitimately exposes uninitialised memory) — the always-on
-    step-boundary state gate provides the composite coverage.
+Pins the corrected contract of `GraphExecutor._check_nan_inf`:
+  - NaN is NEVER legitimate → raises (any op);
+  - +Inf in a compute output is an overflow, never legitimate → raises;
+  - -Inf is legitimate across the zoo (additive attention masks,
+    log-underflow of a true zero, -inf padding) and is NOT distinguishable
+    from a corrupting -inf after arithmetic propagation → NOT raised
+    per-op. Where -inf genuinely signals corruption — the iterative-flow
+    loop state — it is caught unambiguously by the always-on
+    step-boundary isfinite state gate (engine audit #2 2026-07-05);
+  - METADATA-class ops stay exempt by design (views alias storage already
+    checked at its producing compute op; aten::empty legitimately exposes
+    uninitialised memory).
+
+This mirrors the historical NaN + positive-Inf contract: a per-op -inf
+raise false-positives on legitimately masked attention (many in-zoo
+models trace decomposed softmax with an additive -inf bias) and on
+in-graph log-underflow (aten::log appears in 13 zoo graphs).
 
 Run: PYTHONPATH=src python -m pytest tests/unit/runtime/test_check_nan_inf_guard.py
 """
@@ -31,8 +37,6 @@ class _Ctx:
 
 class _Stub:
     """Minimal surface _check_nan_inf reads (called unbound)."""
-
-    _INF_LEGITIMATE_OPS = GraphExecutor._INF_LEGITIMATE_OPS
 
     def __init__(self, op_outputs):
         self._ctx = _Ctx(op_outputs)
@@ -57,27 +61,37 @@ def test_nan_raises():
 def test_pos_inf_raises():
     out = torch.randn(4)
     out[0] = float("inf")
-    with pytest.raises(RuntimeError, match=r"\+inf=1"):
+    with pytest.raises(RuntimeError, match="Pos-Inf"):
         _check("aten.add::1", "aten::add", out)
 
 
-def test_neg_inf_raises_blind_spot_closed():
-    """The historical guard only flagged +inf; -inf must raise too."""
+def test_neg_inf_does_not_raise_per_op():
+    """-inf is legitimate (masks / log-underflow) and is left to the
+    step-boundary state gate; the per-op guard must NOT false-positive."""
     out = torch.randn(4)
     out[0] = float("-inf")
-    with pytest.raises(RuntimeError, match=r"-inf=1"):
-        _check("aten.log::1", "aten::log", out)
+    # log-underflow and an additive-mask propagation both reach here as
+    # plain compute ops; neither may raise.
+    _check("aten.log::1", "aten::log", out)
+    _check("aten.add::1", "aten::add", out)
 
 
-def test_mask_op_inf_is_legitimate():
-    """±inf from mask-materialising ops is by-construction legitimate."""
+def test_mask_neg_inf_is_legitimate():
+    """-inf from any op (mask materialisation or otherwise) never raises."""
     mask = torch.full((4, 4), float("-inf"))
-    for op_type in ("aten::full", "aten::masked_fill", "aten::where"):
+    for op_type in ("aten::full", "aten::masked_fill", "aten::where", "aten::add"):
         _check("op::1", op_type, mask)
 
 
-def test_mask_op_nan_still_raises():
-    """NaN has no allowlist — not even for mask ops."""
+def test_pos_inf_raises_even_for_mask_ops():
+    """+Inf is overflow and never legitimate, mask op or not."""
+    out = torch.full((4,), float("inf"))
+    with pytest.raises(RuntimeError, match="Pos-Inf"):
+        _check("op::1", "aten::masked_fill", out)
+
+
+def test_nan_still_raises_for_mask_ops():
+    """NaN has no exemption — not even for mask ops."""
     out = torch.full((4,), float("nan"))
     with pytest.raises(RuntimeError, match="NaN"):
         _check("op::1", "aten::masked_fill", out)
