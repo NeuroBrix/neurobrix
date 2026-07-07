@@ -328,7 +328,7 @@ neurobrix run --model Sana_1600M_1024px_MultiLing --prompt "a red fox" --triton 
 neurobrix run --model Sana_1600M_1024px_MultiLing --prompt "a red fox" --triton-sequential --output fox.png  # Triton op-by-op
 ```
 
-> Every supported model is validated in all four execution modes, and the modes are cross-checked for numerical agreement — they produce the same output (modulo floating-point numerics). Sampling is deterministically seeded: the same `--seed` reproduces the same output on the same hardware. The four mode flags are also available on `neurobrix serve` and `neurobrix upscale`.
+> Every supported model is validated in all four execution modes, and the modes are cross-checked for numerical agreement — they produce the same output (modulo floating-point numerics). Sampling is deterministically seeded: the same `--seed` reproduces the same output on the same hardware. The four mode flags are also available on `neurobrix serve`; `neurobrix upscale` selects the same modes via `--mode <compiled|sequential|triton|triton-sequential>`.
 
 ---
 
