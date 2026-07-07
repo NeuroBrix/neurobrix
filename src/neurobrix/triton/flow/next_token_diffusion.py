@@ -47,6 +47,26 @@ def _parse_device_idx(device) -> int:
     return int(s.split(":")[1]) if ":" in s else 0
 
 
+def _require_default(defaults: Dict[str, Any], key: str) -> Any:
+    """ZERO FALLBACK read of a semantic key from the .nbx defaults.json.
+
+    R30 mirror of core/flow/next_token_diffusion._require_default (own
+    copy — the two engines never share compute-path helpers). These keys
+    encode model semantics (guidance scale, latent scale/bias, scheduler
+    shape); a silently-invented value yields plausible-but-wrong audio.
+    Absent key = malformed/incomplete .nbx → crash naming the key
+    (engine audit #2 2026-07-05, P-ZERO-FALLBACK-SWEEP).
+    """
+    val = defaults.get(key)
+    if val is None:
+        raise RuntimeError(
+            f"ZERO FALLBACK: '{key}' missing from defaults.json — "
+            f"next_token_diffusion refuses to invent a value; rebuild the "
+            f".nbx with '{key}' in its runtime defaults."
+        )
+    return val
+
+
 class TritonNextTokenDiffusionEngine:
     """Triton-mode VibeVoice next-token-diffusion TTS (NBXTensor end-to-end)."""
 
@@ -119,14 +139,15 @@ class TritonNextTokenDiffusionEngine:
         # ── generation / diffusion params (data-driven) ──
         _ov = self.ctx.variable_resolver.resolved
         max_steps = int(_ov.get("global.max_tokens", defaults.get("max_tokens", 2048)))
-        ddpm_steps = int(defaults.get("ddpm_num_inference_steps", 20))
+        ddpm_steps = int(_require_default(defaults, "ddpm_num_inference_steps"))
         _cfg_override = _ov.get("global.guidance_scale")
-        cfg_scale = float(_cfg_override) if _cfg_override is not None else float(defaults.get("cfg_scale", 1.3))
+        cfg_scale = (float(_cfg_override) if _cfg_override is not None
+                     else float(_require_default(defaults, "cfg_scale")))
         _seed = _ov.get("global.seed")
         self._rng = np.random.RandomState(int(_seed) if _seed is not None else 0)
-        scaling = float(defaults.get("speech_scaling_factor", 0.1962890625))
-        bias = float(defaults.get("speech_bias_factor", -0.04931640625))
-        vae_dim = int(defaults.get("acoustic_vae_dim", 64))
+        scaling = float(_require_default(defaults, "speech_scaling_factor"))
+        bias = float(_require_default(defaults, "speech_bias_factor"))
+        vae_dim = int(_require_default(defaults, "acoustic_vae_dim"))
 
         prompt = _ov.get("global.prompt")
         if prompt is None or prompt == "":
@@ -260,11 +281,11 @@ class TritonNextTokenDiffusionEngine:
     # ─── diffusion sampling (NBXTensor + zero-torch scheduler/CFG) ─────────────
     def _sample_speech_tokens(self, pos_cond_np, neg_cond_np, cfg_scale, ddpm_steps, vae_dim, defaults) -> NBXTensor:
         sched = TritonDPMSolverPPScheduler({
-            "num_train_timesteps": int(defaults.get("ddpm_num_steps", 1000)),
+            "num_train_timesteps": int(_require_default(defaults, "ddpm_num_steps")),
             "beta_start": 0.0001,
             "beta_end": 0.02,
-            "beta_schedule": defaults.get("ddpm_beta_schedule", "cosine"),
-            "prediction_type": defaults.get("prediction_type", "v_prediction"),
+            "beta_schedule": _require_default(defaults, "ddpm_beta_schedule"),
+            "prediction_type": _require_default(defaults, "prediction_type"),
             "solver_order": 2,
             "algorithm_type": "dpmsolver++",
             "solver_type": "midpoint",

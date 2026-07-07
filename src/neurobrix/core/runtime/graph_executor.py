@@ -3399,12 +3399,28 @@ class GraphExecutor:
             f"temporarily; the historical name 'native' is deprecated)."
         )
 
+    # Op types whose outputs legitimately carry ±inf by construction:
+    # attention-mask materialisation (full(-inf), masked_fill(-inf),
+    # where(mask, -inf, x), -inf padding). NaN is NEVER legitimate and
+    # has no allowlist.
+    _INF_LEGITIMATE_OPS = frozenset({
+        "aten::full", "aten::full_like", "aten::new_full",
+        "aten::masked_fill", "aten::masked_fill_",
+        "aten::where", "aten::constant_pad_nd",
+    })
+
     def _check_nan_inf(self, op_uid: str, op_type: str, exec_type: OpExecution) -> None:
         """
-        Check for NaN/Inf in TRITON op outputs.
+        Check for NaN/Inf in compute-op outputs.
 
-        NOTE: Only checks TRITON ops. METADATA ops may produce transient inf
-        values that get masked by subsequent operations.
+        METADATA-class ops stay exempt by design: true metadata ops
+        (view/permute/...) alias storage already checked at its producing
+        compute op, and allocator ops (aten::empty) legitimately expose
+        uninitialised memory. Composite always-on coverage is provided by
+        the step-boundary state gate in the iterative flows (engine audit
+        #2 2026-07-05). Both +inf AND -inf raise here — the historical
+        guard missed -inf saturation (e.g. fp16 log-underflow) — except
+        for the mask-materialising op types in _INF_LEGITIMATE_OPS.
         """
         if exec_type == OpExecution.METADATA:
             return
@@ -3415,15 +3431,21 @@ class GraphExecutor:
 
         for idx, out in enumerate(self._ctx.op_outputs[op_uid]):
             if isinstance(out, torch.Tensor) and out.dtype in (torch.float32, torch.float16, torch.bfloat16):
-                has_nan = torch.isnan(out).any()
-                has_pos_inf = torch.isinf(out).any() and (out == float('inf')).any()
+                has_nan = bool(torch.isnan(out).any())
+                has_inf = (op_type not in self._INF_LEGITIMATE_OPS
+                           and bool(torch.isinf(out).any()))
 
-                if has_nan or has_pos_inf:
-                    msg = "NaN" if has_nan else "Pos-Inf"
-                    if has_nan and has_pos_inf:
-                        msg = "NaN and Pos-Inf"
+                if has_nan or has_inf:
+                    kinds = []
+                    if has_nan:
+                        kinds.append("NaN")
+                    if has_inf:
+                        n_pos = int((out == float('inf')).sum())
+                        n_neg = int((out == float('-inf')).sum())
+                        kinds.append(f"Inf (+inf={n_pos}, -inf={n_neg})")
                     raise RuntimeError(
-                        f"{msg} detected in output {idx} of op '{op_uid}' ({op_type})."
+                        f"{' and '.join(kinds)} detected in output {idx} "
+                        f"of op '{op_uid}' ({op_type})."
                     )
 
     def _handle_op_error(

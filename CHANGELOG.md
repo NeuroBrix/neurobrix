@@ -28,6 +28,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   kernel config) and within float reassociation tolerance (max relative
   difference ~1e-4) on the former per-row decode route.
 
+### Silent-failure hardening (zero-fallback sweep)
+
+- **A failed tiled residual-chain merge now stops the run.** Previously,
+  when a band-streamed residual-chain merge failed inside the op-level
+  tiling engine — or its chain weights could not be resolved — the
+  un-merged input tensor was silently substituted and the run continued
+  to a wrong final output. Both failure paths now raise with the chain
+  and op named in the message.
+- **Always-on NaN/Inf gate on the diffusion loop state.** Both execution
+  branches now verify the latent state is finite once per denoising step
+  (a single `isfinite` scan at the step boundary — no per-op overhead)
+  and stop with the component, step, and timestep named, instead of a
+  debug-only print that let corrupt runs continue. The per-op output
+  guard keeps its NaN and positive-infinity contract (negative infinity
+  is a legitimate value — attention masks, log-underflow — so it is left
+  to the step-boundary state gate, where it unambiguously signals
+  corruption).
+- **fp16-overflow protection can no longer be silently disabled.** The
+  per-component flag registry raises when its file exists but is
+  unreadable or malformed (an absent registry still legitimately
+  resolves to defaults), and the fp32-pin resolution in the placement
+  solver propagates read failures instead of returning an empty
+  protection set.
+- **Text-to-speech diffusion parameters are now required.** The
+  next-token-diffusion flow (both execution branches) refuses to run
+  when its semantic keys (guidance scale, latent scale/bias, scheduler
+  shape) are missing from the model package instead of inventing
+  defaults, matching the behavior of the other audio flows.
+- **Classifier-free guidance input batching no longer swallows resolver
+  errors.** A genuinely absent optional conditioning port is still
+  skipped; any other resolution failure now propagates instead of
+  silently feeding batch-1 conditioning to a batch-2 forward.
+
 ## [0.3.0] - 2026-07-07
 
 The video release. NeuroBrix now runs the video generation family

@@ -3529,27 +3529,27 @@ class PrismSolver:
         result (manual > auto by construction; no conflict surface). Both
         sources default-absent ⇒ empty set ⇒ ZERO behaviour change for
         any model not matching the criteria (anti-régression guarantee).
+
+        ZERO FALLBACK (engine audit #2 2026-07-05): read failures
+        PROPAGATE. The former blanket try/excepts silently returned an
+        empty pin set on a broken container / registry / family config,
+        disabling the fp32-overflow protection engine-wide. Legitimate
+        ABSENCE (no manifest family, no flag annotation, policy disabled
+        in the family YAML) still resolves to the empty set.
         """
         from neurobrix.core.runtime.registry_flags import get_component_flag
-        try:
-            manifest = container.get_manifest() or {}
-            model_name = manifest.get("model_name")
-            family = manifest.get("family")
-        except Exception:
-            model_name = None
-            family = None
+        manifest = container.get_manifest() or {}
+        model_name = manifest.get("model_name")
+        family = manifest.get("family")
 
         forced = set()
 
         # (1) Manual flag (Ch6-era).
-        try:
-            for comp in container.get_neural_components():
-                if get_component_flag(model_name, comp.name,
-                                      "requires_fp32_compute", default=False,
-                                      env_override="NBX_FORCE_FP32_COMPUTE"):
-                    forced.add(comp.name)
-        except Exception:
-            pass
+        for comp in container.get_neural_components():
+            if get_component_flag(model_name, comp.name,
+                                  "requires_fp32_compute", default=False,
+                                  env_override="NBX_FORCE_FP32_COMPUTE"):
+                forced.add(comp.name)
 
         # (2) Auto-detect (Ch8). Bypassable for diagnosis.
         if os.environ.get("NBX_DISABLE_AUTO_FP32", "0") == "1":
@@ -3565,15 +3565,14 @@ class PrismSolver:
         Policy and thresholds live in `config/families/<family>.yml`
         under `dtype_policy.auto_fp32_on_overflow_risk`. Default-absent
         ⇒ disabled ⇒ empty set. See _components_force_fp32 docstring
-        for the full rule.
+        for the full rule. ZERO FALLBACK: an unknown family (no YAML)
+        or a broken profile RAISES via the loader / profile — the
+        former swallow silently disabled the auto-detect.
         """
         if family is None:
             return set()
-        try:
-            from neurobrix.core.config.loader import get_family_config
-            fcfg = get_family_config(family) or {}
-        except Exception:
-            return set()
+        from neurobrix.core.config.loader import get_family_config
+        fcfg = get_family_config(family) or {}
 
         policy = ((fcfg.get("dtype_policy") or {})
                   .get("auto_fp32_on_overflow_risk") or {})
@@ -3583,11 +3582,8 @@ class PrismSolver:
         # Hardware gate: skip on bf16-capable hardware (bf16 exponent
         # range = fp32, no conv-storage saturation).
         if policy.get("skip_when_hw_supports_bf16", True) and profile is not None:
-            try:
-                if profile.devices_support_dtype("bfloat16"):
-                    return set()
-            except Exception:
-                pass
+            if profile.devices_support_dtype("bfloat16"):
+                return set()
 
         require_dtype = policy.get("require_graph_dtype", "float32")
         min_conv = int(policy.get("min_conv2d_count", 20))
@@ -3603,10 +3599,7 @@ class PrismSolver:
                      "aten::_scaled_dot_product_attention_math"}
 
         auto = set()
-        try:
-            comps = container.get_neural_components()
-        except Exception:
-            return set()
+        comps = container.get_neural_components()
         for comp in comps:
             graph = getattr(comp, "graph", None) or {}
             if graph.get("torch_dtype") != require_dtype:

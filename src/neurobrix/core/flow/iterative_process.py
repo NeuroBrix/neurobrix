@@ -22,6 +22,34 @@ from neurobrix.core.runtime.resolution import flux_video_conditioning
 from .base import FlowHandler, FlowContext, register_flow
 
 
+def _gate_loop_state_finite(state: Any, step_idx: int, timestep: Any,
+                            comp_name: str) -> None:
+    """Always-on NaN/Inf gate on the diffusion loop state.
+
+    One `isfinite` scan per step boundary on the state tensor (catches
+    NaN, +inf AND -inf) — never per-op, so it adds no measurable wall.
+    A non-finite latent can only decode to garbage; crash with op/step
+    context instead of continuing to a silently corrupt output. Replaces
+    the former DEBUG-gated print-and-continue (engine audit #2
+    2026-07-05, P-ZERO-FALLBACK-SWEEP).
+    """
+    if not isinstance(state, torch.Tensor) or not state.is_floating_point():
+        return
+    if bool(torch.isfinite(state).all()):
+        return
+    n_nan = int(torch.isnan(state).sum())
+    n_inf = int(torch.isinf(state).sum())
+    ts = timestep.item() if hasattr(timestep, "item") else timestep
+    raise RuntimeError(
+        f"ZERO FALLBACK: non-finite diffusion loop state after scheduler "
+        f"step {step_idx + 1} (component '{comp_name}', timestep "
+        f"{float(ts):g}): {n_nan} NaN / {n_inf} Inf elements in state "
+        f"shape={list(state.shape)} dtype={state.dtype}. Refusing to "
+        f"continue to a corrupt output. Set NBX_TRACE_NAN=1 to localise "
+        f"the first offending op."
+    )
+
+
 @register_flow("iterative_process")
 class IterativeProcessHandler(FlowHandler):
     """
@@ -639,9 +667,10 @@ class IterativeProcessHandler(FlowHandler):
                             f"{_dsl}/step_{step_idx:03d}.pt")
 
 
-                    if DEBUG:
-                        if torch.isnan(current_state).any() or torch.isinf(current_state).any():
-                            print(f"[DEBUG] CRITICAL: NaN/Inf in current_state at step {step_idx + 1}!")
+                    # Always-on state-finiteness gate (one isfinite per
+                    # step boundary; raises with step context).
+                    _gate_loop_state_finite(current_state, step_idx,
+                                            timestep, comp_name)
 
                     self.ctx.variable_resolver.set(state_key, current_state)
 

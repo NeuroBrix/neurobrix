@@ -22,6 +22,36 @@ from neurobrix.triton import i2v_conditioning
 from neurobrix.triton import vace_control_conditioning
 from neurobrix.triton import flux_video_conditioning
 
+_FLOAT_NBX_DTYPES = (NBXDtype.float16, NBXDtype.bfloat16,
+                     NBXDtype.float32, NBXDtype.float64)
+
+
+def _gate_loop_state_finite(state: Any, step_idx: int, timestep: Any,
+                            comp_name: str) -> None:
+    """Always-on NaN/Inf gate on the diffusion loop state.
+
+    R30 mirror of core/flow/iterative_process._gate_loop_state_finite,
+    NBXTensor + Triton kernels only (R33): one `isfinite` elementwise
+    kernel + `all` reduction per step boundary (catches NaN, +inf AND
+    -inf), never per-op. A non-finite latent can only decode to garbage;
+    crash with op/step context instead of continuing to a silently
+    corrupt output (engine audit #2 2026-07-05, P-ZERO-FALLBACK-SWEEP).
+    """
+    if not isinstance(state, NBXTensor) or state.nbx_dtype not in _FLOAT_NBX_DTYPES:
+        return
+    from neurobrix.kernels.wrappers import all_wrapper, isfinite_wrapper
+    if bool(all_wrapper(isfinite_wrapper(state)).item()):
+        return
+    ts = timestep.item() if hasattr(timestep, "item") else timestep
+    raise RuntimeError(
+        f"ZERO FALLBACK: non-finite diffusion loop state after scheduler "
+        f"step {step_idx + 1} (component '{comp_name}', timestep "
+        f"{float(ts):g}): NaN/Inf elements in state "
+        f"shape={list(state.shape)} dtype={state.dtype}. Refusing to "
+        f"continue to a corrupt output. Set NBX_TRITON_TRACE_NAN=1 to "
+        f"localise the first offending op."
+    )
+
 
 def _vram_probe(tag: str) -> None:
     """Print free/total CUDA VRAM via cudaMemGetInfo, plus the NBX live-bytes
@@ -729,6 +759,12 @@ class TritonIterativeProcessHandler:
                     step_result = driver.step(model_output, timestep, current_state)
                     prev = step_result["prev_sample"] if isinstance(step_result, dict) else step_result.prev_sample
                     current_state = _to_nbx(prev)
+
+                    # Always-on state-finiteness gate (one isfinite per
+                    # step boundary; raises with step context). R30
+                    # mirror of core/flow/iterative_process.py.
+                    _gate_loop_state_finite(current_state, step_idx,
+                                            timestep, comp_name)
 
                     self.ctx.variable_resolver.set(state_key, current_state)
 

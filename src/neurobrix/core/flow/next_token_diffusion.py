@@ -49,6 +49,25 @@ from .base import FlowHandler, FlowContext, register_flow
 from neurobrix.core.device_utils import device_empty_cache
 
 
+def _require_default(defaults: Dict[str, Any], key: str) -> Any:
+    """ZERO FALLBACK read of a semantic key from the .nbx defaults.json.
+
+    These keys encode model semantics (guidance scale, latent scale/bias,
+    scheduler shape); a silently-invented value yields plausible-but-wrong
+    audio. Absent key = malformed/incomplete .nbx → crash naming the key
+    (engine audit #2 2026-07-05, P-ZERO-FALLBACK-SWEEP — the sibling
+    encoder_decoder flow is the reference pattern).
+    """
+    val = defaults.get(key)
+    if val is None:
+        raise RuntimeError(
+            f"ZERO FALLBACK: '{key}' missing from defaults.json — "
+            f"next_token_diffusion refuses to invent a value; rebuild the "
+            f".nbx with '{key}' in its runtime defaults."
+        )
+    return val
+
+
 @register_flow("next_token_diffusion")
 class NextTokenDiffusionEngine(FlowHandler):
     """
@@ -141,15 +160,15 @@ class NextTokenDiffusionEngine(FlowHandler):
         # ── Generation / diffusion params (data-driven) ──
         _ov = self.ctx.variable_resolver.resolved
         max_steps = int(_ov.get("global.max_tokens", defaults.get("max_tokens", 2048)))
-        ddpm_steps = int(defaults.get("ddpm_num_inference_steps", 20))
-        # CFG scale cascade: CLI `--cfg` (global.guidance_scale) > defaults.json
-        # cfg_scale > 1.3 (the VibeVoice default-ish guidance). cfg_scale=1.0
+        ddpm_steps = int(_require_default(defaults, "ddpm_num_inference_steps"))
+        # CFG scale cascade: CLI `--cfg` (global.guidance_scale) >
+        # defaults.json cfg_scale (required — ZERO FALLBACK). cfg_scale=1.0
         # disables guidance (negative context becomes irrelevant).
         _cfg_override = _ov.get("global.guidance_scale")
         if _cfg_override is not None:
             cfg_scale = float(_cfg_override)
         else:
-            cfg_scale = float(defaults.get("cfg_scale", 1.3))
+            cfg_scale = float(_require_default(defaults, "cfg_scale"))
         # One diffusion-noise generator for the whole run: advances across steps
         # (fresh init noise per step) yet makes the run reproducible. SHARED with
         # the triton next_token_diffusion handler: both draw init noise from the
@@ -161,9 +180,9 @@ class NextTokenDiffusionEngine(FlowHandler):
         import numpy as _np_vv
         _seed = _ov.get("global.seed")
         diffusion_gen = _np_vv.random.RandomState(int(_seed) if _seed is not None else 0)
-        scaling = float(defaults.get("speech_scaling_factor", 0.1962890625))
-        bias = float(defaults.get("speech_bias_factor", -0.04931640625))
-        vae_dim = int(defaults.get("acoustic_vae_dim", 64))
+        scaling = float(_require_default(defaults, "speech_scaling_factor"))
+        bias = float(_require_default(defaults, "speech_bias_factor"))
+        vae_dim = int(_require_default(defaults, "acoustic_vae_dim"))
 
         # ── Build the LM prompt exactly as the VibeVoice processor (text-only) ──
         prompt = self.ctx.variable_resolver.resolved.get("global.prompt")
@@ -430,11 +449,11 @@ class NextTokenDiffusionEngine(FlowHandler):
         defaults = self.ctx.pkg.defaults
         config = {
             "_class_name": "DPMSolverMultistepScheduler",
-            "num_train_timesteps": int(defaults.get("ddpm_num_steps", 1000)),
+            "num_train_timesteps": int(_require_default(defaults, "ddpm_num_steps")),
             "beta_start": 0.0001,
             "beta_end": 0.02,
-            "beta_schedule": defaults.get("ddpm_beta_schedule", "cosine"),
-            "prediction_type": defaults.get("prediction_type", "v_prediction"),
+            "beta_schedule": _require_default(defaults, "ddpm_beta_schedule"),
+            "prediction_type": _require_default(defaults, "prediction_type"),
             "solver_order": 2,
             "algorithm_type": "dpmsolver++",
             "solver_type": "midpoint",
