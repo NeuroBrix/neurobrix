@@ -95,6 +95,22 @@ class MemoryManager:
         for dev in devices_to_sync:
             device_sync(dev)
 
+        # Step 1b: evict the triton attention bias caches (audit #2 F7).
+        # `wrappers._causal_bias_cache` holds MATERIALIZED [Sq, Sk] additive
+        # masks keyed by (device, Sq, Sk, dtype); a warm serve sweeping many
+        # sequence lengths grows it unbounded because nothing reclaimed it.
+        # Unload boundaries are the right eviction point (a diffusion loop
+        # never unloads per step, so hot reuse of one bias table is intact).
+        # After the per-device sync above, no in-flight kernel is still
+        # reading these tensors, so dropping the refs (→ finalizer cudaFree)
+        # is UAF-safe. Lazy import + guard: a triton-substrate cleanup must
+        # never break a compiled-path unload, and never raise.
+        try:
+            from neurobrix.kernels.wrappers import clear_bias_caches
+            clear_bias_caches()
+        except Exception:
+            pass
+
         # Step 2: drop references — ComponentArena.__del__ / NBXTensor
         # finalizers run cudaFree here, but the kernels that touched
         # this memory are now guaranteed to have completed.

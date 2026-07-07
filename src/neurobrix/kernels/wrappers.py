@@ -6166,6 +6166,30 @@ def _get_causal_bias(device_idx, seqlen_q, seqlen_k, dtype):
     return bias
 
 
+def clear_bias_caches() -> None:
+    """Evict the module-global attention bias caches.
+
+    `_causal_bias_cache` stores MATERIALIZED [Sq, Sk] additive masks keyed
+    by (device, Sq, Sk, dtype); `_zero_bias_cache` stores stride-0 broadcast
+    rows. Both persist for the process lifetime otherwise. In a cold CLI run
+    that is negligible (a handful of shapes), but a warm serve that sweeps
+    many sequence lengths accumulates one materialized [Sq, Sk] tensor per
+    distinct length — unbounded growth that the runtime never reclaimed
+    (audit #2 F7). This hook is called from the single memory-cleanup
+    surface (`MemoryManager.unload_weights`), so eviction rides the same
+    phase boundaries as weight unload (encoder→loop→VAE, request teardown).
+    The caches rebuild lazily on next use, so clearing is always safe;
+    within a diffusion loop `unload_weights` is not called per step, so the
+    hot reuse of a single bias table is untouched.
+
+    R33-pure: clears two Python dicts of NBXTensors — no torch, no compute.
+    The dropped NBXTensor refs trigger their finalizers (cudaFree) once the
+    caller's per-device sync in `unload_weights` has completed.
+    """
+    _zero_bias_cache.clear()
+    _causal_bias_cache.clear()
+
+
 def _is_power_of_2(n: int) -> bool:
     return n > 0 and (n & (n - 1)) == 0
 
@@ -6197,6 +6221,75 @@ def _sdpa_math_scores_budget_bytes() -> int:
             "sdpa_math_max_scores_bytes", 0))
     except Exception:
         return 0
+
+
+_DEFERRED_DRAIN_CLIFF_DEFAULT = 2_000_000_000   # 2 GB — throughput ceiling
+_DEFERRED_DRAIN_FLOOR_DEFAULT = 268_435_456     # 256 MiB — pressure-branch floor
+
+
+def deferred_drain_policy():
+    """Return the triton deferred-free drain policy as a 4-tuple
+    `(cliff_bytes, floor_bytes, pressure_reserve_bytes, freecheck_interval)`.
+
+    The triton hot loop batches every dead/overwritten NBXTensor into a
+    `_deferred` list, drained (after a device sync) when a threshold trips —
+    the amount by which the triton live watermark can exceed the compiled
+    free-at-last-use watermark (compiled frees at the kill point via torch's
+    caching allocator). The historical policy was a flat 2 GB cap (audit #2
+    F1). Draining is always correctness-safe (sync-before-free) but NOT free:
+    with the caching pool off (default), every drain is a cudaFree→cudaMalloc
+    cycle, so draining EAGERLY on a model that has headroom is pure churn
+    (measured: a fixed 650 MiB cap regressed CogVideoX-2b VAE decode ~49% for
+    no capacity benefit — the device had ~21 GB free).
+
+    Policy is therefore PRESSURE-SENSITIVE:
+    - `cliff`   — the queue is ALWAYS drained at this size (throughput ceiling,
+      bounds worst-case retention). On a device with headroom this is the ONLY
+      trigger, so runtime is identical to the historical 2 GB behavior.
+    - `floor`   — below this the queue is never drained mid-run (small-model /
+      ample-headroom fast path).
+    - `reserve` — when the queue is >= floor, the engine probes driver-free
+      memory; if free < reserve the device is near capacity and the queue is
+      drained early to keep the watermark from reaching OOM. Draining more
+      (slower) to FIT beats an OOM — capacity is the hard constraint.
+    - `interval`— minimum ops between free probes (bounds the probe rate; the
+      probe is `DeviceAllocator.device_free_bytes` = cudaMemGetInfo, no sync,
+      the sanctioned feasibility API — NOT a kernel-config source).
+
+    Data-driven (R7/R24) from `config/vendors/<vendor>/<arch>.yml memory:`,
+    keyed on the detected device's vendor+architecture. Safe fallback (no
+    profile / keys absent / exception): `cliff = 2 GB, floor = cliff,
+    reserve = 0` → the pressure branch can never trip (`free < 0` is
+    impossible) and the queue only ever drains at the 2 GB cliff = the exact
+    prior behavior.
+    """
+    cliff = _DEFERRED_DRAIN_CLIFF_DEFAULT
+    fallback = (cliff, cliff, 0, 1 << 30)
+    prof = get_hardware_profile()
+    devices = getattr(prof, "devices", None) if prof is not None else None
+    if not devices:
+        return fallback
+    try:
+        from neurobrix.core.config.loader import get_vendor_config
+        _brand = devices[0].brand
+        _vendor = getattr(_brand, "value", _brand)
+        cfg = get_vendor_config(_vendor, devices[0].architecture)
+        mem = cfg.get("memory", {})
+        cliff = int(mem.get("deferred_drain_cliff_bytes", cliff))
+        reserve = int(mem.get("deferred_drain_pressure_reserve_bytes", 0))
+        if reserve <= 0:
+            # Pressure branch disabled → pure cliff (prior behavior).
+            return (cliff, cliff, 0, 1 << 30)
+        floor = int(mem.get("deferred_drain_floor_bytes",
+                            _DEFERRED_DRAIN_FLOOR_DEFAULT))
+        if floor > cliff:
+            floor = cliff
+        interval = int(mem.get("deferred_drain_freecheck_interval", 8))
+        if interval < 1:
+            interval = 1
+        return (cliff, floor, reserve, interval)
+    except Exception:
+        return fallback
 
 
 def _math_attention(q, k, v, attn_mask=None, is_causal=False, scale=None):

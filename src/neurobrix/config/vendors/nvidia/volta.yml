@@ -126,6 +126,22 @@ memory:
   # (decode stays deterministic); documented residual.
   sdpa_math_max_scores_bytes: 134217728  # 128 MiB
 
+  # Triton deferred-free queue policy (audit #2 F1, P-TRITON-LIVE-SET).
+  # PRESSURE-SENSITIVE: the queue always drains at `cliff` (throughput
+  # ceiling — identical to the historical 2 GB behavior when the device has
+  # headroom, so NO runtime regression), and drains EARLY (queue >= floor)
+  # only when a throttled driver-free probe shows the device within
+  # `pressure_reserve` of capacity — where a lower watermark is needed to
+  # avoid OOM and a slower run that fits beats an OOM. Draining is not free
+  # (cudaFree->cudaMalloc with the pool off), so eager draining on a model
+  # with headroom is pure churn (a fixed 650 MiB cap regressed CogVideoX-2b
+  # VAE ~49% for no benefit — hence the pressure gate). reserve <= 0 or keys
+  # absent -> cliff-only (prior behavior).
+  deferred_drain_cliff_bytes: 2000000000          # 2 GB — throughput ceiling
+  deferred_drain_floor_bytes: 268435456           # 256 MiB — pressure floor
+  deferred_drain_pressure_reserve_bytes: 6442450944  # 6 GiB free -> under pressure
+  deferred_drain_freecheck_interval: 8            # min ops between free probes
+
 # SMEM budget safety factor — fraction of max_shared_memory_per_block
 # that the picker considers usable. Triton's compiler inflates the
 # analytical Q+K+V+bias tile footprint by ~1.3× via double-buffered

@@ -105,6 +105,17 @@ memory:
   # presence, is the gate. hand_curated_from_docs.
   sdpa_math_max_scores_bytes: 0
 
+  # Triton deferred-free queue policy (audit #2 F1, P-TRITON-LIVE-SET).
+  # PRESSURE-SENSITIVE: always drain at `cliff` (throughput ceiling — no
+  # runtime regression when the device has headroom), drain EARLY (queue >=
+  # floor) only when a throttled driver-free probe shows the device within
+  # `pressure_reserve` of capacity (avoids OOM; a slower run that fits beats
+  # an OOM). reserve <= 0 or keys absent -> cliff-only (prior behavior).
+  deferred_drain_cliff_bytes: 2000000000          # 2 GB — throughput ceiling
+  deferred_drain_floor_bytes: 268435456           # 256 MiB — pressure floor
+  deferred_drain_pressure_reserve_bytes: 6442450944  # 6 GiB free -> under pressure
+  deferred_drain_freecheck_interval: 8            # min ops between free probes
+
 # SMEM budget safety factor — see volta.yml comment.
 sdpa_smem_safety: 0.7
 

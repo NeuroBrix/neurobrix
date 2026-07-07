@@ -18,6 +18,8 @@ from neurobrix.kernels.nbx_tensor import (
     NBXTensor, NBXDtype, DeviceAllocator, parse_dtype,
     invalidate_current_device_cache,
 )
+from neurobrix.kernels.wrappers import (
+    deferred_drain_policy, _DEFERRED_DRAIN_FLOOR_DEFAULT)
 
 from .arena import Arena
 from .symbols import SymbolResolver
@@ -37,18 +39,31 @@ from .dtype import TritonDtypeEngine
 # the peak concurrency was bounded only by the run's total allocation
 # volume.
 #
-# Fix: drain `_deferred` the moment it crosses a bytes OR count threshold.
-# The drain still uses `sync_device()` before clearing the list (cudaFree
-# is synchronous and releasing while a kernel is still reading would
-# UAF), so correctness is identical to the end-of-run drain — we just
-# do it more often. Empirically ~5 ms of extra sync per run on PixArt
-# against 158 s of decode — noise.
+# Fix: drain `_deferred` the moment it crosses a bytes threshold. The drain
+# uses `sync_device()` before clearing the list (cudaFree is synchronous and
+# releasing while a kernel is still reading would UAF), so correctness is
+# identical to the end-of-run drain — we just do it more often.
+#
+# Pressure-sensitive policy (audit #2 F1, P-TRITON-LIVE-SET): a flat 2 GB cap
+# let the deferred queue carry up to ~2 GB of dead tensors above the compiled
+# free-at-last-use watermark. But draining is not free — with the caching
+# pool off (default) every drain is a cudaFree→cudaMalloc cycle, so draining
+# eagerly on a model that HAS headroom is pure churn (a fixed 650 MiB cap was
+# measured to regress CogVideoX-2b VAE decode ~49% with ~21 GB free — no
+# benefit). So `wrappers.deferred_drain_policy()` returns
+# (cliff, floor, pressure_reserve, freecheck_interval): the queue always
+# drains at `cliff` (2 GB, throughput ceiling — unchanged when there is
+# headroom, hence NO runtime regression), and drains EARLY (at `floor`) only
+# when a throttled driver-free probe shows the device is within
+# `pressure_reserve` of capacity — i.e. only when a lower watermark is needed
+# to avoid OOM, where a slower run that fits beats an OOM. Unconfigured arch
+# → cliff-only (prior behavior preserved).
 #
 # Tuning via env vars (lookup once, not in the hot loop):
-#   NBX_DEFERRED_DRAIN_BYTES  default 2_000_000_000  (2 GB)
-#      Primary threshold. Sized so it never triggers on small models
-#      (TinyLlama, Janus) where end-of-run drain already fits
-#      comfortably, but triggers ~9× per run on PixArt-scale DiTs.
+#   NBX_DEFERRED_DRAIN_BYTES   pins the cliff AND disables the pressure branch
+#      (floor := cliff) — reproduces a fixed cap exactly (debug / A-B).
+#   NBX_DEFERRED_DRAIN_RESERVE  pins the pressure reserve (force/relax the
+#      early-drain pressure gate for demonstration).
 #   NBX_DEFERRED_DRAIN_COUNT  default 512
 #      Safety net against pathologies where many small tensors accumulate
 #      without ever crossing the bytes threshold (hypothetical: many-heads
@@ -75,8 +90,40 @@ def _parse_env_int(name: str, default: int) -> int:
         return default
 
 
-_DEFERRED_DRAIN_BYTES_DEFAULT = 2_000_000_000
+# Bytes/pressure thresholds are data-driven (wrappers.deferred_drain_policy);
+# the count safety-net stays a flat cap (guards pathological many-small-
+# tensor accumulation that never crosses the bytes budget).
 _DEFERRED_DRAIN_COUNT_DEFAULT = 512
+
+
+def _resolve_drain_policy():
+    """Resolve the per-run deferred-drain policy once, applying env overrides.
+
+    Returns `(cliff, floor, reserve, interval, count_limit)`. The config-driven
+    base comes from `wrappers.deferred_drain_policy()`; two env overrides layer
+    on top for reproducibility/demonstration (looked up once per run, never in
+    the hot loop):
+      - NBX_DEFERRED_DRAIN_BYTES pins `cliff` AND disables the pressure branch
+        (`floor := cliff`, `reserve := 0`) → reproduces a fixed cap exactly.
+      - NBX_DEFERRED_DRAIN_RESERVE pins `reserve`; if the pressure branch was
+        disabled it is re-enabled at the default floor.
+    Shared by both hot loops so the policy is identical single- and multi-device
+    (R30 by construction). No torch, no compute (R33).
+    """
+    cliff, floor, reserve, interval = deferred_drain_policy()
+    _env_cap = _parse_env_int("NBX_DEFERRED_DRAIN_BYTES", 0)
+    if _env_cap > 0:
+        cliff = _env_cap
+        floor = _env_cap        # disable the pressure branch
+        reserve = 0
+    _env_res = _parse_env_int("NBX_DEFERRED_DRAIN_RESERVE", -1)
+    if _env_res >= 0:
+        reserve = _env_res
+        if floor >= cliff:      # pressure branch was disabled — re-enable it
+            floor = min(_DEFERRED_DRAIN_FLOOR_DEFAULT, cliff)
+    count_limit = _parse_env_int(
+        "NBX_DEFERRED_DRAIN_COUNT", _DEFERRED_DRAIN_COUNT_DEFAULT)
+    return cliff, floor, reserve, interval, count_limit
 
 
 # Same pattern as core/runtime/graph/compiled_sequence._BLOCK_RE and
@@ -2805,12 +2852,11 @@ class TritonSequence:
         arena = self._arena
         _deferred: List[NBXTensor] = []
         _deferred_bytes: int = 0
-        _drain_bytes_limit = _parse_env_int(
-            "NBX_DEFERRED_DRAIN_BYTES", _DEFERRED_DRAIN_BYTES_DEFAULT)
-        _drain_count_limit = _parse_env_int(
-            "NBX_DEFERRED_DRAIN_COUNT", _DEFERRED_DRAIN_COUNT_DEFAULT)
+        (_drain_cliff, _drain_floor, _drain_reserve, _drain_interval,
+         _drain_count_limit) = _resolve_drain_policy()
+        _last_free_check = -(1 << 30)
         _drain_diag = os.environ.get("NBX_DEFERRED_DRAIN_DIAG") == "1"
-        _drain_stats = [0, 0, 0] if _drain_diag else None  # [drains, bytes-trig, count-trig]
+        _drain_stats = [0, 0, 0] if _drain_diag else None  # [drains, cliff/count, pressure]
 
         # C1 (P-KERNEL-LAUNCH-HYGIENE): diagnostic env gates hoisted out
         # of the per-op hot loop — read ONCE per run. Same gate
@@ -3455,22 +3501,32 @@ class TritonSequence:
                 import gc as _gc_force
                 _gc_force.collect()
 
-            # Route A — periodic drain. OR of bytes and count thresholds.
-            # Same correctness as the final drain (sync before free),
-            # just sooner. Sync bounds peak VRAM to ~drain_bytes worth
-            # of retained tensors instead of run-total.
-            if (_deferred_bytes >= _drain_bytes_limit
-                    or len(_deferred) >= _drain_count_limit):
+            # Pressure-sensitive drain (see module header + deferred_drain_policy).
+            # Always drain at the cliff/count ceiling; drain EARLY (queue >=
+            # floor) only when a throttled driver-free probe shows the device
+            # within `reserve` of capacity. sync-before-free correctness is
+            # unchanged — draining more often is never a UAF risk, only a
+            # throughput cost, which the pressure gate confines to the case
+            # where the alternative is OOM.
+            _drain_now = (_deferred_bytes >= _drain_cliff
+                          or len(_deferred) >= _drain_count_limit)
+            _pressure = False
+            if (not _drain_now and _drain_reserve > 0
+                    and _deferred_bytes >= _drain_floor
+                    and (op_idx - _last_free_check) >= _drain_interval):
+                _last_free_check = op_idx
+                _free_b = DeviceAllocator.device_free_bytes()
+                if 0 <= _free_b < _drain_reserve:
+                    _drain_now = True
+                    _pressure = True
+            if _drain_now:
                 if _drain_stats is not None:
                     _drain_stats[0] += 1
-                    if _deferred_bytes >= _drain_bytes_limit:
-                        _drain_stats[1] += 1
-                    else:
-                        _drain_stats[2] += 1
+                    _drain_stats[2 if _pressure else 1] += 1
                     print(f"[NBX_DEFERRED_DRAIN] single-dev drain "
                           f"#{_drain_stats[0]}: {len(_deferred)} tensors, "
                           f"{_deferred_bytes/1e9:.2f} GB, "
-                          f"trigger={'bytes' if _deferred_bytes >= _drain_bytes_limit else 'count'}",
+                          f"trigger={'pressure' if _pressure else 'cliff'}",
                           flush=True)
                 DeviceAllocator.sync_device()
                 _deferred.clear()
@@ -3485,7 +3541,7 @@ class TritonSequence:
         if _drain_stats is not None and _drain_stats[0] > 0:
             print(f"[NBX_DEFERRED_DRAIN] single-dev totals: "
                   f"{_drain_stats[0]} drains "
-                  f"({_drain_stats[1]} bytes-trig, {_drain_stats[2]} count-trig)",
+                  f"({_drain_stats[1]} cliff/count, {_drain_stats[2]} pressure)",
                   flush=True)
 
         # ===== TEMP PROFILING REPORT =====
@@ -3540,12 +3596,11 @@ class TritonSequence:
         _current_dev = self.device_idx
         _deferred: List[NBXTensor] = []
         _deferred_bytes: int = 0
-        _drain_bytes_limit = _parse_env_int(
-            "NBX_DEFERRED_DRAIN_BYTES", _DEFERRED_DRAIN_BYTES_DEFAULT)
-        _drain_count_limit = _parse_env_int(
-            "NBX_DEFERRED_DRAIN_COUNT", _DEFERRED_DRAIN_COUNT_DEFAULT)
+        (_drain_cliff, _drain_floor, _drain_reserve, _drain_interval,
+         _drain_count_limit) = _resolve_drain_policy()
+        _last_free_check = -(1 << 30)
         _drain_diag = os.environ.get("NBX_DEFERRED_DRAIN_DIAG") == "1"
-        _drain_stats = [0, 0, 0] if _drain_diag else None
+        _drain_stats = [0, 0, 0] if _drain_diag else None  # [drains, cliff/count, pressure]
 
         # C1 (P-KERNEL-LAUNCH-HYGIENE): diagnostic env gates hoisted out
         # of the per-op hot loop — read ONCE per run (same gate
@@ -3663,20 +3718,30 @@ class TritonSequence:
                     arena[s] = None
             old = None  # noqa: F841 — see P-SANA-4KPX-RUNTIME 2026-05-06
 
-            # Route A — periodic drain. See the Route A block at module
-            # top for rationale.
-            if (_deferred_bytes >= _drain_bytes_limit
-                    or len(_deferred) >= _drain_count_limit):
+            # Pressure-sensitive drain — mirror of the single-device path
+            # (see module header + deferred_drain_policy). The free probe uses
+            # the current device (no-arg → DeviceAllocator.get_device()); the
+            # cliff is the hard guarantee, the pressure gate is best-effort
+            # across devices.
+            _drain_now = (_deferred_bytes >= _drain_cliff
+                          or len(_deferred) >= _drain_count_limit)
+            _pressure = False
+            if (not _drain_now and _drain_reserve > 0
+                    and _deferred_bytes >= _drain_floor
+                    and (op_idx - _last_free_check) >= _drain_interval):
+                _last_free_check = op_idx
+                _free_b = DeviceAllocator.device_free_bytes()
+                if 0 <= _free_b < _drain_reserve:
+                    _drain_now = True
+                    _pressure = True
+            if _drain_now:
                 if _drain_stats is not None:
                     _drain_stats[0] += 1
-                    if _deferred_bytes >= _drain_bytes_limit:
-                        _drain_stats[1] += 1
-                    else:
-                        _drain_stats[2] += 1
+                    _drain_stats[2 if _pressure else 1] += 1
                     print(f"[NBX_DEFERRED_DRAIN] multi-dev drain "
                           f"#{_drain_stats[0]}: {len(_deferred)} tensors, "
                           f"{_deferred_bytes/1e9:.2f} GB, "
-                          f"trigger={'bytes' if _deferred_bytes >= _drain_bytes_limit else 'count'}",
+                          f"trigger={'pressure' if _pressure else 'cliff'}",
                           flush=True)
                 DeviceAllocator.sync_device()
                 _deferred.clear()
@@ -3691,7 +3756,7 @@ class TritonSequence:
         if _drain_stats is not None and _drain_stats[0] > 0:
             print(f"[NBX_DEFERRED_DRAIN] multi-dev totals: "
                   f"{_drain_stats[0]} drains "
-                  f"({_drain_stats[1]} bytes-trig, {_drain_stats[2]} count-trig)",
+                  f"({_drain_stats[1]} cliff/count, {_drain_stats[2]} pressure)",
                   flush=True)
 
 

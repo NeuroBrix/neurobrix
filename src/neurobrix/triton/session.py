@@ -183,11 +183,19 @@ class TritonLMSession:
             run_inputs = {"input_ids": self._accumulated_ids}
 
         # O(n) fallback decode (no KV cache). Logically a growing
-        # prefill, but the arena slot mapping is identical across
-        # calls and every op's output slot is overwritten at the
-        # start of each run — same no-UAF invariant as the KV
-        # fast path, so skip kill_slots here too.
-        outputs = self.executor.run(run_inputs, skip_kills=True)
+        # prefill: the full context is re-run every step and the
+        # per-op intermediates GROW with seq_len. skip_kills controls
+        # ONLY intra-run liveness (whether kill_slots free dead
+        # intermediates DURING the forward) — it does NOT affect the
+        # cross-call slot-overwrite safety (output slots are rebound
+        # at the start of each run regardless). The KV fast path above
+        # can skip kills because its intermediates are fixed-size
+        # (seq_len==1); here they are full-context and large, so
+        # skipping kills retains every intermediate of the whole
+        # forward and blows up VRAM as the context lengthens
+        # (audit #2 F2). Run kills like prefill (skip_kills=False):
+        # the deferred-drain sync still guarantees no UAF.
+        outputs = self.executor.run(run_inputs, skip_kills=False)
         hidden = self._extract_hidden(outputs)
         if hidden is None:
             raise RuntimeError("O(n) decode could not extract hidden_states.")
