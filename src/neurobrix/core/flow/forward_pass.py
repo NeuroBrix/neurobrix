@@ -7,8 +7,7 @@ ZERO HARDCODE: All configuration from NBX container.
 Handles non-iterative models like encoders, decoders, multimodal models.
 """
 
-import gc
-from neurobrix.core.device_utils import device_empty_cache
+from neurobrix.core.memory.manager import release_flow_memory
 import torch
 from typing import Any, Callable, Dict, Optional
 
@@ -97,8 +96,7 @@ class ForwardPassHandler(FlowHandler):
             # Unload weights (skip in serve mode — keep resident for next request)
             if not self.ctx.persistent_mode:
                 self._unload_component_weights(comp_name)
-                gc.collect()
-                device_empty_cache(self.ctx.primary_device)
+                release_flow_memory(self.ctx.primary_device)
         return self.ctx.variable_resolver.resolve_all()
 
     def _preprocess_inputs(self) -> None:

@@ -121,11 +121,8 @@ def _load_pt_numpy(path: str) -> np.ndarray:
 
 def _set_device_for(ctx):
     from neurobrix.kernels.nbx_tensor import DeviceAllocator as _DA
-    dev = str(getattr(ctx, "primary_device", "cuda:0"))
-    try:
-        _DA.set_device(int(dev.split(":")[-1].split(",")[0]) if "cuda" in dev else 0)
-    except (ValueError, IndexError):
-        _DA.set_device(0)
+    from neurobrix.triton.device_transfer import parse_device_idx
+    _DA.set_device(parse_device_idx(getattr(ctx, "primary_device", "cuda:0")))
 
 
 def _load_voicepack_np(engine, phoneme_count: int) -> None:
@@ -256,11 +253,8 @@ def preprocess_audio_input_np(ctx, audio_config: Dict, stages: List[Dict]) -> No
     # the CURRENT DeviceAllocator device — without this it lands on cuda:0 while a
     # multi-GPU-placed encoder may be on another device → "cpu tensor" at conv).
     from neurobrix.kernels.nbx_tensor import DeviceAllocator as _DA
-    dev = str(getattr(ctx, "primary_device", "cuda:0"))
-    try:
-        _DA.set_device(int(dev.split(":")[-1].split(",")[0]) if "cuda" in dev else 0)
-    except (ValueError, IndexError):
-        _DA.set_device(0)
+    from neurobrix.triton.device_transfer import parse_device_idx
+    _DA.set_device(parse_device_idx(getattr(ctx, "primary_device", "cuda:0")))
     nbx = NBXTensor.from_numpy(feats)
     ctx.variable_resolver.resolved[variable] = nbx
     short = variable.split(".")[-1] if "." in variable else variable

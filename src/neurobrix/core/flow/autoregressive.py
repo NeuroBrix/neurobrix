@@ -12,7 +12,6 @@ Architecture (Strategy Pattern):
           └── ImageStrategy        — gen_head logits, gen_embed+aligner, CFG
 """
 
-import gc
 import os
 import json
 import torch
@@ -25,7 +24,7 @@ if TYPE_CHECKING:
     from neurobrix.core.module.autoregressive.generator import AutoregressiveGenerator
 
 from .base import FlowHandler, FlowContext, register_flow
-from neurobrix.core.device_utils import device_empty_cache
+from neurobrix.core.memory.manager import release_flow_memory
 
 _SENTINEL = object()
 
@@ -240,8 +239,7 @@ class GraphLMSession:
             self.kv_wrapper = None
 
         if not is_persistent:
-            gc.collect()
-            device_empty_cache(device)
+            release_flow_memory(device)
 
     def _embed_from_ids(self, input_ids: torch.Tensor) -> torch.Tensor:
         """Embed token IDs via executor's embed_tokens weight."""
@@ -946,8 +944,7 @@ class AutoregressiveHandler(FlowHandler):
             if comp_name in self.ctx.executors:
                 self._unload_component_weights(comp_name)
 
-        gc.collect()
-        device_empty_cache(self.ctx.primary_device)
+        release_flow_memory(self.ctx.primary_device)
 
     def _graph_lm_prefill(self, input_ids: torch.Tensor) -> torch.Tensor:
         """Delegate to active session. Required by runtime-guard hook."""

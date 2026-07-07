@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Internal consolidation / correctness hardening (both engines).** Three
+  duplicated internal patterns, each carrying a latent bug class, now route
+  through a single brick per engine. (1) Device-string parsing in the
+  Triton flow handlers: six divergent copies disagreed on multi-GPU
+  placement strings — one crashed outright, three silently selected GPU 0,
+  and the fast path of the rest picked the LAST device of a comma list
+  instead of the primary; one shared parser now resolves the first named
+  device in every form. (2) Flow-level compute-dtype resolution now reads
+  the resolved allocation plan instead of the model's declared dtype — the
+  plan is what actually executes (a declared dtype the hardware cannot run
+  natively is resolved to a supported one), and one copy had been silently
+  falling back to defaults because it walked a plan attribute that never
+  existed. (3) Stage-boundary memory cleanup in the flow handlers now
+  follows the memory manager's sync-before-free discipline on both
+  engines: the device is synchronized before garbage collection drops the
+  last references, so an in-flight kernel can never read freed memory (the
+  illegal-address class), and the cache/pool flush happens after the
+  collect.
+
 - **Broadcast bias in batched matrix-multiply-add (Triton engine).** A
   bias tensor with a size-1 row or column dimension (e.g. `[batch, 1, N]`)
   was read with its memory stride instead of broadcasting, picking up

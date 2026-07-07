@@ -11,10 +11,10 @@ Handles diffusion models with denoising loop:
 3. Post-loop components (VAE decoder)
 """
 
-import gc
 from typing import Any, Callable, Dict, List, Optional
 
 from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, parse_dtype
+from neurobrix.triton.memory_pool import release_flow_memory
 from neurobrix.core.runtime.debug import DEBUG
 from neurobrix.core.flow.base import FlowContext
 from neurobrix.triton.cfg import TritonCFGEngine
@@ -882,10 +882,7 @@ class TritonIterativeProcessHandler:
         executor = self.ctx.executors.get(comp_name)
         if executor:
             executor.unload_weights()
-        gc.collect()
-        # In triton mode, use ctypes cudaDeviceSynchronize + cudaFreeAsync
-        # rather than torch.cuda.empty_cache(). The DeviceAllocator handles
-        # memory cleanup when tensors go out of scope.
+        release_flow_memory(self.ctx.primary_device)
 
     def _is_loop_component(self, comp_name: str) -> bool:
         """Check if component is in the main loop."""

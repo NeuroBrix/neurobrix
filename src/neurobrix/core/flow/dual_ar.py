@@ -8,8 +8,7 @@ ZERO SEMANTIC: No knowledge of "Fish-Speech" or "OpenAudio".
 ZERO HARDCODE: All parameters from NBX container.
 """
 
-import gc
-from neurobrix.core.device_utils import device_empty_cache
+from neurobrix.core.memory.manager import release_flow_memory
 import time
 import torch
 import numpy as np
@@ -269,8 +268,7 @@ class DualAREngine(FlowHandler):
         if not self.ctx.persistent_mode:
             self._unload_component_weights(comp_name)
             self._unload_component_weights("model.fast")
-            gc.collect()
-            device_empty_cache(device)
+            release_flow_memory(device)
 
         # ── Step 3: codes -> codec.quantizer.decode (RVQ dequantize) -> features ──
         T = len(acoustic_codes)
@@ -329,8 +327,7 @@ class DualAREngine(FlowHandler):
         self.ctx.variable_resolver.resolved["global.generated_token_ids"] = [c[0] for c in acoustic_codes]
         if not self.ctx.persistent_mode:
             self._unload_component_weights("codec.quantizer")
-            gc.collect()
-            device_empty_cache(device)
+            release_flow_memory(device)
 
         # ── Step 4: codec.decoder (features -> waveform), single symbolic-seq pass ──
         # The DAC decoder is fully symbolic (unpad1d negative-end slice keeps the
@@ -345,8 +342,7 @@ class DualAREngine(FlowHandler):
             self._execute_component(codec_name, "forward", None)
             if not self.ctx.persistent_mode:
                 self._unload_component_weights(codec_name)
-                gc.collect()
-                device_empty_cache(device)
+                release_flow_memory(device)
 
         # ── Step 5: Output waveform ──
         from .audio_utils import postprocess_audio_output

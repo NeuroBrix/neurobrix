@@ -10,13 +10,12 @@ ZERO SEMANTIC: No knowledge of specific models.
 ZERO HARDCODE: All parameters from NBX container.
 """
 
-import gc
 import time
 import torch
 from typing import Any, Callable, Dict, List, Optional
 
 from .base import FlowHandler, FlowContext, register_flow
-from neurobrix.core.device_utils import device_empty_cache
+from neurobrix.core.memory.manager import release_flow_memory
 
 
 @register_flow("audio_llm")
@@ -95,8 +94,7 @@ class AudioLLMEngine(FlowHandler):
 
             if not self.ctx.persistent_mode:
                 self._unload_component_weights(comp_name)
-                gc.collect()
-                device_empty_cache(self.ctx.primary_device)
+                release_flow_memory(self.ctx.primary_device)
 
         # ── Step 3: Autoregressive LLM decode with audio embeddings ──
         lm_name = ar_stage["component"]
@@ -208,8 +206,7 @@ class AudioLLMEngine(FlowHandler):
 
         if not self.ctx.persistent_mode:
             self._unload_component_weights(lm_name)
-            gc.collect()
-            device_empty_cache(self.ctx.primary_device)
+            release_flow_memory(self.ctx.primary_device)
 
         # ── Step 4: Decode tokens to text ──
         postprocess_text_output(self.ctx)

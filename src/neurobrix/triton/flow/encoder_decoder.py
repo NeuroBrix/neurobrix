@@ -7,12 +7,13 @@ with cross-attention from encoder output.
 No torch imports in this file (except at audio preprocessing boundary).
 """
 
-import gc
 import time
 import numpy as np
 from typing import Any, Callable, Dict, List, Optional
 
 from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator
+from neurobrix.triton.memory_pool import release_flow_memory
+from neurobrix.triton.device_transfer import parse_device_idx
 
 
 class TritonEncoderDecoderEngine:
@@ -101,7 +102,7 @@ class TritonEncoderDecoderEngine:
 
         if not self.ctx.persistent_mode:
             self._unload_component_weights(enc_name)
-            gc.collect()
+            release_flow_memory(self.ctx.primary_device)
 
         # -- Step 3: Autoregressive decode with cross-attention --
         from neurobrix.core.runtime.decode_bound import decode_bound  # NBX_DECODE_BOUND harness
@@ -140,7 +141,7 @@ class TritonEncoderDecoderEngine:
                         if tied_name not in executor._weights and f"param::{tied_name}" in tensors:
                             executor._weights[tied_name] = embed_weight
 
-        device_idx = _parse_device_idx(self.ctx.primary_device)
+        device_idx = parse_device_idx(self.ctx.primary_device)
         DeviceAllocator.set_device(device_idx)
         generated_ids = [decoder_start_token_id]
 
@@ -197,7 +198,7 @@ class TritonEncoderDecoderEngine:
 
         if not self.ctx.persistent_mode:
             self._unload_component_weights(dec_name)
-            gc.collect()
+            release_flow_memory(self.ctx.primary_device)
 
         # -- Step 4: Decode tokens to text (zero-torch) --
         from neurobrix.triton.audio_frontend import postprocess_text_output_np
@@ -338,21 +339,3 @@ def _is_tensor(val) -> bool:
     return hasattr(val, 'shape') and hasattr(val, 'dtype')
 
 
-def _parse_device_idx(device_str: str) -> int:
-    """Parse device index from device string."""
-    if device_str.startswith("cuda:"):
-        try:
-            return int(device_str.split(":")[-1].split(",")[0])
-        except ValueError:
-            return 0
-    if "cuda:" in device_str:
-        idx = device_str.index("cuda:")
-        num_str = device_str[idx + 5:].split(",")[0].split(":")[0]
-        try:
-            return int(num_str)
-        except ValueError:
-            return 0
-    try:
-        return int(device_str)
-    except ValueError:
-        return 0

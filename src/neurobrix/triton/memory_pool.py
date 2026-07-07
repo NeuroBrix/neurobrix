@@ -6,7 +6,41 @@ via bump pointer. No individual free, no fragmentation.
 Zero torch. Uses DeviceAllocator (hardware-agnostic: CUDA/ROCm).
 """
 
+import gc
+
 from neurobrix.kernels.nbx_tensor import DeviceAllocator
+from neurobrix.triton.device_transfer import parse_device_idxs
+
+
+def release_flow_memory(device=None) -> None:
+    """Flow-boundary memory release — triton-side mirror of the compiled
+    `MemoryManager.release_flow_memory` discipline (R30 naming parity,
+    separate implementation: R33-pure, DeviceAllocator only, no torch).
+
+    Consolidates the bare `gc.collect()` calls the triton flow handlers
+    ran at stage boundaries. Those calls skipped the sync-before-free
+    protection: `gc.collect()` triggers NBXTensor / ComponentArena
+    finalizers (`cudaFree`) on cyclic or lingering references, and freeing
+    memory an in-flight kernel is still reading is the err-700 class
+    documented in `core/memory/manager.py`. Ordering here:
+
+      1. sync every CUDA device named in `device` (the flow's Prism
+         primary-device string — may be compound, e.g. "fgp:cuda:0,cuda:1")
+         BEFORE any reference can be finalized;
+      2. gc.collect() — drop refs, run finalizers;
+      3. DeviceAllocator.empty_cache_pool() — return pool-cached blocks to
+         the driver (no-op when NBX_ALLOC_POOL is off; individual frees
+         already went straight to cudaFree).
+    """
+    idxs = parse_device_idxs(device)
+    if idxs:
+        prev = DeviceAllocator.get_device()
+        for i in idxs:
+            DeviceAllocator.set_device(i)
+            DeviceAllocator.sync_device()
+        DeviceAllocator.set_device(prev)
+    gc.collect()
+    DeviceAllocator.empty_cache_pool()
 
 
 class ComponentArena:

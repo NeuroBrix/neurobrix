@@ -166,6 +166,36 @@ class MemoryManager:
             device_empty_cache()
 
     @staticmethod
+    def release_flow_memory(device: Optional[str] = None) -> None:
+        """
+        Flow-boundary memory release with the sync-before-free discipline.
+
+        Consolidates the hand-rolled `gc.collect(); device_empty_cache(dev)`
+        pairs that flow handlers ran at stage boundaries (after component
+        unload / between phases). Those pairs skipped the manager's
+        sync-before-free protection: `gc.collect()` is what triggers the
+        finalizers (NBXTensor / ComponentArena → cudaFree) on cyclic or
+        lingering references, and freeing memory that an in-flight kernel
+        is still reading is the err-700 class documented in
+        `unload_weights` above. Ordering here:
+
+          1. device_sync(device)   — every pending kernel on the device
+             completes BEFORE any reference can be finalized;
+          2. gc.collect()          — drop refs, run finalizers;
+          3. device_empty_cache(device) — return freed blocks.
+
+        `device` is the flow's primary device string ("cuda:N"); None is a
+        no-op sync/flush (CPU-only contexts), the collect still runs.
+
+        The triton flows use the triton-side mirror
+        (`neurobrix.triton.memory_pool.release_flow_memory`) — separate
+        implementation by design (never a shared compute helper).
+        """
+        device_sync(device)
+        gc.collect()
+        device_empty_cache(device)
+
+    @staticmethod
     def get_memory_stats(device: Optional[str] = None) -> Dict[str, float]:
         """
         Get current GPU memory statistics.
@@ -199,3 +229,8 @@ def cleanup_tensors(
     """Convenience function for MemoryManager.cleanup_tensors()."""
     MemoryManager.cleanup_tensors(*tensor_dicts, clear_cuda_cache=clear_cuda_cache,
                                    log_prefix=log_prefix, verbose=verbose)
+
+
+def release_flow_memory(device: Optional[str] = None) -> None:
+    """Convenience function for MemoryManager.release_flow_memory()."""
+    MemoryManager.release_flow_memory(device)
