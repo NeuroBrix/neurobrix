@@ -353,7 +353,7 @@ class TritonAutoregressiveHandler:
             if cfg_weight is None:
                 raise RuntimeError(
                     "guidance_scale missing from defaults.json for "
-                    "autoregressive_image. Set via forge model_registry.yml.")
+                    "autoregressive_image. Set in the model registry at import.")
             use_cfg = float(cfg_weight) > 1.0
 
         if use_cfg:
@@ -393,7 +393,7 @@ class TritonAutoregressiveHandler:
         lm_name = gen_info.get("lm_component", "language_model")
         # Resolve the LM component name against the live executor map, NOT
         # `pkg.components`. `pkg.components` is populated only from component
-        # dirs that ship a `runtime.json` (loader.py:72-77) — a forge-side
+        # dirs that ship a `runtime.json` (loader.py:72-77) — a build-side
         # artefact that is partial/empty for orpheus-class TTS builds: the
         # 2-component build yields {} (no override, so lm_name stays "model"
         # by luck) while the 3-component SNAC build yields {"codec.decoder"}.
@@ -444,7 +444,7 @@ class TritonAutoregressiveHandler:
                     raise RuntimeError(
                         "ZERO FALLBACK: norm_topk_prob missing from lm_config "
                         "for MoE model.\n"
-                        "Add to forge model_registry.yml: moe.norm_topk_prob")
+                        "Add to the model registry: moe.norm_topk_prob")
                 executor.set_moe_config(norm_topk_prob=norm_topk)
 
         if not lm_config:

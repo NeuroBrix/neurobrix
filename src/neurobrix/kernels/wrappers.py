@@ -273,7 +273,7 @@ def get_hardware_profile():
 #   for this sequence. Read by self-managed wrappers (conv2d_wrapper)
 #   to decide output dtype, mirroring what cuDNN does in compiled mode.
 # - _NBX_ACTIVATIONS_FP16_SAFE: per-component opt-in flag from
-#   forge/config/model_registry.yml. When True, ops in AMP_FP32_OPS
+#   the model registry. When True, ops in AMP_FP32_OPS
 #   that produce fp32 internally cast their output back to compute_dtype
 #   (rms_norm, div, etc.) — VRAM-preserving for models whose activations
 #   are confirmed within fp16 range by measure_activation_ranges. Default
