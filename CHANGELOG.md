@@ -7,1196 +7,276 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
+## [0.3.0] - 2026-07-07
 
-- **Triton `aten::max_pool3d_with_indices` kernel.** Video conditioning
-  masks pooled to the latent grid (e.g. Allegro-TI2V's `state_video_mask`
-  via `F.max_pool3d`) previously crashed `--triton` runs with
-  `[triton] Missing op`. New dedicated `@triton.jit` kernel
-  (`kernels/ops/max_pool3d.py`, temporal extension of the 2D pool kernel)
-  returns values bit-exact vs the PyTorch reference and exact indices
-  (flattened `(T, H, W)` offsets, first-max tie rule).
-  `aten::max_pool3d` and `aten::max_pool2d_with_indices` are dispatched
-  too.
+The video release. NeuroBrix now runs the video generation family
+end-to-end: ten video models — text-to-video and image-to-video — are
+validated in all four execution modes (PyTorch `--sequential` op-by-op,
+PyTorch `--compiled`, Triton `--triton-sequential`, Triton `--triton`),
+with recorded verdicts under `validation_outputs/`. Supporting that
+family, this release delivers 5D spatio-temporal VAE tiling (decode AND
+encode), multi-GPU component placement for 14B+ models, a set of new
+Triton kernels, and scheduler parity fixes. The audio, LLM, image, and
+upscaler families from 0.2.1 are unchanged and re-verified.
 
-### Fixed
+### Video model family
 
-- **Triton `NBXTensor.new_ones` returned UNINITIALIZED memory (leftover
-  TODO) — Allegro `--triton` positive-prompt conditioning washed out.**
-  The T5 text-encoder extended-attention-mask chain opens with
-  `aten::new_ones([], dtype=bool) & (positions >= 0)`; the uninitialized
-  0-dim byte read as 0 → False → the AND zeroed the q-side validity →
-  the extended mask resolved to -3.4e38 on ALL keys for ALL queries →
-  every T5 self-attention row went UNIFORM (softmax of a constant row,
-  measured l2 exactly 8.0 = sqrt(heads) on `[1,64,512,512]`), so
-  positive-prompt embeddings washed toward the pad-token mean. Observable
-  as the CFG cond-branch per-branch drift corr 0.9288 / relL2 35.8% vs the
-  PyTorch oracle at step-0 (scale-invariant: identical at 13f and native
-  88f), while the uncond branch stayed clean (corr 0.99996 — the empty
-  negative prompt has one real token whose rel-pos row is degenerate).
-  `new_ones` now fills ones for every shape/dtype (0-dim included).
-  Post-fix per-branch drift gate (13f, 720x1280, step-0, seed 42, vs the
-  compiled capture): cond corr 0.999992 / relL2 0.35%, uncond corr
-  0.999983 / relL2 0.51%; guided (x7.5 CFG combine) corr 0.999863 —
-  both branches clean, branch stds bit-matched (0.1412 / 0.1508).
-- **Triton bool binary wrappers now broadcast (`bitwise_and`/`bitwise_or`/
-  `logical_and`/`logical_or`).** The wrappers ran the flat elementwise
-  kernel over the first operand's element count with no shape alignment,
-  silently ignoring broadcasting: `bitwise_and([1,1,S,1], [1,1,1,S])` (the
-  T5 extended-mask combine) returned the elementwise diagonal `[1,1,S,1]`
-  (same element count — no crash, silently wrong), and a 0-dim operand
-  (`new_ones([]) & q_valid`) collapsed the output to 0-dim after an
-  out-of-bounds flat read past the 0-dim tensor's one-element allocation.
-  With `new_ones` fixed, this second defect alone would have turned the T5
-  extended mask all-True (no pad masking — pad leak into every real
-  token). The four wrappers now route through the universal binary-op
-  preparation (dtype align, device align, broadcast, contiguous); scalar /
-  0-dim operands are materialized exactly.
-- **Triton conv3d no longer OOMs on native-resolution video-VAE encodes
-  (temporal chunk-streaming).** The temporal decomposition of conv3d needed
-  ~4-5 full folded transients simultaneously (temporal pad copy, frame fold,
-  conv output, permuted copy, accumulator), so a component correctly sized
-  as "fits" for the compiled engine could OOM in triton only — Allegro-TI2V
-  vae_encoder at 720x1280x12f fp32 hit 30.4 GB live at the second
-  convolution on a 32 GB V100. The conv wrapper now streams over temporal
-  output chunks (bounded per-transient size, identical math and kt
-  accumulation order) when — and only when — the one-shot path's exact
-  allocation peak cannot fit the driver-free bytes (probe:
-  `DeviceAllocator.device_free_bytes`); every run that fits keeps the
-  byte-identical one-shot path. Floor and chunk bound configurable via
-  `NBX_CONV3D_CHUNK_BYTES` (default 1 GiB).
-- **Triton input rank alignment (R30 mirror of the compiled bind path).**
-  Components declaring an input with an extra structural unit dim vs the
-  standard flow tensor (e.g. a caption projection taking
-  `encoder_hidden_states` as `[B, 1, S, D]`) crashed `--triton` /
-  `--triton-sequential` at symbol binding (`IndexError: tuple index out of
-  range`) because only the compiled engine rank-aligned inputs. The same
-  graph-driven alignment (simulation checks + batch coherence, ambiguity
-  changes nothing) now runs at the shared triton input boundary; inert for
-  every input whose rank already matches its graph contract.
-- **Component-level VAE ENCODER tiling (downsampling direction, D2-encoder).**
-  Oversized video-VAE *encode* passes can now run tiled on a single GPU: the
-  placement solver lifts the downsampler guard specifically for encoders whose
-  temporal input→output map is exactly linear (t_out = t_in / ratio; causal
-  first-frame-special encoders still decline, same doctrine as the decode
-  gate) and whose profiled activation overflows the GPU budget. Tiles live in
-  input (pixel) space on the compression-ratio lattice, sized by the same
-  balanced cube-root (T, H, W) policy as decode; latent outputs land exactly
-  on the global latent grid (position / ratio) and blend by the existing
-  accumulate/divide averaging over the input-halo overlap. Encoder activation
-  estimates now bind time/height/width symbols to pixel extents for this class
-  (previously latent-bound, hiding the overflow — Allegro-TI2V encoder at 88f
-  720×1280: 156 GiB real vs 0.62 GiB estimated). Allegro-TI2V's native encode
-  now plans as 24 tiles of ~10.6 GiB instead of an unplaceable 156 GiB pass;
-  every existing model's plan is byte-identical (verified across 8 video/image
-  models × 2 hardware profiles).
+- **Ten video models validated in all 4 execution modes:**
+  Wan2.1-T2V-1.3B, CogVideoX-2b, SANA-Video-2B-720p, CogVideoX-5b-I2V,
+  Mochi-1-preview, Wan-I2V-14B, Wan2.2-I2V-A14B (dual-denoiser, 28B),
+  Wan2.1-VACE-1.3B, Open-Sora-v2, and Allegro — plus Allegro-TI2V at
+  native resolution (720×1280, 88 frames). Every model runs and is
+  cross-checked in PyTorch sequential/compiled and Triton
+  sequential/compiled modes, including classifier-free guidance
+  (batched cond/uncond) where the reference pipeline uses it.
+- **Image-to-video conditioning (`--input-image`).** The conditioning
+  image is resized, normalized, and VAE-encoded once, then applied every
+  step. The conditioning layout is data-driven per model — latent
+  channel-concat with a frame mask (Wan-I2V), temporally padded
+  first-frame latent (CogVideoX-I2V), or a folded pixel-space mask plus
+  masked video (Allegro-TI2V) — with no model-name branches, in both the
+  compiled and Triton execution branches.
+- **VACE control conditioning (Wan2.1-VACE).** WanVACE denoisers receive
+  their multi-channel latent control signal and per-injection-layer scale
+  vector, built once from a VAE-encode pass over a control video (the
+  pure text-to-video mode collapses to a single encode of a zeros clip).
+  Driven by a registry flag; inert for every model without it. Both
+  execution branches.
+- **FLUX-style packed-latent video flow (Open-Sora-v2).** Runtime support
+  for packed-latent video denoisers: 3-axis positional ids over the
+  latent grid, 5D pack/unpack around the denoiser, and detection of
+  in-graph timestep scaling (previously double-scaled past fp16 range →
+  all-NaN output). Gated on the denoiser's own graph contract — inert for
+  every other diffusion model.
+- **Dual-denoiser boundary switch (Wan2.2-A14B).** Models with two
+  denoiser experts (high-noise / low-noise, switched at a boundary
+  timestep) run ONE expert per step in both execution branches. Gated on
+  the model config; inert for single-denoiser models.
+- **Classifier-free guidance hardening for video.** Guidance always
+  splits on the text condition (never a separate image-embedding stream,
+  which has no negative counterpart); image conditioning is shared across
+  both batch halves; FLUX/MMDiT denoisers that name their text input
+  `txt` are detected via the encoder side. T5/UMT5 padding embeddings are
+  zeroed before cross-attention on BOTH the positive and negative
+  branches (matching the reference pipelines), and models that
+  cross-attend unmasked get their text embeddings zero-extended to the
+  trained conditioning length — restoring coherent output on models that
+  previously produced structure-free video.
+- **Video CLI.** `--num-frames` and `--fps` for the video family,
+  `--input-image` for image-to-video.
 
-- **Graph-driven input rank alignment at the executor boundary.** Components
-  whose graph declares an input with an extra structural unit dim vs the
-  standard flow tensor (e.g. a caption projection taking
-  `encoder_hidden_states` as `[B, 1, S, D]`) now receive the correctly
-  unsqueezed tensor automatically — driven purely by the graph contract
-  (insertion only at a concretely-unit, non-symbol-sourced dim; ambiguity
-  changes nothing). Inert for all models whose input ranks already match.
-  Disambiguation is completed by batch coherence (the leading dim after
-  insertion must match the component-wide batch) and tolerates
-  symbol-annotated structural unit dims.
+### 5D spatio-temporal tiling
 
+- **Video VAE decode tiling over (T, H, W).** The universal tiling engine
+  generalizes from spatial (H, W) tiles to spatio-temporal (T, H, W)
+  tiles with per-axis overlap and N-d accumulate/divide blending, so
+  long-clip and native-resolution decodes whose activations exceed VRAM
+  run on a single GPU with seamless output — instead of offloading to
+  host RAM (very slow) or failing. The temporal axis is enabled only for
+  VAEs whose time mapping is safely splittable (causal
+  first-frame-special decoders keep spatial-only tiling). Untiled and
+  spatial-only paths are byte-identical to before.
+- **Video VAE encode tiling (downsampling direction).** Oversized video
+  encodes now tile too: tiles live in pixel space on the compression-
+  ratio lattice, land exactly on the global latent grid, and blend over
+  the overlap. Encoder activation estimation now works in pixel space
+  (previously latent-bound, hiding a 156 GiB pass behind a 0.62 GiB
+  estimate) — Allegro-TI2V's native 88-frame 720×1280 encode plans as 24
+  tiles of ~10.6 GiB. Every previously supported model's plan is
+  byte-identical (verified across 8 video/image models × 2 hardware
+  profiles).
+- **Tiling in the Triton branch (NBXTensor, zero torch).** The tiling
+  engine accumulates in NBXTensor when fed NBXTensor tiles, so the Triton
+  branch tiles on GPU without any torch dependency — verified by exact
+  tile-and-blend reconstruction on 4D and 5D inputs.
 
-### Added
+### New Triton kernels & engine
 
-- **`state_video_mask` I2V conditioning layout (Allegro-TI2V).** The I2V
-  latent channel-concat brick gains a third data-driven style: the denoiser
-  input is `cat([latents, masked_video, mask], dim=1)` where masked_video is
-  the VAE-encoded conditioning image(s) (image at its frame index, zeros
-  elsewhere) and mask is the vendor-exact pixel-space inverted frame mask
-  (1 = not conditioned) temporally folded into `vae_temporal_ratio` latent
-  channels. The registry flag's `layout:` key is now accepted as an alias of
-  `style:`. Ratio and channels are profile/registry-driven; the existing
-  `wan` and `cogvideox` styles are unchanged.
+- **`aten::max_pool3d_with_indices` kernel.** Video conditioning masks
+  pooled to the latent grid previously crashed `--triton` runs with
+  "Missing op". The new kernel returns values bit-exact vs the PyTorch
+  reference and exact first-max indices; `max_pool3d` and
+  `max_pool2d_with_indices` are dispatched too.
+- **conv3d temporal chunk-streaming under memory pressure.** The conv3d
+  temporal decomposition needed several full-size transients at once, so
+  a component that fits in compiled mode could OOM in Triton only. The
+  wrapper now streams over temporal output chunks (identical math and
+  accumulation order) when — and only when — the one-shot path cannot fit
+  the free device bytes; every run that fits keeps the byte-identical
+  one-shot path. Combined with eager-freeing of dead per-slice
+  intermediates, the CogVideoX-5b-I2V VAE peak dropped 28.4 GB → 12.3 GB
+  and native-resolution encodes run single-GPU.
+- **Deterministic run-scoped sampling streams (both engines).** Seeded
+  runs thread one run-scoped generator through the initial noise draw AND
+  every stochastic scheduler draw, in consumption order — the reference
+  `generator` contract. Previously the per-step ancestral noise came from
+  a separately seeded source (degenerating ancestral sampling), and the
+  Triton random kernels drew unseeded (stochastic sampling was not
+  reproducible regardless of `--seed`). All nine draw sites now consume a
+  reproducible stream armed from the run seed; deterministic schedulers
+  and seeded init draws are bit-unchanged.
+- **Bool-op broadcasting + `new_ones` initialization.** The four bool
+  binary wrappers (`bitwise_and`/`bitwise_or`/`logical_and`/`logical_or`)
+  silently ignored broadcasting, and `new_ones` returned uninitialized
+  memory — together washing out T5-encoded prompt conditioning in
+  `--triton` (every self-attention row went uniform). Both fixed;
+  attention-mask chains now match the PyTorch reference (correlation
+  0.9999+ per guidance branch).
+- **Per-branch numerical parity for CFG models.** Under batched guidance
+  the two batch halves must stay independent. Fixed: the CogVideoX-I2V
+  image condition reached only one branch (mis-laid batch after a silent
+  frame-dim mismatch); Wan rotary embeddings wrote the rotated query into
+  a throwaway copy instead of the strided destination view (washed-out
+  video) — strided slices now stay views and in-place copies scatter into
+  them, matching PyTorch.
+- **Input rank alignment at the Triton boundary.** Components declaring
+  an input with an extra structural unit dim (e.g. a caption projection
+  taking `[B, 1, S, D]`) crashed `--triton`/`--triton-sequential` at
+  symbol binding; the same graph-driven alignment as the compiled engine
+  now runs at the shared Triton input boundary. Inert when ranks already
+  match.
+- **Complex dtypes across the Triton path (rotary embeddings).**
+  `from_numpy`, `.to()`, `index_select`, broadcast `add`/`sub`/`sum`,
+  inner-dim `cat`, and `view_as_complex` now handle complex64/128
+  correctly (fp64/complex128 narrowed to fp32/complex64 — the kernels are
+  fp32-max). Previously the Wan rotary frequency table read as garbage
+  and the video decoded to a black frame.
+- **Fully-masked attention rows emit `0`, matching PyTorch.** A query row
+  whose every key is masked is a degenerate softmax: PyTorch emits `0`,
+  the Triton math and flash paths computed NaN — turning a whole decoded
+  video black. Both paths now match; bit-identical for every attention
+  without a fully-masked row.
+- **Padding and reduction coverage.** `replication_pad{1,2,3}d` and
+  `reflection_pad3d` wrappers (5D video VAE decoders); general N-D
+  `constant_pad_nd` (middle-axis pads were silently wrong); multi-dim
+  reductions (`sum`/`mean`/`amax`/`std`/`var` over several axes reduced
+  only the first); `aten::index` multi-tensor advanced indexing.
+- **Flash attention: broadcast key-padding bias + Volta tile fix.** A
+  `[B,1,1,Sk]` key-padding mask is now read through a stride-0 broadcast
+  view instead of being materialized to the full `[B,H,Sq,Sk]` matrix
+  (tens of GB on long video sequences, and the unexpanded view caused an
+  illegal memory access). On V100/pre-Ampere the query tile is
+  hardware-gated to 64 rows: ~1.5× faster on long sequences (seq 8192,
+  head dim 64: 9.2 s → 6.1 s) and numerically stable where the previous
+  tile spilled registers.
+- **Per-kernel-launch overhead trimmed (no behavior change).** Device
+  switches are skipped when already current, allocation device queries
+  and diagnostic env-var gates are cached, and contiguity/element-size
+  are computed once per tensor.
 
-- **`state_video_mask` I2V conditioning in `--triton` /
-  `--triton-sequential` modes.** The Triton-branch I2V conditioning brick
-  gains the same Allegro-TI2V style, NBXTensor end-to-end (no torch): host-
-  built folded pixel mask uploaded once, channel-concatenated onto the
-  VAE-encoded masked-video latent, bit-identical to the compiled engine's
-  condition tensor (unit-tested, including the mask-fold and latent-frame
-  agreement guards). Same registry/profile-driven configuration keys as the
-  compiled path; `wan` and `cogvideox` triton styles are unchanged.
+### Multi-GPU
 
-### Fixed
+- **Component placement across GPUs for 14B+ models.** Large video
+  transformers now split correctly: sharded weights resolve to their
+  assigned device per shard file (a 31 GB transformer meant to span two
+  32 GB GPUs no longer collapses onto one); per-op device detection
+  considers every weight of an op, not just the first; inputs are moved
+  to their component's device before execution; and ops with no weights
+  (timestep projections and other flow globals) take the device-alignment
+  path in both engines. Single-GPU placements are byte-identical.
+- **Pipeline placement balances layers and reserves headroom.**
+  Transformer layers are distributed evenly across the minimum number of
+  GPUs whose even share leaves an activation-headroom reserve — instead
+  of packing the first GPU full and running out of memory at the first
+  guided step. Block sizes are estimated at the compute dtype (fp16), not
+  the on-disk dtype (fp32), so block-wise placement is available whenever
+  the loaded weights actually fit.
+- **Dual-expert lifecycle.** For dual-denoiser models the retired
+  high-noise expert is evicted at the boundary transition in both
+  engines, so the low-noise stage runs with the retired expert's VRAM
+  freed (the switch is one-way). In the Triton branch only the active
+  expert executes per step (previously both ran every step → OOM).
+- **Zero-torch placement strategies (Triton branch).** ALL placement
+  strategies (single-GPU, component placement, pipeline parallel, block
+  scatter, weight sharding, lazy sequential, zero3 CPU-offload, CPU
+  execution) now run NBXTensor-native with no torch dependency, including
+  cross-GPU tensor transfer.
 
-- **Compiled engine: synthetic combined seq-length symbols now match exactly.**
-  The compiled-mode scalar promotion pass synthesizes combined (sum-of-pair)
-  sequence-length symbols for models that concatenate two token streams. The
-  ±1 offset tolerance — meant for single-symbol `seq_len + 1` slicing — no
-  longer applies to these synthetic sums: two small sequence symbols (e.g.
-  trace 14 and 1) could otherwise capture a structural model constant one
-  above their sum (16, the rotate-half half-width of a per-axis 3D-RoPE
-  chunk), rebinding per-block rotary slice bounds to the runtime sequence
-  length and crashing compiled runs at the first rotary multiply
-  (`48 vs 32` shape mismatch) while sequential runs passed. Exact matching
-  also restores the weight-dims collision guard for sums. Unit-tested;
-  single-symbol promotions are unchanged.
-- **Compiled engine: out-of-range slice starts replay as empty slices.** The
-  compiled slice op now clamps the start index to the dimension size, matching
-  eager semantics (`x[:, 88:]` on a 3-sized dim is legal and empty). Traced
-  dead branches — e.g. a conditioning path traced past the runtime clip
-  length — previously crashed compiled mode where sequential mode correctly
-  produced an empty chain.
-- **Euler-family schedulers: vendor-parity `linspace` ladder + fp32 step
-  arithmetic (both engines).** The Euler/EulerAncestral `linspace` spacing now
-  matches the reference implementation exactly: FLOAT timesteps down to t=0
-  inclusive with sigmas interpolated at fractional positions (previously the
-  DPM/DDIM integer convention was applied, leaving every intermediate sigma
-  15–40 % off the trained schedule and ending the schedule at t≈125 with a
-  violent σ=0.43→0 final jump — the root of Allegro's native-regime
-  degeneration). Step arithmetic now upcasts to fp32 (reference "Upcast to
-  avoid precision issues"), avoiding catastrophic cancellation of
-  (sample−denoised)/σ at low sigma in fp16. Verified bit-identical timesteps
-  and sigmas vs the reference at 20 and 100 steps. Affects only EulerAncestral/Euler
-  models (Allegro in the current zoo); UniPC/DDIM/DPM/FlowMatch models are
+### Schedulers
+
+- **Euler-family float-timestep parity with the reference pipelines
+  (both engines).** The Euler/EulerAncestral `linspace` spacing now
+  matches the reference exactly — FLOAT timesteps down to t=0 inclusive
+  with sigmas interpolated at fractional positions (previously an integer
+  convention left intermediate sigmas 15–40% off the trained schedule),
+  and step arithmetic upcasts to fp32, avoiding catastrophic cancellation
+  at low sigma in fp16. Verified bit-identical timesteps and sigmas vs
+  the reference at 20 and 100 steps; UniPC/DDIM/DPM/FlowMatch models are
   untouched.
-- **Run-scoped sampling RNG stream (both engines).** Seeded runs now thread
-  ONE run-scoped generator through the init draw AND every stochastic
-  scheduler draw, in consumption order — the reference `generator` contract.
-  Previously the init came from a dedicated seeded generator while the
-  per-step ancestral noise fell back to the GLOBAL RNG seeded with the same
-  seed: the step-0 ancestral noise was bit-identical to the init latent (a
-  deterministic correlated injection along the state's own direction), and
-  every later draw was the reference sequence shifted by one — degenerating
-  EulerAncestral sampling (Allegro: mosaic at 20 steps, saturation at 100).
-  In Triton mode the random wrappers additionally drew every kernel seed
-  from an unseeded source, making stochastic sampling non-reproducible
-  regardless of `--seed`; all nine draw sites (rand/randn/*_like/normal/
-  uniform/bernoulli/multinomial) now consume a reproducible run-scoped
-  stream armed from the same seed. Deterministic schedulers are unaffected;
-  seeded init draws are bit-unchanged.
+- **`UniPCMultistepScheduler`** — runtime-pure (no diffusers import),
+  including the flow-matching branch used by Wan video models, verified
+  bit-exact against the reference implementation across standard + flow
+  configs and 4D + 5D latents. A zero-torch NBXTensor mirror serves the
+  Triton branch, including the `log(0) = -inf` domain edge at the final
+  flow-matching step.
+- **CogVideoX DDIM variant (both engines).** The zero-terminal-SNR
+  alphas-cumprod transforms and the exact "trailing" spacing/previous-
+  timestep conventions, verified against the reference scheduler
+  (30-step v-prediction trajectory max|diff| 4.1e-6).
+- **Flow-matching `invert_sigmas` + video timestep scale (both
+  engines).** Inverted-sigma flow models (Mochi) previously denoised in
+  the wrong direction, and video FlowEuler denoisers with no explicit
+  scale received `[0,1]` timesteps where the model expects raw
+  `[0, num_train_timesteps]` — collapsing the timestep conditioning. Both
+  fixed and gated; non-inverted flow (Sana/Flex/SD3) and non-flow video
+  schedulers are byte-identical.
+- **`algorithm_type` is optional** — it is a DPM++-specific key; UniPC
+  and flow scheduler configs load without a spurious "missing REQUIRED
+  keys" crash.
 
-### Added
+### General fixes
 
-- **Wan2.2-I2V-A14B end-to-end support — CLOSED 4/4.** The dual-denoiser 28B
-  i2v pipeline (2× 14B experts, boundary switch 0.9, 36ch VAE-latent
-  conditioning) now runs in all four modes with recorded gates: compiled
-  bit-exact vs the PyTorch-sequential oracle on both experts; Triton per-branch
-  drift 0.4–0.9 % (high expert) / ≤ 4.8 % (low expert, compounding included);
-  coherent matched renders in compiled AND triton. See
-  `validation_outputs/video/Wan2.2-I2V-A14B/verdict.md`.
-- **Dual-denoiser boundary switch — Triton mirror + expert lifecycle.** The
-  Triton flow now runs ONE expert per step (previously both experts executed
-  every step in Triton mode → out-of-memory), and BOTH engines evict the
-  retired high-noise expert at the boundary transition (the switch is one-way:
-  timesteps decrease monotonically), so the low-noise stage runs with the
-  retired expert's VRAM freed. Gated on boundary_ratio + ≥ 2 loop denoisers —
-  inert for single-denoiser models.
-- **Temporal (T-axis) video-VAE tiling.** The component TilingEngine
-  generalizes from (H, W) to (T, H, W) tiles with per-axis overlap and N-d
-  accumulate/divide blending. Prism sizes tiles cube-root-balanced across the
-  three axes from the activation profile and gates the temporal axis on the
-  component's temporal input→output map read from the graph shape algebra:
-  linear maps (t_out = a·t_in, e.g. Allegro) tile temporally; affine causal
-  maps (a·(t−1)+1: CogVideoX / Wan / Mochi — first latent frame decodes to one
-  pixel frame) keep spatial-only tiling. Untiled and spatial-only paths are
-  byte-identical to before; no existing model configuration changes plan.
-
-### Fixed
-
-- **Multi-GPU: runtime-input device alignment (both engines).** In
-  multi-device sequences, ops consuming runtime-bound inputs (timestep and
-  other flow globals) could execute with operands on different GPUs when the
-  op had no weights to derive its device from (first trigger: the Wan2.2
-  expert's timestep projection under an intra-split placement). Such ops now
-  take the per-op device-alignment path in both the compiled and the Triton
-  sequence. Single-device components are unaffected; already-supported
-  multi-GPU models are numerically unchanged (same-device moves are the
-  identity).
-- **Multi-GPU: pipeline placement now enforces its activation headroom per
-  device.** The pipeline strategy reserved activation headroom only when
-  choosing HOW MANY GPUs to span, not when filling each device, so a 16 GB
-  card could be packed with weights to 13.1/16 GB and the resident attention
-  block ran out of memory at runtime. The per-device fit test now includes the
-  reserve (an absolute working-set floor — activations do not scale with card
-  size). Verified: placements of all previously supported multi-GPU and
-  single-GPU models are byte-identical; only the previously-failing
-  Wan2.2-I2V-A14B plan changes (to its design-intent component lifecycle).
-
-- **Dual-denoiser boundary switch (Wan2.2-A14B MoE-of-experts, compiled).** The
-  iterative_process flow runs ONE denoiser expert per step: the high-noise expert
-  for t >= boundary_timestep (= boundary_ratio x num_train_timesteps), the low-noise
-  expert for t < boundary (`_setup_dual_denoiser`, role-preferred ordering with
-  loop-order fallback). Gated on boundary_ratio + >= 2 loop denoisers -> inert for
-  every single-denoiser model. (Superseded 2026-07-03: Wan2.2-I2V-A14B is now
-  CLOSED 4/4 — see the entries above and the model verdict.)
-
-- **FLUX-video packed-latent flow (Open-Sora-v2, compiled).** Runtime support for
-  FLUX-style packed-latent video denoisers: a `flux_video_conditioning` brick
-  synthesizes the 3-axis positional `img_ids` (over the T,H/p,W/p latent grid),
-  `txt_ids`, and the T2V `cond`; the iterative_process flow gains 5D
-  pack/unpack (`[B,C,T,H,W]<->[B,T*(H/2)*(W/2),C*4]`) and a state-variable alias.
-  All gated on the denoiser declaring an `img_ids` input (FLUX-family only) —
-  inert for every other diffusion model (anti-reg: CogVideoX-2b unchanged).
-  Structurally validated through the MMDiT entry; remaining residual (RoPE/pe
-  shape, VAE numerical, CFG `txt`-naming, triton mirror) tracked in the
-  Open-Sora-v2 verdict.
-
-- **Diagnostic env vars for cross-engine per-branch debugging (default-off,
-  read-only, zero runtime impact when unset).** `NBX_FIXED_LATENT=<path>` loads
-  the initial noise latent from a file (shape-matched) so two engines run on a
-  BIT-IDENTICAL initial latent for a same-input op-by-op divergence diff —
-  this was the harness that drift-gated the CogVideoX-I2V per-branch root cause.
-  `NBX_DISABLE_MATMUL_FP32=1` runs `mm`/`bmm`/`addmm`/`div` in fp16
-  (vendor-equivalent) to isolate whether the matmul fp32 upcast drives a
-  divergence (vs the layer_norm/softmax fp32).
-  `NBX_VACE_SCALE_ZERO=1` forces the VACE per-layer injection scale
-  (`control_hidden_states_scale`) to zeros, collapsing the VACE forward to its
-  pure-T2V base — a differential to localize the triton VACE GRAY degeneracy
-  (finding: scale=0 is still gray, so the bug is the vace *computation*
-  corrupting the main path, not the injection value).
-
-### Changed
-
-- **Triton mode: per-kernel-launch overhead trimmed (no behavior change).**
-  The device switch before every Triton kernel launch is now skipped when the
-  device is already current (cached, re-synced at every run entry and on any
-  cross-device switch); `NBXTensor.empty` queries the current device at most
-  once per allocation instead of three times; the per-op diagnostic env-var
-  gates in the Triton hot loops are read once per run instead of per op; and
-  `NBXTensor` caches its contiguity flag and element size at construction.
-  Enabled diagnostics behave exactly as before, with one caveat: changing a
-  diagnostic env var mid-process no longer applies (they are read at run/import
-  time).
-
-- **`NBX_DUMP_TIDS` sequential dump now records `batch_norms`** (per-batch L2
-  split), matching the compiled and triton dumps — enables cross-engine
-  per-branch (cond/uncond CFG batch=2) comparison from the pytorch op-by-op
-  oracle. Default-off diagnostic, zero runtime impact. Surfaced the
-  P-TRITON-COGVIDEOX root: the sequential transformer split at step 0 is
-  ~equal (uncond 402.5 / cond 404.1) while triton is spread (415/374), so the
-  triton transformer mis-distributes the CFG branches — the divergence is
-  inside the transformer, not the CFG combine or scheduler.
-
-### Fixed
-
-- **Triton attention now matches PyTorch for a fully-masked query row (both the
-  math and flash attention paths).** A query row whose every key is masked — an
-  additive attention bias of `-inf` on all keys, produced e.g. by the Open-Sora-v2
-  video VAE's mid-block self-attention — is a degenerate softmax: PyTorch's fused
-  attention backends emit `0` for such a row, but the Triton paths computed
-  `exp(-inf - -inf) = NaN`, which propagated through the VAE and turned the whole
-  decoded video black. Both Triton attention paths now emit `0` for a fully-masked
-  row, matching PyTorch. The guard is inert — bit-identical — for every attention
-  that has no fully-masked row (i.e. every model that already rendered correctly),
-  so it only changes output that was previously NaN. Open-Sora-v2 in Triton mode
-  now decodes a finite frame; other models are unaffected.
-
-- **Sequential execution mode now preserves fp16-overflow protection on
-  op-output intermediates.** On fp16 hardware the dtype engine upcasts
-  `mm`/`bmm`/`addmm`/`div` to fp32 to prevent accumulation/overflow. In
-  sequential mode the per-op input resolver then realigned every resolved
-  tensor to its graph-recorded (trace-time) dtype, downcasting those fp32
-  intermediates back to fp16 and silently undoing the guard. On models whose
-  activations reach fp16's range this overflowed to Inf -> NaN -> black/empty
-  output (Open-Sora-v2 sequential, at a deep-block modulation). The dtype
-  realignment now applies only to leaves (weights/constants/inputs);
-  op-output intermediates keep the dtype the execution engine produced,
-  mirroring compiled mode. Bit-identical for models that stay within fp16
-  range (verified: Sana-1024 and CogVideoX-2b sequential vs compiled 0.000%).
-
-- **Classifier-free guidance now finds the text condition on FLUX/MMDiT
-  denoisers (Open-Sora-v2, all modes).** A FLUX/MMDiT denoiser names its
-  text-condition input `txt`, not `encoder_hidden_states`/`*hidden_state`, so
-  guidance could not locate the text condition and the run aborted. CFG now
-  falls back to the encoder-output side: a text encoder whose `*_hidden_state`
-  output feeds the denoiser is the text condition (the pooled-vector and image
-  conditions are excluded). The fallback runs only after the existing
-  to-input match, so models naming the input `encoder_hidden_states` keep an
-  unchanged, byte-identical detection path. Mirrored in compiled and triton.
-
-- **Timestep over-scaling on video diffusion models that normalise the timestep
-  internally (FLUX-style packed-latent denoisers, compiled and triton).** When a
-  denoiser already scales the diffusion timestep inside its own graph (the FLUX
-  `time_factor`), the runtime was *also* applying the flow-matching
-  `[0, num_train_timesteps]` scale — double-scaling the timestep past fp16 range,
-  which produced an all-NaN denoiser output and an empty video. The flow now
-  detects in-graph timestep scaling and feeds the raw normalised timestep in that
-  case. Detected per component (no model-name branch); models that do not scale
-  internally (e.g. Mochi) are unchanged. The triton flow mirrors the same
-  graph-inspection gate (R30).
-
-- **Rope-fusion scheduling dropped an output on non-adjacent Q/K rope (triton).**
-  The triton fused-rope pass collapses a layer's Q and K rotary chains into one
-  op, and anchored it at the later of the two branch adds — valid only when Q and
-  K rope are applied back-to-back (HF-Llama). A denoiser that consumes one rope
-  output before the other branch's rope completes (Open-Sora-v2's MMDiT joint
-  attention) then read a not-yet-written slot and crashed. The pass now schedules
-  the fused op inside the valid window (after all its inputs, before the earliest
-  consumer of either output) and leaves a pair unfused when no such position
-  exists — correct, just unoptimised. Fusion-enabled and fusion-disabled paths
-  render the same coherent output.
-
-- **Single-piece tensor splits mishandled in the compiled and Triton runtimes.**
-  A `split`/`chunk` whose size yields a single piece at runtime returns a
-  one-element tuple; the single-output path stored the tuple instead of the
-  tensor, so the next op received a tuple and failed. The runtime now unwraps a
-  one-element split/chunk result in both execution modes.
-
-- **Wan video washed-out frames in Triton mode (Wan2.1-VACE-1.3B, Wan2.2-I2V).**
-  The Wan transformer's rotary embedding writes the rotated query in place at the
-  interleaved (even/odd) positions of a scratch buffer. In Triton mode a strided
-  (`step>1`) slice was materialised into a standalone copy, so the in-place write
-  landed in a throwaway and the buffer the attention actually read stayed zero —
-  collapsing self-attention to a constant and producing washed-out video. Strided
-  slices now stay views and in-place copies scatter into them, matching the
-  PyTorch path. Wan2.1-VACE-1.3B renders a coherent clip across all four execution
-  modes; SANA-Video, Mochi and Wan2.1-T2V are unaffected.
-
-- **Triton video VAE single-GPU OOM: `_conv3d_via_conv2d` materialised too many
-  full-resolution copies (`kernels/wrappers.py`).** The conv3d→conv2d temporal
-  decomposition kept the input, the per-temporal-slice contiguous input copy,
-  the conv2d output, the permuted output, and the accumulator live
-  simultaneously — for CogVideoX-5b-I2V's `(1,256,13,480,720)` fp32 VAE
-  intermediates that is 6×4.4 GB ≈ 28 GB live, OOM-ing a 32 GB V100 at
-  `aten.convolution`. Fixed by **size-gated eager-free** of the dead per-slice
-  intermediates the moment each is consumed (new `_NBX_CONV3D_EAGER_FREE_BYTES`,
-  default 1 GiB): the live set falls to input + accumulator + one transient.
-  `cudaFree` blocks until the device is idle for the relevant stream, so the
-  early drop is async-safe (no use-after-free). Gated so small convs keep the
-  exact prior path — Mochi's full triton render is **byte-identical** with the
-  fix (md5 match on the mp4 and frames; the gate fires on Mochi's 3.75-5.63 GB
-  convs yet changes nothing computed), confirming a pure memory optimisation.
-  CogVideoX-5b-I2V triton VAE peak dropped 28379→12302 MB and now renders the
-  full video single-GPU at the established 13f config (504s, coherent). Benefits
-  every video model sharing the wrapper (Wan / Mochi / SANA-Video / CogVideoX).
-- **CogVideoX-I2V triton: per-branch CFG divergence — the i2v image condition
-  reached only the uncond branch (`triton/i2v_conditioning.py`).** The triton
-  `_build_condition_cogvideox` produced a single-frame condition `[B,1,C,H,W]`
-  because the temporal pad was skipped (`_target_latent_frames` returns `None`
-  in the triton resolution order — the latent is not yet under `global.latents`
-  when `build_condition` runs before the loop). `NBXTensor.cat` then silently
-  accepted the frame-dim mismatch against the 4-frame state and mis-laid the
-  batch, so only batch 0 received the condition (`result[1]` L2 == state L2).
-  That per-branch asymmetry seeded the value tensor (V per-branch split 333 vs
-  oracle 9) and the joint attention amplified it (block-0 output
-  `[2124.8, 1422.6]` vs oracle `[1800.3, 1808.4]`), blowing the CFG-guided latent
-  ~6x. Fix: `apply()` now zero-pads the condition along every non-batch,
-  non-channel axis to the live state's extent (frame 0 = image, frames 1..T-1 =
-  zeros) — timing-independent, semantically identical to the compiled temporal
-  pad, and a byte-identical no-op for Wan-I2V (full-extent condition). End-to-end
-  verification: every leak point now matches the pytorch oracle per-branch
-  (patchified-latent / modulated-hidden splits 5.89% / 1.55% → 0; block-0 SDPA
-  output matches to 0.1%). Flash-attention, conv2d, `repeat` and 5D `cat` were
-  each proven batch-independent by microtest — no kernel was at fault.
-- **Triton FlowEuler scheduler: `invert_sigmas` + video timestep-scale (R30
-  mirror of commit `3770103`).** The triton FlowEuler lacked both halves of the
-  compiled fix, so every inverted-flow video model (Mochi: `invert_sigmas=True`)
-  ran the wrong denoising trajectory in triton mode. (1) `set_timesteps` now does
-  `ts = 1 - ts` and `step` uses terminal `t_next = 1.0` when inverted (was the
-  non-inverted `0→`/`0.0`). (2) `_get_component_timestep_scale` now returns the
-  driver's `num_train_timesteps` for video FlowEuler denoisers with no explicit
-  scale (was 1.0), so the transformer gets the raw `[0, num_train]` timestep it
-  was traced with instead of the collapsed `[0,1]` (which un-conditions the
-  timestep embedding). Validated by cross-engine drift gate on Mochi-1-preview:
-  the triton denoised latent went `l2=10561 → 12184 (invert) → 12870 (both)` vs
-  the compiled oracle `12874` (~0.03%, within DtypeEngine tolerance). Both gated
-  (`invert_sigmas` / `family==video & FlowEuler`), so non-inverted flow
-  (Sana/Flex/SD3) and non-flow video (Wan UniPC, CogVideoX DDIM) are byte-
-  identical no-ops. **Mochi triton drift-gated correct (3/4); coherent frame
-  deferred — V100 conv3d throughput, redundant since triton mirrors compiled.**
-
-- **Triton flash-attention: key-padding bias passed as a broadcast view, not a
-  materialized matrix.** `scaled_dot_product_attention_wrapper` did
-  `bias = attn_mask.contiguous()`, which for a `[B,1,1,Sk]` key-padding mask kept
-  unit-size H/Sq dims with NON-ZERO contiguous strides (=Sk). The kernel iterates
-  `off_h<nheads` and `offs_m<seqlen_q`, so it indexed PAST those size-1 dims →
-  out-of-bounds illegal memory access (CUDA error 700). On large video
-  self-attention the alternative — expanding to the full `[B,H,Sq,Sk]` — is tens
-  of GB (Mochi `[2,24,~16k,~16k]` ≈ 25 GB). Fix: expand to a stride-0 broadcast
-  view and DON'T materialize it; the kernel reads the bias through its strides
-  (memory-resident `tl.load`, bit-equivalent). Mochi-1-preview triton now runs
-  the full attention/loop; anti-reg GREEN (Wan2.1-T2V-1.3B triton coherent).
-  General to every large-attention triton model.
-- **Triton `replication_pad3d` (+ real `1d`/`2d`) wrappers — R33-pure.** The
-  decoder edge-pad of 5D video VAEs (Mochi) lowers to `aten::replication_pad3d`,
-  which had no triton path (the stub raised, and `dispatch.py` mis-routed `3d` to
-  the `2d` stub). Implemented `replication_pad{1,2,3}d_wrapper` via a shared
-  `_replicate_pad_axis` (narrow + expand + `NBXTensor.cat` — no new `@triton.jit`
-  kernel, same decomposition discipline as `reflection_pad2d_wrapper`) and fixed
-  the `replication_pad3d` dispatch mapping. General to 5D-video VAE decoders.
-- **Triton `reflection_pad3d` wrapper — R33-pure (same mis-route class).**
-  `aten::reflection_pad3d` (SANA-Video's 5D VAE) was mis-routed in `dispatch.py`
-  to the 2D wrapper — correct only when the depth pad is 0, silently wrong
-  otherwise. Implemented `reflection_pad3d_wrapper` via a shared
-  `_reflect_pad_axis` (narrow + flip + `NBXTensor.cat`, no new kernel) and fixed
-  the mapping + the generic `pad`-mode dispatch. Both pad families unit-tested
-  bit-exact vs `torch.nn.functional.pad` (max|diff|=0.0 across asymmetric 3D
-  configs). General to 5D-video VAE decoders.
-
-- **Sequential (pytorch op-by-op) mode now gets the spatial-symbol promotion (R30).**
-  The compiled (`CompiledSequence`) and triton/triton_sequential paths apply
-  `triton/promotion.py:_spatial_promotion_pass` to rewrite frozen trace-time
-  height/width literals in view/reshape/expand shape args into scaled
-  height/width symbols, so the graph adapts to any runtime resolution. The
-  pytorch `--sequential` path (`graph_executor` + `sequential_dispatcher`) was
-  the one mode missing it, so a video VAE whose unflatten froze the trace spatial
-  dims crashed at any non-trace resolution — e.g. Mochi's VAE `_unsafe_view`
-  target `[1, T, 28, 44, 2048]` (28 = 2·s_height(14), 44 = 2·s_width(22)) failed
-  with `shape [1,9,28,44,-1] invalid for input of size …` at 848×480 while
-  compiled/triton decoded fine. `GraphExecutor._apply_sequential_spatial_promotion()`
-  now mirrors the same single-source pass for `mode=="sequential"`. Idempotent,
-  inert on graphs without height/width symbols (LLM/audio), bit-perfect at
-  trace==runtime (resolver substitutes the trace value). Mochi-1-preview
-  sequential now decodes coherent; anti-reg GREEN (Wan2.1-T2V-1.3B sequential
-  unchanged-coherent). General to every video model's sequential VAE.
-
-### Added
-
-- **Triton i2v_conditioning multi-style (Wan + CogVideoX) — R30 mirror of the compiled
-  brick.** `triton/i2v_conditioning.py` now dispatches on the registry `style` flag: the
-  Wan path is unchanged (frame-mask + mean/std, channels-first), and a new CogVideoX path
-  builds the condition NBXTensor-pure (scalar `scaling_factor`, temporal-pad, frames-first,
-  `apply(..., channel_dim=2)`); `triton/cfg/engine.py` and `triton/flow/iterative_process.py`
-  pass the data-driven `channel_dim`. **Status: transformer-output-validated, triton mode
-  PENDING (not a closed mode).** Drift-gate on CogVideoX-5b-I2V shows the i2v condition +
-  batch=2 are correct (transformer batch-2 noise_pred matches the oracle), but the full
-  triton mode is blocked on a *pre-existing, shared* CogVideoX-triton kernel divergence
-  (batch-2 per-branch CFG; batch-1 cfg=1.0 NaN) — tracked as P-TRITON-COGVIDEOX
-  (`validation_outputs/cogvideox_5b_i2v/triton_divergence_report.md`), independent of this mirror.
-
-### Fixed
-
-- **DeviceAllocator.most_free_device() implemented (triton CPU-staged weight load).**
-  `graph_executor.py` (`_load_weights_triton`) called
-  `DeviceAllocator.most_free_device()` to place a CPU-staged lazy component on the
-  emptiest GPU, but the method was never defined — every triton run that staged a
-  component through CPU (plan device with no GPU index) crashed with
-  `AttributeError` (surfaced on CogVideoX-5b-I2V `--triton`, vae_encoder load).
-  Implemented R33-pure via the ctypes runtime backend (`cudaGetDeviceCount` +
-  `cudaSetDevice` + `cudaMemGetInfo`, no torch), restoring the prior current
-  device and falling back to device 0 on any query failure / single-GPU host.
-
-- **i2v_conditioning brick generalized to multi-style (Wan + CogVideoX).**
-  The shared I2V channel-concat conditioning brick
-  (`core/runtime/resolution/i2v_conditioning.py`) handled only the Wan-I2V style
-  (frame-mask + mean/std norm, channels-first). CogVideoX-I2V is structurally
-  different — scalar `vae scaling_factor` norm (no mask, no mean/std), image latent
-  temporally padded (frame 0 = image, rest zeros), frames-first layout (channel-
-  concat on dim 2). The brick is now multi-style, selected data-driven by the
-  registry flag `i2v_latent_conditioning.style` (never a model-name branch);
-  `apply()` takes a `channel_dim` (default 1 = Wan). The Wan path is byte-identical
-  (2-pass byte-diff GREEN: cond + out bit-equal new vs old). CogVideoX-5b-I2V CFG
-  batch=2 now builds the 32ch hidden_states correctly. Pays forward for
-  Wan2.2-I2V-A14B and any future I2V.
-
-- **TilingEngine: never component-tile a VAE encoder (downsampler).**
-  CogVideoX-5b-I2V crashed in `TilingEngine._accumulate` ("size of tensor a
-  (264) must match b (4) at dim 4"): the `vae_encoder` (image → compressed
-  latent, downsamples 112→14) was assigned a component TilingEngine, whose
-  accumulate path assembles tiles at the component's UPSCALE (output > input) —
-  the small encoded tiles cannot fill an upscale-sized accumulator. The encoder
-  aliases the VAE module, so its `ComponentMemory` carries the decode-side
-  activation and wrongly trips Prism's tile budget. Fixed at both decision
-  points (data-driven, no name/family match): read the component's output
-  spatial extent from the graph; if smaller than the input it is a downsampler
-  and not a component-tiling target (its peak is the input-resolution conv,
-  owned by op-level tiling). `tiling_engine.from_component_config` + Prism
-  `solver._spatial_component_tiling` (the path that emits the spec). Guard fires
-  for exactly the 3 downsampler encoders (CogVideoX-5b-I2V, Wan-I2V-14B, VACE);
-  all 24 tiled upsamplers (every VAE decoder, Swin2SR, HAT, real-esrgan)
-  provably unchanged (output > input); Sana 1024 runtime PASS (coherent,
-  VAE-decoder tiling path intact).
-- **Sequential dispatcher: evaluate symbolic arithmetic expressions in scalar
-  args.** The op-by-op PyTorch-sequential arg resolver
-  (`TensorResolver._resolve_arg_info`) handled `symbol` scalar args but not
-  composite arithmetic expressions (`add`/`sub`/`mul`/`floordiv`/`mod`/`neg`)
-  over symbols. Mochi's `MochiRoPE` builds its positional grid with
-  `aten::linspace` whose `steps` is `((s2 - 2)//2 + 2)` — an expression over the
-  symbolic height/width dim. The raw expression dict reached `torch.linspace`,
-  which cannot cast a dict to `int`, failing the op schema. Compiled mode folds
-  such expressions to a concrete int at compile time, masking the gap; the
-  triton-sequential path already evaluated them. The PyTorch-sequential resolver
-  now routes arithmetic-expression scalar args to the `shape_resolver` (the same
-  evaluator used for symbolic dims), restoring R30 parity. Pure fix — only fires
-  on arithmetic-expression scalar args, which previously crashed.
-- **Flow-matching scheduler: honour `invert_sigmas`, and video FlowEuler
-  denoisers scale the timestep by `num_train_timesteps`.** Two coupled
-  correctness bugs left Mochi (and any inverted-sigma flow model) producing
-  pure noise, then a coherent-but-unconditioned frame. (1) `FlowEulerScheduler`
-  read the `invert_sigmas` config flag but never applied it — the sigma
-  schedule ran `1 → 0` (terminal 0) instead of the inverted `0 → 1` (terminal
-  1), reversing the denoising direction so the latents never left the noise
-  distribution. (2) Mochi's vendor pipeline passes the scheduler's RAW
-  `[0, num_train_timesteps]` timesteps to the transformer (unlike Flux's
-  in-pipeline `t/1000` normalisation), and the Mochi DiT embeds them directly
-  with no in-graph scaling; NeuroBrix's FlowEuler emits `[0,1]` sigmas, so the
-  sinusoidal timestep embedding collapsed toward 0 and the AdaLN modulation
-  barely conditioned the generation. The loop now derives `timestep_scale =
-  num_train_timesteps` for video FlowEuler denoisers that carry no explicit
-  scale (gated on `family == video` + FlowEuler, so Wan/CogVideoX non-flow
-  schedulers and Flux/SD3 are untouched). Both fixes gated → zero regression on
-  non-inverted / non-flow models.
-- **Prism activation estimator: stride-0 broadcast views and mem-efficient SDPA
-  are not real allocations.** `aten::expand` / `broadcast_to` outputs are
-  stride-0 broadcast views that allocate nothing at runtime, but the activation
-  liveness simulation counted them as dense tensors. A masked-attention video
-  DiT's `[B, 1, 1, T]` key-padding mask broadcasts to `[B, H, T, T]` (tens of GB)
-  for the mem-efficient SDPA, which reads it block-wise and never materialises
-  it — a phantom multi-GB activation that forced large-sequence video
-  transformers into spurious `block_scatter` on heterogeneous multi-GPU boxes
-  (placing a transformer onto an undersized GPU and crashing cross-device).
-  Expand/broadcast-view outputs are now zero-alloc, and the SDPA workspace is
-  modelled as the mem-efficient backend's `O(B·H·T)` logsumexp rather than the
-  full `O(B·H·T²)` score matrix. Restores correct single-GPU placement.
-
-### Added
-
-- **VACE control conditioning for video diffusion (compiled + Triton,
-  data-driven).** WanVACE denoisers take two extra step-invariant inputs the
-  standard video denoiser does not: a multi-channel latent control signal
-  (`cat[inactive_latent, reactive_latent, reshaped_mask]`) and a per-injection-
-  layer scale vector. The runtime now builds both once from a VAE-encode pass
-  over a control video — the all-generate (unconditional, pure text→video) mode
-  uses a zeros control clip with an all-white mask, which collapses to a single
-  encode. Mirrored across both execution branches (the compiled branch and a
-  zero-torch NBXTensor Triton brick), wired through the diffusion flow and the
-  CFG engine (the control is repeated to the guidance batch; its scale is
-  batch-invariant). Driven entirely by a registry flag on the denoiser; inert
-  for every model without it.
-
-- **Image-to-video latent channel-concat conditioning (data-driven).** Some I2V
-  denoisers condition by channel-concatenating a per-step-invariant signal —
-  built from the VAE-encoded first frame plus a frame mask — onto the noise
-  latents before the transformer (the denoiser's input channels exceed the
-  latent channels). The runtime now builds that signal once (VAE-encode → vendor
-  normalization → frame mask → concat) and applies it each step on the
-  conditional, unconditional, and CFG-batched paths. Driven entirely by a
-  registry flag on the denoiser; inert for every model without it.
-
-### Added
-
-- **Image-to-video latent conditioning for the Triton execution branch
-  (NBXTensor, zero-torch).** The Triton branch now has its own i2v
-  channel-concat conditioning brick — built end-to-end with NBXTensor, mirroring
-  the semantics of the compiled-branch conditioning but living entirely in the
-  Triton branch (the two branches stay separate; each reuses its own bricks). It
-  builds the per-step-invariant condition once (VAE-encoded first frame +
-  deterministic frame mask, normalized with the VAE statistics) and channel-
-  concats it onto the noise latents — on the non-CFG loop path and inside the
-  Triton CFG engine for the batched path. Inert for every model without the
-  registry flag.
-
-### Fixed
-
-- **Hardware planning now estimates at the resolution the model actually generates
-  at.** The CLI built the Prism activation-profiling resolution from the per-model
-  defaults plus a hardcoded 1024×1024 fallback, but the runtime executor falls back
-  to the *family* config (`config/families/<family>.yml`, e.g. 512×512 for video)
-  when a model's defaults omit height/width. The two diverged: for a video model
-  without explicit dimensions, Prism profiled the VAE at 1024×1024 (≈8× the real
-  activation, counting the guidance batch) and force-tiled — or distributed — a VAE
-  that decodes natively at the real 512×512 in a few GB. The CLI now mirrors the
-  executor's fallback chain (args → model defaults → family config → 1024), so the
-  plan reflects the actual generation: such models drop from a tiled/sharded plan to
-  plain single-GPU placement, with no behavioural change to models that already
-  specify their resolution.
-
-- **Spatial tiling accumulator now lives on the tiled component's device, not the
-  input's.** When a component is placed on a different GPU than the tensor feeding
-  it (component_placement — e.g. CogVideoX's transformer on one GPU, VAE on
-  another), the TilingEngine allocated its accumulate-and-blend buffer on the
-  input tensor's device while the per-tile results computed on the component's
-  device, so the blend add mixed two devices and raised "Expected all tensors to
-  be on the same device". The accumulator is now allocated on the tile-result
-  device (where the tiles actually compute); for single-device placement the two
-  devices coincide, so this is a no-op there.
-
-- **The Triton execution branch now builds the VACE control conditioning (R30
-  mirror).** WanVACE denoisers consume two extra step-invariant inputs the
-  standard denoiser does not — a multi-channel latent control signal and a
-  per-injection-layer scale. The compiled branch already built these; the Triton
-  branch did not wire its (already-present) NBXTensor control brick into the
-  diffusion flow, so a guided Triton run failed to resolve
-  `control_hidden_states`. The Triton flow now builds the control once from the
-  vae_encoder pass and the Triton CFG engine repeats it to the guidance batch
-  (the scale is batch-invariant) — mirroring the compiled branch exactly, with no
-  cross-branch reach. The control value is byte-equivalent to the compiled
-  branch's. Inert for every model without the registry flag.
-
-- **Op-level convolution tiling no longer mis-fires on 1D audio convolutions.**
-  The Prism op-level spatial tiling routes an over-budget convolution to a
-  band-streaming wrapper that tiles a 2D conv (`[B, C, H, W]`) only. The detector
-  already skipped 5D `conv3d` but still flagged 1D `conv1d`, so the Kokoro
-  iSTFTNet vocoder's noise convolutions (a 3D `[B, C, T]` activation with a
-  single-element stride) were sent into the 2D path and crashed the decoder in
-  every execution mode. The rank guard is generalized so only genuine 2D
-  convolutions are spatially tiled; 1D audio convolutions run native (they are
-  never a 2D-spatial overflow). Kokoro now synthesizes coherent speech across all
+- **Compiled-mode slice semantics.** True strided slices (`x[..., 0::2]`
+  previously TRUNCATED instead of striding — corrupting rotate-half
+  rotary tables), and out-of-range slice starts clamp to empty slices
+  matching eager semantics (`x[:, 88:]` on a 3-sized dim is legal and
+  empty).
+- **Memory estimator accuracy.** Components are sized at the dtype they
+  actually run (a 5B fp16 transformer is no longer counted at fp32,
+  2× over); stride-0 broadcast views and the memory-efficient attention
+  workspace are no longer counted as dense multi-GB allocations; and
+  hardware planning profiles at the resolution the model actually
+  generates at. Together these keep models on fast single-GPU placements
+  that were previously pushed to tiled/sharded/offloaded plans.
+- **Dead-output memory release in all four modes.** Outputs never
+  consumed by a later op (e.g. per-conv cache clones captured at full
+  pixel resolution during a video VAE decode) accumulated for the whole
+  component pass — ~28 GiB on a 9-frame decode, an OOM. All four
+  execution modes now free them at their last use.
+- **Sequential mode preserves fp16-overflow protection.** The op-by-op
+  input resolver no longer downcasts fp32 intermediates back to fp16
+  (which silently undid the overflow guard and produced NaN → black
+  output on deep models); realignment applies to weights/constants/inputs
+  only.
+- **Sequential in-place slice writes and CFG reshapes.** In-place slice/
+  index assignments now land in the real destination view (strided
+  rotary writes previously landed in a dead copy — uniform-noise output),
+  and view-shape inference under a doubled guidance batch recovers the
+  batch axis instead of folding it into the feature dim. Sequential runs
+  also track any runtime resolution, closing the one mode that pinned
+  video VAEs to a single frame size.
+- **1D audio convolutions are never spatially tiled.** The op-level
+  conv tiling detector flagged 1D convolutions into a 2D-only path,
+  crashing the Kokoro iSTFTNet vocoder in every mode; only genuine 2D
+  convolutions are tiled. Kokoro synthesizes coherent speech across all
   four modes.
-
-- **Triton op-by-op (triton_sequential) execution binds weights stored under a
-  shorter name than the graph references.** The op-by-op Triton path bound graph
-  parameters by exact name only, so a build that stored a weight without a prefix
-  the graph param carries (a text encoder whose embedding is `token_embed.weight`
-  while the graph references `encoder.token_embed.weight`) left the embedding
-  unbound and propagated the whole encoder to empty. It now applies the same
-  trailing-suffix fallback as the other three execution modes — all four bind
-  identically.
-
-- **Pipeline-parallel placement spreads transformer layers evenly across GPUs
-  instead of packing the first one full.** The block-wise multi-GPU strategy
-  filled each GPU to capacity with layers before moving to the next, leaving the
-  first GPU with almost no room for runtime activations or the (unmodeled)
-  autotune workspace — so a guided (batch-2) run stalled or ran out of memory.
-  Layers are now distributed evenly across the minimum number of GPUs whose even
-  share leaves a headroom reserve (scaled from the profiled activation peak, with
-  a hardware-universal floor). For the 14 B video transformer this balances to
-  ~16 GB per GPU with ~13 GB free each, so guided generation has room. Still a
-  pipeline — one cross-device transfer per GPU boundary, not per op.
-
-- **Pipeline-parallel placement estimates block sizes at the compute dtype, not
-  the on-disk dtype.** The block-wise multi-GPU strategy sized each transformer
-  layer from its on-disk weights (e.g. fp32, 65.6 GB for a 14 B video
-  transformer) while the runtime loads them at the compute dtype (fp16,
-  32.8 GB). So it judged the model too large for the GPUs and refused
-  ("cannot fit"), even though the fp16 weights fit with headroom — forcing the
-  slower round-robin fallback. The estimate is now scaled to the compute dtype
-  (consistent with the other multi-GPU strategy), so block-wise placement is
-  available whenever the loaded weights actually fit. No-op when the on-disk and
-  compute dtypes match.
-
-- **Triton weight-sharding distributes a component across GPUs instead of
-  collapsing it onto one.** When Prism shards a component's weight files
-  round-robin across GPUs, it produces a shard map keyed by shard-file path. The
-  Triton loader looked those up by individual weight/tensor name, missed every
-  time, and placed the entire component on its default GPU — a 31 GB transformer
-  meant to span two 32 GB GPUs landed on one and ran out of memory. The loader
-  now resolves each shard file's device and places all of that file's weights
-  there (per-weight keys still honored), so the component is correctly split
-  (~16 GB per GPU) with room for activations.
-
-- **Triton multi-GPU execution detects an operation's devices across all its
-  weights.** The Triton per-op device assignment inspected only the first weight
-  of an operation. A projection whose weight matrix is one shard and whose bias
-  is another could be classed single-device, so the cross-device path never
-  engaged and the operation failed reading the other shard. It now considers
-  every weight (running the op on its largest weight's device), matching the
-  compiled path.
-
-- **Triton inputs are moved to their component's device before execution.** The
-  Triton component-input binder cast input dtypes but never moved inputs onto the
-  component's device. When a component is placed on a non-default GPU (a large
-  transformer on the second GPU while the upstream noise/embeddings were created
-  on the default GPU), the first operation's kernel could not read the input from
-  the component's device context (it surfaced as a "pointer cannot be accessed"
-  error at the patch-embedding convolution). Inputs are now transferred to the
-  component device; inert when already co-located (the common single-GPU case).
-
-- **Triton (NBXTensor) execution resolves weights stored under a shorter name
-  than the graph references.** The Triton weight binder matched parameters by
-  exact name only, so a build that stored a weight without a prefix the graph
-  param carries (a text encoder whose embedding is `token_embed.weight` while the
-  graph references `encoder.token_embed.weight`) left the embedding unbound; the
-  whole encoder then propagated empties and produced no output, failing guidance
-  with a missing text embedding. The Triton binder now applies the same
-  trailing-suffix fallback as the compiled and op-by-op paths, so all three
-  execution modes bind identically.
-
-- **Op-by-op (sequential) reshape infers the batch axis, not the feature axis,
-  when a classifier-free-guidance run changes the batch size.** When a reshape
-  unflattens a tensor whose batch was already folded into a leading axis (an
-  attention query reshape fed by a flattened matmul), and guidance has doubled
-  the batch, the shape-inference fallback chose the trailing (feature) axis to
-  recover — folding the extra batch into the feature dimension and crashing the
-  next norm. It now detects that the feature dimension is unchanged and recovers
-  a leading axis instead, matching the compiled path. Image-to-video models now
-  run in op-by-op mode under guidance, not just single-batch.
-
-- **Op-by-op (sequential) execution resolves weights stored under a shorter name
-  than the graph references.** When a build stores a weight without a prefix that
-  the graph param carries (a text encoder whose embedding is `token_embed.weight`
-  in the package while the graph references `encoder.token_embed.weight`), the
-  compiled path already fell back to trailing-suffix matching but the sequential
-  op-by-op path did not — it left the embedding unbound and propagated the whole
-  encoder to empty, failing the run. The sequential resolver now applies the same
-  trailing-suffix fallback, so both execution modes bind identically.
-
-- **Text embeddings are padded to the model's full conditioning length for
-  denoisers that cross-attend unmasked.** Some video diffusion transformers
-  cross-attend to the text embedding over the full padded sequence length with
-  no attention mask, so the count of trailing zero-pad tokens is part of the
-  trained conditioning. The runtime traced its text encoder at a shorter
-  stimulus length and fed that shorter sequence, diluting the conditioning into
-  a degenerate, structure-free output. Text embeddings are now zero-extended to
-  the model's declared maximum sequence length (data-driven, gated by a registry
-  flag, inert for every model whose denoiser masks or slices its text). Restores
-  coherent image-to-video output; works in compiled and Triton modes.
-
-- **Multi-GPU op placement scans all of an op's weights, not just the first.**
-  When a model is sharded across GPUs, a single operation can read weights that
-  landed on different devices (a projection whose weight matrix is one shard and
-  whose bias is another). Inspecting only the first weight could record the wrong
-  device and miss the cross-device case entirely, so the activation transfer
-  never ran and the op failed with a device mismatch. Placement now considers
-  every weight, detects the multi-device case correctly, and runs the op on its
-  largest weight's device. Single-GPU placement is unchanged.
-
-- **Image-to-video conditioning latent is normalized with the VAE's published
-  statistics.** The per-channel mean/scale used to normalize the VAE-encoded
-  conditioning frame were read from the wrong location and silently skipped,
-  feeding an unnormalized latent that poisoned the denoiser. They are now read
-  from the VAE profile's config section, matching the vendor pipeline.
-
-- **Classifier-free guidance shares image conditioning across both batch halves.**
-  Under batched CFG, image-to-video models that feed the denoiser a separate
-  image-embedding stream now repeat that stream across the [negative, positive]
-  batch so it lines up with the batched text and latents, instead of failing on a
-  batch-size mismatch.
-
-- **Classifier-free guidance picks the text condition as its split key, never an
-  image condition.** Image-to-video models that feed the denoiser two conditioning
-  streams (a text embedding and a separate image embedding) could, depending on
-  connection order, select the image stream for the [negative, positive] CFG
-  batch — which has no negative counterpart — and fail. Guidance now always pairs
-  the negative/positive batch on the text condition; image conditioning is shared
-  unchanged across both halves.
-
-- **Attention kernel: ~1.5× faster on V100 (Volta) for long sequences.** The
-  Triton flash-attention launch used a 128-row query tile (tuned for A100)
-  whenever head dim < 128 — the common case (most LLMs and video diffusion
-  transformers, head dim 64). On pre-Ampere GPUs (V100 sm_70 / Turing) a
-  128-row tile overflows the register file and spills to local memory. The
-  tile is hardware-gated to 64 rows on pre-Ampere (measured V100, seq 8192,
-  head dim 64: 9.2 s → 6.1 s), Ampere+ keeps 128 — numerically identical to
-  the reference and verified coherent on CogVideoX-2b/5b triton. (A 32-row
-  tile is ~14× faster but numerically wrong — it diverges into noise across
-  an iterative diffusion loop — so 64 is the correctness floor on Volta.)
-
-### Changed
-
-- **Large video VAEs decode on GPU via spatial tiling instead of host
-  offload.** When a spatial component (e.g. a video VAE) would not fit a GPU
-  with its full activation — the CogVideoX-5b VAE peaks at ~82 GB decoding
-  49 frames at 480×720 — the placement engine previously moved it to host
-  RAM (very slow). It now keeps the component on GPU and runs its decode on
-  overlapping spatial tiles sized to fit VRAM, reusing the universal tiling
-  engine. Verified: the tiled-on-GPU decode produces output visually
-  identical to the host path (coherent video, no seam artifacts). Models
-  that already fit, and non-spatial components, are unaffected.
-
-### Added
-
-- **Spatial tiling: triton (NBXTensor) path.** The tiling engine now
-  accumulates in NBXTensor when fed NBXTensor inputs, so the triton engine
-  can tile spatial components on GPU with zero torch — not just the compiled
-  engine. Verified by exact tile-and-blend reconstruction on both 4D and 5D
-  NBXTensor inputs.
-
-- **Spatial tiling: 5D video support.** The universal spatial tiling engine
-  now handles 5D video tensors `[B, C, T, H, W]` (tiling over the trailing
-  H, W while carrying the temporal axis T through each tile — the only safe
-  split for a causal 3D VAE) in addition to 4D images. This is the
-  foundation for tiling large video-VAE activations that exceed VRAM on
-  GPU instead of offloading the component to host RAM. The 4D
-  image/upscaler path is byte-identical (verified by exact tile-and-blend
-  reconstruction).
-
-- **Triton-native execution strategies (zero-torch placement layer).** The
-  triton execution path can now run NBXTensor-native placement strategies
-  with no torch dependency, the first step toward a triton-only install
-  that carries no PyTorch. Strategy selection routes by execution mode;
-  ported strategies run torch-free. ALL placement strategies are now ported
-  (single-GPU, component placement + lazy, pipeline parallel, block scatter,
-  weight sharding, lazy sequential, zero3 CPU-offload, CPU execution), so any
-  model routed through the triton branch gets a zero-torch placement strategy.
-  Behaviour is byte-identical (greedy decode verified compiled == triton).
-
-### Fixed
-
-- **Triton mode: cross-GPU tensor transfer in placement strategies.** The
-  strategy transfer helper moved only PyTorch tensors between devices;
-  NBXTensor activations (triton mode) fell through untransferred, so the
-  multi-GPU placement strategies (component placement, pipeline parallel)
-  could not actually move data across GPUs in triton mode. NBXTensors are
-  now transferred via the same polymorphic path the per-tensor helper
-  already used. Single-GPU placements are byte-identical (transfer is a
-  no-op when the tensor is already on the target device; greedy
-  compiled==triton verified).
-
-- **Prism memory estimate: per-component dtype.** The placement estimator
-  sized every component at the model-wide dtype, which collapsed to
-  float32 as soon as any single component required fp32 (e.g. a VAE-class
-  component on V100). Every fp16 component was then over-counted 2× — a
-  5B video transformer estimated at 21 GB against 11 GB real — which could
-  push a component that comfortably fits onto a slower placement. The
-  estimator now sizes each component at the dtype it actually runs, matching
-  execution. Mixed-dtype models (fp32 VAE + fp16 transformer) get accurate
-  per-component budgets; single-dtype models are unaffected.
-
-### Added
-
-- **Diagnostics: failing-op context and raw tensor capture.** Op
-  execution errors in the sequential engine now print the op uid, its
-  position, trace shapes, and live input shapes before re-raising.
-  New default-off `NBX_DUMP_RAW="<dir>:<filters>"` saves matching op
-  outputs as `.pt` for value-level oracle comparisons (component-scoped
-  filenames). The step-0 model-input capture now also includes inputs
-  fed purely by topology connections (e.g. image-to-video latents).
-
-### Changed
-
-- **Tensor-name parser: video-family vocabulary.** The container
-  inspection parser now recognizes video-model module names — causal 3D
-  VAE normalization branches, temporal convolutions, gated linear
-  convolution FFNs, and T5-style attention projections — and reports
-  their canonical names, consistent with containers built for the video
-  family. No effect on weight binding, which matches container keys
-  exactly.
-
-### Fixed
-
-- **Compiled engine: true strided slice (step>1).** The compiled slice
-  wrapper applied `step` by TRUNCATING to the first `ceil(length/step)`
-  contiguous elements instead of strided indexing — `cos[..., 0::2]`
-  silently became `cos[..., 0:56]` and the rotate-half RoPE consumed the
-  wrong table halves (SANA-Video compiled: noise/banded output while the
-  assembled tables matched the oracle exactly). Fixed with real
-  `[start:end:step]` indexing. First model to exercise step>1 slices in
-  compiled; chatterbox (2 such slices) becomes ATen-correct.
-- **Shared promotion pass: never stomp symbol-anchored expressions.** The
-  spatial mis-attribution override replaced a fully-symbolic temporal
-  expression (`2*(1+s_time)-1-...`, trace 9) with `height-1` because of a
-  trace-value coincidence (9 == 10-1). The override now fires only for
-  expressions whose symbols are ALL trace-1 (information-free, the original
-  Sana-4Kpx `mul(s_batch=1, 64)` case) — verified both directions offline.
-- **Sequential engine: alias-preserving `aten::copy` destination.**
-  `aten::copy` is the functionalised in-place slice/index assignment and the
-  sequential dispatcher mirrors it as `dst.copy_(src)` — but the tensor
-  resolver forced non-contiguous tensors contiguous and replaced the store
-  entry with the clone, permanently detaching a strided destination view
-  (e.g. `out[..., 0::2]` rotate-half RoPE writes in SanaVideo's linear
-  attention) from its base buffer. The write landed in a dead tensor and
-  every consumer of the base read uninitialized `empty_like` memory
-  (uniform-noise video at exit 0; matched-input microtest vs the vendored
-  transformer read cosine 0.014). The copy destination now resolves RAW and
-  is re-pinned past input normalization — `copy_` handles non-contiguous
-  destinations natively. Gated on `aten::copy` only: structurally inert for
-  graphs without copy ops (TinyLlama/Wan/CogVideoX verified to have none);
-  for graphs with them (kokoro/chatterbox/openaudio) base-buffer consumers
-  now see the write, matching compiled-mode `copy_` semantics (R30).
-  First model proven: SANA-Video_2B_720p sequential f9 704×1280 coherent.
-
-### Added
-
-- **I2V conditioning input (`--input-image`).** The conditioning image is
-  plumbed to `global.image` as a single `[1, 3, 1, H, W]` frame (resize to
-  the run height/width, [-1, 1] normalize — the vendor VideoProcessor
-  contract). Consumed by the build-injected `vae_encoder` component in
-  pre_loop; the denoiser's traced forward broadcasts/pads/concats the
-  conditioning latents internally, so the flow and CFG engines needed no
-  changes. First model: CogVideoX-5b-I2V (frame 0 reconstructs the
-  conditioning image faithfully).
-
-- **CogVideoX DDIM scheduler support (both engines).** The CogVideoX DDIM
-  variant maps to the existing DDIM brick: its deltas are two config-driven
-  init-time alphas_cumprod transforms (`snr_shift_scale`,
-  `rescale_betas_zero_snr` — zero-terminal-SNR, arXiv:2305.08891 Algorithm 1),
-  now implemented in the core scheduler and its zero-torch mirror, plus the
-  factory mapping. Two latent DDIM gaps surfaced by the vendor-oracle test and
-  fixed on the previously unused trailing path (legacy DDIM/DDPM untouched):
-  "trailing" spacing now uses the DDIM-standard formula
-  (`round(arange(T,0,-T/N)) − 1`; the shared helper implements the DPM++
-  trailing convention, off by ±1 on most entries), and the previous-timestep
-  convention under trailing uses the constant stride `t − T//N` (next-list-entry
-  drifted ~one table row per step). Gated by a dev unit test against the
-  vendored scheduler source: 30-step v-prediction trajectory max|diff|
-  4.1e-6 (core, fp32 schedule table) / 1.8e-15 (zero-torch table, fp64), and
-  the plain-DDIM schedule stays bit-identical with the new keys absent.
-- **Video family — 5D rank generalization (in progress).** Generalize rank-4
-  `[B,C,H,W]` assumptions to 5D `[B,C,T,H,W]`, discriminating on tensor rank
-  (never on model family, R34): the Prism conv workspace estimator now handles
-  Conv1D/2D/3D (the `n, in_c, _, _ = in_shape` 4-tuple unpack was the documented
-  "expected 4" crash on a Conv3D), and the diffusion-loop variance-prediction
-  split reads channels from axis 1 for both 4D and 5D (the non-4D branch had
-  mistaken the time axis for channels) — fixed symmetrically in the compiled and
-  triton flow handlers (R30).
-- **`UniPCMultistepScheduler`** (runtime-pure, no diffusers import — R39) in the
-  scheduler registry, with the flow-matching branch (`use_flow_sigmas`,
-  `flow_shift`, `flow_prediction`) used by Wan video models. Predictor/corrector
-  B(h) math ported faithfully; a dev unit test asserts bit-exact equivalence
-  with diffusers (max|diff|=0.0) across standard + flow configs and 4D + 5D
-  latent shapes. A triton (NBXTensor, zero-torch — R33) mirror is also provided
-  in the triton scheduler registry for `--triton`/`--triton-sequential` modes
-  (order ≤ 2 closed-form predictor/corrector; the order-2 corrector `rhos`
-  solved via Cramer's rule, verified bit-accurate vs the PyTorch
-  `torch.linalg.solve` path in fp64).
-- **`_upsample_nearest_exact{1,2}d` multi-resolution support (4 sites, R30).**
-  The nearest-exact upsample variants (used by Wan video VAE decoders) now
-  recompute their output size from the live input × scale, like the plain
-  `upsample_*` variants already did — previously they pinned the spatial extent
-  to a single resolution, so a video VAE could only decode at one frame size.
-  Mirrored across the compiled (`mode="nearest-exact"`, `align_corners=None`),
-  sequential, and triton paths (routed to the nearest wrappers — bit-identical
-  for integer ×2), so every execution mode tracks the runtime latent size
-  identically. Wan2.1-T2V is the only affected model; all others are unchanged.
-- **Video CLI: `--num-frames` / `--fps`** injected into the runtime inputs for
-  the video family.
-- **Text-embedding padding mask for cross-attention (`zero_pad_embeddings`).**
-  T5/UMT5 text encoders emit non-zero embeddings for padding tokens; a diffusion
-  transformer that cross-attends to the full text sequence would attend to that
-  padding and dilute the conditioning, yielding incoherent (mosaic-like) output.
-  The runtime now zeros the text embedding at masked positions (matching the
-  reference pipelines that trim to real length and re-pad with zeros), enabled
-  per text encoder via a data-driven flag, applied to BOTH the positive and the
-  CFG negative/uncond embeddings (the negative `finalize_embeddings` call now
-  receives its attention mask; previously only the positive branch was zeroed,
-  leaving the uncond conditioning polluted and the CFG guidance term wrong).
-  This took Wan2.1-T2V output from a textured/banded field to a coherent scene.
-  Inert for encoders without the flag, so existing image models are unchanged.
-
-### Added
-
-- **Name-driven 5D latent axis alignment at the loop→decode boundary.** Video
-  models do not share one latent layout: Wan denoises and decodes in
-  `[B,C,T,H,W]`, while CogVideoX denoises in `[B,T,C,H,W]` and decodes in
-  `[B,C,T,H,W]` — the vendor pipeline permutes between the loop and the VAE,
-  outside both traced components. The runtime now derives that permutation
-  purely from existing contract data (the latent variable's `shape_source`
-  axis roles against the decoder graph's named symbol axes; the single
-  concrete 5D dim is the channel axis) and applies it before post-loop
-  execution, symmetrically in the compiled and zero-torch flow handlers.
-  Identical layouts derive no permutation and the boundary is untouched —
-  verified by derivation (Wan → identity) and by a Wan sequential
-  anti-regression run.
-- **`traced_buffer` computable-buffer method.** Init-computed buffers absent
-  from the shipped weight files that are not 2D-interpolable (e.g. a composite
-  `[1, text_len + T·H·W, dim]` learned position table) now load verbatim from
-  the data embedded in their spec; dynamic-length handling stays with the
-  graph's own symbolic slicing.
-
-### Fixed
-
-- **Dead-output liveness in the zero-torch op-by-op and hot-loop paths
-  (completing the R30 set).** Both built their last-use maps from consumed
-  tensors only; never-consumed outputs survived for the whole component pass
-  (the same ~27 GiB conv-cache accumulation; the arena variant plausibly
-  contributes to the long-standing live-watermark gap vs the torch path).
-  Verified: CogVideoX-2b renders coherently in both modes; Wan runs; TinyLlama
-  greedy stays byte-identical.
-- **Compiled mode kills dead arena slots and recomputes `native_group_norm`
-  scalars (mirrors of the sequential fixes below, R30).** The compiled
-  liveness analysis tracked only slots read as inputs, so never-consumed
-  outputs stayed in the arena for the whole pass (same ~28 GiB dead
-  conv-cache accumulation, OOM), and the compiled op factory passed the
-  baked N/C/HxW scalars through. Anti-regressions: Wan compiled f9 runs;
-  TinyLlama compiled greedy stays byte-identical.
-- **Sequential mode frees dead op outputs (the producing op is their last
-  use).** The native op-by-op path freed tensors only when consumed as a
-  later op's input; outputs never consumed anywhere — `native_layer_norm`
-  statistics, and most acutely the never-consumed per-conv cache clones a
-  functional video VAE decode captures at full pixel resolution — accumulated
-  for the whole component pass (~28 GiB on the CogVideoX-2b 9-frame decode,
-  OOM). Mirrors the zero-torch sequential path's liveness rule (R30);
-  verified inert on Wan sequential and TinyLlama greedy (byte-identical).
-- **Sequential mode recomputes `native_group_norm`'s derived scalar args.**
-  The functional signature carries N, C, HxW as scalars; the graph bakes
-  their trace values, but they are fully derived from the input tensor — for
-  a video VAE, HxW is the flattened T·H·W product frozen at the tiny trace
-  size (550 = 5·10·11 against a runtime 3·60·90).
-- **Prism op-level tiling skips 5D (video) convolutions.** The spatial
-  band-streaming wrappers are rank-4 only; registering an interceptor on a
-  conv3d crashed at dispatch. 5D convs run native until the 5D tiling work
-  lands (they fit at proof sizes and fail visibly, not corruptly, beyond).
-- **Prism activation profiling resolves video (5D) runtime dims.** Three
-  compounding gaps made every video activation estimate meaningless: the CLI
-  never passed `num_frames` to the profiler's `InputConfig`; the symbol map
-  used the image positional convention (`s1=latent_h, s2=latent_w`) while
-  video graphs name their symbols (`s1=time, s2=height, s3=width`); and
-  graphs traced with a frugal stimulus store tiny concrete trace values in
-  `shape`, with the real dims as symbolic expression trees. The Wan 81-frame
-  VAE upsample — a single 23.14 GiB fp32 tensor at runtime — was estimated at
-  a few MB, so the op-level tiling cascade never fired and the run OOM'd.
-  Now: `InputConfig` carries `num_frames` + `temporal_compression` (from
-  defaults.json, data-driven); the profiler builds a per-graph symbol map
-  binding named symbols from runtime dims (batch stays at its trace value —
-  the trace bakes each component's true batch semantics, and binding the CFG
-  batch doubled Sana VAE estimates and flipped its validated plan); and shape
-  resolution evaluates the symbolic expression trees, gated on the
-  expression's own trace annotation reproducing the concrete trace dim (some
-  image graphs carry mis-associated product expressions whose evaluation
-  exploded estimates to absurdity — inconsistent-at-trace expressions fall
-  back to the concrete value, the legacy behavior). Anti-regression: Sana
-  1024 and Sana 4Kpx solve to byte-identical plans vs the previous code
-  (4Kpx keeps `single_gpu` + its validated VAE op-tiling plan: 3 fusion
-  pairs, 23 tiled ops, 9 residual chains). With truthful estimates the Wan
-  81-frame solve now degrades to `lazy_sequential` with the VAE on CPU
-  instead of a mid-run CUDA OOM; full GPU-resident 81-frame decode
-  additionally needs op-level tiling coverage of the VAE tail chain at full
-  5D resolution (follow-up).
-- **Triton-sequential dtype attrs narrow fp64/complex128 to fp32/complex64
-  (R30 parity with the triton compiled hot loop).** The triton compiled path
-  narrows double-precision dtype attributes at compile time (triton kernels are
-  fp32-max; the constant loader already narrows stored complex128 tables to
-  complex64), but the sequential dispatcher's attribute resolver parsed dtype
-  kwargs verbatim. A graph `_to_copy` to complex128 on the Wan RoPE freqs table
-  then reinterpreted the interleaved fp32 [re,im] pairs as fp64 — the
-  unit-magnitude table collapsed to near-zero garbage (l2 256.0 → 0.5), every
-  downstream rotary application was corrupted, and `--triton-sequential`
-  produced a uniform gray video while running "successfully" end to end. Both
-  dtype-parsing branches of the resolver now apply the same narrowing; the
-  freqs chain matches the coherent `--triton` values exactly and the
-  triton-sequential video is coherent. TinyLlama greedy `--triton-sequential`
-  stays byte-identical to `--compiled` (no regression; inert for graphs
-  without fp64/complex128 attrs).
-- **`NBX_DUMP_TIDS` now covers the triton-sequential op loop.** The per-op dump
-  diagnostic existed only in the compiled hot loops; in `--triton-sequential`
-  it silently produced no file, leaving the mode blind to cross-engine per-op
-  diffs (this gap is what delayed localizing the gray-video bug above). The
-  stats computation is factored into a shared helper so all engines emit the
-  same record schema.
-- **Sequential mode view-shape inference picks the axis that actually changed
-  (R30 parity with compiled `_make_view_reshape`).** When a `view`/`reshape`
-  target's element count no longer matches the runtime input (a dim moved
-  between trace and runtime), the sequential resolver previously inferred the
-  LAST dim as `-1` unconditionally. That folded the CFG batch into the feature
-  dim on Wan modulation views (input `[2,9216]`, frozen target `[1,6,1536]` gave
-  `[1,6,3072]` instead of `[2,6,1536]`) and produced an invalid `[4680,4680,-1]`
-  on hidden-state views whose traced shape duplicated the sequence expression
-  into the batch slot. Now it tries each axis as `-1` and (1) prefers the axis
-  whose recovered value equals the input tensor's real dim at that axis and
-  differs from the frozen target (the moved/batch axis), (2) else keeps the
-  legacy last-dim inference when that is a valid split (the spatial-flatten and
-  LLM attention-reshape case sequential decode relies on), (3) else takes the
-  first valid axis. Verified: Wan2.1-T2V-1.3B `--sequential` now produces a
-  coherent video; TinyLlama greedy `--sequential` stays byte-identical to
-  `--compiled` (no regression).
-- **Triton diffusion flow applies `zero_pad_embeddings` symmetrically with the
-  compiled flow (R30).** The compiled `iterative_process` handler reads the
-  per-encoder `zero_pad_embeddings` flag from the registry and passes the
-  `attention_mask` into `finalize_embeddings`, so UMT5/T5 encoders' non-zero
-  padding embeddings are zeroed before the DiT cross-attends to them (the vendor
-  pipelines trim+zero-pad). The triton handler never mirrored this: both the
-  positive and negative finalize sites read the raw tokenizer config without the
-  flag, and the negative finalize did not pass the `attention_mask` at all — so
-  in `--triton`/`--triton-sequential` the text padding stayed non-zero and the
-  DiT condition diverged from the oracle. Added `_tokenizer_config_with_flags`
-  to the triton handler (mirror of compiled) and pass the negative
-  `attention_mask`; the text-condition `condition_embedder` activation now
-  matches the compiled oracle. Inert for encoders without the registry flag, so
-  image diffusion models are untouched (R23).
-- **Scheduler config: `algorithm_type` is no longer universally required.** It is
-  a DPM++-specific key (dpmsolver++/dpmsolver/sde-*); UniPC and flow schedulers
-  legitimately omit it. Moved from the validator's REQUIRED set to the optional
-  defaults (default `dpmsolver++`, honored when present), so a Wan UniPC `.nbx`
-  loads without a spurious "missing REQUIRED keys" crash.
-- **5D (video) convolution on the triton path (R33-pure).** `conv2d_wrapper` now
-  routes rank-5 weights (Conv3D — Wan transformer patch-embed + VAE temporal
-  causal convs) through a temporal-decomposition helper: `conv3d(x,w)` = the sum
-  over the temporal kernel positions of a `conv2d` on each temporally-shifted
-  set of frames, reusing the existing triton conv2d kernel per slice (slice +
-  accumulate over the time axis; no new kernel). Validated bit-close to the
-  reference `conv3d` (max|diff| 3.05e-05).
-- **`constant_pad_nd` general N-D path silently padded only the last dim.** The
-  fallback branch (any pad beyond the optimized last-1/last-2-dims kernels)
-  computed the correct output *shape* but its kernel only ever applied the
-  last-dimension padding — so padding a middle axis (e.g. the temporal axis of a
-  5D `[B,C,T,H,W]` tensor) produced silent garbage that the right-shaped output
-  masked. Rewritten as cat-of-constant-blocks per padded dim (NBXTensor-pure,
-  R33), correct for any combination of padded axes; the optimized last-dim(s)
-  kernels are retained for the hot image paths and are unchanged.
-- **Multi-dim reductions on the triton path silently reduced only one axis.**
-  `sum`/`mean`/`amax`/`std`/`var` collapsed a list of reduction dims to its
-  first element (`dim = dim[0]`), so a reduction over several axes (e.g. the Wan
-  RoPE grid-size `sum` over dims `[0,1,2,4]`, which must collapse a 5D latent to
-  a 1D coordinate vector) reduced only the first axis and left the wrong rank —
-  here a spurious extra dimension that propagated into a downstream convolution
-  and crashed it. A shared helper now flattens all reduced dims into one axis
-  and performs a single reduction (NBXTensor-pure), correct for separable
-  reductions and for `std`/`var` (the correction divides by the total reduced
-  count). The single-dim / 1-element-list fast path is unchanged, so existing
-  models are byte-identical. Validated against the reference across `sum`/`mean`
-  /`amax`/`var`/`std` with keepdim on/off (max|diff| 1.1e-04, fp32 accumulation).
-- **Triton UniPC scheduler aborted on the final flow-matching step.** The
-  zero-torch UniPC port computes its per-step `lambda = log(alpha) - log(sigma)`
-  in scalar Python; flow-matching drives `sigma -> 0` at the last step, where
-  Python's `math.log(0)` raises `ValueError: math domain error` (the PyTorch
-  reference uses `torch.log`, which yields `-inf` and does not raise). The
-  `-inf` is load-bearing: it makes the predictor coefficients collapse so the
-  step returns the predicted clean sample — the intended denoised output. A
-  `_safelog` helper now mirrors `torch.log` at the domain edge (`log(0) = -inf`)
-  so the final step completes instead of crashing.
-- **`NBXTensor.from_numpy` mistagged complex arrays as float32.** The numpy→NBX
-  dtype map had no `complex64`/`complex128` entries, so a complex array fell
-  through to `float32`: the raw interleaved real/imag bytes were copied but
-  labelled as floats, producing garbage. This corrupted complex constants loaded
-  on the triton path — notably the rotary-embedding frequency table (stored as
-  `complex128 [seq, head_dim/2]`), which became non-finite and propagated NaN
-  through the whole transformer, so the triton video output decoded to a fully
-  black frame. numpy already stores complex as the interleaved real/imag pairs
-  that NBXTensor's complex storage expects, so mapping the two complex dtypes
-  makes `from_numpy` yield a correct complex tensor (`view_as_real`/`view_as_complex`
-  reinterpret the same bytes). Validated by a from_numpy round-trip for complex64
-  and complex128 (correct dtype, element size, and real/imag view).
-- **Complex-dtype handling across the triton path (rotary embeddings).** Beyond
-  `from_numpy`, several triton-path operations silently dropped or mishandled the
-  complex dtype, which collectively turned the Wan video output black (the model
-  applies rotary position embeddings as a complex multiply on a `complex128`
-  frequency table):
-  - `NBXTensor.to(...)` no longer downcasts a complex tensor to a real dtype
-    (PyTorch itself forbids `complex→real` via `.to`; it only arose from the
-    compute-dtype pipeline narrowing a complex tensor, which would reinterpret
-    the interleaved real/imag bytes as a single real array → NaN). complex↔complex
-    casts still proceed.
-  - `view_as_complex` promotes an `fp16`/`bf16` input to `fp32` before tagging
-    `complex64` (there is no complex32; a half-precision input cannot back a
-    valid complex64 view, and reading it as fp32 pairs over-runs the storage).
-  - `index_select` on a complex tensor now routes through the real view
-    (`view_as_real` → select → `view_as_complex`); the element-wise kernel
-    otherwise copied one real value per complex element, reading the wrong stride
-    and returning garbage (the per-axis gather of the rotary frequency table).
-  - `add`/`sub`/`sum` on complex tensors route through the real view. The flat
-    elementwise/reduction kernels are correct for same-shape complex add (re+re,
-    im+im on the interleaved storage) but misalign the real/imag pairs when
-    **broadcasting** or **reducing** (they treat `[re,im,re,im,…]` as flat
-    floats on the wrong stride) — the rotary frequency grid is built by
-    broadcasting and summing per-axis complex frequencies, so this corrupted it.
-  - `cat` of complex tensors along an **inner** dim routes through the real view.
-    `cat(dim=0)` was correct (whole element-blocks stay contiguous) but an inner
-    concat split the interleaved pairs at the boundary, pairing one operand's
-    real with the next's imaginary — the rotary grid concatenates the three
-    per-axis (T/H/W) frequency blocks along the last dim.
-  - The triton path narrows `float64 → float32` and `complex128 → complex64`
-    (in the op-dtype parser and the embedded-constant loader), since the
-    NeuroBrix triton kernels are fp32-max (no native fp64 on Volta). A graph that
-    explicitly casts to `float64`/`complex128` for precision (the rotary chain
-    runs in fp64 in the reference) is honoured at fp32, which is numerically
-    ample for rotary embeddings, and keeps the whole chain on kernels that
-    support it. Inert for models without fp64/complex dtypes.
-  Together these make the triton rotary multiply produce unit-magnitude
-  frequencies and a finite latent (previously the frequency table read as
-  ~2.6e38 garbage → Inf → all-NaN latent → uniform black frame).
-- **The Inf/NaN debug check (`NBX_TRITON_TRACE_NAN`) mis-flagged complex tensors.**
-  It cast each op output to fp32 to scan it, which on a complex tensor read half
-  the bytes and reported false positives. It now scans complex tensors via their
-  real view (all real+imag components), so the first genuine non-finite op is
-  reported.
+- **Weight binding is identical across all four modes.** Weights stored
+  under a shorter name than the graph references (trailing-suffix match)
+  now bind in the sequential, Triton, and Triton-sequential paths exactly
+  as in compiled — previously a text encoder could silently propagate
+  empties in one mode only.
+- **Single-piece tensor splits.** A `split`/`chunk` yielding one piece at
+  runtime returned a one-element tuple that crashed the next op; both
+  engines unwrap it.
+- **Diagnostics fail loudly.** Op execution errors print the failing op,
+  its position, and live shapes before re-raising; the `NBX_DEVICE_TRACE`
+  diagnostic no longer swallows its own errors.
 
 ### Removed
 
-- **Redundant `RELEASE_NOTES_v0.2.0.md` and the `RELEASE_NOTES_*.md` sdist glob.**
-  Release notes are kept in `CHANGELOG.md` (the single source) and in the
-  GitHub/GitLab Release objects. The stand-alone file duplicated the 0.2.0
-  changelog entry and no 0.2.1 equivalent was ever produced, so the convention
-  was dropped rather than perpetuated.
-
-### Fixed
-
-- **`graph_executor` `NBX_DEVICE_TRACE` diagnostic no longer swallows its own
-  errors.** The device-drift diagnostic block (active only when the
-  `NBX_DEVICE_TRACE` env var is set) caught all exceptions with a bare `pass`,
-  so a failure in the diagnostic itself was silent — useless precisely when an
-  operator had enabled tracing to investigate a cross-device issue. It now
-  prints the failure and continues (the block runs only when tracing is
-  explicitly enabled, so the op loop is never affected). Resolves the
-  static-analysis empty-except finding on the `main` integration PR.
+- **Redundant `RELEASE_NOTES_*.md` convention.** Release notes live in
+  `CHANGELOG.md` (the single source) and the GitHub/GitLab Release
+  objects.
 
 ## [0.2.1] - 2026-06-09
 
@@ -3159,7 +2239,8 @@ First stable release of NeuroBrix — universal deep learning inference engine.
 - Zip-slip path traversal validation in registry import
 - Safe arithmetic parser replacing `eval()` in shape resolver
 
-[Unreleased]: https://gitlab.com/neurobrix/Neurobrix/-/compare/v0.1.6...main
+[Unreleased]: https://github.com/NeuroBrix/neurobrix/compare/v0.3.0...main
+[0.3.0]: https://github.com/NeuroBrix/neurobrix/compare/v0.2.1...v0.3.0
 [0.1.6]: https://gitlab.com/neurobrix/Neurobrix/-/compare/v0.1.5...v0.1.6
 [0.1.5]: https://gitlab.com/neurobrix/Neurobrix/-/compare/v0.1.4...v0.1.5
 [0.1.4]: https://gitlab.com/neurobrix/Neurobrix/-/compare/v0.1.3...v0.1.4
