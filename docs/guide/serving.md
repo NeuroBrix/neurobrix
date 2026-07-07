@@ -43,8 +43,10 @@ Chat commands:
 
 | Command | Action |
 |---------|--------|
+| `/new` | Start a new conversation |
+| `/context` | Show token usage |
+| `/status` | Show engine status |
 | `/quit` | Exit chat |
-| `/clear` | Clear conversation history |
 
 ## Stop the Server
 

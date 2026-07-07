@@ -1,6 +1,6 @@
 # NeuroBrix CLI Reference
 
-> **Version**: 0.1.0 | **Last Update**: February 2026
+> **Version**: 0.3.0 | **Last Update**: July 2026
 
 ## Installation
 
@@ -23,6 +23,7 @@ PYTHONPATH=src python -m neurobrix <command> [options]
 | [`chat`](#chat) | Interactive chat session with a running daemon |
 | [`stop`](#stop) | Stop the serving daemon |
 | [`run`](#run) | Run single-shot model inference |
+| [`upscale`](#upscale) | Upscale an image with a super-resolution model |
 | [`hub`](#hub) | Browse models on the NeuroBrix Hub |
 | [`import`](#import) | Download a model from the hub |
 | [`list`](#list) | Show installed models |
@@ -31,6 +32,7 @@ PYTHONPATH=src python -m neurobrix <command> [options]
 | [`info`](#info) | Display system information |
 | [`inspect`](#inspect) | Inspect a .nbx container |
 | [`validate`](#validate) | Validate .nbx file integrity |
+| [`doctor`](#doctor) | Diagnose installation issues (PATH, etc.) |
 
 ---
 
@@ -50,8 +52,10 @@ neurobrix serve --model <name> [--hardware <profile>] [options]
 | `--hardware` | Hardware profile ID (optional — auto-detects if omitted) | auto-detect |
 | `--timeout` | Idle timeout in seconds | 1800 |
 | `--foreground` | Run in foreground (for debugging) | false |
-| `--sequential` | Use native ATen dispatch | false |
-| `--triton` | Use Triton kernels | false |
+| `--compiled` | PyTorch fused graph (explicit default) | true |
+| `--sequential` | PyTorch op-by-op (debug) | false |
+| `--triton` | NeuroBrix Triton kernels (compiled) | false |
+| `--triton-sequential` | Triton kernels op-by-op (debug) | false |
 
 Examples:
 ```bash
@@ -121,8 +125,12 @@ neurobrix run --model <name> --prompt <text> [--hardware <profile>] [options]
 | `--repetition-penalty` | Repetition penalty (LLM) |
 | `--chat` / `--no-chat` | Force chat template on/off |
 | `--set KEY=VALUE` | Override any runtime variable |
-| `--sequential` | Use native ATen dispatch (debug) |
-| `--triton` | Use Triton kernels (experimental) |
+| `--compiled` | PyTorch fused graph (explicit default) |
+| `--sequential` | PyTorch op-by-op (debug) |
+| `--triton` | NeuroBrix Triton kernels — vendor-agnostic compute path |
+| `--triton-sequential` | Triton kernels op-by-op (debug) |
+
+Family-specific input flags (`--audio`, `--input-image`, `--mask-image`, `--reference-audio`, `--speaker`, `--video`, `--num-frames`, `--fps`, `--system`, `--max-tokens`, `--mode`) are documented per family in [CLI Usage by Family](../cli_usage.md).
 
 Examples:
 ```bash
@@ -140,6 +148,22 @@ neurobrix run --model 1600m-1024 \
 ```
 
 > **Note:** For repeated use, prefer `serve` + `chat` to avoid reloading weights each time.
+
+### upscale
+
+Upscale an image with a super-resolution model.
+
+```bash
+neurobrix upscale --model <name> --input <img> --output <img> [options]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--model` | Upscaler model name (required) |
+| `--input` | Input image path, PNG/JPEG (required) |
+| `--output` | Output image path, PNG (required) |
+| `--mode` | Execution mode: `compiled` (default) / `sequential` / `triton` / `triton-sequential` |
+| `--hardware` | Hardware profile ID (auto-detected if omitted) |
 
 ---
 
@@ -253,10 +277,18 @@ neurobrix validate <path.nbx> [options]
 
 | Flag | Description |
 |------|-------------|
-| `--level` | Validation depth: `structure`, `schema`, `coherence`, `deep` |
-| `--strict` | Treat warnings as errors |
+| `--level` | Validation depth: `structure`, `schema`, `coherence` (default), `deep` |
+| `--strict` | Exit on first failure |
 | `--json` | Output results as JSON |
 | `--verbose` / `-v` | Show detailed validation info |
+
+### doctor
+
+Diagnose installation issues (PATH problems, etc.).
+
+```bash
+neurobrix doctor
+```
 
 ---
 

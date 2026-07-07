@@ -53,7 +53,18 @@ neurobrix run --model 1600m-1024 --prompt "A mountain lake at sunset"
 !!! note
     Single-shot mode loads and unloads weights each time. Use serve mode for repeated inference.
 
-## 4. LLM Chat
+## 4. Video Generation
+
+Video models use the same `run` command; `--input-image` switches from text-to-video to image-to-video:
+
+```bash
+neurobrix import THUDM/CogVideoX-2b
+neurobrix run --model CogVideoX-2b \
+    --prompt "a hot air balloon drifting over mountains" \
+    --num-frames 49 --seed 42 --output balloon.mp4
+```
+
+## 5. LLM Chat
 
 For language models, use the interactive chat:
 
@@ -68,7 +79,7 @@ DeepSeek: The capital of France is Paris...
 You: /quit
 ```
 
-## 5. CPU-Only Machines
+## 6. CPU-Only Machines
 
 No GPU? NeuroBrix works on CPU too. Auto-detection handles it automatically:
 

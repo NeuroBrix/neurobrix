@@ -5,8 +5,8 @@ Get NeuroBrix up and running in under 5 minutes.
 ## Prerequisites
 
 - Python 3.10+
-- PyTorch 2.0+ with CUDA support
-- NVIDIA GPU (V100, A100, RTX series)
+- PyTorch 2.1+ (CUDA build recommended)
+- NVIDIA GPU (V100/A100/H100 class, RTX series) recommended — Apple Silicon (MPS) and CPU-only machines also work
 
 ## Steps
 

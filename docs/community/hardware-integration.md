@@ -86,15 +86,17 @@ gpu_count: 1
 
 ## Current Hardware Support
 
-NeuroBrix currently supports NVIDIA GPUs via PyTorch + CUDA + Triton:
+NeuroBrix currently supports NVIDIA GPUs via PyTorch + CUDA + Triton, Apple Silicon (MPS) via the PyTorch backend, and CPU-only execution:
 
 | Profile | Configuration |
 |---------|---------------|
 | V100 16GB | Single GPU |
 | V100 32GB | Single, 2x, 3x (PCIe), 2x/4x (NVLink) |
 | Custom multi-GPU | Mixed VRAM configurations with NVLink |
+| Apple Silicon | M-series (MPS, PyTorch backend) |
+| CPU-only | Auto-detected profile, no GPU required |
 
-**On the roadmap:** AMD ROCm, Intel oneAPI, Apple Metal, Qualcomm AI Engine, custom ASIC support.
+**On the roadmap:** AMD ROCm, Intel oneAPI, Qualcomm AI Engine, custom ASIC support.
 
 ---
 
@@ -120,7 +122,7 @@ NeuroBrix currently supports NVIDIA GPUs via PyTorch + CUDA + Triton:
 **Hardware Integration Program**
 Email: [partners@neurobrix.es](mailto:partners@neurobrix.es)
 Web: [neurobrix.es](https://neurobrix.es)
-GitLab: [gitlab.com/neurobrix](https://gitlab.com/neurobrix)
+Repository: [GitHub](https://github.com/NeuroBrix/neurobrix) | [GitLab](https://gitlab.com/neurobrix/neurobrix)
 
 ---
 

@@ -1,6 +1,6 @@
 # NeuroBrix Architecture
 
-> **Version**: 0.1.2 | **Status**: Production | **Last Update**: April 2026
+> **Version**: 0.3.0 | **Status**: Production | **Last Update**: July 2026
 
 ## Overview
 
@@ -24,9 +24,9 @@ share the `.nbx` container and the Prism plan but no compute code.
 | Mode | Flag | Branch | Implementation | Use Case |
 |------|------|--------|----------------|----------|
 | **Compiled** | (default) | PyTorch | CompiledSequence + DtypeEngine AMP | Production (80-95% GPU utilization) |
-| **Native** | `--sequential` | PyTorch | Sequential ATen dispatcher | Reference oracle (proves graph/trace) |
+| **Native** | `--sequential` | PyTorch | Sequential ATen dispatcher | Op-by-op reference / debug |
 | **Triton** | `--triton` | Triton | TritonSequence (zero PyTorch) | Production — zero-torch, vendor-agnostic |
-| **Triton sequential** | `--triton-sequential` | Triton | TritonSequentialDispatcher (op-by-op) | Kernel oracle (op-by-op vs PyTorch oracle) |
+| **Triton sequential** | `--triton-sequential` | Triton | TritonSequentialDispatcher (op-by-op) | Op-by-op kernel-level debug |
 
 ### Compiled Mode (Default)
 
@@ -130,7 +130,7 @@ Prism supports mixed GPU configurations (e.g., 2x V100-16GB + 2x V100-32GB). Blo
 
 ## Execution Flows
 
-The runtime supports three execution flow types, determined by the model's topology:
+The runtime supports multiple execution flow types, determined by the model's topology. The three main ones:
 
 ### Iterative Process (Diffusion Models)
 
@@ -159,6 +159,8 @@ forward:    [component_1] → [component_2] → output
 
 Used by: Whisper (audio transcription)
 
+Additional flow types cover encoder-decoder speech models, RNN-T transducers (Parakeet), audio-conditioned LLMs (Voxtral, Canary-Qwen, Granite-Speech), and text-to-speech pipelines (Kokoro, Orpheus, Chatterbox, VibeVoice, OpenAudio).
+
 ---
 
 ## DtypeEngine: Automatic Mixed Precision
@@ -184,7 +186,7 @@ The DtypeEngine implements PyTorch AMP autocast rules for numerical stability:
 
 ## Serving Architecture
 
-NeuroBrix supports two execution modes:
+NeuroBrix supports two serving workflows:
 
 ### Serve Mode (Recommended)
 

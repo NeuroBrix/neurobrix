@@ -1,6 +1,6 @@
 # The NBX Container Format
 
-> **Version**: 0.1.2 | **Last Update**: April 2026
+> **Version**: 0.3.0 | **Last Update**: July 2026
 
 ## What is NBX?
 

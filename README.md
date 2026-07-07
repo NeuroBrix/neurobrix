@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://gitlab.com/neurobrix/Neurobrix/-/raw/main/assets/logo_NeuroBrix.png" alt="NeuroBrix Logo" width="200"/>
+  <img src="./assets/logo_NeuroBrix.png" alt="NeuroBrix Logo" width="200"/>
 </p>
 
 <h1 align="center">NeuroBrix</h1>
@@ -12,7 +12,8 @@
 <p align="center">
   <a href="https://pypi.org/project/neurobrix/"><img src="https://img.shields.io/pypi/v/neurobrix?include_prereleases&color=blue" alt="PyPI"/></a>
   <a href="https://pypi.org/project/neurobrix/"><img src="https://img.shields.io/pypi/pyversions/neurobrix?include_prereleases" alt="Python 3.10 | 3.11 | 3.12"/></a>
-  <a href="https://gitlab.com/neurobrix/neurobrix/-/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License"/></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License"/></a>
+  <a href="https://github.com/NeuroBrix/neurobrix"><img src="https://img.shields.io/badge/GitHub-neurobrix-181717?logo=github&logoColor=white" alt="GitHub"/></a>
   <a href="https://gitlab.com/neurobrix/neurobrix"><img src="https://img.shields.io/badge/GitLab-neurobrix-FC6D26?logo=gitlab&logoColor=white" alt="GitLab"/></a>
   <a href="https://neurobrix.es/models"><img src="https://img.shields.io/badge/hub-neurobrix.es-orange" alt="NeuroBrix Hub"/></a>
 </p>
@@ -21,9 +22,10 @@
   <a href="https://neurobrix.es/models">Hub</a> &nbsp;|&nbsp;
   <a href="https://neurobrix.es/docs">Docs</a> &nbsp;|&nbsp;
   <a href="https://pypi.org/project/neurobrix/">PyPI</a> &nbsp;|&nbsp;
+  <a href="https://github.com/NeuroBrix/neurobrix">GitHub</a> &nbsp;|&nbsp;
   <a href="https://gitlab.com/neurobrix/neurobrix">GitLab</a> &nbsp;|&nbsp;
   <a href="#roadmap">Roadmap</a> &nbsp;|&nbsp;
-  <a href="https://gitlab.com/neurobrix/neurobrix/-/blob/main/CONTRIBUTING.md">Contributing</a>
+  <a href="./CONTRIBUTING.md">Contributing</a>
 </p>
 
 ---
@@ -89,9 +91,9 @@ pip install neurobrix
 |----------|-------------|-------|
 | **Linux** | CUDA, Triton kernels | Full support, recommended for production |
 | **Windows** | CUDA | Fully supported. Triton not available on Windows |
-| **macOS** | CPU only | MPS/Metal support planned |
+| **macOS** | Apple Silicon (MPS) | M-series GPUs via PyTorch MPS. Triton not available on macOS |
 
-**Requirements:** Python 3.10+ / PyTorch 2.1+ with CUDA / NVIDIA GPU
+**Requirements:** Python 3.10+ / PyTorch 2.1+. NVIDIA GPU (CUDA) recommended for production; Apple Silicon (MPS) and CPU-only execution are also supported.
 
 ---
 
@@ -111,7 +113,7 @@ neurobrix run --prompt "A robot painting on canvas" --output robot.png
 neurobrix stop
 ```
 
-### Serve Mode (Hot Run Mode , Recommended)
+### Serve Mode (Hot Run Mode — Recommended)
 
 Loads weights into VRAM once and keeps the model warm. Every subsequent request runs with zero startup overhead.
 
@@ -132,7 +134,7 @@ neurobrix stop
 
 ## Usage by Model Family
 
-Each model family uses different CLI flags and defaults. Hardware is always auto-detected.
+NeuroBrix runs **9 model families** through one uniform CLI — image, video, LLM, vision-language (VLM), multimodal, text-to-speech, speech-to-text, speech understanding (audio_llm), and upscalers. Each family uses different CLI flags and defaults. Hardware is always auto-detected.
 
 ### Image Generation
 
@@ -175,6 +177,25 @@ neurobrix stop
 | `--max-tokens` | Maximum tokens to generate | Model-dependent (512-32768) |
 | `--repetition-penalty` | Penalize repeated tokens (1.0 = off) | 1.0 |
 | `--output` | Save response to file | stdout |
+
+### Vision-Language & Multimodal
+
+Vision-language models answer questions about an image. Multimodal models (Janus-Pro) have two heads — text understanding and image generation — selected with `--mode` (required for this family).
+
+```bash
+# VLM: describe an image
+neurobrix run --model <vlm-model> \
+    --input-image cat.jpg \
+    --prompt "What animal is in this image?"
+
+# Multimodal — image generation head
+neurobrix run --model Janus-Pro-7B \
+    --mode image --prompt "a red cat sitting on a couch"
+
+# Multimodal — text understanding head
+neurobrix run --model Janus-Pro-7B \
+    --mode text --input-image cat.jpg --prompt "describe this image"
+```
 
 ### Audio — Speech-to-Text (STT)
 
@@ -243,20 +264,36 @@ neurobrix upscale --model hat-l-x4 \
 
 ### Video Generation
 
+The video family covers **text-to-video and image-to-video** (10 models — Wan 2.1/2.2, CogVideoX, Mochi, Open-Sora, Allegro, SANA-Video), all validated in the four execution modes. The mode is auto-deduced from the inputs: passing `--input-image` switches to image-to-video.
+
 ```bash
+# Text-to-video
 neurobrix run --model SANA-Video_2B_720p \
     --prompt "A cat playing piano" \
     --steps 30 --cfg 5.0 --seed 42 \
+    --num-frames 81 \
+    --output video.mp4
+
+# Image-to-video (auto-detected from --input-image)
+neurobrix run --model Wan2.2-I2V-A14B \
+    --input-image first_frame.png \
+    --prompt "camera pans left, gentle rain" \
+    --num-frames 49 --seed 42 \
     --output video.mp4
 ```
 
 | Flag | Description | Default |
 |------|-------------|---------|
 | `--prompt` | Text description of the video to generate | Required |
+| `--input-image` | First frame — switches to image-to-video | — |
+| `--num-frames` | Number of frames to generate | Model-dependent |
+| `--fps` | Output frame rate | Model-dependent |
 | `--steps` | Number of diffusion steps | Model-dependent (20-50) |
 | `--cfg` | Guidance scale | Model-dependent (5.0) |
-| `--seed` | Random seed | Random |
+| `--seed` | Random seed (same seed → same video) | Random |
 | `--output` | Output file path | `output.mp4` |
+
+> Video models run at their **native resolution and clip length** — up to 720×1280 at 88 frames (Allegro) — with large spatio-temporal activations tiled automatically through both VAE encode and decode. The biggest models (14B+, including the 28B dual-denoiser Wan2.2-I2V-A14B) are placed across multiple GPUs automatically.
 
 ---
 
@@ -273,25 +310,25 @@ Every model in NeuroBrix can run through **two fully independent compute branche
 
 If you pass no mode flag, NeuroBrix runs `--compiled`.
 
-**The PyTorch branch** is the pragmatic bridge to the mature PyTorch + NVIDIA-library ecosystem. `--sequential` is the **oracle**: it dispatches each ATen op to native PyTorch one at a time, so it is the reference that proves a model's graph and trace are sound. `--compiled` fuses that same graph into a zero-overhead execution sequence (pre-resolved tensor slots, direct SDPA, integer-indexed memory arena) — this is the production path.
+**The PyTorch branch** is the pragmatic bridge to the mature PyTorch + NVIDIA-library ecosystem. `--sequential` dispatches each ATen op to native PyTorch one at a time — a transparent, op-by-op reference path that is ideal for debugging. `--compiled` fuses that same graph into a zero-overhead execution sequence (pre-resolved tensor slots, direct SDPA, integer-indexed memory arena) — this is the production path.
 
-**The Triton branch** is the NeuroBrix value-add: 100% NeuroBrix Triton kernels through `NBXTensor`, with **no `torch.*`, no cuDNN/cuBLAS** on the compute path — hardware-universal and vendor-agnostic. `--triton-sequential` is the kernel oracle (op-by-op, diffed against the PyTorch oracle to validate each kernel in isolation); `--triton` is its fused, zero-overhead form.
+**The Triton branch** is the NeuroBrix value-add: 100% NeuroBrix Triton kernels through `NBXTensor`, with **no `torch.*`, no cuDNN/cuBLAS** on the compute path — hardware-universal and vendor-agnostic. `--triton-sequential` runs the same kernels op-by-op for transparent debugging; `--triton` is its fused, zero-overhead form.
 
 **Which to use:**
 
 - **Just run a model →** the default (`--compiled`). Fastest PyTorch path.
 - **Vendor-agnostic / no NVIDIA-library lock-in →** `--triton`.
-- **Debugging a numerical discrepancy →** compare `--sequential` (PyTorch oracle) against `--triton-sequential` (kernel oracle) op-by-op.
+- **Debugging a numerical discrepancy →** compare `--sequential` against `--triton-sequential` op-by-op.
 
 ```bash
 # Same model, four ways:
 neurobrix run --model Sana_1600M_1024px_MultiLing --prompt "a red fox" --output fox.png                      # compiled (default)
-neurobrix run --model Sana_1600M_1024px_MultiLing --prompt "a red fox" --sequential        --output fox.png  # PyTorch oracle
+neurobrix run --model Sana_1600M_1024px_MultiLing --prompt "a red fox" --sequential        --output fox.png  # PyTorch op-by-op
 neurobrix run --model Sana_1600M_1024px_MultiLing --prompt "a red fox" --triton            --output fox.png  # Triton compiled
-neurobrix run --model Sana_1600M_1024px_MultiLing --prompt "a red fox" --triton-sequential --output fox.png  # Triton oracle
+neurobrix run --model Sana_1600M_1024px_MultiLing --prompt "a red fox" --triton-sequential --output fox.png  # Triton op-by-op
 ```
 
-> All four modes are validated to produce the same output (modulo numerics) for the models in the matrix below. The four mode flags are also available on `neurobrix serve` and `neurobrix upscale`.
+> Every supported model is validated in all four execution modes, and the modes are cross-checked for numerical agreement — they produce the same output (modulo floating-point numerics). Sampling is deterministically seeded: the same `--seed` reproduces the same output on the same hardware. The four mode flags are also available on `neurobrix serve` and `neurobrix upscale`.
 
 ---
 
@@ -318,7 +355,7 @@ neurobrix hub --category VIDEO
 neurobrix hub --search sana
 
 # Import a model (downloads .nbx → extracts to cache)
-neurobrix import vendor/model_name
+neurobrix import THUDM/CogVideoX-2b
 
 # Import and delete the .nbx archive to save disk space
 neurobrix import pixart/sigma-xl-1024 --no-keep
@@ -370,54 +407,79 @@ neurobrix run --model Model_Name --prompt "..."
 
 NeuroBrix is a **runtime engine** — it executes models but does **not train or create** them. All models listed below are the work of their respective authors and are subject to their original licenses. **Users must review and accept each model's license before use.**
 
-### Image Generation
+There are two levels of support:
+
+- **Published on the hub** — pre-built `.nbx` containers, downloadable with `neurobrix import`. The video family is being published alongside the v0.3.0 release.
+- **Validated by the engine** — models validated in all four execution modes; hub packages are being published progressively.
+
+### Published on the Hub
+
+#### Image Generation
 
 | Model | Author | License | Size |
 |-------|--------|---------|-----:|
-| Sana 1600M 4K | NVIDIA / MIT | Apache 2.0 | 12 GB |
-| PixArt-Sigma-XL-2-1024-MS | PixArt | OpenRAIL++ | 20 GB |
-| PixArt-XL-2-1024-MS | PixArt | OpenRAIL++ | 20 GB |
-| Flex.1-alpha | Ostris | Apache 2.0 | 24 GB |
-| Janus-Pro-7B | DeepSeek | MIT | 14 GB |
+| PixArt-Sigma-XL-1024 | PixArt | OpenRAIL++ | 20.3 GB |
+| PixArt-XL-1024 | PixArt | OpenRAIL++ | 20.4 GB |
+| Sana-1600M-MultiLing | NVIDIA | NVIDIA Open Model License | 12.1 GB |
+| Sana-1600M-4Kpx-BF16 | NVIDIA | NVIDIA Open Model License | 12.1 GB |
+| Flex.1-alpha | Ostris | Apache 2.0 | 24.5 GB |
 
-### Video Generation
+#### Video Generation
 
-| Model | Author | License | Size |
-|-------|--------|---------|-----:|
-| SANA-Video 2B 720p | NVIDIA / MIT | Apache 2.0 | 17 GB |
+| Model | Author | License | Type |
+|-------|--------|---------|------|
+| Wan-AI/Wan2.1-T2V-1.3B | Alibaba | Apache 2.0 | text-to-video |
+| Wan-AI/Wan2.1-VACE-1.3B | Alibaba | Apache 2.0 | video creation & editing |
+| Wan-AI/Wan2.1-I2V-14B-480P | Alibaba | Apache 2.0 | image-to-video |
+| Wan-AI/Wan2.2-I2V-A14B | Alibaba | Apache 2.0 | image-to-video, 28B dual-denoiser |
+| THUDM/CogVideoX-2b | Zhipu AI | Apache 2.0 | text-to-video |
+| THUDM/CogVideoX-5b-I2V | Zhipu AI | CogVideoX License | image-to-video |
+| genmo/Mochi-1-preview | Genmo | Apache 2.0 | text-to-video |
+| hpcai-tech/Open-Sora-v2 | HPC-AI Tech | Apache 2.0 | text-to-video |
+| rhymes-ai/Allegro | Rhymes AI | Apache 2.0 | text-to-video, native 720×1280, 88 frames |
+| rhymes-ai/Allegro-TI2V | Rhymes AI | Apache 2.0 | image-to-video |
+| Efficient-Large-Model/SANA-Video-2B-720p | NVIDIA | NVIDIA Open Model License | text-to-video, 720p |
 
-### Audio (Speech-to-Text + Text-to-Speech)
+#### Audio (Speech-to-Text, Speech Understanding, Text-to-Speech)
 
 | Model | Author | License | Size | Type |
 |-------|--------|---------|-----:|------|
-| Whisper Large | OpenAI | MIT | 6 GB | STT |
-| Whisper Large V3 Turbo | OpenAI | MIT | 3 GB | STT |
-| Parakeet TDT 1.1B | NVIDIA | CC-BY-4.0 | 4 GB | STT |
-| Voxtral Mini 3B | Mistral AI | Apache 2.0 | 7 GB | audio_llm |
-| Canary-Qwen 2.5B | NVIDIA | CC-BY-4.0 | 10 GB | audio_llm |
-| Granite-Speech 3.3 8B | IBM | Apache 2.0 | 16 GB | audio_llm |
-| Orpheus 3B (SNAC) | Canopy Labs | Apache 2.0 | 7 GB | TTS |
-| Kokoro 82M | Hexgrad | Apache 2.0 | 0.3 GB | TTS |
-| VibeVoice 1.5B | Microsoft | MIT | 6 GB | TTS |
-| OpenAudio S1 Mini | Fish Audio | CC-BY-NC-SA-4.0 | 2 GB | TTS |
-| Chatterbox | Resemble AI | MIT | 1 GB | TTS |
+| Whisper-Large-V3 | OpenAI | MIT | 5.8 GB | STT |
+| Whisper-V3-Turbo | OpenAI | MIT | 1.5 GB | STT |
+| Parakeet-TDT-1.1B | NVIDIA | CC-BY-4.0 | 4.1 GB | STT |
+| Voxtral-Mini-3B | Mistral AI | Apache 2.0 | 8.7 GB | audio_llm |
+| Canary-Qwen-2.5B | NVIDIA | CC-BY-4.0 | 4.8 GB | audio_llm |
+| Granite-Speech-3.3-8B | IBM | Apache 2.0 | 16.1 GB | audio_llm |
+| Orpheus-3B | Canopy Labs | Apache 2.0 | 14.2 GB | TTS |
+| Kokoro-82M | Hexgrad | Apache 2.0 | 385 MB | TTS |
+| VibeVoice-1.5B | Microsoft | MIT | 5.1 GB | TTS |
+| OpenAudio-S1-Mini | Fish Audio | CC-BY-NC-SA-4.0 | 4.0 GB | TTS |
+| Chatterbox | Resemble AI | MIT | 2.1 GB | TTS |
 
-### Image Upscalers (Super-Resolution)
+#### Image Upscalers (Super-Resolution)
 
 | Model | Author | License | Scale |
 |-------|--------|---------|------:|
-| HAT-L x4 | XPixelGroup | Apache 2.0 | 4x |
-| Real-ESRGAN x4 | Xintao Wang et al. | BSD-3-Clause | 4x |
-| SwinIR Classical x4 | Jingyun Liang et al. | Apache 2.0 | 4x |
-| Swin2SR Classical x4 | Marcos V. Conde et al. | Apache 2.0 | 4x |
+| HAT-L-x4 | XPixelGroup | Apache 2.0 | 4x |
+| Real-ESRGAN-x4 | Xintao Wang et al. | BSD-3-Clause | 4x |
+| SwinIR-Classical-x4 | Jingyun Liang et al. | Apache 2.0 | 4x |
+| Swin2SR-Classical-x4 | Marcos V. Conde et al. | Apache 2.0 | 4x |
 
-### Large Language Models
+#### Large Language Models
 
 | Model | Author | License | Size |
 |-------|--------|---------|-----:|
-| DeepSeek-MoE-16B | DeepSeek | MIT | 31 GB |
-| Qwen3-30B-A3B-Thinking | Alibaba / Qwen | Apache 2.0 | 57 GB |
-| TinyLlama 1.1B | TinyLlama | Apache 2.0 | 4 GB |
+| DeepSeek-MoE-16B-Chat | DeepSeek | DeepSeek License | 30.6 GB |
+| Qwen3-30B-A3B-Thinking | Alibaba / Qwen | Apache 2.0 | 57.1 GB |
+| TinyLlama-1.1B-Chat | TinyLlama | Apache 2.0 | 2.1 GB |
+
+### Validated by the Engine (hub publication in progress)
+
+These models are fully supported by the runtime — validated in all four execution modes with cross-checked numerical agreement — and their pre-built `.nbx` packages are being rolled out to the hub.
+
+| Model | Author | Type |
+|-------|--------|------|
+| Janus-Pro-7B | DeepSeek | multimodal (text understanding + image generation) |
 
 > **Non-commercial:** OpenAudio S1 Mini uses CC-BY-NC-SA-4.0 — non-commercial use only. Check each model's license on the [NeuroBrix Hub](https://neurobrix.es/models) before commercial deployment.
 
@@ -474,12 +536,15 @@ You describe your hardware. NeuroBrix figures out the rest. Hardware is auto-det
 | `single_gpu` | Model fits entirely in one GPU |
 | `single_gpu_lifecycle` | Components loaded/unloaded sequentially |
 | `pipeline_parallel` | Per-layer sequential fill across GPUs |
+| `component_placement` | Whole components (encoder / denoiser / decoder) on different GPUs |
 | `block_scatter` | Block-level distribution across GPUs |
 | `weight_sharding` | Weight-file distribution across GPUs |
 | `lazy_sequential` | Stream components through limited VRAM |
 | `zero3` | CPU offload with GPU compute |
 
-**GPU support:** NVIDIA, AMD, Intel, Apple (planned), plus Tenstorrent, Moore Threads, Biren, Iluvatar, Hygon DCU, Cambricon detection.
+Large models are distributed automatically — the 14B+ video models (including the 28B dual-denoiser Wan2.2-I2V-A14B) run via multi-GPU component placement with no manual device mapping.
+
+**GPU support:** NVIDIA, AMD, Intel, Apple Silicon, plus Tenstorrent, Moore Threads, Biren, Iluvatar, Hygon DCU, Cambricon detection.
 
 ---
 
@@ -500,12 +565,13 @@ The runtime compiles the entire execution graph at load time into a **CompiledSe
 
 - [x] **CompiledSequence** — zero-overhead graph execution engine
 - [x] **Prism solver** — automatic multi-GPU hardware allocation (7 strategies)
-- [x] **Image family** — 6 diffusion models (PixArt, Sana, Flex, Janus)
+- [x] **Image family** — 6 models (PixArt, Sana, Flex, Janus)
 - [x] **LLM family** — MoE (DeepSeek), dense (TinyLlama, Qwen3)
 - [x] **Audio family** — 11 models across STT, audio_llm, and TTS (5 flow handlers)
 - [x] **Upscalers** — 4 super-resolution families (HAT, Real-ESRGAN, SwinIR, Swin2SR)
-- [x] **Video family** — SANA-Video 720p (first of 10 planned)
+- [x] **Video family** — 10 models, text-to-video + image-to-video, validated in all four execution modes (Wan 2.1/2.2, CogVideoX, Mochi, Open-Sora, Allegro, SANA-Video); native-resolution generation via spatio-temporal tiling
 - [x] **Cross-platform** — Linux, Windows, macOS support
+- [x] **Apple Silicon** — MPS execution on M-series GPUs
 - [x] **Hardware auto-detection** — 10 GPU vendors, CPU-only fallback
 - [x] **Persistent serving** — warm daemon with chat interface
 - [x] **DtypeEngine** — automatic mixed precision (AMP)
@@ -514,10 +580,8 @@ The runtime compiles the entire execution graph at load time into a **CompiledSe
 
 ### Next
 
-- [ ] **Video family expansion** — remaining 9 models (Wan2.1, CogVideoX, Allegro, Mochi, Open-Sora)
 - [ ] **Vision-Language Models** — multimodal understanding at scale
 - [ ] **Quantization** — INT8/INT4 with NBX-native support
-- [ ] **Apple Silicon** — Metal/MPS backend
 - [ ] **3D generation** — mesh and NeRF models
 - [ ] **Embeddings** — text and image embedding models
 - [ ] **NeuroBrix Studio** — desktop GUI for model management
@@ -564,6 +628,7 @@ neurobrix clean [--store|--cache|--all] [-y]
 neurobrix info [--models] [--hardware] [--system]
 neurobrix inspect <model.nbx> [--topology] [--weights]
 neurobrix validate <model.nbx> [--level deep] [--strict]
+neurobrix doctor
 ```
 
 ---
@@ -572,7 +637,7 @@ neurobrix validate <model.nbx> [--level deep] [--strict]
 
 NeuroBrix is open source under the Apache 2.0 license. Contributions are welcome.
 
-See **[CONTRIBUTING.md](https://gitlab.com/neurobrix/neurobrix/-/blob/main/CONTRIBUTING.md)** for guidelines.
+See **[CONTRIBUTING.md](./CONTRIBUTING.md)** for guidelines.
 
 ---
 
@@ -606,4 +671,4 @@ NeuroBrix is managed by [**WizWorks OÜ**](https://wizworks.io), a property of [
 
 The Apache 2.0 license covers the NeuroBrix engine, CLI, runtime, and NBX format tooling. **It does not cover the model weights** executed by the engine — those are governed by their respective licenses as listed in the [Supported Models](#supported-models) section.
 
-See [LICENSE](https://gitlab.com/neurobrix/Neurobrix/-/blob/main/LICENSE) for the full text.
+See [LICENSE](./LICENSE) for the full text.

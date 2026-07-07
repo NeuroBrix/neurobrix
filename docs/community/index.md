@@ -10,7 +10,7 @@ NeuroBrix is an open-source project and welcomes contributions from the communit
 
 ## Links
 
-- [GitLab Repository](https://gitlab.com/neurobrix/Neurobrix)
-- [Issue Tracker](https://gitlab.com/neurobrix/Neurobrix/-/issues)
+- Repository: [GitHub](https://github.com/NeuroBrix/neurobrix) | [GitLab](https://gitlab.com/neurobrix/neurobrix)
+- Issue Tracker: [GitHub](https://github.com/NeuroBrix/neurobrix/issues) | [GitLab](https://gitlab.com/neurobrix/neurobrix/-/issues)
 - [PyPI Package](https://pypi.org/project/neurobrix/)
 - [Model Hub](https://neurobrix.es/models)

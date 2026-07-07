@@ -31,20 +31,15 @@ from the concrete `shape` array. The concrete shape is the value that
 identify the dims that the runtime can rebind to any value via
 CompiledSequence's symbol binding pass.
 
-Reading only `tensor["shape"]` and ignoring `tensor["symbolic_shape"]` is the
-pattern that produced the Sana 4Kpx triton crash documented in Layer 6 — the
-TilingEngine activated on a DC-AE VAE whose H/W are symbolic, fed an
-NBXTensor into the torch-only accumulator path, and `TypeError`'d.
-
 ## Why symbolic shapes exist
 
 Diffusion image VAEs (Sana DC-AE, AutoencoderKL of PixArt, FLUX VAE) and
 text encoders (Gemma, T5, CLIP) are spatial-/sequence-adaptive by
 construction: the same compiled graph runs at any reasonable height/width
 or sequence length. The build-time graph capture records one representative
-size (`trace_seq_len = 23` for LLM seq, `64` or `128` for spatial), then
-marks the runtime-variable dims as symbolic. CompiledSequence's symbol
-binding pass walks every op at runtime and substitutes the actual size.
+size, then marks the runtime-variable dims as symbolic. CompiledSequence's
+symbol binding pass walks every op at runtime and substitutes the actual
+size.
 
 Without symbolic shapes, every aspect ratio / resolution / max_token would
 require a separate compiled graph — combinatorial explosion.
@@ -68,32 +63,14 @@ where indices ≥ 2 are symbolic is **spatial-adaptive**: never tile, never
 allocate based on build-time concrete size, never make kernel-selection
 decisions on the concrete spatial value alone.
 
-## Sites that already honor the contract
+## Where the contract is enforced
 
-- `core/runtime/graph/compiled_sequence.py` — symbol binding pass (Mar 2026)
+- `core/runtime/graph/compiled_sequence.py` — symbol binding pass.
 - `core/runtime/graph_executor.py::_compute_computable_buffers()` —
   recomputes runtime buffers like `sincos_2d_pos_embed` based on bound
-  symbols. *Coverage gap*: only handles a hardcoded list of buffer name
-  patterns; doesn't yet cover all spatial-dependent constants. See
-  `docs/follow-ups/layer8-computable-buffers-extension.md`.
+  symbols.
 - `core/module/tiling_engine.py::from_component_config()` — refuses to
-  instantiate a TilingEngine when any spatial dim is symbolic
-  (Layer 6.3, Apr 2026).
-
-## Sites still to audit (audit grep, work as it surfaces)
-
-- `triton/sequence.py` — kernel dispatch / arena slot sizing
-- `core/runtime/executor.py` — input synthesis paths, buffer allocation
-- `kernels/wrappers.py` — block-size pickers (most already shape-driven
-  per-call, but worth a sweep)
-
-The audit pattern: grep for `tensor["shape"]`, `tensor.get("shape")`,
-`graph["..."]["shape"]` reads that **drive a runtime decision**. For each
-hit, classify A (benign — diagnostic only), B (decision-bearing, may need
-symbolic_shape consultation), or C (mismatch build-time/runtime — fix).
-Type A hits are noise; type B hits should at least add a comment that the
-decision is shape-concrete-driven and confirm that's intended; type C hits
-are Layer-6-style bugs.
+  instantiate a TilingEngine when any spatial dim is symbolic.
 
 ## Implementation note
 
