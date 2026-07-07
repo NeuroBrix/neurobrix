@@ -184,10 +184,31 @@ def test_bmm_no_per_row_launch_loop():
     )
 
 
+def test_bmm_grid_z_chunking():
+    """Collapsed batches beyond gridDim.z (65535) launch in chunks — the
+    result must stay exact across the chunk boundary (integer-valued
+    inputs, tiny inner dims)."""
+    _skip_no_gpu()
+    B, M, K, N = 65537, 1, 8, 8  # two chunks: 65535 + 2
+    rng = np.random.default_rng(65537)
+    with _hw(False):
+        a = _int_valued((B, M, K), "fp16", rng)
+        b = _int_valued((B, K, N), "fp16", rng)
+        got = _torch_of(w.bmm(a, b)).float()
+    ref = torch.matmul(_torch_of(a).float(), _torch_of(b).float())
+    assert got.shape == ref.shape
+    # Whole-tensor equality covers both sides of the 65535 boundary.
+    assert torch.equal(got, ref), (
+        f"chunked bmm diverges: max|d|={(got - ref).abs().max().item()}"
+    )
+
+
 @pytest.mark.parametrize("bias_kind,alpha,beta", [
     ("3d", 1.0, 1.0),
     ("2d", 2.0, 0.5),
     ("row", 0.5, 2.0),
+    ("b1n", 1.0, 2.0),   # [B, 1, N] — M-broadcast (stride(-2) must zero)
+    ("m1", 2.0, 1.0),    # [M, 1]    — N-broadcast (stride(1) must zero)
 ])
 def test_baddbmm_bias_and_scaling(bias_kind, alpha, beta):
     """baddbmm keeps its bias epilogue (HAS_BIAS=True) after the B1 body
@@ -206,7 +227,8 @@ def test_baddbmm_bias_and_scaling(bias_kind, alpha, beta):
 
     b1 = _small((B, M, K))
     b2 = _small((B, K, N))
-    shape = {"3d": (B, M, N), "2d": (M, N), "row": (1, M, N)}[bias_kind]
+    shape = {"3d": (B, M, N), "2d": (M, N), "row": (1, M, N),
+             "b1n": (B, 1, N), "m1": (M, 1)}[bias_kind]
     bias = _small(shape)
     got = _torch_of(
         w.baddbmm_wrapper(bias, b1, b2, beta=beta, alpha=alpha)).float()
@@ -229,6 +251,8 @@ if __name__ == "__main__":
             test_bmm_real_valued_tolerance(shape, dtype)
     test_bmm_mixed_f32xf16_promote_b()
     test_bmm_no_per_row_launch_loop()
-    for kind, al, be in (("3d", 1.0, 1.0), ("2d", 2.0, 0.5), ("row", 0.5, 2.0)):
+    test_bmm_grid_z_chunking()
+    for kind, al, be in (("3d", 1.0, 1.0), ("2d", 2.0, 0.5), ("row", 0.5, 2.0),
+                         ("b1n", 1.0, 2.0), ("m1", 2.0, 1.0)):
         test_baddbmm_bias_and_scaling(kind, al, be)
     print("PASS")
