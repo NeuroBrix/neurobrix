@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Language models now decode correctly in the op-by-op reference mode
+  beyond the trace length.** In the step-by-step reference execution mode,
+  autoregressive text models could crash once generation ran past the
+  length used when the model was prepared, because the rotary position
+  table was being narrowed to the current step's length while the decode
+  step still asked for an absolute position further along. The reference
+  mode now keeps the full position table available, matching the primary
+  execution mode, so decoding continues correctly to arbitrary lengths.
+  Verified end to end on TinyLlama-1.1B-Chat (identical greedy output
+  across all execution modes) with no change to image generation.
+
 - **Internal consolidation / correctness hardening (both engines).** Three
   duplicated internal patterns, each carrying a latent bug class, now route
   through a single brick per engine. (1) Device-string parsing in the
