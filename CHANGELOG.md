@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Performance
+
+- **Batched matrix-multiply launches (Triton engine).** `bmm` now issues
+  a single batched kernel launch for the whole batch instead of a Python
+  loop of per-batch (and, on the decode path, per-row) launches. LLM
+  decode attention, which runs batch = heads matrix multiplies per
+  generated token, drops from thousands of kernel launches per token to
+  two; measured 47-74× faster on decode-shaped batches and 4.6× on
+  prefill-shaped batches (V100). Results are value-identical to the
+  previous path on the batched-matmul route (bit-equal under a pinned
+  kernel config) and within float reassociation tolerance (max relative
+  difference ~1e-4) on the former per-row decode route.
+
 ## [0.3.0] - 2026-07-07
 
 The video release. NeuroBrix now runs the video generation family

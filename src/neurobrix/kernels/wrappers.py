@@ -1511,8 +1511,17 @@ def bmm(a, b) :
     Kernel accumulates in fp32 (hardware). Output matches input dtype.
     DtypeEngine handles overflow protection externally.
 
-    Small-M fast path (M <= 4): per-batch mv loop. Applies to decode-path
-    bmm (attention Q@K.T with seq=1) and similar short-sequence patterns.
+    One batched 3D-grid launch via `baddbmm_kernel` (HAS_BIAS=False) for
+    every M — P-KERNEL-LAUNCH-HYGIENE B1. The former per-batch
+    matmul_kernel loop (prefill) and per-batch × per-row mv loop (decode
+    M<=4) issued B (resp. B·M) launches per call; on the deterministic
+    decode path (`_math_attention`, batch=B·H, M=1) that was thousands of
+    launches per generated token, pure launch-bound. The batched kernel
+    body is a line-for-line mirror of matmul_kernel, so results are
+    value-identical to the former prefill loop under the same autotune
+    config; the decode path leaves the mv reduction order for tl.dot
+    tiles (fp reassociation-level difference only — products are exact in
+    the fp32 accumulator for half inputs).
     """
     a = _ensure_cuda(a)
     b = _ensure_cuda(b)
@@ -1537,10 +1546,8 @@ def bmm(a, b) :
     # Dtype alignment — see mm() for the full rationale. Fast path: when
     # activation is fp32 (after step 2) and weight is fp16 on pre-Ampere,
     # leave the weight fp16 and let the kernel promote its tile via
-    # PROMOTE_B. All other mismatches fall back to the widening path.
-    # mv_wrapper (M≤4 decode path below) already upcasts both operands
-    # internally via `.to(tl.float32)` in mv_kernel, so it is also safe
-    # to pass mixed dtypes there.
+    # PROMOTE_B. All other mismatches fall back to the widening path, so
+    # the batched kernel always sees matched dtypes or PROMOTE_B=True.
     promote_b = (not _NBX_HAS_NATIVE_BF16
                  and a_nbx == NBXDtype.float32
                  and b_nbx == NBXDtype.float16)
@@ -1556,24 +1563,16 @@ def bmm(a, b) :
     B2, K2, N = b.shape
     assert B == B2 and K == K2, f"bmm shape mismatch: {tuple(a.shape)} @ {tuple(b.shape)}"
 
-    if M <= 4:
-        a = a.contiguous()
-        c = NBXTensor.empty((B, M, N), device=a.device,
-                            dtype=_matmul_out_dtype(a, M, force_fp32=True))
-        for bi in range(B):
-            bt = b[bi].t()
-            a_bi = a[bi]
-            c_bi = c[bi]
-            for i in range(M):
-                c_bi[i] = mv_wrapper(bt, a_bi[i])
-        return c
-
     a = a.contiguous()
     b = b.contiguous()
     out_dtype = _matmul_out_dtype(a, M, force_fp32=True)
     c = NBXTensor.empty((B, M, N), device=a.device, dtype=out_dtype)
     ieee = (not _NBX_HAS_NATIVE_BF16) and (out_dtype == NBXDtype.float32)
-    grid = lambda META: (triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']),)
+    grid = lambda META: (
+        triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']),
+        1,
+        B,
+    )
 
     # Match mm() — sync Triton driver to a's device immediately before launch.
     # NBXTensor.empty(...) above can cudaSetDevice without updating Triton's
@@ -1581,16 +1580,22 @@ def bmm(a, b) :
     # it. Without this, batched kernels on non-zero devices hit
     # "Pointer argument (at 0) cannot be accessed from Triton".
     _set_device(a)
-    for i in range(B):
-        matmul_kernel[grid](
-            a[i], b[i], c[i],
-            M, N, K,
-            a[i].stride(0), a[i].stride(1),
-            b[i].stride(0), b[i].stride(1),
-            c[i].stride(0), c[i].stride(1),
-            IEEE_PRECISION=ieee,
-            PROMOTE_B=promote_b,
-        )
+    # Single batched launch — grid axis 2 walks the batch inside the kernel
+    # (baddbmm_kernel HAS_BIAS=False). `c` doubles as the (dead) bias
+    # pointer: with HAS_BIAS=False the bias load is compiled out, so no
+    # uninitialized read; alpha/beta are likewise unused.
+    baddbmm_kernel[grid](
+        a, b, c, c,
+        1.0, 0.0,
+        M, N, K,
+        a.stride(0), a.stride(1), a.stride(2),
+        b.stride(0), b.stride(1), b.stride(2),
+        c.stride(0), c.stride(1), c.stride(2),
+        0, 0, 0,
+        IEEE_PRECISION=ieee,
+        PROMOTE_B=promote_b,
+        HAS_BIAS=False,
+    )
     return c
 
 
@@ -3992,6 +3997,9 @@ def baddbmm_wrapper(
         B,
     )
     _set_device(batch1)
+    # IEEE_PRECISION=True preserves the kernel's historical
+    # `allow_tf32=False` dot semantics for fp32 inputs (ignored by tl.dot
+    # for half inputs). HAS_BIAS=True keeps the beta*bias epilogue.
     baddbmm_kernel[grid](
         batch1, batch2, output, input,
         alpha, beta,
@@ -4000,6 +4008,9 @@ def baddbmm_wrapper(
         batch2.stride(0), batch2.stride(1), batch2.stride(2),
         output.stride(0), output.stride(1), output.stride(2),
         bias_batch_stride, bias_m_stride, bias_n_stride,
+        IEEE_PRECISION=True,
+        PROMOTE_B=False,
+        HAS_BIAS=True,
     )
     return output
 
