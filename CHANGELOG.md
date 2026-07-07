@@ -1652,28 +1652,27 @@ shipped/validated in **compiled** mode. The other four matrix models are 4/4.
   OK, cos=1.0000 max_abs=0.0000. P-NBX-TILED-CONV2D-SMALL-SCALE
   steps 1 + 2.
 
-## 2026-05-10 — P-SANA-4KPX-RUNTIME POINT 8 closure factuelle (audit perf compiled vs sequential)
+## 2026-05-10 — P-SANA-4KPX-RUNTIME POINT 8 factual closure (perf audit compiled vs sequential)
 
-Audit profile-driven du gap perf triton compiled (hot-loop
-TritonSequence) vs triton_sequential (TritonSequentialDispatcher).
-Mesures sur 1× V100 32 GiB, `NBX_DISABLE_AUTOTUNE=1` :
+Profile-driven audit of the Triton compiled (TritonSequence hot loop)
+vs triton_sequential (TritonSequentialDispatcher) performance gap.
+Measured on 1x V100 32 GiB, `NBX_DISABLE_AUTOTUNE=1`:
 
 | | wall compiled | wall sequential | gap |
 |---|---|---|---|
 | Sana 1024 | 70.35 s | 73.91 s | −4.8 % |
 | Sana 4Kpx | 511.78 s | 513.96 s | **−0.4 %** |
 
-Sustained GPU utilization during Sana 4Kpx Triton runs = **83.5 % avg avec 67.5 %
-du temps actif >90 %** → workload **compute-bound**. Borne haute
-arithmétique du speedup compiled vs sequential = 100/83.5 = **1.20×**
-< 1.5x objective× → cible **structurellement inatteignable**.
-Toutes les hypothèses H1–H5 (silent fallback, no fusion,
-contiguous-guard cost, defensive sync, degenerate hot-loop) sont
-invalidées par lecture code + corrélation mesures (voir
-`validation_outputs/p_sana_4kpx_runtime/point8_compiled_perf_audit/diagnostic_par_hypothese.md`).
-Aucune modification de code. Closure factuelle conforme au mandate.
-Pistes backlog : `P-TRITON-FUSED-KERNELS`, `P-CUDA-GRAPHS`,
-autotune-ON re-mesure baseline.
+Sustained GPU utilization during Sana 4Kpx Triton runs = **83.5 % avg,
+with 67.5 % of active time above 90 %** → the workload is
+**compute-bound**. Arithmetic upper bound on the compiled-vs-sequential
+speedup = 100/83.5 = **1.20x**, below the 1.5x objective → the target is
+**structurally unreachable**. All five hypotheses (silent fallback, no
+fusion, contiguous-guard cost, defensive sync, degenerate hot loop) were
+invalidated by code reading correlated with the measurements.
+No code changes. Factual closure per the objective.
+Backlog leads: fused kernels, CUDA graphs, autotune-on baseline
+re-measurement.
 
 ### Added
 
@@ -1756,90 +1755,91 @@ autotune-ON re-mesure baseline.
   matches the graph declaration. Inactive by default (env var unset
   → zero overhead).
 
-## 2026-05-11 — POINT 10 P-PRISM-NEVER-REFUSE remontée condition #2
+## 2026-05-11 — POINT 10 P-PRISM-NEVER-REFUSE condition #2 escalation
 
-Investigation extensive du blocker Sana 4Kpx sur 1× et 2× V100 16 GiB.
-**Cible binaire NON ATTEINTE** ; remontée selon condition de sortie #2
-(blocker architectural >200 lignes hors scope). 6 stratégies testées
-end-to-end (`single_gpu`, `single_gpu_lifecycle`, `lazy_sequential`,
-`zero3`, pool-tuned `triton_sequential`, `--sequential` PyTorch native +
-`expandable_segments`) ; **toutes OOM au même endroit** : `aten.convolution::62`
-au runtime peak ~17 GiB (live ~13 GiB + 4 GiB conv output structurel).
-Le post-POINT-9 estimator prédit 12 GiB pour VAE, cohérent avec le live
-mesuré ; **l'estimator n'est pas le bug**, c'est la model size structurelle
-qui dépasse 16 GiB hardware. Audit doctrinal model-agnostic : zero violation
-dans le code actif (uniquement des commentaires historiques mentionnant
-des noms de modèles). Audit cascade : 9 stratégies effectivement câblées
-(message d'erreur misleading qui listait 5/9 est fixé dans cette session).
-**Acquis 32 GiB POINTS 7-9 préservés** ; aucune modification de runtime.
-Chantiers backlog ouverts : `P-MULTI-GPU-NBX-INTRA-COMPONENT-SPLIT`
-(pour 2× 16 GiB), `P-PRISM-CPU-FALLBACK-EXECUTION` (pour 1× 16 GiB,
-nouveau, pour respecter pleinement la doctrine "Prism never refuses").
+Extensive investigation of the Sana 4Kpx blocker on 1x and 2x V100
+16 GiB. **Binary target NOT MET**; escalated per exit condition #2
+(architectural blocker beyond the scope threshold). Six strategies
+tested end-to-end (`single_gpu`, `single_gpu_lifecycle`,
+`lazy_sequential`, `zero3`, pool-tuned `triton_sequential`,
+`--sequential` PyTorch native + `expandable_segments`); **all OOM at the
+same site**: `aten.convolution::62` at a runtime peak of ~17 GiB
+(~13 GiB live + a structural 4 GiB conv output). The post-POINT-9
+estimator predicts 12 GiB for the VAE, consistent with the measured
+live set; **the estimator is not the bug** — the structural model size
+exceeds the 16 GiB hardware. Model-agnostic doctrine audit: zero
+violations in active code (only historical comments mention model
+names). Cascade audit: 9 strategies effectively wired (a misleading
+error message listing 5/9 was fixed in this session). **The 32 GiB
+results of POINTS 7-9 are preserved**; no runtime changes.
+Backlog items opened: intra-component multi-GPU split (for 2x 16 GiB)
+and CPU-fallback execution (for 1x 16 GiB, to fully honor the
+"Prism never refuses" doctrine).
 
 ## 2026-05-11 — P-PRISM-ACTIVATION-ESTIMATOR-TILING-AWARE landed (POINT 9)
 
-`PrismSolver._compute_memory` désormais tiling-aware via two-pass dans
-`estimate_peak_memory`. Trois nouveaux mécanismes substituent les
-sentinels runtime au peak estimation :
-(1) `zero_alloc_uids` — upsamples en fusion pair (`FusionUpsampleProxy`,
-0 byte) et chaînes pixel_shuffle broadcast-aware F2a (expand stride-0,
-clone `BroadcastClonePyroxy`, view pass-through) marquées 0 byte ;
-(2) `inplace_adds` — adds résiduels avec liveness in-place aliasés
-(output share buffer with reused input ; reverse-map `frees_at`
-gère les last-uses étendus via alias) ;
-(3) `force_compute_dtype_for_fp` — override des fp meta dtypes (graph
-traced fp32) par le runtime compute_dtype (fp16) pour activations.
-Mesure Sana 4Kpx VAE : peak estimé pre-fix **28 GiB** → post-fix
-**12 GiB** (−57%) cohérent avec runtime mesuré 16.6 GiB.
-Fix config bonus : `config/hardware/v100-16g-x2-01.yml`
-`preferred_dtype: float16` ajouté (manquant — fallback fp32 inflait
-de 2× toutes les estimations multi-GPU). Anti-régression matrice
-4/4 cellules vertes (Sana 1024 / Sana 4Kpx 32g / PixArt-XL / TinyLlama).
-Cible binaire Sana 4Kpx FULL sur 1× V100 16 GiB **non atteinte** —
-runtime peak structurel ~17 GiB > 16 GiB hardware ;
-intra-component VAE split `P-MULTI-GPU-NBX-INTRA-COMPONENT-SPLIT`
-ouvert au backlog (explicitement out-of-scope POINT 9 par mandate).
+`PrismSolver._compute_memory` is now tiling-aware via a two-pass
+`estimate_peak_memory`. Three new mechanisms substitute the runtime
+sentinels into the peak estimation:
+(1) `zero_alloc_uids` — fused upsample pairs (`FusionUpsampleProxy`,
+0 bytes) and broadcast-aware pixel_shuffle chains (stride-0 expand,
+`BroadcastClonePyroxy` clone, pass-through view) marked as 0 bytes;
+(2) `inplace_adds` — residual adds with in-place aliased liveness
+(output shares the reused input's buffer; a reverse `frees_at` map
+handles alias-extended last uses);
+(3) `force_compute_dtype_for_fp` — floating-point meta dtypes (graph
+traced fp32) overridden by the runtime compute dtype (fp16) for
+activations. Measured on the Sana 4Kpx VAE: estimated peak **28 GiB**
+pre-fix → **12 GiB** post-fix (−57 %), consistent with the measured
+16.6 GiB runtime. Bonus config fix: `preferred_dtype: float16` added to
+`config/hardware/v100-16g-x2-01.yml` (it was missing — the fp32
+fallback doubled every multi-GPU estimate). Anti-regression matrix
+4/4 cells green (Sana 1024 / Sana 4Kpx 32g / PixArt-XL / TinyLlama).
+Binary target Sana 4Kpx FULL on 1x V100 16 GiB **not met** — the
+structural runtime peak of ~17 GiB exceeds the 16 GiB hardware; an
+intra-component VAE split was opened in the backlog (explicitly
+out-of-scope for POINT 9).
 
 ## 2026-05-10 — P-SANA-4KPX-RUNTIME fully closed (full pipeline validation)
 
-Total scope closed. Full pipeline Sana 4Kpx (text_encoder →
-transformer 12 steps → VAE) produit pomme rouge sur 1× V100 32 GiB
-en triton_sequential (510 s) ET triton compiled (515 s), peak VRAM
-**16.6 GiB / 32.5 GiB** (éliminé mécaniquement par les fixes
-numériques POINTS 1-6 sans toucher au memory pool). Anti-régression
-matrice **10/10 cellules**. Tag élargi `p-sana-4kpx-runtime-fully-closed`
-sur `90ac662` distingue cette clôture finale du tag numérique
-`p-sana-4kpx-runtime-closed` sur `a862fe0` (POINT 6 H2). Backlog
-ouvert : `P-PRISM-ACTIVATION-ESTIMATOR-TILING-AWARE` (estimator
-tiling-aware pour VRAM-contraintes ≤ 16 GiB) et
-`P-MULTI-GPU-NBX-ADAPTER` (priorité abaissée — 1× 32 GiB suffit en
-production).
+Total scope closed. The full Sana 4Kpx pipeline (text_encoder →
+transformer 12 steps → VAE) produces a coherent image on 1x V100
+32 GiB in triton_sequential (510 s) AND triton compiled (515 s), peak
+VRAM **16.6 GiB / 32.5 GiB** (the historical OOM was eliminated
+mechanically by the POINTS 1-6 numerical fixes without touching the
+memory pool). Anti-regression matrix **10/10 cells**. The widened tag
+`p-sana-4kpx-runtime-fully-closed` on `90ac662` distinguishes this
+final closure from the numerical-correctness tag
+`p-sana-4kpx-runtime-closed` on `a862fe0` (POINT 6 H2). Backlog
+opened: tiling-aware activation estimator (for VRAM-constrained
+<= 16 GiB configs) and a multi-GPU adapter (lowered priority —
+1x 32 GiB suffices in production).
 
 ## 2026-05-10 — P-SANA-4KPX-RUNTIME POINT 7 closure totale (full pipeline + anti-régression)
 
-POINT 7 ferme le scope restant après POINTS 1-6 H2. Sana 4Kpx FULL
-pipeline (text_encoder → transformer 12 steps → VAE) produit une
-pomme rouge cohérente en **triton_sequential** (510 s) ET en
-**triton compiled** (515 s) sur 1× V100 32 GiB, stratégie Prism
-`single_gpu`. Peak VRAM mesuré = **16.6 GiB / 32.5 GiB** (51 % du
-budget) — la mesure historique conv::62 OOM 26+8 GiB est éliminée
-par les fixes POINTS 1-6, sans toucher au memory pool. Matrice
-anti-régression : **10/10 cellules numériquement vertes** (Sana 1024
-4 modes, PixArt-XL + PixArt-Sigma triton_seq, TinyLlama triton_seq,
-Sana 4Kpx VAE-iso triton_seq, Sana 4Kpx FULL triton_seq + triton
-compiled). Découverte factuelle sur configs ≤ 16 GiB :
-`PrismSolver` estime activations VAE Sana 4Kpx = 28 GiB worst-case
-sans intégrer l'op-level tiling kernel-embedded (runtime réel
-16.6 GiB) → rejette au planning avec `ZERO FALLBACK` avant que le
+POINT 7 closes the scope remaining after POINTS 1-6 H2. Sana 4Kpx FULL
+pipeline (text_encoder → transformer 12 steps → VAE) produces a
+coherent image in **triton_sequential** (510 s) AND in
+**triton compiled** (515 s) on 1x V100 32 GiB, Prism strategy
+`single_gpu`. Measured peak VRAM = **16.6 GiB / 32.5 GiB** (51 % of
+budget) — the historical conv::62 OOM measurement (26+8 GiB) is
+eliminated by the POINTS 1-6 fixes, without touching the memory pool.
+Anti-regression matrix: **10/10 numerically green cells** (Sana 1024
+in 4 modes, PixArt-XL + PixArt-Sigma triton_seq, TinyLlama triton_seq,
+Sana 4Kpx VAE-isolated triton_seq, Sana 4Kpx FULL triton_seq + triton
+compiled). Factual finding on <= 16 GiB configs:
+the planner estimated the Sana 4Kpx VAE activations at 28 GiB worst
+case without accounting for kernel-embedded op-level tiling (real
+runtime: 16.6 GiB) → rejected at planning (`ZERO FALLBACK`) before
 tiling could engage. Two backlog items opened:
-`P-PRISM-ACTIVATION-ESTIMATOR-TILING-AWARE` (estimator tiling-aware)
-et `P-MULTI-GPU-NBX-ADAPTER` (déjà nommé). Artefacts R29 :
+a tiling-aware activation estimator and a multi-GPU adapter
+(previously named). Inspection artefacts:
 `validation_outputs/p_sana_4kpx_runtime/point7_full_closure/`.
 
 ## 2026-05-10 — P-SANA-4KPX-RUNTIME closed (numerical correctness)
 
 Sana 4Kpx VAE in triton_sequential mode now produces coherent output.
-Chantier closed via 9 structured commits (POINTS 1-6 H2, refs `ea8e8e2`
+Closed via 9 structured commits (POINTS 1-6 H2, refs `ea8e8e2`
 through `a862fe0`, tag `p-sana-4kpx-runtime-closed`). Root cause final:
 missing `.contiguous()` after NBXTensor slice in tiled conv wrappers —
 flat-indexed downstream wrappers were reading wrong memory addresses on

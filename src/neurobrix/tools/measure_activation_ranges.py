@@ -1,7 +1,7 @@
 """measure_activation_ranges — decide per-component activations_fp16_safe.
 
 Phase 1 doctrine: the per-component flag `activations_fp16_safe` in
-`forge/config/model_registry.yml` opts a model in to the cast-back
+the model registry opts a model in to the cast-back
 behavior on AMP_FP32_OPS reductions (rms_norm, div). Enabling the flag
 when activations are NOT fp16-safe risks silent fp16 saturation. This
 tool measures the actual range distribution by running compiled mode
@@ -23,7 +23,7 @@ core/runtime/graph/compiled_sequence.py) and post-processes the
 emitted TSV (default `/tmp/nbx_ranges.tsv`).
 
 Outputs the verdict to stdout and a registry-snippet that can be copied
-into `forge/config/model_registry.yml`.
+into the model registry.
 """
 
 import argparse

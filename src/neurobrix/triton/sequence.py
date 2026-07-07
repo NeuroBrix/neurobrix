@@ -209,7 +209,7 @@ class TritonSequence:
         self._dtype_engine = TritonDtypeEngine(
             compute_dtype, has_native_bf16=_has_bf16())
         self._compute_dtype = compute_dtype
-        # Phase 1 — per-component opt-in flag from forge/config/model_registry.yml
+        # Phase 1 — per-component opt-in flag from the model registry
         # `activations_fp16_safe`. Default False = conservative (rms_norm/div
         # output stays fp32). Set via set_activations_fp16_safe() after
         # construction, before compile/run, by the registry-driven plumbing
@@ -238,7 +238,7 @@ class TritonSequence:
     def set_activations_fp16_safe(self, safe: bool) -> None:
         """Set the per-component activations_fp16_safe opt-in flag.
 
-        Read from forge/config/model_registry.yml at component init via
+        Read from the model registry at component init via
         RegistryV2. When True, AMP_FP32_OPS in
         _AMP_FP32_OPS_OPT_IN_CAST_BACK (currently rms_norm + div) cast
         their output back to compute_dtype after the fp32 internal

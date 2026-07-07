@@ -606,7 +606,7 @@ def _spatial_promotion_pass(dag, tensors, ops_meta, symbols,
         return None
 
     def _override_misattributed_arith(expr):
-        """Override Forge tracer mistakes that bind spatial dims to the
+        """Override import-tracer mistakes that bind spatial dims to the
         wrong symbol.
 
         Sana 4Kpx VAE shape args contain expressions like `mul(s_batch=1, 64)`
@@ -617,7 +617,7 @@ def _spatial_promotion_pass(dag, tensors, ops_meta, symbols,
         trace (h_trace or w_trace) AND the expression isn't already
         anchored to a height/width symbol, REPLACE it with the canonical
         spatial symbol. This corrects the tracer's mis-attribution at
-        engine load time without touching graph.json or Forge.
+        engine load time without touching graph.json or the build side.
 
         Returns (new_expr, changed). If the expr already references
         height/width symbols, it's left unchanged.
@@ -630,7 +630,7 @@ def _spatial_promotion_pass(dag, tensors, ops_meta, symbols,
 
         # Don't override if any operand already references an
         # INFORMATION-BEARING symbol — spatial OR any symbol with trace
-        # value > 1. The override exists for the degenerate Forge
+        # value > 1. The override exists for the degenerate tracer
         # mis-attribution `mul(s_batch=1, 64)` (Sana 4Kpx), where the only
         # referenced symbol has trace 1 and carries no shape information.
         # An expression anchored to a meaningful symbol (e.g. SANA-Video's
@@ -690,11 +690,11 @@ def _spatial_promotion_pass(dag, tensors, ops_meta, symbols,
         Handles `mul`, `add`, `sub`, `floordiv`, `mod`, `neg`, `product`.
         Returns (new_expr, changed). After recursion, attempts to override
         the entire expr if its trace value matches a spatial dim and
-        no spatial symbol is referenced inside (Forge tracer mis-attribution).
+        no spatial symbol is referenced inside (tracer mis-attribution).
         """
         if not isinstance(expr, dict):
             return _promote_int_value(expr)
-        # Try whole-expression override first (the common Forge tracer mistake).
+        # Try whole-expression override first (the common tracer mistake).
         overridden, was_overridden = _override_misattributed_arith(expr)
         if was_overridden:
             return overridden, True
