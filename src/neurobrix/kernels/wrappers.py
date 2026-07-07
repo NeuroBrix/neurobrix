@@ -332,6 +332,11 @@ _POOL_BH, _POOL_BW = 4, 16                # avg_pool2d / max_pool2d
 _BILINEAR_BX, _BILINEAR_BY = 16, 16       # upsample_bilinear2d
 _WNORM_BM, _WNORM_BN = 64, 256           # weight_norm
 
+# gridDim.z architectural bound — 65535 on both CUDA and HIP (an API
+# limit shared by every supported arch, not a tunable hardware param).
+# Batched matmul launches put the batch on grid axis 2 and chunk past it.
+_GRID_Z_MAX = 65535
+
 
 # ===========================================================================
 # UNIVERSAL LAUNCH LAYER
@@ -1568,11 +1573,6 @@ def bmm(a, b) :
     out_dtype = _matmul_out_dtype(a, M, force_fp32=True)
     c = NBXTensor.empty((B, M, N), device=a.device, dtype=out_dtype)
     ieee = (not _NBX_HAS_NATIVE_BF16) and (out_dtype == NBXDtype.float32)
-    grid = lambda META: (
-        triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']),
-        1,
-        B,
-    )
 
     # Match mm() — sync Triton driver to a's device immediately before launch.
     # NBXTensor.empty(...) above can cudaSetDevice without updating Triton's
@@ -1580,22 +1580,36 @@ def bmm(a, b) :
     # it. Without this, batched kernels on non-zero devices hit
     # "Pointer argument (at 0) cannot be accessed from Triton".
     _set_device(a)
-    # Single batched launch — grid axis 2 walks the batch inside the kernel
+    # Batched launch — grid axis 2 walks the batch inside the kernel
     # (baddbmm_kernel HAS_BIAS=False). `c` doubles as the (dead) bias
     # pointer: with HAS_BIAS=False the bias load is compiled out, so no
-    # uninitialized read; alpha/beta are likewise unused.
-    baddbmm_kernel[grid](
-        a, b, c, c,
-        1.0, 0.0,
-        M, N, K,
-        a.stride(0), a.stride(1), a.stride(2),
-        b.stride(0), b.stride(1), b.stride(2),
-        c.stride(0), c.stride(1), c.stride(2),
-        0, 0, 0,
-        IEEE_PRECISION=ieee,
-        PROMOTE_B=promote_b,
-        HAS_BIAS=False,
-    )
+    # uninitialized read; alpha/beta are likewise unused. gridDim.z caps
+    # at _GRID_Z_MAX: matmul_wrapper collapses ALL leading dims into B, so
+    # an extreme collapsed batch chunks into z-sized launches (one launch
+    # per 65535 batches — the loop body runs exactly once below the cap,
+    # with no narrow() on that fast path).
+    for z0 in range(0, B, _GRID_Z_MAX):
+        zb = min(_GRID_Z_MAX, B - z0)
+        a_z = a if zb == B else a.narrow(0, z0, zb)
+        b_z = b if zb == B else b.narrow(0, z0, zb)
+        c_z = c if zb == B else c.narrow(0, z0, zb)
+        grid = lambda META, _zb=zb: (
+            triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']),
+            1,
+            _zb,
+        )
+        baddbmm_kernel[grid](
+            a_z, b_z, c_z, c_z,
+            1.0, 0.0,
+            M, N, K,
+            a.stride(0), a.stride(1), a.stride(2),
+            b.stride(0), b.stride(1), b.stride(2),
+            c.stride(0), c.stride(1), c.stride(2),
+            0, 0, 0,
+            IEEE_PRECISION=ieee,
+            PROMOTE_B=promote_b,
+            HAS_BIAS=False,
+        )
     return c
 
 
@@ -3981,37 +3995,49 @@ def baddbmm_wrapper(
 
     output = NBXTensor.empty((B, M, N), device=batch1.device, dtype=batch1.dtype)
 
-    # Handle bias broadcasting: input may be [M, N], [B, M, N], [1, M, N], etc.
+    # Handle bias broadcasting: input may be [M, N], [B, M, N], [1, M, N],
+    # [B, 1, N], [M, 1], etc. Any size-1 dim broadcasts with stride 0 —
+    # keeping the memory stride of a size-1 dim would walk PAST the bias
+    # row/column (wrong values, OOB on the last batch).
     if input.ndim == 2:
         bias_batch_stride = 0
-        bias_m_stride = input.stride(0)
-        bias_n_stride = input.stride(1)
+        bias_m_stride = input.stride(0) if input.shape[0] > 1 else 0
+        bias_n_stride = input.stride(1) if input.shape[1] > 1 else 0
     else:
         bias_batch_stride = input.stride(0) if input.shape[0] > 1 else 0
-        bias_m_stride = input.stride(-2)
-        bias_n_stride = input.stride(-1)
+        bias_m_stride = input.stride(-2) if input.shape[-2] > 1 else 0
+        bias_n_stride = input.stride(-1) if input.shape[-1] > 1 else 0
 
-    grid = lambda META: (
-        triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']),
-        1,
-        B,
-    )
     _set_device(batch1)
     # IEEE_PRECISION=True preserves the kernel's historical
     # `allow_tf32=False` dot semantics for fp32 inputs (ignored by tl.dot
     # for half inputs). HAS_BIAS=True keeps the beta*bias epilogue.
-    baddbmm_kernel[grid](
-        batch1, batch2, output, input,
-        alpha, beta,
-        M, N, K,
-        batch1.stride(0), batch1.stride(1), batch1.stride(2),
-        batch2.stride(0), batch2.stride(1), batch2.stride(2),
-        output.stride(0), output.stride(1), output.stride(2),
-        bias_batch_stride, bias_m_stride, bias_n_stride,
-        IEEE_PRECISION=True,
-        PROMOTE_B=False,
-        HAS_BIAS=True,
-    )
+    # gridDim.z caps at _GRID_Z_MAX — chunk the batch past it (the loop
+    # body runs exactly once below the cap, no narrow() on the fast path).
+    for z0 in range(0, B, _GRID_Z_MAX):
+        zb = min(_GRID_Z_MAX, B - z0)
+        b1_z = batch1 if zb == B else batch1.narrow(0, z0, zb)
+        b2_z = batch2 if zb == B else batch2.narrow(0, z0, zb)
+        out_z = output if zb == B else output.narrow(0, z0, zb)
+        bias_z = (input if (zb == B or bias_batch_stride == 0)
+                  else input.narrow(0, z0, zb))
+        grid = lambda META, _zb=zb: (
+            triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']),
+            1,
+            _zb,
+        )
+        baddbmm_kernel[grid](
+            b1_z, b2_z, out_z, bias_z,
+            alpha, beta,
+            M, N, K,
+            batch1.stride(0), batch1.stride(1), batch1.stride(2),
+            batch2.stride(0), batch2.stride(1), batch2.stride(2),
+            output.stride(0), output.stride(1), output.stride(2),
+            bias_batch_stride, bias_m_stride, bias_n_stride,
+            IEEE_PRECISION=True,
+            PROMOTE_B=False,
+            HAS_BIAS=True,
+        )
     return output
 
 

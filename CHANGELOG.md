@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Broadcast bias in batched matrix-multiply-add (Triton engine).** A
+  bias tensor with a size-1 row or column dimension (e.g. `[batch, 1, N]`)
+  was read with its memory stride instead of broadcasting, picking up
+  values past the intended bias row/column. Every size-1 bias dimension
+  now broadcasts correctly.
+
 ### Performance
 
 - **Batched matrix-multiply launches (Triton engine).** `bmm` now issues
