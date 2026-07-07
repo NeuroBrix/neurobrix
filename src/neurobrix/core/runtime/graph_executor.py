@@ -2755,9 +2755,16 @@ class GraphExecutor:
                     )
                     if (isinstance(dim_val, int)
                             and 0 <= dim_val < len(table_shape)):
-                        arg = args[3]
-                        if isinstance(arg, dict) and arg.get("type") == "scalar":
-                            arg["value"] = table_shape[dim_val]
+                        # Replace `end` with the full table size REGARDLESS of the
+                        # original arg type (scalar OR symbol). A symbol-type end
+                        # resolves to the runtime seq_len at op dispatch — which is
+                        # 1 during autoregressive decode — narrowing the cos/sin
+                        # table to [1, head_dim]; the absolute position_ids
+                        # (=[[cache_len]]) then indexes out of bounds. Mirrors the
+                        # compiled-mode fix in
+                        # compiled_sequence._promote_seq_len_scalars_to_symbolic,
+                        # which unconditionally rewrites args[3] to a scalar.
+                        args[3] = {"type": "scalar", "value": table_shape[dim_val]}
                         continue
                 arg = args[3]
                 if isinstance(arg, dict) and arg.get("type") == "scalar":
