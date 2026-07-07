@@ -1,6 +1,6 @@
 # Single-Shot Inference
 
-Single-shot mode runs one inference request and exits. Useful for scripting and batch processing.
+Single-shot mode runs one inference request and exits. Useful for scripting and batch processing. The same command serves all 9 model families — image, video, LLM, VLM, multimodal, TTS, STT, audio_llm, and upscalers.
 
 ## Basic Usage
 
@@ -30,6 +30,41 @@ neurobrix run \
 | `--seed` | random | Reproducibility seed |
 | `--output` | `output.png` | Output file path |
 
+## Video Generation
+
+Text-to-video by default; passing `--input-image` switches to image-to-video automatically.
+
+```bash
+# Text-to-video
+neurobrix run \
+  --model SANA-Video_2B_720p \
+  --prompt "ocean waves at sunset" \
+  --num-frames 81 --seed 42 \
+  --output waves.mp4
+
+# Image-to-video
+neurobrix run \
+  --model Wan2.2-I2V-A14B \
+  --input-image first_frame.png \
+  --prompt "camera pans left" \
+  --num-frames 49 --output clip.mp4
+```
+
+### Parameters
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--prompt` | required | Text prompt |
+| `--input-image` | — | First frame (switches to image-to-video) |
+| `--num-frames` | model default | Number of frames to generate |
+| `--fps` | model default | Output frame rate |
+| `--steps` | model default | Number of diffusion steps |
+| `--cfg` | model default | Guidance scale |
+| `--seed` | random | Same seed reproduces the same video |
+| `--output` | auto | Output `.mp4` path |
+
+Video models run at their native resolution and clip length; large spatio-temporal activations are tiled automatically, and multi-GPU machines are used automatically for the largest models.
+
 ## Language Models
 
 ```bash
@@ -56,9 +91,10 @@ neurobrix run --model ... --prompt "..." \
 # Target specific hardware (optional)
 neurobrix run --model ... --hardware v100-32g --prompt "..."
 
-# Execution modes
-neurobrix run ... --sequential   # Debug mode (native ATen)
-neurobrix run ... --triton       # Custom Triton kernels
+# Execution modes (default: --compiled)
+neurobrix run ... --sequential          # PyTorch op-by-op (debug)
+neurobrix run ... --triton              # NeuroBrix Triton kernels (vendor-agnostic)
+neurobrix run ... --triton-sequential   # Triton kernels op-by-op (debug)
 ```
 
 !!! tip

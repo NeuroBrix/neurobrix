@@ -51,6 +51,9 @@ Output is a PNG at `input × scale`.
 
 ## Distribution
 
-These models are published on the NeuroBrix hub
-(neurobrix.es). They are not distributed via third-party model
-hosts.
+The four x4 classical variants — `hat-l-x4`, `real-esrgan-x4`,
+`swinir-classical-x4`, `swin2SR-classical-x4` — are published on
+the NeuroBrix hub (neurobrix.es) and downloadable now. The other
+variants in the catalogue are validated by the engine and are
+being published to the hub progressively. None are distributed
+via third-party model hosts.

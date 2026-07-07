@@ -10,7 +10,7 @@ NeuroBrix is developed and maintained by **WizWorks OÜ**, a property of **Neura
 
 ### Report Bugs
 
-Found something broken? Open a [Bug Report](https://gitlab.com/neurobrix/Neurobrix/-/issues/new) with:
+Found something broken? Open a Bug Report on [GitHub](https://github.com/NeuroBrix/neurobrix/issues/new/choose) | [GitLab](https://gitlab.com/neurobrix/neurobrix/-/issues/new) with:
 
 - NeuroBrix version (`neurobrix info`)
 - Hardware profile used
@@ -20,7 +20,7 @@ Found something broken? Open a [Bug Report](https://gitlab.com/neurobrix/Neurobr
 
 ### Request Features
 
-Have an idea? Open a [Feature Request](https://gitlab.com/neurobrix/Neurobrix/-/issues/new) describing:
+Have an idea? Open a Feature Request on [GitHub](https://github.com/NeuroBrix/neurobrix/issues/new/choose) | [GitLab](https://gitlab.com/neurobrix/neurobrix/-/issues/new) describing:
 
 - The problem you're solving
 - Your proposed solution
@@ -28,7 +28,7 @@ Have an idea? Open a [Feature Request](https://gitlab.com/neurobrix/Neurobrix/-/
 
 ### Request Model Support
 
-Want a specific model in the NeuroBrix Hub? Open a [Model Request](https://gitlab.com/neurobrix/Neurobrix/-/issues/new) with:
+Want a specific model in the NeuroBrix Hub? Open a Model Request on [GitHub](https://github.com/NeuroBrix/neurobrix/issues/new/choose) | [GitLab](https://gitlab.com/neurobrix/neurobrix/-/issues/new) with:
 
 - Model name and source (Hugging Face link, paper, etc.)
 - Model family (image, LLM, audio, video)
@@ -56,14 +56,18 @@ We welcome contributions across the entire stack:
 ### Prerequisites
 
 - Python 3.10+
-- PyTorch 2.0+ with CUDA
+- PyTorch 2.1+ with CUDA
 - NVIDIA GPU (for kernel development)
 - Git
 
 ### Clone and Install
 
 ```bash
-git clone https://gitlab.com/neurobrix/Neurobrix.git
+# From GitHub
+git clone https://github.com/NeuroBrix/neurobrix.git
+# or from GitLab
+git clone https://gitlab.com/neurobrix/neurobrix.git
+
 cd neurobrix
 pip install -e ".[dev]"
 ```
@@ -200,8 +204,7 @@ Place it in `config/hardware/` and submit a PR.
 
 ## Community
 
-- **Issues:** [gitlab.com/neurobrix/Neurobrix/-/issues](https://gitlab.com/neurobrix/Neurobrix/-/issues)
-- **Discussions:** [gitlab.com/neurobrix/Neurobrix/-/issues](https://gitlab.com/neurobrix/Neurobrix/-/issues)
+- **Issues:** [GitHub](https://github.com/NeuroBrix/neurobrix/issues) | [GitLab](https://gitlab.com/neurobrix/neurobrix/-/issues)
 - **Email:** [contributors@neurobrix.es](mailto:contributors@neurobrix.es)
 
 ---

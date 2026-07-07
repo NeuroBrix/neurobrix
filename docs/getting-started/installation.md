@@ -111,7 +111,11 @@ pip install --upgrade --pre neurobrix
 For development without installing:
 
 ```bash
-git clone https://gitlab.com/neurobrix/Neurobrix.git
+# From GitHub
+git clone https://github.com/NeuroBrix/neurobrix.git
+# or from GitLab
+git clone https://gitlab.com/neurobrix/neurobrix.git
+
 cd neurobrix
 PYTHONPATH=src python -m neurobrix --help
 ```

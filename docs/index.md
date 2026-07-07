@@ -41,10 +41,13 @@ neurobrix run --prompt "A photograph of a mountain lake at sunset"
 |--------|--------|------:|--------|
 | **Image** | PixArt, Sana, Flex.1, Janus-Pro | 6 | Production |
 | **LLM** | DeepSeek-MoE, Qwen3, TinyLlama | 3 | Production |
-| **Audio** | Whisper (x2), Parakeet, Canary-Qwen, Voxtral, Orpheus, Kokoro, VibeVoice, OpenAudio, Chatterbox | 10 | Production |
-| **Video** | SANA-Video | 1 | Production |
+| **Audio** | Whisper (x2), Parakeet, Canary-Qwen, Voxtral, Granite-Speech, Orpheus, Kokoro, VibeVoice, OpenAudio, Chatterbox | 11 | Production |
+| **Upscalers** | HAT, Real-ESRGAN, SwinIR, Swin2SR | 4 | Production |
+| **Video** | Wan 2.1/2.2, CogVideoX, Mochi, Open-Sora, Allegro, SANA-Video | 10 | Production |
 
-All models are the work of their respective authors. See the [Model Hub](getting-started/hub.md) for license details.
+Every supported model runs in four execution modes — PyTorch sequential and compiled, Triton sequential and compiled — and the modes are cross-checked for numerical agreement.
+
+All models are the work of their respective authors. See the [Model Hub](getting-started/hub.md) for license details and for which models are downloadable from the hub today.
 
 ## Quick Links
 

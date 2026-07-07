@@ -145,11 +145,5 @@ during the Layer 6.bis investigation.
 
 ## Cross-references
 
-- `docs/architecture/symbolic-shapes-contract.md` — the parallel
+- [Symbolic Shapes Contract](symbolic-shapes-contract.md) — the parallel
   master contract for spatial-adaptive graphs.
-- `docs/follow-ups/layer7-prism-dtype-override.md` — PixArt VAE conv
-  fp16 storage overflow blocker.
-- `docs/follow-ups/layer8-computable-buffers-extension.md` — Sana 4Kpx
-  computable buffers blocker.
-- Memory `feedback_hardware_universal_data_driven.md` — the absolute
-  rule for all NeuroBrix hardware-dependent code.

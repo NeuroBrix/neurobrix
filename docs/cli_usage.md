@@ -27,12 +27,12 @@ sequential (op-by-op) and a compiled (fused hot-loop) variant. No flag =
 | Flag | Branch | Substrate | Role |
 |------|--------|-----------|------|
 | `--compiled` *(default)* | PyTorch | `torch` + cuDNN/cuBLAS | production path |
-| `--sequential` | PyTorch | `torch` ATen, op-by-op | reference oracle (proves graph/trace) |
+| `--sequential` | PyTorch | `torch` ATen, op-by-op | op-by-op reference / debug path |
 | `--triton` | Triton | NeuroBrix `@triton.jit` + `NBXTensor`, no `torch.*`/cuDNN | vendor-agnostic production |
-| `--triton-sequential` | Triton | NeuroBrix kernels, op-by-op | kernel oracle |
+| `--triton-sequential` | Triton | NeuroBrix kernels, op-by-op | op-by-op debug path |
 
 Use the default to just run a model, `--triton` for a vendor-agnostic path,
-and the two `*-sequential` oracles op-by-op to debug a numerical discrepancy.
+and the two `*-sequential` modes op-by-op to debug a numerical discrepancy.
 The flags are also accepted by `neurobrix serve` and `neurobrix upscale`.
 
 ## llm — Text Generation
@@ -237,21 +237,22 @@ Model guide:
 
 ## video — Video Generation
 
-References: Wan2.x (Alibaba), CogVideoX, HunyuanVideo, SANA-Video.
+References: Wan2.1/Wan2.2 (Alibaba), CogVideoX (Zhipu AI), Mochi (Genmo),
+Open-Sora, Allegro (Rhymes AI), SANA-Video (NVIDIA).
 Supports `t2v` (default), `i2v`, `v2v` — auto-deduced.
 
 ```bash
 # Text-to-video
-neurobrix run --model SANA-Video_2B_720p_diffusers \
+neurobrix run --model SANA-Video_2B_720p \
     --prompt "ocean waves at sunset" --num-frames 24
 
 # Image-to-video (auto: --input-image present)
-neurobrix run --model Wan2-1B-I2V \
+neurobrix run --model Wan2.2-I2V-A14B \
     --input-image first_frame.png \
     --prompt "camera pans left" --num-frames 32
 
 # Video-to-video (auto: --video present)
-neurobrix run --model CogVideoX-V2V \
+neurobrix run --model Wan2.1-VACE-1.3B \
     --video source.mp4 --prompt "same scene at night"
 ```
 
