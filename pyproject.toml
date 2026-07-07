@@ -1,12 +1,12 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-fancy-pypi-readme"]
 build-backend = "hatchling.build"
 
 [project]
 name = "neurobrix"
 version = "0.3.0"
 description = "Universal Deep Learning Inference Engine — execute any AI model without model-specific code"
-readme = "README.md"
+dynamic = ["readme"]
 license = "Apache-2.0"
 requires-python = ">=3.10"
 authors = [
@@ -114,3 +114,20 @@ exclude = [
     "**/*.jsonl",
     "**/*.log",
 ]
+
+[tool.hatch.metadata.hooks.fancy-pypi-readme]
+content-type = "text/markdown"
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.fragments]]
+path = "README.md"
+
+# PyPI does not resolve repository-relative links: rewrite them to absolute
+# GitHub URLs at build time (the repository README keeps relative links so
+# both hosting platforms render it natively).
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = '\]\(\./'
+replacement = "](https://github.com/NeuroBrix/neurobrix/blob/main/"
+
+[[tool.hatch.metadata.hooks.fancy-pypi-readme.substitutions]]
+pattern = 'src="\./'
+replacement = 'src="https://raw.githubusercontent.com/NeuroBrix/neurobrix/main/'
