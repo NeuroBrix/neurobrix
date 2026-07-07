@@ -3399,28 +3399,26 @@ class GraphExecutor:
             f"temporarily; the historical name 'native' is deprecated)."
         )
 
-    # Op types whose outputs legitimately carry ±inf by construction:
-    # attention-mask materialisation (full(-inf), masked_fill(-inf),
-    # where(mask, -inf, x), -inf padding). NaN is NEVER legitimate and
-    # has no allowlist.
-    _INF_LEGITIMATE_OPS = frozenset({
-        "aten::full", "aten::full_like", "aten::new_full",
-        "aten::masked_fill", "aten::masked_fill_",
-        "aten::where", "aten::constant_pad_nd",
-    })
-
     def _check_nan_inf(self, op_uid: str, op_type: str, exec_type: OpExecution) -> None:
         """
-        Check for NaN/Inf in compute-op outputs.
+        Check for NaN / +Inf in compute-op outputs.
+
+        NaN is NEVER legitimate; +Inf in a compute output is an overflow
+        and never legitimate in these paths — both raise. -Inf is
+        deliberately NOT raised here: it is a legitimate value across the
+        zoo (additive attention masks, log-underflow of a true zero,
+        -inf padding), and after arithmetic propagation the guard cannot
+        tell a masking -inf from a corrupting one. Where -inf genuinely
+        signals corruption — the iterative-flow loop state — it is caught
+        unambiguously by the step-boundary isfinite state gate (engine
+        audit #2 2026-07-05). Per-op -inf detection false-positives on
+        legitimately masked attention / log-underflow, so per-op coverage
+        stays NaN + positive-Inf only (the historical contract).
 
         METADATA-class ops stay exempt by design: true metadata ops
         (view/permute/...) alias storage already checked at its producing
         compute op, and allocator ops (aten::empty) legitimately expose
-        uninitialised memory. Composite always-on coverage is provided by
-        the step-boundary state gate in the iterative flows (engine audit
-        #2 2026-07-05). Both +inf AND -inf raise here — the historical
-        guard missed -inf saturation (e.g. fp16 log-underflow) — except
-        for the mask-materialising op types in _INF_LEGITIMATE_OPS.
+        uninitialised memory.
         """
         if exec_type == OpExecution.METADATA:
             return
@@ -3432,17 +3430,14 @@ class GraphExecutor:
         for idx, out in enumerate(self._ctx.op_outputs[op_uid]):
             if isinstance(out, torch.Tensor) and out.dtype in (torch.float32, torch.float16, torch.bfloat16):
                 has_nan = bool(torch.isnan(out).any())
-                has_inf = (op_type not in self._INF_LEGITIMATE_OPS
-                           and bool(torch.isinf(out).any()))
+                has_pos_inf = bool((out == float('inf')).any())
 
-                if has_nan or has_inf:
+                if has_nan or has_pos_inf:
                     kinds = []
                     if has_nan:
                         kinds.append("NaN")
-                    if has_inf:
-                        n_pos = int((out == float('inf')).sum())
-                        n_neg = int((out == float('-inf')).sum())
-                        kinds.append(f"Inf (+inf={n_pos}, -inf={n_neg})")
+                    if has_pos_inf:
+                        kinds.append("Pos-Inf")
                     raise RuntimeError(
                         f"{' and '.join(kinds)} detected in output {idx} "
                         f"of op '{op_uid}' ({op_type})."
