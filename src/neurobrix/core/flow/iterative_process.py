@@ -10,12 +10,11 @@ Handles diffusion models with denoising loop:
 3. Post-loop components (VAE decoder)
 """
 
-import gc
 import torch
 from typing import Any, Dict, List, Optional, Callable
 
 from neurobrix.core.runtime.debug import DEBUG
-from neurobrix.core.device_utils import device_empty_cache
+from neurobrix.core.memory.manager import release_flow_memory
 from neurobrix.core.runtime.resolution import i2v_conditioning
 from neurobrix.core.runtime.resolution import vace_control_conditioning
 from neurobrix.core.runtime.resolution import flux_video_conditioning
@@ -783,8 +782,7 @@ class IterativeProcessHandler(FlowHandler):
         executor = self.ctx.executors.get(comp_name)
         if executor:
             executor.unload_weights()
-        gc.collect()
-        device_empty_cache(self.ctx.primary_device)
+        release_flow_memory(self.ctx.primary_device)
 
     def _is_loop_component(self, comp_name: str) -> bool:
         """Check if component is in the main loop."""

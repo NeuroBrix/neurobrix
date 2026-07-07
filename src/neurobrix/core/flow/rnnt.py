@@ -14,8 +14,7 @@ ZERO SEMANTIC: No knowledge of "Parakeet" or "NeMo".
 ZERO HARDCODE: All parameters from NBX container.
 """
 
-import gc
-from neurobrix.core.device_utils import device_empty_cache
+from neurobrix.core.memory.manager import release_flow_memory
 import time
 import torch
 from pathlib import Path
@@ -68,8 +67,7 @@ class RNNTEngine(FlowHandler):
 
         if not self.ctx.persistent_mode:
             self._unload_component_weights("encoder")
-            gc.collect()
-            device_empty_cache(self.ctx.primary_device)
+            release_flow_memory(self.ctx.primary_device)
 
         # Step 3: RNNT greedy decode
         start = time.perf_counter()
@@ -84,8 +82,7 @@ class RNNTEngine(FlowHandler):
         if not self.ctx.persistent_mode:
             self._unload_component_weights("decoder")
             self._unload_component_weights("joint")
-            gc.collect()
-            device_empty_cache(self.ctx.primary_device)
+            release_flow_memory(self.ctx.primary_device)
 
         # Step 4: Decode tokens to text
         self.ctx.variable_resolver.resolved["global.generated_token_ids"] = tokens

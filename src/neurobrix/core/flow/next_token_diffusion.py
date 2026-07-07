@@ -40,13 +40,12 @@ CFG (classifier-free guidance):
     a future optimisation, not a correctness requirement.
 """
 
-import gc
 import time
 import torch
 from typing import Any, Callable, Dict, List, Optional
 
 from .base import FlowHandler, FlowContext, register_flow
-from neurobrix.core.device_utils import device_empty_cache
+from neurobrix.core.memory.manager import release_flow_memory
 
 
 def _require_default(defaults: Dict[str, Any], key: str) -> Any:
@@ -392,8 +391,7 @@ class NextTokenDiffusionEngine(FlowHandler):
             for comp in (self.LM, self.HEAD, self.ACOUSTIC_TOK, self.SEMANTIC_TOK,
                          self.ACOUSTIC_CONN, self.SEMANTIC_CONN):
                 self._unload_component_weights(comp)
-            gc.collect()
-            device_empty_cache(device)
+            release_flow_memory(device)
 
         return self.ctx.variable_resolver.resolve_all()
 
@@ -540,8 +538,8 @@ class NextTokenDiffusionEngine(FlowHandler):
         return out
 
     def _compute_dtype(self) -> torch.dtype:
-        from neurobrix.core.dtype.config import get_torch_dtype
-        return get_torch_dtype(self.ctx.pkg.manifest.get("dtype", "float16"))
+        """Compute dtype from the Prism-resolved plan (FlowContext.compute_dtype)."""
+        return self.ctx.compute_dtype()
 
     def _embed_weight(self, comp_name: str) -> Optional[torch.Tensor]:
         executor = self.ctx.executors.get(comp_name)

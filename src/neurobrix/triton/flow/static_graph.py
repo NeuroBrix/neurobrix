@@ -6,10 +6,10 @@ topological order without iteration (single pass).
 No torch imports in this file.
 """
 
-import gc
 from typing import Any, Callable, Dict, Optional
 
 from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator
+from neurobrix.triton.memory_pool import release_flow_memory
 
 
 class TritonStaticGraphHandler:
@@ -64,4 +64,4 @@ class TritonStaticGraphHandler:
         executor = self.ctx.executors.get(comp_name)
         if executor:
             executor.unload_weights()
-        gc.collect()
+        release_flow_memory(self.ctx.primary_device)

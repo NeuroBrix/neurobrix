@@ -40,8 +40,7 @@ so they can access ``engine.ctx``, executors, weight loaders, etc.
 #  This file will be removed once the forge re-tracing is done.
 # =======================================================================
 
-import gc
-from neurobrix.core.device_utils import device_empty_cache
+from neurobrix.core.memory.manager import release_flow_memory
 import time
 import torch
 from typing import Dict, List, Optional
@@ -252,8 +251,7 @@ def execute_native_kokoro(engine, stage: Dict, audio_config: Dict) -> None:
 
     if not engine.ctx.persistent_mode:
         engine._unload_component_weights(comp_name)
-        gc.collect()
-        device_empty_cache(engine.ctx.primary_device)
+        release_flow_memory(engine.ctx.primary_device)
 
 
 def preprocess_phonemizer_input(engine, prompt: str, phoneme_vocab: Dict) -> None:

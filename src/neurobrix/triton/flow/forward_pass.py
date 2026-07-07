@@ -6,11 +6,11 @@ from topology.flow.order. All tensor ops via NBXTensor + kernel wrappers.
 No torch imports in this file.
 """
 
-import gc
 import numpy as np
 from typing import Any, Callable, Dict, Optional
 
 from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator
+from neurobrix.triton.memory_pool import release_flow_memory
 
 
 class TritonForwardPassHandler:
@@ -84,7 +84,7 @@ class TritonForwardPassHandler:
             # Unload weights (skip in serve mode)
             if not self.ctx.persistent_mode:
                 self._unload_component_weights(comp_name)
-                gc.collect()
+                release_flow_memory(self.ctx.primary_device)
 
         return self.ctx.variable_resolver.resolve_all()
 

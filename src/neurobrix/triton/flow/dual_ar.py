@@ -7,12 +7,13 @@ then embeds tokens for codec decoder -> waveform.
 No torch imports in hot path.
 """
 
-import gc
 import time
 import numpy as np
 from typing import Any, Callable, Dict, List, Optional
 
 from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator
+from neurobrix.triton.memory_pool import release_flow_memory
+from neurobrix.triton.device_transfer import parse_device_idx
 
 # Shared default sampler seed (R27/R28). The pytorch dual_ar path
 # (core/flow/dual_ar.py) MUST use this same literal so the two separate code
@@ -64,7 +65,7 @@ class TritonDualAREngine:
         # -- Step 2: DualAR generation --
         backbone_stage = stages[0]
         comp_name = backbone_stage["component"]
-        device_idx = _parse_device_idx(self.ctx.primary_device)
+        device_idx = parse_device_idx(self.ctx.primary_device)
         DeviceAllocator.set_device(device_idx)
 
         from neurobrix.core.runtime.decode_bound import decode_bound  # NBX_DECODE_BOUND harness
@@ -269,7 +270,7 @@ class TritonDualAREngine:
             self._unload_component_weights(comp_name)
             self._unload_component_weights("model.fast")
             self._unload_component_weights(codec_q)
-            gc.collect()
+            release_flow_memory(self.ctx.primary_device)
 
         # -- Step 4: Codec decoder (forward stages) --
         for stage in stages[1:]:
@@ -291,7 +292,7 @@ class TritonDualAREngine:
 
             if not self.ctx.persistent_mode:
                 self._unload_component_weights(codec_name)
-                gc.collect()
+                release_flow_memory(self.ctx.primary_device)
 
         # -- Step 5: Output waveform --
         from neurobrix.core.flow.audio_utils import postprocess_audio_output
@@ -478,14 +479,3 @@ def _is_tensor(val) -> bool:
     return isinstance(val, NBXTensor) or (hasattr(val, 'shape') and hasattr(val, 'dtype'))
 
 
-def _parse_device_idx(device_str: str) -> int:
-    """Parse device index from device string."""
-    if device_str.startswith("cuda:"):
-        try:
-            return int(device_str.split(":")[-1].split(",")[0])
-        except ValueError:
-            return 0
-    try:
-        return int(device_str)
-    except ValueError:
-        return 0

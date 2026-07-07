@@ -17,13 +17,14 @@ Models: Chatterbox (T3 + LlamaModel backbone)
 No torch imports in hot path.
 """
 
-import gc
 import time
 import numpy as np
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator
+from neurobrix.triton.memory_pool import release_flow_memory
+from neurobrix.triton.device_transfer import parse_device_idx
 
 # Deterministic sampler seed — shared by both triton modes so triton-seq and
 # triton-compiled produce reproducible (and, given matching logits, identical)
@@ -74,7 +75,7 @@ class TritonTTSLLMEngine:
             audio_config = flow
         stages = audio_config.get("stages", [])
         defaults = self.ctx.pkg.defaults
-        device_idx = _parse_device_idx(self.ctx.primary_device)
+        device_idx = parse_device_idx(self.ctx.primary_device)
         DeviceAllocator.set_device(device_idx)
 
         # Separate stages by role
@@ -160,7 +161,7 @@ class TritonTTSLLMEngine:
                     print(f"   [{comp_name}] Done in {elapsed:.0f}ms")
                     if not self.ctx.persistent_mode:
                         self._unload_component_weights(comp_name)
-                        gc.collect()
+                        release_flow_memory(self.ctx.primary_device)
                 else:
                     print(f"   [{comp_name}] Skipped (no reference audio)")
 
@@ -407,7 +408,7 @@ class TritonTTSLLMEngine:
 
         if not self.ctx.persistent_mode:
             self._unload_component_weights(lm_name)
-            gc.collect()
+            release_flow_memory(self.ctx.primary_device)
 
         # -- Step 4: Vocoder (speech tokens -> audio) --
         if vocoder_stage is not None:
@@ -468,7 +469,7 @@ class TritonTTSLLMEngine:
 
                 if not self.ctx.persistent_mode:
                     self._unload_component_weights(voc_name)
-                    gc.collect()
+                    release_flow_memory(self.ctx.primary_device)
 
         return self.ctx.variable_resolver.resolve_all()
 
@@ -531,7 +532,7 @@ class TritonTTSLLMEngine:
         cond_out_np = _to_numpy(cond_emb).astype(np.float32)
         if not self.ctx.persistent_mode:
             self._unload_component_weights(cond_name)
-            gc.collect()
+            release_flow_memory(self.ctx.primary_device)
         return cond_out_np
 
 
@@ -748,14 +749,3 @@ def _is_tensor(val) -> bool:
     return isinstance(val, NBXTensor) or (hasattr(val, 'shape') and hasattr(val, 'dtype'))
 
 
-def _parse_device_idx(device_str: str) -> int:
-    """Parse device index from device string."""
-    if device_str.startswith("cuda:"):
-        try:
-            return int(device_str.split(":")[-1].split(",")[0])
-        except ValueError:
-            return 0
-    try:
-        return int(device_str)
-    except ValueError:
-        return 0

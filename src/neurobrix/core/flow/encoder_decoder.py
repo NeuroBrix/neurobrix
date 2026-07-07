@@ -9,14 +9,13 @@ ZERO SEMANTIC: No knowledge of "Whisper" or "speech".
 ZERO HARDCODE: All parameters from NBX container.
 """
 
-import gc
 import time
 import torch
 from neurobrix.core.device_utils import device_multinomial
+from neurobrix.core.memory.manager import release_flow_memory
 from typing import Any, Callable, Dict, List, Optional
 
 from .base import FlowHandler, FlowContext, register_flow
-from neurobrix.core.device_utils import device_empty_cache
 
 
 @register_flow("encoder_decoder")
@@ -106,8 +105,7 @@ class EncoderDecoderEngine(FlowHandler):
 
         if not self.ctx.persistent_mode:
             self._unload_component_weights(enc_name)
-            gc.collect()
-            device_empty_cache(self.ctx.primary_device)
+            release_flow_memory(self.ctx.primary_device)
 
         # ── Step 3: Autoregressive decode with cross-attention ──
         from neurobrix.core.runtime.decode_bound import decode_bound  # NBX_DECODE_BOUND harness
@@ -198,8 +196,7 @@ class EncoderDecoderEngine(FlowHandler):
 
         if not self.ctx.persistent_mode:
             self._unload_component_weights(dec_name)
-            gc.collect()
-            device_empty_cache(self.ctx.primary_device)
+            release_flow_memory(self.ctx.primary_device)
 
         # ── Step 4: Decode tokens to text ──
         postprocess_text_output(self.ctx)

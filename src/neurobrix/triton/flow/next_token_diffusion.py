@@ -24,12 +24,13 @@ diffusion steps; the batch=2 head output is split into cond/uncond and combined
 via `uncond + scale*(cond - uncond)`. cfg_scale=1.0 disables it.
 """
 
-import gc
 import time
 import numpy as np
 from typing import Any, Callable, Dict, List, Optional
 
 from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator
+from neurobrix.triton.memory_pool import release_flow_memory
+from neurobrix.triton.device_transfer import parse_device_idx
 from neurobrix.triton.scheduler.dpm_solver_pp import TritonDPMSolverPPScheduler
 from neurobrix.triton.cfg.engine import TritonCFGEngine
 
@@ -42,9 +43,6 @@ def _to_numpy(t) -> np.ndarray:
     return np.asarray(t)
 
 
-def _parse_device_idx(device) -> int:
-    s = str(device)
-    return int(s.split(":")[1]) if ":" in s else 0
 
 
 def _require_default(defaults: Dict[str, Any], key: str) -> Any:
@@ -94,7 +92,7 @@ class TritonNextTokenDiffusionEngine:
     # ─── public entry ──────────────────────────────────────────────────────────
     def execute(self) -> Dict[str, Any]:
         defaults = self.ctx.pkg.defaults
-        DeviceAllocator.set_device(_parse_device_idx(self.ctx.primary_device))
+        DeviceAllocator.set_device(parse_device_idx(self.ctx.primary_device))
 
         tok = self.ctx.modules.get("tokenizer")
         if tok is None:
@@ -274,7 +272,7 @@ class TritonNextTokenDiffusionEngine:
             for comp in (self.LM, self.HEAD, self.ACOUSTIC_TOK, self.SEMANTIC_TOK,
                          self.ACOUSTIC_CONN, self.SEMANTIC_CONN):
                 self._unload_component_weights(comp)
-            gc.collect()
+            release_flow_memory(self.ctx.primary_device)
 
         return self.ctx.variable_resolver.resolve_all()
 

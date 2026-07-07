@@ -17,13 +17,14 @@ tiny graphs have trace-time shapes incompatible with greedy decoding.
 No torch imports in hot path.
 """
 
-import gc
 import time
 import numpy as np
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator
+from neurobrix.triton.memory_pool import release_flow_memory
+from neurobrix.triton.device_transfer import parse_device_idx
 
 
 class TritonRNNTEngine:
@@ -69,7 +70,7 @@ class TritonRNNTEngine:
 
         if not self.ctx.persistent_mode:
             self._unload_component_weights("encoder")
-            gc.collect()
+            release_flow_memory(self.ctx.primary_device)
 
         # Step 3: RNNT greedy decode (numpy-based for variable shapes)
         start = time.perf_counter()
@@ -84,7 +85,7 @@ class TritonRNNTEngine:
         if not self.ctx.persistent_mode:
             self._unload_component_weights("decoder")
             self._unload_component_weights("joint")
-            gc.collect()
+            release_flow_memory(self.ctx.primary_device)
 
         # Step 4: Decode tokens to text
         self.ctx.variable_resolver.resolved["global.generated_token_ids"] = tokens
@@ -108,7 +109,7 @@ class TritonRNNTEngine:
         if audio_path is None:
             raise RuntimeError("ZERO FALLBACK: No audio_path provided.")
 
-        device_idx = _parse_device_idx(self.ctx.primary_device)
+        device_idx = parse_device_idx(self.ctx.primary_device)
         DeviceAllocator.set_device(device_idx)
 
         print(f"   [Audio] Loading: {audio_path}")
@@ -446,14 +447,3 @@ def _to_numpy_f32(tensor) -> np.ndarray:
     return arr
 
 
-def _parse_device_idx(device_str: str) -> int:
-    """Parse device index from device string."""
-    if device_str.startswith("cuda:"):
-        try:
-            return int(device_str.split(":")[-1].split(",")[0])
-        except ValueError:
-            return 0
-    try:
-        return int(device_str)
-    except ValueError:
-        return 0

@@ -18,12 +18,12 @@ ZERO SEMANTIC: no model-specific knowledge. ZERO HARDCODE: all
 parameters from the NBX container / defaults.json.
 """
 
-import gc
 import time
 import numpy as np
 from typing import Any, Callable, Dict, List, Optional
 
 from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype
+from neurobrix.triton.memory_pool import release_flow_memory
 from neurobrix.kernels import wrappers as w
 
 
@@ -102,7 +102,9 @@ class TritonAudioLLMEngine:
         self._unload_component_weights = unload_weights_fn
 
     def _compute_dtype(self) -> NBXDtype:
-        s = self.ctx.pkg.manifest.get("dtype", "float16")
+        """Prism-plan resolved dtype (triton-side resolver), string → NBXDtype."""
+        from neurobrix.triton.dtype import resolve_compute_dtype
+        s = resolve_compute_dtype(self.ctx)
         return _DTYPE_STR_TO_NBX.get(s, NBXDtype.float16)
 
     def execute(self) -> Dict[str, Any]:
@@ -148,7 +150,7 @@ class TritonAudioLLMEngine:
             self._reshape_output_for_connections(comp_name)
             if not self.ctx.persistent_mode:
                 self._unload_component_weights(comp_name)
-                gc.collect()
+                release_flow_memory(self.ctx.primary_device)
 
         # ── Step 3: Autoregressive LLM decode with audio embeddings ──
         lm_name = ar_stage["component"]
@@ -259,7 +261,7 @@ class TritonAudioLLMEngine:
 
         if not self.ctx.persistent_mode:
             self._unload_component_weights(lm_name)
-            gc.collect()
+            release_flow_memory(self.ctx.primary_device)
 
         # ── Step 4: Decode tokens → text (BOUNDARY: tokenizer) ──
         postprocess_text_output(self.ctx)

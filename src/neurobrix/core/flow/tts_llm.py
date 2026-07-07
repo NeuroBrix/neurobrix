@@ -19,8 +19,7 @@ ZERO SEMANTIC: No knowledge of specific models.
 ZERO HARDCODE: All parameters from NBX container.
 """
 
-import gc
-from neurobrix.core.device_utils import device_empty_cache
+from neurobrix.core.memory.manager import release_flow_memory
 import time
 import numpy as np
 import torch
@@ -235,8 +234,7 @@ class TTSLLMEngine(FlowHandler):
                     print(f"   [{comp_name}] Done in {elapsed:.0f}ms, speaker_emb: {speaker_emb.shape if speaker_emb is not None else 'None'}")
                     if not self.ctx.persistent_mode:
                         self._unload_component_weights(comp_name)
-                        gc.collect()
-                        device_empty_cache(self.ctx.primary_device)
+                        release_flow_memory(self.ctx.primary_device)
                 else:
                     print(f"   [{comp_name}] Skipped (no reference audio)")
 
@@ -487,8 +485,7 @@ class TTSLLMEngine(FlowHandler):
 
         if not self.ctx.persistent_mode:
             self._unload_component_weights(lm_name)
-            gc.collect()
-            device_empty_cache(self.ctx.primary_device)
+            release_flow_memory(self.ctx.primary_device)
 
         # ── Step 4: Vocoder (speech tokens → audio) ──
         if vocoder_stage is not None:
@@ -546,22 +543,21 @@ class TTSLLMEngine(FlowHandler):
 
                 if not self.ctx.persistent_mode:
                     self._unload_component_weights(voc_name)
-                    gc.collect()
-                    device_empty_cache(self.ctx.primary_device)
+                    release_flow_memory(self.ctx.primary_device)
 
         return self.ctx.variable_resolver.resolve_all()
 
     # ─── Helpers ──────────────────────────────────────────────────────────────
 
     def _get_compute_dtype(self) -> torch.dtype:
-        """Get compute dtype from Prism plan."""
-        from neurobrix.core.dtype.config import get_torch_dtype
-        if self.ctx.plan and hasattr(self.ctx.plan, 'allocations'):
-            for alloc in self.ctx.plan.allocations.values():
-                if hasattr(alloc, 'dtype') and alloc.dtype is not None:
-                    return get_torch_dtype(alloc.dtype)
-        dtype_str = self.ctx.pkg.defaults.get("dtype", "float16")
-        return get_torch_dtype(dtype_str)
+        """Get compute dtype from the Prism-resolved plan (FlowContext.compute_dtype).
+
+        The previous local copy walked `plan.allocations`, an attribute the
+        ExecutionPlan never had (`plan.components` is the real one) — the
+        walk was dead code and the method silently fell back to
+        `defaults.json`. The FlowContext resolver reads the actual plan.
+        """
+        return self.ctx.compute_dtype()
 
     def _get_component_output(self, comp_name: str) -> Optional[torch.Tensor]:
         """Get component output from variable resolver."""
@@ -698,8 +694,7 @@ class TTSLLMEngine(FlowHandler):
         cond_emb = next(iter(output.values())) if isinstance(output, dict) else output
         if not self.ctx.persistent_mode:
             self._unload_component_weights(cond_name)
-            gc.collect()
-            device_empty_cache(self.ctx.primary_device)
+            release_flow_memory(self.ctx.primary_device)
         return cond_emb
 
     def _sample_token(

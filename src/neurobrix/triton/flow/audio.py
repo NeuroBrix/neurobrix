@@ -10,13 +10,13 @@ Output is converted to NBXTensor at the boundary.
 No torch imports in this file.
 """
 
-import gc
 import time
 import numpy as np
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator
+from neurobrix.triton.memory_pool import release_flow_memory
 
 
 class TritonAudioEngine:
@@ -50,8 +50,13 @@ class TritonAudioEngine:
         torch.dtype. Stage handlers that need a torch.dtype (accepted
         torch-boundary subroutines in core/flow/stages/) are responsible
         for converting the string to torch.dtype themselves.
+
+        Resolved from the Prism plan via the triton-side resolver
+        (`triton/dtype.py:resolve_compute_dtype`) — the plan is the
+        authority, the manifest is only its no-plan fallback.
         """
-        return self.ctx.pkg.manifest.get("dtype", "float16")
+        from neurobrix.triton.dtype import resolve_compute_dtype
+        return resolve_compute_dtype(self.ctx)
 
     def execute(self) -> Dict[str, Any]:
         """Execute the audio pipeline from topology.json flow.audio."""
@@ -268,7 +273,7 @@ class TritonAudioEngine:
 
         if not self.ctx.persistent_mode:
             self._unload_component_weights(comp_name)
-            gc.collect()
+            release_flow_memory(self.ctx.primary_device)
 
     def _try_chunked_forward(self, comp_name: str) -> bool:
         """Run a fixed-length decoder in trace-length chunks (triton-pure mirror of

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, parse_dtype
+from neurobrix.triton.device_transfer import parse_device_idx
 
 from neurobrix.triton.generator import TritonGenerator
 from neurobrix.triton.session import TritonLMSession
@@ -89,7 +90,7 @@ class TritonAutoregressiveHandler:
         generator = strategy.create_generator(
             self.ctx.pkg.defaults, self.ctx.variable_resolver)
 
-        device_idx = self._parse_device_idx()
+        device_idx = parse_device_idx(self.ctx.primary_device)
         generator.set_generation_params(device_idx=device_idx)
 
         input_ids = self._tokenize(gen_info, device_idx)
@@ -234,32 +235,6 @@ class TritonAutoregressiveHandler:
         return self._active_session.decode_step(input_ids, inputs_embeds)
 
     # ─── SETUP ────────────────────────────────────────────────────────
-
-    def _parse_device_idx(self) -> int:
-        """Parse device index from primary_device string.
-
-        Handles: "cuda:2", "fgp:cuda:0,cuda:1", "0", "cuda".
-        """
-        dev = self.ctx.primary_device
-        # "cuda:2" → 2
-        if dev.startswith("cuda:"):
-            try:
-                return int(dev.split(":")[-1].split(",")[0])
-            except ValueError:
-                return 0
-        # Compound: "fgp:cuda:0,cuda:1" → parse first cuda device
-        if "cuda:" in dev:
-            idx = dev.index("cuda:")
-            num_str = dev[idx + 5:].split(",")[0].split(":")[0]
-            try:
-                return int(num_str)
-            except ValueError:
-                return 0
-        # Plain int
-        try:
-            return int(dev)
-        except ValueError:
-            return 0
 
     def _tokenize(self, gen_info: Dict, device_idx: int) -> NBXTensor:
         """Tokenize prompt → NBXTensor of token IDs.
@@ -412,7 +387,7 @@ class TritonAutoregressiveHandler:
                     lm_name = name
                     break
 
-        device_idx = self._parse_device_idx()
+        device_idx = parse_device_idx(self.ctx.primary_device)
 
         # Load weights via lifecycle (same as native mode).
         # In triton mode, load_weights() routes to _load_weights_triton
@@ -617,7 +592,7 @@ class TritonAutoregressiveHandler:
                 cfg_weight=cfg_weight,
                 vq_token_offset=vq_token_offset,
                 defaults=defaults,
-                device_idx=self._parse_device_idx(),
+                device_idx=parse_device_idx(self.ctx.primary_device),
             )
 
         # Default: text strategy (TinyLlama, Qwen3, DeepSeek-MoE, ...)
@@ -644,9 +619,15 @@ class TritonTextStrategy:
     def __init__(self, lm_head_executor, session: TritonLMSession):
         self._head = lm_head_executor
         self._session = session
-        # Cache lm_head device index for D2D transfer in get_logits
+        # Cache lm_head device index for D2D transfer in get_logits.
+        # Canonical FIRST-ordinal parse via the single triton-side helper —
+        # a compound placement ("fgp:cuda:0,cuda:1") must resolve to the
+        # component's own device (cuda:0), matching parse_device_idx at the
+        # other three sites in this file and the compiled mirror; the former
+        # last-ordinal split yielded cuda:1 and sent the logits D2D transfer
+        # to the wrong GPU on a sharded head.
         dev_str = getattr(lm_head_executor, 'device', 'cuda:0')
-        self._head_device_idx = int(dev_str.split(':')[-1]) if ':' in str(dev_str) else 0
+        self._head_device_idx = parse_device_idx(dev_str)
 
     def create_generator(self, defaults: Dict, resolver) -> TritonGenerator:
         config = _build_generator_config(defaults, resolver)

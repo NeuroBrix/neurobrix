@@ -47,8 +47,7 @@ All functions take the AudioEngine instance (``engine``) as first parameter.
 #  This file will be removed once the forge re-tracing is done.
 # =======================================================================
 
-import gc
-from neurobrix.core.device_utils import device_empty_cache
+from neurobrix.core.memory.manager import release_flow_memory
 import time
 import torch
 from typing import Dict, Optional
@@ -265,8 +264,7 @@ def execute_diffusion_stage(engine, stage: Dict, audio_config: Dict) -> None:
 
     if not engine.ctx.persistent_mode:
         engine._unload_component_weights(comp_name)
-        gc.collect()
-        device_empty_cache(engine.ctx.primary_device)
+        release_flow_memory(engine.ctx.primary_device)
 
 
 def execute_native_acoustic_decoder(engine, stage: Dict, audio_config: Dict) -> None:
@@ -353,8 +351,7 @@ def execute_native_acoustic_decoder(engine, stage: Dict, audio_config: Dict) -> 
 
     if not engine.ctx.persistent_mode:
         engine._unload_component_weights(comp_name)
-        gc.collect()
-        device_empty_cache(engine.ctx.primary_device)
+        release_flow_memory(engine.ctx.primary_device)
 
 
 # ─────────────────────────────────────────────────────────────

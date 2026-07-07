@@ -14,14 +14,13 @@ ZERO SEMANTIC: No knowledge of "Whisper", "Kokoro", etc.
 ZERO HARDCODE: All parameters from NBX container.
 """
 
-import gc
 import time
 import torch
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .base import FlowHandler, FlowContext, register_flow
-from neurobrix.core.device_utils import device_empty_cache
+from neurobrix.core.memory.manager import release_flow_memory
 
 
 @register_flow("audio")
@@ -358,8 +357,7 @@ class AudioEngine(FlowHandler):
 
         if not self.ctx.persistent_mode:
             self._unload_component_weights(comp_name)
-            gc.collect()
-            device_empty_cache(self.ctx.primary_device)
+            release_flow_memory(self.ctx.primary_device)
 
     # ─────────────────────────────────────────────────────────────
     # Output postprocessing
@@ -783,6 +781,5 @@ class AudioEngine(FlowHandler):
         return None
 
     def _get_compute_dtype(self) -> torch.dtype:
-        """Get compute dtype from manifest (string→torch.dtype via the dtype engine)."""
-        from neurobrix.core.dtype.config import get_torch_dtype
-        return get_torch_dtype(self.ctx.pkg.manifest.get("dtype", "float16"))
+        """Get compute dtype from the Prism-resolved plan (FlowContext.compute_dtype)."""
+        return self.ctx.compute_dtype()
