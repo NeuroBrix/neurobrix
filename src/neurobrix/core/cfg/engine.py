@@ -31,6 +31,24 @@ if TYPE_CHECKING:
     from neurobrix.core.flow.base import FlowContext
 
 
+def _resolve_optional_port(variable_resolver: Any, port: str) -> Any:
+    """Resolve a connection source port that may legitimately be absent.
+
+    Returns the resolved value, or None when the resolver reports the
+    port as not found (KeyError — the documented VariableResolver.get
+    absence signal): an optional / not-yet-resolved producer port is a
+    legitimate skip for CFG batch expansion. Any OTHER failure
+    propagates (ZERO FALLBACK, engine audit #2 2026-07-05 — the former
+    blanket `except: continue` could silently skip batching a port the
+    denoiser consumes, feeding batch-1 conditioning to a batch-2
+    forward).
+    """
+    try:
+        return variable_resolver.get(port)
+    except KeyError:
+        return None
+
+
 def _resolve_torch_dtype(dt: Union[torch.dtype, str, Any]) -> torch.dtype:
     """Coerce a dtype coming from Prism into a concrete `torch.dtype`.
 
@@ -323,10 +341,9 @@ class CFGEngine:
             to_input = to_port.split(".", 1)[1]
             if to_input in ("timestep", "attention_mask", "encoder_attention_mask"):
                 continue
-            try:
-                _v = self._ctx.variable_resolver.get(from_port)
-            except Exception:
-                continue
+            # Absent optional port → None → skipped by the isinstance
+            # below; real resolver failures propagate (ZERO FALLBACK).
+            _v = _resolve_optional_port(self._ctx.variable_resolver, from_port)
             if isinstance(_v, torch.Tensor) and _v.dim() >= 1 and _v.shape[0] == 1:
                 extra_restore[from_port] = _v
                 self._ctx.variable_resolver.set(

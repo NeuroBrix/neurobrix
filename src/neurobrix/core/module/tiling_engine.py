@@ -1690,7 +1690,30 @@ class OpLevelTilingEngine:
                             t_base_pending = _pending.pop(cid)
                             cw = _resolve(spec_int)
                             if not cw:
-                                _registry[cid] = t_base_pending
+                                # ZERO FALLBACK (engine audit #2
+                                # 2026-07-05, CRITICAL — sibling path
+                                # of the merge-failure fix below):
+                                # resolve_chain_weights returns {}
+                                # exactly when a required chain
+                                # weight cannot be resolved. The
+                                # chain intermediates are already
+                                # intercepted (they never execute
+                                # natively), so substituting the
+                                # un-merged base tensor here DROPPED
+                                # the whole residual branch silently.
+                                raise RuntimeError(
+                                    f"Residual-chain weight "
+                                    f"resolution failed for chain "
+                                    f"'{cid}' at op '{_uid}': "
+                                    f"resolve_chain_weights could "
+                                    f"not resolve a required "
+                                    f"param:: weight from the DAG/"
+                                    f"executor weights. Refusing "
+                                    f"to substitute the un-merged "
+                                    f"base tensor — the chain ops "
+                                    f"are intercepted and would be "
+                                    f"silently dropped."
+                                )
                             else:
                                 try:
                                     # Mode-aware peak measurement: torch
@@ -1799,15 +1822,27 @@ class OpLevelTilingEngine:
                                           flush=True)
                                     _registry[cid] = merge_out
                                 except Exception as e:
-                                    print(f"[S5_CHAIN_FAIL] {cid}: "
-                                          f"{type(e).__name__}: {e}",
-                                          flush=True)
-                                    logger.warning(
-                                        f"[S5] deferred band-streamed "
-                                        f"chain failed for {cid}: "
-                                        f"{type(e).__name__}: {e}."
-                                    )
-                                    _registry[cid] = t_base_pending
+                                    # ZERO FALLBACK (engine audit #2
+                                    # 2026-07-05, CRITICAL): the old
+                                    # handler WARNED and substituted
+                                    # the UN-MERGED base tensor, so
+                                    # the run continued to a silently
+                                    # wrong final output. A failed
+                                    # band-streamed chain merge is a
+                                    # crash, never a substitution.
+                                    raise RuntimeError(
+                                        f"Band-streamed residual-chain"
+                                        f" merge failed for chain "
+                                        f"'{cid}' at op '{_uid}' "
+                                        f"({type(e).__name__}: {e}). "
+                                        f"Refusing to substitute the "
+                                        f"un-merged base tensor — "
+                                        f"that continues the run to "
+                                        f"a silently corrupt output. "
+                                        f"Fix the chain wrapper / "
+                                        f"kernel failure at its "
+                                        f"source."
+                                    ) from e
                         # Whether first or later, return sentinel
                         # referencing the chain's registry entry.
                         if cid in _registry:
