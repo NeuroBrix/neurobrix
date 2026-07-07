@@ -237,13 +237,14 @@ Help us improve guides, tutorials, and examples. Clear documentation lowers the 
 
 ### Code Contributions
 
-Check the [issues page](https://gitlab.com/neurobrix/Neurobrix/-/issues) for good first issues. The codebase follows strict principles (zero hardcode, zero fallback, zero dead code) — read the contributing guide before submitting a merge request.
+Check the issues page ([GitHub](https://github.com/NeuroBrix/neurobrix/issues) | [GitLab](https://gitlab.com/neurobrix/neurobrix/-/issues)) for good first issues. The codebase follows strict principles (zero hardcode, zero fallback, zero dead code) — read the contributing guide before submitting a merge request.
 
 ---
 
 ## Links
 
-- **GitLab**: [gitlab.com/neurobrix/Neurobrix](https://gitlab.com/neurobrix/Neurobrix)
+- **GitHub**: [github.com/NeuroBrix/neurobrix](https://github.com/NeuroBrix/neurobrix)
+- **GitLab**: [gitlab.com/neurobrix/neurobrix](https://gitlab.com/neurobrix/neurobrix)
 - **Model Registry**: [neurobrix.es](https://neurobrix.es)
 - **Install**: `pip install neurobrix`
 
