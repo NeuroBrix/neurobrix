@@ -462,6 +462,33 @@ class PrismSolver:
 
         neural_components = sorted(neural_components, key=lambda c: c.name)
 
+        # vae_scale is a MODEL property (the VAE's spatial compression ratio),
+        # NOT a run-time knob. Callers pass a placeholder default (8) because
+        # runtime defaults.json does not carry vae_scale_factor; left
+        # uncorrected it mis-sizes the latent-space activation estimate for any
+        # VAE whose true compression != 8. Sana DC-AE compresses 32x, so the
+        # default 8 makes the estimator resolve latent = height // 8 (512 at
+        # 4096px) instead of height // 32 (128) -> a 16x (4^2) spatial
+        # over-estimate that flips the 4Kpx transformer single_gpu -> zero3 and
+        # (on the triton path) kills it at op-0. Derive the true value from the
+        # VAE component's arch (2^(len(block_out_channels)-1), the same formula
+        # TilingEngine and src/CLAUDE.md §19 use), reusing config_loader so
+        # there is one derivation. No VAE component (LLM / upscaler) leaves the
+        # caller's value untouched. Estimate-only: runtime symbol resolution is
+        # independent of this field, so this changes placement, never compute.
+        if container.cache_path:
+            from neurobrix.core.components.config_loader import (
+                get_vae_config_for_transformer,
+            )
+            vae_cfg = get_vae_config_for_transformer(str(container.cache_path))
+            if vae_cfg and vae_cfg.vae_scale_factor:
+                if input_config.vae_scale != vae_cfg.vae_scale_factor:
+                    logging.getLogger(__name__).debug(
+                        "Prism: vae_scale %s -> %s (derived from VAE arch)",
+                        input_config.vae_scale, vae_cfg.vae_scale_factor,
+                    )
+                input_config.vae_scale = vae_cfg.vae_scale_factor
+
         # Step 0a: Detect op-level tiling needs per component (fused
         # upsample→conv pairs whose intermediate tensor would OOM). Done
         # AFTER strategies are tried — only if the cascade can't place the
