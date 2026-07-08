@@ -87,6 +87,13 @@ class RuntimeExecutor:
 
         # Universal tiling — DATA-DRIVEN per component from graph.json + profile.json
         self._component_tiling: Dict[str, TilingEngine] = {}
+        # Cache of the auto-detected per-component TilingEngines (each parsed
+        # from that component's STATIC graph.json/profile.json). Built once and
+        # reused across warm-path requests so execute() does not re-read and
+        # re-parse those files from disk on every call (P-COLD-WARM-PATH #1);
+        # the parsed parameters are input-independent, only should_tile() /
+        # tiled_execute() are per-request. None = not built yet.
+        self._tiling_autodetect_cache: Optional[Dict[str, TilingEngine]] = None
 
         # Setup flag — allows InferenceEngine to call setup() once, then execute() many times
         self._is_setup = False
@@ -391,19 +398,28 @@ class RuntimeExecutor:
             variable_resolver=self.variable_resolver
         )
 
-        # Universal tiling — DATA-DRIVEN per component
-        self._component_tiling = {}
-        components_dir = self.pkg.cache_path / "components"
-        for comp_name in self.pkg.topology.get("components", {}):
-            try:
-                engine = TilingEngine.from_component_config(
-                    graph_path=components_dir / comp_name / "graph.json",
-                    profile_path=components_dir / comp_name / "profile.json",
-                )
-                if engine is not None:
-                    self._component_tiling[comp_name] = engine
-            except (FileNotFoundError, ValueError) as e:
-                logger.debug(f"Tiling not available for {comp_name}: {e}")
+        # Universal tiling — DATA-DRIVEN per component. The auto-detect reads
+        # each component's static graph.json/profile.json from disk; parse them
+        # ONCE and cache the resulting engines so the warm serving path does not
+        # re-read/re-parse every component per request (P-COLD-WARM-PATH #1 —
+        # ~100ms-to-seconds/request for nothing). The Prism-plan override and
+        # op-level registration below run per request (in-memory plan, cheap)
+        # and keep their prior semantics untouched.
+        if self._tiling_autodetect_cache is None:
+            cache: Dict[str, TilingEngine] = {}
+            components_dir = self.pkg.cache_path / "components"
+            for comp_name in self.pkg.topology.get("components", {}):
+                try:
+                    engine = TilingEngine.from_component_config(
+                        graph_path=components_dir / comp_name / "graph.json",
+                        profile_path=components_dir / comp_name / "profile.json",
+                    )
+                    if engine is not None:
+                        cache[comp_name] = engine
+                except (FileNotFoundError, ValueError) as e:
+                    logger.debug(f"Tiling not available for {comp_name}: {e}")
+            self._tiling_autodetect_cache = cache
+        self._component_tiling = dict(self._tiling_autodetect_cache)
 
         # Prism-driven component-level tiling — overrides the auto-detect above.
         # Emitted when Prism kept a spatial-overflow component (e.g. a high-res

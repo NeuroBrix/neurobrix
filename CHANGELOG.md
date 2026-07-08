@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Faster repeated requests on the serving daemon.** The server was
+  re-reading and re-parsing every model component's on-disk layout files on
+  every single request in order to set up spatial tiling — 100ms to several
+  seconds of pure per-request overhead, even though those files never change
+  while the daemon is running. That setup now happens once and is reused
+  across requests, so a warm server answers repeat requests without the
+  per-request file-parsing cost. The first request and one-shot CLI runs are
+  unchanged.
+
 - **Lower GPU memory use in the Triton engine when a model is close to
   running out of memory.** The Triton execution engine now reclaims the
   memory of already-finished intermediate results sooner when the GPU is
