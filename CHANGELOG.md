@@ -26,6 +26,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Corrected GPU memory planning for image models that use a
+  high-compression autoencoder (such as Sana).** When estimating how much
+  GPU memory each part of a model needs, the planner assumed a fixed 8x
+  spatial compression from the autoencoder. Models whose autoencoder
+  compresses more aggressively (Sana's is 32x) had the memory need of their
+  main network over-estimated by up to 16x, which could push that network
+  onto slower CPU-offloaded placement — and, in the Triton engine, prevent
+  the run from starting at all. The planner now reads the true compression
+  factor from the model itself, restoring single-GPU placement for these
+  models. (The largest 4K Sana configuration still stops at a separate,
+  already-tracked memory limit during the final image-decode step.)
+
 - **Language models now decode correctly in the op-by-op reference mode
   beyond the trace length.** In the step-by-step reference execution mode,
   autoregressive text models could crash once generation ran past the
