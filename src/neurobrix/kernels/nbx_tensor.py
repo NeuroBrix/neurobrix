@@ -410,6 +410,35 @@ class DeviceAllocator:
     _pool_alloc_size: Dict[int, int] = {}            # ptr -> ALLOCATED nbytes (may exceed requested when smallest-fit is bigger)
     _pool_enabled: bool = False                      # set by _maybe_init_pool() from env
 
+    # OOM-reclaim hooks (P-TRITON-LIVE-SET) — last-chance reclaimers called
+    # ONLY after a device malloc fails, before declaring OOM. The triton hot
+    # loops register their deferred dead-tensor queues here: those tensors
+    # are already killed in the arena (guaranteed dead) but their frees are
+    # batched behind the drain policy's cliff, so at the OOM instant the
+    # queue can legally hold up to the cliff (~2 GB) of reclaimable bytes.
+    # The drain policy's pressure gate compares free memory to a static
+    # reserve and is blind to the SIZE of the incoming request (Sana 4Kpx
+    # VAE decode: 8 GiB request with 7.4 GiB free — above the 6 GiB
+    # reserve, so no pressure drain — failed by ~0.8 GiB while the queue
+    # held reclaimable bytes). A hook takes (device_idx, nbytes requested)
+    # and returns bytes freed (best effort); a non-zero total triggers one
+    # malloc retry. Same philosophy as the pool-flush retry in malloc_cuda
+    # (torch CachingAllocator release-cached-blocks -> retry): dead code on
+    # every run that never OOMs.
+    _oom_reclaim_hooks: list = []
+
+    @classmethod
+    def register_oom_reclaim_hook(cls, fn) -> None:
+        if fn not in cls._oom_reclaim_hooks:
+            cls._oom_reclaim_hooks.append(fn)
+
+    @classmethod
+    def unregister_oom_reclaim_hook(cls, fn) -> None:
+        try:
+            cls._oom_reclaim_hooks.remove(fn)
+        except ValueError:
+            pass
+
     @staticmethod
     def set_device(device_id: int):
         """Set current GPU device for allocations (runtime API only).
@@ -606,6 +635,28 @@ class DeviceAllocator:
         backend = _active_backend()
         ret = getattr(rt, backend["malloc"])(
             ctypes.byref(ptr_obj), ctypes.c_size_t(nbytes))
+
+        # OOM-retry step 1 (P-TRITON-LIVE-SET): ask registered reclaimers
+        # (the hot loops' deferred dead-tensor queues) to sync+free, then
+        # retry once. Dead tensors first — guaranteed-reclaimable memory —
+        # before the pool flush below. A broken reclaimer must never mask
+        # the real OOM: its exception is logged and the retry proceeds on
+        # whatever the other hooks freed; the original OOM raise (with full
+        # diagnostics) still follows if the retry fails.
+        if ret != 0 and DeviceAllocator._oom_reclaim_hooks:
+            _reclaimed = 0
+            for _hook in list(DeviceAllocator._oom_reclaim_hooks):
+                try:
+                    _reclaimed += int(_hook(dev, nbytes) or 0)
+                except Exception as _hook_err:
+                    print(f"[NBX_OOM_RECLAIM] hook error (OOM raise follows "
+                          f"if retry fails): {_hook_err}", flush=True)
+            if _reclaimed > 0:
+                print(f"[NBX_OOM_RECLAIM] freed {_reclaimed/1024/1024:.0f}MB "
+                      f"from deferred queues, retrying "
+                      f"{nbytes/1024/1024:.0f}MB malloc", flush=True)
+                ret = getattr(rt, backend["malloc"])(
+                    ctypes.byref(ptr_obj), ctypes.c_size_t(nbytes))
 
         # Phase 2 OOM-retry: if cudaMalloc fails and the pool holds cached
         # blocks, flush them back to the driver and retry. Defragments the

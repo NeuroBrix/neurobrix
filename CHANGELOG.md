@@ -35,6 +35,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **4K image generation now completes in the Triton engine (Sana 4K).**
+  The final image-decode step used to run out of GPU memory on a 32 GB
+  card. Two fixes: (1) a large intermediate result in the decoder's
+  residual pathway is now written in place into a buffer that was about to
+  be released, instead of allocating a fresh 8 GB block the memory heap
+  could no longer serve contiguously; (2) as a general safety net, when a
+  GPU allocation fails the engine now reclaims memory held by
+  already-finished intermediate results and retries once before reporting
+  out-of-memory — this covers any model running close to the memory limit,
+  not just Sana. A 4096×4096 image that previously crashed at the decode
+  step now renders end to end (~7.5 minutes on one V100).
+
 - **Corrected GPU memory planning for image models that use a
   high-compression autoencoder (such as Sana).** When estimating how much
   GPU memory each part of a model needs, the planner assumed a fixed 8x
