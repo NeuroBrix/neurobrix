@@ -1577,6 +1577,18 @@ class OpLevelTilingEngine:
                         "forks": [], "merges": [], "intermediate_for": []
                     })["intermediate_for"].append(spec_with_cid)
 
+            # In-place reuse map for chain nodes. A uid can be BOTH an
+            # inplace-add candidate AND a chain node; the chain
+            # interceptor registered below OVERWRITES the standalone
+            # inplace-add interceptor for that uid, so the fork-only
+            # natural add in Step 3 must honor the reuse contract itself
+            # — otherwise a fork add of the 8 GiB class allocates a fresh
+            # buffer that its dying input already owns (Sana 4Kpx VAE
+            # aten.add::86: fragmentation OOM at 11.8 GiB free, the
+            # estimator having rightly counted the add as in-place).
+            _inplace_reuse: Dict[str, int] = dict(
+                self.plan.inplace_adds or [])
+
             def make_unified_node_interceptor(
                 _uid,
                 _node_roles,
@@ -1855,21 +1867,56 @@ class OpLevelTilingEngine:
                     # Step 3: if no chain provided the value AND this
                     # node is not a chain intermediate, run the natural
                     # add (this node is a fork-only of one or more
-                    # chains).
+                    # chains). When this uid carries an in-place reuse
+                    # contract (see _inplace_reuse above), write the
+                    # result INTO the dying input's buffer instead of
+                    # allocating — dual-backend, mirroring the standalone
+                    # inplace-add interceptor exactly. alpha-guard: for
+                    # reuse of input 1 the in-place form computes
+                    # b += alpha*a which only equals a + alpha*b when
+                    # alpha == 1, so reuse index 1 requires alpha == 1.
                     if value is None:
-                        if len(args) >= 2 and isinstance(args[0],
-                                torch.Tensor) and isinstance(args[1],
-                                torch.Tensor):
-                            alpha = kwargs.get("alpha", 1.0)
-                            if len(args) > 2 and isinstance(args[2],
-                                    (int, float)):
-                                alpha = args[2]
-                            value = torch.add(args[0], args[1],
-                                              alpha=float(alpha))
-                        elif len(args) >= 2:
-                            value = args[0] + args[1]
-                        else:
+                        if len(args) < 2:
                             return None
+                        alpha = kwargs.get("alpha", 1.0)
+                        if len(args) > 2 and isinstance(args[2],
+                                (int, float)):
+                            alpha = args[2]
+                        _ridx = _inplace_reuse.get(_uid)
+                        if _ridx is not None and (_ridx == 0
+                                                  or float(alpha) == 1.0):
+                            _target = args[0] if _ridx == 0 else args[1]
+                            _other = args[1] if _ridx == 0 else args[0]
+                            from neurobrix.kernels.nbx_tensor import (
+                                NBXTensor as _NBXT_ia,
+                            )
+                            if isinstance(_target, _NBXT_ia):
+                                from neurobrix.kernels.wrappers import (
+                                    add_inplace_nbx,
+                                )
+                                value = add_inplace_nbx(
+                                    _target, _other, alpha=float(alpha))
+                            elif (isinstance(_target, torch.Tensor)
+                                  and isinstance(_other, torch.Tensor)):
+                                if _other.dtype != _target.dtype:
+                                    if (torch.promote_types(
+                                            _target.dtype, _other.dtype)
+                                            == _target.dtype):
+                                        _other = _other.to(_target.dtype)
+                                    else:
+                                        _target = None  # unsafe: upcast
+                                if _target is not None:
+                                    _target.add_(_other,
+                                                 alpha=float(alpha))
+                                    value = _target
+                        if value is None:
+                            if (isinstance(args[0], torch.Tensor)
+                                    and isinstance(args[1],
+                                                   torch.Tensor)):
+                                value = torch.add(args[0], args[1],
+                                                  alpha=float(alpha))
+                            else:
+                                value = args[0] + args[1]
 
                     # Step 4: for each chain that STARTS here, stash
                     # the fork result for deferred compute at the first

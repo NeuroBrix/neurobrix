@@ -2546,6 +2546,54 @@ class TritonSequence:
             self._symbol_resolver.bind_from_inputs(
                 inputs, self._input_ids, self.dag.get("tensors", {}))
 
+    def _ensure_oom_reclaim_hook(self) -> None:
+        """Register (once per instance) a last-chance OOM reclaimer that
+        drains this sequence's CURRENT deferred dead-tensor queue
+        (`self._oom_deferred_queue`, rebound at the start of each run by
+        both hot loops). Called by DeviceAllocator.malloc_cuda ONLY after a
+        device malloc fails — dead code on every run that never OOMs. The
+        drain mirrors the in-loop drains exactly: device sync BEFORE the
+        frees (UAF-safe, sync-before-free doctrine), then clear. The loop's
+        local `_deferred_bytes` counter is deliberately left stale after a
+        hook drain: it only OVERSTATES, so the next cliff check performs
+        one drain of an already-empty queue (a wasted sync on the
+        OOM-recovery path only) and resets — never an early free. Weakref-
+        bound: a dead sequence's hook frees nothing and unregisters itself.
+        P-TRITON-LIVE-SET: the drain policy's pressure gate is blind to the
+        incoming request size (an 8 GiB ask with 7.4 GiB free trips
+        nothing), so the allocator-side retry is the only chokepoint that
+        sees both the request and the reclaimable queue.
+        """
+        if getattr(self, "_oom_hook_registered", False):
+            return
+        import weakref
+        wself = weakref.ref(self)
+
+        def _seq_oom_reclaim(dev_idx, nbytes_requested):
+            seq = wself()
+            if seq is None:
+                DeviceAllocator.unregister_oom_reclaim_hook(_seq_oom_reclaim)
+                return 0
+            queue = getattr(seq, "_oom_deferred_queue", None)
+            if not queue:
+                return 0
+            DeviceAllocator.sync_device()
+            freed = 0
+            for t in queue:
+                freed += getattr(t, "_nbytes", 0) or 0
+            queue.clear()
+            return freed
+
+        DeviceAllocator.register_oom_reclaim_hook(_seq_oom_reclaim)
+        # Eager deregistration when this sequence is collected — the
+        # weakref guard inside the hook stays as belt-and-braces, but the
+        # registry entry itself must not accumulate across many sequence
+        # lifetimes in a long-lived serving process (gardien MEDIUM,
+        # 2026-07-11).
+        weakref.finalize(
+            self, DeviceAllocator.unregister_oom_reclaim_hook, _seq_oom_reclaim)
+        self._oom_hook_registered = True
+
     def run(self, skip_kills: bool = False,
             pre_op_callback: Optional[Callable[[int, 'CompiledOp'], None]] = None):
         """Execute all ops. Zero overhead hot loop.
@@ -2857,6 +2905,11 @@ class TritonSequence:
         _last_free_check = -(1 << 30)
         _drain_diag = os.environ.get("NBX_DEFERRED_DRAIN_DIAG") == "1"
         _drain_stats = [0, 0, 0] if _drain_diag else None  # [drains, cliff/count, pressure]
+
+        # OOM last-chance reclaim: expose THIS run's deferred queue to the
+        # allocator (drained+retried only after a failed device malloc).
+        self._oom_deferred_queue = _deferred
+        self._ensure_oom_reclaim_hook()
 
         # C1 (P-KERNEL-LAUNCH-HYGIENE): diagnostic env gates hoisted out
         # of the per-op hot loop — read ONCE per run. Same gate
@@ -3601,6 +3654,11 @@ class TritonSequence:
         _last_free_check = -(1 << 30)
         _drain_diag = os.environ.get("NBX_DEFERRED_DRAIN_DIAG") == "1"
         _drain_stats = [0, 0, 0] if _drain_diag else None  # [drains, cliff/count, pressure]
+
+        # OOM last-chance reclaim: expose THIS run's deferred queue to the
+        # allocator (drained+retried only after a failed device malloc).
+        self._oom_deferred_queue = _deferred
+        self._ensure_oom_reclaim_hook()
 
         # C1 (P-KERNEL-LAUNCH-HYGIENE): diagnostic env gates hoisted out
         # of the per-op hot loop — read ONCE per run (same gate
