@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`--input-image` preprocessing is now a universal, reusable module.** The
+  image preprocessing behind `--input-image` (image-to-video conditioning
+  and CLIP-encoder views) moved from ad-hoc code inside the CLI into a
+  dedicated `ImageInputProcessor` with a dependency-light numpy core, the
+  same pattern already used for audio input. Outputs are bit-identical to
+  before — validated by unit tests and a byte-identical video anti-regression
+  battery across the image-to-video model zoo — and the new module is the
+  foundation for upcoming vision-language (image-understanding) model
+  support, where image preprocessing types like dynamic-resolution patch
+  grids will plug in alongside the existing ones.
+
 - **Faster repeated requests on the serving daemon.** The server was
   re-reading and re-parsing every model component's on-disk layout files on
   every single request in order to set up spatial tiling — 100ms to several

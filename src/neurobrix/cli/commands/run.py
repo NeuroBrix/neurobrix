@@ -323,70 +323,32 @@ def cmd_run(args):
     if getattr(args, 'fps', None) is not None:
         inputs["global.fps"] = args.fps
     if getattr(args, 'input_image', None):
-        # I2V conditioning image -> global.image [1, 3, 1, H, W] in [-1, 1]
-        # (the vendor VideoProcessor.preprocess contract: resize to the run
-        # height/width, normalize to [-1, 1], single conditioning frame).
-        # Boundary I/O per R34 — PIL here is file reading, not compute.
-        import torch as _torch
-        import numpy as _np
-        from PIL import Image as _PILImage
-        _img = _PILImage.open(args.input_image).convert("RGB")
-        _h = int(args.height) if args.height else _img.height
-        _w = int(args.width) if args.width else _img.width
-        if (_img.width, _img.height) != (_w, _h):
-            _img = _img.resize((_w, _h), _PILImage.LANCZOS)
-        _arr = _np.asarray(_img, dtype="float32") / 127.5 - 1.0
-        inputs["global.image"] = (_torch.from_numpy(_arr)
-                                  .permute(2, 0, 1).unsqueeze(0).unsqueeze(2))
-        # I2V temporal-VAE conditioning: some denoisers (Wan-I2V) encode the
-        # first frame WITHIN the full clip, so the VAE sees [1,3,num_frames,H,W]
-        # (frame0=image, rest=zeros). Pad global.image to num_frames when the
-        # model's vae_encoder declares pad_image_to_num_frames. CogVideoX (single-
-        # frame encode) leaves it at 1 frame. Data-driven via registry flag.
-        try:
-            from neurobrix.core.runtime.registry_flags import get_component_flag
-            if get_component_flag(getattr(args, "model", None), "vae_encoder",
-                                  "pad_image_to_num_frames", default=False):
-                _nf = int(getattr(args, "num_frames", 0) or 0)
-                _img5d = inputs["global.image"]
-                if _nf > 1 and _img5d.shape[2] == 1:
-                    _zeros = _torch.zeros(
-                        _img5d.shape[0], _img5d.shape[1], _nf - 1,
-                        _img5d.shape[3], _img5d.shape[4], dtype=_img5d.dtype)
-                    inputs["global.image"] = _torch.cat([_img5d, _zeros], dim=2)
-        except Exception:
-            pass
-        # CLIP pixel_values for a separate vision image_encoder (Wan-I2V, etc.):
-        # a CLIP-preprocessed view of the SAME input image, distinct from the
-        # VAE-conditioning global.image above. Data-driven from the embedded
-        # modules/image_processor/preprocessor_config.json (resize shortest side
-        # to `size`, center-crop `crop_size`, scale to [0,1], normalize by CLIP
-        # mean/std). Boundary I/O per R34. .contiguous() before the NBXTensor
-        # boundary (channels-last permute view).
+        # Image input routed through the universal ImageInputProcessor
+        # (mirror of AudioInputProcessor; numpy DSP core shared with the
+        # triton path, R34). Same contract as the former inline block:
+        # global.image = I2V VAE-conditioning clip [1,3,T,H,W] in [-1,1]
+        # (T>1 zero-padded only when the model's vae_encoder declares
+        # pad_image_to_num_frames — Wan-I2V temporal-VAE class), and
+        # global.pixel_values = the CLIP view of the SAME image when the
+        # build embeds modules/image_processor/preprocessor_config.json.
+        # Both stay CPU float32; the runtime resolver owns placement.
+        from neurobrix.core.module.vision.input_processor import (
+            ImageInputProcessor,
+        )
+        from neurobrix.core.runtime.registry_flags import get_component_flag
+        _pad_nf = 0
+        if get_component_flag(getattr(args, "model", None), "vae_encoder",
+                              "pad_image_to_num_frames", default=False):
+            _pad_nf = int(getattr(args, "num_frames", 0) or 0)
+        inputs["global.image"] = ImageInputProcessor.process(
+            "i2v_vae_condition", args.input_image,
+            height=args.height, width=args.width,
+            pad_to_num_frames=_pad_nf)
         _proc_cfg = cache_path / "modules" / "image_processor" / "preprocessor_config.json"
         if _proc_cfg.exists():
-            _pc = json.loads(_proc_cfg.read_text())
-            def _dim(d, k, default):
-                v = d.get(k)
-                if isinstance(v, dict):
-                    return int(v.get("height", v.get("shortest_edge", default)))
-                return int(v) if v is not None else default
-            _rs = _dim(_pc, "size", 224)
-            _cs = _dim(_pc, "crop_size", _rs)
-            _mean = _np.asarray(_pc.get("image_mean", [0.48145466, 0.4578275, 0.40821073]), dtype="float32")
-            _std = _np.asarray(_pc.get("image_std", [0.26862954, 0.26130258, 0.27577711]), dtype="float32")
-            _ci = _PILImage.open(args.input_image).convert("RGB")
-            if _pc.get("do_resize", True):
-                _scale = _rs / min(_ci.width, _ci.height)
-                _ci = _ci.resize((max(1, round(_ci.width * _scale)), max(1, round(_ci.height * _scale))), _PILImage.BICUBIC)
-            _l = (_ci.width - _cs) // 2
-            _t = (_ci.height - _cs) // 2
-            _ci = _ci.crop((_l, _t, _l + _cs, _t + _cs))
-            _ca = _np.asarray(_ci, dtype="float32") / 255.0
-            if _pc.get("do_normalize", True):
-                _ca = (_ca - _mean) / _std
-            inputs["global.pixel_values"] = (_torch.from_numpy(_ca)
-                                             .permute(2, 0, 1).unsqueeze(0).contiguous())
+            inputs["global.pixel_values"] = ImageInputProcessor.process(
+                "clip_centercrop", args.input_image,
+                preprocessor_config=json.loads(_proc_cfg.read_text()))
 
     # VACE control conditioning with no explicit control video: the all-generate
     # (unconditional / pure text→video) path. The vae_encoder encodes a zeros
