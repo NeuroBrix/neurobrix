@@ -158,6 +158,34 @@ class SymbolicShapeResolver:
                     input_name = parts[1]
                     dim_str = parts[2]
 
+                    # Value-sourced symbol: "input::grid_thw::val_1" binds from
+                    # the tensor's DATA at flat index 1, not from a shape dim
+                    # (dynamic-resolution grid values, promoted at trace by the
+                    # SymValueSources pass).
+                    val_match = re.match(r"val_(\d+)", dim_str)
+                    if val_match:
+                        flat_idx = int(val_match.group(1))
+                        tensor = self._get_nested_input(inputs, input_name)
+                        if tensor is not None:
+                            if hasattr(tensor, "flatten"):
+                                flat = tensor.flatten()
+                                if flat_idx < len(flat):
+                                    self._bind_symbol(
+                                        symbol_id, int(flat[flat_idx]), symbol_info)
+                                else:
+                                    raise ShapeResolutionError(
+                                        f"Symbol {symbol_id}: val index {flat_idx} out of "
+                                        f"range for input '{input_name}' with "
+                                        f"{len(flat)} elements")
+                            elif hasattr(tensor, "__len__") and flat_idx < len(tensor):
+                                self._bind_symbol(
+                                    symbol_id, int(tensor[flat_idx]), symbol_info)
+                        else:
+                            logger.warning(
+                                f"Symbol {symbol_id}: Cannot find input "
+                                f"'{input_name}' for value source")
+                        continue
+
                     # Extract dim index
                     dim_match = re.match(r"dim_(\d+)", dim_str)
                     if dim_match:

@@ -25,6 +25,42 @@ class SymbolResolver:
         for sym_id, sym_info in self._symbols.items():
             src = sym_info.get("source", "")
 
+            # Value-sourced symbol: "input::grid_thw::val_1" → the symbol
+            # binds from the tensor's DATA at flat index 1, not from a shape
+            # dim (dynamic-resolution grid values, promoted at trace by the
+            # SymValueSources pass). NBXTensor.numpy() is the R33-pure host
+            # read (numpy is allowed CPU glue). Error contract mirrors the
+            # compiled binder (shape_resolver.py): out-of-range index =
+            # broken build-side value-source output → RAISE, never fall
+            # back to the frozen trace grid; missing tensor = warn, leave
+            # unbound.
+            if isinstance(src, str) and src.startswith("input::") and "::val_" in src:
+                parts = src.rsplit("::val_", 1)
+                tensor_id = parts[0]
+                idx = int(parts[1])
+                tensor = inputs.get(tensor_id)
+                if tensor is not None and hasattr(tensor, "numpy"):
+                    flat = tensor.numpy().reshape(-1)
+                    if idx >= flat.shape[0]:
+                        raise RuntimeError(
+                            f"Symbol {sym_id}: val index {idx} out of range "
+                            f"for input '{tensor_id}' with {flat.shape[0]} "
+                            f"elements")
+                    self._bindings[sym_id] = int(flat[idx])
+                elif tensor is not None and hasattr(tensor, "__len__"):
+                    if idx >= len(tensor):
+                        raise RuntimeError(
+                            f"Symbol {sym_id}: val index {idx} out of range "
+                            f"for input '{tensor_id}' with {len(tensor)} "
+                            f"elements")
+                    self._bindings[sym_id] = int(tensor[idx])
+                else:
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        "Symbol %s: cannot find input '%s' for value source",
+                        sym_id, tensor_id)
+                continue
+
             # Parse source string: "input::input_ids::dim_0" → tensor_id, dim
             if isinstance(src, str) and "::dim_" in src:
                 parts = src.rsplit("::dim_", 1)

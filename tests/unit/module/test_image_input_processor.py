@@ -110,7 +110,78 @@ def test_clip_centercrop_bit_identical(synthetic_png, pc):
 
 def test_unknown_type_zero_fallback(synthetic_png):
     with pytest.raises(RuntimeError, match="ZERO FALLBACK"):
+        ImageInputProcessor.process("anyres_slice", synthetic_png)
+
+
+def test_native_patch_grid_requires_config(synthetic_png):
+    with pytest.raises(RuntimeError, match="native_patch_grid requires"):
         ImageInputProcessor.process("native_patch_grid", synthetic_png)
+
+
+# ── native_patch_grid: verbatim port of the vendor Glm4vImageProcessor
+#    _preprocess + smart_resize (transformers 4.57.1) ──────────────────
+
+_GLM_PREPROC = {
+    "size": {"shortest_edge": 12544, "longest_edge": 9633792},
+    "patch_size": 14, "temporal_patch_size": 2, "merge_size": 2,
+    "image_mean": [0.48145466, 0.4578275, 0.40821073],
+    "image_std": [0.26862954, 0.26130258, 0.27577711],
+}
+
+
+def _reference_native_patch_grid(image_path, cfg):
+    import math
+    from PIL import Image
+    p, tp, merge = cfg["patch_size"], cfg["temporal_patch_size"], cfg["merge_size"]
+    factor = p * merge
+    min_px, max_px = cfg["size"]["shortest_edge"], cfg["size"]["longest_edge"]
+    img = Image.open(image_path).convert("RGB")
+    height, width = img.height, img.width
+    h_bar = round(height / factor) * factor
+    w_bar = round(width / factor) * factor
+    t_bar = round(tp / tp) * tp
+    if t_bar * h_bar * w_bar > max_px:
+        beta = math.sqrt((tp * height * width) / max_px)
+        h_bar = max(factor, math.floor(height / beta / factor) * factor)
+        w_bar = max(factor, math.floor(width / beta / factor) * factor)
+    elif t_bar * h_bar * w_bar < min_px:
+        beta = math.sqrt(min_px / (tp * height * width))
+        h_bar = math.ceil(height * beta / factor) * factor
+        w_bar = math.ceil(width * beta / factor) * factor
+    img = img.resize((w_bar, h_bar), Image.BICUBIC)
+    # vendor rescale: float64 * scale, downcast float32; float32 normalize
+    a = (np.asarray(img, dtype=np.uint8).astype(np.float64)
+         * (1.0 / 255.0)).astype(np.float32)
+    a = (a - np.asarray(cfg["image_mean"], dtype=np.float32)) / np.asarray(cfg["image_std"], dtype=np.float32)
+    a = a.transpose(2, 0, 1)
+    patches = np.array([a, a])                       # vendor repeats the lone image
+    channel = patches.shape[1]
+    grid_t = patches.shape[0] // tp
+    grid_h, grid_w = h_bar // p, w_bar // p
+    patches = patches.reshape(grid_t, tp, channel, grid_h // merge, merge, p,
+                              grid_w // merge, merge, p)
+    patches = patches.transpose(0, 3, 6, 4, 7, 2, 1, 5, 8)
+    flat = patches.reshape(grid_t * grid_h * grid_w, channel * tp * p * p)
+    return (torch.from_numpy(np.ascontiguousarray(flat.astype(np.float32))),
+            torch.tensor([[grid_t, grid_h, grid_w]], dtype=torch.int64))
+
+
+def test_native_patch_grid_bit_identical(synthetic_png):
+    got = ImageInputProcessor.process(
+        "native_patch_grid", synthetic_png, preprocessor_config=dict(_GLM_PREPROC))
+    ref_px, ref_grid = _reference_native_patch_grid(synthetic_png, _GLM_PREPROC)
+    assert set(got.keys()) == {"pixel_values", "image_grid_thw"}
+    assert got["pixel_values"].dtype == torch.float32
+    assert got["image_grid_thw"].dtype == torch.int64
+    assert torch.equal(got["image_grid_thw"], ref_grid)
+    assert got["pixel_values"].shape == ref_px.shape
+    assert torch.equal(got["pixel_values"], ref_px)
+    # structural invariants: n_patches = t*h*w; h,w divisible by merge
+    t, h, w = (int(x) for x in got["image_grid_thw"][0])
+    assert got["pixel_values"].shape[0] == t * h * w
+    assert h % 2 == 0 and w % 2 == 0
+    # 480x640 → h_bar=476, w_bar=644 (nearest 28-multiples): grid 34x46
+    assert (t, h, w) == (1, 34, 46)
 
 
 def test_missing_file_raises():

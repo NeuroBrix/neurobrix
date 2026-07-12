@@ -22,10 +22,12 @@ Preprocessing types implemented here:
   clip_centercrop — the CLIP preprocessor contract, data-driven from the
       embedded preprocessor_config.json (resize shortest side, center
       crop, scale to [0, 1], normalize by mean/std) → [1, 3, cs, cs].
+  native_patch_grid — dynamic-resolution flattened patch grid + grid_thw
+      (GLM-4.1V / Qwen-VL lineage; landed with GLM-4.1V, its first
+      consumer).
 
 Planned types (land WITH their consumer model, never speculatively —
-zero-fallback until then): native_patch_grid (Qwen3-VL / GLM-4.1V dynamic
-resolution), anyres_slice (MiniCPM-o LLaVA-UHD slicing).
+zero-fallback until then): anyres_slice (MiniCPM-o LLaVA-UHD slicing).
 """
 
 from typing import Optional
@@ -69,6 +71,83 @@ def i2v_vae_condition_np(
         out[:, :, 0] = clip[:, :, 0]
         return out
     return np.ascontiguousarray(clip)
+
+
+def _smart_resize(num_frames: int, height: int, width: int,
+                  temporal_factor: int, factor: int,
+                  min_pixels: int, max_pixels: int):
+    """Verbatim port of the vendor Glm4vImageProcessor.smart_resize
+    (dynamic-resolution pixel-budget fit, all dims snapped to `factor`)."""
+    import math
+    if num_frames < temporal_factor:
+        raise RuntimeError(
+            f"t:{num_frames} must be larger than temporal_factor:{temporal_factor}")
+    if height < factor or width < factor:
+        raise RuntimeError(
+            f"height:{height} or width:{width} must be larger than factor:{factor}")
+    if max(height, width) / min(height, width) > 200:
+        raise RuntimeError(
+            f"absolute aspect ratio must be smaller than 200, "
+            f"got {max(height, width) / min(height, width)}")
+    h_bar = round(height / factor) * factor
+    w_bar = round(width / factor) * factor
+    t_bar = round(num_frames / temporal_factor) * temporal_factor
+    if t_bar * h_bar * w_bar > max_pixels:
+        beta = math.sqrt((num_frames * height * width) / max_pixels)
+        h_bar = max(factor, math.floor(height / beta / factor) * factor)
+        w_bar = max(factor, math.floor(width / beta / factor) * factor)
+    elif t_bar * h_bar * w_bar < min_pixels:
+        beta = math.sqrt(min_pixels / (num_frames * height * width))
+        h_bar = math.ceil(height * beta / factor) * factor
+        w_bar = math.ceil(width * beta / factor) * factor
+    return h_bar, w_bar
+
+
+def native_patch_grid_np(image_path: str, preprocessing_cfg: dict):
+    """Dynamic-resolution flattened patch grid (Qwen2-VL / GLM-4.1V lineage),
+    vendor Glm4vImageProcessor contract: smart-resize to the pixel budget
+    (dims snapped to patch_size*merge_size), BICUBIC, rescale 1/255,
+    normalize mean/std, temporal-duplicate the single image to
+    temporal_patch_size frames, 9-dim patchify.
+
+    Returns (flatten_patches float32 [t*h*w, C*Tp*P*P],
+             grid_thw int64 [1, 3])."""
+    from PIL import Image
+    cfg = preprocessing_cfg
+    # Defaults below are used ONLY when the embedded preprocessor_config.json
+    # omits the keys — they mirror the vendor processor class's own
+    # documented defaults (same policy as _CLIP_MEAN/_CLIP_STD).
+    p = int(cfg.get("patch_size", 14))
+    tp = int(cfg.get("temporal_patch_size", 2))
+    merge = int(cfg.get("merge_size", 2))
+    size = cfg.get("size", {}) or {}
+    min_px = int(size.get("shortest_edge", 112 * 112))
+    max_px = int(size.get("longest_edge", 14 * 14 * 2 * 2 * 2 * 6144))
+    mean = np.asarray(cfg.get("image_mean", list(_CLIP_MEAN)), dtype=np.float32)
+    std = np.asarray(cfg.get("image_std", list(_CLIP_STD)), dtype=np.float32)
+
+    img = _load_rgb(image_path)
+    h_bar, w_bar = _smart_resize(tp, img.height, img.width,
+                                 temporal_factor=tp, factor=p * merge,
+                                 min_pixels=min_px, max_pixels=max_px)
+    if (img.width, img.height) != (w_bar, h_bar):
+        img = img.resize((w_bar, h_bar), Image.BICUBIC)
+    # Vendor rescale semantics, bit-exact: float64 multiply by the scale
+    # factor, downcast to float32; then float32 normalize in HWC.
+    a = (np.asarray(img, dtype=np.uint8).astype(np.float64)
+         * (1.0 / 255.0)).astype(np.float32)                  # HWC
+    a = (a - mean) / std
+    a = a.transpose(2, 0, 1)                                  # CHW
+    frames = np.stack([a] * tp)                               # Tp,C,H,W (vendor
+    # pads a lone image by repeating it to temporal_patch_size frames)
+    grid_t = frames.shape[0] // tp
+    grid_h, grid_w = h_bar // p, w_bar // p
+    patches = frames.reshape(grid_t, tp, 3, grid_h // merge, merge, p,
+                             grid_w // merge, merge, p)
+    patches = patches.transpose(0, 3, 6, 4, 7, 2, 1, 5, 8)
+    flat = patches.reshape(grid_t * grid_h * grid_w, 3 * tp * p * p)
+    return (np.ascontiguousarray(flat, dtype=np.float32),
+            np.array([[grid_t, grid_h, grid_w]], dtype=np.int64))
 
 
 def clip_centercrop_np(image_path: str, preprocessor_config: dict) -> np.ndarray:
