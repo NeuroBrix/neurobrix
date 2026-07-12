@@ -12,10 +12,13 @@ Supported preprocessing types:
   i2v_vae_condition — video I2V conditioning clip [1,3,T,H,W] in [-1,1]
   clip_centercrop   — CLIP view [1,3,cs,cs] from the embedded
                       modules/image_processor/preprocessor_config.json
+  native_patch_grid — dynamic-resolution flattened patch grid
+                      (GLM-4.1V / Qwen-VL class); returns a dict
+                      {"pixel_values": [n_patches, C*Tp*P*P] float32,
+                       "image_grid_thw": [1, 3] int64} (vendor
+                      model_input_names, landed with GLM-4.1V)
 
 Planned (each lands WITH its consumer model, zero-fallback until then):
-  native_patch_grid — dynamic-resolution patch grid + grid_thw
-                      (Qwen3-VL / GLM-4.1V class)
   anyres_slice      — LLaVA-UHD adaptive slicing (MiniCPM-o class)
 """
 
@@ -31,7 +34,7 @@ from neurobrix.core.module.vision import image_dsp
 class ImageInputProcessor:
     """Routes to the correct image preprocessor based on declared type."""
 
-    SUPPORTED = ("i2v_vae_condition", "clip_centercrop")
+    SUPPORTED = ("i2v_vae_condition", "clip_centercrop", "native_patch_grid")
 
     @staticmethod
     def process(
@@ -42,12 +45,15 @@ class ImageInputProcessor:
         width: Optional[int] = None,
         pad_to_num_frames: int = 0,
         preprocessor_config: Optional[dict] = None,
-    ) -> torch.Tensor:
-        """Preprocess an image file into a model input tensor.
+    ):
+        """Preprocess an image file into model input tensor(s).
 
-        Returns a CPU float32 torch.Tensor (the runtime resolver owns the
-        later device/dtype placement — identical contract to the former
-        inline CLI block this replaces).
+        Returns a CPU float32 torch.Tensor for single-tensor types
+        (i2v_vae_condition, clip_centercrop — identical contract to the
+        former inline CLI block), or a dict of named CPU tensors for
+        multi-tensor types (native_patch_grid → pixel_values +
+        image_grid_thw, vendor model_input_names). The runtime resolver
+        owns the later device/dtype placement.
         """
         if preprocessing_type not in ImageInputProcessor.SUPPORTED:
             raise RuntimeError(
@@ -59,6 +65,21 @@ class ImageInputProcessor:
             )
         if not Path(image_path).exists():
             raise FileNotFoundError(f"Image file not found: {image_path}")
+
+        if preprocessing_type == "native_patch_grid":
+            if not isinstance(preprocessor_config, dict):
+                raise RuntimeError(
+                    "ZERO FALLBACK: native_patch_grid requires the model's "
+                    "preprocessing config (dict) — registry/topology "
+                    "preprocessing block or the embedded "
+                    "preprocessor_config.json contents."
+                )
+            flat, grid = image_dsp.native_patch_grid_np(
+                str(image_path), preprocessor_config)
+            return {
+                "pixel_values": torch.from_numpy(np.ascontiguousarray(flat)),
+                "image_grid_thw": torch.from_numpy(np.ascontiguousarray(grid)),
+            }
 
         if preprocessing_type == "i2v_vae_condition":
             arr = image_dsp.i2v_vae_condition_np(

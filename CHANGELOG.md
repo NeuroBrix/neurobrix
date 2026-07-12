@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Groundwork for vision-language (image-understanding) models.** The
+  engine can now bind a model's symbolic dimensions from the *contents*
+  of an input tensor, not only from its shape — required by modern
+  dynamic-resolution vision models, whose image-grid geometry travels as
+  data. Both execution engines implement it identically, and existing
+  models are provably unaffected (byte-identical regression outputs).
+  The image preprocessing module gains the matching `native_patch_grid`
+  type (dynamic-resolution patch grids, bit-exact with the vendor
+  preprocessing), used by the upcoming GLM-4.1V integration.
+
 ### Changed
 
 - **`--input-image` preprocessing is now a universal, reusable module.** The
