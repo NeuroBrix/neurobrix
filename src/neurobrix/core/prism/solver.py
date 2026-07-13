@@ -762,7 +762,22 @@ class PrismSolver:
                         # Cold: peak of one component at a time
                         total_allocated = max(m.total_bytes for m in component_memory.values())
                 else:
-                    total_allocated = sum(m.total_bytes for m in component_memory.values())
+                    # Allocation-aware GPU residency: a component mapped to
+                    # zero3:* keeps its weights on CPU pinned memory — only
+                    # its activations (+overhead) occupy GPU. Counting the
+                    # offloaded weights as resident rejected valid mixed
+                    # plans (lazy_sequential mapping a 57GB LM to
+                    # zero3:cuda:0 was "over capacity" on a 32GB card → the
+                    # KV check failed → the cascade fell through to
+                    # cpu_execution on a GPU node).
+                    total_allocated = 0
+                    for _comp_name, _m in component_memory.items():
+                        _alloc = strat_allocs.get(_comp_name)
+                        _dev = _alloc[0] if isinstance(_alloc, tuple) else _alloc
+                        if isinstance(_dev, str) and _dev.startswith("zero3:"):
+                            total_allocated += _m.activation_bytes + _m.overhead_bytes
+                        else:
+                            total_allocated += _m.total_bytes
 
                 # Remove KV cache double-count (already in LM activation_bytes)
                 total_allocated = max(total_allocated - kv_already_counted, 0)
@@ -3220,6 +3235,13 @@ class PrismSolver:
             n_components = len(allocations)
             score -= 20.0 * n_components
 
+        # INVARIANT: a GPU-compute strategy never ranks below the R35
+        # last-resort cpu_execution, no matter how harsh its penalties.
+        # (Absent profile CPU/PCIe stats crushed zero3 from base 100 to the
+        # 1.0 floor, letting cpu_execution (10) win on a GPU node — a 57GB
+        # model fell to CPU with two valid GPU plans on the table.)
+        if strategy_name != "cpu_execution":
+            return max(score, BASE_SCORES["cpu_execution"] + 1.0)
         return max(score, 1.0)
 
     # =========================================================================
