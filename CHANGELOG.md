@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Hybrid CPU-offload placements now execute correctly in the compiled
+  engine.** When the placement plan keeps a large component's weights in
+  CPU memory and streams them to the GPU block-by-block *inside* a
+  mixed-placement plan, the compiled execution path previously never
+  engaged the streaming machinery and crashed on the first weighted
+  operation. The streaming installer is now engaged per-component from
+  the placement plan, matching the other execution modes. First
+  beneficiary: 30B-class mixture-of-experts models on a single 32 GB GPU.
+
 - **Large models no longer fall back to CPU execution when a GPU plan
   exists.** Two placement-selection defects combined to route a 57 GB
   mixture-of-experts model to CPU on a machine with four GPUs: the

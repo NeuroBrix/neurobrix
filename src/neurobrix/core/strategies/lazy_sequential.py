@@ -72,6 +72,27 @@ class LazySequentialStrategy(ExecutionStrategy):
 
         return executor.run(inputs or {})
 
+    def install_for_executor(self, component_name: str, executor) -> None:
+        """Engage the FULL zero3 machinery (pinning + block ratchet +
+        prefetch hooks) for a zero3-mapped sub-component.
+
+        RuntimeExecutor._ensure_weights_loaded calls this for any component
+        whose allocation is zero3 (per-component predicate) — flow handlers
+        that drive executor.run directly (LLM prefill) depend on it. Without
+        it, the compiled/triton hot loops execute weighted ops against
+        CPU-pinned pointers and crash on the first mm (DETTE D1 zero3
+        facet — first triggered by Qwen3-Coder-30B under lazy_sequential).
+        Delegates to the Zero3Strategy brick: same StrategyContext, and its
+        device derivation already understands both allocation formats.
+        Idempotent (the brick tracks installed components)."""
+        if self._get_component_strategy(component_name) != "zero3":
+            return
+        if getattr(self, "_zero3_brick", None) is None:
+            from .zero3 import Zero3Strategy
+            self._zero3_brick = Zero3Strategy(
+                self.context, strategy_name="lazy_sequential+zero3")
+        self._zero3_brick.install_for_executor(component_name, executor)
+
     def _get_component_strategy(self, component_name: str) -> str:
         """Get per-component strategy from allocation."""
         alloc = self.context.allocations.get(component_name)
