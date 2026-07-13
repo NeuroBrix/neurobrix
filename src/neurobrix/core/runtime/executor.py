@@ -643,6 +643,24 @@ class RuntimeExecutor:
                 ensure_weights_fn=self._ensure_weights_loaded,
                 unload_weights_fn=self._unload_component_weights,
             )
+        elif flow_type == "vlm":
+            if ctx.mode in ("triton", "triton_sequential"):
+                from neurobrix.triton.flow.vlm import TritonVLMEngine
+                return TritonVLMEngine(
+                    ctx=ctx,
+                    execute_component_fn=self._execute_component,
+                    resolve_inputs_fn=self._input_resolver.resolve_component_inputs,
+                    ensure_weights_fn=self._ensure_weights_loaded,
+                    unload_weights_fn=self._unload_component_weights,
+                )
+            from neurobrix.core.flow.vlm import VLMEngine
+            return VLMEngine(
+                ctx=ctx,
+                execute_component_fn=self._execute_component,
+                resolve_inputs_fn=self._input_resolver.resolve_component_inputs,
+                ensure_weights_fn=self._ensure_weights_loaded,
+                unload_weights_fn=self._unload_component_weights,
+            )
         elif flow_type == "dual_ar":
             if ctx.mode in ("triton", "triton_sequential"):
                 from neurobrix.triton.flow.dual_ar import TritonDualAREngine

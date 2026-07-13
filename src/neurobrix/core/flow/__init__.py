@@ -37,6 +37,7 @@ from .autoregressive import AutoregressiveHandler
 from .audio import AudioEngine
 from .encoder_decoder import EncoderDecoderEngine
 from .audio_llm import AudioLLMEngine
+from .vlm import VLMEngine
 from .dual_ar import DualAREngine
 from .tts_llm import TTSLLMEngine
 from .next_token_diffusion import NextTokenDiffusionEngine
@@ -54,6 +55,7 @@ __all__ = [
     "AudioEngine",
     "EncoderDecoderEngine",
     "AudioLLMEngine",
+    "VLMEngine",
     "DualAREngine",
     "TTSLLMEngine",
     "NextTokenDiffusionEngine",

@@ -37,7 +37,14 @@ class SymbolResolver:
             if isinstance(src, str) and src.startswith("input::") and "::val_" in src:
                 parts = src.rsplit("::val_", 1)
                 tensor_id = parts[0]
-                idx = int(parts[1])
+                spec = parts[1]
+                # optional divisor-annotated source: val_<i>_fd<k> binds
+                # int(flat[i]) // k (merge-derived grid values)
+                fdiv = 1
+                if "_fd" in spec:
+                    spec, fd = spec.split("_fd", 1)
+                    fdiv = int(fd)
+                idx = int(spec)
                 tensor = inputs.get(tensor_id)
                 if tensor is not None and hasattr(tensor, "numpy"):
                     flat = tensor.numpy().reshape(-1)
@@ -46,14 +53,14 @@ class SymbolResolver:
                             f"Symbol {sym_id}: val index {idx} out of range "
                             f"for input '{tensor_id}' with {flat.shape[0]} "
                             f"elements")
-                    self._bindings[sym_id] = int(flat[idx])
+                    self._bindings[sym_id] = int(flat[idx]) // fdiv
                 elif tensor is not None and hasattr(tensor, "__len__"):
                     if idx >= len(tensor):
                         raise RuntimeError(
                             f"Symbol {sym_id}: val index {idx} out of range "
                             f"for input '{tensor_id}' with {len(tensor)} "
                             f"elements")
-                    self._bindings[sym_id] = int(tensor[idx])
+                    self._bindings[sym_id] = int(tensor[idx]) // fdiv
                 else:
                     import logging
                     logging.getLogger(__name__).warning(

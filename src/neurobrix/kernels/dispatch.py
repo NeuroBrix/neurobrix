@@ -685,6 +685,7 @@ def _build_op_map() -> Dict[str, Callable]:
         "add": w.add,
         "mul": w.mul,
         "div": w.div,
+        "floor_divide": w.floor_divide_wrapper,
         "sub": w.sub,
         "rsub": w.rsub,
         "where": w.where_wrapper,
@@ -968,6 +969,9 @@ def _build_op_map() -> Dict[str, Callable]:
         # Math rounding ops — proper Triton kernels
         "floor": w.floor_wrapper,
         "ceil": w.ceil_wrapper,
+
+        # 2D grid sampler (VLM pos-embed adaptation: bicubic/bilinear)
+        "grid_sampler_2d": w.grid_sampler_2d_wrapper,
         "round": w.round_wrapper,
         "trunc": w.trunc_wrapper,
 

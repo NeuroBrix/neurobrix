@@ -1162,6 +1162,14 @@ class TritonSequence:
             # disambiguates Q vs K for readable op ordering.
             q_shape = tensors.get(b_q["x_tid"], {}).get("shape", [])
             k_shape = tensors.get(b_k["x_tid"], {}).get("shape", [])
+
+            # Layout guard: the fused kernel is built for the 4D HF-Llama
+            # [B, H, S, D] layout. Packed-varlen 3D ropes (ViT towers of
+            # the GLM-4.1V/Qwen-VL class: [S, H, D], no batch dim) keep
+            # the correct unfused ATen chain — fusing them is an L2 perf
+            # item for a dedicated kernel, not a layout reinterpretation.
+            if len(q_shape) != 4 or len(k_shape) != 4:
+                continue
             # If K has more heads than Q, swap so "Q" really is Q.
             if (len(q_shape) >= 4 and len(k_shape) >= 4
                     and isinstance(q_shape[1], int) and isinstance(k_shape[1], int)
