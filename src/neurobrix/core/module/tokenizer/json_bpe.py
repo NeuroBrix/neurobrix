@@ -768,6 +768,28 @@ class PyTokenizer:
         self._post = data.get("post_processor")
         self._post_special = self._collect_post_special()
 
+    def register_added_token(self, entry: dict) -> bool:
+        """Register an added token post-construction (idempotent).
+
+        Replicates PreTrainedTokenizerFast merging tokenizer_config.json's
+        `added_tokens_decoder` entries into the matcher: some vendors (GLM-4V
+        class) declare tokens like <|image|> ONLY there, not in
+        tokenizer.json's added_tokens — without this they BPE-split into
+        pieces and placeholder scans miss them. Returns True if added."""
+        content = entry.get("content")
+        if not content or content in self._added_content_to_id:
+            return False
+        at = _AddedToken(entry)
+        self._added.append(at)
+        self._vocab.setdefault(at.content, at.id)
+        self._id_to_tok.setdefault(at.id, at.content)
+        self._added_sorted = sorted(
+            self._added, key=lambda a: len(a.content), reverse=True)
+        if at.special:
+            self._special_ids.add(at.id)
+        self._added_content_to_id[at.content] = at.id
+        return True
+
     # -- construction ------------------------------------------------------
     @classmethod
     def from_file(cls, path: str) -> "PyTokenizer":

@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **First vision-language model support: GLM-4.1V-9B-Thinking.** NeuroBrix
+  now runs image-understanding models end-to-end: give it an image and a
+  question (`--input-image` + `--prompt`) and it answers in text, with the
+  model's full reasoning trace. Images are processed at their native
+  resolution (no fixed crop), and the answer is validated identical across
+  all four execution modes. Supporting engine additions, all usable by
+  future models: a pure-Triton 2D image resampling kernel
+  (bicubic/bilinear, bit-matched to the reference), integer floor-division
+  and dtype-aware cumulative-sum kernels, and chat templates that ship as
+  separate files are now packaged into the model automatically.
+
 - **Groundwork for vision-language (image-understanding) models.** The
   engine can now bind a model's symbolic dimensions from the *contents*
   of an input tensor, not only from its shape — required by modern

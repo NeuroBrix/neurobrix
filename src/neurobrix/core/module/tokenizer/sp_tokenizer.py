@@ -752,6 +752,14 @@ class HFTokenizer:
         self._tokenizer = PyTokenizer.from_file(tokenizer_path)
         self._config = config if config is not None else {}
 
+        # Merge config-only added tokens (added_tokens_decoder) into the
+        # matcher — PreTrainedTokenizerFast does this at load; some vendors
+        # (GLM-4V class) declare <|image|>/<|video|> ONLY in
+        # tokenizer_config.json, not in tokenizer.json's added_tokens.
+        for tid, entry in (self._config.get("added_tokens_decoder") or {}).items():
+            if isinstance(entry, dict) and "content" in entry:
+                self._tokenizer.register_added_token({**entry, "id": int(tid)})
+
         # Max length from config
         self._max_length = self._config.get("model_max_length", 2048)
 

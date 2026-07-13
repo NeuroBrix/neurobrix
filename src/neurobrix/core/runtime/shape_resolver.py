@@ -162,16 +162,18 @@ class SymbolicShapeResolver:
                     # the tensor's DATA at flat index 1, not from a shape dim
                     # (dynamic-resolution grid values, promoted at trace by the
                     # SymValueSources pass).
-                    val_match = re.match(r"val_(\d+)", dim_str)
+                    val_match = re.match(r"val_(\d+)(?:_fd(\d+))?$", dim_str)
                     if val_match:
                         flat_idx = int(val_match.group(1))
+                        fdiv = int(val_match.group(2)) if val_match.group(2) else 1
                         tensor = self._get_nested_input(inputs, input_name)
                         if tensor is not None:
                             if hasattr(tensor, "flatten"):
                                 flat = tensor.flatten()
                                 if flat_idx < len(flat):
                                     self._bind_symbol(
-                                        symbol_id, int(flat[flat_idx]), symbol_info)
+                                        symbol_id, int(flat[flat_idx]) // fdiv,
+                                        symbol_info)
                                 else:
                                     raise ShapeResolutionError(
                                         f"Symbol {symbol_id}: val index {flat_idx} out of "

@@ -325,30 +325,45 @@ def cmd_run(args):
     if getattr(args, 'input_image', None):
         # Image input routed through the universal ImageInputProcessor
         # (mirror of AudioInputProcessor; numpy DSP core shared with the
-        # triton path, R34). Same contract as the former inline block:
-        # global.image = I2V VAE-conditioning clip [1,3,T,H,W] in [-1,1]
-        # (T>1 zero-padded only when the model's vae_encoder declares
-        # pad_image_to_num_frames — Wan-I2V temporal-VAE class), and
-        # global.pixel_values = the CLIP view of the SAME image when the
-        # build embeds modules/image_processor/preprocessor_config.json.
-        # Both stay CPU float32; the runtime resolver owns placement.
+        # triton path, R34). The preprocessing TYPE is data-driven from the
+        # build: a topology.flow.vlm block declares its own preprocessing
+        # (dynamic-resolution VLM); otherwise the video contract applies
+        # (identical to the former inline block): global.image = I2V
+        # VAE-conditioning clip [1,3,T,H,W] in [-1,1] (T>1 zero-padded only
+        # when the model's vae_encoder declares pad_image_to_num_frames —
+        # Wan-I2V temporal-VAE class), and global.pixel_values = the CLIP
+        # view of the SAME image when the build embeds
+        # modules/image_processor/preprocessor_config.json.
+        # All stay CPU; the runtime resolver owns placement.
         from neurobrix.core.module.vision.input_processor import (
             ImageInputProcessor,
         )
-        from neurobrix.core.runtime.registry_flags import get_component_flag
-        _pad_nf = 0
-        if get_component_flag(getattr(args, "model", None), "vae_encoder",
-                              "pad_image_to_num_frames", default=False):
-            _pad_nf = int(getattr(args, "num_frames", 0) or 0)
-        inputs["global.image"] = ImageInputProcessor.process(
-            "i2v_vae_condition", args.input_image,
-            height=args.height, width=args.width,
-            pad_to_num_frames=_pad_nf)
-        _proc_cfg = cache_path / "modules" / "image_processor" / "preprocessor_config.json"
-        if _proc_cfg.exists():
-            inputs["global.pixel_values"] = ImageInputProcessor.process(
-                "clip_centercrop", args.input_image,
-                preprocessor_config=json.loads(_proc_cfg.read_text()))
+        _vlm_input = (pkg.topology.get("flow", {}).get("vlm") or {}).get("input", {})
+        if _vlm_input.get("preprocessing"):
+            _vis = ImageInputProcessor.process(
+                _vlm_input["preprocessing"], args.input_image,
+                preprocessor_config=(pkg.topology["flow"]["vlm"]
+                                     .get("preprocessing") or {}))
+            if isinstance(_vis, dict):
+                for _k, _v in _vis.items():
+                    inputs[f"global.{_k}"] = _v
+            else:
+                inputs[_vlm_input.get("image_variable", "global.pixel_values")] = _vis
+        else:
+            from neurobrix.core.runtime.registry_flags import get_component_flag
+            _pad_nf = 0
+            if get_component_flag(getattr(args, "model", None), "vae_encoder",
+                                  "pad_image_to_num_frames", default=False):
+                _pad_nf = int(getattr(args, "num_frames", 0) or 0)
+            inputs["global.image"] = ImageInputProcessor.process(
+                "i2v_vae_condition", args.input_image,
+                height=args.height, width=args.width,
+                pad_to_num_frames=_pad_nf)
+            _proc_cfg = cache_path / "modules" / "image_processor" / "preprocessor_config.json"
+            if _proc_cfg.exists():
+                inputs["global.pixel_values"] = ImageInputProcessor.process(
+                    "clip_centercrop", args.input_image,
+                    preprocessor_config=json.loads(_proc_cfg.read_text()))
 
     # VACE control conditioning with no explicit control video: the all-generate
     # (unconditional / pure text→video) path. The vae_encoder encodes a zeros

@@ -796,6 +796,77 @@ def ceil_wrapper(x):
     return output
 
 
+def grid_sampler_2d_wrapper(inp, grid, interpolation_mode=0,
+                            padding_mode=0, align_corners=False):
+    """aten::grid_sampler_2d — pure Triton 2D grid sampler.
+
+    ATen integer mode encoding: interpolation 0=bilinear, 1=nearest,
+    2=bicubic; padding 0=zeros, 1=border, 2=reflection. Implemented:
+    bilinear+bicubic x zeros+border x both align flags (the GLM-4.1V /
+    Qwen-VL pos-embed adaptation uses bicubic+border+align_corners=False);
+    ZERO FALLBACK on the rest. fp32 coordinate math and accumulation
+    (ATen opmath), output cast back to the input dtype."""
+    from .ops.grid_sampler import grid_sampler_2d_kernel
+
+    interpolation_mode = int(interpolation_mode)
+    padding_mode = int(padding_mode)
+    if interpolation_mode not in (0, 2):
+        raise RuntimeError(
+            "ZERO FALLBACK: grid_sampler_2d interpolation_mode="
+            f"{interpolation_mode} not implemented (0=bilinear, 2=bicubic).")
+    if padding_mode not in (0, 1):
+        raise RuntimeError(
+            "ZERO FALLBACK: grid_sampler_2d padding_mode="
+            f"{padding_mode} not implemented (0=zeros, 1=border).")
+
+    inp = inp.contiguous()
+    grid = grid.contiguous()
+    N, C, H, W = inp.shape
+    gN, oH, oW, two = grid.shape
+    out_spatial = oH * oW
+    out32 = NBXTensor.empty((N, C, oH, oW), dtype=NBXDtype.float32,
+                            device=inp.device)
+    inp32 = inp.to(NBXDtype.float32)
+    grid32 = grid.to(NBXDtype.float32)
+
+    BLOCK_C = min(triton.next_power_of_2(max(C, 1)), 256)
+    launch_grid = (out_spatial, triton.cdiv(C, BLOCK_C), N)
+    _set_device(inp32)
+    grid_sampler_2d_kernel[launch_grid](
+        inp32, grid32, out32,
+        C, H, W, out_spatial,
+        C * H * W, H * W, W, 1,
+        out_spatial * 2, 2, 1,
+        C * out_spatial, out_spatial, 1,
+        MODE=interpolation_mode,
+        PAD_BORDER=padding_mode,
+        ALIGN=1 if align_corners else 0,
+        BLOCK_C=BLOCK_C,
+    )
+    return out32.to(inp.dtype) if inp.dtype != NBXDtype.float32 else out32
+
+
+def floor_divide_wrapper(a, b):
+    """aten::floor_divide — floor(a / b), result in a's dtype.
+
+    Wrapper-layer composition of the existing div + floor kernels (the
+    kernels themselves stay pure). Integer operands round-trip through
+    float64 — exact for |values| < 2^53, covering every representable
+    index/count in practice (a float32 round-trip would silently corrupt
+    above 2^24). Float operands use their native dtype (floor(a/b) is
+    the ATen semantic, no exactness cliff involved)."""
+    a_dtype = a.dtype
+    _is_int = hasattr(a_dtype, "is_floating") and not a_dtype.is_floating()
+    if _is_int:
+        a_f = a.to(NBXDtype.float64)
+        b_f = b.to(NBXDtype.float64) if hasattr(b, "to") else b
+    else:
+        a_f = a
+        b_f = b
+    out = floor_wrapper(div(a_f, b_f))
+    return out.to(a_dtype) if out.dtype != a_dtype else out
+
+
 def round_wrapper(x):
     x = x.contiguous()
     output = NBXTensor.empty_like(x)
@@ -3357,8 +3428,23 @@ def batch_norm_wrapper(
 # CUMSUM WRAPPER — Extracted from FlagGems (1D scan-then-fan)
 # ===========================================================================
 
-def cumsum_wrapper(x, dim: int = 0) :
-    """Cumulative sum along dimension. Wrapper from FlagGems."""
+def cumsum_wrapper(x, dim: int = 0, dtype=None) :
+    """Cumulative sum along dimension. Wrapper from FlagGems.
+
+    `dtype` mirrors aten::cumsum's dtype kwarg (vendor cu_seqlens passes
+    int32): per ATen semantics the INPUT is cast to `dtype` BEFORE
+    accumulation. Accepted as string or NBXDtype; unknown strings raise
+    (ZERO FALLBACK)."""
+    _out_dtype = dtype
+    if isinstance(_out_dtype, str):
+        _name = _out_dtype.replace("torch.", "")
+        _out_dtype = getattr(NBXDtype, _name, None)
+        if _out_dtype is None:
+            raise RuntimeError(
+                f"ZERO FALLBACK: cumsum dtype '{dtype}' is not a known "
+                f"NBXDtype.")
+    if _out_dtype is not None and x.dtype != _out_dtype:
+        x = x.to(_out_dtype)
     dim = dim % x.ndim
 
     # Reshape to [batch, scan_dim] where scan_dim is the cumsum axis
@@ -3390,7 +3476,10 @@ def cumsum_wrapper(x, dim: int = 0) :
             add_base_sum_kernel[(part_num,)](
                 row_out, partial_sum, scan_size, part_num, BLOCK_SIZE=BLOCK_SIZE)
 
-    return output_2d.view_as(x_perm).movedim(-1, dim)
+    result = output_2d.view_as(x_perm).movedim(-1, dim)
+    if _out_dtype is not None and result.dtype != _out_dtype:
+        result = result.to(_out_dtype)
+    return result
 
 
 # ===========================================================================
