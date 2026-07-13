@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Large models no longer fall back to CPU execution when a GPU plan
+  exists.** Two placement-selection defects combined to route a 57 GB
+  mixture-of-experts model to CPU on a machine with four GPUs: the
+  viability check counted CPU-offloaded weights as if they occupied GPU
+  memory (rejecting valid hybrid plans), and missing hardware-profile
+  statistics could penalize the GPU-offload strategy below the CPU
+  last-resort in the ranking. GPU-compute strategies now use
+  placement-aware memory accounting and can never rank below CPU
+  execution. Verified across all 44 installed models (placement plans
+  unchanged for models that already worked; byte-identical outputs).
+
 ### Added
 
 - **First vision-language model support: GLM-4.1V-9B-Thinking.** NeuroBrix
