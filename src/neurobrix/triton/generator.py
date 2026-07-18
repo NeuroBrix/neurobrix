@@ -4,6 +4,9 @@ Ported from core/module/autoregressive/generator.py.
 Drives token-by-token generation using NBXTensor + Triton samplers.
 """
 
+import os
+import time
+
 import numpy as np
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterator, List, Optional, Tuple
@@ -36,8 +39,18 @@ class TritonGenerator:
         self.top_k: int = config["top_k"]
         self.repetition_penalty: float = config["repetition_penalty"]
         self.vocab_size: int = config.get("vocab_size", 16384)
-        self.eos_token_id: Optional[int] = config.get("eos_token_id")
+        self.eos_token_id = config.get("eos_token_id")
         self.pad_token_id: Optional[int] = config.get("pad_token_id")
+        # defaults.json is vendor-faithful: eos_token_id may be a single id
+        # or a list of ids (e.g. <|im_end|> + <|endoftext|>). Normalize once;
+        # the stop check is a membership test.
+        _eos = self.eos_token_id
+        if isinstance(_eos, (list, tuple)):
+            self._eos_ids = frozenset(int(t) for t in _eos)
+        elif _eos is not None:
+            self._eos_ids = frozenset((int(_eos),))
+        else:
+            self._eos_ids = frozenset()
         self._prompt_ids: List[int] = []
         self._state = GenerationState()
         self._sampler = self._create_sampler()
@@ -125,17 +138,20 @@ class TritonGenerator:
         self._state.generated_tokens.append(token_id)
         self._state.step_idx = step_idx
 
-        if self.eos_token_id is not None and token_id == self.eos_token_id:
+        if token_id in self._eos_ids:
             self._state.is_done = True
         if len(self._state.generated_tokens) >= self.max_tokens:
             self._state.is_done = True
 
-        _prog = __import__("os").environ.get("NBX_DECODE_PROGRESS")
-        if _prog:  # gated decode-trajectory dump (autoregressive); buffer-immune
-            with open(_prog, "a") as _pf:
-                _pf.write(f"step={step_idx} n={len(self._state.generated_tokens)} "
-                          f"last={token_id} done={self._state.is_done}\n")
-                _pf.flush()
+        prog_path = os.environ.get("NBX_DECODE_PROGRESS")
+        if prog_path:
+            # Documented diagnostic (src/neurobrix/CLAUDE.md §8): buffer-immune
+            # per-token decode trajectory with wall-clock, for pace measurement
+            # on long/offloaded decodes. Default-off, zero hot-path cost.
+            with open(prog_path, "a") as pf:
+                pf.write(f"t={time.time():.1f} step={step_idx} "
+                         f"n={len(self._state.generated_tokens)} "
+                         f"last={token_id} done={self._state.is_done}\n")
 
         return next_token, self._state.is_done
 

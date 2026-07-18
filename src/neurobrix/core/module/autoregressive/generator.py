@@ -41,8 +41,11 @@ Usage Pattern:
     image = decoder_executor.run({"input_ids": all_tokens})
 """
 
+import os
+import time
+
 import torch
-from typing import Dict, Any, List, Optional, Tuple, Iterator
+from typing import Dict, Any, List, Optional, Tuple, Iterator, Union
 from dataclasses import dataclass, field
 
 from .samplers import SamplerBase, CombinedSampler
@@ -82,7 +85,7 @@ class AutoregressiveGenerator:
     temperature: float
     top_p: float
     top_k: int
-    eos_token_id: Optional[int]
+    eos_token_id: "Union[int, List[int], None]"  # vendor-faithful: id or list of ids
     pad_token_id: Optional[int]
     vocab_size: int
 
@@ -117,6 +120,16 @@ class AutoregressiveGenerator:
         self.vocab_size = config.get("vocab_size", 16384)
         self.eos_token_id = config.get("eos_token_id")
         self.pad_token_id = config.get("pad_token_id")
+        # defaults.json is vendor-faithful: eos_token_id may be a single id
+        # or a list of ids (e.g. <|im_end|> + <|endoftext|>). Normalize once;
+        # the stop check is a membership test.
+        _eos = self.eos_token_id
+        if isinstance(_eos, (list, tuple)):
+            self._eos_ids = frozenset(int(t) for t in _eos)
+        elif _eos is not None:
+            self._eos_ids = frozenset((int(_eos),))
+        else:
+            self._eos_ids = frozenset()
 
         # Prompt token IDs for repetition penalty context.
         # HuggingFace penalizes tokens from BOTH prompt and generated text.
@@ -250,12 +263,22 @@ class AutoregressiveGenerator:
         self._state.step_idx = step_idx
 
         # Check for EOS
-        if self.eos_token_id is not None and token_id == self.eos_token_id:
+        if token_id in self._eos_ids:
             self._state.is_done = True
 
         # Check for max tokens
         if len(self._state.generated_tokens) >= self.max_tokens:
             self._state.is_done = True
+
+        prog_path = os.environ.get("NBX_DECODE_PROGRESS")
+        if prog_path:
+            # Documented diagnostic (src/neurobrix/CLAUDE.md §8): buffer-immune
+            # per-token decode trajectory with wall-clock, for pace measurement
+            # on long/offloaded decodes. Default-off, zero hot-path cost.
+            with open(prog_path, "a") as pf:
+                pf.write(f"t={time.time():.1f} step={step_idx} "
+                         f"n={len(self._state.generated_tokens)} "
+                         f"last={token_id} done={self._state.is_done}\n")
 
         return next_token, self._state.is_done
 

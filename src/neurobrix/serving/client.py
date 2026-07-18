@@ -140,6 +140,14 @@ class DaemonClient:
         """Send chat request. Returns {text, context}."""
         return self.send("chat", message=message, **kwargs)
 
+    def complete(self, messages: list, tools=None, **kwargs) -> Dict[str, Any]:
+        """Stateless completion over caller-managed messages. Returns {text}."""
+        return self.send("complete", messages=messages, tools=tools, **kwargs)
+
+    def template(self) -> Dict[str, Any]:
+        """Fetch the loaded model's chat template text. Returns {text}."""
+        return self.send("template")
+
     def new_chat(self) -> Dict[str, Any]:
         """Reset conversation history."""
         return self.send("new_chat")

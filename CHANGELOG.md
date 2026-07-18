@@ -7,7 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Terminal coding agent mode.** Tool-capable chat models can now work
+  as a terminal coding agent: `neurobrix chat --agent` (interactive) or
+  `neurobrix run --mode agent --prompt "<task>"` (one-shot). The model
+  reads and writes files, runs shell commands, and iterates until the
+  task completes — entirely inside a sandboxed working directory
+  (canonical-path jail, network isolation by default, per-command
+  timeout, turn bound). Tool-call syntax is read from the model's
+  embedded chat template (XML and JSON dialects supported) — never
+  hardcoded per model; models opt in via their family's supported-modes
+  configuration. Works cold (in-process engine) and warm (serving
+  daemon), on both execution engines. Every session records a full
+  transcript (markdown + JSONL) with per-turn decode outcomes, tool
+  calls, and results. New flags: `--workdir`, `--max-turns`,
+  `--bash-timeout`, `--allow-network`, `--approve-all`, `--yolo`,
+  `--transcript-dir`.
+- **Per-token decode progress diagnostic.** `NBX_DECODE_PROGRESS=<file>`
+  appends a timestamped line per decoded token (both engines) —
+  buffer-immune pace visibility for long or CPU-offloaded decodes.
+
 ### Fixed
+
+- **Pre-tokenized requests now work on the Triton engine's serving
+  path.** Daemon chat/completion requests pass pre-tokenized ids; only
+  the PyTorch engine consumed them — the Triton engine silently
+  tokenized an empty prompt instead and failed deep in a RoPE kernel
+  with a cryptic compile error (`arange's end argument must be greater
+  than the start argument`). The Triton flow now mirrors the
+  pre-tokenized input path exactly, and both engines raise a clear
+  error on an empty prefill instead of crashing mid-graph.
+- **Generation now stops at the template's stop tokens in every mode.**
+  End-of-sequence token lists from the model's configuration are
+  normalized identically in both engines (single id, list, or absent);
+  previously a list-valued eos could be missed, letting decode run past
+  the answer.
+- **Warm agent runs refuse a mismatched `--model`.** If a serving
+  daemon is running a different model than the one requested, the agent
+  command now errors clearly instead of silently using the daemon's
+  model.
+- **Serving no longer crashes on the second request of a session.**
+  The compiled and Triton hot loops eliminate weight-transpose
+  operations at compile time by pre-transposing the stored weight; the
+  pre-transposed state is now stamped in tensor metadata and re-read on
+  every recompile, so a second request (which recompiles against the
+  already-transposed weights) no longer computes with a stale layout —
+  previously this crashed the language-model head with a shape
+  mismatch.
 
 - **Hybrid CPU-offload placements now execute correctly in the compiled
   engine.** When the placement plan keeps a large component's weights in

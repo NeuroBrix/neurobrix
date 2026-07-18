@@ -251,10 +251,31 @@ class TritonAutoregressiveHandler:
         topology gen_type, independent of which family the model is
         packaged under (legacy "image" or current "multimodal").
         """
+        # Priority 0: Pre-tokenized input (from the serving chat/complete
+        # path). Token IDs already include chat template + special tokens —
+        # no re-tokenization, no tokenizer module needed. Exact mirror of
+        # core/flow/autoregressive.py _tokenize Priority 0 (R30).
+        _NO_PRETOKENIZED = object()
+        pre_tokenized = self.ctx.variable_resolver.resolved.get(
+            "global.input_token_ids", _NO_PRETOKENIZED)
+        if pre_tokenized is not _NO_PRETOKENIZED:
+            token_ids = _flatten_tokenizer_output(pre_tokenized)
+            if not token_ids:
+                raise RuntimeError(
+                    "ZERO FALLBACK: 'global.input_token_ids' is empty — "
+                    "a zero-length prefill is never valid.")
+            ids_np = np.array([token_ids], dtype=np.int64)
+            DeviceAllocator.set_device(device_idx)
+            return NBXTensor.from_numpy(ids_np)
+
         if "tokenizer" not in self.ctx.modules:
             raise RuntimeError("autoregressive_generation requires 'tokenizer' module.")
         tokenizer = self.ctx.modules["tokenizer"]
-        prompt = self.ctx.variable_resolver.resolved.get("global.prompt", "")
+        prompt = self.ctx.variable_resolver.resolved.get("global.prompt")
+        if prompt is None:
+            raise RuntimeError(
+                "ZERO FALLBACK: autoregressive_generation requires "
+                "'global.prompt' or 'global.input_token_ids'.")
         defaults = self.ctx.pkg.defaults
         gen_type = gen_info.get("type")
         is_image_ar = (gen_type == "autoregressive_image")

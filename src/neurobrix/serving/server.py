@@ -354,6 +354,18 @@ class ServingDaemon:
                     summarized = self._engine._session._summarization_count > prev_count
                 return make_response({"text": text, "context": context, "summarized": summarized})
 
+            elif method == "complete":
+                messages = params.get("messages") or []
+                tools = params.get("tools")
+                kwargs = {
+                    k: v for k, v in params.items() if k not in ("messages", "tools")
+                }
+                text = self._engine.complete(messages, tools=tools, **kwargs)
+                return make_response({"text": text})
+
+            elif method == "template":
+                return make_response({"text": self._engine.chat_template_text()})
+
             elif method == "new_chat":
                 self._engine.new_conversation()
                 return make_response({"status": "ok"})

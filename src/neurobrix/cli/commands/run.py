@@ -147,6 +147,13 @@ def cmd_run(args):
             print("ERROR: --model is required when no daemon is running.")
             sys.exit(1)
 
+    # Agent mode: the orchestration loop above inference has its own
+    # daemon-first wiring (neurobrix.agent is engine-blind; adapters live
+    # in cli/commands/agent.py).
+    if getattr(args, "mode", None) == "agent":
+        from neurobrix.cli.commands.agent import run_agent_mode
+        sys.exit(run_agent_mode(args))
+
     # Warm path: if daemon is running with same model, use it
     if _try_warm_path(args):
         sys.exit(0)

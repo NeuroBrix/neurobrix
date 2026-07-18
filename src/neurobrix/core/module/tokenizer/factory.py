@@ -119,6 +119,16 @@ class TokenizerWrapper:
         """Check if tokenizer has a chat template configured."""
         return hasattr(self._tokenizer, 'chat_template') and self._tokenizer.chat_template is not None
 
+    def chat_template_text(self) -> str:
+        """The chat template's raw text ('' when absent).
+
+        The agent-mode gate is downstream: parser selection over this
+        text's dialect markers (neurobrix.agent.parsers.select_parser) —
+        one predicate, no duplicate.
+        """
+        template = getattr(self._tokenizer, 'chat_template', None)
+        return template if isinstance(template, str) else ""
+
     @property
     def pad_token_id(self) -> int:
         return self._tokenizer.pad_token_id
