@@ -688,6 +688,18 @@ class CompiledSequence:
         transpose_uids: set = set()
         pretranspose_tids: set = set()
 
+        # The elimination MUTATES the shared in-memory DAG (t ops removed,
+        # weight shapes swapped). A recompile over the already-mutated DAG
+        # finds no aten::t and would lose the bind-time transpose contract
+        # (second-request cold-serving lm_head crash: mm fed the raw
+        # untransposed weight). The mutation therefore carries its own
+        # contract: eliminated weights are stamped `pretransposed` in the
+        # tensor metadata, and every compile seeds the set from the stamps.
+        seeded: set = {
+            tid for tid, meta in tensors.items()
+            if isinstance(meta, dict) and meta.get("pretransposed")
+        }
+
         # Collect expert weight IDs from moe_fused ops — must NOT be pre-transposed
         # because moe_fused_dispatch() calls .t() on them at runtime.
         moe_weight_ids: set = set()
@@ -740,14 +752,19 @@ class CompiledSequence:
             pretranspose_tids.add(root_tid)
 
         if not transpose_uids:
+            self._pretranspose_weights = seeded
             return
 
         # Store set of weight tensor IDs that need pre-transposition
-        self._pretranspose_weights = pretranspose_tids
+        # (stamps from prior compiles over this DAG + newly eliminated)
+        self._pretranspose_weights = seeded | pretranspose_tids
 
-        # Update tensor metadata shape: consumers expect the transposed shape
+        # Update tensor metadata shape: consumers expect the transposed
+        # shape. Newly eliminated tids only — the swap and the stamp
+        # happen exactly once per DAG lifetime.
         for tid in pretranspose_tids:
-            meta = tensors.get(tid, {})
+            meta = tensors.setdefault(tid, {})
+            meta["pretransposed"] = True
             shape = meta.get("shape", [])
             if len(shape) == 2:
                 meta["shape"] = [shape[1], shape[0]]

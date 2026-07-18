@@ -829,6 +829,10 @@ class HFTokenizer:
 
         return default
 
+    def chat_template_text(self) -> str:
+        """The chat template's raw text ('' when absent)."""
+        return self._chat_template or ""
+
     def has_chat_template(self) -> bool:
         """Check if tokenizer has a chat template configured."""
         return self._chat_template is not None
@@ -850,7 +854,9 @@ class HFTokenizer:
             messages: List of message dicts [{"role": "user", "content": "..."}]
             tokenize: If True, return token IDs; if False, return formatted string
             add_generation_prompt: If True, add assistant prompt suffix
-            **kwargs: Additional arguments (ignored)
+            **kwargs: Forwarded into the template render context — HF
+                semantics (templates read e.g. `tools` for the tool
+                contract, `enable_thinking`, ...)
 
         Returns:
             Token IDs (if tokenize=True) or formatted string (if tokenize=False)
@@ -880,6 +886,7 @@ class HFTokenizer:
             bos_token=self._bos_token,
             eos_token=self._eos_token,
             add_generation_prompt=add_generation_prompt,
+            **kwargs,
         )
 
         if not tokenize:

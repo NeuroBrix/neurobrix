@@ -592,6 +592,17 @@ class TritonSequence:
                             "expert_down_weight_ids"):
                     moe_weight_ids.update(attrs.get(key, []))
 
+        # The elimination MUTATES the shared in-memory DAG (t ops removed,
+        # weight shapes swapped). A recompile over the already-mutated DAG
+        # finds no aten::t and would lose the bind-time transpose contract
+        # (second-request cold-serving crash, R30 mirror of the native
+        # pass). The mutation carries its own contract: eliminated weights
+        # are stamped `pretransposed`; every compile seeds from the stamps.
+        seeded: set = {
+            tid for tid, meta in tensors.items()
+            if isinstance(meta, dict) and meta.get("pretransposed")
+        }
+
         for op_uid in execution_order:
             op_data = ops_metadata.get(op_uid)
             if op_data is None:
@@ -636,13 +647,17 @@ class TritonSequence:
             pretranspose_tids.add(root_tid)
 
         if not transpose_uids:
+            self._pretranspose_weights = seeded
             return
 
-        self._pretranspose_weights = pretranspose_tids
+        self._pretranspose_weights = seeded | pretranspose_tids
 
         # Swap shape metadata: consumers expect the transposed shape.
+        # Newly eliminated tids only — swap and stamp exactly once per
+        # DAG lifetime.
         for tid in pretranspose_tids:
-            meta = tensors.get(tid, {})
+            meta = tensors.setdefault(tid, {})
+            meta["pretransposed"] = True
             shape = meta.get("shape", [])
             if len(shape) == 2:
                 meta["shape"] = [shape[1], shape[0]]

@@ -887,6 +887,10 @@ class AutoregressiveHandler(FlowHandler):
                 input_ids = pre_tokenized.to(device)
             if input_ids.dim() == 1:
                 input_ids = input_ids.unsqueeze(0)
+            if input_ids.numel() == 0:
+                raise RuntimeError(
+                    "ZERO FALLBACK: 'global.input_token_ids' is empty — "
+                    "a zero-length prefill is never valid.")
             return input_ids
 
         prompt = self.ctx.variable_resolver.get("global.prompt")

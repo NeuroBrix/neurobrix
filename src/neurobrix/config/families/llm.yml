@@ -61,11 +61,19 @@ inputs:
     - flag: "--max-tokens"
 
 modes:
-  supported: ["text", "chat"]
+  supported: ["text", "chat", "agent"]
   default: "text"
   multimodal_strict: false
+
+# Agent-mode defaults (P-AGENTIC). The mode is additionally gated at
+# runtime on the model's embedded chat template declaring a tools
+# contract — non-tool models get a clear error, never a fallback.
+agent:
+  max_turns: 25              # Loop turn bound (overridable via --max-turns)
+  bash_timeout_s: 120        # Per-command bash timeout (overridable)
 
 output:
   default_extension_per_mode:
     text: ".txt"
     chat: ".txt"
+    agent: ".txt"

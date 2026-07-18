@@ -302,6 +302,52 @@ class InferenceEngine:
 
         return response_text
 
+    def complete(self, messages: list, tools: Optional[list] = None, **kwargs) -> str:
+        """
+        Stateless completion over caller-managed messages (agent path).
+
+        The caller owns the conversation — message dicts including
+        role="tool" results; the embedded chat template renders it (with
+        the tools contract when given) and one decode returns the raw
+        assistant text. Same V1 re-prefill discipline as chat().
+        """
+        from neurobrix.core.config import get_family_config
+        try:
+            supported = (get_family_config(self._family or "").get("modes")
+                         or {}).get("supported", [])
+        except Exception:
+            supported = []
+        if "agent" not in supported:
+            raise RuntimeError(
+                f"ZERO FALLBACK: complete() requires a family declaring "
+                f"'agent' in modes.supported; family '{self._family}' "
+                f"declares {supported or 'none'}."
+            )
+        tokenizer = self._executor.modules.get("tokenizer")
+        if tokenizer is None:
+            raise RuntimeError("ZERO FALLBACK: No tokenizer module in executor.")
+        template_kwargs: Dict[str, Any] = {
+            "tokenize": True,
+            "add_generation_prompt": True,
+        }
+        if tools:
+            template_kwargs["tools"] = tools
+        token_ids = tokenizer.apply_chat_template(messages, **template_kwargs)
+        result = self._generate_from_token_ids(token_ids, **kwargs)
+        return result.get("text", "")
+
+    def chat_template_text(self) -> str:
+        """The embedded chat template's text ('' when absent)."""
+        tokenizer = self._executor.modules.get("tokenizer") if self._executor else None
+        if tokenizer is None:
+            return ""
+        getter = getattr(tokenizer, "chat_template_text", None)
+        if callable(getter):
+            text = getter()
+            return text if isinstance(text, str) else ""
+        template = getattr(getattr(tokenizer, "_tokenizer", None), "chat_template", None)
+        return template if isinstance(template, str) else ""
+
     def _get_max_cache_len(self) -> int:
         """Get KV cache capacity from Prism plan."""
         kv_plan = getattr(self._plan, 'kv_cache_plan', None)
