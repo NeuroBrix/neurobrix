@@ -30,6 +30,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Serving a Triton model no longer breaks on the second request.**
+  A run of warm daemon requests could fail on request two: the Triton
+  execution path bound model weights only once (at compile), so after a
+  request's cleanup released them the next request ran against empty
+  weight slots and crashed inside the rotary-embedding math. The Triton
+  path now re-binds weights on every execution, matching the PyTorch
+  engine. Two related second-request faults are fixed in the same pass:
+  a cached rotary-constant reference into freed memory, and a
+  completed generation whose token list wasn't read back correctly by
+  the serving text extractor.
+- **A broken tool call no longer ends an agent session silently.** When
+  a model emitted a function block without its required wrapper (a rare
+  decode slip), the agent parser treated it as a finished answer and
+  stopped mid-task. It is now recognized as a malformed call, which
+  triggers the existing one-shot format reminder so the model re-emits
+  it correctly.
 - **Pre-tokenized requests now work on the Triton engine's serving
   path.** Daemon chat/completion requests pass pre-tokenized ids; only
   the PyTorch engine consumed them — the Triton engine silently

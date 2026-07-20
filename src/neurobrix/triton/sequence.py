@@ -2504,6 +2504,13 @@ class TritonSequence:
 
     def bind_weights(self, weights: Dict[str, NBXTensor]):
         """Bind weight tensors to arena slots, then compute per-op devices."""
+        # A fresh weight bind invalidates every cached seq-dependent-constant
+        # original: they are NBXTensor views into the PREVIOUS bind's
+        # component arena, which is explicitly freed when weights unload
+        # (zero3/lazy streaming reloads per request — "setup persists,
+        # weights do not"). Re-narrowing from a stale original reads freed
+        # arena memory. Mirror of the compiled bind_weights (R30).
+        self._seq_constant_originals.clear()
         for tid in self._weight_ids:
             tdata = self.dag.get("tensors", {}).get(tid, {})
             wname = tdata.get("weight_name", "")

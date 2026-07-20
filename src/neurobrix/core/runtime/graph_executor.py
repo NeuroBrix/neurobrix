@@ -1740,6 +1740,17 @@ class GraphExecutor:
         it at the default.
         """
         self._ensure_triton_compiled(device_idx)
+        # Re-bind weights EVERY run — exact mirror of
+        # _execute_compiled_graph, which rebuilds its weight_map and calls
+        # bind_weights per execution (R30). The triton bind previously
+        # lived only inside _ensure_triton_compiled's one-time compile
+        # path: on a second serving request (persistent cleanup clears
+        # every arena slot; streaming placements reload self._weights)
+        # the weight slots stayed None, every weighted op NOP-propagated
+        # None, and the first non-propagating consumer crashed
+        # (aten.cat::0 'NoneType' has no attribute 'ndim' in the
+        # rotary_embed chain — the second warm agent turn).
+        self._triton_seq.bind_weights(self._weights)
         self._triton_seq.bind_inputs(input_map)
         self._triton_seq.bind_symbols(input_map)
         self._triton_seq.update_seq_dependent_constants()
@@ -2111,6 +2122,25 @@ class GraphExecutor:
                 # name the op_uid + which positional args were None so a
                 # triton-sequential failure points straight at the producer.
                 _none_pos = [i for i, a in enumerate(resolved_args) if a is None]
+                # Descend into list-typed args (aten::cat & co): a None INSIDE
+                # the tensor list is invisible to the positional scan above and
+                # produced misleading "None args at positions [] of N" reports.
+                # Name each None element with its graph tensor_id so the
+                # failure points straight at the unbound/killed producer slot.
+                _none_inner = []
+                for _ai, _a in enumerate(resolved_args):
+                    if isinstance(_a, (list, tuple)):
+                        _meta = raw_args[_ai] if _ai < len(raw_args) else None
+                        _mlist = (_meta.get("elements") or _meta.get("tensors")
+                                  or _meta.get("value") or []) \
+                            if isinstance(_meta, dict) else \
+                            (_meta if isinstance(_meta, (list, tuple)) else [])
+                        for _ei, _el in enumerate(_a):
+                            if _el is None:
+                                _etid = "?"
+                                if _ei < len(_mlist) and isinstance(_mlist[_ei], dict):
+                                    _etid = _mlist[_ei].get("tensor_id", "?")
+                                _none_inner.append(f"arg{_ai}[{_ei}]={_etid}")
                 import os as _os_fail
                 if _os_fail.environ.get("NBX_DEVICE_TRACE"):
                     for _ai, _a in enumerate(resolved_args):
@@ -2123,7 +2153,9 @@ class GraphExecutor:
                 raise RuntimeError(
                     f"[triton-sequential] Failed at {op_uid} ({op_type}): "
                     f"{type(_e_seq).__name__}: {_e_seq} | None args at positions "
-                    f"{_none_pos} of {len(resolved_args)}") from _e_seq
+                    f"{_none_pos} of {len(resolved_args)}"
+                    + (f" | None list elements: {_none_inner}" if _none_inner
+                       else "")) from _e_seq
 
             # Store outputs
             if isinstance(result, tuple):
