@@ -28,8 +28,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   appends a timestamped line per decoded token (both engines) —
   buffer-immune pace visibility for long or CPU-offloaded decodes.
 
+### Added
+
+- **Image-generation models are now published for the multimodal
+  category** (first: Janus-Pro-7B). They run on the PyTorch execution
+  path (default and sequential modes). The Triton path for
+  image-autoregressive generation is not yet available and the engine
+  now says so explicitly (see Fixed) rather than failing partway
+  through.
+
 ### Fixed
 
+- **Running an autoregressive model on a single pinned GPU no longer
+  fails with an "invalid device ordinal" error.** Position indices for
+  attention could be created on a GPU index that isn't visible in the
+  current process, aborting the run; they now fall back to the active
+  device. Only affects runs pinned to a subset of GPUs; unaffected runs
+  are byte-for-byte unchanged.
+- **Asking the Triton engine for image-autoregressive generation now
+  fails fast with a clear message** instead of crashing deep in the
+  sampler. The engine states that this path is not yet supported and
+  points to the PyTorch modes; the check is on the generation type, not
+  the model, so it lifts automatically for every such model once the
+  path is implemented.
 - **Serving a Triton model no longer breaks on the second request.**
   A run of warm daemon requests could fail on request two: the Triton
   execution path bound model weights only once (at compile), so after a
