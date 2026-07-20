@@ -2497,6 +2497,12 @@ class CompiledSequence:
     def bind_weights(self, weights: Dict[str, torch.Tensor]) -> None:
         """Bind weight tensors to arena slots, including constant tensors."""
         assert self._arena is not None, "compile() must be called before bind_weights()"
+        # A fresh weight bind invalidates every cached seq-dependent-constant
+        # original: they are references into the PREVIOUS bind's tensors.
+        # On streaming placements (weights reload per request) the old
+        # storage is gone — re-narrowing from a stale original reads freed
+        # memory (triton) or hoards dead storages (torch refcount).
+        self._seq_constant_originals.clear()
         for tensor_id, tensor in weights.items():
             slot = self._tensor_id_to_slot.get(tensor_id)
             if slot is not None:

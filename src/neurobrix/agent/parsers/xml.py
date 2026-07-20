@@ -61,5 +61,20 @@ class XmlToolCallParser(ToolCallParser):
             head, _, tail = prose.partition("<tool_call>")
             result.malformed.append("<tool_call>" + tail)
             prose = head
+        # A <function=...> block or a dangling </tool_call> that never sat
+        # inside a well-formed <tool_call>...</tool_call> pair is a broken
+        # tool-call emission, NOT clean prose. The template contract is
+        # explicit: "an inner <function=...></function> block MUST be nested
+        # within <tool_call>." Silently returning it as prose makes the loop
+        # read a broken call as a final answer and terminate mid-task.
+        # Surface it as malformed so the format-reminder recovery fires
+        # (proven cross-engine: a decode near-tie can drop the <tool_call>
+        # opener while keeping the function block + closer intact).
+        for _marker in ("<function=", "</tool_call>"):
+            if _marker in prose:
+                head, _, tail = prose.partition(_marker)
+                result.malformed.append((_marker + tail).strip())
+                prose = head
+                break
         result.prose = prose.strip()
         return result

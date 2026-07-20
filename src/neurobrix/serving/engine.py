@@ -434,7 +434,13 @@ class InferenceEngine:
         if output_tokens is None:
             return {"text": "", "tokens": 0}
 
-        token_ids = output_tokens.flatten().tolist()
+        # Engine-boundary adapter (R30): the compiled flow emits a tensor,
+        # the triton flow emits a plain List[int] (R33 — no tensor type
+        # leaks out of triton/). Accept both output contracts here.
+        if hasattr(output_tokens, "flatten"):
+            token_ids = output_tokens.flatten().tolist()
+        else:
+            token_ids = [int(t) for t in output_tokens]
         text = ""
 
         tokenizer = self._executor.modules.get("tokenizer")
