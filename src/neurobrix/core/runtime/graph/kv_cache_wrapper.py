@@ -564,6 +564,29 @@ class KVCacheAttentionWrapper:
         if not self._is_prefill:
             self._position_offset = self.cache.get_seq_len()
 
+    @staticmethod
+    def _sanitize_device_kwarg(kwargs: dict) -> dict:
+        """Remap a baked graph device that is invalid in this process.
+
+        The tracer freezes the physical trace device (e.g. cuda:2) into
+        aten::arange kwargs. The normal dispatch path rewrites it via the
+        Prism runtime device (sequential_dispatcher._resolve_attr_value),
+        but this KV-cache interceptor sits on a separate path and receives
+        the raw kwarg. Under a CUDA_VISIBLE_DEVICES mask the frozen index
+        can exceed the visible device count → `invalid device ordinal`
+        (Janus-Pro under --hardware v100-32g pinned to one GPU). Remap ONLY
+        when the index is out of range (the masked case); a valid index is
+        left untouched, so LLMs whose arange already resolves to cuda:0 are
+        a strict no-op. Placement-agnostic (R19) — no compute change.
+        """
+        dev = kwargs.get("device")
+        if (isinstance(dev, torch.device) and dev.type == "cuda"
+                and dev.index is not None
+                and dev.index >= torch.cuda.device_count()):
+            return {**kwargs,
+                    "device": torch.device("cuda", torch.cuda.current_device())}
+        return kwargs
+
     def intercept_arange(self, *args, **kwargs) -> torch.Tensor:
         """
         Intercept aten::arange to fix RoPE positions during decode.
@@ -583,6 +606,7 @@ class KVCacheAttentionWrapper:
         aranges live in the model component, not the decoder — the KV cache wrapper
         only intercepts ops in the decoder component where aranges are positional.
         """
+        kwargs = self._sanitize_device_kwarg(kwargs)
         if self._is_prefill:
             return torch.arange(*args, **kwargs)
 

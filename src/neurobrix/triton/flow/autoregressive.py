@@ -84,6 +84,21 @@ class TritonAutoregressiveHandler:
         if not gen_info:
             raise RuntimeError("autoregressive_generation requires flow.generation info.")
 
+        # Capability gate (data-driven on flow-class × engine, R15 — NOT model
+        # name): the Triton engine does not yet support the image-autoregressive
+        # flow. Refuse cleanly at the boundary instead of crashing several
+        # layers down in the sampler (item() on a mis-shaped image-AR logits
+        # tensor). Tracked as chantier P-TRITON-IMAGE-AR; this guard falls for
+        # the WHOLE class the day that chantier closes — no model name here.
+        if gen_info.get("type") == "autoregressive_image":
+            raise RuntimeError(
+                "Triton engine does not yet support the image-autoregressive "
+                "flow (generation.type='autoregressive_image'). This path is "
+                "tracked as chantier P-TRITON-IMAGE-AR. Run image-autoregressive "
+                "models on the validated PyTorch branch (--compiled or "
+                "--sequential) until it closes."
+            )
+
         session = self._create_session(gen_info)
         self._active_session = session
         strategy = self._create_strategy(gen_info, session)
