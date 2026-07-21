@@ -47,6 +47,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pressure is already handled by the allocator's reclaim-and-retry). A
   57 GB MoE that previously took hours now completes in minutes, with no
   change in memory safety or output.
+- **Large MoE models now run efficiently across multiple GPUs on the
+  Triton engine.** When a model's experts are spread across GPUs, the
+  per-layer combine step previously copied results to the CPU, summed
+  them token-by-token in Python, and copied them back — once per layer,
+  per GPU. It is now done entirely on-device. A 57 GB mixture-of-experts
+  model spread over four GPUs renders roughly an order of magnitude
+  faster than the previous single-GPU offload path, with output
+  identical to the compiled engine.
 - **A memory-cleanup call in the lazy component-placement strategy no
   longer raises on phase end** (an undefined variable would have crashed
   it if that path ran with loaded weights).

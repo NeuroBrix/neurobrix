@@ -587,7 +587,12 @@ def _multi_device_fused_moe(
     5. Scatter results back using original token positions
     """
     dt = hidden_states._dtype
-    output = NBXTensor.zeros((M, K), dtype=dt, device=f"cuda:{act_dev}")
+    # (M + 1, K): row M is a discard SINK. The padding sentinel
+    # (sorted_tids == n_total) maps to token_id = n_total // top_k = M
+    # (since n_total = M * top_k), so the device-side index_add routes every
+    # padding row into the sink with no explicit mask. Narrowed back to
+    # (M, K) after the device loop. (D7 Stage B.)
+    output = NBXTensor.zeros((M + 1, K), dtype=dt, device=f"cuda:{act_dev}")
 
     n_total = flat_indices.numel()
 
@@ -699,35 +704,20 @@ def _multi_device_fused_moe(
         DeviceAllocator.set_device(act_dev)
         DeviceAllocator.ensure_triton_device(act_dev)
 
-        # Scatter: down_out is indexed by sorted_tids (global flat positions).
-        # The kernel wrote results at positions sorted_tids[i] in down_out.
-        # We need to accumulate into output[token_id, :] where token_id = flat_pos // top_k.
-        # Read down_out for each valid sorted position and add to output.
-        down_buf_bytes = local_padded * K * dtype_size(dt)
-        down_cpu_buf = (_ctypes.c_char * down_buf_bytes)()
-        DeviceAllocator.memcpy(_ctypes.addressof(down_cpu_buf), down_out.data_ptr(),
-                               down_buf_bytes, kind=2)
-        down_cpu = np.frombuffer(bytes(down_cpu_buf), dtype=np.float16).reshape(local_padded, K)
+        # Combine (device-side, R33-pure). Each row of down_out is the
+        # top-k-weighted result for GLOBAL flat position sorted_tids[i] (the
+        # down pass already applied mul_routed_weight). Accumulate into
+        # output[token_id] where token_id = sorted_tids // top_k. The padding
+        # sentinel (sorted_tids == n_total) maps to token_id = M — the sink
+        # row of the (M+1, K) output — so no mask is needed. index_add_wrapper
+        # preserves down_out's dtype (graph dtype) and accumulates across
+        # devices (functional: output_next = output + scatter). No CPU
+        # round-trip, no Python token loop, no np.float16 literal — this
+        # replaced the pathological host-mediated scatter. (D7 Stage B.)
+        stid_dev = _xfer(sorted_tids, act_dev)
+        token_ids = w.floor_divide_wrapper(stid_dev, top_k)
+        output = w.index_add_wrapper(output, 0, token_ids, down_out)
 
-        out_bytes = M * K * dtype_size(dt)
-        out_cpu_buf = (_ctypes.c_char * out_bytes)()
-        DeviceAllocator.memcpy(_ctypes.addressof(out_cpu_buf), output.data_ptr(),
-                               out_bytes, kind=2)
-        out_cpu = np.frombuffer(bytes(out_cpu_buf), dtype=np.float16).reshape(M, K).copy()
-
-        # The kernel wrote weighted results at sorted positions in down_out.
-        # down_out[i] has the result for the token at sorted_tids_cpu[i] // top_k
-        for i in range(local_padded):
-            flat_pos = int(stid_cpu[i])
-            if flat_pos >= n_total:
-                continue  # padding sentinel
-            token_id = flat_pos // top_k
-            out_cpu[token_id] += down_cpu[i].astype(np.float32)
-
-        # Upload accumulated output back
-        out_cpu_fp16 = out_cpu.astype(np.float16)
-        DeviceAllocator.memcpy(output.data_ptr(),
-                               np.ascontiguousarray(out_cpu_fp16).ctypes.data,
-                               out_bytes, kind=1)
-
+    # Drop the padding sink row (M); real tokens are [0, M).
+    output = output.narrow(0, 0, M).contiguous()
     return output
