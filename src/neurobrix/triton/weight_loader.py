@@ -137,9 +137,13 @@ def load_component_weights(
     #      "cuda:N" per shard.
     #
     #   2. Per-weight-name (FGP): keys are weight names like
-    #      "block.0.attn.q.weight" with "cuda:N" values. This is what
-    #      the native weight_loader's FGP path consumes; the triton
-    #      path does not support FGP today.
+    #      "block.0.attn.q.weight" with "cuda:N" values. The triton path
+    #      DOES support this (see the per-weight loop below populating
+    #      `weight_device` from every "cuda:N" value) — block_scatter /
+    #      component_placement / pipeline_parallel all land here and place
+    #      each weight on its owner GPU. (Comment corrected 2026-07-20,
+    #      D7 — it previously claimed triton had no FGP, contradicting the
+    #      code right below it.)
     #
     # In the triton path we detect style (1) and route accordingly.
     # Under zero3 we partition block vs non-block via _BLOCK_RE and
@@ -158,10 +162,10 @@ def load_component_weights(
         if vals and all(v == "cpu" for v in vals):
             all_cpu_component = True
         else:
-            # Multi-GPU style: values are "cuda:N" per shard path or
-            # per weight name. The triton path does not implement FGP
-            # today, so we only honor shard-path keys that can be
-            # resolved to a device index.
+            # Multi-GPU style (FGP): values are "cuda:N" per shard path or
+            # per weight name. Each key that resolves to a device index is
+            # placed on that owner GPU (the triton FGP path — proven with
+            # Wan-I2V-14B sharded across cuda:2+cuda:3, commit 1d00037).
             for wname, dev_str in shard_map.items():
                 if isinstance(dev_str, str) and ':' in dev_str:
                     weight_device[wname] = int(dev_str.split(':')[-1])

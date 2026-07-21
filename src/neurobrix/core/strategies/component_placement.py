@@ -154,4 +154,10 @@ class ComponentPlacementLazyStrategy(ComponentPlacementStrategy):
         for comp_name in list(self._phase_loaded):
             self.unload_weights(comp_name)
         self._phase_loaded.clear()
-        device_empty_cache(device)
+        # Phase-transition defrag (the legitimate use of empty_cache, per its
+        # docstring — component unload, not a compute hot loop). `device` was
+        # undefined here (NameError if this path ran with loaded weights);
+        # empty the cache on every device this component-placement strategy
+        # spans. (D7 latent-bug fix, 2026-07-20.)
+        for _dev in self.devices:
+            device_empty_cache(_dev)

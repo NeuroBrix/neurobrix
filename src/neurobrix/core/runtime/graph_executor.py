@@ -3602,9 +3602,15 @@ class GraphExecutor:
         if op_type == "custom::moe_fused":
             result = self._execute_moe_fused_native(op_data)
             self._store_op_outputs(op_uid, op_data, result)
-            # Defragment CUDA memory after MoE expert loop — the 64-expert iteration
-            # creates many small allocations that fragment the caching allocator.
-            device_empty_cache(self.device)
+            # NO per-op defrag here (D7, 2026-07-20). An unconditional
+            # device_empty_cache after every moe_fused op forced a full CUDA
+            # sync (cudaFree semantics) 48×/prefill-pass on a 48-layer MoE —
+            # the acute cause of the 10 h --sequential wall. It was a spurious
+            # defensive flush: the compiled path runs the identical per-expert
+            # loop with no defrag, and genuine allocator pressure is handled by
+            # the DeviceAllocator OOM-reclaim-and-retry path (drains the
+            # deferred-dead queues, retries once). Never re-add an unconditional
+            # empty_cache in a compute hot loop.
             return
 
         attrs = op_data.get("attributes", {})

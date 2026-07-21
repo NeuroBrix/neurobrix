@@ -39,6 +39,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Mixture-of-experts models run dramatically faster in the eager
+  (sequential) execution path.** A cache-cleanup call fired after every
+  expert layer, forcing a full GPU synchronization dozens of times per
+  token — the cause of pathologically slow prefills on large MoE models.
+  It was unnecessary (the compiled path never did it, and genuine memory
+  pressure is already handled by the allocator's reclaim-and-retry). A
+  57 GB MoE that previously took hours now completes in minutes, with no
+  change in memory safety or output.
+- **A memory-cleanup call in the lazy component-placement strategy no
+  longer raises on phase end** (an undefined variable would have crashed
+  it if that path ran with loaded weights).
 - **Running an autoregressive model on a single pinned GPU no longer
   fails with an "invalid device ordinal" error.** Position indices for
   attention could be created on a GPU index that isn't visible in the
