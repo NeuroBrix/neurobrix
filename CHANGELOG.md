@@ -31,11 +31,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Image-generation models are now published for the multimodal
-  category** (first: Janus-Pro-7B). They run on the PyTorch execution
-  path (default and sequential modes). The Triton path for
-  image-autoregressive generation is not yet available and the engine
-  now says so explicitly (see Fixed) rather than failing partway
-  through.
+  category and run on ALL FOUR execution modes** (first: Janus-Pro-7B).
+  The Triton engine now supports image-autoregressive generation
+  end-to-end (`--triton` and `--triton-sequential`): the pre-projection
+  hidden states are captured on both Triton substrates, the
+  guidance-conditioned decode feeds the aligned image-token embeddings
+  through the full-context path, and classifier-free guidance routes
+  through the unified CFG engine. Cross-engine agreement on the
+  supported hardware: identical greedy argmax at the first step,
+  hundreds of identical greedy tokens before floating-point near-ties
+  diverge, and visually indistinguishable renders.
 
 ### Fixed
 
@@ -64,12 +69,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   current process, aborting the run; they now fall back to the active
   device. Only affects runs pinned to a subset of GPUs; unaffected runs
   are byte-for-byte unchanged.
-- **Asking the Triton engine for image-autoregressive generation now
-  fails fast with a clear message** instead of crashing deep in the
-  sampler. The engine states that this path is not yet supported and
-  points to the PyTorch modes; the check is on the generation type, not
-  the model, so it lifts automatically for every such model once the
-  path is implemented.
+- **`--seed` now governs Triton-engine autoregressive sampling.** The
+  run-scoped random stream was armed for diffusion runs but not for
+  autoregressive decoding, so temperature/top-p sampling on the Triton
+  engine was not reproducible from the seed (text and image models
+  alike). The same seed now yields the same token stream on both Triton
+  modes; seedless runs keep the previous behaviour.
+- **Guidance-free image generation (`--cfg 1.0`) no longer crashes.**
+  The published Janus-Pro-7B package baked the guided two-stream batch
+  shape into an attention position operation, so requesting a single
+  unguided stream failed on every execution mode. The republished
+  package binds the batch dimension symbolically — guided (`--cfg` > 1)
+  and unguided runs both work, and the guided output is byte-identical
+  to the previously published package's.
 - **Serving a Triton model no longer breaks on the second request.**
   A run of warm daemon requests could fail on request two: the Triton
   execution path bound model weights only once (at compile), so after a

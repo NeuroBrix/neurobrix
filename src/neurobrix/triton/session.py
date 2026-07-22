@@ -31,6 +31,10 @@ class TritonLMSession:
         self.uses_absolute_position = uses_absolute_position
         self.device_idx = device_idx
         self._accumulated_ids: Optional[NBXTensor] = None
+        # O(n)-fallback embeds accumulator (uses_embeds graphs — image-AR:
+        # decode inputs are aligned VQ embeddings, NOT text tokens, so the
+        # full-context re-run must replay the exact embedding stream).
+        self._accumulated_embeds: Optional[NBXTensor] = None
 
     def prefill(self, input_ids: NBXTensor, batch_size: int) -> NBXTensor:
         """Run prefill pass, switch to decode mode, return hidden states."""
@@ -81,6 +85,10 @@ class TritonLMSession:
             self.kv_wrapper.set_decode_mode()
         else:
             self._accumulated_ids = input_ids
+            # uses_embeds graphs replay the embedding stream at O(n) decode
+            # (image-AR feeds aligned VQ embeddings, not re-embedded ids).
+            self._accumulated_embeds = (run_inputs.get("inputs_embeds")
+                                        if self.uses_embeds else None)
 
         # Prefer the explicit pre-lm_head tensor via get_hidden_states;
         # fall back to the output-scan (graph output IS hidden states,
@@ -108,8 +116,12 @@ class TritonLMSession:
         seq_len = input_ids.shape[1]
 
         if self.kv_wrapper is None:
-            # O(n) fallback: accumulate tokens and re-run full context
-            return self._decode_step_full_context(input_ids)
+            # O(n) fallback: accumulate tokens and re-run full context.
+            # inputs_embeds MUST thread through (image-AR decode input is
+            # the aligned VQ embedding — dropping it here re-embedded the
+            # SHIFTED token id through the text table and fed the LM a
+            # different stream than the KV-cache path, R30 asymmetry).
+            return self._decode_step_full_context(input_ids, inputs_embeds)
 
         self.kv_wrapper.update_position_offset()
         cache_len = self.kv_wrapper.get_cache_len()
@@ -154,20 +166,57 @@ class TritonLMSession:
             hidden = hidden.squeeze(0)
         return hidden
 
-    def _decode_step_full_context(self, new_token_ids: NBXTensor) -> NBXTensor:
-        """O(n) decode: concatenate all tokens and re-run full context."""
+    def _to_session_device(self, t: NBXTensor) -> NBXTensor:
+        """Move a tensor to the session device if it lives elsewhere
+        (e.g. produced by a head/aligner executor pinned to another GPU,
+        or a zero3 CPU-offloaded producer). Delegates to the consolidated
+        device_transfer brick — it materialises expanded views before the
+        copy and picks H2D vs D2D by source, which a flat memcpy of
+        `_nbytes` would get wrong."""
+        from neurobrix.triton.device_transfer import needs_move, transfer_tensor
+        if needs_move(t, self.device_idx):
+            return transfer_tensor(t, self.device_idx)
+        return t
+
+    def _decode_step_full_context(self, new_token_ids: NBXTensor,
+                                  new_embeds: Optional[NBXTensor] = None
+                                  ) -> NBXTensor:
+        """O(n) decode: concatenate all tokens and re-run full context.
+
+        For uses_embeds graphs the full embedding sequence is accumulated
+        and re-fed (image-AR: the decode input is the gen_embed→gen_aligner
+        output for the sampled VQ code — re-embedding the shifted token id
+        through the text table would diverge from the KV-cache path).
+        """
         DeviceAllocator.ensure_triton_device(self.device_idx)
         if new_token_ids.ndim == 1:
             new_token_ids = new_token_ids.unsqueeze(0)
         # Ensure token is on the correct device (may be on wrong GPU after lm_head run)
-        if hasattr(new_token_ids, '_device_idx') and new_token_ids._device_idx != self.device_idx:
-            dst = NBXTensor.empty(new_token_ids._shape, new_token_ids._dtype,
-                                  f"cuda:{self.device_idx}")
-            DeviceAllocator.memcpy(dst.data_ptr(), new_token_ids.data_ptr(),
-                                   new_token_ids._nbytes)
-            new_token_ids = dst
-        self._accumulated_ids = NBXTensor.cat(
-            [self._accumulated_ids, new_token_ids], dim=1)
+        new_token_ids = self._to_session_device(new_token_ids)
+        acc_ids = NBXTensor.cat([self._accumulated_ids, new_token_ids], dim=1)
+
+        acc_embeds = None
+        if self.uses_embeds:
+            embeds = (new_embeds if new_embeds is not None
+                      else self._embed_from_ids(new_token_ids))
+            embeds = self._to_session_device(embeds)
+            acc_embeds = NBXTensor.cat([self._accumulated_embeds, embeds],
+                                       dim=1)
+
+        # cat launches are ASYNC (raw kernel launch outside the dispatcher's
+        # synchronous-dispatch contract) and rebinding the accumulator drops
+        # the old buffer's last ref → free_cuda. On the default path cudaFree
+        # blocks until device idle, so the in-flight cat kernel finishes
+        # first — but under NBX_ALLOC_POOL=1 the pointer goes back to the
+        # free-list WITHOUT a sync and the next malloc may hand the block to
+        # a concurrent writer while the cat kernel still reads it. Sync
+        # BEFORE the rebind so the O(n) accumulators stay pool-safe (this
+        # path is the op-by-op determinism reference; one sync per step is
+        # noise here).
+        DeviceAllocator.sync_device()
+        self._accumulated_ids = acc_ids
+        if self.uses_embeds:
+            self._accumulated_embeds = acc_embeds
 
         seq_len = self._accumulated_ids.shape[1]
         batch_size = self._accumulated_ids.shape[0]
@@ -176,7 +225,11 @@ class TritonLMSession:
             pos_np = np.tile(pos_np, (batch_size, 1))
         position_ids = NBXTensor.from_numpy(pos_np)
 
-        if "position_ids" in self.graph_inputs:
+        if self.uses_embeds:
+            run_inputs = {"inputs_embeds": self._accumulated_embeds}
+            if "position_ids" in self.graph_inputs:
+                run_inputs["position_ids"] = position_ids
+        elif "position_ids" in self.graph_inputs:
             run_inputs = {"input_ids": self._accumulated_ids,
                           "position_ids": position_ids}
         else:
@@ -196,7 +249,18 @@ class TritonLMSession:
         # (audit #2 F2). Run kills like prefill (skip_kills=False):
         # the deferred-drain sync still guarantees no UAF.
         outputs = self.executor.run(run_inputs, skip_kills=False)
-        hidden = self._extract_hidden(outputs)
+        # Prefer the explicit pre-lm_head capture (same cascade as prefill
+        # and the KV-cache decode path — R30 symmetry; the former direct
+        # _extract_hidden call skipped the capture and its first-output
+        # fallback handed image-AR graphs their text-vocab logits).
+        hidden = None
+        if hasattr(self.executor, "get_hidden_states"):
+            hidden = self.executor.get_hidden_states(
+                expected_hidden_dim=self.hidden_dim,
+                expected_batch_size=batch_size,
+            )
+        if hidden is None:
+            hidden = self._extract_hidden(outputs)
         if hidden is None:
             raise RuntimeError("O(n) decode could not extract hidden_states.")
         while hidden.ndim > 3:
