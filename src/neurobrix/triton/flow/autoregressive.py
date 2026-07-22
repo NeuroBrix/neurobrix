@@ -84,20 +84,19 @@ class TritonAutoregressiveHandler:
         if not gen_info:
             raise RuntimeError("autoregressive_generation requires flow.generation info.")
 
-        # Capability gate (data-driven on flow-class × engine, R15 — NOT model
-        # name): the Triton engine does not yet support the image-autoregressive
-        # flow. Refuse cleanly at the boundary instead of crashing several
-        # layers down in the sampler (item() on a mis-shaped image-AR logits
-        # tensor). Tracked as chantier P-TRITON-IMAGE-AR; this guard falls for
-        # the WHOLE class the day that chantier closes — no model name here.
-        if gen_info.get("type") == "autoregressive_image":
-            raise RuntimeError(
-                "Triton engine does not yet support the image-autoregressive "
-                "flow (generation.type='autoregressive_image'). This path is "
-                "tracked as chantier P-TRITON-IMAGE-AR. Run image-autoregressive "
-                "models on the validated PyTorch branch (--compiled or "
-                "--sequential) until it closes."
-            )
+        # Arm the run-scoped RNG stream for the Triton random wrappers
+        # (Gumbel-max multinomial sampling draws one seed per step). Same
+        # data-driven cascade as the other triton flows (CLI global.seed
+        # override, else defaults.seed) — R30 mirror of the compiled
+        # engine's torch.manual_seed / sampling_generator. Without this the
+        # sampler fell back to the unseeded random.randint stream and
+        # --seed had NO effect on triton AR sampling (text or image):
+        # triton vs triton_sequential produced different tokens at the
+        # same seed. Seedless runs keep the unseeded fallback.
+        from neurobrix.kernels import rng_stream
+        _ov = self.ctx.variable_resolver.resolved
+        rng_stream.set_run_seed(
+            _ov.get("global.seed", self.ctx.pkg.defaults.get("seed")))
 
         session = self._create_session(gen_info)
         self._active_session = session
@@ -813,7 +812,13 @@ class TritonImageStrategy:
         if self._use_cfg and last.shape[0] >= 2:
             l_cond = self._run_head(last.narrow(0, 0, 1).contiguous())
             l_uncond = self._run_head(last.narrow(0, 1, 1).contiguous())
-            return l_uncond + self._cfg_weight * (l_cond - l_uncond)
+            # CFG guidance via the unified TritonCFGEngine (single formula
+            # authority — R30 mirror of the compiled ImageStrategy, which
+            # routes through CFGEngine.apply_guidance). Lazy import avoids
+            # the cfg.engine↔flow circular import at load.
+            from neurobrix.triton.cfg.engine import TritonCFGEngine
+            return TritonCFGEngine.apply_guidance(
+                l_cond, l_uncond, self._cfg_weight)
         return self._run_head(last)
 
     def _run_head(self, hidden: NBXTensor) -> NBXTensor:

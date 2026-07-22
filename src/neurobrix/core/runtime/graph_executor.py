@@ -1874,6 +1874,13 @@ class GraphExecutor:
                 protected.add(tid)
         for tid in self._dag.get("output_tensor_ids", []):
             protected.add(tid)
+        # Persistent tids (enable_hidden_states_capture — e.g. the pre-lm_head
+        # hidden for image-AR LLMs whose graph output is text-vocab logits)
+        # must survive liveness eviction in this mode too. R30 mirror of
+        # _ensure_triton_compiled, which threads them into the dag's declared
+        # outputs before the arena compile.
+        for tid in self._persistent_tensor_ids:
+            protected.add(tid)
 
         def _collect_arg_tids(arg, out_set):
             if not isinstance(arg, dict):
@@ -2368,6 +2375,16 @@ class GraphExecutor:
         for tid in output_tids:
             if tid in store and store[tid] is not None:
                 outputs[tid] = store[tid]
+
+        # Capture declared outputs + persistent tids for get_hidden_states
+        # (R30 mirror of the compiled-triton arena read in
+        # _get_hidden_states_triton). Rebuilt from scratch every run so
+        # decode steps observe the CURRENT step's tensors, never a stale
+        # prefill capture.
+        self._tritonseq_captured = dict(outputs)
+        for tid in self._persistent_tensor_ids:
+            if tid in store and store[tid] is not None:
+                self._tritonseq_captured[tid] = store[tid]
 
         return outputs, num_ops
 
@@ -4095,30 +4112,43 @@ class GraphExecutor:
         expected_hidden_dim: int,
         expected_batch_size: Optional[int],
     ) -> Optional[Any]:
-        """Triton-mode hidden-states retrieval.
+        """Triton-mode hidden-states retrieval (both triton engines).
 
         Mirrors the two-strategy cascade of the native `get_hidden_states`
-        but reads from the TritonSequence arena (the triton analog of
-        ExecutionContext.tensor_store). Returns an NBXTensor — callers on
-        the triton path are already NBX-native (TritonLMSession).
+        but reads from the triton execution state: the TritonSequence arena
+        in compiled mode, or the per-run capture dict populated by
+        `_run_triton_sequential` in op-by-op mode (P-TRITON-IMAGE-AR — the
+        former `_triton_seq`-only read returned None in triton_sequential,
+        so the session's output-scan silently handed the text-vocab logits
+        to the image strategy as "hidden states"). Returns an NBXTensor —
+        callers on the triton path are already NBX-native (TritonLMSession).
         """
-        if not hasattr(self, "_triton_seq") or self._triton_seq is None:
-            return None
         assert self._dag is not None
+        triton_seq = getattr(self, "_triton_seq", None)
+        seq_captured = getattr(self, "_tritonseq_captured", None)
+        if triton_seq is not None:
+            def _gather(tids):
+                return triton_seq.gather_outputs(list(tids))
+        elif seq_captured is not None:
+            def _gather(tids):
+                return {t: seq_captured.get(t) for t in tids}
+        else:
+            return None
 
         # Strategy 1: declared graph output whose last dim matches hidden_dim
         output_tids = self._dag.get("output_tensor_ids", [])
-        arena_outs = self._triton_seq.gather_outputs(list(output_tids))
-        for tid, tensor in arena_outs.items():
+        for tid, tensor in _gather(output_tids).items():
             if tensor is not None and tensor.shape[-1] == expected_hidden_dim:
                 return tensor
 
         # Strategy 2: pre-lm_head input (image-AR LLMs: graph output is
         # text-vocab logits, hidden states are the first input to the
         # last aten::mm). Requires that enable_hidden_states_capture()
-        # added hidden_tid to _persistent_tensor_ids BEFORE triton compile
-        # — _ensure_triton_compiled threads that into the dag's declared
-        # outputs so the arena slot stays alive through liveness GC.
+        # added hidden_tid to _persistent_tensor_ids BEFORE the first run —
+        # compiled mode threads it into the dag's declared outputs at
+        # _ensure_triton_compiled so the arena slot survives liveness GC;
+        # sequential mode protects the tid from eviction and captures it
+        # per run.
         execution_order = self._dag.get("execution_order", [])
         last_mm_uid = None
         for op_uid in reversed(execution_order):
@@ -4133,19 +4163,26 @@ class GraphExecutor:
         if not input_ids:
             return None
         hidden_tid = input_ids[0]
-        gathered = self._triton_seq.gather_outputs([hidden_tid])
-        hidden = gathered.get(hidden_tid)
+        hidden = _gather([hidden_tid]).get(hidden_tid)
         if hidden is None:
             return None
-        # Reshape: triton may hand back the flattened (1408, 4096) form
-        # (per Janus's lm_head view). Unflatten to (batch, seq, hidden).
+        # Contract guard (ZERO FALLBACK): for text LLMs whose lm_head lives
+        # in a SEPARATE component, the last in-graph mm is an FFN projection
+        # — its input width is the FFN intermediate size, not the model
+        # width. Returning it would feed a mis-shaped tensor into the decode
+        # loop; refuse instead, so the caller's output-scan stays
+        # authoritative for those graphs.
+        if hidden.shape[-1] != expected_hidden_dim:
+            return None
+        # Unflatten: the pre-lm_head tensor is the (B*S, D) view per the
+        # traced lm_head matmul. Restore (batch, seq, hidden) using the
+        # caller-provided batch (CFG image-AR runs at batch=2).
         if hidden.ndim == 2:
-            total, hdim = hidden.shape
-            if hdim == expected_hidden_dim:
-                bsz = expected_batch_size or 1
-                if bsz > 1 and total % bsz == 0:
-                    return hidden.view(bsz, total // bsz, hdim)
-                return hidden.unsqueeze(0)
+            total = hidden.shape[0]
+            bsz = expected_batch_size or 1
+            if bsz > 1 and total % bsz == 0:
+                return hidden.view(bsz, total // bsz, expected_hidden_dim)
+            return hidden.unsqueeze(0)
         return hidden
 
     def _reshape_hidden(
@@ -4263,6 +4300,13 @@ class GraphExecutor:
             self._triton_seq._arena.clear_all()  # type: ignore[attr-defined]
             self._triton_seq = None
 
+        # Step 1c: Drop the triton_sequential per-run capture (holds NBXTensor
+        # refs to the last run's outputs + persistent tids — e.g. the image-AR
+        # LM's text-vocab logits, ~250 MB — which would otherwise survive the
+        # LM unload that precedes the VQ decoder).
+        if hasattr(self, '_tritonseq_captured'):
+            self._tritonseq_captured = {}
+
         # Step 2: Use centralized memory manager
         MemoryManager.cleanup_context(self._ctx)
         MemoryManager.unload_weights(self._weights)
@@ -4293,6 +4337,8 @@ class GraphExecutor:
                 from neurobrix.kernels.nbx_tensor import DeviceAllocator as _DA
                 _DA.sync_device()
                 self._triton_seq._arena.clear_all()  # type: ignore[attr-defined]
+            if hasattr(self, '_tritonseq_captured'):
+                self._tritonseq_captured = {}
             MemoryManager.cleanup_context(self._ctx)
             return
 
@@ -4311,6 +4357,11 @@ class GraphExecutor:
             _DA.sync_device()
             self._triton_seq._arena.clear_all()  # type: ignore[attr-defined]
             # Keep _triton_seq alive — R2 rebinds fresh weights into same slots
+
+        # Per-request state: drop the triton_sequential capture refs (mirror
+        # of the unload_weights Step 1c — same retention hazard).
+        if hasattr(self, '_tritonseq_captured'):
+            self._tritonseq_captured = {}
 
         MemoryManager.cleanup_context(self._ctx)
         MemoryManager.unload_weights(self._weights)
