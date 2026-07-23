@@ -270,10 +270,29 @@ class TokenizerFactory:
         tokenizer_cls = getattr(transformers, class_name, None)
 
         if tokenizer_cls is None:
-            raise RuntimeError(
-                f"ZERO FALLBACK: Tokenizer class '{class_name}' not found in transformers.\n"
-                f"Ensure the class name in tokenizer_config.json is correct."
-            )
+            # Vendor-custom tokenizer CLASS over a STANDARD fast
+            # serialization (e.g. MiniCPMOTokenizerFast, a convenience
+            # subclass of Qwen2TokenizerFast adding only id properties):
+            # the embedded tokenizer.json is class-agnostic, so load it
+            # through the universal fast runner (R34/ZO-1 direction —
+            # engine-internal runner over the embedded data, never vendor
+            # custom code; special tokens + chat template all come from
+            # the embedded files, and modality token ids come from the
+            # topology contract, not tokenizer attributes). ZERO FALLBACK
+            # stays for missing DATA: no fast serialization → crash.
+            if (Path(tokenizer_path) / "tokenizer.json").exists():
+                # Substitution must be LOUD (doctrine): name both sides.
+                print(f"   [Tokenizer] Vendor class '{class_name}' not in "
+                      f"transformers — loading the embedded tokenizer.json "
+                      f"through PreTrainedTokenizerFast (universal fast "
+                      f"runner)")
+                tokenizer_cls = transformers.PreTrainedTokenizerFast
+            else:
+                raise RuntimeError(
+                    f"ZERO FALLBACK: Tokenizer class '{class_name}' not found in transformers\n"
+                    f"and the module embeds no class-agnostic fast serialization (tokenizer.json).\n"
+                    f"Ensure the class name in tokenizer_config.json is correct."
+                )
 
         try:
             return tokenizer_cls.from_pretrained(tokenizer_path)

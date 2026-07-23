@@ -3140,18 +3140,25 @@ def conv2d_wrapper(
 
     assert weight.ndim == 4
 
+    # ATen broadcasts single-element stride/padding/dilation lists over
+    # both spatial dims (padding="valid" convs record [0] — the
+    # MiniCPM-o NaViT patch_embedding hit exactly that as an
+    # IndexError here; same contract as the tracer-side estimator).
     if isinstance(stride, (list, tuple)):
-        stride_h, stride_w = stride[0], stride[1]
+        stride_h = stride[0]
+        stride_w = stride[1] if len(stride) > 1 else stride_h
     else:
         stride_h = stride_w = stride
 
     if isinstance(padding, (list, tuple)):
-        pad_h, pad_w = padding[0], padding[1]
+        pad_h = padding[0] if len(padding) > 0 else 0
+        pad_w = padding[1] if len(padding) > 1 else pad_h
     else:
         pad_h = pad_w = padding
 
     if isinstance(dilation, (list, tuple)):
-        dil_h, dil_w = dilation[0], dilation[1]
+        dil_h = dilation[0]
+        dil_w = dilation[1] if len(dilation) > 1 else dil_h
     else:
         dil_h = dil_w = dilation
 
@@ -4463,6 +4470,62 @@ def gather_wrapper(input, dim: int, index) :
     return out
 
 
+def masked_scatter_wrapper(x, mask, source) :
+    """aten::masked_scatter — fill mask-True elements of `x` from the
+    flat `source` buffer in row-major order (torch semantics).
+
+    R33-pure composition over existing Triton bricks (no dedicated scan
+    kernel): the running index of each True element is the inclusive
+    cumsum of the flat mask minus one; False lanes gather a clamped
+    dummy and are discarded by the final `where`.
+
+        idx      = cumsum(mask.float32) - 1      (exclusive True count)
+        gathered = source_flat[clamp(idx, 0, n_src-1).int64]
+        out      = where(mask, gathered, x)
+
+    The count arithmetic runs in float32 (the well-trodden elementwise
+    path) — exact for counts < 2^24, guarded below; a dedicated scan
+    kernel is the extension past that ceiling (and the optimisation path
+    if this op ever lands on a hot loop beyond the twice-per-forward
+    splice — the flat single-row cumsum walks its partial-sum chain
+    host-side, numel/4096 launches).
+
+    First consumer: the MiniCPM-o llm.model graph (in-graph bool-mask
+    modality splice — expanded [B, S, H] mask, flattened [n, H] source).
+    v1 contract: `mask` must match `x`'s shape exactly (the traced form);
+    broadcasting masks raise a named error.
+    """
+    if tuple(mask.shape) != tuple(x.shape):
+        raise RuntimeError(
+            "ZERO FALLBACK: masked_scatter v1 requires mask.shape == "
+            f"self.shape (got mask {tuple(mask.shape)} vs self "
+            f"{tuple(x.shape)}); broadcast-mask support lands with its "
+            "first consumer graph.")
+    n = x.numel()
+    n_src = source.numel()
+    x_flat = x.contiguous().reshape(n)
+    if n_src == 0:
+        # torch semantics: valid only when the mask has no True element;
+        # the splice flows feed a 1-row stub instead, so an empty source
+        # here means an all-False mask — the input passes through.
+        return x_flat.reshape(*x.shape)
+    if n >= (1 << 24):
+        raise RuntimeError(
+            "ZERO FALLBACK: masked_scatter float32 count path is exact "
+            f"only below 2^24 elements (got {n}); a dedicated int scan "
+            "kernel is the extension for larger splices.")
+    mask_flat = mask.contiguous().reshape(n)
+    src_flat = source.contiguous().reshape(n_src)
+    if src_flat.dtype != x_flat.dtype:
+        src_flat = src_flat.to(x_flat.dtype)
+    idx = cumsum_wrapper(mask_flat, dim=0, dtype=NBXDtype.float32)
+    idx = sub(idx, 1.0)
+    idx = clamp(idx, min_val=0.0, max_val=float(n_src - 1))
+    gathered = gather_wrapper(src_flat, 0, idx.to(NBXDtype.int64))
+    out = where_wrapper(mask_flat, gathered, x_flat)
+    return out.reshape(*x.shape)
+
+
 # ---------------------------------------------------------------------------
 # Scatter / Scatter Add
 # ---------------------------------------------------------------------------
@@ -4836,22 +4899,27 @@ def avg_pool2d_wrapper(
     assert x.ndim == 4
     N, C, H, W = x.shape
 
+    # ATen broadcast for single-element lists (same contract as
+    # conv2d_wrapper — the latent IndexError class).
     if isinstance(kernel_size, int):
         kh, kw = kernel_size, kernel_size
     else:
-        kh, kw = kernel_size[0], kernel_size[1]
+        kh = kernel_size[0]
+        kw = kernel_size[1] if len(kernel_size) > 1 else kh
 
-    if stride is None:
+    if stride is None or (isinstance(stride, (list, tuple)) and not stride):
         sh, sw = kh, kw
     elif isinstance(stride, int):
         sh, sw = stride, stride
     else:
-        sh, sw = stride[0], stride[1]
+        sh = stride[0]
+        sw = stride[1] if len(stride) > 1 else sh
 
     if isinstance(padding, int):
         ph, pw = padding, padding
     else:
-        ph, pw = padding[0], padding[1]
+        ph = padding[0] if len(padding) > 0 else 0
+        pw = padding[1] if len(padding) > 1 else ph
 
     if ceil_mode:
         oh = (H + 2 * ph - kh + sh - 1) // sh + 1
@@ -4862,14 +4930,22 @@ def avg_pool2d_wrapper(
 
     output = NBXTensor.empty((N, C, oh, ow), device=x.device, dtype=x.dtype)
 
+    # Contiguous-guard (manifesto pattern): materialize ONCE and launch
+    # with THAT tensor's strides. The previous form passed
+    # x.contiguous() as data but x.stride(...) of the ORIGINAL — a
+    # non-contiguous input (transpose→unsqueeze chains, e.g. the
+    # MiniCPM-o audio pooler) made the kernel read wrong addresses
+    # (141% relative error at the first diverging op of the audio
+    # drift diff). Contiguous inputs short-circuit at zero cost.
+    xc = x.contiguous()
     grid = (
         N * C,
         triton.cdiv(oh, _POOL_BH) * triton.cdiv(ow, _POOL_BW),
     )
-    _set_device(x.contiguous())
+    _set_device(xc)
     avg_pool2d_forward_kernel[grid](
-        x.contiguous(), output,
-        x.stride(0), x.stride(1), x.stride(2), x.stride(3),
+        xc, output,
+        xc.stride(0), xc.stride(1), xc.stride(2), xc.stride(3),
         C, H, W,
         oh, ow,
         kh, kw, sh, sw, ph, pw,
@@ -4893,6 +4969,17 @@ def max_pool2d_wrapper(
     """Max pooling 2D forward."""
     assert x.ndim == 4
     N, C, H, W = x.shape
+
+    # ATen broadcast for single-element lists (same contract as
+    # conv2d_wrapper/avg_pool2d_wrapper).
+    if isinstance(kernel_size, (list, tuple)) and len(kernel_size) == 1:
+        kernel_size = [kernel_size[0], kernel_size[0]]
+    if isinstance(stride, (list, tuple)) and len(stride) == 1:
+        stride = [stride[0], stride[0]]
+    if isinstance(padding, (list, tuple)) and len(padding) == 1:
+        padding = [padding[0], padding[0]]
+    if isinstance(dilation, (list, tuple)) and len(dilation) == 1:
+        dilation = [dilation[0], dilation[0]]
 
     if isinstance(kernel_size, int):
         kh, kw = kernel_size, kernel_size
@@ -4926,14 +5013,17 @@ def max_pool2d_wrapper(
     output = NBXTensor.empty((N, C, oh, ow), device=x.device, dtype=x.dtype)
     indices = NBXTensor.empty((N, C, oh, ow), device=x.device, dtype=NBXDtype.int64)
 
+    # Contiguous-guard: same fix as avg_pool2d_wrapper — one
+    # materialization, ITS strides.
+    xc = x.contiguous()
     grid = (
         N * C,
         triton.cdiv(oh, _POOL_BH) * triton.cdiv(ow, _POOL_BW),
     )
-    _set_device(x.contiguous())
+    _set_device(xc)
     max_pool2d_forward_kernel[grid](
-        x.contiguous(), output, indices,
-        x.stride(0), x.stride(1), x.stride(2), x.stride(3),
+        xc, output, indices,
+        xc.stride(0), xc.stride(1), xc.stride(2), xc.stride(3),
         C, H, W,
         oh, ow,
         kh, kw, sh, sw, ph, pw, dh, dw,

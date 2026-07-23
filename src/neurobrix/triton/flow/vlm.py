@@ -22,6 +22,13 @@ three planes sequentially from the running offset; an image segment of
 llm-grid t×h×w gets t/h/w meshgrid indices + offset; each segment
 starts at max(previous) + 1.
 
+Second contract handled by the same engine — the STAGED-SPLICE chain
+(MiniCPM-o class), detected data-driven from the vision graph's declared
+inputs (input::all_pixel_values): vision tower → projection component →
+LM with the modality splice IN-GRAPH (bool-mask masked_scatter over
+placeholder-token runs), plain 1-D positions. R30 mirror of
+core/flow/vlm.py:_execute_staged_splice.
+
 ZERO SEMANTIC / ZERO HARDCODE: everything reads topology.flow.vlm and
 defaults.json.
 """
@@ -98,6 +105,22 @@ class TritonVLMEngine:
         vision_name = vlm.get("vision_component")
         lm_name = vlm.get("lm_component")
         head_name = vlm.get("head_component")
+
+        # ── Staged-splice contract detection (R30 mirror of the compiled
+        # flow) — data-driven from the vision graph's declared inputs: a
+        # MiniCPM-o-class vpm graph declares input::all_pixel_values; the
+        # omni contract (hidden_states + grid_thw) never does and keeps
+        # the legacy path below bit-for-bit. ──
+        if vision_name:
+            _vis_graph_path = (Path(self.ctx.pkg.cache_path) / "components"
+                               / vision_name / "graph.json")
+            _vis_tensors = {}
+            if _vis_graph_path.exists():
+                with open(_vis_graph_path, "r") as _f:
+                    _vis_tensors = json.load(_f).get("tensors", {})
+            if "input::all_pixel_values" in _vis_tensors:
+                return self._execute_staged_splice(vlm)
+
         image_token_id = vlm.get("image_token_id")
         merge = vlm.get("spatial_merge_size")
         if not vision_name or not lm_name or image_token_id is None or not merge:
@@ -415,8 +438,13 @@ class TritonVLMEngine:
             # Audio requests on a DeepStack graph feed the empty-stub
             # form (all-False mask + zero-length embeds) — R30 mirror.
             _h_ds = context_embeds.shape[2]
+            # Stub dtype follows the resolved compute dtype (engine
+            # authority), mirroring the compiled flow's
+            # context_embeds.dtype — zero-element, but the declared
+            # input dtype must match on bf16/fp32 builds.
             deepstack_embeds = [
-                NBXTensor.from_numpy(np.zeros((0, _h_ds), dtype=np.float16))
+                NBXTensor.from_numpy(
+                    np.zeros((0, _h_ds), dtype=np.float32)).to(dtype)
                 for _ in ds_input_names]
         for _step in range(max_tokens):
             n_gen = len(generated_ids)
@@ -505,6 +533,403 @@ class TritonVLMEngine:
         if out_var and resolved.get("global.transcription") is not None:
             resolved[out_var] = resolved["global.transcription"]
         return self.ctx.variable_resolver.resolve_all()
+
+    # ─── staged-splice contract (MiniCPM-o class; R30 mirror) ─────────
+
+    def _execute_staged_splice(self, vlm: Dict[str, Any]) -> Dict[str, Any]:
+        """R33-pure mirror of core VLMEngine._execute_staged_splice.
+
+        Staged VLM contract (grounded on the MiniCPM-o-4_5 build):
+        vision tower (all_pixel_values / patch_attention_mask /
+        tgt_sizes) → projection (perceiver resampler) → LM with the
+        modality splice IN-GRAPH via bool-mask masked_scatter; audio:
+        mel → apm (chunked additive encoder mask) →
+        audio_projection_layer (avg-pool in-graph). Plain 1-D positions
+        [B, S] (no M-RoPE) — gated on the LM graph's declared
+        position_ids rank.
+
+        All host-side tensor builds (masks, positions, mel) are numpy
+        (allowed CPU glue); every device tensor is NBXTensor."""
+        defaults = self.ctx.pkg.defaults
+        resolved = self.ctx.variable_resolver.resolved
+        dtype = self._compute_dtype()
+
+        vision_name = vlm.get("vision_component")
+        proj_name = vlm.get("vision_projection_component")
+        lm_name = vlm.get("lm_component")
+        head_name = vlm.get("head_component")
+        audio_name = vlm.get("audio_component")
+        aproj_name = vlm.get("audio_projection_component")
+        pre = vlm.get("preprocessing") or {}
+        apre = vlm.get("audio_preprocessing") or {}
+        if not lm_name:
+            raise RuntimeError(
+                "ZERO FALLBACK: staged vlm contract requires lm_component.")
+
+        # Positions discriminator (R30 mirror): plain [B, S] positions
+        # only — an M-RoPE LM graph (rank-3 position_ids) needs its own
+        # builder.
+        _lm_graph_path = (Path(self.ctx.pkg.cache_path) / "components"
+                          / lm_name / "graph.json")
+        with open(_lm_graph_path, "r") as _f:
+            _lm_tensors = json.load(_f).get("tensors", {})
+        _pos_rank = len((_lm_tensors.get("input::position_ids", {})
+                         .get("shape")) or [])
+        if _pos_rank != 2:
+            raise RuntimeError(
+                "ZERO FALLBACK: staged splice expects plain 1-D positions "
+                f"(position_ids rank 2 [B, S]); this LM graph declares rank "
+                f"{_pos_rank} — an M-RoPE staged variant needs its own "
+                "position builder.")
+
+        in_cfg = vlm.get("input", {})
+        prompt = resolved.get(in_cfg.get("prompt_variable", "global.prompt"))
+        if not prompt:
+            raise RuntimeError(
+                "ZERO FALLBACK: vlm flow requires a text prompt.")
+        all_pixel_values = resolved.get("global.all_pixel_values")
+        patch_mask = resolved.get("global.patch_attention_mask")
+        tgt_sizes = resolved.get("global.tgt_sizes")
+        audio_path = resolved.get("global.audio_path")
+        has_image = all_pixel_values is not None
+        has_audio = audio_path is not None
+        if has_image and has_audio:
+            raise RuntimeError(
+                "ZERO FALLBACK: staged vlm v1 accepts one modality per "
+                "request — image XOR audio (mixed-modality lands with a "
+                "multi-span splice extension).")
+        if has_image and (patch_mask is None or tgt_sizes is None):
+            raise RuntimeError(
+                "ZERO FALLBACK: image request missing patch_attention_mask "
+                "/ tgt_sizes — the declared image preprocessing emits all "
+                "three vision inputs.")
+
+        # ── Stage 1 (image): vision tower → projection ──
+        modal_embeds: Optional[NBXTensor] = None      # [n_modal, H]
+        span_ids: Tuple[Optional[int], Optional[int]] = (None, None)
+        span_kind: Optional[str] = None
+        if has_image:
+            if not proj_name:
+                raise RuntimeError(
+                    "ZERO FALLBACK: staged vision chain requires "
+                    "vision_projection_component in topology.flow.vlm.")
+            print(f"   [{vision_name}] Running vision forward...")
+            start = time.perf_counter()
+            self._ensure_weights_loaded(vision_name)
+            # CLI host tensors alias into the resolver; the executor's
+            # component-input boundary converts them for the arena.
+            # BOTH the component-scoped and the global slots are written
+            # (the topology connections route global.* — omni precedent).
+            resolved[f"{vision_name}.all_pixel_values"] = all_pixel_values
+            resolved["global.all_pixel_values"] = all_pixel_values
+            resolved[f"{vision_name}.patch_attention_mask"] = patch_mask
+            resolved["global.patch_attention_mask"] = patch_mask
+            resolved[f"{vision_name}.tgt_sizes"] = tgt_sizes
+            resolved["global.tgt_sizes"] = tgt_sizes
+            self._execute_component(vision_name, "forward", None)
+            vis_hidden = self._get_component_output(vision_name)
+            if vis_hidden is None:
+                raise RuntimeError(
+                    f"ZERO FALLBACK: vision component '{vision_name}' "
+                    f"produced no output.")
+            if not self.ctx.persistent_mode:
+                self._unload_component_weights(vision_name)
+                release_flow_memory(self.ctx.primary_device)
+
+            self._ensure_weights_loaded(proj_name)
+            resolved[f"{proj_name}.x"] = vis_hidden.to(dtype)
+            resolved["global.x"] = resolved[f"{proj_name}.x"]
+            resolved[f"{proj_name}.tgt_sizes"] = tgt_sizes
+            self._execute_component(proj_name, "forward", None)
+            proj_out = self._get_component_output(proj_name)
+            if proj_out is None:
+                raise RuntimeError(
+                    f"ZERO FALLBACK: projection component '{proj_name}' "
+                    f"produced no output.")
+            modal_embeds = proj_out.reshape(
+                -1, proj_out.shape[-1]).to(dtype)
+            print(f"   [{vision_name}->{proj_name}] "
+                  f"{modal_embeds.shape[0]} vision tokens in "
+                  f"{(time.perf_counter() - start) * 1000:.0f}ms")
+            if not self.ctx.persistent_mode:
+                self._unload_component_weights(proj_name)
+                release_flow_memory(self.ctx.primary_device)
+            span_ids = (pre.get("image_start_token_id"),
+                        pre.get("image_end_token_id"))
+            span_kind = "image"
+
+        # ── Stage 1 (audio): mel → audio tower → projection(+pool) ──
+        elif has_audio:
+            if not audio_name or not aproj_name:
+                raise RuntimeError(
+                    "ZERO FALLBACK: audio request needs audio_component + "
+                    "audio_projection_component in topology.flow.vlm.")
+            print(f"   [{audio_name}] Running audio forward...")
+            start = time.perf_counter()
+            _ptype = {"whisper_mel": "mel_spectrogram"}.get(
+                apre.get("type", "whisper_mel"), apre.get("type"))
+            from neurobrix.core.module.audio import mel_dsp
+            feats_np = mel_dsp.extract_features_np(
+                _ptype, str(audio_path), Path(self.ctx.pkg.cache_path),
+                None, params=apre)
+            while feats_np.ndim > 2:
+                feats_np = feats_np[0]
+            L = int(feats_np.shape[1])
+            s_cnn = (L - 1) // 2 + 1     # stride-2 conv stem length
+            # Chunked additive encoder mask — R30 mirror of the compiled
+            # branch (vendor get_audio_embedding: all-False padding at
+            # batch 1, chunk mask allowed[i, j] = j < ((i//chunk)+1)*chunk
+            # filled to -inf; chunk = audio_chunk_length seconds of
+            # post-stem frames).
+            _lm_cfg_a = defaults.get("lm_config", {})
+            chunk_len = _lm_cfg_a.get("audio_chunk_length")
+            sr_a = apre.get("sample_rate")
+            hop_a = apre.get("hop_length")
+            pool_k = _lm_cfg_a.get("audio_pool_step")
+            if (chunk_len is None or sr_a is None or hop_a is None
+                    or pool_k is None):
+                raise RuntimeError(
+                    "ZERO FALLBACK: audio chain needs "
+                    "lm_config.audio_chunk_length + audio_pool_step and "
+                    "audio_preprocessing.sample_rate/hop_length — "
+                    "registry-emitted, missing from this build.")
+            chunk = int(float(chunk_len) * ((int(sr_a) // int(hop_a)) // 2))
+            idx = np.arange(s_cnn)
+            allowed = idx[None, :] < ((idx[:, None] // chunk) + 1) * chunk
+            attn_np = np.where(allowed, np.float32(0.0),
+                               np.float32(-np.inf)).astype(np.float32)
+            attn = NBXTensor.from_numpy(np.ascontiguousarray(
+                attn_np.reshape(1, 1, s_cnn, s_cnn))).to(dtype)
+            feats = NBXTensor.from_numpy(np.ascontiguousarray(
+                feats_np[None])).to(dtype)
+            self._ensure_weights_loaded(audio_name)
+            resolved[f"{audio_name}.input_features"] = feats
+            resolved["global.input_features"] = feats
+            resolved[f"{audio_name}.attention_mask"] = attn
+            resolved["global.attention_mask"] = attn
+            self._execute_component(audio_name, "forward", None)
+            aud_hidden = self._get_component_output(audio_name)
+            if aud_hidden is None:
+                raise RuntimeError(
+                    f"ZERO FALLBACK: audio component '{audio_name}' "
+                    f"produced no output.")
+            if not self.ctx.persistent_mode:
+                self._unload_component_weights(audio_name)
+                release_flow_memory(self.ctx.primary_device)
+
+            self._ensure_weights_loaded(aproj_name)
+            resolved[f"{aproj_name}.audio_features"] = aud_hidden.to(dtype)
+            resolved["global.audio_features"] = \
+                resolved[f"{aproj_name}.audio_features"]
+            self._execute_component(aproj_name, "forward", None)
+            aproj_out = self._get_component_output(aproj_name)
+            if aproj_out is None:
+                raise RuntimeError(
+                    f"ZERO FALLBACK: audio projection component "
+                    f"'{aproj_name}' produced no output.")
+            n_expected = (s_cnn - int(pool_k)) // int(pool_k) + 1
+            if aproj_out.shape[1] != n_expected:
+                raise RuntimeError(
+                    f"ZERO FALLBACK: audio projection produced "
+                    f"{aproj_out.shape[1]} tokens but the pooling "
+                    f"arithmetic ((({L}-1)//2+1 - {pool_k})//{pool_k}+1) "
+                    f"expects {n_expected}.")
+            modal_embeds = aproj_out.reshape(
+                -1, aproj_out.shape[-1]).to(dtype)
+            print(f"   [{audio_name}->{aproj_name}] "
+                  f"{modal_embeds.shape[0]} audio tokens (L={L} mel "
+                  f"frames) in {(time.perf_counter() - start) * 1000:.0f}ms")
+            if not self.ctx.persistent_mode:
+                self._unload_component_weights(aproj_name)
+                release_flow_memory(self.ctx.primary_device)
+            span_ids = (apre.get("audio_start_token_id"),
+                        apre.get("audio_end_token_id"))
+            span_kind = "audio"
+
+        # ── Stage 2: token ids with the placeholder run ──
+        ids, span_lo, span_hi = self._tokenize_with_placeholder_run(
+            str(prompt), span_kind, span_ids, pre.get("unk_token_id"),
+            0 if modal_embeds is None else int(modal_embeds.shape[0]))
+
+        # ── Stage 3: LM decode (full re-forward, in-graph splice) ──
+        from neurobrix.core.runtime.decode_bound import decode_bound
+        max_tokens = decode_bound(
+            int(resolved["global.max_tokens"])
+            if resolved.get("global.max_tokens") is not None
+            else defaults.get("max_tokens"))
+        if max_tokens is None:
+            raise RuntimeError(
+                "ZERO FALLBACK: max_tokens missing from defaults.json.")
+        temperature = (float(resolved["global.temperature"])
+                       if resolved.get("global.temperature") is not None
+                       else defaults.get("temperature"))
+        if temperature is None:
+            raise RuntimeError(
+                "ZERO FALLBACK: temperature missing from defaults.json.")
+        eos_token_id = defaults.get("eos_token_id")
+        if eos_token_id is None:
+            raise RuntimeError(
+                "ZERO FALLBACK: eos_token_id missing from defaults.json.")
+        eos_ids = set(eos_token_id if isinstance(eos_token_id, (list, tuple))
+                      else [eos_token_id])
+        repetition_penalty = (
+            float(resolved["global.repetition_penalty"])
+            if resolved.get("global.repetition_penalty") is not None
+            else defaults.get("repetition_penalty", 1.0))
+
+        self._ensure_weights_loaded(lm_name)
+        # Declared-MoE fusion mirror (data-driven; no-op on dense builds).
+        lm_cfg = defaults.get("lm_config", {})
+        _n_exp = lm_cfg.get("num_experts")
+        _lm_exec = self.ctx.executors.get(lm_name)
+        if _n_exp is not None and _n_exp > 1 and _lm_exec is not None:
+            _norm_topk = lm_cfg.get("norm_topk_prob")
+            if _norm_topk is None:
+                raise RuntimeError(
+                    "ZERO FALLBACK: norm_topk_prob missing from lm_config "
+                    "for MoE model — add moe.norm_topk_prob to the registry.")
+            _lm_exec.set_moe_config(norm_topk_prob=_norm_topk)
+        embed_weight = self._get_embed_weight(lm_name)
+        if embed_weight is None:
+            raise RuntimeError(
+                f"ZERO FALLBACK: vlm stage '{lm_name}' requires embed "
+                "weight.")
+
+        # Placeholder rows are overwritten IN-GRAPH by masked_scatter —
+        # the context embeds the full ids, unk placeholders included.
+        context_embeds = self._embed_ids(ids, embed_weight, dtype)
+        hidden_size = context_embeds.shape[2]
+        _zero_stub = NBXTensor.from_numpy(
+            np.zeros((1, hidden_size), dtype=np.float32)).to(dtype)
+        vis_src = modal_embeds if span_kind == "image" else _zero_stub
+        aud_src = modal_embeds if span_kind == "audio" else _zero_stub
+
+        logits_source = ("lm_head"
+                         if (head_name and head_name in self.ctx.executors)
+                         else "embed_weight_tied")
+        print(f"   [{lm_name}] Generating (max={max_tokens}, "
+              f"context={context_embeds.shape[1]}, logits={logits_source})...")
+        start = time.perf_counter()
+        generated_ids: List[int] = []
+        for _step in range(max_tokens):
+            S = context_embeds.shape[1]
+            vis_mask_np = np.zeros((1, S, hidden_size), dtype=bool)
+            aud_mask_np = np.zeros((1, S, hidden_size), dtype=bool)
+            if span_kind == "image":
+                vis_mask_np[0, span_lo:span_hi, :] = True
+            elif span_kind == "audio":
+                aud_mask_np[0, span_lo:span_hi, :] = True
+            position_ids = NBXTensor.from_numpy(
+                np.arange(S, dtype=np.int64).reshape(1, -1))
+            for _key, _value in (
+                    ("inputs_embeds", context_embeds),
+                    ("position_ids", position_ids),
+                    ("visual_pos_masks",
+                     NBXTensor.from_numpy(vis_mask_np)),
+                    ("audio_pos_masks",
+                     NBXTensor.from_numpy(aud_mask_np)),
+                    ("vision_hidden_states", vis_src),
+                    ("audio_hidden_states", aud_src)):
+                resolved[_key] = _value
+                resolved[f"global.{_key}"] = _value
+
+            self._execute_component(lm_name, "forward", None)
+            output = self._get_component_output(lm_name)
+            if output is None:
+                break
+            logits = self._compute_logits(
+                output, embed_weight, logits_source, head_name)
+            next_token = _sample_token_nbx(
+                logits, temperature,
+                generated_ids=generated_ids,
+                repetition_penalty=repetition_penalty,
+            )
+            generated_ids.append(next_token)
+            if next_token in eos_ids:
+                break
+            token_embed = self._embed_ids([next_token], embed_weight, dtype)
+            context_embeds = NBXTensor.cat([context_embeds, token_embed],
+                                           dim=1)
+
+        print(f"   [{lm_name}] Generated {len(generated_ids)} tokens in "
+              f"{(time.perf_counter() - start) * 1000:.0f}ms")
+        resolved["global.generated_token_ids"] = generated_ids
+
+        if not self.ctx.persistent_mode:
+            self._unload_component_weights(lm_name)
+            release_flow_memory(self.ctx.primary_device)
+
+        from neurobrix.triton.audio_frontend import (
+            postprocess_text_output_np as postprocess_text_output,
+        )
+        postprocess_text_output(self.ctx)
+        out_var = vlm.get("output", {}).get("variable",
+                                            "global.generated_text")
+        if out_var and resolved.get("global.transcription") is not None:
+            resolved[out_var] = resolved["global.transcription"]
+        return self.ctx.variable_resolver.resolve_all()
+
+    def _tokenize_with_placeholder_run(
+            self, prompt: str, span_kind: Optional[str],
+            span_ids: Tuple[Optional[int], Optional[int]],
+            unk_id: Optional[int], n_modal: int
+    ) -> Tuple[List[int], int, int]:
+        """Vendor placeholder-run id assembly — text-only boundary,
+        byte-mirror of core VLMEngine._tokenize_with_placeholder_run
+        (see its docstring for the vendor _convert_omni_to_inputs
+        grounding). Returns (ids, span_lo, span_hi); (ids, 0, 0) for
+        text-only requests."""
+        tokenizer = self.ctx.modules.get("tokenizer")
+        if tokenizer is None:
+            raise RuntimeError(
+                "ZERO FALLBACK: vlm flow requires the embedded tokenizer.")
+        if span_kind is None:
+            content = prompt
+        else:
+            if unk_id is None or span_ids[0] is None or span_ids[1] is None:
+                raise RuntimeError(
+                    "ZERO FALLBACK: staged splice needs unk_token_id + "
+                    f"{span_kind} start/end token ids in the topology "
+                    "preprocessing blocks (registry-emitted).")
+            if n_modal <= 0:
+                raise RuntimeError(
+                    f"ZERO FALLBACK: {span_kind} chain produced no tokens.")
+            # skip_special_tokens=False is MANDATORY — R30 mirror of the
+            # compiled flow: the engine-internal tokenizer runner defaults
+            # to skipping special ids on decode, and the placeholder
+            # markers ARE special ids (they would decode to "").
+            s_start = tokenizer.decode([int(span_ids[0])],
+                                       skip_special_tokens=False)
+            s_unk = tokenizer.decode([int(unk_id)],
+                                     skip_special_tokens=False)
+            s_end = tokenizer.decode([int(span_ids[1])],
+                                     skip_special_tokens=False)
+            content = s_start + s_unk * n_modal + s_end + "\n" + prompt
+        messages = [{"role": "user", "content": content}]
+        try:
+            ids = tokenizer.apply_chat_template(
+                messages, tokenize=True, add_generation_prompt=True)
+        except Exception as e:
+            raise RuntimeError(
+                "ZERO FALLBACK: the embedded tokenizer could not apply its "
+                "chat template — the staged vlm flow requires a text chat "
+                "template.") from e
+        if hasattr(ids, "input_ids"):
+            ids = ids.input_ids
+        ids = list(ids[0] if ids and isinstance(ids[0], (list, tuple))
+                   else ids)
+        if span_kind is None:
+            return ids, 0, 0
+        positions = [i for i, tid in enumerate(ids) if tid == int(unk_id)]
+        first, last = (positions[0], positions[-1]) if positions else (0, -1)
+        if (len(positions) != n_modal
+                or positions != list(range(first, last + 1))):
+            raise RuntimeError(
+                "ZERO FALLBACK: placeholder run not recovered after "
+                f"templating ({len(positions)} unk positions, expected a "
+                f"contiguous run of {n_modal}) — the embedded tokenizer "
+                "did not round-trip the placeholder tokens.")
+        return ids, first, last + 1
 
     # ─── mrope positions (numpy; mirror of core VLMEngine) ────────────
 
