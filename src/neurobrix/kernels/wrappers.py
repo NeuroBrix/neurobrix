@@ -4627,6 +4627,31 @@ def index_add_wrapper(x, dim: int, index,
 # Index Put
 # ---------------------------------------------------------------------------
 
+def nonzero_1d_wrapper(mask) -> "NBXTensor":
+    """Ascending int64 indices of the True elements of a 1-D mask.
+
+    Deterministic single-program compaction (kernels/ops/nonzero.py) —
+    no atomics, indices come out in order, bit-reproducible. The output
+    length is data-dependent: worst-case buffer + one count readback
+    (the host-boundary sync every data-dependent-shape op requires),
+    narrowed to [n] (a leading-dim narrow of a contiguous buffer stays
+    contiguous — no guard needed)."""
+    from .ops.nonzero import nonzero_1d_kernel
+    assert mask.ndim == 1, f"nonzero_1d expects 1-D, got {mask.ndim}-D"
+    m = mask.contiguous()
+    n = int(m.shape[0])
+    out = NBXTensor.empty([max(n, 1)], dtype=NBXDtype.int64, device=m.device)
+    count = NBXTensor.zeros([1], dtype=NBXDtype.int32, device=m.device)
+    if n > 0:
+        BLOCK = min(1024, triton.next_power_of_2(n))
+        _set_device(m)
+        nonzero_1d_kernel[(1,)](m, out, count, n, BLOCK)
+        k = int(count.numpy()[0])
+    else:
+        k = 0
+    return out[:k]
+
+
 def index_put_wrapper(x, indices, values, accumulate: bool = False):
     """aten::index_put / index_put_ — scatter-write `values` into `x`.
 
@@ -4674,11 +4699,32 @@ def index_put_wrapper(x, indices, values, accumulate: bool = False):
                               *([1] * (x.ndim - idx.ndim))])
         fill_val = _to_scalar(values) if isinstance(values, NBXTensor) else float(values)
         return masked_fill(x, mask_b, fill_val)
-    if idx.dtype == NBXDtype.bool_:
-        raise NotImplementedError(
-            "aten::index_put with a boolean-mask index is unwired (no "
-            "nonzero kernel in the catalogue) — follow-up "
-            "P-INDEX-PUT-ADVANCED-GENERAL.")
+    if (("bool" in _idx_dtn or "uint8" in _idx_dtn)
+            and list(idx.shape) == list(x.shape[:idx.ndim])):
+        # General boolean-mask scatter with tensor values: x[mask] = vals
+        # where mask is a leading-dim PREFIX of x and vals is [n, ...]
+        # (n = mask True-count) — the DeepStack injection write
+        # (hidden[visual_pos_masks, :] = local_this). NBX stores bool
+        # masks as uint8 (bool-repr doctrine), hence the same name+
+        # shape-prefix conjunction as the masked_fill route above.
+        # Lower to the integer path: flatten the masked leading dims,
+        # compact the mask to ascending row indices (deterministic
+        # nonzero), scatter through the proven single-index route,
+        # restore the shape.
+        xc = x.contiguous()
+        flat_rows = 1
+        for _s in idx.shape:
+            flat_rows *= int(_s)
+        tail = list(x.shape[idx.ndim:])
+        x_flat = xc.reshape([flat_rows] + tail)
+        rows = nonzero_1d_wrapper(idx.reshape([flat_rows]))
+        if int(rows.shape[0]) == 0:
+            # All-False mask (text-mode empty-visual stubs): zero writes —
+            # a fresh copy per the functional contract, same as the
+            # integer path's clone-then-scatter with an empty scatter.
+            return x.clone()
+        out_flat = index_put_wrapper(x_flat, [rows], values, accumulate)
+        return out_flat.reshape(list(x.shape))
     if idx.dtype in (NBXDtype.float16, NBXDtype.bfloat16,
                      NBXDtype.float32, NBXDtype.float64):
         raise NotImplementedError(

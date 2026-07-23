@@ -491,6 +491,17 @@ class TritonAutoregressiveHandler:
                       .get("shape"))
         position_ids_rank = (len(_pos_shape)
                              if isinstance(_pos_shape, (list, tuple)) else 2)
+
+        # DeepStack-lineage visual inputs — R30 mirror of the compiled
+        # _create_session: declared trace shapes so a pure-text request
+        # feeds empty stubs (TritonLMSession._add_visual_stubs).
+        visual_stub_specs = {
+            tid[len("input::"):]: (spec or {}).get("shape")
+            for tid, spec in dag.get("tensors", {}).items()
+            if ((tid == "input::visual_pos_masks"
+                 or tid.startswith("input::deepstack_visual_embeds."))
+                and isinstance((spec or {}).get("shape"), (list, tuple)))
+        }
         # All LLMs with position_ids input use absolute positions (RoPE, learnable).
         # Default True when graph has position_ids — the graph field is optional.
         uses_abs_pos = dag.get("uses_absolute_position",
@@ -577,6 +588,7 @@ class TritonAutoregressiveHandler:
             uses_absolute_position=uses_abs_pos,
             device_idx=device_idx,
             position_ids_rank=position_ids_rank,
+            visual_stub_specs=visual_stub_specs,
         )
 
     def _create_strategy(self, gen_info: Dict,

@@ -23,7 +23,8 @@ class TritonLMSession:
                  graph_inputs: List[str], uses_embeds: bool,
                  uses_absolute_position: bool = False,
                  device_idx: int = 0,
-                 position_ids_rank: int = 2):
+                 position_ids_rank: int = 2,
+                 visual_stub_specs: Optional[Dict[str, list]] = None):
         self.executor = executor
         self.kv_wrapper = kv_wrapper
         self.hidden_dim = hidden_dim
@@ -32,11 +33,40 @@ class TritonLMSession:
         self.uses_absolute_position = uses_absolute_position
         self.device_idx = device_idx
         self.position_ids_rank = position_ids_rank
+        # R30 mirror of GraphLMSession.visual_stub_specs: DeepStack-lineage
+        # graphs declare visual inputs a pure-text request never sets —
+        # filled with empty stubs (all-False mask + zero-length embeds) at
+        # every run site so the injection ops are exact no-ops.
+        self.visual_stub_specs = visual_stub_specs or {}
         self._accumulated_ids: Optional[NBXTensor] = None
         # O(n)-fallback embeds accumulator (uses_embeds graphs — image-AR:
         # decode inputs are aligned VQ embeddings, NOT text tokens, so the
         # full-context re-run must replay the exact embedding stream).
         self._accumulated_embeds: Optional[NBXTensor] = None
+
+    def _add_visual_stubs(self, run_inputs: Dict[str, NBXTensor]) -> None:
+        """R30 mirror of GraphLMSession._add_visual_stubs — numpy build is
+        allowed CPU glue (the stubs are decode-control data, not compute)."""
+        if not self.visual_stub_specs:
+            return
+        stream = run_inputs.get("inputs_embeds")
+        if stream is None:
+            stream = run_inputs.get("input_ids")
+        if stream is None:
+            return
+        b, s = stream.shape[0], stream.shape[1]
+        DeviceAllocator.set_device(self.device_idx)
+        for name, spec_shape in self.visual_stub_specs.items():
+            if name in run_inputs:
+                continue
+            if name == "visual_pos_masks":
+                h = spec_shape[2] if len(spec_shape) == 3 else self.hidden_dim
+                run_inputs[name] = NBXTensor.from_numpy(
+                    np.zeros((b, s, h), dtype=bool))
+            else:  # deepstack_visual_embeds.N — [0, H] zero-length embeds
+                h = spec_shape[1] if len(spec_shape) == 2 else self.hidden_dim
+                run_inputs[name] = NBXTensor.from_numpy(
+                    np.zeros((0, h), dtype=np.float16))
 
     def _lift_positions(self, pos_np: 'np.ndarray') -> 'np.ndarray':
         """Lift [B, S] positions to the graph's declared rank.
@@ -94,6 +124,7 @@ class TritonLMSession:
         # explicitly to document the intent (default is also False now
         # that the shape-based is_decode heuristic is gone — see
         # graph_executor._run_triton_compiled).
+        self._add_visual_stubs(run_inputs)
         outputs = self.executor.run(run_inputs, skip_kills=False)
 
         # Switch to decode mode / init O(n) accumulator
@@ -166,6 +197,7 @@ class TritonLMSession:
         # kill_slots are redundant work — skip them. This is the
         # ONE legitimate skip_kills=True site in the triton runtime
         # (mirrored below for the O(n) fallback).
+        self._add_visual_stubs(run_inputs)
         outputs = self.executor.run(run_inputs, skip_kills=True)
 
         hidden = None
@@ -264,6 +296,7 @@ class TritonLMSession:
         # forward and blows up VRAM as the context lengthens
         # (audit #2 F2). Run kills like prefill (skip_kills=False):
         # the deferred-drain sync still guarantees no UAF.
+        self._add_visual_stubs(run_inputs)
         outputs = self.executor.run(run_inputs, skip_kills=False)
         # Prefer the explicit pre-lm_head capture (same cascade as prefill
         # and the KV-cache decode path — R30 symmetry; the former direct

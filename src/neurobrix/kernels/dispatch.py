@@ -311,6 +311,31 @@ def _meta_index(x, indices):
     if len(present) == 1:
         # Single advanced index — unchanged behaviour (byte-identical path).
         dim, idx = present[0]
+        _idx_dtn = str(getattr(idx, "dtype", "")).lower()
+        if (("bool" in _idx_dtn or "uint8" in _idx_dtn)
+                and dim == 0 and idx.ndim >= 1
+                and list(idx.shape) == list(x.shape[:idx.ndim])):
+            # Boolean-mask advanced indexing: x[mask] gathers the rows
+            # where the leading-dim-prefix mask is True —
+            # x.flatten(masked dims)[nonzero(mask.flatten())]. The
+            # DeepStack injection read (hidden[visual_pos_masks, :]).
+            # Deterministic compaction; integer masks keep the historic
+            # index_select route below untouched.
+            xc = x.contiguous()
+            flat_rows = 1
+            for _s in idx.shape:
+                flat_rows *= int(_s)
+            x_flat = xc.reshape([flat_rows] + list(x.shape[idx.ndim:]))
+            rows = w.nonzero_1d_wrapper(idx.reshape([flat_rows]))
+            if int(rows.shape[0]) == 0:
+                # All-False mask (the text-mode empty-visual stub path):
+                # a [0, tail...] gather — allocated directly, the select
+                # kernel has no zero-length grid.
+                from .nbx_tensor import NBXTensor
+                return NBXTensor.empty(
+                    [0] + list(x.shape[idx.ndim:]),
+                    dtype=x.dtype, device=x.device)
+            return w.index_select_wrapper(x_flat, 0, rows)
         orig_idx_shape = idx.shape
         flat_idx = idx.reshape(-1) if idx.ndim > 1 else idx
         selected = w.index_select_wrapper(x, dim, flat_idx)

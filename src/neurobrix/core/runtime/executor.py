@@ -122,6 +122,23 @@ class RuntimeExecutor:
             gen_type = flow.get("generation", {}).get("type", "")
             if gen_type == "encoder_decoder_audio":
                 return "audio"
+            # Modality-driven selection for multimodal understanding
+            # builds (Qwen3-Omni lineage): a vlm-typed topology whose
+            # generation block names a REAL component serves both
+            # image+text (vlm flow) and pure-text requests — the latter
+            # on the AR flow (KV-cached, the Stage-1-proven path) with
+            # empty visual stubs. Request datum: the preprocessed image
+            # input's presence. Topologies whose generation block names
+            # a non-component (GLM's legacy 'language_model' alias) keep
+            # the plain vlm routing — behavior unchanged.
+            if flow_type == "vlm" and self.variable_resolver is not None:
+                _gen_lm = flow.get("generation", {}).get("lm_component")
+                _img_var = (flow.get("vlm", {}).get("input", {})
+                            .get("image_variable", "global.pixel_values"))
+                if (_gen_lm in (self.pkg.topology.get("components") or {})
+                        and self.variable_resolver.resolved.get(_img_var)
+                        is None):
+                    return "autoregressive_generation"
             return flow_type
 
         raise RuntimeError(
