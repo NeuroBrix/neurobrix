@@ -4664,6 +4664,33 @@ def nonzero_1d_wrapper(mask) -> "NBXTensor":
     return out[:k]
 
 
+def bucketize_wrapper(x, boundaries, out_int32: bool = False,
+                      right: bool = False) -> "NBXTensor":
+    """aten::bucketize.Tensor — per-element boundary index (linear scan
+    kernel, kernels/ops/bucketize.py). Boundary vectors on this path
+    are decode-control scale (one per temporal frame / packed segment),
+    so the O(n_boundaries) scan is exact, branch-free and
+    bit-reproducible."""
+    from .ops.bucketize import bucketize_kernel
+    xc = x.contiguous()
+    bc = boundaries.contiguous()
+    n = 1
+    for d in xc.shape:
+        n *= int(d)
+    nb = int(bc.shape[0]) if bc.ndim >= 1 else 1
+    out = NBXTensor.empty(list(xc.shape) or [1], dtype=NBXDtype.int64,
+                          device=xc.device)
+    if n > 0:
+        BLOCK = min(1024, triton.next_power_of_2(n))
+        grid = ((n + BLOCK - 1) // BLOCK,)
+        _set_device(xc)
+        bucketize_kernel[grid](xc, bc, out, n, nb,
+                               RIGHT=bool(right), BLOCK_SIZE=BLOCK)
+    if out_int32:
+        out = out.to(NBXDtype.int32)
+    return out
+
+
 def index_put_wrapper(x, indices, values, accumulate: bool = False):
     """aten::index_put / index_put_ — scatter-write `values` into `x`.
 

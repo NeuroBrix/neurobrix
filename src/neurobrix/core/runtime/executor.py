@@ -138,6 +138,7 @@ class RuntimeExecutor:
                 _resolved = self.variable_resolver.resolved
                 _has_modal = (
                     _resolved.get(_img_var) is not None
+                    or _resolved.get("global.pixel_values_videos") is not None
                     or _resolved.get("global.audio_path") is not None)
                 if (_gen_lm in (self.pkg.topology.get("components") or {})
                         and not _has_modal):

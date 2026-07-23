@@ -372,6 +372,30 @@ def cmd_run(args):
                     "clip_centercrop", args.input_image,
                     preprocessor_config=json.loads(_proc_cfg.read_text()))
 
+    if getattr(args, 'input_video', None):
+        # Video understanding input — the video variant of the build's
+        # declared image preprocessing (native_patch_grid →
+        # native_patch_grid_video). Emits the vendor model_input_names
+        # (pixel_values_videos / video_grid_thw) plus the per-video
+        # M-RoPE temporal scale (video_second_per_grid). --fps overrides
+        # the vendor sampling default when given.
+        from neurobrix.core.module.vision.input_processor import (
+            ImageInputProcessor as _VIP,
+        )
+        _vlm_blk = pkg.topology.get("flow", {}).get("vlm") or {}
+        _vlm_in = _vlm_blk.get("input", {})
+        if not _vlm_in.get("preprocessing"):
+            raise RuntimeError(
+                "ZERO FALLBACK: --input-video needs a build whose "
+                "topology.flow.vlm declares an image preprocessing type "
+                "(video understanding rides the vision tower).")
+        _vid = _VIP.process(
+            f"{_vlm_in['preprocessing']}_video", args.input_video,
+            preprocessor_config=(_vlm_blk.get("preprocessing") or {}),
+            fps=(float(args.fps) if getattr(args, 'fps', None) else None))
+        for _k, _v in _vid.items():
+            inputs[f"global.{_k}"] = _v
+
     # VACE control conditioning with no explicit control video: the all-generate
     # (unconditional / pure text→video) path. The vae_encoder encodes a zeros
     # control clip [1,3,num_frames,H,W]; the brick builds control_hidden_states

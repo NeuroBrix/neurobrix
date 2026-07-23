@@ -150,6 +150,131 @@ def native_patch_grid_np(image_path: str, preprocessing_cfg: dict):
             np.array([[grid_t, grid_h, grid_w]], dtype=np.int64))
 
 
+def _smart_resize_2d(height: int, width: int, factor: int,
+                     min_pixels: int, max_pixels: int):
+    """Verbatim port of the vendor Qwen2-VL image/video smart_resize:
+    per-frame 2-D pixel-budget fit (h*w vs the budget — NO temporal term,
+    unlike the GLM variant above), dims snapped to `factor`."""
+    import math
+    if height < factor or width < factor:
+        raise RuntimeError(
+            f"height:{height} or width:{width} must be larger than factor:{factor}")
+    if max(height, width) / min(height, width) > 200:
+        raise RuntimeError(
+            f"absolute aspect ratio must be smaller than 200, "
+            f"got {max(height, width) / min(height, width)}")
+    h_bar = round(height / factor) * factor
+    w_bar = round(width / factor) * factor
+    if h_bar * w_bar > max_pixels:
+        beta = math.sqrt((height * width) / max_pixels)
+        h_bar = max(factor, math.floor(height / beta / factor) * factor)
+        w_bar = max(factor, math.floor(width / beta / factor) * factor)
+    elif h_bar * w_bar < min_pixels:
+        beta = math.sqrt(min_pixels / (height * width))
+        h_bar = math.ceil(height * beta / factor) * factor
+        w_bar = math.ceil(width * beta / factor) * factor
+    return h_bar, w_bar
+
+
+def native_patch_grid_video_np(video_path: str, preprocessing_cfg: dict,
+                               fps: Optional[float] = None):
+    """Video variant of the flattened patch grid — vendor
+    Qwen2VLVideoProcessor contract (the AutoVideoProcessor resolution for
+    the Qwen3-Omni lineage): uniform fps-based frame sampling
+    (indices = arange(0, total, total/n) in float32, exactly the vendor
+    arithmetic), per-frame 2-D smart-resize to the pixel budget, BICUBIC,
+    rescale 1/255, normalize mean/std, temporal grouping by
+    temporal_patch_size, 9-dim patchify.
+
+    Defaults below mirror the vendor processor class's own documented
+    defaults (same policy as native_patch_grid_np) and apply ONLY when
+    the embedded preprocessing block omits the keys: fps 1.0,
+    min_frames 4, max_frames 768.
+
+    Returns (flatten_patches float32 [t*h*w, C*Tp*P*P],
+             grid_thw int64 [1, 3],
+             second_per_grid float — temporal_patch_size / fps, the
+             M-RoPE temporal scale carried per video)."""
+    import math
+    from PIL import Image
+    cfg = preprocessing_cfg
+    p = int(cfg.get("patch_size", 14))
+    tp = int(cfg.get("temporal_patch_size", 2))
+    merge = int(cfg.get("merge_size", 2))
+    # The VIDEO pixel budget is NOT the image budget: the vendor
+    # processors override it per lineage, and both known lineages
+    # resolve to the same formula — 128·factor² / 768·factor²
+    # (omni Qwen3OmniMoeProcessor videos_kwargs _defaults 128·32²/
+    # 768·32²; Qwen2VLVideoProcessor class defaults 128·28²/768·28²).
+    # Explicit video_min_pixels / video_max_pixels keys win.
+    factor = p * merge
+    min_px = int(cfg.get("video_min_pixels", 128 * factor * factor))
+    max_px = int(cfg.get("video_max_pixels", 768 * factor * factor))
+    mean = np.asarray(cfg.get("image_mean", list(_CLIP_MEAN)), dtype=np.float32)
+    std = np.asarray(cfg.get("image_std", list(_CLIP_STD)), dtype=np.float32)
+    tgt_fps = float(fps if fps is not None else cfg.get("video_fps", 1.0))
+    min_frames = int(cfg.get("video_min_frames", 4))
+    max_frames = int(cfg.get("video_max_frames", 768))
+
+    # Boundary file I/O (R34-allowed): decode the clip + container fps.
+    import imageio
+    reader = imageio.get_reader(str(video_path))
+    meta = reader.get_meta_data()
+    video_fps = float(meta.get("fps") or 0.0)
+    if video_fps <= 0:
+        raise RuntimeError(
+            f"ZERO FALLBACK: no fps metadata in {video_path} — fps-based "
+            "frame sampling needs the container frame rate.")
+    frames_raw = [np.asarray(f) for f in reader]
+    reader.close()
+    total = len(frames_raw)
+    if total < tp:
+        raise RuntimeError(
+            f"ZERO FALLBACK: video has {total} frames, fewer than "
+            f"temporal_patch_size {tp}.")
+
+    # Vendor sample_frames arithmetic (fps mode), verbatim:
+    max_f = math.floor(min(max_frames, total) / tp) * tp
+    n = total / video_fps * tgt_fps
+    n = min(min(max(n, min_frames), max_f), total)
+    n = math.floor(n / tp) * tp
+    if n <= 0 or n > total:
+        raise RuntimeError(
+            f"ZERO FALLBACK: video can't be sampled — inferred "
+            f"num_frames={n} from total={total} fps={video_fps} "
+            f"target_fps={tgt_fps}.")
+    # torch.arange(0, total, step).int() with a python-float step runs in
+    # float32 — replicate that exact dtype so indices match the vendor.
+    indices = np.arange(0, total, total / n, dtype=np.float32).astype(np.int32)
+
+    # All frames of one container share a shape (the vendor groups by
+    # shape; one video = one group) — resolve the budget fit once.
+    first = Image.fromarray(frames_raw[int(indices[0])]).convert("RGB")
+    h_bar, w_bar = _smart_resize_2d(
+        first.height, first.width, factor=factor,
+        min_pixels=min_px, max_pixels=max_px)
+    proc = []
+    for idx in indices:
+        img = Image.fromarray(frames_raw[int(idx)]).convert("RGB")
+        if (img.width, img.height) != (w_bar, h_bar):
+            img = img.resize((w_bar, h_bar), Image.BICUBIC)
+        a = (np.asarray(img, dtype=np.uint8).astype(np.float64)
+             * (1.0 / 255.0)).astype(np.float32)               # HWC
+        a = (a - mean) / std
+        proc.append(a.transpose(2, 0, 1))                      # CHW
+    frames = np.stack(proc)                                    # N,C,H,W
+
+    grid_t = frames.shape[0] // tp
+    grid_h, grid_w = h_bar // p, w_bar // p
+    patches = frames.reshape(grid_t, tp, 3, grid_h // merge, merge, p,
+                             grid_w // merge, merge, p)
+    patches = patches.transpose(0, 3, 6, 4, 7, 2, 1, 5, 8)
+    flat = patches.reshape(grid_t * grid_h * grid_w, 3 * tp * p * p)
+    return (np.ascontiguousarray(flat, dtype=np.float32),
+            np.array([[grid_t, grid_h, grid_w]], dtype=np.int64),
+            float(tp) / tgt_fps)
+
+
 def clip_centercrop_np(image_path: str, preprocessor_config: dict) -> np.ndarray:
     """CLIP-preprocessed view [1,3,cs,cs] float32, data-driven from the
     embedded modules/image_processor/preprocessor_config.json."""

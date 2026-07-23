@@ -91,21 +91,34 @@ class VLMEngine(FlowHandler):
         in_cfg = vlm.get("input", {})
         pixel_values = resolved.get(in_cfg.get("image_variable", "global.pixel_values"))
         grid_thw = resolved.get(in_cfg.get("grid_variable", "global.image_grid_thw"))
+        pixel_values_videos = resolved.get("global.pixel_values_videos")
+        video_grid_thw = resolved.get("global.video_grid_thw")
+        video_spg = resolved.get("global.video_second_per_grid")
         audio_path = resolved.get("global.audio_path")
         audio_name = vlm.get("audio_component")
         prompt = resolved.get(in_cfg.get("prompt_variable", "global.prompt"))
         if not prompt:
             raise RuntimeError("ZERO FALLBACK: vlm flow requires a text prompt.")
         has_image = pixel_values is not None
+        has_video = pixel_values_videos is not None
+        if has_image and has_video:
+            raise RuntimeError(
+                "ZERO FALLBACK: one visual modality per request — provide "
+                "--input-image or --input-video, not both.")
         if has_image and grid_thw is None:
             raise RuntimeError(
                 "ZERO FALLBACK: image request missing the grid input "
                 f"({in_cfg.get('grid_variable')}).")
-        if not has_image and audio_path is None:
+        if has_video and video_grid_thw is None:
+            raise RuntimeError(
+                "ZERO FALLBACK: video request missing the grid input "
+                "(global.video_grid_thw).")
+        has_visual = has_image or has_video
+        if not has_visual and audio_path is None:
             raise RuntimeError(
                 "ZERO FALLBACK: vlm flow requires a modality input — "
-                "provide --input-image or --audio.")
-        if not has_image and not audio_name:
+                "provide --input-image, --input-video or --audio.")
+        if not has_visual and not audio_name:
             raise RuntimeError(
                 "ZERO FALLBACK: this build declares no audio_component — "
                 "audio understanding needs a build traced with the audio "
@@ -131,14 +144,19 @@ class VLMEngine(FlowHandler):
                 "deepstack_visual_embeds.N inputs — inconsistent trace.")
 
         deepstack_embeds: List[torch.Tensor] = []
-        if has_image:
-            # ── Step 2 (image): vision encoder forward ──
+        if has_visual:
+            # ── Step 2 (visual): vision encoder forward — the video path
+            # rides the SAME tower with its own patch stream and grid
+            # (temporal dim > 1); only the placeholder token and the
+            # M-RoPE temporal scale differ downstream. ──
+            vis_pixels = pixel_values if has_image else pixel_values_videos
+            vis_grid = grid_thw if has_image else video_grid_thw
             print(f"   [{vision_name}] Running vision forward...")
             start = time.perf_counter()
             self._ensure_weights_loaded(vision_name)
-            resolved[f"{vision_name}.hidden_states"] = pixel_values.to(device=device, dtype=dtype)
+            resolved[f"{vision_name}.hidden_states"] = vis_pixels.to(device=device, dtype=dtype)
             resolved["global.hidden_states"] = resolved[f"{vision_name}.hidden_states"]
-            resolved[f"{vision_name}.grid_thw"] = grid_thw.to(device=device)
+            resolved[f"{vision_name}.grid_thw"] = vis_grid.to(device=device)
             resolved["global.grid_thw"] = resolved[f"{vision_name}.grid_thw"]
             self._execute_component(vision_name, "forward", None)
             modal_embeds = self._get_component_output(vision_name)
@@ -170,14 +188,22 @@ class VLMEngine(FlowHandler):
                 release_flow_memory(self.ctx.primary_device)
 
             # merged-token sanity: placeholder count must equal t*h*w/merge²
-            t, h, w = (int(x) for x in grid_thw.reshape(-1)[:3])
+            t, h, w = (int(x) for x in vis_grid.reshape(-1)[:3])
             expected = t * (h // merge) * (w // merge)
             if n_modal != expected:
                 raise RuntimeError(
                     f"ZERO FALLBACK: vision output has {n_modal} tokens but "
                     f"grid {t}x{h}x{w} / merge {merge} expects {expected}.")
-            span_token_id = image_token_id
-            span_content_type = "image"
+            if has_image:
+                span_token_id = image_token_id
+                span_content_type = "image"
+            else:
+                span_token_id = vlm.get("video_token_id")
+                if span_token_id is None:
+                    raise RuntimeError(
+                        "ZERO FALLBACK: topology.flow.vlm carries no "
+                        "video_token_id — video understanding needs it.")
+                span_content_type = "video"
         else:
             # ── Step 2 (audio): mel features → audio tower forward ──
             print(f"   [{audio_name}] Running audio forward...")
@@ -317,15 +343,33 @@ class VLMEngine(FlowHandler):
             parts.append(_embed(suffix_ids))
         context_embeds = torch.cat(parts, dim=1)
 
-        # segment layout for mrope positions: (kind, length, (t,h,w) or
-        # None). Image spans get the 3-D grid planes; audio spans use
-        # 1-D text-style positions on all three planes — the vendor
-        # get_rope_index's audio-only branch is arange().expand(3, -1).
-        segments: List[Tuple[str, int, Optional[Tuple[int, int, int]]]] = []
+        # segment layout for mrope positions: (kind, length,
+        # (t, h, w, t_scale) or None). Visual spans get the 3-D grid
+        # planes with a temporal scale; audio spans use 1-D text-style
+        # positions on all three planes — the vendor get_rope_index's
+        # audio-only branch is arange().expand(3, -1).
+        # Temporal scale (vendor get_rope_index): omni-lineage configs
+        # declare position_id_per_seconds — image t_index scales by it
+        # (1 s per grid step), video by second_per_grid × it; legacy
+        # mrope configs (no such key) keep the plain +1-per-grid index.
+        _t_scale = 1.0
+        if has_visual:
+            _pids = lm_cfg.get("position_id_per_seconds")
+            if _pids is not None:
+                _spg = 1.0
+                if has_video:
+                    if video_spg is None:
+                        raise RuntimeError(
+                            "ZERO FALLBACK: video request missing "
+                            "global.video_second_per_grid.")
+                    _spg = float(video_spg.reshape(-1)[0])
+                _t_scale = _spg * float(_pids)
+        segments: List[Tuple[str, int, Optional[Tuple[int, int, int, float]]]] = []
         if prefix_ids:
             segments.append(("text", len(prefix_ids), None))
-        if has_image:
-            segments.append(("image", n_modal, (t, h // merge, w // merge)))
+        if has_visual:
+            segments.append(("visual", n_modal,
+                             (t, h // merge, w // merge, _t_scale)))
         else:
             segments.append(("text", n_modal, None))
         if suffix_ids:
@@ -340,7 +384,7 @@ class VLMEngine(FlowHandler):
         generated_ids: List[int] = []
 
         img_span_start = len(prefix_ids)
-        if has_deepstack and not has_image:
+        if has_deepstack and not has_visual:
             # Audio (and any non-visual) requests on a DeepStack graph
             # feed the empty-stub form: all-False mask + zero-length
             # embeds — the injection ops become exact no-ops (the vendor
@@ -373,7 +417,7 @@ class VLMEngine(FlowHandler):
                 # positions).
                 _s = context_embeds.shape[1]
                 _mask2d = torch.zeros(1, _s, dtype=torch.bool, device=device)
-                if has_image:
+                if has_visual:
                     _mask2d[0, img_span_start:img_span_start + n_modal] = True
                 _mask3d = _mask2d.unsqueeze(-1).expand(
                     -1, -1, context_embeds.shape[2]).contiguous()
@@ -436,8 +480,10 @@ class VLMEngine(FlowHandler):
         """[3, 1, S] positions per the vendor get_rope_index contract.
 
         Text segment of length L: all three planes = offset + arange(L).
-        Image segment of llm grid (t, h, w): temporal/height/width meshgrid
-        indices + offset. Every segment starts at max(previous) + 1.
+        Visual segment of llm grid (t, h, w, t_scale): temporal/height/
+        width meshgrid indices + offset, the temporal index scaled by
+        t_scale (position_id_per_seconds × second-per-grid semantics;
+        1.0 for legacy mrope). Every segment starts at max(previous) + 1.
         Returns (positions, next_offset_for_decode)."""
         planes: List[torch.Tensor] = []
         offset = 0
@@ -446,8 +492,9 @@ class VLMEngine(FlowHandler):
                 pos = torch.arange(length, dtype=torch.long, device=device)
                 seg = pos.view(1, -1).expand(3, -1) + offset
             else:
-                gt, gh, gw = grid
-                t_idx = torch.arange(gt, dtype=torch.long, device=device)\
+                gt, gh, gw, t_scale = grid
+                t_idx = (torch.arange(gt, dtype=torch.float32, device=device)
+                         * float(t_scale)).long()\
                     .view(-1, 1).expand(-1, gh * gw).flatten()
                 h_idx = torch.arange(gh, dtype=torch.long, device=device)\
                     .view(1, -1, 1).expand(gt, -1, gw).flatten()

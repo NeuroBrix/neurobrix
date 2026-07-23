@@ -34,7 +34,8 @@ from neurobrix.core.module.vision import image_dsp
 class ImageInputProcessor:
     """Routes to the correct image preprocessor based on declared type."""
 
-    SUPPORTED = ("i2v_vae_condition", "clip_centercrop", "native_patch_grid")
+    SUPPORTED = ("i2v_vae_condition", "clip_centercrop", "native_patch_grid",
+                 "native_patch_grid_video")
 
     @staticmethod
     def process(
@@ -45,6 +46,7 @@ class ImageInputProcessor:
         width: Optional[int] = None,
         pad_to_num_frames: int = 0,
         preprocessor_config: Optional[dict] = None,
+        fps: Optional[float] = None,
     ):
         """Preprocess an image file into model input tensor(s).
 
@@ -79,6 +81,24 @@ class ImageInputProcessor:
             return {
                 "pixel_values": torch.from_numpy(np.ascontiguousarray(flat)),
                 "image_grid_thw": torch.from_numpy(np.ascontiguousarray(grid)),
+            }
+
+        if preprocessing_type == "native_patch_grid_video":
+            if not isinstance(preprocessor_config, dict):
+                raise RuntimeError(
+                    "ZERO FALLBACK: native_patch_grid_video requires the "
+                    "model's preprocessing config (dict) — registry/topology "
+                    "preprocessing block."
+                )
+            flat, grid, second_per_grid = image_dsp.native_patch_grid_video_np(
+                str(image_path), preprocessor_config, fps=fps)
+            return {
+                "pixel_values_videos":
+                    torch.from_numpy(np.ascontiguousarray(flat)),
+                "video_grid_thw":
+                    torch.from_numpy(np.ascontiguousarray(grid)),
+                "video_second_per_grid":
+                    torch.tensor([second_per_grid], dtype=torch.float32),
             }
 
         if preprocessing_type == "i2v_vae_condition":
