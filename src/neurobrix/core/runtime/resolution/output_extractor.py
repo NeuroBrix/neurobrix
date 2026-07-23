@@ -110,9 +110,31 @@ class OutputExtractor:
             # Find semantic outputs (not tensor IDs)
             semantic_keys = [k for k in output.keys() if not k.startswith("T_")]
 
-            # Map semantic outputs to output_0, output_1, etc.
-            for idx, key in enumerate(semantic_keys):
-                self._variable_resolver.resolved[f"{comp_name}.output_{idx}"] = output[key]
+            # Positional aliases (output_0, output_1, ...). Two invariants:
+            # (1) output_0 mirrors the PRIMARY output — the tracer names a
+            #     tuple return's element 0 "output" and dataclass primaries
+            #     keep their field names; the gather order is PRODUCER-OP
+            #     order, which for multi-output components puts secondary
+            #     outputs first (the vision deepstack levels fire before
+            #     the merger — aliasing by gather order spliced deepstack_0
+            #     as the vision embeds on the first +image run);
+            # (2) an alias never clobbers a key that a REAL output owns
+            #     (output_1..N are declared names whose tensors must
+            #     survive the alias pass).
+            # Single-output components and dataclass dicts keep their
+            # historical aliases bit-for-bit (primary == first key there).
+            if semantic_keys:
+                _pref = ("output", "last_hidden_state", "logits", "sample")
+                primary = next((p for p in _pref if p in output),
+                               semantic_keys[0])
+                ordered = [primary] + [k for k in semantic_keys
+                                       if k != primary]
+                for idx, key in enumerate(ordered):
+                    alias = f"output_{idx}"
+                    if alias in output and alias != key:
+                        continue  # a real output owns this name
+                    self._variable_resolver.resolved[
+                        f"{comp_name}.{alias}"] = output[key]
 
             # If no semantic outputs, use first output
             if not semantic_keys and len(output) > 0:

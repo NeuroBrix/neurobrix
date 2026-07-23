@@ -27,6 +27,7 @@ ZERO SEMANTIC: no model-name knowledge — everything reads topology.flow.vlm.
 ZERO FALLBACK: missing schema fields raise.
 """
 
+import os
 import time
 import torch
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -99,6 +100,25 @@ class VLMEngine(FlowHandler):
         if not prompt:
             raise RuntimeError("ZERO FALLBACK: vlm flow requires a text prompt.")
 
+        # ── DeepStack detection (data-driven from the LM graph spec) ──
+        # A Qwen3-VL/omni-lineage LM graph declares visual_pos_masks +
+        # deepstack_visual_embeds.N as inputs: the vision encoder's
+        # multi-scale features are injected into the first N decoder
+        # layers via bool-mask indexing. Read the DAG input spec — no
+        # family/model branch (R15); GLM-class graphs (no such inputs)
+        # keep the legacy path bit-for-bit.
+        lm_exec = self.ctx.executors.get(lm_name)
+        _dag_tensors = (getattr(lm_exec, "_dag", None) or {}).get("tensors", {})
+        has_deepstack = "input::visual_pos_masks" in _dag_tensors
+        ds_input_names = sorted(
+            (tid[len("input::"):] for tid in _dag_tensors
+             if tid.startswith("input::deepstack_visual_embeds.")),
+            key=lambda n: int(n.rsplit(".", 1)[1]))
+        if has_deepstack and not ds_input_names:
+            raise RuntimeError(
+                "ZERO FALLBACK: LM graph declares visual_pos_masks but no "
+                "deepstack_visual_embeds.N inputs — inconsistent trace.")
+
         # ── Step 2: vision encoder forward ──
         print(f"   [{vision_name}] Running vision forward...")
         start = time.perf_counter()
@@ -116,8 +136,23 @@ class VLMEngine(FlowHandler):
             vision_embeds = vision_embeds.unsqueeze(0)          # [1, n_merged, H]
         vision_embeds = vision_embeds.to(dtype=dtype)
         n_merged = vision_embeds.shape[1]
+        deepstack_embeds: List[torch.Tensor] = []
+        if has_deepstack:
+            # The tracer names the vision tuple's flattened extras
+            # output_1..N ((hidden, [deepstack x3]) return); each is
+            # [n_merged, H_text], row-aligned with the merged hidden.
+            for k in range(1, len(ds_input_names) + 1):
+                t = resolved.get(f"{vision_name}.output_{k}")
+                if t is None:
+                    raise RuntimeError(
+                        f"ZERO FALLBACK: LM graph declares "
+                        f"{len(ds_input_names)} deepstack inputs but vision "
+                        f"component '{vision_name}' produced no output_{k}.")
+                deepstack_embeds.append(t.to(device=device, dtype=dtype))
         elapsed = (time.perf_counter() - start) * 1000
-        print(f"   [{vision_name}] {n_merged} vision tokens in {elapsed:.0f}ms")
+        print(f"   [{vision_name}] {n_merged} vision tokens in {elapsed:.0f}ms"
+              + (f" (+{len(deepstack_embeds)} deepstack levels)"
+                 if deepstack_embeds else ""))
         if not self.ctx.persistent_mode:
             self._unload_component_weights(vision_name)
             release_flow_memory(self.ctx.primary_device)
@@ -136,10 +171,18 @@ class VLMEngine(FlowHandler):
 
         # ── Step 4: LM decode with merged embeds + mrope positions ──
         from neurobrix.core.runtime.decode_bound import decode_bound
-        max_tokens = decode_bound(defaults.get("max_tokens"))
+        # CLI overrides first (mirror of the AR flow's _CLI_OVERRIDES):
+        # the request's --max-tokens/--temperature land in the resolver as
+        # global.* variables; pkg.defaults holds only the build defaults.
+        max_tokens = decode_bound(
+            int(resolved["global.max_tokens"])
+            if resolved.get("global.max_tokens") is not None
+            else defaults.get("max_tokens"))
         if max_tokens is None:
             raise RuntimeError("ZERO FALLBACK: max_tokens missing from defaults.json.")
-        temperature = defaults.get("temperature")
+        temperature = (float(resolved["global.temperature"])
+                       if resolved.get("global.temperature") is not None
+                       else defaults.get("temperature"))
         if temperature is None:
             raise RuntimeError("ZERO FALLBACK: temperature missing from defaults.json.")
         eos_token_id = defaults.get("eos_token_id")
@@ -147,9 +190,25 @@ class VLMEngine(FlowHandler):
             raise RuntimeError("ZERO FALLBACK: eos_token_id missing from defaults.json.")
         eos_ids = set(eos_token_id if isinstance(eos_token_id, (list, tuple))
                       else [eos_token_id])
-        repetition_penalty = defaults.get("repetition_penalty", 1.0)
+        repetition_penalty = (
+            float(resolved["global.repetition_penalty"])
+            if resolved.get("global.repetition_penalty") is not None
+            else defaults.get("repetition_penalty", 1.0))
 
         self._ensure_weights_loaded(lm_name)
+        # Declared-MoE fusion (mirror of the AR flow's setup — the Stage-1
+        # wall-5 class: without it only the trace-fired experts of a
+        # 128-expert MoE run and the logits go near-uniform ⇒ degenerate
+        # single-token repetition; proven again on the first vlm-path run).
+        lm_cfg = self.ctx.pkg.defaults.get("lm_config", {})
+        _n_exp = lm_cfg.get("num_experts")
+        if _n_exp is not None and _n_exp > 1 and lm_exec is not None:
+            _norm_topk = lm_cfg.get("norm_topk_prob")
+            if _norm_topk is None:
+                raise RuntimeError(
+                    "ZERO FALLBACK: norm_topk_prob missing from lm_config "
+                    "for MoE model — add moe.norm_topk_prob to the registry.")
+            lm_exec.set_moe_config(norm_topk_prob=_norm_topk)
         embed_weight = self._get_embed_weight(lm_name)
         if embed_weight is None:
             raise RuntimeError(
@@ -185,6 +244,7 @@ class VLMEngine(FlowHandler):
         start = time.perf_counter()
         generated_ids: List[int] = []
 
+        img_span_start = len(prefix_ids)
         for step in range(max_tokens):
             n_gen = len(generated_ids)
             if n_gen:
@@ -198,6 +258,23 @@ class VLMEngine(FlowHandler):
             resolved["inputs_embeds"] = context_embeds
             resolved["global.position_ids"] = position_ids
             resolved["position_ids"] = position_ids
+            if has_deepstack:
+                # visual_pos_masks travels in the wrapper's expanded
+                # [B, S, H] masked_scatter form (the graph reduces it via
+                # [..., 0]). True exactly over the image span; generated
+                # tokens extend the mask with False, so the per-step full
+                # re-forward matches vendor semantics (deepstack adds only
+                # at visual positions).
+                _s = context_embeds.shape[1]
+                _mask2d = torch.zeros(1, _s, dtype=torch.bool, device=device)
+                _mask2d[0, img_span_start:img_span_start + n_merged] = True
+                _mask3d = _mask2d.unsqueeze(-1).expand(
+                    -1, -1, context_embeds.shape[2]).contiguous()
+                resolved["visual_pos_masks"] = _mask3d
+                resolved["global.visual_pos_masks"] = _mask3d
+                for _i, _t in enumerate(deepstack_embeds):
+                    resolved[f"deepstack_visual_embeds.{_i}"] = _t
+                    resolved[f"global.deepstack_visual_embeds.{_i}"] = _t
 
             self._execute_component(lm_name, "forward", None)
             output = self._get_component_output(lm_name)
@@ -205,6 +282,18 @@ class VLMEngine(FlowHandler):
                 break
 
             logits = self._compute_logits(output, embed_weight, logits_source, head_name)
+            if step == 0 and os.environ.get("NBX_DEBUG"):
+                _l = logits.reshape(-1).float()
+                _top = torch.topk(_l, 5)
+                _ds_norms = [round(float(t.float().norm()), 3)
+                             for t in deepstack_embeds]
+                print(f"   [vlm-diag] context_norm="
+                      f"{float(context_embeds.float().norm()):.4f} "
+                      f"hidden_norm={float(output.float().norm()):.4f} "
+                      f"ds_norms={_ds_norms} "
+                      f"pos_head={position_ids[:, 0, :3].tolist()} "
+                      f"top5_ids={_top.indices.tolist()} "
+                      f"top5_logits={[round(float(x), 3) for x in _top.values]}")
             from .audio_utils import sample_token
             next_token = sample_token(
                 logits, temperature,

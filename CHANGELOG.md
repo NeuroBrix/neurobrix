@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Image understanding for DeepStack multimodal models (Qwen3-Omni
+  lineage).** `neurobrix run --input-image … --prompt …` now answers
+  questions about an image with these builds: the vision tower's
+  multi-scale DeepStack features are routed into the language model's
+  early layers on both execution engines, and the SAME build still
+  serves pure-text prompts (image-less requests take the KV-cached
+  text path automatically). Sequential mode reproduces the vendor
+  pipeline token-for-token on the reference input; compiled mode is
+  byte-identical to sequential; the Triton engine matches its own
+  op-by-op reference byte-for-byte. Includes a deterministic
+  boolean-mask compaction kernel (`nonzero`) and boolean-mask
+  advanced-indexing support (`aten::index` / `aten::index_put`) on the
+  Triton engine, covering zero-size masks.
+
 - **Terminal coding agent mode.** Tool-capable chat models can now work
   as a terminal coding agent: `neurobrix chat --agent` (interactive) or
   `neurobrix run --mode agent --prompt "<task>"` (one-shot). The model

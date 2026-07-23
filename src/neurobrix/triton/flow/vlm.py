@@ -26,8 +26,10 @@ ZERO SEMANTIC / ZERO HARDCODE: everything reads topology.flow.vlm and
 defaults.json.
 """
 
+import json
 import time
 import numpy as np
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype
@@ -114,6 +116,25 @@ class TritonVLMEngine:
             raise RuntimeError(
                 "ZERO FALLBACK: vlm flow requires a text prompt.")
 
+        # ── DeepStack detection (data-driven from the LM graph spec) ──
+        # R30 mirror of core/flow/vlm.py: a Qwen3-VL/omni-lineage LM graph
+        # declares visual_pos_masks + deepstack_visual_embeds.N inputs —
+        # the vision tower's multi-scale features are injected into its
+        # first N decoder layers. GLM-class graphs keep the legacy path.
+        _lm_graph_path = (Path(self.ctx.pkg.cache_path) / "components"
+                          / lm_name / "graph.json")
+        with open(_lm_graph_path, "r") as _f:
+            _lm_dag_tensors = json.load(_f).get("tensors", {})
+        has_deepstack = "input::visual_pos_masks" in _lm_dag_tensors
+        ds_input_names = sorted(
+            (tid[len("input::"):] for tid in _lm_dag_tensors
+             if tid.startswith("input::deepstack_visual_embeds.")),
+            key=lambda n: int(n.rsplit(".", 1)[1]))
+        if has_deepstack and not ds_input_names:
+            raise RuntimeError(
+                "ZERO FALLBACK: LM graph declares visual_pos_masks but no "
+                "deepstack_visual_embeds.N inputs — inconsistent trace.")
+
         # ── Step 2: vision encoder forward ──
         print(f"   [{vision_name}] Running vision forward...")
         start = time.perf_counter()
@@ -133,8 +154,22 @@ class TritonVLMEngine:
             vision_embeds = vision_embeds.reshape(1, n, h)
         vision_embeds = vision_embeds.to(dtype)
         n_merged = vision_embeds.shape[1]
+        deepstack_embeds: List[NBXTensor] = []
+        if has_deepstack:
+            # Tracer names the vision tuple's flattened extras output_1..N
+            # ((hidden, [deepstack x3]) return); each is [n_merged, H_text].
+            for k in range(1, len(ds_input_names) + 1):
+                t = resolved.get(f"{vision_name}.output_{k}")
+                if not isinstance(t, NBXTensor):
+                    raise RuntimeError(
+                        f"ZERO FALLBACK: LM graph declares "
+                        f"{len(ds_input_names)} deepstack inputs but vision "
+                        f"component '{vision_name}' produced no output_{k}.")
+                deepstack_embeds.append(t.to(dtype))
         print(f"   [{vision_name}] {n_merged} vision tokens in "
-              f"{(time.perf_counter() - start) * 1000:.0f}ms")
+              f"{(time.perf_counter() - start) * 1000:.0f}ms"
+              + (f" (+{len(deepstack_embeds)} deepstack levels)"
+                 if deepstack_embeds else ""))
         if not self.ctx.persistent_mode:
             self._unload_component_weights(vision_name)
             release_flow_memory(self.ctx.primary_device)
@@ -152,11 +187,18 @@ class TritonVLMEngine:
 
         # ── Step 4: LM decode with merged embeds + mrope positions ──
         from neurobrix.core.runtime.decode_bound import decode_bound
-        max_tokens = decode_bound(defaults.get("max_tokens"))
+        # CLI overrides first — R30 mirror of the compiled vlm flow (the
+        # request's global.* variables beat the build defaults).
+        max_tokens = decode_bound(
+            int(resolved["global.max_tokens"])
+            if resolved.get("global.max_tokens") is not None
+            else defaults.get("max_tokens"))
         if max_tokens is None:
             raise RuntimeError(
                 "ZERO FALLBACK: max_tokens missing from defaults.json.")
-        temperature = defaults.get("temperature")
+        temperature = (float(resolved["global.temperature"])
+                       if resolved.get("global.temperature") is not None
+                       else defaults.get("temperature"))
         if temperature is None:
             raise RuntimeError(
                 "ZERO FALLBACK: temperature missing from defaults.json.")
@@ -166,9 +208,25 @@ class TritonVLMEngine:
                 "ZERO FALLBACK: eos_token_id missing from defaults.json.")
         eos_ids = set(eos_token_id if isinstance(eos_token_id, (list, tuple))
                       else [eos_token_id])
-        repetition_penalty = defaults.get("repetition_penalty", 1.0)
+        repetition_penalty = (
+            float(resolved["global.repetition_penalty"])
+            if resolved.get("global.repetition_penalty") is not None
+            else defaults.get("repetition_penalty", 1.0))
 
         self._ensure_weights_loaded(lm_name)
+        # Declared-MoE fusion — R30 mirror of the compiled vlm flow (the
+        # Stage-1 wall-5 class: without it only trace-fired experts run
+        # and logits go near-uniform ⇒ degenerate repetition).
+        lm_cfg = self.ctx.pkg.defaults.get("lm_config", {})
+        _n_exp = lm_cfg.get("num_experts")
+        _lm_exec = self.ctx.executors.get(lm_name)
+        if _n_exp is not None and _n_exp > 1 and _lm_exec is not None:
+            _norm_topk = lm_cfg.get("norm_topk_prob")
+            if _norm_topk is None:
+                raise RuntimeError(
+                    "ZERO FALLBACK: norm_topk_prob missing from lm_config "
+                    "for MoE model — add moe.norm_topk_prob to the registry.")
+            _lm_exec.set_moe_config(norm_topk_prob=_norm_topk)
         embed_weight = self._get_embed_weight(lm_name)
         if embed_weight is None:
             raise RuntimeError(
@@ -201,6 +259,7 @@ class TritonVLMEngine:
         start = time.perf_counter()
         generated_ids: List[int] = []
 
+        img_span_start = len(prefix_ids)
         for _step in range(max_tokens):
             n_gen = len(generated_ids)
             if n_gen:
@@ -216,6 +275,22 @@ class TritonVLMEngine:
             resolved["inputs_embeds"] = context_embeds
             resolved["global.position_ids"] = position_ids
             resolved["position_ids"] = position_ids
+            if has_deepstack:
+                # Expanded [B, S, H] masked_scatter form (the graph
+                # reduces it via [..., 0]); True exactly over the image
+                # span, generated tokens extend with False — the per-step
+                # full re-forward matches vendor semantics. numpy build =
+                # allowed CPU glue (mask is decode-control data).
+                _s = context_embeds.shape[1]
+                _mask_np = np.zeros(
+                    (1, _s, context_embeds.shape[2]), dtype=bool)
+                _mask_np[0, img_span_start:img_span_start + n_merged, :] = True
+                _mask = NBXTensor.from_numpy(_mask_np)
+                resolved["visual_pos_masks"] = _mask
+                resolved["global.visual_pos_masks"] = _mask
+                for _i, _t in enumerate(deepstack_embeds):
+                    resolved[f"deepstack_visual_embeds.{_i}"] = _t
+                    resolved[f"global.deepstack_visual_embeds.{_i}"] = _t
 
             self._execute_component(lm_name, "forward", None)
             output = self._get_component_output(lm_name)

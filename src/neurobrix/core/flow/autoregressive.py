@@ -50,6 +50,7 @@ class GraphLMSession:
         uses_embeds: bool,
         uses_absolute_position: bool = False,
         position_ids_rank: int = 2,
+        visual_stub_specs: Optional[Dict[str, list]] = None,
     ):
         self.executor = executor
         self.kv_wrapper = kv_wrapper
@@ -58,9 +59,45 @@ class GraphLMSession:
         self.uses_embeds = uses_embeds
         self.uses_absolute_position = uses_absolute_position
         self.position_ids_rank = position_ids_rank
+        # DeepStack-lineage graphs (Qwen3-VL/omni) declare visual inputs
+        # (visual_pos_masks + deepstack_visual_embeds.N) that a pure-text
+        # request never populates: {input_name: declared trace shape} from
+        # the dag input spec, filled with empty stubs at run time
+        # (all-False mask + zero-length embeds ⇒ the deepstack injection
+        # ops are exact no-ops, matching the vendor's `is None` skip).
+        self.visual_stub_specs = visual_stub_specs or {}
         # O(n) fallback state (models without SDPA / no KV cache)
         self._accumulated_ids: Optional[torch.Tensor] = None
         self._accumulated_embeds: Optional[torch.Tensor] = None
+
+    def _add_visual_stubs(self, run_inputs: Dict[str, torch.Tensor]) -> None:
+        """Fill declared-but-unset visual inputs with empty stubs.
+
+        Runs at every executor.run site. The batch/seq dims come from the
+        actual stream tensor; the structural hidden dim from the declared
+        trace shape. No-op for graphs without visual inputs (text LLMs)
+        and for stages that already set them (the vlm flow)."""
+        if not self.visual_stub_specs:
+            return
+        stream = run_inputs.get("inputs_embeds")
+        if stream is None:
+            stream = run_inputs.get("input_ids")
+        if stream is None:
+            return
+        b, s = stream.shape[0], stream.shape[1]
+        for name, spec_shape in self.visual_stub_specs.items():
+            if name in run_inputs:
+                continue
+            if name == "visual_pos_masks":
+                h = spec_shape[2] if len(spec_shape) == 3 else self.hidden_dim
+                run_inputs[name] = torch.zeros(
+                    b, s, h, dtype=torch.bool, device=stream.device)
+            else:  # deepstack_visual_embeds.N — [0, H] zero-length embeds
+                h = spec_shape[1] if len(spec_shape) == 2 else self.hidden_dim
+                dt = (stream.dtype if torch.is_floating_point(stream)
+                      else torch.float16)
+                run_inputs[name] = torch.zeros(
+                    0, h, dtype=dt, device=stream.device)
 
     def _shape_positions(self, position_ids: torch.Tensor) -> torch.Tensor:
         """Lift [B, S] positions to the graph's declared rank.
@@ -121,6 +158,8 @@ class GraphLMSession:
                           "position_ids": self._shape_positions(position_ids)}
         else:
             run_inputs = {"input_ids": input_ids}
+
+        self._add_visual_stubs(run_inputs)
 
         self.executor.run(run_inputs)
 
@@ -193,6 +232,8 @@ class GraphLMSession:
             else:
                 run_inputs = {"input_ids": input_ids}
 
+            self._add_visual_stubs(run_inputs)
+
             self.executor.run(run_inputs)
 
         else:
@@ -209,6 +250,7 @@ class GraphLMSession:
                     pos_ids = torch.arange(actual_len, dtype=torch.long, device=device)
                     pos_ids = pos_ids.unsqueeze(0).expand(self._accumulated_embeds.shape[0], -1)
                     run_inputs["position_ids"] = self._shape_positions(pos_ids)
+                self._add_visual_stubs(run_inputs)
                 self.executor.run(run_inputs)
                 batch_size = self._accumulated_embeds.shape[0]
             else:
@@ -223,6 +265,7 @@ class GraphLMSession:
                     pos_ids = torch.arange(actual_len, dtype=torch.long, device=device)
                     pos_ids = pos_ids.unsqueeze(0).expand(self._accumulated_ids.shape[0], -1)
                     run_inputs["position_ids"] = self._shape_positions(pos_ids)
+                self._add_visual_stubs(run_inputs)
                 self.executor.run(run_inputs)
                 batch_size = self._accumulated_ids.shape[0]
 
@@ -776,6 +819,18 @@ class AutoregressiveHandler(FlowHandler):
         position_ids_rank = (len(_pos_shape)
                              if isinstance(_pos_shape, (list, tuple)) else 2)
 
+        # DeepStack-lineage visual inputs (Qwen3-VL/omni): declared trace
+        # shapes for visual_pos_masks / deepstack_visual_embeds.N so a
+        # pure-text request feeds empty stubs (GraphLMSession._add_visual_
+        # stubs). Empty dict for every other graph — zero blast radius.
+        visual_stub_specs = {
+            tid[len('input::'):]: (spec or {}).get('shape')
+            for tid, spec in dag.get('tensors', {}).items()
+            if ((tid == 'input::visual_pos_masks'
+                 or tid.startswith('input::deepstack_visual_embeds.'))
+                and isinstance((spec or {}).get('shape'), (list, tuple)))
+        }
+
         # Detect position_ids policy: absolute vs relative
         # VQ-image autoregressive paths (Janus pattern) need absolute position_ids
         # regardless of which family they're packaged under (legacy "image",
@@ -811,6 +866,7 @@ class AutoregressiveHandler(FlowHandler):
             uses_embeds=uses_embeds,
             uses_absolute_position=uses_absolute_position,
             position_ids_rank=position_ids_rank,
+            visual_stub_specs=visual_stub_specs,
         )
 
     def _create_strategy(self, gen_info: Dict, session: GraphLMSession) -> GenerationStrategy:
