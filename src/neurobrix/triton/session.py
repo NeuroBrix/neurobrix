@@ -22,7 +22,8 @@ class TritonLMSession:
     def __init__(self, executor, kv_wrapper, hidden_dim: int,
                  graph_inputs: List[str], uses_embeds: bool,
                  uses_absolute_position: bool = False,
-                 device_idx: int = 0):
+                 device_idx: int = 0,
+                 position_ids_rank: int = 2):
         self.executor = executor
         self.kv_wrapper = kv_wrapper
         self.hidden_dim = hidden_dim
@@ -30,11 +31,26 @@ class TritonLMSession:
         self.uses_embeds = uses_embeds
         self.uses_absolute_position = uses_absolute_position
         self.device_idx = device_idx
+        self.position_ids_rank = position_ids_rank
         self._accumulated_ids: Optional[NBXTensor] = None
         # O(n)-fallback embeds accumulator (uses_embeds graphs — image-AR:
         # decode inputs are aligned VQ embeddings, NOT text tokens, so the
         # full-context re-run must replay the exact embedding stream).
         self._accumulated_embeds: Optional[NBXTensor] = None
+
+    def _lift_positions(self, pos_np: 'np.ndarray') -> 'np.ndarray':
+        """Lift [B, S] positions to the graph's declared rank.
+
+        R30 mirror of the compiled GraphLMSession._shape_positions: M-RoPE
+        graphs declare position_ids [3, B, S] (temporal/height/width
+        planes); a pure-text stream feeds three IDENTICAL planes (vendor
+        get_rope_index semantics). Rank comes from the graph input spec —
+        data-driven, no family/model branch (R15).
+        """
+        if self.position_ids_rank == 3 and pos_np.ndim == 2:
+            return np.ascontiguousarray(
+                np.broadcast_to(pos_np, (3,) + pos_np.shape))
+        return pos_np
 
     def prefill(self, input_ids: NBXTensor, batch_size: int) -> NBXTensor:
         """Run prefill pass, switch to decode mode, return hidden states."""
@@ -48,7 +64,7 @@ class TritonLMSession:
         if batch_size > 1:
             pos_np = np.tile(pos_np, (batch_size, 1))
         DeviceAllocator.set_device(self.device_idx)
-        position_ids = NBXTensor.from_numpy(pos_np)
+        position_ids = NBXTensor.from_numpy(self._lift_positions(pos_np))
 
         # Build inputs
         if self.uses_embeds:
@@ -132,7 +148,7 @@ class TritonLMSession:
         else:
             pos_np = np.zeros((batch_size, seq_len), dtype=np.int64)
         DeviceAllocator.set_device(self.device_idx)
-        position_ids = NBXTensor.from_numpy(pos_np)
+        position_ids = NBXTensor.from_numpy(self._lift_positions(pos_np))
 
         # Build inputs
         if self.uses_embeds:
@@ -223,7 +239,7 @@ class TritonLMSession:
         pos_np = np.arange(seq_len, dtype=np.int64).reshape(1, seq_len)
         if batch_size > 1:
             pos_np = np.tile(pos_np, (batch_size, 1))
-        position_ids = NBXTensor.from_numpy(pos_np)
+        position_ids = NBXTensor.from_numpy(self._lift_positions(pos_np))
 
         if self.uses_embeds:
             run_inputs = {"inputs_embeds": self._accumulated_embeds}

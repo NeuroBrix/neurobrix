@@ -599,11 +599,34 @@ class TensorResolver:
                             inferred_shape[-1] = -1
                             return inferred_shape
 
-            # Resolve symbolic values in lists (e.g., shape = ["s0", 768])
+            # Resolve symbolic values in lists (e.g., shape = ["s0", 768]).
+            # TENSOR-REF entries resolve through the tensor store — ATen
+            # list-of-optional-Tensor signatures (aten::index / index_put:
+            # `[None, idx_tensor]`) carry tensors INSIDE the list; routing
+            # them into the shape resolver raised "Unknown SymInt type:
+            # tensor" (Qwen3-Omni thinker placeholder scatter — the first
+            # list-of-tensors consumer on this path). None entries keep the
+            # skip-dim semantics. R30 note: the triton_sequential mirror
+            # (_resolve_sequential_arg) is already recursive over list
+            # entries and handles tensor refs — this was the asymmetric side.
             raw_list = arg_info.get("value", [])
-            if self._ctx.symbolic_shapes_enabled and self._ctx.shape_resolver:
-                return [self._ctx.shape_resolver.resolve(v) for v in raw_list]
-            return raw_list
+            resolved_entries = []
+            for v in raw_list:
+                if isinstance(v, dict) and v.get("type") == "tensor":
+                    _tid = v.get("tensor_id")
+                    if _tid is None:
+                        raise ValueError(
+                            f"ZERO FALLBACK: tensor list entry missing "
+                            f"'tensor_id' in {op_type} arg: {v}")
+                    resolved_entries.append(self.resolve_normalized(_tid))
+                elif v is None or (isinstance(v, dict)
+                                   and v.get("type") == "None"):
+                    resolved_entries.append(None)
+                elif self._ctx.symbolic_shapes_enabled and self._ctx.shape_resolver:
+                    resolved_entries.append(self._ctx.shape_resolver.resolve(v))
+                else:
+                    resolved_entries.append(v)
+            return resolved_entries
 
         elif arg_type == "tensor_tuple":
             tensor_ids = arg_info.get("tensor_ids", [])

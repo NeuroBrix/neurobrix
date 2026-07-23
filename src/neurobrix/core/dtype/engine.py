@@ -238,7 +238,12 @@ _FP16_NEED_FP32: FrozenSet[str] = frozenset({"mm", "bmm", "div", "addmm"})
 AMP_PROMOTE_OPS: FrozenSet[str] = frozenset({
     "addcdiv", "addcmul", "atan2", "bilinear", "cross",
     "dot", "vdot", "grid_sampler", "index_put",
-    "tensordot", "scatter_add",
+    "tensordot", "scatter_add", "index_add",
+    # index_add: same promote class as its sibling scatter_add in the
+    # torch autocast tables — self/index/source must agree on the widest
+    # float type. First consumer: Qwen3-Omni thinker placeholder scatter
+    # (fp16 zeros buffer + AMP-upcast fp32 source crashed
+    # "self (Half) and source (Float)").
 })
 
 # Ops that take a Python-SCALAR fill value converted to a tensor's dtype.

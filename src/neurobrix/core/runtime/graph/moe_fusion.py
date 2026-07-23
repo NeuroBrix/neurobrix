@@ -18,12 +18,20 @@ import re
 import os
 
 
-def detect_and_fuse_moe(dag: Dict[str, Any], family: str, norm_topk_prob: bool = True) -> Dict[str, Any]:
+def detect_and_fuse_moe(dag: Dict[str, Any], family: str, norm_topk_prob: bool = True,
+                        declared: bool = False) -> Dict[str, Any]:
     """
     Detect MoE patterns in DAG and replace with fused ops.
 
     Guards:
-        - family must be "llm" (eliminates image/audio/video)
+        - family "llm" (the historical fast path) OR an EXPLICIT MoE
+          declaration (`declared=True` — the flow read num_experts > 1
+          from lm_config, registry-driven). MoE LMs are packaged under
+          other families too (Qwen3-Omni thinker → multimodal); a family
+          branch alone on this universal primitive silently skipped them
+          and the graph ran with only the trace-fired experts → garbage.
+          The structural pattern-match below remains the correctness
+          authority either way.
         - Must find topk ops with k > 1 (eliminates dense LLMs)
 
     Args:
@@ -31,13 +39,15 @@ def detect_and_fuse_moe(dag: Dict[str, Any], family: str, norm_topk_prob: bool =
         family: Model family from manifest ("llm", "image", etc.)
         norm_topk_prob: Whether to normalize routing weights after topk selection.
             DeepSeek: False (raw softmax scores). Qwen3/Mixtral: True (default).
+        declared: The caller declared this component a MoE LM (lm_config
+            num_experts > 1) — admits non-llm families to the pass.
 
     Returns:
         The DAG (same reference, possibly mutated)
     """
     if os.environ.get("NBX_DISABLE_MOE_FUSION"):
         return dag
-    if family != "llm":
+    if family != "llm" and not declared:
         return dag
 
     ops = dag.get("ops", {})
