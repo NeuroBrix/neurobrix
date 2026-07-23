@@ -53,6 +53,14 @@ def _read_small_ints(t: Any, count: int) -> List[int]:
     return [int(x) for x in flat[:count]]
 
 
+def _read_small_float(t: Any) -> float:
+    """Boundary metadata read: first element of a tiny float tensor
+    (same class as _read_small_ints — decode-control, not compute)."""
+    if isinstance(t, NBXTensor):
+        return float(t.numpy().reshape(-1)[0])
+    return float(np.asarray(t).reshape(-1)[0])
+
+
 class TritonVLMEngine:
     """Vision-conditioned LLM (R33): encode image → merge embeds →
     mrope decode. Mirror of core/flow/vlm.py VLMEngine."""
@@ -107,6 +115,9 @@ class TritonVLMEngine:
             in_cfg.get("image_variable", "global.pixel_values"))
         grid_thw = resolved.get(
             in_cfg.get("grid_variable", "global.image_grid_thw"))
+        pixel_values_videos = resolved.get("global.pixel_values_videos")
+        video_grid_thw = resolved.get("global.video_grid_thw")
+        video_spg = resolved.get("global.video_second_per_grid")
         audio_path = resolved.get("global.audio_path")
         audio_name = vlm.get("audio_component")
         prompt = resolved.get(
@@ -115,15 +126,25 @@ class TritonVLMEngine:
             raise RuntimeError(
                 "ZERO FALLBACK: vlm flow requires a text prompt.")
         has_image = pixel_values is not None
+        has_video = pixel_values_videos is not None
+        if has_image and has_video:
+            raise RuntimeError(
+                "ZERO FALLBACK: one visual modality per request — provide "
+                "--input-image or --input-video, not both.")
         if has_image and grid_thw is None:
             raise RuntimeError(
                 "ZERO FALLBACK: image request missing the grid input "
                 f"({in_cfg.get('grid_variable')}).")
-        if not has_image and audio_path is None:
+        if has_video and video_grid_thw is None:
+            raise RuntimeError(
+                "ZERO FALLBACK: video request missing the grid input "
+                "(global.video_grid_thw).")
+        has_visual = has_image or has_video
+        if not has_visual and audio_path is None:
             raise RuntimeError(
                 "ZERO FALLBACK: vlm flow requires a modality input — "
-                "provide --input-image or --audio.")
-        if not has_image and not audio_name:
+                "provide --input-image, --input-video or --audio.")
+        if not has_visual and not audio_name:
             raise RuntimeError(
                 "ZERO FALLBACK: this build declares no audio_component — "
                 "audio understanding needs a build traced with the audio "
@@ -149,15 +170,20 @@ class TritonVLMEngine:
                 "deepstack_visual_embeds.N inputs — inconsistent trace.")
 
         deepstack_embeds: List[NBXTensor] = []
-        if has_image:
-            # ── Step 2 (image): vision encoder forward ──
+        if has_visual:
+            # ── Step 2 (visual): vision encoder forward — the video path
+            # rides the SAME tower with its own patch stream and grid
+            # (temporal dim > 1); only the placeholder token and the
+            # M-RoPE temporal scale differ downstream. R30 mirror. ──
+            vis_pixels = pixel_values if has_image else pixel_values_videos
+            vis_grid = grid_thw if has_image else video_grid_thw
             print(f"   [{vision_name}] Running vision forward...")
             start = time.perf_counter()
             self._ensure_weights_loaded(vision_name)
-            resolved[f"{vision_name}.hidden_states"] = pixel_values
-            resolved["global.hidden_states"] = pixel_values
-            resolved[f"{vision_name}.grid_thw"] = grid_thw
-            resolved["global.grid_thw"] = grid_thw
+            resolved[f"{vision_name}.hidden_states"] = vis_pixels
+            resolved["global.hidden_states"] = vis_pixels
+            resolved[f"{vision_name}.grid_thw"] = vis_grid
+            resolved["global.grid_thw"] = vis_grid
             self._execute_component(vision_name, "forward", None)
             modal_embeds = self._get_component_output(vision_name)
             if modal_embeds is None:
@@ -261,15 +287,23 @@ class TritonVLMEngine:
                 self._unload_component_weights(audio_name)
                 release_flow_memory(self.ctx.primary_device)
 
-        if has_image:
-            t, h, wgrid = _read_small_ints(grid_thw, 3)
+        if has_visual:
+            t, h, wgrid = _read_small_ints(vis_grid, 3)
             expected = t * (h // merge) * (wgrid // merge)
             if n_modal != expected:
                 raise RuntimeError(
                     f"ZERO FALLBACK: vision output has {n_modal} tokens but "
                     f"grid {t}x{h}x{wgrid} / merge {merge} expects {expected}.")
-            span_token_id = image_token_id
-            span_content_type = "image"
+            if has_image:
+                span_token_id = image_token_id
+                span_content_type = "image"
+            else:
+                span_token_id = vlm.get("video_token_id")
+                if span_token_id is None:
+                    raise RuntimeError(
+                        "ZERO FALLBACK: topology.flow.vlm carries no "
+                        "video_token_id — video understanding needs it.")
+                span_content_type = "video"
         else:
             span_token_id = vlm.get("audio_token_id")
             if span_token_id is None:
@@ -339,14 +373,29 @@ class TritonVLMEngine:
         context_embeds = (NBXTensor.cat(parts, dim=1)
                           if len(parts) > 1 else modal_embeds)
 
-        # Image spans get the 3-D grid planes; audio spans use 1-D
-        # text-style positions (vendor audio-only branch).
-        segments: List[Tuple[str, int, Optional[Tuple[int, int, int]]]] = []
+        # Visual spans get the 3-D grid planes with a temporal scale;
+        # audio spans use 1-D text-style positions (vendor audio-only
+        # branch). Temporal scale — R30 mirror of the compiled flow:
+        # position_id_per_seconds present → image ×pids, video
+        # ×(second_per_grid × pids); absent (legacy mrope) → plain +1.
+        _t_scale = 1.0
+        if has_visual:
+            _pids = lm_cfg.get("position_id_per_seconds")
+            if _pids is not None:
+                _spg = 1.0
+                if has_video:
+                    if video_spg is None:
+                        raise RuntimeError(
+                            "ZERO FALLBACK: video request missing "
+                            "global.video_second_per_grid.")
+                    _spg = _read_small_float(video_spg)
+                _t_scale = _spg * float(_pids)
+        segments: List[Tuple[str, int, Optional[Tuple[int, int, int, float]]]] = []
         if prefix_ids:
             segments.append(("text", len(prefix_ids), None))
-        if has_image:
-            segments.append(("image", n_modal,
-                             (t, h // merge, wgrid // merge)))
+        if has_visual:
+            segments.append(("visual", n_modal,
+                             (t, h // merge, wgrid // merge, _t_scale)))
         else:
             segments.append(("text", n_modal, None))
         if suffix_ids:
@@ -362,7 +411,7 @@ class TritonVLMEngine:
         generated_ids: List[int] = []
 
         img_span_start = len(prefix_ids)
-        if has_deepstack and not has_image:
+        if has_deepstack and not has_visual:
             # Audio requests on a DeepStack graph feed the empty-stub
             # form (all-False mask + zero-length embeds) — R30 mirror.
             _h_ds = context_embeds.shape[2]
@@ -393,7 +442,7 @@ class TritonVLMEngine:
                 _s = context_embeds.shape[1]
                 _mask_np = np.zeros(
                     (1, _s, context_embeds.shape[2]), dtype=bool)
-                if has_image:
+                if has_visual:
                     _mask_np[0, img_span_start:img_span_start + n_modal, :] = True
                 _mask = NBXTensor.from_numpy(_mask_np)
                 resolved["visual_pos_masks"] = _mask
@@ -469,8 +518,12 @@ class TritonVLMEngine:
                 seg = np.broadcast_to(pos.reshape(1, -1), (3, length)).copy()
                 seg += offset
             else:
-                gt, gh, gw = grid
-                t_idx = np.repeat(np.arange(gt, dtype=np.int64), gh * gw)
+                gt, gh, gw, t_scale = grid
+                # float32 scale then truncate — R30 mirror of the
+                # compiled builder's (arange.float() * t_scale).long().
+                t_vals = (np.arange(gt, dtype=np.float32)
+                          * np.float32(t_scale)).astype(np.int64)
+                t_idx = np.repeat(t_vals, gh * gw)
                 h_idx = np.tile(np.repeat(np.arange(gh, dtype=np.int64), gw),
                                 gt)
                 w_idx = np.tile(np.arange(gw, dtype=np.int64), gt * gh)

@@ -118,6 +118,8 @@ For more information: https://neurobrix.es
     # ── 9-family inputs ──
     run_parser.add_argument('--input-image', default=None, dest='input_image',
                             help='Input image path (vlm, img2img, inpainting, upscaler, multimodal)')
+    run_parser.add_argument('--input-video', default=None, dest='input_video',
+                            help='Input video path for understanding (vlm/multimodal)')
     run_parser.add_argument('--mask-image', default=None, dest='mask_image',
                             help='Inpainting mask image path (image inpainting mode)')
     run_parser.add_argument('--reference-image', default=None, dest='reference_image',

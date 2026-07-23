@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Video understanding for omni multimodal models (Qwen3-Omni
+  lineage).** `neurobrix run --input-video … --prompt …` answers
+  questions about a video clip with these builds — completing
+  four-modality understanding (text, image, audio, video) on a single
+  build, on both execution engines. Frames are sampled at the vendor's
+  fps contract (`--fps` overrides), the vision tower runs the clip as
+  a temporal patch grid, and rotary positions carry real timestamps
+  (temporal scale from the sampling rate), so any clip length or frame
+  rate works on one build. All four execution modes produce
+  byte-identical answers on the reference clip.
+
 - **Audio understanding for omni multimodal models (Qwen3-Omni
   lineage).** `neurobrix run --input-audio … --prompt …` now answers
   questions about an audio clip with these builds: the audio tower's

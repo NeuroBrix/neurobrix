@@ -325,6 +325,15 @@ class NativeATenDispatcher:
                              key=lambda d: torch.tensor([], dtype=d).element_size())
                     q, k, v = q.to(_t), k.to(_t), v.to(_t)
                 inputs = [q, k, v] + list(inputs[3:])
+                # A FLOATING attn_mask must track the (possibly AMP-upcast)
+                # query dtype — torch SDPA rejects a half mask against a
+                # float query (omni vision block-diagonal mask, traced
+                # additive-fp16 by the vendor interface). Bool masks are
+                # dtype-invariant and pass through untouched.
+                if (len(inputs) > 3 and isinstance(inputs[3], torch.Tensor)
+                        and inputs[3].is_floating_point()
+                        and inputs[3].dtype != q.dtype):
+                    inputs[3] = inputs[3].to(q.dtype)
 
         # [MULTI-RESOLUTION FIX] Upsample ops have hardcoded output_size from trace time.
         # When scale factors (scales_h, scales_w) are available, recompute output_size

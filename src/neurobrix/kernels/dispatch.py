@@ -962,6 +962,7 @@ def _build_op_map() -> Dict[str, Callable]:
         "select": _meta_select,
         "unbind": _meta_unbind,
         "split_with_sizes": _meta_slice,  # simplified
+        "bucketize": w.bucketize_wrapper,
         "view_as": _meta_view_as,
         "reshape_as": _meta_reshape_as,
         "as_strided": _meta_as_strided,
