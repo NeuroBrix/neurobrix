@@ -25,9 +25,12 @@ Preprocessing types implemented here:
   native_patch_grid — dynamic-resolution flattened patch grid + grid_thw
       (GLM-4.1V / Qwen-VL lineage; landed with GLM-4.1V, its first
       consumer).
-
-Planned types (land WITH their consumer model, never speculatively —
-zero-fallback until then): anyres_slice (MiniCPM-o LLaVA-UHD slicing).
+  minicpm_adaptive_slice — LLaVA-UHD adaptive-slice NaViT contract
+      (MiniCPM-o lineage; landed with MiniCPM-o-4_5, its first
+      consumer). v1 = single image, max_slice_nums 1 (no slicing):
+      smart-resize to the scale_resolution budget, normalize by the
+      topology's mean/std, pack to the patch-major [1, N, C*p*p]
+      layout the traced vpm graph consumes.
 """
 
 from typing import Optional
@@ -305,3 +308,97 @@ def clip_centercrop_np(image_path: str, preprocessor_config: dict) -> np.ndarray
     if pc.get("do_normalize", True):
         a = (a - mean) / std
     return np.ascontiguousarray(a.transpose(2, 0, 1))[np.newaxis]  # 1,3,cs,cs
+
+
+def minicpm_adaptive_slice_np(image_path: str, preprocessing_cfg: dict) -> dict:
+    """LLaVA-UHD adaptive-slice NaViT preprocessing (MiniCPM-o lineage),
+    v1 single-image single-slice contract (max_slice_nums == 1).
+
+    Vendor source: MiniCPMVImageProcessor (processing_minicpmo.py). With
+    max_slice_nums == 1, get_sliced_grid returns None (multiple =
+    min(ceil(w*h/sr**2), 1) <= 1) and slice_image takes the no-slice
+    branch:
+
+        best_size = self.find_best_resize(original_size, scale_resolution,
+                                          patch_size, allow_upscale=True)
+        source_image = image.resize(best_size, resample=BICUBIC)
+
+    find_best_resize (vendor, verbatim arithmetic below):
+
+        if (width * height > scale_resolution * scale_resolution) or allow_upscale:
+            r = width / height
+            height = int(scale_resolution / math.sqrt(r))
+            width = int(height * r)
+        best_width = ensure_divide(width, patch_size)    # max(round(w/p)*p, p)
+        best_height = ensure_divide(height, patch_size)
+
+    Then per slice: to_numpy .astype(float32)/255, normalize mean/std
+    (HWC), channel-first, reshape_by_patch:
+
+        patches = F.unfold(image, (p, p), stride=(p, p))     # [C*p*p, L]
+        patches = patches.reshape(C, p, p, -1)
+        patches = patches.permute(0, 1, 3, 2).reshape(C, p, -1)   # [C, p, L*p]
+
+    and the model wrapper (get_vision_embedding) packs
+    `i.flatten(end_dim=1).permute(1, 0)` -> [L*p, C*p]. The traced vpm
+    graph consumes the PATCH-MAJOR form [1, N, C*p*p] whose definitional
+    inverse (the trace wrapper's repack) is
+    reshape(B, N, C, p, p).permute(0, 2, 3, 1, 4).reshape(B, C, p, N*p)
+    — i.e. row n = patch (row-major over the gh x gw grid), inner order
+    (c, i, j). The equivalent direct numpy packing from the CHW array:
+    reshape(C, gh, p, gw, p) -> transpose(1, 3, 0, 2, 4) -> [gh*gw, C*p*p].
+
+    Returns the vpm graph's input dict:
+        all_pixel_values     float32 [1, N, C*p*p]
+        patch_attention_mask bool    [1, 1, N] (all-True, B=1 contract)
+        tgt_sizes            int32   [[gh, gw]] (values feed in-graph
+                                     position arithmetic — must be exact)
+    """
+    import math
+    from PIL import Image
+    cfg = preprocessing_cfg
+    missing = [k for k in ("patch_size", "scale_resolution", "max_slice_nums",
+                           "image_mean", "image_std") if cfg.get(k) is None]
+    if missing:
+        raise RuntimeError(
+            "ZERO FALLBACK: minicpm_adaptive_slice preprocessing block is "
+            f"missing {missing} — the build's topology.flow.vlm.preprocessing "
+            "must carry them (registry-emitted).")
+    p = int(cfg["patch_size"])
+    scale_resolution = int(cfg["scale_resolution"])
+    max_slice_nums = int(cfg["max_slice_nums"])
+    if max_slice_nums != 1:
+        raise RuntimeError(
+            "ZERO FALLBACK: minicpm_adaptive_slice v1 implements the "
+            f"single-slice contract only (max_slice_nums == 1, got "
+            f"{max_slice_nums}); multi-slice lands with a multi-slice vpm "
+            "trace (B > 1 slice batch).")
+    mean = np.asarray(cfg["image_mean"], dtype=np.float32)
+    std = np.asarray(cfg["image_std"], dtype=np.float32)
+
+    img = _load_rgb(image_path)
+    width, height = img.size
+    # find_best_resize(original_size, scale_resolution, patch_size,
+    # allow_upscale=True) — vendor arithmetic verbatim (allow_upscale
+    # short-circuits the budget check to the resize branch).
+    r = width / height
+    height = int(scale_resolution / math.sqrt(r))
+    width = int(height * r)
+    best_width = max(round(width / p) * p, p)     # ensure_divide
+    best_height = max(round(height / p) * p, p)   # ensure_divide
+    img = img.resize((best_width, best_height), Image.Resampling.BICUBIC)
+
+    a = np.asarray(img).astype(np.float32) / 255.0            # HWC, vendor /255
+    a = (a - mean) / std                                      # vendor normalize
+    a = a.transpose(2, 0, 1)                                  # CHW
+    gh, gw = best_height // p, best_width // p
+    # Patch-major packing (see docstring): [C,H,W] -> [gh*gw, C*p*p].
+    packed = (a.reshape(a.shape[0], gh, p, gw, p)
+              .transpose(1, 3, 0, 2, 4)
+              .reshape(gh * gw, a.shape[0] * p * p))
+    return {
+        "all_pixel_values":
+            np.ascontiguousarray(packed, dtype=np.float32)[np.newaxis],
+        "patch_attention_mask": np.ones((1, 1, gh * gw), dtype=bool),
+        "tgt_sizes": np.array([[gh, gw]], dtype=np.int32),
+    }

@@ -140,8 +140,22 @@ class RuntimeExecutor:
                     _resolved.get(_img_var) is not None
                     or _resolved.get("global.pixel_values_videos") is not None
                     or _resolved.get("global.audio_path") is not None)
+                # Staged-splice builds (MiniCPM-o class) never take the AR
+                # shortcut: their LM graph's FIRST op is a mandatory
+                # bool-mask masked_scatter fed by vision/audio_hidden_states
+                # + pos-mask inputs the AR flow cannot synthesize (proven:
+                # 'input::vision_hidden_states could not be resolved' at
+                # op 1/3592 on the first probe). The topology connections
+                # carry the contract (global.vision_hidden_states →
+                # <lm>.vision_hidden_states) — data-driven, no graph read.
+                # Text-only requests run the vlm flow's inert-stub form
+                # (all-False masks + one zero source row) instead. Omni
+                # topologies carry no such connection → behavior unchanged.
+                _lm_splice = any(
+                    (c.get("to") or "") == f"{_gen_lm}.vision_hidden_states"
+                    for c in (self.pkg.topology.get("connections") or []))
                 if (_gen_lm in (self.pkg.topology.get("components") or {})
-                        and not _has_modal):
+                        and not _has_modal and not _lm_splice):
                     return "autoregressive_generation"
             return flow_type
 

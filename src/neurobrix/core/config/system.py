@@ -28,6 +28,15 @@ PRISM_DEFAULTS = {
     "safety_margin": 0.95,  # Use 95% of VRAM capacity (tight for large models)
     "default_seq_len": 128,  # Conservative default; actual value from defaults.json
     "overhead_factor": 0.05,  # 5% fragmentation buffer (low for inference)
+    # Driver/library overhead reserve (MB) subtracted from a single GPU's
+    # planning capacity before ANY strategy parks the whole model on one
+    # device. Empirical derivation (P-PRISM-NEVER-REFUSE v2 B.4, 2026-05-12):
+    # ~13 GiB of live NBX tensors produced a 16.6 GiB runtime peak on a
+    # 32 GiB V100 — CUDA context + cuDNN/cuBLAS workspaces + Triton kernel
+    # cache + caching-allocator fragmentation ≈ 3 GiB that no activation
+    # estimator term covers. Single source for the reserve used by
+    # _try_single_gpu, _try_single_gpu_lifecycle and _place_component.
+    "oom_reserve_mb": 3072,
     # FGP (Fine-Grained Pipeline) settings
     "fgp_utilization_target": 0.85,  # Use 85% of GPU memory for FGP
     "fgp_max_blocks_per_stage": 7,   # Max transformer blocks per GPU (7 for 32GB, ~4 for 16GB)

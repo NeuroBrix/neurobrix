@@ -358,6 +358,13 @@ class PrismSolver:
         prism_defaults = get_prism_defaults()
         self.safety_margin = prism_defaults.get("safety_margin", safety_margin)
         self.overhead_factor = overhead_factor
+        # Driver/library overhead reserve for single-GPU acceptance gates.
+        # Value + empirical derivation: PRISM_DEFAULTS["oom_reserve_mb"]
+        # (config/system.py). One constant for every single-GPU gate —
+        # _try_single_gpu, _try_single_gpu_lifecycle, _place_component.
+        # No literal default here — config/system.py is the single source
+        # (a missing key is a config regression and must crash).
+        self.oom_reserve_mb = prism_defaults["oom_reserve_mb"]
         self._dtype_bytes = get_dtype_bytes()
 
     # =========================================================================
@@ -725,8 +732,14 @@ class PrismSolver:
                         # will fail clean if RAM truly insufficient).
                         total_capacity = 2**62
                 elif strat_name in ("single_gpu", "single_gpu_lifecycle"):
-                    # Single GPU: capacity = largest GPU only
-                    total_capacity = int(max(d.capacity_mb for d in strat_devices) * 1024 * 1024)
+                    # Single GPU: capacity = largest GPU only, minus the same
+                    # driver/library overhead reserve the acceptance gates
+                    # subtract (PRISM_DEFAULTS["oom_reserve_mb"]) — the KV
+                    # budget must not be sized into the reserve the strategy
+                    # gate just refused to plan into.
+                    total_capacity = int(
+                        max(0.0, max(d.capacity_mb for d in strat_devices)
+                            - self.oom_reserve_mb) * 1024 * 1024)
                 else:
                     total_capacity = sum(int(d.capacity_mb * 1024 * 1024) for d in strat_devices)
 
@@ -1239,7 +1252,8 @@ class PrismSolver:
         given moment, not the full-resolution buffer it would otherwise.
         The estimator approximates this by treating the chain
         intermediates as zero-alloc, which gives a slightly optimistic
-        peak; the existing 3 GiB `_OOM_RESERVE_MB` in `_try_single_gpu`
+        peak; the existing 3 GiB reserve (PRISM_DEFAULTS["oom_reserve_mb"])
+        in `_try_single_gpu`
         absorbs the residual band transient comfortably (band size ≪
         full intermediate at tile_factor ≥ 4 on 4 GiB-class tensors).
         P-PRISM-NEVER-REFUSE v2 S5 2026-05-13.
@@ -1864,15 +1878,14 @@ class PrismSolver:
         total_required += total_required * overhead_pct
 
         # P-PRISM-NEVER-REFUSE v2 B.4: blanket driver/library overhead
-        # reserve (matches `_place_component` Strategy 1 — see comment
-        # there for the empirical justification). Prevents `single_gpu`
-        # from accepting plans that fit the activation estimator but
-        # then runtime-OOM at the conv::62 boundary of Sana 4Kpx on
-        # 1× V100 16 GiB. The cascade can then fall through to
+        # reserve (single constant PRISM_DEFAULTS["oom_reserve_mb"] — see
+        # config/system.py for the empirical justification). Prevents
+        # `single_gpu` from accepting plans that fit the activation
+        # estimator but then runtime-OOM at the conv::62 boundary of Sana
+        # 4Kpx on 1× V100 16 GiB. The cascade can then fall through to
         # `lazy_sequential` (which routes VAE to CPU via Strategy 4
         # of `_place_component`) or `cpu_execution`.
-        _OOM_RESERVE_MB = 3072
-        effective_capacity = largest.capacity_mb - _OOM_RESERVE_MB
+        effective_capacity = largest.capacity_mb - self.oom_reserve_mb
         if total_required > effective_capacity:
             return None
 
@@ -1979,7 +1992,20 @@ class PrismSolver:
 
         peak = persistent_mb + max_transient
 
-        if peak > largest.capacity_mb:
+        # Same driver/library overhead reserve as `_try_single_gpu` and
+        # `_place_component` Strategy 1 (PRISM_DEFAULTS["oom_reserve_mb"]).
+        # This gate used to compare peak against the RAW 0.95-margined
+        # capacity — the only single-GPU acceptance without the reserve —
+        # so a model whose resident set lands in the [capacity − reserve,
+        # capacity] window slipped through here after `_try_single_gpu`
+        # correctly rejected it. DeepSeek-Coder-V2-Lite (29.96 GiB weights,
+        # tiny LLM trace-time activations): peak 30,575 MB vs raw capacity
+        # 31,130 MB → accepted eager on one 32 GiB V100 → runtime OOM with
+        # ~3 GiB eaten by CUDA context + workspaces + fragmentation. With
+        # the reserve the cascade degrades to a multi-GPU strategy at
+        # solve time, as designed.
+        effective_capacity = largest.capacity_mb - self.oom_reserve_mb
+        if peak > effective_capacity:
             return None
 
         allocations = {}
@@ -2883,15 +2909,13 @@ class PrismSolver:
         # Strategy 1: single_gpu — component fits on largest GPU.
         # Capacity discounted by a fixed driver/library overhead reserve
         # (cuDNN/cuBLAS workspaces, Triton kernel cache, autotune state,
-        # PyTorch caching allocator fragmentation). Observed empirically:
-        # 16.6 GiB peak runtime usage on 32 GiB GPU for ~13 GiB of live
-        # NBX tensors → ~3 GiB driver-side overhead. Applying the reserve
-        # at planning time prevents per-component placements that fit
-        # the estimator but OOM at runtime, which then triggers Strategy
-        # 4 (CPU placement) below. P-PRISM-NEVER-REFUSE v2 B.4 —
-        # 2026-05-12.
-        _OOM_RESERVE_MB = 3072  # 3 GiB blanket driver/library overhead
-        effective_capacity = largest.capacity_mb - _OOM_RESERVE_MB
+        # PyTorch caching allocator fragmentation). Single constant
+        # PRISM_DEFAULTS["oom_reserve_mb"] — see config/system.py for the
+        # empirical derivation. Applying the reserve at planning time
+        # prevents per-component placements that fit the estimator but
+        # OOM at runtime, which then triggers Strategy 4 (CPU placement)
+        # below. P-PRISM-NEVER-REFUSE v2 B.4 — 2026-05-12.
+        effective_capacity = largest.capacity_mb - self.oom_reserve_mb
         if required <= effective_capacity * 0.92:
             shard_map = {s: largest.device_string for s in shard_sizes.get(comp_name, {})}
             return (largest.device_string, shard_map)

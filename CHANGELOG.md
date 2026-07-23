@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Staged-splice multimodal understanding (MiniCPM-o lineage).** A
+  second vision-language contract joins the vlm flow on both execution
+  engines: models whose vision tower feeds a perceiver projection
+  stage and whose language model splices modality embeddings in-graph
+  (bool-mask scatter over placeholder runs) now run text, image and
+  audio understanding on one build — detected from the packaged
+  graphs, never from model names. Includes adaptive-slice image
+  preprocessing (LLaVA-UHD class), a universal fast-tokenizer runner
+  for vendor tokenizer classes over standard serializations, a new
+  Triton masked-scatter kernel composition, and correctness fixes with
+  reach beyond this lineage: convolution/pooling argument broadcast
+  for single-element geometry lists, a pooling-kernel fix for
+  non-contiguous inputs (silent wrong values on transposed inputs),
+  and a placement-solver reserve applied uniformly so near-capacity
+  models degrade to multi-GPU plans at solve time instead of failing
+  at runtime.
+
 - **Video understanding for omni multimodal models (Qwen3-Omni
   lineage).** `neurobrix run --input-video … --prompt …` answers
   questions about a video clip with these builds — completing

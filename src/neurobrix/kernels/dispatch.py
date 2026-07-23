@@ -717,6 +717,7 @@ def _build_op_map() -> Dict[str, Callable]:
         "maximum": w.maximum_wrapper,
         "minimum": w.minimum_wrapper,
         "masked_fill": w.masked_fill,
+        "masked_scatter": w.masked_scatter_wrapper,
 
         # --- Comparisons ---
         "gt": w.gt,

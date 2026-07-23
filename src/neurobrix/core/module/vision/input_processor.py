@@ -17,9 +17,12 @@ Supported preprocessing types:
                       {"pixel_values": [n_patches, C*Tp*P*P] float32,
                        "image_grid_thw": [1, 3] int64} (vendor
                       model_input_names, landed with GLM-4.1V)
-
-Planned (each lands WITH its consumer model, zero-fallback until then):
-  anyres_slice      — LLaVA-UHD adaptive slicing (MiniCPM-o class)
+  minicpm_adaptive_slice — LLaVA-UHD adaptive-slice NaViT contract
+                      (MiniCPM-o class, landed with MiniCPM-o-4_5);
+                      returns a dict matching the traced vpm graph's
+                      input names {"all_pixel_values": [1, N, C*p*p]
+                      float32, "patch_attention_mask": [1, 1, N] bool,
+                      "tgt_sizes": [[gh, gw]] int32}
 """
 
 from pathlib import Path
@@ -35,7 +38,7 @@ class ImageInputProcessor:
     """Routes to the correct image preprocessor based on declared type."""
 
     SUPPORTED = ("i2v_vae_condition", "clip_centercrop", "native_patch_grid",
-                 "native_patch_grid_video")
+                 "native_patch_grid_video", "minicpm_adaptive_slice")
 
     @staticmethod
     def process(
@@ -62,11 +65,25 @@ class ImageInputProcessor:
                 f"ZERO FALLBACK: Unknown image preprocessing type "
                 f"'{preprocessing_type}'.\n"
                 f"Supported: {', '.join(ImageInputProcessor.SUPPORTED)}. "
-                f"(native_patch_grid / anyres_slice land with their "
-                f"consumer models.)"
+                f"(New preprocessing types land with their consumer models.)"
             )
         if not Path(image_path).exists():
             raise FileNotFoundError(f"Image file not found: {image_path}")
+
+        if preprocessing_type == "minicpm_adaptive_slice":
+            if not isinstance(preprocessor_config, dict):
+                raise RuntimeError(
+                    "ZERO FALLBACK: minicpm_adaptive_slice requires the "
+                    "model's preprocessing config (dict) — the "
+                    "topology.flow.vlm.preprocessing block."
+                )
+            out = image_dsp.minicpm_adaptive_slice_np(
+                str(image_path), preprocessor_config)
+            # Keys mirror the traced vpm graph's input:: names; dtypes are
+            # the graph contract (float32 / bool / int32 — tgt_sizes values
+            # feed in-graph position arithmetic and must stay exact ints).
+            return {k: torch.from_numpy(np.ascontiguousarray(v))
+                    for k, v in out.items()}
 
         if preprocessing_type == "native_patch_grid":
             if not isinstance(preprocessor_config, dict):

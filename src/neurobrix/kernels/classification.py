@@ -32,9 +32,9 @@ _TRITON_OPS = {
     "neg", "exp", "exp2", "sin", "cos", "tan", "rsqrt", "sqrt", "abs", "log",
     "reciprocal", "pow", "clamp", "clamp_min", "erf", "threshold",
 
-    # Binary element-wise (13)
+    # Binary element-wise (14)
     "add", "mul", "div", "sub", "rsub", "where", "maximum", "minimum",
-    "masked_fill", "glu", "lerp", "addcdiv", "addcmul",
+    "masked_fill", "masked_scatter", "glu", "lerp", "addcdiv", "addcmul",
 
     # Comparisons (7)
     "gt", "ge", "lt", "le", "eq", "ne",
