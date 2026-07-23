@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Audio understanding for omni multimodal models (Qwen3-Omni
+  lineage).** `neurobrix run --input-audio … --prompt …` now answers
+  questions about an audio clip with these builds: the audio tower's
+  windowed encoder runs natively on both execution engines with
+  variable-length mel features (no fixed 30-second padding), and the
+  SAME build still serves text-only and image prompts. Audio spans get
+  1-D rotary positions matching the vendor semantics; chunk counts,
+  window paddings and feature lengths all follow the input's true
+  duration — any clip length works on a single build. Sequential mode
+  reproduces the vendor pipeline token-for-token on the reference
+  clip; compiled mode is byte-identical to sequential; the Triton
+  engine matches its own op-by-op reference byte-for-byte. Includes a
+  fix for a latent memory-safety bug in the fused MoE kernel's
+  final projection (out-of-bounds routing-weight reads on padded
+  expert blocks) that could crash multi-expert models regardless of
+  modality.
+
 - **Image understanding for DeepStack multimodal models (Qwen3-Omni
   lineage).** `neurobrix run --input-image … --prompt …` now answers
   questions about an image with these builds: the vision tower's

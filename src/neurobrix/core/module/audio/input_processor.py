@@ -38,6 +38,7 @@ class AudioInputProcessor:
         device: torch.device,
         dtype: torch.dtype,
         input_shape: Optional[Tuple[int, ...]] = None,
+        params: Optional[dict] = None,
     ) -> torch.Tensor:
         """
         Preprocess audio file into model input features.
@@ -73,6 +74,7 @@ class AudioInputProcessor:
         # Vendor-free numpy DSP (shared with the triton path, R34).
         feats = mel_dsp.extract_features_np(
             preprocessing_type, str(audio_path), Path(model_path), input_shape,
+            params=params,
         )
 
         # Convert to torch only at the device boundary (compiled mode = torch allowed).

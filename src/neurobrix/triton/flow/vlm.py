@@ -27,6 +27,7 @@ defaults.json.
 """
 
 import json
+import os
 import time
 import numpy as np
 from pathlib import Path
@@ -99,22 +100,34 @@ class TritonVLMEngine:
 
         dtype = self._compute_dtype()
 
-        # ── Step 1: vision inputs (CLI boundary; alias only) ──
+        # ── Step 1: request modality (image XOR audio, plus text) ──
+        # R30 mirror of the compiled flow's modality dispatch.
         in_cfg = vlm.get("input", {})
         pixel_values = resolved.get(
             in_cfg.get("image_variable", "global.pixel_values"))
         grid_thw = resolved.get(
             in_cfg.get("grid_variable", "global.image_grid_thw"))
+        audio_path = resolved.get("global.audio_path")
+        audio_name = vlm.get("audio_component")
         prompt = resolved.get(
             in_cfg.get("prompt_variable", "global.prompt"))
-        if pixel_values is None or grid_thw is None:
-            raise RuntimeError(
-                "ZERO FALLBACK: vlm flow requires preprocessed image "
-                f"inputs ({in_cfg.get('image_variable')}, "
-                f"{in_cfg.get('grid_variable')}) — provide --input-image.")
         if not prompt:
             raise RuntimeError(
                 "ZERO FALLBACK: vlm flow requires a text prompt.")
+        has_image = pixel_values is not None
+        if has_image and grid_thw is None:
+            raise RuntimeError(
+                "ZERO FALLBACK: image request missing the grid input "
+                f"({in_cfg.get('grid_variable')}).")
+        if not has_image and audio_path is None:
+            raise RuntimeError(
+                "ZERO FALLBACK: vlm flow requires a modality input — "
+                "provide --input-image or --audio.")
+        if not has_image and not audio_name:
+            raise RuntimeError(
+                "ZERO FALLBACK: this build declares no audio_component — "
+                "audio understanding needs a build traced with the audio "
+                "tower.")
 
         # ── DeepStack detection (data-driven from the LM graph spec) ──
         # R30 mirror of core/flow/vlm.py: a Qwen3-VL/omni-lineage LM graph
@@ -135,55 +148,139 @@ class TritonVLMEngine:
                 "ZERO FALLBACK: LM graph declares visual_pos_masks but no "
                 "deepstack_visual_embeds.N inputs — inconsistent trace.")
 
-        # ── Step 2: vision encoder forward ──
-        print(f"   [{vision_name}] Running vision forward...")
-        start = time.perf_counter()
-        self._ensure_weights_loaded(vision_name)
-        resolved[f"{vision_name}.hidden_states"] = pixel_values
-        resolved["global.hidden_states"] = pixel_values
-        resolved[f"{vision_name}.grid_thw"] = grid_thw
-        resolved["global.grid_thw"] = grid_thw
-        self._execute_component(vision_name, "forward", None)
-        vision_embeds = self._get_component_output(vision_name)
-        if vision_embeds is None:
-            raise RuntimeError(
-                f"ZERO FALLBACK: vision component '{vision_name}' "
-                f"produced no output.")
-        if vision_embeds.ndim == 2:
-            n, h = vision_embeds.shape
-            vision_embeds = vision_embeds.reshape(1, n, h)
-        vision_embeds = vision_embeds.to(dtype)
-        n_merged = vision_embeds.shape[1]
         deepstack_embeds: List[NBXTensor] = []
-        if has_deepstack:
-            # Tracer names the vision tuple's flattened extras output_1..N
-            # ((hidden, [deepstack x3]) return); each is [n_merged, H_text].
-            for k in range(1, len(ds_input_names) + 1):
-                t = resolved.get(f"{vision_name}.output_{k}")
-                if not isinstance(t, NBXTensor):
-                    raise RuntimeError(
-                        f"ZERO FALLBACK: LM graph declares "
-                        f"{len(ds_input_names)} deepstack inputs but vision "
-                        f"component '{vision_name}' produced no output_{k}.")
-                deepstack_embeds.append(t.to(dtype))
-        print(f"   [{vision_name}] {n_merged} vision tokens in "
-              f"{(time.perf_counter() - start) * 1000:.0f}ms"
-              + (f" (+{len(deepstack_embeds)} deepstack levels)"
-                 if deepstack_embeds else ""))
-        if not self.ctx.persistent_mode:
-            self._unload_component_weights(vision_name)
-            release_flow_memory(self.ctx.primary_device)
+        if has_image:
+            # ── Step 2 (image): vision encoder forward ──
+            print(f"   [{vision_name}] Running vision forward...")
+            start = time.perf_counter()
+            self._ensure_weights_loaded(vision_name)
+            resolved[f"{vision_name}.hidden_states"] = pixel_values
+            resolved["global.hidden_states"] = pixel_values
+            resolved[f"{vision_name}.grid_thw"] = grid_thw
+            resolved["global.grid_thw"] = grid_thw
+            self._execute_component(vision_name, "forward", None)
+            modal_embeds = self._get_component_output(vision_name)
+            if modal_embeds is None:
+                raise RuntimeError(
+                    f"ZERO FALLBACK: vision component '{vision_name}' "
+                    f"produced no output.")
+            if modal_embeds.ndim == 2:
+                n, h = modal_embeds.shape
+                modal_embeds = modal_embeds.reshape(1, n, h)
+            modal_embeds = modal_embeds.to(dtype)
+            n_modal = modal_embeds.shape[1]
+            if has_deepstack:
+                # Tracer names the vision tuple's flattened extras
+                # output_1..N ((hidden, [deepstack x3]) return).
+                for k in range(1, len(ds_input_names) + 1):
+                    t = resolved.get(f"{vision_name}.output_{k}")
+                    if not isinstance(t, NBXTensor):
+                        raise RuntimeError(
+                            f"ZERO FALLBACK: LM graph declares "
+                            f"{len(ds_input_names)} deepstack inputs but vision "
+                            f"component '{vision_name}' produced no output_{k}.")
+                    deepstack_embeds.append(t.to(dtype))
+            print(f"   [{vision_name}] {n_modal} vision tokens in "
+                  f"{(time.perf_counter() - start) * 1000:.0f}ms"
+                  + (f" (+{len(deepstack_embeds)} deepstack levels)"
+                     if deepstack_embeds else ""))
+            if not self.ctx.persistent_mode:
+                self._unload_component_weights(vision_name)
+                release_flow_memory(self.ctx.primary_device)
+        else:
+            # ── Step 2 (audio): mel features → audio tower forward ──
+            # R30 mirror of the compiled audio branch: the mel DSP is the
+            # SHARED numpy core (R34 boundary I/O), features cross into
+            # the arena as NBXTensor.
+            print(f"   [{audio_name}] Running audio forward...")
+            start = time.perf_counter()
+            self._ensure_weights_loaded(audio_name)
+            _aud_graph_path = (Path(self.ctx.pkg.cache_path) / "components"
+                               / audio_name / "graph.json")
+            _in_shape = None
+            try:
+                with open(_aud_graph_path, "r") as _f:
+                    _in_shape = (json.load(_f).get("tensors", {})
+                                 .get("input::input_features", {})
+                                 .get("shape"))
+            except Exception:
+                pass
+            _ap = vlm.get("audio_preprocessing") or {}
+            _ptype = {"whisper_mel": "mel_spectrogram"}.get(
+                _ap.get("type", "whisper_mel"), _ap.get("type"))
+            from neurobrix.core.module.audio import mel_dsp
+            feats_np = mel_dsp.extract_features_np(
+                _ptype, str(audio_path), Path(self.ctx.pkg.cache_path),
+                tuple(_in_shape) if _in_shape else None, params=_ap)
+            while feats_np.ndim > 2:
+                feats_np = feats_np[0]
+            L = int(feats_np.shape[1])
+            lm_cfg_a = self.ctx.pkg.defaults.get("lm_config", {})
+            _n_window = lm_cfg_a.get("audio_n_window")
+            if _n_window is None:
+                raise RuntimeError(
+                    "ZERO FALLBACK: audio_n_window missing from lm_config "
+                    "— the registry must map it for audio understanding.")
+            _W = 2 * int(_n_window)
 
-        t, h, wgrid = _read_small_ints(grid_thw, 3)
-        expected = t * (h // merge) * (wgrid // merge)
-        if n_merged != expected:
-            raise RuntimeError(
-                f"ZERO FALLBACK: vision output has {n_merged} tokens but "
-                f"grid {t}x{h}x{wgrid} / merge {merge} expects {expected}.")
+            def _aftercnn(x: int) -> int:
+                return (((x + 1) // 2 + 1) // 2 + 1) // 2
 
-        # ── Step 3: tokenize prompt around the image span ──
-        prefix_ids, suffix_ids = self._tokenize_around_image(
-            str(prompt), image_token_id)
+            _nc = (L + _W - 1) // _W
+            _tail = L - (_nc - 1) * _W
+            n_modal = _aftercnn(_W) * (_nc - 1) + _aftercnn(_tail)
+            feats = NBXTensor.from_numpy(
+                np.ascontiguousarray(feats_np)).to(dtype)
+            resolved[f"{audio_name}.input_features"] = feats
+            resolved["global.input_features"] = feats
+            _flens = NBXTensor.from_numpy(np.array([L], dtype=np.int64))
+            resolved[f"{audio_name}.feature_lens"] = _flens
+            resolved["global.feature_lens"] = _flens
+            _alens = NBXTensor.from_numpy(np.array([n_modal], dtype=np.int64))
+            resolved[f"{audio_name}.aftercnn_lens"] = _alens
+            resolved["global.aftercnn_lens"] = _alens
+            self._execute_component(audio_name, "forward", None)
+            modal_embeds = self._get_component_output(audio_name)
+            if modal_embeds is None:
+                raise RuntimeError(
+                    f"ZERO FALLBACK: audio component '{audio_name}' "
+                    f"produced no output.")
+            if modal_embeds.ndim == 2:
+                n, h = modal_embeds.shape
+                modal_embeds = modal_embeds.reshape(1, n, h)
+            modal_embeds = modal_embeds.to(dtype)
+            if modal_embeds.shape[1] != n_modal:
+                raise RuntimeError(
+                    f"ZERO FALLBACK: audio output has "
+                    f"{modal_embeds.shape[1]} tokens but aftercnn({L}) "
+                    f"expects {n_modal}.")
+            print(f"   [{audio_name}] {n_modal} audio tokens "
+                  f"(L={L} mel frames) in "
+                  f"{(time.perf_counter() - start) * 1000:.0f}ms")
+            if not self.ctx.persistent_mode:
+                self._unload_component_weights(audio_name)
+                release_flow_memory(self.ctx.primary_device)
+
+        if has_image:
+            t, h, wgrid = _read_small_ints(grid_thw, 3)
+            expected = t * (h // merge) * (wgrid // merge)
+            if n_modal != expected:
+                raise RuntimeError(
+                    f"ZERO FALLBACK: vision output has {n_modal} tokens but "
+                    f"grid {t}x{h}x{wgrid} / merge {merge} expects {expected}.")
+            span_token_id = image_token_id
+            span_content_type = "image"
+        else:
+            span_token_id = vlm.get("audio_token_id")
+            if span_token_id is None:
+                raise RuntimeError(
+                    "ZERO FALLBACK: topology.flow.vlm carries no "
+                    "audio_token_id — audio understanding needs it.")
+            span_content_type = "audio"
+
+        # ── Step 3: tokenize prompt around the modality span ──
+        prefix_ids, suffix_ids = self._tokenize_around_span(
+            str(prompt), span_token_id, span_content_type)
 
         # ── Step 4: LM decode with merged embeds + mrope positions ──
         from neurobrix.core.runtime.decode_bound import decode_bound
@@ -236,17 +333,22 @@ class TritonVLMEngine:
         parts: List[NBXTensor] = []
         if prefix_ids:
             parts.append(self._embed_ids(prefix_ids, embed_weight, dtype))
-        parts.append(vision_embeds)
+        parts.append(modal_embeds)
         if suffix_ids:
             parts.append(self._embed_ids(suffix_ids, embed_weight, dtype))
         context_embeds = (NBXTensor.cat(parts, dim=1)
-                          if len(parts) > 1 else vision_embeds)
+                          if len(parts) > 1 else modal_embeds)
 
+        # Image spans get the 3-D grid planes; audio spans use 1-D
+        # text-style positions (vendor audio-only branch).
         segments: List[Tuple[str, int, Optional[Tuple[int, int, int]]]] = []
         if prefix_ids:
             segments.append(("text", len(prefix_ids), None))
-        segments.append(("image", n_merged,
-                         (t, h // merge, wgrid // merge)))
+        if has_image:
+            segments.append(("image", n_modal,
+                             (t, h // merge, wgrid // merge)))
+        else:
+            segments.append(("text", n_modal, None))
         if suffix_ids:
             segments.append(("text", len(suffix_ids), None))
         base_positions_np, next_pos = self._build_mrope_positions_np(segments)
@@ -260,6 +362,13 @@ class TritonVLMEngine:
         generated_ids: List[int] = []
 
         img_span_start = len(prefix_ids)
+        if has_deepstack and not has_image:
+            # Audio requests on a DeepStack graph feed the empty-stub
+            # form (all-False mask + zero-length embeds) — R30 mirror.
+            _h_ds = context_embeds.shape[2]
+            deepstack_embeds = [
+                NBXTensor.from_numpy(np.zeros((0, _h_ds), dtype=np.float16))
+                for _ in ds_input_names]
         for _step in range(max_tokens):
             n_gen = len(generated_ids)
             if n_gen:
@@ -277,14 +386,15 @@ class TritonVLMEngine:
             resolved["position_ids"] = position_ids
             if has_deepstack:
                 # Expanded [B, S, H] masked_scatter form (the graph
-                # reduces it via [..., 0]); True exactly over the image
-                # span, generated tokens extend with False — the per-step
-                # full re-forward matches vendor semantics. numpy build =
-                # allowed CPU glue (mask is decode-control data).
+                # reduces it via [..., 0]); True exactly over the IMAGE
+                # span (all-False for audio), generated tokens extend
+                # with False — the per-step full re-forward matches
+                # vendor semantics. numpy build = allowed CPU glue.
                 _s = context_embeds.shape[1]
                 _mask_np = np.zeros(
                     (1, _s, context_embeds.shape[2]), dtype=bool)
-                _mask_np[0, img_span_start:img_span_start + n_merged, :] = True
+                if has_image:
+                    _mask_np[0, img_span_start:img_span_start + n_modal, :] = True
                 _mask = NBXTensor.from_numpy(_mask_np)
                 resolved["visual_pos_masks"] = _mask
                 resolved["global.visual_pos_masks"] = _mask
@@ -310,6 +420,23 @@ class TritonVLMEngine:
             token_embed = self._embed_ids([next_token], embed_weight, dtype)
             context_embeds = NBXTensor.cat([context_embeds, token_embed],
                                            dim=1)
+            if os.environ.get("NBX_VLM_STEP_SYNC"):
+                # Binary race probe: force the flow's async tail (logits
+                # projection on the head device, sampler, next-token
+                # embedding, cat) to complete on EVERY device before the
+                # next executor.run's rebind/transfers (current-device
+                # sync alone is blind to the scattered placement).
+                from neurobrix.kernels.nbx_tensor import DeviceAllocator
+                _prev_d = DeviceAllocator.get_device()
+                try:
+                    for _d in range(8):
+                        try:
+                            DeviceAllocator.set_device(_d)
+                            DeviceAllocator.sync_device()
+                        except Exception:
+                            break
+                finally:
+                    DeviceAllocator.set_device(_prev_d)
 
         print(f"   [{lm_name}] Generated {len(generated_ids)} tokens in "
               f"{(time.perf_counter() - start) * 1000:.0f}ms")
@@ -355,8 +482,9 @@ class TritonVLMEngine:
 
     # ─── tokenization around the image span (text-only boundary) ──────
 
-    def _tokenize_around_image(self, prompt: str, image_token_id: int
-                               ) -> Tuple[List[int], List[int]]:
+    def _tokenize_around_span(self, prompt: str, span_token_id: int,
+                              content_type: str
+                              ) -> Tuple[List[int], List[int]]:
         tokenizer = self.ctx.modules.get("tokenizer")
         if tokenizer is None:
             raise RuntimeError(
@@ -364,7 +492,7 @@ class TritonVLMEngine:
         messages = [{
             "role": "user",
             "content": [
-                {"type": "image"},
+                {"type": content_type},
                 {"type": "text", "text": prompt},
             ],
         }]
@@ -374,23 +502,23 @@ class TritonVLMEngine:
         except Exception as e:
             raise RuntimeError(
                 "ZERO FALLBACK: the embedded tokenizer could not apply its "
-                "chat template to an image+text message; the vlm flow "
-                "requires a multimodal chat template.") from e
+                f"chat template to a {content_type}+text message; the vlm "
+                "flow requires a multimodal chat template.") from e
         if hasattr(ids, "input_ids"):
             ids = ids.input_ids
         ids = list(ids[0] if ids and isinstance(ids[0], (list, tuple))
                    else ids)
-        positions = [i for i, tid in enumerate(ids) if tid == image_token_id]
+        positions = [i for i, tid in enumerate(ids) if tid == span_token_id]
         if not positions:
             raise RuntimeError(
-                "ZERO FALLBACK: chat template produced no image placeholder "
-                f"(token id {image_token_id}) — cannot merge vision "
-                f"embeddings.")
+                f"ZERO FALLBACK: chat template produced no {content_type} "
+                f"placeholder (token id {span_token_id}) — cannot merge "
+                f"modality embeddings.")
         first, last = positions[0], positions[-1]
         if positions != list(range(first, last + 1)):
             raise RuntimeError(
-                "ZERO FALLBACK: image placeholder span is not contiguous — "
-                "concat-merge equivalence does not hold.")
+                f"ZERO FALLBACK: {content_type} placeholder span is not "
+                "contiguous — concat-merge equivalence does not hold.")
         return ids[:first], ids[last + 1:]
 
     # ─── helpers (NBXTensor mirrors) ───────────────────────────────────

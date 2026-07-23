@@ -1027,8 +1027,15 @@ def _build_op_map() -> Dict[str, Callable]:
         "index_put": w.index_put_wrapper,
         "index_put_": w.index_put_wrapper,
 
-        # Split/chunk (use narrow internally)
-        "split": lambda x, size, dim=0: tuple(x.narrow(dim, i * size, size) for i in range(x.shape[dim] // size)),
+        # Split/chunk (use narrow internally). torch.split semantics:
+        # ceil(shape/size) chunks, the LAST carries the remainder — the
+        # floor-division form returned an EMPTY tuple whenever
+        # split_size > shape[dim] (the audio stem's conv_chunksize 500
+        # over 5 windows → None into the first convolution) and silently
+        # DROPPED the tail chunk in the general case.
+        "split": lambda x, size, dim=0: tuple(
+            x.narrow(dim, i * size, min(size, x.shape[dim] - i * size))
+            for i in range((x.shape[dim] + size - 1) // size)),
         "split_with_sizes": lambda x, sizes, dim=0: tuple(
             x.narrow(dim, sum(sizes[:i]), s) for i, s in enumerate(sizes)),
         "chunk": lambda x, chunks, dim=0: x.unbind(dim) if chunks == x.size(dim) else (x,),

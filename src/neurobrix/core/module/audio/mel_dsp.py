@@ -109,20 +109,38 @@ def _mel_filters(sr: int, n_fft: int, n_mels: int, *, htk: bool, norm) -> np.nda
 # ---------------------------------------------------------------------------
 # extractors (numpy) — bit-close mirrors of the original vendor extractors
 # ---------------------------------------------------------------------------
-def _whisper_mel(audio_path: str, model_path: Path, n_mels_override) -> np.ndarray:
-    """Whisper log-mel (mel_spectrogram). Mirrors WhisperFeatureExtractor."""
+def _whisper_mel(audio_path: str, model_path: Path, n_mels_override,
+                 params: "Optional[dict]" = None) -> np.ndarray:
+    """Whisper log-mel (mel_spectrogram). Mirrors WhisperFeatureExtractor.
+
+    `params` (the topology's audio_preprocessing block, when the build
+    carries one) overrides the file/config defaults — the Qwen3-Omni
+    extractor is a 128-mel VARLEN WhisperFeatureExtractor with NO 30-s
+    chunk (n_samples caps at 300 s): a params block WITHOUT
+    chunk_length keeps the actual audio length instead of padding to
+    the classic Whisper 30-s window."""
     cfg = {}
     cp = model_path / "preprocessor_config.json"
     if cp.exists():
         cfg = json.load(open(cp))
+    if params:
+        cfg = {**cfg, **params}
     n_fft = cfg.get("n_fft", 400)
     hop = cfg.get("hop_length", 160)
-    sr = cfg.get("sampling_rate", 16000)
-    chunk = cfg.get("chunk_length", 30)
-    n_mels = n_mels_override or cfg.get("feature_size", 80)
+    sr = cfg.get("sampling_rate", cfg.get("sample_rate", 16000))
+    n_mels = (cfg.get("n_mels") or n_mels_override
+              or cfg.get("feature_size", 80))
     audio = _load_audio(audio_path, sr)
-    nsamp = chunk * sr
-    audio = audio[:nsamp] if len(audio) >= nsamp else np.pad(audio, (0, nsamp - len(audio)))
+    if params and "chunk_length" not in params:
+        # Varlen contract: keep the true length (cap only at the
+        # extractor's own maximum when it declares one).
+        _max = cfg.get("n_samples")
+        if isinstance(_max, int) and _max > 0:
+            audio = audio[:_max]
+    else:
+        chunk = cfg.get("chunk_length", 30)
+        nsamp = chunk * sr
+        audio = audio[:nsamp] if len(audio) >= nsamp else np.pad(audio, (0, nsamp - len(audio)))
     power = _stft_power(audio, n_fft, n_fft, hop)[:, :-1]   # drop last frame
     mf = _mel_filters(sr, n_fft, n_mels, htk=False, norm="slaney")
     mel = mf @ power
@@ -220,12 +238,15 @@ def _raw_waveform(audio_path: str, model_path: Path, input_shape) -> np.ndarray:
 
 def extract_features_np(preprocessing_type: str, audio_path: str, model_path: Path,
                         input_shape: Optional[Tuple[int, ...]] = None,
-                        rng=None) -> np.ndarray:
+                        rng=None, params: Optional[dict] = None) -> np.ndarray:
     n_mels_override = None
     if input_shape and len(input_shape) >= 3 and input_shape[1] in (40, 64, 80, 128):
         n_mels_override = input_shape[1]
+    elif input_shape and len(input_shape) == 2 and input_shape[0] in (40, 64, 80, 128):
+        # 2-D packed-varlen contract ([mel, frames] — Qwen3-Omni tower)
+        n_mels_override = input_shape[0]
     if preprocessing_type == "mel_spectrogram":
-        return _whisper_mel(audio_path, model_path, n_mels_override)
+        return _whisper_mel(audio_path, model_path, n_mels_override, params)
     if preprocessing_type == "conformer":
         return _conformer_mel(audio_path, model_path, n_mels_override)
     if preprocessing_type == "nemo_mel":

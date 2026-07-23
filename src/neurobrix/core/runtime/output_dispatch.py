@@ -194,6 +194,11 @@ def resolve_output_path(
     if user_output is None:
         return f"output_{model_name}{expected_ext}"
 
+    # Device sinks (/dev/null, /dev/stdout…) are pass-through: suffixing
+    # an extension turns them into unwritable paths ('/dev/null.txt').
+    if user_output.startswith("/dev/"):
+        return user_output
+
     p = Path(user_output)
     actual_ext = p.suffix.lower()
     if actual_ext and actual_ext != expected_ext.lower():
