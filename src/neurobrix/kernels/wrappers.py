@@ -1948,7 +1948,19 @@ def invoke_fused_moe(
     stored as an absolute int64 in the table — no offset arithmetic.
     """
     M = hidden_states.shape[0]
-    num_valid_tokens = M * top_k
+    # num_valid_tokens MUST be the true assignment count (tokens × top_k)
+    # — topk_weights is [M_tokens * top_k] on every pass. Deriving it
+    # from hidden_states.shape[0] was correct for the gate/up passes
+    # (input [M_tokens, K]) but WRONG for the down pass (input
+    # `activated` is [padded, N]): the inflated bound turned the
+    # sentinel lanes' token_mask TRUE, and the moe_weight load
+    # (mul_routed_weight, down pass only) read past the [n] routing
+    # buffer — a layout-dependent Warp Illegal Address, named by the
+    # CUDA coredump at fused_moe.py:107 on the Qwen3-Omni audio leg
+    # (immune to every sync barrier, hidden under CUDA_LAUNCH_BLOCKING
+    # because the heap layout — not timing — decided whether the OOB
+    # page was mapped).
+    num_valid_tokens = topk_weights.shape[0]
     EM = sorted_token_ids.shape[0]
 
     if M < _MOE_BM:

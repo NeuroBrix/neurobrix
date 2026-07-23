@@ -205,6 +205,36 @@ _ACCUMULATOR_OPS = frozenset({
 })
 
 
+def _sync_deferred_all_devices(deferred) -> None:
+    """Sync EVERY device that owns a tensor in the deferred batch before
+    clear() lets the finalizers cudaFree.
+
+    `sync_device()` alone syncs only the CURRENT device; on a
+    block-scatter placement the batch holds pointers from several GPUs,
+    and freeing a cuda:N pointer while cuda:N's stream is still reading
+    it is the documented multi-GPU illegal-access class (see the
+    allocator's malloc_cuda doctrine note; the compiled MemoryManager
+    contract already syncs every holding device — R30 symmetry). Proven
+    on the Qwen3-Omni audio triton leg: deterministic error-700 poison
+    at step-2 entry on cuda:3, gone under CUDA_LAUNCH_BLOCKING, ledger
+    clean — a cross-device drain race, not an allocator bug."""
+    devs = set()
+    for t in deferred:
+        d = getattr(t, "_device_idx", None)
+        if d is not None:
+            devs.add(int(d))
+    if not devs:
+        DeviceAllocator.sync_device()
+        return
+    prev = DeviceAllocator.get_device()
+    try:
+        for d in sorted(devs):
+            DeviceAllocator.set_device(d)
+            DeviceAllocator.sync_device()
+    finally:
+        DeviceAllocator.set_device(prev)
+
+
 @dataclass
 class CompiledOp:
     """Pre-compiled operation with closure-based argument resolution."""
@@ -2607,7 +2637,7 @@ class TritonSequence:
             queue = getattr(seq, "_oom_deferred_queue", None)
             if not queue:
                 return 0
-            DeviceAllocator.sync_device()
+            _sync_deferred_all_devices(queue)
             freed = 0
             for t in queue:
                 freed += getattr(t, "_nbytes", 0) or 0
@@ -3611,13 +3641,13 @@ class TritonSequence:
                           f"{_deferred_bytes/1e9:.2f} GB, "
                           f"trigger={'pressure' if _pressure else 'cliff'}",
                           flush=True)
-                DeviceAllocator.sync_device()
+                _sync_deferred_all_devices(_deferred)
                 _deferred.clear()
                 _deferred_bytes = 0
 
         # All kernels submitted — sync GPU then release deferred tensors
         if _deferred:
-            DeviceAllocator.sync_device()
+            _sync_deferred_all_devices(_deferred)
             _deferred.clear()
             _deferred_bytes = 0
 
@@ -3831,13 +3861,13 @@ class TritonSequence:
                           f"{_deferred_bytes/1e9:.2f} GB, "
                           f"trigger={'pressure' if _pressure else 'cliff'}",
                           flush=True)
-                DeviceAllocator.sync_device()
+                _sync_deferred_all_devices(_deferred)
                 _deferred.clear()
                 _deferred_bytes = 0
 
         # All kernels submitted — sync GPU then release deferred tensors
         if _deferred:
-            DeviceAllocator.sync_device()
+            _sync_deferred_all_devices(_deferred)
             _deferred.clear()
             _deferred_bytes = 0
 

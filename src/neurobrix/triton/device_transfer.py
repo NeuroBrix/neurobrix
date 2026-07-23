@@ -92,9 +92,31 @@ def transfer_tensor(tensor: NBXTensor, target_dev: int) -> NBXTensor:
     """
     if tensor.is_expanded():
         tensor = tensor.contiguous()
-    DeviceAllocator.set_device(target_dev)
     src_device = getattr(tensor, "_device", "cuda")
     kind = 1 if src_device == "cpu" else 3
+    if kind == 3:
+        # D2D read barrier: the memcpy runs on the TARGET device's
+        # legacy stream, which does NOT wait for the SOURCE device's
+        # triton (non-default) stream — reading a tensor a kernel is
+        # still writing violates the "never read a weight still being
+        # copied" contract the zero3 H2D path enforces with events.
+        # Sync the source device before the peer copy (this is the
+        # declared slow path; an event-based overlap is the perf-layer
+        # upgrade). Proven on the Qwen3-Omni audio triton leg:
+        # deterministic error-700 poison at step-2 entry on the
+        # block-scatter placement, gone under CUDA_LAUNCH_BLOCKING,
+        # allocator ledger clean, flow tail fully quiesced — only the
+        # run-entry transfer region remained.
+        _src_idx = getattr(tensor, "_device_idx", None)
+        if _src_idx is not None:
+            _prev = DeviceAllocator.get_device()
+            if _prev != _src_idx:
+                DeviceAllocator.set_device(_src_idx)
+                DeviceAllocator.sync_device()
+                DeviceAllocator.set_device(_prev)
+            else:
+                DeviceAllocator.sync_device()
+    DeviceAllocator.set_device(target_dev)
     if tensor._nbytes > 0:
         dst_raw_ptr = DeviceAllocator.malloc_cuda(tensor._nbytes)
         DeviceAllocator.memcpy(dst_raw_ptr, tensor.data_ptr(),

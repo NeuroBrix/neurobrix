@@ -135,9 +135,12 @@ class RuntimeExecutor:
                 _gen_lm = flow.get("generation", {}).get("lm_component")
                 _img_var = (flow.get("vlm", {}).get("input", {})
                             .get("image_variable", "global.pixel_values"))
+                _resolved = self.variable_resolver.resolved
+                _has_modal = (
+                    _resolved.get(_img_var) is not None
+                    or _resolved.get("global.audio_path") is not None)
                 if (_gen_lm in (self.pkg.topology.get("components") or {})
-                        and self.variable_resolver.resolved.get(_img_var)
-                        is None):
+                        and not _has_modal):
                     return "autoregressive_generation"
             return flow_type
 

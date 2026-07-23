@@ -759,7 +759,13 @@ class DeviceAllocator:
         rt = _gpu_runtime()
         backend = _active_backend()
         alloc_dev = DeviceAllocator._cuda_ptr_device.pop(ptr, None)
-        getattr(rt, backend["free"])(ctypes.c_void_p(ptr))
+        _rc = getattr(rt, backend["free"])(ctypes.c_void_p(ptr))
+        if _rc not in (None, 0):
+            # Finalizer context — raising here cascades through GC; a
+            # LOUD print preserves the sticky-error surfacing site.
+            print(f"[NBX-CUDA-ERROR] cudaFree rc={_rc} ptr={ptr:#x} "
+                  f"dev={alloc_dev} — sticky async error surfaced at "
+                  f"this free; the fault is at or before it.", flush=True)
         nbytes = DeviceAllocator._cuda_ptr_size.pop(ptr, None)
         if _MALLOC_TRACE_FILE is not None and nbytes is not None:
             _record_free_site(ptr, nbytes)
@@ -903,21 +909,44 @@ class DeviceAllocator:
 
     @staticmethod
     def memcpy(dst: int, src: int, nbytes: int, kind: int = 3):
-        """Copy memory. kind: 0=H2H, 1=H2D, 2=D2H, 3=D2D."""
+        """Copy memory. kind: 0=H2H, 1=H2D, 2=D2H, 3=D2D.
+
+        NOTE (NVIDIA API-sync-behavior spec): for D2D the "synchronous"
+        cudaMemcpy performs NO host-side synchronization — the copy is
+        enqueued on the calling device's legacy stream and the host
+        returns immediately. Lifetime of src/dst must be guaranteed by
+        stream ordering, never by host program order.
+        """
         if nbytes > 0:
             rt = _gpu_runtime()
-            getattr(rt, _active_backend()["memcpy"])(
+            _rc = getattr(rt, _active_backend()["memcpy"])(
                 ctypes.c_void_p(dst), ctypes.c_void_p(src),
                 ctypes.c_size_t(nbytes), ctypes.c_int(kind))
+            if _rc not in (None, 0):
+                raise RuntimeError(
+                    f"cudaMemcpy failed rc={_rc} (kind={kind}, "
+                    f"nbytes={nbytes}) — CUDA errors are STICKY: this is "
+                    f"the first CHECKED call after the poisoning site, "
+                    f"not necessarily the fault itself.")
 
     @staticmethod
     def sync_device():
-        """Synchronize current GPU device. Waits for all pending GPU ops."""
+        """Synchronize current GPU device. Waits for all pending GPU ops.
+
+        RAISES on a nonzero return: cudaDeviceSynchronize returns any
+        prior async error (sticky semantics) — discarding it hid the
+        true poisoning site of the multi-GPU error-700 class behind the
+        next checked malloc (R16 research, 2026-07-24)."""
         rt = _gpu_runtime()
         backend = _active_backend()
         sync_name = backend.get("sync")
         if sync_name:
-            getattr(rt, sync_name)()
+            _rc = getattr(rt, sync_name)()
+            if _rc not in (None, 0):
+                raise RuntimeError(
+                    f"deviceSynchronize failed rc={_rc} on current device "
+                    f"{DeviceAllocator.get_device()} — sticky async error "
+                    f"surfaced at this sync; the fault is at or before it.")
 
     # ------------------------------------------------------------------
     # Async stream + event primitives (zero torch).
