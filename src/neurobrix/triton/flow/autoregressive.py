@@ -482,6 +482,15 @@ class TritonAutoregressiveHandler:
             graph_inputs.append(name)
 
         uses_embeds = "inputs_embeds" in graph_inputs
+
+        # position_ids rank from the graph input spec (M-RoPE backbones
+        # declare [3, B, S]) — R30 mirror of the compiled _create_session;
+        # the session lifts its 2-D positions to this rank.
+        _pos_shape = (dag.get("tensors", {})
+                      .get("input::position_ids", {})
+                      .get("shape"))
+        position_ids_rank = (len(_pos_shape)
+                             if isinstance(_pos_shape, (list, tuple)) else 2)
         # All LLMs with position_ids input use absolute positions (RoPE, learnable).
         # Default True when graph has position_ids — the graph field is optional.
         uses_abs_pos = dag.get("uses_absolute_position",
@@ -567,6 +576,7 @@ class TritonAutoregressiveHandler:
             uses_embeds=uses_embeds,
             uses_absolute_position=uses_abs_pos,
             device_idx=device_idx,
+            position_ids_rank=position_ids_rank,
         )
 
     def _create_strategy(self, gen_info: Dict,

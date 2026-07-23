@@ -49,6 +49,7 @@ class GraphLMSession:
         graph_inputs: List[str],
         uses_embeds: bool,
         uses_absolute_position: bool = False,
+        position_ids_rank: int = 2,
     ):
         self.executor = executor
         self.kv_wrapper = kv_wrapper
@@ -56,9 +57,26 @@ class GraphLMSession:
         self.graph_inputs = graph_inputs
         self.uses_embeds = uses_embeds
         self.uses_absolute_position = uses_absolute_position
+        self.position_ids_rank = position_ids_rank
         # O(n) fallback state (models without SDPA / no KV cache)
         self._accumulated_ids: Optional[torch.Tensor] = None
         self._accumulated_embeds: Optional[torch.Tensor] = None
+
+    def _shape_positions(self, position_ids: torch.Tensor) -> torch.Tensor:
+        """Lift [B, S] positions to the graph's declared rank.
+
+        M-RoPE graphs (mrope_section text backbones — the GLM/Qwen-VL/omni
+        lineage) declare position_ids [3, B, S]: temporal/height/width
+        planes. For a pure-text stream the three planes are IDENTICAL to
+        the text arange (vendor get_rope_index semantics); multimodal
+        stages synthesize modality-specific planes upstream and pass 3-D
+        positions directly (this lift is a no-op on already-3-D input).
+        Rank comes from the graph's input spec — data-driven, no
+        family/model branch (R15).
+        """
+        if self.position_ids_rank == 3 and position_ids.dim() == 2:
+            return position_ids.unsqueeze(0).expand(3, -1, -1).contiguous()
+        return position_ids
 
     def prefill(self, input_ids: torch.Tensor, batch_size: int) -> torch.Tensor:
         """Reset cache → run prefill → switch to decode mode → return hidden_states."""
@@ -97,9 +115,10 @@ class GraphLMSession:
                 inputs_embeds = F.embedding(input_ids, embed_weight)
             run_inputs = {"inputs_embeds": inputs_embeds}
             if 'position_ids' in self.graph_inputs:
-                run_inputs["position_ids"] = position_ids
+                run_inputs["position_ids"] = self._shape_positions(position_ids)
         elif 'position_ids' in self.graph_inputs:
-            run_inputs = {"input_ids": input_ids, "position_ids": position_ids}
+            run_inputs = {"input_ids": input_ids,
+                          "position_ids": self._shape_positions(position_ids)}
         else:
             run_inputs = {"input_ids": input_ids}
 
@@ -167,9 +186,10 @@ class GraphLMSession:
                     embeds_batch = embeds_to_use.shape[0]
                     if embeds_batch != batch_size:
                         position_ids = torch.zeros((embeds_batch, seq_len), dtype=torch.long, device=device)
-                    run_inputs["position_ids"] = position_ids
+                    run_inputs["position_ids"] = self._shape_positions(position_ids)
             elif 'position_ids' in self.graph_inputs:
-                run_inputs = {"input_ids": input_ids, "position_ids": position_ids}
+                run_inputs = {"input_ids": input_ids,
+                              "position_ids": self._shape_positions(position_ids)}
             else:
                 run_inputs = {"input_ids": input_ids}
 
@@ -188,7 +208,7 @@ class GraphLMSession:
                 if 'position_ids' in self.graph_inputs:
                     pos_ids = torch.arange(actual_len, dtype=torch.long, device=device)
                     pos_ids = pos_ids.unsqueeze(0).expand(self._accumulated_embeds.shape[0], -1)
-                    run_inputs["position_ids"] = pos_ids
+                    run_inputs["position_ids"] = self._shape_positions(pos_ids)
                 self.executor.run(run_inputs)
                 batch_size = self._accumulated_embeds.shape[0]
             else:
@@ -202,7 +222,7 @@ class GraphLMSession:
                 if 'position_ids' in self.graph_inputs:
                     pos_ids = torch.arange(actual_len, dtype=torch.long, device=device)
                     pos_ids = pos_ids.unsqueeze(0).expand(self._accumulated_ids.shape[0], -1)
-                    run_inputs["position_ids"] = pos_ids
+                    run_inputs["position_ids"] = self._shape_positions(pos_ids)
                 self.executor.run(run_inputs)
                 batch_size = self._accumulated_ids.shape[0]
 
@@ -746,6 +766,16 @@ class AutoregressiveHandler(FlowHandler):
         graph_inputs = [tid.replace('input::', '') for tid in input_ids_list if tid.startswith('input::')]
         uses_embeds = 'inputs_embeds' in graph_inputs
 
+        # position_ids rank from the graph's input spec: M-RoPE text
+        # backbones declare [3, B, S] (temporal/height/width planes) —
+        # the session lifts its 2-D text positions to that rank
+        # (GraphLMSession._shape_positions). Data-driven, R15.
+        _pos_shape = (dag.get('tensors', {})
+                      .get('input::position_ids', {})
+                      .get('shape'))
+        position_ids_rank = (len(_pos_shape)
+                             if isinstance(_pos_shape, (list, tuple)) else 2)
+
         # Detect position_ids policy: absolute vs relative
         # VQ-image autoregressive paths (Janus pattern) need absolute position_ids
         # regardless of which family they're packaged under (legacy "image",
@@ -780,6 +810,7 @@ class AutoregressiveHandler(FlowHandler):
             graph_inputs=graph_inputs,
             uses_embeds=uses_embeds,
             uses_absolute_position=uses_absolute_position,
+            position_ids_rank=position_ids_rank,
         )
 
     def _create_strategy(self, gen_info: Dict, session: GraphLMSession) -> GenerationStrategy:
@@ -798,14 +829,23 @@ class AutoregressiveHandler(FlowHandler):
                 dtype = get_torch_dtype(comp_alloc.dtype)
 
         if gen_type == "autoregressive_text":
-            # DATA-DRIVEN: use lm_head graph executor for logits
-            if "lm_head" not in self.ctx.pkg.topology.get("components", {}):
-                raise RuntimeError("ZERO FALLBACK: lm_head component not found for text generation.")
+            # DATA-DRIVEN: the head component name comes from the topology's
+            # generation info (wrapper-nested models name it e.g.
+            # "thinker.lm_head" — Qwen3-Omni understanding branch); default
+            # "lm_head" for the classic LLM layout. R30: the triton mirror
+            # (triton/flow/autoregressive.py _create_strategy) already reads
+            # head_component — this was the asymmetric side.
+            head_name = gen_info.get("head_component", "lm_head")
+            if head_name not in self.ctx.pkg.topology.get("components", {}):
+                raise RuntimeError(
+                    f"ZERO FALLBACK: head component '{head_name}' not found "
+                    f"for text generation.")
 
-            self._ensure_weights_loaded("lm_head")
-            lm_head_executor = self.ctx.executors.get("lm_head")
+            self._ensure_weights_loaded(head_name)
+            lm_head_executor = self.ctx.executors.get(head_name)
             if lm_head_executor is None:
-                raise RuntimeError("ZERO FALLBACK: lm_head executor not created.")
+                raise RuntimeError(
+                    f"ZERO FALLBACK: head executor '{head_name}' not created.")
 
             # Propagate persistent mode — lm_head must survive cleanup between requests
             if self.ctx.persistent_mode and hasattr(lm_head_executor, '_persistent'):

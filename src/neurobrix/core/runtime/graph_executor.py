@@ -356,8 +356,27 @@ class GraphExecutor:
         TIMING FIX: MoE fusion runs in __init__ (before this is called) and
         bakes norm_topk_prob into fused op attributes. We patch the DAG so
         that CompiledSequence reads the correct value when it compiles later.
+
+        DECLARED-MoE LATE FUSION: __init__'s fusion pass short-circuits on
+        non-llm families (its historical fast path). A MoE LM packaged
+        under another family (Qwen3-Omni thinker → multimodal) reaches
+        here with an UNFUSED dag while the flow has just read
+        num_experts > 1 from lm_config — run the fusion NOW, explicitly
+        declared. Timing is safe: the graph is loaded, nothing has
+        executed, and the compiled/triton sequences compile lazily after
+        this call. Registry-driven declaration, never a family/model name.
         """
         self._moe_norm_topk_prob = norm_topk_prob
+
+        if self._dag and not any(
+                op.get("op_type") == "custom::moe_fused"
+                for op in self._dag.get("ops", {}).values()):
+            from .graph.moe_fusion import detect_and_fuse_moe
+            self._dag = detect_and_fuse_moe(
+                self._dag, self.family,
+                norm_topk_prob=norm_topk_prob,
+                declared=True,
+            )
 
         # Patch fused op attributes in the DAG (fusion already ran with default=True)
         if self._dag:

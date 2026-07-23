@@ -69,6 +69,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   current process, aborting the run; they now fall back to the active
   device. Only affects runs pinned to a subset of GPUs; unaffected runs
   are byte-for-byte unchanged.
+- **Mixture-of-experts language models packaged under any family now run
+  correctly.** Expert routing was only activated for models in the LLM
+  family; a MoE backbone inside a multimodal package silently ran with
+  just the handful of experts recorded at packaging time, producing
+  near-random output. Routing now activates from the model's declared
+  expert configuration, whatever the family.
+- **Language models with multi-plane rotary positions (M-RoPE) decode on
+  every execution mode.** The runtime feeds the position input at the
+  rank the model's graph declares — text-only requests supply the three
+  identical planes automatically, on both the PyTorch and Triton
+  engines.
+- **Two operator-coverage fixes for newer architectures:** indexing
+  operations that take a list of index tensors no longer fail shape
+  resolution, and `index_add` participates in mixed-precision type
+  promotion (previously crashed on a half/float mismatch).
 - **`--seed` now governs Triton-engine autoregressive sampling.** The
   run-scoped random stream was armed for diffusion runs but not for
   autoregressive decoding, so temperature/top-p sampling on the Triton
