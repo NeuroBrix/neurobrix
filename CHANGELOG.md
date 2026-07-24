@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Large mixture-of-experts vision-language models** (Qwen3-VL-MoE
+  class, 30B-scale): text, image and video understanding run on
+  packages of this family, sharded across GPUs automatically. The
+  placeholder-mask convention is now discovered from the packaged
+  graph instead of assumed, so lineages that index hidden states with
+  a flat mask and lineages that scatter with an expanded one both work
+  from the same runtime code.
+
+### Fixed
+
+- **Scatter operations with mixed precision inputs**: when automatic
+  mixed precision promotes only one side, the source now follows the
+  destination's precision instead of failing (both execution engines).
+
+### Added
+
 - **Mixture-of-experts models with several routers per layer** (Ming
   lineage): models that pick experts through a different gate per
   input modality now run on the fused expert path, on both execution

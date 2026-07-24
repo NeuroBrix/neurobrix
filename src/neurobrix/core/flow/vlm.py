@@ -459,10 +459,18 @@ class VLMEngine(FlowHandler):
                 _mask2d = torch.zeros(1, _s, dtype=torch.bool, device=device)
                 if has_visual:
                     _mask2d[0, img_span_start:img_span_start + n_modal] = True
-                _mask3d = _mask2d.unsqueeze(-1).expand(
-                    -1, -1, context_embeds.shape[2]).contiguous()
-                resolved["visual_pos_masks"] = _mask3d
-                resolved["global.visual_pos_masks"] = _mask3d
+                # Mask RANK follows the graph's declared input: the omni
+                # wrapper takes the expanded [B, S, H] masked_scatter form,
+                # the Qwen3-VL-MoE text model indexes with a flat [B, S]
+                # mask. Read the contract, never assume it.
+                _mask_rank = len(
+                    (_dag_tensors.get("input::visual_pos_masks") or {})
+                    .get("shape") or [1, 1, 1])
+                _mask_in = (_mask2d if _mask_rank == 2
+                            else _mask2d.unsqueeze(-1).expand(
+                                -1, -1, context_embeds.shape[2]).contiguous())
+                resolved["visual_pos_masks"] = _mask_in
+                resolved["global.visual_pos_masks"] = _mask_in
                 for _i, _t in enumerate(deepstack_embeds):
                     resolved[f"deepstack_visual_embeds.{_i}"] = _t
                     resolved[f"global.deepstack_visual_embeds.{_i}"] = _t

@@ -60,9 +60,17 @@ class TritonLMSession:
             if name in run_inputs:
                 continue
             if name == "visual_pos_masks":
-                h = spec_shape[2] if len(spec_shape) == 3 else self.hidden_dim
-                run_inputs[name] = NBXTensor.from_numpy(
-                    np.zeros((b, s, h), dtype=bool))
+                # RANK from the declared trace shape (R30 mirror): flat
+                # [B, S] where the model indexes with the mask, expanded
+                # [B, S, H] for the masked_scatter contract.
+                if len(spec_shape) == 2:
+                    run_inputs[name] = NBXTensor.from_numpy(
+                        np.zeros((b, s), dtype=bool))
+                else:
+                    h = (spec_shape[2] if len(spec_shape) == 3
+                         else self.hidden_dim)
+                    run_inputs[name] = NBXTensor.from_numpy(
+                        np.zeros((b, s, h), dtype=bool))
             else:  # deepstack_visual_embeds.N — [0, H] zero-length embeds
                 h = spec_shape[1] if len(spec_shape) == 2 else self.hidden_dim
                 run_inputs[name] = NBXTensor.from_numpy(

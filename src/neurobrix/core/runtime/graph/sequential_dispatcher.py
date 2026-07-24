@@ -429,6 +429,20 @@ class NativeATenDispatcher:
                     else:
                         new_inputs.append(inp)
                 inputs = new_inputs
+                # scatter/scatter_add(self, dim, index, src): ATen requires
+                # self.dtype == src.dtype. AMP can upcast the src branch
+                # (a routing-weight _to_copy) while `self` stays at the
+                # allocation dtype (zeros_like of the fp16 scores) — the
+                # DtypeEngine decides the compute dtype, this only makes
+                # the pair consistent, following `self`.
+                if (base_name in ("scatter", "scatter_add") and len(inputs) >= 4
+                        and isinstance(inputs[0], torch.Tensor)
+                        and isinstance(inputs[3], torch.Tensor)
+                        and inputs[0].is_floating_point()
+                        and inputs[3].is_floating_point()
+                        and inputs[0].dtype != inputs[3].dtype):
+                    inputs = list(inputs)
+                    inputs[3] = inputs[3].to(inputs[0].dtype)
 
             # [STABILITY FIX] Handle cat with scalar/empty tensors (Gemma2 attention pattern)
             # Gemma2 creates scalar -inf tensors for attention masking, then tries to cat them.

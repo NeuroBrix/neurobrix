@@ -483,10 +483,18 @@ class TritonVLMEngine:
                 # with False — the per-step full re-forward matches
                 # vendor semantics. numpy build = allowed CPU glue.
                 _s = context_embeds.shape[1]
-                _mask_np = np.zeros(
-                    (1, _s, context_embeds.shape[2]), dtype=bool)
+                # Mask RANK follows the graph's declared input (R30 mirror
+                # of the compiled flow): expanded [B,S,H] for the omni
+                # masked_scatter contract, flat [B,S] where the text model
+                # indexes with the mask directly.
+                _mask_rank = len(
+                    (_lm_dag_tensors.get("input::visual_pos_masks") or {})
+                    .get("shape") or [1, 1, 1])
+                _mask_np = (np.zeros((1, _s), dtype=bool) if _mask_rank == 2
+                            else np.zeros((1, _s, context_embeds.shape[2]),
+                                          dtype=bool))
                 if has_visual:
-                    _mask_np[0, img_span_start:img_span_start + n_modal, :] = True
+                    _mask_np[0, img_span_start:img_span_start + n_modal] = True
                 _mask = NBXTensor.from_numpy(_mask_np)
                 resolved["visual_pos_masks"] = _mask
                 resolved["global.visual_pos_masks"] = _mask
