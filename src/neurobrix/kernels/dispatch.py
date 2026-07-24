@@ -259,6 +259,24 @@ def _meta_unfold(x, dimension, size, step):
 def _meta_unbind(x, dim=0):
     return x.unbind(dim)
 
+def _chunk_narrow(x, chunks, dim=0):
+    """torch.chunk semantics via narrow views.
+
+    chunk_size = ceil(n / chunks); ceil(n / chunk_size) chunks are
+    returned, the LAST carrying the remainder — exactly torch.chunk.
+    The former placeholder (`x.unbind(dim) if chunks == x.size(dim)
+    else (x,)`) silently returned the WHOLE tensor for any real
+    chunks > 1 request (same "simplified" landmine class as the dead
+    split_with_sizes → _meta_slice entry removed in P-TRITON-MLA).
+    """
+    chunks = int(_force_int(chunks))
+    n = x.shape[dim]
+    if n == 0 or chunks <= 1:
+        return (x,)
+    size = -(-n // chunks)  # ceil division
+    return tuple(x.narrow(dim, i * size, min(size, n - i * size))
+                 for i in range(-(-n // size)))
+
 def _meta_select_item(x):
     return x.item()
 
@@ -962,7 +980,14 @@ def _build_op_map() -> Dict[str, Callable]:
         "slice": _meta_slice,
         "select": _meta_select,
         "unbind": _meta_unbind,
-        "split_with_sizes": _meta_slice,  # simplified
+        # NOTE: split_with_sizes is bound ONCE, in the Split/chunk section
+        # below (narrow-based multi-output tuple). A historical
+        # `"split_with_sizes": _meta_slice  # simplified` entry sat here and
+        # was only harmless because the later duplicate key in this same
+        # dict literal shadowed it — removed so a reorder can never
+        # resurrect the wrong (single-output, wrong-signature) binding
+        # (P-TRITON-MLA: the MLA q nope/rope split [128, 64] rides on the
+        # narrow-based binding).
         "bucketize": w.bucketize_wrapper,
         "view_as": _meta_view_as,
         "reshape_as": _meta_reshape_as,
@@ -1040,7 +1065,7 @@ def _build_op_map() -> Dict[str, Callable]:
             for i in range((x.shape[dim] + size - 1) // size)),
         "split_with_sizes": lambda x, sizes, dim=0: tuple(
             x.narrow(dim, sum(sizes[:i]), s) for i, s in enumerate(sizes)),
-        "chunk": lambda x, chunks, dim=0: x.unbind(dim) if chunks == x.size(dim) else (x,),
+        "chunk": _chunk_narrow,
         "tensor_split": lambda x, sections, dim=0: (x,),
 
         # Atleast

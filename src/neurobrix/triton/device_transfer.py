@@ -68,6 +68,26 @@ def parse_device_idx(device) -> int:
         return 0
 
 
+def is_dense_window(t: NBXTensor) -> bool:
+    """True iff the view's strided address span equals its logical numel —
+    i.e. the flat ``[data_ptr, data_ptr + nbytes)`` window contains ALL of
+    the view's elements and addresses NOTHING outside it. Only such views
+    may be transferred by a flat ``memcpy(nbytes)`` with their strides
+    carried over.
+
+    Dense: contiguous tensors, full-tensor permute/transpose views (the
+    zero3 pre-transposed weight ``.t()``), dim-0 narrows.
+    NOT dense: interior narrows / slices (offset window, span > numel),
+    step>1 slices (de-interleave views, span > numel), broadcast/expand
+    views (stride-0 axes, span < numel).
+    """
+    if t._numel == 0:
+        return True
+    span = 1 + sum((d - 1) * s
+                   for d, s in zip(t._shape, t._strides) if d > 0)
+    return span == t._numel
+
+
 def needs_move(t: NBXTensor, target_dev: int) -> bool:
     """True iff `t` must be transferred to land on cuda:target_dev.
 
@@ -84,13 +104,30 @@ def transfer_tensor(tensor: NBXTensor, target_dev: int) -> NBXTensor:
     """Copy an NBXTensor to cuda:target_dev, preserving shape/strides/dtype.
 
     kind=1 (H2D) for a CPU source (zero3), kind=3 (D2D) for a cross-GPU move.
-    Expanded/broadcast views (stride 0) are materialised first so the memcpy
-    does not over-read the backing allocation. Strides are carried over (not
-    forced contiguous) — a pre-transposed weight view keeps its `.t()` stride
-    semantics, matching the native `torch.Tensor.to(device)` contract; a
-    downstream `.contiguous()` inside mm/bmm materialises correctly.
+
+    Stride handling — dense-window rule (P-TRITON-MLA root fix): the flat
+    ``memcpy(tensor._nbytes)`` from ``data_ptr()`` is only meaningful when
+    the view's strided address span EQUALS its logical numel
+    (`is_dense_window`). For such views (contiguous tensors, the zero3
+    pre-transposed weight ``.t()``, dim-0 narrows) the strides are carried
+    over unchanged — the historical contract, preserved byte-for-byte.
+    Every OTHER view — interior narrow/slice (span > numel, offset
+    window), step>1 de-interleave slices, broadcast/expand (stride-0,
+    span < numel) — is materialised via ``.contiguous()`` on the SOURCE
+    device first. The old code only materialised the expand case; an
+    interior/strided view was flat-copied and its original strides
+    re-attached over an nbytes-sized allocation — the strides address a
+    window FAR LARGER than the allocation, so the first downstream kernel
+    reading the view walks past the end of the new buffer — async illegal
+    memory access (error 700) surfacing a few launches later. Proven at
+    the DeepSeek-Coder-V2-Lite pipeline_parallel boundary (block.13 MLA
+    rope q/k de-interleave: a [1,16,23,64] narrow-of-transpose view,
+    strides addressing a 70528-element span over a 23552-element
+    allocation → 2/3 of reads OOB → strided_copy fault surfacing at
+    aten.cat::91, BOTH triton modes — this helper is shared by
+    _run_multi_device and the triton_sequential per-op transfer block).
     """
-    if tensor.is_expanded():
+    if not is_dense_window(tensor):
         tensor = tensor.contiguous()
     src_device = getattr(tensor, "_device", "cuda")
     kind = 1 if src_device == "cpu" else 3

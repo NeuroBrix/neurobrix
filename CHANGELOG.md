@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Multi-head-latent attention on the Triton engine** (DeepSeek-V2
+  class): attention with asymmetric query/value head widths now
+  computes correctly end-to-end, and three deep correctness fixes land
+  with it — a protected float16 downcast (out-of-range sentinel values
+  saturate to the finite extreme instead of overflowing to infinity,
+  matching the PyTorch engine's behavior), concatenation of strided
+  tensor views, and cross-device transfers of non-dense tensor views
+  on multi-GPU placements (previously read out of bounds at pipeline
+  boundaries). All four execution modes produce byte-identical output
+  on the reference code-generation prompt.
+
 ### Added
 
 - **Staged-splice multimodal understanding (MiniCPM-o lineage).** A

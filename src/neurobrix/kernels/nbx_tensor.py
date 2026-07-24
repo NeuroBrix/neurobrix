@@ -2421,7 +2421,14 @@ class NBXTensor:
         # casts (complex128<->complex64) still proceed below.
         if self.is_complex() and target not in _COMPLEX_DTYPES:
             return self
-        # Cast via Triton copy kernel (tl.store auto-converts dtype)
+        # Cast via Triton copy kernel (tl.store auto-converts dtype).
+        # Downcasts from wider floats to float16 use the PROTECTED
+        # conversion (clamp finite values to ±65504) — the triton mirror
+        # of the compiled DtypeEngine contract; raw tl.store overflows
+        # bf16/fp32-range sentinels (finfo.min mask fills) to ±inf.
+        _sat = (target == NBXDtype.float16
+                and self._dtype in (NBXDtype.float32, NBXDtype.float64,
+                                    NBXDtype.bfloat16))
         new = NBXTensor.empty(self._shape, target, f"cuda:{self._device_idx}")
         n = self._numel
         if n > 0:
@@ -2429,7 +2436,9 @@ class NBXTensor:
             import triton
             src = self.contiguous()
             _set_device(src)
-            copy_kernel[(triton.cdiv(n, 1024),)](src, new, n, BLOCK_SIZE=1024)
+            copy_kernel[(triton.cdiv(n, 1024),)](src, new, n,
+                                                 BLOCK_SIZE=1024,
+                                                 SATURATE_F16=_sat)
         return new
 
     def float(self) -> 'NBXTensor':
@@ -2505,6 +2514,12 @@ class NBXTensor:
             real_parts = [t.view_as_real() for t in valid]
             return NBXTensor.cat(real_parts, dd).view_as_complex()
         dim = dim % tensors[0].ndim
+        # Contiguous-guard (manifesto pattern): the cat copy kernels
+        # flat-index their sources; a strided view (e.g. the MLA rope
+        # de-interleave slices x[..., 0::2]) fed directly reads wrong
+        # addresses — layout-dependent illegal access at runtime.
+        # Contiguous inputs short-circuit at zero cost.
+        tensors = [t.contiguous() for t in tensors]
         # Align dtypes — cat_copy_kernel requires all inputs same type
         target_dtype = tensors[0]._dtype
         tensors = [t.to(target_dtype) if t._dtype != target_dtype else t for t in tensors]
