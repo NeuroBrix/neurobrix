@@ -89,9 +89,17 @@ class GraphLMSession:
             if name in run_inputs:
                 continue
             if name == "visual_pos_masks":
-                h = spec_shape[2] if len(spec_shape) == 3 else self.hidden_dim
-                run_inputs[name] = torch.zeros(
-                    b, s, h, dtype=torch.bool, device=stream.device)
+                # RANK follows the declared trace shape: expanded
+                # [B, S, H] (masked_scatter contract) or flat [B, S]
+                # (models that index hidden_states with the mask).
+                if len(spec_shape) == 2:
+                    run_inputs[name] = torch.zeros(
+                        b, s, dtype=torch.bool, device=stream.device)
+                else:
+                    h = (spec_shape[2] if len(spec_shape) == 3
+                         else self.hidden_dim)
+                    run_inputs[name] = torch.zeros(
+                        b, s, h, dtype=torch.bool, device=stream.device)
             else:  # deepstack_visual_embeds.N — [0, H] zero-length embeds
                 h = spec_shape[1] if len(spec_shape) == 2 else self.hidden_dim
                 dt = (stream.dtype if torch.is_floating_point(stream)

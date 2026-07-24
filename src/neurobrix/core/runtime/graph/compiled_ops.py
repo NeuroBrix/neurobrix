@@ -406,6 +406,15 @@ class CompiledOpResolver:
             dim = _tensor_to_int(dim)
             if isinstance(index, torch.Tensor) and index.is_floating_point():
                 index = index.long()
+            # ATen requires self.dtype == src.dtype; AMP can upcast one
+            # branch only (mirror of the sequential dispatcher's guard —
+            # follow `self`, the DtypeEngine owns the compute dtype).
+            if (isinstance(src, torch.Tensor)
+                    and isinstance(input_tensor, torch.Tensor)
+                    and src.is_floating_point()
+                    and input_tensor.is_floating_point()
+                    and src.dtype != input_tensor.dtype):
+                src = src.to(input_tensor.dtype)
             return raw_op(input_tensor, dim, index, src, *args, **kwargs)
         return scatter_wrapper
 
