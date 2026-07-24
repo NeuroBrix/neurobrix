@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Mixture-of-experts models with several routers per layer** (Ming
+  lineage): models that pick experts through a different gate per
+  input modality now run on the fused expert path, on both execution
+  engines. The modality blending stays visible in the model graph —
+  the fused expert primitive consumes its result and learns nothing
+  model-specific. Every already-supported MoE model keeps a
+  bit-identical expert binding and execution order. Two latent defects
+  in that shared path are fixed along the way: the binding was not
+  reproducible across processes, and the fused operation could be
+  scheduled before the operation that produces its input.
+
 ### Fixed
 
 - **Multi-head-latent attention on the Triton engine** (DeepSeek-V2

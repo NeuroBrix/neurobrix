@@ -245,6 +245,8 @@ def execute_moe_fused(
     num_experts: int,
     norm_topk_prob: bool = True,
     cache_key: str = "",
+    topk_indices=None,
+    topk_weights=None,
 ):
     """Execute MoE via fused grouped GEMM — zero torch, zero extra memory.
 
@@ -252,26 +254,51 @@ def execute_moe_fused(
     kernels with zero-copy offset tables for expert weight access.
 
     Args:
-        gate_scores: Router logits [batch*seq, num_experts]
+        gate_scores: Router logits [batch*seq, num_experts]. None when the
+            routing is pre-computed (multi-gate blend, see below).
         hidden_states: Input activations [batch*seq, hidden_dim]
         gate_weights: List of gate weight NBXTensors per expert
         up_weights: List of up weight NBXTensors per expert
         down_weights: List of down weight NBXTensors per expert
         top_k: Number of experts per token
         num_experts: Total number of experts
-        norm_topk_prob: Whether to normalize routing probabilities
+        norm_topk_prob: Whether to normalize routing probabilities. IGNORED
+            when topk_indices/topk_weights are supplied — that routing is
+            already normalized per gate inside the graph.
         cache_key: Stable key for offset table caching (component + op_uid)
+        topk_indices: Pre-computed expert indices [batch*seq, top_k], int.
+            Multi-gate MoE (e.g. BailingMoe text/image/audio routers) blends
+            several gates' topk results by per-token modality masks IN THE
+            GRAPH; the blend result is bound by moe_fusion.py and consumed
+            here verbatim. Mirror of the compiled engine (R30).
+        topk_weights: Pre-computed routing weights [batch*seq, top_k], float.
+            Supplied together with topk_indices or not at all.
     """
     if hidden_states is None:
         raise RuntimeError("MoE fused: hidden_states is None")
+
+    _blended = topk_indices is not None or topk_weights is not None
+    if _blended and (topk_indices is None or topk_weights is None):
+        raise RuntimeError(
+            "MoE fused (multi-gate): topk_indices and topk_weights must be "
+            "supplied together — got "
+            f"indices={'None' if topk_indices is None else 'OK'}, "
+            f"weights={'None' if topk_weights is None else 'OK'}")
+    if not _blended and gate_scores is None:
+        raise RuntimeError("MoE fused: gate_scores is None and no blended routing")
 
     # Set device context to activation device
     act_dev = hidden_states._device_idx
     DeviceAllocator.set_device(act_dev)
     DeviceAllocator.ensure_triton_device(act_dev)
 
-    # Transfer gate_scores to activation device if needed
-    if gate_scores._device_idx != act_dev:
+    # Transfer routing tensors to activation device if needed
+    if _blended:
+        if topk_indices._device_idx != act_dev:
+            topk_indices = _xfer(topk_indices, act_dev)
+        if topk_weights._device_idx != act_dev:
+            topk_weights = _xfer(topk_weights, act_dev)
+    elif gate_scores._device_idx != act_dev:
         gate_scores = _xfer(gate_scores, act_dev)
 
     # Zero3 CPU offload: expert weights may be on pinned host memory.
@@ -325,7 +352,12 @@ def execute_moe_fused(
     orig_shape = hidden_states.shape
     if hidden_states.ndim == 3:
         hidden_states = hidden_states.reshape(-1, hidden_states.shape[-1])
-    if gate_scores.ndim == 3:
+    if _blended:
+        if topk_indices.ndim > 2:
+            topk_indices = topk_indices.reshape(-1, topk_indices.shape[-1])
+        if topk_weights.ndim > 2:
+            topk_weights = topk_weights.reshape(-1, topk_weights.shape[-1])
+    elif gate_scores.ndim == 3:
         gate_scores = gate_scores.reshape(-1, gate_scores.shape[-1])
 
     # Resolve weight dtype
@@ -365,23 +397,37 @@ def execute_moe_fused(
         except Exception as _e:
             import sys as _sys
             print(f"[MOE_DIAG] {label} failed: {_e}", file=_sys.stderr, flush=True)
-    _dump("gate_scores_in", gate_scores)
+    if not _blended:
+        _dump("gate_scores_in", gate_scores)
     _dump("hidden_states_in", hidden_states)
     # =========================================
 
     # ================================================================
-    # STEP 1: Routing — topk + normalize
+    # STEP 1: Routing — topk + normalize, OR pre-computed blend
     # ================================================================
-    gate_fp32 = gate_scores.to(NBXDtype.float32)
-    scores, indices = w.topk_wrapper(gate_fp32, top_k, dim=-1)
-    _dump("topk_scores", scores)
-    _dump("topk_indices", indices)
+    if _blended:
+        # Multi-gate: the graph already ran N gates (softmax → topk →
+        # normalize) and blended them by per-token modality masks. Re-running
+        # topk here would discard the modality selection; re-normalizing
+        # would double-normalize. Consume verbatim.
+        indices = topk_indices
+        if indices._dtype != NBXDtype.int64:
+            # moe_align_block_size and _multi_device_fused_moe read the flat
+            # index buffer as int64 via ctypes — normalize at the boundary.
+            indices = indices.to(NBXDtype.int64)
+        scores = topk_weights.to(NBXDtype.float32)
+        _dump("blend_indices", indices)
+        _dump("blend_scores", scores)
+    else:
+        gate_fp32 = gate_scores.to(NBXDtype.float32)
+        scores, indices = w.topk_wrapper(gate_fp32, top_k, dim=-1)
+        _dump("topk_scores", scores)
+        _dump("topk_indices", indices)
 
-    if norm_topk_prob:
-        denom = w.sum_wrapper(scores, dim=-1, keepdim=True)
-        scores = w.div(scores, denom)
-        _dump("scores_norm", scores)
-
+        if norm_topk_prob:
+            denom = w.sum_wrapper(scores, dim=-1, keepdim=True)
+            scores = w.div(scores, denom)
+            _dump("scores_norm", scores)
 
     # Flatten routing for fused kernel
     flat_indices = indices.reshape(-1)                 # [M * top_k]

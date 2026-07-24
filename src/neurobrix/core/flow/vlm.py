@@ -99,6 +99,24 @@ class VLMEngine(FlowHandler):
         if "input::all_pixel_values" in _vis_tensors:
             return self._execute_staged_splice(vlm)
 
+        # ── M-RoPE masked-splice contract detection (data-driven) ──
+        # A bailingmm-class LM graph declares TWO modality pairs as
+        # inputs — image_pos_masks/image_embeds AND
+        # audio_pos_masks/audio_embeds — plus rank-3 M-RoPE
+        # position_ids: both the placeholder splice (masked_scatter) and
+        # the per-modality MoE router gating live IN-GRAPH, and the flow
+        # only supplies the four tensors. Discriminator = the declared
+        # input NAME `image_pos_masks`, which is the contract itself:
+        # the deepstack omni graphs declare `visual_pos_masks` +
+        # `deepstack_visual_embeds.N`, the staged (MiniCPM) graphs
+        # declare `visual_pos_masks` + `vision_hidden_states` and are
+        # already routed above, and the GLM-class graphs declare neither.
+        _lm_exec0 = self.ctx.executors.get(lm_name) if lm_name else None
+        _lm_tensors0 = (getattr(_lm_exec0, "_dag", None) or {}).get(
+            "tensors", {})
+        if "input::image_pos_masks" in _lm_tensors0:
+            return self._execute_mrope_masked_splice(vlm)
+
         image_token_id = vlm.get("image_token_id")
         merge = vlm.get("spatial_merge_size")
         if not vision_name or not lm_name or image_token_id is None or not merge:
@@ -924,6 +942,539 @@ class VLMEngine(FlowHandler):
                 "did not round-trip the placeholder tokens.")
         return ids, first, last + 1
 
+    # ─── M-RoPE masked-splice contract (bailingmm class) ────────────────
+
+    def _execute_mrope_masked_splice(self, vlm: Dict[str, Any]) -> Dict[str, Any]:
+        """Third staged contract: two projection chains, TWO in-graph
+        modality mask/embed pairs, 3-D M-RoPE positions.
+
+        Grounded on the Ming-Lite-Omni-1.5 build (first consumer) — the
+        traced DAG contracts, quoted from the graphs:
+
+          vision(hidden_states [n_patch, C*Tp*P*P], grid_thw [1, 3])
+              -> [t*(h/2)*(w/2), vision_out_hidden]
+          linear_proj(image_embeds [n, vision_out_hidden])
+              -> [n, H]                     (in-graph F.normalize)
+          audio(x [1, T_mel, n_mels])
+              -> [1, (T_mel-1)//2+1, d_audio]
+          linear_proj_audio(audio_feats [1, L1, d_audio])
+              -> [1, (L1-1)//2+1, H]        (ds conv k3 s2 + in-graph
+                                             F.normalize)
+          model.model(inputs_embeds [B, S, H],
+                      position_ids [3, B, S] int64,
+                      image_pos_masks / audio_pos_masks [B, S, H] bool,
+                      image_embeds / audio_embeds [n, H])
+              -> hidden -> lm_head
+
+        The LM graph's first two ops are
+        `masked_scatter(inputs_embeds, image_pos_masks, image_embeds)`
+        then the same for audio, and `select(mask, dim=2, index=0)`
+        rebuilds the [B, S] router masks that gate the per-modality MoE
+        gates — so the expanded [B, S, H] mask form is the contract, not
+        a convenience. Absent modalities feed an all-False mask plus ONE
+        zero source row (masked_scatter consumes zero rows — inert, and
+        it keeps the graph's n >= 1 symbol constraint), exactly the
+        deepstack/staged stub pattern.
+
+        Positions follow the vendor get_rope_index: text runs advance the
+        three planes together from the running offset, a visual run gets
+        the t/h/w meshgrid of the llm grid (h, w divided by
+        spatial_merge_size, no temporal scaling — the vendor calls
+        get_rope_index without second_per_grid_ts), audio runs are
+        text-like on all three planes, and every run starts at
+        max(previous) + 1. The [16, 24, 24] section split is applied
+        IN-GRAPH by the traced rotary; the flow only supplies positions.
+
+        ZERO FALLBACK: every id, token count and template comes from the
+        topology / the request; a missing one raises by name.
+        """
+        defaults = self.ctx.pkg.defaults
+        resolved = self.ctx.variable_resolver.resolved
+        dtype = self._get_compute_dtype()
+        device = self.ctx.primary_device
+
+        vision_name = vlm.get("vision_component")
+        vproj_name = vlm.get("vision_projection_component")
+        audio_name = vlm.get("audio_component")
+        aproj_name = vlm.get("audio_projection_component")
+        lm_name = vlm.get("lm_component")
+        head_name = vlm.get("head_component")
+        pre = vlm.get("preprocessing") or {}
+        apre = vlm.get("audio_preprocessing") or {}
+        merge = vlm.get("spatial_merge_size")
+        if not lm_name or not merge:
+            raise RuntimeError(
+                "ZERO FALLBACK: the M-RoPE masked-splice contract requires "
+                "topology.flow.vlm.lm_component and spatial_merge_size.")
+
+        lm_exec = self.ctx.executors.get(lm_name)
+        lm_tensors = (getattr(lm_exec, "_dag", None) or {}).get("tensors", {})
+        _missing = [n for n in ("inputs_embeds", "position_ids",
+                                "image_pos_masks", "image_embeds",
+                                "audio_pos_masks", "audio_embeds")
+                    if f"input::{n}" not in lm_tensors]
+        if _missing:
+            raise RuntimeError(
+                "ZERO FALLBACK: the M-RoPE masked-splice LM graph must "
+                f"declare all six splice inputs — missing {_missing}.")
+        _pos_rank = len((lm_tensors["input::position_ids"].get("shape")) or [])
+        if _pos_rank != 3:
+            raise RuntimeError(
+                "ZERO FALLBACK: this contract expects M-RoPE positions "
+                f"(position_ids rank 3 [3, B, S]); the graph declares rank "
+                f"{_pos_rank}.")
+
+        in_cfg = vlm.get("input", {})
+        prompt = resolved.get(in_cfg.get("prompt_variable", "global.prompt"))
+        if not prompt:
+            raise RuntimeError("ZERO FALLBACK: vlm flow requires a text prompt.")
+        pixel_values = resolved.get(
+            in_cfg.get("image_variable", "global.pixel_values"))
+        grid_thw = resolved.get(
+            in_cfg.get("grid_variable", "global.image_grid_thw"))
+        pixel_values_videos = resolved.get("global.pixel_values_videos")
+        video_grid_thw = resolved.get("global.video_grid_thw")
+        audio_path = resolved.get("global.audio_path")
+        has_image = pixel_values is not None
+        has_video = pixel_values_videos is not None
+        has_audio = audio_path is not None
+        if has_image and has_video:
+            raise RuntimeError(
+                "ZERO FALLBACK: one visual modality per request — provide "
+                "--input-image or --input-video, not both.")
+        if has_image and grid_thw is None:
+            raise RuntimeError(
+                "ZERO FALLBACK: image request missing the grid input "
+                f"({in_cfg.get('grid_variable')}).")
+        if has_video and video_grid_thw is None:
+            raise RuntimeError(
+                "ZERO FALLBACK: video request missing the grid input "
+                "(global.video_grid_thw).")
+        has_visual = has_image or has_video
+
+        img_embeds: Optional[torch.Tensor] = None      # [n_img, H]
+        aud_embeds: Optional[torch.Tensor] = None      # [n_aud, H]
+        vis_grid_llm: Optional[Tuple[int, int, int]] = None
+
+        # ── Stage 1 (visual): vision tower → projection ──
+        if has_visual:
+            if not vision_name or not vproj_name:
+                raise RuntimeError(
+                    "ZERO FALLBACK: the visual chain needs vision_component "
+                    "+ vision_projection_component in topology.flow.vlm.")
+            vis_pixels = pixel_values if has_image else pixel_values_videos
+            vis_grid = grid_thw if has_image else video_grid_thw
+            print(f"   [{vision_name}] Running vision forward...")
+            start = time.perf_counter()
+            self._ensure_weights_loaded(vision_name)
+            _px = vis_pixels.to(device=device, dtype=dtype)
+            _gr = vis_grid.to(device=device)
+            resolved[f"{vision_name}.hidden_states"] = _px
+            resolved["global.hidden_states"] = _px
+            resolved[f"{vision_name}.grid_thw"] = _gr
+            resolved["global.grid_thw"] = _gr
+            self._execute_component(vision_name, "forward", None)
+            vis_out = self._get_component_output(vision_name)
+            if vis_out is None:
+                raise RuntimeError(
+                    f"ZERO FALLBACK: vision component '{vision_name}' "
+                    f"produced no output.")
+            if not self.ctx.persistent_mode:
+                self._unload_component_weights(vision_name)
+                release_flow_memory(self.ctx.primary_device)
+
+            self._ensure_weights_loaded(vproj_name)
+            # NOTE: `global.image_embeds` is the topology's connection
+            # source for BOTH the projection input (raw tower output) and
+            # the LM input (projected rows). The slot carries the tower
+            # output here and is rewritten with the projected rows before
+            # every LM forward below.
+            _vin = vis_out.reshape(-1, vis_out.shape[-1]).to(dtype=dtype)
+            resolved[f"{vproj_name}.image_embeds"] = _vin
+            resolved["global.image_embeds"] = _vin
+            self._execute_component(vproj_name, "forward", None)
+            proj_out = self._get_component_output(vproj_name)
+            if proj_out is None:
+                raise RuntimeError(
+                    f"ZERO FALLBACK: vision projection component "
+                    f"'{vproj_name}' produced no output.")
+            img_embeds = proj_out.reshape(
+                -1, proj_out.shape[-1]).to(device=device, dtype=dtype)
+            t, h, w = (int(x) for x in vis_grid.reshape(-1)[:3])
+            vis_grid_llm = (t, h // merge, w // merge)
+            expected = t * (h // merge) * (w // merge)
+            if int(img_embeds.shape[0]) != expected:
+                raise RuntimeError(
+                    f"ZERO FALLBACK: the visual chain produced "
+                    f"{int(img_embeds.shape[0])} tokens but grid {t}x{h}x{w} "
+                    f"/ merge {merge} expects {expected}.")
+            print(f"   [{vision_name}->{vproj_name}] {expected} vision "
+                  f"tokens in {(time.perf_counter() - start) * 1000:.0f}ms")
+            if not self.ctx.persistent_mode:
+                self._unload_component_weights(vproj_name)
+                release_flow_memory(self.ctx.primary_device)
+
+        # ── Stage 1 (audio): mel → audio tower → projection ──
+        if has_audio:
+            if not audio_name or not aproj_name:
+                raise RuntimeError(
+                    "ZERO FALLBACK: audio request needs audio_component + "
+                    "audio_projection_component in topology.flow.vlm.")
+            print(f"   [{audio_name}] Running audio forward...")
+            start = time.perf_counter()
+            _ptype = {"whisper_mel": "mel_spectrogram"}.get(
+                apre.get("type", "whisper_mel"), apre.get("type"))
+            from pathlib import Path as _Path
+            from neurobrix.core.module.audio.input_processor import (
+                AudioInputProcessor,
+            )
+            feats = AudioInputProcessor.process(
+                _ptype, str(audio_path), _Path(self.ctx.pkg.cache_path),
+                device, dtype, None, params=apre)
+            while feats.dim() > 2:
+                feats = feats.squeeze(0)                        # [n_mels, L]
+            L = int(feats.shape[1])
+            # Vendor encode_audio_segments length arithmetic, verbatim:
+            # whisper stem conv (k3 s2 p1) then the projection ds conv
+            # (kernel/stride declared by the registry-emitted lm_config).
+            _lm_cfg_a = defaults.get("lm_config", {})
+            _k = _lm_cfg_a.get("audio_ds_kernel_size")
+            _s = _lm_cfg_a.get("audio_ds_stride")
+            if _k is None or _s is None:
+                raise RuntimeError(
+                    "ZERO FALLBACK: audio_ds_kernel_size / audio_ds_stride "
+                    "missing from lm_config — the registry must map them "
+                    "for audio understanding.")
+            _l1 = (L - 1) // 2 + 1
+            _l2 = (_l1 - int(_k) + 2 * (int(_k) // 2)) // int(_s) + 1
+            self._ensure_weights_loaded(audio_name)
+            _x = feats.transpose(0, 1).unsqueeze(0).contiguous()  # [1, L, mel]
+            resolved[f"{audio_name}.x"] = _x
+            resolved["global.x"] = _x
+            self._execute_component(audio_name, "forward", None)
+            aud_hidden = self._get_component_output(audio_name)
+            if aud_hidden is None:
+                raise RuntimeError(
+                    f"ZERO FALLBACK: audio component '{audio_name}' "
+                    f"produced no output.")
+            if not self.ctx.persistent_mode:
+                self._unload_component_weights(audio_name)
+                release_flow_memory(self.ctx.primary_device)
+
+            self._ensure_weights_loaded(aproj_name)
+            _ain = aud_hidden.to(dtype=dtype)
+            resolved[f"{aproj_name}.audio_feats"] = _ain
+            resolved["global.audio_feats"] = _ain
+            self._execute_component(aproj_name, "forward", None)
+            aproj_out = self._get_component_output(aproj_name)
+            if aproj_out is None:
+                raise RuntimeError(
+                    f"ZERO FALLBACK: audio projection component "
+                    f"'{aproj_name}' produced no output.")
+            aud_embeds = aproj_out.reshape(
+                -1, aproj_out.shape[-1]).to(device=device, dtype=dtype)
+            if int(aud_embeds.shape[0]) != _l2:
+                raise RuntimeError(
+                    f"ZERO FALLBACK: the audio chain produced "
+                    f"{int(aud_embeds.shape[0])} tokens but the vendor "
+                    f"length arithmetic on {L} mel frames "
+                    f"(({L}-1)//2+1 then k={_k} s={_s}) expects {_l2}.")
+            print(f"   [{audio_name}->{aproj_name}] {_l2} audio tokens "
+                  f"(L={L} mel frames) in "
+                  f"{(time.perf_counter() - start) * 1000:.0f}ms")
+            if not self.ctx.persistent_mode:
+                self._unload_component_weights(aproj_name)
+                release_flow_memory(self.ctx.primary_device)
+
+        # ── Stage 2: prompt ids with both placeholder runs ──
+        ids, img_span, aud_span = self._build_masked_splice_ids(
+            str(prompt), vlm, pre, apre,
+            0 if img_embeds is None else int(img_embeds.shape[0]),
+            0 if aud_embeds is None else int(aud_embeds.shape[0]),
+            is_video=has_video)
+
+        # ── Stage 3: LM decode (full re-forward, in-graph splice) ──
+        from neurobrix.core.runtime.decode_bound import decode_bound
+        max_tokens = decode_bound(
+            int(resolved["global.max_tokens"])
+            if resolved.get("global.max_tokens") is not None
+            else defaults.get("max_tokens"))
+        if max_tokens is None:
+            raise RuntimeError("ZERO FALLBACK: max_tokens missing from defaults.json.")
+        temperature = (float(resolved["global.temperature"])
+                       if resolved.get("global.temperature") is not None
+                       else defaults.get("temperature"))
+        if temperature is None:
+            raise RuntimeError("ZERO FALLBACK: temperature missing from defaults.json.")
+        eos_token_id = defaults.get("eos_token_id")
+        if eos_token_id is None:
+            raise RuntimeError("ZERO FALLBACK: eos_token_id missing from defaults.json.")
+        eos_ids = set(eos_token_id if isinstance(eos_token_id, (list, tuple))
+                      else [eos_token_id])
+        repetition_penalty = (
+            float(resolved["global.repetition_penalty"])
+            if resolved.get("global.repetition_penalty") is not None
+            else defaults.get("repetition_penalty", 1.0))
+
+        self._ensure_weights_loaded(lm_name)
+        # Declared-MoE fusion (data-driven; no-op on dense builds) — same
+        # call as every other branch of this engine.
+        lm_cfg = defaults.get("lm_config", {})
+        _n_exp = lm_cfg.get("num_experts")
+        if _n_exp is not None and _n_exp > 1 and lm_exec is not None:
+            _norm_topk = lm_cfg.get("norm_topk_prob")
+            if _norm_topk is None:
+                raise RuntimeError(
+                    "ZERO FALLBACK: norm_topk_prob missing from lm_config "
+                    "for MoE model — add moe.norm_topk_prob to the registry.")
+            lm_exec.set_moe_config(norm_topk_prob=_norm_topk)
+        embed_weight = self._get_embed_weight(lm_name)
+        if embed_weight is None:
+            raise RuntimeError(
+                f"ZERO FALLBACK: vlm stage '{lm_name}' requires the token "
+                "embedding weight.")
+
+        def _embed(token_ids: List[int]) -> torch.Tensor:
+            tens = torch.tensor([token_ids], dtype=torch.long,
+                                device=embed_weight.device)
+            with torch.no_grad():
+                return torch.nn.functional.embedding(tens, embed_weight)\
+                    .to(device=device, dtype=dtype)
+
+        # Placeholder rows are overwritten IN-GRAPH by masked_scatter —
+        # the context embeds the full ids, placeholders included.
+        context_embeds = _embed(ids)
+        hidden_size = int(context_embeds.shape[2])
+        _zero_stub = torch.zeros(1, hidden_size, dtype=dtype, device=device)
+        img_src = img_embeds if img_embeds is not None else _zero_stub
+        aud_src = aud_embeds if aud_embeds is not None else _zero_stub
+
+        base_positions, next_pos = self._build_mrope_positions(
+            self._mrope_segments(len(ids), img_span, aud_span, vis_grid_llm),
+            device)
+
+        logits_source = ("lm_head"
+                         if (head_name and head_name in self.ctx.executors)
+                         else "embed_weight_tied")
+        print(f"   [{lm_name}] Generating (max={max_tokens}, "
+              f"context={context_embeds.shape[1]}, logits={logits_source})...")
+        start = time.perf_counter()
+        generated_ids: List[int] = []
+        for _step in range(max_tokens):
+            S = int(context_embeds.shape[1])
+            n_gen = len(generated_ids)
+            if n_gen:
+                gen_pos = torch.arange(next_pos, next_pos + n_gen,
+                                       dtype=torch.long, device=device)\
+                    .view(1, 1, -1).expand(3, 1, -1)
+                position_ids = torch.cat([base_positions, gen_pos], dim=2)
+            else:
+                position_ids = base_positions
+            img_mask = torch.zeros(1, S, hidden_size, dtype=torch.bool,
+                                   device=device)
+            aud_mask = torch.zeros(1, S, hidden_size, dtype=torch.bool,
+                                   device=device)
+            if img_span[1] > img_span[0]:
+                img_mask[0, img_span[0]:img_span[1], :] = True
+            if aud_span[1] > aud_span[0]:
+                aud_mask[0, aud_span[0]:aud_span[1], :] = True
+            for _key, _value in (
+                    ("inputs_embeds", context_embeds),
+                    ("position_ids", position_ids),
+                    ("image_pos_masks", img_mask),
+                    ("audio_pos_masks", aud_mask),
+                    ("image_embeds", img_src),
+                    ("audio_embeds", aud_src)):
+                resolved[_key] = _value
+                resolved[f"global.{_key}"] = _value
+
+            self._execute_component(lm_name, "forward", None)
+            output = self._get_component_output(lm_name)
+            if output is None:
+                break
+            logits = self._compute_logits(output, embed_weight,
+                                          logits_source, head_name)
+            from .audio_utils import sample_token
+            next_token = sample_token(
+                logits, temperature,
+                generated_ids=generated_ids,
+                repetition_penalty=repetition_penalty,
+            )
+            generated_ids.append(next_token)
+            if next_token in eos_ids:
+                break
+            context_embeds = torch.cat(
+                [context_embeds, _embed([next_token])], dim=1)
+
+        print(f"   [{lm_name}] Generated {len(generated_ids)} tokens in "
+              f"{(time.perf_counter() - start) * 1000:.0f}ms")
+        resolved["global.generated_token_ids"] = generated_ids
+
+        if not self.ctx.persistent_mode:
+            self._unload_component_weights(lm_name)
+            release_flow_memory(self.ctx.primary_device)
+
+        from .audio_utils import postprocess_text_output
+        postprocess_text_output(self.ctx)
+        out_var = vlm.get("output", {}).get("variable",
+                                            "global.generated_text")
+        if out_var and resolved.get("global.transcription") is not None:
+            resolved[out_var] = resolved["global.transcription"]
+        return self.ctx.variable_resolver.resolve_all()
+
+    def _build_masked_splice_ids(
+            self, prompt: str, vlm: Dict[str, Any], pre: Dict[str, Any],
+            apre: Dict[str, Any], n_img: int, n_aud: int, is_video: bool
+    ) -> Tuple[List[int], Tuple[int, int], Tuple[int, int]]:
+        """Assemble the prompt id sequence carrying both placeholder runs.
+
+        Vendor renderer (processing_bailingmm): the modality marker inside
+        the user turn is replaced by start + patch*N + end BEFORE
+        encoding, the visual block adding a trailing newline; the turn is
+        then wrapped by the role markers. Runtime mirror: the placeholder
+        STRINGS are rebuilt from the topology-declared token ids via
+        single-id decode (added tokens round-trip exactly), and the role
+        wrapper comes from the build's declared prompt template — the
+        engine holds no role/marker semantics of its own.
+
+        Template source cascade (both data-driven, both named in the
+        error): the request's `global.prompt_template` (a legitimate CLI
+        input via --set) then `topology.flow.vlm.prompt_template`. The
+        template must carry `{modality}` and `{text}`; substitution is by
+        replace(), never format(), so braces inside the user prompt are
+        literal.
+
+        Returns (ids, image_span, audio_span) with each span a
+        half-open [lo, hi) over the placeholder run — (0, 0) when the
+        modality is absent."""
+        tokenizer = self._get_tokenizer()
+        resolved = self.ctx.variable_resolver.resolved
+
+        def _tok_str(tid: Optional[int], what: str) -> str:
+            if tid is None:
+                raise RuntimeError(
+                    f"ZERO FALLBACK: {what} missing from the topology "
+                    "preprocessing block — the registry must emit it.")
+            # skip_special_tokens=False is MANDATORY: the placeholder
+            # markers ARE special ids and would decode to "".
+            return tokenizer.decode([int(tid)], skip_special_tokens=False)
+
+        blocks = ""
+        if n_img > 0:
+            if is_video:
+                _start = pre.get("video_start_token_id")
+                _end = pre.get("video_end_token_id")
+                _patch = vlm.get("video_token_id")
+                _what = "video start/end/patch token id"
+            else:
+                _start = pre.get("image_start_token_id")
+                _end = pre.get("image_end_token_id")
+                _patch = vlm.get("image_token_id")
+                _what = "image start/end/patch token id"
+            blocks += (_tok_str(_start, _what)
+                       + _tok_str(_patch, _what) * n_img
+                       + _tok_str(_end, _what) + "\n")
+        if n_aud > 0:
+            _a_start = apre.get("audio_start_token_id")
+            _a_end = apre.get("audio_end_token_id")
+            _a_patch = vlm.get("audio_token_id")
+            _what_a = "audio start/end/patch token id"
+            blocks += (_tok_str(_a_start, _what_a)
+                       + _tok_str(_a_patch, _what_a) * n_aud
+                       + _tok_str(_a_end, _what_a))
+
+        template = resolved.get("global.prompt_template")
+        if not template:
+            template = vlm.get("prompt_template")
+        if not template:
+            raise RuntimeError(
+                "ZERO FALLBACK: this build declares no prompt template and "
+                "its tokenizer embeds no chat template — the masked-splice "
+                "contract cannot invent role markers. Provide "
+                "topology.flow.vlm.prompt_template (registry-emitted) or "
+                "the request input global.prompt_template "
+                "(--set global.prompt_template='...'), carrying the "
+                "{modality} and {text} markers.")
+        template = str(template)
+        if "{modality}" not in template or "{text}" not in template:
+            raise RuntimeError(
+                "ZERO FALLBACK: the prompt template must carry both the "
+                "{modality} and the {text} marker; got: "
+                f"{template[:120]!r}")
+        text = template.replace("{modality}", blocks).replace("{text}", prompt)
+        # padding=False is MANDATORY (the embedded tokenizer pads to its
+        # declared model_max_length otherwise); the build's tokenizer
+        # config drives BOS/EOS, which this contract never adds.
+        ids = tokenizer.encode(text, padding=False, add_special_tokens=False)
+        if hasattr(ids, "input_ids"):
+            ids = ids.input_ids
+        ids = [int(i) for i in (ids[0] if ids and isinstance(ids[0], (list, tuple))
+                                else ids)]
+
+        def _span(patch_id: Optional[int], n: int, kind: str
+                  ) -> Tuple[int, int]:
+            if n <= 0:
+                return (0, 0)
+            positions = [i for i, tid in enumerate(ids)
+                         if tid == int(patch_id)]
+            first = positions[0] if positions else 0
+            last = positions[-1] if positions else -1
+            if (len(positions) != n
+                    or positions != list(range(first, last + 1))):
+                raise RuntimeError(
+                    f"ZERO FALLBACK: the {kind} placeholder run was not "
+                    f"recovered after templating ({len(positions)} "
+                    f"positions, expected a contiguous run of {n}) — the "
+                    "embedded tokenizer did not round-trip the placeholder "
+                    "token.")
+            return (first, last + 1)
+
+        img_span = _span(vlm.get("video_token_id") if is_video
+                         else vlm.get("image_token_id"), n_img,
+                         "video" if is_video else "image")
+        aud_span = _span(vlm.get("audio_token_id"), n_aud, "audio")
+        if (img_span[1] > img_span[0] and aud_span[1] > aud_span[0]
+                and not (img_span[1] <= aud_span[0]
+                         or aud_span[1] <= img_span[0])):
+            raise RuntimeError(
+                "ZERO FALLBACK: the image and audio placeholder runs "
+                f"overlap ({img_span} vs {aud_span}) — the two masks must "
+                "be disjoint (the vendor asserts the same).")
+        return ids, img_span, aud_span
+
+    @staticmethod
+    def _mrope_segments(seq_len: int, img_span: Tuple[int, int],
+                        aud_span: Tuple[int, int],
+                        vis_grid_llm: Optional[Tuple[int, int, int]]):
+        """Segment layout for the M-RoPE builder: text runs between the
+        modality spans, the visual span as a t/h/w grid, the audio span
+        as a text-like run (the vendor's audio-only branch is a plain
+        arange expanded over the three planes)."""
+        spans = []
+        if img_span[1] > img_span[0]:
+            if vis_grid_llm is None:
+                raise RuntimeError(
+                    "ZERO FALLBACK: a visual span needs its llm grid "
+                    "(t, h/merge, w/merge) for the M-RoPE builder.")
+            spans.append((img_span[0], img_span[1], "visual", vis_grid_llm))
+        if aud_span[1] > aud_span[0]:
+            spans.append((aud_span[0], aud_span[1], "text", None))
+        spans.sort(key=lambda s: s[0])
+        segments: List[Tuple[str, int, Optional[Tuple[int, int, int, float]]]] = []
+        cursor = 0
+        for lo, hi, kind, grid in spans:
+            if lo > cursor:
+                segments.append(("text", lo - cursor, None))
+            if kind == "visual":
+                gt, gh, gw = grid
+                segments.append(("visual", hi - lo, (gt, gh, gw, 1.0)))
+            else:
+                segments.append(("text", hi - lo, None))
+            cursor = hi
+        if cursor < seq_len:
+            segments.append(("text", seq_len - cursor, None))
+        return segments
+
     # ─── mrope positions (internal get_rope_index port) ─────────────────
 
     @staticmethod
@@ -1025,10 +1576,26 @@ class VLMEngine(FlowHandler):
 
     def _get_embed_weight(self, comp_name: str) -> Optional[torch.Tensor]:
         executor = self.ctx.executors.get(comp_name)
-        if executor is not None:
-            for key in executor._weights:
-                if "embed_tokens" in key or "token_embed" in key or key == "embed.weight":
-                    return executor._weights[key]
+        if executor is None:
+            return None
+        for key in executor._weights:
+            if "embed_tokens" in key or "token_embed" in key or key == "embed.weight":
+                return executor._weights[key]
+        # Second pass — the NeuroTax substring rule ("embed" in key, see
+        # src/neurobrix/CLAUDE.md §0) with the vocab table as the
+        # discriminator: a rank-2 weight whose rows equal the declared
+        # vocab_size IS the token embedding (e.g. `word_embeddings.weight`).
+        # Additive only: every build resolved by the exact names above
+        # never reaches this pass.
+        vocab = (self.ctx.pkg.defaults.get("lm_config", {}) or {}).get(
+            "vocab_size")
+        if vocab is None:
+            return None
+        for key, tensor in executor._weights.items():
+            if ("embed" in key and tensor is not None
+                    and getattr(tensor, "ndim", 0) == 2
+                    and int(tensor.shape[0]) == int(vocab)):
+                return tensor
         return None
 
     def _compute_logits(self, hidden_states: torch.Tensor,

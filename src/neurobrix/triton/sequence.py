@@ -1720,13 +1720,24 @@ class TritonSequence:
 
     def _compile_moe_fused_op(self, op_uid: str, op_data: dict,
                               kill_slots: Tuple[int, ...]) -> CompiledOp:
-        """Compile fused MoE dispatch — delegates to triton/moe.py."""
+        """Compile fused MoE dispatch — delegates to triton/moe.py.
+
+        TWO ROUTING BINDINGS, mirror of the compiled engine (R30):
+        - single gate: `gate_scores_tid` → topk + optional normalization
+          inside execute_moe_fused.
+        - multi-gate blend: `topk_indices_tid` / `topk_weights_tid` → routing
+          computed in-graph by N gates + per-token mask blend; passed through
+          verbatim, `norm_topk_prob` deliberately NOT applied (the per-gate
+          normalization already ran in the graph).
+        """
         from .moe import execute_moe_fused as _moe_exec
 
         attrs = op_data.get("attributes", {})
         output_tids = op_data.get("output_tensor_ids", [])
 
         gate_scores_tid = attrs["gate_scores_tid"]
+        topk_indices_tid = attrs.get("topk_indices_tid")
+        topk_weights_tid = attrs.get("topk_weights_tid")
         hidden_states_tid = attrs["hidden_states_tid"]
         gate_weight_ids = attrs["expert_gate_weight_ids"]
         up_weight_ids = attrs["expert_up_weight_ids"]
@@ -1736,7 +1747,14 @@ class TritonSequence:
         norm_topk_prob = attrs.get("norm_topk_prob", True)
 
         # Resolve arena slots (compile-time)
-        gate_scores_slot = self._tid_to_slot[gate_scores_tid]
+        if topk_indices_tid is not None and topk_weights_tid is not None:
+            gate_scores_slot = None
+            topk_indices_slot = self._tid_to_slot[topk_indices_tid]
+            topk_weights_slot = self._tid_to_slot[topk_weights_tid]
+        else:
+            gate_scores_slot = self._tid_to_slot[gate_scores_tid]
+            topk_indices_slot = None
+            topk_weights_slot = None
         hidden_states_slot = self._tid_to_slot[hidden_states_tid]
 
         gate_w_slots = []
@@ -1755,6 +1773,8 @@ class TritonSequence:
 
         # Freeze for closure
         _gs_slot = gate_scores_slot
+        _ti_slot = topk_indices_slot
+        _tw_slot = topk_weights_slot
         _hs_slot = hidden_states_slot
         _gw = tuple(gate_w_slots)
         _uw = tuple(up_w_slots)
@@ -1767,13 +1787,15 @@ class TritonSequence:
 
         def moe_fused_dispatch(arena):
             return _moe_exec(
-                gate_scores=arena[_gs_slot],
+                gate_scores=None if _gs_slot is None else arena[_gs_slot],
                 hidden_states=arena[_hs_slot],
                 gate_weights=[arena[s] for s in _gw],
                 up_weights=[arena[s] for s in _uw],
                 down_weights=[arena[s] for s in _dw],
                 top_k=_k, num_experts=_ne, norm_topk_prob=_norm,
                 cache_key=_cache_key,
+                topk_indices=None if _ti_slot is None else arena[_ti_slot],
+                topk_weights=None if _tw_slot is None else arena[_tw_slot],
             )
 
         # Output slots
@@ -1801,7 +1823,9 @@ class TritonSequence:
             output_slots=tuple(output_slots),
             kill_slots=kill_slots,
             weight_input_slots=tuple(list(_gw) + list(_uw) + list(_dw)),
-            all_input_slots=tuple([_gs_slot, _hs_slot] + list(_gw) + list(_uw) + list(_dw)),
+            all_input_slots=tuple(
+                ([_gs_slot] if _gs_slot is not None else [_ti_slot, _tw_slot])
+                + [_hs_slot] + list(_gw) + list(_uw) + list(_dw)),
         )
 
     # ========================================================================

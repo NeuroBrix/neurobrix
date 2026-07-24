@@ -379,6 +379,13 @@ class GraphExecutor:
             )
 
         # Patch fused op attributes in the DAG (fusion already ran with default=True)
+        #
+        # NOTE (multi-gate): fused ops bound to a blended routing
+        # (`topk_indices_tid`/`topk_weights_tid`) IGNORE this flag — their
+        # weights were normalized per gate inside the graph before the mask
+        # blend, so re-normalizing at dispatch would double-normalize. The
+        # patch is still written for uniformity; the runtime dispatchers gate
+        # on the presence of the blended tids.
         if self._dag:
             for _uid, op in self._dag.get("ops", {}).items():
                 if op.get("op_type") == "custom::moe_fused":
@@ -2458,9 +2465,16 @@ class GraphExecutor:
         up_weight_ids = attrs["expert_up_weight_ids"]
         down_weight_ids = attrs["expert_down_weight_ids"]
 
-        cache_key = f"triton_seq_{attrs['gate_scores_tid']}"
+        # Multi-gate blend: routing was computed in-graph by N gates and a
+        # per-token modality mask blend (see moe_fusion._detect_gate_blends).
+        # Mirror of the compiled/triton-compiled engines (R30).
+        idx_tid = attrs.get("topk_indices_tid")
+        w_tid = attrs.get("topk_weights_tid")
+        blended = idx_tid is not None and w_tid is not None
+
+        cache_key = f"triton_seq_{idx_tid if blended else attrs['gate_scores_tid']}"
         return execute_moe_fused(
-            gate_scores=store.get(attrs["gate_scores_tid"]),
+            gate_scores=None if blended else store.get(attrs["gate_scores_tid"]),
             hidden_states=store.get(attrs["hidden_states_tid"]),
             gate_weights=[store.get(wid) for wid in gate_weight_ids],
             up_weights=[store.get(wid) for wid in up_weight_ids],
@@ -2469,6 +2483,8 @@ class GraphExecutor:
             num_experts=attrs["num_experts"],
             norm_topk_prob=attrs.get("norm_topk_prob", True),
             cache_key=cache_key,
+            topk_indices=store.get(idx_tid) if blended else None,
+            topk_weights=store.get(w_tid) if blended else None,
         )
 
     def register_triton_interceptors(self, interceptors: Dict[str, Any]):
@@ -3751,6 +3767,9 @@ class GraphExecutor:
         attrs = op_data.get("attributes", {})
 
         gate_scores_tid = attrs["gate_scores_tid"]
+        topk_indices_tid = attrs.get("topk_indices_tid")
+        topk_weights_tid = attrs.get("topk_weights_tid")
+        blended = topk_indices_tid is not None and topk_weights_tid is not None
         hidden_states_tid = attrs["hidden_states_tid"]
         gate_weight_ids = attrs["expert_gate_weight_ids"]
         up_weight_ids = attrs["expert_up_weight_ids"]
@@ -3766,11 +3785,18 @@ class GraphExecutor:
         # Read tensors from store (activations are already resolved by prior ops)
         store = self._ctx.tensor_store
         hidden_states = store.get(hidden_states_tid)
-        gate_scores = store.get(gate_scores_tid)
+        gate_scores = None if blended else store.get(gate_scores_tid)
+        pre_indices = store.get(topk_indices_tid) if blended else None
+        pre_scores = store.get(topk_weights_tid) if blended else None
 
         if hidden_states is None:
             raise RuntimeError(
                 f"MoE fused native: hidden_states is None (tid={hidden_states_tid})"
+            )
+        if blended and (pre_indices is None or pre_scores is None):
+            raise RuntimeError(
+                f"MoE fused native (multi-gate): blended routing is None "
+                f"(idx={topk_indices_tid}, weights={topk_weights_tid})"
             )
 
         # Pre-resolve all expert weight tensors into store (they may not have been
@@ -3788,8 +3814,13 @@ class GraphExecutor:
         orig_shape = hidden_states.shape
         if hidden_states.dim() == 3:
             hidden_states = hidden_states.reshape(-1, hidden_states.size(-1))
-        if gate_scores.dim() == 3:
+        if gate_scores is not None and gate_scores.dim() == 3:
             gate_scores = gate_scores.reshape(-1, gate_scores.size(-1))
+        if blended:
+            if pre_indices.dim() > 2:
+                pre_indices = pre_indices.reshape(-1, pre_indices.size(-1))
+            if pre_scores.dim() > 2:
+                pre_scores = pre_scores.reshape(-1, pre_scores.size(-1))
 
         # Resolve weight dtype from first expert
         w_dtype = store.get(gate_weight_ids[0]).dtype
@@ -3802,18 +3833,32 @@ class GraphExecutor:
         # ROUTING IN FP32 (same as compiled path). The fp32-upcast policy is
         # owned by the dtype engine (single source); see routing_upcast_fp32.
         from neurobrix.core.dtype.engine import routing_upcast_fp32
-        gate_scores = routing_upcast_fp32(gate_scores)
         _compute_dev = hidden_states.device
-        if gate_scores.device != _compute_dev:
-            gate_scores = gate_scores.to(_compute_dev)
 
-        # Dynamic routing (replaces hardcoded topk+sort+bincount+slice)
-        scores, indices = gate_scores.topk(top_k, dim=-1)
-        _dump_n("topk_scores", scores)
-        _dump_n("topk_indices", indices)
-        if norm_topk_prob:
-            scores = scores / scores.sum(dim=-1, keepdim=True)
-            _dump_n("scores_norm", scores)
+        if blended:
+            # Multi-gate: routing came from the graph (N gates blended by
+            # per-token modality masks). Consume verbatim — no topk, and no
+            # re-normalization (each gate already normalized in-graph).
+            indices = pre_indices
+            scores = routing_upcast_fp32(pre_scores)
+            if indices.device != _compute_dev:
+                indices = indices.to(_compute_dev)
+            if scores.device != _compute_dev:
+                scores = scores.to(_compute_dev)
+            _dump_n("blend_indices", indices)
+            _dump_n("blend_scores", scores)
+        else:
+            gate_scores = routing_upcast_fp32(gate_scores)
+            if gate_scores.device != _compute_dev:
+                gate_scores = gate_scores.to(_compute_dev)
+
+            # Dynamic routing (replaces hardcoded topk+sort+bincount+slice)
+            scores, indices = gate_scores.topk(top_k, dim=-1)
+            _dump_n("topk_scores", scores)
+            _dump_n("topk_indices", indices)
+            if norm_topk_prob:
+                scores = scores / scores.sum(dim=-1, keepdim=True)
+                _dump_n("scores_norm", scores)
 
         flat_indices = indices.flatten()
         _dump_n("flat_scores", scores.flatten())

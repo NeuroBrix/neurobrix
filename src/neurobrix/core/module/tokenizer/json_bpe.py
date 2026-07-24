@@ -143,6 +143,19 @@ def _translate_pp_regex(pattern: str) -> str:
             in_class = True
         elif c == "]" and in_class:
             in_class = False
+        # Possessive quantifiers (`?+`, `*+`, `++`, `{m,n}+`) are onig/PCRE
+        # syntax that stdlib `re` rejects ("multiple repeat"). They differ
+        # from the greedy form only in BACKTRACKING (never giving matched
+        # text back), which cannot change the match set of these split
+        # patterns: each possessive atom here is followed by a
+        # disjoint-alphabet atom or end-of-alternative, so no backtracking
+        # into it can succeed anyway. Drop the trailing `+` — the greedy
+        # quantifier is match-equivalent for this pattern class (first hit:
+        # the Ming/bailing BPE pre-tokenizer's `[^…]?+` and `[^…]++`).
+        if (not in_class and c == "+" and out
+                and out[-1] in ("?", "*", "+", "}")):
+            i += 1
+            continue
         out.append(c)
         i += 1
     return "".join(out)

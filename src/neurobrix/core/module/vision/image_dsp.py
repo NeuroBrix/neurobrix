@@ -123,16 +123,33 @@ def native_patch_grid_np(image_path: str, preprocessing_cfg: dict):
     p = int(cfg.get("patch_size", 14))
     tp = int(cfg.get("temporal_patch_size", 2))
     merge = int(cfg.get("merge_size", 2))
-    size = cfg.get("size", {}) or {}
-    min_px = int(size.get("shortest_edge", 112 * 112))
-    max_px = int(size.get("longest_edge", 14 * 14 * 2 * 2 * 2 * 6144))
     mean = np.asarray(cfg.get("image_mean", list(_CLIP_MEAN)), dtype=np.float32)
     std = np.asarray(cfg.get("image_std", list(_CLIP_STD)), dtype=np.float32)
 
     img = _load_rgb(image_path)
-    h_bar, w_bar = _smart_resize(tp, img.height, img.width,
-                                 temporal_factor=tp, factor=p * merge,
-                                 min_pixels=min_px, max_pixels=max_px)
+    # Pixel-budget form, read from the emitted block — the two vendor
+    # processor-config shapes carry two DIFFERENT budget arithmetics and
+    # the config shape is the only data-driven signal for which one:
+    #   flat `min_pixels`/`max_pixels` (Qwen2-VL / Qwen2.5-VL / bailingmm
+    #   processors)  -> per-frame 2-D budget h_bar*w_bar, no temporal term
+    #   `size.{shortest_edge,longest_edge}` (Glm4vImageProcessor)
+    #   -> budget includes the temporal factor t_bar*h_bar*w_bar
+    # The video variant below already uses the 2-D form unconditionally.
+    # Clean end state: an explicit emitted flag instead of this key-shape
+    # proxy (registry/topology change, not a runtime one).
+    if cfg.get("min_pixels") is not None or cfg.get("max_pixels") is not None:
+        min_px = int(cfg.get("min_pixels", 56 * 56))
+        max_px = int(cfg.get("max_pixels", 28 * 28 * 1280))
+        h_bar, w_bar = _smart_resize_2d(img.height, img.width,
+                                        factor=p * merge,
+                                        min_pixels=min_px, max_pixels=max_px)
+    else:
+        size = cfg.get("size", {}) or {}
+        min_px = int(size.get("shortest_edge", 112 * 112))
+        max_px = int(size.get("longest_edge", 14 * 14 * 2 * 2 * 2 * 6144))
+        h_bar, w_bar = _smart_resize(tp, img.height, img.width,
+                                     temporal_factor=tp, factor=p * merge,
+                                     min_pixels=min_px, max_pixels=max_px)
     if (img.width, img.height) != (w_bar, h_bar):
         img = img.resize((w_bar, h_bar), Image.BICUBIC)
     # Vendor rescale semantics, bit-exact: float64 multiply by the scale

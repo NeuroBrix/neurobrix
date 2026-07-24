@@ -13,7 +13,7 @@ are extracted from the graph tensors and op attributes.
 Called BEFORE CompiledSequence.compile() to transform the DAG in-place.
 """
 
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Set, Tuple
 import re
 import os
 
@@ -74,15 +74,27 @@ def detect_and_fuse_moe(dag: Dict[str, Any], family: str, norm_topk_prob: bool =
     consumer_map = _build_consumer_map(ops, execution_order)
     producer_map = _build_producer_map(ops, execution_order)
 
+    # Multi-gate routers (one MoE layer driven by N sibling gates whose
+    # topk results are blended by per-token modality masks). Empty dict on
+    # every single-gate model — the legacy path below is then bit-identical.
+    blends = _detect_gate_blends(ops, execution_order, consumer_map,
+                                 tensors, moe_topk_uids)
+
     fused_count = 0
     ops_removed_total = 0
     dead_outputs_total = 0
 
     for topk_uid in moe_topk_uids:
+        blend = blends.get(topk_uid)
+        if blend is not None and blend.representative != topk_uid:
+            # Sibling gate of an already-handled multi-gate layer: its
+            # routing tensors are consumed by the representative's fused op.
+            continue
         result = _fuse_one_moe_layer(
             dag, ops, execution_order, tensors,
             consumer_map, producer_map, topk_uid,
             norm_topk_prob=norm_topk_prob,
+            blend=blend,
         )
         if result is not None:
             removed_count, fused_uid, fused_op, dead_outputs_count = result
@@ -123,6 +135,7 @@ def _fuse_one_moe_layer(
     producer_map: Dict[str, str],
     topk_uid: str,
     norm_topk_prob: bool = True,
+    blend: Optional["GateBlend"] = None,
 ) -> Optional[Tuple[int, str, Dict[str, Any], int]]:
     """
     Fuse one MoE layer starting from a topk op.
@@ -133,36 +146,48 @@ def _fuse_one_moe_layer(
     - DeepSeek v1 (deepseek-moe-16b-chat): ~1300 ops per layer, mm ops in subgraph → FUSE
     - DeepSeek v2 (DeepSeek-Coder-V2): ~11 ops per layer, mm ops NOT in subgraph → SKIP
       V2 uses a different architecture where expert computation is decoupled from routing.
+
+    MULTI-GATE (`blend` not None): the layer has several sibling gates whose
+    topk results are blended in-graph (see `_detect_gate_blends`). The gate
+    and blend ops STAY in the DAG; the walk is seeded from the blended
+    routing tensors and the fused op binds them directly instead of a single
+    gate's raw scores.
     """
     topk_data = ops[topk_uid]
 
     # --- Extract MoE parameters from graph (ZERO HARDCODE) ---
 
-    # topk input = gate_scores (softmax output)
-    gate_scores_tid = _get_input_tensor_id(topk_data, 0)
-    if gate_scores_tid is None:
-        raise RuntimeError(f"[MoE Fusion] Cannot find gate_scores input for {topk_uid}")
-
     # k from topk attributes
     top_k = _extract_topk_k(topk_data)
 
-    # topk outputs: scores and indices
-    topk_scores_tid = topk_data["output_tensor_ids"][0]
-    topk_indices_tid = topk_data["output_tensor_ids"][1]
-
-    # --- Trace forward from topk to find the complete MoE subgraph ---
-
     # Collect ALL ops that belong to this MoE layer
     moe_op_uids: Set[str] = set()
-    moe_op_uids.add(topk_uid)
+
+    if blend is not None:
+        # Routing is computed by the graph (N gates + mask blend) and the
+        # fused op consumes the RESULT. No single gate's scores are bound.
+        gate_scores_tid = None
+        seed_weights_tid = blend.weights_tid
+        seed_indices_tid = blend.indices_tid
+    else:
+        # topk input = gate_scores (softmax output)
+        gate_scores_tid = _get_input_tensor_id(topk_data, 0)
+        if gate_scores_tid is None:
+            raise RuntimeError(f"[MoE Fusion] Cannot find gate_scores input for {topk_uid}")
+        # topk outputs: scores and indices
+        seed_weights_tid = topk_data["output_tensor_ids"][0]
+        seed_indices_tid = topk_data["output_tensor_ids"][1]
+        moe_op_uids.add(topk_uid)
+
+    # --- Trace forward from the routing tensors to find the MoE subgraph ---
 
     # Find the hidden_states input: trace back from the index ops
     # The gate_scores come from softmax, which comes from router mm
     # The hidden_states are the input to both the router AND the expert index ops
 
-    # Step 1: Find sort, bincount, floor_divide, view ops after topk
+    # Step 1: Find sort, bincount, floor_divide, view ops after the routing
     _trace_routing_ops(ops, execution_order, consumer_map,
-                       topk_scores_tid, topk_indices_tid, moe_op_uids)
+                       seed_weights_tid, seed_indices_tid, moe_op_uids)
 
     # num_experts from topk input shape (gate_scores last dim) — ZERO HARDCODE
     num_experts = _count_total_experts(tensors, topk_uid, ops)
@@ -218,12 +243,15 @@ def _fuse_one_moe_layer(
 
     fused_uid = f"moe_fused::{block_id}"
 
+    # Routing tensors the fused op reads: a single gate's raw scores (legacy)
+    # or the blended (indices, weights) pair produced in-graph (multi-gate).
+    routing_tids = ([blend.indices_tid, blend.weights_tid] if blend is not None
+                    else [gate_scores_tid])
+
     # Build args list for liveness analysis — all input tensors must be declared
     # so _extract_input_slots_from_dag can track them and prevent premature GC
-    liveness_args = [
-        {"type": "tensor", "tensor_id": hidden_states_tid},
-        {"type": "tensor", "tensor_id": gate_scores_tid},
-    ]
+    liveness_args = [{"type": "tensor", "tensor_id": hidden_states_tid}]
+    liveness_args += [{"type": "tensor", "tensor_id": t} for t in routing_tids]
     # All expert weight tensors (64 × 3 = 192 tensors)
     for i in range(num_experts):
         liveness_args.append({"type": "tensor", "tensor_id": expert_weight_ids["gate"][i]})
@@ -231,7 +259,7 @@ def _fuse_one_moe_layer(
         liveness_args.append({"type": "tensor", "tensor_id": expert_weight_ids["down"][i]})
 
     # input_tensor_ids for native mode liveness tracking (_compute_last_use scans this)
-    all_input_tids = [hidden_states_tid, gate_scores_tid]
+    all_input_tids = [hidden_states_tid] + list(routing_tids)
     for i in range(num_experts):
         all_input_tids.append(expert_weight_ids["gate"][i])
         all_input_tids.append(expert_weight_ids["up"][i])
@@ -255,6 +283,15 @@ def _fuse_one_moe_layer(
             "norm_topk_prob": norm_topk_prob,
         },
     }
+
+    if blend is not None:
+        # Pre-computed routing: the engine reads these instead of running
+        # topk on gate scores. The per-gate normalization already happened
+        # in-graph, so the runtime NEVER re-normalizes in this mode
+        # (norm_topk_prob is ignored — see the runtime dispatchers).
+        fused_op["attributes"]["topk_indices_tid"] = blend.indices_tid
+        fused_op["attributes"]["topk_weights_tid"] = blend.weights_tid
+        fused_op["attributes"]["gate_group"] = list(blend.members)
 
     # --- Remove old ops from execution_order, add fused op ---
 
@@ -281,6 +318,44 @@ def _fuse_one_moe_layer(
     for uid in execution_order[:last_moe_pos + 1]:
         if uid not in moe_op_uids:
             insert_idx += 1
+
+    # DATA-DEPENDENCE CLAMP. `last_moe_pos` is the tail of the traced
+    # subgraph, which is NOT always the op that produced the MoE result: a
+    # trace can leave a DEAD routing by-product after the combine (Ming-Lite
+    # -Omni emits `blended_topk_idx.view(batch, seq, k)` past the weighted
+    # sum). The heuristic above then places the fused op AFTER the surviving
+    # op that reads its output. Clamp to the true dependence window:
+    #   latest producer of a fused input  <  fused op  <=  earliest surviving
+    #                                                      consumer of its output
+    new_pos = {uid: i for i, uid in enumerate(new_order)}
+
+    earliest_consumer = len(new_order)
+    for c_uid in consumer_map.get(last_scatter_tid, []):
+        i = new_pos.get(c_uid)
+        if i is not None and i < earliest_consumer:
+            earliest_consumer = i
+
+    latest_producer = -1
+    for in_tid in all_input_tids:
+        p_uid = producer_map.get(in_tid)
+        if p_uid is None:
+            continue
+        i = new_pos.get(p_uid)
+        if i is not None and i > latest_producer:
+            latest_producer = i
+
+    if insert_idx > earliest_consumer:
+        insert_idx = earliest_consumer
+    if insert_idx <= latest_producer:
+        insert_idx = latest_producer + 1
+    if insert_idx > earliest_consumer:
+        raise RuntimeError(
+            f"[MoE Fusion] Cannot place {fused_uid}: an input producer at "
+            f"position {latest_producer} runs after the consumer of the MoE "
+            f"output at position {earliest_consumer}. The traced subgraph is "
+            "not a contiguous dependence window."
+        )
+
     new_order.insert(insert_idx, fused_uid)
 
     # Post-fusion dead-op elimination: boundary ops that depend on removed
@@ -395,6 +470,232 @@ def _fuse_one_moe_layer(
     ops_removed = len(moe_op_uids)
 
     return ops_removed, fused_uid, fused_op, dead_outputs_count
+
+
+# ============================================================================
+# MULTI-GATE ROUTER BLEND DETECTION
+# ============================================================================
+#
+# Some MoE layers are driven by SEVERAL sibling gates instead of one.
+# Ming-Lite-Omni (BailingMoe) holds three BailingMoeGate routers per layer
+# (text `router`, `image_gate`, `audio_gate`); every gate runs the full
+# softmax → topk → normalize chain and the three (topk_idx, topk_weight)
+# pairs are then blended by per-token modality masks through a chain of
+# elementwise `mul`/`add` before the sort/scatter that drives dispatch.
+#
+# The blend is ordinary ATen compute over runtime inputs (the masks are
+# graph inputs), so it STAYS in the DAG and the fused op binds the blend
+# RESULT. Absorbing the blend into the fused op would force the universal
+# MoE primitive to re-implement per-modality gate selection — model
+# semantics inside a hardware primitive, forbidden.
+#
+# Structural criterion for "this op belongs to the routing blend" — no
+# model name, no op count, no parent_module string:
+#   1. op_type is a pure elementwise / dtype / shape op (no reduction, no
+#      gather, no matmul) — `_BLEND_OP_TYPES`;
+#   2. it has exactly ONE output and that output's shape is EXACTLY the
+#      topk output shape (…, k). This is the bound that keeps the walk
+#      from escaping through residual `add`s (activations are (…, hidden))
+#      and through the post-dispatch combine ((…, k, hidden));
+#   3. every tensor operand broadcasts into that routing shape (the
+#      modality masks come in as (…, 1)).
+# Two gates are siblings when their blend closures share a tensor — i.e.
+# they converge into the same blended routing tensor.
+
+_BLEND_OP_TYPES = {
+    "aten::add", "aten::sub", "aten::mul", "aten::div",
+    "aten::where", "aten::masked_fill",
+    "aten::_to_copy", "aten::clone", "aten::detach",
+    "aten::view", "aten::reshape", "aten::_unsafe_view",
+}
+
+
+class GateBlend(NamedTuple):
+    """Resolved multi-gate routing blend for one MoE layer."""
+    representative: str          # topk op_uid that carries the fusion
+    members: Tuple[str, ...]     # every sibling topk op_uid (exec order)
+    indices_tid: str             # blended topk indices (integer dtype)
+    weights_tid: str             # blended topk weights (float dtype)
+
+
+def _tensor_shape(tensors: Dict[str, Any], tid: str) -> Optional[List[Any]]:
+    td = tensors.get(tid)
+    if td is None:
+        return None
+    shape = td.get("shape")
+    return list(shape) if shape is not None else None
+
+
+def _broadcasts_into(shape: Optional[List[Any]],
+                     target: Optional[List[Any]]) -> bool:
+    """True when `shape` broadcasts into `target` (numpy right-aligned rules).
+
+    Symbolic dims (strings) compare by identity — a symbol only broadcasts
+    into itself or into a literal 1.
+    """
+    if shape is None or target is None:
+        return False
+    if len(shape) > len(target):
+        return False
+    for s, t in zip(reversed(shape), reversed(target)):
+        if s == 1 or s == t:
+            continue
+        return False
+    return True
+
+
+def _blend_closure(
+    ops: Dict[str, Any],
+    consumer_map: Dict[str, List[str]],
+    tensors: Dict[str, Any],
+    seed_tids: List[str],
+    routing_shape: List[Any],
+) -> Tuple[Set[str], Set[str]]:
+    """Forward closure of routing-shaped elementwise ops from one gate.
+
+    Returns (op_uids, tensor_ids). The tensor set includes the seeds so
+    that two gates that never converge produce disjoint sets.
+    """
+    closure_ops: Set[str] = set()
+    closure_tids: Set[str] = set(seed_tids)
+    frontier = list(seed_tids)
+
+    while frontier:
+        tid = frontier.pop()
+        for consumer_uid in consumer_map.get(tid, []):
+            if consumer_uid in closure_ops:
+                continue
+            op_data = ops.get(consumer_uid)
+            if op_data is None:
+                continue
+            if op_data.get("op_type") not in _BLEND_OP_TYPES:
+                continue
+            out_tids = op_data.get("output_tensor_ids", [])
+            if len(out_tids) != 1:
+                continue
+            if _tensor_shape(tensors, out_tids[0]) != routing_shape:
+                continue
+            operands = _collect_input_tids(op_data)
+            if not all(_broadcasts_into(_tensor_shape(tensors, t), routing_shape)
+                       for t in operands):
+                continue
+            closure_ops.add(consumer_uid)
+            closure_tids.add(out_tids[0])
+            frontier.append(out_tids[0])
+
+    return closure_ops, closure_tids
+
+
+def _detect_gate_blends(
+    ops: Dict[str, Any],
+    execution_order: List[str],
+    consumer_map: Dict[str, List[str]],
+    tensors: Dict[str, Any],
+    topk_uids: List[str],
+) -> Dict[str, GateBlend]:
+    """Group sibling gates of multi-gate MoE layers.
+
+    Returns {topk_uid: GateBlend} covering ONLY topk ops that belong to a
+    group of size > 1. Single-gate models get an empty dict, so the legacy
+    fusion path stays bit-identical.
+    """
+    closures: Dict[str, Tuple[Set[str], Set[str]]] = {}
+    routing_shapes: Dict[str, List[Any]] = {}
+
+    for topk_uid in topk_uids:
+        op_data = ops.get(topk_uid, {})
+        out_tids = op_data.get("output_tensor_ids", [])
+        if len(out_tids) < 2:
+            continue
+        routing_shape = _tensor_shape(tensors, out_tids[0])
+        if routing_shape is None:
+            continue
+        closures[topk_uid] = _blend_closure(
+            ops, consumer_map, tensors, list(out_tids), routing_shape)
+        routing_shapes[topk_uid] = routing_shape
+
+    # Union-find: two gates are siblings when their closures share a tensor.
+    parent: Dict[str, str] = {u: u for u in closures}
+
+    def _find(x: str) -> str:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def _union(a: str, b: str) -> None:
+        ra, rb = _find(a), _find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    tid_owner: Dict[str, str] = {}
+    for topk_uid, (_, closure_tids) in closures.items():
+        for tid in closure_tids:
+            owner = tid_owner.get(tid)
+            if owner is None:
+                tid_owner[tid] = topk_uid
+            else:
+                _union(owner, topk_uid)
+
+    grouped: Dict[str, List[str]] = {}
+    for topk_uid in closures:
+        grouped.setdefault(_find(topk_uid), []).append(topk_uid)
+
+    order_index = {uid: i for i, uid in enumerate(execution_order)}
+    blends: Dict[str, GateBlend] = {}
+
+    for members in grouped.values():
+        if len(members) < 2:
+            continue  # single gate — legacy path
+        members.sort(key=lambda u: order_index.get(u, 0))
+        representative = members[0]
+
+        shapes = {tuple(routing_shapes[u]) for u in members}
+        if len(shapes) != 1:
+            raise RuntimeError(
+                "[MoE Fusion] Multi-gate router group with inconsistent "
+                f"routing shapes {sorted(shapes)} at {members}. The gates of "
+                "one MoE layer must produce identically shaped topk results."
+            )
+
+        union_ops: Set[str] = set()
+        for u in members:
+            union_ops |= closures[u][0]
+
+        # Terminals: closure outputs with no consumer inside the closure —
+        # the tensors the sort/scatter actually reads.
+        terminals: List[str] = []
+        for op_uid in union_ops:
+            for out_tid in ops.get(op_uid, {}).get("output_tensor_ids", []):
+                if not any(c in union_ops for c in consumer_map.get(out_tid, [])):
+                    terminals.append(out_tid)
+
+        int_terms = [t for t in terminals
+                     if "int" in (tensors.get(t, {}).get("dtype") or "")]
+        float_terms = [t for t in terminals
+                       if "float" in (tensors.get(t, {}).get("dtype") or "")]
+
+        if len(int_terms) != 1 or len(float_terms) != 1:
+            raise RuntimeError(
+                "[MoE Fusion] Multi-gate router group at "
+                f"{members} does not resolve to exactly one blended index "
+                f"tensor and one blended weight tensor "
+                f"(int={sorted(int_terms)}, float={sorted(float_terms)}). "
+                "The blend topology is unsupported — extend "
+                "_detect_gate_blends (chantier P-MOE-MULTIGATE) rather than "
+                "letting the trace-frozen routing run."
+            )
+
+        blend = GateBlend(
+            representative=representative,
+            members=tuple(members),
+            indices_tid=int_terms[0],
+            weights_tid=float_terms[0],
+        )
+        for u in members:
+            blends[u] = blend
+
+    return blends
 
 
 # ============================================================================
@@ -550,7 +851,7 @@ def _find_moe_output(
 
 def _trace_expert_blocks(
     ops: Dict[str, Any],
-    _execution_order: List[str],  # unused, kept for API compatibility
+    execution_order: List[str],
     tensors: Dict[str, Any],
     _consumer_map: Dict[str, List[str]],  # unused, kept for API compatibility
     producer_map: Dict[str, str],
@@ -582,7 +883,17 @@ def _trace_expert_blocks(
     expert_weights: Dict[int, Dict[str, str]] = {}  # expert_id -> {gate: tid, up: tid, down: tid}
     hidden_states_tid = None
 
-    for op_uid in moe_op_uids:
+    # DETERMINISM: iterate in EXECUTION ORDER, never in `moe_op_uids` set
+    # order. Set iteration over op_uid strings is randomized per process by
+    # PYTHONHASHSEED, and the `hidden_states_tid` pick below is "first match
+    # wins" — Qwen3-MoE offers 128 equivalent `unsqueeze(view)` candidates
+    # per layer, so the bound tid (and hence the surviving op / arena slot /
+    # execution_order) changed on every process. Values were unaffected (the
+    # candidates are views of the same tensor) but the plan was not
+    # reproducible, which breaks R28-style build/plan diffing.
+    for op_uid in execution_order:
+        if op_uid not in moe_op_uids:
+            continue
         op_data = ops.get(op_uid)
         if op_data is None:
             continue
