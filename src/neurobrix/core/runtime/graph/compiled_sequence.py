@@ -1726,6 +1726,37 @@ class CompiledSequence:
                 attrs = op_data.get("attributes", {})
                 args = attrs.get("args", [])
 
+                if op_type == "aten::arange" and len(args) >= 1:
+                    # aten::arange(end) whose OWN output dim carries a
+                    # symbolic EXPRESSION (a product/sum of grid symbols,
+                    # not a bare symbol — those are handled by
+                    # _promote_seq_len_scalars): the trace baked `end`
+                    # concrete while the tensor node knows the algebra.
+                    # Inject the op's own output expression so ExprArg
+                    # resolves it at runtime (Ming vision: arange(2755)
+                    # = gh·gw·gt, frozen at the trace grid while every
+                    # consumer view was symbolic).
+                    _end = args[0]
+                    _end_val = (_end.get("value")
+                                if isinstance(_end, dict) else _end)
+                    if isinstance(_end_val, int) and _end_val > 1:
+                        _otids = op_data.get("output_tensor_ids") or []
+                        _odims = []
+                        if _otids:
+                            _oss = tensors.get(_otids[0], {}).get(
+                                "symbolic_shape", {})
+                            if isinstance(_oss, dict):
+                                _odims = _oss.get("dims", [])
+                        if len(_odims) == 1 and isinstance(_odims[0], dict):
+                            _d = _odims[0]
+                            if (_d.get("type") in ("mul", "add", "sub",
+                                                   "floordiv", "mod")
+                                    and _d.get("trace",
+                                               _d.get("trace_value")) == _end_val):
+                                args[0] = _d
+                                injected += 1
+                    continue
+
                 if op_type == "aten::expand" and len(args) >= 2:
                     # Expand: check broadcast dims (input_dim=1 → target_dim=N)
                     size_arg = args[1]
@@ -1901,6 +1932,13 @@ class CompiledSequence:
 
         All parameters (num_experts, top_k, weight slots) are extracted from
         the DAG attributes set by moe_fusion.py — ZERO HARDCODE.
+
+        TWO ROUTING BINDINGS (moe_fusion.py decides, this reads):
+        - single gate: `gate_scores_tid` → topk + optional normalization here.
+        - multi-gate blend: `topk_indices_tid` / `topk_weights_tid` → routing
+          was computed in-graph by N gates plus a per-token mask blend; use it
+          verbatim. Normalization already happened per gate in the graph, so
+          `norm_topk_prob` is deliberately NOT applied in this mode.
         """
         import torch.nn.functional as F
         from neurobrix.core.dtype.engine import routing_upcast_fp32
@@ -1910,6 +1948,8 @@ class CompiledSequence:
 
         # Extract parameters from fusion pass attributes
         gate_scores_tid = attrs["gate_scores_tid"]
+        topk_indices_tid = attrs.get("topk_indices_tid")
+        topk_weights_tid = attrs.get("topk_weights_tid")
         hidden_states_tid = attrs["hidden_states_tid"]
         gate_weight_ids = attrs["expert_gate_weight_ids"]
         up_weight_ids = attrs["expert_up_weight_ids"]
@@ -1919,7 +1959,14 @@ class CompiledSequence:
         norm_topk_prob = attrs.get("norm_topk_prob", True)
 
         # Resolve tensor IDs to arena slots (compile-time)
-        gate_scores_slot = self._tensor_id_to_slot[gate_scores_tid]
+        if topk_indices_tid is not None and topk_weights_tid is not None:
+            gate_scores_slot = None
+            topk_indices_slot = self._tensor_id_to_slot[topk_indices_tid]
+            topk_weights_slot = self._tensor_id_to_slot[topk_weights_tid]
+        else:
+            gate_scores_slot = self._tensor_id_to_slot[gate_scores_tid]
+            topk_indices_slot = None
+            topk_weights_slot = None
         hidden_states_slot = self._tensor_id_to_slot[hidden_states_tid]
 
         # Resolve all expert weight slots (compile-time, zero-copy lists at runtime)
@@ -1968,6 +2015,8 @@ class CompiledSequence:
         _num_experts = num_experts
         _norm_topk_prob = norm_topk_prob
         _gate_scores_slot = gate_scores_slot
+        _topk_indices_slot = topk_indices_slot
+        _topk_weights_slot = topk_weights_slot
         _hidden_states_slot = hidden_states_slot
         _gate_w_slots = gate_w_slots
         _up_w_slots = up_w_slots
@@ -1981,22 +2030,37 @@ class CompiledSequence:
             Replaces ~893 ops with hardcoded slice boundaries.
             All routing computed dynamically from gate_scores.
             """
-            gate_scores = arena[_gate_scores_slot]
+            _blended = _gate_scores_slot is None
+            gate_scores = None if _blended else arena[_gate_scores_slot]
+            pre_indices = arena[_topk_indices_slot] if _blended else None
+            pre_scores = arena[_topk_weights_slot] if _blended else None
             hidden_states = arena[_hidden_states_slot]
 
             if hidden_states is None:
                 raise RuntimeError(
                     f"MoE fused: hidden_states is None (slot {_hidden_states_slot}). "
-                    f"gate_scores={'None' if gate_scores is None else 'OK'}. "
+                    f"routing={'None' if (gate_scores is None and pre_indices is None) else 'OK'}. "
                     f"Killed by liveness analysis before fused op."
+                )
+            if _blended and (pre_indices is None or pre_scores is None):
+                raise RuntimeError(
+                    f"MoE fused (multi-gate): blended routing is None "
+                    f"(idx slot {_topk_indices_slot}, weight slot "
+                    f"{_topk_weights_slot}). Killed by liveness analysis "
+                    f"before fused op."
                 )
 
             # Handle 3D tensors [batch, seq, dim] → flatten to 2D [batch*seq, dim]
             orig_shape = hidden_states.shape
             if hidden_states.dim() == 3:
                 hidden_states = hidden_states.reshape(-1, hidden_states.size(-1))
-            if gate_scores.dim() == 3:
+            if gate_scores is not None and gate_scores.dim() == 3:
                 gate_scores = gate_scores.reshape(-1, gate_scores.size(-1))
+            if _blended:
+                if pre_indices.dim() > 2:
+                    pre_indices = pre_indices.reshape(-1, pre_indices.size(-1))
+                if pre_scores.dim() > 2:
+                    pre_scores = pre_scores.reshape(-1, pre_scores.size(-1))
 
             def _dnat(_label, _tensor): pass
 
@@ -2008,24 +2072,39 @@ class CompiledSequence:
             if hidden_states.dtype != w_dtype:
                 hidden_states = hidden_states.to(w_dtype)
 
-            # ROUTING IN FP32: precision-critical for expert selection. The
-            # fp32-upcast policy is owned by the dtype engine (single source);
-            # see routing_upcast_fp32 for the rationale (vLLM PR #14027).
-            gate_scores = routing_upcast_fp32(gate_scores)
-
-            # Ensure ALL routing tensors on hidden_states device
             _compute_dev = hidden_states.device
-            if gate_scores.device != _compute_dev:
-                gate_scores = gate_scores.to(_compute_dev)
 
-            # Dynamic routing in fp32 (replaces hardcoded topk+sort+bincount+slice)
-            scores, indices = gate_scores.topk(_top_k, dim=-1)
-            _dnat("topk_scores", scores)
-            _dnat("topk_indices", indices)
+            if _blended:
+                # Multi-gate: routing came from the graph (N gates blended by
+                # per-token modality masks). Use it verbatim — re-running topk
+                # here would silently discard the modality selection, and
+                # re-normalizing would double-normalize the per-gate softmax.
+                indices = pre_indices
+                scores = routing_upcast_fp32(pre_scores)
+                if indices.device != _compute_dev:
+                    indices = indices.to(_compute_dev)
+                if scores.device != _compute_dev:
+                    scores = scores.to(_compute_dev)
+                _dnat("blend_scores", scores)
+                _dnat("blend_indices", indices)
+            else:
+                # ROUTING IN FP32: precision-critical for expert selection. The
+                # fp32-upcast policy is owned by the dtype engine (single source);
+                # see routing_upcast_fp32 for the rationale (vLLM PR #14027).
+                gate_scores = routing_upcast_fp32(gate_scores)
 
-            if _norm_topk_prob:
-                scores = scores / scores.sum(dim=-1, keepdim=True)
-                _dnat("scores_norm", scores)
+                # Ensure ALL routing tensors on hidden_states device
+                if gate_scores.device != _compute_dev:
+                    gate_scores = gate_scores.to(_compute_dev)
+
+                # Dynamic routing in fp32 (replaces hardcoded topk+sort+bincount+slice)
+                scores, indices = gate_scores.topk(_top_k, dim=-1)
+                _dnat("topk_scores", scores)
+                _dnat("topk_indices", indices)
+
+                if _norm_topk_prob:
+                    scores = scores / scores.sum(dim=-1, keepdim=True)
+                    _dnat("scores_norm", scores)
 
             flat_indices = indices.flatten()
             _dnat("flat_scores", scores.flatten())
@@ -2098,8 +2177,10 @@ class CompiledSequence:
         def func_wrapper(arena: TensorArena) -> torch.Tensor:
             return moe_fused_dispatch(arena)
 
-        # All input slots: gate_scores + hidden_states + all expert weights
-        moe_all_input_slots = [_gate_scores_slot, _hidden_states_slot] + list(all_weight_slots)
+        # All input slots: routing + hidden_states + all expert weights
+        _routing_slots = ([topk_indices_slot, topk_weights_slot]
+                          if gate_scores_slot is None else [gate_scores_slot])
+        moe_all_input_slots = _routing_slots + [_hidden_states_slot] + list(all_weight_slots)
 
         return CompiledOp(
             op_uid=op_uid,

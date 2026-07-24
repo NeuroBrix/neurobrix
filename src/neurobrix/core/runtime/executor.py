@@ -140,20 +140,37 @@ class RuntimeExecutor:
                     _resolved.get(_img_var) is not None
                     or _resolved.get("global.pixel_values_videos") is not None
                     or _resolved.get("global.audio_path") is not None)
-                # Staged-splice builds (MiniCPM-o class) never take the AR
-                # shortcut: their LM graph's FIRST op is a mandatory
-                # bool-mask masked_scatter fed by vision/audio_hidden_states
-                # + pos-mask inputs the AR flow cannot synthesize (proven:
-                # 'input::vision_hidden_states could not be resolved' at
-                # op 1/3592 on the first probe). The topology connections
-                # carry the contract (global.vision_hidden_states →
-                # <lm>.vision_hidden_states) — data-driven, no graph read.
-                # Text-only requests run the vlm flow's inert-stub form
-                # (all-False masks + one zero source row) instead. Omni
-                # topologies carry no such connection → behavior unchanged.
-                _lm_splice = any(
-                    (c.get("to") or "") == f"{_gen_lm}.vision_hidden_states"
-                    for c in (self.pkg.topology.get("connections") or []))
+                # In-graph-splice builds never take the AR shortcut: their
+                # LM graph's FIRST op is a mandatory bool-mask
+                # masked_scatter fed by modality embed + pos-mask inputs
+                # the AR flow cannot synthesize (proven twice on first
+                # probes: 'input::vision_hidden_states could not be
+                # resolved' at op 1/3592 on the staged MiniCPM-o class,
+                # 'input::image_pos_masks could not be resolved' at op
+                # 1/19204 on the bailingmm M-RoPE masked-splice class).
+                # The topology connections carry the contract — a
+                # `<m>_pos_masks` port PAIRED with its exact modality
+                # source port `<m>_embeds` / `<m>_hidden_states` is an
+                # in-graph splice, whatever the modality is named. The
+                # deepstack omni contract declares `visual_pos_masks`
+                # with `deepstack_visual_embeds.N` — additive injection,
+                # NOT a splice source (its visual merge happens in the
+                # flow, prefix+vision+suffix concat), so it keeps the AR
+                # shortcut bit-for-bit. Data-driven, no graph read.
+                # Text-only requests on a splice build run the vlm flow's
+                # inert-stub form (all-False masks + one zero row).
+                _lm_ports = set()
+                _prefix = f"{_gen_lm}."
+                for _c in (self.pkg.topology.get("connections") or []):
+                    _to = _c.get("to") or ""
+                    if _to.startswith(_prefix):
+                        _lm_ports.add(_to[len(_prefix):])
+                _lm_splice = "vision_hidden_states" in _lm_ports or any(
+                    _p.endswith("_pos_masks")
+                    and (f"{_p[:-len('_pos_masks')]}_embeds" in _lm_ports
+                         or f"{_p[:-len('_pos_masks')]}_hidden_states"
+                         in _lm_ports)
+                    for _p in _lm_ports)
                 if (_gen_lm in (self.pkg.topology.get("components") or {})
                         and not _has_modal and not _lm_splice):
                     return "autoregressive_generation"
