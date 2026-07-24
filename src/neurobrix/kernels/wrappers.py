@@ -6560,9 +6560,13 @@ def _math_attention(q, k, v, attn_mask=None, is_causal=False, scale=None):
     """Math-decomposed attention — deterministic for any head_dim.
 
     Used for non-power-of-2 head_dim (PixArt 72, Sana 112) where the
-    flash kernel's masked-load path is non-deterministic on Volta SIMT.
+    flash kernel's masked-load path is non-deterministic on Volta SIMT,
+    and for asymmetric head_dim attention (MLA class — DeepSeek-V2
+    qk_head_dim 192 / v_head_dim 128), which the flash kernel cannot
+    express (single BLOCK_HEADDIM constexpr, q-shaped output).
 
-    Shapes: q [B, H, T_q, D], k/v [B, H_k, T_k, D]. Returns [B, H, T_q, D].
+    Shapes: q [B, H, T_q, D], k [B, H_k, T_k, D], v [B, H_k, T_k, D_v]
+    (D_v may differ from D). Returns [B, H, T_q, D_v].
 
     Algorithm:
         scores = Q @ K^T * scale       (bmm)
@@ -6579,6 +6583,21 @@ def _math_attention(q, k, v, attn_mask=None, is_causal=False, scale=None):
     B, H, T_q, D = q.shape
     H_k = k.shape[1]
     T_k = k.shape[2]
+    # Value head_dim is carried INDEPENDENTLY of q/k head_dim. MLA-class
+    # attention (DeepSeek-V2: qk_head_dim 192 = 128 nope + 64 rope,
+    # v_head_dim 128) is asymmetric — reusing q's D for the v reshape
+    # built a numel-mismatched view (NBXTensor.view re-strides without
+    # numel validation → silent out-of-bounds read) and returned a
+    # q-shaped [B, H, T_q, 192] output that the baked downstream views
+    # re-inferred into heads*192 = 3072 columns → aten.mm
+    # "Incompatible dimensions: 3072 vs 2048"
+    # (DeepSeek-Coder-V2-Lite aten.mm::3, P-TRITON-MLA).
+    D_v = v.shape[3]
+    # q @ k^T requires matching q/k head dims. Since NBXTensor.view /
+    # reshape never validate numel, a mismatch here would be a SILENT
+    # out-of-bounds read — fail loudly instead.
+    assert k.shape[3] == D, (
+        f"math attention: q head_dim {D} != k head_dim {k.shape[3]}")
 
     if scale is None:
         scale = 1.0 / _math.sqrt(D)
@@ -6590,13 +6609,13 @@ def _math_attention(q, k, v, attn_mask=None, is_causal=False, scale=None):
         assert H_k * groups == H
         # [B, H_k, T_k, D] -> [B, H_k, 1, T_k, D] -> [B, H_k, groups, T_k, D] -> [B, H, T_k, D]
         k = k.unsqueeze(2).expand(B, H_k, groups, T_k, D).reshape(B, H, T_k, D).contiguous()
-        v = v.unsqueeze(2).expand(B, H_k, groups, T_k, D).reshape(B, H, T_k, D).contiguous()
+        v = v.unsqueeze(2).expand(B, H_k, groups, T_k, D_v).reshape(B, H, T_k, D_v).contiguous()
 
     # Reshape to 3D for bmm
     q_3d = q.reshape(B * H, T_q, D)
     # Transpose K's last two dims so bmm computes Q @ K^T
     k_3d_t = k.transpose(-2, -1).contiguous().reshape(B * H, D, T_k)
-    v_3d = v.reshape(B * H, T_k, D)
+    v_3d = v.reshape(B * H, T_k, D_v)
 
     # scores = q @ k^T (bmm returns fp32 on V100 via force_fp32)
     scores = bmm(q_3d, k_3d_t)  # [B*H, T_q, T_k]
@@ -6648,11 +6667,11 @@ def _math_attention(q, k, v, attn_mask=None, is_causal=False, scale=None):
         p = p.to(v_3d.nbx_dtype)
 
     # out = p @ v (bmm again returns fp32 on V100)
-    out_3d = bmm(p, v_3d)  # [B*H, T_q, D]
+    out_3d = bmm(p, v_3d)  # [B*H, T_q, D_v]
     if out_3d.nbx_dtype != q.nbx_dtype:
         out_3d = out_3d.to(q.nbx_dtype)
 
-    return out_3d.reshape(B, H, T_q, D)
+    return out_3d.reshape(B, H, T_q, D_v)
 
 
 def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
@@ -6793,6 +6812,18 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     # path regardless of hardware/headdim.
     import os as _os_fma
     _use_math = _os_fma.environ.get("NBX_FORCE_MATH_ATTENTION") == "1"
+    # Asymmetric head_dim (MLA class — e.g. DeepSeek-V2 qk 192 / v 128):
+    # the flash kernel is structurally single-headdim — one BLOCK_HEADDIM
+    # constexpr shared by both tl.dot operands, V strides read with the K
+    # tile geometry, output allocated q-shaped (empty_like(q)) — so it
+    # CANNOT compute p @ V when v head_dim != qk head_dim. Route to the
+    # math composition unconditionally: it carries D_v independently
+    # end-to-end. Pure shape signal, no model/family knowledge (R34).
+    # A Dv-aware flash tile is the named perf follow-up if MLA
+    # long-context prefill ever needs it (P-TRITON-MLA).
+    headdim_v = v.shape[3]
+    if not _use_math and headdim_v != headdim:
+        _use_math = True
     if not _use_math:
         _scores_bytes = batch * nheads * seqlen_q * seqlen_k * 4
         if not _is_power_of_2(headdim):
@@ -6822,7 +6853,7 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
         scaled_dot_product_attention_wrapper._route_diag_done = True
         _pr = get_hardware_profile()
         _dv = getattr(_pr, "devices", None) if _pr is not None else None
-        print(f"[NBX_SDPA_ROUTE_DIAG] hd={headdim} pow2={_is_power_of_2(headdim)} "
+        print(f"[NBX_SDPA_ROUTE_DIAG] hd={headdim} hdv={headdim_v} pow2={_is_power_of_2(headdim)} "
               f"B={batch} H={nheads} Tq={seqlen_q} Tk={seqlen_k} "
               f"scores_bytes={batch*nheads*seqlen_q*seqlen_k*4} "
               f"budget={_sdpa_math_scores_budget_bytes()} "
