@@ -611,13 +611,20 @@ The runtime compiles the entire execution graph at load time into a **CompiledSe
 - [x] **TilingEngine** — universal spatial tiling for large inputs
 - [x] **NBX Hub** — model registry at neurobrix.es
 
-### Next
+### Next — the official roadmap ([docs/roadmap.md](docs/roadmap.md), 2026-07-27)
 
-- [ ] **Speech generation for omni models** — the deferred talker stacks
-- [ ] **Quantization** — INT8/INT4 with NBX-native support
-- [ ] **3D generation** — mesh and NeRF models
-- [ ] **Embeddings** — text and image embedding models
-- [ ] **NeuroBrix Studio** — desktop GUI for model management
+Four phases, in order:
+
+- [ ] **v0.5 — the complete omni family**: generative outputs (speech
+      out, image out), 2–3 fully validated generative omni models
+- [ ] **AMD** — ready-to-light ROCm/CDNA code paths (gated, documented;
+      lit the day the hardware is available)
+- [ ] **Metal** — Triton execution on Apple GPUs, even if it takes
+      building our own Triton-to-Metal path
+- [ ] **Optimization** — reproducible benchmarks against established
+      runtimes first; then graph algebra, data-driven kernel fusion,
+      execution replay, the megakernel horizon, speculative decoding —
+      each behind its own truth gate
 
 ---
 

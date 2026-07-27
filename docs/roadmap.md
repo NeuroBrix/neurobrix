@@ -1,253 +1,100 @@
 # NeuroBrix Roadmap
 
-**Last updated: February 2026**
+**Official roadmap — 2026-07-27. Replaces every earlier version.**
 
-NeuroBrix is a universal deep learning inference engine. One runtime, any model, any hardware. This roadmap outlines where we are today, where we are headed, and how you can help shape the future of open AI infrastructure.
+NeuroBrix is a universal deep-learning inference engine: one runtime,
+any model, any hardware, zero model-specific code. The goal of this
+project is neither fundraising nor a sale. The goal is to **finish the
+engine** — performant, model-agnostic, hardware-agnostic.
 
----
+Where we stand (v0.4.x): 42 published models across 10 categories —
+image, video, LLM, code, VLM, omni multimodal understanding, TTS, STT,
+speech understanding, upscalers — every model validated in four
+execution modes (PyTorch sequential, PyTorch compiled, Triton
+sequential, Triton compiled), automatic multi-GPU placement, a
+tool-calling agent loop on the serving daemon.
 
-## Vision
-
-NeuroBrix aims to become the universal runtime for neural network inference — capable of running any modern AI model on any hardware, with zero proprietary dependencies, zero silent failures, and a clean, portable architecture.
-
-Think of it as a universal operating system for neural networks.
-
----
-
-## Why NeuroBrix?
-
-The AI inference landscape is fragmented. Each tool solves a piece of the puzzle, but none solves the whole thing.
-
-| Capability | Ollama | ComfyUI | vLLM | llama.cpp | **NeuroBrix** |
-|---|---|---|---|---|---|
-| LLM inference | Yes | No | Yes | Yes | **Yes** |
-| Image generation | No | Yes | No | No | **Yes** |
-| Audio models | No | No | No | Yes (whisper.cpp) | **Yes** |
-| Video generation | No | Yes (plugins) | No | No | **Yes** |
-| Multimodal (VQ) | No | No | No | No | **Yes** |
-| Multi-GPU parallelism | No | Limited | Yes | Partial | **Yes** |
-| Hardware-agnostic | No | NVIDIA only | NVIDIA focused | CPU + NVIDIA | **Any GPU** |
-| Custom hardware profiles | No | No | No | No | **Yes** |
-| Zero silent fallbacks | No | No | No | No | **Yes** |
-| One unified CLI | Yes | No (GUI) | Yes | Yes | **Yes** |
-| Model registry | Yes | No | No | No | **Yes** |
-| pip installable | No | Yes | Yes | No | **Yes** |
-
-NeuroBrix is the first runtime that treats all model families — diffusion, language, audio, video, multimodal — as first-class citizens under one unified architecture.
+Four phases, in order.
 
 ---
 
-## Architecture Overview
-
-NeuroBrix is designed around a simple principle: **the model container is the single source of truth**.
-
-```
-Install:   pip install neurobrix
-Import:    neurobrix import sana/1600m-1024
-Run:       neurobrix run --model 1600m-1024 --hardware v100-32g --prompt "A sunset over the ocean"
-```
-
-When you run a model, NeuroBrix:
-
-1. **Reads the model container** — a self-describing `.nbx` package containing the computation graph, weights, metadata, and execution pipeline
-2. **Selects an execution strategy** — based on your hardware profile (single GPU, multi-GPU with NVLink, CPU offload, etc.)
-3. **Executes deterministically** — no guessing, no silent fallbacks, no hardcoded values. If something is wrong, you get a clear error, not a corrupted output
-
-### Core Design Principles
-
-- **Zero Hardcode** — All dimensions, configurations, and parameters are derived from the model container. Nothing is assumed.
-- **Zero Fallback** — The system crashes explicitly if data is missing. No silent defaults that produce wrong results.
-- **Zero Semantic** — The runtime has no concept of "image", "latent", or "text". It sees tensors and operations. This is what makes it truly universal.
-
-### Hardware Strategy Engine (Prism)
-
-NeuroBrix automatically determines the best execution strategy for your hardware:
-
-- **Single GPU** — Standard execution with intelligent memory management
-- **Pipeline Parallel** — Per-layer sequential fill across GPUs (like Accelerate `device_map="auto"`)
-- **Component Placement** — Distributes whole components (text_encoder, transformer, vae) across GPUs
-- **Block Scatter** — Block-level distribution across GPUs for very large components
-- **Weight Sharding** — Weight-file round-robin distribution across GPUs
-- **CPU Offload** — DeepSpeed-style offloading when GPU memory is insufficient
-
-You describe your hardware once in a YAML profile, and NeuroBrix handles the rest.
-
----
-
-## Supported Models
-
-### Available Now
-
-**Image Generation (Diffusion)**
-- PixArt-Alpha (multiple resolutions)
-- PixArt-Sigma XL 1024
-- Sana 1024px and 4K
-
-**Large Language Models**
-- DeepSeek-MoE-16B-Chat
-- Llama 3 family
-- Mistral
-- TinyLlama (lightweight)
-
-**Multimodal**
-- Janus-Pro-7B (vision + autoregressive image generation)
-
-### Coming Soon
-
-**Audio**
-- Whisper (speech-to-text, all model sizes)
-
-**Video**
-- CogVideoX (text-to-video generation)
-
-**Additional LLMs**
-- DeepSeek-V2 and V3
-- Llama 3.1 and 3.2
-- Mixtral MoE
-- Qwen 2.5
-
-**Additional Image Models**
-- Stable Diffusion XL
-- Stable Diffusion 3
-
----
-
-## Phased Roadmap
-
-### Phase 1 — Foundation & Community (Q1-Q2 2026)
-
-**Status: In Progress**
-
-Phase 1 is about hardening what works and building the community foundation.
-
-- **LoRA support** — Load and apply LoRA adapters at runtime. This is critical for the community and is a top priority for Phase 1.
-- **Multi-hardware validation** — Testing on AMD ROCm (MI100/MI250), Apple Silicon (MPS), and Intel Arc GPUs.
-- **Community hardware profiles program** — Submit your GPU configuration as a YAML profile and help NeuroBrix run on more hardware. See [Contributing Hardware Profiles](#contributing-hardware-profiles) below.
-- **Audio models** — Complete Whisper support across all model sizes.
-- **API documentation** — Full public API reference for developers building on NeuroBrix.
-- **Profiler** — Built-in `--profile` flag to measure time and memory per operation.
-- **Model registry expansion** — Grow the registry to 50+ models across all families.
-
-### Phase 2 — Performance & Scale (Q3-Q4 2026)
-
-Phase 2 is about making NeuroBrix fast and efficient.
-
-- **Quantization** — INT4 and FP8 quantization for reduced memory usage and faster inference. Support for common community formats (AWQ, GPTQ).
-- **Benchmarking system** — Reproducible benchmarks comparing NeuroBrix performance across hardware configurations and against other runtimes. Published results with methodology.
-- **Fused kernels** — Custom Triton kernels for fused operations (LayerNorm+Linear, GELU+MatMul) to reduce memory bandwidth.
-- **Flash Attention** — Native Flash Attention support for faster and more memory-efficient inference.
-- **Video models** — Full CogVideoX support and other text-to-video architectures.
-- **KV cache quantization** — INT8/FP8 KV cache for longer context windows on limited memory.
-- **Graph visualizer** — Interactive web-based visualization of the execution graph (what is actually happening inside your model).
-
-### Phase 3 — Universal Runtime (2027)
-
-Phase 3 is the long-term vision: NeuroBrix as the standard runtime for AI inference.
-
-- **6+ GPU architectures** — NVIDIA, AMD, Intel, Apple Silicon, ARM (Jetson, Snapdragon), and RISC-V.
-- **95% Triton kernel coverage** — Custom kernels for the vast majority of operations, reducing PyTorch dependency.
-- **Graph debugger** — Set breakpoints in the computation graph, inspect intermediate tensors, step through execution.
-- **SDK for integrations** — Stable Python API for embedding NeuroBrix in other applications and services.
-- **100+ models in registry** — Comprehensive coverage across diffusion, LLM, multimodal, audio, and video.
-
----
-
-## Mobile Strategy
-
-Let us be transparent about mobile and edge deployment.
-
-NeuroBrix is built on Python and Triton. These are not technologies that run natively on phones or microcontrollers. We will not pretend otherwise, and we will not ship a half-working mobile solution just to check a box.
-
-Our mobile strategy is honest:
-
-1. **Server-side inference is the primary target.** Most production AI workloads run on servers, and that is where NeuroBrix delivers the most value today.
-
-2. **Edge GPUs are a real target.** NVIDIA Jetson (Orin, AGX) runs full Python + Triton and can run NeuroBrix today. ARM server GPUs are on our roadmap.
-
-3. **Apple Silicon Macs are a target.** MPS backend support is planned for Phase 1. Many developers use Macs locally, and we want to support that workflow.
-
-4. **Phones and browsers are not a target.** We will not compile NeuroBrix to WASM or ship an iOS framework. If you need on-device inference for mobile apps, tools like Core ML, TensorFlow Lite, or ONNX Runtime Mobile are better choices. We would rather point you to the right tool than give you a bad experience.
-
-5. **If the landscape changes, we adapt.** If Triton gains genuine mobile support, or if WebGPU matures for serious inference, we will revisit this position. But we will not chase hype.
-
-This is a deliberate technical decision, not a limitation we are ignoring. We believe that doing fewer things exceptionally well is more valuable than doing everything poorly.
-
----
-
-## Timeline
-
-```
-2026 Q1  [███████░░░░░]  Foundation: LoRA, Whisper, API docs, hardware validation
-2026 Q2  [░░░░░░░░░░░░]  Community: Hardware profiles, model registry, profiler
-2026 Q3  [░░░░░░░░░░░░]  Performance: INT4/FP8 quantization, fused kernels, benchmarks
-2026 Q4  [░░░░░░░░░░░░]  Scale: Flash Attention, video models, KV cache quantization
-2027 H1  [░░░░░░░░░░░░]  Universal: 6+ GPU architectures, graph debugger, SDK
-2027 H2  [░░░░░░░░░░░░]  Maturity: 100+ models, 95% kernel coverage, stable API
-```
-
----
-
-## Success Metrics
-
-We will measure progress against concrete, public metrics:
-
-| Metric | Current (Feb 2026) | Phase 1 Target | Phase 2 Target | Phase 3 Target |
-|---|---|---|---|---|
-| Supported model families | 3 (image, LLM, multimodal) | 4 (+audio) | 5 (+video) | 5+ |
-| Models in registry | ~15 | 50+ | 100+ | 150+ |
-| Tested GPU architectures | 1 (NVIDIA) | 3 (+AMD, +Apple) | 4 (+Intel) | 6+ |
-| Triton kernel coverage | Experimental | Stable core ops | Fused ops | 95%+ |
-| Community hardware profiles | 5 | 20+ | 50+ | 100+ |
-| Quantization formats | None | None | INT4, FP8, AWQ, GPTQ | Full suite |
-| LoRA support | No | Yes | Yes (multi-LoRA) | Yes |
-
----
-
-## Get Involved
-
-NeuroBrix is open source, and we are building it in public. There are many ways to contribute:
-
-### Contributing Models
-
-Every model added to the NeuroBrix registry makes the ecosystem more valuable. If you work with a model family we do not yet support, open an issue describing the architecture — we prioritize based on community demand.
-
-### Contributing Hardware Profiles
-
-This is one of the most impactful contributions you can make. NeuroBrix uses YAML hardware profiles to understand your GPU's capabilities (memory, compute, interconnect). If you have hardware we have not tested on:
-
-1. Run NeuroBrix on your setup
-2. Create a hardware profile YAML describing your configuration
-3. Submit a pull request with your profile and test results
-
-We especially need profiles for:
-- AMD Instinct (MI100, MI250, MI300)
-- AMD Radeon (RX 7900 XTX)
-- Intel Arc (A770, A780)
-- Apple Silicon (M1/M2/M3/M4 Pro, Max, Ultra)
-- NVIDIA consumer GPUs (RTX 3090, 4090)
-- Multi-GPU configurations (2x, 4x, 8x)
-
-### Bug Reports & Testing
-
-Run NeuroBrix on your models and hardware. When something fails, the error messages are designed to be useful — include them in your bug report. Every crash report helps us improve.
-
-### Documentation
-
-Help us improve guides, tutorials, and examples. Clear documentation lowers the barrier for everyone.
-
-### Code Contributions
-
-Check the issues page ([GitHub](https://github.com/NeuroBrix/neurobrix/issues) | [GitLab](https://gitlab.com/neurobrix/neurobrix/-/issues)) for good first issues. The codebase follows strict principles (zero hardcode, zero fallback, zero dead code) — read the contributing guide before submitting a merge request.
-
----
-
-## Links
-
-- **GitHub**: [github.com/NeuroBrix/neurobrix](https://github.com/NeuroBrix/neurobrix)
-- **GitLab**: [gitlab.com/neurobrix/neurobrix](https://gitlab.com/neurobrix/neurobrix)
-- **Model Registry**: [neurobrix.es](https://neurobrix.es)
-- **Install**: `pip install neurobrix`
-
----
-
-*This roadmap is a living document. It reflects our current plans and priorities, which may evolve based on community feedback, technical discoveries, and the rapidly changing AI landscape. We update it regularly and welcome input.*
+## Phase 1 — v0.5: the complete omni family (generative outputs)
+
+v0.4 delivered omni **understanding** — text, image, audio and video
+inputs. v0.5 completes the family with **generative outputs**:
+
+- **Speech out** — the talker branch: the model answers with voice.
+- **Image out** — the image-generation branch of the omni lineage.
+- **Two to three fully validated generative omni models** — never a
+  single representative: these are the models that draw users, and
+  depth beats tokenism.
+
+House standard unchanged: four execution modes, cross-engine numerical
+gates, inspectable artifacts for every closure.
+
+## Phase 2 — AMD: ready-to-light ROCm/CDNA paths
+
+Integrate the ROCm/CDNA code paths cleanly — gated, documented, and
+data-driven from vendor/architecture profiles — **without test
+execution**, since no AMD GPU is available to the project yet. The code
+arrives ready to light the day the hardware does. No support claim
+before first light.
+
+## Phase 3 — Metal: Triton on Apple GPUs
+
+A primary goal. The Triton execution mode must run on Apple Metal
+GPUs — even if that means building our own Triton-to-Metal path. This
+is a large chantier, undertaken with open eyes: it begins with a
+sourced state-of-the-art review (Triton upstream, existing Metal
+efforts, MLIR backends) and an honest scoping before any line of code.
+
+## Phase 4 — Optimization: benchmarks first, then the kill
+
+**Method before work.** A reproducible benchmark harness on well-known
+models — three columns: established runtimes (vLLM, and above all
+Ollama) / our PyTorch mode / our Triton mode — with documented
+methodology and profiling that says where every millisecond lives. We
+optimize **only** what the profile designates, in measured-gain order.
+
+Then the program, in layers — each carrying its own truth gate:
+
+1. **Graph algebra.** A value-flow analysis over the sequential ATen
+   trace eliminates what the GPU never needs to compute: constant
+   folding, common-subexpression elimination, dead code, identities
+   (×1, +0, transpose-of-transpose, full slices), and cancelling
+   patterns within a subsequence (+x…−x, ×v…÷v, values known ahead of
+   time). Exact identities — integer and shape algebra — are removed
+   byte-preservingly. Floating-point cancellations are a real win but
+   go through a dedicated drift-gate policy, never claimed byte-equal.
+2. **Kernel fusion.** A data-driven pass pattern-matches the simplified
+   graph — vertical chains (matmul + element-wise epilogues: bias,
+   activation, norm + residual, gated MLPs) and horizontal groups
+   (same-shape parallel ops) — and emits fused Triton kernels from
+   templates, cached per model. Never a hand-written per-model fusion:
+   always the pass that reads the graph.
+3. **Execution replay.** The deterministic allocator and symbolic
+   shapes let the resolved execution plan be frozen per shape bucket
+   and replayed without per-op dispatch — killing the launch tax that
+   dominates autoregressive decoding. On the PyTorch side, native CUDA
+   Graph capture per bucket is evaluated as well.
+4. **The megakernel horizon.** The 2026 research frontier compiles an
+   entire block into one persistent kernel with specialized
+   producer-consumer warps, reporting 10–50 % latency gains over
+   mainstream runtimes. Those systems require a fine-grained model DAG,
+   hand-written in their case. **Our sequential trace already IS that
+   DAG — for every model** — which turns megakernel synthesis into a
+   model-agnostic build pass. Honest, sourced scoping before any line.
+5. **Speculative decoding as a mode.** Draft + verify: under greedy
+   decoding, verification guarantees token-identical output — the only
+   1.3–3× class of speedup that is byte-identical by construction.
+   Shipped as an optional mode: faster AND provably identical.
+
+In support: a paged KV cache on the serving daemon, asynchronous weight
+prefetch, and compute/transfer overlap on multi-GPU placements.
+
+**Optimization never negotiates truth.** Byte-identity gates the exact
+transforms; drift-gates the floating-point ones; the full-zoo
+regression battery gates the infrastructure. We have the detailed
+graph, our own kernels, and the models' anatomy — every ingredient
+needed to be the best, and it will be proven at the benchmark, not in
+prose.
