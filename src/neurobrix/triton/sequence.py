@@ -2902,6 +2902,47 @@ class TritonSequence:
             except Exception as e:
                 print(f"[NBX_DUMP_TIDS] failed on {tid}: {e}", flush=True)
 
+    def _maybe_dump_raw(self, op: 'CompiledOp') -> None:
+        """NBX_DUMP_RAW mirror of the torch-side hook (graph_executor):
+        "<dir>:<csv of tid/op_uid substrings>" — saves matching output
+        tensors as .npy at the diagnostic boundary (NBXTensor → numpy,
+        R33-clean CPU glue) for value-level engine-vs-engine diffs.
+        First-write-only per tid, same filename sanitization as the .pt
+        side so a comparator pairs `<tid>.pt` ↔ `<tid>.npy` directly.
+        Default-off; added for the D6 band column-mapping (the stats
+        dump gives norms, not spatial structure)."""
+        import os as _os_r
+        spec = _os_r.environ.get("NBX_DUMP_RAW")
+        if not spec:
+            return
+        raw_dir, _, raw_csv = spec.partition(":")
+        filters = [f for f in raw_csv.split(",") if f]
+        if not hasattr(self, "_slot_to_tid"):
+            self._slot_to_tid = {s: t for t, s in self._tid_to_slot.items()}
+        for out_slot in op.output_slots:
+            tid = self._slot_to_tid.get(out_slot, f"slot::{out_slot}")
+            if filters and not any(f in tid or f in op.op_uid
+                                   for f in filters):
+                continue
+            tensor = self._arena[out_slot] if self._arena else None
+            if tensor is None:
+                continue
+            comp = str(self.dag.get("component_name", "comp"))
+            fn = _os_r.path.join(
+                raw_dir,
+                comp + "_" + tid.replace(":", "_").replace("/", "_")
+                + ".npy")
+            if _os_r.path.exists(fn):
+                continue
+            try:
+                import numpy as _np_r
+                _np_r.save(fn, tensor.numpy())
+                print(f"[NBX_DUMP_RAW triton] {tid} {list(tensor.shape)} "
+                      f"-> {fn}", flush=True)
+            except Exception as e:
+                print(f"[NBX_DUMP_RAW triton] failed on {tid}: {e}",
+                      flush=True)
+
     def _maybe_fingerprint(self, op: 'CompiledOp', arena, path: str) -> None:
         """Run-to-run op-output fingerprint (P-TRITON-MOE-DETERMINISM-RESIDUAL,
         P-SANA differential methodology). Gated by env NBX_OP_FINGERPRINT=
@@ -3005,6 +3046,7 @@ class TritonSequence:
         _trace_nan_on = os.environ.get("NBX_TRITON_TRACE_NAN") == "1"
         _fp_path = os.environ.get("NBX_OP_FINGERPRINT", "")
         _dump_tids_env = os.environ.get("NBX_DUMP_TIDS")
+        _dump_raw_on = bool(os.environ.get("NBX_DUMP_RAW"))
         _trace_tids_env = os.environ.get("NBX_TRACE_TIDS", "")
         _trace_tids = (set(t.strip() for t in _trace_tids_env.split(","))
                        if _trace_tids_env else set())
@@ -3565,6 +3607,8 @@ class TritonSequence:
             # Gate hoisted to run start (C1).
             if _dump_tids_env and op.output_slots:
                 self._maybe_dump_tid(op, _dump_tids_env)
+            if _dump_raw_on and op.output_slots:
+                self._maybe_dump_raw(op)
             # =============================================================
 
             # === Targeted tid lifecycle trace (P-SANA-4KPX-RUNTIME) ===
