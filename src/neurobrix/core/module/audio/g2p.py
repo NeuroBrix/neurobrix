@@ -269,7 +269,7 @@ def load_runner(nbx_path_str: str) -> G2P:
                 "ZERO-OUTSIDER g2p: no embedded lexicon found at "
                 f"{Path(nbx_path_str) / 'modules/g2p/en_lexicon.txt(.gz)'}. "
                 "Rebuild the Kokoro .nbx with the g2p module embedded "
-                "(forge build re-runs the ZO-3 embed step).")
+                "(the build toolchain re-runs the ZO-3 embed step).")
         _RUNNER_CACHE[key] = runner
     return runner
 

@@ -32,7 +32,7 @@ All functions take the AudioEngine instance (``engine``) as first parameter.
 #      the data-driven flow rule (see MEMORY.md:
 #      feedback_datadriven_flow.md).
 #
-#  RESOLUTION (forge side, not runtime):
+#  RESOLUTION (build-toolchain side, not runtime):
 #    - Re-trace VibeVoice as **two separate components** in the
 #      ``.nbx``: ``diffusion_transformer`` (or ``prediction_head``)
 #      and ``acoustic_decoder``. Each with its own ``graph.json``.
@@ -44,7 +44,7 @@ All functions take the AudioEngine instance (``engine``) as first parameter.
 #    - Remove all ``engine._weights`` accesses from this file
 #      (data-driven flow rule).
 #
-#  This file will be removed once the forge re-tracing is done.
+#  This file will be removed once the build-toolchain re-tracing is done.
 # =======================================================================
 
 from neurobrix.core.memory.manager import release_flow_memory

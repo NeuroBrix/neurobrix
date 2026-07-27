@@ -28,7 +28,7 @@ so they can access ``engine.ctx``, executors, weight loaders, etc.
 #      binaries or third-party libraries at inference time — the
 #      contract is zero external dependency.
 #
-#  RESOLUTION (forge side, not runtime):
+#  RESOLUTION (build-toolchain side, not runtime):
 #    - Trace LSTMs and ``pack_padded_sequence`` into the graph (emit
 #      ``aten::lstm`` / ``aten::rnn_relu`` / ``aten::pack_padded_sequence``
 #      in the DAG, with associated Triton kernels if needed).
@@ -37,7 +37,7 @@ so they can access ``engine.ctx``, executors, weight loaders, etc.
 #      traceable network). Remove all ``import kokoro / phonemizer``
 #      and ``subprocess`` calls from this file.
 #
-#  This file will be removed once the forge re-tracing is done.
+#  This file will be removed once the build-toolchain re-tracing is done.
 # =======================================================================
 
 from neurobrix.core.memory.manager import release_flow_memory
@@ -71,7 +71,7 @@ def execute_native_kokoro(engine, stage: Dict, audio_config: Dict) -> None:
     """Native (hand-rolled) execution for Kokoro's LSTM components.
 
     TRITON-ONLY band-aid as of 2026-05-30. The COMPILED path no longer uses this:
-    Forge now traces the LSTM forward correctly (parent_module weight-resolution
+    The build toolchain now traces the LSTM forward correctly (parent_module weight-resolution
     fix for the cuDNN flatten_parameters data_ptr aliasing), so the compiled
     registry runs the predictor + text_encoder via `execution: forward` (the
     traced graph), validated element-wise vs the vendor oracle. The COMPILED

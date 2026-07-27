@@ -2533,7 +2533,7 @@ class GraphExecutor:
             compute_dtype=parse_dtype(self.dtype))
 
         # Phase 1 — read per-component opt-in flag from
-        # forge/config/model_registry.yml (no Forge re-build required;
+        # the build toolchain's config/model_registry.yml (no toolchain re-build required;
         # runtime-direct read keeps the .nbx contract immutable per R18).
         # Defaults to False (conservative). Annotated only for models whose
         # activation ranges have been validated fp16-safe via

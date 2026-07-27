@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-07-27
+
+### Changed
+
+- **0.4.1 replaces 0.4.0 (packaging hygiene).** Shipped files referred to
+  internal build tooling by name in comments and error messages; those
+  references now read "the build toolchain". No functional change to any
+  execution path.
+- **Model-registry annotation lookup**: the optional per-component flag
+  registry is now located via the `NBX_MODEL_REGISTRY` environment
+  variable or a `.nbx_registry` pointer file (development setups); a
+  configured-but-missing location raises instead of being silently
+  ignored. Deployed installs without a registry are unchanged (documented
+  defaults apply).
+
 ## [0.4.0] - 2026-07-27
 
 ### Added
@@ -2668,7 +2683,8 @@ First stable release of NeuroBrix — universal deep learning inference engine.
 - Zip-slip path traversal validation in registry import
 - Safe arithmetic parser replacing `eval()` in shape resolver
 
-[Unreleased]: https://github.com/NeuroBrix/neurobrix/compare/v0.4.0...main
+[Unreleased]: https://github.com/NeuroBrix/neurobrix/compare/v0.4.1...main
+[0.4.1]: https://github.com/NeuroBrix/neurobrix/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/NeuroBrix/neurobrix/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/NeuroBrix/neurobrix/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/NeuroBrix/neurobrix/compare/v0.2.0...v0.2.1

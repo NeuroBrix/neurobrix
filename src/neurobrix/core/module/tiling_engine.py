@@ -183,7 +183,7 @@ class TilingEngine:
 
         # NBX SYMBOLIC SHAPES — MASTER CONTRACT
         # ────────────────────────────────────────────────────────────────
-        # Forge tracer marks dims that the runtime can rebind as symbolic
+        # The build-toolchain tracer marks dims that the runtime can rebind as symbolic
         # in `tensor["symbolic_shape"]["dims"]`. CompiledSequence's symbol
         # binding pass adapts every consumer op to the actual runtime
         # shape, so a graph with symbolic spatial dims is spatial-adaptive
