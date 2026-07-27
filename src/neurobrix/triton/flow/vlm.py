@@ -49,6 +49,30 @@ from neurobrix.triton.flow.audio_llm import (
 from neurobrix.kernels import wrappers as w
 
 
+def _maybe_log_topk(logits, step: int) -> None:
+    """NBX_DECODE_TOPK=<jsonl>: per-step top-4 logits + top-2 margin.
+
+    R33-clean mirror of the torch-side helper (core/flow/vlm.py):
+    NBXTensor crosses to numpy at the diagnostic boundary (CPU glue,
+    allowed), top-4 via argpartition. Default-off; records pair with
+    the torch engine's by (step) on identical inputs.
+    """
+    path = os.environ.get("NBX_DECODE_TOPK")
+    if not path:
+        return
+    arr = np.asarray(logits.numpy()).reshape(-1).astype(np.float32)
+    idx = np.argpartition(arr, -4)[-4:]
+    order = idx[np.argsort(-arr[idx])]
+    vals = [float(arr[i]) for i in order]
+    rec = {"engine": "triton", "step": int(step),
+           "ids": [int(i) for i in order],
+           "vals": [round(v, 6) for v in vals],
+           "margin12": round(vals[0] - vals[1], 6)}
+    with open(path, "a") as f:
+        json.dump(rec, f)
+        f.write("\n")
+
+
 def _read_small_ints(t: Any, count: int) -> List[int]:
     """Boundary metadata read: first `count` ints of a tiny tensor —
     NBXTensor (.numpy()), numpy array, or any host object exposing
@@ -509,6 +533,7 @@ class TritonVLMEngine:
 
             logits = self._compute_logits(
                 output, embed_weight, logits_source, head_name)
+            _maybe_log_topk(logits, len(generated_ids))
             next_token = _sample_token_nbx(
                 logits, temperature,
                 generated_ids=generated_ids,
@@ -862,6 +887,7 @@ class TritonVLMEngine:
                 break
             logits = self._compute_logits(
                 output, embed_weight, logits_source, head_name)
+            _maybe_log_topk(logits, len(generated_ids))
             next_token = _sample_token_nbx(
                 logits, temperature,
                 generated_ids=generated_ids,
@@ -1257,6 +1283,7 @@ class TritonVLMEngine:
                 break
             logits = self._compute_logits(
                 output, embed_weight, logits_source, head_name)
+            _maybe_log_topk(logits, len(generated_ids))
             next_token = _sample_token_nbx(
                 logits, temperature,
                 generated_ids=generated_ids,

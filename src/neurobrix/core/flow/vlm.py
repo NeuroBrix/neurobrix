@@ -43,6 +43,32 @@ from .base import FlowHandler, FlowContext, register_flow
 from neurobrix.core.memory.manager import release_flow_memory
 
 
+def _maybe_log_topk(logits, step: int) -> None:
+    """NBX_DECODE_TOPK=<jsonl>: per-step top-4 logits + top-2 margin.
+
+    The measuring tool for the greedy first-token flip class: at every
+    cross-engine token divergence, the top-2 margin says near-tie
+    (legitimate rank flip within numeric drift) vs large-margin flip
+    (a real bug). Default-off diagnostic, NBX_DECODE_PROGRESS class;
+    buffer-immune append per step. Mirrored in the triton vlm flow so
+    engine records pair by (step) on identical inputs.
+    """
+    path = os.environ.get("NBX_DECODE_TOPK")
+    if not path:
+        return
+    import json as _json
+    _l = logits.reshape(-1).float()
+    _top = torch.topk(_l, 4)
+    vals = [float(x) for x in _top.values]
+    rec = {"engine": "torch", "step": int(step),
+           "ids": [int(i) for i in _top.indices],
+           "vals": [round(v, 6) for v in vals],
+           "margin12": round(vals[0] - vals[1], 6)}
+    with open(path, "a") as f:
+        _json.dump(rec, f)
+        f.write("\n")
+
+
 @register_flow("vlm")
 class VLMEngine(FlowHandler):
     """Vision-conditioned LLM: encode image → merge embeds → decode text.
@@ -481,6 +507,7 @@ class VLMEngine(FlowHandler):
                 break
 
             logits = self._compute_logits(output, embed_weight, logits_source, head_name)
+            _maybe_log_topk(logits, len(generated_ids))
             if step == 0 and os.environ.get("NBX_DEBUG"):
                 _l = logits.reshape(-1).float()
                 _top = torch.topk(_l, 5)
@@ -851,6 +878,7 @@ class VLMEngine(FlowHandler):
                 break
             logits = self._compute_logits(output, embed_weight,
                                           logits_source, head_name)
+            _maybe_log_topk(logits, len(generated_ids))
             from .audio_utils import sample_token
             next_token = sample_token(
                 logits, temperature,
@@ -1302,6 +1330,7 @@ class VLMEngine(FlowHandler):
                 break
             logits = self._compute_logits(output, embed_weight,
                                           logits_source, head_name)
+            _maybe_log_topk(logits, len(generated_ids))
             from .audio_utils import sample_token
             next_token = sample_token(
                 logits, temperature,
