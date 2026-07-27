@@ -22,6 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Scatter operations with mixed precision inputs**: when automatic
   mixed precision promotes only one side, the source now follows the
   destination's precision instead of failing (both execution engines).
+- **Sorting on the Triton engine**: models whose graphs sort tensors at
+  runtime (windowed vision transformers of the Ming lineage) now run on
+  the Triton engine — the radix-sort kernel failed to build on current
+  Triton releases and its wrapper mis-initialized the returned order
+  indices. Sorted values and order indices are now byte-equal to the
+  reference, including tie stability.
 
 ### Added
 

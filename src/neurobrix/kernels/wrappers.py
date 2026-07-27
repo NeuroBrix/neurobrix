@@ -5160,11 +5160,20 @@ def sort_wrapper(x, dim: int = -1,
             hist_cumsum[b, p] = cs - row
     ex_cumsum = hist_cumsum.to(NBXDtype.int32)
 
-    # Double buffers
+    # Double buffers. The sweep kernel CARRIES the associate array (the
+    # argsort indices) through the radix passes — it never synthesizes
+    # initial positions, so the buffer must start as arange(n) PER ROW
+    # (R33-pure via the triton arange kernel). First live firing (the
+    # Ming windowed-ViT argsort) exposed the old init: an empty (0, n)
+    # zeros buffer from an invalid zeros(0, n, dtype=...) call.
     arr_in = x.contiguous().clone()
-    indices_in = NBXTensor.zeros(0, n, dtype=NBXDtype.int64, device=x.device)
-    if m > 1:
-        indices_in = indices_in.unsqueeze(0).expand(m, -1).contiguous()
+    indices_in = NBXTensor.empty((m, n), dtype=NBXDtype.int64,
+                                 device=x.device)
+    _IDX_BLOCK = 1024
+    _set_device(indices_in)
+    for b in range(m):
+        arange_kernel[(triton.cdiv(n, _IDX_BLOCK),)](
+            indices_in[b], 0, 1, n, BLOCK_SIZE=_IDX_BLOCK)
     arr_out = NBXTensor.empty_like(arr_in)
     indices_out = NBXTensor.empty_like(indices_in)
 
@@ -5173,19 +5182,24 @@ def sort_wrapper(x, dim: int = -1,
     sweep_grid_n = triton.cdiv(n, SWEEP_TILE)
     status = NBXTensor.empty((m, num_bins, sweep_grid_n), device=x.device, dtype=NBXDtype.int32)
 
-    # Stage 2: sweep per radix pass
+    # Stage 2: sweep per radix pass. OUT_N is the STATUS row stride the
+    # kernel indexes with pid_n ∈ [0, sweep_grid_n) — it must be the CTA
+    # count along n, never n itself (the old call passed n: every status
+    # write past bin 0 landed out of the (m, bins, sweep_grid_n) buffer).
     for i in range(n_passes):
-        status.zero_()
+        status.fill_(0)
         _set_device(arr_in)
         radix_sort_sweep_kernel[(m * sweep_grid_n, grid_r)](
             arr_in, indices_in, arr_out, indices_out,
             ex_cumsum, status,
-            n_passes, i, i * k_bits, m, n, n,
+            n_passes, i, i * k_bits, m, n, sweep_grid_n,
             SWEEP_TILE, TILE_R, k_bits, descending)
         arr_in, arr_out = arr_out, arr_in
         indices_in, indices_out = indices_out, indices_in
 
-    return arr_in, indices_in
+    # Values keep x's shape (clone lineage); indices were built (m, n) —
+    # fold them back to the input shape for the aten::sort contract.
+    return arr_in, indices_in.view(x.shape)
 
 
 # ===========================================================================

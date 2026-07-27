@@ -16,26 +16,34 @@ import triton.language as tl
 # Uint conversion helpers — preserve sort order across signed/float types
 # --------------------------------------------------------------------------- #
 
-@triton.jit
+# COMPILE-TIME helpers — `@tl.constexpr`, NEVER `@triton.jit`. Upstream
+# FlagGems has carried them as constexpr functions since the one-sweep
+# sort's birth commit (e669aee, PR #694); our vendoring delta hardened
+# them into `@triton.jit`, which Triton >= 3.4 structurally rejects (the
+# `_builder`→`_semantic` frontend refactor: a JIT callee compiles as a
+# real typed function, so it can no longer return a dtype object, and
+# `tl.core.get_int_dtype` — a plain undecorated python function — no
+# longer resolves from inside JIT). `@tl.constexpr` runs them as plain
+# compile-time python (legal 3.1→3.6), exactly upstream's shape.
 def _unwrap_constexpr(o):
     return o.value if isinstance(o, tl.constexpr) else o
 
 
-@triton.jit
+@tl.constexpr
 def _get_int_t(num_bits: tl.constexpr, signed: tl.constexpr):
     num_bits = _unwrap_constexpr(num_bits)
     signed = _unwrap_constexpr(signed)
     return tl.core.get_int_dtype(num_bits, signed)
 
 
-@triton.jit
+@tl.constexpr
 def _one_zeros(num_bits: tl.constexpr):
     """1 followed by (num_bits-1) zeros, e.g. 0x80 for 8-bit."""
     num_bits = _unwrap_constexpr(num_bits)
     return 1 << (num_bits - 1)
 
 
-@triton.jit
+@tl.constexpr
 def _zero_ones(num_bits: tl.constexpr):
     """0 followed by (num_bits-1) ones, e.g. 0x7F for 8-bit."""
     num_bits = _unwrap_constexpr(num_bits)
