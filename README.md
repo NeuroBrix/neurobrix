@@ -180,7 +180,11 @@ neurobrix stop
 
 ### Vision-Language & Multimodal
 
-Vision-language models answer questions about an image. Multimodal models (Janus-Pro) have two heads — text understanding and image generation — selected with `--mode` (required for this family).
+Vision-language models answer questions about an image. Multimodal models
+take `--mode` (required for this family): generation-capable models
+(Janus-Pro) select their head with it, and omni understanding models
+(Qwen3-Omni, MiniCPM-o, Ming-Lite-Omni, Qwen3-VL) run `--mode text` over
+any mix of image, audio, and video inputs.
 
 ```bash
 # VLM: describe an image
@@ -195,6 +199,14 @@ neurobrix run --model Janus-Pro-7B \
 # Multimodal — text understanding head
 neurobrix run --model Janus-Pro-7B \
     --mode text --input-image cat.jpg --prompt "describe this image"
+
+# Omni understanding — image, audio, or video inputs
+neurobrix run --model Ming-Lite-Omni-1.5 \
+    --mode text --input-image photo.png --prompt "What fruit is shown?"
+neurobrix run --model Qwen3-Omni-30B-A3B-Instruct \
+    --mode text --audio clip.wav --prompt "What is said in this audio?"
+neurobrix run --model Qwen3-VL-30B-A3B-Thinking \
+    --mode text --input-video clip.mp4 --prompt "What happens in this video?"
 ```
 
 ### Audio — Speech-to-Text (STT)
@@ -264,7 +276,7 @@ neurobrix upscale --model hat-l-x4 \
 
 ### Video Generation
 
-The video family covers **text-to-video and image-to-video** (10 models — Wan 2.1/2.2, CogVideoX, Mochi, Open-Sora, Allegro, SANA-Video), all validated in the four execution modes. The mode is auto-deduced from the inputs: passing `--input-image` switches to image-to-video.
+The video family covers **text-to-video and image-to-video** (11 models — Wan 2.1/2.2, CogVideoX, Mochi, Open-Sora, Allegro + Allegro-TI2V, SANA-Video), all validated in the four execution modes. The mode is auto-deduced from the inputs: passing `--input-image` switches to image-to-video.
 
 ```bash
 # Text-to-video
@@ -409,7 +421,7 @@ NeuroBrix is a **runtime engine** — it executes models but does **not train or
 
 There are two levels of support:
 
-- **Published on the hub** — pre-built `.nbx` containers, downloadable with `neurobrix import`. The video family is being published alongside the v0.3.0 release.
+- **Published on the hub** — pre-built `.nbx` containers, downloadable with `neurobrix import` (42 models across 10 categories).
 - **Validated by the engine** — models validated in all four execution modes; hub packages are being published progressively.
 
 ### Published on the Hub
@@ -473,13 +485,31 @@ There are two levels of support:
 | Qwen3-30B-A3B-Thinking | Alibaba / Qwen | Apache 2.0 | 57.1 GB |
 | TinyLlama-1.1B-Chat | TinyLlama | Apache 2.0 | 2.1 GB |
 
+#### Code Generation
+
+| Model | Author | License | Size |
+|-------|--------|---------|-----:|
+| Qwen3-Coder-30B-A3B-Instruct | Alibaba / Qwen | Apache 2.0 | 57.1 GB |
+| DeepSeek-Coder-V2-Lite-Instruct | DeepSeek | DeepSeek License | 30.7 GB |
+
+#### Vision-Language & Multimodal (Omni Understanding + Generation)
+
+| Model | Author | License | Size | Type |
+|-------|--------|---------|-----:|------|
+| Janus-Pro-7B | DeepSeek | MIT | 13.8 GB | text understanding + image generation |
+| GLM-4.1V-9B-Thinking | Zhipu AI | MIT | 19.2 GB | vision-language understanding |
+| Qwen3-Omni-30B-A3B-Instruct | Alibaba / Qwen | Apache 2.0 | 59.2 GB | omni understanding: text, image, audio, video |
+| Qwen3-VL-30B-A3B-Thinking | Alibaba / Qwen | Apache 2.0 | 57.9 GB | vision-language MoE: text, image, video |
+| MiniCPM-o-4.5 | OpenBMB | Apache 2.0 | 18.2 GB | omni understanding: text, image, audio |
+| Ming-Lite-Omni-1.5 | inclusionAI | MIT | 35.2 GB | omni understanding: text, image, audio, video |
+
 ### Validated by the Engine (hub publication in progress)
 
 These models are fully supported by the runtime — validated in all four execution modes with cross-checked numerical agreement — and their pre-built `.nbx` packages are being rolled out to the hub.
 
 | Model | Author | Type |
 |-------|--------|------|
-| Janus-Pro-7B | DeepSeek | multimodal (text understanding + image generation) |
+| DeepSeek-V2-Lite-Instruct | DeepSeek | LLM (multi-head latent attention) |
 
 > **Non-commercial:** OpenAudio S1 Mini uses CC-BY-NC-SA-4.0 — non-commercial use only. Check each model's license on the [NeuroBrix Hub](https://neurobrix.es/models) before commercial deployment.
 
@@ -569,7 +599,10 @@ The runtime compiles the entire execution graph at load time into a **CompiledSe
 - [x] **LLM family** — MoE (DeepSeek), dense (TinyLlama, Qwen3)
 - [x] **Audio family** — 11 models across STT, audio_llm, and TTS (5 flow handlers)
 - [x] **Upscalers** — 4 super-resolution families (HAT, Real-ESRGAN, SwinIR, Swin2SR)
-- [x] **Video family** — 10 models, text-to-video + image-to-video, validated in all four execution modes (Wan 2.1/2.2, CogVideoX, Mochi, Open-Sora, Allegro, SANA-Video); native-resolution generation via spatio-temporal tiling
+- [x] **Video family** — 11 models, text-to-video + image-to-video, validated in all four execution modes (Wan 2.1/2.2, CogVideoX, Mochi, Open-Sora, Allegro + Allegro-TI2V, SANA-Video); native-resolution generation via spatio-temporal tiling
+- [x] **Vision-language & omni multimodal** — image, audio, and video understanding (Qwen3-Omni, Qwen3-VL-MoE, MiniCPM-o, Ming-Lite-Omni, GLM-4.1V) + autoregressive image generation (Janus-Pro), validated in all four execution modes
+- [x] **Code models** — MoE code generation (Qwen3-Coder, DeepSeek-Coder-V2-Lite)
+- [x] **Agentic serving** — tool-calling loop on the warm daemon
 - [x] **Cross-platform** — Linux, Windows, macOS support
 - [x] **Apple Silicon** — MPS execution on M-series GPUs
 - [x] **Hardware auto-detection** — 10 GPU vendors, CPU-only fallback
@@ -580,7 +613,7 @@ The runtime compiles the entire execution graph at load time into a **CompiledSe
 
 ### Next
 
-- [ ] **Vision-Language Models** — multimodal understanding at scale
+- [ ] **Speech generation for omni models** — the deferred talker stacks
 - [ ] **Quantization** — INT8/INT4 with NBX-native support
 - [ ] **3D generation** — mesh and NeRF models
 - [ ] **Embeddings** — text and image embedding models

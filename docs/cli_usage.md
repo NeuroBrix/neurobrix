@@ -92,6 +92,13 @@ neurobrix run --model Janus-Pro-7B \
 # Text understanding (requires Janus build traced for text AR)
 neurobrix run --model Janus-Pro-7B \
     --mode text --input-image cat.jpg --prompt "describe this image"
+
+# Omni understanding builds (Qwen3-Omni, MiniCPM-o, Ming-Lite-Omni,
+# Qwen3-VL): --mode text over any mix of image / audio / video inputs
+neurobrix run --model Ming-Lite-Omni-1.5 \
+    --mode text --input-image photo.png --prompt "What fruit is shown?"
+neurobrix run --model Qwen3-Omni-30B-A3B-Instruct \
+    --mode text --audio clip.wav --prompt "What is said in this audio?"
 ```
 
 A `.nbx` traced for one mode rejects the other with a clear error:
