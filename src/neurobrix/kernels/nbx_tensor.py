@@ -19,6 +19,7 @@ import math
 import os
 import struct
 import sys
+import threading
 from enum import IntEnum
 from typing import Dict, List, Optional, Tuple
 
@@ -346,7 +347,7 @@ _GPU_BACKENDS = {
 # the last device index that was fully synchronised (runtime device AND
 # Triton driver device both pointing at it) and skip the pair on a hit.
 #
-# Cache invariant: `_CURRENT_DEVICE_IDX == idx` implies the CUDA/HIP
+# Cache invariant: `_cached_device_idx() == idx` (per-thread) implies the CUDA/HIP
 # runtime current device is `idx` AND Triton's active driver device is
 # `idx`. Every NeuroBrix-side device change maintains the invariant:
 #   - `ensure_triton_device` refreshes the cache after a full sync;
@@ -360,18 +361,30 @@ _GPU_BACKENDS = {
 # compiled-mode path) cannot interleave with a warm cache inside a
 # triton run (R33: no torch in triton paths); triton run entry points
 # invalidate the cache defensively (see triton/sequence.py run()).
-_CURRENT_DEVICE_IDX: Optional[int] = None
+#
+# THREAD-LOCAL, not process-global (D9 root cause, 2026-07-27): the
+# cudaSetDevice/hipSetDevice state the invariant mirrors IS per-thread.
+# A process-global cache warmed by one thread makes every OTHER thread
+# skip the sync while its own runtime device is still the default —
+# the serving daemon's worker thread then launches kernels holding
+# cuda:N pointers from a device-0 context ("CUDA: out of memory" at
+# launch with gigabytes free on every device; cmd_run, single-threaded,
+# can never reproduce it).
+_DEVICE_CACHE = threading.local()
+
+
+def _cached_device_idx() -> Optional[int]:
+    return getattr(_DEVICE_CACHE, "idx", None)
 
 
 def invalidate_current_device_cache() -> None:
-    """Drop the ensure_triton_device fast-path cache.
+    """Drop the ensure_triton_device fast-path cache (this thread).
 
     Call after any device switch that does not go through
     `DeviceAllocator.set_device` / `ensure_triton_device`, so the next
     `ensure_triton_device` performs the full runtime + Triton sync.
     """
-    global _CURRENT_DEVICE_IDX
-    _CURRENT_DEVICE_IDX = None
+    _DEVICE_CACHE.idx = None
 
 
 class DeviceAllocator:
@@ -455,9 +468,8 @@ class DeviceAllocator:
         # ensure_triton_device performs the full sync. Switching to the
         # cached device itself keeps the pair coherent (Triton's driver
         # device is untouched here).
-        global _CURRENT_DEVICE_IDX
-        if device_id != _CURRENT_DEVICE_IDX:
-            _CURRENT_DEVICE_IDX = None
+        if device_id != _cached_device_idx():
+            _DEVICE_CACHE.idx = None
 
     @staticmethod
     def get_device() -> int:
@@ -1080,14 +1092,13 @@ class DeviceAllocator:
 
         C2 fast path: called before every kernel launch, so when the
         requested device is already fully current (see the
-        _CURRENT_DEVICE_IDX invariant at module level) the pair of
+        per-thread device-cache invariant) the pair of
         driver calls is skipped. Any device change outside this
         function must invalidate the cache (set_device does so
         automatically; raw switches call
         invalidate_current_device_cache()).
         """
-        global _CURRENT_DEVICE_IDX
-        if device_idx == _CURRENT_DEVICE_IDX:
+        if device_idx == _cached_device_idx():
             return
         # 1. Set runtime device (cudaSetDevice / hipSetDevice)
         backend = _active_backend()
@@ -1096,8 +1107,8 @@ class DeviceAllocator:
         # 2. Tell Triton which device to target
         import triton.runtime.driver
         triton.runtime.driver.active.set_current_device(device_idx)
-        # Cache only after BOTH calls succeeded.
-        _CURRENT_DEVICE_IDX = device_idx
+        # Cache only after BOTH calls succeeded (this thread's state).
+        _DEVICE_CACHE.idx = device_idx
 
 
 def _set_device(t):
@@ -1672,7 +1683,7 @@ class NBXTensor:
             # malloc_cuda so it does not re-query.
             dev_idx = DeviceAllocator.get_device()
             ptr = DeviceAllocator.malloc_cuda(nbytes, dev_idx=dev_idx)
-        elif dev_idx == _CURRENT_DEVICE_IDX:
+        elif dev_idx == _cached_device_idx():
             # Explicit device already fully current (C2 cache invariant
             # guarantees the runtime device equals the cached idx): no
             # driver query, no switch.

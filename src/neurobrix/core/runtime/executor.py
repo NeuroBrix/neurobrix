@@ -910,6 +910,17 @@ class RuntimeExecutor:
                 dag=dag,
                 mode=self.mode
             )
+            # Warm-serving contract: propagate persistent mode to the
+            # GraphExecutor so its cleanup() keeps weights in VRAM between
+            # requests. The serving engine sets _persistent_mode BEFORE
+            # setup() precisely so this creation site can forward it —
+            # without the forward, GraphExecutor._persistent stays False,
+            # end-of-generation cleanup silently UNLOADS the full weight
+            # set, and the next request re-loads it mid-flight (57 GB churn
+            # on Qwen3-30B block_scatter: stale ptr-table fingerprints +
+            # concurrent deferred-free drains → layout-dependent illegal
+            # access at the first cross-device fused-MoE; D9 layer 2).
+            executor._persistent = self._persistent_mode
             self.executors[comp_name] = executor
 
     def _get_allocation(self, comp_name: str) -> Optional[Any]:

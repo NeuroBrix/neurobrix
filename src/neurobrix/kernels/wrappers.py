@@ -70,7 +70,7 @@ from .ops.rmsnorm import rms_norm_forward_kernel
 
 # === Softmax ===
 
-from .ops.softmax import softmax_forward_kernel
+from .ops.softmax import softmax_forward_kernel, softmax_forward_looped_kernel
 
 # === Matmul ===
 
@@ -1325,6 +1325,30 @@ def rms_norm(x, weight, eps=1e-6, epsilon=None):
 # SOFTMAX WRAPPER
 # ===========================================================================
 
+# Above this feat size the single-tile kernel's next_power_of_2(feat) tile
+# spills to CUDA local memory, whose pool the driver allocates DEVICE-WIDE
+# at launch (frame × max resident threads — ~2 GiB measured at vocab
+# 151936 on V100, D9 2026-07-27). Rows larger than the cap route to the
+# bounded-tile looped kernel; rows at or under it keep the proven
+# single-tile kernel byte-for-byte. Same capped-tile idiom as
+# argmax_wrapper's TILE_N = min(next_power_of_2(N), 4096) (FlagGems).
+_SOFTMAX_MAX_FUSED_FEAT = 16384
+_SOFTMAX_LOOPED_TILE = 4096
+
+
+def _launch_looped_softmax(x_2d, output_2d, batch_dim, feat_dim, log: bool):
+    """Launch the bounded-tile online softmax — one program per row."""
+    softmax_forward_looped_kernel[(batch_dim,)](
+        x_2d, output_2d,
+        feat_dim,
+        x_2d.stride(0), x_2d.stride(1),
+        output_2d.stride(0), output_2d.stride(1),
+        log=log,
+        TILE_FEAT=_SOFTMAX_LOOPED_TILE,
+        num_warps=4,
+    )
+
+
 def softmax(x, dim: int = -1, half_to_float: bool = False) :
     """Softmax over given dimension."""
     dim = dim % x.ndim
@@ -1337,17 +1361,20 @@ def softmax(x, dim: int = -1, half_to_float: bool = False) :
     x_2d = x_perm.view(batch_dim, feat_dim)
     output_2d = NBXTensor.empty_like(x_2d)
 
-    _bsb = _batch_block(batch_dim, feat_dim)
-    grid = (triton.cdiv(batch_dim, _bsb),)
     _set_device(x_2d)
-    softmax_forward_kernel[grid](
-        x_2d, output_2d,
-        batch_dim, feat_dim,
-        x_2d.stride(0), x_2d.stride(1),
-        output_2d.stride(0), output_2d.stride(1),
-        log=False,
-        num_warps=4,
-    )
+    if feat_dim > _SOFTMAX_MAX_FUSED_FEAT:
+        _launch_looped_softmax(x_2d, output_2d, batch_dim, feat_dim, log=False)
+    else:
+        _bsb = _batch_block(batch_dim, feat_dim)
+        grid = (triton.cdiv(batch_dim, _bsb),)
+        softmax_forward_kernel[grid](
+            x_2d, output_2d,
+            batch_dim, feat_dim,
+            x_2d.stride(0), x_2d.stride(1),
+            output_2d.stride(0), output_2d.stride(1),
+            log=False,
+            num_warps=4,
+        )
     return output_2d.view_as(x_perm).movedim(-1, dim)
 
 
@@ -1361,17 +1388,20 @@ def log_softmax(x, dim: int = -1) :
     x_2d = x_perm.view(batch_dim, feat_dim)
     output_2d = NBXTensor.empty_like(x_2d)
 
-    _bsb = _batch_block(batch_dim, feat_dim)
-    grid = (triton.cdiv(batch_dim, _bsb),)
     _set_device(x_2d)
-    softmax_forward_kernel[grid](
-        x_2d, output_2d,
-        batch_dim, feat_dim,
-        x_2d.stride(0), x_2d.stride(1),
-        output_2d.stride(0), output_2d.stride(1),
-        log=True,
-        num_warps=4,
-    )
+    if feat_dim > _SOFTMAX_MAX_FUSED_FEAT:
+        _launch_looped_softmax(x_2d, output_2d, batch_dim, feat_dim, log=True)
+    else:
+        _bsb = _batch_block(batch_dim, feat_dim)
+        grid = (triton.cdiv(batch_dim, _bsb),)
+        softmax_forward_kernel[grid](
+            x_2d, output_2d,
+            batch_dim, feat_dim,
+            x_2d.stride(0), x_2d.stride(1),
+            output_2d.stride(0), output_2d.stride(1),
+            log=True,
+            num_warps=4,
+        )
     return output_2d.view_as(x_perm).movedim(-1, dim)
 
 
