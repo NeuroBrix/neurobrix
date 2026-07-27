@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-27
+
 ### Added
 
 - **Large mixture-of-experts vision-language models** (Qwen3-VL-MoE
@@ -2666,7 +2668,8 @@ First stable release of NeuroBrix — universal deep learning inference engine.
 - Zip-slip path traversal validation in registry import
 - Safe arithmetic parser replacing `eval()` in shape resolver
 
-[Unreleased]: https://github.com/NeuroBrix/neurobrix/compare/v0.3.0...main
+[Unreleased]: https://github.com/NeuroBrix/neurobrix/compare/v0.4.0...main
+[0.4.0]: https://github.com/NeuroBrix/neurobrix/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/NeuroBrix/neurobrix/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/NeuroBrix/neurobrix/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/NeuroBrix/neurobrix/compare/v0.1.6...v0.2.0
