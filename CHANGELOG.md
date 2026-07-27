@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Per-step decode diagnostics** (`NBX_DECODE_TOPK`): both execution
+  engines can log the top-4 next-token logits and the top-2 margin at
+  every decode step — the measuring tool for adjudicating rare
+  greedy-decoding token flips between engines.
+
+### Fixed
+
+- **Ming-Lite-Omni decode is now deterministic (greedy) as the vendor
+  intends**: the packaged sampling default made every run stochastic;
+  with the corrected package, all four execution modes produce identical
+  answers token-for-token on text, image, and audio inputs.
+
 ## [0.4.1] - 2026-07-27
 
 ### Changed
