@@ -1785,7 +1785,20 @@ class TritonSequence:
 
         _cache_key = f"triton_compiled_{op_uid}"
 
+        import os as _os_md
+        _moe_slot_diag = bool(_os_md.environ.get("NBX_MOE_DIAG"))
+
         def moe_fused_dispatch(arena):
+            if _moe_slot_diag:
+                import sys as _sys_md
+                _g0 = arena[_gw[0]]
+                _h0 = arena[_hs_slot]
+                print(f"[MOE_SLOT] {_cache_key} gw0_slot={_gw[0]} "
+                      f"gw0_ptr={0 if _g0 is None else _g0.data_ptr():#x} "
+                      f"gw0_dev={None if _g0 is None else _g0._device_idx} "
+                      f"hs_slot={_hs_slot} "
+                      f"hs_ptr={0 if _h0 is None else _h0.data_ptr():#x}",
+                      file=_sys_md.stderr, flush=True)
             return _moe_exec(
                 gate_scores=None if _gs_slot is None else arena[_gs_slot],
                 hidden_states=arena[_hs_slot],
@@ -3782,6 +3795,13 @@ class TritonSequence:
         _last_free_check = -(1 << 30)
         _drain_diag = os.environ.get("NBX_DEFERRED_DRAIN_DIAG") == "1"
         _drain_stats = [0, 0, 0] if _drain_diag else None  # [drains, cliff/count, pressure]
+        # Diagnostic: NBX_ARENA_WATCH=<slot> logs every op that changes the
+        # identity of arena[<slot>] (same env-gated class as NBX_FORCE_GC).
+        # Out-of-range slot disarms the watch (never IndexError mid-run).
+        _watch_slot = int(os.environ.get("NBX_ARENA_WATCH", "-1"))
+        if not (0 <= _watch_slot < len(arena)):
+            _watch_slot = -1
+        _watch_ref = arena[_watch_slot] if _watch_slot >= 0 else None
 
         # OOM last-chance reclaim: expose THIS run's deferred queue to the
         # allocator (drained+retried only after a failed device malloc).
@@ -3795,6 +3815,14 @@ class TritonSequence:
         _fp_path_md = os.environ.get("NBX_OP_FINGERPRINT", "")
 
         for op_idx, op in enumerate(self._ops):
+            if _watch_slot >= 0 and arena[_watch_slot] is not _watch_ref:
+                _new = arena[_watch_slot]
+                print(f"[ARENA_WATCH] slot {_watch_slot} changed BEFORE "
+                      f"op_idx={op_idx} {op.op_uid}: "
+                      f"ptr={0 if _new is None else _new.data_ptr():#x} "
+                      f"dev={None if _new is None else _new._device_idx}",
+                      flush=True)
+                _watch_ref = _new
             if pre_op_callback is not None:
                 pre_op_callback(op_idx, op)
             args = op.args_resolver(arena)

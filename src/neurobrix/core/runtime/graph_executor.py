@@ -1057,6 +1057,11 @@ class GraphExecutor:
         Uses shard_map from Prism for multi-GPU placement.
         Same lifecycle for both native and triton — only tensor FORMAT differs.
         """
+        if os.environ.get("NBX_WEIGHTS_LOAD_TRACE"):
+            import traceback as _tb_wl
+            print(f"[WEIGHTS_LOAD] component={component} mode={self.mode}",
+                  flush=True)
+            _tb_wl.print_stack()
         if self.mode in ("triton", "triton_sequential"):
             self._load_weights_triton(nbx_path, component, shard_map)
         else:

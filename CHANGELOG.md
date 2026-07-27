@@ -29,6 +29,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   driven): the band is gone, the same video renders byte-identically
   across repeated runs for the first time, and generation is faster on
   the affected configuration.
+- **Serving large-vocabulary models no longer fails at warmup with a
+  spurious GPU out-of-memory error (Triton engine)**: the softmax kernel
+  used at sampling loaded the whole vocabulary row in one register tile;
+  at 150k-token vocabularies the kernel launch itself silently required
+  ~2 GiB of GPU memory for register spill, and could fail on a busy
+  device even with gigabytes reported free. Vocabulary-scale rows now use
+  a bounded-tile streaming softmax whose launch needs no extra memory at
+  any vocabulary size; smaller rows keep the existing kernel unchanged.
+- **Warm serving now actually keeps weights loaded between requests**:
+  the persistent-serving flag was never forwarded to the per-component
+  executors, so the daemon silently unloaded the full weight set after
+  its warmup and re-loaded it during the first request — on large
+  multi-GPU models (57 GB MoE sharded across 4 GPUs) that mid-request
+  reload could crash the request with a GPU illegal-access error, and
+  in all cases defeated the purpose of warm serving. The daemon now
+  serves warm requests without any reload, which also makes the first
+  response dramatically faster.
+- **Cross-GPU tensor transfers in the fused MoE path now use the shared
+  synchronized transfer helper**: the previous local copy skipped the
+  source-device synchronization barrier, leaving a latent read-ordering
+  race on multi-GPU expert placements.
 
 ## [0.4.1] - 2026-07-27
 

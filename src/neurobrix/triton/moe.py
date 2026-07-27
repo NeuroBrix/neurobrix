@@ -19,12 +19,19 @@ Multi-GPU: one set of kernel launches per device, bulk D2D transfers.
 """
 
 import ctypes as _ctypes
+import os as _os
 from collections import defaultdict, OrderedDict
 
 import numpy as np
 
 from neurobrix.kernels import wrappers as w
 from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, dtype_size
+
+# NBX_MOE_DIAG gate, hoisted to import time (C1 hygiene: never read the
+# environ on the per-MoE-op hot path). Empty/unset → falsy → zero cost.
+# A non-"1" value doubles as a cache_key substring filter for the
+# intermediate dumps (NBX_DUMP_TIDS_FILTER idiom); "1" dumps every block.
+_MOE_DIAG_ENV = _os.environ.get("NBX_MOE_DIAG", "")
 
 # Block size for token alignment (must match wrapper's _MOE_BM)
 _BLOCK_SIZE_M = 16
@@ -222,15 +229,24 @@ def moe_align_block_size(topk_ids_flat, block_size, num_experts, device_idx):
 # ============================================================================
 
 def _xfer(tensor: NBXTensor, target_dev: int) -> NBXTensor:
-    """Transfer NBXTensor to target device via D2D memcpy."""
+    """Move an NBXTensor to target_dev via the shared cross-device brick.
+
+    Same-device: no-op. Cross-device: `device_transfer.transfer_tensor`,
+    which enforces the D2D read-ordering contract (source-device sync
+    barrier before the peer copy) and materialises non-dense views on
+    the source device. The previous local flat memcpy skipped BOTH — a
+    D2D enqueued on the target's legacy stream never waits for the
+    source device's stream, so routing metadata / activations could be
+    copied while still being written: layout-dependent illegal-address
+    poison at block-scatter boundaries, surfacing at the fused-MoE
+    launch of the first block on the next device (D9 layer 2; same
+    class as the Qwen3-Omni audio step-2 precedent recorded in
+    transfer_tensor's docstring).
+    """
     if tensor._device_idx == target_dev:
         return tensor
-    DeviceAllocator.set_device(target_dev)
-    dst = NBXTensor.empty(tensor._shape, tensor._dtype, f"cuda:{target_dev}")
-    if tensor._nbytes > 0:
-        DeviceAllocator.memcpy(dst.data_ptr(), tensor.data_ptr(),
-                               tensor._nbytes, kind=3)
-    return dst
+    from neurobrix.triton.device_transfer import transfer_tensor
+    return transfer_tensor(tensor, target_dev)
 
 
 # ============================================================================
@@ -368,15 +384,16 @@ def execute_moe_fused(
     M, K = hidden_states.shape
     N_gate = gate_weights[0].shape[0]  # intermediate_dim (gate/up are [intermediate, hidden])
 
-    # === TEMP DIAG: dump MoE intermediates ===
-    import os as _os_moe
-    _moe_diag = _os_moe.environ.get("NBX_MOE_DIAG")
+    # Env-gated MoE intermediate dumps (§8 NBX_MOE_DIAG; gate hoisted to
+    # module import — zero environ reads on this hot path).
+    _moe_diag = _MOE_DIAG_ENV
     _moe_diag_cache_key = cache_key
     def _dump(label, tensor):
         if not _moe_diag:
             return
-        # Only dump for block.1 (first target)
-        if "block.1" not in _moe_diag_cache_key:
+        # Value other than "1" = cache_key substring filter
+        # (NBX_DUMP_TIDS_FILTER idiom).
+        if _moe_diag != "1" and _moe_diag not in _moe_diag_cache_key:
             return
         try:
             import ctypes as _ct
@@ -482,6 +499,17 @@ def execute_moe_fused(
             sorted_token_ids = _xfer(sorted_token_ids, dev)
             expert_ids = _xfer(expert_ids, dev)
             num_tokens_post_padded = _xfer(num_tokens_post_padded, dev)
+
+        if _moe_diag:
+            import sys as _sys_d
+            print(f"[MOE_DIAG] {cache_key} dev={dev} act_dev={act_dev} "
+                  f"h=(d{hidden_states._device_idx},{hidden_states.shape},{hidden_states.data_ptr():#x}) "
+                  f"scores=(d{flat_scores._device_idx},{flat_scores.shape}) "
+                  f"sorted=(d{sorted_token_ids._device_idx},{sorted_token_ids.shape}) "
+                  f"expids=(d{expert_ids._device_idx},{expert_ids.shape}) "
+                  f"npad=(d{num_tokens_post_padded._device_idx}) "
+                  f"tbl_gate=(d{tables.gate_ptrs[dev]._device_idx},{tables.gate_ptrs[dev].shape},{tables.gate_ptrs[dev].data_ptr():#x}) "
+                  f"M={M} topk={top_k}", file=_sys_d.stderr, flush=True)
 
         result = _fused_moe_pass(
             hidden_states, tables, dev, flat_scores,
