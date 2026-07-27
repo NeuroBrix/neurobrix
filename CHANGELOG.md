@@ -20,6 +20,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   intends**: the packaged sampling default made every run stochastic;
   with the corrected package, all four execution modes produce identical
   answers token-for-token on text, image, and audio inputs.
+- **Corrupted vertical band on short-schedule video generation (Triton
+  engine, V100)**: the flash-attention kernel's known instability on
+  pre-Ampere GPUs turned out to be structurally biased, corrupting a
+  fixed window of tokens that classifier-free guidance then amplified
+  into a visible band. Affected attention shapes now take the
+  deterministic attention path on V100-class hardware (hardware-profile
+  driven): the band is gone, the same video renders byte-identically
+  across repeated runs for the first time, and generation is faster on
+  the affected configuration.
 
 ## [0.4.1] - 2026-07-27
 

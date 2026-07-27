@@ -116,15 +116,27 @@ memory:
   # SIMT. The deterministic _math_attention path is routed for pow2
   # head_dim only when its [B*H,Tq,Tk] scores tensor is within this
   # budget (non-pow2 head_dim is routed unconditionally — preserved
-  # PixArt/Sana path). 128 MiB covers all LLM determinism cases:
-  # Qwen3-30B-A3B test (B1*H32*Tq15*Tk15*fp32 = 28 KiB), every decode
-  # step (Tq=1*Tk<=4096*H32*fp32 <= 512 KiB), prefill up to seqlen~1024
-  # (H32*fp32 = 128 MiB). Stays well below image-diffusion self-attn
-  # (PixArt 512 ~ 1 GiB, Sana >>) so those keep the flash path with no
-  # OOM / no path change. Very-long-prompt LLM prefill (seqlen >~ 1152
-  # @ 32 heads fp32) exceeds the budget -> flash for that prefill only
-  # (decode stays deterministic); documented residual.
-  sdpa_math_max_scores_bytes: 134217728  # 128 MiB
+  # PixArt/Sana path).
+  #
+  # 2026-07-27 (D6 root cause): the sm_70 flash race is not just
+  # nondeterministic NOISE — it is STRUCTURALLY BIASED. Measured on
+  # Wan2.1-T2V-1.3B block-0 self-attention ([2,12,4096,128], scores
+  # 1.61 GiB): bit-equal-input microtest flash-vs-math shows rel 9.4%
+  # concentrated 374x on tokens ≡ 9-15 (mod 32) — a tile-aligned
+  # corruption window that CFG (x5 on a 0.26-cancellation guided term)
+  # and short-schedule iteration amplify into the recorded vertical
+  # pixel band (cols 127-269) at 13f/10s. NBX_FORCE_MATH_ATTENTION=1
+  # kills the band (R29) and runs FASTER on that config. Budget raised
+  # 128 MiB -> 2 GiB so V100-32G-feasible diffusion self-attention
+  # (Wan-class 4096-token video DiT included) takes the deterministic
+  # math path; video-native token counts (Allegro 79200² ~ 1.2 TB,
+  # CogVideoX-class >> 2 GiB) stay on flash — no OOM regression. LLM
+  # prefill between the old and new bound (seqlen ~1152-4600 @ 32
+  # heads) moves to math: deterministic, and on sm_70 the flash kernel
+  # holds no perf advantage (structural ~10% cuBLAS ceiling; the Wan
+  # math run was faster end-to-end). Gate: attention-change diffusion
+  # regression battery per doctrine.
+  sdpa_math_max_scores_bytes: 2147483648  # 2 GiB (was 128 MiB pre-D6)
 
   # Triton deferred-free queue policy (audit #2 F1, P-TRITON-LIVE-SET).
   # PRESSURE-SENSITIVE: the queue always drains at `cliff` (throughput
