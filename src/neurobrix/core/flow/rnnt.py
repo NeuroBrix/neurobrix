@@ -522,14 +522,14 @@ class RNNTEngine(FlowHandler):
         raise RuntimeError(
             "ZERO FALLBACK: No sentencepiece tokenizer.model or vocab.txt in NBX cache.\n"
             "The model needs to be rebuilt with the tokenizer included.\n"
-            "Run: forge build --overwrite"
+            "Re-run the build toolchain: build --overwrite"
         )
 
     def _find_tokenizer_model(self) -> Optional[Path]:
         """Find sentencepiece tokenizer.model in NBX cache.
 
         ZERO FALLBACK: Runtime ONLY reads from NBX cache.
-        If the tokenizer is missing, the forge builder needs to include it.
+        If the tokenizer is missing, the toolchain builder needs to include it.
         """
         cache_path = self.ctx.pkg.cache_path
         if cache_path is None:

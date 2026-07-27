@@ -776,14 +776,14 @@ class AutoregressiveHandler(FlowHandler):
                 "max_position_embeddings": extracted.get("max_position_embeddings"),
             }
 
-        # MoE config — values MUST come from lm_config (built by forge from model_registry.yml)
+        # MoE config — values MUST come from lm_config (built by the build toolchain from model_registry.yml)
         num_experts = lm_config.get("num_experts")
         if num_experts is not None and num_experts > 1:
             norm_topk = lm_config.get("norm_topk_prob")
             if norm_topk is None:
                 raise RuntimeError(
                     "ZERO FALLBACK: norm_topk_prob missing from lm_config for MoE model.\n"
-                    "Add to forge model_registry.yml: moe.norm_topk_prob"
+                    "Add to the build toolchain's model_registry.yml: moe.norm_topk_prob"
                 )
             executor.set_moe_config(norm_topk_prob=norm_topk)
 
@@ -941,7 +941,7 @@ class AutoregressiveHandler(FlowHandler):
                 missing = [n for n, e in [(head_name, head_executor), (embed_name, embed_executor), (aligner_name, aligner_executor)] if e is None]
                 raise RuntimeError(f"ZERO FALLBACK: Missing VQ executors: {missing}")
 
-            # CFG weight — MUST come from defaults (set by forge from model_registry.yml)
+            # CFG weight — MUST come from defaults (set by the build toolchain from model_registry.yml)
             cli_cfg = self.ctx.variable_resolver.get("global.guidance_scale", default=_SENTINEL)
             if cli_cfg is not _SENTINEL:
                 cfg_weight = float(cli_cfg)
@@ -950,7 +950,7 @@ class AutoregressiveHandler(FlowHandler):
                 if cfg_weight is None:
                     raise RuntimeError(
                         "ZERO FALLBACK: guidance_scale missing from defaults for autoregressive_image.\n"
-                        "Add to forge model_registry.yml: generation.guidance_scale"
+                        "Add to the build toolchain's model_registry.yml: generation.guidance_scale"
                     )
                 cfg_weight = float(cfg_weight)
             # VQ token offset
@@ -1025,7 +1025,7 @@ class AutoregressiveHandler(FlowHandler):
                 if cfg_weight is None:
                     raise RuntimeError(
                         "ZERO FALLBACK: guidance_scale missing from defaults.json for image model. "
-                        "Add it to forge model_registry.yml and rebuild."
+                        "Add it to the build toolchain's model_registry.yml and rebuild."
                     )
                 cfg_weight = float(cfg_weight)
             use_cfg = cfg_weight > 1.0

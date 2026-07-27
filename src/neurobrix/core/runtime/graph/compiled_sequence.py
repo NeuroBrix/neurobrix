@@ -89,7 +89,7 @@ def _has_none_arg(args: tuple) -> bool:
 def _concrete_product_match(target: int, sym_dims: list) -> bool:
     """True if ``target`` equals the product of some contiguous run of CONCRETE
     (plain-int) entries in ``sym_dims`` — i.e. the value is fully explained by the
-    input's concrete dims, with no symbolic dim contributing. Mirror of Forge
+    input's concrete dims, with no symbolic dim contributing. Mirror of the build toolchain's
     windowing.py.
     """
     n = len(sym_dims)
@@ -1664,7 +1664,7 @@ class CompiledSequence:
         expr_map: Dict[int, Any] = {}  # trace_value → expression dict
         ambiguous: set = set()  # trace_values with multiple expressions
 
-        # Architectural-constant dims from WEIGHT/parameter shapes (mirror of Forge
+        # Architectural-constant dims from WEIGHT/parameter shapes (mirror of the build toolchain's
         # windowing.py). Used by the collision guard below — kept concrete only when
         # a value is BOTH a weight dim AND fully explained by concrete input dims.
         weight_dims: set = set()
@@ -1818,7 +1818,7 @@ class CompiledSequence:
                         if not isinstance(dim_val, int) or dim_val <= 1:
                             continue
                         if dim_val in expr_map:
-                            # Trace-value collision guard (mirror of Forge
+                            # Trace-value collision guard (mirror of the build toolchain's
                             # windowing.py): keep the dim CONCRETE only when it is BOTH
                             # a weight/architectural constant AND fully explained by
                             # concrete input dims. Both required: weight-dim alone

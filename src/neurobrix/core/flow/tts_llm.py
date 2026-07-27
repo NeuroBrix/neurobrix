@@ -604,7 +604,7 @@ class TTSLLMEngine(FlowHandler):
         return result
 
     def _load_default_conditioning(self) -> Optional[Dict[str, torch.Tensor]]:
-        """Load the embedded default-voice conditioning (built by forge).
+        """Load the embedded default-voice conditioning (built by the build toolchain).
 
         runtime/default_conditioning.safetensors holds the conds.pt inputs:
         t3.{speaker_emb, cond_prompt_speech_tokens, emotion_adv} for cond_enc

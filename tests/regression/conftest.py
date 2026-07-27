@@ -161,7 +161,7 @@ KNOWN_FAILURES: List[Tuple[str, str | None, str]] = [
     # mode (ABSOLUTE ZERO torch) rejects this.  Native mode works in
     # practice but the CLI invocation profile the harness uses doesn't
     # match what the model expects (needs speaker ref / script format).
-    # Needs forge re-trace to integrate DDPM as a neural component.
+    # Needs a build-toolchain re-trace to integrate DDPM as a neural component.
     # ------------------------------------------------------------------
     ("VibeVoice-1.5B",     None, "TensorDAG contract violation — DDPM + ConvNext1d outside graph; needs build-side re-trace"),
 

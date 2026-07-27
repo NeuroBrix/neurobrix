@@ -77,7 +77,7 @@ def estimate_op_workspace_bytes(
         return int(workspace_upper)
 
     if "scaled_dot_product_attention" in cl:
-        # Forge forces the MEM-EFFICIENT SDPA backend at trace (R20:
+        # The build toolchain forces the MEM-EFFICIENT SDPA backend at trace (R20:
         # enable_flash=False, enable_mem_efficient=True, enable_math=True), so the
         # runtime executes aten::_scaled_dot_product_efficient_attention. That
         # backend STREAMS attention block-wise and NEVER materialises the full

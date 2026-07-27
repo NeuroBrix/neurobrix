@@ -2,7 +2,7 @@
 
 Pins the HIGH finding of engine audit #2 (2026-07-05): the registry
 reader's former "never raises" contract meant a MALFORMED
-forge/config/model_registry.yml silently disabled every per-component
+the build toolchain's config/model_registry.yml silently disabled every per-component
 annotation engine-wide (activations_fp16_safe, requires_fp32_compute —
 the fp32-overflow protection).
 

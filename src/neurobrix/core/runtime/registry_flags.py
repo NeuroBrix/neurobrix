@@ -1,13 +1,13 @@
-"""Runtime-direct read of per-component flags from forge/config/model_registry.yml.
+"""Runtime-direct read of per-component flags from the build toolchain's config/model_registry.yml.
 
 Phase 1 (DtypeEngine triton fix) introduced the per-component
 `activations_fp16_safe` flag. Doctrine: changing the YAML must take
-effect on next neurobrix run, WITHOUT Forge re-build (R18 immutable
+effect on next neurobrix run, WITHOUT a toolchain re-build (R18 immutable
 .nbx is preserved — no field added to graph/topology/profile contract).
 
 Lookup precedence at runtime:
   1. env var override (developer iteration / debugging)
-  2. forge/config/model_registry.yml when accessible (monorepo / dev)
+  2. the build toolchain's config/model_registry.yml when accessible (monorepo / dev)
   3. default value (legitimate for ABSENT registry / model / component /
      flag — the annotations are opt-in)
 
@@ -21,7 +21,7 @@ protection; graph_executor.py records that exact silent neutralisation
 happening once already).
 
 This module ONLY reads. It never writes to the registry. It does not
-import any forge code, so it remains decoupled from the build system.
+import any build-toolchain code, so it remains decoupled from the build system.
 """
 
 import os
@@ -33,17 +33,39 @@ _REGISTRY_CACHE: Optional[dict] = None
 
 
 def _find_registry_yaml() -> Optional[Path]:
-    """Locate forge/config/model_registry.yml relative to this file.
+    """Locate the build toolchain's config/model_registry.yml.
 
-    Walk up from the current source location until we find a sibling
-    `forge/config/model_registry.yml`. Returns None if not found
-    (deployed install without forge co-located).
+    Resolution order:
+      1. `NBX_MODEL_REGISTRY` env var — absolute path to the YAML. A SET
+         path that does not exist RAISES (present-but-broken class,
+         ZERO FALLBACK — silently ignoring an explicit setting would
+         disable every per-component annotation engine-wide).
+      2. `.nbx_registry` pointer file — walk up from this source file;
+         the first parent carrying one wins. The pointer holds the
+         registry path relative to that parent (one line, gitignored —
+         the dev/monorepo hookup). A pointer whose target is missing
+         RAISES (same present-but-broken class).
+      3. None (deployed install without the build toolchain co-located
+         → every flag read resolves to its documented default).
     """
+    override = os.environ.get("NBX_MODEL_REGISTRY")
+    if override:
+        p = Path(override).expanduser().resolve()
+        if p.exists():
+            return p
+        raise FileNotFoundError(
+            f"NBX_MODEL_REGISTRY is set but does not exist: {p} "
+            "(ZERO FALLBACK: unset it or fix the path)")
     here = Path(__file__).resolve()
     for parent in here.parents:
-        candidate = parent / "forge" / "config" / "model_registry.yml"
-        if candidate.exists():
-            return candidate
+        pointer = parent / ".nbx_registry"
+        if pointer.exists():
+            target = (parent / pointer.read_text().strip()).resolve()
+            if target.exists():
+                return target
+            raise FileNotFoundError(
+                f"registry pointer {pointer} targets a missing file: "
+                f"{target} (ZERO FALLBACK: fix or remove the pointer)")
     return None
 
 
