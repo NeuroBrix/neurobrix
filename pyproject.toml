@@ -94,12 +94,15 @@ exclude = ["src/neurobrix/kernels/triton_kernels_ref"]
 # Whitelist approach: only include source tree + minimum metadata.
 # Previous blacklist approach scanned 32 GB of validation_outputs/
 # before excluding them, causing builds to hang for 15+ minutes.
+# Patterns are anchored to the project root: unanchored git-style
+# patterns match at any depth, so a stray co-located directory could
+# leak files into the sdist through the whitelist.
 include = [
-    "src/neurobrix",
-    "pyproject.toml",
-    "README.md",
-    "LICENSE",
-    "CHANGELOG.md",
+    "/src/neurobrix",
+    "/pyproject.toml",
+    "/README.md",
+    "/LICENSE",
+    "/CHANGELOG.md",
 ]
 exclude = [
     ".gitignore",
