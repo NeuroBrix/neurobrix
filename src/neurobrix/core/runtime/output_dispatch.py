@@ -241,12 +241,16 @@ def save_audio(
     output_path: str,
     pkg,
 ) -> str:
-    """Save audio waveform (TTS) or transcription text (STT — falls back to save_text)."""
-    transcription = outputs.get("global.transcription")
-    if transcription:
-        return save_text(outputs, output_path, executor=None)
+    """Save audio waveform (TTS) or transcription text (STT — falls back to save_text).
 
+    Precedence: a produced WAVEFORM wins. Omni speech requests carry BOTH
+    a text transcription (the thinker's answer) and global.output_audio —
+    the STT text fallthrough only applies when no waveform exists."""
     waveform = outputs.get("global.output_audio")
+    if waveform is None:
+        transcription = outputs.get("global.transcription")
+        if transcription:
+            return save_text(outputs, output_path, executor=None)
     if waveform is None:
         raise RuntimeError(
             f"ZERO FALLBACK: no audio output to save (no global.output_audio). "
@@ -256,7 +260,14 @@ def save_audio(
     from neurobrix.core.module.audio.output_processor import AudioOutputProcessor
 
     audio_cfg = get_output_processing("tts")
-    flow_sr = pkg.topology.get("flow", {}).get("audio", {}).get("sample_rate")
+    _flow = pkg.topology.get("flow", {})
+    flow_sr = (
+        _flow.get("audio", {}).get("sample_rate")
+        # Generative-speech contract (omni lineage): the vocoder's rate
+        # is declared in topology.flow.speech.vocoder — same data-driven
+        # source, different flow block.
+        or _flow.get("speech", {}).get("vocoder", {}).get("sample_rate")
+    )
     sample_rate = (
         flow_sr
         or pkg.defaults.get("sample_rate")

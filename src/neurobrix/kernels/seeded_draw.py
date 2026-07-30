@@ -1,0 +1,98 @@
+"""Shared seeded CPU fp64 draw frontier (R30).
+
+ONE code path draws sampled tokens for BOTH engines: logits cross the
+boundary as fp64 numpy arrays (D2H at the caller), the vendor-faithful
+filter chain (repetition penalty -> temperature -> top-k -> top-p) and
+the draw run in CPU fp64, and the uniform stream comes from one seeded
+generator. Compiled and triton therefore produce bit-identical draws
+whenever the incoming logits agree; near-ties remain the only residual
+class, adjudicated by margins (NBX_DECODE_TOPK doctrine).
+
+Torch-free by construction: numpy is CPU glue, legal in both modes
+(R33/R34), so this module is importable from core/ AND triton/ without
+duplication. Precedent: the dual_ar flow's byte-identical duplicated
+`_sample_token_np` pair — this module is that prototype promoted to a
+single shared frontier. Scope: activated by a registry-declared speech
+sampling contract; existing zoo samplers are untouched (their byte
+gates hold by construction).
+
+Filter semantics mirror the transformers LogitsProcessor chain:
+- repetition penalty: seen ids with logit > 0 divided by the penalty,
+  logit <= 0 multiplied by it (RepetitionPenaltyLogitsProcessor).
+- top-k: THRESHOLD keep — every logit >= the k-th highest survives
+  (ties at the threshold may keep more than k, exactly like
+  TopKLogitsWarper's `< topk(...)[-1]` mask).
+- top-p: smallest set of highest-probability tokens whose cumulative
+  probability reaches top_p, at least one token kept
+  (TopPLogitsWarper); ties broken by ascending vocab index for
+  run-to-run determinism.
+- draw: inverse-CDF walk over the filtered, renormalized fp64 probs in
+  vocab-index order against one uniform from the stream. The draw
+  count per step is the cross-engine coupling contract: both engines
+  MUST consume draws in the same order.
+"""
+
+import numpy as np
+
+__all__ = ["SeededDrawStream", "apply_repetition_penalty"]
+
+
+def apply_repetition_penalty(logits: np.ndarray, seen_ids, penalty: float) -> np.ndarray:
+    """RepetitionPenaltyLogitsProcessor semantics on fp64 logits (in place)."""
+    if not penalty or penalty == 1.0 or seen_ids is None:
+        return logits
+    ids = np.unique(np.asarray(list(seen_ids), dtype=np.int64))
+    if ids.size == 0:
+        return logits
+    ids = ids[(ids >= 0) & (ids < logits.shape[0])]
+    vals = logits[ids]
+    logits[ids] = np.where(vals > 0, vals / penalty, vals * penalty)
+    return logits
+
+
+class SeededDrawStream:
+    """One seeded uniform stream; the draw ORDER is the R30 contract."""
+
+    def __init__(self, seed: int):
+        self._rng = np.random.default_rng(int(seed) & 0xFFFFFFFFFFFFFFFF)
+        self.draws = 0
+
+    def draw(self, logits_fp64, temperature: float = 1.0, top_k: int = 0,
+             top_p: float = 1.0, seen_ids=None,
+             repetition_penalty: float = 1.0) -> int:
+        """Sample one token id from a single 1-D fp64 logits vector."""
+        z = np.array(logits_fp64, dtype=np.float64).reshape(-1)
+        apply_repetition_penalty(z, seen_ids, repetition_penalty)
+        # temp <= 0 is the GREEDY contract (argmax), never a silent
+        # unscaled multinomial — the Ming sampling-class trap (2026-07-27).
+        if temperature is not None and temperature <= 0:
+            return int(np.argmax(z))
+        if temperature and temperature != 1.0:
+            z = z / float(temperature)
+
+        keep = np.ones(z.shape[0], dtype=bool)
+        if top_k and 0 < top_k < z.shape[0]:
+            kth = np.partition(z, -top_k)[-top_k]
+            keep &= z >= kth  # threshold keep — ties survive (HF semantics)
+
+        # softmax over the surviving set only, fp64-stable
+        zk = np.where(keep, z, -np.inf)
+        zk = zk - zk.max()
+        p = np.exp(zk)
+        p /= p.sum()
+
+        if top_p and 0.0 < top_p < 1.0:
+            # descending prob, ties by ascending vocab index (lexsort keys
+            # are last-key-major): smallest high-prob set reaching top_p.
+            order = np.lexsort((np.arange(p.shape[0]), -p))
+            csum = np.cumsum(p[order])
+            cut = int(np.searchsorted(csum, top_p, side="left")) + 1
+            nucleus = order[:cut]
+            mask = np.zeros(p.shape[0], dtype=bool)
+            mask[nucleus] = True
+            p = np.where(mask, p, 0.0)
+            p /= p.sum()
+
+        u = self._rng.random()
+        self.draws += 1
+        return int(np.searchsorted(np.cumsum(p), u, side="right").clip(0, p.shape[0] - 1))
