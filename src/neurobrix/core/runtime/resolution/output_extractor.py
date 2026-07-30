@@ -10,6 +10,13 @@ Extracts primary outputs and stores outputs in variable resolver.
 import torch
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
+# Primary-output surface names, in preference order — the SINGLE source of
+# truth for "which named output is a component's principal output". Consumed
+# by the output_0 alias pass below and by GraphExecutor's hidden-states
+# extraction (`_primary_output_tids`). Auxiliary named outputs (e.g. a
+# mid-stack hidden tap) must never shadow these.
+PRIMARY_OUTPUT_NAMES = ("output", "last_hidden_state", "logits", "sample")
+
 if TYPE_CHECKING:
     from neurobrix.core.runtime.resolution.variable_resolver import VariableResolver
 
@@ -124,7 +131,7 @@ class OutputExtractor:
             # Single-output components and dataclass dicts keep their
             # historical aliases bit-for-bit (primary == first key there).
             if semantic_keys:
-                _pref = ("output", "last_hidden_state", "logits", "sample")
+                _pref = PRIMARY_OUTPUT_NAMES
                 primary = next((p for p in _pref if p in output),
                                semantic_keys[0])
                 ordered = [primary] + [k for k in semantic_keys

@@ -50,6 +50,26 @@ from .graph.compiled_sequence import CompiledSequence
 from neurobrix.core.memory import MemoryManager
 
 
+def _primary_output_tids(dag: dict) -> list:
+    """Declared-contract-first ordering of a DAG's output tensor ids.
+
+    An output NAMED as a principal surface (output / last_hidden_state /
+    logits / sample — the OutputExtractor's primary-preference set) outranks
+    positional order: auxiliary named outputs (e.g. a mid-stack hidden tap
+    exposed for a generative-speech leg) must never shadow the component's
+    principal output. Positional order is the fallback for unnamed outputs,
+    so single-output and legacy graphs keep their behavior bit-for-bit.
+    """
+    from neurobrix.core.runtime.resolution.output_extractor import (
+        PRIMARY_OUTPUT_NAMES,
+    )
+    tids = dag.get("output_tensor_ids", []) or []
+    tens = dag.get("tensors", {}) or {}
+    named = [t for t in tids
+             if (tens.get(t) or {}).get("output_name") in PRIMARY_OUTPUT_NAMES]
+    return named or tids
+
+
 class GraphStructureError(Exception):
     """Error in graph structure or format."""
     pass
@@ -4142,8 +4162,7 @@ class GraphExecutor:
         # Strategy 1: Check graph output — if last dim matches hidden_dim,
         # the graph outputs hidden_states directly (no lm_head in graph).
         assert self._dag is not None
-        output_tids = self._dag.get("output_tensor_ids", [])
-        for tid in output_tids:
+        for tid in _primary_output_tids(self._dag):
             tensor = self._ctx.tensor_store.get(tid)
             if tensor is not None and tensor.shape[-1] == expected_hidden_dim:
                 result = self._reshape_hidden(tensor, expected_hidden_dim, expected_batch_size)
@@ -4205,8 +4224,7 @@ class GraphExecutor:
             return None
 
         # Strategy 1: declared graph output whose last dim matches hidden_dim
-        output_tids = self._dag.get("output_tensor_ids", [])
-        for tid, tensor in _gather(output_tids).items():
+        for tid, tensor in _gather(_primary_output_tids(self._dag)).items():
             if tensor is not None and tensor.shape[-1] == expected_hidden_dim:
                 return tensor
 
