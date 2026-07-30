@@ -24,6 +24,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Text-mode answers on speech-enabled multimodal builds**: builds whose
+  language-model graph exposes an auxiliary mid-stack output (used by the
+  generative-speech leg) produced garbled text in text-only requests —
+  the runtime picked the auxiliary output as the final hidden states by
+  position. Hidden-state extraction now prefers the output the build
+  NAMES as principal (both execution engines); text answers are restored
+  byte-identically to their pre-speech baselines.
 - **Ming-Lite-Omni decode is now deterministic (greedy) as the vendor
   intends**: the packaged sampling default made every run stochastic;
   with the corrected package, all four execution modes produce identical
