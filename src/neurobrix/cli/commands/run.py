@@ -55,6 +55,22 @@ def _try_warm_path(args) -> bool:
         kwargs["repetition_penalty"] = args.repetition_penalty
     if args.chat_mode is not None:
         kwargs["chat_mode"] = args.chat_mode
+    # Warm-boundary symmetry (doctrine: serving RPCs hide R30 gaps): the
+    # resolved mode and speaker travel to the daemon exactly like the
+    # cold path ships them to the flow. Mode resolves once, here — the
+    # binary-output path block below reuses it.
+    family = status.get("family")
+    mode = None
+    if family:
+        from neurobrix.core.runtime.output_dispatch import resolve_mode
+        try:
+            mode = resolve_mode(family, args)
+        except RuntimeError:
+            mode = getattr(args, "mode", None)
+    if mode is not None:
+        kwargs["mode"] = mode
+    if getattr(args, 'speaker', None) is not None:
+        kwargs["speaker"] = args.speaker
     if args.seed is not None:
         kwargs["seed"] = args.seed
 
@@ -66,19 +82,16 @@ def _try_warm_path(args) -> bool:
     # so daemon saves the file. Text families (llm/vlm/multimodal-text/stt/
     # audio_llm) return text in the JSON response and don't need a server-side
     # save path.
-    family = status.get("family")
     if family:
         from neurobrix.core.runtime.output_dispatch import (
             get_output_format,
             resolve_output_path,
-            resolve_mode,
         )
         try:
             fmt = get_output_format(family)
         except RuntimeError:
             fmt = "txt"
         if fmt != "txt":
-            mode = resolve_mode(family, args)
             output_path = resolve_output_path(args.output, args.model, family, mode)
             kwargs["output_path"] = str(Path(output_path).resolve())
 
@@ -189,6 +202,43 @@ def cmd_run(args):
         print(f"Audio: {args.audio}")
     print("=" * 70)
 
+    # Mutually exclusive flags: --compiled / --sequential / --triton /
+    # --triton-sequential. Default = compiled when no flag is passed.
+    # Resolved BEFORE the container gates: capability gates (e.g. the
+    # audio-mode engine gate) need the resolved engine name.
+    _mode_flags = [
+        getattr(args, 'compiled', False),
+        args.sequential,
+        args.triton,
+        getattr(args, 'triton_sequential', False),
+    ]
+    if sum(bool(f) for f in _mode_flags) > 1:
+        print("\nERROR: Only one execution mode flag can be passed at a time.")
+        print("       Choose one of: --compiled (default), --sequential, --triton, --triton-sequential")
+        return 1
+
+    if args.sequential:
+        execution_mode = "sequential"
+    elif args.triton or getattr(args, 'triton_sequential', False):
+        # Triton mode: validate hardware compatibility
+        if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            print("\n[ERROR] --triton mode is not compatible with Apple Metal GPUs.")
+            print("   Metal/MPS backend does not support Triton kernels.")
+            print("   This will be supported in a future version of NeuroBrix.")
+            print("   Use default mode (without --triton) for Metal GPU inference.")
+            return
+        if not torch.cuda.is_available():
+            import os
+            os.environ.setdefault("TRITON_CPU_BACKEND", "1")
+            print("   [Triton] No GPU detected — using Triton CPU backend (experimental)")
+        if getattr(args, 'triton_sequential', False):
+            execution_mode = "triton_sequential"
+        else:
+            execution_mode = "triton"
+    else:
+        # default OR --compiled explicit
+        execution_mode = "compiled"
+
     # 1. Load NBX Container
     print("\n[1/4] Loading NBX container...")
     container = NBXContainer.load(str(nbx_path))
@@ -203,6 +253,7 @@ def cmd_run(args):
     from neurobrix.core.runtime.output_dispatch import (
         validate_required_inputs,
         resolve_mode,
+        get_family_config,
     )
     try:
         validate_required_inputs(family, args)
@@ -232,6 +283,34 @@ def cmd_run(args):
                 f"--mode {mode} to use that mode."
             )
             sys.exit(1)
+        # Speech capability gates — scoped to multimodal_strict families
+        # (the generative-speech leg: builds where --mode audio routes
+        # through topology.flow.speech). Audio-native families (tts, stt,
+        # audio_llm) serve mode "audio" through their own flow handlers,
+        # closed in both engines — these gates must never fire for them.
+        _mm_strict = (
+            get_family_config(family).get("modes", {}).get("multimodal_strict", False)
+        )
+        if _mm_strict and mode == "audio":
+            if execution_mode in ("triton", "triton_sequential"):
+                print(
+                    "\nERROR: --mode audio is not yet wired in the triton "
+                    "engines — the speech leg's triton mirror is the active "
+                    "chantier (P-OMNI-GEN §1, R30). Use --compiled or "
+                    "--sequential."
+                )
+                sys.exit(1)
+            # --mode audio requires the generative-speech contract in the
+            # container (topology.flow.speech, emitted from the model's
+            # declared registry contract). Builds without it refuse HERE.
+            if not _topo.get("flow", {}).get("speech"):
+                print(
+                    f"\nERROR: This '{args.model}' build carries no "
+                    f"generative-speech contract (topology.flow.speech). "
+                    f"--mode audio requires a speech-declaring build "
+                    f"(P-OMNI-GEN speech leg)."
+                )
+                sys.exit(1)
 
     neural_components = container.get_neural_components()
     print(f"   Components: {[c.name for c in neural_components]}")
@@ -424,6 +503,14 @@ def cmd_run(args):
         inputs["global.max_tokens"] = args.max_tokens
     if args.chat_mode is not None:
         inputs["global.chat_mode"] = args.chat_mode
+    # Resolved output mode travels to the flow handlers (the speech leg
+    # activates on global.mode == "audio" + topology.flow.speech; every
+    # other handler ignores the key). Speaker preset rides along for
+    # speech-capable builds.
+    if mode is not None:
+        inputs["global.mode"] = mode
+    if getattr(args, 'speaker', None) is not None:
+        inputs["global.speaker"] = args.speaker
 
     print(f"   CLI inputs: {list(inputs.keys())}")
 
@@ -456,42 +543,7 @@ def cmd_run(args):
     print(f"   Total inputs: {len(inputs)}")
 
     # 5. Determine Execution Engine Mode
-    # Mutually exclusive flags: --compiled / --sequential / --triton /
-    # --triton-sequential. Default = compiled when no flag is passed.
-    _mode_flags = [
-        getattr(args, 'compiled', False),
-        args.sequential,
-        args.triton,
-        getattr(args, 'triton_sequential', False),
-    ]
-    if sum(bool(f) for f in _mode_flags) > 1:
-        print("\nERROR: Only one execution mode flag can be passed at a time.")
-        print("       Choose one of: --compiled (default), --sequential, --triton, --triton-sequential")
-        return 1
-
-    if args.sequential:
-        execution_mode = "sequential"
-    elif args.triton or getattr(args, 'triton_sequential', False):
-        # Triton mode: validate hardware compatibility
-        if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-            print("\n[ERROR] --triton mode is not compatible with Apple Metal GPUs.")
-            print("   Metal/MPS backend does not support Triton kernels.")
-            print("   This will be supported in a future version of NeuroBrix.")
-            print("   Use default mode (without --triton) for Metal GPU inference.")
-            return
-        if not torch.cuda.is_available():
-            import os
-            os.environ.setdefault("TRITON_CPU_BACKEND", "1")
-            print("   [Triton] No GPU detected — using Triton CPU backend (experimental)")
-        if getattr(args, 'triton_sequential', False):
-            execution_mode = "triton_sequential"
-        else:
-            execution_mode = "triton"
-    else:
-        # default OR --compiled explicit
-        execution_mode = "compiled"
-
-    # 6. Execute
+    # 6. Execute (engine resolved before the container gates, above)
     print("\n[Execute] Running pipeline...")
     print(f"   Engine: {execution_mode.upper()}")
     # Data-driven hardware capability surface for Triton kernel wrappers.

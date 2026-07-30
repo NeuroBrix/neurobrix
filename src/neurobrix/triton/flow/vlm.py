@@ -118,6 +118,15 @@ class TritonVLMEngine:
     # ─── main ────────────────────────────────────────────────────────
 
     def execute(self) -> Dict[str, Any]:
+        # Capability gate (R30): the generative-speech leg has no triton
+        # mirror yet — refuse at the boundary naming the chantier instead
+        # of silently serving the text leg into a .wav path.
+        if str(self.ctx.variable_resolver.resolved.get("global.mode") or "") == "audio":
+            raise NotImplementedError(
+                "ZERO FALLBACK: --mode audio is not wired in the triton "
+                "engines yet — the speech-leg triton mirror is the active "
+                "chantier (P-OMNI-GEN §1, R30). Use --compiled or "
+                "--sequential.")
         flow = self.ctx.pkg.topology.get("flow", {})
         vlm = flow.get("vlm", {})
         if not vlm:

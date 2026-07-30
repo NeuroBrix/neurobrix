@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Generative speech output (`--mode audio`) for multimodal builds**
+  that declare a speech contract, on the compiled engine: speaker
+  selection, seeded reproducible sampling (one shared draw path designed
+  to produce bit-identical audio across engines when probabilities
+  agree), and WAV output at the model's declared sample rate.
+  Unsupported engine or build combinations refuse cleanly with an
+  explanatory message; the Triton-engine speech path is the named
+  follow-up and refuses cleanly until it lands.
 - **Per-step decode diagnostics** (`NBX_DECODE_TOPK`): both execution
   engines can log the top-4 next-token logits and the top-2 margin at
   every decode step — the measuring tool for adjudicating rare

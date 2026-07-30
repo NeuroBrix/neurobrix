@@ -234,6 +234,55 @@ def _fuse_one_moe_layer(
     if hidden_states_tid is None:
         return None
 
+    # ── Doomed-boundary absorption (gated-shared-expert motif) ─────────
+    # A boundary op that consumes subgraph-INTERNAL tensors other than
+    # the chosen exit tensor is guaranteed dead after the removal pass
+    # (its producers vanish with the subgraph) and its death cascades
+    # into the combine tail. Qwen3-Omni talker: the gated shared expert
+    # interposes an aten::add (excluded from MOE_OP_TYPES — residual
+    # escape) between the last index_add and the reshape, so the last
+    # combine op lands on the boundary consuming removed internals —
+    # measured effect: 1/20 layers fused, ~41k downstream ops killed,
+    # the graph output left with no producer in execution_order.
+    # Absorb exactly those ops back into the subgraph and rebind the
+    # exit tensor to their output. The trigger condition is precisely
+    # "this op would be declared dead by the removal pass", so clean
+    # graphs (thinker/deepseek/qwen3: a view boundary consuming ONLY
+    # the exit tensor) never match — fused sets stay bit-identical
+    # (verified on thinker 48/48, deepseek-moe 27/27, V2-Lite 26/26,
+    # Qwen3-30B 48/48, Ming multi-gate 28/28).
+    _absorb_changed = True
+    while _absorb_changed:
+        _absorb_changed = False
+        for b_uid in sorted(boundary_ops,
+                            key=lambda u: execution_order.index(u)
+                            if u in execution_order else -1):
+            b_op = ops.get(b_uid, {})
+            b_outs = b_op.get("output_tensor_ids", [])
+            if len(b_outs) != 1:
+                continue
+            in_tids = _collect_input_tids(b_op)
+            internal_ins = [t for t in in_tids
+                            if producer_map.get(t) in moe_op_uids
+                            or t == last_scatter_tid]
+            doomed = any(t != last_scatter_tid for t in internal_ins)
+            if not doomed:
+                continue
+            # Absorption requires every non-weight input to be subgraph-
+            # internal (or the exit tensor) — an op with a live external
+            # activation input (the shared-expert combine add) stays out.
+            external = [t for t in in_tids
+                        if t not in internal_ins
+                        and producer_map.get(t) is not None
+                        and producer_map.get(t) not in moe_op_uids]
+            if external:
+                continue
+            moe_op_uids.add(b_uid)
+            boundary_ops.discard(b_uid)
+            last_scatter_tid = b_outs[0]
+            _absorb_changed = True
+            break
+
     # --- Create fused op ---
     # Extract block identifier from parent_module of topk
     parent = topk_data.get("parent_module", "")
@@ -388,9 +437,14 @@ def _fuse_one_moe_layer(
             for in_tid in _collect_input_tids(op_data):
                 if in_tid in removed_producers:
                     dead_ops.add(uid)
-                    # This dead op's outputs are also removed
+                    # This dead op's outputs are also removed — EXCEPT the
+                    # fused op's own outputs (same exemption as the seeding
+                    # above): cascading a fused output tid into
+                    # removed_producers self-poisons every consumer of the
+                    # fused result.
                     for out_tid in op_data.get("output_tensor_ids", []):
-                        removed_producers.add(out_tid)
+                        if out_tid not in fused_output_tids:
+                            removed_producers.add(out_tid)
                     changed = True
                     break
 

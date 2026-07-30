@@ -536,6 +536,33 @@ class VLMEngine(FlowHandler):
         print(f"   [{lm_name}] Generated {len(generated_ids)} tokens in {elapsed:.0f}ms")
         resolved["global.generated_token_ids"] = generated_ids
 
+        # ── Generative-speech leg (P-OMNI-GEN §1) ──
+        # Activates on the request mode + the container's declared
+        # contract (topology.flow.speech) — data only, no model names.
+        # Runs BEFORE the LM unload: the leg reads the thinker embed
+        # weight and the final forward's hidden_tap output.
+        if str(resolved.get("global.mode") or "") == "audio":
+            if not self.ctx.pkg.topology.get("flow", {}).get("speech"):
+                raise RuntimeError(
+                    "ZERO FALLBACK: --mode audio on a build without "
+                    "topology.flow.speech (P-OMNI-GEN speech leg).")
+            _tap = resolved.get(f"{lm_name}.hidden_tap")
+            if _tap is None:
+                raise RuntimeError(
+                    "ZERO FALLBACK: the LM graph exposes no hidden_tap "
+                    "output — re-trace with the speech contract (R15 "
+                    "registry-driven tap).")
+            from .speech import SpeechLeg
+            SpeechLeg(self).run({
+                "input_ids": (list(prefix_ids)
+                              + [int(span_token_id)] * int(n_modal)
+                              + list(suffix_ids)),
+                "generated_ids": generated_ids,
+                "context_embeds": context_embeds,
+                "hidden_tap": _tap,
+                "lm_name": lm_name,
+            })
+
         if not self.ctx.persistent_mode:
             self._unload_component_weights(lm_name)
             release_flow_memory(self.ctx.primary_device)
