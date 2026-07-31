@@ -292,14 +292,10 @@ def cmd_run(args):
             get_family_config(family).get("modes", {}).get("multimodal_strict", False)
         )
         if _mm_strict and mode == "audio":
-            if execution_mode in ("triton", "triton_sequential"):
-                print(
-                    "\nERROR: --mode audio is not yet wired in the triton "
-                    "engines — the speech leg's triton mirror is the active "
-                    "chantier (P-OMNI-GEN §1, R30). Use --compiled or "
-                    "--sequential."
-                )
-                sys.exit(1)
+            # All four engines serve --mode audio: the compiled leg
+            # (core/flow/speech.py) and its R33-pure triton mirror
+            # (triton/flow/speech.py) consume the same contract and the
+            # same graphs (P-OMNI-GEN §1, R30).
             # --mode audio requires the generative-speech contract in the
             # container (topology.flow.speech, emitted from the model's
             # declared registry contract). Builds without it refuse HERE.
