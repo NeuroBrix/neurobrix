@@ -21,6 +21,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   engines can log the top-4 next-token logits and the top-2 margin at
   every decode step — the measuring tool for adjudicating rare
   greedy-decoding token flips between engines.
+- **Reproducible speech seed from the package**: speech-enabled builds
+  now carry their default RNG seed in the package defaults; the CLI
+  `--set global.seed` overrides it per request (seed 0 is a valid
+  value). Packages without a declared seed refuse with a clear message
+  instead of silently falling back.
+
+### Changed
+
+- **The speech leg executes every codec-embedding lookup and the
+  per-step residual-code head projection as graph components** (a
+  single-step predictor component invoked once per residual code
+  group), removing all raw weight access from the flow layer. Both
+  execution engines run the same graphs by construction; the sampling
+  frontier is unchanged. Requires a package built with the matching
+  speech contract — older speech packages refuse cleanly at the
+  contract check, as before.
 
 ### Fixed
 

@@ -174,6 +174,11 @@ class SynonymRegistry:
         "wte": "token_embed",
         "wpe": "pos_embed",
         "rotary_emb": "rotary_embed",
+        # Codec-token embedding tables (generative-speech talkers: the
+        # talker backbone's codec vocab table and the MTP predictor's
+        # per-group ModuleList tables — Qwen3-Omni lineage; MiniCPM-o /
+        # Ming talkers reuse the term).
+        "codec_embedding": "codec_embed",
 
         # Diffusion embeddings
         "x_embedder": "x_embed",
