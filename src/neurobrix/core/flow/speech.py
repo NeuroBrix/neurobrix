@@ -75,18 +75,6 @@ class SpeechLeg:
         # leg concatenates across calls, so normalize to the leg device.
         return out.to(self._device) if hasattr(out, "to") else out
 
-    def _weight(self, comp: str, key: str) -> torch.Tensor:
-        self.engine._ensure_weights_loaded(comp)
-        execu = self.ctx.executors.get(comp)
-        if execu is None:
-            raise RuntimeError(f"ZERO FALLBACK: component {comp} not loaded.")
-        w = execu._weights.get(key)
-        if w is None:
-            raise RuntimeError(
-                f"ZERO FALLBACK: {comp} has no weight '{key}' "
-                f"(NeuroTax-normalized name expected).")
-        return w
-
     @staticmethod
     def _mrope_positions(seq_len: int, device) -> torch.Tensor:
         # Text-style positions on all three M-RoPE planes (the talker
@@ -111,6 +99,8 @@ class SpeechLeg:
         c_backbone = _require(comps, "backbone", "speech components")
         c_head = _require(comps, "codec_head", "speech components")
         c_pred = _require(comps, "predictor", "speech components")
+        c_cemb = _require(comps, "codec_embedding", "speech components")
+        c_pemb = _require(comps, "predictor_embedding", "speech components")
         c_tproj = _require(comps, "text_projection", "speech components")
         c_hproj = _require(comps, "hidden_projection", "speech components")
         c_voc = _require(comps, "vocoder", "speech components")
@@ -131,12 +121,18 @@ class SpeechLeg:
                 f"ZERO FALLBACK: unknown speaker '{req_speaker}' — "
                 f"declared speakers: {sorted(speakers)}.")
         speaker_id = int({k.lower(): v for k, v in speakers.items()}[req_speaker])
-        # RECORDED DEBT (P-OMNI-GEN §1 build-toolchain lot): the literal 1234 falls
-        # when the builder emits `seed` into defaults.json (registry-driven,
-        # same lot as the text-leg retrace); current builds don't carry it
-        # and the ear-validated smoke runs on this value.
-        seed = int(self.resolved.get("global.seed")
-                   or self.ctx.pkg.defaults.get("seed") or 1234)
+        # Registry-driven seed (generation.seed → defaults.json at build);
+        # CLI `--set global.seed` overrides per request. `is None` checks —
+        # seed 0 is a legitimate value, never a missing one.
+        _seed_v = self.resolved.get("global.seed")
+        if _seed_v is None:
+            _seed_v = self.ctx.pkg.defaults.get("seed")
+        if _seed_v is None:
+            raise RuntimeError(
+                "ZERO FALLBACK: no RNG seed — the build must emit "
+                "generation.seed into defaults.json (registry-driven); "
+                "re-import a current build or pass --set global.seed.")
+        seed = int(_seed_v)
         max_frames = int(self.resolved.get("global.max_audio_frames")
                          or _require(talker_s, "max_new_tokens",
                                      "talker sampling contract"))
@@ -236,12 +232,11 @@ class SpeechLeg:
                     else int(_require(sp, name, "codec specials"))
                     for name in _require(lay, "codec_specials_order",
                                          "assistant layout")]
-                talker_codec_w = self._weight(c_backbone,
-                                              "codec_embedding.weight")
-                codec_emb = talker_codec_w[
-                    torch.tensor(codec_specials,
-                                 device=talker_codec_w.device)] \
-                    .to(device=device, dtype=dtype).unsqueeze(0)               # [1, 6, 1024]
+                codec_emb = self._run(
+                    c_cemb,
+                    input=torch.tensor([codec_specials], dtype=torch.long,
+                                       device=device)) \
+                    .to(device=device, dtype=dtype)                            # [1, 6, 1024]
                 h = tts_pad_embed.shape[-1]
                 assistant_text_hidden = torch.cat(
                     (assistant_hidden[:, :_kp],
@@ -267,7 +262,11 @@ class SpeechLeg:
         talker_context = torch.cat(talker_embeds, dim=1).to(dtype)
 
         # ── 4. talker outer AR + predictor MTP inner AR ──────────────
-        talker_codec_w = self._weight(c_backbone, "codec_embedding.weight")
+        # MTP componentization (supervisor pattern 2026-07-30): every codec
+        # embedding lookup and the per-step head projection are GRAPH work
+        # (codec_embedding / predictor_embedding lookup components + the
+        # mono-step predictor's in-graph head_index gather). The flow owns
+        # only the loops, the context concats and the seeded draws (WHEN).
         # Declared-MoE late fusion for the talker backbone (the same
         # set_moe_config path the thinker uses): the traced expert unroll
         # is superseded wholesale in all modes; routing params come from
@@ -277,21 +276,19 @@ class SpeechLeg:
             _texec = self.ctx.executors.get(c_backbone)
             if _texec is not None and hasattr(_texec, "set_moe_config"):
                 _texec.set_moe_config(norm_topk_prob=bool(
-                    talker_moe.get("norm_topk_prob", True)))
-        pred_tables = [self._weight(c_pred,
-                                    f"model.codec_embedding.{i}.weight")
-                       for i in range(num_groups - 1)]
-        pred_heads = [self._weight(c_pred,
-                                   f"head.{i}.weight")
-                      for i in range(num_groups - 1)]
+                    _require(talker_moe, "norm_topk_prob",
+                             "talker MoE contract")))
 
-        t_temp = float(talker_s.get("temperature", 1.0))
-        t_topk = int(talker_s.get("top_k", 0))
-        t_topp = float(talker_s.get("top_p", 1.0))
-        t_pen = float(talker_s.get("repetition_penalty", 1.0))
-        p_temp = float(pred_s.get("temperature", 1.0))
-        p_topk = int(pred_s.get("top_k", 0))
-        p_topp = float(pred_s.get("top_p", 1.0))
+        # Every sampling key is _required — a silent temperature default
+        # (1.0 = unscaled multinomial) is the Ming sampling-class trap.
+        t_temp = float(_require(talker_s, "temperature", "talker sampling"))
+        t_topk = int(_require(talker_s, "top_k", "talker sampling"))
+        t_topp = float(_require(talker_s, "top_p", "talker sampling"))
+        t_pen = float(_require(talker_s, "repetition_penalty",
+                               "talker sampling"))
+        p_temp = float(_require(pred_s, "temperature", "predictor sampling"))
+        p_topk = int(_require(pred_s, "top_k", "predictor sampling"))
+        p_topp = float(_require(pred_s, "top_p", "predictor sampling"))
 
         frames: List[List[int]] = []
         seen_codes: List[int] = list(talker_ids)
@@ -313,7 +310,10 @@ class SpeechLeg:
             seen_codes.append(c0)
 
             # predictor MTP: prefill [past_hidden, last_id_embed]
-            last_id_embed = talker_codec_w[c0].to(device=device, dtype=dtype).view(1, 1, -1)
+            last_id_embed = self._run(
+                c_cemb,
+                input=torch.tensor([[c0]], dtype=torch.long, device=device)) \
+                .to(device=device, dtype=dtype)                  # [1, 1, 1024]
             pred_embeds = torch.cat((last_hidden.to(dtype), last_id_embed),
                                     dim=1)
             frame = [c0]
@@ -322,21 +322,31 @@ class SpeechLeg:
                 P = pred_embeds.shape[1]
                 pos = torch.arange(P, dtype=torch.long, device=device) \
                     .unsqueeze(0)
-                ph = self._run(c_pred,
-                               inputs_embeds=pred_embeds, position_ids=pos)
-                # VENDOR PARITY: the predictor lm_head runs in the model
-                # compute dtype (vendor: nn.Linear in model dtype); the
-                # fp64 conversion below is the seeded-draw frontier
-                # boundary, not a compute upcast. The triton leg MUST
-                # mirror this frontier when it lands (P-OMNI-GEN §1).
-                # (No hardcoded fp32 — DtypeEngine doctrine.)
-                pl = ph[:, -1, :] @ pred_heads[g].to(
-                    device=ph.device, dtype=ph.dtype).T
+                # Mono-step predictor: backbone + in-graph head_index
+                # gather -> logits (vendor lm_head[g] applied on every
+                # position; the last-position slice below is the AR read).
+                pred_logits = self._run(
+                    c_pred,
+                    inputs_embeds=pred_embeds, position_ids=pos,
+                    head_index=torch.tensor([g], dtype=torch.long,
+                                            device=device))
+                # VENDOR PARITY: logits arrive in the model compute dtype;
+                # the fp64 conversion below is the seeded-draw frontier
+                # boundary, not a compute upcast. The triton leg mirrors
+                # this frontier by construction (same graph, same draw —
+                # P-OMNI-GEN §1). (No hardcoded fp32 — DtypeEngine doctrine.)
+                pl = pred_logits[:, -1, :]
                 zg = pl.reshape(-1).to(torch.float64).cpu().numpy()
                 cg = stream.draw(zg, temperature=p_temp, top_k=p_topk,
                                  top_p=p_topp)
                 frame.append(cg)
-                step_embed = pred_tables[g][cg].to(device=device, dtype=dtype).view(1, 1, -1)
+                step_embed = self._run(
+                    c_pemb,
+                    input=torch.tensor([[cg]], dtype=torch.long,
+                                       device=device),
+                    table_index=torch.tensor([g], dtype=torch.long,
+                                             device=device)) \
+                    .to(device=device, dtype=dtype)              # [1, 1, 1024]
                 group_embeds.append(step_embed)
                 pred_embeds = torch.cat((pred_embeds, step_embed), dim=1)
             frames.append(frame)
