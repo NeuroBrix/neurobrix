@@ -32,9 +32,20 @@ Filter semantics mirror the transformers LogitsProcessor chain:
   MUST consume draws in the same order.
 """
 
+import json
+import os
+
 import numpy as np
 
 __all__ = ["SeededDrawStream", "apply_repetition_penalty"]
+
+# NBX_DRAW_DIAG=<jsonl path>: per-draw top-4 candidate ids/logits + the
+# top-2 margin + the chosen id, appended as one JSON line. The speech
+# twin of NBX_DECODE_TOPK — at any cross-engine code divergence the
+# FIRST differing line localizes the flip and its margin adjudicates
+# near-tie vs large-margin (both engines instrumented by construction:
+# this module IS the shared frontier). Default off, zero cost off.
+_DIAG_PATH = os.environ.get("NBX_DRAW_DIAG")
 
 
 def apply_repetition_penalty(logits: np.ndarray, seen_ids, penalty: float) -> np.ndarray:
@@ -63,10 +74,24 @@ class SeededDrawStream:
         """Sample one token id from a single 1-D fp64 logits vector."""
         z = np.array(logits_fp64, dtype=np.float64).reshape(-1)
         apply_repetition_penalty(z, seen_ids, repetition_penalty)
+        _diag_rec = None
+        if _DIAG_PATH:
+            _t4 = np.argsort(z)[::-1][:4]
+            _diag_rec = {
+                "n": self.draws,
+                "top4": [[int(i), round(float(z[i]), 6)] for i in _t4],
+                "margin": round(float(z[_t4[0]] - z[_t4[1]]), 6)
+                            if _t4.size > 1 else None,
+            }
         # temp <= 0 is the GREEDY contract (argmax), never a silent
         # unscaled multinomial — the Ming sampling-class trap (2026-07-27).
         if temperature is not None and temperature <= 0:
-            return int(np.argmax(z))
+            _g = int(np.argmax(z))
+            if _diag_rec is not None:
+                _diag_rec["chosen"] = _g
+                with open(_DIAG_PATH, "a") as _f:
+                    _f.write(json.dumps(_diag_rec) + "\n")
+            return _g
         if temperature and temperature != 1.0:
             z = z / float(temperature)
 
@@ -95,4 +120,10 @@ class SeededDrawStream:
 
         u = self._rng.random()
         self.draws += 1
-        return int(np.searchsorted(np.cumsum(p), u, side="right").clip(0, p.shape[0] - 1))
+        chosen = int(np.searchsorted(np.cumsum(p), u,
+                                     side="right").clip(0, p.shape[0] - 1))
+        if _diag_rec is not None:
+            _diag_rec["chosen"] = chosen
+            with open(_DIAG_PATH, "a") as _f:
+                _f.write(json.dumps(_diag_rec) + "\n")
+        return chosen

@@ -118,15 +118,6 @@ class TritonVLMEngine:
     # ─── main ────────────────────────────────────────────────────────
 
     def execute(self) -> Dict[str, Any]:
-        # Capability gate (R30): the generative-speech leg has no triton
-        # mirror yet — refuse at the boundary naming the chantier instead
-        # of silently serving the text leg into a .wav path.
-        if str(self.ctx.variable_resolver.resolved.get("global.mode") or "") == "audio":
-            raise NotImplementedError(
-                "ZERO FALLBACK: --mode audio is not wired in the triton "
-                "engines yet — the speech-leg triton mirror is the active "
-                "chantier (P-OMNI-GEN §1, R30). Use --compiled or "
-                "--sequential.")
         flow = self.ctx.pkg.topology.get("flow", {})
         vlm = flow.get("vlm", {})
         if not vlm:
@@ -575,6 +566,33 @@ class TritonVLMEngine:
         print(f"   [{lm_name}] Generated {len(generated_ids)} tokens in "
               f"{(time.perf_counter() - start) * 1000:.0f}ms")
         resolved["global.generated_token_ids"] = generated_ids
+
+        # ── Generative-speech leg (P-OMNI-GEN §1) — R30 mirror ──
+        # Activates on the request mode + the container's declared
+        # contract (topology.flow.speech) — data only, no model names.
+        # Runs BEFORE the LM unload: the leg reads the thinker embed
+        # weight and the final forward's hidden_tap output.
+        if str(resolved.get("global.mode") or "") == "audio":
+            if not self.ctx.pkg.topology.get("flow", {}).get("speech"):
+                raise RuntimeError(
+                    "ZERO FALLBACK: --mode audio on a build without "
+                    "topology.flow.speech (P-OMNI-GEN speech leg).")
+            _tap = resolved.get(f"{lm_name}.hidden_tap")
+            if _tap is None:
+                raise RuntimeError(
+                    "ZERO FALLBACK: the LM graph exposes no hidden_tap "
+                    "output — re-trace with the speech contract (R15 "
+                    "registry-driven tap).")
+            from neurobrix.triton.flow.speech import SpeechLeg
+            SpeechLeg(self).run({
+                "input_ids": (list(prefix_ids)
+                              + [int(span_token_id)] * int(n_modal)
+                              + list(suffix_ids)),
+                "generated_ids": generated_ids,
+                "context_embeds": context_embeds,
+                "hidden_tap": _tap,
+                "lm_name": lm_name,
+            })
 
         if not self.ctx.persistent_mode:
             self._unload_component_weights(lm_name)
