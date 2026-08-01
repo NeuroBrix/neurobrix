@@ -1312,6 +1312,97 @@ class VLMEngine(FlowHandler):
         img_src = img_embeds if img_embeds is not None else _zero_stub
         aud_src = aud_embeds if aud_embeds is not None else _zero_stub
 
+        # ── Generative-image leg (P-OMNI-GEN model 2/3) ──
+        # --mode image on a build declaring topology.flow.image_gen:
+        # the condition rides THE SPLICE CONTRACT ITSELF — per-scale
+        # gen spans [start, patch×s², end] append to the ids, the
+        # QUERY-TOKEN CONSTANTS enter as image_embeds (the graph's
+        # masked_scatter splices them — the vendor
+        # get_condition_embeds path verbatim), positions extend with
+        # per-scale visual strips (grid rows [1, 2, s·s·2] → llm
+        # 1×1×s²), ONE encoder pass replaces the decode, and the
+        # diffusion leg (connector → FlowMatchEuler + 2-chunk CFG →
+        # vae) produces the image.
+        if str(resolved.get("global.mode") or "") == "image":
+            ig_c = self.ctx.pkg.topology.get("flow", {}).get("image_gen")
+            if not ig_c:
+                raise RuntimeError(
+                    "ZERO FALLBACK: --mode image on a build without "
+                    "topology.flow.image_gen (P-OMNI-GEN image leg).")
+            from .image_gen import ImageGenLeg
+            from .image_gen import _require as _ig_req
+            _scales = [int(s) for s in
+                       _ig_req(ig_c, "img_gen_scales", "condition layout")]
+            _ptok = int(_ig_req(ig_c, "patch_token_id", "condition layout"))
+            _stok = int(_ig_req(ig_c, "gen_start_token_id",
+                                "condition layout"))
+            _etok = int(_ig_req(ig_c, "gen_end_token_id",
+                                "condition layout"))
+            _qtp = str(_ig_req(ig_c, "query_tokens_constant",
+                               "query tokens"))
+            _gen_ids = list(ids)
+            _gen_pos: List[int] = []
+            _segments = [("text", len(ids), None)]
+            for _s in _scales:
+                _gen_ids.append(_stok)
+                _segments.append(("text", 1, None))
+                _b0 = len(_gen_ids)
+                _gen_ids.extend([_ptok] * (_s * _s))
+                _gen_pos.extend(range(_b0, _b0 + _s * _s))
+                _segments.append(("visual", _s * _s, (1, 1, _s * _s, 1.0)))
+                _gen_ids.append(_etok)
+                _segments.append(("text", 1, None))
+            _ctx_ig = _embed(_gen_ids)
+            _S_ig = int(_ctx_ig.shape[1])
+            _leg = ImageGenLeg(self)
+            _qts = _leg._load_query_tokens()
+            try:
+                _img_src_ig = torch.cat(
+                    [_qts[f"{_qtp}.{_s}x{_s}"]
+                     .to(device=device, dtype=dtype) for _s in _scales],
+                    dim=0)                                   # [Σs², H]
+            except KeyError as _ke:
+                raise RuntimeError(
+                    f"ZERO FALLBACK: query-token constant {_ke} absent "
+                    f"from the container asset.") from _ke
+            _m2d = torch.zeros(1, _S_ig, dtype=torch.bool, device=device)
+            _m2d[0, torch.tensor(_gen_pos, device=device)] = True
+            _img_mask_ig = _m2d.unsqueeze(-1) \
+                .expand(-1, -1, hidden_size).contiguous()
+            _aud_mask_ig = torch.zeros(1, _S_ig, hidden_size,
+                                       dtype=torch.bool, device=device)
+            _pos_ig, _ = self._build_mrope_positions(_segments, device)
+            for _key, _value in (
+                    ("inputs_embeds", _ctx_ig),
+                    ("position_ids", _pos_ig),
+                    ("image_pos_masks", _img_mask_ig),
+                    ("audio_pos_masks", _aud_mask_ig),
+                    ("image_embeds", _img_src_ig),
+                    ("audio_embeds", aud_src)):
+                resolved[_key] = _value
+                resolved[f"global.{_key}"] = _value
+            print(f"   [{lm_name}] Image-gen ENCODER pass "
+                  f"(S={_S_ig}, gen tokens={len(_gen_pos)})...")
+            self._execute_component(lm_name, "forward", None)
+            _lm_out = self._get_component_output(lm_name)
+            if _lm_out is None:
+                raise RuntimeError(
+                    "ZERO FALLBACK: the condition LM produced no output "
+                    "on the image-gen encoder pass.")
+            _last_s = _scales[-1]
+            _last_pos0 = _gen_pos[-_last_s * _last_s]
+            _gen_hidden = _lm_out[:, _last_pos0:_last_pos0
+                                  + _last_s * _last_s].to(dtype)
+            if not self.ctx.persistent_mode:
+                self._unload_component_weights(lm_name)
+                release_flow_memory(self.ctx.primary_device)
+            _leg.run({
+                "gen_hidden": _gen_hidden,
+                "device": device,
+                "dtype": dtype,
+            })
+            return self.ctx.variable_resolver.resolve_all()
+
         base_positions, next_pos = self._build_mrope_positions(
             self._mrope_segments(len(ids), img_span, aud_span, vis_grid_llm),
             device)

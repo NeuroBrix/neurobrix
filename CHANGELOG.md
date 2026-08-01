@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Generative image output (`--mode image`) for multimodal builds**
+  that declare an image-generation contract, on the compiled engine:
+  the language model conditions a flow-matching diffusion stack that
+  lives entirely inside the package (learned query tokens as a package
+  constant, condition bridge, denoiser and VAE as traced components),
+  with guided sampling through the internal CFG protocol and scheduler
+  factory, seeded and byte-reproducible run to run. Builds without the
+  contract refuse cleanly.
 - **Generative speech output (`--mode audio`) for multimodal builds**
   that declare a speech contract, on ALL FOUR execution modes: speaker
   selection, seeded reproducible sampling (one shared draw path — each

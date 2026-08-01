@@ -274,6 +274,14 @@ def cmd_run(args):
             _topo = json.load(f)
         _build_gen_type = _topo.get("flow", {}).get("generation", {}).get("type", "")
         _mode_gen_type = {"text": "autoregressive_text", "image": "autoregressive_image"}.get(mode or "")
+        # Generative-image contract (P-OMNI-GEN model 2/3): a build that
+        # declares topology.flow.image_gen serves --mode image through
+        # the diffusion leg — the autoregressive-image coherence gate
+        # below is for VQ-AR builds (Janus class), not this contract
+        # (the speech-gate pattern: capability comes from the DECLARED
+        # contract, never the model name).
+        if mode == "image" and _topo.get("flow", {}).get("image_gen"):
+            _mode_gen_type = None
         if _mode_gen_type and _build_gen_type and _mode_gen_type != _build_gen_type:
             _supported_mode = "image" if _build_gen_type == "autoregressive_image" else "text"
             print(
