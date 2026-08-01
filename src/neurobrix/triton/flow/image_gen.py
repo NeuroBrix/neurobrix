@@ -1,38 +1,38 @@
-"""Generative-image leg (P-OMNI-GEN model 2/3) — compiled engine.
+"""Generative-image leg (P-OMNI-GEN model 2/3) — triton engines (R33-pure).
 
-Runs INSTEAD of the vlm text decode when the request asks --mode image
-and the container declares topology.flow.image_gen (the registry-
-emitted contract: condition layout, guidance, scheduler). The leg
-mirrors the vendor pipeline op-for-op:
+Mirror of core/flow/image_gen.py over the SAME flow.image_gen contract
+and the SAME component graphs — NBXTensor end-to-end, zero torch (R33).
+The two engines share ONE seeded CPU fp32 gaussian frontier
+(kernels/seeded_draw.py:seeded_gaussian): identical seed, identical
+initial latents, so the engines can only diverge through kernel
+numerics (R30 by construction).
 
-  prompt ids (chat template) + per-scale appended gen spans
-  [start, patch x s^2, end] (scales from the contract; gen_mask marks
-  patch positions)
-    -> words embeds + QUERY-TOKEN CONSTANTS spliced at the gen
-       positions (runtime/image_gen_constants.safetensors — static
-       learned tensors, an .nbx constant per the conds.pt precedent)
-    -> LM ENCODER pass (no AR decode; M-RoPE positions; principal
-       hidden out)
-    -> LAST scale's gen hiddens -> condition_connector component
-       (proj_in -> non-causal qwen2 -> proj_out -> normalize, all
-       in-graph) -> prompt_embeds
-    -> FlowMatchEuler loop (OUR scheduler factory; shift/steps from
-       the contract) with 2-chunk CFG through OUR CFG engine
-       (negative = zero embeds, vendor contract) over the
-       image_denoiser component (ToClipMLP + pooled IN-GRAPH)
-    -> image_vae decode leg -> resolved["global.output_image"]
-       (the CLI writes the PNG; the flow never writes files)
+Structure is the compiled leg's, section for section:
 
-Every quantity is read from topology.flow.image_gen / pkg.defaults —
-no model names, no literals (ZERO FALLBACK on missing contract keys).
-The RNG is the generation.seed chain (CLI global.seed override >
-defaults.seed > raise), driving latent init deterministically.
+  1. condition_connector run on the LAST scale's gen hiddens (delivered
+     by the vlm splice branch) -> prompt_embeds; negative = zero embeds
+     (vendor contract).
+  2. FlowMatchEuler loop (TritonSchedulerFactory, shift from the
+     contract) with 2-chunk CFG over the denoiser component; timestep
+     conditioning through the contract's timestep_scale
+     (per-component-scale doctrine: our flow schedulers expose raw
+     [0,1] sigmas; the DiT conditions on sigma*1000).
+  3. image_vae decode leg (contract scaling/shift factors) ->
+     resolved["global.output_image"] (the CLI writes the PNG; the flow
+     never writes files).
+
+Every quantity comes from topology.flow.image_gen / pkg.defaults — no
+model names, no literals (ZERO FALLBACK on missing contract keys).
 """
 
 import time
 from typing import Any, Dict
 
-import torch
+import numpy as np
+
+from neurobrix.kernels.nbx_tensor import NBXTensor, DeviceAllocator
+from neurobrix.kernels.seeded_draw import seeded_gaussian
+from neurobrix.triton.device_transfer import needs_move, transfer_tensor
 
 
 def _require(block: Dict[str, Any], key: str, where: str):
@@ -44,17 +44,32 @@ def _require(block: Dict[str, Any], key: str, where: str):
     return val
 
 
+def _from_np_on(arr: np.ndarray, dev_idx: int) -> NBXTensor:
+    """Upload a host array to a SPECIFIC device (speech-leg idiom: under
+    a multi-GPU placement the leg's components sit on different devices,
+    so every host-created tensor is pinned explicitly)."""
+    prev = DeviceAllocator.get_device()
+    try:
+        DeviceAllocator.set_device(dev_idx)
+        return NBXTensor.from_numpy(arr)
+    finally:
+        DeviceAllocator.set_device(prev)
+
+
 class ImageGenLeg:
-    """Compiled-engine image-gen leg over the flow.image_gen contract."""
+    """Triton-engine image-gen leg over the flow.image_gen contract."""
 
     def __init__(self, engine):
-        # engine = the VLMEngine instance (same ctx, same component
-        # plumbing, same lifecycle — the SpeechLeg idiom).
+        # engine = the triton VLMEngine instance: same ctx, same
+        # component plumbing, same lifecycle (compiled-leg idiom).
         self.engine = engine
         self.ctx = engine.ctx
         self.resolved = engine.ctx.variable_resolver.resolved
+        self._dev: int = 0   # bound to the gen-hidden tap's device in run()
 
-    def _run(self, comp: str, **inputs) -> torch.Tensor:
+    # ── component plumbing (dual-write + run, compiled-leg idiom) ──
+
+    def _run(self, comp: str, **inputs) -> NBXTensor:
         self.engine._ensure_weights_loaded(comp)
         for name, val in inputs.items():
             self.resolved[f"{comp}.{name}"] = val
@@ -63,12 +78,15 @@ class ImageGenLeg:
         out = self.engine._get_component_output(comp)
         if out is None:
             raise RuntimeError(f"ZERO FALLBACK: {comp} produced no output.")
-        return out.to(self._device) if hasattr(out, "to") else out
+        if needs_move(out, self._dev):
+            out = transfer_tensor(out, self._dev)
+        return out
 
-    def _load_query_tokens(self) -> Dict[str, torch.Tensor]:
+    def _load_query_tokens_np(self) -> Dict[str, np.ndarray]:
         """Load the query-token constants from the container asset
-        (runtime/image_gen_constants.safetensors — the conds.pt loading
-        precedent). Keys: <prefix>.{s}x{s}."""
+        (runtime/image_gen_constants.safetensors) as HOST numpy arrays —
+        the vlm splice branch pins them onto the LM's device. Keys:
+        <prefix>.{s}x{s}."""
         from pathlib import Path
         from safetensors import safe_open
         base = Path(self.ctx.pkg.cache_path
@@ -80,8 +98,8 @@ class ImageGenLeg:
                 "ZERO FALLBACK: runtime/image_gen_constants.safetensors "
                 "absent from the container — rebuild with the image_gen "
                 "contract (query-token constants).")
-        out: Dict[str, torch.Tensor] = {}
-        with safe_open(str(asset), framework="pt", device="cpu") as f:
+        out: Dict[str, np.ndarray] = {}
+        with safe_open(str(asset), framework="np", device="cpu") as f:
             for k in f.keys():
                 out[k] = f.get_tensor(k)
         return out
@@ -95,9 +113,9 @@ class ImageGenLeg:
                 "ZERO FALLBACK: image-gen leg invoked without "
                 "topology.flow.image_gen.")
         t0 = time.perf_counter()
-        device = state["device"]
-        self._device = device
+        gen_hidden: NBXTensor = state["gen_hidden"]          # [1, s², H]
         dtype = state["dtype"]
+        self._dev = int(gen_hidden._device_idx)
 
         comps = _require(ig, "components", "functional component slots")
         c_conn = _require(comps, "connector", "image_gen components")
@@ -134,17 +152,13 @@ class ImageGenLeg:
               f"cfg={gscale} seed={seed}")
 
         # ── 1. connector → prompt embeds ─────────────────────────────
-        # The condition ENCODER pass lives in the vlm splice branch
-        # (the gen spans + query-token constants ride the six-input
-        # splice contract; the graph splices them) — the leg receives
-        # the LAST scale's gen hiddens ready for the bridge.
-        gen_hidden = state["gen_hidden"]                     # [1, s², H]
         prompt_embeds = self._run(c_conn, hidden_states=gen_hidden)
-        neg_embeds = prompt_embeds * 0                       # vendor contract
+        neg_embeds = prompt_embeds * 0.0                     # vendor contract
+        cond = NBXTensor.cat([neg_embeds, prompt_embeds], dim=0)  # [2, N, H]
 
         # ── 2. FlowMatchEuler loop + 2-chunk CFG ─────────────────────
-        from neurobrix.core.module.scheduler.factory import SchedulerFactory
-        scheduler = SchedulerFactory.create({
+        from neurobrix.triton.scheduler.factory import TritonSchedulerFactory
+        scheduler = TritonSchedulerFactory.create({
             "_class_name": str(_require(sched_c, "type",
                                         "scheduler contract")),
             **{k: v for k, v in sched_c.items() if k != "type"}})
@@ -153,42 +167,43 @@ class ImageGenLeg:
         lat_ch = int(_require(vae_c, "latent_channels", "vae contract"))
         h_lat, w_lat = height // vae_scale, width // vae_scale
         # Latent init through the SHARED seeded frontier (R30): both
-        # engines consume the same CPU fp32 array, so they start from
-        # bit-identical noise — RNG provenance can never explain a
-        # cross-engine divergence.
-        from neurobrix.kernels.seeded_draw import seeded_gaussian
-        latents = torch.from_numpy(
-            seeded_gaussian(seed, (1, lat_ch, h_lat, w_lat))
-        ).to(device=device, dtype=dtype)
+        # engines consume the same CPU fp32 array — RNG provenance can
+        # never explain a cross-engine divergence.
+        latents = _from_np_on(
+            seeded_gaussian(seed, (1, lat_ch, h_lat, w_lat)), self._dev)
 
-        scheduler.set_timesteps(steps, device=device)
+        scheduler.set_timesteps(steps)
         timesteps = scheduler.timesteps
         if timesteps is None:
             raise RuntimeError(
                 "ZERO FALLBACK: scheduler produced no timesteps.")
-        cond = torch.cat([neg_embeds, prompt_embeds], dim=0)  # [2, N, H]
         for i, t in enumerate(timesteps):
-            lat_in = torch.cat([latents, latents], dim=0)
-            t_in = torch.full((2,), float(t) * ts_scale,
-                              device=device, dtype=dtype)
+            t_f = float(t.item()) if isinstance(t, NBXTensor) else float(t)
+            lat_h = latents.to(dtype)
+            lat_in = NBXTensor.cat([lat_h, lat_h], dim=0)
+            t_in = _from_np_on(
+                np.full((2,), t_f * ts_scale, dtype=np.float32),
+                self._dev).to(dtype)
             noise_pred = self._run(
-                c_den, hidden_states=lat_in.to(dtype),
+                c_den, hidden_states=lat_in,
                 timestep=t_in, encoder_hidden_states=cond,
                 return_dict=False)
             if isinstance(noise_pred, (tuple, list)):
                 noise_pred = noise_pred[0]
-            uncond, text = noise_pred.chunk(2)
-            guided = uncond + gscale * (text - uncond)
+            half = int(noise_pred.shape[0]) // 2
+            uncond = noise_pred.narrow(0, 0, half).contiguous()
+            text = noise_pred.narrow(0, half, half).contiguous()
+            guided = uncond + (text - uncond) * gscale
             latents = scheduler.step(
-                guided.float(), t, latents.float(),
-                return_dict=False).to(dtype)
+                guided.to("float32"), t_f, latents.to("float32"),
+                return_dict=False)
             if (i + 1) % 5 == 0:
                 print(f"   [image_gen] step {i + 1}/{steps}")
 
-        # ── 6. VAE decode ─────────────────────────────────────────────
+        # ── 3. VAE decode ─────────────────────────────────────────────
         sf = float(_require(vae_c, "scaling_factor", "vae contract"))
         sh = float(_require(vae_c, "shift_factor", "vae contract"))
-        z = latents.float() / sf + sh
+        z = latents.to("float32") / sf + sh
         image = self._run(c_vae, sample=z.to(dtype))
         self.resolved["global.output_image"] = image
         dt = time.perf_counter() - t0
