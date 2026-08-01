@@ -30,7 +30,7 @@ defaults.seed > raise), driving latent init deterministically.
 """
 
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
 import torch
 
@@ -152,10 +152,14 @@ class ImageGenLeg:
         vae_scale = int(_require(vae_c, "vae_scale_factor", "vae contract"))
         lat_ch = int(_require(vae_c, "latent_channels", "vae contract"))
         h_lat, w_lat = height // vae_scale, width // vae_scale
-        gen = torch.Generator(device="cpu").manual_seed(seed)
-        latents = torch.randn(
-            (1, lat_ch, h_lat, w_lat), generator=gen,
-            dtype=torch.float32).to(device=device, dtype=dtype)
+        # Latent init through the SHARED seeded frontier (R30): both
+        # engines consume the same CPU fp32 array, so they start from
+        # bit-identical noise — RNG provenance can never explain a
+        # cross-engine divergence.
+        from neurobrix.kernels.seeded_draw import seeded_gaussian
+        latents = torch.from_numpy(
+            seeded_gaussian(seed, (1, lat_ch, h_lat, w_lat))
+        ).to(device=device, dtype=dtype)
 
         scheduler.set_timesteps(steps, device=device)
         timesteps = scheduler.timesteps

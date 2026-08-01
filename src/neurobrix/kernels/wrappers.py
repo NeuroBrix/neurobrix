@@ -1094,7 +1094,28 @@ def mul(a, b) :
     return output
 
 
-def div(a, b) :
+def div(a, b, rounding_mode=None) :
+    # aten::div carries an optional rounding_mode kwarg ("floor"/"trunc",
+    # e.g. the SD3-class pos_embed crop offset (max-h)//2 traces as
+    # div(rounding_mode=floor) on a 0-dim int64). Routed onto the
+    # existing bricks — floor_divide_wrapper's fp64 int discipline for
+    # floor, the same composition with trunc for trunc.
+    if rounding_mode == "floor":
+        return floor_divide_wrapper(a, b)
+    if rounding_mode == "trunc":
+        a_dtype = a.dtype
+        _is_int = hasattr(a_dtype, "is_floating") and not a_dtype.is_floating()
+        if _is_int:
+            a_f = a.to(NBXDtype.float64)
+            b_f = b.to(NBXDtype.float64) if hasattr(b, "to") else b
+        else:
+            a_f, b_f = a, b
+        out = trunc_wrapper(div(a_f, b_f))
+        return out.to(a_dtype) if out.dtype != a_dtype else out
+    if rounding_mode is not None:
+        raise RuntimeError(
+            f"ZERO FALLBACK: aten::div rounding_mode '{rounding_mode}' "
+            "is not a known ATen mode (floor/trunc/None).")
     a, b, output, n, dev_ctx, scalar = _prepare_binary(a, b)
     if scalar:
         div_scalar_kernel[_1d_grid(n)](a, output, n, float(b), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)

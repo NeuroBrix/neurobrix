@@ -37,7 +37,8 @@ import os
 
 import numpy as np
 
-__all__ = ["SeededDrawStream", "apply_repetition_penalty"]
+__all__ = ["SeededDrawStream", "apply_repetition_penalty",
+           "seeded_gaussian"]
 
 # NBX_DRAW_DIAG=<jsonl path>: per-draw top-4 candidate ids/logits + the
 # top-2 margin + the chosen id, appended as one JSON line. The speech
@@ -127,3 +128,96 @@ class SeededDrawStream:
             with open(_DIAG_PATH, "a") as _f:
                 _f.write(json.dumps(_diag_rec) + "\n")
         return chosen
+
+    def draw_chattts(self, logits_fp64, temperature: float, top_p: float,
+                     top_k: int, min_tokens_to_keep: int = 3,
+                     seen_ids=None, repetition_penalty: float = 1.0,
+                     penalty_window: int = 16,
+                     eos_masked: bool = False, eos_id: int = -1) -> int:
+        """Vendor-exact ChatTTS-class chain (MiniCPM-o tts contract,
+        modeling generate :4425-4462 + gen_logits :4994-5008):
+        temperature -> window-frequency penalty -> TopP (min_keep) ->
+        TopK (min_keep) -> optional eos -inf mask (min_new_token) ->
+        softmax -> ONE multinomial from the stream. Same seeded stream,
+        same draw-order contract as draw() (R30 coupling)."""
+        z = np.array(logits_fp64, dtype=np.float64).reshape(-1)
+        if temperature is not None and temperature <= 0:
+            return int(np.argmax(z))          # greedy contract
+        if temperature and temperature != 1.0:
+            z = z / float(temperature)
+        z = _chattts_window_penalty(z, seen_ids, repetition_penalty,
+                                    penalty_window)
+        _mk = max(1, int(min_tokens_to_keep))
+        # TopP FIRST (the vendor warper order), HF keep-set semantics +
+        # min_tokens_to_keep floor; ties by ascending vocab index.
+        if top_p and 0.0 < top_p < 1.0:
+            zs = z - z.max()
+            pf = np.exp(zs)
+            pf /= pf.sum()
+            order = np.lexsort((np.arange(pf.shape[0]), -pf))
+            csum = np.cumsum(pf[order])
+            cut = max(int(np.searchsorted(csum, top_p, side="left")) + 1,
+                      _mk)
+            mask = np.zeros(pf.shape[0], dtype=bool)
+            mask[order[:cut]] = True
+            z = np.where(mask, z, -np.inf)
+        # TopK with the min_tokens_to_keep floor (HF: k = max(k, mk)).
+        if top_k and top_k > 0:
+            _k = min(max(int(top_k), _mk), z.shape[0])
+            kth = np.partition(z, -_k)[-_k]
+            z = np.where(z >= kth, z, -np.inf)
+        if eos_masked and 0 <= eos_id < z.shape[0]:
+            z[eos_id] = -np.inf                # min_new_token contract
+        _diag_rec = None
+        if _DIAG_PATH:
+            _t4 = np.argsort(z)[::-1][:4]
+            _diag_rec = {
+                "n": self.draws, "class": "chattts",
+                "top4": [[int(i), round(float(z[i]), 6)] for i in _t4],
+                "margin": round(float(z[_t4[0]] - z[_t4[1]]), 6)
+                if _t4.size > 1 else None,
+            }
+        zk = z - z[np.isfinite(z)].max()
+        p = np.exp(zk)
+        p[~np.isfinite(zk)] = 0.0
+        p /= p.sum()
+        u = self._rng.random()
+        self.draws += 1
+        chosen = int(np.searchsorted(np.cumsum(p), u,
+                                     side="right").clip(0, p.shape[0] - 1))
+        if _diag_rec is not None:
+            _diag_rec["chosen"] = chosen
+            with open(_DIAG_PATH, "a") as _f:
+                _f.write(json.dumps(_diag_rec) + "\n")
+        return chosen
+
+
+def seeded_gaussian(seed: int, shape) -> np.ndarray:
+    """Seeded fp32 standard-normal draw — the latent-init twin of
+    SeededDrawStream. ONE stream (PCG64(seed), native-fp32 ziggurat) on
+    the CPU; both engines consume the SAME array, so generative
+    diffusion legs start from bit-identical noise whenever seed and
+    shape agree. This is the cross-engine coupling contract for
+    image/video latent init, exactly as the draw stream is for sampled
+    tokens: the engines may only diverge through compute numerics,
+    never through RNG provenance."""
+    return np.random.default_rng(int(seed)).standard_normal(
+        size=tuple(int(d) for d in shape), dtype=np.float32)
+
+
+def _chattts_window_penalty(z: np.ndarray, seen_ids, penalty: float,
+                            window: int) -> np.ndarray:
+    """ChatTTS-class repetition penalty (vendor
+    CustomRepetitionPenaltyLogitsProcessorRepeat): alpha = penalty^freq
+    over the last `window` draws; negative logits multiply by alpha,
+    non-negative divide. Distinct from the HF processor (seen-set,
+    freq-blind) — declared per contract as repetition_penalty_class."""
+    if not penalty or penalty == 1.0 or not seen_ids:
+        return z
+    ids = np.asarray(list(seen_ids)[-int(window):], dtype=np.int64)
+    ids = ids[(ids >= 0) & (ids < z.shape[0])]
+    if ids.size == 0:
+        return z
+    freq = np.bincount(ids, minlength=z.shape[0]).astype(np.float64)
+    alpha = np.power(float(penalty), freq)
+    return np.where(z < 0, z * alpha, z / alpha)
