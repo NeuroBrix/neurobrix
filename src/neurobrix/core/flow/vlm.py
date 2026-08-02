@@ -861,6 +861,17 @@ class VLMEngine(FlowHandler):
                 return torch.nn.functional.embedding(tens, embed_weight)\
                     .to(device=device, dtype=dtype)
 
+        # --mode audio on a hidden_text_merge speech contract: the vendor
+        # tts template ends the assistant prefix with the tts-bos marker
+        # (use_tts_template) so generation ENTERS the speakable span.
+        # Contract-driven append — inert for every other request.
+        if str(resolved.get("global.mode") or "") == "audio":
+            _sp_pre = self.ctx.pkg.topology.get("flow", {}).get("speech") \
+                or {}
+            if str(_sp_pre.get("condition_type") or "") \
+                    == "hidden_text_merge":
+                ids = list(ids) + [int(_sp_pre["tts_bos_token_id"])]
+
         # The placeholder rows of the context embedding are overwritten
         # IN-GRAPH by masked_scatter — the vendor embeds the full ids
         # (unk placeholders included) and scatters over them.
@@ -922,6 +933,37 @@ class VLMEngine(FlowHandler):
         print(f"   [{lm_name}] Generated {len(generated_ids)} tokens "
               f"in {elapsed:.0f}ms")
         resolved["global.generated_token_ids"] = generated_ids
+
+        # ── Generative-speech leg, CFM class (P-OMNI-GEN model 3/3) ──
+        # Activates on the request mode + the container's declared
+        # contract; the condition_type key dispatches the leg VARIANT
+        # (hidden_text_merge = additive last-hidden merge + token2wav
+        # CFM) — data only, no model names. `output` is the FINAL
+        # decode forward's last-hidden [1, S, H]: causal ⇒ row p equals
+        # the vendor's per-step hidden for the token at p.
+        if str(resolved.get("global.mode") or "") == "audio":
+            _sp_c = self.ctx.pkg.topology.get("flow", {}).get("speech")
+            if not _sp_c:
+                raise RuntimeError(
+                    "ZERO FALLBACK: --mode audio on a build without "
+                    "topology.flow.speech (P-OMNI-GEN speech leg).")
+            if str(_sp_c.get("condition_type") or "") == "hidden_text_merge":
+                if output is None:
+                    raise RuntimeError(
+                        "ZERO FALLBACK: no decode forward output to "
+                        "condition the speech leg on.")
+                from .speech_cfm import SpeechCFMLeg
+                SpeechCFMLeg(self).run({
+                    "full_ids": list(ids) + list(generated_ids),
+                    "lm_hidden": output,
+                    "device": device,
+                    "dtype": dtype,
+                })
+            else:
+                raise RuntimeError(
+                    "ZERO FALLBACK: this splice class has no leg for "
+                    f"condition_type={_sp_c.get('condition_type')!r} — "
+                    "the tap+chatml class rides the M-RoPE branch.")
 
         if not self.ctx.persistent_mode:
             self._unload_component_weights(lm_name)
