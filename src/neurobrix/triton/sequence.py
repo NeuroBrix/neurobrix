@@ -1682,8 +1682,11 @@ class TritonSequence:
             func = dispatch(op_type)
             if func is None:
                 raise RuntimeError(f"[triton] Missing op: {op_type}")
-            # Wrap with AMP dtype rules
+            # Wrap with AMP dtype rules (alias-canonical — the AMP sets
+            # key on canonical names, aten::multiply behaves as mul).
+            from neurobrix.kernels.classification import canonical_aten
             bare_name = op_type.split("::")[-1] if "::" in op_type else op_type
+            bare_name = canonical_aten(bare_name)
             func = self._dtype_engine.wrap_op(bare_name, func)
 
         # Compile args → dataclasses

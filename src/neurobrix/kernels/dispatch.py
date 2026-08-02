@@ -1100,7 +1100,8 @@ def dispatch(op_type: str) -> Optional[Callable]:
         _OP_MAP = _build_op_map()
 
     op_name = op_type.split("::")[-1] if "::" in op_type else op_type
-    return _OP_MAP.get(op_name)
+    from neurobrix.kernels.classification import canonical_aten
+    return _OP_MAP.get(canonical_aten(op_name))
 
 
 def has_kernel(op_type: str) -> bool:
