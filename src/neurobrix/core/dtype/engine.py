@@ -260,6 +260,20 @@ AMP_SCALAR_FILL_OPS: FrozenSet[str] = frozenset({
     "index_fill", "index_fill_",
 })
 
+# CREATION ops that carry the fill scalar next to an explicit dtype kwarg
+# (no input tensor to infer from — the AMP_SCALAR_FILL_OPS mechanism above
+# keys on a floating tensor argument, which these ops don't have). The graph
+# records e.g. full(size, -3.4e38, dtype=bf16) for a causal-mask sentinel;
+# Prism remaps the dtype kwarg to fp16 on non-bf16 hardware (V100) and the
+# untouched scalar then overflows ("value cannot be converted to type
+# at::Half"). The guard clamps the scalar to the RESOLVED target dtype's
+# finite range at call time — numerically inert for mask sentinels (masked
+# positions are ~0 after softmax either way). Surfaced by the MiniCPM-o
+# speech-AR LlamaModel causal mask (aten::full, 2026-08-02).
+AMP_CREATION_FILL_OPS: FrozenSet[str] = frozenset({
+    "full", "new_full", "full_like",
+})
+
 
 
 
@@ -309,6 +323,12 @@ class DtypeEngine:
 
         assert func is not None, f"ZERO FALLBACK: func cannot be None for op {op_name}"
 
+        # Creation-fill guard: independent of the amp_enabled gate — the
+        # Prism dtype remap (bf16→fp16 kwarg) happens regardless of AMP,
+        # so the scalar clamp must too. See AMP_CREATION_FILL_OPS.
+        if op_name in AMP_CREATION_FILL_OPS:
+            return self._make_creation_fill_guard(func)
+
         # AMP disabled: skip all autocast wrapping (no fp32 upcasting).
         if not self.amp_enabled:
             return func
@@ -353,6 +373,29 @@ class DtypeEngine:
     # ========================================================================
     # AMP WRAPPERS
     # ========================================================================
+
+    def _make_creation_fill_guard(self, func: Callable) -> Callable:
+        """Clamp the Python-scalar fill of full/new_full/full_like to the
+        finite range of the RESOLVED target dtype (kwarg, positional dtype,
+        or the template tensor's dtype for the *_like/new_* forms). See the
+        AMP_CREATION_FILL_OPS doctrine comment for the failure it closes."""
+        def guarded(*args, **kwargs):
+            tgt = kwargs.get("dtype")
+            if tgt is None:
+                tgt = next((a for a in args if isinstance(a, torch.dtype)), None)
+            if tgt is None and args and isinstance(args[0], torch.Tensor):
+                tgt = args[0].dtype
+            if tgt in (torch.float16, torch.bfloat16):
+                info = torch.finfo(tgt)
+                args = tuple(
+                    max(info.min, min(info.max, a)) if isinstance(a, float)
+                    else a
+                    for a in args)
+                fv = kwargs.get("fill_value")
+                if isinstance(fv, float):
+                    kwargs["fill_value"] = max(info.min, min(info.max, fv))
+            return func(*args, **kwargs)
+        return guarded
 
     def _make_safe_softmax(self, func: Callable) -> Callable:
         """
