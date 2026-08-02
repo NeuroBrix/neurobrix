@@ -622,6 +622,13 @@ class TensorResolver:
                 elif v is None or (isinstance(v, dict)
                                    and v.get("type") == "None"):
                     resolved_entries.append(None)
+                elif isinstance(v, float):
+                    # Scale factors (upsample scales=[1/480]) are NOT shape
+                    # dims — the shape resolver int-coerces them ([0.00208]
+                    # → [0], the HiFT SineGen resample "output (W: 0)"
+                    # crash). Plain floats pass through verbatim; ints and
+                    # symbol dicts/strings still resolve as dims.
+                    resolved_entries.append(v)
                 elif self._ctx.symbolic_shapes_enabled and self._ctx.shape_resolver:
                     resolved_entries.append(self._ctx.shape_resolver.resolve(v))
                 else:
