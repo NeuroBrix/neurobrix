@@ -487,9 +487,59 @@ class NativeATenDispatcher:
                 inputs = ([inputs[0], inputs[1], inputs[2], _n, _c, _hxw]
                           + list(inputs[6:]))
 
+            # [DERIVED SIZES] upsample ops traced from F.interpolate(scale_factor=)
+            # carry output_size=None + scale factors; the raw aten op resolves the
+            # null size to 0 ("input (W: 49920) and output (W: 0)"). Recompute the
+            # size from the LIVE input × scale — the sequential mirror of compiled
+            # _make_upsample (Kokoro F0 / HiFT SineGen resample class). Scales take
+            # precedence over a recorded size, exactly like the compiled wrapper
+            # (a baked trace size must not survive at other lengths).
+            if (base_name.startswith(("upsample_", "_upsample_"))
+                    and inputs and isinstance(inputs[0], torch.Tensor)):
+                _x = inputs[0]
+                _rest = list(inputs[1:])
+                import os as _os_up
+                if _os_up.environ.get("NBX_DEBUG") == "1":
+                    print(f"[UPSAMPLE-DBG] {base_name} rest="
+                          f"{[type(a).__name__ + ':' + repr(a)[:40] for a in _rest]}",
+                          flush=True)
+                _scales = []
+                for _a in _rest[1:]:
+                    if isinstance(_a, (list, tuple)):
+                        _scales += [float(_s) for _s in _a
+                                    if isinstance(_s, (int, float))
+                                    and not isinstance(_s, bool)]
+                    elif (isinstance(_a, (int, float))
+                          and not isinstance(_a, bool)):
+                        _scales.append(float(_a))
+                _nsp = _x.dim() - 2
+                if _scales and _nsp >= 1 and len(_scales) >= _nsp:
+                    _sz = [int(round(_x.shape[2 + _i] * _scales[_i]))
+                           for _i in range(_nsp)]
+                    # aten's nearest overloads require EXACTLY ONE of
+                    # output_size/scales — null the scale-like args (bools =
+                    # align_corners stay), mirroring compiled's
+                    # F.interpolate(size=...) call form.
+                    _tail = [
+                        (None if (isinstance(_a, (list, tuple))
+                                  or (isinstance(_a, (int, float))
+                                      and not isinstance(_a, bool)))
+                         else _a)
+                        for _a in _rest[1:]
+                    ]
+                    inputs = [_x, _sz] + _tail
+
             # [UNIVERSAL KWARGS] Extract kwargs from graph attributes (SOURCE OF TRUTH)
             # This handles dtype, device, layout, memory_format for ALL ops universally
             kwargs = self._extract_kwargs(attributes)
+
+            # Creation-fill sentinel clamp (single authority: DtypeEngine).
+            # full-class ops carry a bf16/fp32-min mask sentinel next to a
+            # Prism-remapped dtype kwarg — the scalar overflows fp16 unless
+            # clamped to the RESOLVED target dtype's finite range.
+            from neurobrix.core.dtype.engine import clamp_creation_fill_args
+            inputs, kwargs = clamp_creation_fill_args(
+                base_name, list(inputs), kwargs)
 
             if kwargs:
                 result = op_fn(*inputs, **kwargs)

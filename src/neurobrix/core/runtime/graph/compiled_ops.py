@@ -147,6 +147,15 @@ class CompiledOpResolver:
         Native/compiled mode only. Triton mode uses triton/ package.
         """
         # ── NATIVE MODE: special handlers for complex ATen signatures ──
+        # [PINNED NOISE] R30 mirror of the sequential dispatcher's block and
+        # the triton rand wrappers: under NBX_FORCE_RAND_SEED all engines
+        # draw from ONE shared numpy RandomState (kernels/rng_pin.py), so a
+        # stochastic vocoder (s3gen CFM + NSF/SineGen source) is reproducible
+        # per engine and draw-coupled across engines. The compiled path was
+        # the uncovered side (MiniCPM-o HiFT pin rows, 2026-08-02). Default
+        # off → native torch RNG unchanged.
+        if op_name in ("randn_like", "rand_like", "randn", "rand"):
+            return self._make_pinned_rand(op_name)
         if op_name == "slice":
             return self._make_slice()
         if op_name == "narrow":
@@ -268,6 +277,28 @@ class CompiledOpResolver:
                 return torch.rsqrt(clamped)
             return torch.rsqrt(inp)
         return rsqrt_stable
+
+    def _make_pinned_rand(self, op_name: str) -> Callable:
+        """[PINNED NOISE] see the _resolve_op_func registration comment."""
+        is_uniform = op_name in ("rand", "rand_like")
+        is_like = op_name.endswith("_like")
+        aten_fn = getattr(torch.ops.aten, op_name)
+
+        def pinned_rand(*args, **kwargs):
+            from neurobrix.kernels.rng_pin import (
+                pinned_seed, pinned_normal, pinned_uniform)
+            if pinned_seed() is None:
+                return aten_fn(*args, **kwargs)
+            if is_like and args and isinstance(args[0], torch.Tensor):
+                ref = args[0]
+                shp, dev, dt = list(ref.shape), ref.device, ref.dtype
+            else:
+                shp = list(args[0]) if args else []
+                dev = kwargs.get("device") or self.device
+                dt = kwargs.get("dtype") or torch.float32
+            arr = pinned_uniform(shp) if is_uniform else pinned_normal(shp)
+            return torch.from_numpy(arr).to(device=dev, dtype=dt)
+        return pinned_rand
 
     def _make_slice(self) -> Callable:
         """Create slice wrapper — clamps end to dim size, uses narrow."""

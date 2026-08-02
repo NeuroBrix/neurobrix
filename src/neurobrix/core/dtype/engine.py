@@ -275,6 +275,32 @@ AMP_CREATION_FILL_OPS: FrozenSet[str] = frozenset({
 })
 
 
+def clamp_creation_fill_args(op_base_name: str, args, kwargs):
+    """Shared creation-fill sentinel clamp (see AMP_CREATION_FILL_OPS).
+
+    Serves BOTH execution paths — the compiled compile-time wrapper and
+    the sequential dispatcher's materialized call — so the clamp rule
+    lives once. Returns (args, kwargs), possibly rebuilt."""
+    if op_base_name not in AMP_CREATION_FILL_OPS:
+        return args, kwargs
+    tgt = kwargs.get("dtype")
+    if tgt is None:
+        tgt = next((a for a in args if isinstance(a, torch.dtype)), None)
+    if tgt is None and args and isinstance(args[0], torch.Tensor):
+        tgt = args[0].dtype
+    if tgt in (torch.float16, torch.bfloat16):
+        info = torch.finfo(tgt)
+        args = [
+            max(info.min, min(info.max, a)) if isinstance(a, float) else a
+            for a in args
+        ]
+        fv = kwargs.get("fill_value")
+        if isinstance(fv, float):
+            kwargs = {**kwargs,
+                      "fill_value": max(info.min, min(info.max, fv))}
+    return args, kwargs
+
+
 
 
 
@@ -378,22 +404,13 @@ class DtypeEngine:
         """Clamp the Python-scalar fill of full/new_full/full_like to the
         finite range of the RESOLVED target dtype (kwarg, positional dtype,
         or the template tensor's dtype for the *_like/new_* forms). See the
-        AMP_CREATION_FILL_OPS doctrine comment for the failure it closes."""
+        AMP_CREATION_FILL_OPS doctrine comment; the rule itself lives in
+        clamp_creation_fill_args (shared with the sequential dispatcher)."""
+        _name = getattr(func, "__name__", "full")
         def guarded(*args, **kwargs):
-            tgt = kwargs.get("dtype")
-            if tgt is None:
-                tgt = next((a for a in args if isinstance(a, torch.dtype)), None)
-            if tgt is None and args and isinstance(args[0], torch.Tensor):
-                tgt = args[0].dtype
-            if tgt in (torch.float16, torch.bfloat16):
-                info = torch.finfo(tgt)
-                args = tuple(
-                    max(info.min, min(info.max, a)) if isinstance(a, float)
-                    else a
-                    for a in args)
-                fv = kwargs.get("fill_value")
-                if isinstance(fv, float):
-                    kwargs["fill_value"] = max(info.min, min(info.max, fv))
+            args, kwargs = clamp_creation_fill_args(
+                _name if _name in AMP_CREATION_FILL_OPS else "full",
+                list(args), kwargs)
             return func(*args, **kwargs)
         return guarded
 

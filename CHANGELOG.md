@@ -69,7 +69,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   carry a mask sentinel next to an explicitly recorded dtype no longer
   overflow when the hardware dtype policy narrows that dtype — the
   scalar now clamps to the resolved target dtype's finite range
-  (numerically inert for attention-mask sentinels).
+  (numerically inert for attention-mask sentinels), on BOTH the
+  compiled and the sequential execution paths through one shared rule.
+- **Sequential-mode resample ops traced from scale factors**: upsample
+  ops recorded with a null output size and float scale factors now
+  recompute the size from the live input length (mirroring the
+  compiled wrapper), and float scale factors in op argument lists are
+  no longer integer-coerced by the shape resolver (a 1/480 downsample
+  scale became 0, crashing the vocoder source resample).
+- **Pinned-noise reproducibility on the compiled path**: the shared
+  seeded RNG pin (`NBX_FORCE_RAND_SEED`) now also covers compiled
+  execution — all execution modes draw stochastic vocoder noise from
+  one shared stream, making pinned runs byte-reproducible per engine.
 - **Text-mode answers on speech-enabled multimodal builds**: builds whose
   language-model graph exposes an auxiliary mid-stack output (used by the
   generative-speech leg) produced garbled text in text-only requests —
