@@ -196,7 +196,10 @@ class TritonSequentialDispatcher:
                 return valid[0]
             inputs = [valid] + list(inputs[1:])
 
-        # Lookup kernel and wrap with AMP rules
+        # Lookup kernel and wrap with AMP rules (alias-canonical: the AMP
+        # sets key on canonical names — aten::multiply must behave as mul).
+        from neurobrix.kernels.classification import canonical_aten
+        base = canonical_aten(base)
         func = kernel_dispatch(base)
         if func is None:
             raise RuntimeError(f"[triton-sequential] No kernel for: {op_type}")

@@ -10,15 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Conditional-flow-matching voice synthesis for multimodal builds**
-  whose speech contract declares a CFM token2wav chain: the language
-  model's answer conditions a codec-token autoregressive stage
-  (additive text-embedding + normalized hidden-projection merge),
-  then a conformer flow encoder, a guided cosine-grid flow-matching
-  decoder and a neural vocoder — all packaged components, with
-  per-speaker conditioning constants precomputed into the package.
-  Verified end-to-end by independent speech-to-text on the produced
-  WAV. Adds the `NBX_SPEECH_DUMP` diagnostic (default-off) capturing
-  the leg's bisection points (span ids, speech codes, mel, waveform).
+  whose speech contract declares a CFM token2wav chain, on ALL FOUR
+  execution modes: the language model's answer conditions a
+  codec-token autoregressive stage (additive text-embedding +
+  normalized hidden-projection merge), then a conformer flow encoder,
+  a guided cosine-grid flow-matching decoder and a neural vocoder —
+  all packaged components, with per-speaker conditioning constants
+  precomputed into the package. Both engines share the seeded draw
+  AND initial-noise frontiers, so the codec tokens are byte-coupled
+  across all four modes; verified end-to-end by independent
+  speech-to-text on every mode's WAV. Adds the `NBX_SPEECH_DUMP`
+  diagnostic (default-off) capturing the leg's bisection points
+  (span ids, speech codes, mel, waveform) on both engines.
 - **Generative image output (`--mode image`) for multimodal builds**
   that declare an image-generation contract, on ALL FOUR execution
   modes: the language model conditions a flow-matching diffusion stack
@@ -81,6 +84,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   seeded RNG pin (`NBX_FORCE_RAND_SEED`) now also covers compiled
   execution — all execution modes draw stochastic vocoder noise from
   one shared stream, making pinned runs byte-reproducible per engine.
+- **ATen alias ops in Triton modes**: numpy-style ATen aliases
+  (`multiply`, `divide`, `subtract`, comparison aliases) recorded by
+  vendor code now canonicalize to their base ops in one shared map —
+  kernel dispatch, op classification and precision rules all treat an
+  alias exactly like its canonical op.
 - **Text-mode answers on speech-enabled multimodal builds**: builds whose
   language-model graph exposes an auxiliary mid-stack output (used by the
   generative-speech leg) produced garbled text in text-only requests —

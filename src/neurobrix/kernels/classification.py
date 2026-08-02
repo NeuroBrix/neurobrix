@@ -144,6 +144,25 @@ _METADATA_OPS = {
 }
 
 
+# ATen ALIAS names → canonical op names. torch exposes numpy-style
+# aliases (aten::multiply == aten::mul); vendor code calling the alias
+# records it verbatim in the graph (first hit: the HiFT SineGen
+# harmonics `torch.multiply`, MiniCPM-o voice). ONE canonical map —
+# consumed by classification, kernel dispatch AND the triton AMP
+# wrap sites, so an alias behaves exactly like its canonical op.
+ATEN_ALIASES: Dict[str, str] = {
+    "multiply": "mul", "divide": "div", "subtract": "sub",
+    "true_divide": "div", "absolute": "abs",
+    "greater": "gt", "greater_equal": "ge",
+    "less": "lt", "less_equal": "le", "not_equal": "ne",
+}
+
+
+def canonical_aten(bare_name: str) -> str:
+    """Map an ATen alias to its canonical bare op name (identity otherwise)."""
+    return ATEN_ALIASES.get(bare_name, bare_name)
+
+
 # Build the classification dict
 ATEN_CLASSIFICATION: Dict[str, OpExecution] = {}
 for op in _TRITON_OPS:
@@ -160,6 +179,8 @@ def get_execution_type(op_name: str) -> OpExecution:
     """Get the execution type for an ATen op."""
     if not op_name.startswith(("aten::", "custom::")):
         op_name = f"aten::{op_name}"
+    if op_name.startswith("aten::"):
+        op_name = f"aten::{canonical_aten(op_name[6:])}"
     if op_name not in ATEN_CLASSIFICATION:
         raise KeyError(f"Unknown ATen op: {op_name}")
     return ATEN_CLASSIFICATION[op_name]
