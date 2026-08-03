@@ -1,0 +1,44 @@
+# Benchmark rows — phase 1 (see ../README.md for the methodology).
+# Every column of a row serves the SAME upstream checkpoint in fp16.
+
+defaults:
+  repetitions: 5
+  warmup_requests: 1
+  decoding: greedy
+  stream: true
+  gpu_memory_sample_hz: 1
+
+rows:
+  - id: llm_dense_tinyllama
+    family: llm
+    checkpoint: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+    neurobrix_model: TinyLlama-1.1B-Chat-v1.0
+    prompt: "Explain in three sentences why the sky is blue."
+    max_new_tokens: 128
+    columns: [vllm, ollama, neurobrix_pytorch, neurobrix_triton]
+
+  - id: llm_moe_deepseek
+    family: llm
+    checkpoint: deepseek-ai/deepseek-moe-16b-chat
+    neurobrix_model: deepseek-moe-16b-chat
+    prompt: "Write a Python function that returns the factorial of n."
+    max_new_tokens: 128
+    columns: [vllm, ollama, neurobrix_pytorch, neurobrix_triton]
+
+  - id: vlm_qwen3vl
+    family: vlm
+    checkpoint: Qwen/Qwen3-VL-30B-A3B-Thinking
+    neurobrix_model: Qwen3-VL-30B-A3B-Thinking
+    prompt: "What fruit is shown in this image? Answer briefly."
+    input_image: validation_outputs/qwen3_omni_stage1/test_image_apple_448.png
+    max_new_tokens: 64
+    columns: [vllm, neurobrix_pytorch, neurobrix_triton]   # ollama: no VLM parity at fp16 — verify at pin time, else not-applicable
+
+  - id: image_diffusion_sana1024
+    family: image
+    checkpoint: Efficient-Large-Model/Sana_1600M_1024px_MultiLing
+    neurobrix_model: Sana_1600M_1024px_MultiLing
+    prompt: "a red apple on a wooden table"
+    steps: 20
+    seed: 42
+    columns: [neurobrix_pytorch, neurobrix_triton]   # diffusion: competitor columns not applicable
