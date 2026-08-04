@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Optimization analysis engine (report-only)**: a new analysis module
+  maps optimization opportunities across every installed package graph —
+  constant-foldable subgraphs, exact algebraic identities, duplicated
+  computations, dead code, layout candidates and kernel-fusion sites —
+  each labeled with the gate class a future transformation must pass
+  (byte-preserving vs drift-gated). Nothing is transformed: the sweep
+  (`python -m neurobrix.core.optim.sweep`) only writes a dated findings
+  report per model plus a synthesis table. Findings are honest to
+  symbolic dimensions: bounds frozen at trace values are surfaced as
+  package-coverage suspects instead of being reported as removable.
+
 ## [0.5.0] - 2026-08-03
 
 ### Added

@@ -1,0 +1,55 @@
+# Competitor-backend version pins — sourced 2026-08-04 against the
+# reference-rig ceilings (NVIDIA driver 535.288.01 / CUDA <= 12.2,
+# torch <= 2.5.1+cu121, Tesla V100 sm_70, Python 3.10). These are the
+# factual maxima installable on this hardware; both upstreams have
+# since moved past it (vLLM: no sm_70 in current wheels; Ollama:
+# driver-550 floor since v0.30.10). The honest framing everywhere:
+# "newest versions installable on this hardware".
+
+vllm:
+  pin: "0.7.3"            # last release pinning torch==2.5.1 (cu121 wheels)
+  fallback_pin: "0.6.6.post1"
+  install: |
+    pip install "torch==2.5.1+cu121" "torchvision==0.20.1+cu121" \
+        "torchaudio==2.5.1+cu121" \
+        --index-url https://download.pytorch.org/whl/cu121
+    pip install "xformers==0.0.28.post3" \
+        --index-url https://download.pytorch.org/whl/cu121
+    pip install vllm==0.7.3
+  post_install_gate: 'python -c "import torch; assert torch.version.cuda == \"12.1\""'
+  serve_flags: "--dtype float16"   # bf16 unsupported on sm_70
+  volta_notes:
+    - "Attention backend: XFormers (FlashAttention-2 structurally
+       impossible on sm_70 — Ampere MMA shapes)."
+    - "NEVER set VLLM_USE_V1=1: the V1 engine needs compute capability
+       8.0+; V0 is the only Volta path on 0.7.x."
+  sources:
+    - https://raw.githubusercontent.com/vllm-project/vllm/v0.7.3/requirements-cuda.txt
+    - https://docs.vllm.ai/en/v0.7.3/getting_started/installation/gpu.html
+    - https://github.com/vllm-project/vllm/issues/10592
+
+ollama:
+  pin: "0.24.0"           # newest stable before the driver-550 fatbin floor
+  install: |
+    curl -fsSL https://ollama.com/install.sh | OLLAMA_VERSION=0.24.0 sh
+  volta_notes:
+    - "Newer Ollama (>= 0.30.10) requires driver 550+ (cuda_v12 fatbin
+       compression); v0.30.x crashes on V100 + driver 535 with 'device
+       kernel image is invalid'."
+    - "Serve f16 GGUF only (no quantization anywhere in the harness);
+       leave OLLAMA_KV_CACHE_TYPE at default f16."
+    - "Record OLLAMA_FLASH_ATTENTION state explicitly in every run
+       manifest (llama.cpp Volta FA = tile/vec kernels, no tensor
+       cores)."
+  sources:
+    - https://github.com/ollama/ollama/issues/16449
+    - https://github.com/ollama/ollama/issues/16533
+    - https://github.com/ollama/ollama/pull/16895
+
+fairness_recorded:
+  - "Software-age asymmetry: the rig ceilings pin vLLM to 2025-02
+     (0.7.3) but Ollama to 2026-05 (0.24.0) — a 15-month freshness gap
+     between baselines; stated in every published table."
+  - "No baseline (nor our Triton mode) gets an HMMA tensor-core
+     attention path on sm_70 — the comparison is engine-vs-engine,
+     not hardware-tier-vs-tier."
