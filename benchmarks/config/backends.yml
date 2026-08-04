@@ -17,7 +17,11 @@ vllm:
         --index-url https://download.pytorch.org/whl/cu121
     pip install "xformers==0.0.28.post3" \
         --index-url https://download.pytorch.org/whl/cu121
-    pip install vllm==0.7.3
+    pip install vllm==0.7.3 "transformers==4.49.0"
+    # transformers MUST be era-pinned: vllm 0.7.3 declares >=4.48.2
+    # unbounded, but transformers 5.x removed
+    # all_special_tokens_extended -> engine crashes at tokenizer init
+    # (verified on this rig 2026-08-04).
   post_install_gate: 'python -c "import torch; assert torch.version.cuda == \"12.1\""'
   serve_flags: "--dtype float16"   # bf16 unsupported on sm_70
   volta_notes:
