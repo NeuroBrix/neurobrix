@@ -21,6 +21,7 @@ import socket
 import traceback
 from typing import Any, Dict, Optional
 
+from neurobrix import decode_progress
 from neurobrix.serving.engine import InferenceEngine
 from neurobrix.serving.protocol import (
     SOCKET_PATH, PID_PATH, LOG_PATH, DAEMON_DIR,
@@ -304,7 +305,7 @@ class ServingDaemon:
             if request is None:
                 break  # Client disconnected
 
-            response = self._dispatch(request)
+            response = self._dispatch(request, conn)
             send_message(conn, response)
 
             # Check if shutdown was requested
@@ -312,15 +313,37 @@ class ServingDaemon:
                 self._running = False
                 break
 
-    def _dispatch(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        """Dispatch JSON-RPC request to engine method."""
+    def _dispatch(self, request: Dict[str, Any], conn: socket.socket) -> Dict[str, Any]:
+        """Dispatch JSON-RPC request to engine method.
+
+        `conn` is the client connection — used only by streaming requests
+        (generate with stream=true) to push per-token event messages ahead
+        of the final response on the same length-prefixed wire.
+        """
         method = request.get("method", "")
         params = request.get("params", {})
 
         try:
             if method == "generate":
                 output_path = params.pop("output_path", None)
-                result = self._engine.generate(**params)
+                stream = bool(params.pop("stream", False))
+                if stream:
+                    # Per-token events from the decode loop (both engines emit
+                    # at the generator sample site). A send failure (client
+                    # gone) propagates and aborts the request — no silent
+                    # decode into the void.
+                    def _on_token(step: int, n: int, token_id: int,
+                                  done: bool) -> None:
+                        send_message(conn, {"stream": {
+                            "step": step, "n": n,
+                            "token": token_id, "done": done}})
+                    decode_progress.set_listener(_on_token)
+                    try:
+                        result = self._engine.generate(**params)
+                    finally:
+                        decode_progress.clear_listener()
+                else:
+                    result = self._engine.generate(**params)
                 # For binary-output families (image, video, tts wav): save the
                 # tensor to disk and return the path instead of raw tensors.
                 # Text families (llm, vlm, multimodal-text, stt, audio_llm) put

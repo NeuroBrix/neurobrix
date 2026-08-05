@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Token streaming over the serving RPC**: `generate` accepts
+  `stream: true` and the daemon pushes one event per decoded token on
+  the same connection before the final response, on every execution
+  mode. `DaemonClient.generate_stream(...)` yields the events —
+  time-to-first-token is now measurable (and measured, in the
+  benchmark harness) instead of estimated. Non-streaming requests are
+  byte-identical to before.
 - **Optimization analysis engine (report-only)**: a new analysis module
   maps optimization opportunities across every installed package graph —
   constant-foldable subgraphs, exact algebraic identities, duplicated

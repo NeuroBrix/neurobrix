@@ -11,6 +11,7 @@ import numpy as np
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
+from neurobrix import decode_progress
 from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator
 
 from .samplers import CombinedSampler, create_sampler
@@ -152,6 +153,12 @@ class TritonGenerator:
                 pf.write(f"t={time.time():.1f} step={step_idx} "
                          f"n={len(self._state.generated_tokens)} "
                          f"last={token_id} done={self._state.is_done}\n")
+
+        # In-process sibling of the file diagnostic above (same event, same
+        # site): feeds the daemon's streaming RPC for real-TTFT measurement.
+        # decode_progress is stdlib-only (R33-safe).
+        decode_progress.emit(step_idx, len(self._state.generated_tokens),
+                             token_id, self._state.is_done)
 
         return next_token, self._state.is_done
 

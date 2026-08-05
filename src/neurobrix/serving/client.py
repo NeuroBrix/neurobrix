@@ -136,6 +136,32 @@ class DaemonClient:
         """Send generate request."""
         return self.send("generate", prompt=prompt, **kwargs)
 
+    def generate_stream(self, prompt: str, **kwargs):
+        """Send generate with stream=true; yield events as they arrive.
+
+        Yields ("token", event) per decoded token — event carries
+        {step, n, token, done} — then ("result", result) once, and returns.
+        The per-token events arrive live from the daemon's decode loop, so
+        the wall-clock of the first ("token", ...) yield IS the real TTFT.
+        """
+        if self._sock is None:
+            raise RuntimeError("ZERO FALLBACK: Not connected. Call connect() first.")
+
+        request = make_request("generate", prompt=prompt, stream=True, **kwargs)
+        send_message(self._sock, request)
+
+        while True:
+            msg = recv_message(self._sock)
+            if msg is None:
+                raise RuntimeError("ZERO FALLBACK: Daemon disconnected mid-stream.")
+            if "error" in msg:
+                raise RuntimeError(f"Daemon error: {msg['error']}")
+            if "stream" in msg:
+                yield ("token", msg["stream"])
+                continue
+            yield ("result", msg.get("result", {}))
+            return
+
     def chat(self, message: str, **kwargs) -> Dict[str, Any]:
         """Send chat request. Returns {text, context}."""
         return self.send("chat", message=message, **kwargs)

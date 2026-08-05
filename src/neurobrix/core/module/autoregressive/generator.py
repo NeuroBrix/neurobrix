@@ -48,6 +48,8 @@ import torch
 from typing import Dict, Any, List, Optional, Tuple, Iterator, Union
 from dataclasses import dataclass, field
 
+from neurobrix import decode_progress
+
 from .samplers import SamplerBase, CombinedSampler
 
 
@@ -279,6 +281,11 @@ class AutoregressiveGenerator:
                 pf.write(f"t={time.time():.1f} step={step_idx} "
                          f"n={len(self._state.generated_tokens)} "
                          f"last={token_id} done={self._state.is_done}\n")
+
+        # In-process sibling of the file diagnostic above (same event, same
+        # site): feeds the daemon's streaming RPC for real-TTFT measurement.
+        decode_progress.emit(step_idx, len(self._state.generated_tokens),
+                             token_id, self._state.is_done)
 
         return next_token, self._state.is_done
 
