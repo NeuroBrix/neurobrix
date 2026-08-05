@@ -816,6 +816,25 @@ class GraphExecutor:
             norm_topk_prob=getattr(self, '_moe_norm_topk_prob', True)
         )
 
+        # OptimizationEngine hook (Phase 2, scoping doc D1): THE choke
+        # point where passes annotate the ONE in-memory graph all four
+        # modes consume — after MoE fusion, before any engine-specific
+        # state. const_fold is OPT-IN (NBX_OPTIM_CONST_FOLD=1) until its
+        # full-zoo byte gate passes; the planner only annotates
+        # (dag["_optim_const_fold"]) — each mode lowers at its own
+        # compile/bind step.
+        if os.environ.get("NBX_OPTIM_CONST_FOLD") == "1":
+            from neurobrix.core.optim.passes.const_fold import (
+                PLAN_KEY, plan_const_fold)
+            _cf_plan = plan_const_fold(self._dag)
+            if _cf_plan:
+                self._dag[PLAN_KEY] = _cf_plan
+                # Activation evidence for ON-vs-OFF gates: a gate run
+                # must PROVE the ON arm was on, never assume it.
+                print(f"[Optim] const_fold: {len(_cf_plan['op_uids'])} ops "
+                      f"-> {len(_cf_plan['frontier_tids'])} bind-time "
+                      f"constants ({self._component_name})")
+
         self._apply_sequential_spatial_promotion()
 
         # Pre-compile dispatch table for Triton mode
