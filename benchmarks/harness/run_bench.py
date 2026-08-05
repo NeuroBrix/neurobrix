@@ -148,7 +148,11 @@ def cell_vllm(row: dict, gpu: int, n: int) -> dict:
 
 def cell_ollama(row: dict, gpu: int, n: int) -> dict:
     tag = f"{row['id']}-f16"
-    gguf = next(GGUF.glob("*.f16.gguf"))
+    # The GGUF is named per-row in rows.yml — a bare glob would silently
+    # serve the wrong checkpoint once a second row's GGUF lands.
+    gguf = GGUF / row["gguf"]
+    if not gguf.exists():
+        raise FileNotFoundError(f"row GGUF missing: {gguf}")
     OLLAMA_MODELS.mkdir(parents=True, exist_ok=True)
     env = {**os.environ, "CUDA_VISIBLE_DEVICES": str(gpu),
            "OLLAMA_HOST": f"127.0.0.1:{OLLAMA_PORT}",
@@ -232,16 +236,33 @@ def cell_neurobrix(row: dict, gpu: int, n: int, triton: bool,
         cold_start = time.perf_counter() - t_launch
 
         def one() -> dict:
+            # Streamed RPC: per-token events from the daemon's decode loop.
+            # TTFT = client wall at the first token event; decode rate =
+            # (n-1)/(t_last-t0-ttft) — the exact formula of the vLLM cell,
+            # so the columns stay methodologically symmetric.
             t0 = time.perf_counter()
-            res = client.generate(prompt=row["prompt"],
-                                  max_tokens=row["max_new_tokens"],
-                                  temperature=0)
-            wall = time.perf_counter() - t0
-            r = res.get("result", res) or {}
-            n_tok = r.get("tokens_generated") or r.get("num_tokens")
-            return {"wall_s": wall, "ttft_s": None,  # daemon RPC: no wire streaming yet
-                    "tokens": n_tok,
-                    "tok_per_s": (n_tok / wall) if n_tok else None}
+            ttft = None
+            t_last = None
+            n_events = 0
+            final = {}
+            for kind, payload in client.generate_stream(
+                    prompt=row["prompt"],
+                    max_tokens=row["max_new_tokens"], temperature=0):
+                wall = time.perf_counter()
+                if kind == "token":
+                    if ttft is None:
+                        ttft = wall - t0
+                    t_last = wall
+                    n_events += 1
+                else:
+                    final = payload or {}
+            wall_s = time.perf_counter() - t0
+            n_tok = final.get("tokens")  # exact daemon count (generated)
+            return {"wall_s": wall_s, "ttft_s": ttft,
+                    "tokens": n_tok, "tokens_streamed": n_events,
+                    "tok_per_s": (n_tok - 1) / (t_last - t0 - ttft)
+                    if (n_tok and n_tok > 1 and ttft is not None)
+                    else None}
         one()  # warmup
         out = {"cold_start_s": cold_start,
                "requests": [one() for _ in range(n)]}
