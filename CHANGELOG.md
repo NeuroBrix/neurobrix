@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Constant folding at load (opt-in)**: with `NBX_OPTIM_CONST_FOLD=1`,
+  subgraphs computable from model parameters alone are executed once at
+  weight-bind time — through the same kernels the hot path would have
+  used, so outputs stay byte-identical — and their results become
+  load-time constants, leaving the per-forward hot loop. Applies to
+  both execution engines; conservatively skips symbolic shapes,
+  in-place-aliased tensors, fused-op inputs, and streaming (zero3/lazy)
+  placements, which refuse with a clear message. Off by default while
+  the zoo-wide byte gate and the fold cache land.
 - **Token streaming over the serving RPC**: `generate` accepts
   `stream: true` and the daemon pushes one event per decoded token on
   the same connection before the final response, on every execution

@@ -82,11 +82,17 @@ PASS_REGISTRY: dict[str, PassPolicy] = {
             gate_class=GateClass.EXACT,
             provenance="passes/const_fold.py",
             version=1,
+            # default_on states ELIGIBILITY for the "exact" level once
+            # the full-zoo byte gate passes. Until then the runtime
+            # hook is env-opt-in (NBX_OPTIM_CONST_FOLD=1,
+            # graph_executor._init_from_dag) — the gate window's single
+            # source of truth is the hook, not this flag.
             default_on=True,
             summary=(
                 "Values known in advance: ops whose inputs are all "
-                "parameters/constants (e.g. weight transposes) folded "
-                "once at load instead of every forward."
+                "parameters/constants folded once at bind instead of "
+                "every forward (transpose class excluded — view-owned "
+                "by the per-engine pretranspose passes)."
             ),
         ),
         PassPolicy(

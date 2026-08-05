@@ -312,6 +312,13 @@ class TritonSequence:
         # because the compiled op list is immutable after compile().
         self._op_blocks_cache: Optional[Dict[int, Dict[str, Any]]] = None
 
+        # const_fold partition (optim Phase 2): set at compile from
+        # dag["_optim_const_fold"], executed at bind_weights when the
+        # partition's external inputs actually changed (identity sig).
+        # R30 mirror of CompiledSequence.
+        self._const_fold_plan: Optional[Dict[str, Any]] = None
+        self._const_fold_sig: Optional[tuple] = None
+
     def set_activations_fp16_safe(self, safe: bool) -> None:
         """Set the per-component activations_fp16_safe opt-in flag.
 
@@ -390,6 +397,12 @@ class TritonSequence:
         # internally via IS_CAUSAL=True, so the whole chain is dead code.
         # Removes ~132 ops/step for TinyLlama (6 ops × 22 layers).
         self._eliminate_dead_causal_mask_ops(tensors, ops_by_uid, exec_order)
+
+        # Phase -0.35: const_fold partition (optim Phase 2) — R30 mirror
+        # of CompiledSequence Phase -0.4: the planner-annotated partition
+        # leaves the hot sequence; bind_weights() executes it once
+        # through THIS engine's own op machinery (NBXTensor + Triton).
+        self._extract_const_fold_partition(tensors, exec_order)
 
         # Phase -0.3: Fuse SwiGLU (silu + mul) into custom::swiglu_fused.
         # Collapses 2 elem ops → 1 kernel launch, and the fused kernel reads
@@ -589,6 +602,116 @@ class TritonSequence:
             out_meta = tensors.get(out_tid, {})
             if out_meta.get("is_output") and in_tid in tensors:
                 tensors[in_tid]["is_output"] = True
+
+    def _extract_const_fold_partition(
+        self,
+        tensors: Dict[str, Any],
+        execution_order: List[str],
+    ) -> None:
+        """Take the const_fold partition out of the hot sequence.
+
+        R30 mirror of CompiledSequence._extract_const_fold_partition:
+        partition ops leave execution_order, frontier tensors are
+        stamped `folded_const` (categorized as weights — their value
+        arrives at bind time from _execute_const_fold). Idempotent on
+        recompile: stamps and plan survive in the shared DAG.
+        """
+        plan = self.dag.get("_optim_const_fold")
+        if not plan:
+            return
+        self._const_fold_plan = plan
+        for tid in plan["frontier_tids"]:
+            meta = tensors.setdefault(tid, {})
+            meta["folded_const"] = True
+        uids = set(plan["op_uids"])
+        new_order = [u for u in execution_order if u not in uids]
+        if len(new_order) != len(execution_order):
+            execution_order.clear()
+            execution_order.extend(new_order)
+
+    def _execute_const_fold(self, weights: Dict[str, "NBXTensor"]) -> None:
+        """Run the const_fold partition ONCE and fill the frontier slots.
+
+        R30 mirror of the compiled lowering, R33-pure by construction:
+        the partition executes through a nested TritonSequence — the
+        same NBXTensor + Triton kernel callables that computed these
+        values per-forward before the fold, same device and dtype
+        engine configuration.
+        """
+        plan = self._const_fold_plan
+        if not plan:
+            return
+
+        # External inputs of the partition, resolved against the OUTER
+        # arena (bound just above). R30 mirror of the compiled lowering.
+        produced: set = set()
+        for u in plan["op_uids"]:
+            produced.update(self.dag["ops"][u].get("output_tensor_ids") or [])
+        ext_tids: list = []
+        seen: set = set()
+        ext_missing = []
+        for u in plan["op_uids"]:
+            for tid in self.dag["ops"][u].get("input_tensor_ids") or []:
+                if tid in produced or tid in seen:
+                    continue
+                seen.add(tid)
+                ext_tids.append(tid)
+                s = self._tid_to_slot.get(tid)
+                if s is None or self._arena[s] is None:
+                    ext_missing.append(tid)
+        if ext_missing:
+            # Streaming-placement guard (gardien M3): name the real
+            # cause when a streaming placement leaves partition params
+            # unbound at bind time, instead of failing downstream.
+            raise RuntimeError(
+                f"const_fold: {len(ext_missing)} partition inputs unbound "
+                f"at bind time (e.g. {ext_missing[:3]}) — streaming "
+                f"placement (zero3/lazy) provides weights per block, which "
+                f"this fold does not support yet. Run this placement with "
+                f"NBX_OPTIM_CONST_FOLD=0 (named limitation, scoping doc).")
+
+        # Fold-once idempotence: warm serving rebinds the SAME weight
+        # objects every request — re-folding there charged ~0.2 s per
+        # warm request for identical bytes (measured, sana_delta_warm).
+        # Same objects ⇒ same bytes ⇒ the previous fold stands.
+        sig = tuple(id(self._arena[self._tid_to_slot[t]])
+                    for t in ext_tids)
+        if sig == self._const_fold_sig:
+            return
+
+        frontier = set(plan["frontier_tids"])
+        all_tensors = self.dag.get("tensors", {})
+        # The nested sequence must COMPUTE the frontier, not wait for
+        # it as a weight — strip the stamps in its tensors view.
+        tensors_view = {
+            tid: ({k: v for k, v in meta.items() if k != "folded_const"}
+                  if tid in frontier and isinstance(meta, dict) else meta)
+            for tid, meta in all_tensors.items()
+        }
+        sub_dag = {
+            "ops": {u: self.dag["ops"][u] for u in plan["op_uids"]},
+            "execution_order": list(plan["op_uids"]),
+            "tensors": tensors_view,
+            "output_tensor_ids": list(plan["frontier_tids"]),
+            "torch_dtype": self.dag.get("torch_dtype", ""),
+        }
+        seq = TritonSequence(sub_dag, self.device_idx, self._compute_dtype)
+        seq.set_activations_fp16_safe(self._activations_fp16_safe)
+        seq.compile()
+        seq.bind_weights(weights)
+        seq.run()
+        folded = seq.gather_outputs(list(plan["frontier_tids"]))
+        missing = [t for t in frontier if folded.get(t) is None]
+        if missing:
+            raise RuntimeError(
+                f"ZERO FALLBACK: const_fold produced no value for "
+                f"{len(missing)} frontier tensors (e.g. {missing[:3]}) — "
+                f"plan/graph mismatch, refusing to serve garbage.")
+        for tid, value in folded.items():
+            slot = self._tid_to_slot.get(tid)
+            if slot is not None:
+                self._arena[slot] = value
+        self._const_fold_sig = sig
 
     def _eliminate_weight_transpose_ops(
         self,
@@ -1519,7 +1642,11 @@ class TritonSequence:
         intermediates = []
 
         for tid, tdata in tensors.items():
-            if tid.startswith("param::") or tid.startswith("buffer::"):
+            # folded_const tensors (const_fold frontier) lost their
+            # producer — their value arrives at bind time like a weight
+            # (R30 mirror of the compiled categorization).
+            if tid.startswith("param::") or tid.startswith("buffer::") \
+                    or tdata.get("folded_const"):
                 weights.append(tid)
             elif tid.startswith("input::"):
                 inputs.append(tid)
@@ -2529,7 +2656,11 @@ class TritonSequence:
 
         for tid in self._weight_ids:
             tdata = tensors.get(tid, {})
-            wname = tdata.get("weight_name", "")
+            # `or ""`: op-output tensors carry an explicit weight_name=None,
+            # and const_fold frontier tensors now live in the weight
+            # category — .get()'s default only covers the ABSENT key
+            # (R30 mirror of the compiled fix).
+            wname = tdata.get("weight_name") or ""
             if not wname.startswith("constant_T_"):
                 continue
             shape = tdata.get("shape", [])
@@ -2608,6 +2739,10 @@ class TritonSequence:
                 if tid in self._pretranspose_weights and tensor.ndim == 2:
                     tensor = tensor.t()
                 self._arena[self._tid_to_slot[tid]] = tensor
+        # const_fold partition (optim Phase 2): compute the frontier
+        # constants once with this bind's weights — fills the
+        # folded_const weight slots, before device classification.
+        self._execute_const_fold(weights)
         self.compute_op_devices()
 
     def bind_inputs(self, inputs: Dict[str, NBXTensor]):
