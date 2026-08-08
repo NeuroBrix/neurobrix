@@ -57,13 +57,25 @@ def load_yaml(path: Path) -> dict:
     return yaml.safe_load(path.read_text())
 
 
-def gpu_guard(gpu: int) -> None:
-    out = subprocess.run(
-        ["nvidia-smi", "--query-compute-apps=pid,gpu_uuid",
-         "--format=csv,noheader"],
-        capture_output=True, text=True).stdout.strip()
-    if out:
-        raise SystemExit(f"REFUSED: compute apps present on GPUs:\n{out}")
+def gpu_guard(gpu: int, wait_s: float = 0.0) -> None:
+    """Refuse to run while ANY compute app holds a GPU (exclusive-
+    machine fairness). wait_s>0 grants a grace window first: the
+    previous cell's daemon can take tens of seconds to free 60+GB
+    (memory-manager device syncs) — between OUR OWN cells we wait for
+    the drain instead of aborting the row (three refusal-races on
+    2026-08-08 motivated this)."""
+    t0 = time.perf_counter()
+    while True:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-compute-apps=pid,gpu_uuid",
+             "--format=csv,noheader"],
+            capture_output=True, text=True).stdout.strip()
+        if not out:
+            return
+        if time.perf_counter() - t0 >= wait_s:
+            raise SystemExit(
+                f"REFUSED: compute apps present on GPUs:\n{out}")
+        time.sleep(5.0)
 
 
 def gpu_mem_sampler(gpu: int | None, stop: threading.Event,
@@ -608,7 +620,7 @@ def main() -> int:
                           f"({path.name}); use --force to re-run",
                           flush=True)
                     continue
-            gpu_guard(args.gpu)
+            gpu_guard(args.gpu, wait_s=180.0)
             stop = threading.Event()
             peak = [0]
             th = threading.Thread(
