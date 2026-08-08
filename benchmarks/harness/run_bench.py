@@ -37,6 +37,21 @@ VLLM_PORT = 8077
 OLLAMA_PORT = 11435
 
 
+class DNR(RuntimeError):
+    """Does-Not-Run capability verdict: this backend cannot serve this
+    row on the V100 rig (arch missing at the era pin, sm_80+-only
+    dependency, bf16-only stack, no runtime serves the family). A DNR
+    cell is a first-class recorded result — the capability axis of the
+    public matrix — never a silent skip."""
+
+
+def _gpu_env(gpu: int | None) -> dict:
+    """CUDA visibility for a cell. gpu=None = the MACHINE config: the
+    whole rig stays visible and the backend places freely (its best
+    weapon). An int = the pinned single-GPU closure config."""
+    return {} if gpu is None else {"CUDA_VISIBLE_DEVICES": str(gpu)}
+
+
 def load_yaml(path: Path) -> dict:
     import yaml
     return yaml.safe_load(path.read_text())
@@ -51,14 +66,20 @@ def gpu_guard(gpu: int) -> None:
         raise SystemExit(f"REFUSED: compute apps present on GPUs:\n{out}")
 
 
-def gpu_mem_sampler(gpu: int, stop: threading.Event, peak: list) -> None:
+def gpu_mem_sampler(gpu: int | None, stop: threading.Event,
+                    peak: list) -> None:
+    """Track peak GPU memory. Pinned config samples the ONE GPU; the
+    machine config (gpu=None) samples every GPU and tracks the peak of
+    the rig-wide SUM (what the backend actually consumed across its
+    free placement)."""
+    id_args = [] if gpu is None else [f"--id={gpu}"]
     while not stop.is_set():
         out = subprocess.run(
-            ["nvidia-smi", f"--id={gpu}",
+            ["nvidia-smi", *id_args,
              "--query-gpu=memory.used", "--format=csv,noheader,nounits"],
             capture_output=True, text=True).stdout.strip()
         try:
-            peak[0] = max(peak[0], int(out))
+            peak[0] = max(peak[0], sum(int(v) for v in out.splitlines()))
         except ValueError:
             pass
         stop.wait(1.0)
@@ -104,9 +125,9 @@ def wait_for(probe, timeout_s: float, label: str,
 
 # ---------------------------------------------------------------- cells
 
-def cell_vllm(row: dict, gpu: int, n: int) -> dict:
+def cell_vllm(row: dict, gpu: int | None, n: int) -> dict:
     snap = SNAPSHOTS / row["neurobrix_model"]
-    env = {**os.environ, "CUDA_VISIBLE_DEVICES": str(gpu)}
+    env = {**os.environ, **_gpu_env(gpu)}
     proc = subprocess.Popen(
         [str(VLLM_BIN / "vllm"), "serve", str(snap),
          "--dtype", "float16", "--port", str(VLLM_PORT)],
@@ -146,15 +167,25 @@ def cell_vllm(row: dict, gpu: int, n: int) -> dict:
         proc.wait(timeout=60)
 
 
-def cell_ollama(row: dict, gpu: int, n: int) -> dict:
-    tag = f"{row['id']}-f16"
-    # The GGUF is named per-row in rows.yml — a bare glob would silently
-    # serve the wrong checkpoint once a second row's GGUF lands.
-    gguf = GGUF / row["gguf"]
-    if not gguf.exists():
-        raise FileNotFoundError(f"row GGUF missing: {gguf}")
+def cell_ollama(row: dict, gpu: int | None, n: int) -> dict:
+    # Two supply routes, per row:
+    #   gguf:        local f16 GGUF -> `ollama create` (LLM rows)
+    #   ollama_pull: official library tag -> `ollama pull` (rows whose
+    #                GGUF-import path is documented-broken at the pin,
+    #                e.g. qwen3vlmoe — their packaging is their best
+    #                weapon; the tag's precision is recorded).
+    pull_tag = row.get("ollama_pull")
+    tag = pull_tag or f"{row['id']}-f16"
+    gguf = None
+    if not pull_tag:
+        # The GGUF is named per-row in rows.yml — a bare glob would
+        # silently serve the wrong checkpoint once a second row's
+        # GGUF lands.
+        gguf = GGUF / row["gguf"]
+        if not gguf.exists():
+            raise FileNotFoundError(f"row GGUF missing: {gguf}")
     OLLAMA_MODELS.mkdir(parents=True, exist_ok=True)
-    env = {**os.environ, "CUDA_VISIBLE_DEVICES": str(gpu),
+    env = {**os.environ, **_gpu_env(gpu),
            "OLLAMA_HOST": f"127.0.0.1:{OLLAMA_PORT}",
            "OLLAMA_MODELS": str(OLLAMA_MODELS)}
     proc = subprocess.Popen(["ollama", "serve"], env=env,
@@ -164,10 +195,42 @@ def cell_ollama(row: dict, gpu: int, n: int) -> dict:
     try:
         wait_for(lambda: http_json(
             f"http://127.0.0.1:{OLLAMA_PORT}/api/version"), 120, "ollama")
-        mf = GGUF / f"Modelfile.{tag}"
-        mf.write_text(f"FROM {gguf}\n")
-        subprocess.run(["ollama", "create", tag, "-f", str(mf)],
-                       env=env, check=True, capture_output=True)
+        if pull_tag:
+            try:
+                subprocess.run(["ollama", "pull", pull_tag], env=env,
+                               check=True, capture_output=True,
+                               text=True, timeout=7200)
+            except subprocess.CalledProcessError as e:
+                err = (e.stderr or e.stdout or "").strip()[-400:]
+                # Capability failures only — a network hiccup is an
+                # error to retry, never a DNR verdict.
+                if ("unsupported" in err.lower()
+                        or "requires ollama" in err.lower()
+                        or "not found" in err.lower()):
+                    raise DNR(f"ollama pull {pull_tag} at the era "
+                              f"pin: {err}") from e
+                raise
+        else:
+            mf = GGUF / f"Modelfile.{tag}"
+            mf.write_text(f"FROM {gguf}\n")
+            try:
+                subprocess.run(["ollama", "create", tag, "-f", str(mf)],
+                               env=env, check=True, capture_output=True,
+                               text=True)
+            except subprocess.CalledProcessError as e:
+                err = (e.stderr or e.stdout or "").strip()[-400:]
+                if ("unsupported" in err.lower()
+                        or "unknown architecture" in err.lower()
+                        or "unknown model architecture" in err.lower()):
+                    raise DNR(f"ollama create at the era pin: {err}")
+                raise
+
+        payload_extra: dict = {}
+        if row.get("input_image"):
+            # VLM rows: same committed image every column reads.
+            import base64
+            payload_extra["images"] = [base64.b64encode(
+                (REPO / row["input_image"]).read_bytes()).decode()]
 
         def one() -> dict:
             t0 = time.perf_counter()
@@ -176,6 +239,7 @@ def cell_ollama(row: dict, gpu: int, n: int) -> dict:
             for wall, raw in http_stream_lines(
                 f"http://127.0.0.1:{OLLAMA_PORT}/api/generate",
                 {"model": tag, "prompt": row["prompt"], "stream": True,
+                 **payload_extra,
                  "options": {"temperature": 0,
                              "num_predict": row["max_new_tokens"]}},
             ):
@@ -200,40 +264,143 @@ def cell_ollama(row: dict, gpu: int, n: int) -> dict:
         proc.wait(timeout=60)
 
 
-def cell_neurobrix(row: dict, gpu: int, n: int, triton: bool,
-                   hardware: str, log_dir: Path) -> dict:
+def _neurobrix_daemon(row: dict, gpu: int | None, triton: bool,
+                      hardware: str, log_dir: Path):
+    """Start the warm daemon for a row; return (proc, client,
+    cold_start_s). Row-level env pins (e.g. NBX_FORCE_RAND_SEED for
+    voice rows) ride the daemon environment — closure-config doctrine.
+
+    gpu=int → PINNED config: one visible GPU + the matching single-GPU
+    hardware profile (battery closure-config pattern — the plan is
+    solved for the ONE visible device, never the physical rig).
+    gpu=None → MACHINE config: the whole rig visible, NO --hardware
+    (autodetect fingerprints the real machine) — Prism places freely.
+    """
     from neurobrix.serving.client import DaemonClient
-    env = {**os.environ, "CUDA_VISIBLE_DEVICES": str(gpu)}
-    # Pinned run = matching single-GPU hardware profile (the battery
-    # closure-config pattern): the placement plan must be solved for
-    # the ONE visible device, never for the physical rig.
+    env = {**os.environ, **_gpu_env(gpu),
+           **{k: str(v) for k, v in (row.get("env") or {}).items()}}
     cmd = [sys.executable, "-m", "neurobrix", "serve",
-           "--model", row["neurobrix_model"], "--hardware", hardware,
-           "--foreground"]
+           "--model", row["neurobrix_model"], "--foreground"]
+    if gpu is not None:
+        cmd += ["--hardware", hardware]
     if triton:
         cmd.append("--triton")
+    cfg_tag = "_machine" if gpu is None else ""
     log = (log_dir / f"server_neurobrix_{'triton' if triton else 'pytorch'}"
-           ".log").open("w")
+           f"_{row['id']}{cfg_tag}.log").open("w")
     proc = subprocess.Popen(cmd, env=env, cwd=str(REPO),
                             stdout=log, stderr=subprocess.STDOUT)
     t_launch = time.perf_counter()
+    wait_for(DaemonClient.is_running, 900, "neurobrix daemon", proc=proc)
+    client = DaemonClient()
+
+    def warm_probe() -> bool:
+        try:
+            client.connect()
+        except Exception:
+            return False
+        st = client.status()
+        st = st.get("result", st) or {}
+        return st.get("model") == row["neurobrix_model"]
+
+    wait_for(warm_probe, 900, "neurobrix warm", proc=proc)
+    return proc, client, time.perf_counter() - t_launch
+
+
+def _stop_daemon(proc) -> None:
+    proc.send_signal(signal.SIGTERM)
     try:
-        wait_for(DaemonClient.is_running, 900, "neurobrix daemon",
-                 proc=proc)
+        proc.wait(timeout=120)
+    except subprocess.TimeoutExpired:
+        proc.kill()
 
-        client = DaemonClient()
 
-        def warm_probe() -> bool:
-            try:
-                client.connect()
-            except Exception:
-                return False
-            st = client.status()
-            st = st.get("result", st) or {}
-            return st.get("model") == row["neurobrix_model"]
+def cell_neurobrix_media(row: dict, gpu: int, n: int, triton: bool,
+                         hardware: str, log_dir: Path) -> dict:
+    """image / video / stt / omni rows: warm daemon, N timed requests.
 
-        wait_for(warm_probe, 900, "neurobrix warm", proc=proc)
-        cold_start = time.perf_counter() - t_launch
+    Metrics per class (never tok/s): image → s/image + s/step; video →
+    s/video + s/step + s/frame; stt → wall + RTF vs the pinned input
+    duration; omni → wall prompt→wav. Output artifacts land under the
+    R29 tree (media dir), their sha256 in the committed JSON.
+    """
+    import hashlib
+    mclass = row["metric_class"]
+    media_dir = (REPO / "validation_outputs" /
+                 f"bench_reference_{log_dir.name}" / row["id"])
+    media_dir.mkdir(parents=True, exist_ok=True)
+    ext = {"image": "png", "video": "mp4", "omni": "wav"}.get(mclass, "txt")
+
+    kwargs: dict = {"prompt": row.get("prompt") or ""}
+    if row.get("steps") is not None:
+        kwargs["steps"] = row["steps"]
+    if row.get("seed") is not None:
+        kwargs["seed"] = row["seed"]
+    if row.get("mode"):
+        kwargs["mode"] = row["mode"]
+    if row.get("max_new_tokens") is not None:
+        kwargs["max_tokens"] = row["max_new_tokens"]
+    if row.get("audio"):
+        kwargs["audio_path"] = str(REPO / row["audio"])
+    if row.get("height") is not None:
+        kwargs["height"] = row["height"]
+    if row.get("width") is not None:
+        kwargs["width"] = row["width"]
+    if row.get("num_frames") is not None:
+        kwargs["num_frames"] = row["num_frames"]
+
+    proc, client, cold_start = _neurobrix_daemon(
+        row, gpu, triton, hardware, log_dir)
+    try:
+        eng = ("triton" if triton else "pytorch") + (
+            "_machine" if gpu is None else "")
+
+        def one(idx: int) -> dict:
+            out_path = media_dir / f"neurobrix_{eng}_r{idx}.{ext}"
+            t0 = time.perf_counter()
+            res = client.generate(output_path=str(out_path), **kwargs)
+            wall = time.perf_counter() - t0
+            r = res.get("result", res) or res or {}
+            rec = {"wall_s": wall}
+            if out_path.exists():
+                rec["sha256"] = hashlib.sha256(
+                    out_path.read_bytes()).hexdigest()
+            if mclass in ("image", "video") and row.get("steps"):
+                rec["s_per_step"] = wall / row["steps"]
+            if mclass == "video" and row.get("num_frames"):
+                rec["s_per_frame"] = wall / row["num_frames"]
+            if mclass == "stt":
+                rec["text"] = (r.get("text") or "")[:200]
+                # Pinned input duration is row data, never a literal
+                # (gardien 2026-08-08: the constant was duplicated).
+                rec["rtf"] = wall / row["audio_duration_s"]
+            return rec
+
+        one(-1)  # warmup (weights load into VRAM on first request)
+        out = {"cold_start_s": cold_start,
+               "requests": [one(i) for i in range(n)]}
+        client.close()
+        return out
+    finally:
+        _stop_daemon(proc)
+
+
+def cell_neurobrix(row: dict, gpu: int, n: int, triton: bool,
+                   hardware: str, log_dir: Path) -> dict:
+    if row.get("metric_class", "tokens") != "tokens":
+        return cell_neurobrix_media(row, gpu, n, triton, hardware, log_dir)
+    from neurobrix.serving.client import DaemonClient  # noqa: F401
+    proc, client, cold_start = _neurobrix_daemon(
+        row, gpu, triton, hardware, log_dir)
+    try:
+
+        stream_kwargs: dict = {"prompt": row["prompt"],
+                               "max_tokens": row["max_new_tokens"],
+                               "temperature": 0}
+        if row.get("input_image"):
+            # VLM rows: the committed image asset, same input every
+            # column reads (routed through the shared CLI/daemon brick).
+            stream_kwargs["image_path"] = str(REPO / row["input_image"])
 
         def one() -> dict:
             # Streamed RPC: per-token events from the daemon's decode loop.
@@ -245,9 +412,7 @@ def cell_neurobrix(row: dict, gpu: int, n: int, triton: bool,
             t_last = None
             n_events = 0
             final = {}
-            for kind, payload in client.generate_stream(
-                    prompt=row["prompt"],
-                    max_tokens=row["max_new_tokens"], temperature=0):
+            for kind, payload in client.generate_stream(**stream_kwargs):
                 wall = time.perf_counter()
                 if kind == "token":
                     if ttft is None:
@@ -257,7 +422,11 @@ def cell_neurobrix(row: dict, gpu: int, n: int, triton: bool,
                 else:
                     final = payload or {}
             wall_s = time.perf_counter() - t0
-            n_tok = final.get("tokens")  # exact daemon count (generated)
+            # Exact daemon count when the final payload carries it (llm
+            # flow); otherwise the per-token stream events ARE the exact
+            # count — one event per sampled token at the generator site
+            # (vlm flow's final payload has no token count).
+            n_tok = final.get("tokens") or n_events or None
             return {"wall_s": wall_s, "ttft_s": ttft,
                     "tokens": n_tok, "tokens_streamed": n_events,
                     "tok_per_s": (n_tok - 1) / (t_last - t0 - ttft)
@@ -269,16 +438,76 @@ def cell_neurobrix(row: dict, gpu: int, n: int, triton: bool,
         client.close()
         return out
     finally:
-        proc.send_signal(signal.SIGTERM)
-        try:
-            proc.wait(timeout=120)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+        _stop_daemon(proc)
+
+
+DIFFUSERS_BIN = Path.home() / "bench_venvs" / "diffusers" / "bin"
+
+
+def cell_subprocess_venv(row: dict, gpu: int | None, n: int, script: str,
+                         python_bin: Path, log_dir: Path,
+                         extra_env: dict | None = None) -> dict:
+    """Run a competitor cell in its pinned venv as a subprocess.
+
+    The cell script receives the row as JSON on argv and MUST print a
+    single JSON object on its last stdout line:
+    {cold_start_s, requests: [...]} — same shape as in-process cells.
+    Media artifacts go under the R29 tree; shas inside the JSON.
+    """
+    if not python_bin.exists():
+        raise FileNotFoundError(
+            f"pinned venv python missing: {python_bin} — install per "
+            f"benchmarks/config/backends.yml before running this column")
+    media_dir = (REPO / "validation_outputs" /
+                 f"bench_reference_{log_dir.name}" / row["id"])
+    media_dir.mkdir(parents=True, exist_ok=True)
+    env = {**os.environ, **_gpu_env(gpu), **(extra_env or {})}
+    log = (log_dir / f"cell_{script.rsplit('/', 1)[-1].split('.')[0]}"
+           f"_{row['id']}.log").open("w")
+    res = subprocess.run(
+        [str(python_bin), str(REPO / "benchmarks" / "harness" / script),
+         "--row", json.dumps(row), "--n", str(n),
+         "--media-dir", str(media_dir), "--repo", str(REPO)],
+        env=env, capture_output=True, text=True, timeout=7200)
+    log.write(res.stdout + "\n--- stderr ---\n" + res.stderr)
+    log.close()
+    if res.returncode != 0:
+        raise RuntimeError(
+            f"{script} rc={res.returncode}: {res.stderr[-500:]}")
+    return json.loads(res.stdout.strip().splitlines()[-1])
+
+
+def cell_diffusers(row: dict, gpu: int | None, n: int,
+                   log_dir: Path) -> dict:
+    return cell_subprocess_venv(
+        row, gpu, n, "diffusers_cell.py",
+        DIFFUSERS_BIN / "python", log_dir)
+
+
+MINICPMO_BIN = Path.home() / "bench_venvs" / "minicpmo_vendor" / "bin"
+
+
+def cell_vendor(row: dict, gpu: int | None, n: int,
+                log_dir: Path) -> dict:
+    # Vendor competitor: the model's official HF code, pinned. STT
+    # (whisper) runs on the vllm073 stack (torch 2.5.1+cu121,
+    # transformers 4.49.0); omni voice runs in the dedicated
+    # minicpmo_vendor venv (transformers 4.51.0 + minicpmo-utils —
+    # pins + sources in backends.yml vendor_transformers block).
+    python_bin = (MINICPMO_BIN / "python"
+                  if row["metric_class"] == "omni"
+                  else VLLM_BIN / "python")
+    return cell_subprocess_venv(
+        row, gpu, n, "vendor_cell.py", python_bin, log_dir)
 
 
 CELLS = {
     "vllm": lambda row, gpu, n, hw, ld: cell_vllm(row, gpu, n),
     "ollama": lambda row, gpu, n, hw, ld: cell_ollama(row, gpu, n),
+    "diffusers": lambda row, gpu, n, hw, ld: cell_diffusers(
+        row, gpu, n, ld),
+    "vendor_transformers": lambda row, gpu, n, hw, ld: cell_vendor(
+        row, gpu, n, ld),
     "neurobrix_pytorch": lambda row, gpu, n, hw, ld: cell_neurobrix(
         row, gpu, n, triton=False, hardware=hw, log_dir=ld),
     "neurobrix_triton": lambda row, gpu, n, hw, ld: cell_neurobrix(
@@ -317,6 +546,14 @@ def main() -> int:
     ap.add_argument("--repetitions", type=int, default=5)
     ap.add_argument("--hardware", default="v100-32g",
                     help="single-GPU profile matching the pinned GPU")
+    ap.add_argument("--config", default="pinned",
+                    choices=["pinned", "machine", "both"],
+                    help="pinned = one visible GPU (closure-config); "
+                         "machine = whole rig visible, Prism free and "
+                         "competitors' best weapons; both = the two, "
+                         "intersected with the row's serving_configs")
+    ap.add_argument("--force", action="store_true",
+                    help="re-run cells whose result JSON is already ok")
     args = ap.parse_args()
 
     rows = {r["id"]: r for r in
@@ -327,33 +564,79 @@ def main() -> int:
     (out_dir / "env_manifest.json").write_text(
         json.dumps(env_manifest(args.gpu), indent=1) + "\n")
 
-    for col in args.columns.split(","):
-        gpu_guard(args.gpu)
-        stop = threading.Event()
-        peak = [0]
-        th = threading.Thread(
-            target=gpu_mem_sampler, args=(args.gpu, stop, peak))
-        th.start()
-        t0 = time.time()
-        try:
-            result = CELLS[col](row, args.gpu, args.repetitions,
-                                args.hardware, out_dir)
-            status = "ok"
-        except Exception as e:
-            result = {"error": repr(e)}
-            status = "error"
-        stop.set()
-        th.join()
-        artifact = {
-            "row": args.row, "column": col, "status": status,
-            "peak_gpu_mem_mib": peak[0],
-            "started_unix": t0, **result,
-        }
-        path = out_dir / f"{args.row}_{col}.json"
-        path.write_text(json.dumps(artifact, indent=1) + "\n")
-        print(f"[bench] {args.row}/{col}: {status} "
-              f"peak={peak[0]}MiB -> {path.name}", flush=True)
-        time.sleep(5)  # let the GPU drain between cells
+    row_configs = row.get("serving_configs", ["pinned"])
+    wanted = ["pinned", "machine"] if args.config == "both" \
+        else [args.config]
+    configs = [c for c in wanted if c in row_configs]
+    if not configs:
+        raise SystemExit(f"row {args.row} declares serving_configs="
+                         f"{row_configs}; nothing matches --config "
+                         f"{args.config}")
+
+    # Declarative DNR columns: sourced era-pin impossibilities recorded
+    # as first-class cells without launching anything (the runtime DNR
+    # class — the cell tried and failed — is preferred when an attempt
+    # is meaningful; declarative is for arch-absent-at-pin facts).
+    for col, evidence in (row.get("dnr_columns") or {}).items():
+        for cfg in configs:
+            tag = "__machine" if cfg == "machine" else ""
+            p = out_dir / f"{args.row}_{col}{tag}.json"
+            if not p.exists():
+                p.write_text(json.dumps({
+                    "row": args.row, "column": col, "config": cfg,
+                    "status": "dnr", "evidence": evidence,
+                }, indent=1) + "\n")
+                print(f"[bench] {args.row}/{col}[{cfg}]: dnr (declared) "
+                      f"-> {p.name}", flush=True)
+
+    for cfg in configs:
+        cell_gpu = args.gpu if cfg == "pinned" else None
+        tag = "__machine" if cfg == "machine" else ""
+        for col in args.columns.split(","):
+            path = out_dir / f"{args.row}_{col}{tag}.json"
+            # Cell-level idempotence: a power-loss resume re-runs the
+            # recorded command verbatim, so completed cells must not be
+            # overwritten (dnr is a completed verdict too).
+            if path.exists() and not args.force:
+                try:
+                    prior = json.loads(path.read_text())
+                except ValueError:
+                    prior = {}
+                if prior.get("status") in ("ok", "dnr"):
+                    print(f"[bench] {args.row}/{col}[{cfg}]: skip, "
+                          f"existing {prior['status']} result "
+                          f"({path.name}); use --force to re-run",
+                          flush=True)
+                    continue
+            gpu_guard(args.gpu)
+            stop = threading.Event()
+            peak = [0]
+            th = threading.Thread(
+                target=gpu_mem_sampler, args=(cell_gpu, stop, peak))
+            th.start()
+            t0 = time.time()
+            try:
+                result = CELLS[col](row, cell_gpu, args.repetitions,
+                                    args.hardware, out_dir)
+                status = "ok"
+            except DNR as e:
+                result = {"evidence": str(e)}
+                status = "dnr"
+            except Exception as e:
+                result = {"error": repr(e)}
+                status = "error"
+            stop.set()
+            th.join()
+            artifact = {
+                "row": args.row, "column": col, "config": cfg,
+                "status": status,
+                "peak_gpu_mem_mib": peak[0],
+                "started_unix": t0, **result,
+            }
+            path.write_text(json.dumps(artifact, indent=1) + "\n")
+            print(f"[bench] {args.row}/{col}[{cfg}]: {status} "
+                  f"peak={peak[0]}MiB -> {path.name}", flush=True)
+            time.sleep(5)  # let the GPU drain between cells
     return 0
 
 
