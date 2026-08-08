@@ -47,10 +47,123 @@ ollama:
     - "Record OLLAMA_FLASH_ATTENTION state explicitly in every run
        manifest (llama.cpp Volta FA = tile/vec kernels, no tensor
        cores)."
+  vlm_notes:   # R16 research verdict 2026-08-08 (BLOC E v3 rows)
+    - "qwen3-vl: LIBRARY route only (`ollama pull`, needs >= 0.12.7 —
+       our 0.24.0 qualifies; bf16 tag = their full precision, cost of
+       bf16-on-Volta is theirs). The create-from-GGUF+mmproj import
+       path is documented-broken for qwen3vlmoe with no fix by the
+       pin: ollama#12896 (unknown model architecture), ollama#13480
+       (GGML_ASSERT in llama-context.cpp, unresolved), ollama#16264
+       (crash on first image request)."
+    - "GLM-4.1V: DNR at any Ollama version — arch request ollama#11858
+       closed duplicate/no development; no published GGUF carries the
+       vision mmproj (unsloth GLM-4.1V-9B-Thinking-GGUF discussion#1);
+       upstream llama.cpp GLM4V vision landed 2025-12-16
+       (ggml-org/llama.cpp#18042), not exposed by Ollama's vendored
+       llama.cpp."
+    - "Vision path on V100 needs NO flash attention: clip/mtmd falls
+       back to standard attention with a logged perf warning
+       (ggml-org/llama.cpp#16950) — a documented cost, not a DNR."
   sources:
     - https://github.com/ollama/ollama/issues/16449
     - https://github.com/ollama/ollama/issues/16533
-    - https://github.com/ollama/ollama/pull/16895
+    - https://github.com/ollama/ollama/pull/16895   # (ollama repo — distinct from ggml-org/llama.cpp#16895, unrelated)
+    - https://github.com/ollama/ollama/issues/12896
+    - https://github.com/ollama/ollama/issues/13480
+    - https://github.com/ollama/ollama/issues/16264
+    - https://github.com/ollama/ollama/issues/11858
+    - https://github.com/ggml-org/llama.cpp/pull/16780   # qwen3vl+qwen3vlmoe land (b6887)
+    - https://github.com/ggml-org/llama.cpp/pull/18042   # GLM4V vision land
+    - https://github.com/ggml-org/llama.cpp/issues/16950  # vision FA fallback
+
+diffusers:
+  pin: "0.35.2"           # last of the 0.35 line (2025-10-15) — era-
+                          # consistent with torch 2.5.1/transformers
+                          # 4.49/xformers 0.0.28.post3; pre-0.36
+                          # AttentionMixin refactor; Sana (landed
+                          # 0.32) + Wan2.1 (0.33) + PixArt-Sigma
+                          # (0.28) all mature. Walls: 0.39.0 requires
+                          # torch>=2.6; xformers 0.0.31 DROPS V100.
+  install: |
+    python -m venv ~/bench_venvs/diffusers
+    ~/bench_venvs/diffusers/bin/pip install "torch==2.5.1+cu121" \
+        "torchvision==0.20.1+cu121" \
+        --index-url https://download.pytorch.org/whl/cu121
+    ~/bench_venvs/diffusers/bin/pip install "xformers==0.0.28.post3" \
+        --index-url https://download.pytorch.org/whl/cu121
+    ~/bench_venvs/diffusers/bin/pip install "diffusers==0.35.2" \
+        "transformers==4.49.0" "accelerate>=0.31.0" safetensors \
+        sentencepiece ftfy imageio imageio-ffmpeg
+  post_install_gate: 'python -c "import torch; assert torch.version.cuda == \"12.1\""'
+  volta_notes:
+    - "fp16 transformer everywhere; NEVER bf16 on sm_70 (diffusers
+       bf16 silently falls back to CPU emulation on Volta — sourced,
+       v100-benchmarks-2026). Sana: text encoder + DC-AE VAE stay
+       fp32 (docs mandate bf16-or-fp32; Volta => fp32). Wan: fp16
+       transformer+TE, fp32 VAE (docs recommendation)."
+    - "Attention: stock diffusers = torch SDPA (AttnProcessor2_0) →
+       mem-efficient backend on sm_70 (no flash path). xformers
+       memory_efficient_attention measured once per row; the faster
+       one kept and NAMED in the run manifest."
+    - "Stock from_pretrained().to('cuda') enables NOTHING else —
+       attention/vae slicing, tiling, offload, torch.compile are all
+       opt-in; any flag the competitor gets is listed per row in the
+       manifest (competitor keeps its best weapons, documented)."
+  determinism:
+    - "Seeds via torch.Generator(device='cuda').manual_seed(row.seed);
+       schedulers = the checkpoint-shipped configs (Sana flow-DPM++
+       flow_shift=3.0; Wan flow-UniPC bh2 flow_shift=3.0;
+       PixArt-Sigma epsilon DPM++), steps/resolution pinned by the
+       row on BOTH columns."
+  sources:
+    - https://pypi.org/project/diffusers/#history
+    - https://raw.githubusercontent.com/huggingface/diffusers/v0.39.0/setup.py
+    - https://github.com/facebookresearch/xformers/releases
+    - https://huggingface.co/docs/diffusers/v0.35.1/en/optimization/memory
+    - https://huggingface.co/docs/diffusers/v0.35.1/en/api/pipelines/sana
+    - https://huggingface.co/docs/diffusers/v0.35.1/en/api/pipelines/wan
+    - https://github.com/pocketcoder-ch/v100-benchmarks-2026
+
+vendor_transformers:
+  policy: |
+    Supervisor rule (2026-08-05): when no third-party runtime serves a
+    family, the competitor column is the model's OFFICIAL HF code on
+    the same machine, version-pinned here. STT (whisper) runs on the
+    vllm073 stack pins (torch 2.5.1+cu121, transformers 4.49.0,
+    soundfile 0.14.0) — recorded in each run's cell JSON `pins` field.
+    Omni vendor stacks get a dedicated venv + pin block when their
+    row's baseline lands.
+  minicpmo_venv:            # R16 verdict 2026-08-08 — RUNNABLE on V100
+    path: ~/bench_venvs/minicpmo_vendor
+    install: |
+      python3 -m venv ~/bench_venvs/minicpmo_vendor
+      ~/bench_venvs/minicpmo_vendor/bin/pip install \
+        torch==2.5.1 torchaudio==2.5.1 \
+        --index-url https://download.pytorch.org/whl/cu121
+      ~/bench_venvs/minicpmo_vendor/bin/pip install \
+        "transformers==4.51.0" accelerate \
+        "minicpmo-utils[all]>=1.0.6" soundfile
+    flags: |
+      trust_remote_code=True, attn_implementation="sdpa" (card-official
+      alternative to FA2), torch_dtype=torch.float16 (vendor lineage
+      guidance: "GPUs that do NOT support BF16 (like V100)" —
+      MiniCPM-V card commit 3274a35), init_tts(), generate_audio=True.
+      Card requirement: 28 GB GPU — fits one V100-32G. Watch the
+      family fp16 prior OpenBMB/MiniCPM-o#234 (resampler dtype
+      mismatch) — a smoke run adjudicates before the baseline.
+    sources:
+      - https://huggingface.co/openbmb/MiniCPM-o-4_5
+      - https://pypi.org/pypi/minicpmo-utils/json
+      - https://huggingface.co/openbmb/MiniCPM-V/commit/3274a35ba7b67dfff27d6623049fa5f64b4fffd2
+      - https://github.com/OpenBMB/MiniCPM-o/issues/234
+  omni_dnr_verdicts: |      # R16 2026-08-08 — recorded in rows.yml
+    Qwen3-Omni-30B vendor stack: DNR on the 4xV100 rig (78.85 GB
+    documented minimum WITH FA2; FA2 = Ampere+ only, Dao-AILab
+    #524/#148/#228; bf16 emulated on Volta, pytorch#124996).
+    Ming-Lite-Omni-1.5 vendor stack: DNR on V100 (42 GB bf16
+    single-device official recipe > 32 GB, no multi-GPU HF recipe;
+    official flag flash_attention_2 from an sm_80+ wheel; validated
+    on H800/H20 only).
 
 fairness_recorded:
   - "Software-age asymmetry: the rig ceilings pin vLLM to 2025-02

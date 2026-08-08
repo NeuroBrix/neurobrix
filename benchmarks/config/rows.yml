@@ -1,5 +1,46 @@
-# Benchmark rows — phase 1 (see ../README.md for the methodology).
-# Every column of a row serves the SAME upstream checkpoint in fp16.
+# Benchmark rows — BLOC E v3 (2026-08-08 supervisor directives).
+#
+# REFERENCE rows (reference: true) are the public optimization curve:
+# milestone reports and every published number measure HERE, on big
+# known models — the most publicly used per family, NEVER hub-coverage
+# sweeps. PROBE rows (probe: true) are internal fast iteration probes
+# (non-regression, pass development) — never a public number.
+#
+# v3 revisions (supervisor, 2026-08-08):
+#   - llm_heavy_qwen3_coder REPLACED and llm_moe_deepseek DROPPED.
+#     Four 2026 multimodal reference rows take their place:
+#     Qwen3-VL-30B, Qwen3-Omni-30B, GLM-4.1V-9B, Ming-Lite-Omni-1.5.
+#   - DUAL-CONFIG publication (serving_configs) for every row whose
+#     model exceeds one 32 GB V100: "pinned" = single visible GPU +
+#     matching single-GPU hardware profile (battery closure-config
+#     pattern); "machine" = the full rig visible (4x V100, 96 GB),
+#     NO CUDA pin, NO --hardware (autodetect) — Prism places freely,
+#     and competitors also get the whole machine with their best
+#     weapons. Rows <= 32 GB stay single-config (machine == pinned).
+#   - DNR capability matrix: a competitor cell that cannot run on the
+#     V100 rig is a first-class recorded verdict (status "dnr" +
+#     evidenced cause: arch missing at pin, flash-attn sm_80+ hard
+#     requirement, bf16-only stack, no runtime serves the family).
+#     The public table renders DNR prominently — the capability axis
+#     ("they cannot run model X on V100; we do") leads, speed follows.
+#
+# Every column of a row serves the SAME upstream checkpoint in fp16,
+# warm serving (cold start recorded separately), pinned config down to
+# the seed, N repetitions, dated committed baseline.
+#
+# Diffusion-family metric is seconds/image (or /video) and
+# seconds/step at identical config — never tok/s. STT metric is wall +
+# RTF vs the pinned 11.00 s input. Omni metric is wall prompt→wav
+# (voice) or wall prompt→png (image-out).
+#
+# Column vocabulary:
+#   vllm / ollama            third-party runtimes (pins: backends.yml)
+#   diffusers                HF diffusers competitor (image/video rows)
+#   vendor_transformers      the model's official HF code, pinned —
+#                            the competitor when no third-party
+#                            runtime serves the family (supervisor
+#                            rule: no third party ⇒ measure vs vendor)
+#   neurobrix_pytorch / neurobrix_triton   our two engines
 
 defaults:
   repetitions: 5
@@ -9,38 +50,192 @@ defaults:
   gpu_memory_sample_hz: 1
 
 rows:
+  # ================= REFERENCE ROWS (the curve) =================
+
+  - id: stt_whisper_turbo
+    family: stt
+    metric_class: stt
+    reference: true
+    checkpoint: openai/whisper-large-v3-turbo
+    neurobrix_model: whisper-large-v3-turbo
+    audio: benchmarks/assets/jfk_11s.wav
+    audio_duration_s: 11.00   # RTF denominator — cells read THIS field
+    # jfk_11s.wav: whisper.cpp canonical sample (public domain), mono
+    # 16 kHz, 11.00 s, sha256 59dfb9a4acb36fe2a2affc14bacbee2920ff435c
+    # b13cc314a08c13f66ba7860e
+    columns: [vendor_transformers, neurobrix_pytorch, neurobrix_triton]
+
+  - id: vlm_qwen3vl
+    family: vlm
+    metric_class: tokens
+    reference: true
+    checkpoint: Qwen/Qwen3-VL-30B-A3B-Thinking
+    neurobrix_model: Qwen3-VL-30B-A3B-Thinking
+    # Ollama column rides the LIBRARY route (their packaging = their
+    # best weapon): qwen3-vl needs Ollama >= 0.12.7 (release notes),
+    # our pin 0.24.0 qualifies; bf16 tag = their full-precision
+    # variant (documented — llama.cpp converts bf16 on Volta at a
+    # cost that is theirs to carry). The ollama-create-from-GGUF
+    # import path is documented-broken for qwen3vlmoe with no fix by
+    # the pin (ollama#12896, #13480, #16264) — recorded, not used.
+    ollama_pull: qwen3-vl:30b-a3b-thinking-bf16
+    prompt: "What fruit is shown in this image? Answer briefly."
+    input_image: benchmarks/assets/apple_448.png
+    # apple_448.png: 448x448 RGB, sha256 34210187f5db3ed5d02b02f81ac3
+    # 6319ad912d3d57de3b0a03537a06442427a8 (promoted from the Qwen3-VL
+    # validation asset — committed so every column reads ONE input).
+    max_new_tokens: 64
+    serving_configs: [pinned, machine]   # 58 GB fp16 > one 32 GB V100
+    # ollama column: qwen3-vl support at the v0.24.0 era pin to be
+    # verified (GGUF + mmproj acquisition) — if the pin cannot serve
+    # it on V100, the cell records a DNR verdict with evidence.
+    dnr_columns:
+      vllm: "vllm==0.7.3 (era pin, 2025-02) predates the qwen3_vl
+        architecture entirely — no model class exists at this pin
+        (qwen3 family support landed in vLLM 0.8.x)."
+    columns: [ollama, vendor_transformers,
+              neurobrix_pytorch, neurobrix_triton]
+
+  - id: omni_qwen3omni
+    family: multimodal
+    metric_class: omni
+    reference: true
+    checkpoint: Qwen/Qwen3-Omni-30B-A3B-Instruct
+    neurobrix_model: Qwen3-Omni-30B-A3B-Instruct
+    prompt: "Reply with exactly these two words: Hello there."
+    mode: audio
+    max_new_tokens: 32
+    serving_configs: [pinned, machine]   # 66 GB fp16 > one 32 GB V100
+    # THE headline capability row (R16 verdict 2026-08-08): no
+    # third-party runtime serves omni speech-out AND the vendor's own
+    # official stack cannot run this model on the V100 rig — NeuroBrix
+    # is the only engine that serves Qwen3-Omni speech on this
+    # hardware (4-mode validated, hub fresh).
+    dnr_columns:
+      vendor_transformers: "The vendor's official recipe cannot run on
+        this rig: documented theoretical minimum 78.85 GB measured
+        WITH flash_attention_2 (Qwen3-Omni memory-table footnote);
+        FlashAttention-2 does not exist on sm_70 (Dao-AILab
+        flash-attention#524/#148/#228 — Ampere+ only), and the
+        sdpa/eager fallback costs MORE than that minimum on the 96 GB
+        heterogeneous pool; vendor-validated dtype is bf16, emulated
+        (not native) on Volta (pytorch#124996). Weights alone: 70.5 GB
+        across 15 shards."
+    columns: [neurobrix_pytorch, neurobrix_triton]
+
+  - id: vlm_glm41v
+    family: vlm
+    metric_class: tokens
+    reference: true
+    checkpoint: zai-org/GLM-4.1V-9B-Thinking
+    neurobrix_model: GLM-4.1V-9B-Thinking
+    prompt: "What fruit is shown in this image? Answer briefly."
+    input_image: benchmarks/assets/apple_448.png
+    max_new_tokens: 64
+    # 20 GB fp16 — fits resident on one V100-32G: single config.
+    # vendor_transformers is the third-party competitor; the two
+    # runtime columns below are sourced DNR (R16 verdict 2026-08-08).
+    dnr_columns:
+      vllm: "vllm==0.7.3 (era pin, 2025-02) predates GLM-4.1V
+        (released 2025-07) — no glm4v model class exists at this pin."
+      ollama: "Ollama has NO glm4v support at the v0.24.0 pin (or
+        any version): model request ollama#11858 closed as duplicate
+        with no development; no published GGUF carries the vision
+        mmproj (unsloth GLM-4.1V-9B-Thinking-GGUF discussion#1:
+        'currently only text is supported'); upstream llama.cpp only
+        gained GLM4V vision on 2025-12-16 (PR #18042) and Ollama's
+        vendored llama.cpp does not expose it."
+    columns: [vendor_transformers,
+              neurobrix_pytorch, neurobrix_triton]
+
+  - id: omni_ming_t2i
+    family: multimodal
+    metric_class: image
+    reference: true
+    checkpoint: inclusionAI/Ming-Lite-Omni-1.5
+    neurobrix_model: Ming-Lite-Omni-1.5
+    prompt: "a red apple on a white table"
+    mode: image
+    steps: 30
+    seed: 42
+    # 384x384 / 30 FlowMatchEuler steps / CFG 5.0 / seed 42 = the
+    # closure-config geometry from the 4/4 matrix verdict
+    # (validation_outputs/ming_imagegen_smoke_2026_08_01) — geometry
+    # and CFG come from package data (topology.flow.image_gen +
+    # defaults), so the row does NOT pass height/width.
+    serving_configs: [pinned, machine]   # 50 GB fp16 > one 32 GB V100
+    # Capability row (R16 verdict 2026-08-08): no third-party runtime
+    # serves Ming, and the vendor's own stack cannot run it on V100 —
+    # NeuroBrix renders Ming t2i on this hardware (4/4 matrix,
+    # validation_outputs/ming_imagegen_smoke_2026_08_01).
+    dnr_columns:
+      vendor_transformers: "The vendor's official recipe cannot run on
+        V100: their single-device loading path needs ~42 GB bf16
+        (model card) > 32 GB, with NO published multi-GPU HF recipe;
+        official snippets hard-pass attn_implementation=
+        'flash_attention_2' installed from an sm_80+ cu12/torch2.4
+        wheel — impossible on sm_70 (Dao-AILab #524); vendor
+        validation hardware is H800-80GB/H20-96G, bf16-only
+        (inclusionAI/Ming v1.5 requirements + model card)."
+    columns: [neurobrix_pytorch, neurobrix_triton]
+
+  - id: image_diffusion_sana1024
+    family: image
+    metric_class: image
+    reference: true
+    checkpoint: Efficient-Large-Model/Sana_1600M_1024px_MultiLing
+    diffusers_checkpoint: Efficient-Large-Model/Sana_1600M_1024px_MultiLing_diffusers
+    neurobrix_model: Sana_1600M_1024px_MultiLing
+    prompt: "a red apple on a wooden table"
+    steps: 20
+    seed: 42
+    height: 1024
+    width: 1024
+    columns: [diffusers, neurobrix_pytorch, neurobrix_triton]
+
+  - id: video_wan13b_t2v
+    family: video
+    metric_class: video
+    reference: true
+    checkpoint: Wan-AI/Wan2.1-T2V-1.3B-Diffusers
+    diffusers_checkpoint: Wan-AI/Wan2.1-T2V-1.3B-Diffusers
+    neurobrix_model: Wan2.1-T2V-1.3B-Diffusers
+    prompt: "a red fox running through snow"
+    steps: 10
+    num_frames: 13
+    seed: 0
+    height: 480
+    width: 832
+    # 480x832 = the Wan pipeline's native default, pinned EXPLICITLY
+    # so both columns run the identical resolution.
+    # 13 frames / 10 steps = the battery closure config proven to fit
+    # one V100-32G on both engines; s/step + s/frame normalize.
+    columns: [diffusers, neurobrix_pytorch, neurobrix_triton]
+
+  - id: omni_minicpmo_voice
+    family: multimodal
+    metric_class: omni
+    reference: true
+    checkpoint: openbmb/MiniCPM-o-4_5
+    neurobrix_model: MiniCPM-o-4_5
+    prompt: "Reply with exactly these two words: Hello there."
+    mode: audio
+    max_new_tokens: 32
+    env:
+      NBX_FORCE_RAND_SEED: "1234"   # battery closure pin (voice draw)
+    # No third-party runtime serves omni voice-out — the competitor is
+    # the vendor's own HF code on the same machine (supervisor rule).
+    columns: [vendor_transformers, neurobrix_pytorch, neurobrix_triton]
+
+  # ================= PROBE ROWS (internal iteration only) =================
+
   - id: llm_dense_tinyllama
     family: llm
+    metric_class: tokens
+    probe: true   # fast iteration probe — NEVER a public number
     checkpoint: TinyLlama/TinyLlama-1.1B-Chat-v1.0
     neurobrix_model: TinyLlama-1.1B-Chat-v1.0
     gguf: tinyllama-1.1b-chat-v1.0.f16.gguf
     prompt: "Explain in three sentences why the sky is blue."
     max_new_tokens: 128
     columns: [vllm, ollama, neurobrix_pytorch, neurobrix_triton]
-
-  - id: llm_moe_deepseek
-    family: llm
-    checkpoint: deepseek-ai/deepseek-moe-16b-chat
-    neurobrix_model: deepseek-moe-16b-chat
-    gguf: deepseek-moe-16b-chat.f16.gguf
-    prompt: "Write a Python function that returns the factorial of n."
-    max_new_tokens: 128
-    columns: [vllm, ollama, neurobrix_pytorch, neurobrix_triton]
-
-  - id: vlm_qwen3vl
-    family: vlm
-    checkpoint: Qwen/Qwen3-VL-30B-A3B-Thinking
-    neurobrix_model: Qwen3-VL-30B-A3B-Thinking
-    prompt: "What fruit is shown in this image? Answer briefly."
-    input_image: validation_outputs/qwen3_omni_stage1/test_image_apple_448.png
-    max_new_tokens: 64
-    columns: [vllm, neurobrix_pytorch, neurobrix_triton]   # ollama: no VLM parity at fp16 — verify at pin time, else not-applicable
-
-  - id: image_diffusion_sana1024
-    family: image
-    checkpoint: Efficient-Large-Model/Sana_1600M_1024px_MultiLing
-    neurobrix_model: Sana_1600M_1024px_MultiLing
-    prompt: "a red apple on a wooden table"
-    steps: 20
-    seed: 42
-    columns: [neurobrix_pytorch, neurobrix_triton]   # diffusion: competitor columns not applicable
