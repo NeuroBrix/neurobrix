@@ -180,6 +180,18 @@ class InferenceEngine:
             inputs["global.prompt"] = prompt
         if "audio_path" in kwargs and kwargs["audio_path"]:
             inputs["global.audio_path"] = kwargs.pop("audio_path")
+        if "image_path" in kwargs and kwargs["image_path"]:
+            # Image input through the shared CLI/daemon brick — single
+            # source of truth (output_dispatch pattern, R30-agnostic:
+            # preprocessing is boundary I/O feeding both engines).
+            from neurobrix.core.module.vision.input_processor import (
+                prepare_image_inputs,
+            )
+            inputs.update(prepare_image_inputs(
+                self._pkg.topology, self.model_name,
+                kwargs.pop("image_path"), self._container._cache_path,
+                height=kwargs.get("height"), width=kwargs.get("width"),
+                num_frames=kwargs.get("num_frames")))
         if "steps" in kwargs and kwargs["steps"] is not None:
             inputs["global.num_inference_steps"] = kwargs["steps"]
         if "height" in kwargs and kwargs["height"] is not None:
@@ -196,6 +208,16 @@ class InferenceEngine:
             inputs["global.max_tokens"] = kwargs["max_tokens"]
         if "chat_mode" in kwargs:
             inputs["global.chat_mode"] = kwargs["chat_mode"]
+        if "mode" in kwargs and kwargs["mode"] is not None:
+            # Multimodal-strict families resolve their generation mode
+            # from this input (same key the CLI cold path sets).
+            inputs["global.mode"] = kwargs["mode"]
+        if "speaker" in kwargs and kwargs["speaker"] is not None:
+            # Speech-leg speaker selection (same key the CLI cold path
+            # sets; the warm client already forwards it).
+            inputs["global.speaker"] = kwargs["speaker"]
+        if "num_frames" in kwargs and kwargs["num_frames"] is not None:
+            inputs["global.num_frames"] = kwargs["num_frames"]
         if "seed" in kwargs and kwargs["seed"] is not None:
             seed = kwargs["seed"]
             inputs["global.seed"] = seed
@@ -409,10 +431,14 @@ class InferenceEngine:
     def family(self) -> Optional[str]:
         return self._family
 
-    def save_output(self, outputs: Dict[str, Any], output_path: str) -> str:
+    def save_output(self, outputs: Dict[str, Any], output_path: str,
+                    mode: Optional[str] = None) -> str:
         """
         Save non-text output (image/audio/video) to file. Returns saved path.
-        Delegates to data-driven output_dispatch.save_output.
+        Delegates to data-driven output_dispatch.save_output. `mode` is the
+        request's generation mode — multimodal-strict families resolve
+        their output extension from it (the CLI cold path passes it;
+        the warm path must too, same single source of truth).
         """
         from neurobrix.core.runtime.output_dispatch import save_output
         # Strip any "waveform" alias so save_output finds global.output_audio.
@@ -423,7 +449,8 @@ class InferenceEngine:
         if tx is not None and "global.transcription" not in outputs:
             outputs = {**outputs, "global.transcription": tx}
         return save_output(
-            outputs, output_path, self._family or "", self._executor, self._pkg
+            outputs, output_path, self._family or "", self._executor,
+            self._pkg, mode=mode,
         )
 
     def _extract_llm_output(self, outputs: Dict[str, Any]) -> Dict[str, Any]:
