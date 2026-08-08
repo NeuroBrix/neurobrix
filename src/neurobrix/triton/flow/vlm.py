@@ -40,6 +40,7 @@ import numpy as np
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from neurobrix import decode_progress
 from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype
 from neurobrix.triton.memory_pool import release_flow_memory
 from neurobrix.triton.flow.audio_llm import (
@@ -540,6 +541,11 @@ class TritonVLMEngine:
                 repetition_penalty=repetition_penalty,
             )
             generated_ids.append(next_token)
+            # In-process per-token event (same site as the autoregressive
+            # generators): feeds the daemon's streaming RPC for real TTFT.
+            # decode_progress is stdlib-only (R33-safe by design).
+            decode_progress.emit(len(generated_ids) - 1, len(generated_ids),
+                                 int(next_token), next_token in eos_ids)
             if next_token in eos_ids:
                 break
             token_embed = self._embed_ids([next_token], embed_weight, dtype)
@@ -933,6 +939,11 @@ class TritonVLMEngine:
                 repetition_penalty=repetition_penalty,
             )
             generated_ids.append(next_token)
+            # In-process per-token event (same site as the autoregressive
+            # generators): feeds the daemon's streaming RPC for real TTFT.
+            # decode_progress is stdlib-only (R33-safe by design).
+            decode_progress.emit(len(generated_ids) - 1, len(generated_ids),
+                                 int(next_token), next_token in eos_ids)
             if next_token in eos_ids:
                 break
             token_embed = self._embed_ids([next_token], embed_weight, dtype)
@@ -1446,6 +1457,11 @@ class TritonVLMEngine:
                 repetition_penalty=repetition_penalty,
             )
             generated_ids.append(next_token)
+            # In-process per-token event (same site as the autoregressive
+            # generators): feeds the daemon's streaming RPC for real TTFT.
+            # decode_progress is stdlib-only (R33-safe by design).
+            decode_progress.emit(len(generated_ids) - 1, len(generated_ids),
+                                 int(next_token), next_token in eos_ids)
             if next_token in eos_ids:
                 break
             token_embed = self._embed_ids([next_token], embed_weight, dtype)

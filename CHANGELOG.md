@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Per-token streaming for vision-language models**: the serving
+  daemon's streamed `generate` now emits its per-token events for VLM
+  builds on both execution engines — time-to-first-token is measurable
+  over the RPC for image+text requests, same event semantics as plain
+  LLM decoding.
+- **Image input over the serving daemon**: `generate` accepts
+  `image_path`; the preprocessing is the exact brick the CLI cold path
+  uses (one source of truth), so warm and cold requests see identical
+  model inputs.
+
+### Fixed
+
+- **Speech-mode requests can no longer be silently degraded**: a
+  `mode=audio` request on a speech-capable build is guaranteed to run
+  the flow that carries the speech leg — previously a text-only prompt
+  could be routed to the plain text path and return tokens with no
+  audio and no error. Missing prerequisites now fail loudly.
+- **Warm daemon output resolution for multimodal builds**: the request
+  mode now reaches the output writer, so audio/image answers save with
+  the right extension instead of erroring; the `speaker` selection is
+  forwarded to the speech leg (it was accepted by the CLI and dropped
+  by the daemon).
+
 - **Constant folding at load (opt-in)**: with `NBX_OPTIM_CONST_FOLD=1`,
   subgraphs computable from model parameters alone are executed once at
   weight-bind time — through the same kernels the hot path would have

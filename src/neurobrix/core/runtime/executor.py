@@ -171,8 +171,18 @@ class RuntimeExecutor:
                          or f"{_p[:-len('_pos_masks')]}_hidden_states"
                          in _lm_ports)
                     for _p in _lm_ports)
+                # A mode=audio request on a build that declares the
+                # generative-speech contract MUST stay on the vlm flow:
+                # its speech leg lives there, and the leg's ZERO
+                # FALLBACK gates degrade loudly. Diverting it to the
+                # plain AR flow silently drops the speech leg (the
+                # warm-daemon text-only prompt→wav class, 2026-08-08).
+                _wants_speech = (
+                    str(_resolved.get("global.mode") or "") == "audio"
+                    and bool(flow.get("speech")))
                 if (_gen_lm in (self.pkg.topology.get("components") or {})
-                        and not _has_modal and not _lm_splice):
+                        and not _has_modal and not _lm_splice
+                        and not _wants_speech):
                     return "autoregressive_generation"
             return flow_type
 

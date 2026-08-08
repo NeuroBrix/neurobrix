@@ -135,3 +135,57 @@ class ImageInputProcessor:
 
         # Torch only at the compiled boundary; stays CPU float32.
         return torch.from_numpy(np.ascontiguousarray(arr))
+
+
+def prepare_image_inputs(topology: dict, model_name: Optional[str],
+                         image_path: str, cache_path: Path, *,
+                         height: Optional[int] = None,
+                         width: Optional[int] = None,
+                         num_frames: Optional[int] = None) -> dict:
+    """Image file → the ``global.*`` inputs dict, data-driven from the build.
+
+    Single source of truth shared by the CLI cold path
+    (``cli/commands/run.py``) and the serving warm path
+    (``serving/engine.py``) — the output_dispatch pattern.
+
+    The preprocessing TYPE is data-driven from the build: a
+    ``topology.flow.vlm`` block declares its own preprocessing
+    (dynamic-resolution VLM); otherwise the video contract applies:
+    ``global.image`` = I2V VAE-conditioning clip [1,3,T,H,W] in [-1,1]
+    (T>1 zero-padded only when the model's vae_encoder declares
+    ``pad_image_to_num_frames`` — Wan-I2V temporal-VAE class), and
+    ``global.pixel_values`` = the CLIP view of the SAME image when the
+    build embeds ``modules/image_processor/preprocessor_config.json``.
+    All tensors stay CPU; the runtime resolver owns placement.
+    """
+    import json
+
+    inputs: dict = {}
+    vlm_blk = (topology.get("flow", {}) or {}).get("vlm") or {}
+    vlm_input = vlm_blk.get("input", {})
+    if vlm_input.get("preprocessing"):
+        vis = ImageInputProcessor.process(
+            vlm_input["preprocessing"], image_path,
+            preprocessor_config=(vlm_blk.get("preprocessing") or {}))
+        if isinstance(vis, dict):
+            for k, v in vis.items():
+                inputs[f"global.{k}"] = v
+        else:
+            inputs[vlm_input.get("image_variable",
+                                 "global.pixel_values")] = vis
+    else:
+        from neurobrix.core.runtime.registry_flags import get_component_flag
+        pad_nf = 0
+        if get_component_flag(model_name, "vae_encoder",
+                              "pad_image_to_num_frames", default=False):
+            pad_nf = int(num_frames or 0)
+        inputs["global.image"] = ImageInputProcessor.process(
+            "i2v_vae_condition", image_path,
+            height=height, width=width, pad_to_num_frames=pad_nf)
+        proc_cfg = (cache_path / "modules" / "image_processor"
+                    / "preprocessor_config.json")
+        if proc_cfg.exists():
+            inputs["global.pixel_values"] = ImageInputProcessor.process(
+                "clip_centercrop", image_path,
+                preprocessor_config=json.loads(proc_cfg.read_text()))
+    return inputs

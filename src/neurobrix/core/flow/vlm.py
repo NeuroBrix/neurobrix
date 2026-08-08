@@ -40,6 +40,7 @@ import torch
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .base import FlowHandler, FlowContext, register_flow
+from neurobrix import decode_progress
 from neurobrix.core.memory.manager import release_flow_memory
 
 
@@ -527,6 +528,10 @@ class VLMEngine(FlowHandler):
                 repetition_penalty=repetition_penalty,
             )
             generated_ids.append(next_token)
+            # In-process per-token event (same site as the autoregressive
+            # generators): feeds the daemon's streaming RPC for real TTFT.
+            decode_progress.emit(len(generated_ids) - 1, len(generated_ids),
+                                 int(next_token), next_token in eos_ids)
             if next_token in eos_ids:
                 break
             context_embeds = torch.cat(
@@ -924,6 +929,10 @@ class VLMEngine(FlowHandler):
                 repetition_penalty=repetition_penalty,
             )
             generated_ids.append(next_token)
+            # In-process per-token event (same site as the autoregressive
+            # generators): feeds the daemon's streaming RPC for real TTFT.
+            decode_progress.emit(len(generated_ids) - 1, len(generated_ids),
+                                 int(next_token), next_token in eos_ids)
             if next_token in eos_ids:
                 break
             context_embeds = torch.cat(
@@ -1498,6 +1507,10 @@ class VLMEngine(FlowHandler):
                 repetition_penalty=repetition_penalty,
             )
             generated_ids.append(next_token)
+            # In-process per-token event (same site as the autoregressive
+            # generators): feeds the daemon's streaming RPC for real TTFT.
+            decode_progress.emit(len(generated_ids) - 1, len(generated_ids),
+                                 int(next_token), next_token in eos_ids)
             if next_token in eos_ids:
                 break
             context_embeds = torch.cat(

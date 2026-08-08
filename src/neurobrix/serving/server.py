@@ -354,7 +354,11 @@ class ServingDaemon:
                 except RuntimeError:
                     fmt = "txt"
                 if output_path and fmt != "txt" and "outputs" in result:
-                    saved = self._engine.save_output(result["outputs"], output_path)
+                    # The request mode rides to save_output — multimodal-
+                    # strict families resolve their extension from it.
+                    saved = self._engine.save_output(
+                        result["outputs"], output_path,
+                        mode=params.get("mode"))
                     result.pop("outputs", None)
                     result["output_path"] = saved
                 elif "outputs" in result:
