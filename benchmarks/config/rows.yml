@@ -102,9 +102,16 @@ rows:
     reference: true
     checkpoint: Qwen/Qwen3-Omni-30B-A3B-Instruct
     neurobrix_model: Qwen3-Omni-30B-A3B-Instruct
-    prompt: "Reply with exactly these two words: Hello there."
+    prompt: "In one short sentence, what did the speaker say?"
+    audio: benchmarks/assets/jfk_11s.wav
     mode: audio
     max_new_tokens: 32
+    # Audio-in -> speech-out = this model's VALIDATED closure class
+    # (the deepstack vlm branch requires a modality input; text-only
+    # prompt->speech on that class is a NAMED engine gap — the
+    # staged-splice class has an inert-stub text form, deepstack does
+    # not yet). The AR-diversion guard (2026-08-08) makes the gap
+    # LOUD instead of a silent tokens-only answer.
     serving_configs: [pinned, machine]   # 66 GB fp16 > one 32 GB V100
     # THE headline capability row (R16 verdict 2026-08-08): no
     # third-party runtime serves omni speech-out AND the vendor's own
