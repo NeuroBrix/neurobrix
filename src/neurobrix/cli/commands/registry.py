@@ -78,14 +78,17 @@ def cmd_import(args):
     print(f"   License: {license_name}")
 
     # License acceptance — hub is the source of truth
-    if is_gated and not _is_license_accepted(name):
+    if is_gated and not _is_license_accepted(org, name):
+        full_url = ""
+        if license_url:
+            full_url = license_url if license_url.startswith("http") else f"{registry}{license_url}"
+
         print(f"\n{'=' * 70}")
         print("LICENSE NOTICE")
         print("=" * 70)
         print(f"   Vendor: {org}")
         print(f"   License: {license_name}")
-        if license_url:
-            full_url = license_url if license_url.startswith("http") else f"{registry}{license_url}"
+        if full_url:
             print(f"   Full text: {full_url}")
         print()
         print("   This model is distributed under the license above.")
@@ -95,18 +98,34 @@ def cmd_import(args):
         print("   THIS LICENSE REQUIRES EXPLICIT ACCEPTANCE.")
         print("=" * 70)
 
-        try:
-            reply = input("\n   Accept license terms? [yes/No]: ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            print("\n   Declined.")
-            sys.exit(1)
+        # Non-interactive acceptance: --accept-license flag or NBX_ACCEPT_LICENSE=1
+        accepted_via = None
+        if getattr(args, "accept_license", False):
+            accepted_via = "--accept-license"
+        elif os.environ.get("NBX_ACCEPT_LICENSE") == "1":
+            accepted_via = "NBX_ACCEPT_LICENSE=1"
 
-        if reply != "yes":
-            print("   License declined. Download cancelled.")
-            sys.exit(1)
+        if accepted_via:
+            _record_license_acceptance(org, name, license_id)
+            print(f"   License accepted via {accepted_via}.\n")
+        else:
+            if not sys.stdin.isatty():
+                _print_noninteractive_license_help(model_ref, license_name, full_url)
+                sys.exit(1)
 
-        _record_license_acceptance(name, license_id)
-        print("   License accepted.\n")
+            try:
+                reply = input("\n   Accept license terms? [yes/No]: ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                _print_noninteractive_license_help(model_ref, license_name, full_url)
+                sys.exit(1)
+
+            if reply != "yes":
+                print("   License declined. Download cancelled.")
+                sys.exit(1)
+
+            _record_license_acceptance(org, name, license_id)
+            print("   License accepted.\n")
 
     # 2. Get signed download URL
     print(f"\n[2/4] Getting download URL...")
@@ -118,6 +137,33 @@ def cmd_import(args):
         resp.raise_for_status()
         download_info = resp.json()
     except requests.HTTPError as e:
+        status = e.response.status_code if e.response is not None else 0
+        server_error = None
+        if e.response is not None:
+            try:
+                body = e.response.json()
+                if isinstance(body, dict):
+                    server_error = body
+            except ValueError:
+                server_error = None
+
+        if server_error is not None:
+            code = server_error.get("code", "")
+            message = server_error.get("message") or server_error.get("error") or ""
+            if code == "LICENSE_LOGIN_REQUIRED":
+                if message:
+                    print(f"ERROR: {message}")
+                else:
+                    print("ERROR: License acceptance on the hub is required for this model.")
+                print("The hub requires a logged-in license acceptance for this model.")
+                print(f"Log in on {registry}, accept the license for {org}/{name}, then retry the import.")
+                sys.exit(1)
+            if code or message:
+                print(f"ERROR: Failed to get download URL ({status}): {message or code}")
+                if code and message:
+                    print(f"   Server error code: {code}")
+                sys.exit(1)
+
         print(f"ERROR: Failed to get download URL: {e}")
         sys.exit(1)
 
@@ -539,18 +585,44 @@ from datetime import datetime, timezone
 _ACCEPTANCES_FILE = Path.home() / ".neurobrix" / "license_acceptances.json"
 
 
-def _is_license_accepted(model_name: str) -> bool:
-    """Check if user has already accepted the license for this model."""
+def _print_noninteractive_license_help(model_ref: str, license_name: str, full_url: str) -> None:
+    """Explain how to accept a gated-model license without a terminal prompt."""
+    print("\n   ERROR: This model requires explicit license acceptance, but no")
+    print("   interactive terminal is available to prompt for it.")
+    print()
+    print(f"   License: {license_name}")
+    if full_url:
+        print(f"   Full text: {full_url}")
+    print()
+    print("   To accept the license non-interactively, re-run with either:")
+    print(f"     neurobrix import {model_ref} --accept-license")
+    print(f"     NBX_ACCEPT_LICENSE=1 neurobrix import {model_ref}")
+
+
+def _is_license_accepted(org: str, name: str) -> bool:
+    """Check if user has already accepted the license for org/name.
+
+    Acceptances are keyed by "org/name". Legacy entries keyed by the bare
+    model name are honored and migrated to the org/name key on first read.
+    """
     if not _ACCEPTANCES_FILE.exists():
         return False
     try:
         data = json.loads(_ACCEPTANCES_FILE.read_text())
-        return model_name in data
     except (json.JSONDecodeError, OSError):
         return False
+    key = f"{org}/{name}"
+    if key in data:
+        return True
+    if name in data:
+        # Legacy bare-name entry: migrate to the org/name key.
+        data[key] = data.pop(name)
+        _ACCEPTANCES_FILE.write_text(json.dumps(data, indent=2))
+        return True
+    return False
 
 
-def _record_license_acceptance(model_name: str, license_id: str) -> None:
+def _record_license_acceptance(org: str, name: str, license_id: str) -> None:
     """Record license acceptance locally so user isn't asked again."""
     _ACCEPTANCES_FILE.parent.mkdir(parents=True, exist_ok=True)
     data = {}
@@ -559,7 +631,7 @@ def _record_license_acceptance(model_name: str, license_id: str) -> None:
             data = json.loads(_ACCEPTANCES_FILE.read_text())
         except (json.JSONDecodeError, OSError):
             data = {}
-    data[model_name] = {
+    data[f"{org}/{name}"] = {
         "license": license_id,
         "accepted_at": datetime.now(timezone.utc).isoformat(),
     }
