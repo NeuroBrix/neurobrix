@@ -301,6 +301,12 @@ def discover_models() -> List[Dict[str, str | int]]:
     for sub in sorted(CACHE_ROOT.iterdir()):
         if not sub.is_dir():
             continue
+        if sub.name.endswith("-backup"):
+            # Manual cache backups (e.g. TinyLlama-1.1B-Chat-v1.0
+            # .pre-G-backup) are working copies, not zoo members: they
+            # duplicate an existing row and pollute the golden set
+            # (the 2026-08-08 battery captured goldens for one).
+            continue
         if not (sub / "manifest.json").exists():
             continue
         meta = _read_manifest(sub)

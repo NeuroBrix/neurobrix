@@ -25,7 +25,7 @@ Every cell below is a documented does-not-run verdict for a competitor at its pi
 |---|---|
 | neurobrix_pytorch | 3.61s · 17.3G |
 | neurobrix_triton | 28.84s · 17.5G |
-| vendor_transformers | 1.15s · 21.3G |
+| vendor_transformers | **INVALIDATED 2026-08-10** — the 1.15s walls measured runs whose speech leg CRASHED (cell log: `TypeError: Invalid file: None` in stepaudio2 token2wav on every request; `model.chat` swallowed it and returned text-only, no wav ever synthesized). This checkpoint lineage requires a reference wav for speech; cell fixed (`get_sys_prompt(ref_audio=assets/HT_ref_audio.wav, mode="audio_assistant")` + hard no-wav gate). Re-measure pending — until then the row has NO valid vendor speech number. |
 
 ## omni_qwen3omni — config: machine
 

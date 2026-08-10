@@ -94,11 +94,28 @@ def run_omni_voice(row: dict, n: int, repo: Path,
     model.init_tts()
     cold_start = time.perf_counter() - t0
 
+    # Reference voice: on this checkpoint lineage the vendor speech leg
+    # REQUIRES a reference wav — token2wav crashes on prompt_wav=None
+    # even on the "default voice" warning path (2026-08-08 bench cell
+    # log: TypeError in stepaudio2 token2wav._prepare_prompt on every
+    # request; model.chat swallowed it and returned text-only, so the
+    # recorded walls measured NO speech synthesis — the invalidated
+    # vendor number). The canonical snapshot asset is the vendor's
+    # best-weapon config, recorded in pins.
+    ref_wav = Path(src) / "assets" / "HT_ref_audio.wav"
+    if not ref_wav.is_file():
+        raise SystemExit(
+            f"vendor_cell: reference wav missing at {ref_wav} — the "
+            f"vendor speech leg cannot synthesize without it")
+    sys_msg = model.get_sys_prompt(
+        ref_audio=str(ref_wav), mode="audio_assistant", language="en")
+
     def one(idx: int) -> dict:
         out_wav = media_dir / f"vendor_r{idx}.wav"
         t1 = time.perf_counter()
         model.chat(
-            msgs=[{"role": "user", "content": [row["prompt"]]}],
+            msgs=[sys_msg,
+                  {"role": "user", "content": [row["prompt"]]}],
             tokenizer=tokenizer,
             sampling=False,
             max_new_tokens=int(row.get("max_new_tokens") or 32),
@@ -107,11 +124,18 @@ def run_omni_voice(row: dict, n: int, repo: Path,
             output_audio_path=str(out_wav),
         )
         wall = time.perf_counter() - t1
-        rec = {"wall_s": wall}
-        if out_wav.exists():
-            rec["sha256"] = hashlib.sha256(
-                out_wav.read_bytes()).hexdigest()
-        return rec
+        # HARD GATE — a generate_audio=True request that produced no wav
+        # is a FAILED request; recording its wall would bank a
+        # no-speech timing as a speech number (the 2026-08-08 silent
+        # failure). Fail the whole cell loudly instead.
+        if not out_wav.exists():
+            raise SystemExit(
+                f"vendor_cell: request r{idx} produced no wav at "
+                f"{out_wav} — refusing to record a speech wall for a "
+                f"run that synthesized no speech")
+        return {"wall_s": wall,
+                "sha256": hashlib.sha256(
+                    out_wav.read_bytes()).hexdigest()}
 
     one(-1)  # warmup
     return {
@@ -123,6 +147,8 @@ def run_omni_voice(row: dict, n: int, repo: Path,
             "dtype": "float16",
             "attn_implementation": "sdpa",
             "decoding": "greedy (sampling=False)",
+            "ref_audio": str(ref_wav),
+            "sys_prompt_mode": "audio_assistant",
             "source": src,
         },
     }
