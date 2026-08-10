@@ -402,6 +402,7 @@ def cell_neurobrix(row: dict, gpu: int, n: int, triton: bool,
     if row.get("metric_class", "tokens") != "tokens":
         return cell_neurobrix_media(row, gpu, n, triton, hardware, log_dir)
     from neurobrix.serving.client import DaemonClient  # noqa: F401
+    import hashlib
     proc, client, cold_start = _neurobrix_daemon(
         row, gpu, triton, hardware, log_dir)
     try:
@@ -413,6 +414,18 @@ def cell_neurobrix(row: dict, gpu: int, n: int, triton: bool,
             # VLM rows: the committed image asset, same input every
             # column reads (routed through the shared CLI/daemon brick).
             stream_kwargs["image_path"] = str(REPO / row["input_image"])
+
+        # R29 answer export (evidence-chain fix 2026-08-10): the cell
+        # JSONs carried metrics only, leaving the LLM/VLM answers with
+        # no on-disk artifact to inspect. Every request's answer text
+        # is hashed into the JSON; request r0's full text (2000-char
+        # R29 bound) lands in the media tree.
+        media_dir = (REPO / "validation_outputs" /
+                     f"bench_reference_{log_dir.name}" / row["id"])
+        media_dir.mkdir(parents=True, exist_ok=True)
+        eng = ("triton" if triton else "pytorch") + (
+            "_machine" if gpu is None else "")
+        answers: list = []
 
         def one() -> dict:
             # Streamed RPC: per-token events from the daemon's decode loop.
@@ -439,14 +452,28 @@ def cell_neurobrix(row: dict, gpu: int, n: int, triton: bool,
             # count — one event per sampled token at the generator site
             # (vlm flow's final payload has no token count).
             n_tok = final.get("tokens") or n_events or None
-            return {"wall_s": wall_s, "ttft_s": ttft,
-                    "tokens": n_tok, "tokens_streamed": n_events,
-                    "tok_per_s": (n_tok - 1) / (t_last - t0 - ttft)
-                    if (n_tok and n_tok > 1 and ttft is not None)
-                    else None}
+            text = final.get("text") or ""
+            answers.append(text)
+            rec = {"wall_s": wall_s, "ttft_s": ttft,
+                   "tokens": n_tok, "tokens_streamed": n_events,
+                   "tok_per_s": (n_tok - 1) / (t_last - t0 - ttft)
+                   if (n_tok and n_tok > 1 and ttft is not None)
+                   else None}
+            if text:
+                rec["answer_sha256"] = hashlib.sha256(
+                    text.encode("utf-8")).hexdigest()
+            return rec
         one()  # warmup
+        answers.clear()  # warmup answer is not evidence
         out = {"cold_start_s": cold_start,
                "requests": [one() for _ in range(n)]}
+        if answers and answers[0]:
+            answer_path = (media_dir /
+                           f"neurobrix_{eng}_answer_r0.txt")
+            answer_path.write_text(answers[0][:2000] + "\n",
+                                   encoding="utf-8")
+            out["answers_identical"] = all(
+                a == answers[0] for a in answers)
         client.close()
         return out
     finally:
