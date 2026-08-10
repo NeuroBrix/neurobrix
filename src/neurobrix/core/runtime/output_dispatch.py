@@ -415,6 +415,7 @@ def extract_result(
     outputs: Dict[str, Any],
     family: str,
     executor,
+    mode: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Build serialization-friendly result dict from raw executor outputs.
@@ -423,11 +424,32 @@ def extract_result(
     returns {text, tokens}. For wav-output families (tts): returns
     {waveform_present: True} (caller then calls save_output to file).
     For image/video: returns {outputs} (caller saves to file).
+
+    `mode`: the request's generation mode for mode_dependent
+    (multimodal) families — the serving path threads it (same value as
+    global.mode). A text-mode multimodal answer goes through the txt
+    extraction like any vlm; without it the serving result carried no
+    text at all (raw passthrough), which left multimodal-family VLM
+    answers invisible to warm clients (Qwen3-VL class, found by the
+    2026-08-10 R29 answer-artifact export).
     """
     fmt = get_output_format(family)
     if fmt == "mode_dependent":
-        # multimodal in serving context: needs explicit mode resolution.
-        # For now, treat as raw passthrough — CLI / save_output handles it.
+        if mode == "text":
+            text = _extract_text(outputs, executor)
+            tokens = _extract_token_count(outputs)
+            return {"text": text or "", "tokens": tokens}
+        if mode is None:
+            # No explicit mode (bench/legacy warm clients — the
+            # multimodal family declares default: null by design): if
+            # the run produced a text surface it WAS a text-mode run;
+            # extract it. Media-mode runs have no text surface, so
+            # this stays a strict no-op for them.
+            text = _extract_text(outputs, executor)
+            if text:
+                return {"text": text,
+                        "tokens": _extract_token_count(outputs)}
+        # Media modes: raw passthrough — save_output handles them.
         return {"outputs": outputs}
 
     if fmt == "txt":
