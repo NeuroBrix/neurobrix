@@ -59,6 +59,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   symbolic dimensions: bounds frozen at trace values are surfaced as
   package-coverage suspects instead of being reported as removable.
 
+## [0.5.1] - 2026-08-10
+
+### Fixed
+
+- **Non-interactive license acceptance**: `neurobrix import` accepts
+  `--accept-license` (or `NBX_ACCEPT_LICENSE=1`) so gated models can be
+  installed from scripts, CI and Docker; without a terminal the CLI now
+  explains both options and the license URL instead of failing silently,
+  and license errors from the registry are relayed with the server's
+  message.
+
 ## [0.5.0] - 2026-08-03
 
 ### Added
