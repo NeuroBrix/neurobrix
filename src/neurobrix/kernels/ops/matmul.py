@@ -19,6 +19,28 @@ import triton
 import triton.language as tl
 
 from ._autotune_policy import maybe_pin_single, is_matmul_pinned
+from ._common import sigmoid, tanh_fn
+
+# Vertical-fusion epilogue codes (fusion_vertical pass, EXACT gate).
+# 0 = none, 1 = silu, 2 = gelu exact, 3 = gelu tanh. The epilogue is a
+# tl.constexpr NOT in the autotune key: both fused and unfused variants
+# share ONE tuning-cache entry per (M, N, K, IEEE, PROMOTE_B), so the
+# selected config — and therefore the tl.dot accumulation order — is
+# identical by construction (the two-leg byte-exactness contract: the
+# R16 research showed rounding emulation alone is insufficient if the
+# fused and unfused kernels can tune to different BLOCK_K).
+#
+# Byte-exactness emulation: the unfused pair is
+#   matmul_kernel: fp32 acc -> cast to C dtype -> store        (round 1)
+#   silu/gelu kernel: load C dtype -> .to(fp32) -> f(x) -> store (round 2)
+# The fused epilogue reproduces BOTH rounding points in-register:
+#   acc -> .to(C dtype) -> .to(fp32) -> f(x) -> store
+# using the SAME formula text and the SAME _common helpers as the
+# standalone kernels, so the arithmetic lowers identically.
+EPILOGUE_NONE: int = 0
+EPILOGUE_SILU: int = 1
+EPILOGUE_GELU_EXACT: int = 2
+EPILOGUE_GELU_TANH: int = 3
 
 
 # Per-architecture autotune configs (tutorial pattern
@@ -102,6 +124,7 @@ def matmul_kernel(
     stride_cm, stride_cn,
     IEEE_PRECISION: tl.constexpr = False,
     PROMOTE_B: tl.constexpr = False,
+    EPILOGUE: tl.constexpr = 0,
     BLOCK_M: tl.constexpr = 64,
     BLOCK_N: tl.constexpr = 64,
     BLOCK_K: tl.constexpr = 32,
@@ -174,7 +197,24 @@ def matmul_kernel(
     offs_cn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
     c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
     c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
-    tl.store(c_ptrs, c, mask=c_mask)
+    if EPILOGUE != 0:
+        # Per-stage rounding emulation: `c` already carries round 1 (the
+        # unfused mm's store cast); .to(fp32) is the standalone epilogue
+        # kernel's lossless load upcast. Formulas are copied VERBATIM
+        # from ops/silu.py / ops/gelu.py; the store's implicit downcast
+        # mirrors the standalone kernel's tl.store.
+        x_fp32 = c.to(tl.float32)
+        if EPILOGUE == 1:
+            out = x_fp32 * sigmoid(x_fp32)
+        elif EPILOGUE == 2:
+            cdf = 0.5 * (1.0 + tl.math.erf(0.707106781 * x_fp32))
+            out = cdf * x_fp32
+        else:
+            cdf = 0.5 * (1.0 + tanh_fn(0.7978845608 * x_fp32 * (1.0 + 0.044715 * x_fp32 * x_fp32)))
+            out = cdf * x_fp32
+        tl.store(c_ptrs, out, mask=c_mask)
+    else:
+        tl.store(c_ptrs, c, mask=c_mask)
 
 
 @triton.autotune(configs=_MATMUL_AUTOTUNE_CONFIGS,
@@ -190,6 +230,7 @@ def addmm_kernel(
     alpha, beta,
     IEEE_PRECISION: tl.constexpr = False,
     PROMOTE_B: tl.constexpr = False,
+    EPILOGUE: tl.constexpr = 0,
     BLOCK_M: tl.constexpr = 64,
     BLOCK_N: tl.constexpr = 64,
     BLOCK_K: tl.constexpr = 32,
@@ -246,4 +287,21 @@ def addmm_kernel(
     offs_cm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
     c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
     c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
-    tl.store(c_ptrs, accumulator, mask=c_mask)
+    if EPILOGUE != 0:
+        # Per-stage rounding emulation (see matmul_kernel): the unfused
+        # addmm stores the fp32 accumulator with tl.store's implicit
+        # downcast (round 1); the standalone epilogue kernel loads and
+        # upcasts to fp32. Reproduce both in-register, then apply the
+        # VERBATIM standalone formulas.
+        x_fp32 = accumulator.to(c_ptr.dtype.element_ty).to(tl.float32)
+        if EPILOGUE == 1:
+            out = x_fp32 * sigmoid(x_fp32)
+        elif EPILOGUE == 2:
+            cdf = 0.5 * (1.0 + tl.math.erf(0.707106781 * x_fp32))
+            out = cdf * x_fp32
+        else:
+            cdf = 0.5 * (1.0 + tanh_fn(0.7978845608 * x_fp32 * (1.0 + 0.044715 * x_fp32 * x_fp32)))
+            out = cdf * x_fp32
+        tl.store(c_ptrs, out, mask=c_mask)
+    else:
+        tl.store(c_ptrs, accumulator, mask=c_mask)

@@ -768,6 +768,8 @@ def _build_op_map() -> Dict[str, Callable]:
         "mm": w.mm,
         "bmm": w.bmm,
         "addmm": w.addmm,
+        "mm_epilogue": w.mm_epilogue_wrapper,
+        "addmm_epilogue": w.addmm_epilogue_wrapper,
         "matmul": w.matmul_wrapper,
         "linear": w.linear_wrapper,
         "isin": w.isin_wrapper,

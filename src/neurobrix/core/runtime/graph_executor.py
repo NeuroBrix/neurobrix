@@ -835,6 +835,21 @@ class GraphExecutor:
                       f"-> {len(_cf_plan['frontier_tids'])} bind-time "
                       f"constants ({self._component_name})")
 
+        # fusion_vertical (Phase 3): OPT-IN (NBX_OPTIM_FUSION_VERTICAL=1)
+        # until its full-zoo byte gate passes. Planner only annotates
+        # (dag["_optim_fusion_vertical"]); the triton engine lowers at
+        # compile Phase -0.28, the compiled engine ignores (D2-legit),
+        # sequential paths are oracles and never lower annotations.
+        if os.environ.get("NBX_OPTIM_FUSION_VERTICAL") == "1":
+            from neurobrix.core.optim.passes.fusion_vertical import (
+                PLAN_KEY as _FV_KEY, plan_fusion_vertical)
+            _fv_plan = plan_fusion_vertical(self._dag)
+            if _fv_plan:
+                self._dag[_FV_KEY] = _fv_plan
+                print(f"[Optim] fusion_vertical: "
+                      f"{len(_fv_plan['groups'])} matmul+epilogue "
+                      f"groups planned ({self._component_name})")
+
         self._apply_sequential_spatial_promotion()
 
         # Pre-compile dispatch table for Triton mode

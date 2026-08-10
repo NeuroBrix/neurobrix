@@ -414,6 +414,18 @@ class TritonSequence:
         if os.environ.get("NBX_DISABLE_SWIGLU_FUSION") != "1":
             self._fuse_swiglu_ops(tensors, ops_by_uid, exec_order)
 
+        # Phase -0.28: fusion_vertical lowering (optim Phase 3) — fold
+        # planner-annotated matmul+unary-epilogue groups into
+        # custom::mm_epilogue / custom::addmm_epilogue (one launch per
+        # pair, per-stage rounding emulation in-kernel). Runs AFTER the
+        # swiglu fusion so silu ops consumed into custom::swiglu_fused
+        # are skipped (counted in the activation line). Annotation-driven:
+        # no plan on the dag = no-op.
+        # NBX_DISABLE_FUSION_VERTICAL=1 — diagnostic gate mirroring the
+        # swiglu/rope convention.
+        if os.environ.get("NBX_DISABLE_FUSION_VERTICAL") != "1":
+            self._lower_fusion_vertical(tensors, ops_by_uid, exec_order)
+
         # Phase -0.2: Fuse HF-Llama rotate_half RoPE chains on Q+K into a
         # single custom::rope_fused op backed by Liger's rope_forward_kernel.
         # Collapses 14 ops per layer (slice×4, neg×2, cat×2, mul×4, add×2).
@@ -475,7 +487,11 @@ class TritonSequence:
         if not isinstance(arg, dict):
             return arg
         arg_type = arg.get("type")
-        if arg_type == "tensor":
+        # tensor_ref carries the same tensor_id field (_compile_arg
+        # accepts both) — a ref left unrewired would keep pointing at a
+        # tid the dropped producer never writes (gardien 2026-08-10,
+        # shared-helper hardening, pre-existing blind spot).
+        if arg_type in ("tensor", "tensor_ref"):
             tid = arg.get("tensor_id")
             if tid in rewire:
                 arg = dict(arg)
@@ -1126,6 +1142,125 @@ class TritonSequence:
                 new_order.append(uid)
         execution_order.clear()
         execution_order.extend(new_order)
+
+    def _lower_fusion_vertical(
+        self,
+        tensors: Dict[str, Any],
+        ops_metadata: Dict[str, Any],
+        execution_order: List[str],
+    ) -> None:
+        """Lower planner-annotated matmul+unary-epilogue groups (optim
+        fusion_vertical, EXACT gate) into custom::mm_epilogue /
+        custom::addmm_epilogue.
+
+        The planner (core/optim/passes/fusion_vertical.py) analyzed the
+        PRE-triton-fusion graph, so every group is RE-VERIFIED here on
+        the live op state by walking the chain again: groups whose
+        epilogue was consumed by an earlier fusion (swiglu) or whose
+        anchor disappeared are counted as skipped — the expected class,
+        not an error. Mechanics mirror _fuse_swiglu_ops: the anchor op
+        mutates into the custom op (keeping its uid, args and output
+        tensor id — activated data flows through any intermediate
+        layout ops unchanged, elementwise∘layout == layout∘elementwise),
+        the epilogue op is dropped and its output tid rewired to its
+        input tid.
+        """
+        from neurobrix.core.optim.passes.fusion_vertical import (
+            LAYOUT_TRANSPARENT, PLAN_KEY)
+
+        plan = self.dag.get(PLAN_KEY)
+        if not plan:
+            return
+
+        graph_outputs = set(self.dag.get("output_tensor_ids", []))
+
+        def _is_graph_output(tid: str) -> bool:
+            # Union check (gardien HIGH 2026-08-10): the categorizer
+            # treats output-ness as `is_output OR in output_tensor_ids`
+            # and detach elimination propagates is_output without
+            # touching the id list — mirror the same union here.
+            if tid in graph_outputs:
+                return True
+            tdata = tensors.get(tid)
+            return bool(tdata and tdata.get("is_output"))
+
+        consumers: Dict[str, List[str]] = {}
+        for op_uid in execution_order:
+            od = ops_metadata.get(op_uid)
+            if od is None:
+                continue
+            for t in od.get("input_tensor_ids", []):
+                consumers.setdefault(t, []).append(op_uid)
+
+        fused = 0
+        skipped = 0
+        rewire: Dict[str, str] = {}
+        drops: set = set()
+
+        for group in plan.get("groups", []):
+            a_uid = group["anchor_uid"]
+            e_uid = group["epilogue_uid"]
+            a_op = ops_metadata.get(a_uid)
+            e_op = ops_metadata.get(e_uid)
+            if (a_op is None or e_op is None
+                    or a_op.get("op_type") not in ("aten::mm", "aten::addmm")
+                    or e_op.get("op_type") not in ("aten::silu", "aten::gelu")):
+                skipped += 1
+                continue
+
+            # Live-chain re-walk anchor -> epilogue (single consumer,
+            # layout-only hops), robust to earlier-phase rewrites.
+            cur = a_op
+            hops = 0
+            reached = False
+            while hops <= 6:
+                outs = cur.get("output_tensor_ids") or []
+                if len(outs) != 1 or _is_graph_output(outs[0]):
+                    break
+                cons = consumers.get(outs[0], [])
+                if len(cons) != 1:
+                    break
+                nxt_uid = cons[0]
+                if nxt_uid == e_uid:
+                    reached = True
+                    break
+                nxt = ops_metadata.get(nxt_uid)
+                if nxt is None or nxt.get("op_type") not in LAYOUT_TRANSPARENT:
+                    break
+                cur = nxt
+                hops += 1
+            e_outs = e_op.get("output_tensor_ids") or []
+            e_ins = e_op.get("input_tensor_ids") or []
+            if (not reached or len(e_outs) != 1 or len(e_ins) != 1
+                    or _is_graph_output(e_outs[0])):
+                skipped += 1
+                continue
+
+            # Mutate the anchor into the fused custom op in place.
+            base = a_op["op_type"].split("::")[-1]
+            a_op["op_type"] = f"custom::{base}_epilogue"
+            attrs = a_op.setdefault("attributes", {})
+            kwargs = attrs.setdefault("kwargs", {})
+            kwargs["epilogue"] = {"type": "scalar",
+                                  "value": group["epilogue"]}
+            kwargs["approximate"] = {
+                "type": "scalar",
+                "value": "tanh" if group.get("gelu_tanh") else "none",
+            }
+
+            rewire[e_outs[0]] = e_ins[0]
+            drops.add(e_uid)
+            fused += 1
+
+        if fused:
+            self._apply_rewire_to_remaining_ops(
+                rewire, drops, ops_metadata, execution_order)
+        if fused or skipped:
+            # Activation evidence for ON-vs-OFF gates (const_fold
+            # precedent): a gate run must PROVE the ON arm fused.
+            print(f"[Optim] fusion_vertical[triton]: {fused} "
+                  f"matmul+epilogue fused, {skipped} skipped "
+                  f"(consumed by earlier fusion or reshaped)")
 
     def _fuse_rope_ops(
         self,

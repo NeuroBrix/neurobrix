@@ -171,6 +171,8 @@ for op in _TRITON_OPS:
 ATEN_CLASSIFICATION["custom::rms_norm"] = OpExecution.TRITON
 ATEN_CLASSIFICATION["custom::swiglu_fused"] = OpExecution.TRITON
 ATEN_CLASSIFICATION["custom::rope_fused"] = OpExecution.TRITON
+ATEN_CLASSIFICATION["custom::mm_epilogue"] = OpExecution.TRITON
+ATEN_CLASSIFICATION["custom::addmm_epilogue"] = OpExecution.TRITON
 for op in _METADATA_OPS:
     ATEN_CLASSIFICATION[f"aten::{op}"] = OpExecution.METADATA
 

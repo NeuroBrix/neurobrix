@@ -1498,10 +1498,29 @@ def _matmul_out_dtype(a, M: int = 1, force_fp32: bool = False):
     return dt
 
 
-def mm(a, b) :
+def _apply_matmul_epilogue(c, epilogue_code: int):
+    """Unfused epilogue application for matmul fallback paths (decode
+    M <= 4 mv/addmv routing). Calls the SAME standalone wrappers the
+    unfused graph would dispatch, in the same order — byte-identical to
+    the unfused pair by construction, zero-risk on the decode path.
+    Codes mirror kernels/ops/matmul.py EPILOGUE_*."""
+    if epilogue_code == 0:
+        return c
+    if epilogue_code == 1:
+        return silu(c)
+    return gelu(c, approximate=('tanh' if epilogue_code == 3 else 'none'))
+
+
+def mm(a, b, _epilogue: int = 0) :
     """Matrix multiplication: C = A @ B.
     Kernel accumulates in fp32 (hardware). Output matches input dtype.
     DtypeEngine handles fp16/bf16 overflow protection externally.
+
+    `_epilogue` (fusion_vertical pass): fused elementwise epilogue code
+    (0 none, 1 silu, 2 gelu exact, 3 gelu tanh) executed in-kernel with
+    per-stage rounding emulation — see kernels/ops/matmul.py. The
+    M <= 4 decode path stays UNFUSED (mv routing + standalone epilogue
+    wrapper) so decode bytes are untouched by construction.
 
     Small-M fast path (M <= 4): route to mv_wrapper per-row. matmul_kernel
     tiles on BLOCK_M=64 and wastes 63/64 threads when M=1 (decode). mv_kernel
@@ -1605,7 +1624,7 @@ def mm(a, b) :
         c = NBXTensor.empty((M, N), device=dev_str, dtype=dtype_out)
         for i in range(M):
             c[i] = mv_wrapper(bt, a[i])
-        return c
+        return _apply_matmul_epilogue(c, _epilogue)
 
     a = a.contiguous()
     b = b.contiguous()
@@ -1629,6 +1648,7 @@ def mm(a, b) :
         c.stride(0), c.stride(1),
         IEEE_PRECISION=ieee,
         PROMOTE_B=promote_b,
+        EPILOGUE=_epilogue,
     )
     return c
 
@@ -1867,13 +1887,17 @@ def linear_wrapper(input, weight, bias=None):
 
 
 def addmm(bias, a, b,
-          beta: float = 1.0, alpha: float = 1.0) :
+          beta: float = 1.0, alpha: float = 1.0, _epilogue: int = 0) :
     """C = beta * bias + alpha * (A @ B).
     Kernel accumulates in fp32 (hardware). Output matches input dtype.
     DtypeEngine handles overflow protection externally.
 
     Small-M fast path (M <= 4): per-row addmv. Bias is broadcast the same
     way torch.addmm does: (N,), (1, N), or (M, N).
+
+    `_epilogue` (fusion_vertical pass): fused elementwise epilogue code
+    (0 none, 1 silu, 2 gelu exact, 3 gelu tanh) with per-stage rounding
+    emulation in-kernel; M <= 4 decode path stays unfused (see mm()).
     """
     a = _ensure_cuda(a)
     b = _ensure_cuda(b)
@@ -1923,7 +1947,7 @@ def addmm(bias, a, b,
         K_ = a.shape[-1]
         batch = a.numel() // K_
         a2d = a.contiguous().view(batch, K_)
-        out2d = addmm(bias, a2d, b, beta=beta, alpha=alpha)
+        out2d = addmm(bias, a2d, b, beta=beta, alpha=alpha, _epilogue=_epilogue)
         return out2d.view(*orig_lead, out2d.shape[-1])
 
     M, K = a.shape
@@ -1946,7 +1970,7 @@ def addmm(bias, a, b,
         for i in range(M):
             br = bias[i] if bias_per_row else bias_shared
             c[i] = addmv_wrapper(br, bt, a[i], beta=beta, alpha=alpha)
-        return c
+        return _apply_matmul_epilogue(c, _epilogue)
 
     a = a.contiguous()
     b = b.contiguous()
@@ -1964,8 +1988,38 @@ def addmm(bias, a, b,
         alpha, beta,
         IEEE_PRECISION=ieee,
         PROMOTE_B=promote_b,
+        EPILOGUE=_epilogue,
     )
     return c
+
+
+# Epilogue string -> kernel code mapping (fusion_vertical pass). Kept in
+# ONE place so the emitter, the wrappers, and the kernel constexpr codes
+# cannot drift apart.
+_MATMUL_EPILOGUE_CODES = {
+    ("silu", "none"): 1,
+    ("silu", "tanh"): 1,   # approximate is silu-irrelevant; tolerate
+    ("gelu", "none"): 2,
+    ("gelu", "tanh"): 3,
+}
+
+
+def mm_epilogue_wrapper(a, b, epilogue: str = "silu",
+                        approximate: str = "none"):
+    """custom::mm_epilogue — aten::mm fused with a unary elementwise
+    epilogue (fusion_vertical pass, EXACT gate). One kernel launch for
+    the pair; byte-identical to the unfused pair via per-stage rounding
+    emulation + shared autotune config (same kernel function)."""
+    return mm(a, b, _epilogue=_MATMUL_EPILOGUE_CODES[(epilogue, approximate)])
+
+
+def addmm_epilogue_wrapper(bias, a, b, beta: float = 1.0,
+                           alpha: float = 1.0, epilogue: str = "silu",
+                           approximate: str = "none"):
+    """custom::addmm_epilogue — aten::addmm fused with a unary
+    elementwise epilogue (fusion_vertical pass, EXACT gate)."""
+    return addmm(bias, a, b, beta=beta, alpha=alpha,
+                 _epilogue=_MATMUL_EPILOGUE_CODES[(epilogue, approximate)])
 
 
 # ===========================================================================

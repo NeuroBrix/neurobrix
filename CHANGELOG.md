@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Vertical fusion pass (opt-in)**: `NBX_OPTIM_FUSION_VERTICAL=1`
+  fuses matmul + activation (SiLU/GELU) pairs into single Triton
+  kernel launches with byte-identical outputs, reducing per-step
+  launch count on Triton mode (measured +1.2% on diffusion steps
+  where the pattern dominates).
 - **Per-token streaming for vision-language models**: the serving
   daemon's streamed `generate` now emits its per-token events for VLM
   builds on both execution engines — time-to-first-token is measurable

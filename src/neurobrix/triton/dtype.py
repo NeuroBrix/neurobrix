@@ -166,6 +166,11 @@ def resolve_compute_dtype(ctx, component: str = None) -> str:
 # construction.
 _SELF_MANAGED_OPS: FrozenSet[str] = frozenset({
     "mm", "bmm", "addmm",
+    # fusion_vertical fused anchors: route through mm()/addmm() and
+    # inherit their self-managed accumulation-overflow doctrine. A
+    # wrap_op passthrough here would silently strip the mm-class dtype
+    # protection from the fused op (the scouting-named trap).
+    "mm_epilogue", "addmm_epilogue",
     "conv2d", "_convolution",
     "upsample_nearest1d", "upsample_nearest2d", "upsample_nearest3d",
 })
