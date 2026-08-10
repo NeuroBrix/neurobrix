@@ -235,7 +235,9 @@ class InferenceEngine:
         # Build result — DATA-DRIVEN by family output_format
         from neurobrix.core.runtime.output_dispatch import extract_result
         result = {"timing": {"total_s": round(t_total, 3)}, "family": self._family}
-        result.update(extract_result(outputs, self._family or "", self._executor))
+        result.update(extract_result(outputs, self._family or "",
+                                     self._executor,
+                                     mode=kwargs.get("mode")))
         return result
 
     def _generate_from_token_ids(self, token_ids: list, **kwargs) -> Dict[str, Any]:

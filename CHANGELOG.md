@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   kernel launches with byte-identical outputs, reducing per-step
   launch count on Triton mode (measured +1.2% on diffusion steps
   where the pattern dominates).
+- **Warm-serving text answers for multimodal builds**: text-mode
+  requests against multimodal-family models (Qwen3-VL class) now
+  return the answer text in the serving response instead of a raw
+  passthrough; the request mode is honored and, absent a mode, a
+  produced text surface is detected automatically.
 - **Per-token streaming for vision-language models**: the serving
   daemon's streamed `generate` now emits its per-token events for VLM
   builds on both execution engines — time-to-first-token is measurable
