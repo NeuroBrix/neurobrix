@@ -1,0 +1,7 @@
+{
+ "row": "omni_qwen3omni",
+ "column": "vendor_transformers",
+ "config": "machine",
+ "status": "dnr",
+ "evidence": "The vendor's official recipe cannot run on this rig: documented theoretical minimum 78.85 GB measured WITH flash_attention_2 (Qwen3-Omni memory-table footnote); FlashAttention-2 does not exist on sm_70 (Dao-AILab flash-attention#524/#148/#228 \u2014 Ampere+ only), and the sdpa/eager fallback costs MORE than that minimum on the 96 GB heterogeneous pool; vendor-validated dtype is bf16, emulated (not native) on Volta (pytorch#124996). Weights alone: 70.5 GB across 15 shards."
+}

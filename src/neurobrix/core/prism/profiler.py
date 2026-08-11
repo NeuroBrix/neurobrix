@@ -341,8 +341,24 @@ class ActivationProfiler:
 
         return last_use
 
-    def build_symbol_map(self, input_config: InputConfig) -> Dict[str, int]:
+    def build_symbol_map(self, input_config: InputConfig,
+                         placement_floor: bool = False) -> Dict[str, int]:
         """Symbol map for THIS graph: positional base + name-driven overrides.
+
+        `placement_floor=True` (PLACEMENT estimates only — never the
+        per-request paths): no named symbol binds BELOW its trace value.
+        The trace is a WITNESSED extent; placement must stay safe for
+        extents >= trace. Root case (2026-08-10, D7 scoping note):
+        Qwen3-Omni thinker.audio_tower's mel-frame axis is NAMED
+        `seq_len`, so it bound to the global text seq config (~128)
+        instead of >= its 441-frame trace — the activation estimate
+        collapsed and block_scatter packed a 16G card to 15.77 GiB with
+        zero forward headroom. Per-request estimation legitimately binds
+        BELOW trace (Kokoro seq 14 < trace 23), hence the flag, not a
+        default. The complete fix — declared per-input runtime maxima in
+        the container defaults (registry-driven) — is a build-toolchain
+        contract evolution, filed separately; the floor removes the
+        under-trace class without inventing data.
 
         The positional convention in InputConfig.to_symbol_map (s1=latent_h,
         s2=latent_w) is the image legacy. Graphs that carry a
@@ -415,6 +431,11 @@ class ActivationProfiler:
                 # Unknown named symbol: trace value (matches the trace, never
                 # worse than the legacy positional guess).
                 symbol_map[sid] = trace
+            if (placement_floor and isinstance(trace, int)
+                    and sid in symbol_map
+                    and isinstance(symbol_map[sid], int)
+                    and symbol_map[sid] < trace):
+                symbol_map[sid] = trace
         return symbol_map
 
     def estimate_peak_memory(
@@ -427,6 +448,7 @@ class ActivationProfiler:
         zero_alloc_uids: Optional[set] = None,
         inplace_adds: Optional[List] = None,
         force_compute_dtype_for_fp: bool = False,
+        placement_floor: bool = False,
     ) -> ActivationProfile:
         """
         Simulate execution to find peak activation memory.
@@ -457,7 +479,8 @@ class ActivationProfiler:
 
         # Build symbol map for shape resolution (positional base + this
         # graph's name-driven symbol overrides — video time/height/width).
-        symbol_map = self.build_symbol_map(input_config)
+        symbol_map = self.build_symbol_map(
+            input_config, placement_floor=placement_floor)
 
         # Initialize tracking
         peak_bytes = 0

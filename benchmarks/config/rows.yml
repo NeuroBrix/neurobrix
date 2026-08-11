@@ -106,6 +106,12 @@ rows:
     audio: benchmarks/assets/jfk_11s.wav
     mode: audio
     max_new_tokens: 32
+    env:
+      # 66 GB het-pack: torch caching-allocator fragmentation left
+      # 2.47 GiB reserved-but-unallocated on the 16G card while a
+      # 20 MiB alloc failed (2026-08-11 retry log). Same remedy the
+      # dsv2 battery rows pin; recorded closure config.
+      PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
     # Audio-in -> speech-out = this model's VALIDATED closure class
     # (the deepstack vlm branch requires a modality input; text-only
     # prompt->speech on that class is a NAMED engine gap — the

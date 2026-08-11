@@ -1532,6 +1532,12 @@ class PrismSolver:
                         dtype_bytes=dtype_bytes,
                         vram_per_gpu_bytes=smallest_gpu_bytes or None,
                         force_compute_dtype_for_fp=True,
+                        # PLACEMENT estimate: no symbol binds below its
+                        # witnessed trace extent (the audio-tower
+                        # seq_len-misbinding class, D7 scoping note
+                        # 2026-08-10). Per-request paths keep the
+                        # unfloored map.
+                        placement_floor=True,
                     )
                     # Second pass (tiling-aware) only when first pass found
                     # overflow_ops AND we have a real budget to reason about.
@@ -2063,7 +2069,12 @@ class PrismSolver:
         if len(devices) < 2:
             return None
 
-        capacity_threshold = devices[0].capacity_mb * 0.80
+        # Heterogeneity fix (2026-08-11, D7 scoping note): the FGP gate
+        # compares against the LARGEST device — a component that still
+        # fits whole on the biggest GPU does not need scattering; the
+        # former devices[0] read made the first-listed device decide for
+        # a mixed 16G/32G rig.
+        capacity_threshold = max(d.capacity_mb for d in devices) * 0.80
         needs_fgp = [(n, m) for n, m in sorted_comps if m.weight_mb + m.activation_mb > capacity_threshold]
 
         if not needs_fgp:
@@ -2081,6 +2092,19 @@ class PrismSolver:
             )
             for d in devices
         ]
+
+        # Per-device activation reserve (2026-08-11, the 2026-08-08 OOM
+        # class): any device that hosts weights must keep headroom for
+        # the largest single-component forward transient of the model —
+        # at runtime ANY component's forward may execute while scattered
+        # weights sit resident, and the uniform act/n_blocks spreading
+        # under-reserves devices packed with many small blocks
+        # (block_scatter filled a V100-16G to 15.77 GiB of weights; the
+        # audio-encoder forward then failed a 20 MiB alloc). Data-driven
+        # from the same profiles the packing already consumes — no
+        # constant.
+        act_reserve_mb = max(
+            (m.activation_mb for _, m in sorted_comps), default=0.0)
 
         allocations = {}
         current_dev_idx = 0
@@ -2108,7 +2132,7 @@ class PrismSolver:
                 while current_dev_idx < len(fresh):
                     dev = fresh[current_dev_idx]
                     real_size = dev.get_real_block_size(blocks['non_block_mb'], model_dtype) * packing_overhead
-                    if dev.can_fit(real_size):
+                    if dev.can_fit(real_size + act_reserve_mb):
                         dev.used_mb += real_size
                         dev.components.append(f"{comp_name}.non_block")
                         for key in blocks['non_block_keys']:
@@ -2123,11 +2147,18 @@ class PrismSolver:
             for block_num in sorted(blocks['blocks'].keys()):
                 block_keys = blocks['blocks'][block_num]
                 base_block = blocks['block_sizes'][block_num]
-                real_block = fresh[0].get_real_block_size(base_block, model_dtype)
-                total_block = (real_block + act_per_block) * packing_overhead
 
-                # Find GPUs that can fit this block
-                fit_devs = [d for d in fresh if d.can_fit(total_block)]
+                # Heterogeneity fix: the dtype-conversion cost of a block
+                # is a property of the CANDIDATE device (bf16 on a
+                # non-bf16 card costs differently) — evaluate per device,
+                # never via fresh[0]. The reserve keeps forward headroom
+                # on every packed device.
+                def _block_cost(d):
+                    return (d.get_real_block_size(base_block, model_dtype)
+                            + act_per_block) * packing_overhead
+
+                fit_devs = [d for d in fresh
+                            if d.can_fit(_block_cost(d) + act_reserve_mb)]
                 if not fit_devs:
                     return None
 
@@ -2152,7 +2183,7 @@ class PrismSolver:
                 if target is None:
                     target = max(fit_devs, key=lambda d: d.free_mb)
 
-                target.used_mb += total_block
+                target.used_mb += _block_cost(target)
                 target.components.append(f"{comp_name}.block.{block_num}")
                 for key in block_keys:
                     shard_map[key] = target.device_string
@@ -2169,7 +2200,12 @@ class PrismSolver:
 
         for comp_name, mem in regular:
             required = mem.weight_mb + mem.activation_mb
-            target = next((d for d in fresh if d.can_fit(required)), None)
+            # Reserve applies here too: a regular component's device may
+            # also execute OTHER components' forwards (the reserve is
+            # model-wide, not per-component).
+            target = next(
+                (d for d in fresh if d.can_fit(required + act_reserve_mb)),
+                None)
             if target is None:
                 return None
             target.allocate(comp_name, required)
