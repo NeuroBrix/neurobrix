@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Heterogeneous multi-GPU placement hardening**: placement estimates
+  no longer bind any symbolic dimension below its traced extent, block
+  packing accounts per-device conversion costs and reserves per-GPU
+  activation headroom — large omni models (Qwen3-Omni class) now run
+  multi-GPU on mixed 16G/32G rigs where the vendor stack cannot load.
 - **Vertical fusion pass (opt-in)**: `NBX_OPTIM_FUSION_VERTICAL=1`
   fuses matmul + activation (SiLU/GELU) pairs into single Triton
   kernel launches with byte-identical outputs, reducing per-step
