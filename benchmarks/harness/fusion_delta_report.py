@@ -63,6 +63,18 @@ def main() -> int:
         mon = _cell_metrics(don.get("result", don))
         moff = _cell_metrics(doff.get("result", doff))
         rows_seen += 1
+        # EXACT-gate text check (gardien 2026-08-10): the media byte
+        # gate covers wav/png; the VLM/LLM rows' exactness lives in the
+        # per-request answer_sha256 — compare the sha SETS across arms.
+        ron = (don.get("result", don) or {}).get("requests") or []
+        roff = (doff.get("result", doff) or {}).get("requests") or []
+        sha_on = {r.get("answer_sha256") for r in ron} - {None}
+        sha_off = {r.get("answer_sha256") for r in roff} - {None}
+        if sha_on or sha_off:
+            verdict = ("BYTE-IDENTICAL" if sha_on == sha_off and
+                       len(sha_on) == 1 else "MISMATCH")
+            print(f"| {on_path.stem} | answer_sha | {len(sha_off)} uniq "
+                  f"| {len(sha_on)} uniq | {verdict} |")
         for key in sorted(set(mon) | set(moff)):
             a, b = moff.get(key), mon.get(key)
             if a and b:
