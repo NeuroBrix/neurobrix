@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Diffusion step cache (opt-in, per-model)**: models configured with
+  a `step_cache` threshold reuse the previous denoising prediction on
+  low-change steps (relative-L1 signal, bounded consecutive skips,
+  first/last steps always computed) — Sana-1024 on Triton mode drops
+  from 24.6 to 17.5 s/image at 29.5 dB PSNR with 8/20 steps skipped.
+  Outputs are approximate by design; the pass is inactive unless
+  explicitly enabled and reports its skip rate on every run.
 - **Frozen-plan replay for Triton mode (opt-in)**: `NBX_TRITON_REPLAY=1`
   records a graph's kernel-launch sequence once and replays it as
   direct C-launcher calls with byte-identical outputs — diffusion
