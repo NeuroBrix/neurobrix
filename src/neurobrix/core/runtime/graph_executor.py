@@ -1847,6 +1847,10 @@ class GraphExecutor:
         # strategies like zero3). This mirrors the behaviour of
         # _execute_compiled_graph in native mode.
         cb = self._pre_op_callback or self._persistent_pre_op_callback
+        # Replay v1 capability gate: stage-driven executors are outside
+        # the standard flow contract (their call sites mark the flag).
+        self._triton_seq._replay_ineligible = getattr(
+            self, '_replay_ineligible', False)
         self._triton_seq.run(skip_kills=effective_skip_kills, pre_op_callback=cb)
         return self._triton_seq.gather_outputs(), self._triton_seq.num_ops
 

@@ -24,6 +24,7 @@ from neurobrix.kernels.wrappers import (
 from .arena import Arena
 from .symbols import SymbolResolver
 from .dtype import TritonDtypeEngine
+from . import replay as _replay
 
 
 # ----------------------------------------------------------------------------
@@ -3003,6 +3004,15 @@ class TritonSequence:
         _w.set_compute_dtype(self._compute_dtype)
         _w.set_activations_fp16_safe(self._activations_fp16_safe)
         try:
+            # Phase 4a frozen-plan replay (opt-in NBX_TRITON_REPLAY=1):
+            # 1st run per bucket = warmup (autotune fires), 2nd =
+            # recording, 3rd+ = direct C-launcher replay. Handled runs
+            # return here; every ineligible case falls through to the
+            # normal paths untouched. Contract + design: scoping doc
+            # "Phase 4a".
+            if _replay.ENABLED and not self._is_multi_device:
+                if _replay.maybe_run(self, skip_kills, pre_op_callback):
+                    return
             if self._is_multi_device:
                 self._run_multi_device(skip_kills, pre_op_callback)
             else:

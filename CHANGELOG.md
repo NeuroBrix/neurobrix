@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Frozen-plan replay for Triton mode (opt-in)**: `NBX_TRITON_REPLAY=1`
+  records a graph's kernel-launch sequence once and replays it as
+  direct C-launcher calls with byte-identical outputs — diffusion
+  steps on Triton mode run up to 2.2x faster (Sana-1024: 52.6 to
+  24.4 s/image, outputs byte-identical). Ineligible graph classes
+  (KV-cache decode, streaming flows) automatically keep the normal
+  path.
 - **Heterogeneous multi-GPU placement hardening**: placement estimates
   no longer bind any symbolic dimension below its traced extent, block
   packing accounts per-device conversion costs and reserves per-GPU

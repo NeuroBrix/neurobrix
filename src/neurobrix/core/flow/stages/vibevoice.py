@@ -130,6 +130,7 @@ def execute_diffusion_stage(engine, stage: Dict, audio_config: Dict) -> None:
 
     # -- Determine latent shape from graph input --
     executor = engine.ctx.executors[comp_name]
+    executor._replay_ineligible = True  # stage-driven: outside the standard flow contract (replay v1 capability gate)
     dag = getattr(executor, '_dag', None)
     latent_shape = None
     condition_input_name = None
@@ -209,6 +210,7 @@ def execute_diffusion_stage(engine, stage: Dict, audio_config: Dict) -> None:
     # resolves from topology connections (condition) but noisy_images and
     # timesteps are runtime-generated per step.
     executor = engine.ctx.executors[comp_name]
+    executor._replay_ineligible = True  # stage-driven: outside the standard flow contract (replay v1 capability gate)
     print(f"   [{comp_name}] Diffusion: {num_steps} steps, latent {concrete_shape}")
     for step_idx, t in enumerate(scheduler.timesteps):
         if isinstance(t, torch.Tensor) and t.dim() == 0:
