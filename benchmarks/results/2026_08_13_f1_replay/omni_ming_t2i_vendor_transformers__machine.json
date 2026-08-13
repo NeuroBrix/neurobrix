@@ -1,0 +1,7 @@
+{
+ "row": "omni_ming_t2i",
+ "column": "vendor_transformers",
+ "config": "machine",
+ "status": "dnr",
+ "evidence": "The vendor's official recipe cannot run on V100: their single-device loading path needs ~42 GB bf16 (model card) > 32 GB, with NO published multi-GPU HF recipe; official snippets hard-pass attn_implementation= 'flash_attention_2' installed from an sm_80+ cu12/torch2.4 wheel \u2014 impossible on sm_70 (Dao-AILab #524); vendor validation hardware is H800-80GB/H20-96G, bf16-only (inclusionAI/Ming v1.5 requirements + model card)."
+}

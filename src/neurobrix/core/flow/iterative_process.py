@@ -476,6 +476,10 @@ class IterativeProcessHandler(FlowHandler):
         # Dual-denoiser (Wan2.2-A14B) boundary switch — one expert per step.
         dual = self._setup_dual_denoiser(components, driver)
 
+        # F1 step cache (delayed-signal whole-output reuse, drift-tier,
+        # per-model opt-in via registry defaults — scoping doc "F1").
+        _sc = self._setup_step_cache(components, dual, num_steps)
+
         # Main loop
         for step_idx, timestep in enumerate(iterator):
             if DEBUG:
@@ -513,6 +517,24 @@ class IterativeProcessHandler(FlowHandler):
             for comp_name in step_components:
                 if DEBUG and step_idx == 0:
                     self._audit_component_inputs(comp_name)
+
+                # F1 step-cache skip: reuse the previous fully-processed
+                # model prediction; the scheduler still advances this
+                # timestep normally. Mirrors the driver-step tail.
+                if (_sc is not None and self._is_loop_component(comp_name)
+                        and self._sc_should_skip(_sc, step_idx, num_steps)):
+                    model_output = _sc["prev_pred"]
+                    step_result = driver.step(
+                        model_output, timestep, current_state,
+                        generator=self.ctx.variable_resolver.sampling_generator())
+                    if isinstance(step_result, dict):
+                        current_state = step_result["prev_sample"]
+                    else:
+                        current_state = step_result.prev_sample
+                    _gate_loop_state_finite(current_state, step_idx,
+                                            timestep, comp_name)
+                    self.ctx.variable_resolver.set(state_key, current_state)
+                    continue
 
                 # Scale model input
                 scaled_state = driver.scale_model_input(current_state, timestep)
@@ -627,6 +649,11 @@ class IterativeProcessHandler(FlowHandler):
                     if DEBUG:
                         self._print_step_diagnostics(step_idx, timestep, model_output, current_state)
 
+                    # F1 step-cache signal capture on the final processed
+                    # prediction (post-split, post-transfer).
+                    if _sc is not None and self._is_loop_component(comp_name):
+                        self._sc_observe(_sc, model_output)
+
                     # Driver step — thread the run-scoped sampling generator
                     # (vendor semantics: the SAME seeded stream that drew the
                     # init supplies the scheduler's stochastic draws, in order;
@@ -672,6 +699,86 @@ class IterativeProcessHandler(FlowHandler):
                                             timestep, comp_name)
 
                     self.ctx.variable_resolver.set(state_key, current_state)
+
+        # F1 rates line (clause 4): activation + skip-rate proof.
+        if _sc is not None:
+            print(f"[StepCache] skipped {_sc['skipped']}/{_sc['total']} "
+                  f"steps (threshold={_sc['threshold']}, "
+                  f"max_consecutive={_sc['max_skips']})")
+
+    # ------------------------------------------------------------------
+    # F1 step cache — delayed-signal whole-output reuse (drift tier).
+    # Design + the six-clause drift discipline: scoping doc "F1".
+    # R30 mirror: triton/flow/iterative_process.py.
+    # ------------------------------------------------------------------
+
+    def _setup_step_cache(self, components, dual, num_steps):
+        """Opt-in via registry-driven defaults: step_cache={threshold,
+        max_consecutive_skips}. ABSENT = inactive. CLI --set
+        global.step_cache_* overrides. v1 scope: single loop
+        component, no dual-denoiser."""
+        import os as _os_sc
+        cfg = self.ctx.pkg.defaults.get("step_cache")
+        resolved = self.ctx.variable_resolver.resolved
+        thr_override = (resolved.get("global.step_cache_threshold")
+                        or _os_sc.environ.get("NBX_STEP_CACHE_THRESHOLD"))
+        if cfg is None and thr_override is None:
+            return None
+        if dual is not None:
+            return None
+        loop_comps = [c for c in components if self._is_loop_component(c)]
+        if len(loop_comps) != 1:
+            return None
+        cfg = dict(cfg or {})
+        if thr_override is not None:
+            cfg["threshold"] = float(thr_override)
+        mcs_override = (resolved.get("global.step_cache_max_skips")
+                        or _os_sc.environ.get("NBX_STEP_CACHE_MAX_SKIPS"))
+        if mcs_override is not None:
+            cfg["max_consecutive_skips"] = int(mcs_override)
+        if "threshold" not in cfg or "max_consecutive_skips" not in cfg:
+            raise RuntimeError(
+                "ZERO FALLBACK: step_cache needs BOTH threshold and "
+                "max_consecutive_skips (registry defaults or --set "
+                "global.step_cache_*) — no engine-side constants for a "
+                "drift-tier pass")
+        return {"threshold": float(cfg["threshold"]),
+                "max_skips": int(cfg["max_consecutive_skips"]),
+                "prev_pred": None, "signal": None,
+                "consec": 0, "skipped": 0, "executed": 0,
+                "total": int(num_steps)}
+
+    def _sc_should_skip(self, sc, step_idx, num_steps) -> bool:
+        """Skip iff the LAST EXECUTED step's signal sat below the
+        threshold; never first/last step; never more than
+        max_consecutive_skips in a row (re-arms on each executed
+        step)."""
+        if step_idx == 0 or step_idx >= num_steps - 1:
+            return False
+        if sc["prev_pred"] is None or sc["signal"] is None:
+            return False
+        if sc["consec"] >= sc["max_skips"]:
+            return False
+        if sc["signal"] < sc["threshold"]:
+            sc["skipped"] += 1
+            sc["consec"] += 1
+            return True
+        return False
+
+    def _sc_observe(self, sc, model_output) -> None:
+        """Relative-L1 signal between consecutive EXECUTED predictions
+        (one scalar sync per executed step at the flow boundary)."""
+        prev = sc["prev_pred"]
+        if (prev is not None and hasattr(prev, "shape")
+                and tuple(prev.shape) == tuple(model_output.shape)):
+            den = float(prev.float().abs().sum().item()) or 1.0
+            num = float((model_output.float() - prev.float()).abs().sum().item())
+            sc["signal"] = num / den
+        else:
+            sc["signal"] = None
+        sc["prev_pred"] = model_output
+        sc["executed"] += 1
+        sc["consec"] = 0
 
     def _execute_post_loop(self, post_loop: List[str], loop_components: List[str]) -> None:
         """
