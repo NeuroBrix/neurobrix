@@ -710,6 +710,7 @@ def _scale_kokoro_durations(raw: torch.Tensor, target: int) -> torch.Tensor:
 def _get_kokoro_decoder_shapes(engine) -> Dict[str, int]:
     """Read decoder input shapes from graph for exact target dimensions."""
     executor = engine.ctx.executors.get("decoder")
+    executor._replay_ineligible = True  # stage-driven: outside the standard flow contract (replay v1 capability gate)
     if executor is None:
         raise RuntimeError(
             "ZERO FALLBACK: 'decoder' component not found in executors.\n"

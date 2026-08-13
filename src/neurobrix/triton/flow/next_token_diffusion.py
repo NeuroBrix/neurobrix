@@ -94,6 +94,15 @@ class TritonNextTokenDiffusionEngine:
         defaults = self.ctx.pkg.defaults
         DeviceAllocator.set_device(parse_device_idx(self.ctx.primary_device))
 
+        # Replay v1 capability gate: this flow's per-token/chunk
+        # streaming contract exceeds the frozen-plan replay model
+        # (2026-08-13 adjudication: five falsified byte-divergence
+        # mechanisms on the tokenizer legs — residual filed). Its
+        # executors run the normal path until the residual is
+        # root-caused.
+        for _ex in self.ctx.executors.values():
+            _ex._replay_ineligible = True
+
         tok = self.ctx.modules.get("tokenizer")
         if tok is None:
             raise RuntimeError("ZERO FALLBACK: next_token_diffusion requires a tokenizer module.")
