@@ -3828,9 +3828,22 @@ class TritonSequence:
                         except Exception as _dump_e:
                             print(f"[LIVE_DUMP failed: {_dump_e}]", flush=True)
                     _none_pos = [i for i, a in enumerate(args) if a is None]
+                    # Per-arg NBX placement: "cannot be accessed from
+                    # Triton" is raised for CPU-resident AND freed/foreign
+                    # pointers alike — print what each arg actually is so
+                    # the failure adjudicates itself (P-WARM-TRITON-VIDEO
+                    # class: warm lazy_sequential fed a stale placement).
+                    _arg_diag = "; ".join(
+                        f"arg{i}={getattr(a, '_device', '?')}"
+                        f":{getattr(a, '_device_idx', '?')}"
+                        f" ptr={getattr(a, '_data_ptr', 0):#x}"
+                        f" shape={tuple(getattr(a, '_shape', ()))}"
+                        for i, a in enumerate(args)
+                        if isinstance(a, NBXTensor))
                     raise RuntimeError(
                         f"Failed at {op.op_uid} ({op.op_type}): {e} | None args at "
-                        f"positions {_none_pos} of {len(args)}") from e
+                        f"positions {_none_pos} of {len(args)} | NBX args: "
+                        f"{_arg_diag}") from e
                 if _PROF:
                     DeviceAllocator.sync_device()
                     _dt = _time.perf_counter() - _t0

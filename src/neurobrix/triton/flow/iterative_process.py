@@ -654,8 +654,8 @@ class TritonIterativeProcessHandler:
                 # timestep normally (standard cache formulation). The
                 # skip path mirrors the driver-step tail EXACTLY.
                 if (_sc is not None and self._is_loop_component(comp_name)
-                        and self._sc_should_skip(_sc, step_idx, num_steps)):
-                    model_output = _sc["prev_pred"]
+                        and _sc.should_skip(step_idx)):
+                    model_output = _sc.prev_pred
                     step_result = driver.step(model_output, timestep, current_state)
                     prev = step_result["prev_sample"] if isinstance(step_result, dict) else step_result.prev_sample
                     current_state = _to_nbx(prev)
@@ -778,7 +778,7 @@ class TritonIterativeProcessHandler:
                     # F1 step-cache signal capture on the final processed
                     # prediction (post-split, post-transfer).
                     if _sc is not None and self._is_loop_component(comp_name):
-                        self._sc_observe(_sc, model_output)
+                        _sc.observe(model_output)
 
                     # Driver step — triton scheduler is NBXTensor-native (zero torch).
                     step_result = driver.step(model_output, timestep, current_state)
@@ -795,9 +795,7 @@ class TritonIterativeProcessHandler:
 
         # F1 rates line (clause 4): activation + skip-rate proof.
         if _sc is not None:
-            print(f"[StepCache] skipped {_sc['skipped']}/{_sc['total']} "
-                  f"steps (threshold={_sc['threshold']}, "
-                  f"max_consecutive={_sc['max_skips']})")
+            _sc.report()
 
     # ------------------------------------------------------------------
     # F1 step cache — delayed-signal whole-output reuse (drift tier).
@@ -806,78 +804,17 @@ class TritonIterativeProcessHandler:
     # ------------------------------------------------------------------
 
     def _setup_step_cache(self, components, dual, num_steps):
-        """Opt-in via registry-driven defaults: step_cache={threshold,
-        max_consecutive_skips}. ABSENT = inactive (no default constant
-        anywhere — a model without registry data has no cache). CLI
-        `--set global.step_cache_threshold` overrides for row pins.
-        v1 scope: single loop component, no dual-denoiser."""
-        import os as _os_sc
-        cfg = self.ctx.pkg.defaults.get("step_cache")
-        resolved = self.ctx.variable_resolver.resolved
-        thr_override = (resolved.get("global.step_cache_threshold")
-                        or _os_sc.environ.get("NBX_STEP_CACHE_THRESHOLD"))
-        if cfg is None and thr_override is None:
-            return None
+        """Flow eligibility (v1 scope: single loop component, no
+        dual-denoiser) + the shared StepCache brick
+        (triton/flow/step_cache.py, also consumed by the image_gen
+        leg)."""
         if dual is not None:
             return None
         loop_comps = [c for c in components if self._is_loop_component(c)]
         if len(loop_comps) != 1:
             return None
-        cfg = dict(cfg or {})
-        if thr_override is not None:
-            cfg["threshold"] = float(thr_override)
-        mcs_override = (resolved.get("global.step_cache_max_skips")
-                        or _os_sc.environ.get("NBX_STEP_CACHE_MAX_SKIPS"))
-        if mcs_override is not None:
-            cfg["max_consecutive_skips"] = int(mcs_override)
-        if "threshold" not in cfg or "max_consecutive_skips" not in cfg:
-            raise RuntimeError(
-                "ZERO FALLBACK: step_cache needs BOTH threshold and "
-                "max_consecutive_skips (registry defaults or --set "
-                "global.step_cache_*) — no engine-side constants for a "
-                "drift-tier pass")
-        return {"threshold": float(cfg["threshold"]),
-                "max_skips": int(cfg["max_consecutive_skips"]),
-                "prev_pred": None, "prev_np": None, "signal": None,
-                "consec": 0, "skipped": 0, "executed": 0,
-                "total": int(num_steps)}
-
-    def _sc_should_skip(self, sc, step_idx, num_steps) -> bool:
-        """Skip iff the LAST EXECUTED step's signal sat below the
-        threshold, never on the first/last step, and never more than
-        max_consecutive_skips in a row (a skipped step produces no
-        fresh signal — the decision re-arms on each executed step)."""
-        if step_idx == 0 or step_idx >= num_steps - 1:
-            return False
-        if sc["prev_pred"] is None or sc["signal"] is None:
-            return False
-        if sc["consec"] >= sc["max_skips"]:
-            return False
-        if sc["signal"] < sc["threshold"]:
-            sc["skipped"] += 1
-            sc["consec"] += 1
-            return True
-        return False
-
-    def _sc_observe(self, sc, model_output) -> None:
-        """Relative-L1 signal between consecutive EXECUTED predictions
-        (numpy at the flow boundary — latents are small; one D2H per
-        executed step)."""
-        import numpy as _np
-        cur = model_output.float().numpy() if hasattr(model_output, "numpy") else None
-        if cur is None:
-            sc["signal"] = None
-            return
-        prev = sc["prev_np"]
-        if prev is not None and prev.shape == cur.shape:
-            den = float(_np.abs(prev).sum()) or 1.0
-            sc["signal"] = float(_np.abs(cur - prev).sum()) / den
-        else:
-            sc["signal"] = None
-        sc["prev_np"] = cur
-        sc["prev_pred"] = model_output
-        sc["executed"] += 1
-        sc["consec"] = 0
+        from neurobrix.triton.flow.step_cache import StepCache
+        return StepCache.setup(self.ctx, num_steps)
 
     def _execute_post_loop(self, post_loop: List[str], loop_components: List[str]) -> None:
         """

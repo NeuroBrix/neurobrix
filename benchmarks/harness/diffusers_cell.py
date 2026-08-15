@@ -17,6 +17,7 @@ Fairness contract (backends.yml `diffusers.volta_notes`):
 import argparse
 import hashlib
 import json
+import os
 import time
 from pathlib import Path
 
@@ -43,8 +44,21 @@ def load_pipeline(row: dict):
         pipe.vae = pipe.vae.to(torch.float32)
         fixes.append("vae=fp32 (Wan doctrine)")
     pipe = pipe.to("cuda")
+
+    # Fairness-arm cache weapon (drift-discipline clause 6): when the
+    # campaign sets BENCH_DIFFUSERS_FBC=<threshold>, enable diffusers'
+    # own FirstBlockCache on the denoiser (CacheMixin at the 0.35.2
+    # pin — Wan qualifies, Sana does not). Absent = stock pipeline,
+    # byte-unchanged. The pins block records the weapon.
+    cache_note = None
+    fbc_thr = os.environ.get("BENCH_DIFFUSERS_FBC")
+    if fbc_thr:
+        from diffusers.hooks import FirstBlockCacheConfig
+        denoiser = getattr(pipe, "transformer", None) or getattr(pipe, "unet")
+        denoiser.enable_cache(FirstBlockCacheConfig(threshold=float(fbc_thr)))
+        cache_note = f"FirstBlockCache(threshold={float(fbc_thr)})"
     cold = time.perf_counter() - t0
-    return pipe, cold, fixes, src
+    return pipe, cold, fixes, src, cache_note
 
 
 def main() -> int:
@@ -60,7 +74,7 @@ def main() -> int:
     import torch
     import diffusers
 
-    pipe, cold, fixes, src = load_pipeline(row)
+    pipe, cold, fixes, src, cache_note = load_pipeline(row)
     mclass = row["metric_class"]
     steps = row["steps"]
 
@@ -109,7 +123,8 @@ def main() -> int:
                      else "float16",
             "attention": "torch SDPA / AttnProcessor2_0 "
                          "(mem-efficient backend on sm_70)",
-            "enabled_optims": "none (stock pipeline; slicing/tiling/"
+            "enabled_optims": cache_note or
+                              "none (stock pipeline; slicing/tiling/"
                               "offload/compile all off)",
             "scheduler": type(pipe.scheduler).__name__
                          + " (checkpoint-shipped config)",

@@ -177,8 +177,24 @@ class ImageGenLeg:
         if timesteps is None:
             raise RuntimeError(
                 "ZERO FALLBACK: scheduler produced no timesteps.")
+        # F1 step cache (drift tier, opt-in) — the shared brick, same
+        # config channels as the diffusion flow (registry step_cache /
+        # --set global.step_cache_* / NBX_STEP_CACHE_*). The signal is
+        # observed on the post-guidance prediction; a skip reuses it
+        # while the scheduler still advances the timestep. R30 mirror
+        # of the compiled leg.
+        from neurobrix.triton.flow.step_cache import StepCache
+        _sc = StepCache.setup(self.ctx, steps)
         for i, t in enumerate(timesteps):
             t_f = float(t.item()) if isinstance(t, NBXTensor) else float(t)
+            if _sc is not None and _sc.should_skip(i):
+                guided = _sc.prev_pred
+                latents = scheduler.step(
+                    guided.to("float32"), t_f, latents.to("float32"),
+                    return_dict=False)
+                if (i + 1) % 5 == 0:
+                    print(f"   [image_gen] step {i + 1}/{steps}")
+                continue
             lat_h = latents.to(dtype)
             lat_in = NBXTensor.cat([lat_h, lat_h], dim=0)
             t_in = _from_np_on(
@@ -194,11 +210,15 @@ class ImageGenLeg:
             uncond = noise_pred.narrow(0, 0, half).contiguous()
             text = noise_pred.narrow(0, half, half).contiguous()
             guided = uncond + (text - uncond) * gscale
+            if _sc is not None:
+                _sc.observe(guided)
             latents = scheduler.step(
                 guided.to("float32"), t_f, latents.to("float32"),
                 return_dict=False)
             if (i + 1) % 5 == 0:
                 print(f"   [image_gen] step {i + 1}/{steps}")
+        if _sc is not None:
+            _sc.report()
 
         # ── 3. VAE decode ─────────────────────────────────────────────
         sf = float(_require(vae_c, "scaling_factor", "vae contract"))

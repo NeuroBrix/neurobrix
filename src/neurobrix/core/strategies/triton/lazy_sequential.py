@@ -45,12 +45,37 @@ class LazySequentialStrategy(TritonStrategy):
         if comp_strategy == "zero3":
             self._pinned_components.add(component_name)
 
-        # Ensure inputs on the component's device (no-op when already there).
+        # Ensure inputs on the component's EXECUTION device (no-op when
+        # already there) — see _execution_device for the CPU-staged rule.
         if inputs:
-            device = self._get_component_device(component_name)
-            inputs = self.transfer_dict(inputs, device)
+            inputs = self.transfer_dict(
+                inputs, self._execution_device(component_name))
 
         return executor.run(inputs or {})
+
+    def _execution_device(self, component_name: str) -> str:
+        """Execution device for a component. The plan device rules when
+        it names a GPU; for a CPU-staged lazy component the plan device
+        ('cpu', no GPU index) is a WEIGHT-STAGING location, never an
+        execution device — NBX kernels are GPU-only, so the triton
+        weight loader resolved the actual GPU at load time and persisted
+        it on the executor (graph_executor CPU-staged branch). Inputs
+        follow the executor, not the staging plan: transferring them to
+        'cpu' handed the Wan VAE a host tensor at aten.convolution::0
+        (P-WARM-TRITON-VIDEO, 2026-08-15)."""
+        device = str(self._get_component_device(component_name))
+        if device.startswith("cuda"):
+            return device
+        ex = self.context.component_executors.get(component_name)
+        ex_device = str(getattr(ex, "device", ""))
+        if ex_device.startswith("cuda"):
+            return ex_device
+        raise RuntimeError(
+            f"ZERO FALLBACK: '{component_name}' resolved no CUDA execution "
+            f"device (plan device {device!r} carries no GPU index and "
+            f"executor.device={ex_device!r}) — NBX kernels are GPU-only; "
+            f"the weight loader must resolve the GPU before inputs can "
+            f"be placed.")
 
     def _get_component_strategy(self, component_name: str) -> str:
         alloc = self.context.allocations.get(component_name)
@@ -71,8 +96,8 @@ class LazySequentialStrategy(TritonStrategy):
         component_name: str,
         inputs: Dict[str, Any],
     ) -> Dict[str, Any]:
-        device = self._get_component_device(component_name)
-        return self.transfer_dict(inputs, device)
+        return self.transfer_dict(
+            inputs, self._execution_device(component_name))
 
     def handle_outputs(
         self,
