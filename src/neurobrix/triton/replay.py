@@ -495,10 +495,34 @@ def signature(seq) -> Optional[tuple]:
     return tuple(parts)
 
 
+_AT_SEEDED = False
+
+
+def _seed_autotune_once() -> None:
+    """E2-full: seed the sanctioned Autotuner caches from the
+    arch-keyed artifact once per process — a seeded key means run()
+    never benches (kills first-request tuning cost AND the tuning
+    timing-variance surface on recorded shapes)."""
+    global _AT_SEEDED
+    if _AT_SEEDED:
+        return
+    _AT_SEEDED = True
+    try:
+        from neurobrix.triton.autotune_cache import seed as _at_seed
+        n = _at_seed()
+        if n:
+            print(f"[Replay] autotune artifact seeded: {n} configs")
+    except (OSError, ValueError):
+        pass  # artifact I/O is an optimization, never a failure source
+    except Exception as e:  # API drift must stay observable, once
+        print(f"[Replay] autotune seed unavailable ({type(e).__name__}: {e})")
+
+
 def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
     """Replay fast path. True = this run was fully handled."""
     if not ENABLED or pre_op_callback is not None:
         return False
+    _seed_autotune_once()
     sig = signature(seq)
     if sig is None:
         return False
@@ -650,6 +674,18 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
                                frozen._nbytes, 3)
         seq._arena[slot] = fresh
     _store_slab_size(seq, sig, slab.size)
+    # E2-full: the recording pass just warmed the sanctioned autotuners
+    # for every shape in this graph — persist the selected configs into
+    # the arch-keyed artifact (seeded back on the next process's
+    # install; immune to triton's source-hash invalidation).
+    try:
+        from neurobrix.triton.autotune_cache import capture as _at_capture
+        _at_capture()
+    except (OSError, ValueError):
+        pass  # artifact I/O is an optimization, never a failure source
+    except Exception as e:  # API drift must stay observable, once
+        print(f"[Replay] autotune capture unavailable "
+              f"({type(e).__name__}: {e})")
     comp = str((seq.dag or {}).get("component_name", "?"))
     print(f"[Replay] plan frozen[{comp}]: {plan.launches} launches "
           f"({plan.actions} actions), slab "
