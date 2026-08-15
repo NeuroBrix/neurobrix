@@ -36,6 +36,36 @@ def add_scalar_kernel(
 
 
 @triton.jit
+def add_scalar_dev_kernel(
+    x_ptr, s_ptr, output_ptr,
+    n_elements,
+    alpha,
+    BLOCK_SIZE: tl.constexpr,
+):
+    """out = x + (s * alpha) where s is a 0-d DEVICE tensor.
+
+    Bit-exact mirror of add_scalar_kernel's `x + scalar` path: the
+    host path computes `float(s) * alpha` in Python float64 then
+    narrows to the f32 kernel argument; here the same math runs
+    in-register (load -> f64 -> *alpha -> f32). Replaces the host
+    .item() sync so the scalar stays device-resident — the replay
+    device-scalar increment (Ming timestep class, 2026-08-15).
+
+    Bit-exactness constraint: `alpha` binds as an f32 runtime arg, so
+    the f64 multiply sees f32(alpha) where the host path sees the full
+    f64 alpha — a 1-ulp double-rounding risk for alpha values not
+    exactly representable in f32. Every ATen call site passes alpha=±1
+    (exact); a non-representable alpha would need an f64-carried arg.
+    """
+    pid = tl.program_id(0)
+    offset = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offset < n_elements
+    s = (tl.load(s_ptr).to(tl.float64) * alpha).to(tl.float32)
+    x = tl.load(x_ptr + offset, mask=mask)
+    tl.store(output_ptr + offset, x + s, mask=mask)
+
+
+@triton.jit
 def add_bias_broadcast_kernel(
     x_ptr, bias_ptr, output_ptr,
     n_elements, feat_dim,

@@ -196,6 +196,12 @@ rows:
     family: image
     metric_class: image
     reference: true
+    env:
+      # F1 drift verdict (Hocine 2026-08-15): thr=0.15 = ROW DEFAULT
+      # (0.25 = opt-up per row only, never a default without
+      # re-inspection). validation_outputs/f1_step_cache_2026_08_13/.
+      NBX_STEP_CACHE_THRESHOLD: "0.15"
+      NBX_STEP_CACHE_MAX_SKIPS: "3"
     checkpoint: Efficient-Large-Model/Sana_1600M_1024px_MultiLing
     diffusers_checkpoint: Efficient-Large-Model/Sana_1600M_1024px_MultiLing_diffusers
     neurobrix_model: Sana_1600M_1024px_MultiLing

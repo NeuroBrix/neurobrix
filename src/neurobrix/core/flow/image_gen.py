@@ -167,7 +167,22 @@ class ImageGenLeg:
             raise RuntimeError(
                 "ZERO FALLBACK: scheduler produced no timesteps.")
         cond = torch.cat([neg_embeds, prompt_embeds], dim=0)  # [2, N, H]
+        # F1 step cache (drift tier, opt-in) — the shared brick, same
+        # config channels as the diffusion flow (registry step_cache /
+        # --set global.step_cache_* / NBX_STEP_CACHE_*). The signal is
+        # observed on the post-guidance prediction; a skip reuses it
+        # while the scheduler still advances the timestep.
+        from neurobrix.core.flow.step_cache import StepCache
+        _sc = StepCache.setup(self.ctx, steps)
         for i, t in enumerate(timesteps):
+            if _sc is not None and _sc.should_skip(i):
+                guided = _sc.prev_pred
+                latents = scheduler.step(
+                    guided.float(), t, latents.float(),
+                    return_dict=False).to(dtype)
+                if (i + 1) % 5 == 0:
+                    print(f"   [image_gen] step {i + 1}/{steps}")
+                continue
             lat_in = torch.cat([latents, latents], dim=0)
             t_in = torch.full((2,), float(t) * ts_scale,
                               device=device, dtype=dtype)
@@ -179,11 +194,15 @@ class ImageGenLeg:
                 noise_pred = noise_pred[0]
             uncond, text = noise_pred.chunk(2)
             guided = uncond + gscale * (text - uncond)
+            if _sc is not None:
+                _sc.observe(guided)
             latents = scheduler.step(
                 guided.float(), t, latents.float(),
                 return_dict=False).to(dtype)
             if (i + 1) % 5 == 0:
                 print(f"   [image_gen] step {i + 1}/{steps}")
+        if _sc is not None:
+            _sc.report()
 
         # ── 6. VAE decode ─────────────────────────────────────────────
         sf = float(_require(vae_c, "scaling_factor", "vae contract"))

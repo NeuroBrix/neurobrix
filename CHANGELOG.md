@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Device-resident scalar arithmetic on Triton mode**: binary ops
+  (add/mul/div/sub) with a 0-d GPU scalar operand now compute the
+  scalar in-register instead of syncing it to the host — outputs stay
+  byte-identical (host-binding arithmetic reproduced exactly), and
+  per-step host syncs disappear from diffusion timestep chains
+  (Ming-class image generation: 1,196 syncs per request removed),
+  making those graphs eligible for frozen-plan replay.
+- **Step cache extended to autoregressive image-generation legs**: the
+  opt-in diffusion step cache now also covers the image-generation
+  denoise loop of omni/multimodal models (same configuration channels,
+  same skip-rate reporting, both engines).
+- **Failure diagnostics for Triton op errors**: a failed Triton op now
+  reports each tensor argument's device, pointer, and shape in the
+  error message, so placement bugs adjudicate themselves from the
+  traceback.
+
+### Fixed
+
+- **Step-cache override precedence**: an explicit `--set
+  global.step_cache_*` value of 0 now correctly overrides a
+  process-level environment pin instead of silently falling through.
+
 - **Diffusion step cache (opt-in, per-model)**: models configured with
   a `step_cache` threshold reuse the previous denoising prediction on
   low-change steps (relative-L1 signal, bounded consecutive skips,

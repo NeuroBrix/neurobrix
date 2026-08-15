@@ -46,9 +46,9 @@ from .ops.copy import copy_forward_kernel
 
 # === Binary element-wise ===
 
-from .ops.add import add_forward_kernel, add_scalar_kernel, add_bias_broadcast_kernel
-from .ops.mul import mul_forward_kernel, mul_scalar_kernel
-from .ops.div import div_forward_kernel, div_scalar_kernel
+from .ops.add import add_forward_kernel, add_scalar_kernel, add_scalar_dev_kernel, add_bias_broadcast_kernel
+from .ops.mul import mul_forward_kernel, mul_scalar_kernel, mul_scalar_dev_kernel
+from .ops.div import div_forward_kernel, div_scalar_kernel, div_scalar_dev_kernel
 from .ops.sub import sub_forward_kernel, rsub_forward_kernel
 from .ops.where import where_forward_kernel
 from .ops.maximum import maximum_forward_kernel
@@ -350,8 +350,22 @@ def _to_scalar(x):
     if isinstance(x, (int, float, bool)):
         return x
     if hasattr(x, 'ndim') and x.ndim == 0:
+        if os.environ.get("NBX_SCALAR_DIAG") == "1":
+            import traceback as _tb
+            site = next((f"{_f.name}@{_f.lineno}" for _f in
+                         reversed(_tb.extract_stack()[:-1])
+                         if "wrappers.py" in _f.filename), "?")
+            print(f"[SCALAR_DIAG] device-0d .item() via {site} "
+                  f"dtype={getattr(x, 'nbx_dtype', '?')}")
         return x.item()
     if hasattr(x, 'numel') and x.numel() == 1:
+        if os.environ.get("NBX_SCALAR_DIAG") == "1":
+            import traceback as _tb
+            site = next((f"{_f.name}@{_f.lineno}" for _f in
+                         reversed(_tb.extract_stack()[:-1])
+                         if "wrappers.py" in _f.filename), "?")
+            print(f"[SCALAR_DIAG] device-1el .item() via {site} "
+                  f"shape={getattr(x, 'shape', '?')}")
         return x.item()
     return x
 
@@ -430,10 +444,23 @@ def _prepare_binary(a, b):
     When is_scalar=True: a is tensor, b is Python scalar (int/float/bool).
     """
     # --- Scalar path: normalize so tensor=a, scalar=b ---
+    # Device-resident 0-d operands stay ON DEVICE (is_scalar="dev"):
+    # the host .item() here was 1,196 syncs per Ming request and made
+    # the denoiser bucket replay-ineligible (per-step timestep baked
+    # into launch scalars). The *_scalar_dev kernels load the scalar
+    # in-register with bit-exact host-path arithmetic (2026-08-15).
+    def _dev_scalar(x):
+        # NBXTensor.device returns self (its own device context) — the
+        # canonical device string lives in _device ('cuda' / 'cpu').
+        return (isinstance(x, NBXTensor) and getattr(x, 'ndim', None) == 0
+                and str(getattr(x, '_device', 'cpu')).startswith('cuda'))
+
     if _is_scalar(b):
         a = a.contiguous()
         _set_device(a)
         output = NBXTensor.empty_like(a)
+        if _dev_scalar(b):
+            return a, b, output, a.numel(), None, "dev"
         return a, _to_scalar(b), output, a.numel(), None, True
 
     if _is_scalar(a):
@@ -441,6 +468,8 @@ def _prepare_binary(a, b):
         b = b.contiguous()
         _set_device(b)
         output = NBXTensor.empty_like(b)
+        if _dev_scalar(a):
+            return b, a, output, b.numel(), None, "dev"
         return b, _to_scalar(a), output, b.numel(), None, True
 
     # --- Two-tensor path ---
@@ -961,7 +990,9 @@ def add(a, b, alpha: float = 1.0) :
         return output
 
     a, b, output, n, dev_ctx, scalar = _prepare_binary(a, b)
-    if scalar:
+    if scalar == "dev":
+        add_scalar_dev_kernel[_1d_grid(n)](a, b, output, n, float(alpha), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    elif scalar:
         add_scalar_kernel[_1d_grid(n)](a, output, n, float(b) * alpha, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     else:
         add_forward_kernel[_1d_grid(n)](a, b, output, n, alpha, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
@@ -1086,7 +1117,9 @@ def mul(a, b) :
     if cr is not None:
         return cr
     a, b, output, n, dev_ctx, scalar = _prepare_binary(a, b)
-    if scalar:
+    if scalar == "dev":
+        mul_scalar_dev_kernel[_1d_grid(n)](a, b, output, n, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    elif scalar:
         # Contract: tensor is always `a`, scalar is always `b`
         mul_scalar_kernel[_1d_grid(n)](a, output, n, float(b), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     else:
@@ -1117,7 +1150,9 @@ def div(a, b, rounding_mode=None) :
             f"ZERO FALLBACK: aten::div rounding_mode '{rounding_mode}' "
             "is not a known ATen mode (floor/trunc/None).")
     a, b, output, n, dev_ctx, scalar = _prepare_binary(a, b)
-    if scalar:
+    if scalar == "dev":
+        div_scalar_dev_kernel[_1d_grid(n)](a, b, output, n, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    elif scalar:
         div_scalar_kernel[_1d_grid(n)](a, output, n, float(b), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     else:
         div_forward_kernel[_1d_grid(n)](a, b, output, n, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
@@ -1128,7 +1163,9 @@ def sub(a, b, alpha: float = 1.0) :
     if (isinstance(a, NBXTensor) and a.is_complex()) or (isinstance(b, NBXTensor) and b.is_complex()):
         return _complex_addsub(a, b, alpha, is_sub=True)
     a, b, output, n, dev_ctx, scalar = _prepare_binary(a, b)
-    if scalar:
+    if scalar == "dev":
+        add_scalar_dev_kernel[_1d_grid(n)](a, b, output, n, -float(alpha), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    elif scalar:
         add_scalar_kernel[_1d_grid(n)](a, output, n, -float(b) * alpha, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     else:
         sub_forward_kernel[_1d_grid(n)](a, b, output, n, alpha, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
@@ -1160,6 +1197,8 @@ def where_wrapper(cond, x, y) :
 
 def maximum_wrapper(a, b) :
     a, b, output, n, dev_ctx, scalar = _prepare_binary(a, b)
+    if scalar == "dev":  # off the timestep hot path: host extract, exact old behavior
+        b, scalar = _to_scalar(b), True
     if scalar:
         # scalar maximum: clamp_min
         clamp_min_forward_kernel[_1d_grid(n)](a, output, n, float(b), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
@@ -1170,6 +1209,8 @@ def maximum_wrapper(a, b) :
 
 def minimum_wrapper(a, b) :
     a, b, output, n, dev_ctx, scalar = _prepare_binary(a, b)
+    if scalar == "dev":  # off the timestep hot path: host extract, exact old behavior
+        b, scalar = _to_scalar(b), True
     if not scalar:
         minimum_forward_kernel[_1d_grid(n)](a, b, output, n, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     else:
@@ -2569,6 +2610,8 @@ def remainder_wrapper(a, b) :
     """Remainder (modulo): a % b."""
     from .ops.remainder import remainder_forward_kernel, remainder_scalar_kernel
     a, b, output, n, dev_ctx, scalar = _prepare_binary(a, b)
+    if scalar == "dev":  # off the timestep hot path: host extract, exact old behavior
+        b, scalar = _to_scalar(b), True
     if scalar:
         remainder_scalar_kernel[_1d_grid(n)](a, output, n, float(b), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     else:
@@ -3810,6 +3853,8 @@ def bitwise_and_wrapper(a, b) :
     # 35.8% drift vs compiled at native, uncond clean because the empty-prompt
     # mask is all-ones = inert).
     a, b, output, n, dev_ctx, scalar = _prepare_binary(a, b)
+    if scalar == "dev":  # off the timestep hot path: host extract, exact old behavior
+        b, scalar = _to_scalar(b), True
     if scalar:
         # 0-dim / python-scalar operand (e.g. the traced `mask.all() & qside`
         # opening the T5 extended-mask chain): materialize to a full tensor of
@@ -3825,6 +3870,8 @@ def bitwise_and_wrapper(a, b) :
 def bitwise_or_wrapper(a, b) :
     # Same universal binary contract as bitwise_and_wrapper (broadcast fix).
     a, b, output, n, dev_ctx, scalar = _prepare_binary(a, b)
+    if scalar == "dev":  # off the timestep hot path: host extract, exact old behavior
+        b, scalar = _to_scalar(b), True
     if scalar:
         # Scalar operand: materialize (see bitwise_and_wrapper).
         b = NBXTensor.empty_like(a).fill_(b)
