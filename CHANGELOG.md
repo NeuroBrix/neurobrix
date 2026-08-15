@@ -25,6 +25,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   error message, so placement bugs adjudicate themselves from the
   traceback.
 
+- **Persistable autotune selections for replay runs**: the kernel
+  configurations selected during a recorded Triton-mode run are saved
+  per hardware architecture and re-applied on later runs, so replayed
+  graphs never re-tune — recorded-run start on the Sana row drops
+  56 to 46 s with byte-identical output. Stored configurations are
+  validated against the kernel's current search space before use;
+  anything stale simply re-tunes.
+
 ### Fixed
 
 - **Step-cache override precedence**: an explicit `--set
