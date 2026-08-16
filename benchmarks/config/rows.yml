@@ -177,6 +177,13 @@ rows:
     # and CFG come from package data (topology.flow.image_gen +
     # defaults), so the row does NOT pass height/width.
     serving_configs: [pinned, machine]   # 50 GB fp16 > one 32 GB V100
+    env:
+      # Step-cache drift verdict (Hocine 2026-08-15, delegated eye on
+      # the campaign PNGs): thr=0.15 = ROW DEFAULT (36.48 dB,
+      # indistinguishable vs the exact replay reference). 0.25 = NO as
+      # default (visible skin-texture smoothing) — opt-up per case only.
+      NBX_STEP_CACHE_THRESHOLD: "0.15"
+      NBX_STEP_CACHE_MAX_SKIPS: "3"
     # Capability row (R16 verdict 2026-08-08): no third-party runtime
     # serves Ming, and the vendor's own stack cannot run it on V100 —
     # NeuroBrix renders Ming t2i on this hardware (4/4 matrix,
@@ -229,6 +236,13 @@ rows:
     # so both columns run the identical resolution.
     # 13 frames / 10 steps = the battery closure config proven to fit
     # one V100-32G on both engines; s/step + s/frame normalize.
+    # Step-cache VIDEO verdict (Hocine 2026-08-15, frames eyeballed):
+    # 0.15 NO and 0.25 NO categorical — the subject washes out at 0.15
+    # and dissolves at 0.25 mid-sequence; temporal accumulation makes
+    # IMAGE thresholds non-transferable to VIDEO. This row stays
+    # REPLAY-ONLY (no NBX_STEP_CACHE_* pin, ever, without a fresh R29
+    # verdict on MOVING images); a low-frequency 0.05-0.08 arm may be
+    # measured later as an opt-in experiment.
     columns: [diffusers, neurobrix_pytorch, neurobrix_triton]
 
   - id: omni_minicpmo_voice

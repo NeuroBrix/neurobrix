@@ -29,7 +29,13 @@ _DIR = os.path.join(os.path.expanduser("~"), ".neurobrix", "replay_cache")
 
 # The sanctioned autotune surface (Phase 1.5 doctrine: mm/bmm/addmm/
 # conv2d only) — explicit list, not a gc walk. A new autotuned kernel
-# is added here the day its autotune exception is granted.
+# is added here the day its autotune exception is granted. Supervisor
+# ruling 2026-08-16: NO autotuner lives outside this artifact+gate
+# regime. The one candidate outside it (add_on_kernel in
+# kernels/utils/shape_utils.py, FlagGems remnant) is DEAD CODE — its
+# package __init__ imports modules that do not exist (libentry,
+# triton_lang_extension), so it cannot import; removal is scheduled
+# with battery maintenance, not enrolled here.
 _KERNEL_SITES = (
     ("neurobrix.kernels.ops.matmul", "matmul_kernel"),
     ("neurobrix.kernels.ops.matmul", "addmm_kernel"),
