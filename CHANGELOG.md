@@ -33,6 +33,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   validated against the kernel's current search space before use;
   anything stale simply re-tunes.
 
+- **Quantized-execution kernel family (first increment)**: pure-Triton
+  int4 groupwise dequantize-GEMV kernels for LLM decode, gated
+  byte-for-byte against their own dequantize-then-multiply reference
+  (same math, same accumulation order — proven across the target
+  decode shapes). Weight traffic drops 4x vs fp16 by construction;
+  kernels are not yet wired into the engine (the quantized-artifact
+  format decision precedes integration).
+
 ### Fixed
 
 - **Step-cache override precedence**: an explicit `--set
