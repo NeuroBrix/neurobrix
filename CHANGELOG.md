@@ -20,6 +20,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Opt-in via `NBX_TRITON_REPLAY=1` + `NBX_REPLAY_KV_DECODE=1`; the
   Qwen3-Coder-30B int4 reference row moves from 2.08 to 4.86 tok/s
   (×2.34) on one V100-32G with identical answers.
+- **CUDA-graph launch of recorded decode plans (Triton mode)**: a
+  recorded decode graph can additionally be instantiated as a single
+  CUDA graph per length bucket and launched as one call per token,
+  removing the per-kernel submission cost on top of frozen-plan
+  replay. Byte-identical outputs (per-bucket verification unchanged);
+  any capture error falls back loudly to direct replay. Opt-in via
+  `NBX_REPLAY_GRAPH=1`; measured on the Qwen3-Coder-30B int4 reference
+  row: 4.86 → 5.78 tok/s (+18.8%; cumulative ×2.78 over the
+  pre-replay baseline) on one V100-32G with identical answers.
 - **Warm serving keeps KV cache buffers across requests (Triton
   mode)**: the KV cache is now owned by the executor and reset in
   place between requests instead of being reallocated per request —
