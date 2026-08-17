@@ -493,7 +493,8 @@ def _install_seams() -> None:
 
 class FrozenPlan:
     __slots__ = ("records", "slab", "arena_snapshot", "frozen_inputs",
-                 "launches", "actions", "output_slots", "scan_limit")
+                 "launches", "actions", "output_slots", "scan_limit",
+                 "graph", "graph_disabled")
 
     def __init__(self, records: List[Tuple[str, tuple]],
                  slab: SlabAllocator,
@@ -523,6 +524,12 @@ class FrozenPlan:
         # source).
         self.scan_limit = (len(arena_list) if scan_limit is None
                           else scan_limit)
+        # Phase 4b: lazily captured CUDA graph of the action list
+        # (opt-in NBX_REPLAY_GRAPH=1, A/B-gated adoption). A capture
+        # failure disables the graph for this bucket only — direct
+        # replay stays the correct path.
+        self.graph = None
+        self.graph_disabled = False
 
     def replay(self, arena) -> None:
         # Freeze-and-copy over rebound WEIGHT/CONSTANT/INPUT slots:
@@ -532,6 +539,7 @@ class FrozenPlan:
         # freed previous-step constant) gets its bytes copied into the
         # frozen buffer so every recorded pointer stays live and
         # current. Identity scan cost is ~µs; identical objects skip.
+        _scan_copied = 0
         for slot in range(min(self.scan_limit, len(self.arena_snapshot))):
             frozen = self.arena_snapshot[slot]
             if frozen is None:
@@ -546,6 +554,7 @@ class FrozenPlan:
                     f"{slot}: {tuple(new.shape)}/{new.nbx_dtype} vs "
                     f"frozen {tuple(frozen.shape)}/{frozen.nbx_dtype} "
                     "— the bucket signature should have caught this")
+            _scan_copied += 1
             try:
                 DeviceAllocator.memcpy(frozen.data_ptr(), new.data_ptr(),
                                        frozen._nbytes, 3)
@@ -558,7 +567,111 @@ class FrozenPlan:
                     f"{getattr(new, '_device_idx', '?')} frozen_ptr="
                     f"{frozen.data_ptr():#x} new_ptr={new.data_ptr():#x}"
                 ) from e
-        for idx, (tag, rec) in enumerate(self.records):
+        if os.environ.get("NBX_REPLAY_GRAPH_DUMP") == "1":
+            import ctypes as _cs
+            vals = []
+            for s, ft in self.frozen_inputs.items():
+                if ft._nbytes <= 16:
+                    b = (_cs.c_int64 * (ft._nbytes // 8))()
+                    DeviceAllocator.memcpy(_cs.addressof(b),
+                                           ft.data_ptr(), ft._nbytes, 2)
+                    vals.append((s, list(b)))
+            print(f"[Replay][SCAN] copied={_scan_copied} "
+                  f"small_inputs={vals}", flush=True)
+        if (os.environ.get("NBX_REPLAY_GRAPH") == "1"
+                and not self.graph_disabled):
+            # Full-list capture. The launch is bracketed by device-wide
+            # syncs (CapturedPlan.launch): the input-scan copies are
+            # async legacy-stream work a NON_BLOCKING graph stream
+            # would NOT wait for — the 2026-08-17 root cause of the
+            # stale-input token doubling (all intermediate "breaking
+            # node" bisection boundaries were timing artifacts of that
+            # race, masked by diagnostic D2H syncs).
+            # NBX_REPLAY_GRAPH_CUT=N remains a bisection instrument
+            # (prefix in-graph, remainder direct — order preserved).
+            cut = int(os.environ.get("NBX_REPLAY_GRAPH_CUT", "0") or 0)
+            recs = self.records[:cut] if cut > 0 else self.records
+            if cut <= 0:
+                cut = len(self.records)
+            try:
+                if self.graph is None:
+                    from neurobrix.triton.replay_graph import CapturedPlan
+                    if os.environ.get("NBX_REPLAY_GRAPH_DUMP") == "1":
+                        from collections import Counter as _Ctr
+                        seqd = "".join(t for t, _ in recs[:60])
+                        names = [getattr(r[0], "name", "?")[:28]
+                                 for t, r in recs[:12] if t == _KERNEL]
+                        cnt = _Ctr(t for t, _ in self.records)
+                        sizes = sorted({len(r[1]) for t, r in self.records
+                                        if t == _H2D})
+                        print(f"[Replay][GRAPH] action tags[:60]={seqd} "
+                              f"counts={dict(cnt)} h2d_sizes={sizes[:8]} "
+                              f"first kernels={names}", flush=True)
+                        tail = [(t, getattr(r[0], "name", "?")[:24]
+                                 if t == _KERNEL else
+                                 (r[2] if t in (_MEMCPY,) else len(r[1])
+                                  if t == _H2D else r))
+                                for t, r in self.records[-16:]]
+                        print(f"[Replay][GRAPH] tail16={tail}", flush=True)
+                    self.graph = CapturedPlan(
+                        recs, getattr(self.slab, "dev_idx", None))
+                    print(f"[Replay][GRAPH] bucket captured: "
+                          f"{self.graph.launches} launches as one CUDA "
+                          f"graph ({cut}/{len(self.records)} actions "
+                          f"in-graph)")
+                self.graph.launch()
+            except Exception as e:
+                if getattr(e, "executed", False):
+                    # The graph's work was already submitted — device
+                    # state (KV counters) has advanced; re-running the
+                    # actions would double-advance it. Crash loudly.
+                    raise RuntimeError(
+                        "replay graph post-execution failure — state "
+                        "advanced, no safe fallback") from e
+                # Capture / pre-launch failure: nothing executed.
+                # Loud per-bucket refusal — direct replay is the
+                # correct path by construction (llama.cpp guard class).
+                print(f"[Replay][GRAPH] refusal ({e}) — bucket keeps "
+                      f"direct replay")
+                self.graph_disabled = True
+                if self.graph is not None:
+                    try:
+                        self.graph.destroy()
+                    finally:
+                        self.graph = None
+                self._direct_actions()
+            else:
+                # Bisection tail (order-preserving): runs OUTSIDE the
+                # refusal try — a tail failure is a direct-replay
+                # failure (loud RuntimeError), never a trigger for
+                # re-running the already-executed graph prefix.
+                if cut < len(self.records):
+                    self._direct_actions(self.records[cut:])
+        else:
+            self._direct_actions()
+        for i, t in enumerate(self.arena_snapshot):
+            arena[i] = t
+        # Contract clause 2 (inter-replay overwrite), enforced HERE so
+        # no flow needs to cooperate: callers may legally retain output
+        # objects across calls (VibeVoice chunk accumulation appends by
+        # reference — battery adjudication 2026-08-13: every appended
+        # chunk was THE SAME frozen tensor, rewritten by the next
+        # replay). Each replay therefore returns FRESH copies of the
+        # graph outputs; the frozen buffers stay plan-internal.
+        for slot in self.output_slots:
+            frozen = self.arena_snapshot[slot]
+            if frozen is None:
+                continue
+            fresh = NBXTensor.empty_like(frozen)
+            DeviceAllocator.memcpy(fresh.data_ptr(), frozen.data_ptr(),
+                                   frozen._nbytes, 3)
+            arena[slot] = fresh
+
+    def _direct_actions(self, records=None) -> None:
+        """Phase 4a direct C-launcher replay of the action list."""
+        if records is None:
+            records = self.records
+        for idx, (tag, rec) in enumerate(records):
             try:
                 if tag == _KERNEL:
                     kernel, g0, g1, g2, stream, flat = rec
@@ -581,23 +694,6 @@ class FrozenPlan:
                 raise RuntimeError(
                     f"replay action {idx}/{len(self.records)} "
                     f"({name}) failed: {e}") from e
-        for i, t in enumerate(self.arena_snapshot):
-            arena[i] = t
-        # Contract clause 2 (inter-replay overwrite), enforced HERE so
-        # no flow needs to cooperate: callers may legally retain output
-        # objects across calls (VibeVoice chunk accumulation appends by
-        # reference — battery adjudication 2026-08-13: every appended
-        # chunk was THE SAME frozen tensor, rewritten by the next
-        # replay). Each replay therefore returns FRESH copies of the
-        # graph outputs; the frozen buffers stay plan-internal.
-        for slot in self.output_slots:
-            frozen = self.arena_snapshot[slot]
-            if frozen is None:
-                continue
-            fresh = NBXTensor.empty_like(frozen)
-            DeviceAllocator.memcpy(fresh.data_ptr(), frozen.data_ptr(),
-                                   frozen._nbytes, 3)
-            arena[slot] = fresh
 
 
 # ---------------------------------------------------------------------------
@@ -858,6 +954,30 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
                 print(f"[Replay][VERIFY_EVERY] DIVERGENCE at "
                       f"occurrence {n[sig]} of bucket "
                       f"({state.launches} launches)")
+                if os.environ.get("NBX_REPLAY_GRAPH_DUMP") == "1":
+                    for tid in (seq.dag.get("output_tensor_ids")
+                                or [])[:1]:
+                        slot = seq._tid_to_slot.get(tid)
+                        frozen = state.arena_snapshot[slot] \
+                            if slot is not None else None
+                        if frozen is None:
+                            continue
+                        import ctypes as _c
+                        import numpy as _np
+                        nb = min(frozen._nbytes, 64)
+                        rb = (_c.c_char * nb)()
+                        DeviceAllocator.memcpy(_c.addressof(rb),
+                                               frozen.data_ptr(), nb, 2)
+                        fro = _np.frombuffer(bytes(rb), dtype=_np.float16)
+                        cur = seq._arena[slot]
+                        rb2 = (_c.c_char * nb)()
+                        DeviceAllocator.memcpy(_c.addressof(rb2),
+                                               cur.data_ptr(), nb, 2)
+                        nor = _np.frombuffer(bytes(rb2),
+                                             dtype=_np.float16)
+                        print(f"[Replay][VERIFY_EVERY] out[:8] "
+                              f"replayed(frozen)={fro[:8].tolist()} "
+                              f"normal={nor[:8].tolist()}", flush=True)
             return True
         state.replay(seq._arena)
         for o in owners:
@@ -866,6 +986,17 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
         n_r[sig] = n_r.get(sig, 0) + 1
         if n_r[sig] % 50 == 1:
             _mem_diag(f"replay #{n_r[sig]}")
+        if os.environ.get("NBX_REPLAY_GRAPH_DUMP") == "1" and owners:
+            import ctypes as _c
+            for o in owners:
+                lay = next(iter(o.cache._layers.values()), None)
+                if lay is None or lay.pos_counter is None:
+                    continue
+                b = (_c.c_int32 * 1)()
+                DeviceAllocator.memcpy(_c.addressof(b),
+                                       lay.pos_counter.data_ptr(), 4, 2)
+                print(f"[Replay][GRAPH] post-replay dev_pos={b[0]} "
+                      f"host_len={lay.current_len}", flush=True)
         return True
     if isinstance(state, tuple) and state[0] == "VERIFY":
         # verify-first-replay (universal guard, battery adjudication
@@ -894,6 +1025,14 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
             _mem_diag("post-verify")
         else:
             plan.slab.retire()
+            if plan.graph is not None:
+                # The verify pass may have captured the CUDA graph —
+                # release exec/graph/staging/stream with the rejected
+                # plan (gardien 2026-08-17: the drop leaked them).
+                try:
+                    plan.graph.destroy()
+                finally:
+                    plan.graph = None
             plans[sig] = "UNREPLAYABLE"
             print("[Replay] plan REJECTED at verify (outputs differ "
                   "from the normal path) — normal path keeps this "
