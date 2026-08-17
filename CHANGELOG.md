@@ -82,6 +82,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   position and returns a per-window NLL record — the perplexity
   instrument for build-variant quality clauses.
 
+- **Decode address stabilization (replay groundwork, opt-in)**: under
+  the decode-replay development flag, token-decode steps carve every
+  transient allocation from a per-sequence bump slab recycled each
+  step, and attention reads bucket-padded KV views with a persistent
+  additive length mask (padding proven byte-neutral: identical greedy
+  output with and without). Measured: the per-step varying launch
+  surface collapses from 3,428 tuples to the 144 KV-append write
+  offsets plus one sampling seed — the address-stability prerequisite
+  for replaying token decode.
+
 ### Fixed
 
 - **Step-cache override precedence**: an explicit `--set

@@ -188,6 +188,136 @@ class SlabAllocator:
             _ACTIVE_SLABS.remove(self)
 
 
+class StepSlab(SlabAllocator):
+    """Per-sequence slab RECYCLED at every decode step (P-REPLAY-KV-
+    DECODE B1). reset() returns the whole range to the free list so
+    the next step's allocations carve IDENTICAL addresses (the decode
+    graph's allocation order is structurally constant — census-
+    proven); allocations from previous steps become 'stale' and their
+    later finalizer frees are absorbed silently (the range is already
+    recycled — safe because each step's consumers run before the next
+    step begins in the synchronous decode timeline)."""
+
+    def __init__(self, nbytes: int, dev_idx: Optional[int]) -> None:
+        super().__init__(nbytes, dev_idx)
+        self.stale: set = set()
+        self.carve_sizes: List[int] = []   # diagnosis: per-step size seq
+        self.prev_carve: Optional[List[int]] = None
+
+    def malloc(self, nbytes: int) -> int:
+        """PURE BUMP carving — mid-step frees are absorbed without
+        recycling (see free below), so placement is a pure function of
+        the allocation-size sequence (measured identical step-to-step)
+        and IMMUNE to free-timing nondeterminism (GC-cycle finalizers
+        fire at variable points; first-fit reuse turned that into
+        per-step placement churn — measured: identical size sequences,
+        differing offsets)."""
+        self.carve_sizes.append(int(nbytes))
+        need = (int(nbytes) + _ALIGN - 1) // _ALIGN * _ALIGN
+        off, sz = self.free_list[0]
+        if sz < need:
+            self.shortfall += need
+            return 0
+        self.free_list[0] = (off + need, sz - need)
+        ptr = self.base + off
+        self.allocs[ptr] = (off, need)
+        return ptr
+
+    def reset(self) -> None:
+        self.prev_carve = self.carve_sizes
+        self.carve_sizes = []
+        self.stale.update(self.allocs.keys())
+        self.allocs.clear()
+        self.free_list = [(0, self.size)]
+
+    def free(self, ptr: int) -> bool:
+        """Absorb without recycling: the range stays consumed until the
+        next reset (bump purity beats intra-step reuse)."""
+        if ptr in self.stale:
+            self.stale.discard(ptr)
+            return True
+        if ptr in self.allocs:
+            self.allocs.pop(ptr)
+            return True
+        return False
+
+
+def _stabilize_tick(seq) -> None:
+    """B1 lifecycle per sequence: runs 1-2 pass through (prefill +
+    warmup), run 3 measures the transient high-water, runs 4+ carve
+    every allocation from the sequence's recycled StepSlab. The active
+    slab is switched at each run start (runs are synchronous, so the
+    slab in force during a run is always the running sequence's)."""
+    # Bank a pending measurement into ITS owner first (ticks of OTHER
+    # sequences must never clobber the global measuring window — that
+    # sized the decode slab from the sampler's tiny window and starved
+    # it by 627 MB).
+    if getattr(STATE, "measure_owner", None) is not None:
+        STATE.measure_owner.__dict__["_stab_total"] = STATE.total_measured
+        STATE.measure_owner = None
+        STATE.measuring = False
+
+    n = seq.__dict__.get("_stab_run", 0) + 1
+    seq.__dict__["_stab_run"] = n
+    if n <= 2:
+        STATE.stab_slab = None
+        return
+    if n == 3:
+        STATE.stab_slab = None
+        STATE.measuring = True
+        STATE.live = STATE.high_water = 0
+        STATE.measured.clear()
+        STATE.total_measured = 0
+        STATE.measure_owner = seq
+        return
+    if "_stab_total" in seq.__dict__ and \
+            seq.__dict__.get("_stab_slab") is None:
+        # PURE-BUMP sizing: the slab must hold the step's TOTAL carved
+        # bytes (no intra-step reuse), not the live high-water.
+        need = int(seq.__dict__.pop("_stab_total") * 1.25) + (64 << 20)
+        dev = None
+        try:
+            dev = DeviceAllocator.get_device()
+        except Exception:
+            pass
+        seq.__dict__["_stab_slab"] = StepSlab(need, dev)
+        comp = str((seq.dag or {}).get("component_name", "?"))
+        print(f"[StepSlab] {comp}: stabilizing decode allocations "
+              f"({need / 1e6:.0f} MB slab)", flush=True)
+    slab = seq.__dict__.get("_stab_slab")
+    if slab is not None:
+        if not seq.__dict__.get("_stab_served_printed") and \
+                seq.__dict__["_stab_run"] == 6:
+            comp = str((seq.dag or {}).get("component_name", "?"))
+            n_ops = len((seq.dag or {}).get("ops", {}))
+            print(f"[StepSlab] {comp} (dag {n_ops} ops, seq id "
+                  f"{id(seq) & 0xffff:04x}): served "
+                  f"{len(slab.allocs) + len(slab.stale)} allocations "
+                  f"last step (live {len(slab.allocs)}, "
+                  f"stale {len(slab.stale)}, shortfall {slab.shortfall})",
+                  flush=True)
+            a, b = slab.prev_carve or [], slab.carve_sizes
+            if a and b:
+                if len(a) != len(b):
+                    print(f"[StepSlab] {comp}: carve COUNT varies "
+                          f"({len(a)} vs {len(b)})", flush=True)
+                else:
+                    div = [i for i, (x, y) in enumerate(zip(a, b))
+                           if x != y]
+                    if div:
+                        i = div[0]
+                        print(f"[StepSlab] {comp}: carve sizes diverge "
+                              f"at {len(div)} indices; first at #{i}: "
+                              f"{a[max(0,i-2):i+3]} vs "
+                              f"{b[max(0,i-2):i+3]}", flush=True)
+                    else:
+                        print(f"[StepSlab] {comp}: carve size sequence "
+                              f"IDENTICAL ({len(a)} allocs)", flush=True)
+            seq.__dict__["_stab_served_printed"] = True
+        slab.reset()
+    STATE.stab_slab = slab
+
+
 # ---------------------------------------------------------------------------
 # Seams — installed once; routed by the module-level state below
 # ---------------------------------------------------------------------------
@@ -204,10 +334,21 @@ class _State:
         # per-run launch-tuple capture + consecutive-run diff; no
         # eligibility gates, no replay ever). NBX_REPLAY_TUPLE_CENSUS=1.
         self.census_current: Optional[List[tuple]] = None
+        # B1: the running sequence's recycled StepSlab (or None) —
+        # switched at each run start by _stabilize_tick under
+        # NBX_REPLAY_KV_DECODE=1.
+        self.stab_slab: Optional["StepSlab"] = None
+        # Census attribution: the seq whose run the current capture
+        # belongs to (armed at its tick; banked at the NEXT tick).
+        self.census_owner = None
+        # Measurement attribution (same off-by-one shape): the seq
+        # whose run the measuring window covers.
+        self.measure_owner = None
         # measuring counters (aligned bytes)
         self.live = 0
         self.high_water = 0
         self.measured: Dict[int, int] = {}  # ptr -> aligned size
+        self.total_measured = 0             # cumulative (never decremented)
 
     def break_plan(self, reason: str) -> None:
         if self.broken is None:
@@ -279,10 +420,18 @@ def _install_seams() -> None:
             STATE.break_plan(
                 f"slab exhausted (short {STATE.slab.shortfall} B)")
             return _ORIG_MALLOC(nbytes, dev_idx)
+        if STATE.stab_slab is not None:
+            ptr = STATE.stab_slab.malloc(nbytes)
+            if ptr:
+                return ptr
+            # Graceful degradation: an over-slab allocation falls back
+            # to the heap (address stability degrades for that tensor
+            # only; the census quantifies the residue).
         ptr = _ORIG_MALLOC(nbytes, dev_idx)
         if STATE.measuring and ptr:
             need = (int(nbytes) + _ALIGN - 1) // _ALIGN * _ALIGN
             STATE.measured[ptr] = need
+            STATE.total_measured += need
             STATE.live += need
             if STATE.live > STATE.high_water:
                 STATE.high_water = STATE.live
@@ -540,14 +689,28 @@ def _census_tick(seq) -> None:
     NBX_TRITON_REPLAY=1 + NBX_REPLAY_TUPLE_CENSUS=1 together (the
     sequence only consults the replayer under the first flag; the
     second short-circuits every plan path — observation only)."""
-    prev_runs = seq.__dict__.setdefault("_census_runs", [])
-    if STATE.census_current is not None:
-        prev_runs.append(STATE.census_current)
+    # Bank the finished capture into the seq that RAN it (the owner
+    # armed at the previous tick) — banking into the ticking seq
+    # misattributed every window once several sequences interleaved
+    # (decode / lm_head / sampler) and made every tuple "vary".
+    if STATE.census_current is not None and STATE.census_owner is not None:
+        STATE.census_owner.__dict__.setdefault("_census_runs", []).append(
+            STATE.census_current)
+        _census_report(STATE.census_owner)
     STATE.census_current = []
+    STATE.census_owner = seq
+    return
+
+
+def _census_report(seq) -> None:
+    prev_runs = seq.__dict__.get("_census_runs", [])
     # Compare runs 3 vs 4 (two STEADY decode steps): run 1 is the
     # prefill (different shape class by design — vLLM never captures
     # it either) and run 2 is the first decode (warmup/autotune).
-    if len(prev_runs) < 4 or seq.__dict__.get("_census_printed"):
+    # Under B1 stabilization, run 3 measures (heap) and run 4 is the
+    # FIRST slab run — compare runs 5 vs 6 (two stabilized steps).
+    min_runs = 6 if os.environ.get("NBX_REPLAY_KV_DECODE") == "1" else 4
+    if len(prev_runs) < min_runs or seq.__dict__.get("_census_printed"):
         return
     a, b = prev_runs[-2], prev_runs[-1]
     comp = str((seq.dag or {}).get("component_name", "?"))
@@ -578,6 +741,12 @@ def _census_tick(seq) -> None:
 
 def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
     """Replay fast path. True = this run was fully handled."""
+    if os.environ.get("NBX_REPLAY_KV_DECODE") == "1":
+        _install_seams()
+        _stabilize_tick(seq)
+        if os.environ.get("NBX_REPLAY_TUPLE_CENSUS") == "1":
+            _census_tick(seq)
+        return False
     if os.environ.get("NBX_REPLAY_TUPLE_CENSUS") == "1":
         _install_seams()
         _census_tick(seq)
