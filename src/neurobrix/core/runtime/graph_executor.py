@@ -1150,6 +1150,23 @@ class GraphExecutor:
 
     def _load_weights_native(self, nbx_path, component, shard_map):
         """Load weights as torch.Tensor (native mode)."""
+        # Capability gate (unsupported-path doctrine): encoded-weight
+        # builds execute on the Triton engine only — the native path
+        # has no dequant kernel family. REFUSE loudly, never a silent
+        # fallback to a full-precision read that does not exist here.
+        import json as _json
+        from pathlib import Path as _P
+        _wi = _P(nbx_path) / "components" / component / "weights_index.json"
+        if _wi.exists():
+            _enc = _json.loads(_wi.read_text()).get("weight_encoding")
+            if _enc:
+                raise RuntimeError(
+                    f"UNSUPPORTED PATH: component '{component}' stores its "
+                    f"weights with encoding '{_enc}', which the compiled "
+                    f"engine does not execute. Run this build with "
+                    f"--triton, or use the full-precision build published "
+                    f"next to this variant. (Chantier: compiled-mode "
+                    f"encoded-weight execution.)")
         from neurobrix.core.io import WeightLoader
         torch_dtype = get_torch_dtype(self.dtype)
         with WeightLoader(nbx_path) as loader:

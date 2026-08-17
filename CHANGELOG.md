@@ -67,6 +67,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   encoded variant generates coherent text on a SINGLE V100-32G
   (17 GB of weights vs 57 GB full precision).
 
+- **Compiled-mode refusal for encoded-weight builds**: running an
+  encoded variant without `--triton` refuses at weight-load with a
+  message naming the supported path and the full-precision build
+  published next to the variant — never a silent fallback.
+
 ### Fixed
 
 - **Step-cache override precedence**: an explicit `--set
