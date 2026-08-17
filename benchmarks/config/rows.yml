@@ -262,6 +262,25 @@ rows:
 
   # ================= PROBE ROWS (internal iteration only) =================
 
+  - id: llm_moe_qwen3coder_int4
+    family: llm
+    metric_class: tokens
+    reference: true
+    checkpoint: Qwen/Qwen3-Coder-30B-A3B-Instruct
+    neurobrix_model: Qwen3-Coder-30B-A3B-Instruct-int4g128
+    # Quantized-tier PROOF ROW (E7): the 30B-A3B class on ONE
+    # V100-32G via the int4-g128 weight-encoding variant. Fairness =
+    # SAME quantization class: the ollama column runs their Q4_K_M
+    # (qwen3-coder:30b default pull), never their fp16. The fp16
+    # NeuroBrix column stays documented from its own multi-GPU
+    # measurements (57G does not fit one card — the row note IS the
+    # capability headline). Kernel ceiling compass: ~147 tok/s
+    # (2 GB activated int4 / 294 GB/s effective GEMV bandwidth).
+    ollama_pull: qwen3-coder:30b
+    prompt: "Write a Python function that reverses a string."
+    max_new_tokens: 128
+    columns: [ollama, neurobrix_triton]
+
   - id: llm_dense_tinyllama
     family: llm
     metric_class: tokens
