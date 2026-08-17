@@ -72,6 +72,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   message naming the supported path and the full-precision build
   published next to the variant — never a silent fallback.
 
+- **Launch-tuple census diagnostic**: `NBX_REPLAY_TUPLE_CENSUS=1`
+  (with replay enabled) records two steady decode steps' kernel-launch
+  tuples and prints the varying surface per sequence — the
+  measurement instrument behind extending replay to token-decode
+  graphs. Observation only; never replays.
+- **Teacher-forced scoring mode**: `--set global.score_mode=1` turns a
+  Triton-mode text request into one prefill with logits at every
+  position and returns a per-window NLL record — the perplexity
+  instrument for build-variant quality clauses.
+
 ### Fixed
 
 - **Step-cache override precedence**: an explicit `--set

@@ -115,6 +115,19 @@ class TritonAutoregressiveHandler:
         # Prefill
         hidden = session.prefill(input_ids, batch_size)
 
+        # Teacher-forced scoring mode (quant-ppl-scoring, tier row
+        # clause 2): --set global.score_mode=1 turns the request into
+        # ONE prefill + head over ALL positions + per-token NLL vs the
+        # shifted prompt ids — no decode loop, no sampling. The output
+        # text is a JSON record the ppl harness aggregates. R30 mirror:
+        # core/flow/autoregressive.py.
+        if self.ctx.variable_resolver.resolved.get("global.score_mode"):
+            self._execute_score(strategy, hidden, input_ids)
+            rv = self.ctx.variable_resolver.resolved
+            return {"status": "success",
+                    "global.transcription": rv["global.transcription"],
+                    "output_tokens": []}
+
         # Decode loop
         import os as _os_dl
         _dump_path = _os_dl.environ.get("NBX_DUMP_LOGITS")
@@ -385,6 +398,35 @@ class TritonAutoregressiveHandler:
 
         DeviceAllocator.set_device(device_idx)
         return NBXTensor.from_numpy(ids_np)
+
+    def _execute_score(self, strategy, hidden, input_ids) -> None:
+        """Teacher-forced scoring (quant-ppl-scoring): head over ALL
+        prefill positions, per-token NLL against the shifted prompt
+        ids, JSON record through the text output path (the ppl
+        harness aggregates windows). fp64 log-sum-exp at the numpy
+        evaluation boundary."""
+        import json as _json
+        logits = strategy.get_logits_all(hidden)
+        la = logits.float().numpy()
+        la = la[0].astype(np.float64)          # [T, V]
+        ids = np.asarray(self._read_ids_to_list(input_ids),
+                         dtype=np.int64)       # [T] (batch 1 contract)
+        if la.shape[0] != len(ids):
+            raise RuntimeError(
+                f"ZERO FALLBACK: score-mode logits T={la.shape[0]} != "
+                f"prompt tokens {len(ids)}.")
+        targets = ids[1:]
+        la = la[:-1]
+        la -= la.max(axis=-1, keepdims=True)
+        logz = np.log(np.exp(la).sum(axis=-1))
+        nll = logz - la[np.arange(len(targets)), targets]
+        record = {"score_mode": True, "tokens": int(len(targets)),
+                  "nll_sum": float(nll.sum()),
+                  "ppl_window": float(np.exp(nll.mean()))}
+        rv = self.ctx.variable_resolver.resolved
+        rv["global.transcription"] = _json.dumps(record)
+        rv["global.output_tokens"] = []
+        rv["output_tokens"] = []
 
     def _read_ids_to_list(self, input_ids: NBXTensor) -> List[int]:
         """Read token IDs from GPU to Python list (small transfer)."""
@@ -689,6 +731,23 @@ class TritonTextStrategy:
     def create_generator(self, defaults: Dict, resolver) -> TritonGenerator:
         config = _build_generator_config(defaults, resolver)
         return TritonGenerator(config)
+
+    def get_logits_all(self, hidden: NBXTensor) -> NBXTensor:
+        """Run lm_head over ALL positions ([B, T, H] -> [B, T, V]) —
+        the teacher-forced scoring entry (quant-ppl-scoring). Same
+        device dance as get_logits, no last-position select."""
+        hidden_dev = getattr(hidden, '_device_idx', 0)
+        head_dev = self._head_device_idx
+        if hidden_dev != head_dev:
+            dst = NBXTensor.empty(hidden._shape, hidden._dtype,
+                                  f"cuda:{head_dev}")
+            DeviceAllocator.memcpy(dst.data_ptr(), hidden.data_ptr(),
+                                   hidden._nbytes)
+            hidden = dst
+        outputs = self._head.run({"input": hidden})
+        for _k, val in outputs.items():
+            return val
+        raise RuntimeError("lm_head produced no output.")
 
     def get_logits(self, hidden: NBXTensor, step_idx: int) -> NBXTensor:
         """Run lm_head to get logits from last hidden state."""

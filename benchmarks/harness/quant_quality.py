@@ -60,19 +60,61 @@ def corpus_windows(n_windows: int, window_len: int, tokenizer):
     return windows, sha
 
 
+def _corpus_text_windows(n_windows: int, chars_per_window: int):
+    import pyarrow.parquet as pq
+    path = REPO / "benchmarks" / "assets" / "wikitext2_raw_test.parquet"
+    sha = hashlib.sha256(path.read_bytes()).hexdigest()
+    text = "\n".join(t for t in pq.read_table(path).column("text").to_pylist()
+                     if t.strip())
+    wins = [text[i * chars_per_window:(i + 1) * chars_per_window]
+            for i in range(n_windows)]
+    return [w for w in wins if len(w) == chars_per_window], sha
+
+
 def measure_ppl(model_name: str, gpu: str, hardware: str,
                 n_windows: int, window_len: int) -> dict:
-    """Teacher-forced perplexity via prefill logits.
+    """Teacher-forced perplexity via the engine's score mode
+    (`--set global.score_mode=1`: one prefill, lm_head over ALL
+    positions, per-window NLL record through the text output).
 
-    Requires the engine's teacher-forced scoring entry (`score
-    window -> all-position logits` on the autoregressive flow) —
-    the NAMED increment before the row VERDICT. Refuses loudly until
-    it lands (never a fake number)."""
-    raise NotImplementedError(
-        "ppl instrument pending the engine scoring entry (all-position "
-        "lm_head over a prefill window on the triton autoregressive "
-        "flow) — named increment 'quant-ppl-scoring'; the row verdict "
-        "waits for it. Use --shas-only meanwhile.")
+    Windows are FIXED TEXT slices of the pinned corpus — both
+    artifacts score the same text through the same tokenizer, so the
+    row clause's RELATIVE delta is exact; absolute ppl includes the
+    model's own prompt template, noted in the report."""
+    import os
+    out_dir = Path("/tmp/claude-quantppl")
+    out_dir.mkdir(exist_ok=True)
+    windows, corpus_sha = _corpus_text_windows(n_windows, window_len * 4)
+    total_nll, total_tok = 0.0, 0
+    for wi, wtext in enumerate(windows):
+        out = out_dir / f"win_{wi}.txt"
+        env = dict(os.environ)
+        if gpu:
+            env["CUDA_VISIBLE_DEVICES"] = gpu
+        cmd = [sys.executable, "-m", "neurobrix", "run",
+               "--model", model_name, "--prompt", wtext,
+               "--max-tokens", "1", "--triton",
+               "--set", "global.score_mode=1", "--output", str(out)]
+        if hardware:
+            cmd[4:4] = ["--hardware", hardware]
+        r = subprocess.run(cmd, env=env, cwd=str(REPO),
+                           capture_output=True, text=True, timeout=3600)
+        if not out.exists():
+            raise RuntimeError(
+                f"score window {wi} failed rc={r.returncode}: "
+                f"{r.stdout[-400:]}")
+        rec = json.loads(out.read_text())
+        total_nll += rec["nll_sum"]
+        total_tok += rec["tokens"]
+        print(f"  window {wi + 1}/{len(windows)}: "
+              f"ppl so far {__import__('math').exp(total_nll / total_tok):.3f}",
+              flush=True)
+    import math
+    return {"ppl": math.exp(total_nll / total_tok), "tokens": total_tok,
+            "windows": len(windows), "chars_per_window": window_len * 4,
+            "corpus_sha256": corpus_sha,
+            "note": "fixed text windows incl. model prompt template — "
+                    "the row clause reads the RELATIVE int4/fp16 delta"}
 
 
 def greedy_shas(model_name: str, gpu: str, hardware: str,
