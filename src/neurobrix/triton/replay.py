@@ -200,6 +200,10 @@ class _State:
         self.records: List[Tuple[str, tuple]] = []
         self.broken: Optional[str] = None
         self.slab: Optional[SlabAllocator] = None
+        # P-REPLAY-KV-DECODE step A: tuple census (pure observation —
+        # per-run launch-tuple capture + consecutive-run diff; no
+        # eligibility gates, no replay ever). NBX_REPLAY_TUPLE_CENSUS=1.
+        self.census_current: Optional[List[tuple]] = None
         # measuring counters (aligned bytes)
         self.live = 0
         self.high_water = 0
@@ -239,6 +243,17 @@ def _install_seams() -> None:
 
     def _run_prop(self):  # noqa: ANN001
         raw = orig_run_prop.fget(self)
+        if STATE.census_current is not None and not STATE.recording:
+            def census_run(g0, g1, g2, stream, function, packed_metadata,
+                           launch_md, enter_hook, exit_hook, *vals):
+                flat = tuple(
+                    int(v.data_ptr()) if hasattr(v, "data_ptr") else v
+                    for v in vals)
+                STATE.census_current.append(
+                    (getattr(self, "name", "?"), g0, g1, g2, flat))
+                return raw(g0, g1, g2, stream, function, packed_metadata,
+                           launch_md, enter_hook, exit_hook, *vals)
+            return census_run
         if not STATE.recording:
             return raw
 
@@ -518,8 +533,55 @@ def _seed_autotune_once() -> None:
         print(f"[Replay] autotune seed unavailable ({type(e).__name__}: {e})")
 
 
+def _census_tick(seq) -> None:
+    """Tuple census (P-REPLAY-KV-DECODE step A): close the previous
+    run's capture, diff it against the run before, print the varying
+    surface ONCE per sequence, arm the next capture. Enabled by
+    NBX_TRITON_REPLAY=1 + NBX_REPLAY_TUPLE_CENSUS=1 together (the
+    sequence only consults the replayer under the first flag; the
+    second short-circuits every plan path — observation only)."""
+    prev_runs = seq.__dict__.setdefault("_census_runs", [])
+    if STATE.census_current is not None:
+        prev_runs.append(STATE.census_current)
+    STATE.census_current = []
+    # Compare runs 3 vs 4 (two STEADY decode steps): run 1 is the
+    # prefill (different shape class by design — vLLM never captures
+    # it either) and run 2 is the first decode (warmup/autotune).
+    if len(prev_runs) < 4 or seq.__dict__.get("_census_printed"):
+        return
+    a, b = prev_runs[-2], prev_runs[-1]
+    comp = str((seq.dag or {}).get("component_name", "?"))
+    if len(a) != len(b):
+        print(f"[TupleCensus] {comp}: launch COUNT varies "
+              f"({len(a)} vs {len(b)}) — structural per-step change",
+              flush=True)
+        seq.__dict__["_census_printed"] = True
+        return
+    varying = []
+    for i, (la, lb) in enumerate(zip(a, b)):
+        if la == lb:
+            continue
+        name_a, g0a, g1a, g2a, fa = la
+        _, g0b, g1b, g2b, fb = lb
+        grid_diff = (g0a, g1a, g2a) != (g0b, g1b, g2b)
+        arg_idx = [j for j, (x, y) in enumerate(zip(fa, fb)) if x != y]
+        varying.append((i, name_a, grid_diff, arg_idx))
+    print(f"[TupleCensus] {comp}: {len(a)} launches, "
+          f"{len(varying)} vary between consecutive runs", flush=True)
+    from collections import Counter
+    by_kernel = Counter((v[1], v[2], tuple(v[3])) for v in varying)
+    for (kname, gdiff, args), cnt in by_kernel.most_common(12):
+        print(f"  {cnt:5d}x {kname}  grid_varies={gdiff}  "
+              f"varying_arg_positions={list(args)}", flush=True)
+    seq.__dict__["_census_printed"] = True
+
+
 def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
     """Replay fast path. True = this run was fully handled."""
+    if os.environ.get("NBX_REPLAY_TUPLE_CENSUS") == "1":
+        _install_seams()
+        _census_tick(seq)
+        return False
     if not ENABLED or pre_op_callback is not None:
         return False
     _seed_autotune_once()
