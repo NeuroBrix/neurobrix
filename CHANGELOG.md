@@ -48,6 +48,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   I/O, and encoded variants always ship next to their full-precision
   build.
 
+- **Encoded-weight execution on Triton mode (dense LLMs)**: builds
+  using the packed weight-storage encoding now run end-to-end — the
+  loader assembles per-tensor triplets under the graph keys, the
+  transpose marker is zero-cost (the packed layout is already the
+  transposed orientation), decode routes through the byte-gated fused
+  dequantize-GEMV and prefill through a transient dense dequantize.
+  First validated model produces the same greedy answer as its
+  full-precision build at a quarter of the weight bytes.
+
 ### Fixed
 
 - **Step-cache override precedence**: an explicit `--set

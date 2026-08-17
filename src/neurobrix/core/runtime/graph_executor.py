@@ -1196,6 +1196,17 @@ class GraphExecutor:
             nbx_path, component, device_idx, compute_dtype,
             shard_map=shard_map)
 
+        # Weight-storage encoding: fold qweight/scales/qmins triplets
+        # into QuantizedTensor handles under the graph keys (compute
+        # wrappers route on the type; ZERO FALLBACK on a broken
+        # triplet). No-op for dense builds.
+        if any(k.endswith(".qweight") for k in self._weights):
+            from neurobrix.kernels.quantized_tensor import (
+                assemble_quantized)
+            n_q = assemble_quantized(self._weights)
+            print(f"   [Triton] '{component}': {n_q} encoded weights "
+                  f"assembled (int4-g128-asym)", flush=True)
+
         # TEMP DIAG: probe VRAM right after triton weight load commits the
         # component's arena. Gate env NBX_UNLOAD_DIAG=1.
         import os as _os_d
