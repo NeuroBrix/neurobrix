@@ -284,6 +284,15 @@ rows:
     ollama_pull: qwen3-coder:30b
     prompt: "Write a Python function that reverses a string."
     max_new_tokens: 128
+    env:
+      # P-REPLAY-KV-DECODE closure config (2026-08-17): frozen-plan
+      # replay on the decode graph. NOT a drift class — every bucket is
+      # verify-first byte-gated against the normal path in-process, and
+      # the cross-run byte gate (32-tok and 250-tok incl. a bucket
+      # boundary) matched the replay-off output exactly (ce0c22a3 /
+      # 250-tok pair in validation_outputs/replay_kv_decode_2026_08_17).
+      NBX_TRITON_REPLAY: "1"
+      NBX_REPLAY_KV_DECODE: "1"
     columns: [ollama, neurobrix_triton]
 
   - id: llm_dense_tinyllama

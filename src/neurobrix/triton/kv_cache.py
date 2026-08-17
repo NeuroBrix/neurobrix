@@ -14,7 +14,8 @@ class KVCacheLayer:
 
     __slots__ = ('k_buffer', 'v_buffer', 'current_len', '_buffer_len',
                  'max_len', 'num_kv_heads', 'k_head_dim', 'v_head_dim',
-                 'batch_size', 'dtype', 'device_idx', 'mask_buffer')
+                 'batch_size', 'dtype', 'device_idx', 'mask_buffer',
+                 'pos_counter', '_synced')
 
     def __init__(self, device_idx: int, dtype: NBXDtype, max_len: int,
                  num_kv_heads: int, k_head_dim: int, v_head_dim: int,
@@ -40,6 +41,16 @@ class KVCacheLayer:
         # ONE tiny write per appended position (never a per-step
         # allocation). Lazy: built on first bucketed update.
         self.mask_buffer = None
+        # B3: per-layer device position counter (int32 [1]) — the
+        # kv_append kernel reads its write position from it, making the
+        # append launch tuple CONSTANT across steps. Host current_len
+        # stays the control-flow authority (bucket math, view sizes).
+        self.pos_counter = None
+        # Device state (mask validity, pos counter value) in sync with
+        # the host authority. clear() flips this instead of dropping
+        # the buffers: their ADDRESSES must survive requests (recorded
+        # replay tuples point at them), only their CONTENTS reset.
+        self._synced = False
 
     def update(self, k, v):
         """Write new K/V to buffer, return view of all cached values.
@@ -82,35 +93,108 @@ class KVCacheLayer:
 
         Returns (k_view, v_view, mask_view, padded_len)."""
         import numpy as np
-        self.update(k, v)  # append + advance current_len
-        padded = min(((self.current_len + bucket - 1) // bucket) * bucket,
-                     self._buffer_len)
-        if self.mask_buffer is None:
-            # First bucketed call: validate EVERYTHING cached so far
-            # (the prefill populated [0:current_len) through the plain
-            # update path) — only positions beyond current_len stay
-            # masked. Missing this masked out the whole prompt.
+        new_len = k.shape[2]
+        if self.mask_buffer is None or not self._synced:
+            # First bucketed call of a request: validate EVERYTHING
+            # cached so far (the prefill populated [0:current_len)
+            # through the plain update path) — only positions beyond
+            # current_len stay masked. Missing this masked out the
+            # whole prompt. On a warm re-request (clear() flipped
+            # _synced) the SAME buffers are rewritten IN PLACE — their
+            # addresses are part of recorded replay plans.
+            from neurobrix.triton.dtype import numpy_staging_dtype
             neg = np.full((1, 1, 1, self._buffer_len), -np.inf,
-                          dtype=np.float16 if self.dtype == NBXDtype.float16
-                          else np.float32)
+                          dtype=numpy_staging_dtype(self.dtype))
             neg[:, :, :, :self.current_len] = 0.0
             DeviceAllocator.set_device(self.device_idx)
-            self.mask_buffer = NBXTensor.from_numpy(neg)
-        # Extend validity: zero the newly appended positions (tiny
-        # device write; the mask address never changes).
-        new_from = self.current_len - k.shape[2]
-        zeros = np.zeros((1, 1, 1, self.current_len - new_from),
-                         dtype=np.float16 if self.dtype == NBXDtype.float16
-                         else np.float32)
-        self.mask_buffer[:, :, :, new_from:self.current_len] = \
-            NBXTensor.from_numpy(zeros)
+            staged = NBXTensor.from_numpy(neg)
+            if staged.nbx_dtype != self.dtype:
+                staged = staged.to(self.dtype)  # bf16: no numpy repr
+            if self.mask_buffer is None:
+                self.mask_buffer = staged
+            else:
+                self.mask_buffer[:, :, :, :] = staged
+            if self.pos_counter is not None:
+                self._write_pos(self.current_len)
+            self._synced = True
+
+        if new_len == 1 and self.batch_size == 1:
+            # B3 constant-tuple append: k/v/mask written at the DEVICE
+            # counter's position; the counter advances in a second
+            # stream-ordered launch. Host current_len mirrors for
+            # control flow only.
+            import triton as _tr
+            from neurobrix.kernels.ops.kv_append import (
+                kv_append_kernel, kv_pos_inc_kernel)
+            if self.pos_counter is None:
+                DeviceAllocator.set_device(self.device_idx)
+                self.pos_counter = NBXTensor.from_numpy(
+                    np.array([self.current_len], dtype=np.int32))
+            if self.current_len + 1 > self._buffer_len:
+                raise RuntimeError(
+                    f"KV cache overflow: {self.current_len}+1 > "
+                    f"{self._buffer_len}")
+            ks = k.contiguous()
+            vs = v.contiguous()
+            block = max(_tr.next_power_of_2(max(self.k_head_dim,
+                                                self.v_head_dim)), 16)
+            from neurobrix.kernels.nbx_tensor import _set_device
+            _set_device(self.k_buffer)
+            kv_append_kernel[(self.num_kv_heads,)](
+                ks, vs, self.k_buffer, self.v_buffer,
+                self.mask_buffer, self.pos_counter,
+                self.k_buffer.stride(1), self.k_buffer.stride(2),
+                self.v_buffer.stride(1), self.v_buffer.stride(2),
+                D_K=self.k_head_dim, D_V=self.v_head_dim,
+                BLOCK=block, num_warps=1)
+            kv_pos_inc_kernel[(1,)](self.pos_counter)
+            self.current_len += 1
+        else:
+            # Prefill / multi-token / batched append: the plain setitem
+            # path + host mask-validity write (not on the per-step hot
+            # loop; batch>1 is outside the append kernel's contract).
+            new_from = self.current_len
+            self.update(k, v)
+            from neurobrix.triton.dtype import numpy_staging_dtype
+            zeros = np.zeros(
+                (1, 1, 1, self.current_len - new_from),
+                dtype=numpy_staging_dtype(self.dtype))
+            staged = NBXTensor.from_numpy(zeros)
+            if staged.nbx_dtype != self.dtype:
+                staged = staged.to(self.dtype)  # bf16: no numpy repr
+            self.mask_buffer[:, :, :, new_from:self.current_len] = staged
+            if self.pos_counter is not None:
+                # Keep the device counter mirroring the host authority
+                # even off the kernel path.
+                self._write_pos(self.current_len)
+
+        padded = min(((self.current_len + bucket - 1) // bucket) * bucket,
+                     self._buffer_len)
         k_view = self.k_buffer[:self.batch_size, :, :padded, :]
         v_view = self.v_buffer[:self.batch_size, :, :padded, :]
         mask_view = self.mask_buffer[:, :, :, :padded]
         return k_view, v_view, mask_view, padded
 
+    def _write_pos(self, value: int):
+        """Overwrite the device position counter IN PLACE (4-byte D2D;
+        the counter's address never changes — recorded replay tuples
+        point at it). Used at request-boundary resync and by the
+        verify-first restore hook (the counter increment is the append
+        step's only non-idempotent device write)."""
+        import numpy as np
+        DeviceAllocator.set_device(self.device_idx)
+        src = NBXTensor.from_numpy(np.array([value], dtype=np.int32))
+        DeviceAllocator.memcpy(self.pos_counter.data_ptr(),
+                               src.data_ptr(), 4, 3)
+
     def clear(self):
         self.current_len = 0
+        # Device state (mask validity, position counter) now stale —
+        # resynced IN PLACE at the next bucketed call so buffer
+        # addresses survive the request boundary (replay plans record
+        # them). Dropping the buffers here would silently invalidate
+        # every recorded plan on the second warm request.
+        self._synced = False
 
 
 class TritonKVCache:
@@ -370,6 +454,72 @@ class TritonAttentionInterceptor:
         for layer in self.cache._layers.values():
             return layer.current_len
         return 0
+
+    # ------------------------------------------------------------------
+    # Replay registration contract (P-REPLAY-KV-DECODE) — the refined
+    # interceptor guard: a sequence whose interceptors ALL implement
+    # this contract becomes replay-eligible, with the interceptor state
+    # entering the bucket signature. Three methods:
+    #   replay_signature(funcs) -> hashable | None (None = not eligible
+    #       under the CURRENT state; refused for this run only)
+    #   replay_advance()  — after each replayed run: mirror the state
+    #       the replayed launches advanced device-side onto the host
+    #       authority (current_len drives position_ids and bucket math)
+    #   replay_restore()  — before the verify pass's normal re-run:
+    #       undo the replayed pass's non-idempotent device writes (the
+    #       position-counter increments; k/v/mask writes are idempotent
+    #       — same bytes at the same positions on identical inputs)
+    # ------------------------------------------------------------------
+
+    def replay_signature(self, registered_funcs):
+        """Signature contribution, or None while ineligible.
+
+        Eligible = decode mode, B3 bucketed path active, every layer on
+        the constant-tuple append kernel (batch 1, device counter and
+        mask live). The arange interceptor (position_ids-less models)
+        bakes a per-step position scalar into its launch tuple — a
+        recorded step would replay stale positions forever, so its
+        registration refuses the whole sequence (that model class needs
+        the device-side arange increment first, a named extension)."""
+        import os
+        for f in registered_funcs:
+            if getattr(f, "__func__", None) is \
+                    TritonAttentionInterceptor.intercept_arange:
+                return None
+        if self._is_prefill:
+            return None
+        if os.environ.get("NBX_REPLAY_KV_DECODE") != "1":
+            return None
+        bucket = int(os.environ.get("NBX_KV_BUCKET", "256"))
+        if not self.cache._layers:
+            return None
+        for layer in self.cache._layers.values():
+            if (layer.batch_size != 1 or layer.mask_buffer is None
+                    or layer.pos_counter is None or not layer._synced):
+                return None
+        length = self.get_cache_len()
+        buffer_len = next(iter(self.cache._layers.values()))._buffer_len
+        # The bucket THIS step will compute in: the append advances
+        # current_len before the padded views are taken.
+        padded = min(((length + 1 + bucket - 1) // bucket) * bucket,
+                     buffer_len)
+        return ("kv_decode", bucket, padded)
+
+    def replay_advance(self):
+        """The replayed launches appended one position per layer and
+        advanced every device counter; mirror on the host authority
+        (position_ids and the bucket signature read current_len)."""
+        for layer in self.cache._layers.values():
+            layer.current_len += 1
+
+    def replay_restore(self):
+        """Rewind the device counters to the host authority so the
+        verify pass's normal re-run appends at the same position the
+        replayed pass wrote (identical inputs -> idempotent k/v/mask
+        writes; only the counter increment needs undoing)."""
+        for layer in self.cache._layers.values():
+            if layer.pos_counter is not None:
+                layer._write_pos(layer.current_len)
 
 
 # Phase 1 opt-in cleanup: mark the interceptor's underlying function

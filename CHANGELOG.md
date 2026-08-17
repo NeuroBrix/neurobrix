@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Frozen-plan replay on autoregressive decode (Triton mode)**: the
+  per-token decode graph of KV-cached language models can now be
+  recorded once and replayed as direct kernel launches, cutting the
+  per-step launch overhead. The KV append writes at a device-resident
+  position counter, MoE token routing tables are built on the GPU
+  (removing one host sync per expert layer per step), and every
+  replayed bucket is verified byte-equal against the normal path
+  before being adopted — outputs are byte-identical by construction.
+  Opt-in via `NBX_TRITON_REPLAY=1` + `NBX_REPLAY_KV_DECODE=1`; the
+  Qwen3-Coder-30B int4 reference row moves from 2.08 to 4.86 tok/s
+  (×2.34) on one V100-32G with identical answers.
+- **Warm serving keeps KV cache buffers across requests (Triton
+  mode)**: the KV cache is now owned by the executor and reset in
+  place between requests instead of being reallocated per request —
+  removing per-request allocation churn and keeping recorded replay
+  plans valid across a serving session.
 - **Device-resident scalar arithmetic on Triton mode**: binary ops
   (add/mul/div/sub) with a 0-d GPU scalar operand now compute the
   scalar in-register instead of syncing it to the host — outputs stay

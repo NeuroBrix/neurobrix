@@ -206,11 +206,26 @@ def _build_ptr_tables(gate_weights, up_weights, down_weights):
 
 
 # ============================================================================
-# MOE ALIGN BLOCK SIZE — sort tokens by expert on CPU (tiny for decode)
+# MOE ALIGN BLOCK SIZE — device-side token-by-expert sort (3 Triton kernels)
 # ============================================================================
 
 def moe_align_block_size(topk_ids_flat, block_size, num_experts, device_idx):
-    """Sort tokens by expert, pad to block_size alignment.
+    """Sort tokens by expert, pad to block_size alignment — ON DEVICE.
+
+    Three constant-tuple Triton kernels (kernels/ops/moe_align.py)
+    replace the former host path (D2H of topk_ids -> numpy sort -> H2D
+    of tables): the routing tables are now recomputed from the CURRENT
+    router output at every launch, which removes one D2H sync per MoE
+    layer per step AND makes the MoE band replay-eligible (the host
+    D2H was a structural plan-breaker at recording — P-REPLAY-KV-
+    DECODE). The deterministic pairwise rank in stage 3 preserves the
+    host sort's exact token order — the swap is byte-gated against the
+    removed implementation.
+
+    Outputs are sized on the shape-derived worst case
+    min(n*BS, n + E*(BS-1)) rounded up to BS; the TRUE total lives only
+    in the device scalar (every fused variant early-exits on it — the
+    launch grids depend on host shapes alone, never on routing data).
 
     Args:
         topk_ids_flat: NBXTensor [M * top_k] — flat expert indices
@@ -219,53 +234,50 @@ def moe_align_block_size(topk_ids_flat, block_size, num_experts, device_idx):
         device_idx: GPU device for output tensors
 
     Returns:
-        sorted_token_ids: NBXTensor [total_padded] — token indices sorted by expert
-        expert_ids: NBXTensor [num_blocks] — expert id per block
+        sorted_token_ids: NBXTensor [max_total] — token indices sorted
+            by expert (sentinel n beyond each expert's true count)
+        expert_ids: NBXTensor [max_blocks] — expert id per block (-1 pad)
         num_tokens_post_padded: NBXTensor [1] — total entries after padding
     """
+    import triton as _tr
+    from neurobrix.kernels.nbx_tensor import _set_device
+    from neurobrix.kernels.ops.moe_align import (
+        moe_align_stage1_kernel, moe_align_stage2_kernel,
+        moe_align_stage3_kernel)
+
     n = topk_ids_flat.numel()
+    bs = int(block_size)
+    bound = min(n * bs, n + num_experts * (bs - 1))
+    max_total = ((bound + bs - 1) // bs) * bs
+    max_blocks = max_total // bs
 
-    # D2H: small tensor (e.g., 8 ints for decode batch=1 top_k=8)
-    buf = (_ctypes.c_int64 * n)()
-    DeviceAllocator.memcpy(_ctypes.addressof(buf), topk_ids_flat.data_ptr(),
-                           n * 8, kind=2)
-    ids = np.frombuffer(buf, dtype=np.int64).copy()
-
-    # Count tokens per expert
-    counts = np.bincount(ids.clip(0, num_experts - 1), minlength=num_experts)
-
-    # Pad each count to be divisible by block_size
-    padded_counts = ((counts + block_size - 1) // block_size) * block_size
-
-    # Cumulative offsets
-    offsets = np.zeros(num_experts + 1, dtype=np.int64)
-    offsets[1:] = np.cumsum(padded_counts)
-    total = int(offsets[-1])
-
-    # Scatter tokens to sorted positions (padding = sentinel n)
-    sorted_ids = np.full(total, n, dtype=np.int64)
-    cursors = offsets[:-1].copy()
-    for i in range(n):
-        expert = int(ids[i])
-        if 0 <= expert < num_experts:
-            sorted_ids[int(cursors[expert])] = i
-            cursors[expert] += 1
-
-    # Expert ID per block
-    num_blocks = total // block_size
-    exp_ids = np.full(num_blocks, -1, dtype=np.int64)
-    for e in range(num_experts):
-        start_block = int(offsets[e]) // block_size
-        end_block = int(offsets[e + 1]) // block_size
-        exp_ids[start_block:end_block] = e
-
-    # H2D
     DeviceAllocator.set_device(device_idx)
-    sorted_ids_gpu = NBXTensor.from_numpy(sorted_ids)
-    expert_ids_gpu = NBXTensor.from_numpy(exp_ids)
-    num_post_pad_gpu = NBXTensor.from_numpy(np.array([total], dtype=np.int64))
+    dev = f"cuda:{device_idx}"
+    sorted_ids = NBXTensor.empty((max_total,), dtype=NBXDtype.int64,
+                                 device=dev)
+    expert_ids = NBXTensor.empty((max_blocks,), dtype=NBXDtype.int64,
+                                 device=dev)
+    num_post_pad = NBXTensor.empty((1,), dtype=NBXDtype.int64, device=dev)
+    offsets_ws = NBXTensor.empty((num_experts,), dtype=NBXDtype.int64,
+                                 device=dev)
+    padded_ws = NBXTensor.empty((num_experts,), dtype=NBXDtype.int64,
+                                device=dev)
 
-    return sorted_ids_gpu, expert_ids_gpu, num_post_pad_gpu
+    ids = topk_ids_flat.contiguous()
+    _set_device(sorted_ids)
+    BE = max(_tr.next_power_of_2(num_experts), 16)
+    BLK = ((128 + bs - 1) // bs) * bs  # positions/program, multiple of bs
+    moe_align_stage1_kernel[(1,)](
+        ids, offsets_ws, padded_ws, num_post_pad, n,
+        BS=bs, BE=BE, E=num_experts, BT=128, num_warps=4)
+    moe_align_stage2_kernel[(_tr.cdiv(max_total, BLK),)](
+        offsets_ws, padded_ws, sorted_ids, expert_ids, n, max_total,
+        BS=bs, BE=BE, E=num_experts, BLK=BLK, num_warps=4)
+    moe_align_stage3_kernel[(_tr.cdiv(n, 128),)](
+        ids, offsets_ws, sorted_ids, n,
+        E=num_experts, BLKT=128, BN=128, num_warps=4)
+
+    return sorted_ids, expert_ids, num_post_pad
 
 
 # ============================================================================

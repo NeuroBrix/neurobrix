@@ -102,6 +102,24 @@ def _get_nbx_dtype(a) -> NBXDtype:
     return NBXDtype.float32
 
 
+def numpy_staging_dtype(dtype: NBXDtype):
+    """Host (numpy) staging dtype for uploading CONSTANTS destined for
+    an NBX buffer of `dtype` — the single authority for that mapping
+    (gardien 2026-08-17: ad-hoc fp16/fp32 ternaries in kv_cache mask
+    staging bypassed the dtype boundary). bfloat16 has no numpy
+    representation: stage fp32 and cast device-side (NBXTensor.to,
+    R33-pure) after upload — callers must compare the uploaded tensor's
+    nbx_dtype against the target and cast when they differ."""
+    import numpy as np
+    return {
+        NBXDtype.float16: np.float16,
+        NBXDtype.float32: np.float32,
+        NBXDtype.bfloat16: np.float32,   # no numpy bf16 — cast on device
+        NBXDtype.int32: np.int32,
+        NBXDtype.int64: np.int64,
+    }.get(dtype, np.float32)
+
+
 def resolve_compute_dtype(ctx, component: str = None) -> str:
     """Prism-RESOLVED compute dtype for triton flow-level tensor synthesis.
 
