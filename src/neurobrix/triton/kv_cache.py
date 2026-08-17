@@ -6,7 +6,7 @@ indexed writes, and the Triton Flash Attention wrapper for SDPA.
 
 from typing import Dict
 
-from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype
+from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator
 
 
 class KVCacheLayer:
@@ -14,7 +14,7 @@ class KVCacheLayer:
 
     __slots__ = ('k_buffer', 'v_buffer', 'current_len', '_buffer_len',
                  'max_len', 'num_kv_heads', 'k_head_dim', 'v_head_dim',
-                 'batch_size', 'dtype', 'device_idx')
+                 'batch_size', 'dtype', 'device_idx', 'mask_buffer')
 
     def __init__(self, device_idx: int, dtype: NBXDtype, max_len: int,
                  num_kv_heads: int, k_head_dim: int, v_head_dim: int,
@@ -34,6 +34,12 @@ class KVCacheLayer:
             (batch_size, num_kv_heads, max_len, k_head_dim), dtype=dtype, device=dev)
         self.v_buffer = NBXTensor.zeros(
             (batch_size, num_kv_heads, max_len, v_head_dim), dtype=dtype, device=dev)
+        # B2' (bucket-padded decode views): persistent additive length
+        # mask [1, 1, 1, max_len] — 0 for valid positions, -inf beyond.
+        # Fixed address for the plan's lifetime; extending validity is
+        # ONE tiny write per appended position (never a per-step
+        # allocation). Lazy: built on first bucketed update.
+        self.mask_buffer = None
 
     def update(self, k, v):
         """Write new K/V to buffer, return view of all cached values.
@@ -62,6 +68,46 @@ class KVCacheLayer:
         k_cached = self.k_buffer[:self.batch_size, :, :self.current_len, :]
         v_cached = self.v_buffer[:self.batch_size, :, :self.current_len, :]
         return k_cached, v_cached
+
+    def update_bucketed(self, k, v, bucket: int):
+        """B2' decode update: append k/v, then return views padded to
+        the LENGTH BUCKET plus the additive mask view excluding the pad.
+
+        The padding never changes results, only memory geometry: the
+        region beyond current_len is excluded by the -inf mask (never
+        by content — stale K there must not matter), and every
+        downstream allocation sized from these views is constant
+        within a bucket (the address-stability prerequisite measured
+        in the B1 gate).
+
+        Returns (k_view, v_view, mask_view, padded_len)."""
+        import numpy as np
+        self.update(k, v)  # append + advance current_len
+        padded = min(((self.current_len + bucket - 1) // bucket) * bucket,
+                     self._buffer_len)
+        if self.mask_buffer is None:
+            # First bucketed call: validate EVERYTHING cached so far
+            # (the prefill populated [0:current_len) through the plain
+            # update path) — only positions beyond current_len stay
+            # masked. Missing this masked out the whole prompt.
+            neg = np.full((1, 1, 1, self._buffer_len), -np.inf,
+                          dtype=np.float16 if self.dtype == NBXDtype.float16
+                          else np.float32)
+            neg[:, :, :, :self.current_len] = 0.0
+            DeviceAllocator.set_device(self.device_idx)
+            self.mask_buffer = NBXTensor.from_numpy(neg)
+        # Extend validity: zero the newly appended positions (tiny
+        # device write; the mask address never changes).
+        new_from = self.current_len - k.shape[2]
+        zeros = np.zeros((1, 1, 1, self.current_len - new_from),
+                         dtype=np.float16 if self.dtype == NBXDtype.float16
+                         else np.float32)
+        self.mask_buffer[:, :, :, new_from:self.current_len] = \
+            NBXTensor.from_numpy(zeros)
+        k_view = self.k_buffer[:self.batch_size, :, :padded, :]
+        v_view = self.v_buffer[:self.batch_size, :, :padded, :]
+        mask_view = self.mask_buffer[:, :, :, :padded]
+        return k_view, v_view, mask_view, padded
 
     def clear(self):
         self.current_len = 0
@@ -94,6 +140,21 @@ class TritonKVCache:
                 batch_size=batch_size)
 
         return self._layers[layer_idx].update(k, v)
+
+    def update_bucketed(self, layer_idx: int, k, v, bucket: int):
+        """B2' decode update: bucket-padded views + additive pad mask
+        (see KVCacheLayer.update_bucketed). Lazy allocation as above."""
+        if layer_idx not in self._layers:
+            device_idx = k._device_idx if hasattr(k, '_device_idx') else 0
+            batch_size = k.shape[0]
+            self._layers[layer_idx] = KVCacheLayer(
+                device_idx=device_idx, dtype=self.dtype,
+                max_len=self.max_cache_len,
+                num_kv_heads=self.num_kv_heads,
+                k_head_dim=self.k_head_dim,
+                v_head_dim=self.v_head_dim,
+                batch_size=batch_size)
+        return self._layers[layer_idx].update_bucketed(k, v, bucket)
 
     def clear(self):
         for layer in self._layers.values():
@@ -184,8 +245,23 @@ class TritonAttentionInterceptor:
             k = k.view(batch, self._num_kv_heads, self._gqa_group_size, seq_len, head_dim)[:, :, 0]
             v = v.view(batch, self._num_kv_heads, self._gqa_group_size, seq_len, v.shape[-1])[:, :, 0]
 
-        # Update cache
-        k_full, v_full = self.cache.update(layer_idx, k, v)
+        # Update cache. B2' (NBX_REPLAY_KV_DECODE): bucket-padded views
+        # + persistent additive pad mask — padding never changes the
+        # result, only the memory geometry (downstream allocation sizes
+        # become bucket-constant, the address-stability prerequisite).
+        import os as _os_b2
+        _bucket = 0
+        if _os_b2.environ.get("NBX_REPLAY_KV_DECODE") == "1":
+            _bucket = int(_os_b2.environ.get("NBX_KV_BUCKET", "256"))
+        if _bucket:
+            k_full, v_full, _pad_mask, _ = self.cache.update_bucketed(
+                layer_idx, k, v, _bucket)
+            if attn_mask is not None and \
+                    attn_mask.shape[-1] != k_full.shape[2]:
+                attn_mask = None
+            attn_mask = _pad_mask if attn_mask is None else attn_mask
+        else:
+            k_full, v_full = self.cache.update(layer_idx, k, v)
 
         # GQA: re-expand
         if self._gqa_group_size > 1:
