@@ -118,6 +118,216 @@ def fused_moe_kernel(
 
 
 @triton.jit
+def fused_moe_wna16_kernel(
+    a_ptr,                          # activations [M, K]
+    qw_ptrs_ptr,                    # [E] int64 — packed int4 [K//8, N] per expert
+    sc_ptrs_ptr,                    # [E] int64 — scales fp16 [K//G, N]
+    mn_ptrs_ptr,                    # [E] int64 — mins fp16 [K//G, N]
+    c_ptr,
+    topk_weights_ptr,
+    sorted_token_ids_ptr,
+    expert_ids_ptr,
+    num_tokens_post_padded_ptr,
+    N, K, EM, num_valid_tokens,
+    stride_am, stride_ak,
+    stride_qk, stride_qn,           # packed strides (rows of int32)
+    stride_sg, stride_sn,           # scales/mins strides
+    stride_cm, stride_cn,
+    BLOCK_SIZE_M: tl.constexpr,
+    BLOCK_SIZE_N: tl.constexpr,
+    BLOCK_SIZE_K: tl.constexpr,
+    GROUP_SIZE_M: tl.constexpr,
+    MUL_ROUTED_WEIGHT: tl.constexpr,
+    top_k: tl.constexpr,
+    compute_type: tl.constexpr,
+    QGROUP: tl.constexpr,           # quant group size along K (128)
+    QPACK: tl.constexpr,            # nibbles per int32 (8)
+    TOPK_DIVIDE: tl.constexpr = True,
+):
+    """Grouped GEMM over int4-g128-asym experts — in-register dequant.
+
+    Structure mirrors fused_moe_kernel exactly (same pid mapping, same
+    K-loop, same routed-weight epilogue); the B tile is rebuilt each
+    iteration from the expert's packed triplet with the tier's
+    CANONICAL dequant (pure fp32: q*scale+min — contraction-immune,
+    int4 x fp16 products exact in fp32) and the dot runs fp32 x fp32
+    (on sm_70 fp16 tl.dot lowers to FMA fp32 anyway — Phase 1.5
+    audit). BLOCK_SIZE_K must divide QGROUP so a K-tile never crosses
+    a quant-group boundary (one scales/mins row vector per
+    iteration). SPLIT_K = 1, no atomics (tier byte contract). The
+    byte oracle is fused_moe_fp32b_kernel below — textually identical
+    minus the unpack.
+    """
+    pid = tl.program_id(axis=0)
+    num_pid_m = tl.cdiv(EM, BLOCK_SIZE_M)
+    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
+    num_pid_in_group = GROUP_SIZE_M * num_pid_n
+    group_id = pid // num_pid_in_group
+    first_pid_m = group_id * GROUP_SIZE_M
+    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
+    pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
+    pid_n = (pid % num_pid_in_group) // group_size_m
+
+    num_tokens_post_padded = tl.load(num_tokens_post_padded_ptr)
+    if pid_m * BLOCK_SIZE_M >= num_tokens_post_padded:
+        return
+
+    offs_token_id = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+    offs_token = tl.load(sorted_token_ids_ptr + offs_token_id).to(tl.int64)
+    token_mask = offs_token < num_valid_tokens
+
+    off_experts = tl.load(expert_ids_ptr + pid_m)
+    qw_base = tl.cast(tl.load(qw_ptrs_ptr + off_experts),
+                      tl.pointer_type(tl.int32), bitcast=True)
+    sc_base = tl.cast(tl.load(sc_ptrs_ptr + off_experts),
+                      tl.pointer_type(tl.float16), bitcast=True)
+    mn_base = tl.cast(tl.load(mn_ptrs_ptr + off_experts),
+                      tl.pointer_type(tl.float16), bitcast=True)
+
+    offs_bn = (pid_n * BLOCK_SIZE_N
+               + tl.arange(0, BLOCK_SIZE_N).to(tl.int64)) % N
+    offs_k = tl.arange(0, BLOCK_SIZE_K).to(tl.int64)
+
+    if TOPK_DIVIDE:
+        a_idx = offs_token[:, None] // top_k
+    else:
+        a_idx = offs_token[:, None]
+    a_ptrs = a_ptr + (a_idx * stride_am + offs_k[None, :] * stride_ak)
+
+    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+    for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
+        k_rem = K - k * BLOCK_SIZE_K
+        a = tl.load(
+            a_ptrs,
+            mask=token_mask[:, None] & (offs_k[None, :] < k_rem),
+            other=0.0,
+        )
+        cur_k = k * BLOCK_SIZE_K + offs_k
+        packed = tl.load(
+            qw_base + (cur_k[:, None] // QPACK) * stride_qk
+            + offs_bn[None, :] * stride_qn,
+            mask=offs_k[:, None] < k_rem, other=0)
+        q = (packed >> ((cur_k[:, None] % QPACK) * 4)) & 0xF
+        g = k * BLOCK_SIZE_K // QGROUP  # BLOCK_SIZE_K divides QGROUP
+        scale = tl.load(sc_base + g * stride_sg + offs_bn * stride_sn)
+        mn = tl.load(mn_base + g * stride_sg + offs_bn * stride_sn)
+        # Canonical dequant — the tier's contraction-immune fp32 form,
+        # textually identical to the GEMV family's.
+        b = (q.to(tl.float32) * scale[None, :].to(tl.float32)
+             + mn[None, :].to(tl.float32))
+        b = tl.where(offs_k[:, None] < k_rem, b, 0.0)
+        accumulator += tl.dot(a.to(tl.float32), b)
+        a_ptrs += BLOCK_SIZE_K * stride_ak
+
+    if MUL_ROUTED_WEIGHT:
+        moe_weight = tl.load(
+            topk_weights_ptr + offs_token,
+            mask=token_mask,
+            other=0,
+        )
+        accumulator = accumulator * moe_weight[:, None]
+
+    accumulator = accumulator.to(compute_type)
+    offs_cn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)).to(tl.int64)
+    c_ptrs = c_ptr + stride_cm * offs_token[:, None] + stride_cn * offs_cn[None, :]
+    c_mask = token_mask[:, None] & (offs_cn[None, :] < N)
+    tl.store(c_ptrs, accumulator, mask=c_mask)
+
+
+@triton.jit
+def fused_moe_fp32b_kernel(
+    a_ptr,
+    expert_ptrs_ptr,                # [E] int64 — dense FP32 [K, N] per expert
+    c_ptr,
+    topk_weights_ptr,
+    sorted_token_ids_ptr,
+    expert_ids_ptr,
+    num_tokens_post_padded_ptr,
+    N, K, EM, num_valid_tokens,
+    stride_am, stride_ak,
+    stride_bk, stride_bn,
+    stride_cm, stride_cn,
+    BLOCK_SIZE_M: tl.constexpr,
+    BLOCK_SIZE_N: tl.constexpr,
+    BLOCK_SIZE_K: tl.constexpr,
+    GROUP_SIZE_M: tl.constexpr,
+    MUL_ROUTED_WEIGHT: tl.constexpr,
+    top_k: tl.constexpr,
+    compute_type: tl.constexpr,
+    TOPK_DIVIDE: tl.constexpr = True,
+):
+    """The wna16 kernel's BYTE ORACLE: dense fp32 expert weights (the
+    family's standalone dequant output), identical pid mapping, K-loop,
+    fp32 dot and epilogue — textually the kernel above minus the
+    unpack. Never used on a hot path; exists so the fused W4 kernel is
+    provably byte-identical to dequantize-then-grouped-GEMM."""
+    pid = tl.program_id(axis=0)
+    num_pid_m = tl.cdiv(EM, BLOCK_SIZE_M)
+    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
+    num_pid_in_group = GROUP_SIZE_M * num_pid_n
+    group_id = pid // num_pid_in_group
+    first_pid_m = group_id * GROUP_SIZE_M
+    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
+    pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
+    pid_n = (pid % num_pid_in_group) // group_size_m
+
+    num_tokens_post_padded = tl.load(num_tokens_post_padded_ptr)
+    if pid_m * BLOCK_SIZE_M >= num_tokens_post_padded:
+        return
+
+    offs_token_id = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+    offs_token = tl.load(sorted_token_ids_ptr + offs_token_id).to(tl.int64)
+    token_mask = offs_token < num_valid_tokens
+
+    off_experts = tl.load(expert_ids_ptr + pid_m)
+    b_base = tl.cast(tl.load(expert_ptrs_ptr + off_experts),
+                     tl.pointer_type(tl.float32), bitcast=True)
+
+    offs_bn = (pid_n * BLOCK_SIZE_N
+               + tl.arange(0, BLOCK_SIZE_N).to(tl.int64)) % N
+    offs_k = tl.arange(0, BLOCK_SIZE_K).to(tl.int64)
+
+    if TOPK_DIVIDE:
+        a_idx = offs_token[:, None] // top_k
+    else:
+        a_idx = offs_token[:, None]
+    a_ptrs = a_ptr + (a_idx * stride_am + offs_k[None, :] * stride_ak)
+    b_ptrs = b_base + (offs_k[:, None] * stride_bk
+                       + offs_bn[None, :] * stride_bn)
+
+    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+    for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
+        k_rem = K - k * BLOCK_SIZE_K
+        a = tl.load(
+            a_ptrs,
+            mask=token_mask[:, None] & (offs_k[None, :] < k_rem),
+            other=0.0,
+        )
+        b = tl.load(
+            b_ptrs,
+            mask=offs_k[:, None] < k_rem,
+            other=0.0,
+        )
+        accumulator += tl.dot(a.to(tl.float32), b)
+        a_ptrs += BLOCK_SIZE_K * stride_ak
+        b_ptrs += BLOCK_SIZE_K * stride_bk
+
+    if MUL_ROUTED_WEIGHT:
+        moe_weight = tl.load(
+            topk_weights_ptr + offs_token,
+            mask=token_mask,
+            other=0,
+        )
+        accumulator = accumulator * moe_weight[:, None]
+
+    accumulator = accumulator.to(compute_type)
+    offs_cn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)).to(tl.int64)
+    c_ptrs = c_ptr + stride_cm * offs_token[:, None] + stride_cn * offs_cn[None, :]
+    c_mask = token_mask[:, None] & (offs_cn[None, :] < N)
+    tl.store(c_ptrs, accumulator, mask=c_mask)
+
+
+@triton.jit
 def silu_and_mul_kernel(
     input_ptr, output_ptr,
     M, N,

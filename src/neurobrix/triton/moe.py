@@ -103,7 +103,7 @@ class PtrTables:
     __slots__ = ('gate_ptrs', 'gate_stride_bk', 'gate_stride_bn',
                  'up_ptrs', 'up_stride_bk', 'up_stride_bn',
                  'down_ptrs', 'down_stride_bk', 'down_stride_bn',
-                 'device_experts')
+                 'device_experts', 'quantized', 'q_tables')
 
     def __init__(self):
         self.gate_ptrs = {}       # {device → NBXTensor[E] int64}
@@ -116,6 +116,11 @@ class PtrTables:
         self.down_stride_bk = {}
         self.down_stride_bn = {}
         self.device_experts = {}
+        # int4-g128-asym experts: *_ptrs holds the qweight table and
+        # q_tables[proj][dev] = (sc_ptrs, mn_ptrs, stride_sg, stride_sn);
+        # the *_stride_bk/bn slots hold the PACKED int32 strides.
+        self.quantized = False
+        self.q_tables = {}
 
 
 def _build_ptr_tables(gate_weights, up_weights, down_weights):
@@ -124,8 +129,20 @@ def _build_ptr_tables(gate_weights, up_weights, down_weights):
     Stores each expert's data_ptr() as int64 in a GPU tensor. No offset math.
     Total GPU allocation: 3 × E × 8 bytes per device (~3KB for 128 experts).
     """
+    from neurobrix.kernels.quantized_tensor import QuantizedTensor
+
     num_experts = len(gate_weights)
     tables = PtrTables()
+    tables.quantized = isinstance(gate_weights[0], QuantizedTensor)
+    if tables.quantized:
+        # Uniformity contract: mixed dense/quantized expert lists are a
+        # broken build — refuse loudly (ZERO FALLBACK).
+        for proj_name, ws in (("gate", gate_weights), ("up", up_weights),
+                              ("down", down_weights)):
+            if not all(isinstance(x, QuantizedTensor) for x in ws):
+                raise RuntimeError(
+                    f"ZERO FALLBACK: mixed dense/quantized experts in "
+                    f"'{proj_name}' projection — re-build the variant.")
     by_device = defaultdict(list)
     for i in range(num_experts):
         by_device[gate_weights[i]._device_idx].append(i)
@@ -136,12 +153,39 @@ def _build_ptr_tables(gate_weights, up_weights, down_weights):
 
         def _build_proj(weights):
             # Absolute pointers as int64
+            if tables.quantized:
+                qw = np.array(
+                    [weights[eid].qweight.data_ptr() for eid in expert_ids],
+                    dtype=np.int64)
+                sc = np.array(
+                    [weights[eid].scales.data_ptr() for eid in expert_ids],
+                    dtype=np.int64)
+                mn = np.array(
+                    [weights[eid].qmins.data_ptr() for eid in expert_ids],
+                    dtype=np.int64)
+                base = weights[expert_ids[0]]
+                return ((NBXTensor.from_numpy(qw),
+                         NBXTensor.from_numpy(sc),
+                         NBXTensor.from_numpy(mn)),
+                        base.qweight.stride(0), base.qweight.stride(1),
+                        base.scales.stride(0), base.scales.stride(1))
             ptrs = np.array(
                 [weights[eid].data_ptr() for eid in expert_ids],
                 dtype=np.int64)
             ptr_table = NBXTensor.from_numpy(ptrs)
             base = weights[expert_ids[0]]
             return ptr_table, base.stride(1), base.stride(0)
+
+        if tables.quantized:
+            for name, ws in (("gate", gate_weights), ("up", up_weights),
+                             ("down", down_weights)):
+                (qw_t, sc_t, mn_t), qk, qn, sg, sn = _build_proj(ws)
+                getattr(tables, f"{name}_ptrs")[dev] = qw_t
+                getattr(tables, f"{name}_stride_bk")[dev] = qk
+                getattr(tables, f"{name}_stride_bn")[dev] = qn
+                tables.q_tables.setdefault(name, {})[dev] = (
+                    sc_t, mn_t, sg, sn)
+            continue
 
         gp, gbk, gbn = _build_proj(gate_weights)
         tables.gate_ptrs[dev] = gp
@@ -588,29 +632,37 @@ def _fused_moe_pass(
               f"expert_ids.numel={expert_ids.numel()} M={M} top_k={top_k} "
               f"N_gate={N_gate} K={K}", file=_sys.stderr, flush=True)
 
+    def _proj(name, x, out, N_p, K_p, mul_routed, topk_div=True):
+        """One grouped-GEMM pass — dense or W4 per the tables."""
+        if tables.quantized:
+            sc_t, mn_t, sg, sn = tables.q_tables[name][dev]
+            w.invoke_fused_moe_wna16(
+                x, getattr(tables, f"{name}_ptrs")[dev], sc_t, mn_t,
+                out, flat_scores,
+                sorted_token_ids, expert_ids, num_tokens_post_padded,
+                N_p, K_p,
+                getattr(tables, f"{name}_stride_bk")[dev],
+                getattr(tables, f"{name}_stride_bn")[dev],
+                sg, sn,
+                top_k, mul_routed_weight=mul_routed, topk_divide=topk_div,
+            )
+        else:
+            w.invoke_fused_moe(
+                x, getattr(tables, f"{name}_ptrs")[dev], out, flat_scores,
+                sorted_token_ids, expert_ids, num_tokens_post_padded,
+                N_p, K_p,
+                getattr(tables, f"{name}_stride_bk")[dev],
+                getattr(tables, f"{name}_stride_bn")[dev],
+                top_k, mul_routed_weight=mul_routed, topk_divide=topk_div,
+            )
+
     gate_out = NBXTensor.zeros((padded, N_gate), dtype=dt, device=f"cuda:{dev}")
-    w.invoke_fused_moe(
-        hidden_states,
-        tables.gate_ptrs[dev],
-        gate_out, flat_scores,
-        sorted_token_ids, expert_ids, num_tokens_post_padded,
-        N_gate, K,
-        tables.gate_stride_bk[dev], tables.gate_stride_bn[dev],
-        top_k, mul_routed_weight=False,
-    )
+    _proj("gate", hidden_states, gate_out, N_gate, K, False)
     if _diag_dump is not None:
         _diag_dump("gate_out", gate_out)
 
     up_out = NBXTensor.zeros((padded, N_gate), dtype=dt, device=f"cuda:{dev}")
-    w.invoke_fused_moe(
-        hidden_states,
-        tables.up_ptrs[dev],
-        up_out, flat_scores,
-        sorted_token_ids, expert_ids, num_tokens_post_padded,
-        N_gate, K,
-        tables.up_stride_bk[dev], tables.up_stride_bn[dev],
-        top_k, mul_routed_weight=False,
-    )
+    _proj("up", hidden_states, up_out, N_gate, K, False)
     if _diag_dump is not None:
         _diag_dump("up_out", up_out)
 
@@ -622,15 +674,7 @@ def _fused_moe_pass(
 
     # Down pass
     down_out = NBXTensor.zeros((padded, K), dtype=dt, device=f"cuda:{dev}")
-    w.invoke_fused_moe(
-        activated,
-        tables.down_ptrs[dev],
-        down_out, flat_scores,
-        sorted_token_ids, expert_ids, num_tokens_post_padded,
-        K, N_gate,
-        tables.down_stride_bk[dev], tables.down_stride_bn[dev],
-        top_k, mul_routed_weight=True, topk_divide=False,
-    )
+    _proj("down", activated, down_out, K, N_gate, True, topk_div=False)
     if _diag_dump is not None:
         _diag_dump("down_out", down_out)
 

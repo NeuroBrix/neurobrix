@@ -66,6 +66,14 @@ class QuantizedTensor:
         return NBXDtype.float16  # the dense weight's traced dtype class
 
     @property
+    def _dtype(self):
+        return NBXDtype.float16
+
+    @property
+    def _shape(self) -> Tuple[int, int]:
+        return self.shape
+
+    @property
     def nbx_dtype(self):
         return NBXDtype.float16
 
@@ -89,6 +97,11 @@ class QuantizedTensor:
     def numel(self) -> int:
         n, k = self.logical_shape
         return n * k
+
+    def data_ptr(self) -> int:
+        """Identity pointer for cache fingerprints (the qweight buffer
+        — stable for the triplet's lifetime)."""
+        return self.qweight.data_ptr()
 
     def t(self) -> "QuantizedTensor":
         return QuantizedTensor(self.qweight, self.scales, self.qmins,
