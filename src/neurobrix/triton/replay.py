@@ -493,12 +493,13 @@ def _install_seams() -> None:
 
 class FrozenPlan:
     __slots__ = ("records", "slab", "arena_snapshot", "frozen_inputs",
-                 "launches", "actions", "output_slots")
+                 "launches", "actions", "output_slots", "scan_limit")
 
     def __init__(self, records: List[Tuple[str, tuple]],
                  slab: SlabAllocator,
                  arena_list: List[Optional[NBXTensor]],
-                 input_slots: Tuple[int, ...]) -> None:
+                 input_slots: Tuple[int, ...],
+                 scan_limit: Optional[int] = None) -> None:
         self.records = records
         self.slab = slab  # strong ref pins the slab for the plan's life
         self.arena_snapshot = list(arena_list)
@@ -510,16 +511,29 @@ class FrozenPlan:
         self.launches = sum(1 for r in records if r[0] == _KERNEL)
         self.actions = len(records)
         self.output_slots: Tuple[int, ...] = ()
+        # Scan bound: weights + inputs (constants are weight-region
+        # slots). Intermediates are NEVER copied — the DAG produces
+        # every intermediate before consuming it, so the replayed
+        # launches rewrite the frozen buffers from the frozen inputs;
+        # copying them was both wasted work (tens of thousands of slots
+        # on an LLM decode graph) and a dangling-source hazard: after a
+        # verify pass's normal re-run, an intermediate slot can hold a
+        # VIEW whose base died with the next rebind (measured: KV-decode
+        # gate v2, slot 18939, GQA view, cudaMemcpy rc=1 on the freed
+        # source).
+        self.scan_limit = (len(arena_list) if scan_limit is None
+                          else scan_limit)
 
     def replay(self, arena) -> None:
-        # Freeze-and-copy over ALL slots, not only declared inputs:
+        # Freeze-and-copy over rebound WEIGHT/CONSTANT/INPUT slots:
         # anything rebound between steps with a NEW object (bind_inputs
         # slots, but also per-step re-sliced seq-dependent constants —
         # probe 4 caught a strided_copy at replay action 6 reading a
         # freed previous-step constant) gets its bytes copied into the
         # frozen buffer so every recorded pointer stays live and
         # current. Identity scan cost is ~µs; identical objects skip.
-        for slot, frozen in enumerate(self.arena_snapshot):
+        for slot in range(min(self.scan_limit, len(self.arena_snapshot))):
+            frozen = self.arena_snapshot[slot]
             if frozen is None:
                 continue
             new = arena[slot]
@@ -532,8 +546,18 @@ class FrozenPlan:
                     f"{slot}: {tuple(new.shape)}/{new.nbx_dtype} vs "
                     f"frozen {tuple(frozen.shape)}/{frozen.nbx_dtype} "
                     "— the bucket signature should have caught this")
-            DeviceAllocator.memcpy(frozen.data_ptr(), new.data_ptr(),
-                                   frozen._nbytes, 3)
+            try:
+                DeviceAllocator.memcpy(frozen.data_ptr(), new.data_ptr(),
+                                       frozen._nbytes, 3)
+            except Exception as e:
+                raise RuntimeError(
+                    f"replay input-copy failed at slot {slot}: shape "
+                    f"{tuple(frozen.shape)} dtype {frozen.nbx_dtype} "
+                    f"nbytes {frozen._nbytes} frozen_dev="
+                    f"{getattr(frozen, '_device_idx', '?')} new_dev="
+                    f"{getattr(new, '_device_idx', '?')} frozen_ptr="
+                    f"{frozen.data_ptr():#x} new_ptr={new.data_ptr():#x}"
+                ) from e
         for idx, (tag, rec) in enumerate(self.records):
             try:
                 if tag == _KERNEL:
@@ -617,15 +641,35 @@ def signature(seq) -> Optional[tuple]:
     # behind the capability gate until the residual is root-caused.
     if getattr(seq, "_replay_ineligible", False):
         return None
-    # v1 eligibility: STATEFUL interceptors (KV-cache attention class)
-    # advance internal state per call while the sequence's input
-    # signature stays constant — a recorded step would bake one cache
-    # length and replay it forever (battery adjudication 2026-08-13:
-    # tinyllama_triton text diff + vibevoice_triton wav diff, both
-    # KV-decode legs). Any registered interceptor ⇒ ineligible until
-    # interceptor state enters the signature (named next increment).
+    # STATEFUL interceptors (KV-cache attention class) advance internal
+    # state per call while the sequence's input signature stays
+    # constant — a recorded step would bake one cache length and replay
+    # it forever (battery adjudication 2026-08-13: tinyllama_triton
+    # text diff + vibevoice_triton wav diff, both KV-decode legs).
+    # Registration contract (P-REPLAY-KV-DECODE): interceptors whose
+    # owner implements (replay_signature, replay_advance,
+    # replay_restore) contribute their state to the bucket signature
+    # instead; anything unregistered refuses as before.
+    owners: List[Any] = []
+    contrib: List[Any] = []
     if seq._op_uid_interceptors or seq._op_interceptors:
-        return None
+        by_owner: Dict[int, Tuple[Any, List[Any]]] = {}
+        for func in list(seq._op_interceptors.values()) + \
+                list(seq._op_uid_interceptors.values()):
+            owner = getattr(func, "__self__", None)
+            if owner is None or not (
+                    hasattr(owner, "replay_signature")
+                    and hasattr(owner, "replay_advance")
+                    and hasattr(owner, "replay_restore")):
+                return None
+            by_owner.setdefault(id(owner), (owner, []))[1].append(func)
+        for owner, funcs in by_owner.values():
+            s = owner.replay_signature(funcs)
+            if s is None:
+                return None
+            contrib.append(s)
+            owners.append(owner)
+    seq.__dict__["_replay_state_owners"] = owners
     # v1 eligibility: in-graph RNG ops draw fresh values per step from
     # host-advanced generator state baked into launch scalars — a
     # recorded draw would replay ONE step's noise forever (battery
@@ -655,8 +699,25 @@ def signature(seq) -> Optional[tuple]:
             if isinstance(v, (int, float, str)))))
     parts.append(tuple(sorted(seq._op_uid_interceptors)))
     parts.append(tuple(sorted(seq._op_interceptors)))
+    # Registration-contract state (e.g. the KV decode bucket): a state
+    # change — bucket boundary crossed — lands the run in a NEW bucket
+    # (measure/record/verify again) instead of replaying stale extents.
+    parts.append(tuple(contrib))
     parts.append(bool(getattr(seq, "_activations_fp16_safe", False)))
-    return tuple(parts)
+    sig = tuple(parts)
+    if os.environ.get("NBX_REPLAY_SIG_DIAG") == "1":
+        prev = seq.__dict__.get("_sig_diag_prev")
+        if prev is not None and prev != sig and len(prev) == len(sig):
+            for i, (a, b) in enumerate(zip(prev, sig)):
+                if a != b:
+                    print(f"[Replay][SIG] part {i} changed: "
+                          f"{repr(a)[:200]} -> {repr(b)[:200]}",
+                          flush=True)
+            for o in owners:
+                print(f"[Replay][SIG] owner id={id(o) & 0xffffff:06x} "
+                      f"cache_len={o.get_cache_len()}", flush=True)
+        seq.__dict__["_sig_diag_prev"] = sig
+    return sig
 
 
 _AT_SEEDED = False
@@ -739,16 +800,30 @@ def _census_report(seq) -> None:
     seq.__dict__["_census_printed"] = True
 
 
+def _mem_diag(tag: str) -> None:
+    """NBX_REPLAY_MEM_DIAG=1: print the allocator's live-tracked bytes
+    at replay state transitions (retention forensics)."""
+    if os.environ.get("NBX_REPLAY_MEM_DIAG") != "1":
+        return
+    total = sum(DeviceAllocator._cuda_live_bytes.values())
+    print(f"[Replay][MEM] {tag}: live_tracked={total/1e6:.0f}MB",
+          flush=True)
+
+
 def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
-    """Replay fast path. True = this run was fully handled."""
-    if os.environ.get("NBX_REPLAY_KV_DECODE") == "1":
-        _install_seams()
-        _stabilize_tick(seq)
-        if os.environ.get("NBX_REPLAY_TUPLE_CENSUS") == "1":
-            _census_tick(seq)
-        return False
+    """Replay fast path. True = this run was fully handled.
+
+    Mode composition: NBX_REPLAY_TUPLE_CENSUS short-circuits every plan
+    path (pure observation; with NBX_REPLAY_KV_DECODE it also runs the
+    B1 StepSlab stabilizer so the census sees stabilized addresses).
+    WITHOUT the census flag, NBX_REPLAY_KV_DECODE composes with the
+    plan machine directly: the B1 stabilizer stays OFF (the recording
+    slab is the address-pinning authority) and the interceptor
+    registration contract in signature() decides eligibility."""
     if os.environ.get("NBX_REPLAY_TUPLE_CENSUS") == "1":
         _install_seams()
+        if os.environ.get("NBX_REPLAY_KV_DECODE") == "1":
+            _stabilize_tick(seq)
         _census_tick(seq)
         return False
     if not ENABLED or pre_op_callback is not None:
@@ -765,12 +840,16 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
     plans = seq.__dict__.setdefault("_replay_plans", {})
     state = plans.get(sig)
 
+    owners = seq.__dict__.get("_replay_state_owners", ())
+
     if isinstance(state, FrozenPlan):
         if os.environ.get("NBX_REPLAY_VERIFY_EVERY") == "1":
             # Diagnostic mode: verify EVERY replay, name the first
             # diverging occurrence per bucket.
             state.replay(seq._arena)
             replayed = _output_hashes(seq)
+            for o in owners:
+                o.replay_restore()
             seq._run_single_device(skip_kills, None)
             normal = _output_hashes(seq)
             n = seq.__dict__.setdefault("_replay_occurrence", {})
@@ -781,6 +860,12 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
                       f"({state.launches} launches)")
             return True
         state.replay(seq._arena)
+        for o in owners:
+            o.replay_advance()
+        n_r = seq.__dict__.setdefault("_replay_count", {})
+        n_r[sig] = n_r.get(sig, 0) + 1
+        if n_r[sig] % 50 == 1:
+            _mem_diag(f"replay #{n_r[sig]}")
         return True
     if isinstance(state, tuple) and state[0] == "VERIFY":
         # verify-first-replay (universal guard, battery adjudication
@@ -794,12 +879,19 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
         plan = state[1]
         plan.replay(seq._arena)
         replayed = _output_hashes(seq)
+        # Registration contract: rewind the replayed pass's
+        # non-idempotent device writes (e.g. KV position counters) so
+        # the normal re-run below operates on the SAME state — it then
+        # advances host+device consistently itself.
+        for o in owners:
+            o.replay_restore()
         seq._run_single_device(skip_kills, None)
         normal = _output_hashes(seq)
         if replayed == normal:
             plans[sig] = plan
             print(f"[Replay] plan VERIFIED byte-equal "
                   f"({plan.launches} launches) — replaying this bucket")
+            _mem_diag("post-verify")
         else:
             plan.slab.retire()
             plans[sig] = "UNREPLAYABLE"
@@ -831,6 +923,7 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
         finally:
             STATE.measuring = False
         plans[sig] = ("MEASURED", STATE.high_water, 1)
+        _mem_diag("post-measure")
         return True
 
     # ("MEASURED", slab_bytes, attempt) — record this execution.
@@ -883,7 +976,8 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
         return True
 
     plan = FrozenPlan(records, slab, list(seq._arena),
-                      tuple(_input_slot_range(seq)))
+                      tuple(_input_slot_range(seq)),
+                      scan_limit=seq._num_weights + seq._num_inputs)
     plan.output_slots = tuple(
         s for s in (seq._tid_to_slot.get(tid)
                     for tid in seq.dag.get("output_tensor_ids") or [])
@@ -920,5 +1014,7 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
     comp = str((seq.dag or {}).get("component_name", "?"))
     print(f"[Replay] plan frozen[{comp}]: {plan.launches} launches "
           f"({plan.actions} actions), slab "
-          f"{slab.size/1e6:.0f} MB, inputs {len(plan.frozen_inputs)}")
+          f"{slab.size/1e6:.0f} MB, inputs {len(plan.frozen_inputs)}, "
+          f"outputs {len(plan.output_slots)}")
+    _mem_diag("post-record")
     return True

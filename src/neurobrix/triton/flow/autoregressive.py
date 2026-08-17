@@ -569,7 +569,7 @@ class TritonAutoregressiveHandler:
             if kv_plan is not None:
                 # Prism path — uses precomputed budget
                 cache_dtype = parse_dtype(kv_plan.dtype)
-                kv_cache = TritonKVCache(
+                kv_params = dict(
                     num_layers=kv_plan.num_layers,
                     num_kv_heads=kv_plan.num_kv_heads,
                     k_head_dim=kv_plan.k_head_dim,
@@ -584,7 +584,7 @@ class TritonAutoregressiveHandler:
                 num_layers = lm_config.get("num_layers") or 22
                 from neurobrix.core.runtime.decode_bound import decode_bound  # NBX_DECODE_BOUND harness
                 max_tokens = decode_bound(self.ctx.pkg.defaults.get("max_tokens", 512))
-                kv_cache = TritonKVCache(
+                kv_params = dict(
                     num_layers=num_layers,
                     num_kv_heads=num_kv_heads,
                     k_head_dim=head_dim,
@@ -592,6 +592,26 @@ class TritonAutoregressiveHandler:
                     max_cache_len=max_tokens + 128,
                     dtype=NBXDtype.float16,
                 )
+
+            # EXECUTOR-scoped cache persistence: the KV BUFFERS must
+            # outlive the per-request session — warm serving creates a
+            # session (and interceptor) per request, but replay plans
+            # record the cache buffers' device addresses into frozen
+            # launch tuples. A per-request cache would silently split
+            # the state (prefill writes the new buffers, replayed
+            # decode appends to the old — measured on the warm N=5
+            # row) and churns ~0.6 GB of alloc/free per request. The
+            # interceptor stays per-request (its _is_prefill /
+            # call-count state is request-local); the buffers persist
+            # and clear() resyncs their device state in place.
+            key = tuple(sorted((k, str(v)) for k, v in kv_params.items()))
+            memo = executor.__dict__.setdefault("_kv_cache_memo", {})
+            kv_cache = memo.get(key)
+            if kv_cache is None:
+                kv_cache = TritonKVCache(**kv_params)
+                memo[key] = kv_cache
+            else:
+                kv_cache.clear()
 
             kv_interceptor = TritonAttentionInterceptor(
                 cache=kv_cache, num_heads=num_heads)
