@@ -65,6 +65,28 @@ class NBXRuntimeLoader:
                 )
             core_data[key] = self._load_json_from_cache(file_path)
 
+        # 1b. Weight-storage encoding compatibility gate (artifact-verdict
+        # condition 1): a build whose manifest declares a weight_encoding
+        # scheme this engine does not support REFUSES here — loudly,
+        # before any weight I/O — never a mis-read deep in execution.
+        # (Engines predating this gate crash before producing output on
+        # such builds — the renamed per-tensor keys never reconcile —
+        # but their message is far from the cause; from this version on
+        # the refusal names the scheme and the fix.)
+        enc = core_data["manifest"].get("weight_encoding")
+        if enc:
+            scheme = enc.get("scheme") if isinstance(enc, dict) else str(enc)
+            from neurobrix.core.runtime.weight_encoding import (
+                SUPPORTED_WEIGHT_ENCODINGS)
+            if scheme not in SUPPORTED_WEIGHT_ENCODINGS:
+                raise RuntimeError(
+                    f"UNSUPPORTED WEIGHT ENCODING: this build stores its "
+                    f"weights with scheme '{scheme}', which this engine "
+                    f"version does not support "
+                    f"(supported: {sorted(SUPPORTED_WEIGHT_ENCODINGS)}).\n"
+                    f"  FIX: upgrade neurobrix, or use the full-precision "
+                    f"build published next to this variant.")
+
         # 2. Discover and Load Components from cache
         # Components are in 'components/<name>/runtime.json'
         components = {}

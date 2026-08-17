@@ -41,6 +41,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   kernels are not yet wired into the engine (the quantized-artifact
   format decision precedes integration).
 
+- **Weight-storage encoding compatibility gate**: builds that declare
+  a packed weight-storage encoding are checked against the engine's
+  supported set at load time — an unsupported scheme is refused with
+  a clear message (naming the scheme and the fix) before any weight
+  I/O, and encoded variants always ship next to their full-precision
+  build.
+
 ### Fixed
 
 - **Step-cache override precedence**: an explicit `--set
