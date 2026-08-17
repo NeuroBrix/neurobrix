@@ -57,6 +57,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   First validated model produces the same greedy answer as its
   full-precision build at a quarter of the weight bytes.
 
+- **Encoded-weight execution for MoE models on Triton mode**: the
+  fused grouped-GEMM over experts learns in-register decompression —
+  per-expert packed triplets ride three pointer tables and the
+  B-tile is rebuilt each K-iteration with the tier's canonical fp32
+  dequantization, byte-identical to a dequantize-then-grouped-GEMM
+  reference kernel (proven per expert shape, decode and prefill,
+  both routing arms). First validation: the 30B-A3B coding model's
+  encoded variant generates coherent text on a SINGLE V100-32G
+  (17 GB of weights vs 57 GB full precision).
+
 ### Fixed
 
 - **Step-cache override precedence**: an explicit `--set

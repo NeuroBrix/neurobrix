@@ -2193,6 +2193,54 @@ def invoke_fused_moe(
     )
 
 
+def invoke_fused_moe_wna16(
+    hidden_states,            # NBXTensor [M, K] — activations
+    qw_ptrs, sc_ptrs, mn_ptrs,  # NBXTensor [E] int64 — triplet tables
+    output,
+    topk_weights,
+    sorted_token_ids,
+    expert_ids,
+    num_tokens_post_padded,
+    N, K,
+    stride_qk, stride_qn,     # packed int32 strides
+    stride_sg, stride_sn,     # scales/mins strides
+    top_k,
+    mul_routed_weight=False,
+    topk_divide=True,
+):
+    """Launch the W4 fused MoE grouped GEMM (int4-g128-asym experts,
+    in-register dequant — byte-gated vs fused_moe_fp32b_kernel).
+    Same launch contract as invoke_fused_moe; _MOE_BK (32) divides the
+    quant group (128) so a K-tile never crosses a group boundary."""
+    from neurobrix.kernels.ops.fused_moe import fused_moe_wna16_kernel
+    M = hidden_states.shape[0]
+    num_valid_tokens = topk_weights.shape[0]
+    EM = sorted_token_ids.shape[0]
+    if M < _MOE_BM:
+        EM = min(EM, M * top_k * _MOE_BM)
+    grid = (triton.cdiv(EM, _MOE_BM) * triton.cdiv(N, _MOE_BN),)
+    _set_device(hidden_states)
+
+    fused_moe_wna16_kernel[grid](
+        hidden_states, qw_ptrs, sc_ptrs, mn_ptrs, output,
+        topk_weights,
+        sorted_token_ids, expert_ids, num_tokens_post_padded,
+        N, K, EM, num_valid_tokens,
+        hidden_states.stride(0), hidden_states.stride(1),
+        stride_qk, stride_qn,
+        stride_sg, stride_sn,
+        output.stride(0), output.stride(1),
+        BLOCK_SIZE_M=_MOE_BM, BLOCK_SIZE_N=_MOE_BN, BLOCK_SIZE_K=_MOE_BK,
+        GROUP_SIZE_M=_MOE_GROUP,
+        MUL_ROUTED_WEIGHT=mul_routed_weight,
+        top_k=top_k,
+        compute_type=hidden_states.dtype,
+        QGROUP=128, QPACK=8,
+        TOPK_DIVIDE=topk_divide,
+        num_warps=4, num_stages=2,
+    )
+
+
 def invoke_silu_and_mul(input_tensor, M, N):
     """Launch fused SwiGLU kernel: silu(input[:, :N]) * input[:, N:2*N].
 
