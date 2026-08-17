@@ -267,9 +267,14 @@ rows:
     metric_class: tokens
     reference: true
     checkpoint: Qwen/Qwen3-Coder-30B-A3B-Instruct
-    neurobrix_model: Qwen3-Coder-30B-A3B-Instruct-int4g128
+    neurobrix_model: Qwen3-Coder-30B-A3B-Instruct-int4g128-ffnonly
     # Quantized-tier PROOF ROW (E7): the 30B-A3B class on ONE
-    # V100-32G via the int4-g128 weight-encoding variant. Fairness =
+    # V100-32G via the int4-g128 weight-encoding variant. CANONICAL
+    # ARTIFACT = ffn-only (experts int4, attention projections fp16):
+    # the full attn+ffn variant measured +9.26% relative ppl (below
+    # the sourced RTN class) while ffn-only measures +3.53% — in the
+    # published band; the Qwen3 attention fragility is measured, not
+    # assumed. Fairness =
     # SAME quantization class: the ollama column runs their Q4_K_M
     # (qwen3-coder:30b default pull), never their fp16. The fp16
     # NeuroBrix column stays documented from its own multi-GPU
