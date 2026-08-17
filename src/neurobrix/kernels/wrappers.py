@@ -1552,6 +1552,63 @@ def _apply_matmul_epilogue(c, epilogue_code: int):
     return gelu(c, approximate=('tanh' if epilogue_code == 3 else 'none'))
 
 
+def _mm_quantized(a, qt, _epilogue: int = 0):
+    """mm where B is an int4-g128-asym QuantizedTensor (weight triplet).
+
+    The graph's `t(weight) -> mm` marks the triplet transposed — which
+    IS the packed layout's natural [K, N] orientation. Decode (M == 1)
+    runs the fused byte-gated dequant-GEMV with the family's pinned
+    parity config; prefill (M > 1) dequantizes to a transient dense
+    tensor via the family's standalone kernel (the byte oracle's own
+    dequant) and re-enters the normal mm path. Output dtype mirrors
+    the dense path (a's dtype).
+    """
+    import triton as _tr
+    from neurobrix.kernels.ops.dequant_gemv import (
+        BLOCK_K, BLOCK_N, NUM_WARPS, GROUP_SIZE, PACK,
+        dequant_gemv_int4_kernel, dequant_int4_kernel)
+    if not qt.transposed:
+        raise NotImplementedError(
+            "quantized mm without the graph-side transpose marker is "
+            "outside the v1 contract (the packed layout is [K, N]; "
+            "the traced linear always transposes) — named follow-up.")
+    a = _ensure_cuda(a)
+    K, N = qt.shape
+    M = a.shape[0] if a.ndim == 2 else 1
+    wq, sc, mn = qt.qweight, qt.scales, qt.qmins
+    if hasattr(a, '_device_idx') and a._device_idx != wq._device_idx:
+        a = _transfer_to_device(a, wq._device_idx)
+    _set_device(wq)
+
+    if a.ndim == 2 and M == 1 or a.ndim == 1:
+        x = a.contiguous().view(-1)
+        out32 = NBXTensor.empty((N,), dtype=NBXDtype.float32,
+                                device=a.device)
+        dequant_gemv_int4_kernel[(_tr.cdiv(N, BLOCK_N),)](
+            x, wq, sc, mn, out32, K, N,
+            wq.stride(0), wq.stride(1), sc.stride(0), sc.stride(1),
+            BLOCK_K_C=BLOCK_K, BLOCK_N_C=BLOCK_N,
+            GROUP_C=GROUP_SIZE, PACK_C=PACK,
+            num_warps=NUM_WARPS, num_stages=2)
+        out = out32.to(a.nbx_dtype) if a.nbx_dtype != NBXDtype.float32 \
+            else out32
+        return out.view(1, N) if a.ndim == 2 else out
+
+    # Prefill: transient dense via the family's standalone dequant.
+    dense32 = NBXTensor.empty((K, N), dtype=NBXDtype.float32,
+                              device=a.device)
+    dequant_int4_kernel[(_tr.cdiv(K, BLOCK_K), _tr.cdiv(N, BLOCK_N))](
+        wq, sc, mn, dense32, K, N,
+        wq.stride(0), wq.stride(1), sc.stride(0), sc.stride(1),
+        dense32.stride(0), dense32.stride(1),
+        BLOCK_K_C=BLOCK_K, BLOCK_N_C=BLOCK_N,
+        GROUP_C=GROUP_SIZE, PACK_C=PACK,
+        num_warps=NUM_WARPS, num_stages=2)
+    dense = dense32.to(a.nbx_dtype) if a.nbx_dtype != NBXDtype.float32 \
+        else dense32
+    return mm(a, dense, _epilogue)
+
+
 def mm(a, b, _epilogue: int = 0) :
     """Matrix multiplication: C = A @ B.
     Kernel accumulates in fp32 (hardware). Output matches input dtype.
@@ -1570,6 +1627,9 @@ def mm(a, b, _epilogue: int = 0) :
     For M > 4, stays on matmul_kernel which is optimal for larger GEMM
     (diffusion spatial mm with M in the thousands).
     """
+    from neurobrix.kernels.quantized_tensor import QuantizedTensor
+    if isinstance(b, QuantizedTensor):
+        return _mm_quantized(a, b, _epilogue)
     a = _ensure_cuda(a)
     b = _ensure_cuda(b)
     # Multi-device: align b to a's device
