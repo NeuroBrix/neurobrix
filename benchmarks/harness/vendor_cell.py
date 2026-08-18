@@ -52,6 +52,16 @@ def run_stt(row: dict, n: int, repo: Path, media_dir: Path) -> dict:
             ids = model.generate(feats, do_sample=False)
         text = processor.batch_decode(ids, skip_special_tokens=True)[0]
         wall = time.perf_counter() - t1
+        # HARD GATE (anti-silent-failure, generalized 2026-08-17 from
+        # the omni-voice cell's no-wav gate): an empty transcription is
+        # a FAILED request — banking its wall would record a no-work
+        # timing as an STT number. Every vendor cell must verify its
+        # claimed output (text/wav/png) is non-empty before recording.
+        if not text.strip():
+            raise SystemExit(
+                "vendor_cell: STT request produced an EMPTY "
+                "transcription — refusing to record its wall as an "
+                "STT number")
         return {"wall_s": wall, "rtf": wall / row["audio_duration_s"],
                 "text": text.strip()[:200]}
 

@@ -7,7 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Warm serving of CPU-streamed models survives multiple requests**:
+  large models served with per-request weight reloading (CPU-streamed
+  placement on a single GPU) crashed on the second request with a
+  device mismatch at the first layer-norm — the weight-streaming hooks
+  installed on the first load were not re-armed after the
+  between-request unload. The unload path now uninstalls the streaming
+  state so every reload re-installs it (both engines).
+- **Text-only prompts can drive speech generation on omni models**:
+  a text-only request with `--mode audio` on a build declaring the
+  generative-speech contract now runs end-to-end (both engines);
+  previously it was refused for lacking an image/audio input even
+  though the requested OUTPUT was speech.
+
+### Removed
+
+- Dead vendored kernel-utility package (`kernels/utils`) that could
+  not be imported (missing internal modules) and had no consumers.
+
 ### Added
+
+- **Per-instance serving daemon channel**: `NBX_SOCKET_PATH` gives a
+  daemon (and every client that targets it) an isolated socket, pid
+  and log path, so independent daemons can coexist on one machine.
+  Default behavior without the variable is unchanged.
 
 - **Frozen-plan replay on autoregressive decode (Triton mode)**: the
   per-token decode graph of KV-cached language models can now be

@@ -203,11 +203,22 @@ class TritonVLMEngine:
                 "ZERO FALLBACK: video request missing the grid input "
                 "(global.video_grid_thw).")
         has_visual = has_image or has_video
-        if not has_visual and audio_path is None:
+        # Text-only→speech form (deepstack class) — R30 mirror of
+        # core/flow/vlm.py: a --mode audio request on a build declaring
+        # the generative-speech contract needs NO modality INPUT; the
+        # LM runs the empty-stub deepstack form and the speech leg
+        # consumes the generated ids + hidden tap as usual.
+        text_only = (
+            not has_visual and audio_path is None
+            and str(resolved.get("global.mode") or "") == "audio"
+            and bool(self.ctx.pkg.topology.get("flow", {}).get("speech")))
+        if not has_visual and audio_path is None and not text_only:
             raise RuntimeError(
                 "ZERO FALLBACK: vlm flow requires a modality input — "
-                "provide --input-image, --input-video or --audio.")
-        if not has_visual and not audio_name:
+                "provide --input-image, --input-video or --audio "
+                "(text-only requests are accepted only with --mode "
+                "audio on a build declaring topology.flow.speech).")
+        if not has_visual and not text_only and not audio_name:
             raise RuntimeError(
                 "ZERO FALLBACK: this build declares no audio_component — "
                 "audio understanding needs a build traced with the audio "
@@ -233,7 +244,17 @@ class TritonVLMEngine:
                 "deepstack_visual_embeds.N inputs — inconsistent trace.")
 
         deepstack_embeds: List[NBXTensor] = []
-        if has_visual:
+        if text_only:
+            # ── Step 2 (text-only→speech): no modality tower runs; the
+            # deepstack injection rides the empty-stub form built in
+            # the decode loop below. R30 mirror. ──
+            print("   [vlm] text-only\u2192speech form engaged \u2014 "
+                  "no modality input; deepstack rides the empty stubs")
+            n_modal = 0
+            modal_embeds = None
+            span_token_id = None
+            span_content_type = None
+        elif has_visual:
             # ── Step 2 (visual): vision encoder forward — the video path
             # rides the SAME tower with its own patch stream and grid
             # (temporal dim > 1); only the placeholder token and the
@@ -376,8 +397,12 @@ class TritonVLMEngine:
             span_content_type = "audio"
 
         # ── Step 3: tokenize prompt around the modality span ──
-        prefix_ids, suffix_ids = self._tokenize_around_span(
-            str(prompt), span_token_id, span_content_type)
+        if text_only:
+            prefix_ids = self._tokenize_text_only(str(prompt))
+            suffix_ids = []
+        else:
+            prefix_ids, suffix_ids = self._tokenize_around_span(
+                str(prompt), span_token_id, span_content_type)
 
         # ── Step 4: LM decode with merged embeds + mrope positions ──
         from neurobrix.core.runtime.decode_bound import decode_bound
@@ -430,11 +455,16 @@ class TritonVLMEngine:
         parts: List[NBXTensor] = []
         if prefix_ids:
             parts.append(self._embed_ids(prefix_ids, embed_weight, dtype))
-        parts.append(modal_embeds)
+        if modal_embeds is not None:
+            parts.append(modal_embeds)
         if suffix_ids:
             parts.append(self._embed_ids(suffix_ids, embed_weight, dtype))
+        if not parts:
+            raise RuntimeError(
+                "ZERO FALLBACK: vlm flow assembled an empty context "
+                "(no prompt tokens and no modality embeds).")
         context_embeds = (NBXTensor.cat(parts, dim=1)
-                          if len(parts) > 1 else modal_embeds)
+                          if len(parts) > 1 else parts[0])
 
         # Visual spans get the 3-D grid planes with a temporal scale;
         # audio spans use 1-D text-style positions (vendor audio-only
@@ -459,7 +489,7 @@ class TritonVLMEngine:
         if has_visual:
             segments.append(("visual", n_modal,
                              (t, h // merge, wgrid // merge, _t_scale)))
-        else:
+        elif n_modal:
             segments.append(("text", n_modal, None))
         if suffix_ids:
             segments.append(("text", len(suffix_ids), None))
@@ -592,7 +622,8 @@ class TritonVLMEngine:
             from neurobrix.triton.flow.speech import SpeechLeg
             SpeechLeg(self).run({
                 "input_ids": (list(prefix_ids)
-                              + [int(span_token_id)] * int(n_modal)
+                              + ([int(span_token_id)] * int(n_modal)
+                                 if n_modal else [])
                               + list(suffix_ids)),
                 "generated_ids": generated_ids,
                 "context_embeds": context_embeds,
@@ -1686,6 +1717,36 @@ class TritonVLMEngine:
                 f"ZERO FALLBACK: {content_type} placeholder span is not "
                 "contiguous — concat-merge equivalence does not hold.")
         return ids[:first], ids[last + 1:]
+
+    def _tokenize_text_only(self, prompt: str) -> List[int]:
+        """Chat-template a PLAIN-TEXT prompt (no modality span) — the
+        text-only→speech form of the deepstack class. R30 mirror of
+        core/flow/vlm.py._tokenize_text_only."""
+        tokenizer = self.ctx.modules.get("tokenizer")
+        if tokenizer is None:
+            raise RuntimeError(
+                "ZERO FALLBACK: vlm flow requires the embedded tokenizer.")
+        messages = [{
+            "role": "user",
+            "content": [{"type": "text", "text": prompt}],
+        }]
+        try:
+            ids = tokenizer.apply_chat_template(
+                messages, tokenize=True, add_generation_prompt=True)
+        except Exception:
+            try:
+                ids = tokenizer.apply_chat_template(
+                    [{"role": "user", "content": prompt}],
+                    tokenize=True, add_generation_prompt=True)
+            except Exception as e:
+                raise RuntimeError(
+                    "ZERO FALLBACK: the embedded tokenizer could not "
+                    "apply its chat template to a text-only message."
+                ) from e
+        if hasattr(ids, "input_ids"):
+            ids = ids.input_ids
+        return list(ids[0] if ids and isinstance(ids[0], (list, tuple))
+                    else ids)
 
     # ─── helpers (NBXTensor mirrors) ───────────────────────────────────
 

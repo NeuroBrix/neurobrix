@@ -109,12 +109,43 @@ class LazySequentialStrategy(TritonStrategy):
             return self.transfer_dict(outputs, target_device)
         return outputs
 
+    def install_for_executor(self, component_name: str, executor) -> None:
+        """Engage the FULL zero3 machinery for a zero3-mapped
+        sub-component — R30 mirror of the compiled LazySequential
+        wiring. Without it, the triton multi-device path grinds every
+        CPU-weighted mm through host contiguous materializations
+        instead of the block ratchet (measured: the qwen3vl pinned
+        triton cell crawled for 3 h inside _contiguous_cpu under
+        wrappers.mm — the 2026-08-18 SIGABRT stack). The Zero3Strategy
+        brick already carries the triton leg (NBX pinning is loader-
+        side; ratchet/prefetch/flip all have is_triton branches —
+        proven on Qwen3-Coder-30B under lazy_sequential)."""
+        if self._get_component_strategy(component_name) != "zero3":
+            return
+        if getattr(self, "_zero3_brick", None) is None:
+            from ..zero3 import Zero3Strategy
+            self._zero3_brick = Zero3Strategy(
+                self.context, strategy_name="triton_lazy_sequential+zero3")
+        self._zero3_brick.install_for_executor(component_name, executor)
+
+    def uninstall_for_executor(self, component_name: str,
+                               executor=None) -> None:
+        """Lifecycle mirror of install_for_executor (see the compiled
+        LazySequential twin for the request-2 stale-install class)."""
+        brick = getattr(self, "_zero3_brick", None)
+        if brick is not None:
+            brick.uninstall_for_executor(component_name, executor)
+
     def unload_weights(self, component_name: str) -> None:
+        self.uninstall_for_executor(component_name)
         super().unload_weights(component_name)
         self._loaded_components.discard(component_name)
         self._pinned_components.discard(component_name)
 
     def cleanup(self) -> None:
+        brick = getattr(self, "_zero3_brick", None)
+        if brick is not None:
+            brick.cleanup()
         self._loaded_components.clear()
         self._pinned_components.clear()
         from neurobrix.kernels.nbx_tensor import DeviceAllocator
