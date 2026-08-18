@@ -70,6 +70,12 @@ class LazySequentialStrategy(ExecutionStrategy):
             device = self._get_component_device(component_name)
             inputs = self.transfer_dict(inputs, device)
 
+        import os as _os_d
+        if _os_d.environ.get("NBX_ZERO3_DIAG") == "1":
+            print(f"[Z3DIAG] lazy.pre-run({component_name}) "
+                  f"exec_id={id(executor) & 0xffffff:06x} cb="
+                  f"{getattr(executor, '_persistent_pre_op_callback', None) is not None}",
+                  flush=True)
         return executor.run(inputs or {})
 
     def install_for_executor(self, component_name: str, executor) -> None:
@@ -92,6 +98,17 @@ class LazySequentialStrategy(ExecutionStrategy):
             self._zero3_brick = Zero3Strategy(
                 self.context, strategy_name="lazy_sequential+zero3")
         self._zero3_brick.install_for_executor(component_name, executor)
+
+    def uninstall_for_executor(self, component_name: str,
+                               executor=None) -> None:
+        """Lifecycle mirror of install_for_executor — forwards to the
+        zero3 brick so a between-request unload re-arms the install
+        (see Zero3Strategy.uninstall_for_executor for the failure
+        class). No-op when no brick exists or the component was never
+        installed."""
+        brick = getattr(self, "_zero3_brick", None)
+        if brick is not None:
+            brick.uninstall_for_executor(component_name, executor)
 
     def _get_component_strategy(self, component_name: str) -> str:
         """Get per-component strategy from allocation."""
@@ -153,12 +170,17 @@ class LazySequentialStrategy(ExecutionStrategy):
 
     def unload_weights(self, component_name: str) -> None:
         """Unload component weights (lazy mode — always unload)."""
+        self.uninstall_for_executor(component_name)
         super().unload_weights(component_name)
         self._loaded_components.discard(component_name)
         self._pinned_components.discard(component_name)
 
     def cleanup(self) -> None:
-        """Release all resources."""
+        """Release all resources (brick teardown first — its ratchet
+        holds executor callbacks, gpu_cache and triton streams)."""
+        brick = getattr(self, "_zero3_brick", None)
+        if brick is not None:
+            brick.cleanup()
         self._loaded_components.clear()
         self._pinned_components.clear()
         device_empty_cache(self.exec_device)

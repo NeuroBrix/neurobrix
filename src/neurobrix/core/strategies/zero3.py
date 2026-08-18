@@ -237,6 +237,11 @@ class Zero3Strategy(ExecutionStrategy):
         GraphLMSession.prefill calling executor.run directly) still
         benefit from the ratchet. Idempotent.
         """
+        import os as _os_d
+        if _os_d.environ.get("NBX_ZERO3_DIAG") == "1":
+            print(f"[Z3DIAG] install_for_executor({component_name}) "
+                  f"already={component_name in self._installed}",
+                  flush=True)
         if component_name in self._installed:
             return
         self._pin_cpu_weights(component_name, executor)
@@ -499,7 +504,12 @@ class Zero3Strategy(ExecutionStrategy):
         sequence is guaranteed to be built and device-annotated.
         """
         seq, is_triton = self._seq_handle(executor)
+        import os as _os_d
+        _z3d = _os_d.environ.get("NBX_ZERO3_DIAG") == "1"
         if seq is None:
+            if _z3d:
+                print(f"[Z3DIAG] build_state({component_name}): NO SEQ",
+                      flush=True)
             return None
         try:
             blocks = seq.get_op_blocks()
@@ -514,6 +524,9 @@ class Zero3Strategy(ExecutionStrategy):
         real_blocks = {bidx: entry for bidx, entry in blocks.items() if bidx >= 0}
         if not real_blocks:
             # No transformer blocks — nothing to pipeline.
+            if _z3d:
+                print(f"[Z3DIAG] build_state({component_name}): NO REAL "
+                      f"BLOCKS ({len(blocks)} raw)", flush=True)
             return None
 
         op_to_block = self._build_op_to_block(real_blocks)
@@ -527,6 +540,10 @@ class Zero3Strategy(ExecutionStrategy):
             for t in cpu_originals.values()
         )
         if not has_cpu_block_weights:
+            if _z3d:
+                print(f"[Z3DIAG] build_state({component_name}): NO CPU "
+                      f"BLOCK WEIGHTS ({len(cpu_originals)} originals)",
+                      flush=True)
             return None
 
         # Stream setup. Transfer stream carries the async H2D; the
@@ -600,6 +617,10 @@ class Zero3Strategy(ExecutionStrategy):
             f"[Zero3] {component_name}: primed {n_flipped} "
             f"non-pipelined CPU-weighted ops on {path_label}"
         )
+        import os as _os_d
+        if _os_d.environ.get("NBX_ZERO3_DIAG") == "1":
+            print(f"[Z3DIAG] primed({component_name}): flipped="
+                  f"{n_flipped} path={path_label}", flush=True)
         state['primed'] = True
 
     def _ratchet_on_op(
@@ -645,8 +666,18 @@ class Zero3Strategy(ExecutionStrategy):
     def _install(self, component_name: str, executor: Any) -> None:
         """Attach ratchet + priming callbacks to the executor."""
         strategy = self
+        # Diag gate captured ONCE at install — the callback is the
+        # per-op hot loop (house 5.8 rule: hoisted gates, zero cost
+        # off; gardien 2026-08-18).
+        import os as _os_i
+        _z3d_cb = _os_i.environ.get("NBX_ZERO3_DIAG") == "1"
 
         def pre_op_cb(op_idx: int, op: Any) -> None:
+            if _z3d_cb and op_idx == 0:
+                print(f"[Z3DIAG] pre_op_cb({component_name}) op0 "
+                      f"ratchet_present="
+                      f"{strategy._ratchet.get(component_name) is not None}",
+                      flush=True)
             state = strategy._ratchet.get(component_name)
             if state is None:
                 state = strategy._build_ratchet_state(component_name, executor)
@@ -664,6 +695,22 @@ class Zero3Strategy(ExecutionStrategy):
         executor._persistent_pre_op_callback = pre_op_cb
         executor._post_run_hook = post_run_hook
         self._installed[component_name] = executor
+
+    def uninstall_for_executor(self, component_name: str,
+                               executor: Any = None) -> None:
+        """Public uninstall chokepoint — the lifecycle mirror of
+        install_for_executor. RuntimeExecutor._unload_component_weights
+        calls this BEFORE executor.unload_weights(): the ratchet/pin
+        state tracks the exact tensors being dropped, and a stale
+        `_installed` entry makes the NEXT load skip re-install and run
+        the hot loop against replaced (CPU, unpinned) weights — the
+        warm-daemon request-2 device-mismatch class
+        (custom.rms_norm::0 "cuda:0 and cpu", pinned qwen3vl row,
+        2026-08-08/17). Idempotent; no-op for never-installed
+        components."""
+        self._uninstall(component_name)
+        self._loaded_components.discard(component_name)
+        self._pinned_components.discard(component_name)
 
     def _uninstall(self, component_name: str) -> None:
         """Reverse of _install. Called on unload_weights / cleanup."""

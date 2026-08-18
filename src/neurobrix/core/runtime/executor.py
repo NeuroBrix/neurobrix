@@ -1197,6 +1197,12 @@ class RuntimeExecutor:
             install_fn = getattr(self.strategy, 'install_for_executor', None)
             if install_fn is not None:
                 install_fn(comp_name, executor)
+                import os as _os_d
+                if _os_d.environ.get("NBX_ZERO3_DIAG") == "1":
+                    print(f"[Z3DIAG] post-install({comp_name}) "
+                          f"exec_id={id(executor) & 0xffffff:06x} cb="
+                          f"{getattr(executor, '_persistent_pre_op_callback', None) is not None}",
+                          flush=True)
 
     def _unload_component_weights(self, comp_name: str) -> None:
         """Unload weights for a component to free GPU memory."""
@@ -1208,8 +1214,31 @@ class RuntimeExecutor:
             return
 
         if hasattr(executor, 'unload_weights'):
+            # Strategy uninstall FIRST — the lifecycle mirror of the
+            # install in _ensure_weights_loaded. Zero3-class installs
+            # (pin + block ratchet + prefetch hooks) track the exact
+            # tensors being dropped; leaving the install armed makes
+            # the NEXT load's install_for_executor a stale no-op and
+            # the hot loop runs against replaced CPU weights (the
+            # warm-daemon request-2 device-mismatch class on the
+            # pinned qwen3vl row).
+            if self.strategy is not None:
+                _uninstall = getattr(self.strategy,
+                                     'uninstall_for_executor', None)
+                if _uninstall is not None:
+                    _uninstall(comp_name, executor)
             executor.unload_weights()
             executor._weights_loaded = False
+            # The per-op device classification derives from WEIGHT
+            # placement and is cached one-shot ("static after
+            # load_weights") — an unload invalidates that premise: the
+            # next load's bind must recompute, or the sequence loses
+            # its multi-device classification and the single-device hot
+            # loop runs CPU weights without the zero3 callback (the
+            # request-2 device-mismatch class — the callback is only
+            # honored on the multi-device path).
+            if hasattr(executor, '_devices_computed'):
+                executor._devices_computed = False
 
     # ========== UTILITY METHODS ==========
 

@@ -32,8 +32,32 @@ if IS_WINDOWS:
     IPC_ADDRESS = ("127.0.0.1", IPC_PORT)
     IPC_FAMILY = socket.AF_INET
     SOCKET_PATH = None  # No Unix socket on Windows
+    import os as _os_w
+    if _os_w.environ.get("NBX_SOCKET_PATH"):
+        import sys as _sys_w
+        print("[NeuroBrix] WARNING: NBX_SOCKET_PATH is ignored on "
+              "Windows (fixed TCP port transport) — per-instance "
+              "isolation is NOT in effect.", file=_sys_w.stderr)
 else:
-    SOCKET_PATH = DAEMON_DIR / "daemon.sock"
+    # NBX_SOCKET_PATH: per-instance socket override so independent
+    # daemons can coexist (harness finding 2026-08-13: parallel pinned
+    # runners collided on the single default socket — one row's daemon
+    # held it while another row's runner bound it, "[Errno 98] Address
+    # already in use"; the GPU guard watches processes, not sockets).
+    # Both the server AND every client read the same env, so a runner
+    # that sets it gets a fully isolated daemon channel. Default
+    # (env absent) is byte-for-byte the historical path.
+    import os as _os
+    _sock_env = _os.environ.get("NBX_SOCKET_PATH")
+    SOCKET_PATH = (Path(_sock_env) if _sock_env
+                   else DAEMON_DIR / "daemon.sock")
+    if _sock_env:
+        # A per-instance channel isolates the WHOLE identity: pid file
+        # (the "already running" guard) and log follow the socket stem
+        # so two instances never adjudicate each other's liveness or
+        # interleave logs.
+        PID_PATH = SOCKET_PATH.with_suffix(".pid")
+        LOG_PATH = SOCKET_PATH.with_suffix(".log")
     IPC_ADDRESS = str(SOCKET_PATH)
     IPC_FAMILY = socket.AF_UNIX
 
