@@ -816,6 +816,38 @@ class GraphExecutor:
             norm_topk_prob=getattr(self, '_moe_norm_topk_prob', True)
         )
 
+        # ORDER MATTERS HERE. fusion_horizontal runs FIRST because it
+        # REWRITES the graph, emitting one `aten::cat` of constant
+        # weights per fused group. Those concats are computable from
+        # parameters alone, which is exactly const_fold's definition of
+        # foldable — so planning const_fold afterwards hoists every one
+        # of them to bind time through machinery both engines already
+        # have. Reversed, the concat would be paid on every forward on
+        # weight-sized tensors and the fusion could cost more than it
+        # saves.
+        # fusion_horizontal (Phase 3, rung 2): OPT-IN
+        # (NBX_OPTIM_FUSION_HORIZONTAL=1) until its full-zoo byte gate
+        # passes. Planner only annotates; each mode lowers by
+        # concatenating the group's constant weights once at bind and
+        # reading column bands of one wider mm. Runs AFTER cse so the
+        # sibling sources are already canonicalised.
+        if os.environ.get("NBX_OPTIM_FUSION_HORIZONTAL") == "1":
+            from neurobrix.core.optim.passes.fusion_horizontal import (
+                PLAN_KEY as _FH_KEY, apply_fusion_horizontal,
+                plan_fusion_horizontal)
+            _fh_plan = plan_fusion_horizontal(self._dag)
+            if _fh_plan:
+                # Unlike the annotate-only passes, this one REWRITES the
+                # shared dag with ordinary ATen ops (cat + one wider mm +
+                # column-band slices), so both engines execute it through
+                # machinery they already have — no new kernel, no
+                # per-engine lowering to keep in sync.
+                _fh_removed = apply_fusion_horizontal(self._dag, _fh_plan)
+                self._dag[_FH_KEY] = _fh_plan
+                print(f"[Optim] fusion_horizontal: {_fh_plan['n_groups']} "
+                      f"sibling-matmul groups, {_fh_removed} launches "
+                      f"removed ({self._component_name})")
+
         # OptimizationEngine hook (Phase 2, scoping doc D1): THE choke
         # point where passes annotate the ONE in-memory graph all four
         # modes consume — after MoE fusion, before any engine-specific
@@ -868,22 +900,6 @@ class GraphExecutor:
                       f"aliased onto their first computation, "
                       f"{_cse_plan['barriers']} mutation barriers "
                       f"({self._component_name})")
-
-        # fusion_horizontal (Phase 3, rung 2): OPT-IN
-        # (NBX_OPTIM_FUSION_HORIZONTAL=1) until its full-zoo byte gate
-        # passes. Planner only annotates; each mode lowers by
-        # concatenating the group's constant weights once at bind and
-        # reading column bands of one wider mm. Runs AFTER cse so the
-        # sibling sources are already canonicalised.
-        if os.environ.get("NBX_OPTIM_FUSION_HORIZONTAL") == "1":
-            from neurobrix.core.optim.passes.fusion_horizontal import (
-                PLAN_KEY as _FH_KEY, plan_fusion_horizontal)
-            _fh_plan = plan_fusion_horizontal(self._dag)
-            if _fh_plan:
-                self._dag[_FH_KEY] = _fh_plan
-                print(f"[Optim] fusion_horizontal: {_fh_plan['n_groups']} "
-                      f"sibling-matmul groups, {_fh_plan['n_ops_saved']} "
-                      f"launches saved ({self._component_name})")
 
         self._apply_sequential_spatial_promotion()
 

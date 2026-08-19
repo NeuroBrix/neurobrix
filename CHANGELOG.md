@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Horizontal matmul fusion now rewrites the graph** rather than only
+  planning: several projections reading one activation with different
+  constant weights become one wider matrix multiply plus column reads,
+  built from ordinary operations both engines already run.
 - **Two opt-in graph optimisation passes** (both off by default; with
   their flag unset the engines execute exactly what they executed
   before). *Common-subexpression elimination* recognises an operation
