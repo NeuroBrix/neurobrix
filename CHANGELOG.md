@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Exact identity elimination**: operations that return their input
+  unchanged — a slice covering a whole axis, a reshape to the shape a
+  tensor already has — are removed from the executed sequence, and
+  every consumer reads the original tensor. Validated byte-identical
+  across the whole model zoo. Arithmetic that merely *looks* like an
+  identity (multiplying by one, adding zero) is deliberately left in
+  place: it is not exact in floating point, and belongs to a separate
+  pass with a different acceptance rule.
 - **Horizontal matmul fusion now rewrites the graph** rather than only
   planning: several projections reading one activation with different
   constant weights become one wider matrix multiply plus column reads,

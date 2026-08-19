@@ -636,17 +636,33 @@ class TritonSequence:
         execution_order. Nothing engine-specific happens here — the
         equivalence was proven engine-neutrally by the planner.
         """
-        plan = self.dag.get("_optim_cse")
-        if not plan:
-            return
-
+        # One mechanism for every alias-shaped plan: cse merges a
+        # recomputation onto its first computation, algebraic drops an
+        # operation whose output IS its input. Both reduce to "this tid
+        # is another name for that one, and this op leaves the
+        # sequence", so they share this lowering rather than growing a
+        # second copy of it.
         rename: Dict[str, str] = {}
-        for m in plan["merges"]:
-            for dropped, kept in m["alias"]:
-                rename[dropped] = kept
-        drop_uids = {m["drop"] for m in plan["merges"]}
+        drop_uids: set = set()
+        for key in ("_optim_cse", "_optim_algebraic"):
+            plan = self.dag.get(key)
+            if not plan:
+                continue
+            for m in plan["merges"]:
+                for dropped, kept in m["alias"]:
+                    rename[dropped] = kept
+                drop_uids.add(m["drop"])
         if not rename:
             return
+        # Chase alias chains: algebraic can rename A->B while another
+        # entry renames B->C, and a consumer must land on C.
+        for tid in list(rename):
+            seen = {tid}
+            tgt = rename[tid]
+            while tgt in rename and tgt not in seen:
+                seen.add(tgt)
+                tgt = rename[tgt]
+            rename[tid] = tgt
 
         from neurobrix.core.optim.passes.cse import rename_tensor_refs
         ops = self.dag.get("ops", {})
@@ -668,7 +684,7 @@ class TritonSequence:
         execution_order.clear()
         execution_order.extend(new_order)
         if removed:
-            print(f"[Optim] cse lowering (triton): {removed} ops left "
+            print(f"[Optim] alias lowering (triton): {removed} ops left "
                   f"the hot sequence")
 
     def _extract_const_fold_partition(
