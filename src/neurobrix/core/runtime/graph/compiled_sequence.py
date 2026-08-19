@@ -505,6 +505,13 @@ class CompiledSequence:
         # executes it once through this engine's own op machinery.
         self._extract_const_fold_partition(tensors, execution_order)
 
+        # Phase -0.38: cse (optim Phase 3). The shared planner annotated
+        # dag["_optim_cse"]; here the redundant ops leave the hot
+        # sequence and their outputs are re-pointed at the first
+        # computation's outputs, so every consumer reads the value that
+        # was already produced.
+        self._apply_cse_plan(tensors, execution_order)
+
         # Phase -0.25: (retired) Windowing symbolization — pad→view num_blocks
         # = ceil(seq/W) — is now emitted at trace/build time, so the graph
         # arrives with symbolic windowing dims and no runtime pre-compilation
@@ -680,6 +687,67 @@ class CompiledSequence:
         new_order = [uid for uid in execution_order if uid not in detach_uids]
         execution_order.clear()
         execution_order.extend(new_order)
+
+    def _apply_cse_plan(
+        self,
+        tensors: Dict[str, Any],
+        execution_order: List[str],
+    ) -> None:
+        """Drop redundant ops and re-point their outputs at the original.
+
+        The engine-neutral planner (core/optim/passes/cse.py) annotated
+        dag["_optim_cse"] = {merges: [{keep, drop, alias}], ...} at the
+        load hook, having already proven each `drop` recomputes what
+        `keep` produced (equal op_type, input ids, attributes,
+        dtype/device, with every mutating op treated as a full barrier
+        and random draws never value-numbered).
+
+        Lowering is a rename plus a deletion: every consumer that reads
+        a dropped output is rewritten to read the kept output, then the
+        dropped ops leave execution_order. Consumers are rewritten
+        rather than slots aliased so the two engines share one
+        mechanism — the triton mirror does exactly this.
+
+        Idempotent on recompile: after the first pass no op references
+        a dropped tid, so the rename finds nothing and the order filter
+        removes nothing.
+        """
+        plan = self.dag.get("_optim_cse")
+        if not plan:
+            return
+
+        rename: Dict[str, str] = {}
+        for m in plan["merges"]:
+            for dropped, kept in m["alias"]:
+                rename[dropped] = kept
+        drop_uids = {m["drop"] for m in plan["merges"]}
+        if not rename:
+            return
+
+        from neurobrix.core.optim.passes.cse import rename_tensor_refs
+        ops = self.dag.get("ops", {})
+        for uid in execution_order:
+            if uid in drop_uids:
+                continue
+            op = ops.get(uid)
+            if op:
+                rename_tensor_refs(op, rename)
+
+        # Graph outputs are excluded by the planner, so no output id can
+        # be renamed here; assert rather than trust.
+        for tid in self.dag.get("output_tensor_ids") or []:
+            if tid in rename:
+                raise RuntimeError(
+                    f"ZERO FALLBACK: cse plan would alias graph output "
+                    f"{tid!r} — the positional output contract is frozen")
+
+        new_order = [u for u in execution_order if u not in drop_uids]
+        removed = len(execution_order) - len(new_order)
+        execution_order.clear()
+        execution_order.extend(new_order)
+        if removed:
+            print(f"[Optim] cse lowering (compiled): {removed} ops left "
+                  f"the hot sequence")
 
     def _extract_const_fold_partition(
         self,

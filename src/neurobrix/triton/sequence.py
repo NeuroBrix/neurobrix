@@ -405,6 +405,10 @@ class TritonSequence:
         # through THIS engine's own op machinery (NBXTensor + Triton).
         self._extract_const_fold_partition(tensors, exec_order)
 
+        # Phase -0.33: cse (optim Phase 3) — R30 mirror of
+        # CompiledSequence Phase -0.38.
+        self._apply_cse_plan(tensors, exec_order)
+
         # Phase -0.3: Fuse SwiGLU (silu + mul) into custom::swiglu_fused.
         # Collapses 2 elem ops → 1 kernel launch, and the fused kernel reads
         # gate/up once each + writes output once (vs silu writing intermediate
@@ -619,6 +623,53 @@ class TritonSequence:
             out_meta = tensors.get(out_tid, {})
             if out_meta.get("is_output") and in_tid in tensors:
                 tensors[in_tid]["is_output"] = True
+
+    def _apply_cse_plan(
+        self,
+        tensors: Dict[str, Any],
+        execution_order: List[str],
+    ) -> None:
+        """R30 mirror of CompiledSequence._apply_cse_plan.
+
+        Same plan, same mechanism: consumers of a dropped output are
+        rewritten to read the kept output, then the dropped ops leave
+        execution_order. Nothing engine-specific happens here — the
+        equivalence was proven engine-neutrally by the planner.
+        """
+        plan = self.dag.get("_optim_cse")
+        if not plan:
+            return
+
+        rename: Dict[str, str] = {}
+        for m in plan["merges"]:
+            for dropped, kept in m["alias"]:
+                rename[dropped] = kept
+        drop_uids = {m["drop"] for m in plan["merges"]}
+        if not rename:
+            return
+
+        from neurobrix.core.optim.passes.cse import rename_tensor_refs
+        ops = self.dag.get("ops", {})
+        for uid in execution_order:
+            if uid in drop_uids:
+                continue
+            op = ops.get(uid)
+            if op:
+                rename_tensor_refs(op, rename)
+
+        for tid in self.dag.get("output_tensor_ids") or []:
+            if tid in rename:
+                raise RuntimeError(
+                    f"ZERO FALLBACK: cse plan would alias graph output "
+                    f"{tid!r} — the positional output contract is frozen")
+
+        new_order = [u for u in execution_order if u not in drop_uids]
+        removed = len(execution_order) - len(new_order)
+        execution_order.clear()
+        execution_order.extend(new_order)
+        if removed:
+            print(f"[Optim] cse lowering (triton): {removed} ops left "
+                  f"the hot sequence")
 
     def _extract_const_fold_partition(
         self,

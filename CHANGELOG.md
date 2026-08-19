@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Two opt-in graph optimisation passes** (both off by default; with
+  their flag unset the engines execute exactly what they executed
+  before). *Common-subexpression elimination* recognises an operation
+  whose result was already computed with the same inputs and reads the
+  first result instead of recomputing it. *Horizontal matmul fusion*
+  recognises several projections that read the same activation with
+  different constant weights — the classic query/key/value shape — so
+  the engines can run them as one wider matrix multiply instead of
+  several narrow ones. The first is validated byte-identical across the
+  whole model zoo; the second ships its planner and its measurement
+  contract while its own byte gate runs.
+
 ### Fixed
 
 - **Warm serving of CPU-streamed models survives multiple requests**:
