@@ -882,6 +882,28 @@ class GraphExecutor:
                       f"{len(_fv_plan['groups'])} matmul+epilogue "
                       f"groups planned ({self._component_name})")
 
+        # dead_code (Phase 3, rung 4): OPT-IN (NBX_OPTIM_DEAD_CODE=1).
+        # The ENGINE-side counterpart of R19's build-side prune, and not
+        # redundant with it: R19 has only been applied to six rebuilt
+        # models, the loaded graph is post-MoE-fusion, and a build that
+        # arrives from the hub cannot be re-traced. Same contract as
+        # R19 — side-effecting ops and random draws are ROOTS, because
+        # tid-reachability is not liveness.
+        if os.environ.get("NBX_OPTIM_DEAD_CODE") == "1":
+            from neurobrix.core.optim.passes.dead_code import (
+                PLAN_KEY as _DC_KEY, plan_dead_code)
+            _dc_plan = plan_dead_code(self._dag)
+            if _dc_plan:
+                self._dag[_DC_KEY] = _dc_plan
+                _dc_order = [u for u in self._dag.get("execution_order", [])
+                             if u not in set(_dc_plan["dead_uids"])]
+                self._dag["execution_order"] = _dc_order
+                print(f"[Optim] dead_code: {_dc_plan['n_ops']} unreachable "
+                      f"ops left the sequence, retained "
+                      f"{_dc_plan['retained_writes']} in-place writes + "
+                      f"{_dc_plan['retained_rng']} random draws "
+                      f"({self._component_name})")
+
         # algebraic (Phase 3, rung 3): OPT-IN (NBX_OPTIM_ALGEBRAIC=1)
         # until its full-zoo byte gate passes. Removes operations whose
         # output IS their input — full-range slices, views/expands to

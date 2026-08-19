@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Unreachable-code elimination at load time**: operations no output
+  depends on are skipped instead of executed. This complements the
+  build-side pruning shipped earlier — it also covers models built
+  before that landed, and models installed from the registry that
+  cannot be rebuilt locally. Operations that write in place, and random
+  draws, are always kept: their effect is not visible in the graph's
+  data flow.
 - **Exact identity elimination**: operations that return their input
   unchanged — a slice covering a whole axis, a reshape to the shape a
   tensor already has — are removed from the executed sequence, and
