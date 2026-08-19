@@ -34,6 +34,18 @@ def discover_models(root: Path, only: set[str] | None) -> list[Path]:
     return out
 
 
+
+def _family_of(model_dir: Path) -> str:
+    """Family from the build manifest — the same key the runtime reads."""
+    mf = model_dir / "manifest.json"
+    if mf.exists():
+        try:
+            return json.loads(mf.read_text()).get("family", "?")
+        except Exception:
+            pass
+    return "?"
+
+
 def sweep_model(model_dir: Path, out_dir: Path) -> dict:
     """Analyze every component graph of one build; return the summary row."""
     model = model_dir.name
@@ -42,11 +54,34 @@ def sweep_model(model_dir: Path, out_dir: Path) -> dict:
     removable: dict[str, int] = {}
     n_ops_total = 0
     n_suspects = 0
+    stored_order_total = 0
+    exec_order_total = 0
     reports_payload = []
+
+    # THE EXECUTED SURFACE, not the stored one (measured 2026-08-19).
+    # A findings count over the on-disk graph is a phantom for any MoE
+    # build: the runtime fuses the expert subgraphs into one
+    # `custom::moe_fused` op, and the ops it absorbs never launch. On
+    # the canonical int4 decode row the executed sequence is 4,490 ops
+    # out of 115,419 stored (-96%); deepseek-moe 2,683 of 18,610. A map
+    # that counts the stored graph promises a pass work it can never
+    # do — so the sweep applies the same fusion the runtime applies,
+    # and records BOTH numbers so the gap itself stays visible.
+    fam = _family_of(model_dir)
 
     for gpath in sorted(model_dir.rglob("graph.json")):
         raw = gpath.read_bytes()
         graph = json.loads(raw)
+        n_stored_order = len(graph.get("execution_order") or [])
+        try:
+            from neurobrix.core.runtime.graph.moe_fusion import (
+                detect_and_fuse_moe)
+            graph = detect_and_fuse_moe(graph, fam, declared=True)
+        except Exception:
+            # A build the fusion does not recognise analyses as-is; the
+            # two order counts then agree and the row says so.
+            pass
+        n_exec_order = len(graph.get("execution_order") or [])
         component = graph.get("component_name") or gpath.parent.name
         rep = GraphAnalyzer(model, component, graph, raw).run()
         counts = rep.counts()
@@ -56,6 +91,8 @@ def sweep_model(model_dir: Path, out_dir: Path) -> dict:
         for k, v in opsrem.items():
             removable[k] = removable.get(k, 0) + v
         n_ops_total += rep.n_ops
+        stored_order_total += n_stored_order
+        exec_order_total += n_exec_order
         n_suspects += len(rep.suspects)
         comp_summaries.append({
             "component": component,
@@ -63,12 +100,18 @@ def sweep_model(model_dir: Path, out_dir: Path) -> dict:
             "counts": counts,
             "ops_removable": opsrem,
             "n_suspects": len(rep.suspects),
+            # Both surfaces, so the phantom gap stays visible per
+            # component rather than hiding inside a total.
+            "n_ops_stored_order": n_stored_order,
+            "n_ops_executed_order": n_exec_order,
         })
         reports_payload.append(rep.to_dict())
         del graph, rep, raw  # bound memory across large video graphs
 
     payload = {
         "model": model,
+        "n_ops_stored_order": stored_order_total,
+        "n_ops_executed_order": exec_order_total,
         "n_components": len(comp_summaries),
         "n_ops_total": n_ops_total,
         "totals": totals,
