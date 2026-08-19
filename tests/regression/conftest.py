@@ -112,6 +112,35 @@ MODEL_TIMEOUT_S: Dict[str, int] = {
 SLOW_FAMILIES = {"image", "video"}
 
 
+# HARNESS INVOCATION GAPS found by the 2026-08-19 freshness run — the
+# suite calls itself the inventory of truth, and these are places where
+# its own CLI profile has drifted from what the engine (correctly)
+# requires, so it manufactures REDs that say nothing about the models:
+#
+#   1. vlm family: the harness runs `--prompt "Hello world"` with no
+#      image, and the engine refuses — "ZERO FALLBACK: family 'vlm'
+#      requires --input-image". Both GLM-4.1V-9B-Thinking cells fail on
+#      this, never reaching the model. The profile needs an image
+#      fixture for vlm, like the one the omni rows already use.
+#   2. stt family: the harness passes a `.wav` output path for a
+#      text-producing STT run, and the engine refuses —
+#      "output extension '.wav' incompatible with family 'stt' mode
+#      'text'. Expected '.txt'" (output_dispatch.py:206). Both
+#      whisper ::native cells fail on this. Let the extension be
+#      derived, or pass `.txt` for stt/text.
+#   3. triton timeouts arrive as `Partial stdout: b''` — the subprocess
+#      capture yields NOTHING when the budget expires, so six cells
+#      (Qwen3-VL, Voxtral, canary, chatterbox, granite, whisper-large)
+#      are undiagnosable from the log alone and cannot be told apart
+#      from a genuine hang. Line-buffered capture (and a budget that
+#      accounts for cold Triton kernel compilation) is a precondition
+#      for judging any of them.
+#
+# Until (1) and (2) are fixed the affected cells are NOT recorded as
+# KNOWN_FAILURES: they are harness defects, and an xfail there would
+# hide the defect instead of fixing it.
+
+
 # Known-broken cells and the reason — recorded as xfail.  Keep this list
 # short, current, and ALWAYS with a reason.  Every entry is a promise
 # that we know about the breakage and we're not hiding a regression
@@ -120,13 +149,40 @@ SLOW_FAMILIES = {"image", "video"}
 # xfails masks regressions.
 KNOWN_FAILURES: List[Tuple[str, str | None, str]] = [
     # ------------------------------------------------------------------
+    # FRESHNESS PASS 2026-08-19 (run:
+    # scratchpad/xpass_fast.log, flightrec xpass-refresh-fast-subset,
+    # 15 failed / 54 passed / 39 skipped in 1:31:39). Eight entries were
+    # removed because the run PASSED them — Janus-Pro-7B::triton,
+    # Kokoro-82M::triton, VibeVoice-1.5B (both modes), hat-l-x4::triton,
+    # hat-s-x4::triton, openaudio-s1-mini::triton, orpheus-3b-0.1-ft
+    # (both modes), parakeet-tdt-1.1b::triton. Every entry below either
+    # FAILED in that run or was not exercised by it (slow families).
+    # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Weight-encoding variants on the compiled engine — a DECLARED
+    # capability gate, not a breakage: the engine refuses with
+    # "UNSUPPORTED PATH: component stores its weights with encoding
+    # 'int4-g128-asym', which the compiled engine does not execute. Run
+    # this build with --triton" (graph_executor.py:1163). Recorded as
+    # xfail so the matrix stays honest about which mode is unblocked;
+    # the ::triton cells run normally. Chantier named by the engine
+    # message: compiled-mode encoded-weight execution.
+    # ------------------------------------------------------------------
+    ("Qwen3-Coder-30B-A3B-Instruct-int4g128", "native",
+     "Capability gate: int4-g128-asym weights are not executed by the compiled engine (graph_executor.py:1163) — run with --triton. Chantier: compiled-mode encoded-weight execution."),
+    ("Qwen3-Coder-30B-A3B-Instruct-int4g128-ffnonly", "native",
+     "Capability gate: int4-g128-asym weights are not executed by the compiled engine — run with --triton. Chantier: compiled-mode encoded-weight execution."),
+    ("TinyLlama-1.1B-Chat-v1.0-int4g128", "native",
+     "Capability gate: int4-g128-asym weights are not executed by the compiled engine — run with --triton. Chantier: compiled-mode encoded-weight execution."),
+
+    # ------------------------------------------------------------------
     # Triton audio — genuine runtime blockers on the --triton path.
     # Native paths for these all PASS (Batch 1 harness extension landed
     # flow-aware CLI dispatch).  What remains is per-family Triton work.
     # ------------------------------------------------------------------
     ("whisper-large",          "triton", "Triton encoder_decoder audio flow not validated end-to-end yet"),
     ("whisper-large-v3-turbo", "triton", "Triton encoder_decoder audio flow not validated end-to-end yet"),
-    ("parakeet-tdt-1.1b",      "triton", "Triton rnnt flow not validated end-to-end yet"),
     # P-AUDIO-LLM-TRITON-FLOW: triton/flow/audio_llm.py now ported
     # (TritonAudioLLMEngine, R33-pure). Voxtral validated
     # compiled<->triton byte-identical → un-xfail'd. canary-qwen /
@@ -141,7 +197,6 @@ KNOWN_FAILURES: List[Tuple[str, str | None, str]] = [
     # in the Triton tts_llm / dual_ar flow handlers.
     # ------------------------------------------------------------------
     ("chatterbox",         "triton", "triton/flow/tts_llm.py doesn't wire audio_path reference voice"),
-    ("openaudio-s1-mini",  "triton", "triton/flow/dual_ar.py doesn't wire audio_path reference voice"),
 
     # ------------------------------------------------------------------
     # Kokoro — triton only. _execute_native_text_encoder still passes
@@ -153,7 +208,6 @@ KNOWN_FAILURES: List[Tuple[str, str | None, str]] = [
     # docs/follow-ups/archive/kokoro_cudnn_batch_norm_regression.md and
     # docs/verdicts/p_kokoro_native_cudnn_batch_norm/verdict.md.)
     # ------------------------------------------------------------------
-    ("Kokoro-82M", "triton", "_execute_native_text_encoder passes NBXTensor to torch.nn.functional.embedding — stage needs NBX→torch boundary"),
 
     # ------------------------------------------------------------------
     # VibeVoice — structural contract violation: DDPM loop + ConvNext1d
@@ -163,7 +217,6 @@ KNOWN_FAILURES: List[Tuple[str, str | None, str]] = [
     # match what the model expects (needs speaker ref / script format).
     # Needs a build-toolchain re-trace to integrate DDPM as a neural component.
     # ------------------------------------------------------------------
-    ("VibeVoice-1.5B",     None, "TensorDAG contract violation — DDPM + ConvNext1d outside graph; needs build-side re-trace"),
 
     # ------------------------------------------------------------------
     # Pre-existing failures observed in the Ch8 full --runslow harness
@@ -173,11 +226,7 @@ KNOWN_FAILURES: List[Tuple[str, str | None, str]] = [
     # clean run does not report them as FAILED.
     # ------------------------------------------------------------------
     ("Flex.1-alpha",                   "triton", "P-FLEX1-VAE-FP32-GATE — Flex.1-alpha VAE does not satisfy the Ch8 conv-dominance auto-fp32 gate; triton path was already failing pre-Ch8. Diagnose VAE structure vs gate thresholds."),
-    ("Janus-Pro-7B",                   "triton", "Janus-Pro-7B::triton multimodal autoregressive_image path times out (>300s default); pre-existing. Has working compiled path; triton path needs profiling."),
     ("SANA-Video_2B_720p_diffusers",   None,     "P-PRISM-VIDEO-5D-UNPACK — `too many values to unpack (expected 4)` in the Prism video allocator (reproduces with NBX_DISABLE_AUTO_FP32=1, i.e. not the Ch8 auto-fp32). 5D [B,C,T,H,W] tensors hit a hardcoded 4-tuple unpack."),
-    ("hat-l-x4",                       "triton", "P-TRITON-IM2COL-KERNEL — HAT OCAB unfold path is not covered by the triton upscaler harness; pre-existing 2/4-modes coverage (per P-NEUROBRIX-UPSCALERS-V1 closure note)."),
-    ("hat-s-x4",                       "triton", "P-TRITON-IM2COL-KERNEL — same as hat-l-x4."),
-    ("orpheus-3b-0.1-ft",              None,     "orpheus-3b-0.1-ft (TTS-LLM autoregressive) exits 1 in both modes; failure precedes Ch7/Ch8. To be diagnosed in the audio-family chantier (post-Dettes-C/D/E)."),
 
     # ------------------------------------------------------------------
     # Sana 4Kpx — standing INDETERMINATE per project memory
@@ -214,30 +263,22 @@ KNOWN_FAILURES: List[Tuple[str, str | None, str]] = [
 #
 # (model_name, family, reason)
 TARGET_MATRIX_NOT_TRACED: List[Tuple[str, str, str]] = [
-    # VLM family — whole-family debt: never opened. Snapshot at
-    # /home/mlops/hf_snapshots/ exists, no .nbx in cache.
-    ("Qwen3-VL-30B-A3B-Thinking", "vlm",
-     "VLM family has not been opened — no traced model. Whole-family technical debt (Hocine's dedicated chantier)."),
-
-    # LLM gemma sub-family — snapshot present, never traced.
+    # LLM gemma sub-family — the only genuine gaps left in this list.
     ("gemma-4-26B-A4B-it", "llm",
-     "Gemma sub-family not yet traced (snapshot present, no .nbx)."),
+     "Gemma sub-family: snapshot present, not traced (no graphs, no .nbx)."),
     ("gemma-4-E4B-it", "llm",
-     "Gemma sub-family not yet traced (snapshot present, no .nbx)."),
-
-    # Video family — only SANA-Video is in the cache (and it fails
-    # on P-PRISM-VIDEO-5D-UNPACK), so effective video coverage is
-    # zero. These snapshots are present at /home/mlops/hf_snapshots/.
-    ("Allegro",          "video", "Video family coverage gap (snapshot present, no .nbx)."),
-    ("Allegro-TI2V",     "video", "Video family coverage gap (snapshot present, no .nbx)."),
-    ("CogVideoX-2b",     "video", "Video family coverage gap (snapshot present, no .nbx)."),
-    ("CogVideoX-5b-I2V", "video", "Video family coverage gap (snapshot present, no .nbx)."),
-    ("mochi-1-preview",  "video", "Video family coverage gap (snapshot present, no .nbx)."),
-    ("Open-Sora-v2",     "video", "Video family coverage gap (snapshot present, no .nbx)."),
-    ("Wan2.1-I2V-14B",   "video", "Video family coverage gap (snapshot present, no .nbx)."),
-    ("Wan2.1-T2V-1.3B",  "video", "Video family coverage gap (snapshot present, no .nbx)."),
-    ("Wan2.1-VACE-1.3B", "video", "Video family coverage gap (snapshot present, no .nbx)."),
-    ("Wan2.2-I2V-A14B",  "video", "Video family coverage gap (snapshot present, no .nbx)."),
+     "Gemma sub-family: TRACED (graphs in .cache/graphs) but never built/installed — build + install to turn this into a real cell."),
+    #
+    # FRESHNESS PASS 2026-08-19: the video family and the VLM family were
+    # opened and closed since this list was written — Allegro,
+    # Allegro-TI2V, CogVideoX-2b, CogVideoX-5b-I2V, mochi-1-preview,
+    # Open-Sora-v2, the four Wan builds (installed under their
+    # `-Diffusers` cache names) and Qwen3-VL-30B-A3B-Thinking are all in
+    # `~/.neurobrix/cache/`, hence already REAL cells via
+    # discover_models(). Keeping them here emitted a second, phantom
+    # "not traced" cell per model — an inventory that contradicted the
+    # cache it claims to describe. Removed; the list holds only what is
+    # genuinely absent.
 ]
 
 
