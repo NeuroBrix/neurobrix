@@ -197,6 +197,13 @@ def _cli_inputs_for(family: str, flow: str, gen_type: str) -> List[str]:
         return ["--audio", str(AUDIO_REF), "--prompt", "Hello world"]
     if flow in TTS_WITH_REF_FLOWS:
         return ["--prompt", "Hello world", "--audio", str(AUDIO_REF)]
+    if family == "vlm":
+        # A vlm run without an image is refused by the engine — "ZERO
+        # FALLBACK: family 'vlm' requires --input-image" — so the cell
+        # never reached the model and reported a RED that said nothing
+        # about it (both GLM-4.1V cells, 2026-08-19 freshness run). The
+        # engine is right; the harness was calling it wrong.
+        return ["--input-image", str(IMAGE_REF), "--prompt", "What is in this image?"]
     # Image-diffusion + video + TTS without ref + any other family:
     # use the historical anti-reg prompt for image (Sana 1600M reads
     # this photorealistically; landscapes return stylised illustration).
@@ -251,11 +258,16 @@ def _run_out_path(model: str, mode: str, family: str, gen_type: str) -> Path:
         ext = "mp4"
     elif family in ("audio_llm", "llm", "vlm"):
         ext = "txt"
-    elif family in ("audio", "tts", "stt"):
-        # audio family covers both STT (transcription → txt by CLI dispatch)
-        # and TTS (synthesis → wav); `neurobrix run` family-aware dispatch
-        # handles the actual writer, we just need an extension the CLI
-        # accepts without strict-mismatch error. .wav is the audio default.
+    elif family == "stt":
+        # STT transcribes: the writer produces TEXT. Passing `.wav` made
+        # the engine refuse with "output extension '.wav' incompatible
+        # with family 'stt' mode 'text'. Expected '.txt'"
+        # (output_dispatch.py) — both whisper ::native cells failed on
+        # the harness's own extension, never on the model (2026-08-19).
+        ext = "txt"
+    elif family in ("audio", "tts"):
+        # TTS synthesises audio; `.wav` is the family default and the
+        # CLI accepts it without a strict-mismatch error.
         ext = "wav"
     else:
         ext = "out"
@@ -303,7 +315,7 @@ def _run_neurobrix(model: str, mode: str, family: str, flow: str,
         if out_path.exists():
             out_path.unlink()
         cmd = [
-            _runtime_python(), "-m", "neurobrix", "upscale",
+            _runtime_python(), "-u", "-m", "neurobrix", "upscale",
             "--model", model,
             "--input", str(IMAGE_REF),
             "--output", str(out_path),
@@ -311,7 +323,7 @@ def _run_neurobrix(model: str, mode: str, family: str, flow: str,
         ]
     else:
         cmd = [
-            _runtime_python(), "-m", "neurobrix", "run",
+            _runtime_python(), "-u", "-m", "neurobrix", "run",
             "--model", model,
             "--temperature", "0",
         ]
@@ -333,7 +345,15 @@ def _run_neurobrix(model: str, mode: str, family: str, flow: str,
         if mode == "triton":
             cmd.append("--triton")
 
-    env = {**os.environ, "PYTHONPATH": str(REPO / "src")}
+    # PYTHONUNBUFFERED (with `-u` in the argv above): without it the
+    # child's stdout is block-buffered, so a timeout kill discards the
+    # buffer and `TimeoutExpired.stdout` arrives EMPTY. Six triton cells
+    # in the 2026-08-19 run reported `Partial stdout: b''`, which is
+    # indistinguishable from a genuine hang and undiagnosable from the
+    # log — the harness has to be able to say WHERE a cell was when its
+    # budget expired.
+    env = {**os.environ, "PYTHONPATH": str(REPO / "src"),
+           "PYTHONUNBUFFERED": "1"}
     return subprocess.run(
         cmd, capture_output=True, text=True,
         timeout=timeout_s, env=env, cwd=str(REPO),
