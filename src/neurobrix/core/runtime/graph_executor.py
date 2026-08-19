@@ -850,6 +850,41 @@ class GraphExecutor:
                       f"{len(_fv_plan['groups'])} matmul+epilogue "
                       f"groups planned ({self._component_name})")
 
+        # cse (Phase 3): OPT-IN (NBX_OPTIM_CSE=1) until its full-zoo
+        # byte gate passes. Planner only annotates (dag["_optim_cse"]);
+        # each mode lowers by skipping the dropped ops and reading the
+        # kept op's outputs in their place. Deferred until now for a
+        # measured reason that EXPIRED: the per-op dispatch tax used to
+        # drown the removed compute, and frozen-plan replay plus
+        # per-bucket graph capture crushed that floor — a removed op is
+        # now removed work AND one fewer captured node.
+        if os.environ.get("NBX_OPTIM_CSE") == "1":
+            from neurobrix.core.optim.passes.cse import (
+                PLAN_KEY as _CSE_KEY, plan_cse)
+            _cse_plan = plan_cse(self._dag)
+            if _cse_plan:
+                self._dag[_CSE_KEY] = _cse_plan
+                print(f"[Optim] cse: {_cse_plan['n_ops']} redundant ops "
+                      f"aliased onto their first computation, "
+                      f"{_cse_plan['barriers']} mutation barriers "
+                      f"({self._component_name})")
+
+        # fusion_horizontal (Phase 3, rung 2): OPT-IN
+        # (NBX_OPTIM_FUSION_HORIZONTAL=1) until its full-zoo byte gate
+        # passes. Planner only annotates; each mode lowers by
+        # concatenating the group's constant weights once at bind and
+        # reading column bands of one wider mm. Runs AFTER cse so the
+        # sibling sources are already canonicalised.
+        if os.environ.get("NBX_OPTIM_FUSION_HORIZONTAL") == "1":
+            from neurobrix.core.optim.passes.fusion_horizontal import (
+                PLAN_KEY as _FH_KEY, plan_fusion_horizontal)
+            _fh_plan = plan_fusion_horizontal(self._dag)
+            if _fh_plan:
+                self._dag[_FH_KEY] = _fh_plan
+                print(f"[Optim] fusion_horizontal: {_fh_plan['n_groups']} "
+                      f"sibling-matmul groups, {_fh_plan['n_ops_saved']} "
+                      f"launches saved ({self._component_name})")
+
         self._apply_sequential_spatial_promotion()
 
         # Pre-compile dispatch table for Triton mode
