@@ -882,6 +882,25 @@ class GraphExecutor:
                       f"{len(_fv_plan['groups'])} matmul+epilogue "
                       f"groups planned ({self._component_name})")
 
+        # algebraic (Phase 3, rung 3): OPT-IN (NBX_OPTIM_ALGEBRAIC=1)
+        # until its full-zoo byte gate passes. Removes operations whose
+        # output IS their input — full-range slices, views/expands to
+        # the shape the tensor already has. Emits the same alias-shaped
+        # plan as cse so both share one lowering. Floating-point
+        # "identities" (x*1, x/1, x+0) are counted and deliberately NOT
+        # removed: they belong to `cancellation` under a drift gate.
+        if os.environ.get("NBX_OPTIM_ALGEBRAIC") == "1":
+            from neurobrix.core.optim.passes.algebraic import (
+                PLAN_KEY as _ALG_KEY, plan_algebraic)
+            _alg_plan = plan_algebraic(self._dag)
+            if _alg_plan:
+                self._dag[_ALG_KEY] = _alg_plan
+                print(f"[Optim] algebraic: {_alg_plan['n_ops']} identity "
+                      f"ops aliased away, "
+                      f"{_alg_plan['floating_identities_seen']} floating "
+                      f"identities left to cancellation "
+                      f"({self._component_name})")
+
         # cse (Phase 3): OPT-IN (NBX_OPTIM_CSE=1) until its full-zoo
         # byte gate passes. Planner only annotates (dag["_optim_cse"]);
         # each mode lowers by skipping the dropped ops and reading the
