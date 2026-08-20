@@ -5779,6 +5779,13 @@ def clamp_min_wrapper(x, min_val) :
     return output
 
 
+# Bounds for the two-stage top-k, measured on sm_70. See the comment at
+# the chunk-widening loop in topk_wrapper for the numbers behind them.
+_TOPK_MERGE_TILE_TARGET = 2048   # widen chunks to keep the merge tile here
+_TOPK_MERGE_TILE_MAX = 8192      # past this, refuse rather than stall
+_TOPK_CHUNK_MAX = 8192           # stage-1 window still flat at this width
+
+
 def topk_wrapper(x, k: int, dim: int = -1,
                  largest: bool = True, sorted: bool = True):
     """Top-k via 2-stage Triton pipeline. Stage 1: per-chunk top-k. Stage 2: merge via bitonic sort.
@@ -5809,7 +5816,38 @@ def topk_wrapper(x, k: int, dim: int = -1,
     if chunk_size < k:
         chunk_size = triton.next_power_of_2(k)
 
+    # Keep the stage-2 merge tile small.
+    #
+    # Stage 2 sorts next_power_of_2(chunk_num * k) elements inside ONE
+    # Triton program, fully unrolled over log2(tile) bitonic stages, so
+    # its FIRST-COMPILE cost explodes with the tile: measured on sm_70,
+    # 2048 -> 15 s, 4096 -> 48 s, 8192 -> over 150 s, and 16384 did not
+    # finish in the budget. That cost is paid once per (k, N, tile)
+    # triple and then cached, but it lands on the first token of a
+    # request, where minutes of apparent hang is indistinguishable from
+    # a deadlock. Qwen2's 152k vocabulary with top_k=64 sat squarely in
+    # that hole.
+    #
+    # Widening the chunk trades the merge tile for stage-1 work, which
+    # is a k-iteration reduction rather than a sort — measured flat at
+    # 1.1 s up to CHUNK 8192. Partitioning does not change the answer:
+    # the top-k of the per-chunk top-k's IS the global top-k for any
+    # partition. Only the index chosen among exactly-tied values can
+    # move, so this is a FLOATING-class change, not an EXACT one.
+    while (chunk_size < _TOPK_CHUNK_MAX
+           and triton.cdiv(topk_n, chunk_size) * k > _TOPK_MERGE_TILE_TARGET):
+        chunk_size *= 2
+
     chunk_num = triton.cdiv(topk_n, chunk_size)
+
+    if chunk_num > 1 and chunk_num * k > _TOPK_MERGE_TILE_MAX:
+        raise ValueError(
+            f"topk: k={k} over {topk_n} elements needs a merge tile of "
+            f"{triton.next_power_of_2(chunk_num * k)} even at the widest "
+            f"chunk ({_TOPK_CHUNK_MAX}), past the {_TOPK_MERGE_TILE_MAX} "
+            f"bound where the bitonic merge's first-compile cost runs to "
+            f"minutes. Reduce k, or extend topk with a hierarchical "
+            f"reduction stage.")
 
     # Stage 1 buffers
     s1_vals = NBXTensor.empty(batch_size * chunk_num * k, device=x.device, dtype=x.dtype)

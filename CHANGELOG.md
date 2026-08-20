@@ -38,6 +38,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the returned values, the returned identifiers, and the agreement
   between the two verified separately.
 
+- **Minutes-long stall on the first token when combining a large
+  vocabulary with a large `top_k`** on the Triton engine. The final
+  selection step is generated as one fully unrolled routine whose
+  compilation cost grows steeply with the number of candidates it has
+  to sort — on the tested hardware, 15 seconds, 48 seconds, and then
+  over two and a half minutes as that number doubled. `top_k` of 64 on
+  a 152k-token vocabulary landed in the worst part of that curve and
+  looked like a freeze. The candidate set is now kept small enough for
+  the step to stay in the fast region, by scanning the vocabulary in
+  fewer, wider passes. The selected tokens are unchanged; only tokens
+  with *exactly* equal scores may now be broken in a different order.
+  Beyond the range where this remains practical, the engine now reports
+  a clear error instead of appearing to hang.
+
 ### Added
 
 - **Unreachable-code elimination at load time**: operations no output

@@ -107,7 +107,8 @@ _VOCABS = [
     (151936, 1),      # Qwen3 - greedy width
     (151936, 5),
     (151936, 50),     # Qwen3 - the canonical decode row's sampler width
-    (152064, 64),     # Qwen2
+    (152064, 64),     # Qwen2 - needed a wider chunk to keep the tile bounded
+    (151936, 100),    # large-k sampling, same
 ]
 
 # Router widths. The first five bypass the merge (chunk_num == 1); 512
@@ -134,10 +135,18 @@ def _d2h(t):
 
 
 def _chunking(V: int, k: int):
-    """Mirror of the wrapper's chunk heuristic, for labelling only."""
+    """Mirror of the wrapper's chunk heuristic, for labelling only.
+
+    Reads the wrapper's own bounds rather than restating them, so a
+    change there cannot silently leave this test printing labels that
+    describe a partitioning the kernel no longer uses.
+    """
     chunk = 256 if V < 1024 else 1024
     if chunk < k:
         chunk = triton.next_power_of_2(k)
+    while (chunk < W._TOPK_CHUNK_MAX
+           and triton.cdiv(V, chunk) * k > W._TOPK_MERGE_TILE_TARGET):
+        chunk *= 2
     n_chunks = triton.cdiv(V, chunk)
     stage2_n = n_chunks * k
     return n_chunks, stage2_n, triton.next_power_of_2(stage2_n)
