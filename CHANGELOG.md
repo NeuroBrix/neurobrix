@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-08-20
+
 ### Fixed
 
 - **Top-k sampling returned wrong tokens on the Triton engine.** When
@@ -3118,7 +3120,10 @@ First stable release of NeuroBrix — universal deep learning inference engine.
 - Zip-slip path traversal validation in registry import
 - Safe arithmetic parser replacing `eval()` in shape resolver
 
-[Unreleased]: https://github.com/NeuroBrix/neurobrix/compare/v0.4.1...main
+[Unreleased]: https://github.com/NeuroBrix/neurobrix/compare/v0.5.2...main
+[0.5.2]: https://github.com/NeuroBrix/neurobrix/compare/v0.5.1...v0.5.2
+[0.5.1]: https://github.com/NeuroBrix/neurobrix/compare/v0.5.0...v0.5.1
+[0.5.0]: https://github.com/NeuroBrix/neurobrix/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/NeuroBrix/neurobrix/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/NeuroBrix/neurobrix/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/NeuroBrix/neurobrix/compare/v0.2.1...v0.3.0
