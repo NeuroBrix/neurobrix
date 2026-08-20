@@ -1173,6 +1173,13 @@ def _gpu_runtime():
 # STRIDED COPY
 # ============================================================================
 
+# Shape/stride metadata buffers, keyed by (values, device). Never
+# evicted — a frozen replay plan records raw device pointers inside its
+# recorded kernel launches, so a freed buffer would leave the plan
+# pointing at reclaimed memory. See _upload_int64_array.
+_INT64_ARRAY_CACHE: dict = {}
+
+
 def _upload_int64_array(values, device_idx: int) -> 'NBXTensor':
     """Upload a small tuple/list of ints to the GPU as a contiguous
     int64 NBXTensor. Used to hand shape and stride vectors to the N-D
@@ -1180,17 +1187,42 @@ def _upload_int64_array(values, device_idx: int) -> 'NBXTensor':
 
     Zero-torch: goes through `NBXTensor.from_numpy`, which internally
     uses `DeviceAllocator.malloc_cuda` + `DeviceAllocator.memcpy` (via
-    `_GPU_BACKENDS`). The returned tensor owns its storage; its
-    Python-refcount lifetime covers the kernel launch and it is freed
-    by `NBXTensor.__del__` as soon as the caller stops referencing it.
-    For shapes with up to 25 dims, this is 200 bytes per upload —
-    small enough that the driver-level malloc / free overhead is
-    amortised across a whole transformer forward pass (< 1 ms total).
+    `_GPU_BACKENDS`).
+
+    MEMOISED by value. The original form allocated, uploaded and freed a
+    fresh buffer per call, on the reasoning that "200 bytes per upload is
+    amortised across a whole forward pass (< 1 ms total)". Measured on
+    2026-08-20 that reasoning does not hold: `strided_copy` runs ~757
+    times per decode token on the canonical 30B row, so these metadata
+    uploads were **616 host-to-device transfers per token** — costing
+    more than every matmul in the model combined. The assumption was
+    true when the strided path was rare and false once it became hot.
+
+    The values are shapes and strides: a model touches a few hundred
+    distinct tuples, so the cache is bounded in practice at tens of
+    kilobytes.
+
+    It is deliberately NEVER evicted, and that is a correctness
+    requirement rather than a simplification: a frozen replay plan
+    records raw device POINTERS inside its kernel launches, so evicting
+    a buffer between recording and replay would leave the plan pointing
+    at freed memory.
+
+    Safe to share because every consumer is read-only — the four call
+    sites are `_strided_copy` and `_strided_scatter`, and the kernels
+    only `tl.load` these pointers, never `tl.store` to them.
     """
+    key = (tuple(int(v) for v in values), int(device_idx))
+    hit = _INT64_ARRAY_CACHE.get(key)
+    if hit is not None:
+        return hit
+
     import numpy as _np
     arr = _np.asarray(values, dtype=_np.int64)
     DeviceAllocator.set_device(device_idx)
-    return NBXTensor.from_numpy(arr)
+    buf = NBXTensor.from_numpy(arr)
+    _INT64_ARRAY_CACHE[key] = buf
+    return buf
 
 
 # PyTorch's hard limit on tensor rank. Beyond this we refuse to launch
