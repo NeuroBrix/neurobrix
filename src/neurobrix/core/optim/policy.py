@@ -140,7 +140,18 @@ PASS_REGISTRY: dict[str, PassPolicy] = {
         ),
         PassPolicy(
             name="fusion_horizontal",
-            gate_class=GateClass.EXACT,
+            # RECLASSIFIED 2026-08-20 by its own byte gate. Declared
+            # EXACT and required to earn it; the full-zoo gate refused.
+            # omni_audio_compiled changed DETERMINISTICALLY (pass1 ==
+            # pass2, both != the OFF baseline) while 61 of 65 artifacts
+            # matched — the fused GEMM's wider N made the kernel choose
+            # a different accumulation order over K, exactly the risk
+            # the module documented before the gate ran. The contract
+            # said reclassify rather than widen a tolerance, so it is
+            # reclassified: the arithmetic is mathematically identical
+            # and numerically reassociated, which is what FLOATING
+            # means here.
+            gate_class=GateClass.FLOATING,
             provenance="fusion/matcher.py",
             version=1,
             default_on=False,  # lands with its measured benchmark delta

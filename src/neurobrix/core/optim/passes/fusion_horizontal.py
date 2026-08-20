@@ -299,12 +299,28 @@ def apply_fusion_horizontal(dag: dict, plan: dict) -> int:
             if wp is not None and wp in ops:
                 hoisted.append(wp)
 
+        # The emitted ops must use the tracer's OWN encoding, not a
+        # plausible one. `aten::cat` takes its tensors as a
+        # `tensor_tuple` in args[0] with the dim in args[1] (and a
+        # mirrored `dim` field); passing them only through
+        # input_tensor_ids made the engine read the dim scalar as the
+        # tensor list — "cat() received an invalid combination of
+        # arguments - got (int, dim=int)" on six audio cells,
+        # 2026-08-19. Copied from a traced cat rather than guessed.
+        member_wtids = [m["weight_tid"] for m in members]
         ops[cat_uid] = {
             "op_uid": cat_uid,
             "op_type": "aten::cat",
-            "input_tensor_ids": [m["weight_tid"] for m in members],
+            "input_tensor_ids": member_wtids,
             "output_tensor_ids": [w_fused],
-            "attributes": {"args": [{"type": "scalar", "value": 1}]},
+            "attributes": {
+                "args": [
+                    {"type": "tensor_tuple", "tensor_ids": member_wtids},
+                    {"type": "scalar", "value": 1},
+                ],
+                "kwargs": {},
+                "dim": 1,
+            },
         }
         tensors[w_fused] = {"shape": [k, group["total_cols"]],
                             "dtype": (tensors.get(members[0]["weight_tid"]) or {}).get("dtype"),
@@ -315,7 +331,17 @@ def apply_fusion_horizontal(dag: dict, plan: dict) -> int:
             "op_type": "aten::mm",
             "input_tensor_ids": [src, w_fused],
             "output_tensor_ids": [wide_out],
-            "attributes": {},
+            # Tensor operands travel in args as {"type": "tensor"}, and
+            # args[0] is the tensor itself — the same encoding a traced
+            # mm carries. Emitting an empty attrs dict left the engine
+            # with no operands to bind.
+            "attributes": {
+                "args": [
+                    {"type": "tensor", "tensor_id": src},
+                    {"type": "tensor", "tensor_id": w_fused},
+                ],
+                "kwargs": {},
+            },
         }
         tensors[wide_out] = {"shape": [rows, group["total_cols"]],
                              "dtype": dtype, "device": device}
@@ -330,12 +356,21 @@ def apply_fusion_horizontal(dag: dict, plan: dict) -> int:
                 "input_tensor_ids": [wide_out],
                 # dim, start, end, step — the decomposed-ATen form both
                 # engines already dispatch.
-                "attributes": {"args": [
-                    {"type": "scalar", "value": 1},
-                    {"type": "scalar", "value": offset},
-                    {"type": "scalar", "value": offset + m["cols"]},
-                    {"type": "scalar", "value": 1},
-                ]},
+                # Traced form: args[0] is the tensor, then dim, start,
+                # end — no step — with the same three values mirrored
+                # as named fields.
+                "attributes": {
+                    "args": [
+                        {"type": "tensor", "tensor_id": wide_out},
+                        {"type": "scalar", "value": 1},
+                        {"type": "scalar", "value": offset},
+                        {"type": "scalar", "value": offset + m["cols"]},
+                    ],
+                    "kwargs": {},
+                    "dim": 1,
+                    "start": offset,
+                    "end": offset + m["cols"],
+                },
                 "output_tensor_ids": [m["out_tid"]],
             }
             band_uids.append(slice_uid)
