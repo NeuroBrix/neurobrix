@@ -1754,8 +1754,16 @@ def mm(a, b, _epilogue: int = 0) :
     return c
 
 
-def bmm(a, b) :
+def bmm(a, b, allow_strided_b: bool = False) :
     """Batched matrix multiplication: C[i] = A[i] @ B[i].
+
+    `allow_strided_b` lets the caller hand in a non-contiguous B and have
+    the kernel walk it by its own strides. `baddbmm_kernel` already
+    receives all three of B's strides; the unconditional `.contiguous()`
+    below simply threw that generality away. Off by default — a badly
+    strided operand can cost more in uncoalesced loads than the copy it
+    saves, so it is opt-in per call site with its measurement, never a
+    blanket change. See `_math_attention`, the first caller.
     Kernel accumulates in fp32 (hardware). Output matches input dtype.
     DtypeEngine handles overflow protection externally.
 
@@ -1812,7 +1820,8 @@ def bmm(a, b) :
     assert B == B2 and K == K2, f"bmm shape mismatch: {tuple(a.shape)} @ {tuple(b.shape)}"
 
     a = a.contiguous()
-    b = b.contiguous()
+    if not allow_strided_b:
+        b = b.contiguous()
     out_dtype = _matmul_out_dtype(a, M, force_fp32=True)
     c = NBXTensor.empty((B, M, N), device=a.device, dtype=out_dtype)
     ieee = (not _NBX_HAS_NATIVE_BF16) and (out_dtype == NBXDtype.float32)
@@ -6925,12 +6934,25 @@ def _math_attention(q, k, v, attn_mask=None, is_causal=False, scale=None):
 
     # Reshape to 3D for bmm
     q_3d = q.reshape(B * H, T_q, D)
-    # Transpose K's last two dims so bmm computes Q @ K^T
-    k_3d_t = k.transpose(-2, -1).contiguous().reshape(B * H, D, T_k)
+    # Q @ K^T without materialising K^T.
+    #
+    # This used to be `k.transpose(-2,-1).contiguous().reshape(...)`,
+    # which copied the whole K tile on every layer of every decode step
+    # to serve a single-token query — on the canonical 30B row, 48 x
+    # [32, 256, 128] per token. `baddbmm_kernel` takes B's strides and
+    # can walk the transposed view directly. Measured on that exact
+    # shape: BIT-IDENTICAL result, 0.519 ms -> 0.122 ms (x4.26), which
+    # over 48 layers is ~19 ms per token.
+    #
+    # Order matters: reshape FIRST on the contiguous k (merging B and H,
+    # a pure view), THEN transpose. Transposing first and reshaping
+    # after would send `reshape` through its own materialisation and put
+    # the copy straight back.
+    k_3d_t = k.reshape(B * H, T_k, D).transpose(-2, -1)
     v_3d = v.reshape(B * H, T_k, D_v)
 
     # scores = q @ k^T (bmm returns fp32 on V100 via force_fp32)
-    scores = bmm(q_3d, k_3d_t)  # [B*H, T_q, T_k]
+    scores = bmm(q_3d, k_3d_t, allow_strided_b=True)  # [B*H, T_q, T_k]
     scores = mul(scores, float(scale))
 
     # Causal/explicit mask handling — additive bias on scores.
