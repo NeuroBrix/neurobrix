@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Top-k sampling returned wrong tokens on the Triton engine.** When
+  sampling with `top_k` over a large vocabulary, the operation that
+  selects the k highest-scoring tokens could return values that were not
+  the true top k, together with token identifiers that did not match the
+  values they were returned with. Generated text was still fluent, which
+  is what made this hard to notice: the sampler was choosing from a
+  corrupted candidate set rather than failing outright. Anyone who ran
+  Triton-engine generation with top-k sampling in 0.5.1 should regard
+  that output as unreliable and re-run it.
+
+  Two things had to be true at once for the fault to appear, which is
+  why it escaped earlier testing: the vocabulary had to be large enough
+  to be processed in several passes, and the number of candidates those
+  passes produced had to not be an exact power of two. Combinations that
+  happened to land on a power of two were correct, so a spot check could
+  easily pick a clean case and conclude the operation was sound.
+
+  **Greedy decoding was never affected** — it does not use this
+  operation at all. **Mixture-of-experts routing was never affected for
+  any published model**: routing takes a single-pass path that skips the
+  faulty step entirely, for any model with 256 experts or fewer, and the
+  largest published model has 128. The PyTorch engine was never affected
+  in any mode; it uses PyTorch's own implementation.
+
+  The operation is now checked on every release against an independent
+  reference, across vocabulary sizes, candidate counts and seeds, with
+  the returned values, the returned identifiers, and the agreement
+  between the two verified separately.
+
 ### Added
 
 - **Unreachable-code elimination at load time**: operations no output

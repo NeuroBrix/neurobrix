@@ -38,12 +38,38 @@ def _get_finfo_val(
     dtype,
     return_max,
 ):
-    # Return fp32 limits as literals — the kernel upcasts to fp32 internally.
-    # Using Python float literals avoids constexpr/fp64 type mismatch.
-    if return_max:
-        return 3.4028235e+38
+    """Saturating limit for `dtype`, as a Python float literal.
+
+    The limit MUST match the dtype of the buffer being loaded, not the
+    dtype the kernel computes in. `tl.load(..., other=v)` materialises
+    `v` in the POINTER's element type, so an fp32 limit handed to an
+    fp16 buffer overflows and lands as -inf. That is not a benign
+    sentinel here: `_compare_and_swap` permutes with a masked sum, and
+    `0 * -inf` is NaN, which loses every comparison and collapses the
+    sort network (measured: pad slots surfacing into the top-k with
+    their INT32_MIN sentinel index, whenever chunk_num*k was not a
+    power of two).
+
+    Literals rather than `tl.constexpr(torch.finfo(...).max)` — the
+    upstream FlagGems form — because R33 forbids torch here and the
+    constexpr wrapper mixes fp64 into the comparison. Dropping the
+    dtype branching along with the torch call was the regression.
+    """
+    if dtype is tl.float16:
+        if return_max:
+            return 65504.0
+        else:
+            return -65504.0
+    elif dtype is tl.bfloat16:
+        if return_max:
+            return 3.3895314e+38
+        else:
+            return -3.3895314e+38
     else:
-        return -3.4028235e+38
+        if return_max:
+            return 3.4028235e+38
+        else:
+            return -3.4028235e+38
 
 
 # --- Stage 1: per-chunk top-k ---
@@ -103,19 +129,32 @@ def _compare_and_swap(x, ids, flip, i: core.constexpr, n_dims: core.constexpr):
     y = core.reshape(x, shape)
     y_idx = core.reshape(ids, shape)
 
-    # Slice left/right with stride 2**(n_dims - i - 1)
+    # Slice left/right with stride 2**(n_dims - i - 1).
+    #
+    # SELECT the unwanted lane away rather than multiplying it by zero.
+    # The upstream form is `tl.sum(y * (1 - mask), 1)`, which is exact
+    # for finite values but yields NaN on any +-inf, because 0 * inf is
+    # NaN. Selecting keeps the identity (-inf + 0 == -inf), so a
+    # non-finite entry sorts to its extreme instead of poisoning the
+    # comparison network. Callers do put -inf in the data: the sampler
+    # masks rejected logits with -inf and then takes a top-k over the
+    # result.
     mask = core.arange(0, 2)[None, :, None]
-    left = core.broadcast_to(tl.sum(y * (1 - mask), 1)[:, None, :], shape).to(x.dtype)
-    right = core.broadcast_to(tl.sum(y * mask, 1)[:, None, :], shape).to(x.dtype)
+    left = core.broadcast_to(
+        tl.sum(core.where(mask == 0, y, zeros_like(y)), 1)[:, None, :], shape
+    ).to(x.dtype)
+    right = core.broadcast_to(
+        tl.sum(core.where(mask == 1, y, zeros_like(y)), 1)[:, None, :], shape
+    ).to(x.dtype)
     left = core.reshape(left, x.shape)
     right = core.reshape(right, x.shape)
 
-    left_idx = core.broadcast_to(tl.sum(y_idx * (1 - mask), 1)[:, None, :], shape).to(
-        ids.dtype
-    )
-    right_idx = core.broadcast_to(tl.sum(y_idx * mask, 1)[:, None, :], shape).to(
-        ids.dtype
-    )
+    left_idx = core.broadcast_to(
+        tl.sum(core.where(mask == 0, y_idx, zeros_like(y_idx)), 1)[:, None, :], shape
+    ).to(ids.dtype)
+    right_idx = core.broadcast_to(
+        tl.sum(core.where(mask == 1, y_idx, zeros_like(y_idx)), 1)[:, None, :], shape
+    ).to(ids.dtype)
     left_idx = core.reshape(left_idx, ids.shape)
     right_idx = core.reshape(right_idx, ids.shape)
 
