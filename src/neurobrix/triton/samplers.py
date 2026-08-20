@@ -214,6 +214,64 @@ class CombinedSampler:
             logits_bytes, 1)  # H2D
         return logits
 
+    def _shift_mask_right(self, mask: NBXTensor) -> NBXTensor:
+        """Shift the top-p mask right by one and clear position 0.
+
+        Guarantees the highest-probability token is never masked
+        (HuggingFace/PyTorch convention). Without it, a peaked
+        distribution whose top probability already exceeds top_p masks
+        every token, softmax returns NaN, and the sampler yields 0.
+        """
+        shape = mask.shape
+        n = mask.numel()
+        buf = (_ctypes.c_char * n)()
+        DeviceAllocator.memcpy(_ctypes.addressof(buf), mask.data_ptr(),
+                               n, kind=2)  # D2H
+        arr = np.frombuffer(buf, dtype=np.bool_).reshape(shape).copy()
+        arr[..., 1:] = arr[..., :-1]
+        arr[..., 0] = False
+        DeviceAllocator.set_device(mask._device_idx)
+        return NBXTensor.from_numpy(np.ascontiguousarray(arr))
+
+    def _sample_from_candidates(self, logits: NBXTensor) -> NBXTensor:
+        """Sample from the top-k candidates, working at width k.
+
+        The masking formulation keeps the vector at full vocabulary width
+        and lets every later stage pay for entries that cannot be
+        sampled. On a 151936-token vocabulary with top_k=20, that is a
+        7600x overcharge on the sort, the softmax, the cumulative sum and
+        the draw. `multinomial` is the worst of them: it samples by
+        Gumbel-max, so it draws one uniform PER CATEGORY — 151936 random
+        numbers to pick one token.
+
+        Gathering the candidates first runs the same arithmetic over
+        top_k entries. It also removes the sort outright: topk already
+        returns its values sorted descending, which is the order the
+        top-p filter needs.
+
+        Distributionally this is exact. Gumbel-max over the masked full
+        vector adds noise to every entry, but the masked ones hold -inf
+        and -inf + g is still -inf, so only the k survivors can ever win
+        — both forms are exact Gumbel-max sampling from the same
+        categorical distribution. What changes is the REALISATION: k
+        Gumbels are drawn instead of V, so a seeded run picks a different
+        (equally valid) token. Nothing promises RNG realisations are
+        stable across versions, but a recorded baseline will move.
+        """
+        top_k = min(max(self.top_k, self.min_tokens_to_keep), logits.shape[-1])
+        cand_logits, cand_ids = w.topk_wrapper(logits, top_k, dim=-1)
+
+        if self.top_p < 1.0:
+            probs = w.softmax(cand_logits, dim=-1)
+            cum = w.cumsum_wrapper(probs, dim=-1)
+            mask = self._shift_mask_right(w.gt(cum, self.top_p))
+            cand_logits = w.masked_fill(cand_logits, mask, float('-inf'))
+
+        probs = w.softmax(cand_logits, dim=-1)
+        # A position within the candidate set, not a vocabulary id.
+        pos = w.multinomial_wrapper(probs, num_samples=1)
+        return w.gather_wrapper(cand_ids, -1, pos)
+
     def __call__(self, logits: NBXTensor,
                  input_ids: Optional[NBXTensor] = None, **kwargs) -> NBXTensor:
         # 1. Repetition penalty
@@ -223,42 +281,25 @@ class CombinedSampler:
         if self.temperature != 1.0 and self.temperature > 0:
             logits = w.div(logits, self.temperature)
 
-        # 3. Top-k filtering
+        # Greedy needs no candidate set and draws nothing.
+        if self.temperature <= 0:
+            return w.argmax_wrapper(logits, dim=-1, keepdim=True)
+
+        # 3+4+5 at width k when a top-k cut bounds the candidate set.
         if self.top_k > 0:
-            top_k = min(max(self.top_k, self.min_tokens_to_keep), logits.shape[-1])
-            values, _indices = w.topk_wrapper(logits, top_k, dim=-1)
-            kth = values.select(-1, top_k - 1).unsqueeze(-1)
-            logits = w.masked_fill(logits, w.lt(logits, kth), float('-inf'))
+            return self._sample_from_candidates(logits)
 
         # 4. Top-p filtering (sort via CPU for portability — ~1ms per token)
         if self.top_p < 1.0:
             sorted_logits, sorted_indices = _cpu_sort(logits, descending=True)
             sorted_probs = w.softmax(sorted_logits, dim=-1)
             cum_probs = w.cumsum_wrapper(sorted_probs, dim=-1)
-            sorted_mask = w.gt(cum_probs, self.top_p)
-
-            # Shift mask right by 1 and zero out position 0 — guarantees
-            # the top-1 token is never masked (HuggingFace/PyTorch convention).
-            # Without this, a peaked distribution where probs[0] > top_p masks
-            # every token → softmax → NaN → sampler returns 0.
-            _shape = sorted_mask.shape
-            _n = sorted_mask.numel()
-            _mbuf = (_ctypes.c_char * _n)()
-            DeviceAllocator.memcpy(_ctypes.addressof(_mbuf),
-                                   sorted_mask.data_ptr(), _n, kind=2)  # D2H
-            _mask_np = np.frombuffer(_mbuf, dtype=np.bool_).reshape(_shape).copy()
-            _mask_np[..., 1:] = _mask_np[..., :-1]
-            _mask_np[..., 0] = False
-            DeviceAllocator.set_device(sorted_mask._device_idx)
-            sorted_mask = NBXTensor.from_numpy(np.ascontiguousarray(_mask_np))
-
+            sorted_mask = self._shift_mask_right(w.gt(cum_probs, self.top_p))
             indices_to_remove = w.scatter_wrapper(
                 sorted_mask, -1, sorted_indices, sorted_mask)
             logits = w.masked_fill(logits, indices_to_remove, float('-inf'))
 
-        # 5. Sample
-        if self.temperature <= 0:
-            return w.argmax_wrapper(logits, dim=-1, keepdim=True)
+        # 5. Sample. Greedy already returned above.
         probs = w.softmax(logits, dim=-1)
         return w.multinomial_wrapper(probs, num_samples=1)
 

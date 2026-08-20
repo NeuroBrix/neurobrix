@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Sampling with `top_k` is dramatically faster on the Triton engine.**
+  The top-k cut used to be applied by masking: rejected tokens were set
+  aside but the vector stayed at full vocabulary width, so every later
+  stage — the sort, the softmax, the cumulative sum, the draw itself —
+  paid for 150,000 entries when at most `top_k` of them (typically 20 to
+  50) could ever be chosen. The draw was the worst of these: it samples
+  by a method that needs one random number per candidate, so it was
+  drawing 150,000 random numbers to pick a single token. The candidates
+  are now collected first and everything after runs over that short
+  list, which also removes the sort entirely because the candidates
+  already arrive in order. Measured on a 30B model over a 152k-token
+  vocabulary, the sampling stage of each decoding step fell from 43.5 ms
+  to 3.0 ms.
+
+  The distribution sampled from is unchanged — both forms are exact
+  samplers for the same set of probabilities. What changes is which
+  random numbers get consumed, so a run with a fixed seed will now
+  produce different, equally valid, text than the same seed did before.
+  Nothing has ever promised that seeded output stays identical across
+  versions, but if you depend on a recorded sample, re-record it.
+
 ## [0.5.2] - 2026-08-20
 
 ### Fixed
