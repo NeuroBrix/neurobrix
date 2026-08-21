@@ -119,6 +119,18 @@ class TritonEncoderDecoderEngine:
         logits_source = decoder_stage.get("logits_source", "embed_weight_tied")
         repetition_penalty = defaults.get("repetition_penalty", 1.0)
 
+        # Sampling-parameter contract: this path implements temperature
+        # and the repetition penalty only. Anything else configured here
+        # would be silently dropped, so refuse instead. See
+        # core/module/sampling_contract.py.
+        from neurobrix.core.module.sampling_contract import (
+            enforce_sampling_support)
+        _samp_cfg, _samp_explicit = _effective_sampling(
+            self.ctx, defaults)
+        enforce_sampling_support(
+            "encoder_decoder (triton)", ("temperature", "repetition_penalty"),
+            _samp_cfg, explicit=_samp_explicit)
+
         # Forced decoder IDs (language/task tokens for Whisper)
         forced_decoder_ids = defaults.get("forced_decoder_ids", [])
         forced_map = {pos: tid for pos, tid in forced_decoder_ids}
@@ -339,3 +351,34 @@ def _is_tensor(val) -> bool:
     return hasattr(val, 'shape') and hasattr(val, 'dtype')
 
 
+_SAMPLING_PARAMS = ("temperature", "top_k", "top_p",
+                    "repetition_penalty", "min_p")
+
+
+def _effective_sampling(ctx, defaults):
+    """Effective sampling config, and which parts the USER asked for.
+
+    The registry's `defaults` is only half the story: a CLI flag or a
+    serving request lands as a `global.*` variable in the resolver, and
+    the autoregressive flow's own override table reads it from there.
+    A guard that inspected `defaults` alone would miss exactly the case
+    it exists to catch — whisper carries no `top_k` at all, so
+    `--top-k 20` is invisible in `defaults` and visible only here.
+
+    Returns (config, explicit) where config is defaults overlaid with
+    the overrides, and explicit names the overridden parameters.
+    """
+    config = {k: defaults.get(k) for k in _SAMPLING_PARAMS}
+    explicit = set()
+    resolver = getattr(ctx, "variable_resolver", None)
+    if resolver is None:
+        return config, explicit
+    for name in _SAMPLING_PARAMS:
+        try:
+            val = resolver.get(f"global.{name}", None)
+        except Exception:
+            continue
+        if val is not None:
+            config[name] = val
+            explicit.add(name)
+    return config, explicit

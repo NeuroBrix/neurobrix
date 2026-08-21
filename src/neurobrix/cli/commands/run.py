@@ -472,6 +472,10 @@ def cmd_run(args):
         inputs["global.temperature"] = args.temperature
     if args.repetition_penalty is not None:
         inputs["global.repetition_penalty"] = args.repetition_penalty
+    if getattr(args, 'top_k', None) is not None:
+        inputs["global.top_k"] = args.top_k
+    if getattr(args, 'top_p', None) is not None:
+        inputs["global.top_p"] = args.top_p
     if getattr(args, 'max_tokens', None) is not None:
         inputs["global.max_tokens"] = args.max_tokens
     if args.chat_mode is not None:
