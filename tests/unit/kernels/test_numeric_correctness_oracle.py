@@ -132,10 +132,14 @@ def _relative_error(B, H, T, D, causal=True, seed=0):
 _HEAD_DIMS = [16, 32, 64, 80, 96, 112, 127, 128, 129, 160, 192, 255, 256]
 
 
-# Head dims where the kernel is KNOWN WRONG today — P-FLASH-D128-CORRECTNESS.
-# Listed explicitly rather than skipped, so that a fix turns these into
-# unexpected passes and forces the list to be revisited.
-_KNOWN_BROKEN_HEAD_DIMS = {128, 256}
+# Head dims known wrong at some point. EMPTIED 2026-08-21 when
+# P-FLASH-D128-CORRECTNESS landed its exact zero-pad detour: 128 went
+# from 4.2e-01 to 3.7e-04 and 256 from 4.1e-01 to 4.1e-04, both inside
+# the bound. The mechanism worked as designed — the entries asserted
+# themselves broken, the fix made those assertions fail, and the failure
+# forced this list to be revisited rather than letting a fix pass
+# unnoticed. Kept as a named set so the next defect has somewhere to go.
+_KNOWN_BROKEN_HEAD_DIMS: set = set()
 
 
 @pytest.mark.parametrize("D", _HEAD_DIMS)

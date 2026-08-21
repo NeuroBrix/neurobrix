@@ -7220,6 +7220,54 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
         return _math_attention(q, k, v, attn_mask=attn_mask,
                                 is_causal=is_causal, scale=softmax_scale)
 
+    # ---- P-FLASH-D128-CORRECTNESS: exact detour around a wrong kernel ----
+    #
+    # The Triton flash kernel returns WRONG answers when headdim is a
+    # power of two >= 128 — measured against a float64 reference:
+    #
+    #     headdim 127 -> 5.0e-04     headdim 128 -> 4.2e-01  (208x bound)
+    #     headdim 129 -> 3.1e-04     headdim 256 -> 4.1e-01
+    #
+    # 127 and 128 compile the SAME kernel source with the SAME tile and
+    # the SAME block sizes; the divergence is in Triton's codegen for
+    # that specialisation, and it is a known upstream class (Dao-AILab's
+    # own flash_attn_triton.py: "Triton bug ... we get the wrong
+    # output!", tested only on A100 — we run sm_70). Root cause needs a
+    # version bisect / PTX diff and is tracked separately; it must not
+    # keep a wrong kernel in production in the meantime.
+    #
+    # The detour is ZERO-PADDING the head dimension by one. Padded
+    # components contribute exactly nothing to a dot product, so
+    # Q·K is unchanged, the softmax is unchanged, and the extra output
+    # columns are zero and discarded: the algebra is EXACT, not
+    # approximate. Measured 3.35e-01 -> 5.95e-04, i.e. inside the bound
+    # and equal to the math path's own accuracy.
+    #
+    # NOTE ON THE SCALE, which is the trap here: `softmax_scale` is
+    # computed from the TRUE headdim above and is passed through
+    # unchanged. Letting the kernel derive 1/sqrt(headdim) from the
+    # padded value would silently rescale every score.
+    #
+    # A half-and-half split of the head dimension was evaluated first and
+    # is NOT viable: the softmax needs the COMPLETE score, so two
+    # 64-wide flash calls produce softmaxes of half dot products at the
+    # wrong scale, which no later operation can recombine. Splitting only
+    # works if the scores are materialised first, which is the math path.
+    _hd_broken = (headdim >= 128
+                  and (headdim & (headdim - 1)) == 0)
+    if _hd_broken:
+        _pad = 1
+        def _pad_hd(t):
+            z = NBXTensor.zeros(tuple(t.shape[:-1]) + (_pad,),
+                                dtype=t._dtype, device=f"cuda:{t._device_idx}")
+            return NBXTensor.cat([t, z], dim=-1).contiguous()
+        _dv = v.shape[-1]
+        out = scaled_dot_product_attention_wrapper(
+            _pad_hd(q), _pad_hd(k), _pad_hd(v), attn_mask=attn_mask,
+            dropout_p=dropout_p, is_causal=is_causal,
+            scale=softmax_scale, **kwargs)
+        return out.narrow(-1, 0, _dv).contiguous()
+
     # Adaptive BLOCK_M (Phase 1): decode-path seqlen_q is typically 1–4. Using
     # BLOCK_M=128 wastes >99% of the Q tile. 16 is the floor enforced by
     # tl.dot (TensorCore tile minimum) — below that the kernel crashes.
