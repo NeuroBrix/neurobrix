@@ -318,7 +318,21 @@ def _effective_sampling(ctx, defaults):
             val = resolver.get(f"global.{name}", None)
         except Exception:
             continue
-        if val is not None:
-            config[name] = val
+        if val is None:
+            continue
+        config[name] = val
+        # EXPLICIT means the value DIFFERS from the registry default,
+        # not merely that the resolver holds one. The configuration
+        # pipeline populates `global.*` from defaults too, so presence
+        # alone classifies every inherited field as a user request — the
+        # first version did exactly that and refused MiniCPM-o for a
+        # top_k=20 nobody had asked for. Re-requesting the default value
+        # lands in the inherited branch, which is harmless: it is the
+        # same value that was going to be ignored either way.
+        try:
+            same = float(val) == float(defaults.get(name))
+        except (TypeError, ValueError):
+            same = val == defaults.get(name)
+        if not same:
             explicit.add(name)
     return config, explicit
