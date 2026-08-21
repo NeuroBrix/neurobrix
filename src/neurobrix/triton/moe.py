@@ -6,12 +6,10 @@ handles ALL experts instead of iterating one-by-one.
 Architecture:
   1. moe_align_block_size: sort tokens by expert, pad to BLOCK_M alignment
   2. Build offset tables: [E] int64 element offsets into arena (zero-copy, cached)
-  3. Pass 1 (gate): fused GEMM via offset table → [M*top_k, N]
-  4. Pass 2 (up):   fused GEMM via offset table → [M*top_k, N]
-  5. Activation:    silu(gate) * up → [M*top_k, N]
-  6. Pass 3 (down): fused GEMM + routing weights → [M*top_k, K]
-     (the SCHEDULE is padded; the OUTPUTS are not — the kernel
-      stores at the original token index under a mask)
+  3. Pass 1 (gate): fused GEMM via offset table → [padded, N]
+  4. Pass 2 (up):   fused GEMM via offset table → [padded, N]
+  5. Activation:    silu(gate) * up → [padded, N]
+  6. Pass 3 (down): fused GEMM + routing weights → [padded, K]
   7. Reduce across top_k → [M, K]
 
 Zero extra GPU memory — expert weights stay in the arena. Only a small
@@ -629,26 +627,7 @@ def _fused_moe_pass(
     """Three fused GEMM passes + silu activation."""
     dt = hidden_states._dtype
     total_tokens = M * top_k
-
-    # Intermediates are sized on the ORIGINAL token layout, not the
-    # sorted-and-padded one.
-    #
-    # `sorted_token_ids` is the padded schedule — one BLOCK_SIZE_M-wide
-    # block per active expert, so at decode (M=1, top_k=8) it is 128
-    # slots for 8 real rows. But the kernel does not write at the slot
-    # index: it writes at `offs_token`, the ORIGINAL flat (token, k)
-    # index, under `token_mask = offs_token < num_valid_tokens` where
-    # num_valid_tokens is M*top_k. Padded slots carry a sentinel and
-    # their store is masked off. Sizing these buffers at `padded` was
-    # therefore a 16x over-allocation at every layer of every decode
-    # step, carried through silu and mul as well.
-    #
-    # `empty` rather than `zeros`: every row below total_tokens is
-    # written exactly once — each (token, expert) pair appears once in
-    # the schedule — and only those rows are ever read (`narrow` below).
-    # Zeroing protected nothing; it would only have turned a scheduling
-    # bug into a silently plausible zero instead of an obvious one.
-    rows = total_tokens
+    padded = sorted_token_ids.shape[0]
 
     # Diagnostic: dump the stride config being passed to the kernel for each
     # projection. DeepSeek 1408/2048 layout vs Qwen3 1536/2048 — a wrong
@@ -689,12 +668,12 @@ def _fused_moe_pass(
                 top_k, mul_routed_weight=mul_routed, topk_divide=topk_div,
             )
 
-    gate_out = NBXTensor.empty((rows, N_gate), dtype=dt, device=f"cuda:{dev}")
+    gate_out = NBXTensor.zeros((padded, N_gate), dtype=dt, device=f"cuda:{dev}")
     _proj("gate", hidden_states, gate_out, N_gate, K, False)
     if _diag_dump is not None:
         _diag_dump("gate_out", gate_out)
 
-    up_out = NBXTensor.empty((rows, N_gate), dtype=dt, device=f"cuda:{dev}")
+    up_out = NBXTensor.zeros((padded, N_gate), dtype=dt, device=f"cuda:{dev}")
     _proj("up", hidden_states, up_out, N_gate, K, False)
     if _diag_dump is not None:
         _diag_dump("up_out", up_out)
@@ -706,7 +685,7 @@ def _fused_moe_pass(
         _diag_dump("activated", activated)
 
     # Down pass
-    down_out = NBXTensor.empty((rows, K), dtype=dt, device=f"cuda:{dev}")
+    down_out = NBXTensor.zeros((padded, K), dtype=dt, device=f"cuda:{dev}")
     _proj("down", activated, down_out, K, N_gate, True, topk_div=False)
     if _diag_dump is not None:
         _diag_dump("down_out", down_out)
