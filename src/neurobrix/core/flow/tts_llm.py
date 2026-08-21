@@ -256,6 +256,19 @@ class TTSLLMEngine(FlowHandler):
         min_p = _ov.get("global.min_p", defaults.get("min_p", 0.05))
         repetition_penalty = _ov.get("global.repetition_penalty", defaults.get("repetition_penalty", 1.2))
 
+        # Sampling-parameter contract: this path implements temperature,
+        # top-p, min-p and the repetition penalty — but NOT top-k. A
+        # configured top_k would be silently dropped, so refuse when it
+        # was asked for explicitly and report when it was inherited.
+        # See core/module/sampling_contract.py.
+        from neurobrix.core.module.sampling_contract import (
+            enforce_sampling_support)
+        _samp_cfg, _samp_explicit = _effective_sampling(self.ctx, defaults)
+        enforce_sampling_support(
+            "tts_llm (compiled)",
+            ("temperature", "top_p", "min_p", "repetition_penalty"),
+            _samp_cfg, explicit=_samp_explicit)
+
         if eos_token_id is None:
             raise RuntimeError("ZERO FALLBACK: eos_token_id missing from defaults.json.")
         if bos_token_id is None:
@@ -767,3 +780,30 @@ class TTSLLMEngine(FlowHandler):
                 wf.writeframes(struct.pack(f'<{len(audio_int16)}h', *audio_int16))
 
         print(f"   [Audio] Saved: {output_path} ({len(audio_np)/sample_rate:.1f}s @ {sample_rate}Hz)")
+
+
+_SAMPLING_PARAMS = ("temperature", "top_k", "top_p",
+                    "repetition_penalty", "min_p")
+
+
+def _effective_sampling(ctx, defaults):
+    """Effective sampling config, and which parts the USER asked for.
+
+    `defaults` is only half the story: a CLI flag or a serving request
+    lands as a `global.*` variable in the resolver. A guard reading
+    `defaults` alone misses exactly the case it exists to catch.
+    """
+    config = {k: defaults.get(k) for k in _SAMPLING_PARAMS}
+    explicit = set()
+    resolver = getattr(ctx, "variable_resolver", None)
+    if resolver is None:
+        return config, explicit
+    for name in _SAMPLING_PARAMS:
+        try:
+            val = resolver.get(f"global.{name}", None)
+        except Exception:
+            continue
+        if val is not None:
+            config[name] = val
+            explicit.add(name)
+    return config, explicit
