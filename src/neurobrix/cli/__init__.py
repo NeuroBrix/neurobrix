@@ -88,6 +88,18 @@ For more information: https://neurobrix.es
     run_parser.add_argument('--temperature', type=float, default=None, help='Sampling temperature (0 = greedy)')
     run_parser.add_argument('--repetition-penalty', type=float, default=None, dest='repetition_penalty',
                             help='Repetition penalty (1.0 = none, 1.1-1.5 recommended)')
+    # top-k / top-p were already honoured by both engines through the
+    # flow's global.top_k / global.top_p overrides; only the flags were
+    # missing, so asking for them meant knowing to write
+    # `--set global.top_k=0`. A setting the engine reads and the CLI
+    # cannot name is an interface that hides its own capability.
+    run_parser.add_argument('--top-k', type=int, default=None, dest='top_k',
+                            help='Keep only the k highest-probability tokens '
+                                 '(0 = disabled)')
+    run_parser.add_argument('--top-p', type=float, default=None, dest='top_p',
+                            help='Nucleus sampling: keep the smallest set of '
+                                 'tokens whose probability sums to p '
+                                 '(1.0 = disabled)')
     run_parser.add_argument('--set', action='append', metavar='KEY=VALUE',
                             help='Set arbitrary runtime variable (e.g., --set global.cfg=7.5)')
     # Execution modes (mutually exclusive). When no flag is passed the
