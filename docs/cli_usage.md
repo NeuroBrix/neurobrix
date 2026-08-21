@@ -15,8 +15,24 @@ open-source models. Run `neurobrix run --help` for the full flag list.
 | `--model <name>` | Model directory name in `~/.neurobrix/cache/` |
 | `--hardware <id>` | Hardware profile (auto-detect if omitted) |
 | `--output <path>` | Save destination. Auto-extension if extension omitted; strict mismatch error otherwise |
-| `--seed <int>` | Deterministic seed |
+| `--seed <int>` | Seeds the sampler and any random initialisation. **Greedy decoding (`--temperature 0`) is reproducible; seeded *sampling* is not yet reproducible on the Triton engine for models with a head dimension of 128** — see the note below |
 | `--triton` / `--triton-sequential` / `--sequential` | Execution backend (default: compiled native) |
+
+> **Reproducibility, precisely.** `--temperature 0` (greedy decoding) is
+> reproducible run to run: measured stable over sixteen runs across five
+> configurations, including a 4,164-token context.
+>
+> Seeded **sampling** is a weaker guarantee today. The Triton attention
+> kernel is non-deterministic when the model's head dimension is 128 —
+> reproduced in isolation at a single head and a 256-token sequence, so
+> it is not a long-context or large-model effect. The perturbation is
+> small; greedy absorbs it because an argmax has a margin, while a
+> sampling draw near a tie can flip. In practice two runs at the same
+> seed usually agree and occasionally do not.
+>
+> This is tracked as P-NONDET-LONG-ROW with a minimal reproducer. The
+> guarantee stated here is the one that currently holds, not the one we
+> intend to ship.
 
 ## Execution modes — two branches, four modes
 
