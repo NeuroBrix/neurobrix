@@ -6923,17 +6923,38 @@ def _math_attention(q, k, v, attn_mask=None, is_causal=False, scale=None):
     if scale is None:
         scale = 1.0 / _math.sqrt(D)
 
-    # GQA broadcast — repeat K/V heads to match Q. For plain MHA
-    # (H == H_k) this is a no-op view.
-    if H != H_k:
-        groups = H // H_k
-        assert H_k * groups == H
-        # [B, H_k, T_k, D] -> [B, H_k, 1, T_k, D] -> [B, H_k, groups, T_k, D] -> [B, H, T_k, D]
-        k = k.unsqueeze(2).expand(B, H_k, groups, T_k, D).reshape(B, H, T_k, D).contiguous()
-        v = v.unsqueeze(2).expand(B, H_k, groups, T_k, D_v).reshape(B, H, T_k, D_v).contiguous()
+    # GQA WITHOUT BROADCASTING K/V.
+    #
+    # The old form expanded K and V up to Q's head count and
+    # materialised the result — the whole KV cache, per layer, per
+    # token. Measured at a 4,164-token context that was 34 MB per call,
+    # 4.9 GB per decode step for K and the same again for V, and it is
+    # the dominant term in our context scaling: `strided_copy` fitted at
+    # 11.9 us per context token against `baddbmm`'s 3.8.
+    #
+    # The algebra never needed it. Q's heads can be grouped INSIDE each
+    # KV head instead: with H = H_k * groups the flat order of
+    # [B, H, T_q, D] is already b, h_k, g, t, d, so viewing it as
+    # [B*H_k, groups*T_q, D] is a pure view, and batched against
+    # [B*H_k, T_k, D] it computes exactly the same dot products.
+    #
+    # For plain MHA groups == 1, BH == B*H and M == T_q, so every
+    # expression below is literally the previous one — MHA is unchanged
+    # by construction, not by luck.
+    groups = H // H_k
+    assert H_k * groups == H, f"GQA: H={H} not a multiple of H_k={H_k}"
+    BH = B * H_k
+    M = groups * T_q
+
+    def _mask_to_grouped(m2d):
+        """[T_q, T_k] -> [BH, M, T_k], row (g, t) taking mask row t."""
+        if groups == 1:
+            return m2d.unsqueeze(0).expand(BH, M, T_k)
+        return (m2d.unsqueeze(0).expand(groups, T_q, T_k)
+                .reshape(M, T_k).unsqueeze(0).expand(BH, M, T_k))
 
     # Reshape to 3D for bmm
-    q_3d = q.reshape(B * H, T_q, D)
+    q_3d = q.reshape(BH, M, D)
     # Q @ K^T without materialising K^T.
     #
     # This used to be `k.transpose(-2,-1).contiguous().reshape(...)`,
@@ -6948,11 +6969,11 @@ def _math_attention(q, k, v, attn_mask=None, is_causal=False, scale=None):
     # a pure view), THEN transpose. Transposing first and reshaping
     # after would send `reshape` through its own materialisation and put
     # the copy straight back.
-    k_3d_t = k.reshape(B * H, T_k, D).transpose(-2, -1)
-    v_3d = v.reshape(B * H, T_k, D_v)
+    k_3d_t = k.reshape(BH, T_k, D).transpose(-2, -1)
+    v_3d = v.reshape(BH, T_k, D_v)
 
     # scores = q @ k^T (bmm returns fp32 on V100 via force_fp32)
-    scores = bmm(q_3d, k_3d_t, allow_strided_b=True)  # [B*H, T_q, T_k]
+    scores = bmm(q_3d, k_3d_t, allow_strided_b=True)  # [BH, M, T_k]
     scores = mul(scores, float(scale))
 
     # Causal/explicit mask handling — additive bias on scores.
@@ -6960,18 +6981,20 @@ def _math_attention(q, k, v, attn_mask=None, is_causal=False, scale=None):
     if is_causal and attn_mask is None:
         device_idx = q._device_idx if hasattr(q, '_device_idx') else 0
         bias = _get_causal_bias(device_idx, T_q, T_k, scores.nbx_dtype)
-        # bias shape [T_q, T_k] -> broadcast to [B*H, T_q, T_k]
-        scores = add(scores, bias.unsqueeze(0).expand(B * H, T_q, T_k))
+        # bias [T_q, T_k] -> [BH, M, T_k], grouped like the scores
+        scores = add(scores, _mask_to_grouped(bias))
     elif attn_mask is not None:
         # attn_mask may be [T_q, T_k], [B, T_q, T_k], or [B, H, T_q, T_k].
         if attn_mask.ndim == 2:
-            mask_3d = attn_mask.unsqueeze(0).expand(B * H, T_q, T_k)
+            mask_3d = _mask_to_grouped(attn_mask)
         elif attn_mask.ndim == 3:
             if attn_mask.shape[0] == 1 and B > 1:
                 attn_mask = attn_mask.expand(B, T_q, T_k)
-            mask_3d = attn_mask.unsqueeze(1).expand(B, H, T_q, T_k).reshape(B * H, T_q, T_k)
+            mask_3d = (attn_mask.unsqueeze(1).unsqueeze(1)
+                       .expand(B, H_k, groups, T_q, T_k).reshape(BH, M, T_k))
         elif attn_mask.ndim == 4:
-            mask_3d = attn_mask.expand(B, H, T_q, T_k).reshape(B * H, T_q, T_k)
+            mask_3d = (attn_mask.expand(B, H, T_q, T_k)
+                       .reshape(B, H_k, groups, T_q, T_k).reshape(BH, M, T_k))
         else:
             raise RuntimeError(f"unsupported attn_mask.ndim={attn_mask.ndim}")
         if mask_3d.nbx_dtype != scores.nbx_dtype:
@@ -7001,7 +7024,7 @@ def _math_attention(q, k, v, attn_mask=None, is_causal=False, scale=None):
         p = p.to(v_3d.nbx_dtype)
 
     # out = p @ v (bmm again returns fp32 on V100)
-    out_3d = bmm(p, v_3d)  # [B*H, T_q, D_v]
+    out_3d = bmm(p, v_3d)  # [BH, M, D_v]
     if out_3d.nbx_dtype != q.nbx_dtype:
         out_3d = out_3d.to(q.nbx_dtype)
 

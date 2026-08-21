@@ -347,14 +347,26 @@ class TritonAttentionInterceptor:
         else:
             k_full, v_full = self.cache.update(layer_idx, k, v)
 
-        # GQA: re-expand
-        if self._gqa_group_size > 1:
-            batch, kv_heads, cached_len, k_dim = k_full.shape
-            k_full = k_full.unsqueeze(2).expand(-1, -1, self._gqa_group_size, -1, -1)
-            k_full = k_full.reshape(batch, self._num_heads, cached_len, k_dim).contiguous()
-            v_dim = v_full.shape[-1]
-            v_full = v_full.unsqueeze(2).expand(-1, -1, self._gqa_group_size, -1, -1)
-            v_full = v_full.reshape(batch, self._num_heads, cached_len, v_dim).contiguous()
+        # GQA: DO NOT re-expand.
+        #
+        # This used to broadcast K and V up to `num_heads` and
+        # materialise the result, so that downstream code saw an MHA
+        # shape. At a 4,164-token context that copied 34 MB per call,
+        # 4.9 GB per decode step for K and as much again for V — 9.8 GB
+        # of pure data movement to generate ONE token, and the dominant
+        # term in our context scaling (`strided_copy` fitted at 11.9 us
+        # per context token, against the real attention matmul's 3.8).
+        #
+        # Nothing downstream needs it. The SDPA wrapper already handles
+        # H != H_kv natively — `gqa_groups = nheads // nheads_k` with a
+        # head mapping inside the kernel, its own comment recording that
+        # "K/V keep their native (b, nheads_k, s, d) layout ... zero
+        # cost" — and `_math_attention`, the path decode takes, now
+        # groups Q's heads inside each KV head instead of broadcasting
+        # K/V, which is a pure view.
+        #
+        # So K and V travel in their native cache layout, and the
+        # expansion that existed only to flatten a shape is gone.
 
         # Causal masking
         use_causal = is_causal if self._is_prefill else False
