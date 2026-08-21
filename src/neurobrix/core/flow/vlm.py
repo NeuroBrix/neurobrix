@@ -409,6 +409,18 @@ class VLMEngine(FlowHandler):
             if resolved.get("global.repetition_penalty") is not None
             else defaults.get("repetition_penalty", 1.0))
 
+        # Sampling-parameter contract: this decode path samples through
+        # `audio_utils.sample_token`, which implements temperature,
+        # top-p and the repetition penalty — but NOT top-k. Refuse an
+        # explicit top_k rather than drop it; report an inherited one.
+        # See core/module/sampling_contract.py.
+        from neurobrix.core.module.sampling_contract import (
+            enforce_sampling_support)
+        _samp_cfg, _samp_explicit = _effective_sampling(self.ctx, defaults)
+        enforce_sampling_support(
+            "vlm (compiled)", ("temperature", "top_p", "repetition_penalty"),
+            _samp_cfg, explicit=_samp_explicit)
+
         self._ensure_weights_loaded(lm_name)
         # Declared-MoE fusion (mirror of the AR flow's setup — the Stage-1
         # wall-5 class: without it only the trace-fired experts of a
@@ -879,6 +891,18 @@ class VLMEngine(FlowHandler):
             float(resolved["global.repetition_penalty"])
             if resolved.get("global.repetition_penalty") is not None
             else defaults.get("repetition_penalty", 1.0))
+
+        # Sampling-parameter contract: this decode path samples through
+        # `audio_utils.sample_token`, which implements temperature,
+        # top-p and the repetition penalty — but NOT top-k. Refuse an
+        # explicit top_k rather than drop it; report an inherited one.
+        # See core/module/sampling_contract.py.
+        from neurobrix.core.module.sampling_contract import (
+            enforce_sampling_support)
+        _samp_cfg, _samp_explicit = _effective_sampling(self.ctx, defaults)
+        enforce_sampling_support(
+            "vlm (compiled)", ("temperature", "top_p", "repetition_penalty"),
+            _samp_cfg, explicit=_samp_explicit)
 
         self._ensure_weights_loaded(lm_name)
         # Declared-MoE fusion mirror (data-driven; no-op on dense builds).
@@ -1367,6 +1391,18 @@ class VLMEngine(FlowHandler):
             float(resolved["global.repetition_penalty"])
             if resolved.get("global.repetition_penalty") is not None
             else defaults.get("repetition_penalty", 1.0))
+
+        # Sampling-parameter contract: this decode path samples through
+        # `audio_utils.sample_token`, which implements temperature,
+        # top-p and the repetition penalty — but NOT top-k. Refuse an
+        # explicit top_k rather than drop it; report an inherited one.
+        # See core/module/sampling_contract.py.
+        from neurobrix.core.module.sampling_contract import (
+            enforce_sampling_support)
+        _samp_cfg, _samp_explicit = _effective_sampling(self.ctx, defaults)
+        enforce_sampling_support(
+            "vlm (compiled)", ("temperature", "top_p", "repetition_penalty"),
+            _samp_cfg, explicit=_samp_explicit)
 
         self._ensure_weights_loaded(lm_name)
         # Declared-MoE fusion (data-driven; no-op on dense builds) — same
@@ -1892,3 +1928,30 @@ class VLMEngine(FlowHandler):
         raise RuntimeError(
             "ZERO FALLBACK: no lm_head weight and no embed weight — "
             "cannot project hidden states to logits.")
+
+
+_SAMPLING_PARAMS = ("temperature", "top_k", "top_p",
+                    "repetition_penalty", "min_p")
+
+
+def _effective_sampling(ctx, defaults):
+    """Effective sampling config, and which parts the USER asked for.
+
+    `defaults` is only half the story: a CLI flag or a serving request
+    lands as a `global.*` variable in the resolver. A guard reading
+    `defaults` alone misses exactly the case it exists to catch.
+    """
+    config = {k: defaults.get(k) for k in _SAMPLING_PARAMS}
+    explicit = set()
+    resolver = getattr(ctx, "variable_resolver", None)
+    if resolver is None:
+        return config, explicit
+    for name in _SAMPLING_PARAMS:
+        try:
+            val = resolver.get(f"global.{name}", None)
+        except Exception:
+            continue
+        if val is not None:
+            config[name] = val
+            explicit.add(name)
+    return config, explicit
