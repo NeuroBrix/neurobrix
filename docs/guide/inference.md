@@ -27,7 +27,7 @@ neurobrix run \
 | `--steps` | model default | Number of inference steps |
 | `--height` | model default | Output height in pixels |
 | `--width` | model default | Output width in pixels |
-| `--seed` | random | Reproducibility seed |
+| `--seed` | random | Seeds sampling and random initialisation. Greedy (`--temperature 0`) is reproducible; seeded *sampling* is not yet reproducible on the Triton engine at head dimension 128 (P-NONDET-LONG-ROW) |
 | `--output` | `output.png` | Output file path |
 
 ## Video Generation
