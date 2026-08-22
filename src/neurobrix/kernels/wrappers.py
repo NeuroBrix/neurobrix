@@ -7031,6 +7031,76 @@ def _math_attention(q, k, v, attn_mask=None, is_causal=False, scale=None):
     return out_3d.reshape(B, H, T_q, D_v)
 
 
+def _flash_decode(q, k, v, bias, softmax_scale,
+                  batch, nheads, nheads_k, seqlen_k, headdim):
+    """Split-KV flash-decoding launch pair. See ops/flash_decode.py.
+
+    q [B, H, 1, D] fp16 · k/v [B, H_kv, T_k, D] fp16 (native cache
+    layout) · bias flat [T_k] additive fp32/fp16 or None.
+
+    GQA by grouping Q inside each KV head: [B, H, 1, D] viewed as
+    [B*H_kv, GROUPS, D] is a pure view (flat order b, h_kv, g, d).
+
+    The split count targets SM occupancy: enough programs that
+    B*H_kv*SPLIT covers the 80 SMs, capped so each split still has a
+    few BLOCK_N chunks to amortise its prologue.
+    """
+    from .ops.flash_decode import (flash_decode_split_kernel,
+                                   flash_decode_reduce_kernel)
+    groups = nheads // nheads_k
+    BH = batch * nheads_k
+    BLOCK_G = max(triton.next_power_of_2(groups), 16)
+    BLOCK_D = max(triton.next_power_of_2(headdim), 16)
+    # K and V tiles are [BLOCK_N, BLOCK_D] fp16, double-buffered by the
+    # pipeliner: BLOCK_N * BLOCK_D * 2 B * ~4 buffers must fit Volta's
+    # 96 KB. At BLOCK_D<=128, BLOCK_N=128 uses ~
+    # 128*128*2*4 = 128 KB requested pre-pipelining but measured to fit;
+    # at BLOCK_D=256 the same BLOCK_N requests 147 KB and refuses to
+    # launch (caught by the day-one oracle at D=129). Halve until it
+    # fits the 96 KB budget.
+    BLOCK_N = 128 if BLOCK_D <= 128 else (32 if BLOCK_D <= 256 else 16)
+    split = max(1, min(int(triton.cdiv(seqlen_k, 256)), 32))
+    seg_len = int(triton.cdiv(seqlen_k, split))
+
+    qg = q.reshape(BH, groups, headdim)
+    kf = k.reshape(BH, seqlen_k, headdim)
+    vf = v.reshape(BH, seqlen_k, headdim)
+
+    dev = f"cuda:{q._device_idx}"
+    opart = NBXTensor.empty((BH, split, groups, headdim),
+                            dtype=NBXDtype.float32, device=dev)
+    mpart = NBXTensor.empty((BH, split, groups), dtype=NBXDtype.float32,
+                            device=dev)
+    lpart = NBXTensor.empty((BH, split, groups), dtype=NBXDtype.float32,
+                            device=dev)
+    out = NBXTensor.empty((BH, groups, headdim), dtype=q.nbx_dtype,
+                          device=dev)
+
+    _set_device(q)
+    flash_decode_split_kernel[(BH, split)](
+        qg, kf, vf,
+        bias if bias is not None else qg,   # dead pointer when HAS_BIAS=0
+        opart, mpart, lpart,
+        seqlen_k, seg_len, float(softmax_scale),
+        qg.stride(0), qg.stride(1),
+        kf.stride(0), kf.stride(1),
+        opart.stride(0), opart.stride(1), opart.stride(2),
+        mpart.stride(0), mpart.stride(1),
+        GROUPS=groups, BLOCK_G=BLOCK_G, BLOCK_N=BLOCK_N,
+        BLOCK_D=BLOCK_D, D=headdim,
+        HAS_BIAS=bias is not None,
+        num_warps=4, num_stages=2)
+    flash_decode_reduce_kernel[(BH,)](
+        opart, mpart, lpart, out,
+        opart.stride(0), opart.stride(1), opart.stride(2),
+        mpart.stride(0), mpart.stride(1),
+        out.stride(0), out.stride(1),
+        SPLIT=split, GROUPS=groups, BLOCK_G=BLOCK_G,
+        BLOCK_D=BLOCK_D, D=headdim,
+        num_warps=4)
+    return out.reshape(batch, nheads, 1, headdim)
+
+
 def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
                                           dropout_p=0.0, is_causal=False,
                                           scale=None, **kwargs):
@@ -7111,6 +7181,39 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     q = q.contiguous()
     k = k.contiguous()
     v = v.contiguous()
+
+    # ---- FLASH-DECODING (T_q == 1) ------------------------------------
+    #
+    # Decode used to fall through to the math budget below, which at
+    # T_q=1 always chose `_math_attention` — bmm/softmax/bmm with
+    # materialised scores, the largest single kernel of the captured
+    # step at a working context (9.3 ms/token at 4,164, linear in T_k).
+    #
+    # This routes single-query attention to the split-KV flash-decoding
+    # pair instead: the KV sequence is split across programs so the SMs
+    # fill even at batch 1, each split combines under online softmax,
+    # and a fixed-order second pass merges the splits — deterministic by
+    # construction (replay verifies plans byte-equal, so run-to-run
+    # variance would be disqualifying).
+    #
+    # Routing is correctness-preserving: any shape or mask this path
+    # does not model falls through to the existing paths unchanged. The
+    # decode mask from the bucketed KV cache is additive [1,1,1,T_k];
+    # anything not flattenable to [T_k] falls through.
+    import os as _os_fd
+    if (seqlen_q == 1 and q._device != "cpu"
+            and _os_fd.environ.get("NBX_FLASH_DECODE", "1") != "0"
+            and headdim == v.shape[3]):
+        _fd_bias = None
+        _fd_ok = True
+        if attn_mask is not None:
+            if attn_mask.numel() == seqlen_k:
+                _fd_bias = attn_mask.reshape(seqlen_k)
+            else:
+                _fd_ok = False
+        if _fd_ok:
+            return _flash_decode(q, k, v, _fd_bias, softmax_scale,
+                                 batch, nheads, nheads_k, seqlen_k, headdim)
 
     # tl.dot on V100 TensorCores requires matching operand dtypes; our
     # conditional fp32-output matmul (M<=4 decode) can leave q/k/v mixed
