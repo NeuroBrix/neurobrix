@@ -7045,6 +7045,7 @@ def _flash_decode(q, k, v, bias, softmax_scale,
     B*H_kv*SPLIT covers the 80 SMs, capped so each split still has a
     few BLOCK_N chunks to amortise its prologue.
     """
+    import os as _os_fd2
     from .ops.flash_decode import (flash_decode_split_kernel,
                                    flash_decode_reduce_kernel)
     groups = nheads // nheads_k
@@ -7058,8 +7059,10 @@ def _flash_decode(q, k, v, bias, softmax_scale,
     # at BLOCK_D=256 the same BLOCK_N requests 147 KB and refuses to
     # launch (caught by the day-one oracle at D=129). Halve until it
     # fits the 96 KB budget.
-    BLOCK_N = 128 if BLOCK_D <= 128 else (32 if BLOCK_D <= 256 else 16)
-    split = max(1, min(int(triton.cdiv(seqlen_k, 256)), 32))
+    BLOCK_N = int(_os_fd2.environ.get("NBX_FD_BLOCK_N", "128")) \
+        if BLOCK_D <= 128 else (32 if BLOCK_D <= 256 else 16)
+    split = max(1, min(int(triton.cdiv(
+        seqlen_k, int(_os_fd2.environ.get("NBX_FD_SEG", "256")))), 64))
     seg_len = int(triton.cdiv(seqlen_k, split))
 
     qg = q.reshape(BH, groups, headdim)
@@ -7200,9 +7203,21 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     # does not model falls through to the existing paths unchanged. The
     # decode mask from the bucketed KV cache is additive [1,1,1,T_k];
     # anything not flattenable to [T_k] falls through.
+    # DEFAULT OFF, by measurement (2026-08-22): correct and deterministic
+    # (oracle green at D=127/128/129), but SLOWER than the math path on
+    # this card at real bucket sizes — paired, machine exclusive:
+    #   256-bucket   9.074 -> 8.167 tok/s  (-10.0%)
+    #   4,352-bucket 7.568 -> 6.512        (-14.0%)  best tuning 7.419
+    #   8,448-bucket 2.747 -> 2.841        (+3.4%, n=1)
+    # The math path post GQA-grouping + strided-K + batched bmm already
+    # fills the SMs through its N-dimension grid at long context; the
+    # split pair only breaks even around an 8k bucket. Kept as opt-in
+    # (NBX_FLASH_DECODE=1) — it is the correct shape for cards where the
+    # math path's materialised scores stop fitting, and for longer
+    # buckets than this row uses.
     import os as _os_fd
     if (seqlen_q == 1 and q._device != "cpu"
-            and _os_fd.environ.get("NBX_FLASH_DECODE", "1") != "0"
+            and _os_fd.environ.get("NBX_FLASH_DECODE", "0") == "1"
             and headdim == v.shape[3]):
         _fd_bias = None
         _fd_ok = True
@@ -7357,7 +7372,13 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     # wrong scale, which no later operation can recombine. Splitting only
     # works if the scores are materialised first, which is the math path.
     _hd_broken = (headdim >= 128
-                  and (headdim & (headdim - 1)) == 0)
+                  and (headdim & (headdim - 1)) == 0
+                  and _os_fd.environ.get("NBX_D128_DETOUR", "1") != "0")
+    # NBX_D128_DETOUR=0 disables the zero-pad detour — DIAGNOSTIC ONLY:
+    # it re-exposes the wrong kernel. Exists to measure the detour's true
+    # cost (TTFT at long prefill) and for the day the upstream codegen
+    # defect is fixed, when the correctness oracle's _KNOWN_BROKEN
+    # mechanism will demand this whole block be removed.
     if _hd_broken:
         _pad = 1
         def _pad_hd(t):
