@@ -3087,6 +3087,10 @@ class TritonSequence:
                 # between the check and the run). Bind NOW, before any op
                 # executes — the skip must never be observable on the
                 # op-by-op path.
+                import os as _os_lb2
+                if _os_lb2.environ.get("NBX_LAZY_BIND_DIAG") == "1":
+                    print("[LazyBind] late-bind fired (replay declined "
+                          "after would_replay said yes)", flush=True)
                 self.bind_weights(_parked)
             if self._is_multi_device:
                 self._run_multi_device(skip_kills, pre_op_callback)
