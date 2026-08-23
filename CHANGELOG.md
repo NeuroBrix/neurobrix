@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The opt-in flash-decoding attention kernel (`NBX_FLASH_DECODE=1`)
+  now defaults to its best measured configuration (a 10-configuration
+  sweep found the former default block size ran 4× slower on this
+  hardware). The kernel remains off by default: re-measured under the
+  pinned protocol it is still slower than the standard attention path
+  at every context length tested, and the measurement notes at the
+  flag site record the full numbers.
+
 - **Decode attention no longer copies the KV cache to read it.** The
   KV cache hands out views whose padding makes them non-contiguous in
   memory, and the attention entry point materialised those views —
