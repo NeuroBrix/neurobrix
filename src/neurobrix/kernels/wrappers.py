@@ -7242,8 +7242,11 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     #   best cfg (BN=64, SEG=512, from a 10-config isolated sweep):
     #     4,164 ctx x0.857 (-14.3%) · short x0.968 (-3.2%), no overlap.
     # The kernel REPLAYS and graph-captures fine (plan frozen, verified
-    # byte-equal) — the loss is its own GPU time: ~0.47 ms/call = ~22.7
-    # ms/token vs the in-engine autotuned math band's ~14 ms. The
+    # byte-equal), and its ROW OUTPUTS were byte-equal to the math
+    # path's (every armed rep reproduced the math arm's majority sha
+    # over 60 greedy tokens) — the loss is its own GPU time: ~0.47
+    # ms/call = ~22.7 ms/token vs the in-engine autotuned math band's
+    # ~14 ms. The
     # isolated math figure (1.47 ms/call) was 5x SLOWER than in-engine
     # — eager wrapper overhead + cold autotune; the FD isolated figures
     # transferred. Third refusal, first two protocol-grade.
