@@ -7115,6 +7115,71 @@ def _math_attention_chunked(q, k, v, attn_mask, is_causal, scale,
     return out
 
 
+def _decode_attn_vec(q, k, v, bias, softmax_scale,
+                     batch, nheads, nheads_k, seqlen_k, headdim):
+    """Vector (SIMT) decode attention launch pair — see
+    ops/decode_attn_vec.py for the sourced structure (R16 2026-08-23:
+    FasterTransformer mmha / vLLM paged v2 / llama.cpp fattn-vec /
+    lightllm — no tl.dot on sm_70, one query row per program, split-KV
+    with the existing fixed-order reduce).
+
+    q [B, H, 1, D] fp16 CONTIGUOUS (wrapper entry) · k/v in native
+    cache layout, consumed BY THEIR OWN STRIDES (the bucketed cache's
+    prefix-slice views flow in unmaterialised — the strided-KV lot's
+    contract) · bias flat [T_k] or None.
+    """
+    import os as _os_dv
+    from .ops.decode_attn_vec import decode_attn_vec_split_kernel
+    from .ops.flash_decode import flash_decode_reduce_kernel
+    groups = nheads // nheads_k
+    BHq = batch * nheads
+    D_v = v.shape[3]
+    BLOCK_D = max(triton.next_power_of_2(max(headdim, D_v)), 16)
+    BLOCK_N = int(_os_dv.environ.get("NBX_DV_BLOCK_N", "32"))
+    seg = int(_os_dv.environ.get("NBX_DV_SEG", "512"))
+    split = max(1, min(int(triton.cdiv(seqlen_k, seg)), 64))
+    seg_len = int(triton.cdiv(seqlen_k, split))
+    warps = int(_os_dv.environ.get("NBX_DV_WARPS", "4"))
+
+    q2 = q.reshape(BHq, headdim)   # contiguous -> pure view
+
+    dev = f"cuda:{q._device_idx}"
+    opart = NBXTensor.empty((BHq, split, D_v), dtype=NBXDtype.float32,
+                            device=dev)
+    mpart = NBXTensor.empty((BHq, split), dtype=NBXDtype.float32,
+                            device=dev)
+    lpart = NBXTensor.empty((BHq, split), dtype=NBXDtype.float32,
+                            device=dev)
+    out = NBXTensor.empty((BHq, 1, D_v), dtype=q.nbx_dtype, device=dev)
+
+    _set_device(q)
+    decode_attn_vec_split_kernel[(BHq, split)](
+        q2, k, v,
+        bias if bias is not None else q2,   # dead pointer when HAS_BIAS=0
+        opart, mpart, lpart,
+        seqlen_k, seg_len, float(softmax_scale),
+        q2.stride(0),
+        k.stride(1), k.stride(2),
+        v.stride(1), v.stride(2),
+        opart.stride(0), opart.stride(1),
+        mpart.stride(0),
+        GQA_GROUPS=groups, BLOCK_N=BLOCK_N, BLOCK_D=BLOCK_D,
+        D=headdim, D_V=D_v,
+        HAS_BIAS=bias is not None,
+        num_warps=warps, num_stages=1)
+    # Fixed-order deterministic combine — the EXISTING flash_decode
+    # reduce kernel viewed at GROUPS=1 (partials [BHq, split, 1, D_v]).
+    flash_decode_reduce_kernel[(BHq,)](
+        opart, mpart, lpart, out,
+        opart.stride(0), opart.stride(1), D_v,
+        mpart.stride(0), mpart.stride(1),
+        out.stride(0), out.stride(1),
+        SPLIT=split, GROUPS=1, BLOCK_G=16,
+        BLOCK_D=BLOCK_D, D=D_v,
+        num_warps=4)
+    return out.reshape(batch, nheads, 1, D_v)
+
+
 def _flash_decode(q, k, v, bias, softmax_scale,
                   batch, nheads, nheads_k, seqlen_k, headdim):
     """Split-KV flash-decoding launch pair. See ops/flash_decode.py.
@@ -7334,6 +7399,24 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     # cp.async pipeline) — reaching the bar needs a different kernel,
     # a named follow-up, not a tuning of this one.
     import os as _os_fd
+    # ---- VECTOR (SIMT) DECODE ATTENTION — the second attempt at the
+    # decode bar, structured from the sourced pre-Ampere patterns (see
+    # ops/decode_attn_vec.py). Opt-in during its judgment; the verdict
+    # under the pinned protocol decides default/opt-in/refused.
+    if (seqlen_q == 1 and q._device != "cpu"
+            and _os_fd.environ.get("NBX_DECODE_VEC", "0") == "1"
+            and headdim == v.shape[3]):
+        _dv_bias = None
+        _dv_ok = True
+        if attn_mask is not None:
+            if attn_mask.numel() == seqlen_k:
+                _dv_bias = attn_mask.reshape(seqlen_k)
+            else:
+                _dv_ok = False
+        if _dv_ok:
+            return _decode_attn_vec(q, k, v, _dv_bias, softmax_scale,
+                                    batch, nheads, nheads_k, seqlen_k,
+                                    headdim)
     if (seqlen_q == 1 and q._device != "cpu"
             and _os_fd.environ.get("NBX_FLASH_DECODE", "0") == "1"
             and headdim == v.shape[3]):
