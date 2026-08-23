@@ -138,6 +138,19 @@ memory:
   # regression battery per doctrine.
   sdpa_math_max_scores_bytes: 2147483648  # 2 GiB (was 128 MiB pre-D6)
 
+  # P-NONDET-LONG-ROW (2026-08-23): shapes whose fp32 scores exceed the
+  # budget above routed to flash, whose Volta masked-load specialisation
+  # (where the exact D>=128 pad-by-one detour lands) is
+  # NON-DETERMINISTIC (kernel-level: 3 distinct outputs in 5 identical
+  # calls at the 4,164-token prefill shape). CHUNKED math splits the
+  # query rows so every chunk's scores fit the budget — deterministic
+  # by construction — bounded by this chunk-count ceiling. 16 covers
+  # LLM-class prefills to ~16k context (4k ctx -> 2 chunks); video-
+  # scale shapes (30-500+ chunks, prohibitive) keep their existing
+  # path and are the REGISTERED residual non-deterministic class on
+  # this hardware (defect register, trigger measured).
+  sdpa_math_max_chunks: 16
+
   # Triton deferred-free queue policy (audit #2 F1, P-TRITON-LIVE-SET).
   # PRESSURE-SENSITIVE: the queue always drains at `cliff` (throughput
   # ceiling — identical to the historical 2 GB behavior when the device has

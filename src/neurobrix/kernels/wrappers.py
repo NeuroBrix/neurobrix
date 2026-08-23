@@ -6808,6 +6808,31 @@ def _sdpa_math_scores_budget_bytes() -> int:
         return 0
 
 
+def _sdpa_math_max_chunks() -> int:
+    """Chunk-count ceiling for the CHUNKED deterministic math prefill
+    (P-NONDET-LONG-ROW fix). Data-driven from
+    config/vendors/<vendor>/<arch>.yml `memory.sdpa_math_max_chunks`;
+    0 (absent key / no profile) = the chunked route never fires, so an
+    unconfigured arch keeps its attention path byte-unchanged (R23).
+    The ceiling is the determinism tax bound: LLM-class prefills chunk
+    a handful of times under the 2 GiB scores budget (4k ctx → 2,
+    16k → 16); video-scale prefills would chunk 30-500+ times at a
+    prohibitive cost and stay on their existing path, REGISTERED as
+    the residual non-deterministic class on this hardware."""
+    prof = get_hardware_profile()
+    devices = getattr(prof, "devices", None) if prof is not None else None
+    if not devices:
+        return 0
+    try:
+        from neurobrix.core.config.loader import get_vendor_config
+        _brand = devices[0].brand
+        _vendor = getattr(_brand, "value", _brand)
+        cfg = get_vendor_config(_vendor, devices[0].architecture)
+        return int(cfg.get("memory", {}).get("sdpa_math_max_chunks", 0))
+    except Exception:
+        return 0
+
+
 _DEFERRED_DRAIN_CLIFF_DEFAULT = 2_000_000_000   # 2 GB — throughput ceiling
 _DEFERRED_DRAIN_FLOOR_DEFAULT = 268_435_456     # 256 MiB — pressure-branch floor
 
@@ -7035,6 +7060,59 @@ def _math_attention(q, k, v, attn_mask=None, is_causal=False, scale=None):
         out_3d = out_3d.to(q.nbx_dtype)
 
     return out_3d.reshape(B, H, T_q, D_v)
+
+
+def _math_attention_chunked(q, k, v, attn_mask, is_causal, scale,
+                            chunk_rows):
+    """Deterministic math attention for scores tensors OVER the budget —
+    the P-NONDET-LONG-ROW fix (2026-08-23).
+
+    The long-context prefill routed to the flash kernel (its full fp32
+    scores exceed `sdpa_math_max_scores_bytes`), and on Volta the flash
+    kernel's masked-load specialisation — which the exact D>=128 pad-
+    by-one detour lands in — is NON-DETERMINISTIC (kernel-level: 3
+    distinct outputs in 5 identical calls at the 4,164-token prefill
+    shape; end-to-end: the first replayed-step logits differed across
+    every pair of runs, and greedy near-ties downstream made the row's
+    output bimodal). Forcing math made 4/4 runs byte-identical at
+    every step.
+
+    This runs the SAME `_math_attention` (deterministic by
+    construction) over query-row chunks, so no chunk's scores tensor
+    exceeds the budget. Causality is preserved exactly: the full
+    causal bias is built once and each chunk receives its row slice as
+    an explicit additive mask — the same values `_math_attention`
+    would have added row-by-row unchunked.
+    """
+    B, H, T_q, _D = q.shape
+    T_k = k.shape[2]
+    D_v = v.shape[3]
+    device_idx = q._device_idx if hasattr(q, '_device_idx') else 0
+    out = NBXTensor.empty((B, H, T_q, D_v), dtype=q.nbx_dtype,
+                          device=f"cuda:{device_idx}")
+    bias_full = None
+    if is_causal and attn_mask is None:
+        bias_full = _get_causal_bias(device_idx, T_q, T_k,
+                                     NBXDtype.float32)
+    for q0 in range(0, T_q, chunk_rows):
+        c = min(chunk_rows, T_q - q0)
+        q_c = q[:, :, q0:q0 + c, :].contiguous()
+        if bias_full is not None:
+            mask_c = bias_full[q0:q0 + c, :]
+        elif attn_mask is None:
+            mask_c = None
+        elif attn_mask.ndim == 2:
+            mask_c = attn_mask[q0:q0 + c, :]
+        elif attn_mask.ndim == 3:
+            mask_c = (attn_mask if attn_mask.shape[1] == 1
+                      else attn_mask[:, q0:q0 + c, :])
+        else:
+            mask_c = (attn_mask if attn_mask.shape[2] == 1
+                      else attn_mask[:, :, q0:q0 + c, :])
+        o = _math_attention(q_c, k, v, attn_mask=mask_c,
+                            is_causal=False, scale=scale)
+        out[:, :, q0:q0 + c, :] = o
+    return out
 
 
 def _flash_decode(q, k, v, bias, softmax_scale,
@@ -7364,7 +7442,26 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
             # tensor (bmm returns fp32 on V100) — 4 bytes/elem is the
             # true memory cost, independent of q's dtype. Budget is 0
             # on non-Volta (no yml key) → this never fires there.
-            _use_math = _scores_bytes <= _sdpa_math_scores_budget_bytes()
+            _budget = _sdpa_math_scores_budget_bytes()
+            _use_math = _scores_bytes <= _budget
+            if not _use_math and _budget:
+                # P-NONDET-LONG-ROW (2026-08-23): over-budget pow2
+                # shapes routed to flash, whose Volta masked-load
+                # specialisation (the D>=128 detour's landing path) is
+                # NON-DETERMINISTIC — the canonical long row's prefill
+                # was fp-different on every run. CHUNKED math keeps
+                # every chunk's scores inside the budget and is
+                # deterministic by construction. Bounded by the
+                # per-arch chunk ceiling: LLM-class prefills chunk 2-16
+                # times; video-scale shapes (30-500+ chunks) keep their
+                # existing path and are REGISTERED as the residual
+                # non-deterministic class on this hardware.
+                _row_bytes = batch * nheads * seqlen_k * 4
+                _chunk_rows = (_budget // _row_bytes) // 128 * 128
+                if _chunk_rows >= 128:
+                    _n_chunks = -(-seqlen_q // _chunk_rows)
+                    if _n_chunks <= _sdpa_math_max_chunks():
+                        _use_math = "chunked"
     if _os_fma.environ.get("NBX_SDPA_ROUTE_DIAG") == "1" and not getattr(
             scaled_dot_product_attention_wrapper, "_route_diag_done", False):
         scaled_dot_product_attention_wrapper._route_diag_done = True
@@ -7376,6 +7473,9 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
               f"budget={_sdpa_math_scores_budget_bytes()} "
               f"profile={'None' if _pr is None else getattr(_pr,'vendor','?')+'/'+(getattr(_dv[0],'architecture','?') if _dv else '?')} "
               f"use_math={_use_math}", flush=True)
+    if _use_math == "chunked":
+        return _math_attention_chunked(q, k, v, attn_mask, is_causal,
+                                       softmax_scale, _chunk_rows)
     if _use_math:
         return _math_attention(q, k, v, attn_mask=attn_mask,
                                 is_causal=is_causal, scale=softmax_scale)

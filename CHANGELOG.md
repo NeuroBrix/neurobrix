@@ -7,7 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Long-context text generation is now run-to-run deterministic on
+  Volta.** Long prompts (roughly 4,000 tokens and beyond) occasionally
+  produced one of two different completions for the same input at
+  temperature 0. The cause was traced link by link: the prompt-reading
+  phase routed its attention to a kernel whose specialisation for
+  these shapes has a known race on this hardware generation, making
+  every run's internal state microscopically different; one
+  close-call token decision then landed differently in about one run
+  in ten. That phase now computes attention in a small number of
+  deterministic chunks instead — verified byte-identical at every
+  generation step across repeated runs — and reads the prompt about
+  25% faster as a bonus. Very large spatial attention (video-scale
+  models) is outside this fix's cost envelope and keeps its previous
+  behavior; the remaining scope is recorded in the debt registry.
+
 ### Changed
+
+- **The benchmark protocol now locks GPU clocks for the whole campaign
+  instead of merely logging them.** The measurement harness pins the SM
+  frequency (default 1380 MHz, chosen to hold within this machine's
+  thermal envelope), samples it during every repetition, and refuses
+  the campaign outright if the lock ever breaks mid-run — clock drift
+  is killed at the source rather than documented after the fact.
+  Locked numbers sit ~10% below boost-clock numbers; reports record
+  the lock frequency so like is always compared with like.
 
 - The opt-in flash-decoding attention kernel (`NBX_FLASH_DECODE=1`)
   now defaults to its best measured configuration (a 10-configuration
