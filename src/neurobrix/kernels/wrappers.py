@@ -6969,8 +6969,13 @@ def _math_attention(q, k, v, attn_mask=None, is_causal=False, scale=None):
     # a pure view), THEN transpose. Transposing first and reshaping
     # after would send `reshape` through its own materialisation and put
     # the copy straight back.
-    k_3d_t = k.reshape(BH, T_k, D).transpose(-2, -1)
-    v_3d = v.reshape(BH, T_k, D_v)
+    # merge_dims keeps the (B, H) merge a PURE VIEW even when K/V are
+    # the bucketed cache's prefix-slice views (non-contiguous in the T
+    # dim — a plain reshape materialised them here, copying the whole
+    # padded K and V per layer per decode step; copies-at-source census
+    # 2026-08-23). Both bmms below walk B's strides.
+    k_3d_t = k.merge_dims(0, 1).transpose(-2, -1)
+    v_3d = v.merge_dims(0, 1)
 
     # scores = q @ k^T (bmm returns fp32 on V100 via force_fp32)
     scores = bmm(q_3d, k_3d_t, allow_strided_b=True)  # [BH, M, T_k]
@@ -7023,8 +7028,9 @@ def _math_attention(q, k, v, attn_mask=None, is_causal=False, scale=None):
     if p.nbx_dtype != v_3d.nbx_dtype:
         p = p.to(v_3d.nbx_dtype)
 
-    # out = p @ v (bmm again returns fp32 on V100)
-    out_3d = bmm(p, v_3d)  # [BH, M, D_v]
+    # out = p @ v (bmm again returns fp32 on V100). Strided B: v_3d may
+    # be the merged bucketed-cache view (row pitch = buffer capacity).
+    out_3d = bmm(p, v_3d, allow_strided_b=True)  # [BH, M, D_v]
     if out_3d.nbx_dtype != q.nbx_dtype:
         out_3d = out_3d.to(q.nbx_dtype)
 
@@ -7181,9 +7187,16 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     assert nheads_k * gqa_groups == nheads, (
         f"nheads ({nheads}) must be a multiple of nheads_k ({nheads_k})")
 
+    # Q is materialised unconditionally (tiny at decode; graph-contiguous
+    # at prefill, so free). K and V are NOT: the bucketed KV cache hands
+    # out prefix-slice views `buffer[:, :, :padded, :]` that are
+    # non-contiguous in the T dim, and the unconditional `.contiguous()`
+    # here copied the ENTIRE padded K and V per layer per decode step —
+    # 24 MB/token at bucket 256, scaling with context (copies-at-source
+    # census, 2026-08-23). The math path (decode's route) now consumes
+    # the views directly (`merge_dims` + strided-B bmm); the flash paths
+    # materialise at their own entry below, exactly as before.
     q = q.contiguous()
-    k = k.contiguous()
-    v = v.contiguous()
 
     # ---- FLASH-DECODING (T_q == 1) ------------------------------------
     #
@@ -7237,7 +7250,9 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
             else:
                 _fd_ok = False
         if _fd_ok:
-            return _flash_decode(q, k, v, _fd_bias, softmax_scale,
+            # This opt-in path keeps its measured behavior: flat layout.
+            return _flash_decode(q, k.contiguous(), v.contiguous(),
+                                 _fd_bias, softmax_scale,
                                  batch, nheads, nheads_k, seqlen_k, headdim)
 
     # tl.dot on V100 TensorCores requires matching operand dtypes; our
@@ -7347,6 +7362,12 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     if _use_math:
         return _math_attention(q, k, v, attn_mask=attn_mask,
                                 is_causal=is_causal, scale=softmax_scale)
+
+    # Flash path from here on: flat-indexed kernel — materialise the K/V
+    # views that the math path above consumes strided (see the entry
+    # comment). Contiguous tensors short-circuit at zero cost.
+    k = k.contiguous()
+    v = v.contiguous()
 
     # ---- P-FLASH-D128-CORRECTNESS: exact detour around a wrong kernel ----
     #
