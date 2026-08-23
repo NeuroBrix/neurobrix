@@ -18,6 +18,13 @@ The protocol this script pins:
 
   - N repetitions per arm (default 5), ARMS INTERLEAVED (a1 b1 a2 b2 …)
     so drift lands on both arms;
+  - SM clocks LOCKED for the whole campaign (default 1380 MHz via
+    passwordless-sudo `nvidia-smi -lgc`, verified held; a sampler
+    polls during every rep and any excursion REFUSES the campaign —
+    drift killed at the source, not documented). `--lock-clock 0`
+    opts out. NOTE: locked numbers are ~10% below boost-clock numbers;
+    compare like with like (the report records `lock_clock_mhz`), and
+    re-anchor baselines once per lock regime;
   - SM clock + temperature + persistence logged via nvidia-smi before
     and after every single run;
   - rate computed from millisecond timestamps over the post-warm steps;
@@ -51,6 +58,63 @@ BASE_ENV = {
     "NBX_REPLAY_GRAPH": "1",
     "NBX_FORCE_RAND_SEED": "1234",
 }
+
+
+def lock_clocks(gpu: str, mhz: int) -> None:
+    """Pin SM clocks to a single frequency for the whole campaign.
+
+    Kills clock drift at the source instead of documenting it (the
+    2026-08-23 campaigns logged dips to 1485/1425/1290 MHz mid-rep).
+    Requires passwordless sudo for nvidia-smi (verified on driver
+    535.309.01: `-lgc M,M` holds min=max even at idle). A lock REQUEST
+    that cannot be satisfied is a REFUSAL, not a silent unlocked run.
+    """
+    r = subprocess.run(["sudo", "-n", "nvidia-smi", "-i", gpu,
+                        "-lgc", f"{mhz},{mhz}"],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        raise SystemExit(
+            f"REFUSED: cannot lock GPU {gpu} clocks to {mhz} MHz "
+            f"({(r.stderr or r.stdout).strip()}) — pass --lock-clock 0 "
+            f"to measure unlocked (drift documented, not killed)")
+    got = gpu_state(gpu).get("sm_clock", "")
+    if not got.startswith(str(mhz)):
+        unlock_clocks(gpu)
+        raise SystemExit(
+            f"REFUSED: lock did not take (clocks.sm={got!r}, "
+            f"wanted {mhz} MHz)")
+
+
+def unlock_clocks(gpu: str) -> None:
+    subprocess.run(["sudo", "-n", "nvidia-smi", "-i", gpu, "-rgc"],
+                   capture_output=True, text=True)
+
+
+class ClockWatch:
+    """Samples clocks.sm during a run; any sample off the locked value
+    marks the rep contaminated (a before/after pair would miss a
+    transient mid-rep dip — power events can override even min=max)."""
+
+    def __init__(self, gpu: str, mhz: int, period_s: float = 2.0):
+        import threading
+        self.gpu, self.mhz, self.period = gpu, mhz, period_s
+        self.violations: list = []
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def _run(self):
+        while not self._stop.wait(self.period):
+            s = gpu_state(self.gpu).get("sm_clock", "")
+            if not s.startswith(str(self.mhz)):
+                self.violations.append(s)
+
+    def __enter__(self):
+        self._thread.start()
+        return self
+
+    def __exit__(self, *a):
+        self._stop.set()
+        self._thread.join(timeout=5)
 
 
 def gpu_state(gpu: str) -> dict:
@@ -96,13 +160,30 @@ def run_once(args, arm_env: dict, tag: str, outdir: Path) -> dict:
     env["NBX_DECODE_PROGRESS"] = str(prog)
     before = gpu_state(args.gpu)
     t0 = time.time()
-    r = subprocess.run(
-        ["python3", "-u", "-m", "neurobrix", "run",
-         "--hardware", args.hardware, "--model", args.model,
-         "--prompt", args.prompt, "--max-tokens", str(args.max_tokens),
-         "--temperature", args.temperature, "--triton",
-         "--output", str(outdir / f"out_{tag}.txt")],
-        env=env, capture_output=True, text=True, timeout=2400)
+    if args.lock_clock:
+        with ClockWatch(args.gpu, args.lock_clock) as watch:
+            r = subprocess.run(
+                ["python3", "-u", "-m", "neurobrix", "run",
+                 "--hardware", args.hardware, "--model", args.model,
+                 "--prompt", args.prompt, "--max-tokens", str(args.max_tokens),
+                 "--temperature", args.temperature, "--triton",
+                 "--output", str(outdir / f"out_{tag}.txt")],
+                env=env, capture_output=True, text=True, timeout=2400)
+        if watch.violations:
+            raise SystemExit(
+                f"REFUSED: clock lock broke during rep {tag} — sampled "
+                f"{watch.violations[:5]} against the {args.lock_clock} MHz "
+                f"lock; the rep is contaminated and the campaign stops "
+                f"(re-run, or lower --lock-clock to a frequency this "
+                f"thermal envelope can hold)")
+    else:
+        r = subprocess.run(
+            ["python3", "-u", "-m", "neurobrix", "run",
+             "--hardware", args.hardware, "--model", args.model,
+             "--prompt", args.prompt, "--max-tokens", str(args.max_tokens),
+             "--temperature", args.temperature, "--triton",
+             "--output", str(outdir / f"out_{tag}.txt")],
+            env=env, capture_output=True, text=True, timeout=2400)
     wall = time.time() - t0
     after = gpu_state(args.gpu)
     rate = rate_from_progress(str(prog), args.warm) if r.returncode == 0 else None
@@ -130,6 +211,13 @@ def main() -> int:
                     metavar=("NAME", "ENV"),
                     help="arm name + comma-separated ENV=VAL list ('-' for none)")
     ap.add_argument("--out", required=True)
+    ap.add_argument("--lock-clock", type=int, default=1380,
+                    help="pin SM clocks to this MHz for the whole campaign "
+                         "(default 1380 — held with margin at this "
+                         "machine's thermal envelope; the max boost 1530 "
+                         "is NOT holdable under power transients, dips to "
+                         "1290 were logged). 0 = measure unlocked "
+                         "(drift documented per rep, not killed).")
     args = ap.parse_args()
     if args.prompt_file:
         args.prompt = Path(args.prompt_file).read_text()
@@ -149,22 +237,32 @@ def main() -> int:
                 env[k] = v
         arms.append((name, env))
 
+    if args.lock_clock:
+        lock_clocks(args.gpu, args.lock_clock)
+        print(f"  clocks LOCKED at {args.lock_clock} MHz (GPU {args.gpu})",
+              flush=True)
     results = {name: [] for name, _ in arms}
-    # INTERLEAVED: rep 1 of every arm, then rep 2 of every arm, ...
-    for rep in range(1, args.reps + 1):
-        for name, env in arms:
-            res = run_once(args, env, f"{name}_{rep}", outdir)
-            results[name].append(res)
-            print(f"  {name} rep{rep} rc={res['rc']} "
-                  f"rate={res['rate'] and round(res['rate'], 3)} "
-                  f"sha={res['sha']} "
-                  f"clk={res['gpu_after'].get('sm_clock', '?')} "
-                  f"T={res['gpu_after'].get('temp_c', '?')}C", flush=True)
+    try:
+        # INTERLEAVED: rep 1 of every arm, then rep 2 of every arm, ...
+        for rep in range(1, args.reps + 1):
+            for name, env in arms:
+                res = run_once(args, env, f"{name}_{rep}", outdir)
+                results[name].append(res)
+                print(f"  {name} rep{rep} rc={res['rc']} "
+                      f"rate={res['rate'] and round(res['rate'], 3)} "
+                      f"sha={res['sha']} "
+                      f"clk={res['gpu_after'].get('sm_clock', '?')} "
+                      f"T={res['gpu_after'].get('temp_c', '?')}C", flush=True)
+    finally:
+        if args.lock_clock:
+            unlock_clocks(args.gpu)
+            print(f"  clocks unlocked (GPU {args.gpu})", flush=True)
 
     report = {"model": args.model, "max_tokens": args.max_tokens,
               "prompt_sha": __import__("hashlib").sha256(
                   args.prompt.encode()).hexdigest()[:12],
-              "reps": args.reps, "warm": args.warm, "arms": {}}
+              "reps": args.reps, "warm": args.warm,
+              "lock_clock_mhz": args.lock_clock, "arms": {}}
     print()
     for name, _ in arms:
         rates = [r["rate"] for r in results[name] if r["rate"]]
