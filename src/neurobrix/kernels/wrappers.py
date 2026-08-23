@@ -7209,12 +7209,13 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     #   256-bucket   9.074 -> 8.167 tok/s  (-10.0%)
     #   4,352-bucket 7.568 -> 6.512        (-14.0%)  best tuning 7.419
     #   8,448-bucket 2.747 -> 2.841        (+3.4%, n=1)
-    # The math path post GQA-grouping + strided-K + batched bmm already
-    # fills the SMs through its N-dimension grid at long context; the
-    # split pair only breaks even around an 8k bucket. Kept as opt-in
-    # (NBX_FLASH_DECODE=1) — it is the correct shape for cards where the
-    # math path's materialised scores stop fitting, and for longer
-    # buckets than this row uses.
+    # VERDICT CORRECTED (2026-08-23, supervisor): the math path is not
+    # "full", it is SLOW — at a 4,164 context it reads ~409 MB of KV in
+    # 9.3 ms = 44 GB/s = 5% of the 900 GB/s HBM. The split pair lost to
+    # it anyway (its own overheads are larger still at these buckets).
+    # THE BAR FOR THIS KERNEL'S RETURN, at the flag as required: ~0.5 ms
+    # per token at 4k context (409 MB at ~900 GB/s). Beat the math
+    # path's 9.3 ms by an order of magnitude, or stay off.
     import os as _os_fd
     if (seqlen_q == 1 and q._device != "cpu"
             and _os_fd.environ.get("NBX_FLASH_DECODE", "0") == "1"
