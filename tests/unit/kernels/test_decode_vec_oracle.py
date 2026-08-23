@@ -165,9 +165,12 @@ def test_decode_vec_is_deterministic(D) -> None:
         f"for the replay engine regardless of accuracy")
 
 
-def test_decode_vec_is_actually_routed() -> None:
-    """ACTIVATION PROOF: armed, the wrapper reaches _decode_attn_vec;
-    unarmed, it does not (the vacuous-equivalence lesson)."""
+def test_decode_vec_routing_three_states() -> None:
+    """ACTIVATION PROOF for the three-state contract (ADOPTED default,
+    2026-08-23 verdict): "1" = armed pre-route; unset = the DEFAULT
+    Tq=1 refinement of the math route; "0" = kill switch everywhere;
+    and NBX_FORCE_MATH_ATTENTION keeps its exact meaning (the pure
+    bmm+softmax chain, vec bypassed). Counted, never assumed."""
     if not _has_gpu():
         pytest.skip("no GPU")
     calls = {"n": 0}
@@ -177,19 +180,41 @@ def test_decode_vec_is_actually_routed() -> None:
         calls["n"] += 1
         return orig(*a, **k)
 
-    W._decode_attn_vec = counting
-    try:
-        _run(1, 32, 8, 256, 128)
-        assert calls["n"] == 1, "armed flag did not reach the vec kernel"
-        n_before = calls["n"]
-        # unarmed: the same call must NOT route here
+    def one_call():
         rng = np.random.default_rng(0)
         q = _t(rng.standard_normal((1, 32, 1, 128)).astype(np.float16))
         k = _t(rng.standard_normal((1, 8, 256, 128)).astype(np.float16))
         v = _t(rng.standard_normal((1, 8, 256, 128)).astype(np.float16))
         W.scaled_dot_product_attention_wrapper(
             q, k, v, attn_mask=None, is_causal=False, scale=0.088)
-        assert calls["n"] == n_before, "unarmed call routed to the vec kernel"
+
+    W._decode_attn_vec = counting
+    try:
+        _run(1, 32, 8, 256, 128)     # arms "1"
+        assert calls["n"] == 1, "armed flag did not reach the vec kernel"
+
+        n0 = calls["n"]
+        one_call()                   # default (unset): routes via math
+        assert calls["n"] == n0 + 1, (
+            "default (unset) did not route Tq=1 to the vec kernel")
+
+        n0 = calls["n"]
+        _os.environ["NBX_DECODE_VEC"] = "0"
+        try:
+            one_call()
+        finally:
+            _os.environ.pop("NBX_DECODE_VEC", None)
+        assert calls["n"] == n0, "kill switch '0' did not kill the route"
+
+        n0 = calls["n"]
+        _os.environ["NBX_FORCE_MATH_ATTENTION"] = "1"
+        try:
+            one_call()
+        finally:
+            _os.environ.pop("NBX_FORCE_MATH_ATTENTION", None)
+        assert calls["n"] == n0, (
+            "NBX_FORCE_MATH_ATTENTION no longer means the pure math "
+            "chain — the vec kernel fired under it")
     finally:
         W._decode_attn_vec = orig
 
@@ -286,8 +311,8 @@ if __name__ == "__main__":
                 for _ in range(3)]
         assert outs[0] == outs[1] == outs[2], D
     print("  OK determinism 3x at D=127/128/129")
-    test_decode_vec_is_actually_routed()
-    print("  OK route activation (armed reaches, unarmed does not)")
+    test_decode_vec_routing_three_states()
+    print("  OK route activation (three-state contract)")
     test_masked_tail_contributes_nothing()
     print("  OK masked tail bitwise inert")
     test_strided_bucketed_views_bit_equal_no_copy()
