@@ -3077,9 +3077,17 @@ class TritonSequence:
             # return here; every ineligible case falls through to the
             # normal paths untouched. Contract + design: scoping doc
             # "Phase 4a".
+            _parked = self.__dict__.pop("_deferred_weight_bind", None)
             if _replay.ENABLED and not self._is_multi_device:
                 if _replay.maybe_run(self, skip_kills, pre_op_callback):
                     return
+            if _parked is not None:
+                # The executor skipped bind_weights on the strength of
+                # would_replay(); replay then declined (or was disabled
+                # between the check and the run). Bind NOW, before any op
+                # executes — the skip must never be observable on the
+                # op-by-op path.
+                self.bind_weights(_parked)
             if self._is_multi_device:
                 self._run_multi_device(skip_kills, pre_op_callback)
             else:

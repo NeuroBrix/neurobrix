@@ -1955,13 +1955,6 @@ class GraphExecutor:
         # None, and the first non-propagating consumer crashed
         # (aten.cat::0 'NoneType' has no attribute 'ndim' in the
         # rotary_embed chain — the second warm agent turn).
-        self._triton_seq.bind_weights(self._weights)
-        self._triton_seq.bind_inputs(input_map)
-        self._triton_seq.bind_symbols(input_map)
-        self._triton_seq.update_seq_dependent_constants()
-
-        effective_skip_kills = bool(skip_kills) if skip_kills is not None else False
-
         # Thread pre_op_callback from the executor into TritonSequence.
         # Explicit per-call wins over the persistent hook (installed by
         # strategies like zero3). This mirrors the behaviour of
@@ -1971,6 +1964,29 @@ class GraphExecutor:
         # the standard flow contract (their call sites mark the flag).
         self._triton_seq._replay_ineligible = getattr(
             self, '_replay_ineligible', False)
+
+        # Per-step setup, replay-aware. `bind_weights` (which ends with
+        # compute_op_devices) exists to serve OP-BY-OP execution; a step
+        # that will replay a frozen plan executes baked pointers instead,
+        # and the host profile put this redundant re-bind at the heart of
+        # the ~65 ms/token of host time (25 ms compute_op_devices +
+        # 18.8 ms bind + ~45 ms of dict/str/arena churn under cProfile).
+        # would_replay() is the SAME eligibility logic maybe_run uses,
+        # side-effect-free; when it says yes, the weights are PARKED on
+        # the sequence and run() binds them late if replay then declines
+        # — the skip is never observable on the op-by-op path. Inputs,
+        # symbols and seq-dependent constants still bind every step: the
+        # replay reads fresh input values from those slots.
+        from neurobrix.triton import replay as _replay_mod
+        if _replay_mod.would_replay(self._triton_seq, cb):
+            self._triton_seq._deferred_weight_bind = self._weights
+        else:
+            self._triton_seq.bind_weights(self._weights)
+        self._triton_seq.bind_inputs(input_map)
+        self._triton_seq.bind_symbols(input_map)
+        self._triton_seq.update_seq_dependent_constants()
+
+        effective_skip_kills = bool(skip_kills) if skip_kills is not None else False
         self._triton_seq.run(skip_kills=effective_skip_kills, pre_op_callback=cb)
         return self._triton_seq.gather_outputs(), self._triton_seq.num_ops
 
