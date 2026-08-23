@@ -1990,6 +1990,41 @@ class NBXTensor:
             return self.view(*shape)
         return self.contiguous().view(*shape)
 
+    def merge_dims(self, d0: int, d1: int) -> 'NBXTensor':
+        """Merge two ADJACENT dims into one — as a pure view when the
+        strides allow it, else via reshape (which materialises).
+
+        The merge is a legal view iff stride(d0) == shape(d1)*stride(d1)
+        — the two dims already walk memory as one. This holds on tensors
+        whose non-contiguity lives in ANOTHER dim: the bucketed KV-cache
+        view `buffer[:, :, :padded, :]` is non-contiguous in the T dim,
+        so plain `reshape(BH, T, D)` copied the whole padded K/V per
+        layer per decode step (the copies-at-source census, 2026-08-23),
+        while its (B, H) pair still merges for free. Callers that feed
+        the merged tensor to a kernel must handle its strides
+        (`bmm(..., allow_strided_b=True)`); the fallback keeps the
+        semantics identical for every stride pattern.
+        """
+        d0 = d0 % self.ndim
+        d1 = d1 % self.ndim
+        if d1 != d0 + 1:
+            raise ValueError(f"merge_dims needs adjacent dims, got {d0},{d1}")
+        if self._strides[d0] != self._shape[d1] * self._strides[d1]:
+            new_shape = (self._shape[:d0]
+                         + (self._shape[d0] * self._shape[d1],)
+                         + self._shape[d1 + 1:])
+            return self.reshape(new_shape)
+        new_shape = (self._shape[:d0]
+                     + (self._shape[d0] * self._shape[d1],)
+                     + self._shape[d1 + 1:])
+        new_strides = (self._strides[:d0] + (self._strides[d1],)
+                       + self._strides[d1 + 1:])
+        return NBXTensor(self._data_ptr, new_shape, new_strides,
+                         self._dtype, self._device, self._offset,
+                         device_idx=self._device_idx,
+                         base=self._base if self._base is not None else self,
+                         pinned=self._pinned)
+
     def unsqueeze(self, dim: int) -> 'NBXTensor':
         dim = dim % (self.ndim + 1) if dim >= 0 else dim + self.ndim + 1
         new_shape = list(self._shape)

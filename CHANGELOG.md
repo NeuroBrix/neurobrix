@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Decode attention no longer copies the KV cache to read it.** The
+  KV cache hands out views whose padding makes them non-contiguous in
+  memory, and the attention entry point materialised those views —
+  copying the entire visible K and V for every layer of every generated
+  token, a cost that grows with context length. The attention math path
+  now walks the views directly through stride-aware matrix kernels
+  (verified bit-identical, with a test proving no hidden copy remains),
+  while kernel paths that genuinely need flat memory still get it.
+  Measured under the pinned protocol on the 30B row: +2.4% at a short
+  context, **+11.1% at a 4,164-token context** (16.7 → 18.5 tokens/s),
+  outputs byte-identical.
+
 - **Large-model decoding on the Triton engine is substantially faster
   again: the per-step host work no longer scales with the size of the
   stored graph.** A traced model's graph carries every operation of the
