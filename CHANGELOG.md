@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Decode attention on Volta now runs a purpose-built vector kernel —
+  large models generate significantly faster, and the gain grows with
+  context.** The previous decode attention computed scores through
+  general matrix kernels shaped for tensor cores this hardware
+  generation cannot use for that pattern. The new kernel follows the
+  structure every production decode kernel uses on this silicon
+  (per-thread fused multiply-adds over vectorized cache reads, online
+  softmax, a deterministic fixed-order combine): measured under the
+  locked protocol with interleaved arms, +5.7% at a short context,
+  **+16.6% at a 4,164-token context, +30.1% at ~8,200 tokens**,
+  outputs byte-identical to the previous path at all three lengths.
+  Born with a float64 correctness oracle, a determinism proof, and a
+  counted route-activation test; `NBX_DECODE_VEC=0` restores the
+  previous path.
+
 ### Fixed
 
 - **Long-context text generation is now run-to-run deterministic on

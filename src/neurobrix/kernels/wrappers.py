@@ -7115,6 +7115,22 @@ def _math_attention_chunked(q, k, v, attn_mask, is_causal, scale,
     return out
 
 
+def _try_decode_vec(q, k, v, attn_mask, softmax_scale,
+                    batch, nheads, nheads_k, seqlen_k, headdim):
+    """Route guard for the vector decode kernel: returns the output or
+    None when the shape/mask is outside the kernel's contract."""
+    if headdim != v.shape[3]:
+        return None
+    bias = None
+    if attn_mask is not None:
+        if attn_mask.numel() == seqlen_k:
+            bias = attn_mask.reshape(seqlen_k)
+        else:
+            return None
+    return _decode_attn_vec(q, k, v, bias, softmax_scale,
+                            batch, nheads, nheads_k, seqlen_k, headdim)
+
+
 def _decode_attn_vec(q, k, v, bias, softmax_scale,
                      batch, nheads, nheads_k, seqlen_k, headdim):
     """Vector (SIMT) decode attention launch pair — see
@@ -7135,8 +7151,10 @@ def _decode_attn_vec(q, k, v, bias, softmax_scale,
     BHq = batch * nheads
     D_v = v.shape[3]
     BLOCK_D = max(triton.next_power_of_2(max(headdim, D_v)), 16)
+    # Defaults = the judged config (locked pinned protocol, 2026-08-23:
+    # seg 256 / BN 32 / 4 warps won the row at all three contexts).
     BLOCK_N = int(_os_dv.environ.get("NBX_DV_BLOCK_N", "32"))
-    seg = int(_os_dv.environ.get("NBX_DV_SEG", "512"))
+    seg = int(_os_dv.environ.get("NBX_DV_SEG", "256"))
     split = max(1, min(int(triton.cdiv(seqlen_k, seg)), 64))
     seg_len = int(triton.cdiv(seqlen_k, split))
     warps = int(_os_dv.environ.get("NBX_DV_WARPS", "4"))
@@ -7153,20 +7171,39 @@ def _decode_attn_vec(q, k, v, bias, softmax_scale,
     out = NBXTensor.empty((BHq, 1, D_v), dtype=q.nbx_dtype, device=dev)
 
     _set_device(q)
-    decode_attn_vec_split_kernel[(BHq, split)](
-        q2, k, v,
-        bias if bias is not None else q2,   # dead pointer when HAS_BIAS=0
-        opart, mpart, lpart,
-        seqlen_k, seg_len, float(softmax_scale),
-        q2.stride(0),
-        k.stride(1), k.stride(2),
-        v.stride(1), v.stride(2),
-        opart.stride(0), opart.stride(1),
-        mpart.stride(0),
-        GQA_GROUPS=groups, BLOCK_N=BLOCK_N, BLOCK_D=BLOCK_D,
-        D=headdim, D_V=D_v,
-        HAS_BIAS=bias is not None,
-        num_warps=warps, num_stages=1)
+    if _os_dv.environ.get("NBX_DV_GROUPED", "0") == "1":
+        # One KV head per program: K/V loaded once, reused across the
+        # GQA group from registers (see the grouped kernel's docstring).
+        from .ops.decode_attn_vec import decode_attn_vec_grouped_kernel
+        decode_attn_vec_grouped_kernel[(batch * nheads_k, split)](
+            q2, k, v,
+            bias if bias is not None else q2,
+            opart, mpart, lpart,
+            seqlen_k, seg_len, float(softmax_scale),
+            q2.stride(0),
+            k.stride(1), k.stride(2),
+            v.stride(1), v.stride(2),
+            opart.stride(0), opart.stride(1),
+            mpart.stride(0),
+            GQA_GROUPS=groups, BLOCK_N=BLOCK_N, BLOCK_D=BLOCK_D,
+            D=headdim, D_V=D_v,
+            HAS_BIAS=bias is not None,
+            num_warps=warps, num_stages=1)
+    else:
+        decode_attn_vec_split_kernel[(BHq, split)](
+            q2, k, v,
+            bias if bias is not None else q2,   # dead pointer when HAS_BIAS=0
+            opart, mpart, lpart,
+            seqlen_k, seg_len, float(softmax_scale),
+            q2.stride(0),
+            k.stride(1), k.stride(2),
+            v.stride(1), v.stride(2),
+            opart.stride(0), opart.stride(1),
+            mpart.stride(0),
+            GQA_GROUPS=groups, BLOCK_N=BLOCK_N, BLOCK_D=BLOCK_D,
+            D=headdim, D_V=D_v,
+            HAS_BIAS=bias is not None,
+            num_warps=warps, num_stages=1)
     # Fixed-order deterministic combine — the EXISTING flash_decode
     # reduce kernel viewed at GROUPS=1 (partials [BHq, split, 1, D_v]).
     flash_decode_reduce_kernel[(BHq,)](
@@ -7399,24 +7436,18 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     # cp.async pipeline) — reaching the bar needs a different kernel,
     # a named follow-up, not a tuning of this one.
     import os as _os_fd
-    # ---- VECTOR (SIMT) DECODE ATTENTION — the second attempt at the
-    # decode bar, structured from the sourced pre-Ampere patterns (see
-    # ops/decode_attn_vec.py). Opt-in during its judgment; the verdict
-    # under the pinned protocol decides default/opt-in/refused.
+    # NBX_DECODE_VEC three-state contract: "1" = ARMED here regardless
+    # of the math routing below (diagnostics + the oracle, which runs
+    # in profile-less processes where the budget is 0); unset = the
+    # kernel is the DEFAULT Tq=1 refinement INSIDE the math route
+    # below; "0" = kill switch everywhere.
     if (seqlen_q == 1 and q._device != "cpu"
-            and _os_fd.environ.get("NBX_DECODE_VEC", "0") == "1"
-            and headdim == v.shape[3]):
-        _dv_bias = None
-        _dv_ok = True
-        if attn_mask is not None:
-            if attn_mask.numel() == seqlen_k:
-                _dv_bias = attn_mask.reshape(seqlen_k)
-            else:
-                _dv_ok = False
-        if _dv_ok:
-            return _decode_attn_vec(q, k, v, _dv_bias, softmax_scale,
-                                    batch, nheads, nheads_k, seqlen_k,
-                                    headdim)
+            and _os_fd.environ.get("NBX_DECODE_VEC", "") == "1"):
+        _dv_out = _try_decode_vec(q, k, v, attn_mask, softmax_scale,
+                                  batch, nheads, nheads_k, seqlen_k,
+                                  headdim)
+        if _dv_out is not None:
+            return _dv_out
     if (seqlen_q == 1 and q._device != "cpu"
             and _os_fd.environ.get("NBX_FLASH_DECODE", "0") == "1"
             and headdim == v.shape[3]):
@@ -7489,7 +7520,8 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     # NBX_DISABLE_AUTOTUNE / NBX_DUMP_TIDS): force the deterministic
     # path regardless of hardware/headdim.
     import os as _os_fma
-    _use_math = _os_fma.environ.get("NBX_FORCE_MATH_ATTENTION") == "1"
+    _use_math_forced = _os_fma.environ.get("NBX_FORCE_MATH_ATTENTION") == "1"
+    _use_math = _use_math_forced
     # Asymmetric head_dim (MLA class — e.g. DeepSeek-V2 qk 192 / v 128):
     # the flash kernel is structurally single-headdim — one BLOCK_HEADDIM
     # constexpr shared by both tl.dot operands, V strides read with the K
@@ -7560,6 +7592,28 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
         return _math_attention_chunked(q, k, v, attn_mask, is_causal,
                                        softmax_scale, _chunk_rows)
     if _use_math:
+        # ---- VECTOR (SIMT) DECODE ATTENTION — DEFAULT on the math
+        # route at Tq == 1 (ADOPTED 2026-08-23, three-outcome verdict
+        # under the locked pinned protocol, interleaved arms, n=5, no
+        # overlap, outputs byte-identical to the math chain at all
+        # three contexts):
+        #   short (256 bucket)   21.538 -> 22.759 tok/s  (+5.7%)
+        #   4,164-token context  17.033 -> 19.868        (+16.6%)
+        #   ~8,200-token context 13.043 -> 16.972        (+30.1%)
+        # The gain grows with T, as the KV-streaming structure predicts
+        # (see ops/decode_attn_vec.py for the sourced design). Scoped
+        # INSIDE the math route: archs whose vendor yml defines no math
+        # budget never reach here at pow2 dims (R23 — non-Volta
+        # attention unchanged). NBX_FORCE_MATH_ATTENTION=1 keeps its
+        # exact meaning (the pure bmm+softmax chain) and bypasses this.
+        # NBX_DECODE_VEC=0 is the kill switch.
+        if (seqlen_q == 1 and not _use_math_forced
+                and _os_fd.environ.get("NBX_DECODE_VEC", "") != "0"):
+            _dv_out = _try_decode_vec(q, k, v, attn_mask, softmax_scale,
+                                      batch, nheads, nheads_k,
+                                      seqlen_k, headdim)
+            if _dv_out is not None:
+                return _dv_out
         return _math_attention(q, k, v, attn_mask=attn_mask,
                                 is_causal=is_causal, scale=softmax_scale)
 

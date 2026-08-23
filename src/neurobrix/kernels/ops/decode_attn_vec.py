@@ -115,3 +115,98 @@ def decode_attn_vec_split_kernel(
              acc, mask=mask_dv)
     tl.store(mpart_ptr + pid_q * stride_mh + pid_s, m_i)
     tl.store(lpart_ptr + pid_q * stride_mh + pid_s, l_i)
+
+
+@triton.jit
+def decode_attn_vec_grouped_kernel(
+    q_ptr,          # [B*H_q, D]        row-major grouped by KV head
+    k_ptr,          # [B*H_kv, T_k, D]
+    v_ptr,          # [B*H_kv, T_k, D_v]
+    bias_ptr,       # [T_k]
+    opart_ptr,      # [B*H_q, SPLIT, D_v] fp32
+    mpart_ptr,      # [B*H_q, SPLIT] fp32
+    lpart_ptr,      # [B*H_q, SPLIT] fp32
+    T_k, seg_len,
+    sm_scale,
+    stride_qh,
+    stride_kh, stride_kn,
+    stride_vh, stride_vn,
+    stride_oh, stride_os,
+    stride_mh,
+    GQA_GROUPS: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    BLOCK_D: tl.constexpr,
+    D: tl.constexpr,
+    D_V: tl.constexpr,
+    HAS_BIAS: tl.constexpr,
+):
+    """One KV HEAD per program (grid = (B*H_kv, split)): the GQA query
+    group is processed inside the block, so K/V tiles are loaded ONCE
+    and reused GQA_GROUPS times from registers — the per-Q-head variant
+    above re-reads K through L2 GROUPS times, and its measured 76 GB/s
+    unique-byte rate said the L2 was not absorbing enough. This is the
+    vLLM-Triton-backend decode shape (BLOCK_Q = the GQA group of one KV
+    head). The (G, N, D) product tile is avoided by a STATIC loop over
+    the group's rows; per-row online-softmax state lives in (GROUPS,)
+    vectors updated by a masked select (constexpr-unrolled, GROUPS is
+    4 on the canonical row)."""
+    pid_kv = tl.program_id(0)       # b * H_kv + h_kv
+    pid_s = tl.program_id(1)
+    offs_d = tl.arange(0, BLOCK_D)
+    mask_d = offs_d < D
+    mask_dv = offs_d < D_V
+    offs_g = tl.arange(0, GQA_GROUPS)
+
+    seg_start = pid_s * seg_len
+    seg_end = tl.minimum(seg_start + seg_len, T_k)
+
+    m_i = tl.full((GQA_GROUPS,), float("-inf"), dtype=tl.float32)
+    l_i = tl.zeros((GQA_GROUPS,), dtype=tl.float32)
+    acc = tl.zeros((GQA_GROUPS, BLOCK_D), dtype=tl.float32)
+
+    # the group's GROUPS query rows: [GROUPS, BLOCK_D]
+    q = tl.load(q_ptr + (pid_kv * GQA_GROUPS + offs_g)[:, None] * stride_qh
+                + offs_d[None, :],
+                mask=mask_d[None, :], other=0.0).to(tl.float32)
+
+    for n0 in range(seg_start, seg_end, BLOCK_N):
+        offs_n = n0 + tl.arange(0, BLOCK_N)
+        mask_n = offs_n < seg_end
+        k_tile = tl.load(k_ptr + pid_kv * stride_kh
+                         + offs_n[:, None] * stride_kn + offs_d[None, :],
+                         mask=mask_n[:, None] & mask_d[None, :],
+                         other=0.0).to(tl.float32)
+        v_tile = tl.load(v_ptr + pid_kv * stride_vh
+                         + offs_n[:, None] * stride_vn + offs_d[None, :],
+                         mask=mask_n[:, None] & mask_dv[None, :],
+                         other=0.0).to(tl.float32)
+        if HAS_BIAS:
+            b = tl.load(bias_ptr + offs_n, mask=mask_n,
+                        other=0.0).to(tl.float32)
+        for g in tl.static_range(GQA_GROUPS):
+            q_g = tl.sum(tl.where(offs_g[:, None] == g, q, 0.0), 0)
+            s = tl.sum(q_g[None, :] * k_tile, 1) * sm_scale
+            if HAS_BIAS:
+                s = s + b
+            s = tl.where(mask_n, s, float("-inf"))
+            m_old = tl.max(tl.where(offs_g == g, m_i, float("-inf")), 0)
+            m_new = tl.maximum(m_old, tl.max(s, 0))
+            m_safe = tl.where(m_new == float("-inf"), 0.0, m_new)
+            corr = tl.exp(tl.where(m_old == float("-inf"),
+                                   float("-inf"), m_old - m_safe))
+            p = tl.exp(s - m_safe)
+            p = tl.where(mask_n, p, 0.0)
+            pv = tl.sum(p[:, None] * v_tile, 0)          # [BLOCK_D]
+            l_old = tl.max(tl.where(offs_g == g, l_i, 0.0), 0)
+            sel = offs_g == g
+            acc = tl.where(sel[:, None],
+                           acc * corr + pv[None, :], acc)
+            l_i = tl.where(sel, l_old * corr + tl.sum(p, 0), l_i)
+            m_i = tl.where(sel, m_new, m_i)
+
+    base_q = pid_kv * GQA_GROUPS
+    tl.store(opart_ptr + (base_q + offs_g)[:, None] * stride_oh
+             + pid_s * stride_os + offs_d[None, :],
+             acc, mask=mask_dv[None, :])
+    tl.store(mpart_ptr + (base_q + offs_g) * stride_mh + pid_s, m_i)
+    tl.store(lpart_ptr + (base_q + offs_g) * stride_mh + pid_s, l_i)
