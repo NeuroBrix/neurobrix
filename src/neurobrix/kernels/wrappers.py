@@ -7065,10 +7065,16 @@ def _flash_decode(q, k, v, bias, softmax_scale,
     # at BLOCK_D=256 the same BLOCK_N requests 147 KB and refuses to
     # launch (caught by the day-one oracle at D=129). Halve until it
     # fits the 96 KB budget.
-    BLOCK_N = int(_os_fd2.environ.get("NBX_FD_BLOCK_N", "128")) \
+    # Defaults = the measured best of the 2026-08-23 10-config sweep
+    # (BN=64/SEG=512: 0.47 ms/call at T_k=4,352 vs 2.0 ms at the former
+    # BN=128 default, whose 128x128 double-buffered tile chokes Volta
+    # smem/occupancy). The kernel remains opt-in and remains SLOWER
+    # than the math path on the row even at this config (see the flag
+    # site) — but whoever arms it gets its best self.
+    BLOCK_N = int(_os_fd2.environ.get("NBX_FD_BLOCK_N", "64")) \
         if BLOCK_D <= 128 else (32 if BLOCK_D <= 256 else 16)
     split = max(1, min(int(triton.cdiv(
-        seqlen_k, int(_os_fd2.environ.get("NBX_FD_SEG", "256")))), 64))
+        seqlen_k, int(_os_fd2.environ.get("NBX_FD_SEG", "512")))), 64))
     seg_len = int(triton.cdiv(seqlen_k, split))
 
     qg = q.reshape(BH, groups, headdim)
@@ -7226,18 +7232,26 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     # "full", it is SLOW — at a 4,164 context it reads ~409 MB of KV in
     # 9.3 ms = 44 GB/s = 5% of the 900 GB/s HBM. The split pair lost to
     # it anyway (its own overheads are larger still at these buckets).
-    # MEASUREMENT CAVEAT (2026-08-23): the -10%/-14% figures above were
-    # taken on the FULL int4g128 artifact, before the pinned protocol
-    # existed, with 0.1 s-quantised timestamps whose single-rep noise
-    # floor was ~2% — and partly within the ~7% inter-campaign drift
-    # that incident exposed. They are directionally right (arms did not
-    # overlap) but will be RE-JUDGED under benchmarks/harness/
-    # bench_row.py (interleaved arms, ms timestamps, clocks logged,
-    # n + dispersion) on the published artifact the day this kernel
-    # comes back.
-    # THE BAR FOR THIS KERNEL'S RETURN, at the flag as required: ~0.5 ms
-    # per token at 4k context (409 MB at ~900 GB/s). Beat the math
-    # path's 9.3 ms by an order of magnitude, or stay off.
+    # RE-JUDGED under the pinned protocol (2026-08-23, bench_row.py,
+    # interleaved arms, n=5, published ffn-only artifact, at the 93%-GPU
+    # step where a GPU-side change is no longer masked by host time —
+    # HEAD 5cc7362):
+    #   default cfg (BN=128): 4,164 ctx x0.560 (-44.0%) · short x0.754
+    #     — BLOCK_N=128 is the pathology (the 128x128 double-buffered
+    #     fp16 tile chokes Volta smem/occupancy: 2-6 ms/call isolated).
+    #   best cfg (BN=64, SEG=512, from a 10-config isolated sweep):
+    #     4,164 ctx x0.857 (-14.3%) · short x0.968 (-3.2%), no overlap.
+    # The kernel REPLAYS and graph-captures fine (plan frozen, verified
+    # byte-equal) — the loss is its own GPU time: ~0.47 ms/call = ~22.7
+    # ms/token vs the in-engine autotuned math band's ~14 ms. The
+    # isolated math figure (1.47 ms/call) was 5x SLOWER than in-engine
+    # — eager wrapper overhead + cold autotune; the FD isolated figures
+    # transferred. Third refusal, first two protocol-grade.
+    # THE BAR STANDS: ~0.5 ms per token at 4k context (the KV bytes at
+    # ~900 GB/s). This split-KV shape cannot reach it on sm_70 (fp32
+    # partials + reduce pass + 16-row G-tile carrying 4 real rows, no
+    # cp.async pipeline) — reaching the bar needs a different kernel,
+    # a named follow-up, not a tuning of this one.
     import os as _os_fd
     if (seqlen_q == 1 and q._device != "cpu"
             and _os_fd.environ.get("NBX_FLASH_DECODE", "0") == "1"
