@@ -114,16 +114,29 @@ def test_index_put_failfast_multi_index():
         fn(x, [i0, i1], v, False)
 
 
-def test_index_put_failfast_bool_mask():
-    """Boolean-mask index must raise (no nonzero kernel in catalogue)."""
+def test_index_put_bool_mask_is_correct():
+    """Boolean-mask index_put — WAS a fail-fast pin ("no nonzero kernel
+    in catalogue"), but the capability has since been implemented and the
+    refusal no longer fires. A stale fail-fast is worse than none: it
+    reports a working feature as a defect. Converted (2026-08-23) to the
+    check that matters now — the masked write lands on exactly the True
+    positions."""
     if not torch.cuda.is_available():
         pytest.skip("CUDA required")
     fn = dispatch("aten::index_put")
     x = _nbx(np.zeros((4,), np.float32))
     mask = _nbx(np.array([True, False, True, False], dtype=np.bool_))
     v = _nbx(np.ones((2,), np.float32))
-    with pytest.raises(NotImplementedError):
-        fn(x, [mask], v, False)
+    out = fn(x, [mask], v, False)
+    import ctypes
+    from neurobrix.kernels.nbx_tensor import DeviceAllocator
+    buf = (ctypes.c_char * out._nbytes)()
+    DeviceAllocator.memcpy(ctypes.addressof(buf), out.data_ptr(),
+                           out._nbytes, 2)
+    got = np.frombuffer(bytes(buf), dtype=np.float32)
+    ref = np.zeros(4, np.float32); ref[[0, 2]] = 1.0
+    assert np.array_equal(got.reshape(-1), ref), (
+        f"bool-mask index_put wrong: got {got} want {ref}")
 
 
 if __name__ == "__main__":  # production-torch fidelity run (no pytest dep)

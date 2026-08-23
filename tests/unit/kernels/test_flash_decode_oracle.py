@@ -97,7 +97,14 @@ def _ref_float64(qn, kn, vn, bias, scale):
     return np.einsum("bhqk,bhkd->bhqd", e / l, V)
 
 
+import os as _os
+
+
 def _run(B, H, H_kv, T_k, D, bias_len=None, seed=0):
+    # The kernel is OPT-IN since f6032cf (measured slower than the math
+    # path at real bucket sizes). This oracle tests THE KERNEL, so it
+    # arms the flag explicitly for the duration of the call.
+    _os.environ["NBX_FLASH_DECODE"] = "1"
     rng = np.random.default_rng(seed)
     qn = rng.standard_normal((B, H, 1, D)).astype(np.float16)
     kn = rng.standard_normal((B, H_kv, T_k, D)).astype(np.float16)
@@ -184,8 +191,9 @@ def test_masked_tail_contributes_nothing() -> None:
         "is leaking into the softmax")
 
 
-def test_flash_decode_is_actually_routed() -> None:
-    """Activation proof: T_q=1 must take the new path, not math."""
+def test_flash_decode_is_actually_routed_when_armed() -> None:
+    """Activation proof: with NBX_FLASH_DECODE=1, T_q=1 takes the new
+    path. `_run` arms the flag; the probe proves arrival."""
     if not _has_gpu():
         pytest.skip("no GPU")
     called = {"n": 0}
@@ -200,8 +208,39 @@ def test_flash_decode_is_actually_routed() -> None:
     finally:
         W._flash_decode = orig
     assert called["n"] == 1, (
-        f"_flash_decode called {called['n']} times for a T_q=1 shape — "
-        f"the routing hook is not reaching it")
+        f"_flash_decode called {called['n']} times for a T_q=1 shape "
+        f"with the flag armed — the routing hook is not reaching it")
+
+
+def test_flash_decode_is_off_by_default() -> None:
+    """The twin: WITHOUT the flag, T_q=1 must go to the math path — the
+    default was flipped OFF by measurement (f6032cf: -10% short, -14%
+    long vs the tuned math path) and this pins that decision. If someone
+    re-enables it by default, this fails and demands the measurement be
+    redone rather than the flag drifting silently."""
+    if not _has_gpu():
+        pytest.skip("no GPU")
+    called = {"n": 0}
+    orig = W._flash_decode
+
+    def probe(*a, **k):
+        called["n"] += 1
+        return orig(*a, **k)
+    W._flash_decode = probe
+    _os.environ.pop("NBX_FLASH_DECODE", None)
+    try:
+        import numpy as _np
+        rng = _np.random.default_rng(0)
+        q = _t(rng.standard_normal((1, 32, 1, 128)).astype(_np.float16))
+        k = _t(rng.standard_normal((1, 4, 256, 128)).astype(_np.float16))
+        v = _t(rng.standard_normal((1, 4, 256, 128)).astype(_np.float16))
+        W.scaled_dot_product_attention_wrapper(
+            q, k, v, scale=1.0 / _np.sqrt(128))
+    finally:
+        W._flash_decode = orig
+    assert called["n"] == 0, (
+        "flash_decode ran WITHOUT NBX_FLASH_DECODE=1 — the measured "
+        "default-off decision has drifted")
 
 
 if __name__ == "__main__":  # script mode
@@ -226,8 +265,10 @@ if __name__ == "__main__":  # script mode
                      ("determinism D=128", lambda: test_flash_decode_is_deterministic(128)),
                      ("determinism D=129", lambda: test_flash_decode_is_deterministic(129)),
                      ("masked tail bitwise inert", test_masked_tail_contributes_nothing),
-                     ("activation: routing reaches _flash_decode",
-                      test_flash_decode_is_actually_routed)):
+                     ("activation: armed flag routes to _flash_decode",
+                      test_flash_decode_is_actually_routed_when_armed),
+                     ("twin: default-off goes to math",
+                      test_flash_decode_is_off_by_default)):
         try:
             fn()
             print(f"  ok    {name}")
