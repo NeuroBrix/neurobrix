@@ -213,11 +213,12 @@ def main() -> int:
     ap.add_argument("--out", required=True)
     ap.add_argument("--lock-clock", type=int, default=1380,
                     help="pin SM clocks to this MHz for the whole campaign "
-                         "(default 1380 — held with margin at this "
-                         "machine's thermal envelope; the max boost 1530 "
-                         "is NOT holdable under power transients, dips to "
-                         "1290 were logged). 0 = measure unlocked "
-                         "(drift documented per rep, not killed).")
+                         "(default 1380 — held with margin at decode-class "
+                         "loads; 8k+ prefills draw harder and hold 1290, "
+                         "not 1380 — the watchdog refused a 1380 campaign "
+                         "on a 1335 MHz sample during an 8k prefill. The "
+                         "max boost 1530 is never holdable. 0 = measure "
+                         "unlocked (drift documented per rep, not killed).")
     args = ap.parse_args()
     if args.prompt_file:
         args.prompt = Path(args.prompt_file).read_text()
