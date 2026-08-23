@@ -906,6 +906,42 @@ def _mem_diag(tag: str) -> None:
           flush=True)
 
 
+def would_replay(seq, pre_op_callback) -> bool:
+    """Side-effect-free: would `maybe_run` take the frozen-plan path?
+
+    Exists so the caller can SKIP the per-step setup that only serves
+    op-by-op execution — `bind_weights` and the `compute_op_devices` it
+    ends with — when this step will replay a frozen plan anyway. The
+    host profile of the captured decode step put that setup at the heart
+    of the ~65 ms/token of host time: the replay executes BAKED
+    pointers, so re-binding weights every token was pure redundancy *by
+    the replay's own trust model* — if the weights had actually moved,
+    the frozen launches would already be invalid.
+
+    Deliberately conservative: every path this predicate cannot vouch
+    for (census mode, pre_op callbacks — the zero3 class —, multi-device,
+    stage-driven, unregistered stateful interceptors, no frozen plan
+    yet) returns False and the caller binds exactly as before. And the
+    skip is guarded end-to-end: the caller parks the weights on the
+    sequence, and if `maybe_run` then declines for ANY reason, `run()`
+    performs the parked bind before executing a single op.
+    """
+    if os.environ.get("NBX_REPLAY_TUPLE_CENSUS") == "1":
+        return False
+    if not ENABLED or pre_op_callback is not None:
+        return False
+    sig = signature(seq)
+    if sig is None:
+        return False
+    only = os.environ.get("NBX_REPLAY_ONLY")
+    if only:
+        comp = str((seq.dag or {}).get("component_name", "?"))
+        if comp not in only.split(","):
+            return False
+    state = seq.__dict__.get("_replay_plans", {}).get(sig)
+    return isinstance(state, FrozenPlan)
+
+
 def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
     """Replay fast path. True = this run was fully handled.
 
