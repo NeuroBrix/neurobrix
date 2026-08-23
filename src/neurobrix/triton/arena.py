@@ -23,6 +23,21 @@ class Arena:
     def __len__(self) -> int:
         return len(self._slots)
 
+    def restore_from(self, snapshot: list) -> None:
+        """Bulk-restore every slot from a same-length snapshot list.
+
+        C-level slice assign. The frozen-plan replay restores the full
+        arena after every replayed step; the per-slot Python loop it
+        replaces cost ~140k `__setitem__` calls per decode token on the
+        30B row (2026-08-23 host profile), most of one of the two
+        ~16 ms GPU-idle holes in the step.
+        """
+        if len(snapshot) != len(self._slots):
+            raise ValueError(
+                f"arena restore length mismatch: snapshot "
+                f"{len(snapshot)} vs arena {len(self._slots)}")
+        self._slots[:] = snapshot
+
     def clear_intermediates(self):
         """Free intermediate slots (keep weights + inputs)."""
         start = self._num_weights + self._num_inputs
