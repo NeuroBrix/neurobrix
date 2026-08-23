@@ -7213,6 +7213,15 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     # "full", it is SLOW — at a 4,164 context it reads ~409 MB of KV in
     # 9.3 ms = 44 GB/s = 5% of the 900 GB/s HBM. The split pair lost to
     # it anyway (its own overheads are larger still at these buckets).
+    # MEASUREMENT CAVEAT (2026-08-23): the -10%/-14% figures above were
+    # taken on the FULL int4g128 artifact, before the pinned protocol
+    # existed, with 0.1 s-quantised timestamps whose single-rep noise
+    # floor was ~2% — and partly within the ~7% inter-campaign drift
+    # that incident exposed. They are directionally right (arms did not
+    # overlap) but will be RE-JUDGED under benchmarks/harness/
+    # bench_row.py (interleaved arms, ms timestamps, clocks logged,
+    # n + dispersion) on the published artifact the day this kernel
+    # comes back.
     # THE BAR FOR THIS KERNEL'S RETURN, at the flag as required: ~0.5 ms
     # per token at 4k context (409 MB at ~900 GB/s). Beat the math
     # path's 9.3 ms by an order of magnitude, or stay off.

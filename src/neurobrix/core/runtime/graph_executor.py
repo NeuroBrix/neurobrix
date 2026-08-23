@@ -1978,7 +1978,9 @@ class GraphExecutor:
         # symbols and seq-dependent constants still bind every step: the
         # replay reads fresh input values from those slots.
         from neurobrix.triton import replay as _replay_mod
-        if _replay_mod.would_replay(self._triton_seq, cb):
+        import os as _os_lb
+        if (_os_lb.environ.get("NBX_LAZY_BIND", "1") != "0"
+                and _replay_mod.would_replay(self._triton_seq, cb)):
             self._triton_seq._deferred_weight_bind = self._weights
         else:
             self._triton_seq.bind_weights(self._weights)

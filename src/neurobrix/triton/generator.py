@@ -150,7 +150,7 @@ class TritonGenerator:
             # per-token decode trajectory with wall-clock, for pace measurement
             # on long/offloaded decodes. Default-off, zero hot-path cost.
             with open(prog_path, "a") as pf:
-                pf.write(f"t={time.time():.1f} step={step_idx} "
+                pf.write(f"t={time.time():.3f} step={step_idx} "
                          f"n={len(self._state.generated_tokens)} "
                          f"last={token_id} done={self._state.is_done}\n")
 
