@@ -1760,6 +1760,22 @@ class GraphExecutor:
             if self._post_run_hook is not None:
                 self._post_run_hook()
 
+    def _graph_input_tids(self, tensors_meta: dict) -> list:
+        """`input::` tensor ids of the current DAG, cached.
+
+        The tensors dict spans the FULL stored graph (~70k entries on
+        the 30B row) while the `input::` entries are a handful; walking
+        the whole dict per execution cost ~140k `str.startswith` per
+        decode token (2026-08-23 host profile). The DAG is immutable
+        post-load (R18), so the list is cached keyed on dict identity —
+        shared by the triton and compiled per-step input binds.
+        """
+        if getattr(self, '_input_tids_src', None) is not tensors_meta:
+            self._input_tids = [t for t in tensors_meta
+                                if t.startswith("input::")]
+            self._input_tids_src = tensors_meta
+        return self._input_tids
+
     def _run_triton(self, inputs: Dict[str, Any],
                     skip_kills: Optional[bool] = None) -> Dict[str, Any]:
         """Execute via triton path with NBXTensor inputs. Zero torch.
@@ -1803,9 +1819,7 @@ class GraphExecutor:
         # Sana, Flex, SANA-Video, future diffusion).
         input_map = {}
         tensors_meta = self._dag.get("tensors", {})
-        for tid in tensors_meta:
-            if not tid.startswith("input::"):
-                continue
+        for tid in self._graph_input_tids(tensors_meta):
             input_name = tid[7:]
             value = inputs.get(input_name)
             if value is None and "." in input_name:
@@ -3517,39 +3531,38 @@ class GraphExecutor:
         # Prism dtype (self.dtype) is source of truth for floating-point inputs
         input_map = {}
         assert self._ctx is not None
-        for tid, tdata in tensors.items():
-            if tid.startswith("input::"):
-                input_name = tid[7:]  # Strip "input::"
-                value = None
+        for tid in self._graph_input_tids(tensors):
+            input_name = tid[7:]  # Strip "input::"
+            value = None
 
-                # Check flat key first (handles dotted names like ref_dict.prompt_token),
-                # then try nested dict navigation for actual nested inputs
-                if input_name in self._ctx.inputs:
-                    value = self._ctx.inputs[input_name]
-                elif "." in input_name:
-                    # Handle dotted paths for nested dicts (e.g., "added_cond_kwargs.resolution")
-                    parts = input_name.split(".")
-                    value = self._ctx.inputs
-                    found = True
-                    for part in parts:
-                        if isinstance(value, dict) and part in value:
-                            value = value[part]
-                        else:
-                            found = False
-                            break
-                    if not found:
-                        value = None
+            # Check flat key first (handles dotted names like ref_dict.prompt_token),
+            # then try nested dict navigation for actual nested inputs
+            if input_name in self._ctx.inputs:
+                value = self._ctx.inputs[input_name]
+            elif "." in input_name:
+                # Handle dotted paths for nested dicts (e.g., "added_cond_kwargs.resolution")
+                parts = input_name.split(".")
+                value = self._ctx.inputs
+                found = True
+                for part in parts:
+                    if isinstance(value, dict) and part in value:
+                        value = value[part]
+                    else:
+                        found = False
+                        break
+                if not found:
+                    value = None
 
-                # Apply Prism dtype + device conversion (same logic as sequential mode)
-                if isinstance(value, torch.Tensor):
-                    # For floating-point tensors, convert to Prism dtype
-                    torch_dtype = get_torch_dtype(self.dtype)
-                    if value.dtype.is_floating_point and value.dtype != torch_dtype:
-                        value = value.to(torch_dtype)
-                    # Move input to executor's device (critical for FGP/multi-device)
-                    if str(value.device) != str(self.device):
-                        value = value.to(self.device)
-                    input_map[tid] = value
+            # Apply Prism dtype + device conversion (same logic as sequential mode)
+            if isinstance(value, torch.Tensor):
+                # For floating-point tensors, convert to Prism dtype
+                torch_dtype = get_torch_dtype(self.dtype)
+                if value.dtype.is_floating_point and value.dtype != torch_dtype:
+                    value = value.to(torch_dtype)
+                # Move input to executor's device (critical for FGP/multi-device)
+                if str(value.device) != str(self.device):
+                    value = value.to(self.device)
+                input_map[tid] = value
 
         assert self._compiled_seq is not None
         self._compiled_seq.bind_inputs(input_map)

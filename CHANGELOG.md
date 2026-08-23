@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Large-model decoding on the Triton engine is substantially faster
+  again: the per-step host work no longer scales with the size of the
+  stored graph.** A traced model's graph carries every operation of the
+  full forward pass, but a replayed decode step executes only a small
+  fraction of it. Three pieces of per-step bookkeeping nevertheless
+  walked the entire stored graph on every generated token — scanning
+  ~70,000 tensor entries to find a handful of inputs, and restoring
+  ~70,000 arena slots one Python assignment at a time. The input scan
+  is now computed once per model, the restore is a single bulk
+  operation, and the replay input check pairs its lists at C level.
+  Measured on a 30B MoE model on one V100-32G under a pinned protocol
+  (5 repetitions per campaign, clocks logged on every run; the
+  before/after comparison spans two sequential same-day campaigns whose
+  logged drift bound, 1–2%, is two orders below the effect):
+  14.0 → 23.8 tokens/s at a short context (+69%), 11.1 → 16.7 tokens/s
+  at a 4,164-token context (+50%), outputs byte-identical in every
+  repetition. The equivalent
+  input-scan on the PyTorch engine is cached the same way.
+
 - **Sampling with `top_k` is dramatically faster on the Triton engine.**
   The top-k cut used to be applied by masking: rejected tokens were set
   aside but the vector stayed at full vocabulary width, so every later

@@ -540,12 +540,14 @@ class FrozenPlan:
         # frozen buffer so every recorded pointer stays live and
         # current. Identity scan cost is ~µs; identical objects skip.
         _scan_copied = 0
-        for slot in range(min(self.scan_limit, len(self.arena_snapshot))):
-            frozen = self.arena_snapshot[slot]
-            if frozen is None:
-                continue
-            new = arena[slot]
-            if new is None or new is frozen:
+        # C-level pairing (zip + islice over the raw slot list) — the
+        # indexed per-slot form cost ~19k Arena.__getitem__ per decode
+        # token on the 30B row (2026-08-23 host profile).
+        from itertools import islice
+        for slot, (frozen, new) in enumerate(
+                islice(zip(self.arena_snapshot, arena._slots),
+                       self.scan_limit)):
+            if frozen is None or new is None or new is frozen:
                 continue
             if (tuple(new.shape) != tuple(frozen.shape)
                     or new.nbx_dtype != frozen.nbx_dtype):
@@ -649,8 +651,7 @@ class FrozenPlan:
                     self._direct_actions(self.records[cut:])
         else:
             self._direct_actions()
-        for i, t in enumerate(self.arena_snapshot):
-            arena[i] = t
+        arena.restore_from(self.arena_snapshot)
         # Contract clause 2 (inter-replay overwrite), enforced HERE so
         # no flow needs to cooperate: callers may legally retain output
         # objects across calls (VibeVoice chunk accumulation appends by
