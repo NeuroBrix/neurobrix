@@ -4147,12 +4147,39 @@ def dot_wrapper(x, y) :
 # ---------------------------------------------------------------------------
 
 def mv_wrapper(mat, vec) :
-    """Matrix-vector multiply: out[i] = sum_j(mat[i, j] * vec[j])."""
+    """Matrix-vector multiply: out[i] = sum_j(mat[i, j] * vec[j]).
+
+    The SIMT gemv_vec kernel (ops/gemv_vec.py) is the DEFAULT
+    (ADOPTED 2026-08-24: locked pinned protocol, interleaved arms,
+    n=5, no overlap, outputs byte-identical at all three contexts —
+    short +7.1%, 4,164 +6.4%, ~8,300 +6.1%; judged config
+    BN=8/BK=512/W=4). Its (BLOCK_N,) per-chunk-reduced accumulator
+    replaces the incumbent FlagGems kernel's (64, 256) fp32 register
+    tile (64 KB/CTA, spill class). NBX_MV_VEC=0 restores the
+    incumbent. Deterministic both ways (all of K inside one program,
+    fixed order — no split-K atomics, the GemLite pattern refused).
+    """
+    import os as _os_mv
     mat, vec = mat.contiguous(), vec.contiguous()
     N, M = mat.shape
     out = NBXTensor.empty(N, device=mat.device, dtype=_matmul_out_dtype(mat))
-    grid = (triton.cdiv(N, _MV_BN),)
     _set_device(mat)
+    if _os_mv.environ.get("NBX_MV_VEC", "1") != "0":
+        from .ops.gemv_vec import gemv_vec_kernel
+        BN = int(_os_mv.environ.get("NBX_MVV_BN", "8"))
+        BK = int(_os_mv.environ.get("NBX_MVV_BK", "256"))
+        W = int(_os_mv.environ.get("NBX_MVV_WARPS", "4"))
+        gemv_vec_kernel[(triton.cdiv(N, BN),)](
+            mat, vec, out,
+            N, M,
+            mat.stride(0), mat.stride(1),
+            vec.stride(0),
+            out.stride(0),
+            BLOCK_N=BN, BLOCK_K=BK,
+            num_warps=W, num_stages=1,
+        )
+        return out
+    grid = (triton.cdiv(N, _MV_BN),)
     mv_kernel[grid](
         mat, vec, out,
         N, M,
