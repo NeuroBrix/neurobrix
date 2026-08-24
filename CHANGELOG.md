@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The per-token weight projections run a rewritten vector kernel —
+  all model generation on the Triton engine gets a uniform speedup.**
+  The previous matrix-vector kernel accumulated into a large register
+  tile (64 KB per thread block, forcing spills) and under-filled the
+  GPU at small output widths. The rewrite follows the structure of
+  production decode kernels on this hardware class: a small group of
+  output rows per program, wide vectorized weight reads, one small
+  accumulator reduced chunk by chunk in fixed order (deterministic by
+  construction). Measured under the locked protocol with interleaved
+  arms at three context lengths: **+7.1% / +6.4% / +6.1%**
+  (short / 4,164 / ~8,300 tokens), outputs byte-identical everywhere.
+  `NBX_MV_VEC=0` restores the previous kernel.
+
 - **Decode attention on Volta now runs a purpose-built vector kernel —
   large models generate significantly faster, and the gain grows with
   context.** The previous decode attention computed scores through
