@@ -196,6 +196,95 @@ def run_once(args, arm_env: dict, tag: str, outdir: Path) -> dict:
             "sha": sha, "gpu_before": before, "gpu_after": after}
 
 
+def _wait_gpu_free(gpu: str, timeout_s: int = 180) -> None:
+    """Poll until no compute app holds the GPU (an ollama arm with
+    keep_alive=0 unloads asynchronously after the response; the next
+    nbx rep must not contend)."""
+    t0 = time.time()
+    while time.time() - t0 < timeout_s:
+        out = subprocess.run(
+            ["nvidia-smi", f"--id={gpu}", "--query-compute-apps=pid",
+             "--format=csv,noheader"],
+            capture_output=True, text=True).stdout.strip()
+        if not out:
+            return
+        time.sleep(2)
+    raise SystemExit(
+        f"REFUSED: GPU {gpu} still held by a compute app {timeout_s}s "
+        f"after an ollama rep — unload did not complete; the campaign "
+        f"cannot keep its exclusivity contract")
+
+
+def run_once_ollama(args, arm_env: dict, tag: str, outdir: Path) -> dict:
+    """One ollama rep through its native API — the cross-engine arm of
+    the locked protocol (2026-08-24 re-anchor: no published gap number
+    may rest on a ratio transfer; both sides measured on this machine
+    under the same clock lock).
+
+    Fairness notes, recorded not hidden:
+      - keep_alive=0 -> cold load every rep, like the nbx arm.
+      - decode rate = eval_count / eval_duration from ollama's OWN
+        timers (its native definition, over all generated tokens); the
+        nbx arm's rate is post-warm from ms timestamps. Each engine
+        gets its best native measurement.
+      - temperature 0, same versioned prompt, same token budget.
+    TTFT fields (load_duration, prompt_eval_*) land in the run record.
+    """
+    import json as _json
+    import urllib.request
+    model = arm_env.get("OLLAMA_MODEL")
+    if not model:
+        raise SystemExit("ollama arm needs OLLAMA_MODEL=<tag> in its env")
+    url = arm_env.get("OLLAMA_URL", "http://127.0.0.1:11434") + "/api/generate"
+    body = _json.dumps({
+        "model": model, "prompt": args.prompt, "stream": False,
+        "keep_alive": 0,
+        "options": {"temperature": float(args.temperature),
+                    "num_predict": args.max_tokens, "seed": 1234},
+    }).encode()
+    before = gpu_state(args.gpu)
+    t0 = time.time()
+    if args.lock_clock:
+        with ClockWatch(args.gpu, args.lock_clock) as watch:
+            with urllib.request.urlopen(
+                    urllib.request.Request(
+                        url, data=body,
+                        headers={"Content-Type": "application/json"}),
+                    timeout=2400) as resp:
+                r = _json.loads(resp.read())
+        if watch.violations:
+            raise SystemExit(
+                f"REFUSED: clock lock broke during ollama rep {tag} — "
+                f"sampled {watch.violations[:5]} against "
+                f"{args.lock_clock} MHz")
+    else:
+        with urllib.request.urlopen(
+                urllib.request.Request(
+                    url, data=body,
+                    headers={"Content-Type": "application/json"}),
+                timeout=2400) as resp:
+            r = _json.loads(resp.read())
+    wall = time.time() - t0
+    after = gpu_state(args.gpu)
+    text = r.get("response", "")
+    (outdir / f"out_{tag}.txt").write_text(text)
+    import hashlib
+    sha = hashlib.sha256(text.encode()).hexdigest()[:12]
+    ev_n = r.get("eval_count", 0)
+    ev_d = r.get("eval_duration", 0)
+    rate = ev_n / (ev_d / 1e9) if ev_d else None
+    rec = {"tag": tag, "rc": 0, "rate": rate, "wall_s": round(wall, 1),
+           "sha": sha, "gpu_before": before, "gpu_after": after,
+           "ollama": {
+               "eval_count": ev_n, "eval_duration_ns": ev_d,
+               "prompt_eval_count": r.get("prompt_eval_count"),
+               "prompt_eval_duration_ns": r.get("prompt_eval_duration"),
+               "load_duration_ns": r.get("load_duration"),
+               "total_duration_ns": r.get("total_duration")}}
+    _wait_gpu_free(args.gpu)
+    return rec
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True)
@@ -247,7 +336,9 @@ def main() -> int:
         # INTERLEAVED: rep 1 of every arm, then rep 2 of every arm, ...
         for rep in range(1, args.reps + 1):
             for name, env in arms:
-                res = run_once(args, env, f"{name}_{rep}", outdir)
+                runner = (run_once_ollama if env.get("ARM_ENGINE") == "ollama"
+                          else run_once)
+                res = runner(args, env, f"{name}_{rep}", outdir)
                 results[name].append(res)
                 print(f"  {name} rep{rep} rc={res['rc']} "
                       f"rate={res['rate'] and round(res['rate'], 3)} "
