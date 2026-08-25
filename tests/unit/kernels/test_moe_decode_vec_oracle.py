@@ -1,7 +1,9 @@
 """Day-one float64 oracle for the SIMT MoE decode band.
 
 Fourth member of the SIMT decode family. Tests the FULL band path
-(execute_moe_fused routing -> topk -> the two-kernel vec pass) against
+(execute_moe_fused routing -> topk -> the three-kernel vec pass:
+gateup + down-split + fixed-order part reduce, ADOPTED 2026-08-25;
+NBX_MOEV_DSPLIT=0 = fused down combine kill path) against
 an INDEPENDENT float64 reference computed FROM THE PACKED BYTES
 (numpy nibble unpack + q*scale+qmin dequant + SwiGLU + router-weighted
 combine — the dequant-GEMV audit pattern: no NeuroBrix kernel in the
@@ -24,6 +26,10 @@ Five proofs (the family rule):
      and non-quantized tables never route (the zoo guard — fp16 MoEs
      keep the proven path).
   5. M>1 keeps the grouped path (prefill unaffected by construction).
+  6. COUNTED down-path three states (ADOPTED default): unset and "1"
+     launch the split pair (down_split + part_reduce), "0" launches
+     the fused combine — the same activation-proof discipline as the
+     NBX_MOE_VEC contract.
 
 Runnable two ways:
   - pytest:  PYTHONPATH=src python3 -m pytest tests/unit/kernels/test_moe_decode_vec_oracle.py -v
@@ -233,6 +239,54 @@ def test_moe_vec_route_activation_and_guards() -> None:
         MOE._moe_decode_vec_pass = orig
 
 
+def test_moe_vec_dsplit_three_state() -> None:
+    """COUNTED sub-path contract: unset (ADOPTED default) and "1"
+    launch the split pair (down_split + part_reduce); "0" launches the
+    fused combine kill path. Patches the kernels MODULE attributes —
+    the pass's function-local import re-reads them at every call."""
+    if not _has_gpu():
+        pytest.skip("no GPU")
+    import neurobrix.kernels.ops.moe_decode_vec as KOPS
+
+    counts = {"split": 0, "reduce": 0, "fused": 0}
+
+    class _CountingLauncher:
+        def __init__(self, kern, key):
+            self._kern, self._key = kern, key
+
+        def __getitem__(self, grid):
+            counts[self._key] += 1
+            return self._kern[grid]
+
+    origs = (KOPS.moe_down_split_vec_kernel, KOPS.moe_part_reduce_kernel,
+             KOPS.moe_down_combine_vec_kernel)
+    KOPS.moe_down_split_vec_kernel = _CountingLauncher(origs[0], "split")
+    KOPS.moe_part_reduce_kernel = _CountingLauncher(origs[1], "reduce")
+    KOPS.moe_down_combine_vec_kernel = _CountingLauncher(origs[2], "fused")
+    try:
+        weights, _, xn, logits = _build_band(seed=13)
+        _run_band(weights, xn, logits)  # unset: ADOPTED default
+        assert counts == {"split": 1, "reduce": 1, "fused": 0}, (
+            f"unset (adopted default) did not take the split pair: {counts}")
+        _os.environ["NBX_MOEV_DSPLIT"] = "0"
+        try:
+            _run_band(weights, xn, logits)
+        finally:
+            _os.environ.pop("NBX_MOEV_DSPLIT", None)
+        assert counts == {"split": 1, "reduce": 1, "fused": 1}, (
+            f"kill switch '0' did not restore the fused combine: {counts}")
+        _os.environ["NBX_MOEV_DSPLIT"] = "1"
+        try:
+            _run_band(weights, xn, logits)
+        finally:
+            _os.environ.pop("NBX_MOEV_DSPLIT", None)
+        assert counts == {"split": 2, "reduce": 2, "fused": 1}, (
+            f"explicit '1' did not take the split pair: {counts}")
+    finally:
+        (KOPS.moe_down_split_vec_kernel, KOPS.moe_part_reduce_kernel,
+         KOPS.moe_down_combine_vec_kernel) = origs
+
+
 def test_moe_vec_agrees_with_grouped_path() -> None:
     """Cross-implementation: the vec band vs the proven grouped band on
     the same inputs — both within the float64 bound, and within a tight
@@ -257,6 +311,8 @@ if __name__ == "__main__":
     print("  OK router-weight contract")
     test_moe_vec_route_activation_and_guards()
     print("  OK route activation + guards (unset, M>1)")
+    test_moe_vec_dsplit_three_state()
+    print("  OK down-path three states (split default, fused kill)")
     test_moe_vec_agrees_with_grouped_path()
     print("  OK vec agrees with the grouped path")
     print("PASS: moe_decode_vec oracle complete")

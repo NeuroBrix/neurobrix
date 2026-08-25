@@ -20,21 +20,28 @@ fixed order. This kernel pair goes one step further and keeps the
 cross-expert sum INSIDE the down kernel as a FIXED-ORDER expert loop —
 no intermediate per-slot outputs, no sum_wrapper, no atomics.
 
-Two kernels replace the whole band:
+Three kernels replace the whole band (second pass ADOPTED 2026-08-25):
   1. `moe_gateup_vec_kernel` — grid (TOP_K, cdiv(INTER, BLOCK_N)):
      each program owns one active expert's tile of the intermediate
      dim, runs TWO dequant-matvec accumulators (gate and up — the
      llama.cpp dual-accumulator GLU shape, no weight-layout change)
      over K with int4-g128-asym dequant in the FMA loop, and applies
      SwiGLU in the epilogue: h[e, tile] = silu(g) * u.
-  2. `moe_down_combine_vec_kernel` — grid (cdiv(HID, BLOCK_N),):
-     each program accumulates over the TOP_K experts IN FIXED ORDER:
-     acc += w_e * (dequant(W_down_e)[:, tile]^T @ h[e]) — the router
-     weight fused as the epilogue multiply, the sum deterministic by
-     construction.
-  moe_align disappears at M=1 (no token sort exists to build); the
-  SwiGLU pass, the sum_wrapper combine, and the zero-init of the
-  grouped caches disappear with it.
+  2. `moe_down_split_vec_kernel` — grid (TOP_K, cdiv(HID, BLOCK_N)):
+     the expert axis lives on the GRID (8x the programs of the fused
+     loop — the occupancy lever: 32 -> 512 programs on 80 SMs moved
+     the down projection from 46 to ~248 GB/s), each program writing
+     its ROUTER-WEIGHTED partial.
+  3. `moe_part_reduce_kernel` — fixed-order sum of the TOP_K weighted
+     partials; the combine stays deterministic by construction.
+  `moe_down_combine_vec_kernel` (the first-pass fused down + combine)
+  remains as the NBX_MOEV_DSPLIT=0 kill path. moe_align disappears at
+  M=1 (no token sort exists to build); the SwiGLU pass, the
+  sum_wrapper combine, and the zero-init of the grouped caches
+  disappear with it. A gate/up-split projection variant (one matrix
+  per program + separate silu-mul epilogue) was profiled and REFUSED:
+  2x42.9+3.4 us vs the fused dual-accumulator gateup's 71 us at BN=32
+  (nsys ladder 2026-08-25).
 
 Dequant expression TEXTUALLY IDENTICAL to dequant_gemv_int4_kernel
 (the parity-derived brick: q unpacked LSB-nibble from int32,
@@ -180,4 +187,73 @@ def moe_down_combine_vec_kernel(
             part += tl.sum(a[:, None] * b, axis=0)
         acc += we * part
 
+    tl.store(out_ptr + offs_n, acc, mask=mask_n)
+
+
+@triton.jit
+def moe_down_split_vec_kernel(
+    h_ptr, topk_ids_ptr, topk_w_ptr,
+    down_qw_tab, down_sc_tab, down_mn_tab,
+    part_ptr,         # [TOP_K, N] fp32 — weighted per-expert partials
+    Kd, N,
+    stride_wk, stride_wn,
+    stride_sg, stride_sn,
+    BLOCK_N: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+    GROUP: tl.constexpr,
+    PACK: tl.constexpr,
+):
+    """ADOPTED second pass (2026-08-25): the expert axis moves to the
+    GRID (grid = (TOP_K, tiles) — 8x the programs of the fused loop),
+    each program writing its ROUTER-WEIGHTED partial; a separate tiny
+    fixed-order reduce completes the deterministic combine. Trades one
+    launch + a [TOP_K, N] fp32 buffer for occupancy and a straight-line
+    inner loop."""
+    pid_e = tl.program_id(0)
+    pid_n = tl.program_id(1)
+    offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    mask_n = offs_n < N
+    eid = tl.load(topk_ids_ptr + pid_e).to(tl.int64)
+    we = tl.load(topk_w_ptr + pid_e).to(tl.float32)
+    qw = tl.cast(tl.load(down_qw_tab + eid),
+                 tl.pointer_type(tl.int32), bitcast=True)
+    sc = tl.cast(tl.load(down_sc_tab + eid),
+                 tl.pointer_type(tl.float16), bitcast=True)
+    mp = tl.cast(tl.load(down_mn_tab + eid),
+                 tl.pointer_type(tl.float16), bitcast=True)
+    acc = tl.zeros((BLOCK_N,), dtype=tl.float32)
+    for kc in range(0, tl.cdiv(Kd, BLOCK_K)):
+        offs_k = kc * BLOCK_K + tl.arange(0, BLOCK_K)
+        mask_k = offs_k < Kd
+        mask = mask_k[:, None] & mask_n[None, :]
+        a = tl.load(h_ptr + pid_e * Kd + offs_k, mask=mask_k, other=0.0)
+        g = kc * BLOCK_K // GROUP
+        packed = tl.load(qw + (offs_k[:, None] // PACK) * stride_wk
+                         + offs_n[None, :] * stride_wn, mask=mask, other=0)
+        q = (packed >> ((offs_k[:, None] % PACK) * 4)) & 0xF
+        scale = tl.load(sc + g * stride_sg + offs_n * stride_sn,
+                        mask=mask_n, other=0.0)
+        mn = tl.load(mp + g * stride_sg + offs_n * stride_sn,
+                     mask=mask_n, other=0.0)
+        w = (q.to(tl.float32) * scale[None, :].to(tl.float32)
+             + mn[None, :].to(tl.float32))
+        b = tl.where(mask, w, 0.0)
+        acc += tl.sum(a[:, None] * b, axis=0)
+    tl.store(part_ptr + pid_e * N + offs_n, we * acc, mask=mask_n)
+
+
+@triton.jit
+def moe_part_reduce_kernel(
+    part_ptr, out_ptr, N,
+    TOP_K: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+):
+    """Fixed-order sum of the TOP_K weighted partials — deterministic
+    (the same contract as flash_decode_reduce: order is a constant)."""
+    pid = tl.program_id(0)
+    offs_n = pid * BLOCK_N + tl.arange(0, BLOCK_N)
+    mask_n = offs_n < N
+    acc = tl.zeros((BLOCK_N,), dtype=tl.float32)
+    for e in tl.static_range(TOP_K):
+        acc += tl.load(part_ptr + e * N + offs_n, mask=mask_n, other=0.0)
     tl.store(out_ptr + offs_n, acc, mask=mask_n)

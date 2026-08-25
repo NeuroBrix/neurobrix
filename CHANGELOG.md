@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Mixture-of-experts generation gets a second wave of speedup — the
+  expert down-projection now spreads across the whole GPU.** The
+  first rewrite of the single-token expert pipeline (below) left its
+  final projection running on far too few thread blocks to fill the
+  GPU (32 programs for 80 multiprocessors, ~46 GB/s of weight
+  streaming). That projection now places each expert on its own grid
+  row — eight times the parallelism, ~248 GB/s — and completes the
+  expert sum in a separate fixed-order reduction, still deterministic
+  by construction; the gated projections also adopt the narrower tile
+  the profile ladder selected. Measured under the locked protocol with
+  interleaved arms: **+23.2% / +21.3% / +20.3%** at short / 4,164 /
+  ~8,300 tokens on top of the first wave — the 30B reference row
+  reaches 38 tokens/s on one V100. Outputs byte-identical at short
+  and 4,164; the ~8,300 row moved once, pass-stable (a greedy
+  near-tie under the new reduction order, same class as the first
+  wave). `NBX_MOEV_DSPLIT=0` restores the fused down-projection;
+  `NBX_MOE_VEC=0` still restores the pre-rewrite path entirely.
+
 - **Mixture-of-experts generation is dramatically faster — the
   single-token expert pipeline was rebuilt end to end.** At one token,
   the previous path sorted a trivial routing list through a three-stage
