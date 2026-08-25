@@ -155,21 +155,30 @@ def run_nbx_arm(args, env_spec: dict, outdir: Path) -> list:
     print(f"  [nbx {flag}] daemon warm "
           f"(T={gpu_state(args.gpu).get('temp_c')}C)", flush=True)
     recs = []
-    for rep in range(1, args.reps + 1):
-        p = prompt_variant(args.prompt, rep)
-        r = ttft_stream_nbx(p, args.max_tokens)
-        r["rep"] = rep
-        r["request_index"] = rep  # request-1 vs 2+ split at report time
-        recs.append(r)
-        print(f"  nbx rep{rep} ttft={r['ttft_s'] and round(r['ttft_s'], 3)}s "
-              f"tokens={r['tokens']}", flush=True)
     try:
-        c = DaemonClient()
-        c.connect()
-        c.shutdown()
-    except Exception:
-        proc.kill()
-    proc.wait(timeout=120)
+        for rep in range(1, args.reps + 1):
+            p = prompt_variant(args.prompt, rep)
+            r = ttft_stream_nbx(p, args.max_tokens)
+            r["rep"] = rep
+            r["request_index"] = rep  # request-1 vs 2+ split
+            recs.append(r)
+            print(f"  nbx rep{rep} "
+                  f"ttft={r['ttft_s'] and round(r['ttft_s'], 3)}s "
+                  f"tokens={r['tokens']}", flush=True)
+    finally:
+        # The daemon must NEVER outlive its arm block — a leaked warm
+        # daemon breaks the next campaign's exclusivity check (leaked
+        # once on the 2026-08-25 long-OOM rep).
+        try:
+            c = DaemonClient()
+            c.connect()
+            c.shutdown()
+        except Exception:
+            proc.kill()
+        try:
+            proc.wait(timeout=120)
+        except subprocess.TimeoutExpired:
+            proc.kill()
     return recs
 
 
