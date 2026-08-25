@@ -703,6 +703,7 @@ def _moe_decode_vec_pass(hidden_states, tables, dev, flat_indices,
     W = int(_os_dv.environ.get("NBX_MOEV_WARPS", "4"))
     BND = int(_os_dv.environ.get("NBX_MOEV_BND", str(BN)))
     WD = int(_os_dv.environ.get("NBX_MOEV_WARPS_D", str(W)))
+    ST = int(_os_dv.environ.get("NBX_MOEV_STAGES", "1"))
 
     _set_device(h)
     moe_gateup_vec_kernel[(top_k, _tr.cdiv(N_gate, BN))](
@@ -713,7 +714,7 @@ def _moe_decode_vec_pass(hidden_states, tables, dev, flat_indices,
         tables.gate_stride_bk[dev], tables.gate_stride_bn[dev],
         sg, sn,
         BLOCK_N=BN, BLOCK_K=BK, GROUP=128, PACK=8,
-        num_warps=W, num_stages=1)
+        num_warps=W, num_stages=ST)
     if _os_dv.environ.get("NBX_MOEV_DSPLIT", "1") != "0":
         part = NBXTensor.empty((top_k, K), dtype=NBXDtype.float32,
                                device=f"cuda:{dev}")
@@ -724,7 +725,7 @@ def _moe_decode_vec_pass(hidden_states, tables, dev, flat_indices,
             tables.down_stride_bk[dev], tables.down_stride_bn[dev],
             dsg, dsn,
             BLOCK_N=BND, BLOCK_K=BK, GROUP=128, PACK=8,
-            num_warps=WD, num_stages=1)
+            num_warps=WD, num_stages=ST)
         moe_part_reduce_kernel[(_tr.cdiv(K, 256),)](
             part, out32, K, TOP_K=top_k, BLOCK_N=256, num_warps=2)
         return out32.to(dt).reshape(1, K)
@@ -735,7 +736,7 @@ def _moe_decode_vec_pass(hidden_states, tables, dev, flat_indices,
         tables.down_stride_bk[dev], tables.down_stride_bn[dev],
         dsg, dsn,
         TOP_K=top_k, BLOCK_N=BND, BLOCK_K=BK, GROUP=128, PACK=8,
-        num_warps=WD, num_stages=1)
+        num_warps=WD, num_stages=ST)
     return out32.to(dt).reshape(1, K)
 
 

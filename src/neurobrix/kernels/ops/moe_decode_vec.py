@@ -41,7 +41,18 @@ Three kernels replace the whole band (second pass ADOPTED 2026-08-25):
   disappear with it. A gate/up-split projection variant (one matrix
   per program + separate silu-mul epilogue) was profiled and REFUSED:
   2x42.9+3.4 us vs the fused dual-accumulator gateup's 71 us at BN=32
-  (nsys ladder 2026-08-25).
+  (nsys ladder 2026-08-25). A wide-load variant (one packed int32
+  load per word, [KP, PACK, BN] register unpack) was also REFUSED:
+  x0.69 at equal blocks, best point x1.02 = rank noise — Volta's L1
+  serves the offs_k//PACK redundant requests nearly free, and the
+  cross-kernel comparison (down single-stream ~248 GB/s vs gateup
+  dual-stream ~200 at identical dequant ALU per byte) proves the
+  unpack ALU is NOT the binding constraint. DOCUMENTED WALL
+  (2026-08-25): the band's residual over its ~3.2 ms ALU working bar
+  is the dual-stream SwiGLU gateup structure at M=1 on sm_70; the
+  upstream reference for this exact regime (vLLM moe_wna16) is a CUDA
+  half2 SIMT kernel — outside Triton-pure scope. Evidence:
+  validation_outputs/moev2adopt_offbyte_gate_2026_08_25/WALL.md.
 
 Dequant expression TEXTUALLY IDENTICAL to dequant_gemv_int4_kernel
 (the parity-derived brick: q unpacked LSB-nibble from int32,
