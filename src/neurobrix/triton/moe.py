@@ -535,6 +535,56 @@ def execute_moe_fused(
             DeviceAllocator.ensure_triton_device(act_dev)
 
     # ================================================================
+    # STEP 2b: SIMT decode band — M == 1, int4-g128 experts (the
+    # fourth SIMT family member, 2026-08-24). At one token the grouped
+    # GEMM's every 16-row tile carries ONE real row and the sorted-
+    # token machinery sorts a list of top_k entries; this path replaces
+    # the whole band (align + 3 grouped launches + SwiGLU pass + sum
+    # combine) with two kernels whose cross-expert combine is a FIXED-
+    # ORDER in-kernel loop (see ops/moe_decode_vec.py). Capability-
+    # gated, data-driven: quantized tables + M==1 + single device +
+    # the g128/int4 shape contract verified from the weights — every
+    # other MoE (fp16 experts, prefill M>1, multi-device) keeps the
+    # proven path below. NBX_MOE_VEC three-state: "1"
+    # armed explicitly, unset = DEFAULT (ADOPTED 2026-08-25: locked
+    # 1290, interleaved n=5, no overlap — short +27.6% (the row's
+    # first 30+ tok/s: 31.07), 4,164 +24.1%, ~8,300 +20.8%; short and
+    # long byte-identical, xlong moved ONCE pass-stable under the new
+    # fixed reduction order; judged config BN=64/BK=128/W=4), "0" kill.
+    import os as _os_mv
+    if (M == 1 and tables.quantized
+            and len(tables.device_experts) == 1
+            and _os_mv.environ.get("NBX_MOE_VEC", "1") != "0"):
+        _q0 = gate_weights[0]
+        _group = (K // _q0.scales.shape[0]
+                  if getattr(_q0, "scales", None) is not None
+                  and _q0.scales.shape[0] > 0 else 0)
+        _down0 = down_weights[0]
+        _dgroup = (N_gate // _down0.scales.shape[0]
+                   if getattr(_down0, "scales", None) is not None
+                   and _down0.scales.shape[0] > 0 else 0)
+        if _group == 128 and _dgroup == 128:
+            dev = next(iter(tables.device_experts))
+            if dev != act_dev:
+                DeviceAllocator.set_device(dev)
+                DeviceAllocator.ensure_triton_device(dev)
+                hidden_states = _xfer(hidden_states, dev)
+                flat_scores = _xfer(flat_scores, dev)
+                flat_indices = _xfer(flat_indices, dev)
+            output = _moe_decode_vec_pass(
+                hidden_states, tables, dev, flat_indices, flat_scores,
+                top_k, K, N_gate)
+            if dev != act_dev:
+                output = _xfer(output, act_dev)
+                DeviceAllocator.set_device(act_dev)
+                DeviceAllocator.ensure_triton_device(act_dev)
+            if len(orig_shape) == 3:
+                output = output.reshape(orig_shape)
+            DeviceAllocator.set_device(act_dev)
+            DeviceAllocator.ensure_triton_device(act_dev)
+            return output
+
+    # ================================================================
     # STEP 3: Align tokens by expert (sorting)
     # ================================================================
     sorted_token_ids, expert_ids, num_tokens_post_padded = \
@@ -612,6 +662,55 @@ def execute_moe_fused(
               flush=True)
 
     return output
+
+
+def _moe_decode_vec_pass(hidden_states, tables, dev, flat_indices,
+                         flat_scores, top_k, K, N_gate):
+    """Two-launch SIMT decode band (see ops/moe_decode_vec.py).
+
+    hidden_states [1, K] fp16 · flat_indices [top_k] int64 ·
+    flat_scores [top_k]. Returns [1, K] in hidden's dtype.
+    """
+    import os as _os_dv
+    import triton as _tr
+    from neurobrix.kernels.ops.moe_decode_vec import (
+        moe_gateup_vec_kernel, moe_down_combine_vec_kernel)
+    from neurobrix.kernels.nbx_tensor import _set_device
+
+    dt = hidden_states._dtype
+    x = hidden_states.reshape(K)
+    h = NBXTensor.empty((top_k, N_gate), dtype=NBXDtype.float32,
+                        device=f"cuda:{dev}")
+    out32 = NBXTensor.empty((K,), dtype=NBXDtype.float32,
+                            device=f"cuda:{dev}")
+
+    g_sc, g_mn, sg, sn = tables.q_tables["gate"][dev]
+    u_sc, u_mn, _, _ = tables.q_tables["up"][dev]
+    d_sc, d_mn, dsg, dsn = tables.q_tables["down"][dev]
+
+    BN = int(_os_dv.environ.get("NBX_MOEV_BN", "64"))
+    BK = int(_os_dv.environ.get("NBX_MOEV_BK", "128"))
+    W = int(_os_dv.environ.get("NBX_MOEV_WARPS", "4"))
+
+    _set_device(h)
+    moe_gateup_vec_kernel[(top_k, _tr.cdiv(N_gate, BN))](
+        x, flat_indices,
+        tables.gate_ptrs[dev], g_sc, g_mn,
+        tables.up_ptrs[dev], u_sc, u_mn,
+        h, K, N_gate,
+        tables.gate_stride_bk[dev], tables.gate_stride_bn[dev],
+        sg, sn,
+        BLOCK_N=BN, BLOCK_K=BK, GROUP=128, PACK=8,
+        num_warps=W, num_stages=1)
+    moe_down_combine_vec_kernel[(_tr.cdiv(K, BN),)](
+        h, flat_indices, flat_scores,
+        tables.down_ptrs[dev], d_sc, d_mn,
+        out32, N_gate, K,
+        tables.down_stride_bk[dev], tables.down_stride_bn[dev],
+        dsg, dsn,
+        TOP_K=top_k, BLOCK_N=BN, BLOCK_K=BK, GROUP=128, PACK=8,
+        num_warps=W, num_stages=1)
+    return out32.to(dt).reshape(1, K)
 
 
 # ============================================================================
