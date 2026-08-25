@@ -98,9 +98,12 @@ def _dl(t, np_dtype):
     return buf.view(np_dtype).reshape(t.shape)
 
 
-def _run_family(x_np, w_np):
+def _run_family(x_np, w_np, block_n=None):
     """Run oracle chain + fused kernel on GPU; return (dense_fp32,
-    oracle_out_fp32, fused_out_fp32) as numpy arrays."""
+    oracle_out_fp32, fused_out_fp32) as numpy arrays. `block_n`
+    overrides the pinned parity BLOCK_N — oracle AND fused run the
+    SAME width (the tier contract holds at every width; the wrapper's
+    occupancy rule adapts it at small N)."""
     import triton
     from neurobrix.kernels.nbx_tensor import NBXTensor, DeviceAllocator
     from neurobrix.kernels.ops.dequant_gemv import (
@@ -109,6 +112,8 @@ def _run_family(x_np, w_np):
     from neurobrix.kernels.nbx_tensor import NBXDtype
 
     K, N = w_np.shape
+    if block_n is None:
+        block_n = BLOCK_N
     packed, scales, mins = quantize_int4_g128(w_np)
     x = _nbx(x_np)
     wq = _nbx(packed)
@@ -117,24 +122,24 @@ def _run_family(x_np, w_np):
     DeviceAllocator.set_device(x._device_idx)
 
     dense = NBXTensor.empty((K, N), dtype=NBXDtype.float32, device="cuda")
-    dequant_int4_kernel[(triton.cdiv(K, BLOCK_K), triton.cdiv(N, BLOCK_N))](
+    dequant_int4_kernel[(triton.cdiv(K, BLOCK_K), triton.cdiv(N, block_n))](
         wq, sc, mn, dense, K, N,
         wq.stride(0), wq.stride(1), sc.stride(0), sc.stride(1),
         dense.stride(0), dense.stride(1),
-        BLOCK_K_C=BLOCK_K, BLOCK_N_C=BLOCK_N, GROUP_C=GROUP, PACK_C=PACK,
+        BLOCK_K_C=BLOCK_K, BLOCK_N_C=block_n, GROUP_C=GROUP, PACK_C=PACK,
         num_warps=NUM_WARPS, num_stages=2)
 
     oracle = NBXTensor.empty((N,), dtype=NBXDtype.float32, device="cuda")
-    gemv_ref_kernel[(triton.cdiv(N, BLOCK_N),)](
+    gemv_ref_kernel[(triton.cdiv(N, block_n),)](
         x, dense, oracle, K, N, dense.stride(0), dense.stride(1),
-        BLOCK_K_C=BLOCK_K, BLOCK_N_C=BLOCK_N,
+        BLOCK_K_C=BLOCK_K, BLOCK_N_C=block_n,
         num_warps=NUM_WARPS, num_stages=2)
 
     fused = NBXTensor.empty((N,), dtype=NBXDtype.float32, device="cuda")
-    dequant_gemv_int4_kernel[(triton.cdiv(N, BLOCK_N),)](
+    dequant_gemv_int4_kernel[(triton.cdiv(N, block_n),)](
         x, wq, sc, mn, fused, K, N,
         wq.stride(0), wq.stride(1), sc.stride(0), sc.stride(1),
-        BLOCK_K_C=BLOCK_K, BLOCK_N_C=BLOCK_N, GROUP_C=GROUP, PACK_C=PACK,
+        BLOCK_K_C=BLOCK_K, BLOCK_N_C=block_n, GROUP_C=GROUP, PACK_C=PACK,
         num_warps=NUM_WARPS, num_stages=2)
 
     return (_dl(dense, np.float32), _dl(oracle, np.float32),
@@ -187,6 +192,70 @@ def test_fused_byte_equals_oracle():
         assert rel.max() < 5e-3, f"drift vs f64 ref: {rel.max()}"
 
 
+def test_fused_byte_equals_oracle_at_occupancy_widths():
+    """The occupancy rule's parity proof at the EXPLICIT widths the
+    V100 rule selects (router N=128 -> BLOCK_N=1; full-int4
+    projection N=2048 -> BLOCK_N=8) — fused == oracle byte-for-byte
+    and matches the float64 reference at every width. Explicit widths,
+    not the rule's output, so the proof can never go vacuous when the
+    process has no stashed hardware profile."""
+    rng = np.random.default_rng(23)
+    for (K, N), bn in [((2048, 128), 1),    # MoE router mv
+                       ((2048, 2048), 8),   # full-int4 projection class
+                       ((2048, 128), 64)]:  # pinned width still proven
+        x = (rng.standard_normal(K) * 0.5).astype(np.float16)
+        w = (rng.standard_normal((K, N)) * 0.05).astype(np.float16)
+        dense, oracle, fused = _run_family(x, w, block_n=bn)
+        assert np.array_equal(oracle.view(np.uint32),
+                              fused.view(np.uint32)), \
+            f"BYTE GATE FAILED at K={K} N={N} bn={bn}"
+        assert np.abs(fused).sum() > 0 and np.isfinite(fused).all()
+        ref = dense.astype(np.float64).T @ x.astype(np.float64)
+        rel = np.abs(fused - ref) / (np.abs(ref) + 1e-6)
+        assert rel.max() < 5e-3, \
+            f"drift vs f64 ref at bn={bn}: {rel.max()}"
+
+
+def test_occupancy_rule_resolves_vendor_config():
+    """COUNTED activation proof for the rule itself: with a stashed
+    profile whose arch is volta, _dequant_gemv_block_n narrows the
+    router shape to 1 and leaves the huge-N grid pinned; with no
+    profile, it degrades to the pinned width (prior behavior)."""
+    import neurobrix.kernels.wrappers as W
+
+    class _Dev:
+        brand = "nvidia"
+        architecture = "volta"
+
+    class _Prof:
+        devices = [_Dev()]
+
+    saved_prof = W.get_hardware_profile()
+    saved_cache = W._DEQUANT_GEMV_MIN_PROGRAMS
+    try:
+        W._NBX_HW_PROFILE = _Prof()
+        W._DEQUANT_GEMV_MIN_PROGRAMS = None  # force re-resolution
+        assert W._dequant_gemv_block_n(128) == 1, "router shape not narrowed"
+        assert W._dequant_gemv_block_n(2048) == 8, "projection not narrowed"
+        assert W._dequant_gemv_block_n(151936) == 64, "huge-N was touched"
+        W._NBX_HW_PROFILE = None
+        W._DEQUANT_GEMV_MIN_PROGRAMS = None
+        assert W._dequant_gemv_block_n(128) == 64, \
+            "no-profile fallback lost the pinned width"
+        import os as _osl
+        W._NBX_HW_PROFILE = _Prof()
+        W._DEQUANT_GEMV_MIN_PROGRAMS = None
+        _osl.environ["NBX_DGEMV_ADAPT"] = "0"
+        try:
+            assert W._dequant_gemv_block_n(128) == 64, \
+                "kill switch '0' did not restore the pinned width"
+        finally:
+            _osl.environ.pop("NBX_DGEMV_ADAPT", None)
+    finally:
+        W._NBX_HW_PROFILE = saved_prof
+        W._DEQUANT_GEMV_MIN_PROGRAMS = saved_cache
+
+
 if __name__ == "__main__":
     if not _cuda_available():
         raise SystemExit("CUDA device required")
@@ -194,3 +263,7 @@ if __name__ == "__main__":
     print("pack round-trip + RTN bound: PASS")
     test_fused_byte_equals_oracle()
     print(f"BYTE GATE: fused == oracle on {len(SHAPES)} shapes — ALL PASS")
+    test_fused_byte_equals_oracle_at_occupancy_widths()
+    print("BYTE GATE at occupancy widths (router/full-int4): PASS")
+    test_occupancy_rule_resolves_vendor_config()
+    print("occupancy rule resolution + kill switch (counted): PASS")

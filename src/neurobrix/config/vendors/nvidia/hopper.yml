@@ -57,6 +57,14 @@ block_sizes:
   # Generic reduction block size
   reduction: 2048
 
+  # M=1 dequant-GEMV occupancy rule — see nvidia/volta.yml for the
+  # full rationale (pinned parity BLOCK_N under-fills small-N grids;
+  # the wrapper halves BLOCK_N until the grid reaches min_programs).
+  # 264 = 2 waves x 132 SMs (H100); validation_status: analytical.
+  # Key absent or 0 -> no adaptation.
+  dequant_gemv:
+    min_programs: 264
+
 # Scaled Dot-Product Attention block size thresholds.
 # Schema documented in volta.yml. Decode entries first.
 # Hopper values not yet empirically calibrated; tile sizes scaled

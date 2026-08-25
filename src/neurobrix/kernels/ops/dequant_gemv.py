@@ -41,10 +41,19 @@ import triton.language as tl
 GROUP_SIZE: int = 128
 PACK: int = 8  # nibbles per int32
 
-# ONE pinned config for the byte-parity path (oracle AND fused run
-# with the same values — the tl.sum reduction tree must be identical).
-# Perf sweeps may explore {32,64,128} x {32,64,128} x warps {1,2,4}
-# in a measurement harness, never in the parity gate.
+# Pinned parity config: oracle AND fused always run the SAME values —
+# the tl.sum reduction tree must be identical between the two, which
+# is the tier contract (fused == dequant->ref byte-for-byte).
+# BLOCK_K and NUM_WARPS stay pinned. BLOCK_N adapts at runtime for
+# small-N grids (wrappers._dequant_gemv_block_n, 2026-08-25: halved
+# pow2 until the grid reaches the vendor-yml occupancy target,
+# NBX_DGEMV_ADAPT=0 kill) — legitimate because BLOCK_N only
+# partitions OUTPUT columns while each column's K-reduction tree is
+# BLOCK_K-fixed; the parity microtest proves fused == oracle
+# byte-for-byte at the adapted widths (1/8) as well as the pinned 64.
+# Cross-WIDTH outputs differ in low bits (the per-column lowering
+# changes with BLOCK_N) — width changes are drift-class and go
+# through the model byte gate, never silently.
 BLOCK_N: int = 64
 BLOCK_K: int = 128
 NUM_WARPS: int = 4
