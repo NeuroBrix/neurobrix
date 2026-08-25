@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Small single-token quantized projections now fill the GPU.** The
+  int4 matrix-vector kernel tiled its outputs in fixed blocks of 64
+  columns, so projections with few outputs — above all the per-layer
+  expert-routing projection of mixture-of-experts models (128
+  outputs) — launched two thread blocks on an 80-multiprocessor GPU
+  and ran latency-bound at ~3 GB/s. The tile width now narrows
+  automatically until the launch reaches the hardware's occupancy
+  target, read from the architecture configuration file; large
+  projections keep their proven width untouched, and the kernel's
+  byte-parity oracle is proven at every width. Measured under the
+  locked protocol with interleaved arms: **+4.3%** at short context
+  (38.4 → 40.1 tokens/s on the 30B reference row), outputs
+  byte-identical across arms at all three contexts.
+  `NBX_DGEMV_ADAPT=0` restores the fixed width.
+
 - **Mixture-of-experts generation gets a second wave of speedup — the
   expert down-projection now spreads across the whole GPU.** The
   first rewrite of the single-token expert pipeline (below) left its

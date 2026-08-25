@@ -1552,6 +1552,53 @@ def _apply_matmul_epilogue(c, epilogue_code: int):
     return gelu(c, approximate=('tanh' if epilogue_code == 3 else 'none'))
 
 
+_DEQUANT_GEMV_MIN_PROGRAMS = None  # lazy: vendor-yml read once per process
+
+
+def _dequant_gemv_block_n(N: int) -> int:
+    """Occupancy-adapted BLOCK_N for the M=1 dequant-GEMV grid.
+
+    The tier's pinned parity BLOCK_N under-fills the device at small N
+    (the MoE router mv is N=128 -> a 2-program grid on 80 SMs, ~38 us
+    latency-bound). Halve BLOCK_N (pow2, floor 1) until the grid
+    reaches `block_sizes.dequant_gemv.min_programs` from the vendor
+    arch YAML (R7/R24). BLOCK_N only partitions OUTPUT columns; the
+    parity oracle runs the SAME adapted config, so fused == ref by
+    construction at every width. Key absent / 0 / any config error ->
+    the pinned BLOCK_N (prior behavior). Large-N grids that already
+    meet the target are untouched.
+    """
+    from neurobrix.kernels.ops.dequant_gemv import BLOCK_N
+    global _DEQUANT_GEMV_MIN_PROGRAMS
+    if _DEQUANT_GEMV_MIN_PROGRAMS is None:
+        target = 0
+        if os.environ.get("NBX_DGEMV_ADAPT", "1") == "0":
+            # Kill switch: pinned width everywhere (pre-adaptation
+            # behavior). Cached like the resolved target.
+            _DEQUANT_GEMV_MIN_PROGRAMS = 0
+            return BLOCK_N
+        try:
+            prof = get_hardware_profile()
+            devices = getattr(prof, "devices", None) if prof else None
+            if devices:
+                from neurobrix.core.config.loader import get_vendor_config
+                _brand = devices[0].brand
+                _vendor = getattr(_brand, "value", _brand)
+                cfg = get_vendor_config(_vendor, devices[0].architecture)
+                target = int(cfg.get("block_sizes", {})
+                             .get("dequant_gemv", {})
+                             .get("min_programs", 0))
+        except Exception:
+            target = 0
+        _DEQUANT_GEMV_MIN_PROGRAMS = max(0, target)
+    bn = BLOCK_N
+    target = _DEQUANT_GEMV_MIN_PROGRAMS
+    if target:
+        while bn > 1 and -(-N // bn) < target:
+            bn //= 2
+    return bn
+
+
 def _mm_quantized(a, qt, _epilogue: int = 0):
     """mm where B is an int4-g128-asym QuantizedTensor (weight triplet).
 
@@ -1584,10 +1631,11 @@ def _mm_quantized(a, qt, _epilogue: int = 0):
         x = a.contiguous().view(-1)
         out32 = NBXTensor.empty((N,), dtype=NBXDtype.float32,
                                 device=a.device)
-        dequant_gemv_int4_kernel[(_tr.cdiv(N, BLOCK_N),)](
+        bn = _dequant_gemv_block_n(N)
+        dequant_gemv_int4_kernel[(_tr.cdiv(N, bn),)](
             x, wq, sc, mn, out32, K, N,
             wq.stride(0), wq.stride(1), sc.stride(0), sc.stride(1),
-            BLOCK_K_C=BLOCK_K, BLOCK_N_C=BLOCK_N,
+            BLOCK_K_C=BLOCK_K, BLOCK_N_C=bn,
             GROUP_C=GROUP_SIZE, PACK_C=PACK,
             num_warps=NUM_WARPS, num_stages=2)
         out = out32.to(a.nbx_dtype) if a.nbx_dtype != NBXDtype.float32 \

@@ -60,6 +60,19 @@ block_sizes:
   # Generic reduction block size
   reduction: 1024
 
+  # M=1 dequant-GEMV occupancy rule (2026-08-25). The tier's pinned
+  # parity BLOCK_N (64) under-fills the device at small N — the MoE
+  # router mv (N=128) ran a 2-program grid on 80 SMs (~38 us/call for
+  # ~131 KB of weights, ~3.4 GB/s: latency-bound, not bandwidth). The
+  # wrapper halves BLOCK_N (pow2, floor 1) until the grid reaches
+  # min_programs; the parity oracle runs the SAME adapted config
+  # (fused == dequant->ref by construction at every BLOCK_N). Large-N
+  # calls (grid already >= min_programs) are untouched — zero drift on
+  # the proven big-mv path. 160 = 2 waves x 80 SMs (V100). Key absent
+  # or 0 -> no adaptation (prior behavior).
+  dequant_gemv:
+    min_programs: 160
+
 # Scaled Dot-Product Attention block size thresholds.
 #
 # Schema: each entry is a (BLOCK_M, BLOCK_N) selection rule. Optional
