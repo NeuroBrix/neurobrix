@@ -31,7 +31,16 @@ The protocol this script pins:
   - the report prints, per arm: n, MEDIAN, MIN–MAX — and every headline
     number quoted from it must carry n and the dispersion;
   - machine exclusivity checked before starting (refuses like the gate
-    runner does).
+    runner does);
+  - AMBIENT-THERMAL CLAUSE (2026-08-25): the server cabinet is cooled
+    by ambient air — warm by day, cool at night. The campaign start
+    time (UTC) and the GPU's starting temperature are logged in the
+    report (`campaign` block) and printed with the summary. Every
+    HEADLINE ABSOLUTE number quoted from a report must carry its time
+    slot alongside n and dispersion; absolute numbers from different
+    slots are compared across campaigns only with the slot visible.
+    RATIOS are already protected: the same-campaign interleaved-arms
+    rule means thermal drift lands on both arms of a judgment.
 
 Usage:
   python3 benchmarks/harness/bench_row.py \
@@ -318,6 +327,17 @@ def main() -> int:
     outdir = Path(args.out)
     outdir.mkdir(parents=True, exist_ok=True)
 
+    # Ambient-thermal clause: log when the campaign ran and how warm
+    # the GPU started — the cabinet is ambient-air cooled, so absolute
+    # numbers carry their time slot (ratios are covered by
+    # interleaving).
+    campaign_start_utc = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime())
+    start_state = gpu_state(args.gpu)
+    print(f"  campaign start {campaign_start_utc}  GPU {args.gpu} "
+          f"T={start_state.get('temp_c', '?')}C "
+          f"clk={start_state.get('sm_clock', '?')} "
+          f"persistence={start_state.get('persistence', '?')}", flush=True)
+
     arms = []
     for name, envspec in args.arm:
         env = {}
@@ -354,8 +374,18 @@ def main() -> int:
               "prompt_sha": __import__("hashlib").sha256(
                   args.prompt.encode()).hexdigest()[:12],
               "reps": args.reps, "warm": args.warm,
-              "lock_clock_mhz": args.lock_clock, "arms": {}}
-    print()
+              "lock_clock_mhz": args.lock_clock,
+              "campaign": {
+                  "start_utc": campaign_start_utc,
+                  "end_utc": time.strftime("%Y-%m-%d %H:%M UTC",
+                                           time.gmtime()),
+                  "gpu_start": start_state,
+                  "gpu_end": gpu_state(args.gpu)},
+              "arms": {}}
+    print(f"\ncampaign {campaign_start_utc} -> "
+          f"{report['campaign']['end_utc']}  "
+          f"start T={start_state.get('temp_c', '?')}C  "
+          f"(headline absolutes must quote this time slot)")
     for name, _ in arms:
         rates = [r["rate"] for r in results[name] if r["rate"]]
         shas = {r["sha"] for r in results[name] if r["sha"]}
