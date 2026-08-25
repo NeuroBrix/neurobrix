@@ -294,6 +294,78 @@ def run_once_ollama(args, arm_env: dict, tag: str, outdir: Path) -> dict:
     return rec
 
 
+def run_once_vllm(args, arm_env: dict, tag: str, outdir: Path) -> dict:
+    """One vLLM rep — cold load per rep like every other arm, decode
+    rate and TTFT from vLLM's OWN RequestMetrics (each engine gets its
+    best native measurement). Arm env: VLLM_MODEL (HF id or local
+    path), VLLM_PYTHON (venv interpreter, default
+    ~/venvs/vllm073/bin/python), optional VLLM_DTYPE (default
+    float16 — Volta has no bf16)."""
+    py = arm_env.get("VLLM_PYTHON",
+                     os.path.expanduser("~/venvs/vllm073/bin/python"))
+    model = arm_env.get("VLLM_MODEL")
+    if not model:
+        raise SystemExit("vllm arm needs VLLM_MODEL=<hf-id-or-path>")
+    dtype = arm_env.get("VLLM_DTYPE", "float16")
+    script = r'''
+import json, sys, hashlib
+from vllm import LLM, SamplingParams
+model, dtype, prompt_path, max_tokens = sys.argv[1:5]
+prompt = open(prompt_path).read()
+llm = LLM(model=model, dtype=dtype, enforce_eager=False,
+          disable_log_stats=True)
+sp = SamplingParams(temperature=0, max_tokens=int(max_tokens), seed=1234)
+out = llm.generate([prompt], sp)[0]
+m = out.metrics
+n = len(out.outputs[0].token_ids)
+text = out.outputs[0].text
+rate = ((n - 1) / (m.finished_time - m.first_token_time)
+        if (m and m.first_token_time and m.finished_time
+            and m.finished_time > m.first_token_time and n > 1) else None)
+print("VLLM_RESULT " + json.dumps({
+    "rate": rate, "tokens": n,
+    "ttft_s": (m.first_token_time - m.arrival_time) if m else None,
+    "sha": hashlib.sha256(text.encode()).hexdigest()[:12]}))
+'''
+    prompt_file = outdir / f"vllm_prompt_{tag}.txt"
+    prompt_file.write_text(args.prompt)
+    env = dict(os.environ)
+    env.update(arm_env)
+    env["CUDA_VISIBLE_DEVICES"] = args.gpu
+    env.setdefault("VLLM_ATTENTION_BACKEND", "XFORMERS")
+    before = gpu_state(args.gpu)
+    t0 = time.time()
+
+    def _run():
+        return subprocess.run(
+            [py, "-c", script, model, dtype, str(prompt_file),
+             str(args.max_tokens)],
+            env=env, capture_output=True, text=True, timeout=2400)
+
+    if args.lock_clock:
+        with ClockWatch(args.gpu, args.lock_clock) as watch:
+            r = _run()
+        if watch.violations:
+            raise SystemExit(
+                f"REFUSED: clock lock broke during vllm rep {tag} — "
+                f"sampled {watch.violations[:5]}")
+    else:
+        r = _run()
+    wall = time.time() - t0
+    after = gpu_state(args.gpu)
+    rate, sha, vres = None, "", {}
+    for line in (r.stdout or "").splitlines():
+        if line.startswith("VLLM_RESULT "):
+            vres = json.loads(line[len("VLLM_RESULT "):])
+            rate, sha = vres.get("rate"), vres.get("sha", "")
+    if r.returncode != 0 and not vres:
+        (outdir / f"vllm_err_{tag}.log").write_text(
+            (r.stdout or "")[-4000:] + "\n===\n" + (r.stderr or "")[-8000:])
+    return {"tag": tag, "rc": r.returncode, "rate": rate,
+            "wall_s": round(wall, 1), "sha": sha, "vllm": vres,
+            "gpu_before": before, "gpu_after": after}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True)
@@ -356,8 +428,9 @@ def main() -> int:
         # INTERLEAVED: rep 1 of every arm, then rep 2 of every arm, ...
         for rep in range(1, args.reps + 1):
             for name, env in arms:
-                runner = (run_once_ollama if env.get("ARM_ENGINE") == "ollama"
-                          else run_once)
+                runner = {"ollama": run_once_ollama,
+                          "vllm": run_once_vllm}.get(
+                    env.get("ARM_ENGINE", ""), run_once)
                 res = runner(args, env, f"{name}_{rep}", outdir)
                 results[name].append(res)
                 print(f"  {name} rep{rep} rc={res['rc']} "
