@@ -666,7 +666,10 @@ def execute_moe_fused(
 
 def _moe_decode_vec_pass(hidden_states, tables, dev, flat_indices,
                          flat_scores, top_k, K, N_gate):
-    """Two-launch SIMT decode band (see ops/moe_decode_vec.py).
+    """Three-launch SIMT decode band (see ops/moe_decode_vec.py):
+    gateup + down-split (expert axis on the grid) + fixed-order part
+    reduce. NBX_MOEV_DSPLIT=0 restores the first-pass fused down
+    combine.
 
     hidden_states [1, K] fp16 · flat_indices [top_k] int64 ·
     flat_scores [top_k]. Returns [1, K] in hidden's dtype.
@@ -674,7 +677,8 @@ def _moe_decode_vec_pass(hidden_states, tables, dev, flat_indices,
     import os as _os_dv
     import triton as _tr
     from neurobrix.kernels.ops.moe_decode_vec import (
-        moe_gateup_vec_kernel, moe_down_combine_vec_kernel)
+        moe_gateup_vec_kernel, moe_down_combine_vec_kernel,
+        moe_down_split_vec_kernel, moe_part_reduce_kernel)
     from neurobrix.kernels.nbx_tensor import _set_device
 
     dt = hidden_states._dtype
@@ -688,9 +692,17 @@ def _moe_decode_vec_pass(hidden_states, tables, dev, flat_indices,
     u_sc, u_mn, _, _ = tables.q_tables["up"][dev]
     d_sc, d_mn, dsg, dsn = tables.q_tables["down"][dev]
 
-    BN = int(_os_dv.environ.get("NBX_MOEV_BN", "64"))
+    # Adopted second-pass grid (2026-08-25): BN=32 is the gateup tile
+    # from the profile ladder (71 us/call vs 87.5 at BN=64; 16/BK256/
+    # W2/W8 all slower). The down projection moves its expert axis to
+    # the grid — 512 programs vs the fused loop's 32 on 80 SMs
+    # (46 -> ~248 GB/s) — with a fixed-order part reduce completing
+    # the deterministic combine.
+    BN = int(_os_dv.environ.get("NBX_MOEV_BN", "32"))
     BK = int(_os_dv.environ.get("NBX_MOEV_BK", "128"))
     W = int(_os_dv.environ.get("NBX_MOEV_WARPS", "4"))
+    BND = int(_os_dv.environ.get("NBX_MOEV_BND", str(BN)))
+    WD = int(_os_dv.environ.get("NBX_MOEV_WARPS_D", str(W)))
 
     _set_device(h)
     moe_gateup_vec_kernel[(top_k, _tr.cdiv(N_gate, BN))](
@@ -702,14 +714,28 @@ def _moe_decode_vec_pass(hidden_states, tables, dev, flat_indices,
         sg, sn,
         BLOCK_N=BN, BLOCK_K=BK, GROUP=128, PACK=8,
         num_warps=W, num_stages=1)
-    moe_down_combine_vec_kernel[(_tr.cdiv(K, BN),)](
+    if _os_dv.environ.get("NBX_MOEV_DSPLIT", "1") != "0":
+        part = NBXTensor.empty((top_k, K), dtype=NBXDtype.float32,
+                               device=f"cuda:{dev}")
+        moe_down_split_vec_kernel[(top_k, _tr.cdiv(K, BND))](
+            h, flat_indices, flat_scores,
+            tables.down_ptrs[dev], d_sc, d_mn,
+            part, N_gate, K,
+            tables.down_stride_bk[dev], tables.down_stride_bn[dev],
+            dsg, dsn,
+            BLOCK_N=BND, BLOCK_K=BK, GROUP=128, PACK=8,
+            num_warps=WD, num_stages=1)
+        moe_part_reduce_kernel[(_tr.cdiv(K, 256),)](
+            part, out32, K, TOP_K=top_k, BLOCK_N=256, num_warps=2)
+        return out32.to(dt).reshape(1, K)
+    moe_down_combine_vec_kernel[(_tr.cdiv(K, BND),)](
         h, flat_indices, flat_scores,
         tables.down_ptrs[dev], d_sc, d_mn,
         out32, N_gate, K,
         tables.down_stride_bk[dev], tables.down_stride_bn[dev],
         dsg, dsn,
-        TOP_K=top_k, BLOCK_N=BN, BLOCK_K=BK, GROUP=128, PACK=8,
-        num_warps=W, num_stages=1)
+        TOP_K=top_k, BLOCK_N=BND, BLOCK_K=BK, GROUP=128, PACK=8,
+        num_warps=WD, num_stages=1)
     return out32.to(dt).reshape(1, K)
 
 
