@@ -167,17 +167,22 @@ def run_once(args, arm_env: dict, tag: str, outdir: Path) -> dict:
     env.update(arm_env)
     env["CUDA_VISIBLE_DEVICES"] = args.gpu
     env["NBX_DECODE_PROGRESS"] = str(prog)
+    # Engine selector (hub-benchmark S1): ARM_ENGINE=compiled runs the
+    # PyTorch/compiled branch (no --triton flag); default stays the
+    # triton branch. Mirrors the existing ARM_ENGINE=ollama pattern.
+    cmd = ["python3", "-u", "-m", "neurobrix", "run",
+           "--hardware", args.hardware, "--model", args.model,
+           "--prompt", args.prompt, "--max-tokens", str(args.max_tokens),
+           "--temperature", args.temperature,
+           "--output", str(outdir / f"out_{tag}.txt")]
+    if arm_env.get("ARM_ENGINE") != "compiled":
+        cmd.insert(-2, "--triton")
     before = gpu_state(args.gpu)
     t0 = time.time()
     if args.lock_clock:
         with ClockWatch(args.gpu, args.lock_clock) as watch:
             r = subprocess.run(
-                ["python3", "-u", "-m", "neurobrix", "run",
-                 "--hardware", args.hardware, "--model", args.model,
-                 "--prompt", args.prompt, "--max-tokens", str(args.max_tokens),
-                 "--temperature", args.temperature, "--triton",
-                 "--output", str(outdir / f"out_{tag}.txt")],
-                env=env, capture_output=True, text=True, timeout=2400)
+                cmd, env=env, capture_output=True, text=True, timeout=2400)
         if watch.violations:
             raise SystemExit(
                 f"REFUSED: clock lock broke during rep {tag} — sampled "
@@ -187,12 +192,7 @@ def run_once(args, arm_env: dict, tag: str, outdir: Path) -> dict:
                 f"thermal envelope can hold)")
     else:
         r = subprocess.run(
-            ["python3", "-u", "-m", "neurobrix", "run",
-             "--hardware", args.hardware, "--model", args.model,
-             "--prompt", args.prompt, "--max-tokens", str(args.max_tokens),
-             "--temperature", args.temperature, "--triton",
-             "--output", str(outdir / f"out_{tag}.txt")],
-            env=env, capture_output=True, text=True, timeout=2400)
+            cmd, env=env, capture_output=True, text=True, timeout=2400)
     wall = time.time() - t0
     after = gpu_state(args.gpu)
     rate = rate_from_progress(str(prog), args.warm) if r.returncode == 0 else None
