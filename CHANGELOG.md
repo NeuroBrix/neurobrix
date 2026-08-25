@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Mixture-of-experts generation is dramatically faster — the
+  single-token expert pipeline was rebuilt end to end.** At one token,
+  the previous path sorted a trivial routing list through a three-stage
+  alignment, ran three grouped matrix kernels whose every 16-row tile
+  carried a single real row, applied the activation in a separate pass,
+  and summed the expert outputs in another. Two kernels now do all of
+  it: one computes each active expert's gated projections with the
+  int4 weights dequantized on the fly and the activation applied in
+  the epilogue; the second walks the experts in a fixed order and
+  folds the router-weighted sum directly into its accumulator —
+  deterministic by construction, with no intermediate buffers.
+  Measured under the locked protocol with interleaved arms:
+  **+27.6% / +24.1% / +20.8%** at short / 4,164 / ~8,300 tokens —
+  the 30B reference row crosses 30 tokens/s on one V100 for the first
+  time. Dense-expert models and multi-token prefill keep the previous
+  path. `NBX_MOE_VEC=0` restores it everywhere.
+
 - **The per-token weight projections run a rewritten vector kernel —
   all model generation on the Triton engine gets a uniform speedup.**
   The previous matrix-vector kernel accumulated into a large register
