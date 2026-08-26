@@ -397,6 +397,14 @@ class InferenceEngine:
             for name in list(self._executor.executors.keys()):
                 self._executor._unload_component_weights(name)
 
+        # Memory Manager doctrine order: refs dropped above, then a
+        # cycle collection so NBXTensor/arena finalizers actually run
+        # (executor graphs are cyclic — without this the freed weights
+        # wait for an eventual gc pass and sequential load/unload in
+        # one process accumulates VRAM; caught by the 2026-08-26 warm
+        # sweep: 26.7 GB live by the 6th family), then empty-cache.
+        import gc
+        gc.collect()
         device_empty_cache(self._device)
 
         self._is_loaded = False

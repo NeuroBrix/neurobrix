@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Serving releases GPU memory promptly on unload.** Unloading a
+  model from a serving engine left freed weights waiting for a
+  garbage-collection pass (executor graphs hold reference cycles),
+  so loading several models in sequence inside one process
+  accumulated GPU memory. Unload now runs the collection step
+  itself before clearing the cache. Note that fully returning every
+  byte between sequential loads in one process is still being
+  worked on — one model per serving process remains the recommended
+  shape.
+
 - **Upscalers now work through the serving daemon.** Requesting an
   upscale from a warm `neurobrix serve` session failed on both
   engines: the serving path prepared the input image with the
