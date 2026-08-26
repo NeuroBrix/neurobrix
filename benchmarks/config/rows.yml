@@ -211,7 +211,11 @@ rows:
       NBX_STEP_CACHE_MAX_SKIPS: "3"
     checkpoint: Efficient-Large-Model/Sana_1600M_1024px_MultiLing
     diffusers_checkpoint: Efficient-Large-Model/Sana_1600M_1024px_MultiLing_diffusers
-    neurobrix_model: Sana_1600M_1024px_MultiLing
+    # 2026-08-26: local artifact renamed to the hub slug — the legacy
+    # Sana_1600M_1024px_MultiLing cache copy was PROVEN byte-identical
+    # and removed (validation_outputs/hub_benchmark_2026_08/
+    # SANA_DUPLICATE_PROOF.md). Same artifact, same row identity.
+    neurobrix_model: Sana-1600M-MultiLing
     prompt: "a red apple on a wooden table"
     steps: 20
     seed: 42
@@ -309,3 +313,62 @@ rows:
     prompt: "Explain in three sentences why the sky is blue."
     max_new_tokens: 128
     columns: [vllm, ollama, neurobrix_pytorch, neurobrix_triton]
+
+  # ---- S3 upscaler segment (hub benchmark 2026-08; prereg:
+  # validation_outputs/hub_benchmark_2026_08/S3_IMAGE_PREREG.md).
+  # Competitor = the vendor/reference stack in its pinned venv
+  # (upscaler_cell.py; venv name per row — basicsr version conflicts
+  # force separate venvs, see the R16 synthesis). Same pinned input
+  # for every arm; metric = seconds/image at the row's scale.
+  - id: upscale_realesrgan_x4
+    family: upscaler
+    metric_class: image
+    reference: true
+    checkpoint: xinntao/Real-ESRGAN-x4
+    neurobrix_model: real-esrgan-x4
+    input_image: benchmarks/assets/apple_448.png
+    scale: 4
+    upscaler_stack: realesrgan
+    upscaler_venv: realesrgan
+    upscaler_weights: /home/mlops/hf_snapshots/upscaler_weights/RealESRGAN_x4plus.pth
+    # Vendor default on CUDA is half=True -> fp16 class, matches nbx.
+    columns: [vendor_upscaler, neurobrix_pytorch, neurobrix_triton]
+
+  - id: upscale_swin2sr_x4
+    family: upscaler
+    metric_class: image
+    reference: true
+    checkpoint: caidas/Swin2SR-Classical-x4
+    neurobrix_model: swin2SR-classical-sr-x4-64
+    input_image: benchmarks/assets/apple_448.png
+    scale: 4
+    upscaler_stack: swin2sr
+    upscaler_venv: diffusers   # transformers route (4.49.0), shares the bloc-E venv
+    swin2sr_checkpoint: caidas/swin2SR-classical-sr-x4-64
+    # Vendor default precision is fp32 (12M params) — precision class
+    # LABELED (nbx runs the hardware dtype); noted in the annex.
+    columns: [vendor_upscaler, neurobrix_pytorch, neurobrix_triton]
+
+  - id: upscale_swinir_x4
+    family: upscaler
+    metric_class: image
+    reference: true
+    checkpoint: JingyunLiang/SwinIR-Classical-x4
+    neurobrix_model: swinir-classical-x4
+    input_image: benchmarks/assets/apple_448.png
+    scale: 4
+    upscaler_stack: swinir   # NOT IMPLEMENTED YET in upscaler_cell.py
+    upscaler_venv: realesrgan
+    columns: [vendor_upscaler, neurobrix_pytorch, neurobrix_triton]
+
+  - id: upscale_hat_l_x4
+    family: upscaler
+    metric_class: image
+    reference: true
+    checkpoint: XPixelGroup/HAT-L-x4
+    neurobrix_model: hat-l-x4
+    input_image: benchmarks/assets/apple_448.png
+    scale: 4
+    upscaler_stack: hat      # NOT IMPLEMENTED YET (basicsr 1.3.4.9 venv + Drive weights)
+    upscaler_venv: hat
+    columns: [vendor_upscaler, neurobrix_pytorch, neurobrix_triton]

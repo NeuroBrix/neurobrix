@@ -354,6 +354,10 @@ def cell_neurobrix_media(row: dict, gpu: int, n: int, triton: bool,
         kwargs["max_tokens"] = row["max_new_tokens"]
     if row.get("audio"):
         kwargs["audio_path"] = str(REPO / row["audio"])
+    if row.get("input_image"):
+        # Upscaler rows (and any image-input row): the pinned input
+        # image rides the serving warm path's image_path kwarg.
+        kwargs["image_path"] = str(REPO / row["input_image"])
     if row.get("height") is not None:
         kwargs["height"] = row["height"]
     if row.get("width") is not None:
@@ -540,12 +544,29 @@ def cell_vendor(row: dict, gpu: int | None, n: int,
         row, gpu, n, "vendor_cell.py", python_bin, log_dir)
 
 
+def cell_vendor_upscaler(row: dict, gpu: int | None, n: int,
+                         log_dir: Path) -> dict:
+    # Upscaler competitor: the model's vendor/reference stack in the
+    # row's pinned venv (`upscaler_venv` — basicsr version conflicts
+    # force per-stack venvs, S3 R16 synthesis). HF snapshots ride the
+    # NAS per the S3 disk policy.
+    python_bin = (Path.home() / "bench_venvs" / row["upscaler_venv"]
+                  / "bin" / "python")
+    nas = Path.home() / "hf_snapshots"
+    extra_env = {"HF_HOME": str(nas / "hf_home"),
+                 "HUGGINGFACE_HUB_CACHE": str(nas / "hf_home" / "hub")}
+    return cell_subprocess_venv(row, gpu, n, "upscaler_cell.py",
+                                python_bin, log_dir, extra_env)
+
+
 CELLS = {
     "vllm": lambda row, gpu, n, hw, ld: cell_vllm(row, gpu, n),
     "ollama": lambda row, gpu, n, hw, ld: cell_ollama(row, gpu, n),
     "diffusers": lambda row, gpu, n, hw, ld: cell_diffusers(
         row, gpu, n, ld),
     "vendor_transformers": lambda row, gpu, n, hw, ld: cell_vendor(
+        row, gpu, n, ld),
+    "vendor_upscaler": lambda row, gpu, n, hw, ld: cell_vendor_upscaler(
         row, gpu, n, ld),
     "neurobrix_pytorch": lambda row, gpu, n, hw, ld: cell_neurobrix(
         row, gpu, n, triton=False, hardware=hw, log_dir=ld),
