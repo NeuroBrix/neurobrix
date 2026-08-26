@@ -44,6 +44,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Hub catalog correction: Whisper-Large relabeled V3 → V2.** The
+  model previously listed as `openai/Whisper-Large-V3` on the hub is
+  in fact a large-v2-class artifact: fingerprint verification on the
+  hub-served file itself found 80 mel bins and 99 language tokens
+  (large-v3 uses 128 mel bins and adds Cantonese), with
+  Whisper-V3-Turbo checking out as genuine v3-class under the same
+  test. The entry is now `openai/Whisper-Large-V2` — imports use the
+  new address; a copy already imported under the old name keeps
+  working unchanged, since only the label was wrong, never the
+  weights or the transcription behavior.
+
 - **Small single-token quantized projections now fill the GPU.** The
   int4 matrix-vector kernel tiled its outputs in fixed blocks of 64
   columns, so projections with few outputs — above all the per-layer
