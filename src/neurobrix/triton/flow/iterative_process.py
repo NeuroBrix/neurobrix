@@ -165,7 +165,7 @@ class TritonIterativeProcessHandler:
         self._cfg_engine = cfg_engine
         self._output_extractor = output_extractor
         self._packing_info = None
-        self._flux_video = False
+        self._flux_family = False
 
     def _resolve_as_nbx(self, key: str):
         """Get value from variable_resolver, converting torch.Tensor → NBXTensor."""
@@ -481,8 +481,8 @@ class TritonIterativeProcessHandler:
         # the allocated 5D latent so the loop state resolves. Gated on the
         # denoiser taking an img_ids input (FLUX-family only) — inert otherwise.
         # R30 mirror of core/flow/iterative_process.py.
-        self._flux_video = flux_video_conditioning.is_flux_video(self.ctx, components)
-        if self._flux_video:
+        self._flux_family = flux_video_conditioning.is_flux_family(self.ctx, components)
+        if self._flux_family:
             vr = self.ctx.variable_resolver
             _st = vr.resolved.get(state_key)
             if _st is None:
@@ -497,7 +497,7 @@ class TritonIterativeProcessHandler:
 
         # DATA-DRIVEN: Detect if Flux-style packing is needed
         packing_shape = self._detect_packing(components)
-        if self._flux_video and current_state.dim() == 5:
+        if self._flux_family and current_state.dim() == 5:
             # FLUX-video pack: [B,C,T,H,W] -> [B, T*(H/p)*(W/p), C*p^2]
             self._packing_info = {
                 'channels': current_state.shape[1],
@@ -522,12 +522,18 @@ class TritonIterativeProcessHandler:
 
         # FLUX-video positional ids + cond (Open-Sora T2V): synthesize img_ids /
         # txt_ids / cond into the resolver now that the packed dims are known.
-        if self._flux_video and self._packing_info is not None:
+        # 5D-pack ONLY (ndim==5 is set solely by the video branch above):
+        # FLUX-family IMAGE models (Flex.1) also declare img_ids and take the
+        # 4D pack — their conditioning comes from their own traced path, and
+        # the video synthesis would KeyError on the frameless packing_info.
+        # R30 mirror of core/flow/iterative_process.py.
+        if (self._flux_family and self._packing_info is not None
+                and self._packing_info.get('ndim') == 5):
             flux_video_conditioning.prepare(self.ctx, current_state, self._packing_info)
         import os as _os_fvd
         if _os_fvd.environ.get("NBX_FVD_DEBUG"):
             _vr = self.ctx.variable_resolver
-            print(f"[FVD] flux_video={self._flux_video} packing_info={self._packing_info} "
+            print(f"[FVD] flux_video={self._flux_family} packing_info={self._packing_info} "
                   f"state.dim={current_state.dim() if current_state is not None else None}",
                   flush=True)
             for _k in ("global.img", "global.img_ids", "global.txt_ids", "global.cond",
