@@ -77,45 +77,53 @@ def lock_clocks(gpu: str, mhz: int) -> None:
     Requires passwordless sudo for nvidia-smi (verified on driver
     535.309.01: `-lgc M,M` holds min=max even at idle). A lock REQUEST
     that cannot be satisfied is a REFUSAL, not a silent unlocked run.
-    """
-    r = subprocess.run(["sudo", "-n", "nvidia-smi", "-i", gpu,
-                        "-lgc", f"{mhz},{mhz}"],
-                       capture_output=True, text=True)
-    if r.returncode != 0:
-        raise SystemExit(
-            f"REFUSED: cannot lock GPU {gpu} clocks to {mhz} MHz "
-            f"({(r.stderr or r.stdout).strip()}) — pass --lock-clock 0 "
-            f"to measure unlocked (drift documented, not killed)")
-    got = gpu_state(gpu).get("sm_clock", "")
-    if not got.startswith(str(mhz)):
-        unlock_clocks(gpu)
-        raise SystemExit(
-            f"REFUSED: lock did not take (clocks.sm={got!r}, "
-            f"wanted {mhz} MHz)")
+    `gpu` may be a comma list — every listed GPU is locked (multi-GPU
+    cells for over-card models, prereg amendment 2026-08-26)."""
+    for g in [x.strip() for x in str(gpu).split(",")]:
+        r = subprocess.run(["sudo", "-n", "nvidia-smi", "-i", g,
+                            "-lgc", f"{mhz},{mhz}"],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            raise SystemExit(
+                f"REFUSED: cannot lock GPU {g} clocks to {mhz} MHz "
+                f"({(r.stderr or r.stdout).strip()}) — pass "
+                f"--lock-clock 0 to measure unlocked (drift "
+                f"documented, not killed)")
+        got = gpu_state(g).get("sm_clock", "")
+        if not got.startswith(str(mhz)):
+            unlock_clocks(gpu)
+            raise SystemExit(
+                f"REFUSED: lock did not take on GPU {g} "
+                f"(clocks.sm={got!r}, wanted {mhz} MHz)")
 
 
 def unlock_clocks(gpu: str) -> None:
-    subprocess.run(["sudo", "-n", "nvidia-smi", "-i", gpu, "-rgc"],
-                   capture_output=True, text=True)
+    for g in [x.strip() for x in str(gpu).split(",")]:
+        subprocess.run(["sudo", "-n", "nvidia-smi", "-i", g, "-rgc"],
+                       capture_output=True, text=True)
 
 
 class ClockWatch:
     """Samples clocks.sm during a run; any sample off the locked value
     marks the rep contaminated (a before/after pair would miss a
-    transient mid-rep dip — power events can override even min=max)."""
+    transient mid-rep dip — power events can override even min=max).
+    `gpu` may be a comma list ("0,1,2,3" — multi-GPU cells for
+    over-card models): every listed GPU is watched."""
 
     def __init__(self, gpu: str, mhz: int, period_s: float = 2.0):
         import threading
-        self.gpu, self.mhz, self.period = gpu, mhz, period_s
+        self.gpus = [g.strip() for g in str(gpu).split(",")]
+        self.mhz, self.period = mhz, period_s
         self.violations: list = []
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
 
     def _run(self):
         while not self._stop.wait(self.period):
-            s = gpu_state(self.gpu).get("sm_clock", "")
-            if not s.startswith(str(self.mhz)):
-                self.violations.append(s)
+            for g in self.gpus:
+                s = gpu_state(g).get("sm_clock", "")
+                if not s.startswith(str(self.mhz)):
+                    self.violations.append(f"gpu{g}:{s}")
 
     def __enter__(self):
         self._thread.start()
@@ -127,6 +135,9 @@ class ClockWatch:
 
 
 def gpu_state(gpu: str) -> dict:
+    # A comma list (multi-GPU cell) records the FIRST listed GPU here;
+    # ClockWatch and lock_clocks cover every listed GPU individually.
+    gpu = str(gpu).split(",")[0].strip()
     out = subprocess.run(
         ["nvidia-smi", f"--id={gpu}",
          "--query-gpu=persistence_mode,temperature.gpu,clocks.sm,power.draw",
