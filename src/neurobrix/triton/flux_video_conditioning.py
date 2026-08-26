@@ -27,7 +27,7 @@ TXT_IDS_VAR = "global.txt_ids"
 COND_VAR = "global.cond"
 
 
-def is_flux_video(ctx: Any, components: List[str]) -> bool:
+def is_flux_family(ctx: Any, components: List[str]) -> bool:
     """True iff a loop denoiser declares an ``img_ids`` input (FLUX-family)."""
     comps = ctx.pkg.topology.get("components", {})
     for c in components:

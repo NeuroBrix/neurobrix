@@ -343,8 +343,8 @@ class IterativeProcessHandler(FlowHandler):
         # that the builder does not directly allocate; alias it to the allocated 5D
         # latent so the loop state resolves. Gated on the denoiser taking an img_ids
         # input (FLUX-family only) — inert for every other model.
-        self._flux_video = flux_video_conditioning.is_flux_video(self.ctx, components)
-        if self._flux_video:
+        self._flux_family = flux_video_conditioning.is_flux_family(self.ctx, components)
+        if self._flux_family:
             try:
                 _st = self.ctx.variable_resolver.get(state_key)
             except Exception:
@@ -357,7 +357,7 @@ class IterativeProcessHandler(FlowHandler):
 
         # DATA-DRIVEN: Detect if Flux-style packing is needed
         packing_shape = self._detect_packing(components)
-        if self._flux_video and current_state.dim() == 5:
+        if self._flux_family and current_state.dim() == 5:
             # FLUX-video pack: [B,C,T,H,W] -> [B, T*(H/p)*(W/p), C*p^2]
             self._packing_info = {
                 'channels': current_state.shape[1],
@@ -382,7 +382,12 @@ class IterativeProcessHandler(FlowHandler):
 
         # FLUX-video positional ids + cond (Open-Sora T2V): synthesize img_ids /
         # txt_ids / cond into the resolver now that the packed dims are known.
-        if self._flux_video and self._packing_info is not None:
+        # 5D-pack ONLY (ndim==5 is set solely by the video branch above):
+        # FLUX-family IMAGE models (Flex.1) also declare img_ids and take the
+        # 4D pack — their conditioning comes from their own traced path, and
+        # the video synthesis would KeyError on the frameless packing_info.
+        if (self._flux_family and self._packing_info is not None
+                and self._packing_info.get('ndim') == 5):
             flux_video_conditioning.prepare(self.ctx, current_state, self._packing_info)
 
         # I2V latent channel-concat conditioning (data-driven, R23-gated). When

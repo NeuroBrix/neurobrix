@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Flex.1-alpha generates images again.** Since the FLUX-video flow
+  landed in late June, image models of the FLUX family (Flex.1-alpha)
+  crashed at the first denoising step with `KeyError: 'frames'` in
+  both engines: the video-conditioning synthesis keyed on "the model
+  declares FLUX positional ids", which is true for the whole FLUX
+  family, and then read video-only packing metadata that image models
+  do not have. The synthesis now fires only for genuinely
+  video-packed (5-dimensional) latents; FLUX image models keep their
+  own conditioning path, and video models are unaffected. The
+  internal classifier was also renamed to say what it detects
+  (family, not video) so the distinction cannot silently regress.
+
 - **DeepSeek-MoE generation no longer degenerates in Triton modes.**
   Models that rebuild their rotary-position tables on every forward
   pass (DeepSeek-MoE among them) produced garbage from the moment a
