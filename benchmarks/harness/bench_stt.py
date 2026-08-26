@@ -91,9 +91,14 @@ def run_once_nbx(args, arm_env: dict, tag: str, outdir: Path) -> dict:
     env = dict(os.environ)
     env.update(arm_env)
     env["CUDA_VISIBLE_DEVICES"] = args.gpu
+    # top-k 0 / top-p 1 neutralize the vendor sampling defaults
+    # explicitly: the sampling capability gate refuses defaults-carried
+    # top_k/top_p on paths that don't implement them, even under
+    # greedy, and greedy argmax is invariant to both anyway.
     cmd = ["python3", "-u", "-m", "neurobrix", "run",
            "--hardware", args.hardware, "--model", args.model,
            "--audio", args.audio, "--temperature", args.temperature,
+           "--top-k", "0", "--top-p", "1",
            "--output", str(outdir / f"out_{tag}.txt")]
     if arm_env.get("NBX_PROMPT"):          # audio_llm arms need a prompt
         cmd += ["--prompt", arm_env["NBX_PROMPT"]]
