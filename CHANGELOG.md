@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Browsing speech models on the hub works again.** `neurobrix hub
+  --category` offered two category names the registry never served
+  (`AUDIO`, `SPEECH`) and was missing the three speech categories the
+  registry actually uses; filtering by any speech category ended in a
+  registry error. The command's category choices now match the
+  registry vocabulary (`TTS`, `STT`, `AUDIO_LLM`, alongside the
+  existing categories), in upper or lower case.
+
 ### Changed
 
 - **Small single-token quantized projections now fill the GPU.** The

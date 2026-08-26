@@ -285,11 +285,11 @@ Examples:
         """
     )
     hub_parser.add_argument('--category', '-c', default=None,
-                            choices=['IMAGE', 'VIDEO', 'AUDIO', 'SPEECH', 'LLM', 'CODE',
-                                     'VLM', 'MULTIMODAL', 'UPSCALER',
-                                     'image', 'video', 'audio', 'speech', 'llm', 'code',
-                                     'vlm', 'multimodal', 'upscaler'],
-                            help='Filter by model category')
+                            choices=['IMAGE', 'VIDEO', 'TTS', 'STT', 'AUDIO_LLM', 'LLM',
+                                     'CODE', 'VLM', 'MULTIMODAL', 'UPSCALER',
+                                     'image', 'video', 'tts', 'stt', 'audio_llm', 'llm',
+                                     'code', 'vlm', 'multimodal', 'upscaler'],
+                            help='Filter by model category (registry vocabulary)')
     hub_parser.add_argument('--search', '-s', default=None, help='Search models by name, tag, or description')
     hub_parser.add_argument('--registry', default=None, help=f'Registry URL (default: {REGISTRY_URL})')
 
