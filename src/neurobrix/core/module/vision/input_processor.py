@@ -137,6 +137,81 @@ class ImageInputProcessor:
         return torch.from_numpy(np.ascontiguousarray(arr))
 
 
+def find_upscale_input_variable(topology: dict) -> str:
+    """Return the unique ``global.*`` connection source feeding the graph.
+
+    R34: the input variable name is never hardcoded — it is whatever
+    the container's topology declares (e.g. ``global.pixel_values``).
+    Shared by the CLI cold path (``cli/commands/upscale.py``) and the
+    serving warm path via :func:`prepare_image_inputs`.
+    """
+    sources = []
+    for conn in topology.get("connections", []):
+        src = conn.get("from", "")
+        if src.startswith("global."):
+            sources.append(src)
+    uniq = sorted(set(sources))
+    if not uniq:
+        raise RuntimeError(
+            "No `global.*` input connection found in topology. "
+            "The container does not declare a user-facing image input."
+        )
+    if len(uniq) > 1:
+        raise RuntimeError(
+            f"Expected exactly one global input connection, found "
+            f"{uniq}. Upscalers take a single image input."
+        )
+    return uniq[0]
+
+
+def load_upscale_image(image_path: str, cache_path: Path):
+    """PIL load → NCHW float tensor with container-declared preprocessing.
+
+    Reads ``modules/processor/preprocessor_config.json`` for the
+    rescale factor and pad alignment. Falls back to the standard
+    1/255 rescale + multiple-of-8 reflect pad when the processor
+    config is absent (the conventional SR defaults). Returns
+    ``(tensor, (orig_h, orig_w))``. Shared by ``nbx upscale`` and the
+    serving warm path — one preprocessing, every entry point.
+    """
+    import json
+
+    import numpy as np
+    import torch
+    from PIL import Image
+
+    img = Image.open(image_path).convert("RGB")
+
+    proc_cfg = {}
+    proc_file = (cache_path / "modules" / "processor"
+                 / "preprocessor_config.json")
+    if proc_file.exists():
+        with open(proc_file) as f:
+            proc_cfg = json.load(f)
+
+    rescale_factor = (
+        proc_cfg.get("rescale_factor", 1.0 / 255.0)
+        if proc_cfg.get("do_rescale", True)
+        else 1.0
+    )
+    pad_size = proc_cfg.get("pad_size", 8) if proc_cfg.get("do_pad", True) else 1
+
+    arr = np.asarray(img, dtype=np.float32) * float(rescale_factor)
+    # HWC → CHW → NCHW
+    tensor = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0).contiguous()
+
+    # Pad H and W up to a multiple of `pad_size` (reflect padding,
+    # matching the Swin2SR image processor convention).
+    _, _, h, w = tensor.shape
+    pad_h = (pad_size - h % pad_size) % pad_size
+    pad_w = (pad_size - w % pad_size) % pad_size
+    if pad_h or pad_w:
+        tensor = torch.nn.functional.pad(
+            tensor, (0, pad_w, 0, pad_h), mode="reflect")
+
+    return tensor, (h, w)
+
+
 def prepare_image_inputs(topology: dict, model_name: Optional[str],
                          image_path: str, cache_path: Path, *,
                          height: Optional[int] = None,
@@ -148,17 +223,31 @@ def prepare_image_inputs(topology: dict, model_name: Optional[str],
     (``cli/commands/run.py``) and the serving warm path
     (``serving/engine.py``) — the output_dispatch pattern.
 
-    The preprocessing TYPE is data-driven from the build: a
-    ``topology.flow.vlm`` block declares its own preprocessing
-    (dynamic-resolution VLM); otherwise the video contract applies:
-    ``global.image`` = I2V VAE-conditioning clip [1,3,T,H,W] in [-1,1]
-    (T>1 zero-padded only when the model's vae_encoder declares
-    ``pad_image_to_num_frames`` — Wan-I2V temporal-VAE class), and
-    ``global.pixel_values`` = the CLIP view of the SAME image when the
-    build embeds ``modules/image_processor/preprocessor_config.json``.
+    The preprocessing TYPE is data-driven from the build:
+    family=upscaler (read from the container manifest) takes the SR
+    contract — the topology's unique input variable fed with the
+    rescaled/padded NCHW float image (the ``nbx upscale`` cold-path
+    preparation; before this branch existed the warm path fell
+    through to the video contract and the upscaler family broke on
+    serve warm, both engines — S3_FINDING_SERVE_UPSCALER_WARM,
+    2026-08-26). A ``topology.flow.vlm`` block declares its own
+    preprocessing (dynamic-resolution VLM); otherwise the video
+    contract applies: ``global.image`` = I2V VAE-conditioning clip
+    [1,3,T,H,W] in [-1,1] (T>1 zero-padded only when the model's
+    vae_encoder declares ``pad_image_to_num_frames`` — Wan-I2V
+    temporal-VAE class), and ``global.pixel_values`` = the CLIP view
+    of the SAME image when the build embeds
+    ``modules/image_processor/preprocessor_config.json``.
     All tensors stay CPU; the runtime resolver owns placement.
     """
     import json
+
+    manifest_file = cache_path / "manifest.json"
+    if manifest_file.exists():
+        family = (json.loads(manifest_file.read_text()) or {}).get("family")
+        if family == "upscaler":
+            tensor, _ = load_upscale_image(image_path, cache_path)
+            return {find_upscale_input_variable(topology): tensor}
 
     inputs: dict = {}
     vlm_blk = (topology.get("flow", {}) or {}).get("vlm") or {}

@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Upscalers now work through the serving daemon.** Requesting an
+  upscale from a warm `neurobrix serve` session failed on both
+  engines: the serving path prepared the input image with the
+  video/VLM contract instead of the super-resolution one, so the
+  model's actual input never received the image and saving crashed.
+  The serving path now uses the exact same input preparation as the
+  `neurobrix upscale` command (one shared, data-driven brick), and a
+  permanent regression test exercises the warm path on both engines
+  with the output resolution verified.
+
 - **Flex.1-alpha generates images again.** Since the FLUX-video flow
   landed in late June, image models of the FLUX family (Flex.1-alpha)
   crashed at the first denoising step with `KeyError: 'frames'` in
