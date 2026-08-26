@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **DeepSeek-MoE generation no longer degenerates in Triton modes.**
+  Models that rebuild their rotary-position tables on every forward
+  pass (DeepSeek-MoE among them) produced garbage from the moment a
+  generation crossed the internal reference length: the Triton
+  engine kept the rebuilt table frozen at that reference size, so
+  later positions read past its end — output collapsed to a repeated
+  "!" (observed on `deepseek-moe-16b-chat` in both `--triton` and
+  `--triton-sequential`). The table now grows with the actual
+  sequence length (prompt plus generated tokens), in both Triton
+  modes and from the very first forward pass; outputs are now
+  byte-identical to the PyTorch engine on the affected model. Models
+  that ship a pre-built rotary table are unaffected.
+
 - **Browsing speech models on the hub works again.** `neurobrix hub
   --category` offered two category names the registry never served
   (`AUDIO`, `SPEECH`) and was missing the three speech categories the

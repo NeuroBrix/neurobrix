@@ -162,7 +162,11 @@ class SymbolicShapeResolver:
                     # the tensor's DATA at flat index 1, not from a shape dim
                     # (dynamic-resolution grid values, promoted at trace by the
                     # SymValueSources pass).
-                    val_match = re.match(r"val_(\d+)(?:_fd(\d+))?$", dim_str)
+                    # Negative indices are part of the vocabulary
+                    # (e.g. "val_-1" = last element — runtime rope-length
+                    # symbols); mirror of the triton binder
+                    # (triton/symbols.py bind_from_inputs).
+                    val_match = re.match(r"val_(-?\d+)(?:_fd(\d+))?$", dim_str)
                     if val_match:
                         flat_idx = int(val_match.group(1))
                         fdiv = int(val_match.group(2)) if val_match.group(2) else 1
@@ -170,7 +174,7 @@ class SymbolicShapeResolver:
                         if tensor is not None:
                             if hasattr(tensor, "flatten"):
                                 flat = tensor.flatten()
-                                if flat_idx < len(flat):
+                                if -len(flat) <= flat_idx < len(flat):
                                     self._bind_symbol(
                                         symbol_id, int(flat[flat_idx]) // fdiv,
                                         symbol_info)
@@ -179,7 +183,8 @@ class SymbolicShapeResolver:
                                         f"Symbol {symbol_id}: val index {flat_idx} out of "
                                         f"range for input '{input_name}' with "
                                         f"{len(flat)} elements")
-                            elif hasattr(tensor, "__len__") and flat_idx < len(tensor):
+                            elif (hasattr(tensor, "__len__")
+                                  and -len(tensor) <= flat_idx < len(tensor)):
                                 self._bind_symbol(
                                     symbol_id, int(tensor[flat_idx]), symbol_info)
                         else:

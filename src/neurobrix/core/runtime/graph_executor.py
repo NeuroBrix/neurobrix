@@ -2047,6 +2047,18 @@ class GraphExecutor:
         ops_meta = self._dag.get("ops", {})
         exec_order = self._dag.get("execution_order", [])
 
+        # Apply symbolic promotion (shared with triton-compiled mode) so
+        # that ops like ones([23,23]) become ones([s1,s1]) →
+        # ones([actual_seq_len, actual_seq_len]). MUST run before the
+        # resolver is built and bound: the pass may insert runtime
+        # symbols (nbx_rope_len) into symbolic_context, and they must
+        # bind on the FIRST forward — prefill is exactly the forward
+        # where an unbound rope-length symbol reads the table OOB.
+        if not hasattr(self, '_seq_promotion_done'):
+            from neurobrix.triton.promotion import promote_seq_len_scalars
+            promote_seq_len_scalars(self._dag, tensors, ops_meta)
+            self._seq_promotion_done = True
+
         # Symbol resolver for symbolic shapes
         sym_ctx = self._dag.get("symbolic_context", {})
         sym_resolver = SymbolResolver(sym_ctx) if sym_ctx else None
@@ -2054,13 +2066,6 @@ class GraphExecutor:
             sym_resolver.bind_from_inputs(input_map,
                                           self._dag.get("input_tensor_ids", []),
                                           tensors)
-
-        # Apply symbolic promotion (shared with compiled mode) so that
-        # ops like ones([23,23]) become ones([s1,s1]) → ones([actual_seq_len, actual_seq_len])
-        if not hasattr(self, '_seq_promotion_done'):
-            from neurobrix.triton.promotion import promote_seq_len_scalars
-            promote_seq_len_scalars(self._dag, tensors, ops_meta)
-            self._seq_promotion_done = True
 
         # Tensor store: maps tensor_id → NBXTensor
         store: Dict[str, Any] = {}
@@ -2649,12 +2654,16 @@ class GraphExecutor:
             if atype == "tensor_tuple":
                 return [store.get(tid) for tid in arg.get("tensor_ids", [])]
             if atype == "symbol":
-                sid = arg.get("symbol_id") or arg.get("id")
-                if sym_resolver and sid:
-                    v = sym_resolver.get(sid)
-                    if v > 0:
-                        return v + arg.get("offset", 0)
-                return arg.get("trace_value", arg.get("trace", 0))
+                # Delegate to the resolver's own symbol semantics
+                # (bindings + offset, trace fallback + offset) — the
+                # mirror of triton/symbols.py _eval_expr. The previous
+                # inline form dropped the ref offset on the unbound
+                # fallback and conflated a bound value of 0 with unbound
+                # (get() defaults to 0).
+                if sym_resolver:
+                    return sym_resolver.resolve(arg)
+                return (arg.get("trace_value", arg.get("trace", 0))
+                        + arg.get("offset", 0))
             if atype in ("mul", "add", "sub", "floordiv", "mod", "neg", "product"):
                 if sym_resolver:
                     try:

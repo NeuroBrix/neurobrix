@@ -135,6 +135,8 @@ def promote_seq_len_scalars(dag: dict, tensors: dict, ops_meta: dict):
 
     rope_slice_full_size: Dict[str, int] = {}
     rope_seq_slice_inputs: set = set()  # intermediate-source rope slices
+    rope_slice_dynamic: set = set()     # case-(b) slice op_uids (recomputed
+    # chain — their end must track the runtime TOTAL length, see below)
     # feeding from a computed chain — backward-traced to pin the arange too.
     for _uid, _op_data in ops_meta.items():
         if _op_data.get("op_type") != "aten::slice":
@@ -177,6 +179,7 @@ def promote_seq_len_scalars(dag: dict, tensors: dict, ops_meta: dict):
         # constant whose size never shrinks.
         if _is_seq_dim and not _is_weight:
             rope_seq_slice_inputs.add(_ins[0])
+            rope_slice_dynamic.add(_uid)
 
     # Pin the aten::arange at the root of the RoPE chain. DeepSeek-MoE
     # recomputes RoPE per forward via arange(seq_len) → mul(inv_freq) →
@@ -230,15 +233,60 @@ def promote_seq_len_scalars(dag: dict, tensors: dict, ops_meta: dict):
                         continue
                     _stack.append(_pi)
 
+    # Dynamic RoPE length for the case-(b) recomputed chain. The chain
+    # regenerates cos/sin per forward from arange(N); N must cover every
+    # ABSOLUTE position the downstream index(position_ids) will read —
+    # i.e. the runtime TOTAL length (prompt + generated so far), which
+    # GROWS past trace_seq_len during decode. A static pin at
+    # trace_seq_len (the previous behaviour) made positions >=
+    # trace_seq_len read out of the table's bounds: garbage rotations,
+    # degenerate logits from that step on (deepseek-moe-16b, first bad
+    # token exactly at position trace_seq_len=23; 2026-08-26). Mirror of
+    # the compiled engine's _recompute_rope_constant, which regenerates
+    # the table at the needed length.
+    # Mechanism: a value-sourced symbol bound per forward from the LAST
+    # element of input::position_ids (both executors bind symbols on
+    # every component invocation); refs carry offset=1 so they resolve
+    # to last_position + 1 = total length. Fallback (symbol unbound) is
+    # trace_value-1 + 1 = the original trace length — the pre-fix
+    # behaviour. The per-forward host read of position_ids is a few
+    # bytes and only exists on graphs that carry this chain.
+    _ROPE_LEN_SYM = "nbx_rope_len"
+    if rope_arange_uids:
+        _sym_tv = next(iter(trace_seq_lens))
+        dag.setdefault("symbolic_context", {}).setdefault("symbols", {})[
+            _ROPE_LEN_SYM] = {
+            "name": _ROPE_LEN_SYM,
+            "source": "input::position_ids::val_-1",
+            "trace_value": _sym_tv - 1,
+        }
+
+    def _rope_len_ref(tv: int) -> dict:
+        return {"type": "symbol", "symbol_id": _ROPE_LEN_SYM,
+                "trace_value": tv - 1, "offset": 1}
+
+    def _is_rope_len_ref(arg) -> bool:
+        return (isinstance(arg, dict)
+                and arg.get("type") == "symbol"
+                and (arg.get("symbol_id") or arg.get("id")) == _ROPE_LEN_SYM)
+
     def _un_promote_rope_shape(arg):
-        """Replace any symbolic seq_len factor in a shape list with its
-        static trace_value. Used inside the RoPE chain only, to prevent
-        view/reshape/expand/cat shape args from shrinking at decode."""
+        """Rewrite symbolic seq_len factors in RoPE-chain shape args.
+
+        seq_len symbols become the dynamic nbx_rope_len reference (total
+        runtime length) when the chain is the recomputed case-(b) form;
+        other symbols collapse to their static trace_value as before.
+        Prevents view/reshape/expand/cat shape args from shrinking to
+        the decode seq_len=1 AND from freezing at trace_seq_len."""
         if isinstance(arg, dict):
             t = arg.get("type")
             if t == "symbol":
+                if _is_rope_len_ref(arg):
+                    return arg
                 tv = arg.get("trace_value")
                 if isinstance(tv, int):
+                    if rope_arange_uids and tv in trace_seq_lens:
+                        return _rope_len_ref(tv)
                     return {"type": "scalar", "value": tv}
             elif t == "product":
                 # Resolve each factor, then collapse to a scalar if static.
@@ -273,10 +321,17 @@ def promote_seq_len_scalars(dag: dict, tensors: dict, ops_meta: dict):
         args = attrs.get("args", [])
 
         if op_type == "aten::slice" and len(args) >= 4:
-            # RoPE slice: set end to full source dim (static). This turns the
-            # narrow slice into effective identity so downstream aten::index
-            # with position_ids can read any row, not just [0:seq_len).
-            if op_uid in rope_slice_full_size:
+            # RoPE slice consumed by index(position_ids):
+            #  case (a) — pre-loaded constant table: end pinned to the FULL
+            #  static source dim (identity slice; the table already covers
+            #  every position).
+            #  case (b) — recomputed chain: the source itself now grows with
+            #  the runtime total length (dynamic arange below), so the end
+            #  tracks the same nbx_rope_len reference.
+            if op_uid in rope_slice_dynamic:
+                if not _is_rope_len_ref(args[3]):
+                    args[3] = _rope_len_ref(rope_slice_full_size[op_uid])
+            elif op_uid in rope_slice_full_size:
                 args[3] = {"type": "scalar",
                            "value": rope_slice_full_size[op_uid]}
             elif isinstance(args[3], dict):
@@ -286,20 +341,28 @@ def promote_seq_len_scalars(dag: dict, tensors: dict, ops_meta: dict):
 
         elif op_type == "aten::arange" and len(args) >= 1:
             # If this arange feeds the RoPE chain (cos/sin → slice → index
-            # with position_ids), pin it at trace_seq_len so RoPE cos/sin
-            # stay sized for absolute position indexing at decode. Without
-            # this, arange shrinks to runtime seq_len=1 → cos/sin become
-            # (1, head_dim) → position_ids > 0 read OOB.
-            # The tracer may have already replaced arg[0] with a {'type':
-            # 'symbol', 'symbol_id': 's1', 'trace_value': N} node — undo
-            # that back to a static scalar for RoPE aranges only.
+            # with position_ids), its end must be the runtime TOTAL length
+            # (nbx_rope_len + 1) so the recomputed table covers every
+            # absolute position the index reads. Neither of the two static
+            # choices is correct: runtime seq_len shrinks to 1 at decode
+            # (positions > 0 OOB from the second token), and the previous
+            # static trace_seq_len pin went OOB the moment total length
+            # crossed trace_seq_len (deepseek-moe wall at position 23).
             if op_uid in rope_arange_uids:
                 a0 = args[0]
-                if isinstance(a0, dict) and a0.get("type") == "symbol":
+                if _is_rope_len_ref(a0):
+                    pass  # already rewritten (pass re-entry)
+                elif isinstance(a0, dict) and a0.get("type") == "symbol":
                     tv = a0.get("trace_value")
                     if isinstance(tv, int):
-                        args[0] = {"type": "scalar", "value": tv}
-                # Plain-int args stay as-is.
+                        args[0] = _rope_len_ref(tv)
+                elif isinstance(a0, dict) and a0.get("type") == "scalar" \
+                        and a0.get("value") in trace_seq_lens:
+                    # A static pin left by an earlier run of the pre-fix
+                    # pass — upgrade it to the dynamic form.
+                    args[0] = _rope_len_ref(a0["value"])
+                elif isinstance(a0, int) and a0 in trace_seq_lens:
+                    args[0] = _rope_len_ref(a0)
             elif isinstance(args[0], dict):
                 r = _promote_scalar_dict(args[0])
                 if r:

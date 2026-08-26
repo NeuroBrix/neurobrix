@@ -48,14 +48,14 @@ class SymbolResolver:
                 tensor = inputs.get(tensor_id)
                 if tensor is not None and hasattr(tensor, "numpy"):
                     flat = tensor.numpy().reshape(-1)
-                    if idx >= flat.shape[0]:
+                    if idx >= flat.shape[0] or idx < -flat.shape[0]:
                         raise RuntimeError(
                             f"Symbol {sym_id}: val index {idx} out of range "
                             f"for input '{tensor_id}' with {flat.shape[0]} "
                             f"elements")
                     self._bindings[sym_id] = int(flat[idx]) // fdiv
                 elif tensor is not None and hasattr(tensor, "__len__"):
-                    if idx >= len(tensor):
+                    if idx >= len(tensor) or idx < -len(tensor):
                         raise RuntimeError(
                             f"Symbol {sym_id}: val index {idx} out of range "
                             f"for input '{tensor_id}' with {len(tensor)} "
