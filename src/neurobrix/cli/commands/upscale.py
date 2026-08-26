@@ -32,74 +32,24 @@ def _resolve_execution_mode(args) -> str:
     return "triton_sequential" if mode == "triton-sequential" else mode
 
 
+# Input-variable discovery and image preprocessing moved to the shared
+# CLI/daemon brick (core/module/vision/input_processor.py) so the
+# serving warm path takes the IDENTICAL preparation — the warm path
+# previously fell through to the video contract and the family broke
+# on serve warm, both engines (S3_FINDING_SERVE_UPSCALER_WARM,
+# 2026-08-26). Thin aliases keep this module's call sites readable.
 def _find_input_variable(topology: dict) -> str:
-    """Return the unique `global.*` connection source feeding the graph.
-
-    R34: the input variable name is never hardcoded — it is whatever
-    the container's topology declares (e.g. `global.pixel_values`).
-    """
-    sources = []
-    for conn in topology.get("connections", []):
-        src = conn.get("from", "")
-        if src.startswith("global."):
-            sources.append(src)
-    uniq = sorted(set(sources))
-    if not uniq:
-        raise RuntimeError(
-            "No `global.*` input connection found in topology. "
-            "The container does not declare a user-facing image input."
-        )
-    if len(uniq) > 1:
-        raise RuntimeError(
-            f"Expected exactly one global input connection, found "
-            f"{uniq}. Upscalers take a single image input."
-        )
-    return uniq[0]
+    from neurobrix.core.module.vision.input_processor import (
+        find_upscale_input_variable,
+    )
+    return find_upscale_input_variable(topology)
 
 
 def _load_and_preprocess_image(image_path: str, cache_path: Path):
-    """PIL load → CHW float tensor with container-declared preprocessing.
-
-    Reads `modules/processor/preprocessor_config.json` for the
-    rescale factor and pad alignment. Falls back to the standard
-    1/255 rescale + multiple-of-8 pad when the processor config is
-    absent (those are the conventional defaults for SR models).
-    """
-    import torch
-    from PIL import Image
-
-    img = Image.open(image_path).convert("RGB")
-
-    proc_cfg = {}
-    proc_file = cache_path / "modules" / "processor" / "preprocessor_config.json"
-    if proc_file.exists():
-        with open(proc_file) as f:
-            proc_cfg = json.load(f)
-
-    rescale_factor = (
-        proc_cfg.get("rescale_factor", 1.0 / 255.0)
-        if proc_cfg.get("do_rescale", True)
-        else 1.0
+    from neurobrix.core.module.vision.input_processor import (
+        load_upscale_image,
     )
-    pad_size = proc_cfg.get("pad_size", 8) if proc_cfg.get("do_pad", True) else 1
-
-    import numpy as np
-    arr = np.asarray(img, dtype=np.float32) * float(rescale_factor)
-    # HWC → CHW → NCHW
-    tensor = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0).contiguous()
-
-    # Pad H and W up to a multiple of `pad_size` (reflect padding,
-    # matching the Swin2SR image processor convention). The padded
-    # region is trimmed implicitly by the model's known upscale ratio
-    # downstream; SR models are trained to ignore the reflected band.
-    _, _, h, w = tensor.shape
-    pad_h = (pad_size - h % pad_size) % pad_size
-    pad_w = (pad_size - w % pad_size) % pad_size
-    if pad_h or pad_w:
-        tensor = torch.nn.functional.pad(
-            tensor, (0, pad_w, 0, pad_h), mode="reflect")
-
-    return tensor, (h, w)
+    return load_upscale_image(image_path, cache_path)
 
 
 def cmd_upscale(args):
