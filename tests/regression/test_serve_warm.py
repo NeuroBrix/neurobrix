@@ -17,12 +17,34 @@ the gate). Extend one small row per family as warm coverage grows —
 never delete a family from here once added.
 
 Runnable: python3 -m pytest tests/regression/test_serve_warm.py -q
+
+REQUIRES THE FULL UNMASKED RIG: cells plan against autodetect (which
+enumerates via nvidia-smi and is BLIND to CUDA_VISIBLE_DEVICES —
+D-AUTODETECT-VISIBLE-MASK), so running the suite under a restricted
+mask produces false failures ("invalid device ordinal" class; 13 of
+them in the 2026-08-27 supervisor spot-check). A module guard skips
+the suite with a clear message instead. Rows that need pinning do it
+themselves (_PINNED_ROWS: mask + MATCHING profile together, per
+cell, in the subprocess).
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
+
+# Guard: refuse a restricted parent environment loudly-but-kindly.
+# (The pinned rows set their own mask inside their subprocess env —
+# the parent process must stay unmasked.)
+if os.environ.get("CUDA_VISIBLE_DEVICES") not in (None, ""):
+    pytest.skip(
+        "test_serve_warm requires the FULL unmasked rig: autodetect is "
+        "blind to CUDA_VISIBLE_DEVICES (D-AUTODETECT-VISIBLE-MASK) and "
+        "a restricted mask yields false 'invalid device ordinal' "
+        "failures (supervisor spot-check 2026-08-27). Unset "
+        "CUDA_VISIBLE_DEVICES and re-run.",
+        allow_module_level=True)
 
 REPO = Path(__file__).resolve().parents[2]
 
