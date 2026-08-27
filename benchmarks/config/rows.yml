@@ -357,8 +357,9 @@ rows:
     neurobrix_model: swinir-classical-x4
     input_image: benchmarks/assets/apple_448.png
     scale: 4
-    upscaler_stack: swinir   # NOT IMPLEMENTED YET in upscaler_cell.py
+    upscaler_stack: swinir
     upscaler_venv: realesrgan
+    upscaler_weights: /home/mlops/hf_snapshots/upscaler_weights/001_classicalSR_DIV2K_s48w8_SwinIR-M_x4.pth
     columns: [vendor_upscaler, neurobrix_pytorch, neurobrix_triton]
 
   - id: upscale_hat_l_x4
@@ -369,6 +370,31 @@ rows:
     neurobrix_model: hat-l-x4
     input_image: benchmarks/assets/apple_448.png
     scale: 4
-    upscaler_stack: hat      # NOT IMPLEMENTED YET (basicsr 1.3.4.9 venv + Drive weights)
+    upscaler_stack: hat
     upscaler_venv: hat
+    upscaler_weights: /home/mlops/hf_snapshots/upscaler_weights/HAT-L_SRx4_ImageNet-pretrain.pth
     columns: [vendor_upscaler, neurobrix_pytorch, neurobrix_triton]
+
+  - id: image_diffusion_flex1
+    family: image
+    metric_class: image
+    reference: true
+    checkpoint: ostris/Flex.1-alpha
+    diffusers_checkpoint: ostris/Flex.1-alpha
+    neurobrix_model: Flex.1-alpha
+    prompt: "a red apple on a wooden table"
+    # steps pinned explicitly on BOTH arms (FLUX-dev convention; the
+    # build carries guidance 3.5 in topology and FluxPipeline defaults
+    # to the same 3.5 — equal by construction, recorded here).
+    steps: 28
+    seed: 42
+    height: 1024
+    width: 1024
+    # diffusers arm: fp16 transformer + fp32 text encoders +
+    # enable_model_cpu_offload (Flux/V100 doctrine, S3 R16 synthesis —
+    # 26.3 GB fp16 not resident with activations on one 32 GB card).
+    # Snapshot on the NAS (hf_snapshots/Flex.1-alpha, all-in-one file
+    # excluded). R29 standing instruction: triton-vs-compiled
+    # sharpness compared explicitly on the measured renders — the
+    # Flex-triton softness reserve is ON TRIAL at this row.
+    columns: [diffusers, neurobrix_pytorch, neurobrix_triton]

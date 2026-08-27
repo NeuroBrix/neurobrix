@@ -34,16 +34,31 @@ def load_pipeline(row: dict):
     pipe = DiffusionPipeline.from_pretrained(src, torch_dtype=torch.float16)
     # V100 dtype doctrine (sourced, backends.yml): TE/VAE precision.
     fixes = []
+    offloaded = False
     if row["metric_class"] == "image" and hasattr(pipe, "text_encoder"):
         # Sana class: TE (Gemma2) + DC-AE VAE must not run fp16.
         if "sana" in type(pipe).__name__.lower():
             pipe.text_encoder = pipe.text_encoder.to(torch.float32)
             pipe.vae = pipe.vae.to(torch.float32)
             fixes.append("text_encoder=fp32, vae=fp32 (Sana doctrine)")
+        # FLUX class (Flex.1): HF Flux docs — fp16 text encoders change
+        # outputs on Turing/Volta, fp32 TEs remove the difference; and
+        # 26.3 GB fp16 weights do not sit resident with activations on
+        # one 32 GB card, so the vendor cpu-offload path applies (S3
+        # R16 synthesis, sourced).
+        if "flux" in type(pipe).__name__.lower():
+            pipe.text_encoder = pipe.text_encoder.to(torch.float32)
+            if getattr(pipe, "text_encoder_2", None) is not None:
+                pipe.text_encoder_2 = pipe.text_encoder_2.to(torch.float32)
+            pipe.enable_model_cpu_offload()
+            offloaded = True
+            fixes.append("text encoders=fp32 + enable_model_cpu_offload "
+                         "(Flux/V100 doctrine)")
     if row["metric_class"] == "video" and hasattr(pipe, "vae"):
         pipe.vae = pipe.vae.to(torch.float32)
         fixes.append("vae=fp32 (Wan doctrine)")
-    pipe = pipe.to("cuda")
+    if not offloaded:
+        pipe = pipe.to("cuda")
 
     # Fairness-arm cache weapon (drift-discipline clause 6): when the
     # campaign sets BENCH_DIFFUSERS_FBC=<threshold>, enable diffusers'
