@@ -9,6 +9,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Swin-transformer upscalers produced tonally wrong images and only
+  worked at one input size.** Three published super-resolution models
+  — `Swin2SR-Classical-x4`, `SwinIR-Classical-x4` and `HAT-L-x4` —
+  shipped with defects that made their output unusable.
+
+  `Swin2SR-Classical-x4` shifted every pixel of every image it
+  produced: white backgrounds rendered grey and dark areas were
+  crushed, on both engines. Structure, sharpness and the 4x factor
+  were correct, which is why the defect was easy to miss at a glance
+  and impossible to miss side by side with the reference. The cause
+  was a normalisation step the model applies around its own network
+  that was not captured when the model was prepared, so the engine ran
+  the network without ever undoing it.
+
+  All three models additionally accepted only the exact image size
+  they had been prepared at, failing on any other size with an
+  internal shape error. Real-ESRGAN was unaffected by both defects.
+
+  The affected containers have been withdrawn from distribution while
+  corrected ones are prepared. If you downloaded any of them before
+  2026-08-28, do not rely on their output: re-run `neurobrix import`
+  once the corrected containers are published, and regenerate any
+  images produced with the earlier ones.
+
+### Added
+
+- **Upscaler outputs are now checked for tonal fidelity, not just
+  size.** The upscaler regression suite previously asserted only that
+  the output had the expected dimensions, which is what let the tonal
+  defect above ship unnoticed. It now also asserts, on both engines,
+  that the output preserves the input's overall brightness and that a
+  uniform background survives upscaling, with the tolerances measured
+  against four independent reference implementations.
+
 - **Serving releases GPU memory promptly on unload.** Unloading a
   model from a serving engine left freed weights waiting for a
   garbage-collection pass (executor graphs hold reference cycles),

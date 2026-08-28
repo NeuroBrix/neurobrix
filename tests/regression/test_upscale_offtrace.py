@@ -120,3 +120,135 @@ def test_upscale_two_sizes(model: str, size: str, mode: str,
     assert im.size == expected and im.mode == "RGB", (
         f"{model}/{mode} ({size}): expected {expected} RGB, got "
         f"{im.size} {im.mode}")
+
+
+# ---------------------------------------------------------------------------
+# TONE FIDELITY — the value twin of the shape cells above.
+#
+# The cells above assert output DIMENSIONS. That is exactly the hole the
+# swin2sr mean-addback defect walked through: it shipped to the hub with
+# correct dimensions, correct sharpness, correct 4x factor, and every
+# pixel shifted by the model's RGB mean (grey background instead of
+# white). A shape gate is structurally blind to it.
+#
+# These cells assert VALUES, on the real bench asset (the synthetic
+# gradient used above has no uniform background, so it could not carry
+# this check even with a value assertion):
+#
+#   1. input-referenced (universal, no fixture needed) — super-resolution
+#      preserves low-frequency content, so the output mean must track the
+#      input mean, and a uniform background must survive. This half works
+#      for ANY upscaler, including ones with no banked vendor arm.
+#   2. vendor-referenced (when a vendor arm is banked) — the output mean
+#      must match the vendor stack's own output.
+#
+# Thresholds live in data/upscaler_tone_reference.json, measured across
+# four independent vendor stacks — never inline constants.
+# ---------------------------------------------------------------------------
+
+TONE_REF = json.loads(
+    (Path(__file__).parent / "data" / "upscaler_tone_reference.json").read_text())
+
+
+def _tone_stats(path: Path, patch: int) -> tuple[float, list[float]]:
+    """Global mean and the background triplet (median of corner patches)."""
+    import numpy as np
+    from PIL import Image
+
+    a = np.asarray(Image.open(path).convert("RGB")).astype(float)
+    corners = np.concatenate([
+        a[:patch, :patch].reshape(-1, 3), a[:patch, -patch:].reshape(-1, 3),
+        a[-patch:, :patch].reshape(-1, 3), a[-patch:, -patch:].reshape(-1, 3)])
+    return float(a.mean()), [float(v) for v in np.median(corners, axis=0)]
+
+
+def _tone_params() -> list:
+    """One cell per (artifact, engine).
+
+    An artifact carrying a KNOWN defect is marked xfail(strict=True) —
+    named, so it reports as a tracked defect rather than as suite noise,
+    and strict, so the marker cannot rot into a silent pass: the day the
+    re-trace lands, the cell XPASSes and the suite goes red until the
+    marker is removed. Same discipline that retired the swin2sr shape
+    xfail on 2026-08-28.
+    """
+    out = []
+    for model, cfg in TONE_REF["artifacts"].items():
+        defect = cfg.get("known_defect")
+        for engine in cfg["engines"]:
+            marks = ([pytest.mark.xfail(reason=defect, strict=True)]
+                     if defect else [])
+            out.append(pytest.param(model, engine, marks=marks,
+                                    id=f"{model}-{engine}"))
+    return out
+
+
+@pytest.mark.parametrize("model,mode", _tone_params())
+def test_upscale_tone_fidelity(model: str, mode: str, tmp_path: Path) -> None:
+    from neurobrix.cli.utils import find_model
+    try:
+        find_model(model)
+    except Exception:
+        pytest.skip(f"{model} not in the local cache")
+
+    tol = TONE_REF["tolerances"]
+    patch = TONE_REF["background_probe"]["corner_patch_px"]
+    asset = REPO / TONE_REF["input_asset"]
+    if not asset.exists():
+        pytest.skip(f"bench asset missing: {asset}")
+
+    # Run at the artifact's OWN trace size. One cell, one defect class:
+    # the off-trace freeze is the two-size cells' job above, and letting
+    # it crash this cell would hide the tonal verdict behind an exit 1
+    # (observed 2026-08-28 on swinir / hat / swin2sr-x2 / realworld).
+    from PIL import Image
+
+    hw = _trace_hw(model)
+    src = tmp_path / f"tone_in_{model}.png"
+    Image.open(asset).convert("RGB").resize(
+        (hw[1], hw[0]), Image.LANCZOS).save(src)
+
+    out = tmp_path / f"tone_{model}_{mode}.png"
+    cmd = [sys.executable, "-u", "-m", "neurobrix", "upscale",
+           "--model", model, "--input", str(src), "--output", str(out)]
+    if mode != "compiled":
+        cmd += ["--mode", mode]
+    env = {**os.environ, "PYTHONPATH": str(REPO / "src"),
+           "PYTHONUNBUFFERED": "1"}
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=1800,
+                       env=env, cwd=str(REPO))
+    assert r.returncode == 0, (
+        f"{model}/{mode}: exit {r.returncode}\n"
+        f"... tail:\n{(r.stderr or r.stdout or '')[-600:]}")
+
+    in_mean, in_bg = _tone_stats(src, patch)
+    out_mean, out_bg = _tone_stats(out, patch)
+
+    # 1. Input-referenced — catches a global tonal shift with no fixture.
+    d_mean = abs(out_mean - in_mean)
+    assert d_mean <= tol["mean_abs_delta_vs_input"], (
+        f"{model}/{mode}: output mean {out_mean:.2f} vs input {in_mean:.2f} "
+        f"(delta {d_mean:.2f} > {tol['mean_abs_delta_vs_input']}). An "
+        f"upscaler preserves low-frequency content; this size of shift is a "
+        f"tonal defect, not resampling. Check whether the traced unit "
+        f"dropped a parent-forward normalisation.")
+
+    d_bg = [abs(o - i) for o, i in zip(out_bg, in_bg)]
+    assert max(d_bg) <= tol["background_abs_delta_per_channel"], (
+        f"{model}/{mode}: background {out_bg} vs input {in_bg} "
+        f"(per-channel delta {[round(v, 1) for v in d_bg]} > "
+        f"{tol['background_abs_delta_per_channel']}). A uniform background "
+        f"must survive upscaling.")
+
+    # 2. Vendor-referenced — only where a vendor arm is banked AND this
+    #    cell ran at the size that arm was measured at. Comparing a
+    #    trace-size run against a 448-measured vendor mean would be
+    #    comparing two different inputs.
+    vendor = (TONE_REF["artifacts"][model] or {}).get("vendor")
+    if vendor and list(hw) == TONE_REF.get("vendor_measured_hw"):
+        d_vendor = abs(out_mean - vendor["mean"])
+        assert d_vendor <= tol["mean_abs_delta_vs_vendor"], (
+            f"{model}/{mode}: output mean {out_mean:.2f} vs vendor "
+            f"{vendor['mean']:.2f} (delta {d_vendor:.2f} > "
+            f"{tol['mean_abs_delta_vs_vendor']}). Vendor reference: "
+            f"{vendor['source']}")

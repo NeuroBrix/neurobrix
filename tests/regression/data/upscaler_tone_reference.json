@@ -1,0 +1,137 @@
+{
+  "_doc": [
+    "Tone-fidelity reference for the permanent upscaler cells.",
+    "",
+    "WHY THIS FILE EXISTS: until 2026-08-28 the upscaler cells asserted",
+    "output DIMENSIONS only. A defect that shifted every swin2sr output by",
+    "the model's RGB mean (grey background instead of white, crushed dark",
+    "side) shipped to the hub and survived every gate, because no cell ever",
+    "looked at a VALUE. Shape gates are structurally blind to tone.",
+    "",
+    "CALIBRATION (measured 2026-08-28 on benchmarks/assets/apple_448.png,",
+    "input mean 180.70, background 254/254/254). Four independent vendor",
+    "stacks, banked under validation_outputs/bench_reference_2026_08_27/:",
+    "  hat        180.65  (delta -0.05)  bg 254,254,254",
+    "  realesrgan 181.64  (delta +0.94)  bg 255,255,255",
+    "  swinir     180.71  (delta +0.01)  bg 254,254,255",
+    "  swin2sr    183.18  (delta +2.48)  bg 254,254,254",
+    "The observed defect sat at mean 95.15 (delta -85.55), bg 139,142,150.",
+    "The tolerances below clear the worst CORRECT arm by ~3x and sit ~10x",
+    "under the defect. They are measurements, not guesses: widen one only",
+    "against a new vendor measurement recorded in this file.",
+    "vendor_measured_hw: the vendor arms above were measured on the 448 asset; the vendor half of the assertion only applies to a cell that ran at that size."
+  ],
+  "input_asset": "benchmarks/assets/apple_448.png",
+  "tolerances": {
+    "mean_abs_delta_vs_input": 8.0,
+    "background_abs_delta_per_channel": 12.0,
+    "mean_abs_delta_vs_vendor": 8.0
+  },
+  "background_probe": {
+    "corner_patch_px": 8,
+    "_note": "Median over the four corner patches. Valid because the fixture asset has uniform background at all four corners; a fixture without that property needs a different probe."
+  },
+  "artifacts": {
+    "real-esrgan-x4": {
+      "engines": [
+        "compiled",
+        "triton"
+      ],
+      "vendor": {
+        "mean": 181.64,
+        "per_channel": [
+          215.8,
+          164.07,
+          165.04
+        ],
+        "background": [
+          255.0,
+          255.0,
+          255.0
+        ],
+        "source": "validation_outputs/bench_reference_2026_08_27/upscale_realesrgan_x4/vendor_realesrgan_r0.png"
+      }
+    },
+    "swinir-classical-x4": {
+      "engines": [
+        "compiled",
+        "triton"
+      ],
+      "vendor": {
+        "mean": 180.71,
+        "per_channel": [
+          213.96,
+          163.37,
+          164.81
+        ],
+        "background": [
+          254.0,
+          254.0,
+          255.0
+        ],
+        "source": "validation_outputs/bench_reference_2026_08_27/upscale_swinir_x4/vendor_swinir_r0.png"
+      }
+    },
+    "hat-l-x4": {
+      "engines": [
+        "compiled"
+      ],
+      "_engines_note": "triton support in progress (docs/upscalers/index.md); add it here when it lands.",
+      "vendor": {
+        "mean": 180.65,
+        "per_channel": [
+          214.11,
+          163.44,
+          164.39
+        ],
+        "background": [
+          254.0,
+          254.0,
+          254.0
+        ],
+        "source": "validation_outputs/bench_reference_2026_08_27/upscale_hat_l_x4/vendor_hat_r0.png"
+      }
+    },
+    "swin2SR-classical-sr-x4-64": {
+      "engines": [
+        "compiled",
+        "triton"
+      ],
+      "vendor": {
+        "mean": 183.18,
+        "per_channel": [
+          215.46,
+          166.59,
+          167.5
+        ],
+        "background": [
+          254.0,
+          254.0,
+          254.0
+        ],
+        "source": "validation_outputs/bench_reference_2026_08_27/upscale_swin2sr_x4/vendor_swin2sr_r0.png"
+      },
+      "known_defect": "tonal shift by the model's RGB mean \u2014 the parent forward's (x-mean)*img_range and its inverse are owned by no traced unit. FINDING_SWIN2SR_MEAN_ADDBACK.md / hub_upscaler_audit_2026_08_28. Remove this marker WITH the re-trace, never leave it to rot."
+    },
+    "swin2SR-classical-sr-x2-64": {
+      "engines": [
+        "compiled",
+        "triton"
+      ],
+      "_vendor_note": "No banked vendor arm yet \u2014 the input-referenced half still applies and is what catches the mean-addback class.",
+      "known_defect": "tonal shift by the model's RGB mean \u2014 the parent forward's (x-mean)*img_range and its inverse are owned by no traced unit. FINDING_SWIN2SR_MEAN_ADDBACK.md / hub_upscaler_audit_2026_08_28. Remove this marker WITH the re-trace, never leave it to rot."
+    },
+    "swin2SR-realworld-sr-x4-64-bsrgan-psnr": {
+      "engines": [
+        "compiled",
+        "triton"
+      ],
+      "_vendor_note": "No banked vendor arm yet \u2014 input-referenced half applies.",
+      "known_defect": "tonal shift by the model's RGB mean \u2014 the parent forward's (x-mean)*img_range and its inverse are owned by no traced unit. FINDING_SWIN2SR_MEAN_ADDBACK.md / hub_upscaler_audit_2026_08_28. Remove this marker WITH the re-trace, never leave it to rot."
+    }
+  },
+  "vendor_measured_hw": [
+    448,
+    448
+  ]
+}
