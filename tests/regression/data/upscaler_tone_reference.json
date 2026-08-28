@@ -71,6 +71,9 @@
           255.0
         ],
         "source": "validation_outputs/bench_reference_2026_08_27/upscale_swinir_x4/vendor_swinir_r0.png"
+      },
+      "known_defect": {
+        "offtrace": "off-trace tonal deviation, class shared with hat-l-x4 \u2014 the artifact runs at 448 (the freeze is fixed) but returns mean 199.56 against an input 180.70 while the vendor arm returns 180.71. Both engines agree to five decimals, so the cause is on the shared path. See FINDING_UPSCALER_OFFTRACE_TONE.md."
       }
     },
     "hat-l-x4": {
@@ -91,6 +94,9 @@
           254.0
         ],
         "source": "validation_outputs/bench_reference_2026_08_27/upscale_hat_l_x4/vendor_hat_r0.png"
+      },
+      "known_defect": {
+        "offtrace": "off-trace tonal deviation, class shared with swinir-classical-x4 \u2014 the artifact runs at 448 (the freeze is fixed) but returns mean 166.94 against an input 180.70 while the vendor arm returns 180.71. Both engines agree to five decimals, so the cause is on the shared path. See FINDING_UPSCALER_OFFTRACE_TONE.md."
       }
     },
     "swin2SR-classical-sr-x4-64": {
