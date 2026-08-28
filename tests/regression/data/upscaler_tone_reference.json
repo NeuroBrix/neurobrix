@@ -19,7 +19,8 @@
     "The tolerances below clear the worst CORRECT arm by ~3x and sit ~10x",
     "under the defect. They are measurements, not guesses: widen one only",
     "against a new vendor measurement recorded in this file.",
-    "vendor_measured_hw: the vendor arms above were measured on the 448 asset; the vendor half of the assertion only applies to a cell that ran at that size."
+    "vendor_measured_hw: the vendor arms above were measured on the 448 asset; the vendor half of the assertion only applies to a cell that ran at that size.",
+    "known_defect is a string (all cells) or a map keyed by 'size' or '<engine>-<size>', so a defect that only shows on one engine or at one size is marked exactly where it happens and nowhere else."
   ],
   "input_asset": "benchmarks/assets/apple_448.png",
   "tolerances": {
@@ -118,15 +119,17 @@
         "triton"
       ],
       "_vendor_note": "No banked vendor arm yet \u2014 the input-referenced half still applies and is what catches the mean-addback class.",
-      "known_defect": "tonal shift by the model's RGB mean \u2014 the parent forward's (x-mean)*img_range and its inverse are owned by no traced unit. FINDING_SWIN2SR_MEAN_ADDBACK.md / hub_upscaler_audit_2026_08_28. Remove this marker WITH the re-trace, never leave it to rot."
+      "known_defect": {
+        "compiled-trace": "swin2sr-x2 residual defect, DISTINCT from the RGB-mean class that the root-trace-unit fix closed (background is restored: 254 against an input 254). The image is too dark and the two engines disagree with each other \u2014 measured 2026-08-28 at 448: compiled mean 41.26, triton 108.34, input 180.70; at the 112x80 trace size compiled 169.03, triton 176.39. Engine disagreement rules out a shared-path defect. x2 is the only single-stage-upsample variant. See FINDING_SWIN2SR_X2_RESIDUAL.md.",
+        "offtrace": "swin2sr-x2 residual defect, DISTINCT from the RGB-mean class that the root-trace-unit fix closed (background is restored: 254 against an input 254). The image is too dark and the two engines disagree with each other \u2014 measured 2026-08-28 at 448: compiled mean 41.26, triton 108.34, input 180.70; at the 112x80 trace size compiled 169.03, triton 176.39. Engine disagreement rules out a shared-path defect. x2 is the only single-stage-upsample variant. See FINDING_SWIN2SR_X2_RESIDUAL.md."
+      }
     },
     "swin2SR-realworld-sr-x4-64-bsrgan-psnr": {
       "engines": [
         "compiled",
         "triton"
       ],
-      "_vendor_note": "No banked vendor arm yet \u2014 input-referenced half applies.",
-      "known_defect": "tonal shift by the model's RGB mean \u2014 the parent forward's (x-mean)*img_range and its inverse are owned by no traced unit. FINDING_SWIN2SR_MEAN_ADDBACK.md / hub_upscaler_audit_2026_08_28. Remove this marker WITH the re-trace, never leave it to rot."
+      "_vendor_note": "No banked vendor arm yet \u2014 input-referenced half applies."
     }
   },
   "vendor_measured_hw": [

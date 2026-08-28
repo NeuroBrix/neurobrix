@@ -163,28 +163,46 @@ def _tone_stats(path: Path, patch: int) -> tuple[float, list[float]]:
 
 
 def _tone_params() -> list:
-    """One cell per (artifact, engine).
+    """One cell per (artifact, engine, size).
+
+    TWO SIZES, for the same reason the shape cells above run two: a value
+    defect can be invisible at the trace size and gross off it. swin2sr-x2
+    proved it on 2026-08-28 — after its re-trace it measured within
+    tolerance at 112x80 and rendered at a mean of 41 against an input of
+    181 at 448x448. A tone gate pinned to the trace size would have called
+    that artifact fixed.
 
     An artifact carrying a KNOWN defect is marked xfail(strict=True) —
-    named, so it reports as a tracked defect rather than as suite noise,
-    and strict, so the marker cannot rot into a silent pass: the day the
-    re-trace lands, the cell XPASSes and the suite goes red until the
-    marker is removed. Same discipline that retired the swin2sr shape
-    xfail on 2026-08-28.
+    named, so it reports as a tracked defect rather than suite noise, and
+    strict, so the marker cannot rot into a silent pass: the day the fix
+    lands the cell XPASSes and the suite goes red until the marker is
+    removed. `known_defect` is either a string (every cell of that
+    artifact) or a map keyed by size, for a defect that only shows at one.
     """
     out = []
     for model, cfg in TONE_REF["artifacts"].items():
         defect = cfg.get("known_defect")
         for engine in cfg["engines"]:
-            marks = ([pytest.mark.xfail(reason=defect, strict=True)]
-                     if defect else [])
-            out.append(pytest.param(model, engine, marks=marks,
-                                    id=f"{model}-{engine}"))
+            for size in ("trace", "offtrace"):
+                # A defect can be scoped to a size, or to one engine at
+                # one size: swin2sr-x2 after its re-trace fails compiled
+                # at both sizes and triton only off-trace, and marking a
+                # cell that genuinely passes would XPASS and go red.
+                if isinstance(defect, dict):
+                    reason = (defect.get(f"{engine}-{size}")
+                              or defect.get(size))
+                else:
+                    reason = defect
+                marks = ([pytest.mark.xfail(reason=reason, strict=True)]
+                         if reason else [])
+                out.append(pytest.param(model, engine, size, marks=marks,
+                                        id=f"{model}-{engine}-{size}"))
     return out
 
 
-@pytest.mark.parametrize("model,mode", _tone_params())
-def test_upscale_tone_fidelity(model: str, mode: str, tmp_path: Path) -> None:
+@pytest.mark.parametrize("model,mode,size", _tone_params())
+def test_upscale_tone_fidelity(model: str, mode: str, size: str,
+                               tmp_path: Path) -> None:
     from neurobrix.cli.utils import find_model
     try:
         find_model(model)
@@ -197,18 +215,20 @@ def test_upscale_tone_fidelity(model: str, mode: str, tmp_path: Path) -> None:
     if not asset.exists():
         pytest.skip(f"bench asset missing: {asset}")
 
-    # Run at the artifact's OWN trace size. One cell, one defect class:
-    # the off-trace freeze is the two-size cells' job above, and letting
-    # it crash this cell would hide the tonal verdict behind an exit 1
-    # (observed 2026-08-28 on swinir / hat / swin2sr-x2 / realworld).
+    # The trace-size half keeps the tonal verdict readable even for an
+    # artifact that freezes off-trace: letting it crash would hide the
+    # tone behind an exit 1 (observed 2026-08-28 on swinir / hat). The
+    # off-trace half is where a shape-dependent value defect shows.
     from PIL import Image
 
-    hw = _trace_hw(model)
-    src = tmp_path / f"tone_in_{model}.png"
+    hw = _trace_hw(model) if size == "trace" else OFF_TRACE_HW
+    if size == "offtrace" and hw == _trace_hw(model):
+        pytest.skip("off-trace size coincides with the trace size")
+    src = tmp_path / f"tone_in_{model}_{size}.png"
     Image.open(asset).convert("RGB").resize(
         (hw[1], hw[0]), Image.LANCZOS).save(src)
 
-    out = tmp_path / f"tone_{model}_{mode}.png"
+    out = tmp_path / f"tone_{model}_{mode}_{size}.png"
     cmd = [sys.executable, "-u", "-m", "neurobrix", "upscale",
            "--model", model, "--input", str(src), "--output", str(out)]
     if mode != "compiled":
@@ -218,7 +238,7 @@ def test_upscale_tone_fidelity(model: str, mode: str, tmp_path: Path) -> None:
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=1800,
                        env=env, cwd=str(REPO))
     assert r.returncode == 0, (
-        f"{model}/{mode}: exit {r.returncode}\n"
+        f"{model}/{mode} ({size}): exit {r.returncode}\n"
         f"... tail:\n{(r.stderr or r.stdout or '')[-600:]}")
 
     in_mean, in_bg = _tone_stats(src, patch)
