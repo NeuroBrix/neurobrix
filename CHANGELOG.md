@@ -27,11 +27,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   they had been prepared at, failing on any other size with an
   internal shape error. Real-ESRGAN was unaffected by both defects.
 
-  The affected containers have been withdrawn from distribution while
-  corrected ones are prepared. If you downloaded any of them before
-  2026-08-28, do not rely on their output: re-run `neurobrix import`
-  once the corrected containers are published, and regenerate any
-  images produced with the earlier ones.
+  `Swin2SR-Classical-x4` has been withdrawn from distribution while a
+  corrected container is prepared: `neurobrix import` now refuses it and
+  explains why. If you downloaded it before 2026-08-28, do not rely on
+  its output — regenerate those images once the corrected container is
+  published.
+
+  `SwinIR-Classical-x4` and `HAT-L-x4` remain available: their output is
+  correct at their supported input size, and the size limitation is now
+  stated on their model page. Corrected containers without the
+  limitation are being prepared for both.
 
 ### Added
 
