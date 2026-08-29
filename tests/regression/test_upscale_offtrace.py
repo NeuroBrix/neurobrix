@@ -22,6 +22,17 @@ Swin-window artifacts — see
 validation_outputs/spatial_freeze_census_2026_08_27/VERDICT.md).
 
 Runnable: python3 -m pytest tests/regression/test_upscale_offtrace.py -q
+
+REQUIRES THE FULL UNMASKED RIG, for the same reason the warm suite
+does (test_serve_warm.py, 2026-08-27): every cell shells out to
+`nbx upscale`, which plans against autodetect — and autodetect
+enumerates via nvidia-smi and is BLIND to CUDA_VISIBLE_DEVICES
+(D-AUTODETECT-VISIBLE-MASK). Under a restricted mask Prism places
+on an ordinal the child process cannot see and the cell dies with
+"CUDA error: invalid device ordinal", which reads as a model defect
+and is not one. Four such false failures on real-esrgan-x4 on
+2026-08-29 cost a full re-run. The module guard below skips loudly
+instead; unset the mask to run the suite.
 """
 from __future__ import annotations
 
@@ -32,6 +43,19 @@ import sys
 from pathlib import Path
 
 import pytest
+
+# Guard: refuse a restricted parent environment loudly-but-kindly, the
+# same brick test_serve_warm.py carries. A false "invalid device
+# ordinal" is worse than a skip: it accuses the artifact.
+if os.environ.get("CUDA_VISIBLE_DEVICES") not in (None, ""):
+    pytest.skip(
+        "test_upscale_offtrace requires the FULL unmasked rig: the cells "
+        "shell out to `nbx upscale`, whose autodetect is blind to "
+        "CUDA_VISIBLE_DEVICES (D-AUTODETECT-VISIBLE-MASK), so a "
+        "restricted mask yields false 'invalid device ordinal' failures "
+        "that look like model defects. Unset CUDA_VISIBLE_DEVICES and "
+        "re-run.",
+        allow_module_level=True)
 
 REPO = Path(__file__).resolve().parents[2]
 CACHE = Path.home() / ".neurobrix" / "cache"

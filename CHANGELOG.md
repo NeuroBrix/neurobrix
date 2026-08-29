@@ -32,10 +32,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the corrected container and regenerate any images made with the
   earlier one.
 
-  `SwinIR-Classical-x4` and `HAT-L-x4` remain available: their output is
-  correct at their supported input size, and the size limitation is now
-  stated on their model page. Corrected containers without the
-  limitation are being prepared for both.
+  `SwinIR-Classical-x4` and `HAT-L-x4` are now marked **deprecated** on
+  the hub. They stay listed and downloadable and their output is still
+  correct at their supported input size; the badge and its stated
+  reason exist so the size limitation reaches you before you download,
+  not after. Their download counts, tags and history are untouched.
+  Corrected containers without the limitation are being prepared for
+  both, and the badge is lifted in the same motion that publishes
+  them.
 
 ### Added
 
