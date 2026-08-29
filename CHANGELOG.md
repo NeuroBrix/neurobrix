@@ -33,12 +33,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   earlier one.
 
   `SwinIR-Classical-x4` and `HAT-L-x4` have been **corrected and
-  republished** (2026-08-29). Both now work at any input size, with
-  correct output verified against their reference implementations at
-  multiple sizes on every supported engine. The interim deprecation badge is
-  lifted; download counts, tags and history are untouched. If you
+  republished** (2026-08-29). Both now work at any input size — square
+  or not, aligned to the model's window or not — with correct output
+  verified against their reference implementations at multiple sizes
+  and shapes on every supported engine. The interim deprecation badge
+  is lifted; download counts, tags and history are untouched. If you
   downloaded either model before 2026-08-29, re-run `neurobrix import`
   to pick up the corrected container.
+
+  Additionally, for every upscaler: inputs whose size is not a multiple
+  of the model's processing window are now padded to the model's own
+  declared alignment (HAT uses 16 where others use 8 — it previously
+  failed on some sizes), and the output is cropped to exactly input
+  size x scale factor, where the padding could previously leak mirrored
+  edge rows into the result. `Real-ESRGAN-x4` was republished with this
+  metadata as well.
 
 ### Added
 
