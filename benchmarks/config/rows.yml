@@ -381,6 +381,19 @@ rows:
     upscaler_weights: /home/mlops/hf_snapshots/upscaler_weights/001_classicalSR_DIV2K_s48w8_SwinIR-M_x4.pth
     columns: [vendor_upscaler, neurobrix_pytorch, neurobrix_triton]
 
+  - id: upscale_swinir_x2
+    family: upscaler
+    metric_class: image
+    reference: true
+    checkpoint: JingyunLiang/SwinIR-Classical-x2
+    neurobrix_model: swinir-classical-x2
+    input_image: benchmarks/assets/apple_448.png
+    scale: 2
+    upscaler_stack: swinir
+    upscaler_venv: realesrgan
+    upscaler_weights: /home/mlops/hf_snapshots/upscaler_weights/001_classicalSR_DIV2K_s48w8_SwinIR-M_x2.pth
+    columns: [vendor_upscaler, neurobrix_pytorch, neurobrix_triton]
+
   - id: upscale_hat_l_x4
     family: upscaler
     metric_class: image

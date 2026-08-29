@@ -71,9 +71,6 @@
           255.0
         ],
         "source": "validation_outputs/bench_reference_2026_08_27/upscale_swinir_x4/vendor_swinir_r0.png"
-      },
-      "known_defect": {
-        "offtrace": "off-trace tonal deviation, class shared with hat-l-x4 \u2014 the artifact runs at 448 (the freeze is fixed) but returns mean 199.56 against an input 180.70 while the vendor arm returns 180.71. Both engines agree to five decimals, so the cause is on the shared path. See FINDING_UPSCALER_OFFTRACE_TONE.md."
       }
     },
     "hat-l-x4": {
@@ -94,9 +91,6 @@
           254.0
         ],
         "source": "validation_outputs/bench_reference_2026_08_27/upscale_hat_l_x4/vendor_hat_r0.png"
-      },
-      "known_defect": {
-        "offtrace": "off-trace tonal deviation, class shared with swinir-classical-x4 \u2014 the artifact runs at 448 (the freeze is fixed) but returns mean 166.94 against an input 180.70 while the vendor arm returns 180.71. Both engines agree to five decimals, so the cause is on the shared path. See FINDING_UPSCALER_OFFTRACE_TONE.md."
       }
     },
     "swin2SR-classical-sr-x4-64": {
@@ -150,6 +144,34 @@
         "source": "validation_outputs/bench_reference_2026_08_29/upscale_swin2sr_realworld_x4/vendor_swin2sr_r0.png",
         "_note": "Measured 2026-08-29 on the same committed 448 asset, same transformers Swin2SRForImageSuperResolution stack as the classical row, fp32 vendor default. Delta +3.03 vs the input mean 180.70, in family with the classical arm's +2.48. The vendor processor pads to 1824x1824 rather than 1792; tone statistics are unaffected by the pad because the background is uniform."
       }
+    },
+    "swinir-classical-x2": {
+      "engines": [
+        "compiled",
+        "triton"
+      ],
+      "vendor": {
+        "mean": 180.65,
+        "per_channel": [
+          214.06,
+          163.48,
+          164.41
+        ],
+        "background": [
+          254.0,
+          254.0,
+          254.0
+        ],
+        "source": "validation_outputs/bench_reference_2026_08_29/upscale_swinir_x2/vendor_swinir_r0.png",
+        "_note": "Measured 2026-08-29, official SwinIR-M x2 release weights through the vendored SwinIR stack, fp32, same 448 asset. Delta -0.05 vs the input mean 180.70."
+      }
+    },
+    "hat-s-x4": {
+      "engines": [
+        "compiled"
+      ],
+      "_engines_note": "triton support in progress, same as hat-l.",
+      "_vendor_note": "No vendor arm: HAT-S official weights distribute via Google Drive only (no wget-able release). The input-referenced half applies; hat-s is NOT hub-published and does not publish without this gap closed or the limitation stated on its record."
     }
   },
   "vendor_measured_hw": [
