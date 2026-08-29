@@ -284,8 +284,20 @@ def save_image(
     family: str,
     executor,
     pkg,
+    crop_hw=None,
 ) -> str:
-    """Save image tensor (image, multimodal-image, upscaler, vlm-with-image-out)."""
+    """Save image tensor (image, multimodal-image, upscaler, vlm-with-image-out).
+
+    ``crop_hw=(H, W)``: crop the FINAL image to exactly this size before
+    saving. The upscaler contract is input x scale exactly; the input
+    processor reflect-pads to the model's window alignment, and without
+    this crop the pad's mirrored rows shipped in the user's image
+    whenever the input was not already window-aligned (invisible at the
+    448 gate size, where the pad is zero — found by the 2026-08-29
+    odd-size smoke: 300x200 through HAT returned 1216x832, not
+    1200x800). Callers that know the original size pass it; None keeps
+    the tensor untouched.
+    """
     import numpy as np
     import torch
     from PIL import Image
@@ -309,6 +321,10 @@ def save_image(
 
     processor = OutputProcessor.from_package(pkg)
     tensor = torch.select(final, batch_axis, 0).cpu().float()
+    if crop_hw is not None and tensor.dim() == 3:
+        _ch, _cw = int(crop_hw[0]), int(crop_hw[1])
+        if tensor.shape[-2] >= _ch and tensor.shape[-1] >= _cw:
+            tensor = tensor[..., :_ch, :_cw]
     tensor = processor.process(tensor, output_range)
     tensor = tensor.clamp(0, 1)
 

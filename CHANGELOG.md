@@ -35,7 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `SwinIR-Classical-x4` and `HAT-L-x4` have been **corrected and
   republished** (2026-08-29). Both now work at any input size, with
   correct output verified against their reference implementations at
-  multiple sizes on both engines. The interim deprecation badge is
+  multiple sizes on every supported engine. The interim deprecation badge is
   lifted; download counts, tags and history are untouched. If you
   downloaded either model before 2026-08-29, re-run `neurobrix import`
   to pick up the corrected container.

@@ -145,7 +145,23 @@ def cmd_upscale(args):
 
     print(f"\n[Timing] Total execution: {wall:.2f}s")
 
-    saved = save_image(outputs, args.output, family, executor, pkg)
+    # The contract is input x scale exactly — crop the window-alignment
+    # pad back out. Scale read from the container (topology extracted
+    # values, then manifest), never assumed.
+    scale = None
+    for _vals in (topology.get("extracted_values") or {}).values():
+        if isinstance(_vals, dict) and isinstance(_vals.get("upscale"), int):
+            scale = _vals["upscale"]
+            break
+    if scale is None:
+        for _k in ("upscale", "scale"):
+            _v = manifest.get(_k)
+            if isinstance(_v, int) and _v > 0:
+                scale = _v
+                break
+    crop_hw = (orig_h * scale, orig_w * scale) if scale else None
+    saved = save_image(outputs, args.output, family, executor, pkg,
+                       crop_hw=crop_hw)
     print("\n" + "=" * 60)
     print(f"SAVED: {saved}")
     print("=" * 60)

@@ -194,7 +194,31 @@ def load_upscale_image(image_path: str, cache_path: Path):
         if proc_cfg.get("do_rescale", True)
         else 1.0
     )
-    pad_size = proc_cfg.get("pad_size", 8) if proc_cfg.get("do_pad", True) else 1
+    # Pad alignment, in declaration order: the processor config (the
+    # transformers-route contract), then the topology's extracted
+    # window_size (the pth-route contract — HAT's window is 16, and the
+    # hardcoded 8 fed it a H=200 tensor that crashed the first window
+    # view at any size that is a multiple of 8 but not 16; found by the
+    # 2026-08-29 odd-size smoke). The literal 8 survives only as the
+    # last-resort default for containers that declare neither.
+    pad_size = None
+    if proc_cfg.get("do_pad", True):
+        pad_size = proc_cfg.get("pad_size")
+    else:
+        pad_size = 1
+    if pad_size is None:
+        topo_file = cache_path / "topology.json"
+        if topo_file.exists():
+            with open(topo_file) as f:
+                _topo = json.load(f)
+            for _comp_vals in (_topo.get("extracted_values") or {}).values():
+                if isinstance(_comp_vals, dict) and "window_size" in _comp_vals:
+                    _ws = _comp_vals["window_size"]
+                    if isinstance(_ws, int) and _ws >= 1:
+                        pad_size = _ws
+                    break
+    if pad_size is None:
+        pad_size = 8
 
     arr = np.asarray(img, dtype=np.float32) * float(rescale_factor)
     # HWC → CHW → NCHW
