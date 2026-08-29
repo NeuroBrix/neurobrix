@@ -60,6 +60,14 @@ if os.environ.get("CUDA_VISIBLE_DEVICES") not in (None, ""):
 REPO = Path(__file__).resolve().parents[2]
 CACHE = Path.home() / ".neurobrix" / "cache"
 OFF_TRACE_HW = (448, 448)  # the committed bench asset's size
+# A RECTANGULAR off-trace size, multiples of every family window (8, 16).
+# The square 448 is structurally blind to any H<->W confusion: nH == nW,
+# so a half-symbolized window_reverse renders perfectly there and shreds
+# every rectangle (caught 2026-08-29 by a manual odd-size smoke AFTER the
+# full square gate was green and both artifacts republished). A shape
+# PROPERTY the gate cannot express is a path-coverage hole exactly like a
+# size it never runs.
+OFF_TRACE_RECT_HW = (240, 320)
 
 CELLS = [
     pytest.param("real-esrgan-x4", id="realesrgan"),
@@ -68,7 +76,20 @@ CELLS = [
     # cell XPASSed on all four combinations. The xfail was removed with
     # the re-trace, never left to rot into a silent pass.
     pytest.param("swin2SR-classical-sr-x4-64", id="swin2sr"),
+    # The two pth-route Swin artifacts, added 2026-08-29 with the
+    # window-UNALIGNED size below: their whole defect class lived
+    # exactly where the shape gate never looked.
+    pytest.param("swinir-classical-x4", id="swinir"),
+    pytest.param("hat-l-x4", id="hatl"),
 ]
+
+# A size aligned to NO family window (200 % 16 != 0, 300 % 8 != 0): the
+# input processor must pad to the container's declared window and the
+# output must crop back to EXACTLY input x scale. Both halves shipped
+# broken while every aligned size was green (2026-08-29): pad_size was
+# a hardcoded 8 (HAT crashed at H=200) and the crop did not exist (the
+# pad's mirrored rows shipped in the user's image).
+OFF_TRACE_UNALIGNED_HW = (200, 300)
 
 
 def _trace_hw(model: str) -> tuple[int, int]:
@@ -107,7 +128,7 @@ def _make_input(hw: tuple[int, int], dest: Path) -> Path:
 
 
 @pytest.mark.parametrize("mode", ["compiled", "triton"])
-@pytest.mark.parametrize("size", ["trace", "offtrace"])
+@pytest.mark.parametrize("size", ["trace", "offtrace", "offtrace_unaligned"])
 @pytest.mark.parametrize("model", CELLS)
 def test_upscale_two_sizes(model: str, size: str, mode: str,
                            tmp_path: Path) -> None:
@@ -119,10 +140,13 @@ def test_upscale_two_sizes(model: str, size: str, mode: str,
     except Exception:
         pytest.skip(f"{model} not in the local cache")
 
-    hw = _trace_hw(model) if size == "trace" else OFF_TRACE_HW
-    if size == "offtrace" and hw == _trace_hw(model):
+    hw = {"trace": None, "offtrace": OFF_TRACE_HW,
+          "offtrace_unaligned": OFF_TRACE_UNALIGNED_HW}[size] or _trace_hw(model)
+    if size != "trace" and hw == _trace_hw(model):
         pytest.skip("off-trace size coincides with the trace size — "
-                    "pick a different OFF_TRACE_HW")
+                    "pick a different off-trace size")
+    if mode == "triton" and model == "hat-l-x4":
+        pytest.skip("hat triton support in progress (docs/upscalers)")
     scale = _upscale_factor(model)
 
     src = _make_input(hw, tmp_path / f"in_{model}_{size}.png")
@@ -207,7 +231,7 @@ def _tone_params() -> list:
     for model, cfg in TONE_REF["artifacts"].items():
         defect = cfg.get("known_defect")
         for engine in cfg["engines"]:
-            for size in ("trace", "offtrace"):
+            for size in ("trace", "offtrace", "offtrace_rect"):
                 # A defect can be scoped to a size, or to one engine at
                 # one size: swin2sr-x2 after its re-trace fails compiled
                 # at both sizes and triton only off-trace, and marking a
@@ -245,8 +269,9 @@ def test_upscale_tone_fidelity(model: str, mode: str, size: str,
     # off-trace half is where a shape-dependent value defect shows.
     from PIL import Image
 
-    hw = _trace_hw(model) if size == "trace" else OFF_TRACE_HW
-    if size == "offtrace" and hw == _trace_hw(model):
+    hw = {"trace": None, "offtrace": OFF_TRACE_HW,
+          "offtrace_rect": OFF_TRACE_RECT_HW}[size] or _trace_hw(model)
+    if size != "trace" and hw == _trace_hw(model):
         pytest.skip("off-trace size coincides with the trace size")
     src = tmp_path / f"tone_in_{model}_{size}.png"
     Image.open(asset).convert("RGB").resize(
