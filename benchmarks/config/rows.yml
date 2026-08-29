@@ -349,6 +349,25 @@ rows:
     # LABELED (nbx runs the hardware dtype); noted in the annex.
     columns: [vendor_upscaler, neurobrix_pytorch, neurobrix_triton]
 
+  - id: upscale_swin2sr_realworld_x4
+    family: upscaler
+    metric_class: image
+    reference: true
+    checkpoint: caidas/Swin2SR-realworld-x4
+    neurobrix_model: swin2SR-realworld-sr-x4-64-bsrgan-psnr
+    input_image: benchmarks/assets/apple_448.png
+    scale: 4
+    upscaler_stack: swin2sr
+    upscaler_venv: diffusers   # transformers route, same as the classical row
+    # LOCAL snapshot path, not the hub id: the HF cache holds only the
+    # classical checkpoint and the host sits at 97% disk, so a
+    # from_pretrained download is not free here. The snapshot is
+    # complete (config + preprocessor_config + pytorch_model.bin).
+    swin2sr_checkpoint: /home/mlops/hf_snapshots/swin2SR-realworld-sr-x4-64-bsrgan-psnr
+    # Vendor default precision fp32, same class labelling as the
+    # classical row.
+    columns: [vendor_upscaler, neurobrix_pytorch, neurobrix_triton]
+
   - id: upscale_swinir_x4
     family: upscaler
     metric_class: image

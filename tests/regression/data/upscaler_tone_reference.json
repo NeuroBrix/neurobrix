@@ -135,7 +135,21 @@
         "compiled",
         "triton"
       ],
-      "_vendor_note": "No banked vendor arm yet \u2014 input-referenced half applies."
+      "vendor": {
+        "mean": 183.73,
+        "per_channel": [
+          216.32,
+          166.99,
+          167.88
+        ],
+        "background": [
+          255.0,
+          255.0,
+          255.0
+        ],
+        "source": "validation_outputs/bench_reference_2026_08_29/upscale_swin2sr_realworld_x4/vendor_swin2sr_r0.png",
+        "_note": "Measured 2026-08-29 on the same committed 448 asset, same transformers Swin2SRForImageSuperResolution stack as the classical row, fp32 vendor default. Delta +3.03 vs the input mean 180.70, in family with the classical arm's +2.48. The vendor processor pads to 1824x1824 rather than 1792; tone statistics are unaffected by the pad because the background is uniform."
+      }
     }
   },
   "vendor_measured_hw": [
