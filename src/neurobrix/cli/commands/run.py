@@ -423,6 +423,9 @@ def cmd_run(args):
             pkg.topology, getattr(args, "model", None), args.input_image,
             cache_path, height=args.height, width=args.width,
             num_frames=int(getattr(args, "num_frames", 0) or 0)))
+        # Upscaler metadata key, not a runtime input (the dedicated
+        # `nbx upscale` path owns the exact-size crop on this side).
+        inputs.pop("_upscale_orig_hw", None)
 
     if getattr(args, 'input_video', None):
         # Video understanding input — the video variant of the build's

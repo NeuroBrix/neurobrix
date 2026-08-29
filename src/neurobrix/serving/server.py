@@ -358,7 +358,8 @@ class ServingDaemon:
                     # strict families resolve their extension from it.
                     saved = self._engine.save_output(
                         result["outputs"], output_path,
-                        mode=params.get("mode"))
+                        mode=params.get("mode"),
+                        orig_hw=result.pop("_upscale_orig_hw", None))
                     result.pop("outputs", None)
                     result["output_path"] = saved
                 elif "outputs" in result:

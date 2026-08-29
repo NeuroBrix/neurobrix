@@ -145,23 +145,12 @@ def cmd_upscale(args):
 
     print(f"\n[Timing] Total execution: {wall:.2f}s")
 
-    # The contract is input x scale exactly — crop the window-alignment
-    # pad back out. Scale read from the container (topology extracted
-    # values, then manifest), never assumed.
-    scale = None
-    for _vals in (topology.get("extracted_values") or {}).values():
-        if isinstance(_vals, dict) and isinstance(_vals.get("upscale"), int):
-            scale = _vals["upscale"]
-            break
-    if scale is None:
-        for _k in ("upscale", "scale"):
-            _v = manifest.get(_k)
-            if isinstance(_v, int) and _v > 0:
-                scale = _v
-                break
-    crop_hw = (orig_h * scale, orig_w * scale) if scale else None
+    # The contract is input x scale exactly. The scale lookup and the
+    # crop live in save_image — ONE point of truth for both entry
+    # points (D-UPSCALE-SERVING-CROP); this caller only passes the
+    # original size it owns.
     saved = save_image(outputs, args.output, family, executor, pkg,
-                       crop_hw=crop_hw)
+                       orig_hw=(orig_h, orig_w))
     print("\n" + "=" * 60)
     print(f"SAVED: {saved}")
     print("=" * 60)
