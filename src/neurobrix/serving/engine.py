@@ -180,6 +180,7 @@ class InferenceEngine:
             inputs["global.prompt"] = prompt
         if "audio_path" in kwargs and kwargs["audio_path"]:
             inputs["global.audio_path"] = kwargs.pop("audio_path")
+        _upscale_orig_hw = None
         if "image_path" in kwargs and kwargs["image_path"]:
             # Image input through the shared CLI/daemon brick — single
             # source of truth (output_dispatch pattern, R30-agnostic:
@@ -192,6 +193,10 @@ class InferenceEngine:
                 kwargs.pop("image_path"), self._container._cache_path,
                 height=kwargs.get("height"), width=kwargs.get("width"),
                 num_frames=kwargs.get("num_frames")))
+            # Upscaler metadata, not a runtime input: rides on the
+            # result so save_output can crop to exactly orig x scale
+            # (D-UPSCALE-SERVING-CROP).
+            _upscale_orig_hw = inputs.pop("_upscale_orig_hw", None)
         if "steps" in kwargs and kwargs["steps"] is not None:
             inputs["global.num_inference_steps"] = kwargs["steps"]
         if "height" in kwargs and kwargs["height"] is not None:
@@ -238,6 +243,10 @@ class InferenceEngine:
         result.update(extract_result(outputs, self._family or "",
                                      self._executor,
                                      mode=kwargs.get("mode")))
+        if _upscale_orig_hw is not None:
+            # Metadata for save_output's exact-size crop
+            # (D-UPSCALE-SERVING-CROP) — the server passes it back.
+            result["_upscale_orig_hw"] = _upscale_orig_hw
         return result
 
     def _generate_from_token_ids(self, token_ids: list, **kwargs) -> Dict[str, Any]:
@@ -442,7 +451,7 @@ class InferenceEngine:
         return self._family
 
     def save_output(self, outputs: Dict[str, Any], output_path: str,
-                    mode: Optional[str] = None) -> str:
+                    mode: Optional[str] = None, orig_hw=None) -> str:
         """
         Save non-text output (image/audio/video) to file. Returns saved path.
         Delegates to data-driven output_dispatch.save_output. `mode` is the
@@ -460,7 +469,7 @@ class InferenceEngine:
             outputs = {**outputs, "global.transcription": tx}
         return save_output(
             outputs, output_path, self._family or "", self._executor,
-            self._pkg, mode=mode,
+            self._pkg, mode=mode, orig_hw=orig_hw,
         )
 
     def _extract_llm_output(self, outputs: Dict[str, Any]) -> Dict[str, Any]:

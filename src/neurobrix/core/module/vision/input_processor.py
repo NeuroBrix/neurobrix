@@ -270,8 +270,12 @@ def prepare_image_inputs(topology: dict, model_name: Optional[str],
     if manifest_file.exists():
         family = (json.loads(manifest_file.read_text()) or {}).get("family")
         if family == "upscaler":
-            tensor, _ = load_upscale_image(image_path, cache_path)
-            return {find_upscale_input_variable(topology): tensor}
+            tensor, orig_hw = load_upscale_image(image_path, cache_path)
+            # The private key travels WITH the inputs so the warm path
+            # can crop the output to exactly orig x scale; callers pop
+            # it before the runtime sees the dict.
+            return {find_upscale_input_variable(topology): tensor,
+                    "_upscale_orig_hw": orig_hw}
 
     inputs: dict = {}
     vlm_blk = (topology.get("flow", {}) or {}).get("vlm") or {}

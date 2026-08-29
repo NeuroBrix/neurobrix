@@ -278,25 +278,42 @@ def save_audio(
     return output_path
 
 
+def _container_upscale_factor(pkg):
+    """The container's declared scale factor: topology extracted values
+    first (the pth route emits it), then the manifest. None when the
+    container declares neither — the caller then saves uncropped."""
+    for _vals in ((pkg.topology or {}).get("extracted_values")
+                  or {}).values():
+        if isinstance(_vals, dict) and isinstance(_vals.get("upscale"), int):
+            return _vals["upscale"]
+    for _k in ("upscale", "scale"):
+        _v = (pkg.manifest or {}).get(_k)
+        if isinstance(_v, int) and _v > 0:
+            return _v
+    return None
+
+
 def save_image(
     outputs: Dict[str, Any],
     output_path: str,
     family: str,
     executor,
     pkg,
-    crop_hw=None,
+    orig_hw=None,
 ) -> str:
     """Save image tensor (image, multimodal-image, upscaler, vlm-with-image-out).
 
-    ``crop_hw=(H, W)``: crop the FINAL image to exactly this size before
-    saving. The upscaler contract is input x scale exactly; the input
-    processor reflect-pads to the model's window alignment, and without
-    this crop the pad's mirrored rows shipped in the user's image
-    whenever the input was not already window-aligned (invisible at the
-    448 gate size, where the pad is zero — found by the 2026-08-29
-    odd-size smoke: 300x200 through HAT returned 1216x832, not
-    1200x800). Callers that know the original size pass it; None keeps
-    the tensor untouched.
+    ``orig_hw=(H, W)``: the ORIGINAL input size, before window padding.
+    The upscaler contract is input x scale exactly; the input processor
+    reflect-pads to the model's window alignment, and without the crop
+    the pad's mirrored rows shipped in the user's image whenever the
+    input was not window-aligned (invisible at the 448 gate size where
+    the pad is zero — 2026-08-29 odd-size smoke: 300x200 through HAT
+    returned 1216x832, not 1200x800). The scale lookup and the crop
+    live HERE, the single point both entry points share
+    (D-UPSCALE-SERVING-CROP: the first cut put the scale lookup in the
+    CLI, and the warm path shipped padded output while cold cropped).
+    Callers pass the orig size they already own; None saves untouched.
     """
     import numpy as np
     import torch
@@ -321,10 +338,12 @@ def save_image(
 
     processor = OutputProcessor.from_package(pkg)
     tensor = torch.select(final, batch_axis, 0).cpu().float()
-    if crop_hw is not None and tensor.dim() == 3:
-        _ch, _cw = int(crop_hw[0]), int(crop_hw[1])
-        if tensor.shape[-2] >= _ch and tensor.shape[-1] >= _cw:
-            tensor = tensor[..., :_ch, :_cw]
+    if orig_hw is not None and tensor.dim() == 3:
+        _scale = _container_upscale_factor(pkg)
+        if _scale:
+            _ch, _cw = int(orig_hw[0]) * _scale, int(orig_hw[1]) * _scale
+            if tensor.shape[-2] >= _ch and tensor.shape[-1] >= _cw:
+                tensor = tensor[..., :_ch, :_cw]
     tensor = processor.process(tensor, output_range)
     tensor = tensor.clamp(0, 1)
 
@@ -397,6 +416,7 @@ def save_output(
     executor,
     pkg,
     mode: Optional[str] = None,
+    orig_hw=None,
 ) -> str:
     """
     Universal save entry point. Dispatches based on family output_format.
@@ -413,7 +433,8 @@ def save_output(
     if fmt == "wav":
         return save_audio(outputs, output_path, pkg)
     if fmt in ("png", "jpg", "jpeg"):
-        return save_image(outputs, output_path, family, executor, pkg)
+        return save_image(outputs, output_path, family, executor, pkg,
+                          orig_hw=orig_hw)
     if fmt == "mp4":
         return save_video(outputs, output_path, family, executor, pkg)
 

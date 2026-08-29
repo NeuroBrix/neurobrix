@@ -194,6 +194,53 @@ def test_family_serve_warm(model: str, gen_kwargs: dict, verify: str,
 
 
 @pytest.mark.parametrize("mode", ["compiled", "triton"])
+def test_upscaler_serve_warm_unaligned_exact_size(mode: str,
+                                                 tmp_path: Path) -> None:
+    """Warm serve crops to EXACTLY input x scale on window-unaligned input.
+
+    D-UPSCALE-SERVING-CROP: the cold CLI crops the reflect pad back out
+    of the output; the warm path computed the same orig dims and threw
+    them away, so a window-unaligned input returned the PADDED size
+    (100x60 through a pad-8 model came back 416x240, not 400x240) with
+    mirrored pad rows in the user's image. Exact-size assertion, not a
+    plausible-shape one — a gate that accepts any big-enough output
+    cannot see the pad shipping.
+    """
+    from PIL import Image
+
+    from neurobrix.core.prism.autodetect import get_or_create_default_profile
+    from neurobrix.serving.engine import InferenceEngine
+
+    try:
+        from neurobrix.cli.utils import find_model
+        find_model(UPSCALER_MODEL)
+    except Exception:
+        pytest.skip(f"{UPSCALER_MODEL} not in the local cache")
+
+    w, h = 100, 60  # 100 % 8 != 0 — forces a real pad
+    src = tmp_path / f"unaligned_{mode}.png"
+    Image.new("RGB", (w, h), (200, 30, 30)).save(src)
+
+    engine = InferenceEngine(UPSCALER_MODEL,
+                             get_or_create_default_profile(), mode=mode)
+    engine.load()
+    try:
+        result = engine.generate(image_path=str(src))
+        assert "outputs" in result, f"no outputs — keys {sorted(result)}"
+        out_path = tmp_path / f"warm_unaligned_{mode}.png"
+        saved = engine.save_output(
+            result["outputs"], str(out_path),
+            orig_hw=result.get("_upscale_orig_hw"))
+        im = Image.open(saved)
+        assert im.size == (w * UPSCALE_FACTOR, h * UPSCALE_FACTOR), (
+            f"({mode}): expected EXACTLY {w * UPSCALE_FACTOR}x"
+            f"{h * UPSCALE_FACTOR}, got {im.size} — a larger size means "
+            f"the window pad shipped in the user's image")
+    finally:
+        engine.unload()
+
+
+@pytest.mark.parametrize("mode", ["compiled", "triton"])
 def test_upscaler_serve_warm_output_shape(mode: str, tmp_path: Path) -> None:
     from PIL import Image
 

@@ -47,7 +47,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failed on some sizes), and the output is cropped to exactly input
   size x scale factor, where the padding could previously leak mirrored
   edge rows into the result. `Real-ESRGAN-x4` was republished with this
-  metadata as well.
+  metadata as well. The same exact-size guarantee now also applies when
+  upscaling through `neurobrix serve` — the served image previously
+  kept the padding on inputs whose size was not a multiple of the
+  model's window.
 
 ### Added
 
