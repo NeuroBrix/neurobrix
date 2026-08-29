@@ -32,14 +32,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the corrected container and regenerate any images made with the
   earlier one.
 
-  `SwinIR-Classical-x4` and `HAT-L-x4` are now marked **deprecated** on
-  the hub. They stay listed and downloadable and their output is still
-  correct at their supported input size; the badge and its stated
-  reason exist so the size limitation reaches you before you download,
-  not after. Their download counts, tags and history are untouched.
-  Corrected containers without the limitation are being prepared for
-  both, and the badge is lifted in the same motion that publishes
-  them.
+  `SwinIR-Classical-x4` and `HAT-L-x4` have been **corrected and
+  republished** (2026-08-29). Both now work at any input size, with
+  correct output verified against their reference implementations at
+  multiple sizes on both engines. The interim deprecation badge is
+  lifted; download counts, tags and history are untouched. If you
+  downloaded either model before 2026-08-29, re-run `neurobrix import`
+  to pick up the corrected container.
 
 ### Added
 
