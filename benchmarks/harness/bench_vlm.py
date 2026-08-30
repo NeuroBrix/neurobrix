@@ -34,9 +34,11 @@ def run_once_nbx(args, arm_env, tag, outdir):
     if args.prompt:
         cmd += ["--prompt", args.prompt]
     if args.image:
-        cmd += ["--image", args.image]
+        cmd += ["--input-image", args.image]
     if args.audio:
         cmd += ["--audio", args.audio]
+    if args.mode == "t2i":
+        cmd += ["--mode", "image"]
     if args.steps:
         cmd += ["--steps", str(args.steps)]
     if args.max_tokens:
