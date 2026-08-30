@@ -354,6 +354,164 @@ rows:
   # (upscaler_cell.py; venv name per row — basicsr version conflicts
   # force separate venvs, see the R16 synthesis). Same pinned input
   # for every arm; metric = seconds/image at the row's scale.
+  # ── S4 VIDEO rows (prereg 2026-08-30; short pinned configs — the
+  # wan13b precedent; I2V rows carry the versioned conditioning image;
+  # n=3 declared in the prereg, dispersion gate 3%) ─────────────────
+  - id: video_cog2b_t2v
+    family: video
+    metric_class: video
+    reference: true
+    checkpoint: THUDM/CogVideoX-2b
+    diffusers_checkpoint: THUDM/CogVideoX-2b
+    neurobrix_model: CogVideoX-2b
+    prompt: "a red fox running through snow"
+    steps: 10
+    num_frames: 9
+    seed: 0
+    height: 480
+    width: 720
+    columns: [diffusers, neurobrix_pytorch, neurobrix_triton]
+
+  - id: video_cog5b_i2v
+    family: video
+    metric_class: video
+    reference: true
+    checkpoint: THUDM/CogVideoX-5b-I2V
+    diffusers_checkpoint: THUDM/CogVideoX-5b-I2V
+    neurobrix_model: CogVideoX-5b-I2V
+    prompt: "a red fox running through snow"
+    steps: 10
+    num_frames: 9
+    seed: 0
+    height: 480
+    width: 720
+    input_image: benchmarks/assets/apple_448.png
+    columns: [diffusers, neurobrix_pytorch, neurobrix_triton]
+
+  - id: video_wan_vace
+    family: video
+    metric_class: video
+    reference: true
+    checkpoint: Wan-AI/Wan2.1-VACE-1.3B-diffusers
+    diffusers_checkpoint: Wan-AI/Wan2.1-VACE-1.3B-diffusers
+    neurobrix_model: Wan2.1-VACE-1.3B-diffusers
+    prompt: "a red fox running through snow"
+    steps: 10
+    num_frames: 13
+    seed: 0
+    height: 480
+    width: 832
+    columns: [diffusers, neurobrix_pytorch, neurobrix_triton]
+
+  - id: video_wan14b_i2v
+    family: video
+    metric_class: video
+    reference: true
+    checkpoint: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers
+    diffusers_checkpoint: Wan-AI/Wan2.1-I2V-14B-480P-Diffusers
+    neurobrix_model: Wan2.1-I2V-14B-480P-Diffusers
+    prompt: "a red fox running through snow"
+    steps: 6
+    num_frames: 9
+    seed: 0
+    height: 480
+    width: 832
+    input_image: benchmarks/assets/apple_448.png
+    columns: [diffusers, neurobrix_pytorch, neurobrix_triton]
+
+  - id: video_wan22_a14b_i2v
+    family: video
+    metric_class: video
+    reference: true
+    checkpoint: Wan-AI/Wan2.2-I2V-A14B-Diffusers
+    diffusers_checkpoint: Wan-AI/Wan2.2-I2V-A14B-Diffusers
+    neurobrix_model: Wan2.2-I2V-A14B-Diffusers
+    prompt: "a red fox running through snow"
+    steps: 6
+    num_frames: 9
+    seed: 0
+    height: 480
+    width: 832
+    input_image: benchmarks/assets/apple_448.png
+    columns: [diffusers, neurobrix_pytorch, neurobrix_triton]
+
+  - id: video_allegro_t2v
+    family: video
+    metric_class: video
+    reference: true
+    checkpoint: rhymes-ai/Allegro
+    diffusers_checkpoint: rhymes-ai/Allegro
+    neurobrix_model: Allegro
+    prompt: "a red fox running through snow"
+    steps: 6
+    num_frames: 9
+    seed: 0
+    height: 368
+    width: 640
+    columns: [diffusers, neurobrix_pytorch, neurobrix_triton]
+
+  - id: video_allegro_ti2v
+    family: video
+    metric_class: video
+    reference: true
+    checkpoint: rhymes-ai/Allegro-TI2V
+    diffusers_checkpoint: rhymes-ai/Allegro-TI2V
+    neurobrix_model: Allegro-TI2V
+    prompt: "a red fox running through snow"
+    steps: 6
+    num_frames: 9
+    seed: 0
+    height: 368
+    width: 640
+    input_image: benchmarks/assets/apple_448.png
+    columns: [diffusers, neurobrix_pytorch, neurobrix_triton]
+
+  - id: video_mochi_t2v
+    family: video
+    metric_class: video
+    reference: true
+    checkpoint: genmo/mochi-1-preview
+    diffusers_checkpoint: genmo/mochi-1-preview
+    neurobrix_model: mochi-1-preview
+    prompt: "a red fox running through snow"
+    steps: 8
+    num_frames: 13
+    seed: 0
+    height: 480
+    width: 848
+    columns: [diffusers, neurobrix_pytorch, neurobrix_triton]
+
+  - id: video_sana_video
+    family: video
+    metric_class: video
+    reference: true
+    checkpoint: Efficient-Large-Model/SANA-Video_2B_720p_diffusers
+    diffusers_checkpoint: Efficient-Large-Model/SANA-Video_2B_720p_diffusers
+    neurobrix_model: SANA-Video_2B_720p_diffusers
+    prompt: "a red fox running through snow"
+    steps: 8
+    num_frames: 9
+    seed: 0
+    height: 480
+    width: 832
+    columns: [diffusers, neurobrix_pytorch, neurobrix_triton]
+
+  # Open-Sora-v2: NO diffusers pipeline (prereg DNR) — nbx-capacity
+  # columns only.
+  - id: video_opensora_t2v
+    family: video
+    metric_class: video
+    reference: true
+    checkpoint: hpcai-tech/Open-Sora-v2
+    neurobrix_model: Open-Sora-v2
+    prompt: "a red fox running through snow"
+    steps: 8
+    num_frames: 9
+    seed: 0
+    height: 480
+    width: 832
+    columns: [neurobrix_pytorch, neurobrix_triton]
+
   - id: upscale_realesrgan_x4
     family: upscaler
     metric_class: image
