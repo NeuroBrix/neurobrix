@@ -126,6 +126,8 @@ def run_once_nbx(args, arm_env: dict, tag: str, outdir: Path) -> dict:
     cmd = ["python3", "-u", "-m", "neurobrix", "run",
            "--hardware", args.hardware, "--model", args.model,
            "--audio", args.audio, "--temperature", args.temperature,
+           *(["--prompt", arm_env["ARM_PROMPT"]]
+             if arm_env.get("ARM_PROMPT") else []),
            "--top-k", "0", "--top-p", "1",
            "--output", str(outdir / f"out_{tag}.txt")]
     if arm_env.get("NBX_PROMPT"):          # audio_llm arms need a prompt
