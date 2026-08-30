@@ -342,6 +342,13 @@ def main() -> int:
                     help="versioned expected-transcript file; every rep of "
                          "every arm must match it word-for-word after the "
                          "frozen normalization, or the campaign FAILS")
+    ap.add_argument("--expect-phrase", default=None,
+                    help="versioned expected-PHRASE file: the normalized "
+                         "transcript must CONTAIN this normalized word "
+                         "sequence. For clips whose full canonical text is "
+                         "ambiguous (scribe variance: schoolrooms vs "
+                         "school rooms) — the historical audio-closure "
+                         "phrase gate, hardened word-wise.")
     ap.add_argument("--arm", nargs=2, action="append", required=True,
                     metavar=("NAME", "ENV"),
                     help="arm name + comma-separated ENV=VAL list ('-' for none)")
@@ -386,10 +393,19 @@ def main() -> int:
                     args, env, f"{name}_{rep}", outdir)
                 res["rtfx"] = (round(clip_s / res["transcribe_s"], 3)
                                if res.get("transcribe_s") else None)
-                if args.expect:
+                if args.expect or args.expect_phrase:
                     out_f = outdir / f"out_{name}_{rep}.txt"
                     text = out_f.read_text() if out_f.exists() else ""
-                    ok, diff = _word_gate(text, args.expect)
+                    if args.expect:
+                        ok, diff = _word_gate(text, args.expect)
+                    else:
+                        phrase = _norm_words(
+                            pathlib_Path(args.expect_phrase).read_text())
+                        got = _norm_words(text)
+                        ok = any(got[i:i+len(phrase)] == phrase
+                                 for i in range(len(got)-len(phrase)+1))
+                        diff = (f"phrase '{' '.join(phrase[:8])}...' not "
+                                f"found in transcript") if not ok else None
                     res["words_ok"] = ok
                     if not ok:
                         print(f"  ACCURACY GATE FAIL {name} rep{rep}:\n"
@@ -405,7 +421,7 @@ def main() -> int:
             unlock_clocks(args.gpu)
             print(f"  clocks unlocked (GPU {args.gpu})", flush=True)
 
-    gate_fail = args.expect and any(
+    gate_fail = (args.expect or args.expect_phrase) and any(
         r.get("words_ok") is False
         for rs in results.values() for r in rs)
 
@@ -444,11 +460,13 @@ def main() -> int:
         else:
             report["arms"][name] = {"n": 0, "runs": results[name]}
             print(f"{name:14s} NO SUCCESSFUL REPS (runs recorded)")
-    if args.expect:
+    if args.expect or args.expect_phrase:
         report["accuracy_gate"] = {
-            "expect_file": args.expect,
+            "mode": "full-text" if args.expect else "phrase-containment",
+            "expect_file": args.expect or args.expect_phrase,
             "expect_sha": hashlib.sha256(
-                Path(args.expect).read_bytes()).hexdigest()[:12],
+                Path(args.expect or args.expect_phrase)
+                .read_bytes()).hexdigest()[:12],
             "verdict": "FAIL" if gate_fail else "PASS"}
     (outdir / "report.json").write_text(json.dumps(report, indent=1))
     print(f"\nreport -> {outdir}/report.json")
