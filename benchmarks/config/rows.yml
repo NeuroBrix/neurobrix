@@ -223,6 +223,40 @@ rows:
     width: 1024
     columns: [diffusers, neurobrix_pytorch, neurobrix_triton]
 
+  - id: image_diffusion_pixart_xl
+    family: image
+    metric_class: image
+    reference: true
+    env:
+      NBX_STEP_CACHE_THRESHOLD: "0.15"
+      NBX_STEP_CACHE_MAX_SKIPS: "3"
+    checkpoint: PixArt/PixArt-XL-1024
+    diffusers_checkpoint: /home/mlops/hf_snapshots/PixArt-XL-2-1024-MS
+    neurobrix_model: PixArt-XL-1024
+    prompt: "a red apple on a wooden table"
+    steps: 20
+    seed: 42
+    height: 1024
+    width: 1024
+    columns: [diffusers, neurobrix_pytorch, neurobrix_triton]
+
+  - id: image_diffusion_pixart_sigma
+    family: image
+    metric_class: image
+    reference: true
+    env:
+      NBX_STEP_CACHE_THRESHOLD: "0.15"
+      NBX_STEP_CACHE_MAX_SKIPS: "3"
+    checkpoint: PixArt/PixArt-Sigma-XL-1024
+    diffusers_checkpoint: /home/mlops/hf_snapshots/PixArt-Sigma-XL-2-1024-MS
+    neurobrix_model: PixArt-Sigma-XL-1024
+    prompt: "a red apple on a wooden table"
+    steps: 20
+    seed: 42
+    height: 1024
+    width: 1024
+    columns: [diffusers, neurobrix_pytorch, neurobrix_triton]
+
   - id: video_wan13b_t2v
     family: video
     metric_class: video

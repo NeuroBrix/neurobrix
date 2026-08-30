@@ -104,11 +104,30 @@ def main() -> int:
     if mclass == "video" and row.get("num_frames"):
         call_kwargs["num_frames"] = row["num_frames"]
 
+    # Flux/V100 doctrine, second half: with the text encoders held fp32,
+    # FluxPipeline builds its latents at prompt_embeds.dtype, so fp32
+    # embeds meet the fp16 transformer in x_embedder ("mat1 Float,
+    # mat2 Half" — Flex.1 arm, 2026-08-30). The sourced recipe encodes
+    # at fp32 and hands the transformer fp16 embeds. Encoding stays
+    # INSIDE the measured request — the pipe(prompt=...) path also
+    # encodes per request, and so does the NeuroBrix column.
+    flux_fp16_embeds = "flux" in type(pipe).__name__.lower()
+
     def one(idx: int) -> dict:
         gen = torch.Generator(device="cuda").manual_seed(row["seed"])
         t0 = time.perf_counter()
         with torch.inference_mode():
-            out = pipe(generator=gen, **call_kwargs)
+            if flux_fp16_embeds:
+                pe, ppe, _ = pipe.encode_prompt(
+                    prompt=call_kwargs["prompt"], prompt_2=None,
+                    device=pipe._execution_device)
+                kw = {k: v for k, v in call_kwargs.items()
+                      if k != "prompt"}
+                out = pipe(prompt_embeds=pe.to(torch.float16),
+                           pooled_prompt_embeds=ppe.to(torch.float16),
+                           generator=gen, **kw)
+            else:
+                out = pipe(generator=gen, **call_kwargs)
         # Materialize + save (the NeuroBrix column's request also pays
         # its file write — same measurement boundary).
         if mclass == "image":

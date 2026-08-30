@@ -63,3 +63,40 @@ closed 2026-07-11, all four modes now render 4K factually. The night
 timings (~102 s sequential, ~5 min triton-sequential) are UNLOCKED
 correction runs, not perf cells — canonical perf numbers stay with the
 locked protocol.
+
+
+---
+
+# S3 IMAGE segment — completion cells (same night, 2026-08-30 00:15-00:25 UTC)
+
+The named remainder, measured. Locked 1290, GPU 2, n=5, same protocol.
+
+| row | vendor (diffusers) | nbx pytorch | nbx triton |
+|---|---|---|---|
+| flex1 (1024, 20 steps) | 72.82 ±1.13 | (08-27 cells stand) | (08-27 cells stand) |
+| pixart_xl (1024, 20) | 8.15 ±0.001 | 11.44 ±0.029 | 65.28 ±0.111 |
+| pixart_sigma (1024, 20) | 8.54 ±0.002 | 13.46 ±0.003 | 78.26 ±0.048 |
+
+* **flex diffusers arm**: the 08-27 JSON was EMPTY (pre-protobuf-fix
+  failure recorded as a cell). Measured now with the sourced Flux/V100
+  recipe completed: fp32 text encoders + embeds handed to the fp16
+  transformer at fp16 (the missing second half — fp32 embeds built
+  fp32 latents and crashed x_embedder). 72.8 s with vendor
+  cpu-offload, the honest V100 number for a 26 GB-fp16 model.
+* **pixart x2**: first measurement (rows created this night — they had
+  never existed; the "disk arbitrage" blocker resolved by the NAS
+  re-download after the vendor snapshots were found MISSING). nbx
+  pytorch carries 1.40x/1.58x vendor; triton carries the Volta
+  structural gap (8.0x/9.2x), recorded per the reference-dimension
+  rule.
+
+## S3 image segment — remaining list after this night
+
+1. NOTHING measured remains. Every row of the segment has its three
+   arms with n=5, lock, and window recorded.
+2. ONE DECISION remains (supervisor): a locked Sana-4Kpx PERF row.
+   Recommendation: the factual 4-mode matrix (all four render 4K,
+   R29'd) suffices for S3; a locked perf row costs ~3-4 h of locked
+   GPU for a table line with no comparable vendor arm at protocol
+   (diffusers 4K on one V100-32G needs its own offload recipe). If
+   the table wants the line, it is a scheduled decision, not a gap.
