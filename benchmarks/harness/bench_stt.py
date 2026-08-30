@@ -68,6 +68,34 @@ def clip_seconds(path: str) -> float:
         return w.getnframes() / w.getframerate()
 
 
+def _norm_words(text: str) -> list:
+    """The FROZEN accuracy-gate normalization (S2 addendum 2026-08-30):
+    lowercase; strip .,!?;:"'()- ; collapse whitespace; word list.
+    Never tuned after a measurement."""
+    import re as _re
+    t = text.lower()
+    t = _re.sub(r"[^\w\s]", " ", t, flags=_re.UNICODE)
+    return t.split()
+
+
+def _word_gate(text: str, expect_path: str):
+    """Exact word-sequence comparison to the versioned expected text.
+    Returns (ok, aligned_diff_string_or_None). The family fidelity
+    gate — the STT analogue of the upscalers' tone gate; a plausible
+    tensor shape cannot see a wrong transcription."""
+    exp = _norm_words(pathlib_Path(expect_path).read_text())
+    got = _norm_words(text)
+    if got == exp:
+        return True, None
+    import difflib
+    diff = "\n".join(difflib.unified_diff(exp, got,
+                                           "expected", "got", lineterm=""))
+    return False, diff
+
+
+from pathlib import Path as pathlib_Path
+
+
 def _sha12(text: str) -> str:
     import hashlib
     return hashlib.sha256(text.encode()).hexdigest()[:12]
@@ -139,6 +167,32 @@ dt = time.time() - t0
 print("STT_RESULT " + json.dumps({"transcribe_s": dt, "text": text}))
 '''
 
+_TF_SCRIPT = r'''
+import json, sys, time
+import torch
+from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
+import soundfile as sf
+model_id, lang, audio = sys.argv[1:4]
+proc = AutoProcessor.from_pretrained(model_id)
+m = AutoModelForSpeechSeq2Seq.from_pretrained(
+    model_id, torch_dtype=torch.float16).to("cuda").eval()
+wav, sr = sf.read(audio)
+feats = proc(wav, sampling_rate=sr,
+             return_tensors="pt").input_features.to("cuda", torch.float16)
+kw = {}
+if lang:
+    kw["forced_decoder_ids"] = proc.get_decoder_prompt_ids(
+        language=lang, task="transcribe")
+torch.cuda.synchronize()
+t0 = time.time()
+with torch.inference_mode():
+    ids = m.generate(feats, do_sample=False, num_beams=1, **kw)
+torch.cuda.synchronize()
+dt = time.time() - t0
+text = proc.batch_decode(ids, skip_special_tokens=True)[0]
+print("STT_RESULT " + json.dumps({"transcribe_s": dt, "text": text}))
+'''
+
 _OAIW_SCRIPT = r'''
 import json, sys, time
 import whisper
@@ -203,6 +257,18 @@ def run_once_fwhisper(args, arm_env, tag, outdir) -> dict:
          arm_env.get("FW_LANG", "en"), args.audio])
 
 
+def run_once_transformers(args, arm_env, tag, outdir) -> dict:
+    """Vendor-of-record arm: the transformers stack the artifacts are
+    traced FROM (S2 addendum 2026-08-30). fp16, greedy, chrono on
+    generate alone."""
+    py = arm_env.get("TF_PYTHON",
+                     os.path.expanduser("~/bench_venvs/diffusers/bin/python"))
+    model = arm_env.get("TF_MODEL") or sys.exit("transformers arm needs TF_MODEL")
+    return _run_venv_script(
+        args, arm_env, tag, outdir, py, _TF_SCRIPT,
+        [model, arm_env.get("TF_LANG", "en"), args.audio])
+
+
 def run_once_oaiwhisper(args, arm_env, tag, outdir) -> dict:
     py = arm_env.get("OAIW_PYTHON",
                      os.path.expanduser("~/venvs/oaiwhisper/bin/python"))
@@ -257,7 +323,8 @@ def run_once_whispercpp(args, arm_env, tag, outdir) -> dict:
 
 RUNNERS = {"": run_once_nbx, "compiled": run_once_nbx,
            "fwhisper": run_once_fwhisper, "whispercpp": run_once_whispercpp,
-           "nemo": run_once_nemo, "oaiwhisper": run_once_oaiwhisper}
+           "nemo": run_once_nemo, "oaiwhisper": run_once_oaiwhisper,
+           "transformers": run_once_transformers}
 
 
 def main() -> int:
@@ -271,6 +338,10 @@ def main() -> int:
                          "contract — audio_llm paths REFUSE the vendor "
                          "top_k/top_p defaults by capability gate)")
     ap.add_argument("--reps", type=int, default=5)
+    ap.add_argument("--expect", default=None,
+                    help="versioned expected-transcript file; every rep of "
+                         "every arm must match it word-for-word after the "
+                         "frozen normalization, or the campaign FAILS")
     ap.add_argument("--arm", nargs=2, action="append", required=True,
                     metavar=("NAME", "ENV"),
                     help="arm name + comma-separated ENV=VAL list ('-' for none)")
@@ -315,6 +386,14 @@ def main() -> int:
                     args, env, f"{name}_{rep}", outdir)
                 res["rtfx"] = (round(clip_s / res["transcribe_s"], 3)
                                if res.get("transcribe_s") else None)
+                if args.expect:
+                    out_f = outdir / f"out_{name}_{rep}.txt"
+                    text = out_f.read_text() if out_f.exists() else ""
+                    ok, diff = _word_gate(text, args.expect)
+                    res["words_ok"] = ok
+                    if not ok:
+                        print(f"  ACCURACY GATE FAIL {name} rep{rep}:\n"
+                              f"{diff}", flush=True)
                 results[name].append(res)
                 print(f"  {name} rep{rep} rc={res['rc']} "
                       f"rtfx={res['rtfx']} "
@@ -325,6 +404,10 @@ def main() -> int:
         if args.lock_clock:
             unlock_clocks(args.gpu)
             print(f"  clocks unlocked (GPU {args.gpu})", flush=True)
+
+    gate_fail = args.expect and any(
+        r.get("words_ok") is False
+        for rs in results.values() for r in rs)
 
     import hashlib
     report = {"model": args.model, "audio": args.audio,
@@ -361,8 +444,18 @@ def main() -> int:
         else:
             report["arms"][name] = {"n": 0, "runs": results[name]}
             print(f"{name:14s} NO SUCCESSFUL REPS (runs recorded)")
+    if args.expect:
+        report["accuracy_gate"] = {
+            "expect_file": args.expect,
+            "expect_sha": hashlib.sha256(
+                Path(args.expect).read_bytes()).hexdigest()[:12],
+            "verdict": "FAIL" if gate_fail else "PASS"}
     (outdir / "report.json").write_text(json.dumps(report, indent=1))
     print(f"\nreport -> {outdir}/report.json")
+    if gate_fail:
+        print("ACCURACY GATE: FAIL — at least one rep's words differ "
+              "from the expected text. The campaign is RED.")
+        return 1
     return 0
 
 
