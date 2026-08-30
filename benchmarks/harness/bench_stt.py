@@ -101,6 +101,22 @@ def _sha12(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()[:12]
 
 
+def _run_capped(fn):
+    """A timed-out child is a FAILED CELL, never a crashed campaign
+    (2026-08-30 finding: the 600s long rows died whole when the first
+    arm's rep timed out — three campaigns produced zero banked cells
+    from arms that would have passed)."""
+    import subprocess as _sp
+    try:
+        return fn()
+    except _sp.TimeoutExpired as e:
+        class _R:  # minimal CompletedProcess shape
+            returncode = 124
+            stdout = ""
+            stderr = f"TIMEOUT: {e}"
+        return _R()
+
+
 def _locked(args, fn):
     """Run fn() under the in-rep clock watchdog (bench_row semantics:
     an excursion is a campaign REFUSAL, not a footnote)."""
@@ -136,8 +152,8 @@ def run_once_nbx(args, arm_env: dict, tag: str, outdir: Path) -> dict:
         cmd.insert(-2, "--triton")
     before = gpu_state(args.gpu)
     t0 = time.time()
-    r = _locked(args, lambda: subprocess.run(
-        cmd, env=env, capture_output=True, text=True, timeout=2400))
+    r = _locked(args, lambda: _run_capped(lambda: subprocess.run(
+        cmd, env=env, capture_output=True, text=True, timeout=2400)))
     wall = time.time() - t0
     after = gpu_state(args.gpu)
     log = (r.stdout or "") + (r.stderr or "")
@@ -228,9 +244,9 @@ def _run_venv_script(args, arm_env, tag, outdir, py, script, argv) -> dict:
     env["CUDA_VISIBLE_DEVICES"] = args.gpu
     before = gpu_state(args.gpu)
     t0 = time.time()
-    r = _locked(args, lambda: subprocess.run(
+    r = _locked(args, lambda: _run_capped(lambda: subprocess.run(
         [py, "-c", script, *argv],
-        env=env, capture_output=True, text=True, timeout=2400))
+        env=env, capture_output=True, text=True, timeout=2400)))
     wall = time.time() - t0
     after = gpu_state(args.gpu)
     res = {}
@@ -303,8 +319,8 @@ def run_once_whispercpp(args, arm_env, tag, outdir) -> dict:
     env["CUDA_VISIBLE_DEVICES"] = args.gpu
     before = gpu_state(args.gpu)
     t0 = time.time()
-    r = _locked(args, lambda: subprocess.run(
-        cmd, env=env, capture_output=True, text=True, timeout=2400))
+    r = _locked(args, lambda: _run_capped(lambda: subprocess.run(
+        cmd, env=env, capture_output=True, text=True, timeout=2400)))
     wall = time.time() - t0
     after = gpu_state(args.gpu)
     timings = {k: float(v) for k, v in re.findall(
