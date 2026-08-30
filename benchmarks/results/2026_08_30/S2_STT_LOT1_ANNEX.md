@@ -61,3 +61,32 @@ large-v2 01:45-01:53 (rerun2, flightrec 20260830_012534), parakeet
   correctly (gate PASS x 24 cells); every arm is bit-deterministic
   across its 5 reps (1 sha each).
 
+
+---
+
+# S2 lot-2 annex — audio_llm capacity rows (2026-08-30 10:00-11:00 UTC, locked 1290)
+
+nbx-only capacity cells (DNR sourced in the prereg addendum: no
+V100-viable competitor runtime serves these three as audio-LLMs).
+Phrase-containment gate ACTIVE on every cell (both clips), prompt
+"Transcribe this audio." fixed and versioned. Every arm
+bit-deterministic (1 sha across 5 reps); cross-engine shas IDENTICAL
+per (model, clip) — triton == compiled output, byte-for-byte.
+
+| row / clip | arm | n | median RTFx | min-max | shas | gate |
+| Voxtral-Mini-3B-2507_jfk | nbxt | 5 | 0.237 | 0.208-0.240 | 1 | PASS |
+| Voxtral-Mini-3B-2507_jfk | nbxc | 5 | 0.482 | 0.468-0.487 | 1 | PASS |
+| Voxtral-Mini-3B-2507_ref | nbxt | 5 | 0.167 | 0.163-0.169 | 1 | PASS |
+| Voxtral-Mini-3B-2507_ref | nbxc | 5 | 0.378 | 0.372-0.387 | 1 | PASS |
+| canary-qwen-2.5b_jfk | nbxt | 5 | 0.316 | 0.278-0.317 | 1 | PASS |
+| canary-qwen-2.5b_jfk | nbxc | 5 | 0.863 | 0.790-0.876 | 1 | PASS |
+| canary-qwen-2.5b_ref | nbxt | 5 | 0.228 | 0.226-0.230 | 1 | PASS |
+| canary-qwen-2.5b_ref | nbxc | 5 | 0.726 | 0.721-0.735 | 1 | PASS |
+| granite-speech-3.3-8b_jfk | nbxt | 5 | 0.161 | 0.139-0.163 | 1 | PASS |
+| granite-speech-3.3-8b_jfk | nbxc | 5 | 0.370 | 0.364-0.373 | 1 | PASS |
+| granite-speech-3.3-8b_ref | nbxt | 5 | 0.108 | 0.106-0.110 | 1 | PASS |
+| granite-speech-3.3-8b_ref | nbxc | 5 | 0.278 | 0.275-0.279 | 1 | PASS |
+Honest reading: RTFx 0.11-0.86 — sub-realtime across the family, the
+R33-waiver stage-handler path pricing the triton arms 2-3x under
+compiled. Capacity is the axis: three audio-LLMs no other V100
+runtime starts, all fidelity-gated and deterministic.
