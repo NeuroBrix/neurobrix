@@ -64,8 +64,11 @@ from benchmarks.harness.bench_row import (  # noqa: E402
 
 
 def clip_seconds(path: str) -> float:
-    with wave.open(path) as w:
-        return w.getnframes() / w.getframerate()
+    # soundfile, not stdlib wave: vendor TTS arms emit IEEE-float WAVs
+    # (format tag 3) which wave.open refuses ("unknown format: 3").
+    import soundfile as _sf
+    info = _sf.info(path)
+    return info.frames / info.samplerate
 
 
 def _norm_words(text: str) -> list:
