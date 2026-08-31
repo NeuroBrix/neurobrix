@@ -26,6 +26,7 @@ REPO = Path(__file__).resolve().parents[2]
 
 def run_once_nbx(args, arm_env, tag, outdir):
     out = outdir / (f"out_{tag}.png" if args.mode == "t2i"
+                    else f"out_{tag}.wav" if args.mode == "audio"
                     else f"out_{tag}.txt")
     cmd = [sys.executable, "-u", "-m", "neurobrix", "run",
            "--model", args.model, "--hardware", args.hardware,
@@ -57,7 +58,10 @@ def run_once_nbx(args, arm_env, tag, outdir):
     if r.returncode != 0:
         (outdir / f"err_{tag}.log").write_text(
             (r.stdout or "")[-3000:] + "\n===\n" + (r.stderr or "")[-6000:])
+    # speech-to-speech rows gate on the pipeline's own transcription line
+    (outdir / f"log_{tag}.txt").write_text((r.stdout or "")[-8000:])
     return {"tag": tag, "rc": r.returncode, "wall_s": round(wall, 2),
+            "log": str(outdir / f"log_{tag}.txt"),
             "out": str(out) if out.exists() else None,
             "gpu_after": gpu_state(args.gpu)}
 
@@ -67,6 +71,22 @@ def gate(args, res) -> tuple:
     if res["rc"] != 0 or not res.get("out"):
         return False, "run failed / no output"
     p = Path(res["out"])
+    if args.mode == "audio" and p.suffix == ".wav":
+        # speech-to-speech: the WAV is the R29 artifact; the fidelity
+        # gate reads the pipeline's [Output] Transcription: line.
+        log = Path(res["log"]).read_text() if res.get("log") else ""
+        lines = [l.split("Transcription:", 1)[1] for l in log.splitlines()
+                 if "Transcription:" in l]
+        if not lines:
+            return False, "no transcription line in run log"
+        text = lines[-1]
+        got = _norm_words(text)
+        for m in args.must:
+            w = _norm_words(m)
+            if not any(got[i:i+len(w)] == w
+                       for i in range(len(got) - len(w) + 1)):
+                return False, f"speech lacks '{m}': {text.strip()[:90]}"
+        return True, None
     if args.mode in ("vqa", "audio"):
         text = p.read_text()
         got = _norm_words(text)
