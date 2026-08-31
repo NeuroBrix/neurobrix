@@ -130,9 +130,16 @@ def main() -> int:
     results = {n: [] for n, _ in arms}
     gate_fail = False
     try:
+        dead_arms = set()
         for rep in range(0, args.reps + 1):
             for name, env in arms:
+                if name in dead_arms:
+                    continue
                 res = run_once_nbx(args, env, f"{name}_{rep}", outdir)
+                if res.get("rc") == 124:
+                    dead_arms.add(name)
+                    print(f"  ARM {name} TIMED OUT — recorded, skipped "
+                          f"for the rest of the campaign", flush=True)
                 if rep == 0:
                     continue
                 ok, why = gate(args, res)
