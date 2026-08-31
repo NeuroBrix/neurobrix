@@ -15,7 +15,7 @@ mean band [80,220] + std>5. Artifacts under
 | Qwen3-VL-30B-A3B-Thinking | VQA n=5 | 501.15 [491.30–512.33] | 1135.54 [1114.65–1138.35] | PASS/PASS |
 | Janus-Pro-7B | t2i n=3 | 205.10 [204.67–205.48] | **106.97** [105.30–109.80] | PASS/PASS |
 | Ming-Lite-Omni-1.5 | t2i n=3 | 135.87 [134.98–155.32] | 348.89 [346.85–350.36] | PASS-R29 ×2 |
-| Qwen3-Omni-30B | audio | rerun (harness `--mode audio` fix) | rerun | pending |
+| Qwen3-Omni-30B | speech-to-speech n=3 | 467.21 [450.58–471.01] | 888.78 [878.16–897.45] | PASS/PASS |
 
 ## Readings (honest)
 
@@ -30,9 +30,14 @@ mean band [80,220] + std>5. Artifacts under
   Cross-engine coherent (std 54.7/55.6). Gate verdict overridden by R29
   inspection; band guard kept (it exists to catch black frames, and a
   1-point near-miss on a dark scene is its known cost).
-- **Qwen3-Omni first pass 0-reps**: harness omitted `--mode audio`
-  (multimodal family ZERO FALLBACK refusal — correct behavior); harness
-  fixed same motion, campaign rerun.
+- **Qwen3-Omni is a full speech-to-speech row**: 11 s spoken question in,
+  spoken answer out (thinker 27 tokens + talker 94 codec frames + 7.5 s
+  24 kHz waveform). Fidelity gate reads the pipeline's own transcription
+  line (contains the JFK phrase, both engines); WAVs kept as R29
+  artifacts (rms 0.048/0.040, non-silent). The two first-pass failures
+  were HARNESS-side (`--mode audio` omitted, then `.txt` output where
+  the speech contract requires `.wav` — both ZERO FALLBACK guards doing
+  their job); the runs themselves never failed.
 
 ## Capacity axis
 
