@@ -18,8 +18,8 @@ import argparse, json, os, statistics, subprocess, sys, time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from bench_stt import (_locked, _norm_words, check_exclusive, gpu_state,
-                       lock_clocks, unlock_clocks)
+from bench_stt import (_locked, _norm_words, _run_capped, check_exclusive,
+                       gpu_state, lock_clocks, unlock_clocks)
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -49,8 +49,8 @@ def run_once_nbx(args, arm_env, tag, outdir):
     env["CUDA_VISIBLE_DEVICES"] = args.gpu
     env["PYTHONPATH"] = str(REPO / "src")
     t0 = time.time()
-    r = _locked(args, lambda: subprocess.run(
-        cmd, env=env, capture_output=True, text=True, timeout=2400))
+    r = _locked(args, lambda: _run_capped(lambda: subprocess.run(
+        cmd, env=env, capture_output=True, text=True, timeout=2400)))
     wall = time.time() - t0
     if r.returncode != 0:
         (outdir / f"err_{tag}.log").write_text(
