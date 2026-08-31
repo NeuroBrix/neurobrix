@@ -405,10 +405,17 @@ def main() -> int:
               flush=True)
     results = {name: [] for name, _ in arms}
     try:
+        dead_arms = set()
         for rep in range(1, args.reps + 1):     # interleaved, like bench_row
             for name, env in arms:
+                if name in dead_arms:
+                    continue
                 res = RUNNERS[env.get("ARM_ENGINE", "")](
                     args, env, f"{name}_{rep}", outdir)
+                if res.get("rc") == 124:
+                    dead_arms.add(name)
+                    print(f"  ARM {name} TIMED OUT — recorded, skipped "
+                          f"for the rest of the campaign", flush=True)
                 res["rtfx"] = (round(clip_s / res["transcribe_s"], 3)
                                if res.get("transcribe_s") else None)
                 if args.expect or args.expect_phrase:
