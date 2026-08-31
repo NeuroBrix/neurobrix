@@ -39,6 +39,8 @@ def run_once_nbx(args, arm_env, tag, outdir):
         cmd += ["--audio", args.audio]
     if args.mode == "t2i":
         cmd += ["--mode", "image"]
+    if args.mode == "audio":
+        cmd += ["--mode", "audio"]
     if args.steps:
         cmd += ["--steps", str(args.steps)]
     if args.max_tokens:
