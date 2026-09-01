@@ -1,0 +1,7 @@
+{
+ "row": "video_sana_video",
+ "column": "diffusers",
+ "config": "pinned",
+ "status": "dnr",
+ "evidence": "DNR-VERSION-CASCADE (five dated cells, 2026-09-01, logs in the campaign dir): the vendor stack does not run this checkpoint at the row's pinned config on any tested stable release \u2014 diffusers 0.35.2 lacks SanaVideoPipeline; 0.36.0 lacks the checkpoint's AutoencoderKLLTX2Video; 0.37.0's pipeline reads scale_factor_temporal keys the LTX2-VAE config does not carry; 0.38.0 loads and generates but its video post-processor reshape fails at 480x832x9f (the 720p checkpoint's decode emits a mismatched spatial shape at this size). A vendor timing cell, if ever needed, is a dedicated chantier at the model's native 720p config. The nbx triton cell renders this exact row config in 39.5 s."
+}
