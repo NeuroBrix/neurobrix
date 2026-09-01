@@ -522,9 +522,15 @@ def cell_subprocess_venv(row: dict, gpu: int | None, n: int, script: str,
 
 def cell_diffusers(row: dict, gpu: int | None, n: int,
                    log_dir: Path) -> dict:
+    # Per-row venv override (`diffusers_venv`), same mechanism as the
+    # upscaler stacks: a pipeline class absent from the era pin runs in
+    # its own dated venv, recorded by the cell's pins block
+    # (sana_video / diffusers036 is the first user — R16 2026-09-01).
+    venv = row.get("diffusers_venv")
+    python_bin = (Path.home() / "bench_venvs" / venv / "bin" / "python"
+                  if venv else DIFFUSERS_BIN / "python")
     return cell_subprocess_venv(
-        row, gpu, n, "diffusers_cell.py",
-        DIFFUSERS_BIN / "python", log_dir)
+        row, gpu, n, "diffusers_cell.py", python_bin, log_dir)
 
 
 MINICPMO_BIN = Path.home() / "bench_venvs" / "minicpmo_vendor" / "bin"

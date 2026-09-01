@@ -31,7 +31,14 @@ def load_pipeline(row: dict):
     src = str(snap if snap.exists() else ckpt)
 
     t0 = time.perf_counter()
-    pipe = DiffusionPipeline.from_pretrained(src, torch_dtype=torch.float16)
+    # Base dtype is fp16 (sm_70 doctrine) unless the row's recipe pins
+    # another (SANA-Video: upstream mandates bf16 transformer — fp16
+    # tests are skipped for numerical instability; bf16 runs
+    # unaccelerated on sm_70 and the annex row says so).
+    _dtype_name = (row.get("diffusers_recipe") or {}).get(
+        "torch_dtype", "float16")
+    pipe = DiffusionPipeline.from_pretrained(
+        src, torch_dtype=getattr(torch, _dtype_name))
     # V100 dtype doctrine (sourced, backends.yml): TE/VAE precision.
     fixes = []
     offloaded = False
@@ -54,9 +61,26 @@ def load_pipeline(row: dict):
             offloaded = True
             fixes.append("text encoders=fp32 + enable_model_cpu_offload "
                          "(Flux/V100 doctrine)")
-    if row["metric_class"] == "video" and hasattr(pipe, "vae"):
-        pipe.vae = pipe.vae.to(torch.float32)
-        fixes.append("vae=fp32 (Wan doctrine)")
+    if row["metric_class"] == "video":
+        # Per-row vendor recipe (rows.yml `diffusers_recipe`), replacing
+        # the 2026-08-30 generic "vae=fp32 on every video pipeline"
+        # which was itself the campaign's harness hole: it broke
+        # CogVideoX (fp16 latents met a float VAE bias in F.conv3d)
+        # while Allegro/Mochi/Wan-14B lacked the tiling/offload their
+        # own model cards mandate at 32 GB. Each flag is the vendor's
+        # documented recipe, recorded in `pins`; absence = stock.
+        recipe = row.get("diffusers_recipe") or {}
+        if recipe.get("vae_fp32") and hasattr(pipe, "vae"):
+            pipe.vae = pipe.vae.to(torch.float32)
+            fixes.append("vae=fp32 (vendor card / sm_70 doctrine)")
+        if recipe.get("vae_tiling") and hasattr(pipe, "vae"):
+            pipe.vae.enable_tiling()
+            fixes.append("vae.enable_tiling() (vendor card)")
+        if recipe.get("cpu_offload"):
+            pipe.enable_model_cpu_offload()
+            offloaded = True
+            fixes.append("enable_model_cpu_offload() (vendor card — "
+                         "weights exceed one-card residency)")
     if not offloaded:
         pipe = pipe.to("cuda")
 
@@ -92,6 +116,8 @@ def main() -> int:
     pipe, cold, fixes, src, cache_note = load_pipeline(row)
     mclass = row["metric_class"]
     steps = row["steps"]
+    _dtype_name = (row.get("diffusers_recipe") or {}).get(
+        "torch_dtype", "float16")
 
     call_kwargs: dict = {
         "prompt": row["prompt"],
@@ -103,6 +129,19 @@ def main() -> int:
         call_kwargs["width"] = row["width"]
     if mclass == "video" and row.get("num_frames"):
         call_kwargs["num_frames"] = row["num_frames"]
+    if row.get("input_image"):
+        # I2V rows carry a versioned conditioning image; the 08-30
+        # campaign's cells never consumed it (cog5b failed on the
+        # missing required `image` argument — harness hole, not DNR).
+        # The kwarg name is per-pipeline (WanVACE conditions through
+        # `reference_images=[img]`, not `image=`) — mapped by the row's
+        # recipe so both columns run the same task.
+        from PIL import Image
+        _img = Image.open(
+            Path(args.repo) / row["input_image"]).convert("RGB")
+        _recipe = row.get("diffusers_recipe") or {}
+        _kwarg = _recipe.get("image_kwarg", "image")
+        call_kwargs[_kwarg] = [_img] if _recipe.get("image_as_list") else _img
 
     # Flux/V100 doctrine, second half: with the text encoders held fp32,
     # FluxPipeline builds its latents at prompt_embeds.dtype, so fp32
@@ -153,8 +192,8 @@ def main() -> int:
         "pins": {
             "diffusers": diffusers.__version__,
             "torch": torch.__version__,
-            "dtype": "float16 (+ " + "; ".join(fixes) + ")" if fixes
-                     else "float16",
+            "dtype": (_dtype_name + " (+ " + "; ".join(fixes) + ")"
+                      if fixes else _dtype_name),
             "attention": "torch SDPA / AttnProcessor2_0 "
                          "(mem-efficient backend on sm_70)",
             "enabled_optims": cache_note or
