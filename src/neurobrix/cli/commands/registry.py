@@ -561,7 +561,17 @@ def cmd_hub(args):
         downloads = rm.get("downloadCount", 0)
         lic = rm.get("license", "-") or "-"
         name = rm.get("name", slug.split("/")[-1])
-        status = "installed" if name in installed else ""
+        # The visibility badge must reach the user BEFORE the download:
+        # a non-public state (DEPRECATED) outranks the local "installed"
+        # marker in this column. The stated reason is returned by the
+        # download API and shown at import time.
+        visibility = (rm.get("visibility") or "PUBLIC").upper()
+        if visibility != "PUBLIC":
+            status = visibility
+        elif name in installed:
+            status = "installed"
+        else:
+            status = ""
 
         print(f"{slug:<30} {category:<10} {format_size(file_size):>10} {lic:>16} {downloads:>6}  {status}")
 

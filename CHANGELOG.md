@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Deprecated
+
+- **Four hub models are marked deprecated while their published defects
+  are fixed.** Each stays listed with its stated reason; nothing is
+  deleted, and each returns to public with its validated fix.
+  `canopylabs/Orpheus-3B`: speech generated in `--triton` mode can
+  mispronounce words (the default compiled engine is unaffected).
+  `resemble-ai/Chatterbox`: generation currently fails with an internal
+  dtype error on both engines. `nvidia/Parakeet-TDT-1.1B`: long
+  recordings are only partially transcribed (a 10-minute input returns
+  only its opening seconds; short clips are correct).
+  `TinyLlama/TinyLlama-1.1B-Chat`: prompts longer than ~580 tokens fail
+  with a KV-cache capacity error although the model's window is 2048
+  (short prompts are correct).
+
+### Added
+
+- **The `neurobrix hub` listing now shows a model's distribution state.**
+  A deprecated or withdrawn model displays its state in the STATUS
+  column, so the badge reaches you before the download, not after; the
+  stated reason is returned by the download API.
+
 ### Fixed
 
 - **Long-context prompts crashed the Triton engine on machines that mix
