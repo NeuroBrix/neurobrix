@@ -76,6 +76,15 @@ def load_pipeline(row: dict):
         if recipe.get("vae_tiling") and hasattr(pipe, "vae"):
             pipe.vae.enable_tiling()
             fixes.append("vae.enable_tiling() (vendor card)")
+        if (recipe.get("image_encoder_fp32")
+                and getattr(pipe, "image_encoder", None) is not None):
+            # Wan-I2V vendor recipe: the CLIP image encoder runs fp32
+            # (all-fp16 CLIP emits a float pooled_output into a half
+            # visual_projection — 2026-09-01 cell x2); the pipeline
+            # casts image_embeds AND condition latents to the
+            # transformer dtype downstream, so fp32 stays contained.
+            pipe.image_encoder = pipe.image_encoder.to(torch.float32)
+            fixes.append("image_encoder=fp32 (Wan-I2V vendor recipe)")
         if recipe.get("cpu_offload"):
             pipe.enable_model_cpu_offload()
             offloaded = True
