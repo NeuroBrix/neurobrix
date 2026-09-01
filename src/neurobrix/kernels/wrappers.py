@@ -6883,6 +6883,68 @@ def _sdpa_math_scores_budget_bytes() -> int:
         return 0
 
 
+def _sdpa_math_scores_device_fraction() -> float:
+    """Optional per-DEVICE cap on the math-route scores budget, as a
+    fraction of the EXECUTING device's memory. Data-driven from
+    config/vendors/<vendor>/<arch>.yml
+    `memory.sdpa_math_scores_device_fraction` (R23 — the 2026-08-31
+    xlong-prefill OOM proved the per-arch byte budget alone is wrong on
+    heterogeneous rigs: 2 GiB of scores fit a 32 GB card's headroom but
+    not a 16 GB card's). 0.0 (absent key) = no device cap, prior
+    behaviour byte-unchanged."""
+    prof = get_hardware_profile()
+    devices = getattr(prof, "devices", None) if prof is not None else None
+    if not devices:
+        return 0.0
+    try:
+        from neurobrix.core.config.loader import get_vendor_config
+        _brand = devices[0].brand
+        _vendor = getattr(_brand, "value", _brand)
+        cfg = get_vendor_config(_vendor, devices[0].architecture)
+        return float(cfg.get("memory", {}).get(
+            "sdpa_math_scores_device_fraction", 0.0))
+    except Exception:
+        return 0.0
+
+
+def _sdpa_math_scores_budget_bytes_for(device_idx) -> int:
+    """Scores budget for the device that will execute this SDPA:
+    min(per-arch yml byte budget, device_fraction x THIS device's
+    memory_mb from the Prism profile — a static profile read, never a
+    driver query in the hot path). Absence (no fraction key, no
+    profile, unknown index) is handled by EXPLICIT conditions and
+    returns the plain per-arch budget; there is no broad except — a
+    real profile-read failure must surface, not silently restore the
+    16G OOM this cap exists to prevent."""
+    base = _sdpa_math_scores_budget_bytes()
+    if not base:
+        return 0
+    frac = _sdpa_math_scores_device_fraction()
+    if not frac or device_idx is None:
+        return base
+    prof = get_hardware_profile()
+    devices = getattr(prof, "devices", None) if prof is not None else None
+    if not devices:
+        return base
+    dev = next((d for d in devices
+                if getattr(d, "index", None) == int(device_idx)), None)
+    if dev is None:
+        return base
+    return min(base, int(dev.memory_mb * 1024 * 1024 * frac))
+
+
+def _sdpa_chunked_rows_within(bound, batch, nheads, seqlen_q, seqlen_k) -> int:
+    """Rows per chunk that keep each chunk's fp32 scores inside `bound`,
+    128-aligned; 0 when the shape cannot chunk within the per-arch chunk
+    ceiling (video-scale shapes keep their existing path). Shared by the
+    pow2 and non-pow2 routing branches — one ladder, two callers."""
+    row_bytes = batch * nheads * seqlen_k * 4
+    chunk_rows = (bound // row_bytes) // 128 * 128
+    if chunk_rows >= 128 and -(-seqlen_q // chunk_rows) <= _sdpa_math_max_chunks():
+        return chunk_rows
+    return 0
+
+
 def _sdpa_math_max_chunks() -> int:
     """Chunk-count ceiling for the CHUNKED deterministic math prefill
     (P-NONDET-LONG-ROW fix). Data-driven from
@@ -7611,6 +7673,9 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
         _use_math = True
     if not _use_math:
         _scores_bytes = batch * nheads * seqlen_q * seqlen_k * 4
+        # NBXTensor._device is the bare device TYPE ("cuda"); the index
+        # lives in _device_idx (engraved trap: .device returns SELF).
+        _q_dev_idx = getattr(q, "_device_idx", None)
         if not _is_power_of_2(headdim):
             # Non-pow2 head_dim: math WHILE the fp32 scores tensor fits a
             # sane memory bound; FLASH beyond it. The flash kernel fully
@@ -7625,14 +7690,25 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
             # sanity floor — PixArt hd=72 / Sana hd=112 image-scale scores
             # stay ≤ the floor on every arch → their math path is
             # byte-unchanged (R23).
-            _bound = _sdpa_math_scores_budget_bytes() or (2 << 30)
+            _bound = _sdpa_math_scores_budget_bytes_for(_q_dev_idx) or (2 << 30)
             _use_math = _scores_bytes <= _bound
+            if not _use_math and _bound:
+                # Same chunked ladder as the pow2 branch: an over-cap
+                # image-scale shape (PixArt hd=72 / Sana hd=112 on a
+                # 16G card) chunks deterministically instead of
+                # silently landing on the Volta flash band-risk path;
+                # video-scale shapes exceed the chunk ceiling and keep
+                # their existing flash path unchanged.
+                _chunk_rows = _sdpa_chunked_rows_within(
+                    _bound, batch, nheads, seqlen_q, seqlen_k)
+                if _chunk_rows:
+                    _use_math = "chunked"
         else:
             # _math_attention materialises an fp32 [B*H,Tq,Tk] scores
             # tensor (bmm returns fp32 on V100) — 4 bytes/elem is the
             # true memory cost, independent of q's dtype. Budget is 0
             # on non-Volta (no yml key) → this never fires there.
-            _budget = _sdpa_math_scores_budget_bytes()
+            _budget = _sdpa_math_scores_budget_bytes_for(_q_dev_idx)
             _use_math = _scores_bytes <= _budget
             if not _use_math and _budget:
                 # P-NONDET-LONG-ROW (2026-08-23): over-budget pow2
@@ -7646,23 +7722,35 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
                 # times; video-scale shapes (30-500+ chunks) keep their
                 # existing path and are REGISTERED as the residual
                 # non-deterministic class on this hardware.
-                _row_bytes = batch * nheads * seqlen_k * 4
-                _chunk_rows = (_budget // _row_bytes) // 128 * 128
-                if _chunk_rows >= 128:
-                    _n_chunks = -(-seqlen_q // _chunk_rows)
-                    if _n_chunks <= _sdpa_math_max_chunks():
-                        _use_math = "chunked"
-    if _os_fma.environ.get("NBX_SDPA_ROUTE_DIAG") == "1" and not getattr(
-            scaled_dot_product_attention_wrapper, "_route_diag_done", False):
-        scaled_dot_product_attention_wrapper._route_diag_done = True
-        _pr = get_hardware_profile()
-        _dv = getattr(_pr, "devices", None) if _pr is not None else None
-        print(f"[NBX_SDPA_ROUTE_DIAG] hd={headdim} hdv={headdim_v} pow2={_is_power_of_2(headdim)} "
-              f"B={batch} H={nheads} Tq={seqlen_q} Tk={seqlen_k} "
-              f"scores_bytes={batch*nheads*seqlen_q*seqlen_k*4} "
-              f"budget={_sdpa_math_scores_budget_bytes()} "
-              f"profile={'None' if _pr is None else getattr(_pr,'vendor','?')+'/'+(getattr(_dv[0],'architecture','?') if _dv else '?')} "
-              f"use_math={_use_math}", flush=True)
+                _chunk_rows = _sdpa_chunked_rows_within(
+                    _budget, batch, nheads, seqlen_q, seqlen_k)
+                if _chunk_rows:
+                    _use_math = "chunked"
+    if _os_fma.environ.get("NBX_SDPA_ROUTE_DIAG") == "1":
+        # Print once PER DISTINCT EXECUTING DEVICE, not once per process:
+        # on heterogeneous rigs the budget is per-device, so a single line
+        # (which lands on whichever device runs the first SDPA) cannot
+        # show the routing on the other memory class. dev_idx is the
+        # activation instrument — None here means the call site failed to
+        # extract the device index and the per-device cap silently fell
+        # back to the per-arch base budget.
+        _diag_idx = getattr(q, "_device_idx", None)
+        _seen = getattr(scaled_dot_product_attention_wrapper,
+                        "_route_diag_seen", None)
+        if _seen is None:
+            _seen = set()
+            scaled_dot_product_attention_wrapper._route_diag_seen = _seen
+        if _diag_idx not in _seen:
+            _seen.add(_diag_idx)
+            _pr = get_hardware_profile()
+            _dv = getattr(_pr, "devices", None) if _pr is not None else None
+            print(f"[NBX_SDPA_ROUTE_DIAG] hd={headdim} hdv={headdim_v} pow2={_is_power_of_2(headdim)} "
+                  f"B={batch} H={nheads} Tq={seqlen_q} Tk={seqlen_k} "
+                  f"scores_bytes={batch*nheads*seqlen_q*seqlen_k*4} "
+                  f"dev_idx={_diag_idx} qtype={type(q).__name__} "
+                  f"budget={_sdpa_math_scores_budget_bytes_for(_diag_idx)} "
+                  f"profile={'None' if _pr is None else getattr(_pr,'vendor','?')+'/'+(getattr(_dv[0],'architecture','?') if _dv else '?')} "
+                  f"use_math={_use_math}", flush=True)
     if _use_math == "chunked":
         return _math_attention_chunked(q, k, v, attn_mask, is_causal,
                                        softmax_scale, _chunk_rows)

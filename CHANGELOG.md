@@ -9,7 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Swin-transformer upscalers produced tonally wrong images and only
+- **Long-context prompts crashed the Triton engine on machines that mix
+  GPU memory sizes.** On a host with both 16 GB and 32 GB GPUs, running a
+  large language model with a long prompt (~8k tokens) in `--triton` mode
+  failed with an out-of-memory error: the attention memory budget was set
+  per GPU *architecture*, so a working buffer sized for the 32 GB cards was
+  also requested on the 16 GB cards. The budget now adapts to the memory of
+  the specific GPU executing each operation, and the same prompt completes
+  with identical output across repeated runs. As a side effect of the same
+  routing, `Sana_1600M_4Kpx_BF16` image generation in `--triton` mode got
+  about 10% faster (409 s vs 454 s on one V100) while producing an
+  equivalent image.
   worked at one input size.** Three published super-resolution models
   — `Swin2SR-Classical-x4`, `SwinIR-Classical-x4` and `HAT-L-x4` —
   shipped with defects that made their output unusable.
