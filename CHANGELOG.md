@@ -31,6 +31,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`resemble-ai/Chatterbox` failed to generate any audio.** Both
+  engines crashed with an internal dtype error at the first generated
+  token: the speech-head projection assumed the language model's output
+  precision instead of following it. The projection now matches the
+  model's actual output dtype (upcasting when the engine's mixed
+  precision returns full precision). Verified end-to-end on both
+  engines with an independent speech-to-text probe hearing the prompted
+  phrase verbatim. The model returns to public with this fix.
+
 - **Prompts longer than a few hundred tokens crashed models whose
   default generation budget is small.** The KV cache was sized from the
   model's default `max_tokens` plus a fixed margin and was blind to the

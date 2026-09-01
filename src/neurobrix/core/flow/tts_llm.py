@@ -399,7 +399,16 @@ class TTSLLMEngine(FlowHandler):
             out = self._get_component_output(lm_name)
             if out is None:
                 return None
-            return torch.matmul(out[:, -1:, :], speech_head_w_typed.T)  # [1,1,vocab]
+            # The backbone's output dtype is the DtypeEngine's decision
+            # (its AMP tail can legitimately return fp32 on fp16
+            # hardware) — the flow must not assume it. Match the head
+            # weight to the ACTIVATION at the use site: a no-op cast
+            # when both are fp16 (the pre-regression path,
+            # byte-identical), an fp32 upcast otherwise — which is the
+            # engine's own mm accumulation semantic on this hardware
+            # (D-TTSLLM-SPEECHHEAD-DTYPE, 2026-09-01).
+            _last = out[:, -1:, :]
+            return torch.matmul(_last, speech_head_w_typed.T.to(_last.dtype))  # [1,1,vocab]
 
         # Deterministic sampler shared with the triton handler (same algorithm +
         # seed) — gives PER-MODE reproducibility. NB: it does NOT make the four
