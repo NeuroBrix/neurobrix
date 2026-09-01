@@ -31,6 +31,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Prompts longer than a few hundred tokens crashed models whose
+  default generation budget is small.** The KV cache was sized from the
+  model's default `max_tokens` plus a fixed margin and was blind to the
+  actual prompt: on `TinyLlama-1.1B-Chat` any prompt beyond ~580 tokens
+  failed with a cache-overflow error on both engines, although the
+  model's context window is 2048. The cache now sizes itself from the
+  real prompt at prefill (bounded by the model's own context window,
+  which now produces a clear "model's own limit" message instead of a
+  budget error), and a `--max-tokens` larger than the model default
+  correctly enlarges the cache too. Short prompts allocate exactly as
+  before. `TinyLlama-1.1B-Chat` returns to public with this fix.
+
 - **Long-context prompts crashed the Triton engine on machines that mix
   GPU memory sizes.** On a host with both 16 GB and 32 GB GPUs, running a
   large language model with a long prompt (~8k tokens) in `--triton` mode

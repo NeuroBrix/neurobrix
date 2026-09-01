@@ -507,6 +507,10 @@ class TritonAutoregressiveHandler:
                 "hidden_size": extracted.get("hidden_size"),
                 "num_kv_heads": extracted.get("num_key_value_heads") or extracted.get("num_kv_heads"),
                 "head_dim": extracted.get("head_dim"),
+                # Mirror of the compiled extraction (R30): the window is
+                # load-bearing for the prompt-aware KV ceiling — without
+                # it a build on this path would get no model-limit guard.
+                "max_position_embeddings": extracted.get("max_position_embeddings"),
             }
 
         hidden_dim = lm_config.get("hidden_size", 2048)
@@ -565,6 +569,24 @@ class TritonAutoregressiveHandler:
         if has_sdpa and self.ctx.mode == "triton":
             from neurobrix.triton.kv_cache import TritonKVCache, TritonAttentionInterceptor
 
+            # Prompt-aware sizing inputs (S1 finding TINYLLAMA-KVCAP):
+            # the model window bounds the cache and the decode budget
+            # sizes the first-prefill allocation when the prompt
+            # exceeds the plan's margin — both data-driven, read here
+            # and consumed by TritonKVCache at lazy layer creation.
+            from neurobrix.core.runtime.decode_bound import decode_bound  # NBX_DECODE_BOUND harness
+            _window = int(lm_config.get("max_position_embeddings") or 0)
+            # Decode budget mirrors the generator's resolver cascade
+            # (R30 — the compiled generator honors global.max_tokens):
+            # a CLI --max-tokens larger than defaults must size the
+            # cache too, not just the loop.
+            _resolved = getattr(self.ctx.variable_resolver, "resolved", {})
+            _mt = _resolved.get("global.max_tokens")
+            if _mt is None:
+                _mt = _resolved.get("max_tokens")
+            if _mt is None:
+                _mt = self.ctx.pkg.defaults.get("max_tokens", 512)
+            _decode_budget = decode_bound(int(_mt))
             kv_plan = getattr(self.ctx.plan, 'kv_cache_plan', None)
             if kv_plan is not None:
                 # Prism path — uses precomputed budget
@@ -576,14 +598,15 @@ class TritonAutoregressiveHandler:
                     v_head_dim=kv_plan.v_head_dim,
                     max_cache_len=kv_plan.max_cache_len,
                     dtype=cache_dtype,
+                    window_ceiling=_window,
+                    decode_budget=_decode_budget,
                 )
             else:
                 # Legacy fallback from lm_config
                 num_kv_heads = lm_config.get("num_kv_heads") or num_heads
                 head_dim = lm_config.get("head_dim") or (hidden_dim // num_heads)
                 num_layers = lm_config.get("num_layers") or 22
-                from neurobrix.core.runtime.decode_bound import decode_bound  # NBX_DECODE_BOUND harness
-                max_tokens = decode_bound(self.ctx.pkg.defaults.get("max_tokens", 512))
+                max_tokens = _decode_budget
                 kv_params = dict(
                     num_layers=num_layers,
                     num_kv_heads=num_kv_heads,
@@ -591,6 +614,8 @@ class TritonAutoregressiveHandler:
                     v_head_dim=head_dim,
                     max_cache_len=max_tokens + 128,
                     dtype=NBXDtype.float16,
+                    window_ceiling=_window,
+                    decode_budget=_decode_budget,
                 )
 
             # EXECUTOR-scoped cache persistence: the KV BUFFERS must
@@ -604,7 +629,18 @@ class TritonAutoregressiveHandler:
             # interceptor stays per-request (its _is_prefill /
             # call-count state is request-local); the buffers persist
             # and clear() resyncs their device state in place.
-            key = tuple(sorted((k, str(v)) for k, v in kv_params.items()))
+            # Memo key = STRUCTURAL params only. window_ceiling and
+            # decode_budget are per-request sizing inputs (the budget
+            # follows the resolver cascade): keying on them would mint
+            # a NEW cache when a warm request changes --max-tokens —
+            # buffers the recorded replay tuples do not point at (the
+            # silently-split-state failure the comment above records).
+            # The FIRST request's cache stands for the executor's
+            # lifetime; a later longer need hits the loud overflow
+            # (D-SERVE-WARM-KV-GROWTH-ASYMMETRY, ledgered).
+            key = tuple(sorted(
+                (k, str(v)) for k, v in kv_params.items()
+                if k not in ("window_ceiling", "decode_budget")))
             memo = executor.__dict__.setdefault("_kv_cache_memo", {})
             kv_cache = memo.get(key)
             if kv_cache is None:

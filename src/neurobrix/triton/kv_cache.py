@@ -198,47 +198,76 @@ class KVCacheLayer:
 
 
 class TritonKVCache:
-    """Distributed KV cache with per-layer lazy allocation."""
+    """Distributed KV cache with per-layer lazy allocation.
+
+    Prompt-aware sizing (S1 finding TINYLLAMA-KVCAP, fixed 2026-09-01):
+    the planned `max_cache_len` (Prism run-mode plan or the legacy
+    `max_tokens + prompt_margin` fallback) assumes the prompt fits its
+    margin. Layers allocate LAZILY at their first update — which IS the
+    prefill, where the true prompt length is known — so the allocation
+    sizes itself there: when `prompt + decode_budget` exceeds the plan
+    size, the buffer allocates at that need, bounded by the model's own
+    context window (`window_ceiling`, from lm_config, data-driven).
+    Short prompts allocate exactly the plan size, byte-unchanged. No
+    reallocation ever happens (addresses stay fixed from creation —
+    the recorded-replay contract that forbids buffer swaps is honored
+    by construction). A prompt at or beyond the window raises the
+    loud overflow: that is the model's true limit, not a budget."""
 
     def __init__(self, num_layers: int, num_kv_heads: int, k_head_dim: int,
-                 v_head_dim: int, max_cache_len: int, dtype: NBXDtype):
+                 v_head_dim: int, max_cache_len: int, dtype: NBXDtype,
+                 window_ceiling: int = 0, decode_budget: int = 0):
         self.num_layers = num_layers
         self.num_kv_heads = num_kv_heads
         self.k_head_dim = k_head_dim
         self.v_head_dim = v_head_dim
         self.max_cache_len = max_cache_len
         self.dtype = dtype
+        self.window_ceiling = int(window_ceiling or 0)
+        self.decode_budget = int(decode_budget or 0)
         self._layers: Dict[int, KVCacheLayer] = {}
 
-    def update(self, layer_idx: int, k, v):
-        """Update cache for a layer. Lazy allocation on first call."""
+    def _alloc_len_for(self, first_len: int) -> int:
+        """Buffer length for a layer whose FIRST update carries
+        `first_len` positions (the prefill). Plan size when it fits;
+        prompt + decode budget when it does not; the model window is
+        the ceiling."""
+        alloc = self.max_cache_len
+        needed = first_len + self.decode_budget if self.decode_budget \
+            else first_len + 1
+        if needed > alloc:
+            grown = needed if not self.window_ceiling \
+                else min(needed, self.window_ceiling)
+            if grown > alloc:
+                alloc = grown
+        if self.window_ceiling and first_len >= self.window_ceiling:
+            raise RuntimeError(
+                f"Prompt length {first_len} reaches the model's context "
+                f"window ({self.window_ceiling} positions) — this is the "
+                f"model's own limit, not an engine budget.")
+        return alloc
+
+    def _get_layer(self, layer_idx: int, k) -> KVCacheLayer:
         if layer_idx not in self._layers:
             device_idx = k._device_idx if hasattr(k, '_device_idx') else 0
             batch_size = k.shape[0]
             self._layers[layer_idx] = KVCacheLayer(
                 device_idx=device_idx, dtype=self.dtype,
-                max_len=self.max_cache_len,
+                max_len=self._alloc_len_for(int(k.shape[2])),
                 num_kv_heads=self.num_kv_heads,
                 k_head_dim=self.k_head_dim,
                 v_head_dim=self.v_head_dim,
                 batch_size=batch_size)
+        return self._layers[layer_idx]
 
-        return self._layers[layer_idx].update(k, v)
+    def update(self, layer_idx: int, k, v):
+        """Update cache for a layer. Lazy allocation on first call."""
+        return self._get_layer(layer_idx, k).update(k, v)
 
     def update_bucketed(self, layer_idx: int, k, v, bucket: int):
         """B2' decode update: bucket-padded views + additive pad mask
         (see KVCacheLayer.update_bucketed). Lazy allocation as above."""
-        if layer_idx not in self._layers:
-            device_idx = k._device_idx if hasattr(k, '_device_idx') else 0
-            batch_size = k.shape[0]
-            self._layers[layer_idx] = KVCacheLayer(
-                device_idx=device_idx, dtype=self.dtype,
-                max_len=self.max_cache_len,
-                num_kv_heads=self.num_kv_heads,
-                k_head_dim=self.k_head_dim,
-                v_head_dim=self.v_head_dim,
-                batch_size=batch_size)
-        return self._layers[layer_idx].update_bucketed(k, v, bucket)
+        return self._get_layer(layer_idx, k).update_bucketed(k, v, bucket)
 
     def clear(self):
         for layer in self._layers.values():

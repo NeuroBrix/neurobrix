@@ -44,6 +44,7 @@ class KVCacheConfig:
     max_cache_len: int
     dtype: str                  # Dtype string — converted to torch.dtype at allocation boundaries
     initial_cache_len: int = 0  # Initial buffer size (0 = allocate at max, on-demand growth)
+    ceiling_is_window: bool = False  # True when max_cache_len is the MODEL's context window (prompt-aware sizing) — the overflow message names the right authority
 
     @property
     def head_dim(self) -> int:
@@ -66,7 +67,8 @@ class KVCacheLayer:
 
     __slots__ = ('device', 'dtype', 'k_buffer', 'v_buffer', 'current_len',
                  '_buffer_len', 'max_len', 'num_kv_heads', 'k_head_dim', 'v_head_dim',
-                 'batch_size', '_dtype_verified', '_growth_threshold')
+                 'batch_size', '_dtype_verified', '_growth_threshold',
+                 '_ceiling_is_window')
 
     # Growth threshold: grow when buffer is this fraction full
     _GROWTH_RATIO = 0.80
@@ -81,6 +83,7 @@ class KVCacheLayer:
         v_head_dim: int,
         batch_size: int = 1,
         initial_len: int = 0,
+        ceiling_is_window: bool = False,
     ):
         """
         Initialize KV cache buffers on the specified device.
@@ -97,6 +100,7 @@ class KVCacheLayer:
         """
         self.device = device
         self.dtype = dtype
+        self._ceiling_is_window = bool(ceiling_is_window)
         self.max_len = max_len
         self.num_kv_heads = num_kv_heads
         self.k_head_dim = k_head_dim
@@ -160,9 +164,13 @@ class KVCacheLayer:
         end_pos = self.current_len + new_len
         if end_pos > self._buffer_len:
             if end_pos > self.max_len:
+                _authority = (
+                    "the model's own context window — its limit, not an "
+                    "engine budget" if self._ceiling_is_window
+                    else "Prism VRAM budget exceeded")
                 raise RuntimeError(
                     f"KV cache overflow: current_len={self.current_len}, new_len={new_len}, "
-                    f"max_len={self.max_len}. Prism VRAM budget exceeded."
+                    f"max_len={self.max_len}. {_authority}."
                 )
             self._grow_buffer(end_pos)
 
@@ -308,6 +316,7 @@ class DistributedKVCache:
                 v_head_dim=self.config.v_head_dim,
                 batch_size=batch_size,
                 initial_len=self.config.initial_cache_len,
+                ceiling_is_window=getattr(self.config, 'ceiling_is_window', False),
             )
             self._layers[layer_idx] = layer
 
