@@ -219,7 +219,9 @@ def main() -> int:
                       if fixes else _dtype_name),
             "attention": "torch SDPA / AttnProcessor2_0 "
                          "(mem-efficient backend on sm_70)",
-            "enabled_optims": cache_note or
+            "enabled_optims": ("; ".join(
+                [f for f in fixes if "offload" in f or "tiling" in f]
+                + ([cache_note] if cache_note else []))) or
                               "none (stock pipeline; slicing/tiling/"
                               "offload/compile all off)",
             "scheduler": type(pipe.scheduler).__name__

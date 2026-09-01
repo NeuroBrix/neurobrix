@@ -567,6 +567,20 @@ rows:
       torch_dtype: bfloat16
       vae_fp32: true
       frames_kwarg: frames   # SanaVideoPipeline arg name (2026-09-01 cell)
+    dnr_columns:
+      diffusers: >-
+        DNR-VERSION-CASCADE (five dated cells, 2026-09-01, logs in the
+        campaign dir): the vendor stack does not run this checkpoint at
+        the row's pinned config on any tested stable release —
+        diffusers 0.35.2 lacks SanaVideoPipeline; 0.36.0 lacks the
+        checkpoint's AutoencoderKLLTX2Video; 0.37.0's pipeline reads
+        scale_factor_temporal keys the LTX2-VAE config does not carry;
+        0.38.0 loads and generates but its video post-processor
+        reshape fails at 480x832x9f (the 720p checkpoint's decode
+        emits a mismatched spatial shape at this size). A vendor
+        timing cell, if ever needed, is a dedicated chantier at the
+        model's native 720p config. The nbx triton cell renders this
+        exact row config in 39.5 s.
     columns: [diffusers, neurobrix_pytorch, neurobrix_triton]
 
   # Open-Sora-v2: NO diffusers pipeline (prereg DNR) — nbx-capacity
@@ -577,6 +591,11 @@ rows:
     reference: true
     checkpoint: hpcai-tech/Open-Sora-v2
     neurobrix_model: Open-Sora-v2
+    dnr_columns:
+      diffusers: >-
+        Open-Sora-v2 has no diffusers pipeline at any release (the
+        vendor serves it through its own hpcai-tech/Open-Sora repo
+        code only) — S4 prereg DNR, recorded declaratively 2026-09-01.
     prompt: "a red fox running through snow"
     steps: 8
     num_frames: 9
