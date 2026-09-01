@@ -388,6 +388,9 @@ rows:
     height: 480
     width: 720
     input_image: benchmarks/assets/apple_448.png
+    diffusers_recipe:
+      cpu_offload: true  # CogVideoX-5b card recipe below ~32 GB; resident fp16 OOMs at VAE-decode group_norm (2026-09-01 cell, peak 32101 MiB)
+      vae_tiling: true
     columns: [diffusers, neurobrix_pytorch, neurobrix_triton]
 
   - id: video_wan_vace
