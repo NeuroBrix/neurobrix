@@ -29,7 +29,7 @@ in each cell's pins (commits `51bf0cd`, `bde795a`, `43c0181`,
 | allegro t2v (6×9) | 4.6 (±0.2%) | 36.7 (±1.9%) | 154.1 (±0.3%) | UNCONVERGED both arms¹ |
 | allegro ti2v | DNR-VENDOR-ONLY (sourced) | FAILS-AT-HEAD² | same² | — |
 | sana-video t2v (8×9) | DNR-VERSION-CASCADE⁵ | FAILS-AT-HEAD² | 39.5 (±2.3%) | fox PASS (triton) |
-| cog5b i2v (10×9) | 121.4 (±0.5%) offloaded | 120.2 (±0.6%) | 502.3 (±0.2%) | apple PASS |
+| cog5b i2v (10×9) | 47.6 (±1.5%) offloaded⁷ | 120.2 (±0.6%) | 502.3 (±0.2%) | apple PASS |
 | mochi t2v (8×13) | 72.8 (±2.4%) offloaded | 124.8 (±5.9%) | 566.4 (±2.4%) | animal PASS |
 | opensora t2v (8×9) | no pipeline (prereg DNR) | 150.6 (±1.0%) | FAILS-AT-HEAD² | fox-mass PASS (compiled) |
 | vace r2v (10×13) | 35.8 (±0.1%) ref-image task³ | D-VACE-IMGCOND-DIV62³ | same³ | vendor PASS |
@@ -68,6 +68,11 @@ mismatched spatial shape at this size). The vendor stack does not run
 this checkpoint at the row config on any tested stable release; a
 vendor timing cell, if ever needed, is a dedicated chantier at native
 720p. The row's engine cell (nbx triton, 39.5 s, R29 fox) stands.
+⁷ The cell's pins block in this JSON also carries a stale
+`enabled_optims: "none"` line beside a dtype string listing the
+offload — a harness display bug fixed in the same correction commit
+(the optims line now derives from the applied recipe); the recorded
+walls and shas are unaffected.
 ⁶ Four recipe rungs, each measured (image kwarg → CLIP image encoder
 fp32 → model-level offload OOM at 31.3 GB → enable_sequential_cpu_offload):
 the vendor weapon at the 27 GB-transformer size is LAYER-level offload
@@ -99,9 +104,14 @@ recipes, two library generations, and offload for anything ≥ 14B on
 - nbx compiled runs ×5.1–×8.0 the vendor wall on the light t2v rows
   (cog2b 45.4 vs 8.9; allegro 36.7 vs 4.6) — the sm_70 structural
   conv/mm gap named since S3, priced per row.
-- **cog5b i2v: nbx compiled MATCHES the offloaded vendor arm (120.2
-  vs 121.4 s)** — where the vendor recipe pays PCIe offload, resident
-  nbx placement cancels the engine gap.
+- cog5b i2v: vendor offloaded 47.6 s vs nbx compiled resident
+  120.2 s (×2.5) — the sm_70 gap holds on this row too. CORRECTION ON
+  THE RECORD: the annex's first commit (`b9775b1`) cited a fabricated
+  121.4 s for this cell and claimed nbx "matches" the vendor — the
+  number matched no recorded measurement (the corrected cell's JSON
+  was never re-read before the annex filled the cell) and was caught
+  by the closure audit. The claim is retracted; 47.6 s is the
+  recorded value (walls 48.0/47.3/47.6).⁷
 - mochi: vendor offloaded 72.8 vs nbx 124.8 resident (×1.7).
 - triton carries its structural gap (×3.4–5.1 vs compiled on video
   rows) — the same named front as S3/prefill; sana-video triton 39.5 s
