@@ -442,7 +442,8 @@ rows:
       # so both fp32 islands stay contained.
       vae_fp32: true
       image_encoder_fp32: true
-      cpu_offload: true  # 28 GB fp16 weights do not sit resident on one 32 GB card (08-30 OOM at load)
+      sequential_offload: true  # model-level offload still OOMs: the 27 GB transformer ALONE + activations exceeds the card (2026-09-01) — layer-level is the vendor weapon at this size
+
     # nbx arms run the MACHINE config: the 31 GB model is the proven
     # sharded case (cuda:2+3, commit 1d00037) — a pinned single-GPU
     # row was the 08-30 FAILS-CONFIG hole, not an engine gap.
@@ -565,6 +566,7 @@ rows:
     diffusers_recipe:
       torch_dtype: bfloat16
       vae_fp32: true
+      frames_kwarg: frames   # SanaVideoPipeline arg name (2026-09-01 cell)
     columns: [diffusers, neurobrix_pytorch, neurobrix_triton]
 
   # Open-Sora-v2: NO diffusers pipeline (prereg DNR) — nbx-capacity
