@@ -1,3 +1,5 @@
+> **HISTORICAL STARTING POINT — pre-mandate numbers, kept verbatim as the zero-point of the optimization curve. The current one-pager is `../SUMMARY_2026_08_30.md` (capacity first, trajectory section names this file as its starting column).**
+
 # Benchmark matrix — 2026_08_08_ref
 
 ## What only NeuroBrix runs on this hardware

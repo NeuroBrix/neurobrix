@@ -1,3 +1,5 @@
+> **HISTORICAL STARTING POINT — pre-mandate numbers, kept verbatim as the zero-point of the optimization curve. The current one-pager is `../SUMMARY_2026_08_30.md` (capacity first, trajectory section names this file as its starting column).**
+
 # Benchmark results — 2026-08-04 (row: llm_dense_tinyllama)
 
 TinyLlama-1.1B-Chat-v1.0, fp16 everywhere, greedy, 128 new tokens
