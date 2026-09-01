@@ -150,6 +150,17 @@ memory:
   # math run was faster end-to-end). Gate: attention-change diffusion
   # regression battery per doctrine.
   sdpa_math_max_scores_bytes: 2147483648  # 2 GiB (was 128 MiB pre-D6)
+  # Per-DEVICE cap: budget = min(bytes above, fraction x device memory_mb
+  # from the Prism profile). The auto profile (config/hardware/default.yml,
+  # generated from nvidia-smi memory.total) records memory_mb 16384 for
+  # V100-16G rows and 32768 for V100-32G rows — verified 2026-09-01
+  # against the file the runtime loads. 0.066 x 32768 MiB =
+  # 2,267,742,732 bytes > 2 GiB -> min() keeps the 32G budget at the
+  # 2 GiB base (zero route change there); 0.066 x 16384 MiB =
+  # 1,133,871,366 bytes (~1.06 GiB) caps 16G cards so the 1.90 GiB xlong
+  # scores chunk shrinks to fit instead of OOMing (2026-08-31
+  # heterogeneous-rig finding, block_scatter model->cuda:0).
+  sdpa_math_scores_device_fraction: 0.066
 
   # P-NONDET-LONG-ROW (2026-08-23): shapes whose fp32 scores exceed the
   # budget above routed to flash, whose Volta masked-load specialisation
