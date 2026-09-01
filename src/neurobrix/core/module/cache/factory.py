@@ -68,14 +68,34 @@ class StateCacheFactory:
         # Path 1: Prism KVCachePlan (PREFERRED)
         kv_plan = getattr(ctx.plan, 'kv_cache_plan', None)
         if kv_plan is not None:
+            # Prompt-aware ceiling (S1 finding TINYLLAMA-KVCAP, fixed
+            # 2026-09-01): the run-mode plan sizes for
+            # max_tokens + prompt_margin and is blind to the actual
+            # prompt. The wrapper's on-demand growth machinery already
+            # grows buffers toward max_cache_len — so the CEILING is
+            # raised to the model's own context window (data-driven
+            # from lm_config) while the INITIAL allocation stays at
+            # the plan size: short prompts allocate exactly as before,
+            # and a long prompt grows to what it needs, bounded by the
+            # window (beyond it the loud overflow is the model's own
+            # limit, not a budget).
+            max_len = kv_plan.max_cache_len
+            initial = getattr(kv_plan, 'initial_cache_len', 0)
+            window = int(lm_config.get("max_position_embeddings") or 0)
+            ceiling_is_window = False
+            if window > max_len:
+                initial = initial or max_len
+                max_len = window
+                ceiling_is_window = True
             config = KVCacheConfig(
                 num_layers=kv_plan.num_layers,
                 num_kv_heads=kv_plan.num_kv_heads,
                 k_head_dim=kv_plan.k_head_dim,
                 v_head_dim=kv_plan.v_head_dim,
-                max_cache_len=kv_plan.max_cache_len,
+                max_cache_len=max_len,
                 dtype=kv_plan.dtype,
-                initial_cache_len=getattr(kv_plan, 'initial_cache_len', 0),
+                initial_cache_len=initial,
+                ceiling_is_window=ceiling_is_window,
             )
             wrapper = KVCacheAttentionWrapper(config)
             return wrapper
