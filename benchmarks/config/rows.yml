@@ -434,7 +434,11 @@ rows:
     width: 832
     input_image: benchmarks/assets/apple_448.png
     diffusers_recipe:
-      vae_fp32: true     # Wan doctrine (sm_70)
+      # NO vae_fp32 here: on the I2V path the fp32 VAE *encodes* the
+      # reference image and its fp32 latents meet the fp16 transformer
+      # (F.linear float!=Half, 2026-09-01 cell). The sourced Wan
+      # doctrine targeted the bf16-on-sm_70 trap on the DECODE path;
+      # fp16 VAE stands here with the R29 mp4 as the quality gate.
       cpu_offload: true  # 28 GB fp16 weights do not sit resident on one 32 GB card (08-30 OOM at load)
     # nbx arms run the MACHINE config: the 31 GB model is the proven
     # sharded case (cuda:2+3, commit 1d00037) — a pinned single-GPU
@@ -457,7 +461,8 @@ rows:
     width: 832
     input_image: benchmarks/assets/apple_448.png
     diffusers_recipe:
-      vae_fp32: true     # Wan doctrine (sm_70)
+      # NO vae_fp32: same I2V encode-path dtype edge as wan14b
+      # (fp32 image latents vs fp16 transformer).
       cpu_offload: true  # two A14B transformers (high/low noise) — far beyond one-card residency
     # nbx arms need the machine config (57 GB MoE placement = the D7
     # Prism-selection dependency; a FAIL here is the D7 record, not a cell).
