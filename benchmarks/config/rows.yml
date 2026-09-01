@@ -270,6 +270,8 @@ rows:
     seed: 0
     height: 480
     width: 832
+    diffusers_recipe:
+      vae_fp32: true   # Wan doctrine (sm_70, sourced) — reproduces the banked cell byte-for-byte
     # 480x832 = the Wan pipeline's native default, pinned EXPLICITLY
     # so both columns run the identical resolution.
     # 13 frames / 10 steps = the battery closure config proven to fit
@@ -401,6 +403,17 @@ rows:
     seed: 0
     height: 480
     width: 832
+    input_image: benchmarks/assets/apple_448.png
+    # The nbx VACE build is traced WITH image conditioning
+    # (global.image is a required graph input — 08-30 FAILS-CONFIG);
+    # the diffusers arm must run the SAME task, which for WanVACE is
+    # reference_images (its pipeline has no `image` kwarg; prompt-only
+    # is a different task — the 08-30 27.9 s prompt-only vendor cell
+    # is superseded by this row's re-run).
+    diffusers_recipe:
+      vae_fp32: true   # Wan doctrine
+      image_kwarg: reference_images
+      image_as_list: true
     columns: [diffusers, neurobrix_pytorch, neurobrix_triton]
 
   - id: video_wan14b_i2v
@@ -417,6 +430,13 @@ rows:
     height: 480
     width: 832
     input_image: benchmarks/assets/apple_448.png
+    diffusers_recipe:
+      vae_fp32: true     # Wan doctrine (sm_70)
+      cpu_offload: true  # 28 GB fp16 weights do not sit resident on one 32 GB card (08-30 OOM at load)
+    # nbx arms run the MACHINE config: the 31 GB model is the proven
+    # sharded case (cuda:2+3, commit 1d00037) — a pinned single-GPU
+    # row was the 08-30 FAILS-CONFIG hole, not an engine gap.
+    serving_configs: [pinned, machine]
     columns: [diffusers, neurobrix_pytorch, neurobrix_triton]
 
   - id: video_wan22_a14b_i2v
@@ -433,6 +453,12 @@ rows:
     height: 480
     width: 832
     input_image: benchmarks/assets/apple_448.png
+    diffusers_recipe:
+      vae_fp32: true     # Wan doctrine (sm_70)
+      cpu_offload: true  # two A14B transformers (high/low noise) — far beyond one-card residency
+    # nbx arms need the machine config (57 GB MoE placement = the D7
+    # Prism-selection dependency; a FAIL here is the D7 record, not a cell).
+    serving_configs: [pinned, machine]
     columns: [diffusers, neurobrix_pytorch, neurobrix_triton]
 
   - id: video_allegro_t2v
@@ -448,6 +474,9 @@ rows:
     seed: 0
     height: 368
     width: 640
+    diffusers_recipe:
+      vae_fp32: true    # Allegro card: the VAE runs in fp32
+      vae_tiling: true  # Allegro VAE: decode without tiling raises NotImplementedError (08-30 cell proof)
     columns: [diffusers, neurobrix_pytorch, neurobrix_triton]
 
   - id: video_allegro_ti2v
@@ -464,6 +493,18 @@ rows:
     height: 368
     width: 640
     input_image: benchmarks/assets/apple_448.png
+    diffusers_recipe:
+      vae_fp32: true
+      vae_tiling: true  # same Allegro VAE contract as the t2v row
+    dnr_columns:
+      diffusers: >-
+        Allegro-TI2V is vendor-only: its model_index.json declares the
+        transformer as diffusers-namespace class
+        AllegroTransformerTI2V3DModel, which exists in NO diffusers
+        release through v0.40.0 (R16 sourced 2026-09-01: the checkpoint
+        model_index + diffusers main __init__ exports). Stock
+        from_pretrained cannot load it at any pin; the only vendor path
+        is the rhymes-ai/Allegro repo code (train/infer TI2V modules).
     columns: [diffusers, neurobrix_pytorch, neurobrix_triton]
 
   - id: video_mochi_t2v
@@ -479,6 +520,9 @@ rows:
     seed: 0
     height: 480
     width: 848
+    diffusers_recipe:
+      cpu_offload: true  # Mochi card: 38 GB-class weights, offload mandated below 80 GB (08-30 OOM at the text encoder)
+      vae_tiling: true   # Mochi card: enable_vae_tiling for decode
     columns: [diffusers, neurobrix_pytorch, neurobrix_triton]
 
   - id: video_sana_video
@@ -494,6 +538,16 @@ rows:
     seed: 0
     height: 480
     width: 832
+    # SanaVideoPipeline ships in diffusers >= 0.36.0 (R16 sourced
+    # 2026-09-01: versioned v0.36.0 docs + release notes; torch 2.5.1
+    # stays in-range). Upstream mandates bf16 transformer + fp32 VAE
+    # (fp16 tests skipped for numerical instability) — bf16 is
+    # functional but UNACCELERATED on sm_70, so this competitor
+    # number carries that framing note in its annex row.
+    diffusers_venv: diffusers036
+    diffusers_recipe:
+      torch_dtype: bfloat16
+      vae_fp32: true
     columns: [diffusers, neurobrix_pytorch, neurobrix_triton]
 
   # Open-Sora-v2: NO diffusers pipeline (prereg DNR) — nbx-capacity
