@@ -1,3 +1,5 @@
+> **HISTORICAL STARTING POINT — pre-mandate numbers, kept verbatim as the zero-point of the optimization curve. The current one-pager is `../SUMMARY_2026_08_30.md` (capacity first, trajectory section names this file as its starting column).**
+
 # Benchmark results — 2026-08-05 (row: llm_dense_tinyllama, hardened harness)
 
 Re-measure of the NeuroBrix columns ONLY, after paying the two harness
