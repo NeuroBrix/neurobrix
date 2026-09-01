@@ -539,12 +539,15 @@ rows:
     height: 480
     width: 832
     # SanaVideoPipeline ships in diffusers >= 0.36.0 (R16 sourced
-    # 2026-09-01: versioned v0.36.0 docs + release notes; torch 2.5.1
-    # stays in-range). Upstream mandates bf16 transformer + fp32 VAE
-    # (fp16 tests skipped for numerical instability) — bf16 is
-    # functional but UNACCELERATED on sm_70, so this competitor
-    # number carries that framing note in its annex row.
-    diffusers_venv: diffusers036
+    # 2026-09-01), but THIS 720p checkpoint's model_index references
+    # AutoencoderKLLTX2Video, first shipped in v0.37.0 (0.36-cell
+    # failure 2026-09-01, campaign log) -> pin 0.37.0, the minimal
+    # release loading the checkpoint. torch 2.5.1 stays in-range.
+    # Upstream mandates bf16 transformer + fp32 VAE (fp16 tests
+    # skipped for numerical instability) — bf16 is functional but
+    # UNACCELERATED on sm_70, so this competitor number carries that
+    # framing note in its annex row.
+    diffusers_venv: diffusers_video
     diffusers_recipe:
       torch_dtype: bfloat16
       vae_fp32: true
