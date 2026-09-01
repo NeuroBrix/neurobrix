@@ -85,7 +85,18 @@ def load_pipeline(row: dict):
             # transformer dtype downstream, so fp32 stays contained.
             pipe.image_encoder = pipe.image_encoder.to(torch.float32)
             fixes.append("image_encoder=fp32 (Wan-I2V vendor recipe)")
-        if recipe.get("cpu_offload"):
+        if recipe.get("sequential_offload"):
+            # Layer-level offload: the finer vendor weapon when even a
+            # single offloaded COMPONENT (Wan-14B transformer, 27 GB
+            # fp16) plus activations exceeds the card (2026-09-01 cell:
+            # model-level offload OOM'd at 31.3 GB in the forward).
+            # Slow by construction (per-layer PCIe) — the honest V100
+            # number, recorded in pins.
+            pipe.enable_sequential_cpu_offload()
+            offloaded = True
+            fixes.append("enable_sequential_cpu_offload() (vendor "
+                         "recipe for over-card single components)")
+        elif recipe.get("cpu_offload"):
             pipe.enable_model_cpu_offload()
             offloaded = True
             fixes.append("enable_model_cpu_offload() (vendor card — "
@@ -137,7 +148,10 @@ def main() -> int:
     if row.get("width"):
         call_kwargs["width"] = row["width"]
     if mclass == "video" and row.get("num_frames"):
-        call_kwargs["num_frames"] = row["num_frames"]
+        # Kwarg name is per-pipeline (SanaVideoPipeline takes `frames`,
+        # 2026-09-01 cell) — mapped by the row's recipe like image_kwarg.
+        call_kwargs[(row.get("diffusers_recipe") or {}).get(
+            "frames_kwarg", "num_frames")] = row["num_frames"]
     if row.get("input_image"):
         # I2V rows carry a versioned conditioning image; the 08-30
         # campaign's cells never consumed it (cog5b failed on the
