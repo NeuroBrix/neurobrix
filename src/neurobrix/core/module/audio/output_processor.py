@@ -6,10 +6,11 @@ Supports SNAC codec decoding for Orpheus-style TTS models.
 
 ZERO HARDCODE: sample_rate and bit_depth from topology/defaults.
 """
+from __future__ import annotations
+
 
 from typing import Any, List
 
-import torch
 
 
 class AudioOutputProcessor:
@@ -19,16 +20,27 @@ class AudioOutputProcessor:
     def decode_tokens(token_ids: List[int], tokenizer: Any, skip_special: bool = True) -> str:
         """Decode token IDs to text string (STT)."""
         if hasattr(tokenizer, "decode"):
-            return tokenizer.decode(token_ids, skip_special_tokens=skip_special)
+            text = tokenizer.decode(token_ids, skip_special_tokens=skip_special)
+            if skip_special:
+                # Timestamp tokens (<|d.dd|>) are NOT special by the
+                # vendor's own tokenizer data ("special": false), so
+                # skip_special_tokens leaves them; the vendor's decode
+                # drops them by form. Long-form decoding (2026-09-02)
+                # surfaces them in every window. Only the timestamp
+                # form is stripped — any other marker stays visible.
+                import re
+                text = re.sub(r"<\|\d+\.\d+\|>", "", text)
+            return text
         return str(token_ids)
 
     @staticmethod
     def save_waveform(
-        waveform: torch.Tensor,
+        waveform: "torch.Tensor",
         output_path: str,
         sample_rate: int = 16000,
     ) -> str:
         """Save waveform tensor as .wav file (TTS)."""
+        import torch
         import soundfile as sf
 
         # torch.Tensor (compiled) → .cpu(); NBXTensor (triton) has no .cpu() but a
@@ -70,6 +82,7 @@ class AudioOutputProcessor:
         Returns:
             Waveform tensor [1, 1, samples] at 24kHz
         """
+        import torch
         # Filter to audio tokens only
         audio_tokens = [t - audio_token_start for t in token_ids
                         if audio_token_start <= t < vocab_size]

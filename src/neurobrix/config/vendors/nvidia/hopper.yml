@@ -107,6 +107,10 @@ memory:
   # pure perf regression with zero determinism benefit. The key's
   # VALUE, not its presence, is the gate. hand_curated_from_docs.
   sdpa_math_max_scores_bytes: 0
+  # Row block (alignment and floor) of the chunked deterministic
+  # math prefill; the chunk-halving retry on a refused allocation
+  # never goes below it.
+  sdpa_math_min_chunk_rows: 128
 
   # Triton deferred-free queue policy (audit #2 F1, P-TRITON-LIVE-SET).
   # PRESSURE-SENSITIVE: always drain at `cliff` (throughput ceiling — no

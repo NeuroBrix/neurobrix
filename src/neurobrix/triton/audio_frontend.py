@@ -232,22 +232,51 @@ def preprocess_audio_input_np(ctx, audio_config: Dict, stages: List[Dict]) -> No
                 preprocessing = "conformer"
 
     print(f"   [Audio·np] Loading: {audio_path}")
-    feats = extract_features_np(preprocessing, str(audio_path),
-                                Path(find_model_config_path(ctx)), input_shape)
 
-    # Pad/truncate to trace-time dims (mirror of the torch path).
-    if input_shape and len(input_shape) == feats.ndim and feats.ndim >= 3:
-        for d in range(1, len(input_shape)):
-            trace, actual = input_shape[d], feats.shape[d]
-            if actual > trace:
-                sl = [slice(None)] * feats.ndim
-                sl[d] = slice(None, trace)
-                feats = feats[tuple(sl)]
-            elif actual < trace:
-                ps = list(feats.shape); ps[d] = trace - actual
-                feats = np.concatenate([feats, np.zeros(ps, np.float32)], axis=d)
-    feats = np.ascontiguousarray(feats.astype(np.float32))
-    print(f"   [Audio·np] Features: {tuple(feats.shape)} ({preprocessing})")
+    def _fit(feats):
+        # Pad/truncate to trace-time dims (mirror of the torch path).
+        if input_shape and len(input_shape) == feats.ndim and feats.ndim >= 3:
+            for d in range(1, len(input_shape)):
+                trace, actual = input_shape[d], feats.shape[d]
+                if actual > trace:
+                    sl = [slice(None)] * feats.ndim
+                    sl[d] = slice(None, trace)
+                    feats = feats[tuple(sl)]
+                elif actual < trace:
+                    ps = list(feats.shape); ps[d] = trace - actual
+                    feats = np.concatenate([feats, np.zeros(ps, np.float32)], axis=d)
+        return np.ascontiguousarray(feats.astype(np.float32))
+
+    # Long-form (D-STT-LONGFORM-CHUNKING, R30 mirror of the torch
+    # path): audio longer than the whisper-class window runs the
+    # vendor's timestamp-seek algorithm (rules in
+    # core/module/audio/stt_longform.py); the flow builds each window's
+    # mel on demand from this context. One window == the exact
+    # pre-change path. NBX_DISABLE_STT_CHUNKING=1 = truncating path.
+    import os as _os_sw
+    ctx._stt_seek = None
+    feats = None
+    # Only the encoder_decoder flow consumes the seek context (the
+    # audio/audio_llm flows still truncate: D-AUDIOLLM-LONGFORM).
+    _flow_type = ctx.pkg.topology.get("flow", {}).get("type")
+    if (preprocessing == "mel_spectrogram" and _flow_type == "encoder_decoder"
+            and _os_sw.environ.get("NBX_DISABLE_STT_CHUNKING") != "1"):
+        from neurobrix.core.module.audio.mel_dsp import (
+            whisper_seek_context, whisper_window_mel)
+        _seek = whisper_seek_context(
+            str(audio_path), Path(find_model_config_path(ctx)), input_shape)
+        if _seek is not None:
+            def _build(mel_np, _ctx=ctx):
+                _set_device_for(_ctx)   # the encoder's device, explicitly, every window
+                return NBXTensor.from_numpy(_fit(mel_np))
+            _seek["build"] = _build
+            ctx._stt_seek = _seek
+            feats = _fit(whisper_window_mel(_seek, 0))
+    if feats is None:
+        feats = _fit(extract_features_np(preprocessing, str(audio_path),
+                                         Path(find_model_config_path(ctx)), input_shape))
+    print(f"   [Audio·np] Features: {tuple(feats.shape)} ({preprocessing})"
+          + (" (long-form: timestamp seek)" if ctx._stt_seek else ""))
 
     # Place the feature tensor on the encoder's device (NBXTensor.from_numpy uses
     # the CURRENT DeviceAllocator device — without this it lands on cuda:0 while a

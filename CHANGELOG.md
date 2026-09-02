@@ -31,6 +31,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Long recordings are transcribed in full by both speech-to-text
+  families.** Whisper-class models (`encoder_decoder` flow) now run the
+  vendor's own long-form algorithm: each 30-second window is decoded
+  with timestamps and the next window starts where the last complete
+  segment ended, so no word is cut at a window boundary; the vendor's
+  token-suppression rules apply as well. The timestamp and suppression
+  data come from the model's own generation config, carried by the
+  container: a container built before this release refuses a long
+  input with a clear message naming the rebuild, and short clips are
+  unaffected. RNN-T models (`rnnt` flow, Parakeet) run buffered
+  inference — overlapping windows merged by the frame each token was
+  emitted at — with the overlap declared in the family configuration.
+  A 10-minute recording that used to return only its opening seconds
+  now returns the whole transcript, identically on both engines.
+  `NBX_DISABLE_STT_CHUNKING=1` restores the previous single-window
+  behavior for diagnosis.
+
+- **RNN-T / TDT decoding matches the vendor's greedy algorithm.** The
+  prediction network's state was advanced on every blank step and a
+  non-blank symbol's predicted duration never advanced time, which
+  dropped or duplicated symbols inside words ("vis" for "visit",
+  "effecteded"). The decode loop now follows the reference exactly:
+  the state is committed only when a symbol is emitted and the
+  duration head advances time after every symbol. On a 10-minute
+  reference the word-level agreement with the vendor's own output
+  rises from 95.6% to 99.0%, and both engines produce byte-identical
+  transcripts.
+
+- **A large attention chunk refused by the GPU no longer aborts a video
+  generation.** The chunked deterministic attention path retries a
+  refused chunk at half its rows (down to the architecture's row
+  block), keyed on a typed allocator error, and says so loudly. Bytes
+  are identical whether or not the retry fires.
+
 - **A refused command could exit with success.** When `neurobrix run`
   refused a request loudly (for example two execution-mode flags at
   once), the process still exited with code 0 — scripts and harnesses

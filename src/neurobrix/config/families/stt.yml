@@ -13,6 +13,15 @@ defaults:
   temperature: 0.0  # Greedy decoding default for STT
   max_tokens: 448   # Whisper standard max generation length
 
+long_form:
+  # Audio longer than one traced window. The whisper class runs the
+  # vendor's timestamp-seek algorithm (no policy: the model's own
+  # timestamps decide). The RNNT class runs buffered inference — the
+  # NeMo long-form recipe: consecutive windows overlap by this many
+  # seconds and tokens are merged by the encoder frame they were
+  # emitted at.
+  rnnt_overlap_seconds: 2.0
+
 execution:
   # flow_type varies per model (encoder_decoder Whisper, rnnt Parakeet).
   # Read from topology.json.

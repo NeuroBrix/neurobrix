@@ -78,35 +78,105 @@ class EncoderDecoderEngine(FlowHandler):
         enc_name = encoder_stage["component"]
         dec_name = decoder_stage["component"]
 
-        print(f"   [{enc_name}] Running encoder...")
-        start = time.perf_counter()
-        self._ensure_weights_loaded(enc_name)
-        self._execute_component(enc_name, "forward", None)
-        enc_elapsed = (time.perf_counter() - start) * 1000
-        print(f"   [{enc_name}] Done in {enc_elapsed:.0f}ms")
+        # Long-form (D-STT-LONGFORM-CHUNKING): audio longer than one
+        # window runs the vendor's timestamp-seek algorithm — decode a
+        # window with timestamps, seek to the end of its last complete
+        # segment, decode again from there (rules in
+        # core/module/audio/stt_longform.py, shared with the triton
+        # mirror). One window == the exact pre-change path. Weights stay
+        # loaded across windows and unload once after the loop.
+        _seek_ctx = getattr(self.ctx, "_stt_seek", None)
+        _all_ids: list = []
+        _all_texts: list = []
+        _feat_var = audio_config.get("input", {}).get(
+            "variable", "global.input_features")
+        _feat_short = _feat_var.split(".")[-1]
+        _seek = 0
+        _seek_total = len(_seek_ctx["audio"]) if _seek_ctx else 0
+        _ts_ids = None
+        if _seek_ctx:
+            from neurobrix.core.module.audio.stt_longform import whisper_timestamp_ids
+            _ts_ids = whisper_timestamp_ids(defaults)
+            if _ts_ids is None:
+                raise RuntimeError(
+                    "Long-form audio needs the model's timestamp token data "
+                    "(no_timestamps_token_id) in defaults.json; this container "
+                    "was built before the toolchain copied it. Rebuild it with "
+                    "the current toolchain, or pass audio no longer than one "
+                    f"window ({_seek_ctx['chunk_s']:.0f} s).")
+            print(f"   [Audio] Long-form: timestamp seek over "
+                  f"{_seek_total / _seek_ctx['sr']:.1f} s")
 
-        # Store encoder output for cross-attention
-        encoder_output = self._get_component_output(enc_name)
-        if encoder_output is not None:
-            self.ctx.variable_resolver.resolved[f"{enc_name}.output_0"] = encoder_output
-        _prog0 = __import__("os").environ.get("NBX_DECODE_PROGRESS")
-        if _prog0 and encoder_output is not None:  # gated diagnostic — compiled encoder ref
-            try:
-                import numpy as _np
-                _eo = encoder_output.detach().float().cpu().numpy()
-                with open(_prog0, "w") as _pf:
-                    _pf.write(f"ENCODER shape={_eo.shape} l2={float(_np.linalg.norm(_eo)):.3f} "
-                              f"mean={float(_eo.mean()):.5f} std={float(_eo.std()):.5f} "
-                              f"nan={bool(_np.isnan(_eo).any())} "
-                              f"head={_np.round(_eo.flatten()[:6],4).tolist()}\n")
-                    _pf.flush()
-            except Exception:
-                pass
+        _n_win = 0
+        while True:
+            if _seek_ctx and _n_win > 0:
+                from neurobrix.core.module.audio.mel_dsp import whisper_window_mel
+                _wf = _seek_ctx["build"](whisper_window_mel(_seek_ctx, _seek))
+                self.ctx.variable_resolver.resolved[_feat_var] = _wf
+                self.ctx.variable_resolver.resolved[_feat_short] = _wf
+            _n_win += 1
+            _mel_frames = int(self.ctx.variable_resolver.resolved[_feat_var].shape[-1])
+
+            print(f"   [{enc_name}] Running encoder..." +
+                  (f" (window {_n_win} at {_seek / _seek_ctx['sr']:.2f} s)"
+                   if _seek_ctx else ""))
+            start = time.perf_counter()
+            self._ensure_weights_loaded(enc_name)
+            self._execute_component(enc_name, "forward", None)
+            enc_elapsed = (time.perf_counter() - start) * 1000
+            print(f"   [{enc_name}] Done in {enc_elapsed:.0f}ms")
+
+            # Store encoder output for cross-attention
+            encoder_output = self._get_component_output(enc_name)
+            if encoder_output is not None:
+                self.ctx.variable_resolver.resolved[f"{enc_name}.output_0"] = encoder_output
+            _prog0 = __import__("os").environ.get("NBX_DECODE_PROGRESS")
+            if _prog0 and encoder_output is not None:  # gated diagnostic — compiled encoder ref
+                try:
+                    import numpy as _np
+                    _eo = encoder_output.detach().float().cpu().numpy()
+                    with open(_prog0, "w") as _pf:
+                        _pf.write(f"ENCODER shape={_eo.shape} l2={float(_np.linalg.norm(_eo)):.3f} "
+                                  f"mean={float(_eo.mean()):.5f} std={float(_eo.std()):.5f} "
+                                  f"nan={bool(_np.isnan(_eo).any())} "
+                                  f"head={_np.round(_eo.flatten()[:6],4).tolist()}\n")
+                        _pf.flush()
+                except Exception:
+                    pass
+
+            _adv = self._decode_one_window(
+                decoder_stage, dec_name, defaults, _all_ids, _all_texts,
+                seek_ctx=_seek_ctx, ts_ids=_ts_ids, mel_frames=_mel_frames,
+                encoder_frames=(int(encoder_output.shape[1])
+                                if encoder_output is not None else None))
+            if not _seek_ctx:
+                break
+            _seek += _adv if _adv else _seek_ctx["nsamp"]
+            if _seek >= _seek_total:
+                break
 
         if not self.ctx.persistent_mode:
             self._unload_component_weights(enc_name)
+            self._unload_component_weights(dec_name)
             release_flow_memory(self.ctx.primary_device)
 
+        self.ctx.variable_resolver.resolved["global.generated_token_ids"] = _all_ids
+        if _n_win > 1:
+            text = " ".join(t.strip() for t in _all_texts if t and t.strip())
+            self.ctx.variable_resolver.resolved["global.transcription"] = text
+            print(f"   [Output] Transcription ({_n_win} windows): "
+                  f"{text[:100]}{'...' if len(text) > 100 else ''}")
+        else:
+            from .audio_utils import postprocess_text_output
+            postprocess_text_output(self.ctx)
+
+        return self.ctx.variable_resolver.resolve_all()
+
+    def _decode_one_window(self, decoder_stage, dec_name, defaults,
+                           _all_ids, _all_texts, seek_ctx=None, ts_ids=None,
+                           mel_frames=None, encoder_frames=None):
+        """Decode one window; in long-form returns the seek advance in
+        samples (None = consume the whole window)."""
         # ── Step 3: Autoregressive decode with cross-attention ──
         from neurobrix.core.runtime.decode_bound import decode_bound  # NBX_DECODE_BOUND harness
         max_tokens = decode_bound(defaults.get("max_tokens"))
@@ -134,9 +204,13 @@ class EncoderDecoderEngine(FlowHandler):
             "encoder_decoder (compiled)", ("temperature", "repetition_penalty"),
             _samp_cfg, explicit=_samp_explicit)
 
-        # Forced decoder IDs (language/task tokens for Whisper)
-        forced_decoder_ids = defaults.get("forced_decoder_ids", [])
-        forced_map = {pos: tid for pos, tid in forced_decoder_ids}
+        # Forced decoder positions (language/task tokens) and the prompt
+        # length — in long-form the vendor drops a forced
+        # <|notimestamps|> (stt_longform.whisper_forced_map).
+        from neurobrix.core.module.audio.stt_longform import (
+            whisper_begin_index, whisper_forced_map)
+        forced_map = whisper_forced_map(defaults, ts_ids, timestamps=seek_ctx is not None)
+        begin = whisper_begin_index(forced_map)
 
         print(f"   [{dec_name}] Generating tokens (max={max_tokens})...")
         start = time.perf_counter()
@@ -180,6 +254,8 @@ class EncoderDecoderEngine(FlowHandler):
                     logits, temperature,
                     generated_ids=generated_ids,
                     repetition_penalty=repetition_penalty,
+                    defaults=defaults, ts_ids=ts_ids, begin=begin,
+                    timestamps=seek_ctx is not None,
                 )
 
             generated_ids.append(next_token)
@@ -204,16 +280,39 @@ class EncoderDecoderEngine(FlowHandler):
         dec_elapsed = (time.perf_counter() - start) * 1000
         print(f"   [{dec_name}] Generated {len(generated_ids)} tokens in {dec_elapsed:.0f}ms")
 
-        self.ctx.variable_resolver.resolved["global.generated_token_ids"] = generated_ids
-
-        if not self.ctx.persistent_mode:
-            self._unload_component_weights(dec_name)
-            release_flow_memory(self.ctx.primary_device)
-
-        # ── Step 4: Decode tokens to text ──
-        postprocess_text_output(self.ctx)
-
-        return self.ctx.variable_resolver.resolve_all()
+        # Timestamp seek — the vendor's rule (stt_longform.whisper_seek):
+        # an unfinished trailing segment is dropped and decoded again
+        # from the last complete segment's end in the next window; a
+        # single stamp at the very end, or no stamp pairs, consume the
+        # whole window. The advance is measured in samples from the
+        # run's own mel/encoder frame ratio, never assumed.
+        advance_samples = None
+        if seek_ctx is not None:
+            from neurobrix.core.module.audio.stt_longform import (
+                whisper_advance_samples, whisper_seek)
+            _adv_idx, _keep = whisper_seek(generated_ids, begin, ts_ids[1], eos_token_id)
+            if _adv_idx is not None and not encoder_frames:
+                raise RuntimeError("ZERO FALLBACK: long-form seek needs the encoder output frame count.")
+            if _adv_idx is not None and _adv_idx > 0:
+                generated_ids = generated_ids[:_keep]
+                advance_samples = whisper_advance_samples(
+                    _adv_idx, mel_frames, encoder_frames, seek_ctx["hop"])
+                print(f"   [{dec_name}] seek +{advance_samples / seek_ctx['sr']:.2f} s "
+                      f"(end of the last complete segment)")
+            else:
+                print(f"   [{dec_name}] seek: whole window")
+        _all_ids.extend(generated_ids)
+        # Per-window text (timestamp tokens stripped by form); joined by
+        # the caller. Single-window callers still run the classic
+        # postprocess for byte-identical output.
+        tokenizer = self.ctx.modules.get("tokenizer")
+        if tokenizer is not None:
+            from neurobrix.core.module.audio.output_processor import AudioOutputProcessor
+            _all_texts.append(
+                AudioOutputProcessor.decode_tokens(generated_ids, tokenizer))
+        else:
+            _all_texts.append(str(generated_ids))
+        return advance_samples
 
     # ─── Helpers ──────────────────────────────────────────────────────────────
 
@@ -274,6 +373,8 @@ class EncoderDecoderEngine(FlowHandler):
         self, logits: torch.Tensor, temperature: float,
         generated_ids: Optional[List[int]] = None,
         repetition_penalty: float = 1.0,
+        defaults: Optional[dict] = None, ts_ids=None, begin: int = 1,
+        timestamps: bool = False,
     ) -> int:
         """Sample next token from logits."""
         last_logits = logits[:, -1, :].clone()
@@ -285,10 +386,53 @@ class EncoderDecoderEngine(FlowHandler):
                 else:
                     last_logits[0, tid] *= repetition_penalty
 
+        # Vendor logit rules (suppression lists; the timestamp grammar
+        # in long-form) — data the build carries; a container without
+        # them keeps the exact device argmax path.
+        if defaults is not None and (timestamps or defaults.get("suppress_tokens")
+                                     or defaults.get("begin_suppress_tokens")):
+            from neurobrix.core.module.audio.stt_longform import apply_whisper_logit_rules
+            import numpy as _np
+            _row = last_logits[0].detach().float().cpu().numpy()
+            _maybe_log_topk(_row, len(generated_ids or []), "torch", "raw")
+            apply_whisper_logit_rules(_row, generated_ids or [], defaults, ts_ids,
+                                      begin, timestamps=timestamps)
+            _maybe_log_topk(_row, len(generated_ids or []), "torch", "rules")
+            if temperature == 0.0:
+                return int(_np.argmax(_row))
+            last_logits = torch.from_numpy(_row).to(
+                device=last_logits.device, dtype=last_logits.dtype)[None]
+
         if temperature == 0.0:
+            if __import__("os").environ.get("NBX_DECODE_TOPK"):
+                _maybe_log_topk(last_logits[0].detach().float().cpu().numpy(),
+                                len(generated_ids or []), "torch", "raw")
             return last_logits.argmax(dim=-1).item()
         probs = torch.softmax(last_logits / temperature, dim=-1)
         return device_multinomial(probs, 1).item()
+
+
+
+def _maybe_log_topk(row, step: int, engine: str, stage: str) -> None:
+    """NBX_DECODE_TOPK=<jsonl>: per-step top-4 ids/values + top-2 margin
+    of one logits row (numpy), `stage` = "raw" (model logits) or
+    "rules" (after the vendor logit rules). Same record shape as the
+    vlm flows so engine records pair by (step, stage). Default-off."""
+    import os as _os
+    path = _os.environ.get("NBX_DECODE_TOPK")
+    if not path:
+        return
+    import json as _json
+    import numpy as _np
+    r = _np.asarray(row, dtype=_np.float64).reshape(-1)
+    top = _np.argsort(-r)[:4]
+    vals = [float(r[i]) for i in top]
+    rec = {"engine": engine, "stage": stage, "step": int(step),
+           "ids": [int(i) for i in top], "vals": [round(v, 6) for v in vals],
+           "margin12": round(vals[0] - vals[1], 6)}
+    with open(path, "a") as f:
+        _json.dump(rec, f)
+        f.write("\n")
 
 
 _SAMPLING_PARAMS = ("temperature", "top_k", "top_p",

@@ -54,32 +54,53 @@ class RNNTEngine(FlowHandler):
         flow = self.ctx.pkg.topology.get("flow", {})
         audio_config = flow.get("audio", {})
 
-        # Step 1: Audio preprocessing
+        # Step 1: Audio preprocessing (stashes long-form windows —
+        # D-STT-LONGFORM-CHUNKING: one mel window per traced frame span;
+        # len==1 == the exact pre-change path)
         self._preprocess_audio(audio_config)
+        _windows = getattr(self, "_stt_windows", None) or [None]
+        _n_win = len(_windows)
+        if _n_win > 1:
+            print(f"   [Audio] Long-form: {_n_win} windows")
 
-        # Step 2: Run encoder
-        start = time.perf_counter()
-        self._ensure_weights_loaded("encoder")
-        self._execute_component("encoder", "forward", None)
-        enc_output = self._get_component_output("encoder")
-        enc_ms = (time.perf_counter() - start) * 1000
-        print(f"   [encoder] Done in {enc_ms:.0f}ms, output {enc_output.shape}")
+        tokens: list = []
+        for _wi in range(_n_win):
+            if _windows[_wi] is not None and _wi > 0:
+                self._bind_window(*_windows[_wi])
+
+            # Step 2: Run encoder
+            start = time.perf_counter()
+            self._ensure_weights_loaded("encoder")
+            self._execute_component("encoder", "forward", None)
+            enc_output = self._get_component_output("encoder")
+            enc_ms = (time.perf_counter() - start) * 1000
+            print(f"   [encoder] Done in {enc_ms:.0f}ms, output {enc_output.shape}"
+                  + (f" (window {_wi + 1}/{_n_win})" if _n_win > 1 else ""))
+
+            # Step 3: RNNT greedy decode
+            start = time.perf_counter()
+            self._ensure_weights_loaded("decoder")
+            self._ensure_weights_loaded("joint")
+
+            _wtok = self._rnnt_greedy_decode(enc_output)
+            if _n_win > 1:
+                # Buffered-inference merge (stt_longform.rnnt_merge_window):
+                # each token carries the encoder frame it was emitted at;
+                # the kept intervals tile the timeline exactly. The
+                # overlap in encoder frames is measured from THIS
+                # window's encoder output against its mel span.
+                from neurobrix.core.module.audio.stt_longform import rnnt_merge_window
+                _w_enc = int(self._enc_frames)   # the FRAME axis the decode walked
+                _ov_enc = int(round(self._stt_overlap_mel * _w_enc / self._stt_window_mel))
+                _wtok = rnnt_merge_window(_wtok, self._token_frames, _wi, _n_win,
+                                          _w_enc, _ov_enc)
+            tokens.extend(_wtok)
+
+            dec_ms = (time.perf_counter() - start) * 1000
+            print(f"   [rnnt_decode] {len(tokens)} tokens in {dec_ms:.0f}ms")
 
         if not self.ctx.persistent_mode:
             self._unload_component_weights("encoder")
-            release_flow_memory(self.ctx.primary_device)
-
-        # Step 3: RNNT greedy decode
-        start = time.perf_counter()
-        self._ensure_weights_loaded("decoder")
-        self._ensure_weights_loaded("joint")
-
-        tokens = self._rnnt_greedy_decode(enc_output)
-
-        dec_ms = (time.perf_counter() - start) * 1000
-        print(f"   [rnnt_decode] {len(tokens)} tokens in {dec_ms:.0f}ms")
-
-        if not self.ctx.persistent_mode:
             self._unload_component_weights("decoder")
             self._unload_component_weights("joint")
             release_flow_memory(self.ctx.primary_device)
@@ -117,28 +138,32 @@ class RNNTEngine(FlowHandler):
         if audio.ndim > 1:
             audio = audio.mean(axis=1)
 
-        # Resample to 16kHz if needed
-        if sr != 16000:
+        # NeMo preprocessing params from the embedded model_config.yaml —
+        # the single source the numpy mirror reads too
+        # (mel_dsp.nemo_mel_params); the .nbx defaults keep precedence
+        # for the values the build carries.
+        from neurobrix.core.flow.audio_utils import find_model_config_path
+        from neurobrix.core.module.audio.mel_dsp import nemo_mel_params
+        _p = nemo_mel_params(find_model_config_path(self.ctx))
+        defaults = self.ctx.pkg.defaults
+        n_fft, win_length, hop_length, n_mels = _p["n_fft"], _p["win"], _p["hop"], _p["n_mels"]
+        target_sr = _p["sr"]
+        dither = defaults.get("dither", _p["dither"])
+
+        # Resample to the model's rate if needed
+        if sr != target_sr:
             import numpy as np
-            target_len = int(len(audio) * 16000 / sr)
+            target_len = int(len(audio) * target_sr / sr)
             indices = np.linspace(0, len(audio) - 1, target_len)
             audio = np.interp(indices, np.arange(len(audio)), audio).astype(np.float32)
-            sr = 16000
+            sr = target_sr
 
         print(f"   [Audio] Loading: {audio_path}")
 
         waveform = torch.from_numpy(audio).to(device=device, dtype=torch.float32)
 
-        # NeMo preprocessing params from model_config.yaml
-        defaults = self.ctx.pkg.defaults
-        n_fft = 512
-        win_length = 400   # 0.025 * 16000
-        hop_length = 160   # 0.01 * 16000
-        n_mels = 80
-        dither = defaults.get("dither", 1e-5)
-
         # Pre-emphasis filter: y[n] = x[n] - 0.97*x[n-1]
-        preemph = defaults.get("preemphasis", 0.97)
+        preemph = defaults.get("preemphasis", _p["preemph"])
         if preemph > 0:
             waveform = torch.cat([waveform[:1], waveform[1:] - preemph * waveform[:-1]])
 
@@ -183,22 +208,70 @@ class RNNTEngine(FlowHandler):
 
         # Pad to match encoder's traced frame count
         expected_frames = 3000
+        _dag_frames = None
         encoder_executor = self.ctx.executors.get("encoder")
         if encoder_executor and hasattr(encoder_executor, '_dag'):
             for tid in encoder_executor._dag.get("input_tensor_ids", []):
                 tdata = encoder_executor._dag.get("tensors", {}).get(tid, {})
                 shape = tdata.get("shape")
                 if shape and len(shape) == 3:
-                    expected_frames = shape[2]
+                    expected_frames = _dag_frames = shape[2]
                     break
 
-        if actual_frames < expected_frames:
-            features = torch.nn.functional.pad(features, (0, expected_frames - actual_frames))
-        elif actual_frames > expected_frames:
-            features = features[:, :, :expected_frames]
+        # Long-form (D-STT-LONGFORM-CHUNKING): buffered inference over
+        # the encoder's window span — NeMo's own long-form recipe:
+        # overlapping windows (overlap from the family YAML, in seconds,
+        # converted with the extractor's own hop), one decode each,
+        # tokens merged by emission frame (stt_longform). Whole-
+        # utterance mel stats (the normalization above), last window
+        # padded like a short clip. The window length is the traced
+        # span: D-PARAKEET-SYMBOLIC-T (DETTE.md) names the symbolic-T
+        # trace that removes that coupling. NBX_DISABLE_STT_CHUNKING=1
+        # restores the truncating path for diagnosis.
+        import os as _os_sw
+        self._stt_windows = None
+        self._stt_window_mel = expected_frames
+        self._stt_overlap_mel = 0
+        if (actual_frames > expected_frames
+                and _os_sw.environ.get("NBX_DISABLE_STT_CHUNKING") != "1"):
+            from neurobrix.core.config.loader import get_family_config
+            from neurobrix.core.module.audio.stt_longform import rnnt_window_plan
+            _lf = get_family_config("stt").get("long_form") or {}
+            if "rnnt_overlap_seconds" not in _lf:
+                raise RuntimeError(
+                    "ZERO FALLBACK: stt.yml long_form.rnnt_overlap_seconds missing.")
+            if _dag_frames is None:
+                raise RuntimeError(
+                    "ZERO FALLBACK: long-form RNNT needs the encoder's traced frame "
+                    "span from the DAG (no 3-D encoder input found).")
+            if not _p.get("source"):
+                # The overlap is converted with the SAME hop/rate the mel
+                # above was computed with; a legacy build without an
+                # embedded NeMo config runs both on the built-in NeMo
+                # values — said out loud, never silently (the rebuild
+                # that embeds model_config.yaml is D-PARAKEET-SYMBOLIC-T).
+                print(f"   [Audio] NeMo preprocessor params: built-in values "
+                      f"(no embedded config in this build) — sr={sr} hop={hop_length}")
+            self._stt_overlap_mel = int(round(float(_lf["rnnt_overlap_seconds"]) * sr / hop_length))
+            wins = []
+            for _start, _valid in rnnt_window_plan(actual_frames, expected_frames,
+                                                   self._stt_overlap_mel):
+                f = features[:, :, _start:_start + _valid]
+                if _valid < expected_frames:
+                    f = torch.nn.functional.pad(f, (0, expected_frames - _valid))
+                wins.append((f, torch.tensor([_valid], dtype=torch.long, device=device)))
+            self._stt_windows = wins
+            features, length = wins[0]
+        else:
+            if actual_frames < expected_frames:
+                features = torch.nn.functional.pad(features, (0, expected_frames - actual_frames))
+            elif actual_frames > expected_frames:
+                features = features[:, :, :expected_frames]
+            length = torch.tensor([min(actual_frames, expected_frames)], dtype=torch.long, device=device)
 
-        length = torch.tensor([min(actual_frames, expected_frames)], dtype=torch.long, device=device)
+        self._bind_window(features, length)
 
+    def _bind_window(self, features, length) -> None:
         # Bind under all possible keys the executor might look for
         for key in ["global.audio_signal", "global.input_features", "audio_signal",
                      "input::audio_signal", "encoder.audio_signal"]:
@@ -230,6 +303,7 @@ class RNNTEngine(FlowHandler):
         # enc_output is [B, D_enc, T_padded] — transpose to [B, T_padded, D_enc]
         enc_out = enc_output.transpose(1, 2)  # [1, T_padded, D_enc]
         T_padded = enc_out.shape[1]
+        self._enc_frames = int(T_padded)   # encoder frame axis (long-form merge)
 
         # Compute actual encoder output length from input length
         # Conformer subsampling: 2 conv layers with stride 2 each = 4x reduction (typical)
@@ -267,6 +341,7 @@ class RNNTEngine(FlowHandler):
 
         # Initialize
         tokens: List[int] = []
+        self._token_frames: List[int] = []
         blank_token = blank_id
         last_token = blank_token
 
@@ -276,57 +351,63 @@ class RNNTEngine(FlowHandler):
         h = torch.zeros(num_layers, 1, hidden_size, device=device, dtype=dtype)
         c = torch.zeros(num_layers, 1, hidden_size, device=device, dtype=dtype)
 
+        # NeMo's greedy loop (GreedyTDTInfer._greedy_decode /
+        # GreedyRNNTInfer, rnnt_greedy_decoding.py, read 2026-09-02):
+        # the prediction network runs on (last_token, state) and its
+        # output g is REUSED until a non-blank commits a new state; the
+        # duration head's skip advances time after every symbol, blank or
+        # not (a non-blank with skip 0 keeps the frame); a plain RNNT
+        # stays on the frame after a non-blank and moves one frame on a
+        # blank; max_symbols_per_step guards the frame.
+        durations = defaults.get("tdt_durations")
+        if num_tdt_durations > 1 and durations is None:
+            durations = list(range(num_tdt_durations))
+            print(f"   [rnnt_decode] TDT durations: built-in consecutive "
+                  f"{durations} (not carried by this build)")
+        max_symbols_per_step = int(defaults.get("max_symbols_per_step", 10))
         t = 0
-        max_symbols_per_frame = 10  # Safety limit
-
+        g = None                      # prediction-network output for (last_token, state)
+        h_next = c_next = None
         with torch.inference_mode():
             while t < T:
-                # Decoder step: embedding + LSTM
-                token_tensor = torch.tensor([[last_token]], dtype=torch.long, device=device)
-                dec_embed = torch.nn.functional.embedding(token_tensor, dec_weights["embedding"])
-                # dec_embed: [1, 1, D_dec]
-                dec_input = dec_embed.transpose(0, 1)  # [1, 1, D_dec] → [seq=1, batch=1, D_dec]
-                dec_rnn_out, (h, c) = self._run_lstm(
-                    dec_input, (h, c),
-                    dec_weights["weight_ih"], dec_weights["weight_hh"],
-                    dec_weights["bias_ih"], dec_weights["bias_hh"],
-                    num_layers,
-                )
-                # dec_rnn_out: [1, 1, D_dec]
-                dec_frame = dec_rnn_out.squeeze(0)  # [1, D_dec]
-
-                # Encoder frame
-                enc_frame = enc_out[:, t, :]  # [1, D_enc]
-
-                # Joint: linear projections + broadcast add + relu + output
-                logits = self._run_joint(enc_frame, dec_frame, joint_weights)
-                # logits: [vocab_size + num_tdt_durations]
-
-                # Split logits into token logits and duration logits
-                if num_tdt_durations > 1:
-                    token_logits = logits[:vocab_size + 1]  # vocab + blank
-                    dur_logits = logits[vocab_size + 1:]
-                else:
-                    token_logits = logits
-                    dur_logits = None
-
-                pred_token = token_logits.argmax().item()
-
-                if pred_token == blank_id:
-                    # Blank: advance time by 1 (or TDT duration)
-                    if dur_logits is not None and dur_logits.numel() > 0:
-                        dur = dur_logits.argmax().item()
-                        t += max(1, dur)
+                symbols_added = 0
+                need_loop = True
+                skip = 1
+                while need_loop and symbols_added < max_symbols_per_step:
+                    if g is None:
+                        token_tensor = torch.tensor([[last_token]], dtype=torch.long, device=device)
+                        dec_embed = torch.nn.functional.embedding(token_tensor, dec_weights["embedding"])
+                        dec_input = dec_embed.transpose(0, 1)  # [seq=1, batch=1, D_dec]
+                        dec_rnn_out, (h_next, c_next) = self._run_lstm(
+                            dec_input, (h, c),
+                            dec_weights["weight_ih"], dec_weights["weight_hh"],
+                            dec_weights["bias_ih"], dec_weights["bias_hh"],
+                            num_layers,
+                        )
+                        g = dec_rnn_out.squeeze(0)  # [1, D_dec]
+                    enc_frame = enc_out[:, t, :]  # [1, D_enc]
+                    logits = self._run_joint(enc_frame, g, joint_weights)
+                    if num_tdt_durations > 1:
+                        token_logits = logits[:vocab_size + 1]  # vocab + blank
+                        skip = durations[int(logits[vocab_size + 1:].argmax().item())]
                     else:
-                        t += 1
-                else:
-                    # Non-blank: emit token, stay at same time step
-                    tokens.append(pred_token)
-                    last_token = pred_token
-
-                    # Safety: max symbols per frame
-                    if len(tokens) > max_symbols_per_frame * (t + 1):
-                        t += 1
+                        token_logits = logits
+                    pred_token = token_logits.argmax().item()
+                    if pred_token != blank_id:
+                        tokens.append(pred_token)
+                        self._token_frames.append(t)   # encoder frame per token (long-form merge)
+                        h, c = h_next, c_next          # commit the state, as the vendor does
+                        last_token = pred_token
+                        g = None
+                        if num_tdt_durations <= 1:
+                            skip = 0                   # plain RNNT: stay on the frame
+                    elif num_tdt_durations <= 1:
+                        skip = 1                       # plain RNNT: blank moves one frame
+                    symbols_added += 1
+                    t += skip
+                    need_loop = skip == 0
+                if symbols_added == max_symbols_per_step:
+                    t += 1
 
         return tokens
 

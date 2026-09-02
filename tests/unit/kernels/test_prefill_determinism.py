@@ -76,10 +76,12 @@ class _pinned_route:
         self._b = W._sdpa_math_scores_budget_bytes
         self._f = getattr(W, "_sdpa_math_scores_device_fraction", None)
         self._c = W._sdpa_math_max_chunks
+        self._r = W._sdpa_math_min_chunk_rows
         W._sdpa_math_scores_budget_bytes = lambda: self.budget
         if self._f is not None:
             W._sdpa_math_scores_device_fraction = lambda: 0.0
         W._sdpa_math_max_chunks = lambda: self.max_chunks
+        W._sdpa_math_min_chunk_rows = lambda: 128   # the arch row block, pinned like the ceiling
         return self
 
     def __exit__(self, *a):
@@ -87,6 +89,7 @@ class _pinned_route:
         if self._f is not None:
             W._sdpa_math_scores_device_fraction = self._f
         W._sdpa_math_max_chunks = self._c
+        W._sdpa_math_min_chunk_rows = self._r
 
 
 def _mk(B, H, H_kv, T, D, seed=7):
@@ -413,3 +416,81 @@ def test_32g_pow2_window_keeps_prefix_route_on_device() -> None:
     finally:
         restore()
     assert route == "math", f"expected un-chunked math on 32G, got {route}"
+
+
+# ---------------------------------------------------------------------------
+# Headroom-aware chunk retry (D-OPENSORA-TRITON-SDPA, 2026-09-02): the static
+# per-device budget cannot see the live watermark; a refused chunk malloc
+# halves the chunk and resumes at the same row — byte-identical output,
+# loud line, bounded at 128 rows, non-malloc errors propagate untouched.
+# ---------------------------------------------------------------------------
+
+def test_chunk_retry_halves_on_malloc_refusal_and_matches() -> None:
+    import numpy as np
+    import neurobrix.kernels.wrappers as W
+    from neurobrix.kernels.nbx_tensor import NBXTensor, DeviceAllocator
+    try:
+        DeviceAllocator.set_device(0)
+    except Exception:
+        pytest.skip("no GPU")
+    rng = np.random.default_rng(11)
+    B, H, T, D = 1, 2, 512, 64
+    mk = lambda: NBXTensor.from_numpy(
+        (rng.standard_normal((B, H, T, D)) * 0.1).astype(np.float16))
+    q, k, v = mk(), mk(), mk()
+    ref = W._math_attention_chunked(q, k, v, None, True, 1.0 / np.sqrt(D), 256)
+    ref_b = _d2h(ref)
+
+    orig = W._math_attention
+    orig_floor = W._sdpa_math_min_chunk_rows
+    W._sdpa_math_min_chunk_rows = lambda: 128   # the arch row block (yml), pinned
+    state = {"calls": 0, "refused": False}
+
+    from neurobrix.kernels.nbx_tensor import DeviceOOMError
+
+    def flaky(*a, **kw):
+        state["calls"] += 1
+        # refuse exactly one big chunk (the first call), then behave
+        if not state["refused"] and a[0].shape[2] == 256:
+            state["refused"] = True
+            raise DeviceOOMError("GPU malloc failed (error 2) for 1 bytes [device cuda:0 ...]")
+        return orig(*a, **kw)
+
+    W._math_attention = flaky
+    try:
+        out = W._math_attention_chunked(q, k, v, None, True, 1.0 / np.sqrt(D), 256)
+    finally:
+        W._math_attention = orig
+        W._sdpa_math_min_chunk_rows = orig_floor
+    assert state["refused"], "the refusal path never fired (vacuous)"
+    assert _d2h(out) == ref_b, "retry changed the bytes"
+
+
+def test_chunk_retry_propagates_non_malloc_errors() -> None:
+    import numpy as np
+    import neurobrix.kernels.wrappers as W
+    from neurobrix.kernels.nbx_tensor import NBXTensor, DeviceAllocator
+    try:
+        DeviceAllocator.set_device(0)
+    except Exception:
+        pytest.skip("no GPU")
+    rng = np.random.default_rng(12)
+    mk = lambda: NBXTensor.from_numpy(
+        (rng.standard_normal((1, 1, 256, 32)) * 0.1).astype(np.float16))
+    q, k, v = mk(), mk(), mk()
+    orig = W._math_attention
+
+    def boom(*a, **kw):
+        # Same text as a real refusal, but not the typed exception: the
+        # retry must key on the TYPE, never on the message.
+        raise RuntimeError("GPU malloc failed — impostor, some other kernel error")
+
+    W._math_attention = boom
+    orig_floor = W._sdpa_math_min_chunk_rows
+    W._sdpa_math_min_chunk_rows = lambda: 128
+    try:
+        with pytest.raises(RuntimeError, match="some other kernel error"):
+            W._math_attention_chunked(q, k, v, None, True, 0.1, 128)
+    finally:
+        W._math_attention = orig
+        W._sdpa_math_min_chunk_rows = orig_floor

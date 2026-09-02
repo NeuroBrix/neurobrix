@@ -13,6 +13,7 @@ import os
 import triton
 
 from .nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, _broadcast_shapes, _set_device, dtype_size
+from .nbx_tensor import DeviceOOMError
 
 # === Activations ===
 
@@ -6935,14 +6936,37 @@ def _sdpa_math_scores_budget_bytes_for(device_idx) -> int:
 
 def _sdpa_chunked_rows_within(bound, batch, nheads, seqlen_q, seqlen_k) -> int:
     """Rows per chunk that keep each chunk's fp32 scores inside `bound`,
-    128-aligned; 0 when the shape cannot chunk within the per-arch chunk
+    aligned to the arch's row block (memory.sdpa_math_min_chunk_rows); 0
+    when the shape cannot chunk within the per-arch chunk
     ceiling (video-scale shapes keep their existing path). Shared by the
     pow2 and non-pow2 routing branches — one ladder, two callers."""
     row_bytes = batch * nheads * seqlen_k * 4
-    chunk_rows = (bound // row_bytes) // 128 * 128
-    if chunk_rows >= 128 and -(-seqlen_q // chunk_rows) <= _sdpa_math_max_chunks():
+    floor = _sdpa_math_min_chunk_rows()
+    if not floor:
+        return 0
+    chunk_rows = (bound // row_bytes) // floor * floor
+    if chunk_rows >= floor and -(-seqlen_q // chunk_rows) <= _sdpa_math_max_chunks():
         return chunk_rows
     return 0
+
+
+def _sdpa_math_min_chunk_rows() -> int:
+    """Row alignment AND floor of the chunked deterministic math prefill,
+    from config/vendors/<vendor>/<arch>.yml `memory.sdpa_math_min_chunk_rows`
+    (the kernel's row block); 0 (absent key / no profile) = the chunked
+    route never fires, like `sdpa_math_max_chunks` (R23)."""
+    prof = get_hardware_profile()
+    devices = getattr(prof, "devices", None) if prof is not None else None
+    if not devices:
+        return 0
+    try:
+        from neurobrix.core.config.loader import get_vendor_config
+        _brand = devices[0].brand
+        _vendor = getattr(_brand, "value", _brand)
+        cfg = get_vendor_config(_vendor, devices[0].architecture)
+        return int(cfg.get("memory", {}).get("sdpa_math_min_chunk_rows", 0))
+    except Exception:
+        return 0
 
 
 def _sdpa_math_max_chunks() -> int:
@@ -7231,7 +7255,16 @@ def _math_attention_chunked(q, k, v, attn_mask, is_causal, scale,
     if is_causal and attn_mask is None:
         bias_full = _get_causal_bias(device_idx, T_q, T_k,
                                      NBXDtype.float32)
-    for q0 in range(0, T_q, chunk_rows):
+    # Headroom-aware retry (2026-09-02, D-OPENSORA-TRITON-SDPA): the
+    # per-device budget is a STATIC profile read and cannot see the
+    # LIVE watermark — a 42 GB model single-carded leaves 1.87 GB free
+    # and the 1.9 GiB budget chunk fails at malloc. On that failure the
+    # chunk halves (floor 128 rows) and the loop resumes at the same
+    # row: byte-safe by construction (each query row's softmax is
+    # independent of the chunking), query-free (no driver call in the
+    # hot path), loud (one line names the shortfall), bounded.
+    q0 = 0
+    while q0 < T_q:
         c = min(chunk_rows, T_q - q0)
         q_c = q[:, :, q0:q0 + c, :].contiguous()
         if bias_full is not None:
@@ -7246,9 +7279,24 @@ def _math_attention_chunked(q, k, v, attn_mask, is_causal, scale,
         else:
             mask_c = (attn_mask if attn_mask.shape[2] == 1
                       else attn_mask[:, :, q0:q0 + c, :])
-        o = _math_attention(q_c, k, v, attn_mask=mask_c,
-                            is_causal=False, scale=scale)
+        try:
+            o = _math_attention(q_c, k, v, attn_mask=mask_c,
+                                is_causal=False, scale=scale)
+        except DeviceOOMError:
+            _floor = _sdpa_math_min_chunk_rows()
+            if not _floor or chunk_rows <= _floor:
+                raise
+            _prev = chunk_rows
+            chunk_rows = max(_floor, (chunk_rows // 2) // _floor * _floor)
+            print(f"[SDPA chunked] malloc refused a {_prev}-row chunk on "
+                  f"cuda:{device_idx} (live headroom below the static "
+                  f"budget) — retrying at {chunk_rows} rows; the chunk "
+                  f"count may now exceed the arch ceiling "
+                  f"(memory.sdpa_math_max_chunks)", flush=True)
+            del q_c
+            continue
         out[:, :, q0:q0 + c, :] = o
+        q0 += c
     return out
 
 
