@@ -32,15 +32,15 @@ The protocol this script pins:
     number quoted from it must carry n and the dispersion;
   - machine exclusivity checked before starting (refuses like the gate
     runner does);
-  - AMBIENT-THERMAL CLAUSE (2026-08-25): the server cabinet is cooled
-    by ambient air — warm by day, cool at night. The campaign start
-    time (UTC) and the GPU's starting temperature are logged in the
-    report (`campaign` block) and printed with the summary. Every
-    HEADLINE ABSOLUTE number quoted from a report must carry its time
-    slot alongside n and dispersion; absolute numbers from different
-    slots are compared across campaigns only with the slot visible.
-    RATIOS are already protected: the same-campaign interleaved-arms
-    rule means thermal drift lands on both arms of a judgment.
+  - THERMAL CLAUSE REVOKED (owner amendment 2026-09-02): the cabinet
+    has adequate ventilation and the day/night difference is
+    negligible — no campaign is planned by time of day, deferred to
+    the night, or made to wait for a slot; that reading was an
+    over-interpretation and it cost time. What protects a measurement
+    exists by construction and suffices: the clock lock, the
+    same-campaign interleaved-arms rule, and the per-rep temperature
+    which stays a REPORT FIELD (logged in the `campaign` block with the
+    UTC start), never a scheduling constraint.
 
 Usage:
   python3 benchmarks/harness/bench_row.py \
@@ -410,10 +410,9 @@ def main() -> int:
     outdir = Path(args.out)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    # Ambient-thermal clause: log when the campaign ran and how warm
-    # the GPU started — the cabinet is ambient-air cooled, so absolute
-    # numbers carry their time slot (ratios are covered by
-    # interleaving).
+    # Campaign provenance: when it ran and how warm the GPU started —
+    # report fields only (thermal clause revoked 2026-09-02; never a
+    # scheduling constraint).
     campaign_start_utc = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime())
     start_state = gpu_state(args.gpu)
     print(f"  campaign start {campaign_start_utc}  GPU {args.gpu} "
@@ -469,7 +468,7 @@ def main() -> int:
     print(f"\ncampaign {campaign_start_utc} -> "
           f"{report['campaign']['end_utc']}  "
           f"start T={start_state.get('temp_c', '?')}C  "
-          f"(headline absolutes must quote this time slot)")
+          f"(provenance fields — not a planning constraint)")
     for name, _ in arms:
         rates = [r["rate"] for r in results[name] if r["rate"]]
         shas = {r["sha"] for r in results[name] if r["sha"]}
