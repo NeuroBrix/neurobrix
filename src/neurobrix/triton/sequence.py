@@ -265,8 +265,11 @@ class TritonSequence:
     """
 
     def __init__(self, dag: dict, device_idx: int = 0,
-                 compute_dtype: NBXDtype = NBXDtype.float16):
+                 compute_dtype: NBXDtype = NBXDtype.float16,
+                 config_constants=None):
         self.dag = dag
+        # profile.json architectural ints — the seq_len promotion's collision set (R30 mirror)
+        self._config_constants = set(config_constants or ())
         self.device_idx = device_idx
         self._ops: List[CompiledOp] = []
         self._arena: Optional[Arena] = None
@@ -444,7 +447,8 @@ class TritonSequence:
         # Phase 0: Promote trace-time seq_len scalars to symbolic references.
         # Shared logic in triton/promotion.py — used by both compiled and sequential.
         from .promotion import promote_seq_len_scalars
-        promote_seq_len_scalars(self.dag, tensors, ops_by_uid)
+        promote_seq_len_scalars(self.dag, tensors, ops_by_uid,
+                                config_constants=self._config_constants)
 
         # Phase 1: Categorize tensors and assign slots
         self._categorize_and_assign_slots(tensors, ops_by_uid, graph_output_ids)
@@ -1650,189 +1654,6 @@ class TritonSequence:
     # SYMBOLIC PROMOTION — ported from compiled_sequence
     # ========================================================================
 
-    def _promote_seq_len_scalars(self, tensors: dict, ops_meta: dict):
-        """Promote trace-time seq_len constants to symbolic references.
-
-        Ported from compiled_sequence._promote_seq_len_scalars_to_symbolic.
-        Detects concrete scalars matching seq_len trace values and replaces
-        them with symbol references for runtime resolution.
-        """
-        sym_ctx = self.dag.get("symbolic_context", {})
-        symbols = sym_ctx.get("symbols", {})
-
-        # Find seq_len symbols
-        seq_len_syms: Dict[str, int] = {}
-        for sid, sinfo in symbols.items():
-            if sinfo.get("name") == "seq_len":
-                tv = sinfo.get("trace_value")
-                if tv is not None:
-                    seq_len_syms[sid] = tv
-
-        if not seq_len_syms:
-            return
-
-        # Collision check: skip if trace_value appears in weight dimensions
-        weight_dims: set = set()
-        for tid, tdata in tensors.items():
-            if tid.startswith("param::") or tid.startswith("buffer::"):
-                wname = tdata.get("weight_name", "")
-                if wname.startswith("constant_T_"):
-                    continue
-                for d in tdata.get("shape", []):
-                    if isinstance(d, int):
-                        weight_dims.add(d)
-
-        safe: Dict[str, int] = {}
-        for sid, tv in seq_len_syms.items():
-            if tv not in weight_dims:
-                safe[sid] = tv
-
-        # Handle ambiguous trace values (multiple symbols share same value).
-        # If all symbols with the same trace_value have the same name (e.g., all "seq_len"),
-        # they resolve to the same runtime value — keep ONE representative.
-        tv_counts: Dict[int, list] = {}
-        for sid, tv in safe.items():
-            tv_counts.setdefault(tv, []).append(sid)
-        for tv, sids in tv_counts.items():
-            if len(sids) > 1:
-                # Check if all symbols with this value have the same name
-                names = {symbols.get(s, {}).get("name") for s in sids}
-                if len(names) == 1:
-                    # Same semantic — keep the first, remove the rest
-                    for sid in sids[1:]:
-                        del safe[sid]
-                else:
-                    # Genuinely ambiguous — remove all
-                    for sid in sids:
-                        if sid in safe:
-                            del safe[sid]
-
-        if not safe:
-            return
-
-        def _promote_int(val: int):
-            """Try to promote a raw int to symbolic ref."""
-            for sid, tv in safe.items():
-                offset = val - tv
-                if 0 <= offset <= 1:
-                    return {"type": "symbol", "symbol_id": sid,
-                            "trace_value": val, "offset": offset}
-            return None
-
-        def _promote_scalar_dict(arg: dict):
-            if arg.get("type") != "scalar":
-                return None
-            val = arg.get("value")
-            if isinstance(val, int):
-                return _promote_int(val)
-            return None
-
-        # Walk all ops and promote matching scalars
-        for op_uid, op_data in ops_meta.items():
-            op_type = op_data.get("op_type", "")
-            attrs = op_data.get("attributes", {})
-            args = attrs.get("args", [])
-
-            # slice: promote end (index 3)
-            if op_type == "aten::slice" and len(args) >= 4:
-                if isinstance(args[3], dict):
-                    r = _promote_scalar_dict(args[3])
-                    if r:
-                        args[3] = r
-
-            # arange: promote end (index 0)
-            elif op_type == "aten::arange" and len(args) >= 1:
-                if isinstance(args[0], dict):
-                    r = _promote_scalar_dict(args[0])
-                    if r:
-                        args[0] = r
-
-            # ones/zeros/full: promote shape elements
-            elif op_type in ("aten::full", "aten::zeros", "aten::ones",
-                             "aten::new_zeros", "aten::new_ones"):
-                shape_idx = 1 if op_type.startswith("aten::new_") else 0
-                if len(args) > shape_idx:
-                    shape_arg = args[shape_idx]
-                    is_wrapped = isinstance(shape_arg, dict) and shape_arg.get("type") == "list"
-                    items = shape_arg.get("value", []) if is_wrapped else shape_arg
-                    if isinstance(items, (list, tuple)):
-                        items = list(items)
-                        changed = False
-                        for i, elem in enumerate(items):
-                            if isinstance(elem, dict):
-                                r = _promote_scalar_dict(elem)
-                                if r:
-                                    items[i] = r
-                                    changed = True
-                            elif isinstance(elem, int):
-                                r = _promote_int(elem)
-                                if r:
-                                    items[i] = r
-                                    changed = True
-                        if changed:
-                            if is_wrapped:
-                                args[shape_idx] = {"type": "list", "value": items}
-                            else:
-                                args[shape_idx] = items
-
-            # expand: promote size elements
-            elif op_type == "aten::expand" and len(args) >= 2:
-                size_arg = args[1]
-                if isinstance(size_arg, (list, tuple)):
-                    size_list = list(size_arg)
-                    changed = False
-                    for i, elem in enumerate(size_list):
-                        if isinstance(elem, dict):
-                            r = _promote_scalar_dict(elem)
-                            if r:
-                                size_list[i] = r
-                                changed = True
-                        elif isinstance(elem, int):
-                            r = _promote_int(elem)
-                            if r:
-                                size_list[i] = r
-                                changed = True
-                    if changed:
-                        args[1] = size_list
-
-            # view/reshape/_unsafe_view: promote shape if no tracer symbols
-            elif op_type in ("aten::view", "aten::reshape", "aten::_unsafe_view") and len(args) >= 2:
-                shape_arg = args[1]
-                is_wrapped = isinstance(shape_arg, dict) and shape_arg.get("type") == "list"
-                items = shape_arg.get("value", []) if is_wrapped else shape_arg
-                if isinstance(items, (list, tuple)):
-                    has_symbols = any(isinstance(e, dict) and e.get("type") == "symbol"
-                                     for e in items)
-                    if not has_symbols:
-                        items = list(items)
-                        changed = False
-                        for i, elem in enumerate(items):
-                            if isinstance(elem, dict):
-                                r = _promote_scalar_dict(elem)
-                                if r:
-                                    items[i] = r
-                                    changed = True
-                            elif isinstance(elem, int):
-                                r = _promote_int(elem)
-                                if r:
-                                    items[i] = r
-                                    changed = True
-                        if changed:
-                            if is_wrapped:
-                                args[1] = {"type": "list", "value": items}
-                            else:
-                                args[1] = items
-
-            # narrow: promote length (index 3)
-            elif op_type == "aten::narrow" and len(args) >= 4:
-                if isinstance(args[3], dict):
-                    r = _promote_scalar_dict(args[3])
-                    if r:
-                        args[3] = r
-
-    # ========================================================================
-    # SLOT ASSIGNMENT — ported from compiled_sequence._categorize_and_assign_slots
-    # ========================================================================
 
     def _categorize_and_assign_slots(self, tensors: dict, ops_meta: dict,
                                      graph_output_ids: set):
@@ -4088,7 +3909,14 @@ class TritonSequence:
             _drain_now = (_deferred_bytes >= _drain_cliff
                           or len(_deferred) >= _drain_count_limit)
             _pressure = False
+            # Under the allocator pool the pressure probe has no object: a
+            # pressure drain parks dead blocks in the free-list (no driver
+            # memory comes back), and a malloc that would fail already drains
+            # the deferred queues through the registered reclaim hooks before
+            # raising. Measured (2026-09-02, xlong int4 prefill): 401
+            # cudaMemGetInfo calls = 1.8 s of the 22.7 s window.
             if (not _drain_now and _drain_reserve > 0
+                    and not DeviceAllocator._pool_enabled
                     and _deferred_bytes >= _drain_floor
                     and (op_idx - _last_free_check) >= _drain_interval):
                 _last_free_check = op_idx
@@ -4105,7 +3933,23 @@ class TritonSequence:
                           f"{_deferred_bytes/1e9:.2f} GB, "
                           f"trigger={'pressure' if _pressure else 'cliff'}",
                           flush=True)
-                _sync_deferred_all_devices(_deferred)
+                # Under the allocator pool the drain is a stream-ordered
+                # hand-back to the free-list, not a cudaFree: a block
+                # re-issued to a later op on the same in-order stream cannot
+                # overtake the kernel still reading it, so the host sync is
+                # only needed when blocks actually leave for the driver
+                # (pool off, or a block over the parked cap — `free_cuda`
+                # then frees synchronously, and cudaFree itself orders
+                # against pending work). Premise, named: all triton work
+                # orders against the legacy default stream — kernel
+                # launches, D2D/H2D copies, memsets; the zero3 transfer
+                # stream is a BLOCKING stream (`DeviceAllocator.create_stream`,
+                # legacy-ordered); the replay-graph capture stream is the one
+                # non-blocking stream and is bracketed by context syncs.
+                # Measured (2026-09-02, xlong int4 prefill): 397 drain syncs
+                # = 15.5 s of host wait on a 22.7 s window.
+                if not DeviceAllocator._pool_enabled:
+                    _sync_deferred_all_devices(_deferred)
                 _deferred.clear()
                 _deferred_bytes = 0
 
@@ -4325,7 +4169,14 @@ class TritonSequence:
             _drain_now = (_deferred_bytes >= _drain_cliff
                           or len(_deferred) >= _drain_count_limit)
             _pressure = False
+            # Under the allocator pool the pressure probe has no object: a
+            # pressure drain parks dead blocks in the free-list (no driver
+            # memory comes back), and a malloc that would fail already drains
+            # the deferred queues through the registered reclaim hooks before
+            # raising. Measured (2026-09-02, xlong int4 prefill): 401
+            # cudaMemGetInfo calls = 1.8 s of the 22.7 s window.
             if (not _drain_now and _drain_reserve > 0
+                    and not DeviceAllocator._pool_enabled
                     and _deferred_bytes >= _drain_floor
                     and (op_idx - _last_free_check) >= _drain_interval):
                 _last_free_check = op_idx

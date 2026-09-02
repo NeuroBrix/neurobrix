@@ -800,7 +800,16 @@ class AutoregressiveHandler(FlowHandler):
         graph_ops = dag.get("ops", {})
         has_sdpa = any(op.get("op_type") in sdpa_op_types for op in graph_ops.values())
 
-        if not has_sdpa:
+        # NBX_KV_RECOMPUTE=1 (diagnostic, §8): run the O(n) accumulation path
+        # instead of the KV cache — every decode step re-feeds the whole
+        # context, exactly what the op-by-op triton dispatcher does, so a
+        # per-pass op dump (NBX_DUMP_TIDS_PASS) has SAME-SHAPE operands on
+        # both sides (D-TSEQ-ORPHEUS-STEP110: the KV engines dump [1, 1, …]
+        # at pass k where triton-sequential dumps [1, k+prompt, …]).
+        import os as _os_kv
+        if not has_sdpa or _os_kv.environ.get("NBX_KV_RECOMPUTE") == "1":
+            if has_sdpa:
+                print("   [autoregressive] NBX_KV_RECOMPUTE=1: KV cache OFF, O(n) recompute reference", flush=True)
             kv_wrapper = None
         else:
             # Register interceptors

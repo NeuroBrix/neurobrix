@@ -29,7 +29,7 @@ def release_flow_memory(device=None) -> None:
          BEFORE any reference can be finalized;
       2. gc.collect() — drop refs, run finalizers;
       3. DeviceAllocator.empty_cache_pool() — return pool-cached blocks to
-         the driver (no-op when NBX_ALLOC_POOL is off; individual frees
+         the driver (no-op under NBX_ALLOC_POOL=0; individual frees then
          already went straight to cudaFree).
     """
     idxs = parse_device_idxs(device)

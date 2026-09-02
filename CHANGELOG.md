@@ -43,6 +43,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`--triton` gathers now honour negative indices like PyTorch.** The
+  index-select kernel treated a negative index as invalid and left the
+  corresponding output element unwritten, so it held whatever the
+  allocation contained — zeros on fresh device memory, stale values once
+  freed blocks are reused. The HAT upscalers index their relative-position
+  bias with negative entries, so their `--triton` outputs carried a
+  silently wrong (zero) bias, a ±1 difference per pixel that no shape or
+  tone gate could see; the pool's byte gate caught it. Negative indices
+  wrap from the end in both the single-index and the joint-index paths
+  (pinned byte-exact against a NumPy reference).
+
+- **Runtime shape rewrites no longer touch a model's architectural
+  constants.** The engine promotes concrete sizes that match a traced
+  sequence length to runtime symbols; two of those rules could also
+  rewrite a literal that merely equalled `trace length + 1` (the head
+  count of a video transformer, for example), which surfaced as a shape
+  error in the text cross-attention of Allegro-TI2V at any prompt length
+  other than the traced one. Size entries now match exactly (slice ends
+  keep their +1 rule), and the constants declared in a component's
+  profile are never rewritten — in the default and `--triton` engines
+  alike.
+
+- **The `--triton` engines no longer import PyTorch through package
+  initialisers.** Two package inits pulled the scheduler and executor
+  stacks (and PyTorch with them) into the Triton speech path on a plain
+  submodule import; both now export their names lazily. A fresh
+  interpreter importing the shared audio DSP or the decode-bound helper
+  keeps PyTorch out of `sys.modules` (pinned by a test).
+
+
 - **Long recordings are transcribed in full by both speech-to-text
   families.** Whisper-class models (`encoder_decoder` flow) now run the
   vendor's own long-form algorithm: each 30-second window is decoded
@@ -229,6 +259,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   existing categories), in upper or lower case.
 
 ### Changed
+
+- **The `--triton` engines now cache freed GPU blocks by default.** The
+  device allocator's free-list pool (previously opt-in) is on for every
+  run: freed blocks are reused for later requests instead of going back
+  to the driver one by one, and a failed allocation flushes the pool and
+  retries before reporting out-of-memory. Measured on a ~8,300-token
+  prompt with a 30B mixture-of-experts model on one V100-32G: the cold
+  run (load + prompt + first token) drops from 152.5 s to 90.1 s, with
+  byte-identical output. `NBX_ALLOC_POOL=0` restores the previous
+  behaviour. The default engine is unaffected.
 
 - **Hub catalog correction: Whisper-Large relabeled V3 → V2.** The
   model previously listed as `openai/Whisper-Large-V3` on the hub is

@@ -115,6 +115,12 @@ memory:
   # math prefill; the chunk-halving retry on a refused allocation
   # never goes below it.
   sdpa_math_min_chunk_rows: 128
+  # Allocator pool: bytes the free-list may keep PARKED per device as a
+  # fraction of that device's memory (2026-09-02, pool default-on gate).
+  # Beyond it the largest parked blocks go back to the driver, bounding
+  # the pool's contribution to the driver watermark (measured +3.4 GB on
+  # the xlong int4 row unbounded). 0 = unbounded.
+  alloc_pool_parked_cap_fraction: 0.50
 
   # Triton deferred-free queue policy (audit #2 F1, P-TRITON-LIVE-SET).
   # PRESSURE-SENSITIVE: always drain at `cliff` (throughput ceiling — no

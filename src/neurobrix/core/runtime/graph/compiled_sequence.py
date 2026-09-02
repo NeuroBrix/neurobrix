@@ -342,6 +342,7 @@ class CompiledSequence:
         '_shape_resolver',  # SymbolicShapeResolver for runtime symbol resolution
         '_is_multi_device',  # FGP: True when weights span multiple devices
         '_persistent_tensor_ids',  # Protected from liveness GC (e.g., hidden states for LLM)
+        '_config_constants',  # profile.json architectural ints, protected from value-matched shape rewrites
         '_op_interceptors',  # Op interceptors for KV cache (maps op_type -> interceptor)
         '_op_uid_interceptors',  # Fine-grained per-op_uid interceptors for op-level tiling
         '_seq_dependent_constants',  # Constants with trace-time seq_len dim: [(slot, axis, sym_id, trace_val)]
@@ -359,6 +360,7 @@ class CompiledSequence:
         dtype: torch.dtype,
         amp_enabled: bool = True,
         use_triton: bool = False,
+        config_constants=None,
     ):
         """
         Initialize CompiledSequence.
@@ -374,6 +376,9 @@ class CompiledSequence:
             use_triton: Use Triton kernels instead of PyTorch native ops.
         """
         self.dag = dag
+        # Architectural integer constants (profile.json config) — protected
+        # from every value-matched rewrite of a shape list (see the guards).
+        self._config_constants: set = set(config_constants or ())
         self.device = device
         self.dtype = dtype
         # use_triton parameter kept for backward compat but triton mode uses triton/ package
@@ -1142,6 +1147,7 @@ class CompiledSequence:
                     if isinstance(d, int):
                         weight_dims.add(d)
 
+        weight_dims |= set(getattr(self, "_config_constants", ()) or ())
         safe_symbols: Dict[str, int] = {}
         for sym_id, trace_val in seq_len_symbols.items():
             if trace_val not in weight_dims:
@@ -1239,7 +1245,14 @@ class CompiledSequence:
         def _max_offset(sym_id: str) -> int:
             return 0 if sym_id.startswith("_sum_") else 1
 
-        def _try_promote_scalar(arg: dict) -> Optional[dict]:
+        # Offset policy (2026-09-02, Allegro-TI2V): the +1 fuzz exists for the
+        # `seq_len + 1` pattern of causal-mask / BOS SLICING (slice, narrow,
+        # arange ends). A SIZE entry of an expand / view / creation op is
+        # matched EXACTLY: a literal equal to seq_len + 1 there is an
+        # architectural constant, not a length (the head count 24 = 23 + 1
+        # was rewritten as `text_len + 1` and the cross-attention mask
+        # expanded to [B, 78, 1, 77] at runtime). Mirrored in triton/promotion.py.
+        def _try_promote_scalar(arg: dict, exact: bool = False) -> Optional[dict]:
             """Try to promote a scalar arg to a symbolic reference. Returns new arg or None."""
             if not isinstance(arg, dict) or arg.get("type") != "scalar":
                 return None
@@ -1248,7 +1261,7 @@ class CompiledSequence:
                 return None
             for sym_id, trace_val in safe_symbols.items():
                 offset = val - trace_val
-                if 0 <= offset <= _max_offset(sym_id):
+                if 0 <= offset <= (0 if exact else _max_offset(sym_id)):
                     return {
                         "type": "symbol",
                         "symbol_id": sym_id,
@@ -1257,13 +1270,13 @@ class CompiledSequence:
                     }
             return None
 
-        def _try_promote_raw_int(val) -> Optional[dict]:
+        def _try_promote_raw_int(val, exact: bool = False) -> Optional[dict]:
             """Try to promote a raw int value (not wrapped in dict) to symbolic."""
             if not isinstance(val, int):
                 return None
             for sym_id, trace_val in safe_symbols.items():
                 offset = val - trace_val
-                if 0 <= offset <= _max_offset(sym_id):
+                if 0 <= offset <= (0 if exact else _max_offset(sym_id)):
                     return {
                         "type": "symbol",
                         "symbol_id": sym_id,
@@ -1322,13 +1335,13 @@ class CompiledSequence:
                         changed = False
                         for i, elem in enumerate(shape_list):
                             if isinstance(elem, dict):
-                                result = _try_promote_scalar(elem)
+                                result = _try_promote_scalar(elem, exact=True)
                                 if result:
                                     shape_list[i] = result
                                     promoted += 1
                                     changed = True
                             elif isinstance(elem, int):
-                                result = _try_promote_raw_int(elem)
+                                result = _try_promote_raw_int(elem, exact=True)
                                 if result:
                                     shape_list[i] = result
                                     promoted += 1
@@ -1353,13 +1366,13 @@ class CompiledSequence:
                     changed = False
                     for i, elem in enumerate(size_list):
                         if isinstance(elem, dict):
-                            result = _try_promote_scalar(elem)
+                            result = _try_promote_scalar(elem, exact=True)
                             if result:
                                 size_list[i] = result
                                 promoted += 1
                                 changed = True
                         elif isinstance(elem, int):
-                            result = _try_promote_raw_int(elem)
+                            result = _try_promote_raw_int(elem, exact=True)
                             if result:
                                 size_list[i] = result
                                 promoted += 1
@@ -1393,13 +1406,13 @@ class CompiledSequence:
                         changed = False
                         for i, elem in enumerate(shape_list):
                             if isinstance(elem, dict):
-                                result = _try_promote_scalar(elem)
+                                result = _try_promote_scalar(elem, exact=True)
                                 if result:
                                     shape_list[i] = result
                                     promoted += 1
                                     changed = True
                             elif isinstance(elem, int):
-                                result = _try_promote_raw_int(elem)
+                                result = _try_promote_raw_int(elem, exact=True)
                                 if result:
                                     shape_list[i] = result
                                     promoted += 1
@@ -1950,6 +1963,15 @@ class CompiledSequence:
                 for d in (tdata.get("shape") or []):
                     if isinstance(d, int) and d > 1:
                         weight_dims.add(d)
+        # Architectural config constants (num_attention_heads, head_dim,
+        # patch_size, …) are protected OUTRIGHT: the build toolchain's
+        # de-collision keeps every variable trace dim away from them, so a
+        # literal equal to one in a shape list is the constant itself.
+        # (2026-09-02: the head count 24 = text_len 23 + 1 became
+        # `text_len + 1` and the cross-attention mask expanded to
+        # [B, 78, 1, 77].) Weight dims keep their narrower conjunction
+        # guards below.
+        _config_constants = set(getattr(self, "_config_constants", ()) or ())
 
         for _tid, tdata in tensors.items():
             sym_shape = tdata.get("symbolic_shape", {})
@@ -2061,6 +2083,8 @@ class CompiledSequence:
                     for i, (target, actual) in enumerate(zip(size_list, input_shape)):
                         if (isinstance(target, int) and actual == 1
                                 and target > 1 and target in expr_map):
+                            if target in _config_constants:
+                                continue
                             if (target in weight_dims
                                     and not _expr_symbols_in_input(
                                         expr_map[target], _e_sym_dims)):
@@ -2110,6 +2134,8 @@ class CompiledSequence:
                     new_shape = list(old_shape)
                     for i, dim_val in enumerate(old_shape):
                         if not isinstance(dim_val, int) or dim_val <= 1:
+                            continue
+                        if dim_val in _config_constants:
                             continue
                         if dim_val in expr_map:
                             # Trace-value collision guard (mirror of the build toolchain's

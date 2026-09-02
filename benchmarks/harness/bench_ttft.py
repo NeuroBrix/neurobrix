@@ -126,11 +126,22 @@ def run_nbx_arm(args, env_spec: dict, outdir: Path) -> list:
     """Start the daemon warm, run reps with fresh variants, shut down."""
     flag = env_spec.get("NBX_SERVE_FLAG", "--triton")
     env = dict(os.environ)
-    env["CUDA_VISIBLE_DEVICES"] = args.gpu
+    # Per-arm placement / build overrides (2026-09-02): the two engines of one
+    # campaign may need DIFFERENT builds and placements — the int4 build is
+    # triton-only (the compiled engine refuses the weight encoding) and the
+    # fp16 30B build block-scatters over the whole node. NBX_SERVE_GPUS =
+    # CUDA_VISIBLE_DEVICES for this arm (default args.gpu); NBX_SERVE_MODEL =
+    # the build (default args.model); NBX_SERVE_HARDWARE = the profile
+    # ("auto" omits --hardware and lets the detected profile place it).
+    env["CUDA_VISIBLE_DEVICES"] = env_spec.get("NBX_SERVE_GPUS", args.gpu).replace(":", ",")  # "0:1:2:3" (the arm spec is comma-separated)
+    model = env_spec.get("NBX_SERVE_MODEL", args.model)
+    hardware = env_spec.get("NBX_SERVE_HARDWARE", args.hardware)
+    cmd = ["python3", "-u", "-m", "neurobrix", "serve", "--model", model]
+    if hardware and hardware != "auto":
+        cmd += ["--hardware", hardware]
+    cmd += [flag, "--foreground"]
     proc = subprocess.Popen(
-        ["python3", "-u", "-m", "neurobrix", "serve", "--model",
-         args.model, "--hardware", args.hardware, flag, "--foreground"],
-        env=env, stdout=open(outdir / f"daemon_{flag.strip('-')}.log", "w"),
+        cmd, env=env, stdout=open(outdir / f"daemon_{flag.strip('-')}.log", "w"),
         stderr=subprocess.STDOUT, text=True)
     sys.path.insert(0, REPO_SRC)
     from neurobrix.serving.client import DaemonClient
