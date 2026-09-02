@@ -451,7 +451,13 @@ def main():
     try:
         if args.command == 'run':
             from neurobrix.cli.commands.run import cmd_run
-            cmd_run(args)
+            # cmd_run returns a non-zero status on refusal paths (mode-flag
+            # conflict, gate errors) — a loud refusal that exits 0 turns
+            # every harness cell into a silent false-green (the tseq
+            # `--triton --sequential` no-op class, 2026-09-02).
+            _rc = cmd_run(args)
+            if _rc:
+                sys.exit(int(_rc))
         elif args.command == 'import':
             from neurobrix.cli.commands.registry import cmd_import
             cmd_import(args)

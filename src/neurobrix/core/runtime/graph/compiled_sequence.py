@@ -1922,6 +1922,20 @@ class CompiledSequence:
         (avoids ambiguity). Only targets expand broadcast dims (input_dim=1)
         and view/reshape dims that merge/split symbolic dimensions.
         """
+        # Diagnostic kill (retained-diag-env class, §8): adjudicates
+        # "is a cross-branch injection corrupting this model" in one
+        # A/B run — the pass is a compensation layer for old builds,
+        # so a correctly-traced graph must behave identically with it
+        # off (2026-09-02, D-SANAVIDEO-COMPILED-VALUES instrument).
+        import os as _os_cbx
+        if _os_cbx.environ.get("NBX_DISABLE_CROSS_BRANCH") == "1":
+            return
+        _cbx_diag = _os_cbx.environ.get("NBX_CROSS_BRANCH_DIAG") == "1"
+        def _cbx_log(uid, kind, old, new):
+            if _cbx_diag:
+                print(f"[CBX] {uid} {kind}: {old} -> {str(new)[:120]}",
+                      flush=True)
+
         # Step 1: Collect symbolic expressions from tensor symbolic_shapes
         # Build map: trace_value → expression_dict (only unique values)
         expr_map: Dict[int, Any] = {}  # trace_value → expression dict
@@ -2051,6 +2065,8 @@ class CompiledSequence:
                                     and not _expr_symbols_in_input(
                                         expr_map[target], _e_sym_dims)):
                                 continue
+                            _cbx_log(_op_uid, f"expand[{i}]", target,
+                                     expr_map[target])
                             new_size[i] = expr_map[target]
                             changed = True
                             injected += 1
@@ -2135,6 +2151,8 @@ class CompiledSequence:
                                 continue
                             # Direct match (no passthrough-safety — an exact known
                             # windowed value is always the windowed value)
+                            _cbx_log(_op_uid, f"view-direct[{i}]", dim_val,
+                                     expr_map[dim_val])
                             new_shape[i] = expr_map[dim_val]
                             changed = True
                             injected += 1
@@ -2163,6 +2181,9 @@ class CompiledSequence:
                                             "right": quotient,
                                             "trace": dim_val,
                                         }
+                                        _cbx_log(_op_uid,
+                                                 f"view-merge[{i}]", dim_val,
+                                                 product_expr)
                                         new_shape[i] = product_expr
                                         changed = True
                                         injected += 1
