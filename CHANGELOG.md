@@ -31,6 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A refused command could exit with success.** When `neurobrix run`
+  refused a request loudly (for example two execution-mode flags at
+  once), the process still exited with code 0 — scripts and harnesses
+  read the refusal as a pass. Refusals now exit non-zero.
+
 - **A runtime shape-recovery pass could corrupt correctly-prepared
   models.** The engine's load-time pass that recovers dynamic shapes on
   older model containers could re-introduce a shape confusion on models
