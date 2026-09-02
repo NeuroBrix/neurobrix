@@ -750,7 +750,46 @@ class GraphExecutor:
         with open(graph_path) as f:
             self._dag = json.load(f)
 
+        # Architectural integer constants of this component (profile.json
+        # `config`: num_attention_heads, attention_head_dim, patch_size, …).
+        # The engine-side twin of the build toolchain's de-collision
+        # "occupied set": a literal equal to one of them in a shape list IS
+        # the constant, never a length — the cross-branch and seq-length
+        # promotions must leave it alone (2026-09-02, Allegro-TI2V: the
+        # head count 24 = text_len 23 + 1 was injected as `text_len + 1`).
+        self._config_constants = self._read_config_constants(Path(graph_path).parent / "profile.json")
+
         self._init_from_dag()
+
+    @staticmethod
+    def _read_config_constants(profile_path) -> set:
+        """Integer constants > 1 of a component's profile.json `config`."""
+        try:
+            profile_path = Path(profile_path)
+            if not profile_path.exists():
+                return set()
+            with open(profile_path) as _pf:
+                _cfg = (json.load(_pf) or {}).get("config") or {}
+            return {v for v in _cfg.values()
+                    if isinstance(v, int) and not isinstance(v, bool) and v > 1}
+        except Exception:
+            return set()
+
+    def _resolve_config_constants(self) -> set:
+        """The component's architectural ints, resolved from the extracted
+        container (`<cache>/components/<name>/profile.json`) when the graph
+        arrived as a dict (the factory path), else from the graph-path load."""
+        cached = getattr(self, "_config_constants", None)
+        if cached:
+            return cached
+        cache_path = getattr(self, "_cache_path", None)
+        comp = getattr(self, "_component_name", None)
+        if cache_path and comp:
+            found = self._read_config_constants(Path(cache_path) / "components" / comp / "profile.json")
+            if found:
+                self._config_constants = found
+                return found
+        return cached or set()
 
     def _init_from_dag(self) -> None:
         """Initialize executor from loaded DAG."""
@@ -1111,6 +1150,7 @@ class GraphExecutor:
             dtype=get_torch_dtype(self.dtype),
             amp_enabled=self._dtype_engine.amp_enabled,
             use_triton=(self.mode == "triton"),
+            config_constants=self._resolve_config_constants(),
         )
 
         # Register any op interceptors BEFORE compilation (Phase 2.2: KV cache support)
@@ -1315,6 +1355,18 @@ class GraphExecutor:
             n_q = assemble_quantized(self._weights)
             print(f"   [Triton] '{component}': {n_q} encoded weights "
                   f"assembled (int4-g128-asym)", flush=True)
+
+        # Load → forward boundary: return the load phase's temporaries
+        # (per-tensor staging, dtype casts, the int4 assembly) from the
+        # allocator pool to the driver, so the first forward starts with
+        # the full headroom and third-party allocations that cannot reach
+        # the pool (the Triton autotuner's benchmark buffer is a torch
+        # allocation) see the real free memory. The pool then caches only
+        # the forward's own churn — the churn the pool exists for. No-op
+        # under NBX_ALLOC_POOL=0. (2026-09-02, xlong int4 row: the pool
+        # parked the load temporaries and the first attention chunk's
+        # autotune bench found 121 MiB free on a 32 GB card.)
+        DeviceAllocator.empty_cache_pool()
 
         # TEMP DIAG: probe VRAM right after triton weight load commits the
         # component's arena. Gate env NBX_UNLOAD_DIAG=1.
@@ -2060,7 +2112,8 @@ class GraphExecutor:
         # where an unbound rope-length symbol reads the table OOB.
         if not hasattr(self, '_seq_promotion_done'):
             from neurobrix.triton.promotion import promote_seq_len_scalars
-            promote_seq_len_scalars(self._dag, tensors, ops_meta)
+            promote_seq_len_scalars(self._dag, tensors, ops_meta,
+                                    config_constants=self._resolve_config_constants())
             self._seq_promotion_done = True
 
         # Symbol resolver for symbolic shapes
@@ -2763,7 +2816,8 @@ class GraphExecutor:
 
         self._triton_seq = TritonSequence(
             dag_for_triton, device_idx=device_idx,
-            compute_dtype=parse_dtype(self.dtype))
+            compute_dtype=parse_dtype(self.dtype),
+            config_constants=self._resolve_config_constants())
 
         # Phase 1 — read per-component opt-in flag from
         # the build toolchain's config/model_registry.yml (no toolchain re-build required;

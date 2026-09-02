@@ -404,7 +404,10 @@ def _meta_index(x, indices):
     # Row-major flat index across the consecutive indexed dims:
     # flat = ((i0)*n1 + i1)*n2 + i2 ...   (ni = x.shape[indexed dim])
     sizes = [x.shape[d] for d in dims]
-    flats = [t.reshape(-1) for t in idx_tensors]
+    # torch semantics: negative entries count from the end of THEIR dim —
+    # wrap each index before the row-major flatten (a raw negative would
+    # corrupt the joint offset; the single-dim gather wraps in-kernel).
+    flats = [w.remainder_wrapper(t.reshape(-1), int(sz)) for t, sz in zip(idx_tensors, sizes)]
     flat = flats[0]
     for k in range(1, len(flats)):
         flat = flat * sizes[k] + flats[k]

@@ -261,14 +261,13 @@ class TritonLMSession:
 
         # cat launches are ASYNC (raw kernel launch outside the dispatcher's
         # synchronous-dispatch contract) and rebinding the accumulator drops
-        # the old buffer's last ref → free_cuda. On the default path cudaFree
-        # blocks until device idle, so the in-flight cat kernel finishes
-        # first — but under NBX_ALLOC_POOL=1 the pointer goes back to the
-        # free-list WITHOUT a sync and the next malloc may hand the block to
-        # a concurrent writer while the cat kernel still reads it. Sync
-        # BEFORE the rebind so the O(n) accumulators stay pool-safe (this
-        # path is the op-by-op determinism reference; one sync per step is
-        # noise here).
+        # the old buffer's last ref → free_cuda. Under the allocator pool the
+        # block is handed back stream-ordered (the doctrine stated at the
+        # deferred drain in sequence.py: a later op on the same legacy
+        # stream cannot overtake the cat kernel), so this sync is
+        # belt-and-braces on the op-by-op determinism reference path — one
+        # sync per step is noise here and keeps the accumulator lifecycle
+        # trivially auditable.
         DeviceAllocator.sync_device()
         self._accumulated_ids = acc_ids
         if self.uses_embeds:

@@ -15,6 +15,44 @@ import triton
 from .nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, _broadcast_shapes, _set_device, dtype_size
 from .nbx_tensor import DeviceOOMError
 
+
+def _autotune_headroom_guard(launch):
+    """Wrap an autotuned kernel launch (`kernel[grid]`) against the ONE
+    device allocation the engine does not own: the Triton autotuner's
+    benchmark buffer (its L2-flush cache, a 256 MiB torch allocation,
+    taken once per never-seen key). On an edge row the allocator pool
+    and the deferred dead-tensor queues may hold the headroom that
+    allocation needs — the pool flushes on OUR malloc failures only.
+    On an out-of-memory failure of the launch, return the pool to the
+    driver, drain the registered reclaimers, say so once, and retry the
+    launch ONCE; a second failure raises unchanged. Zero cost on the
+    cached-key path (one try/except around the call). 2026-09-02,
+    xlong int4 row: the first attention chunk's autotune bench found
+    121 MiB free on a 32 GB card."""
+    def _run(*args, **kwargs):
+        try:
+            return launch(*args, **kwargs)
+        except RuntimeError as exc:
+            if "out of memory" not in str(exc).lower():
+                raise
+            freed = DeviceAllocator.empty_cache_pool()
+            reclaimed = 0
+            try:
+                dev = DeviceAllocator.get_device()
+            except Exception:
+                dev = None
+            for hook in list(getattr(DeviceAllocator, "_oom_reclaim_hooks", ())):
+                try:
+                    reclaimed += int(hook(dev, 0) or 0)
+                except Exception as hook_err:
+                    print(f"[AUTOTUNE_HEADROOM] reclaim hook error: {hook_err}", flush=True)
+            print(f"[AUTOTUNE_HEADROOM] the autotune benchmark buffer was refused "
+                  f"({str(exc).splitlines()[0][:90]}); pool flushed {freed / 2**20:.0f}MB, "
+                  f"reclaimers freed {reclaimed / 2**20:.0f}MB — retrying the launch once",
+                  flush=True)
+            return launch(*args, **kwargs)
+    return _run
+
 # === Activations ===
 
 from .ops.relu import relu_forward_kernel
@@ -1790,7 +1828,7 @@ def mm(a, b, _epilogue: int = 0) :
     # META lambda so autotune-selected blocks drive the launch shape.
     grid = lambda META: (triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']),)
     _set_device(a)
-    matmul_kernel[grid](
+    _autotune_headroom_guard(matmul_kernel[grid])(
         a, b, c,
         M, N, K,
         a.stride(0), a.stride(1),
@@ -1899,7 +1937,7 @@ def bmm(a, b, allow_strided_b: bool = False) :
             1,
             _zb,
         )
-        baddbmm_kernel[grid](
+        _autotune_headroom_guard(baddbmm_kernel[grid])(
             a_z, b_z, c_z, c_z,
             1.0, 0.0,
             M, N, K,
@@ -2138,7 +2176,7 @@ def addmm(bias, a, b,
     c = NBXTensor.empty((M, N), device=a.device, dtype=out_dtype)
     ieee = (not _NBX_HAS_NATIVE_BF16) and (out_dtype == NBXDtype.float32)
     grid = lambda META: (triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']),)
-    addmm_kernel[grid](
+    _autotune_headroom_guard(addmm_kernel[grid])(
         a, b, bias, c,
         M, N, K,
         a.stride(0), a.stride(1),
@@ -2950,12 +2988,27 @@ def index_select_wrapper(x, dim: int, index) :
     out_shape = list(x.shape)
     out_shape[-1] = index_len
     out = NBXTensor.empty(out_shape, dtype=x.dtype, device=x.device)
+    # Diagnostic (NBX_INDEX_SELECT_SENTINEL=1, §8): pre-fill the output with a
+    # sentinel and count what the kernel leaves unwritten — the kernel stores
+    # under `index_valid_mask`, so an out-of-range index leaves its output
+    # element as whatever the allocation held (pool gate 2026-09-02).
+    _sentinel = os.environ.get("NBX_INDEX_SELECT_SENTINEL") == "1"
+    if _sentinel:
+        out.fill_(float("nan") if x.dtype in (NBXDtype.float16, NBXDtype.float32, NBXDtype.bfloat16) else -7777)
 
     BLOCK_M = min(64, triton.next_power_of_2(M))
     BLOCK_N = min(64, triton.next_power_of_2(index_len))
     grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(index_len, BLOCK_N))
     _set_device(x)
     index_select_kernel[grid](x, out, M, N, index, index_len, BLOCK_M, BLOCK_N)
+    if _sentinel:
+        import numpy as _np
+        _o = out.numpy()
+        _unwritten = int(_np.isnan(_o).sum()) if _o.dtype.kind == "f" else int((_o == -7777).sum())
+        if _unwritten:
+            _ix = index.numpy()
+            print(f"[INDEX_SELECT_SENTINEL] {_unwritten}/{_o.size} output elements UNWRITTEN "
+                  f"(index dtype {index.dtype} len {index_len} min {int(_ix.min())} max {int(_ix.max())} N={N} M={M})", flush=True)
 
     if dim != x.ndim - 1:
         order = list(range(out.ndim - 1))
@@ -3578,7 +3631,7 @@ def conv2d_wrapper(
         groups,
     )
     _set_device(x_c)
-    conv2d_forward_kernel[grid](
+    _autotune_headroom_guard(conv2d_forward_kernel[grid])(
         x_c, w_c, output,
         N, in_c, in_h, in_w,
         out_c, out_h, out_w,
@@ -3616,7 +3669,7 @@ def _depthwise_conv2d_dispatch(
         triton.cdiv(out_h * out_w, META['BLOCK_HW']),
     )
     _set_device(x_c)
-    depthwise_conv2d_kernel[grid](
+    _autotune_headroom_guard(depthwise_conv2d_kernel[grid])(
         x_c, w_c, output,
         N, C,
         IH, IW, out_h, out_w,
@@ -4479,7 +4532,7 @@ def baddbmm_wrapper(
             1,
             _zb,
         )
-        baddbmm_kernel[grid](
+        _autotune_headroom_guard(baddbmm_kernel[grid])(
             b1_z, b2_z, out_z, bias_z,
             alpha, beta,
             M, N, K,
@@ -6950,21 +7003,33 @@ def _sdpa_chunked_rows_within(bound, batch, nheads, seqlen_q, seqlen_k) -> int:
     return 0
 
 
-def _sdpa_math_min_chunk_rows() -> int:
-    """Row alignment AND floor of the chunked deterministic math prefill,
-    from config/vendors/<vendor>/<arch>.yml `memory.sdpa_math_min_chunk_rows`
-    (the kernel's row block); 0 (absent key / no profile) = the chunked
-    route never fires, like `sdpa_math_max_chunks` (R23)."""
+def _arch_memory_param(key: str, default):
+    """One `memory.<key>` value from config/vendors/<vendor>/<arch>.yml of
+    the executing hardware profile; `default` when there is no profile,
+    no key, or the loader fails (R23: hardware params come from the yml,
+    never from code). Shared reader for the memory-policy knobs
+    (`sdpa_math_min_chunk_rows`, `alloc_pool_parked_cap_fraction`, …)."""
     prof = get_hardware_profile()
     devices = getattr(prof, "devices", None) if prof is not None else None
     if not devices:
-        return 0
+        return default
     try:
         from neurobrix.core.config.loader import get_vendor_config
         _brand = devices[0].brand
         _vendor = getattr(_brand, "value", _brand)
         cfg = get_vendor_config(_vendor, devices[0].architecture)
-        return int(cfg.get("memory", {}).get("sdpa_math_min_chunk_rows", 0))
+        return cfg.get("memory", {}).get(key, default)
+    except Exception:
+        return default
+
+
+def _sdpa_math_min_chunk_rows() -> int:
+    """Row alignment AND floor of the chunked deterministic math prefill,
+    from config/vendors/<vendor>/<arch>.yml `memory.sdpa_math_min_chunk_rows`
+    (the kernel's row block); 0 (absent key / no profile) = the chunked
+    route never fires, like `sdpa_math_max_chunks` (R23)."""
+    try:
+        return int(_arch_memory_param("sdpa_math_min_chunk_rows", 0))
     except Exception:
         return 0
 
@@ -6980,16 +7045,8 @@ def _sdpa_math_max_chunks() -> int:
     16k → 16); video-scale prefills would chunk 30-500+ times at a
     prohibitive cost and stay on their existing path, REGISTERED as
     the residual non-deterministic class on this hardware."""
-    prof = get_hardware_profile()
-    devices = getattr(prof, "devices", None) if prof is not None else None
-    if not devices:
-        return 0
     try:
-        from neurobrix.core.config.loader import get_vendor_config
-        _brand = devices[0].brand
-        _vendor = getattr(_brand, "value", _brand)
-        cfg = get_vendor_config(_vendor, devices[0].architecture)
-        return int(cfg.get("memory", {}).get("sdpa_math_max_chunks", 0))
+        return int(_arch_memory_param("sdpa_math_max_chunks", 0))
     except Exception:
         return 0
 
@@ -7282,7 +7339,7 @@ def _math_attention_chunked(q, k, v, attn_mask, is_causal, scale,
         try:
             o = _math_attention(q_c, k, v, attn_mask=mask_c,
                                 is_causal=False, scale=scale)
-        except DeviceOOMError:
+        except DeviceOOMError as _oom:
             _floor = _sdpa_math_min_chunk_rows()
             if not _floor or chunk_rows <= _floor:
                 raise
@@ -7292,7 +7349,8 @@ def _math_attention_chunked(q, k, v, attn_mask, is_causal, scale,
                   f"cuda:{device_idx} (live headroom below the static "
                   f"budget) — retrying at {chunk_rows} rows; the chunk "
                   f"count may now exceed the arch ceiling "
-                  f"(memory.sdpa_math_max_chunks)", flush=True)
+                  f"(memory.sdpa_math_max_chunks). Allocator: "
+                  f"{str(_oom).split('[', 1)[-1].rstrip(']')}", flush=True)
             del q_c
             continue
         out[:, :, q0:q0 + c, :] = o

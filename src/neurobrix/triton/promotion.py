@@ -9,7 +9,8 @@ Called by TritonSequence.compile() and _run_triton_sequential().
 from typing import Dict, Optional
 
 
-def promote_seq_len_scalars(dag: dict, tensors: dict, ops_meta: dict):
+def promote_seq_len_scalars(dag: dict, tensors: dict, ops_meta: dict,
+                            config_constants=None):
     """Promote trace-time seq_len constants to symbolic references.
 
     Mutates ops_meta args in-place. Safe to call multiple times
@@ -19,6 +20,9 @@ def promote_seq_len_scalars(dag: dict, tensors: dict, ops_meta: dict):
         dag: Full graph DAG dict (for symbolic_context)
         tensors: dag["tensors"] dict
         ops_meta: dag["ops"] dict
+        config_constants: the component's architectural ints (profile.json
+            `config`) — a seq_len trace value equal to one of them is a
+            collision and is not promoted (R30 mirror of the compiled rule).
     """
     sym_ctx = dag.get("symbolic_context", {})
     symbols = sym_ctx.get("symbols", {})
@@ -57,6 +61,7 @@ def promote_seq_len_scalars(dag: dict, tensors: dict, ops_meta: dict):
                 if isinstance(d, int):
                     weight_dims.add(d)
 
+    weight_dims |= set(config_constants or ())
     safe: Dict[str, int] = {}
     for sid, tv in seq_len_syms.items():
         if tv not in weight_dims:
@@ -83,20 +88,27 @@ def promote_seq_len_scalars(dag: dict, tensors: dict, ops_meta: dict):
             rope_chain_op_uids, rope_arange_uids,
         )
 
-    def _promote_int(val: int):
+    # Offset policy (2026-09-02, Allegro-TI2V): the +1 fuzz exists for the
+    # `seq_len + 1` pattern of causal-mask / BOS SLICING (slice, narrow,
+    # arange ends). A SIZE entry of an expand / view / creation op is
+    # matched EXACTLY: a literal equal to seq_len + 1 there is an
+    # architectural constant, not a length (the head count 24 = 23 + 1
+    # was rewritten as `text_len + 1` and the cross-attention mask expanded
+    # to [B, 78, 1, 77] at runtime). Same rule in the compiled mirror.
+    def _promote_int(val: int, exact: bool = False):
         for sid, tv in safe.items():
             offset = val - tv
-            if 0 <= offset <= 1:
+            if 0 <= offset <= (0 if exact else 1):
                 return {"type": "symbol", "symbol_id": sid,
                         "trace_value": val, "offset": offset}
         return None
 
-    def _promote_scalar_dict(arg: dict):
+    def _promote_scalar_dict(arg: dict, exact: bool = False):
         if arg.get("type") != "scalar":
             return None
         val = arg.get("value")
         if isinstance(val, int):
-            return _promote_int(val)
+            return _promote_int(val, exact)
         return None
 
     # Detect RoPE-style slices: aten::slice whose output is consumed by
@@ -380,12 +392,12 @@ def promote_seq_len_scalars(dag: dict, tensors: dict, ops_meta: dict):
                     changed = False
                     for i, elem in enumerate(items):
                         if isinstance(elem, dict):
-                            r = _promote_scalar_dict(elem)
+                            r = _promote_scalar_dict(elem, exact=True)
                             if r:
                                 items[i] = r
                                 changed = True
                         elif isinstance(elem, int):
-                            r = _promote_int(elem)
+                            r = _promote_int(elem, exact=True)
                             if r:
                                 items[i] = r
                                 changed = True
@@ -411,12 +423,12 @@ def promote_seq_len_scalars(dag: dict, tensors: dict, ops_meta: dict):
                 changed = False
                 for i, elem in enumerate(size_list):
                     if isinstance(elem, dict):
-                        r = _promote_scalar_dict(elem)
+                        r = _promote_scalar_dict(elem, exact=True)
                         if r:
                             size_list[i] = r
                             changed = True
                     elif isinstance(elem, int):
-                        r = _promote_int(elem)
+                        r = _promote_int(elem, exact=True)
                         if r:
                             size_list[i] = r
                             changed = True
@@ -436,12 +448,12 @@ def promote_seq_len_scalars(dag: dict, tensors: dict, ops_meta: dict):
                     changed = False
                     for i, elem in enumerate(items):
                         if isinstance(elem, dict):
-                            r = _promote_scalar_dict(elem)
+                            r = _promote_scalar_dict(elem, exact=True)
                             if r:
                                 items[i] = r
                                 changed = True
                         elif isinstance(elem, int):
-                            r = _promote_int(elem)
+                            r = _promote_int(elem, exact=True)
                             if r:
                                 items[i] = r
                                 changed = True

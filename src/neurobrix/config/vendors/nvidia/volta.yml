@@ -154,6 +154,12 @@ memory:
   # math prefill; the chunk-halving retry on a refused allocation
   # never goes below it.
   sdpa_math_min_chunk_rows: 128
+  # Allocator pool: bytes the free-list may keep PARKED per device as a
+  # fraction of that device's memory (2026-09-02, pool default-on gate).
+  # Beyond it the largest parked blocks go back to the driver, bounding
+  # the pool's contribution to the driver watermark (measured +3.4 GB on
+  # the xlong int4 row unbounded). 0 = unbounded.
+  alloc_pool_parked_cap_fraction: 0.50
   # Per-DEVICE cap: budget = min(bytes above, fraction x device memory_mb
   # from the Prism profile). The auto profile (config/hardware/default.yml,
   # generated from nvidia-smi memory.total) records memory_mb 16384 for
