@@ -63,7 +63,8 @@ def _hz_to_mel(freqs: np.ndarray, *, htk: bool) -> np.ndarray:
     min_log_hz, min_log_mel = 1000.0, (1000.0 - f_min) / f_sp
     logstep = np.log(6.4) / 27.0
     log_t = freqs >= min_log_hz
-    mels = np.where(log_t, min_log_mel + np.log(freqs / min_log_hz) / logstep, mels)
+    safe = np.where(log_t, freqs, min_log_hz)   # the linear branch never reaches the log
+    mels = np.where(log_t, min_log_mel + np.log(safe / min_log_hz) / logstep, mels)
     return mels
 
 
@@ -110,7 +111,8 @@ def _mel_filters(sr: int, n_fft: int, n_mels: int, *, htk: bool, norm) -> np.nda
 # extractors (numpy) — bit-close mirrors of the original vendor extractors
 # ---------------------------------------------------------------------------
 def _whisper_mel(audio_path: str, model_path: Path, n_mels_override,
-                 params: "Optional[dict]" = None) -> np.ndarray:
+                 params: "Optional[dict]" = None,
+                 _audio: "Optional[np.ndarray]" = None) -> np.ndarray:
     """Whisper log-mel (mel_spectrogram). Mirrors WhisperFeatureExtractor.
 
     `params` (the topology's audio_preprocessing block, when the build
@@ -130,7 +132,7 @@ def _whisper_mel(audio_path: str, model_path: Path, n_mels_override,
     sr = cfg.get("sampling_rate", cfg.get("sample_rate", 16000))
     n_mels = (cfg.get("n_mels") or n_mels_override
               or cfg.get("feature_size", 80))
-    audio = _load_audio(audio_path, sr)
+    audio = _audio if _audio is not None else _load_audio(audio_path, sr)
     if params and "chunk_length" not in params:
         # Varlen contract: keep the true length (cap only at the
         # extractor's own maximum when it declares one).
@@ -141,13 +143,21 @@ def _whisper_mel(audio_path: str, model_path: Path, n_mels_override,
         chunk = cfg.get("chunk_length", 30)
         nsamp = chunk * sr
         audio = audio[:nsamp] if len(audio) >= nsamp else np.pad(audio, (0, nsamp - len(audio)))
+    return _whisper_logmel(audio, sr, n_fft, hop, n_mels)[None]   # [1, n_mels, frames]
+
+
+def _whisper_logmel(audio: np.ndarray, sr: int, n_fft: int, hop: int,
+                    n_mels: int) -> np.ndarray:
+    """The Whisper log-mel core on one waveform: power STFT (last frame
+    dropped), slaney mel, log10, the dynamic-range floor `max - 8`
+    taken over THE WHOLE INPUT, then (x + 4) / 4. [n_mels, frames]."""
     power = _stft_power(audio, n_fft, n_fft, hop)[:, :-1]   # drop last frame
     mf = _mel_filters(sr, n_fft, n_mels, htk=False, norm="slaney")
     mel = mf @ power
     log = np.log10(np.clip(mel, 1e-10, None))
     log = np.maximum(log, log.max() - 8.0)
     log = (log + 4.0) / 4.0
-    return log[None].astype(np.float32)                    # [1, n_mels, frames]
+    return log.astype(np.float32)
 
 
 def _conformer_mel(audio_path: str, model_path: Path, n_mels_override) -> np.ndarray:
@@ -172,10 +182,15 @@ def _conformer_mel(audio_path: str, model_path: Path, n_mels_override) -> np.nda
     return log[None].astype(np.float32)                    # [1, frames//fs, fs*n_mels]
 
 
-def _nemo_mel(audio_path: str, model_path: Path, n_mels_override, rng=None) -> np.ndarray:
-    """NeMo mel (Canary): pre-emphasis + dither + log mel + per-feature normalize."""
+def nemo_mel_params(model_path: Path) -> dict:
+    """NeMo preprocessor parameters (sr, n_fft, win, hop, n_mels, dither,
+    preemph) from the embedded model_config.yaml / config.json — the
+    single source both engines read, for the mel itself and for any
+    frame arithmetic built on it (long-form window overlap)."""
     n_mels, n_fft, win, hop = 80, 512, 400, 160
     sr, dither, preemph = 16000, 1e-5, 0.97
+    source = None   # which embedded file the values came from (None = the
+                    # NeMo defaults above; the long-form arithmetic refuses that)
     yp = model_path / "model_config.yaml"
     if yp.exists():
         try:
@@ -185,6 +200,7 @@ def _nemo_mel(audio_path: str, model_path: Path, n_mels_override, rng=None) -> n
             n_mels = pp.get("features", n_mels); dither = pp.get("dither", dither)
             win = int(pp.get("window_size", 0.025) * sr)
             hop = int(pp.get("window_stride", 0.01) * sr)
+            source = str(yp)
         except Exception:
             pass
     cp = model_path / "config.json"
@@ -196,8 +212,18 @@ def _nemo_mel(audio_path: str, model_path: Path, n_mels_override, rng=None) -> n
                 n_mels = pp.get("features", n_mels); dither = pp.get("dither", dither)
                 win = int(pp.get("window_size", 0.025) * sr)
                 hop = int(pp.get("window_stride", 0.01) * sr)
+                source = str(cp)
         except Exception:
             pass
+    return {"sr": sr, "n_fft": n_fft, "win": win, "hop": hop, "n_mels": n_mels,
+            "dither": dither, "preemph": preemph, "source": source}
+
+
+def _nemo_mel(audio_path: str, model_path: Path, n_mels_override, rng=None) -> np.ndarray:
+    """NeMo mel (Canary): pre-emphasis + dither + log mel + per-feature normalize."""
+    _p = nemo_mel_params(model_path)
+    n_mels, n_fft, win, hop = _p["n_mels"], _p["n_fft"], _p["win"], _p["hop"]
+    sr, dither, preemph = _p["sr"], _p["dither"], _p["preemph"]
     if n_mels_override in (40, 64, 80, 128):
         n_mels = n_mels_override
     audio = _load_audio(audio_path, sr).astype(np.float64)
@@ -215,13 +241,15 @@ def _nemo_mel(audio_path: str, model_path: Path, n_mels_override, rng=None) -> n
     return mel.T[None].astype(np.float32)                  # [1, n_mels, frames]
 
 
-def _raw_waveform(audio_path: str, model_path: Path, input_shape) -> np.ndarray:
+def _raw_waveform(audio_path: str, model_path: Path, input_shape,
+                  _audio: "Optional[np.ndarray]" = None) -> np.ndarray:
     """Raw waveform (Parakeet) reshaped to the graph input shape."""
     sr = 16000
     cp = model_path / "preprocessor_config.json"
     if cp.exists():
         sr = json.load(open(cp)).get("sampling_rate", sr)
-    audio = _load_audio(audio_path, sr)[None]              # [1, samples]
+    audio = (_audio if _audio is not None
+             else _load_audio(audio_path, sr))[None]       # [1, samples]
     if input_shape and len(input_shape) == 3:
         channels, target = input_shape[1], input_shape[2]
         wf = audio[:, None, :]                              # [1, 1, samples]
@@ -256,3 +284,62 @@ def extract_features_np(preprocessing_type: str, audio_path: str, model_path: Pa
     raise RuntimeError(
         f"ZERO FALLBACK: unknown numpy audio preprocessing '{preprocessing_type}'. "
         f"Supported: mel_spectrogram, nemo_mel, conformer, raw_waveform.")
+
+
+def whisper_seek_context(audio_path: str, model_path: Path,
+                         input_shape: "Optional[Tuple[int, ...]]" = None) -> "Optional[dict]":
+    """Long-form whisper by TIMESTAMP SEEK (the vendor's own algorithm,
+    rules in `stt_longform`): the flow decodes a window with timestamps,
+    seeks to the end of the last complete segment and decodes again from
+    there — no word is cut at a fixed window boundary. Returns the audio
+    and the window parameters; each window's mel goes through the
+    unchanged single-window code (`_whisper_mel(_audio=)`)."""
+    cp = model_path / "preprocessor_config.json"
+    if not cp.exists():
+        raise RuntimeError(
+            "ZERO FALLBACK: long-form whisper needs the embedded "
+            f"preprocessor_config.json (sampling rate, hop, window) — missing at {cp}.")
+    cfg = json.load(open(cp))
+    sr = cfg.get("sampling_rate", cfg.get("sample_rate"))
+    hop, n_fft, chunk_s = cfg.get("hop_length"), cfg.get("n_fft"), cfg.get("chunk_length")
+    if None in (sr, hop, n_fft, chunk_s):
+        raise RuntimeError(
+            "ZERO FALLBACK: preprocessor_config.json must carry sampling_rate, "
+            f"hop_length, n_fft and chunk_length for long-form (got {cfg}).")
+    n_mels_override = None
+    if input_shape and len(input_shape) >= 3 and input_shape[1] in (40, 64, 80, 128):
+        n_mels_override = input_shape[1]
+    n_mels = cfg.get("n_mels") or n_mels_override or cfg.get("feature_size")
+    if not n_mels:
+        raise RuntimeError("ZERO FALLBACK: preprocessor_config.json carries no n_mels/feature_size.")
+    nsamp = int(chunk_s) * int(sr)
+    audio = _load_audio(audio_path, sr)
+    if len(audio) <= nsamp:
+        return None   # one window: the classic path, nothing computed twice
+    # The vendor computes the log-mel over the WHOLE audio (dynamic-range
+    # floor = whole-audio max) padded by one window of silence, keeps the
+    # CONTENT frames, and zero-pads each window's slice in feature space
+    # (openai `log_mel_spectrogram(audio, padding=N_SAMPLES)` then
+    # `pad_or_trim`; transformers pads the feature slice the same way).
+    padded = np.pad(audio, (0, nsamp))
+    mel_full = _whisper_logmel(padded, int(sr), int(n_fft), int(hop), int(n_mels))
+    content = len(audio) // int(hop)
+    return {"audio": audio, "sr": int(sr), "nsamp": nsamp, "hop": int(hop),
+            "chunk_s": float(chunk_s), "frames": nsamp // int(hop),
+            "mel_full": np.ascontiguousarray(mel_full[:, :content])}
+
+
+def whisper_window_mel(seek_ctx: dict, seek: int) -> np.ndarray:
+    """Mel window starting at sample `seek`: a slice of the whole-audio
+    log-mel at the seek frame (`seek` is a whole number of hops by
+    construction of the advance); past the content the window is
+    zero-padded in feature space, as the vendor does. [1, n_mels, frames]."""
+    hop = seek_ctx["hop"]
+    if seek % hop:
+        raise RuntimeError(f"seek {seek} samples is not a whole number of hops ({hop}).")
+    f0 = seek // hop
+    n = seek_ctx["frames"]
+    win = seek_ctx["mel_full"][:, f0:f0 + n]
+    if win.shape[1] < n:
+        win = np.pad(win, ((0, 0), (0, n - win.shape[1])))
+    return np.ascontiguousarray(win)[None]

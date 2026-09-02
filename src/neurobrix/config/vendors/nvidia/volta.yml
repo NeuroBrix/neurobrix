@@ -150,6 +150,10 @@ memory:
   # math run was faster end-to-end). Gate: attention-change diffusion
   # regression battery per doctrine.
   sdpa_math_max_scores_bytes: 2147483648  # 2 GiB (was 128 MiB pre-D6)
+  # Row block (alignment and floor) of the chunked deterministic
+  # math prefill; the chunk-halving retry on a refused allocation
+  # never goes below it.
+  sdpa_math_min_chunk_rows: 128
   # Per-DEVICE cap: budget = min(bytes above, fraction x device memory_mb
   # from the Prism profile). The auto profile (config/hardware/default.yml,
   # generated from nvidia-smi memory.total) records memory_mb 16384 for

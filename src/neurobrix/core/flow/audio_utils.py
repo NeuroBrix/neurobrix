@@ -55,32 +55,65 @@ def preprocess_audio_input(
         print(f"   [Audio] Expected input shape: {input_shape}")
 
     from neurobrix.core.module.audio.input_processor import AudioInputProcessor
-    features = AudioInputProcessor.process(
-        preprocessing_type=preprocessing,
-        audio_path=str(audio_path),
-        model_path=find_model_config_path(ctx),
-        device=device,
-        dtype=dtype,
-        input_shape=input_shape,
-    )
+    # Long-form (D-STT-LONGFORM-CHUNKING, 2026-09-02): audio longer than
+    # the whisper-class window runs the vendor's timestamp-seek
+    # algorithm (rules in core/module/audio/stt_longform.py, shared with
+    # the triton mirror); the flow builds each window's mel on demand
+    # from this context. One window == the exact pre-change path
+    # (byte-identical short clips). NBX_DISABLE_STT_CHUNKING=1 restores
+    # the truncating path for diagnosis.
+    import os as _os_sw
+    ctx._stt_seek = None
+    features = None
+    # Only the encoder_decoder flow consumes the seek context (the
+    # audio/audio_llm flows still truncate: D-AUDIOLLM-LONGFORM).
+    _flow_type = ctx.pkg.topology.get("flow", {}).get("type")
+    if (preprocessing == "mel_spectrogram" and _flow_type == "encoder_decoder"
+            and _os_sw.environ.get("NBX_DISABLE_STT_CHUNKING") != "1"):
+        from neurobrix.core.module.audio import mel_dsp as _mel_dsp
+        import numpy as _np_sw
+        _seek = _mel_dsp.whisper_seek_context(
+            str(audio_path), find_model_config_path(ctx), input_shape)
+        if _seek is not None:
+            _seek["build"] = (lambda mel_np: _fit_to_trace(
+                torch.from_numpy(_np_sw.ascontiguousarray(mel_np)).to(
+                    device=device, dtype=dtype)))
+            ctx._stt_seek = _seek
+            features = torch.from_numpy(_np_sw.ascontiguousarray(
+                _mel_dsp.whisper_window_mel(_seek, 0))).to(
+                    device=device, dtype=dtype)
+    if features is None:
+        features = AudioInputProcessor.process(
+            preprocessing_type=preprocessing,
+            audio_path=str(audio_path),
+            model_path=find_model_config_path(ctx),
+            device=device,
+            dtype=dtype,
+            input_shape=input_shape,
+        )
 
     # Pad/truncate to match trace-time dimensions
-    if input_shape and len(input_shape) == len(features.shape) and len(input_shape) >= 3:
-        for dim_idx in range(1, len(input_shape)):
-            trace_size = input_shape[dim_idx]
-            actual_size = features.shape[dim_idx]
-            if actual_size != trace_size:
-                if actual_size > trace_size:
-                    slices = [slice(None)] * len(features.shape)
-                    slices[dim_idx] = slice(None, trace_size)
-                    features = features[tuple(slices)]
-                else:
-                    pad_shape = list(features.shape)
-                    pad_shape[dim_idx] = trace_size - actual_size
-                    pad = torch.zeros(pad_shape, device=features.device, dtype=features.dtype)
-                    features = torch.cat([features, pad], dim=dim_idx)
+    def _fit_to_trace(feats):  # noqa: E306 (defined before first use below)
+        if input_shape and len(input_shape) == len(feats.shape) and len(input_shape) >= 3:
+            for dim_idx in range(1, len(input_shape)):
+                trace_size = input_shape[dim_idx]
+                actual_size = feats.shape[dim_idx]
+                if actual_size != trace_size:
+                    if actual_size > trace_size:
+                        slices = [slice(None)] * len(feats.shape)
+                        slices[dim_idx] = slice(None, trace_size)
+                        feats = feats[tuple(slices)]
+                    else:
+                        pad_shape = list(feats.shape)
+                        pad_shape[dim_idx] = trace_size - actual_size
+                        pad = torch.zeros(pad_shape, device=feats.device, dtype=feats.dtype)
+                        feats = torch.cat([feats, pad], dim=dim_idx)
+        return feats
 
-    print(f"   [Audio] Features: {features.shape} ({preprocessing})")
+    features = _fit_to_trace(features)
+
+    print(f"   [Audio] Features: {features.shape} ({preprocessing})"
+          + (" (long-form: timestamp seek)" if ctx._stt_seek else ""))
 
     # Bind to variable resolver
     ctx.variable_resolver.resolved[variable] = features

@@ -387,6 +387,14 @@ def invalidate_current_device_cache() -> None:
     _DEVICE_CACHE.idx = None
 
 
+
+class DeviceOOMError(RuntimeError):
+    """The device allocator could not honor a request: the driver refused
+    the allocation after the deferred-free drain and the single retry.
+    Typed so callers that can legitimately shrink their request (the
+    chunked SDPA prefill halves its row chunk) catch exactly this and
+    nothing else — every other RuntimeError keeps propagating."""
+
 class DeviceAllocator:
     """GPU + pinned-host memory allocator via raw runtime API.
 
@@ -712,7 +720,7 @@ class DeviceAllocator:
                     driver_free = driver_total = 0
             except Exception:
                 driver_free = driver_total = 0
-            raise RuntimeError(
+            raise DeviceOOMError(
                 f"GPU malloc failed (error {ret}) for {nbytes} bytes "
                 f"[device cuda:{dev} live_tracked={live_now/1024/1024:.0f}MB "
                 f"pool_cached={pool_total/1024/1024:.0f}MB ({pool_count} blocks) "

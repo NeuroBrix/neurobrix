@@ -75,35 +75,104 @@ class TritonEncoderDecoderEngine:
         enc_name = encoder_stage["component"]
         dec_name = decoder_stage["component"]
 
-        print(f"   [{enc_name}] Running encoder...")
-        start = time.perf_counter()
-        self._ensure_weights_loaded(enc_name)
-        self._execute_component(enc_name, "forward", None)
-        enc_elapsed = (time.perf_counter() - start) * 1000
-        print(f"   [{enc_name}] Done in {enc_elapsed:.0f}ms")
+        # Long-form (D-STT-LONGFORM-CHUNKING, R30 mirror of the compiled
+        # flow): audio longer than one window runs the vendor's
+        # timestamp-seek algorithm (rules in
+        # core/module/audio/stt_longform.py, numpy, shared). One window
+        # == the exact pre-change path.
+        _seek_ctx = getattr(self.ctx, "_stt_seek", None)
+        _all_ids: list = []
+        _all_texts: list = []
+        _feat_var = audio_config.get("input", {}).get(
+            "variable", "global.input_features")
+        _feat_short = _feat_var.split(".")[-1]
+        _seek = 0
+        _seek_total = len(_seek_ctx["audio"]) if _seek_ctx else 0
+        _ts_ids = None
+        if _seek_ctx:
+            from neurobrix.core.module.audio.stt_longform import whisper_timestamp_ids
+            _ts_ids = whisper_timestamp_ids(defaults)
+            if _ts_ids is None:
+                raise RuntimeError(
+                    "Long-form audio needs the model's timestamp token data "
+                    "(no_timestamps_token_id) in defaults.json; this container "
+                    "was built before the toolchain copied it. Rebuild it with "
+                    "the current toolchain, or pass audio no longer than one "
+                    f"window ({_seek_ctx['chunk_s']:.0f} s).")
+            print(f"   [Audio·np] Long-form: timestamp seek over "
+                  f"{_seek_total / _seek_ctx['sr']:.1f} s")
 
-        # Store encoder output for cross-attention
-        encoder_output = _get_component_output(self.ctx, enc_name)
-        if encoder_output is not None:
-            self.ctx.variable_resolver.resolved[f"{enc_name}.output_0"] = encoder_output
-        _prog0 = __import__("os").environ.get("NBX_DECODE_PROGRESS")
-        if _prog0 and encoder_output is not None:  # gated diagnostic — encoder sanity
-            try:
-                import numpy as _np
-                _eo = encoder_output.numpy()
-                with open(_prog0, "w") as _pf:
-                    _pf.write(f"ENCODER shape={_eo.shape} l2={float(_np.linalg.norm(_eo)):.3f} "
-                              f"mean={float(_eo.mean()):.5f} std={float(_eo.std()):.5f} "
-                              f"nan={bool(_np.isnan(_eo).any())} "
-                              f"head={_np.round(_eo.flatten()[:6],4).tolist()}\n")
-                    _pf.flush()
-            except Exception:
-                pass
+        _n_win = 0
+        while True:
+            if _seek_ctx and _n_win > 0:
+                from neurobrix.core.module.audio.mel_dsp import whisper_window_mel
+                _wf = _seek_ctx["build"](whisper_window_mel(_seek_ctx, _seek))
+                self.ctx.variable_resolver.resolved[_feat_var] = _wf
+                self.ctx.variable_resolver.resolved[_feat_short] = _wf
+            _n_win += 1
+            _mel_frames = int(self.ctx.variable_resolver.resolved[_feat_var].shape[-1])
+
+            print(f"   [{enc_name}] Running encoder..." +
+                  (f" (window {_n_win} at {_seek / _seek_ctx['sr']:.2f} s)"
+                   if _seek_ctx else ""))
+            start = time.perf_counter()
+            self._ensure_weights_loaded(enc_name)
+            self._execute_component(enc_name, "forward", None)
+            enc_elapsed = (time.perf_counter() - start) * 1000
+            print(f"   [{enc_name}] Done in {enc_elapsed:.0f}ms")
+
+            # Store encoder output for cross-attention
+            encoder_output = _get_component_output(self.ctx, enc_name)
+            if encoder_output is not None:
+                self.ctx.variable_resolver.resolved[f"{enc_name}.output_0"] = encoder_output
+            _prog0 = __import__("os").environ.get("NBX_DECODE_PROGRESS")
+            if _prog0 and encoder_output is not None:  # gated diagnostic — encoder sanity
+                try:
+                    import numpy as _np
+                    _eo = encoder_output.numpy()
+                    with open(_prog0, "w") as _pf:
+                        _pf.write(f"ENCODER shape={_eo.shape} l2={float(_np.linalg.norm(_eo)):.3f} "
+                                  f"mean={float(_eo.mean()):.5f} std={float(_eo.std()):.5f} "
+                                  f"nan={bool(_np.isnan(_eo).any())} "
+                                  f"head={_np.round(_eo.flatten()[:6],4).tolist()}\n")
+                        _pf.flush()
+                except Exception:
+                    pass
+
+            _adv = self._decode_one_window(
+                decoder_stage, dec_name, defaults, _all_ids, _all_texts,
+                seek_ctx=_seek_ctx, ts_ids=_ts_ids, mel_frames=_mel_frames,
+                encoder_frames=(int(encoder_output.shape[1])
+                                if encoder_output is not None else None))
+            if not _seek_ctx:
+                break
+            _seek += _adv if _adv else _seek_ctx["nsamp"]
+            if _seek >= _seek_total:
+                break
 
         if not self.ctx.persistent_mode:
             self._unload_component_weights(enc_name)
+            self._unload_component_weights(dec_name)
             release_flow_memory(self.ctx.primary_device)
 
+        self.ctx.variable_resolver.resolved["global.generated_token_ids"] = _all_ids
+        if _n_win > 1:
+            text = " ".join(t.strip() for t in _all_texts if t and t.strip())
+            self.ctx.variable_resolver.resolved["global.transcription"] = text
+            print(f"   [Output] Transcription ({_n_win} windows): "
+                  f"{text[:100]}{'...' if len(text) > 100 else ''}")
+        else:
+            from neurobrix.triton.audio_frontend import postprocess_text_output_np
+            postprocess_text_output_np(self.ctx)
+
+        return self.ctx.variable_resolver.resolve_all()
+
+    def _decode_one_window(self, decoder_stage, dec_name, defaults,
+                           _all_ids, _all_texts, seek_ctx=None, ts_ids=None,
+                           mel_frames=None, encoder_frames=None):
+        """Decode one window; in long-form returns the seek advance in
+        samples (None = consume the whole window). Mirror of the
+        compiled flow."""
         # -- Step 3: Autoregressive decode with cross-attention --
         from neurobrix.core.runtime.decode_bound import decode_bound  # NBX_DECODE_BOUND harness
         max_tokens = decode_bound(defaults.get("max_tokens"))
@@ -131,9 +200,12 @@ class TritonEncoderDecoderEngine:
             "encoder_decoder (triton)", ("temperature", "repetition_penalty"),
             _samp_cfg, explicit=_samp_explicit)
 
-        # Forced decoder IDs (language/task tokens for Whisper)
-        forced_decoder_ids = defaults.get("forced_decoder_ids", [])
-        forced_map = {pos: tid for pos, tid in forced_decoder_ids}
+        # Forced decoder positions and the prompt length (mirror of the
+        # compiled flow; long-form drops a forced <|notimestamps|>).
+        from neurobrix.core.module.audio.stt_longform import (
+            whisper_begin_index, whisper_forced_map)
+        forced_map = whisper_forced_map(defaults, ts_ids, timestamps=seek_ctx is not None)
+        begin = whisper_begin_index(forced_map)
 
         print(f"   [{dec_name}] Generating tokens (max={max_tokens})...")
         start = time.perf_counter()
@@ -182,6 +254,8 @@ class TritonEncoderDecoderEngine:
                     logits, temperature,
                     generated_ids=generated_ids,
                     repetition_penalty=repetition_penalty,
+                    defaults=defaults, ts_ids=ts_ids, begin=begin,
+                    timestamps=seek_ctx is not None,
                 )
 
             generated_ids.append(next_token)
@@ -206,17 +280,34 @@ class TritonEncoderDecoderEngine:
         dec_elapsed = (time.perf_counter() - start) * 1000
         print(f"   [{dec_name}] Generated {len(generated_ids)} tokens in {dec_elapsed:.0f}ms")
 
-        self.ctx.variable_resolver.resolved["global.generated_token_ids"] = generated_ids
-
-        if not self.ctx.persistent_mode:
-            self._unload_component_weights(dec_name)
-            release_flow_memory(self.ctx.primary_device)
-
-        # -- Step 4: Decode tokens to text (zero-torch) --
-        from neurobrix.triton.audio_frontend import postprocess_text_output_np
-        postprocess_text_output_np(self.ctx)
-
-        return self.ctx.variable_resolver.resolve_all()
+        # Timestamp seek — the vendor's rule (stt_longform.whisper_seek),
+        # mirror of the compiled flow: drop the unfinished trailing
+        # segment, advance to the last complete segment's end; the
+        # advance is measured from the run's own mel/encoder frame ratio.
+        advance_samples = None
+        if seek_ctx is not None:
+            from neurobrix.core.module.audio.stt_longform import (
+                whisper_advance_samples, whisper_seek)
+            _adv_idx, _keep = whisper_seek(generated_ids, begin, ts_ids[1], eos_token_id)
+            if _adv_idx is not None and not encoder_frames:
+                raise RuntimeError("ZERO FALLBACK: long-form seek needs the encoder output frame count.")
+            if _adv_idx is not None and _adv_idx > 0:
+                generated_ids = generated_ids[:_keep]
+                advance_samples = whisper_advance_samples(
+                    _adv_idx, mel_frames, encoder_frames, seek_ctx["hop"])
+                print(f"   [{dec_name}] seek +{advance_samples / seek_ctx['sr']:.2f} s "
+                      f"(end of the last complete segment)")
+            else:
+                print(f"   [{dec_name}] seek: whole window")
+        _all_ids.extend(generated_ids)
+        tokenizer = self.ctx.modules.get("tokenizer")
+        if tokenizer is not None:
+            from neurobrix.core.module.audio.output_processor import AudioOutputProcessor
+            _all_texts.append(
+                AudioOutputProcessor.decode_tokens(generated_ids, tokenizer))
+        else:
+            _all_texts.append(str(generated_ids))
+        return advance_samples
 
 
 # -----------------------------------------------------------------
@@ -296,11 +387,15 @@ def _compute_logits(ctx, hidden_states, embed_weight, logits_source):
     return last_hidden
 
 
-def _sample_token_nbx(logits, temperature, generated_ids=None, repetition_penalty=1.0) -> int:
+def _sample_token_nbx(logits, temperature, generated_ids=None, repetition_penalty=1.0,
+                      defaults=None, ts_ids=None, begin=1, timestamps=False) -> int:
     """Sample next token from logits.
 
     For sampling we need argmax or multinomial. In triton mode,
     we read logits to CPU via numpy for sampling (small tensor).
+    `defaults`/`ts_ids`/`timestamps`: the vendor logit rules (suppression
+    lists; the timestamp grammar in long-form) applied on the numpy row —
+    shared with the compiled flow through stt_longform.
     """
     # Read last position logits to CPU
     if hasattr(logits, 'shape') and len(logits.shape) >= 3:
@@ -323,6 +418,15 @@ def _sample_token_nbx(logits, temperature, generated_ids=None, repetition_penalt
                 else:
                     last_logits_np[tid] *= repetition_penalty
 
+    _maybe_log_topk(last_logits_np, len(generated_ids or []), "triton", "raw")
+    if defaults is not None and (timestamps or defaults.get("suppress_tokens")
+                                 or defaults.get("begin_suppress_tokens")):
+        from neurobrix.core.module.audio.stt_longform import apply_whisper_logit_rules
+        last_logits_np = np.array(last_logits_np, dtype=np.float32, copy=True)
+        apply_whisper_logit_rules(last_logits_np, generated_ids or [], defaults, ts_ids,
+                                  begin, timestamps=timestamps)
+        _maybe_log_topk(last_logits_np, len(generated_ids or []), "triton", "rules")
+
     if temperature == 0.0:
         return int(np.argmax(last_logits_np))
 
@@ -333,6 +437,28 @@ def _sample_token_nbx(logits, temperature, generated_ids=None, repetition_penalt
     probs = exp_logits / exp_logits.sum()
 
     return int(np.random.choice(len(probs), p=probs))
+
+
+def _maybe_log_topk(row, step: int, engine: str, stage: str) -> None:
+    """NBX_DECODE_TOPK=<jsonl>: per-step top-4 ids/values + top-2 margin
+    of one logits row (numpy), `stage` = "raw" (model logits) or
+    "rules" (after the vendor logit rules). Same record shape as the
+    vlm flows so engine records pair by (step, stage). Default-off."""
+    import os as _os
+    path = _os.environ.get("NBX_DECODE_TOPK")
+    if not path:
+        return
+    import json as _json
+    import numpy as _np
+    r = _np.asarray(row, dtype=_np.float64).reshape(-1)
+    top = _np.argsort(-r)[:4]
+    vals = [float(r[i]) for i in top]
+    rec = {"engine": engine, "stage": stage, "step": int(step),
+           "ids": [int(i) for i in top], "vals": [round(v, 6) for v in vals],
+           "margin12": round(vals[0] - vals[1], 6)}
+    with open(path, "a") as f:
+        _json.dump(rec, f)
+        f.write("\n")
 
 
 def _to_numpy(tensor) -> np.ndarray:

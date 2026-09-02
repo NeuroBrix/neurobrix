@@ -132,6 +132,21 @@ class TritonGenerator:
         else:
             context_ids = None
 
+        # NBX_DECODE_TOPK diagnostic — mirror of the compiled generator
+        # (numpy at the diagnostic boundary, R33-safe).
+        _topk_path = os.environ.get("NBX_DECODE_TOPK")
+        if _topk_path:
+            import json as _json
+            _row = np.asarray(logits.numpy(), dtype=np.float64).reshape(-1, logits.shape[-1])[0]
+            _idx = np.argsort(-_row)[:4]
+            _vals = [float(_row[i]) for i in _idx]
+            with open(_topk_path, "a") as _tf:
+                _json.dump({"engine": "triton", "step": int(step_idx),
+                            "ids": [int(i) for i in _idx],
+                            "vals": [round(v, 6) for v in _vals],
+                            "margin12": round(_vals[0] - _vals[1], 6)}, _tf)
+                _tf.write("\n")
+
         next_token = self._sampler(logits, input_ids=context_ids)
 
         # Read token ID to CPU (single int)

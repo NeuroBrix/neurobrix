@@ -255,6 +255,23 @@ class AutoregressiveGenerator:
             torch.tensor([all_context], device=logits.device) if all_context else None
         )
 
+        # NBX_DECODE_TOPK=<jsonl>: per-step top-4 raw logits + top-2 margin
+        # (src/neurobrix/CLAUDE.md §8) — the measuring tool for a greedy
+        # cross-engine token divergence: near-tie vs large-margin flip.
+        # Mirrored in triton/generator.py; records pair by (engine, step).
+        _topk_path = os.environ.get("NBX_DECODE_TOPK")
+        if _topk_path:
+            import json as _json
+            _row = logits.reshape(-1, logits.shape[-1])[0].detach().float()
+            _top = torch.topk(_row, 4)
+            _vals = [float(x) for x in _top.values]
+            with open(_topk_path, "a") as _tf:
+                _json.dump({"engine": "torch", "step": int(step_idx),
+                            "ids": [int(i) for i in _top.indices],
+                            "vals": [round(v, 6) for v in _vals],
+                            "margin12": round(_vals[0] - _vals[1], 6)}, _tf)
+                _tf.write("\n")
+
         # Sample using configured sampler
         # Sampler handles temperature, top-k, top-p, repetition penalty
         next_token = self._sampler(logits, input_ids=context_ids)
