@@ -107,6 +107,45 @@ def _concrete_product_match(target: int, sym_dims: list) -> bool:
     return False
 
 
+def _expr_symbol_ids(node, acc: set) -> set:
+    """Collect every symbol id referenced anywhere in a serialized SymInt
+    expression tree. Mirror of the build toolchain's windowing.py."""
+    if isinstance(node, dict):
+        if node.get("type") == "symbol":
+            sid = node.get("id", node.get("symbol_id"))
+            if sid:
+                acc.add(sid)
+        for k in ("left", "right", "operand"):
+            if k in node:
+                _expr_symbol_ids(node[k], acc)
+        for f in node.get("factors", []):
+            if isinstance(f, dict):
+                _expr_symbol_ids(f, acc)
+            elif isinstance(f, str):
+                acc.add(f)
+    return acc
+
+
+def _expr_symbols_in_input(expr, in_sym_dims: list) -> bool:
+    """True if EVERY symbol referenced by ``expr`` also appears in the op's
+    input symbolic dims. Foreign-symbol collision guard (mirror of the build
+    toolchain's windowing.py): an architectural weight constant must NOT be
+    re-symbolized as a product whose factor symbols are FOREIGN to this op's
+    input — a trace-value coincidence with a product living in another
+    branch. The engine-side twin bit exactly the case the tracer guard
+    already covers (SANA-Video AdaLN 6 == a foreign s5*s6 product, trace 6,
+    runtime 4 → view split 13440 as 4x3360, 2026-09-02): a graph the tracer
+    correctly emits with the 6 CONCRETE must not have the collision
+    re-injected by this runtime pass."""
+    expr_syms = _expr_symbol_ids(expr, set())
+    if not expr_syms:
+        return True  # constant expr — the foreign-symbol guard does not apply
+    in_syms: set = set()
+    for d in (in_sym_dims or []):
+        _expr_symbol_ids(d, in_syms)
+    return expr_syms <= in_syms
+
+
 # ============================================================================
 # ARGUMENT TYPES (compile-time only, never seen at runtime)
 # ============================================================================
@@ -1991,12 +2030,27 @@ class CompiledSequence:
                     if not input_shapes:
                         continue
                     input_shape = input_shapes[0]
+                    # Foreign-symbol guard, expand parity (2026-09-02 review):
+                    # a broadcast target that is a DIRECT weight dim must not
+                    # absorb an expression whose symbols are foreign to this
+                    # op's input — the same runtime re-injection class the
+                    # view branch guards against.
+                    _e_tids = op_data.get("input_tensor_ids", [])
+                    _e_sym_dims = []
+                    if _e_tids:
+                        _ess = tensors.get(_e_tids[0], {}).get("symbolic_shape", {})
+                        if isinstance(_ess, dict):
+                            _e_sym_dims = _ess.get("dims", [])
 
                     changed = False
                     new_size = list(size_list)
                     for i, (target, actual) in enumerate(zip(size_list, input_shape)):
                         if (isinstance(target, int) and actual == 1
                                 and target > 1 and target in expr_map):
+                            if (target in weight_dims
+                                    and not _expr_symbols_in_input(
+                                        expr_map[target], _e_sym_dims)):
+                                continue
                             new_size[i] = expr_map[target]
                             changed = True
                             injected += 1
@@ -2054,6 +2108,31 @@ class CompiledSequence:
                             if (dim_val in weight_dims
                                     and _concrete_product_match(dim_val, in_sym_dims)):
                                 continue
+                            # Foreign-symbol collision guard (mirror): an
+                            # architectural constant split from a CONCRETE input
+                            # (invisible to the concrete-product test) stays
+                            # concrete when the candidate expression references
+                            # symbols ABSENT from this op's input — the product
+                            # belongs to another branch and merely shares the
+                            # trace value (SANA-Video AdaLN 6 vs foreign s5*s6;
+                            # the engine-side twin of the tracer's 2026-06-19
+                            # guard, ported 2026-09-02).
+                            # ENGINE-SIDE SCOPE (same day, swin2sr gate): the
+                            # tracer's broader architectural-FACTOR rule
+                            # over-fires here — a WINDOW COUNT that happens to
+                            # divide the embed dim (10 | 180) would be classed
+                            # architectural and lose the legitimate
+                            # cross-branch injection old builds depend on
+                            # (view::24 crash at 448x448). Runtime records are
+                            # sparser than trace-time ones, so the engine
+                            # guard fires on DIRECT weight dims only; the
+                            # factor class (head_dim) is guarded at trace by
+                            # the build toolchain's 2026-06 factor guard and
+                            # rides re-traced builds.
+                            if (dim_val in weight_dims
+                                    and not _expr_symbols_in_input(
+                                        expr_map[dim_val], in_sym_dims)):
+                                continue
                             # Direct match (no passthrough-safety — an exact known
                             # windowed value is always the windowed value)
                             new_shape[i] = expr_map[dim_val]
@@ -2068,6 +2147,15 @@ class CompiledSequence:
                                 if dim_val % expr_val == 0:
                                     quotient = dim_val // expr_val
                                     if quotient > 1 and quotient in input_shape:
+                                        # Architectural-factor guard (mirror),
+                                        # engine-scoped to DIRECT weight dims
+                                        # like the direct-match guard above:
+                                        # never fold a FOREIGN symbol into a
+                                        # weight constant via a merge.
+                                        if (dim_val in weight_dims
+                                                and not _expr_symbols_in_input(
+                                                    expr_dict, in_sym_dims)):
+                                            continue
                                         # Create product expression
                                         product_expr = {
                                             "type": "mul",

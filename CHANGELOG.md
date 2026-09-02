@@ -31,6 +31,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A runtime shape-recovery pass could corrupt correctly-prepared
+  models.** The engine's load-time pass that recovers dynamic shapes on
+  older model containers could re-introduce a shape confusion on models
+  whose containers are already correct (a model constant sharing a
+  value with an unrelated dimension), crashing or corrupting generation
+  at non-default sizes. The pass now carries the same safeguards as the
+  preparation toolchain and can no longer alter a correct container's
+  behavior; older containers keep their recovery.
+
 - **`resemble-ai/Chatterbox` failed to generate any audio.** Both
   engines crashed with an internal dtype error at the first generated
   token: the speech-head projection assumed the language model's output
