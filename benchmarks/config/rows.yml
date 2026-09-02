@@ -501,7 +501,10 @@ rows:
     neurobrix_model: Allegro-TI2V
     prompt: "a red fox running through snow"
     steps: 6
-    num_frames: 9
+    num_frames: 8   # vendor contract: the Allegro VAE encoder's temporal downsample
+                  # (x[:, :, ::2] + stride-2 causal conv) agrees only for a
+                  # multiple of 4 — 9 frames fails in the vendor's own code
+                  # (D-ALLEGRO-TI2V-ADD5 re-read 2026-09-02)
     seed: 0
     height: 368
     width: 640

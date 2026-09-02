@@ -22,6 +22,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with a KV-cache capacity error although the model's window is 2048
   (short prompts are correct).
 
+- **Back to public.** `nvidia/Parakeet-TDT-1.1B` and
+  `hpcai-tech/Open-Sora-v2` return with the long-form transcription and
+  attention-chunk fixes below; `Efficient-Large-Model/SANA-Video-2B-720p`
+  returns with a container rebuilt by the current toolchain and validated
+  in all four execution modes; `canopylabs/Orpheus-3B` returns after the
+  reported `--triton` mispronunciation was traced to a greedy tie between
+  two equally likely tokens (the Triton engine follows the reference
+  op-by-op engine token for token; the compiled engine took the other
+  branch of an exact tie). `openai/Whisper-V3-Turbo` was replaced with a
+  container that carries the model's timestamp and token-suppression
+  data, which long-form transcription needs.
+
 ### Added
 
 - **The `neurobrix hub` listing now shows a model's distribution state.**

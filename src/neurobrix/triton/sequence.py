@@ -3251,9 +3251,15 @@ class TritonSequence:
             # e.g. all custom.rms_norm outputs across the network).
             if filters and not any(f in tid or f in op.op_uid for f in filters):
                 continue
-            if tid in self._dump_seen:
+            # NBX_DUMP_TIDS_PASS=<k>: only pass k (mirror of the compiled dump).
+            _pass_sel = _os_d.environ.get("NBX_DUMP_TIDS_PASS")
+            _cur_pass = getattr(self, "_dump_pass", 0)
+            if _pass_sel is not None and _cur_pass != int(_pass_sel):
                 continue
-            self._dump_seen.add(tid)
+            _key = (_cur_pass, op.op_uid) if _pass_sel is not None else tid
+            if _key in self._dump_seen:
+                continue
+            self._dump_seen.add(_key)
             tensor = self._arena[out_slot] if self._arena else None
             if tensor is None:
                 continue
@@ -3421,6 +3427,8 @@ class TritonSequence:
         _trace_nan_on = os.environ.get("NBX_TRITON_TRACE_NAN") == "1"
         _fp_path = os.environ.get("NBX_OP_FINGERPRINT", "")
         _dump_tids_env = os.environ.get("NBX_DUMP_TIDS")
+        if _dump_tids_env:
+            self._dump_pass = getattr(self, "_dump_pass", -1) + 1   # NBX_DUMP_TIDS_PASS counter
         _dump_raw_on = bool(os.environ.get("NBX_DUMP_RAW"))
         _trace_tids_env = os.environ.get("NBX_TRACE_TIDS", "")
         _trace_tids = (set(t.strip() for t in _trace_tids_env.split(","))
@@ -4187,6 +4195,8 @@ class TritonSequence:
         # of the per-op hot loop — read ONCE per run (same gate
         # semantics; env changes mid-run no longer apply).
         _dtids = os.environ.get("NBX_DUMP_TIDS")
+        if _dtids:
+            self._dump_pass = getattr(self, "_dump_pass", -1) + 1   # NBX_DUMP_TIDS_PASS counter
         _fp_path_md = os.environ.get("NBX_OP_FINGERPRINT", "")
 
         for op_idx, op in enumerate(self._ops):

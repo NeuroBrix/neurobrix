@@ -3471,6 +3471,16 @@ class CompiledSequence:
 
         # Use inference_mode to disable autograd and reduce memory usage
         with torch.inference_mode():
+            import os as _os_dp
+            if _os_dp.environ.get("NBX_DUMP_TIDS"):
+                # NBX_DUMP_TIDS_PASS: per-run pass counter for the per-op dump
+                # (pass 0 = the first run of this sequence; a decode step k
+                # of an autoregressive flow is pass k).
+                global _DUMP_STATE_NATIVE
+                _st = _DUMP_STATE_NATIVE.setdefault(id(self),
+                    {"seen": set(), "records": [],
+                     "slot_to_tid": {s_: t_ for t_, s_ in self._tensor_id_to_slot.items()}})
+                _st["pass"] = _st.get("pass", -1) + 1
             self._run_inner(arena, debug, pre_op_callback)
 
     def _maybe_dump_tid_native(self, op, out_slot: int, tensor) -> None:
@@ -3497,13 +3507,20 @@ class CompiledSequence:
         # e.g. all custom.rms_norm outputs across the network).
         if filters and not any(f in tid or f in op.op_uid for f in filters):
             return
+        # NBX_DUMP_TIDS_PASS=<k>: dump ONLY during pass k of this sequence
+        # (every op once in that pass) — the per-step differential for a
+        # decode divergence located at step k. Without it: first pass only.
+        _pass_sel = _os_d.environ.get("NBX_DUMP_TIDS_PASS")
+        if _pass_sel is not None and state.get("pass", 0) != int(_pass_sel):
+            return
         # Dedup by op_uid, NOT tid: CompiledSequence reuses arena slots, so many
         # distinct ops share one slot → one tid. Keying by tid silently dropped
         # every reused-slot op (the whole patch-embed/modulation/RoPE chain),
         # making cross-engine diffs blind. op_uid is unique per op.
-        if op.op_uid in state["seen"]:
+        _key = (state.get("pass", 0), op.op_uid) if _pass_sel is not None else op.op_uid
+        if _key in state["seen"]:
             return
-        state["seen"].add(op.op_uid)
+        state["seen"].add(_key)
         try:
             if not isinstance(tensor, torch.Tensor):
                 return

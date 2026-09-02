@@ -2015,6 +2015,10 @@ class GraphExecutor:
         arena slots and therefore has no kill_slots concept — the flag
         is effectively ignored here.
         """
+        if __import__("os").environ.get("NBX_DUMP_TIDS"):
+            # NBX_DUMP_TIDS_PASS: per-run pass counter (mirror of the two
+            # compiled-sequence dumps; pass 0 = first run, decode step k = pass k).
+            self._seq_dump_pass = getattr(self, "_seq_dump_pass", -1) + 1
         del skip_kills  # unused, kept for signature parity
         from neurobrix.triton.sequential import TritonSequentialDispatcher
         from neurobrix.triton.symbols import SymbolResolver
@@ -2431,13 +2435,18 @@ class GraphExecutor:
                     self._seq_dump_seen = set()
                 _td_filters = [f for f in _os_td.environ.get(
                     "NBX_DUMP_TIDS_FILTER", "").split(",") if f]
+                _td_pass_sel = _os_td.environ.get("NBX_DUMP_TIDS_PASS")
+                _td_pass = getattr(self, "_seq_dump_pass", 0)
                 for _ot in output_tids:
                     if _td_filters and not any(
                             f in _ot or f in op_uid for f in _td_filters):
                         continue
-                    if _ot in self._seq_dump_seen:
+                    if _td_pass_sel is not None and _td_pass != int(_td_pass_sel):
                         continue
-                    self._seq_dump_seen.add(_ot)
+                    _td_key = (_td_pass, op_uid, _ot) if _td_pass_sel is not None else _ot
+                    if _td_key in self._seq_dump_seen:
+                        continue
+                    self._seq_dump_seen.add(_td_key)
                     _t = store.get(_ot)
                     if _t is None or not hasattr(_t, "data_ptr"):
                         continue
