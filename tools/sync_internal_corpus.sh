@@ -83,4 +83,33 @@ fi
 # GitHub first, GitLab as its mirror.
 git push -q origin HEAD:main
 git push -q gitlab HEAD:main
+
+# STRICT MIRROR — verified, not assumed. A push can succeed on one remote and
+# fail on the other (it has: GitLab sat at 37cefc3 while GitHub and local were
+# at 9104ac8 on 2026-09-03, and nothing said so). The rule is that GitLab is a
+# strict mirror of GitHub: same repository names, same branch names, same
+# commits, and never a repository that exists on only one side.
+LOCAL=$(git rev-parse HEAD)
+GH=$(git ls-remote origin refs/heads/main 2>/dev/null | cut -f1)
+GL=$(git ls-remote gitlab refs/heads/main 2>/dev/null | cut -f1)
 echo "pushed $(git rev-parse --short HEAD) -> origin(GitHub) + gitlab(mirror)"
+if [ "$GH" != "$LOCAL" ] || [ "$GL" != "$LOCAL" ]; then
+    echo "MIRROR DIVERGENCE — the remotes do not carry what was just pushed:" >&2
+    echo "  local  $LOCAL" >&2
+    echo "  github ${GH:-<unreachable>}" >&2
+    echo "  gitlab ${GL:-<unreachable>}" >&2
+    echo "GitHub is the source and GitLab the mirror: reconcile toward GitHub," >&2
+    echo "losing nothing, then re-run. Do NOT let the two drift." >&2
+    exit 4
+fi
+# Branch sets must match too: a branch on one side only is a divergence that a
+# sha comparison on main would never show.
+GH_BRANCHES=$(git ls-remote --heads origin 2>/dev/null | sed 's|.*refs/heads/||' | sort | tr '\n' ' ')
+GL_BRANCHES=$(git ls-remote --heads gitlab 2>/dev/null | sed 's|.*refs/heads/||' | sort | tr '\n' ' ')
+if [ "$GH_BRANCHES" != "$GL_BRANCHES" ]; then
+    echo "MIRROR DIVERGENCE — branch sets differ:" >&2
+    echo "  github: $GH_BRANCHES" >&2
+    echo "  gitlab: $GL_BRANCHES" >&2
+    exit 4
+fi
+echo "mirror verified: both remotes at ${LOCAL:0:12}, branches [$GH_BRANCHES]"
