@@ -119,6 +119,18 @@ def cmd_upscale(args):
     solver = PrismSolver()
     execution_plan = solver.solve_smart(container, hw_profile, input_config)
     print(f"   Strategy: {execution_plan.strategy}")
+    # The choice, said out loud. Prism scores every viable strategy and takes
+    # the fastest — invisible unless printed, and an engine that decides
+    # without saying so is indistinguishable from one that decides badly.
+    if getattr(execution_plan, "selection_reason", ""):
+        print(f"   Why:      {execution_plan.selection_reason}")
+    _cards = sorted({
+        d for a in execution_plan.components.values()
+        for d in (getattr(a, "devices", None) or [])
+    })
+    if _cards:
+        print(f"   Devices:  {', '.join(_cards)}"
+              f"  ({execution_plan.total_memory_mb:.0f} MB planned)")
 
     loader = NBXRuntimeLoader()
     pkg = loader.load(str(nbx_path))

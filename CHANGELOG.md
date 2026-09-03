@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **NeuroBrix no longer tells you a model will not run.** When nothing fitted
+  on the available hardware, planning stopped with "No strategy can fit this
+  model". It now adds a final option — components loaded and released one at a
+  time, streaming from disk — so a model that is too large for your GPUs, and
+  even for your memory all at once, still runs. It will be slow, and it says
+  so. Planning refuses only when a single component cannot fit on its own, and
+  then it names that component and what would make it run.
+
+- **The engine now says which strategy it chose, and why.** Every run prints
+  the strategy, the devices it will use, the memory it plans to use, and the
+  reason that strategy was preferred over the others that also fitted.
+  NeuroBrix compares every viable strategy on estimated speed rather than
+  taking the first that fits, and that decision was previously invisible.
+
 ### Fixed
 
 - **The `--triton` engine hardcoded the NVIDIA runtime in five places.** Token
