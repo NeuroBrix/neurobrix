@@ -142,6 +142,41 @@ class DiffusionSchedulerBase(ABC):
     timesteps: Optional[torch.Tensor]
     num_inference_steps: Optional[int]
 
+    # ------------------------------------------------------------------
+    # Resumable renders — see core/runtime/render_checkpoint.py
+    # ------------------------------------------------------------------
+    #
+    # A render checkpoint can only resume correctly if the scheduler's
+    # per-step state is carried with the latent. Multistep solvers (UniPC,
+    # DPM++) keep a history of previous model outputs, so a resume that
+    # restored only the latent would silently produce a DIFFERENT image
+    # from the uninterrupted run — the exact class of silent-wrong result
+    # this engine refuses.
+    #
+    # The default is therefore "cannot be resumed". A scheduler opts in by
+    # returning its state; one that does not is refused by the checkpoint,
+    # loudly, and the render restarts from step 0.
+
+    def checkpoint_state(self) -> Optional[Dict[str, Any]]:
+        """Per-step state to carry across a resume, or None if not resumable.
+
+        Returns plain, serialisable values only (ints, lists, numpy arrays)
+        — the triton engine has the same need and R33 keeps torch out of
+        that tree, so the state crosses as data, not as tensors.
+
+        An empty dict means "resumable, and I carry nothing"; None means
+        "do not resume me".
+        """
+        return None
+
+    def restore_state(self, state: Dict[str, Any]) -> None:
+        """Restore what `checkpoint_state` returned. Never called when that
+        returned None."""
+        raise NotImplementedError(
+            f"{type(self).__name__} declared itself resumable but did not "
+            f"implement restore_state()"
+        )
+
     @abstractmethod
     def set_timesteps(
         self,
@@ -209,6 +244,41 @@ class FlowSchedulerBase(ABC):
 
     num_train_timesteps: int
     timesteps: torch.Tensor
+
+    # ------------------------------------------------------------------
+    # Resumable renders — see core/runtime/render_checkpoint.py
+    # ------------------------------------------------------------------
+    #
+    # A render checkpoint can only resume correctly if the scheduler's
+    # per-step state is carried with the latent. Multistep solvers (UniPC,
+    # DPM++) keep a history of previous model outputs, so a resume that
+    # restored only the latent would silently produce a DIFFERENT image
+    # from the uninterrupted run — the exact class of silent-wrong result
+    # this engine refuses.
+    #
+    # The default is therefore "cannot be resumed". A scheduler opts in by
+    # returning its state; one that does not is refused by the checkpoint,
+    # loudly, and the render restarts from step 0.
+
+    def checkpoint_state(self) -> Optional[Dict[str, Any]]:
+        """Per-step state to carry across a resume, or None if not resumable.
+
+        Returns plain, serialisable values only (ints, lists, numpy arrays)
+        — the triton engine has the same need and R33 keeps torch out of
+        that tree, so the state crosses as data, not as tensors.
+
+        An empty dict means "resumable, and I carry nothing"; None means
+        "do not resume me".
+        """
+        return None
+
+    def restore_state(self, state: Dict[str, Any]) -> None:
+        """Restore what `checkpoint_state` returned. Never called when that
+        returned None."""
+        raise NotImplementedError(
+            f"{type(self).__name__} declared itself resumable but did not "
+            f"implement restore_state()"
+        )
 
     @abstractmethod
     def set_timesteps(

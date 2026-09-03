@@ -292,6 +292,16 @@ class DDIMScheduler(DiffusionSchedulerBase):
         """Initial noise sigma."""
         return 1.0
 
+    # --- resumable renders (see core/runtime/render_checkpoint.py) ---------
+
+    def checkpoint_state(self):
+        """Resumable: this solver's step is a function of (sample, sigma) with
+        no history across steps, so only the step index travels."""
+        return {"_step_index": self._step_index}
+
+    def restore_state(self, state) -> None:
+        self._step_index = state.get("_step_index")
+
     @classmethod
     def from_config(cls, config: Dict[str, Any]) -> "DDIMScheduler":
         """Create scheduler from NBX config."""
