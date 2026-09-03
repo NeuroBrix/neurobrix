@@ -51,6 +51,15 @@ def get_family_config(family: str) -> Dict[str, Any]:
         return yaml.safe_load(f)
 
 
+class UnsupportedArchitectureError(FileNotFoundError):
+    """No hardware profile describes the detected GPU.
+
+    Subclasses FileNotFoundError so existing handlers keep working, while
+    letting a caller tell "this GPU has no profile" apart from "a config file
+    is missing from the install".
+    """
+
+
 @lru_cache(maxsize=16)
 def get_vendor_config(vendor: str, architecture: str) -> Dict[str, Any]:
     """
@@ -59,21 +68,45 @@ def get_vendor_config(vendor: str, architecture: str) -> Dict[str, Any]:
     ZERO HARDCODE: Hardware-specific defaults from config files.
 
     Args:
-        vendor: Vendor name (nvidia, amd)
-        architecture: Architecture name (volta, ampere, hopper, cdna, cdna2)
+        vendor: Vendor name (nvidia, amd, apple)
+        architecture: Architecture name (volta, ampere, hopper, cdna, cdna2,
+            cdna3, apple_silicon)
 
     Returns:
         Dict with vendor/architecture configuration
 
     Raises:
-        FileNotFoundError: If vendor/architecture config not found
+        UnsupportedArchitectureError: when no profile describes this GPU. The
+            refusal is deliberate — guessing block sizes and memory limits for
+            an unknown architecture produces wrong results rather than an
+            error. But it must SAY that, which is what this message is for:
+            hardware detection can name architectures no profile covers
+            (Blackwell, RDNA, Vega, pre-Volta NVIDIA), and users met a bare
+            FileNotFoundError with a path in it before running a single op.
     """
     config_path = CONFIG_ROOT / "vendors" / vendor / f"{architecture}.yml"
 
     if not config_path.exists():
-        raise FileNotFoundError(
-            f"ZERO FALLBACK: Vendor config not found: {config_path}\n"
-            f"Available: {list_vendors()}"
+        available = list_vendors()
+        known = ", ".join(f"{v}/{a}" for v, arches in sorted(available.items())
+                          for a in sorted(arches)) or "none"
+        raise UnsupportedArchitectureError(
+            f"No hardware profile for {vendor}/{architecture}.\n"
+            f"\n"
+            f"NeuroBrix reads every hardware-dependent value (block sizes, "
+            f"shared-memory limits,\n"
+            f"precision support) from a per-architecture profile, and refuses "
+            f"to guess them: a\n"
+            f"guessed block size produces wrong output, not an error.\n"
+            f"\n"
+            f"Your GPU was detected as: {vendor} / {architecture}\n"
+            f"Profiles available:       {known}\n"
+            f"\n"
+            f"If your GPU is one NeuroBrix should support, this is a gap on "
+            f"our side, not a\n"
+            f"limit of your hardware — please open an issue naming the "
+            f"architecture above.\n"
+            f"Expected profile path:   {config_path}"
         )
 
     with open(config_path) as f:

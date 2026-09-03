@@ -31,6 +31,15 @@ generation.
   validated: no Apple GPU was available, and no support is claimed until
   they run on one.
 
+- **An unsupported GPU now says so, instead of failing with a file path.**
+  NeuroBrix reads every hardware-dependent value from a per-architecture
+  profile and refuses to guess when none matches — a guessed block size
+  produces wrong output rather than an error. But the refusal was a bare
+  missing-file error naming an internal path. It now names the GPU that was
+  detected, lists the hardware that is covered, and says the gap is ours to
+  fill rather than a limit of your card. Architectures currently without a
+  profile include NVIDIA Blackwell, AMD RDNA and Vega, and pre-Volta NVIDIA.
+
 - **`--triton` on a CPU-only machine no longer fails deep inside the
   compiler.** NeuroBrix enabled its CPU Triton path without checking that
   the required `triton-cpu` package was installed, so the run died later
