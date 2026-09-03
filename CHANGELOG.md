@@ -43,6 +43,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Long recordings are transcribed in full by the audio language models
+  of the Voxtral class, on both engines.** The audio-to-text flow used to
+  keep only the first 30 seconds of a recording (the encoder's window).
+  It now runs every 30-second window through the encoder and feeds the
+  language model all of them at once, the way the model's own processor
+  does, so a 10-minute recording yields the whole transcript. Recordings
+  that fit one window take exactly the path they took before.
 - **`--triton` gathers now honour negative indices like PyTorch.** The
   index-select kernel treated a negative index as invalid and left the
   corresponding output element unwritten, so it held whatever the
