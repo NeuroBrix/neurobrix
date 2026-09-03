@@ -1,5 +1,10 @@
 [build-system]
-requires = ["hatchling", "hatch-fancy-pypi-readme"]
+# hatchling PINNED: unpinned, the isolated build environment takes the newest
+# release, and hatchling >= 1.28 emits `Metadata-Version: 2.5`, which PyPI and
+# twine reject outright ("'2.5' is not a valid metadata version"). The 0.5.3
+# upload failed on exactly that. The pin keeps releases reproducible instead of
+# depending on what the build backend happens to be on the day.
+requires = ["hatchling>=1.21,<1.28", "hatch-fancy-pypi-readme"]
 build-backend = "hatchling.build"
 
 [project]
