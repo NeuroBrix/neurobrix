@@ -189,6 +189,10 @@ class ExecutionPlan:
     strategy: str
     component_memory: Dict[str, ComponentMemory]
     loading_mode: str = "lazy"
+    # Why THIS strategy was chosen over the others that also fitted. An engine
+    # that decides without saying so is indistinguishable from one that
+    # decides badly, so the reason travels with the plan and is printed.
+    selection_reason: str = ""
     kv_cache_plan: Optional[KVCachePlan] = None
     cpu_ram_mb: int = 0  # CPU RAM budget for offload strategies
     # Op-level tiling — per-component plan emitted when a single op's
@@ -587,6 +591,7 @@ class PrismSolver:
             # straight to cpu_execution.
             strategies = [
                 ("cpu_execution", self._try_cpu_execution),
+                ("cpu_streaming", self._try_cpu_streaming),
             ]
         elif len(devices) == 1:
             # Single-GPU shortcut: skip multi-GPU strategies (Apple Silicon,
@@ -598,6 +603,7 @@ class PrismSolver:
                 ("lazy_sequential", self._try_lazy_sequential),
                 ("zero3", self._try_zero3),
                 ("cpu_execution", self._try_cpu_execution),
+                ("cpu_streaming", self._try_cpu_streaming),
             ]
         else:
             strategies = [
@@ -611,6 +617,7 @@ class PrismSolver:
                 ("lazy_sequential", self._try_lazy_sequential),
                 ("zero3", self._try_zero3),
                 ("cpu_execution", self._try_cpu_execution),
+                ("cpu_streaming", self._try_cpu_streaming),
             ]
 
         # NBX_FORCE_STRATEGY: deterministic single-strategy selection for
@@ -805,6 +812,8 @@ class PrismSolver:
             allocations = strat_allocs
             chosen_strategy = strat_name
             chosen_devices = strat_devices
+            self._selection_reason = self._explain_choice(
+                strat_name, score, ranked, profile)
             break
 
         if allocations is None:
@@ -3183,6 +3192,33 @@ class PrismSolver:
                 candidates.append((score, strategy_name, allocations, used_devices))
         return candidates
 
+    def _explain_choice(self, chosen: str, chosen_score: float,
+                        ranked: List, profile: "PrismProfile") -> str:
+        """One line saying why this strategy won, and what it beat.
+
+        Prism does not pick the first strategy that fits — it scores every
+        viable one on estimated throughput and takes the best. That is
+        invisible to the user unless it is said, and an unexplained choice is
+        indistinguishable from a wrong one.
+        """
+        viable = [name for _, name, _, _ in ranked]
+        runners_up = [n for n in viable if n != chosen][:3]
+        parts = [f"{chosen} scored {chosen_score:.0f}"]
+        if runners_up:
+            parts.append("ahead of " + ", ".join(runners_up))
+        else:
+            parts.append("the only viable strategy")
+        if chosen == "cpu_streaming":
+            parts.append(
+                "— no GPU strategy fitted, so components stream from disk one "
+                "at a time: this WILL run, and it will be slow (expect minutes "
+                "to hours rather than seconds)")
+        elif chosen == "cpu_execution":
+            parts.append("— no GPU strategy fitted; running on CPU")
+        elif chosen == "zero3":
+            parts.append("— weights offloaded to host RAM between uses")
+        return " ".join(parts)
+
     def _score_strategy(self, strategy_name: str, allocations: Dict, profile: PrismProfile) -> float:
         """
         Score a strategy by estimated relative throughput (higher = better).
@@ -3210,6 +3246,11 @@ class PrismSolver:
             # successful GPU strategy beats it; only chosen when nothing
             # else fits OR when the profile has no GPUs.
             "cpu_execution": 10,
+            # The last rung: one component resident at a time, streaming from
+            # disk. Scored below everything so it is only ever chosen when
+            # nothing else fits — but it is ALWAYS there, so Prism guarantees
+            # execution instead of refusing (P-PRISM-NEVER-REFUSE).
+            "cpu_streaming": 5,
         }
         score = float(BASE_SCORES.get(strategy_name, 500))
 
@@ -3451,6 +3492,51 @@ class PrismSolver:
         # for "no GPU used". We preserve that signal.
         fresh = self._fresh_devices(devices)
         return allocations, fresh
+
+    def _try_cpu_streaming(
+        self, sorted_comps, comp_mem, devices, shard_sizes, profile, container
+    ) -> Optional[Tuple[Dict, List[DeviceState]]]:
+        """CPU execution with ONE component resident at a time — the last rung.
+
+        `_try_cpu_execution` needs `sum(components)` to fit in host RAM. When
+        it does not, the cascade used to run out of strategies and Prism
+        raised "No strategy can fit this model". That contradicts the
+        engine's own philosophy: a model here never says it will not run, it
+        says it will run and that it will be slow. ZERO FALLBACK forbids
+        silent defaults; it does not forbid a slow path chosen out loud.
+
+        So this rung applies the `lazy_sequential` idea on the host: components
+        are loaded and released one at a time, so the requirement drops from
+        `sum(components)` to `max(component)` — the same reduction that makes
+        lazy_sequential viable on a GPU too small for the whole model. Weights
+        stream from the container on disk as each component is reached.
+
+        Viable whenever the LARGEST SINGLE COMPONENT fits in host RAM. Below
+        that there is nothing left to try, and the refusal is real rather than
+        a gap in the cascade.
+
+        Deliberately unbounded in wall time (R35: availability first, perf
+        free). The user is told which strategy was chosen and why, so a slow
+        run is a decision they can see rather than a surprise.
+        """
+        peak_mb = max((mem.total_mb for _, mem in sorted_comps), default=0.0)
+
+        if profile.cpu and profile.cpu.ram_mb > 0:
+            available_ram_mb = profile.cpu.ram_mb * 0.7
+            if peak_mb > available_ram_mb:
+                # The largest single component does not fit even alone. This
+                # is the real bottom of the ladder.
+                return None
+        # No CPU stats: accept, as _try_cpu_execution does — the runtime
+        # fails clean if host RAM is genuinely insufficient, and refusing on
+        # missing telemetry would be refusing on ignorance.
+
+        allocations: Dict[str, Tuple[str, Dict[str, str]]] = {}
+        for comp_name, _mem in sorted_comps:
+            shard_map = {sh: "cpu" for sh in shard_sizes.get(comp_name, {})}
+            allocations[comp_name] = ("cpu", shard_map)
+
+        return allocations, self._fresh_devices(devices)
 
     # Dtype string to bytes-per-element for safetensors header parsing
     _ST_DTYPE_BYTES = {
@@ -3875,6 +3961,12 @@ class PrismSolver:
             total_gpu_mb = sum(d.capacity_mb for d in devices if d.device_string.startswith("cuda"))
             loading_mode = "eager" if total_mb <= total_gpu_mb * 0.90 else "lazy"
 
+        if strategy == "cpu_streaming":
+            # The whole point of this rung: one component resident at a time.
+            # Eager loading would restore the `sum(components)` requirement it
+            # exists to avoid.
+            loading_mode = "lazy"
+
         # Determine primary dtype
         primary_dtype = "float16"
         for dt in comp_dtypes.values():
@@ -3889,6 +3981,7 @@ class PrismSolver:
             strategy=strategy,
             component_memory=comp_mem,
             loading_mode=loading_mode,
+            selection_reason=getattr(self, "_selection_reason", ""),
             cpu_ram_mb=profile.cpu.ram_mb if profile.cpu else 0,
         )
 
@@ -3919,19 +4012,30 @@ class PrismSolver:
                 "component_placement_lazy, lazy_sequential, zero3 - "
                 "ALL FAILED"
             )
+        # Reaching here now means REAL impossibility, not a gap in the
+        # cascade. The ladder ends in `cpu_streaming`, which needs only the
+        # LARGEST SINGLE COMPONENT to fit in host RAM; if even that fails
+        # there is nothing left to offer, and saying so is honest rather than
+        # a refusal to try (P-PRISM-NEVER-REFUSE, closed 2026-09-03).
+        peak_mb = max((m.total_mb for _, m in sorted_comps), default=0.0)
+        biggest = max(sorted_comps, key=lambda item: item[1].total_mb)[0] if sorted_comps else "?"
         raise RuntimeError(
-            f"ZERO FALLBACK: No strategy can fit this model.\n\n"
-            f"Strategies tried: {tried_str}\n\n"
+            f"This model cannot run on this machine.\n\n"
+            f"Every strategy was tried, down to streaming one component at a "
+            f"time from disk:\n  {tried_str}, cpu_execution, cpu_streaming\n\n"
+            f"The last rung needs only the largest single component to fit in "
+            f"memory, and it does not:\n"
+            f"  largest component: {biggest} at {peak_mb:.0f}MB\n\n"
             f"Components:\n{comp_info}\n\n"
             f"Total required: {total_req:.0f}MB\n\n"
             f"GPUs:\n{dev_info}\n\n"
-            f"Total available: {total_avail:.0f}MB\n\n"
-            f"Solutions:\n  1. Use larger GPUs\n  2. Reduce resolution/batch\n"
-            f"  3. Use smaller model\n"
-            f"  4. CPU offload for the overflowing component "
-            f"(open chantier P-PRISM-NEVER-REFUSE / "
-            f"P-MULTI-GPU-NBX-INTRA-COMPONENT-SPLIT for the architectural "
-            f"work this requires)"
+            f"Total GPU available: {total_avail:.0f}MB\n\n"
+            f"What would make it run:\n"
+            f"  1. More host RAM — the streaming path needs "
+            f"{peak_mb:.0f}MB for that one component\n"
+            f"  2. A GPU with more memory\n"
+            f"  3. A smaller input (resolution, batch, context)\n"
+            f"  4. A smaller model"
         )
 
     def _print_summary(self, devices: List[DeviceState], plan: ExecutionPlan, profile: PrismProfile):
