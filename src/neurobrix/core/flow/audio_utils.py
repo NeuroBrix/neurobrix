@@ -63,6 +63,23 @@ def preprocess_audio_input(
     # (byte-identical short clips). NBX_DISABLE_STT_CHUNKING=1 restores
     # the truncating path for diagnosis.
     import os as _os_sw
+    def _fit_to_trace(feats):  # noqa: E306 (defined before first use below)
+        if input_shape and len(input_shape) == len(feats.shape) and len(input_shape) >= 3:
+            for dim_idx in range(1, len(input_shape)):
+                trace_size = input_shape[dim_idx]
+                actual_size = feats.shape[dim_idx]
+                if actual_size != trace_size:
+                    if actual_size > trace_size:
+                        slices = [slice(None)] * len(feats.shape)
+                        slices[dim_idx] = slice(None, trace_size)
+                        feats = feats[tuple(slices)]
+                    else:
+                        pad_shape = list(feats.shape)
+                        pad_shape[dim_idx] = trace_size - actual_size
+                        pad = torch.zeros(pad_shape, device=feats.device, dtype=feats.dtype)
+                        feats = torch.cat([feats, pad], dim=dim_idx)
+        return feats
+
     ctx._stt_seek = None
     features = None
     # Only the encoder_decoder flow consumes the seek context (the
@@ -82,6 +99,25 @@ def preprocess_audio_input(
             features = torch.from_numpy(_np_sw.ascontiguousarray(
                 _mel_dsp.whisper_window_mel(_seek, 0))).to(
                     device=device, dtype=dtype)
+    # Audio-LLM long-form (D-AUDIOLLM-LONGFORM): the whisper-class encoder
+    # of an audio_llm flow sees every fixed 30 s window of the recording;
+    # the flow runs encoder + projector per window and concatenates the
+    # embeddings in order (the vendor contract, one BEGIN_AUDIO). The
+    # windows live on `ctx._audio_windows`; window 0 is bound below as
+    # the classic single-window input.
+    ctx._audio_windows = None
+    if (features is None and preprocessing == "mel_spectrogram"
+            and _flow_type == "audio_llm"
+            and _os_sw.environ.get("NBX_DISABLE_STT_CHUNKING") != "1"):
+        from neurobrix.core.module.audio import mel_dsp as _mel_dsp
+        import numpy as _np_sw
+        _wins = _mel_dsp.fixed_window_mels(
+            str(audio_path), find_model_config_path(ctx), input_shape)
+        if _wins is not None:
+            ctx._audio_windows = [
+                _fit_to_trace(torch.from_numpy(_np_sw.ascontiguousarray(w[None])).to(
+                    device=device, dtype=dtype)) for w in _wins]
+            features = ctx._audio_windows[0]
     if features is None:
         features = AudioInputProcessor.process(
             preprocessing_type=preprocessing,
@@ -93,27 +129,11 @@ def preprocess_audio_input(
         )
 
     # Pad/truncate to match trace-time dimensions
-    def _fit_to_trace(feats):  # noqa: E306 (defined before first use below)
-        if input_shape and len(input_shape) == len(feats.shape) and len(input_shape) >= 3:
-            for dim_idx in range(1, len(input_shape)):
-                trace_size = input_shape[dim_idx]
-                actual_size = feats.shape[dim_idx]
-                if actual_size != trace_size:
-                    if actual_size > trace_size:
-                        slices = [slice(None)] * len(feats.shape)
-                        slices[dim_idx] = slice(None, trace_size)
-                        feats = feats[tuple(slices)]
-                    else:
-                        pad_shape = list(feats.shape)
-                        pad_shape[dim_idx] = trace_size - actual_size
-                        pad = torch.zeros(pad_shape, device=feats.device, dtype=feats.dtype)
-                        feats = torch.cat([feats, pad], dim=dim_idx)
-        return feats
-
     features = _fit_to_trace(features)
 
     print(f"   [Audio] Features: {features.shape} ({preprocessing})"
-          + (" (long-form: timestamp seek)" if ctx._stt_seek else ""))
+          + (" (long-form: timestamp seek)" if ctx._stt_seek else "")
+          + (f" (long-form: {len(ctx._audio_windows)} fixed windows)" if getattr(ctx, "_audio_windows", None) else ""))
 
     # Bind to variable resolver
     ctx.variable_resolver.resolved[variable] = features
