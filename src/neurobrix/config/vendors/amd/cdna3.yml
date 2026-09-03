@@ -1,12 +1,5 @@
-# AMD CDNA1 Architecture Compute Configuration
-# MI100 (gfx908)
-#
-# Scope narrowed 2026-09-03: this file used to claim CDNA1+2+3 while
-# declaring gfx90a (CDNA2) and FP8 (CDNA3). Prism autodetect maps
-# gfx908 -> cdna, gfx90a -> cdna2, gfx940/941/942 -> cdna3, so the
-# other two generations resolved to a file that did not exist and the
-# ZERO-FALLBACK loader raised FileNotFoundError on every MI200/MI300.
-# cdna2.yml and cdna3.yml now exist; this one is CDNA1 alone.
+# AMD CDNA3 Architecture Compute Configuration
+# MI300A (gfx940/gfx941), MI300X (gfx942)
 #
 # validation_status: hand_curated_from_docs
 #   No AMD CDNA hardware available locally (V100 only). Pre-existing
@@ -16,8 +9,8 @@
 #   (P-TRITON-MOE-DETERMINISM-RESIDUAL) for R10 schema parity with
 #   volta.yml; its value/rationale is documented inline.
 
-architecture: cdna
-compute_capability: "gfx908"  # MI100
+architecture: cdna3
+compute_capability: "gfx942"  # MI300X (MI300A = gfx940/gfx941)
 
 # Device string mapping - HIP uses CUDA-like API via ROCm
 # PyTorch on ROCm still uses "cuda" device string
@@ -66,16 +59,15 @@ block_sizes:
   # M=1 dequant-GEMV occupancy rule — see nvidia/volta.yml for the
   # full rationale (pinned parity BLOCK_N under-fills small-N grids;
   # the wrapper halves BLOCK_N until the grid reaches min_programs).
-  # 240 = 2 waves x 120 CUs (MI100); validation_status: analytical.
+  # 608 = 2 waves x 304 CUs (MI300X); validation_status: analytical.
   # Key absent or 0 -> no adaptation.
   dequant_gemv:
-    min_programs: 240
+    min_programs: 608
 
 # Scaled Dot-Product Attention block size thresholds.
 # Schema documented in volta.yml. Decode entries first.
-# CDNA1/2 values conservative for the 64 KB SMEM budget. CDNA3
-# (MI300) has 160 KB and could use larger tiles — when needed,
-# split into cdna3.yml or extend with conditional blocks.
+# Values inherited from CDNA1/2 (conservative for 64 KB). MI300's
+# 160 KB LDS allows larger tiles — unmeasured, see the memory note.
 sdpa_thresholds:
   # Decode path (seqlen_q ≤ 16)
   - seqlen_q_le: 16
@@ -101,12 +93,13 @@ sdpa_thresholds:
     block_n: 64
     num_warps: 4
 
-# Memory constraints — CDNA1 (MI100) and CDNA2 (MI210/MI250) both
-# expose 64 KB SMEM/CU. CDNA3 (MI300) raises this to 160 KB but the
-# distinction needs a separate cdna3.yml when the picker actually
-# benefits from larger tiles on MI300.
+# Memory constraints — CDNA3 (MI300) exposes 160 KB LDS per CU, 2.5x
+# CDNA1/2. The sdpa_thresholds below are deliberately left at the
+# CDNA1/2 tile sizes: larger tiles are the obvious use of that budget,
+# but choosing them without hardware would be a guess presented as a
+# value. Revisit at first light (docs/internal/amd_first_light.md).
 memory:
-  max_shared_memory_per_block: 65536    # 64 KB (CDNA1/2)
+  max_shared_memory_per_block: 163840   # 160 KB LDS per CU (CDNA3)
   max_registers_per_block: 65536
   wavefront_size: 64    # AMD uses 64-wide wavefronts (vs 32 warps)
   # SDPA deterministic-routing budget (R10 schema parity with
@@ -143,12 +136,12 @@ memory:
 # vendors; if AMD wave64 changes the pipeline overhead, recalibrate.
 sdpa_smem_safety: 0.7
 
-# CDNA1 precision support
+# CDNA3 precision support
 precision:
   supports_fp16: true
   supports_bf16: true    # CDNA2+ supports BF16
   supports_tf32: false   # AMD does not have TF32
-  supports_fp8: false    # FP8 arrives with CDNA3 (MI300)
+  supports_fp8: true     # MI300 Matrix Cores: FP8 E4M3 / E5M2
 
 # Software-pipelining budget — see nvidia/volta.yml for the schema.
 #

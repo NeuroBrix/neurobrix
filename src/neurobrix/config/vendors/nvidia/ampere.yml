@@ -142,3 +142,9 @@ precision:
   supports_bf16: true    # Ampere supports BF16
   supports_tf32: true    # Ampere supports TF32
   supports_fp8: false    # Ampere does not support FP8
+
+# Software-pipelining budget — see volta.yml for the schema. Ampere
+# (sm_80) has cp.async, so the cap is set above anything the config
+# space emits (our widest autotune space tops out at 5) and never binds.
+pipelining:
+  max_num_stages: 8

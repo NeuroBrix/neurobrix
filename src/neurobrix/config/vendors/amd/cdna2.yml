@@ -1,12 +1,5 @@
-# AMD CDNA1 Architecture Compute Configuration
-# MI100 (gfx908)
-#
-# Scope narrowed 2026-09-03: this file used to claim CDNA1+2+3 while
-# declaring gfx90a (CDNA2) and FP8 (CDNA3). Prism autodetect maps
-# gfx908 -> cdna, gfx90a -> cdna2, gfx940/941/942 -> cdna3, so the
-# other two generations resolved to a file that did not exist and the
-# ZERO-FALLBACK loader raised FileNotFoundError on every MI200/MI300.
-# cdna2.yml and cdna3.yml now exist; this one is CDNA1 alone.
+# AMD CDNA2 Architecture Compute Configuration
+# MI210, MI250, MI250X (gfx90a)
 #
 # validation_status: hand_curated_from_docs
 #   No AMD CDNA hardware available locally (V100 only). Pre-existing
@@ -16,8 +9,8 @@
 #   (P-TRITON-MOE-DETERMINISM-RESIDUAL) for R10 schema parity with
 #   volta.yml; its value/rationale is documented inline.
 
-architecture: cdna
-compute_capability: "gfx908"  # MI100
+architecture: cdna2
+compute_capability: "gfx90a"  # MI210 / MI250 / MI250X
 
 # Device string mapping - HIP uses CUDA-like API via ROCm
 # PyTorch on ROCm still uses "cuda" device string
@@ -66,10 +59,10 @@ block_sizes:
   # M=1 dequant-GEMV occupancy rule — see nvidia/volta.yml for the
   # full rationale (pinned parity BLOCK_N under-fills small-N grids;
   # the wrapper halves BLOCK_N until the grid reaches min_programs).
-  # 240 = 2 waves x 120 CUs (MI100); validation_status: analytical.
+  # 220 = 2 waves x 110 CUs (one MI250X GCD); validation_status: analytical.
   # Key absent or 0 -> no adaptation.
   dequant_gemv:
-    min_programs: 240
+    min_programs: 220
 
 # Scaled Dot-Product Attention block size thresholds.
 # Schema documented in volta.yml. Decode entries first.
@@ -143,7 +136,7 @@ memory:
 # vendors; if AMD wave64 changes the pipeline overhead, recalibrate.
 sdpa_smem_safety: 0.7
 
-# CDNA1 precision support
+# CDNA2 precision support
 precision:
   supports_fp16: true
   supports_bf16: true    # CDNA2+ supports BF16

@@ -7004,12 +7004,15 @@ def _sdpa_chunked_rows_within(bound, batch, nheads, seqlen_q, seqlen_k) -> int:
     return 0
 
 
-def _arch_memory_param(key: str, default):
-    """One `memory.<key>` value from config/vendors/<vendor>/<arch>.yml of
-    the executing hardware profile; `default` when there is no profile,
+def _arch_param(section: str, key: str, default):
+    """One `<section>.<key>` value from config/vendors/<vendor>/<arch>.yml
+    of the executing hardware profile; `default` when there is no profile,
     no key, or the loader fails (R23: hardware params come from the yml,
-    never from code). Shared reader for the memory-policy knobs
-    (`sdpa_math_min_chunk_rows`, `alloc_pool_parked_cap_fraction`, …)."""
+    never from code, and never from a driver query in a hot path).
+
+    Shared reader for every per-architecture knob — the memory policy
+    (`memory.sdpa_math_min_chunk_rows`, `memory.alloc_pool_parked_cap_fraction`,
+    …) and the pipelining budget (`pipelining.max_num_stages`)."""
     prof = get_hardware_profile()
     devices = getattr(prof, "devices", None) if prof is not None else None
     if not devices:
@@ -7019,9 +7022,16 @@ def _arch_memory_param(key: str, default):
         _brand = devices[0].brand
         _vendor = getattr(_brand, "value", _brand)
         cfg = get_vendor_config(_vendor, devices[0].architecture)
-        return cfg.get("memory", {}).get(key, default)
+        return cfg.get(section, {}).get(key, default)
     except Exception:
         return default
+
+
+def _arch_memory_param(key: str, default):
+    """One `memory.<key>` value for the executing hardware profile.
+    Thin alias of `_arch_param("memory", ...)`, kept because the memory
+    knobs are read from many call sites."""
+    return _arch_param("memory", key, default)
 
 
 def _sdpa_math_min_chunk_rows() -> int:
