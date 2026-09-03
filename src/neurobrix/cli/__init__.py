@@ -386,8 +386,13 @@ Slash commands (inside chat):
     # ========================================
     subparsers.add_parser(
         'doctor',
-        help='Diagnose installation issues (PATH, etc.)',
-        description='Check that neurobrix is correctly installed and on PATH.',
+        help='Diagnose installation problems (PATH, PyTorch/CUDA, GPU visibility)',
+        description=(
+            'Check that neurobrix is installed, on PATH, and able to see your '
+            'GPU. Reports the exact command to fix a PyTorch build that does '
+            'not match your driver or GPU generation. Exits non-zero when it '
+            'finds something that will block a real run.'
+        ),
     )
 
     # ========================================
@@ -495,8 +500,8 @@ def main():
             from neurobrix.cli.commands.upscale import cmd_upscale
             cmd_upscale(args)
         elif args.command == 'doctor':
-            from neurobrix.cli._path_helper import print_path_diagnostics
-            print_path_diagnostics()
+            from neurobrix.cli.commands.doctor import cmd_doctor
+            sys.exit(cmd_doctor(args))
         else:
             parser.print_help()
             sys.exit(1)

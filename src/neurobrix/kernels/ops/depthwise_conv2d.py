@@ -25,6 +25,8 @@ unrolled at compile time via `tl.constexpr` for kh, kw.
 """
 
 import triton
+
+from ._configs import nbx_autotune
 import triton.language as tl
 
 from ._autotune_policy import maybe_pin_single, is_depthwise_conv2d_pinned
@@ -41,7 +43,7 @@ _DEPTHWISE_CONV2D_CONFIGS = [
 ]
 
 
-@triton.autotune(
+@nbx_autotune(
     configs=maybe_pin_single(_DEPTHWISE_CONV2D_CONFIGS, is_depthwise_conv2d_pinned),
     key=['C', 'H_in', 'W_in', 'H_out', 'W_out', 'kh', 'kw',
          'stride_h', 'stride_w', 'pad_h', 'pad_w', 'fp16'],
