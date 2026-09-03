@@ -25,6 +25,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The first run of a model no longer looks like a hang.** The engine measures
+  kernel configurations the first time it sees a set of tensor shapes on your
+  machine, and it used to do that in complete silence — a first
+  `whisper-large-v3-turbo` transcription spent nearly four minutes producing no
+  output at all, where the second run of the same command took eight seconds.
+  It now says what it is doing, once, and says that the result is cached and
+  will not happen again.
+
 - **Multi-GPU transfers never used your NVLink.** When a model is split across
   several GPUs, the activations handed from one card to the next were being
   routed through system memory instead of the direct card-to-card links,
