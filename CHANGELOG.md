@@ -25,6 +25,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Some models failed to load, or loaded corrupted weights, when part of the
+  model was staged through system memory.** Weights whose stored precision
+  differed from the precision the model runs at were copied at their original
+  width into a buffer sized for the target width. Kokoro-82M could not run on
+  the `--triton` engine at all because of it. Any weight precision is now
+  converted before it is copied, and a mismatch refuses with a message naming
+  the pair instead of writing past the buffer.
+
 - **The first run of a model no longer looks like a hang.** The engine measures
   kernel configurations the first time it sees a set of tensor shapes on your
   machine, and it used to do that in complete silence — a first
