@@ -257,6 +257,18 @@ def cmd_run(args):
 
     # DATA-DRIVEN: Validate inputs against family YAML inputs.required spec
     manifest = container.get_manifest() or {}
+
+    # CHAIN OF CUSTODY. The runtime cache is keyed by model NAME, so a local
+    # re-build silently replaces the graph of a published model under an
+    # unchanged name — and nothing in the run said which container had
+    # actually executed. That produced a wrong verdict on 2026-09-02: a probe
+    # reported "fails at HEAD on the hub container" while running a build that
+    # had overwritten it eight hours earlier. Naming the container on every
+    # run is what makes that impossible to repeat silently.
+    _built = manifest.get("created_at")
+    if _built:
+        print(f"Container: built {_built}  ({nbx_path})")
+
     family = manifest.get("family")
     if family is None:
         print(f"ERROR: 'family' missing in manifest for '{args.model}'.")
