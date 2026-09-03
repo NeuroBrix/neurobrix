@@ -98,6 +98,25 @@ tests/*
 !tests/regression/conftest.py
 !tests/regression/test_all_models.py
 !tests/regression/test_serve_warm.py
+
+# The unit/integration SUITES are tracked too. The broad `test_*.py`
+# rule far above is meant for stray scratch scripts at the repo root,
+# not for the test tree — but it caught every new test under tests/,
+# so each one had to be `git add -f`ed by hand (66 files accumulated
+# that way). Force-adding an ignored path is exactly the habit that
+# has twice put content in this repo that was ignored BY DESIGN, so
+# the pattern is fixed here rather than worked around each time.
+# `tests/scratch/`, `__pycache__` and every other immediate child of
+# tests/ stay ignored via the `tests/*` rule above.
+!tests/unit/
+!tests/unit/**
+!tests/integration/
+!tests/integration/**
+# ...but re-ignore the build detritus the broad negation would let back in.
+tests/unit/**/__pycache__/
+tests/integration/**/__pycache__/
+tests/unit/**/*.pyc
+tests/integration/**/*.pyc
 !tests/regression/test_upscale_offtrace.py
 !tests/regression/pytest.ini
 # Unit tests — tracked explicitly (same policy as the regression harness).

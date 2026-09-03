@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **AMD Instinct MI200 and MI300 cards no longer fail before running
+  anything.** NeuroBrix recognised these cards but had no matching
+  hardware profile for them, so startup stopped with a missing-config
+  error on every MI210, MI250, MI250X, MI300A and MI300X. Each CDNA
+  generation now has its own profile, carrying the values that actually
+  differ between them (MI300 has 2.5x the on-chip memory of MI100/MI200,
+  and is the only one with FP8). No AMD hardware was available to test
+  on: these paths are prepared, not validated, and no AMD support is
+  claimed until they run on a real card.
+
+- **On AMD cards, a GPU capability was being read from the wrong place.**
+  The kernel autotuner decided how deeply to pipeline by asking the
+  NVIDIA driver for a compute-capability number. On AMD that call returns
+  an architecture code instead, which happened to compare as "modern" and
+  silently enabled a pipelining depth that had never been validated on
+  those cards. The setting now comes from each card's own hardware
+  profile. NVIDIA behaviour is unchanged.
+
 ### Deprecated
 
 - **Four hub models are marked deprecated while their published defects

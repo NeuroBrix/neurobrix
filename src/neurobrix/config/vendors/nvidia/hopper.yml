@@ -138,3 +138,8 @@ precision:
   supports_bf16: true
   supports_tf32: true
   supports_fp8: true     # Hopper supports FP8
+
+# Software-pipelining budget — see volta.yml for the schema. Hopper
+# (sm_90) has cp.async and TMA; the cap never binds.
+pipelining:
+  max_num_stages: 8

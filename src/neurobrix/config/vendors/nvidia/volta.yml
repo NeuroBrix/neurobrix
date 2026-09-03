@@ -216,3 +216,13 @@ precision:
   supports_bf16: false   # Volta does not support BF16
   supports_tf32: true   # Volta does not support TF32
   supports_fp8: false    # Volta does not support FP8
+
+# Software-pipelining budget for autotuned Triton kernels (R23/R24: a
+# hardware capability is read here, never queried from the driver in
+# code). `max_num_stages` caps the num_stages of every autotune config.
+# Volta (sm_70) has NO cp.async: Triton's pipelining with num_stages > 2
+# emits async-copy instructions that fault with
+# CUDA_ERROR_MISALIGNED_ADDRESS in any kernel using tl.dot. 2 is measured,
+# not conservative.
+pipelining:
+  max_num_stages: 2
