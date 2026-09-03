@@ -23,9 +23,16 @@ a = ap.parse_args()
 import torch
 from transformers import AutoProcessor, VoxtralForConditionalGeneration
 
+# The 7.5k-token prefill of a 600 s recording: the math SDPA path materialises
+# the fp32 scores (6.7 GiB per layer) — force the memory-efficient kernel (V100 fp16).
+torch.backends.cuda.enable_math_sdp(False)
+torch.backends.cuda.enable_flash_sdp(False)
+torch.backends.cuda.enable_mem_efficient_sdp(True)
+
 proc = AutoProcessor.from_pretrained(a.snapshot)
 model = VoxtralForConditionalGeneration.from_pretrained(
-    a.snapshot, torch_dtype=torch.float16, device_map="auto")   # 20 stacked 30 s windows + a 7.5k-token prompt exceed one 32 GB card
+    a.snapshot, torch_dtype=torch.float16, device_map="auto",
+    max_memory={0: "10GiB", 1: "26GiB"})   # weights split over two cards: the 7.5k-token attention needs ~7 GiB beside them
 inputs = proc.apply_transcription_request(
     language=a.lang, audio=a.audio, model_id=a.snapshot, return_tensors="pt")
 inputs = inputs.to(model.device, dtype=torch.float16)
