@@ -45,20 +45,16 @@ def four_gpus(monkeypatch):
     ]
 
     def fake_smi():
-        # mirrors _parse_nvidia_smi: build the raw list, then apply the filter
-        out = [dict(d) for d in devices]
-        visible = autodetect._visible_device_filter()
-        if visible is not None:
-            by_physical = {d["index"]: d for d in out}
-            out = []
-            for new_index, physical in enumerate(visible):
-                device = by_physical.get(physical)
-                if device is None:
-                    break
-                out.append(dict(device, index=new_index, physical_index=physical))
-        return out
+        return [dict(d) for d in devices]
 
+    # The filter is applied by the DETECTION CASCADE, not inside one detector:
+    # filtering only nvidia-smi made it look like that detector had failed, so
+    # detection fell through to the lspci fallback — which reads the PCI bus
+    # and cannot see the variable — and rebuilt a full-rig profile on a
+    # process that could address none of it (caught by the CPU-only cell,
+    # 2026-09-03). So the pins go through the cascade.
     monkeypatch.setattr(autodetect, "_parse_nvidia_smi", fake_smi)
+    monkeypatch.setattr(autodetect, "_parse_lspci", lambda: ([], "nvidia"))
     return fake_smi
 
 
@@ -97,7 +93,7 @@ def test_uuid_form_is_not_guessed_at(monkeypatch):
 
 def test_pinning_one_card_yields_one_device_at_ordinal_zero(four_gpus, monkeypatch):
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "2")
-    devices = autodetect._parse_nvidia_smi()
+    devices, _ = autodetect._detect_gpus_linux()
     assert len(devices) == 1
     assert devices[0]["index"] == 0, "CUDA renumbers the visible set from 0"
     assert devices[0]["physical_index"] == 2
@@ -107,7 +103,7 @@ def test_pinning_one_card_yields_one_device_at_ordinal_zero(four_gpus, monkeypat
 def test_order_of_the_variable_defines_the_ordinals(four_gpus, monkeypatch):
     """`CUDA_VISIBLE_DEVICES=3,1` makes physical 3 become cuda:0."""
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "3,1")
-    devices = autodetect._parse_nvidia_smi()
+    devices, _ = autodetect._detect_gpus_linux()
     assert [(d["index"], d["physical_index"]) for d in devices] == [(0, 3), (1, 1)]
     assert devices[0]["memory_mb"] == 32768
     assert devices[1]["memory_mb"] == 16384
@@ -115,7 +111,7 @@ def test_order_of_the_variable_defines_the_ordinals(four_gpus, monkeypatch):
 
 def test_unset_keeps_every_card(four_gpus, monkeypatch):
     monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
-    devices = autodetect._parse_nvidia_smi()
+    devices, _ = autodetect._detect_gpus_linux()
     assert [d["index"] for d in devices] == [0, 1, 2, 3]
 
 
@@ -123,7 +119,7 @@ def test_invalid_entry_truncates_like_cuda(four_gpus, monkeypatch):
     """CUDA stops at the first entry it cannot resolve; everything after it is
     invisible, even if individually valid."""
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "1,9,0")
-    devices = autodetect._parse_nvidia_smi()
+    devices, _ = autodetect._detect_gpus_linux()
     assert [d["physical_index"] for d in devices] == [1]
 
 
@@ -166,3 +162,28 @@ def test_unreadable_cache_redetects_rather_than_trusting_it(monkeypatch, tmp_pat
     cache.write_text("id: [unclosed\n")
     monkeypatch.setattr(autodetect, "DEFAULT_PROFILE_PATH", cache)
     assert autodetect._cached_profile_matches_visible_gpus() is False
+
+
+def test_hiding_every_gpu_is_conclusive(four_gpus, monkeypatch):
+    """`CUDA_VISIBLE_DEVICES=""` means no GPU, and must not send detection
+    looking for another source. It used to fall through to the lspci
+    fallback, which reads the PCI bus and rebuilt a four-GPU profile — the
+    process then planned onto cards it could not address and died at the
+    first `.to(device)`."""
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "")
+    devices, brand = autodetect._detect_gpus_linux()
+    assert devices == []
+    assert brand == "none"
+
+
+def test_the_filter_is_reusable_across_detectors():
+    """It is a cascade-level step, so it must work on any detector's output,
+    not only nvidia-smi's."""
+    rocm_like = [{"index": 0, "model": "MI250X"}, {"index": 1, "model": "MI250X"}]
+    import os
+    os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+    try:
+        out = autodetect._apply_visible_filter(rocm_like)
+        assert [(d["index"], d["physical_index"]) for d in out] == [(0, 1)]
+    finally:
+        os.environ.pop("CUDA_VISIBLE_DEVICES", None)

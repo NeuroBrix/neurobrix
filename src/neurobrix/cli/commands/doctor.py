@@ -122,9 +122,26 @@ def check_compute_environment() -> list[str]:
     # they are completely different problems for the user.
     print("  GPU visible:    NO")
     if not gpus:
-        print("    No NVIDIA GPU detected by the driver either.")
-        print("    NeuroBrix runs on CPU for some models, but every benchmark "
-              "and most models expect a GPU.")
+        print("    No NVIDIA GPU detected by the driver either — CPU execution.")
+        print("    This is a supported path: hardware auto-detection selects a "
+              "CPU profile and")
+        print("    small models run without any configuration.")
+        if cuda_build:
+            # Not a problem — it runs — but worth saying, because the CUDA
+            # wheels are ~5 GB on a machine that will never use them, and the
+            # smallest models in the catalogue are 59-376 MB. A pip EXTRA
+            # cannot fix this: PEP 508 dependency specifiers carry no index
+            # URL, so `neurobrix[cpu]` could not pull the CPU wheel. The
+            # recipe is the only honest answer, so print it here where it is
+            # actually diagnosed.
+            print()
+            print("    Note: PyTorch is installed with CUDA support "
+                  f"(CUDA {cuda_build}) on a machine with no")
+            print("    NVIDIA GPU — that is several GB of unused wheels. For a "
+                  "CPU-only install:")
+            print("      pip install torch --index-url "
+                  "https://download.pytorch.org/whl/cpu")
+            print("      pip install neurobrix")
         return problems
 
     caps = ", ".join(f"{n} ({c})" for n, c in gpus)
