@@ -26,10 +26,15 @@ def load(path):
             d = json.loads(line)
             r = d.get("record", d)
             tid = r.get("tid")
-            if tid is None or tid in recs:
+            if tid is None:
                 continue
-            recs[tid] = r
-            order.append(tid)
+            # Keys carry the component: op uids restart per component
+            # (lm_head's mm::0 must not shadow model's mm::0).
+            key = (r.get("component", "?"), tid)
+            if key in recs:
+                continue
+            recs[key] = r
+            order.append(key)
     return recs, order
 
 
@@ -60,14 +65,15 @@ def main():
         d = dev(ra.get(args.field), rb.get(args.field))
         if d is None:
             continue
-        rows.append((tid, ra.get("op_type"), ra.get("shape"), d))
+        rows.append((f"{tid[0]}/{tid[1]}", ra.get("op_type"), ra.get("shape"), d))
     print(f"ops in A {len(order)}, matched in B {len(rows)} (B missing {missing}); field={args.field} rel={args.rel}")
     first = next((r for r in rows if r[3] > args.rel), None)
     if first:
-        tid, ot, shp, d = first
-        print(f"FIRST op over the bound: {tid} ({ot}) shape={shp} rel_dev={d:.4f}")
-        print(f"   A {args.field}: {[round(v, 5) for v in A[tid].get(args.field)]}")
-        print(f"   B {args.field}: {[round(v, 5) for v in B[tid].get(args.field)]}")
+        name, ot, shp, d = first
+        comp, tid = name.split("/", 1)
+        print(f"FIRST op over the bound: {name} ({ot}) shape={shp} rel_dev={d:.4f}")
+        print(f"   A {args.field}: {[round(v, 5) for v in A[(comp, tid)].get(args.field)]}")
+        print(f"   B {args.field}: {[round(v, 5) for v in B[(comp, tid)].get(args.field)]}")
     else:
         print("no op over the bound")
     print(f"top {args.top} deviations:")
