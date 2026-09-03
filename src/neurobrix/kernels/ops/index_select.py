@@ -8,11 +8,18 @@ import triton
 import triton.language as tl
 
 
-@triton.jit
+@triton.jit(debug=True)
 def index_select_kernel(
     inp, out, M, N, index, index_len,
     BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr,
 ):
+    """`debug=True` keeps the `tl.device_assert` below in the compiled
+    kernel regardless of TRITON_DEBUG: an out-of-range index TRAPS (the
+    next device sync raises) exactly where torch's index_select raises.
+    The FlagGems port skipped the store instead, leaving the output
+    element as whatever the allocation held — silent, and invisible to
+    a byte gate whose two sides share the defect
+    (D-GATHER-SCATTER-OOB-SILENT, promoted to correctness 2026-09-02)."""
     pid_x = tl.program_id(axis=0)
     pid_y = tl.program_id(axis=1)
     rows_offsets = pid_x * BLOCK_M + tl.arange(0, BLOCK_M)[:, None]
@@ -32,6 +39,8 @@ def index_select_kernel(
     valid_lower_bound = indices >= 0
     valid_upper_bound = indices < N
     index_valid_mask = valid_lower_bound & valid_upper_bound
+    # Masked lanes loaded `other=0` and are in range by construction.
+    tl.device_assert(index_valid_mask, "index_select: index out of range")
 
     inp_off = rows_offsets * N + indices[None, :]
     out_off = rows_offsets * index_len + cols_offsets[None, :]

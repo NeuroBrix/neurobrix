@@ -22,15 +22,23 @@ import triton
 import triton.language as tl
 
 
-@triton.jit
+@triton.jit(debug=True)
 def index_put_kernel(
     out_ptr, idx_ptr, val_ptr,
-    T, N,
+    T, N, R,
     VAL_SCALAR: tl.constexpr,
     ACCUMULATE: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
 ):
-    """out[idx[off // T], off % T] {=|+=} values[off]  for off < N."""
+    """out[idx[off // T], off % T] {=|+=} values[off]  for off < N.
+
+    `R` = rows of `out` (its leading dim). A negative index counts from
+    the end (torch semantics); an index still out of [0, R) after that
+    TRAPS via `tl.device_assert` (kept in the binary by `debug=True`)
+    where torch's index_put raises — the FlagGems-lineage kernel wrote
+    through it to memory outside the tensor, silently
+    (D-GATHER-SCATTER-OOB-SILENT, promoted to correctness 2026-09-02).
+    """
     pid = tl.program_id(0)
     off = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     mask = off < N
@@ -38,6 +46,9 @@ def index_put_kernel(
     s = off // T                       # which index entry (row in idx)
     t = off % T                        # offset within the flattened tail
     row = tl.load(idx_ptr + s, mask=mask, other=0).to(tl.int64)
+    row = tl.where(row < 0, row + R, row)
+    # Masked lanes loaded `other=0` and are in range by construction.
+    tl.device_assert((row >= 0) & (row < R), "index_put: index out of range")
     dst = row * T + t
 
     if VAL_SCALAR:

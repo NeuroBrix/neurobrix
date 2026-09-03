@@ -7,6 +7,7 @@ No torch imports in this file.
 """
 
 import json
+import os
 import numpy as np
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -58,6 +59,29 @@ def _build_generator_config(defaults: Dict, resolver: Any) -> Dict[str, Any]:
     return config
 
 
+
+def _session_dag(executor, graph_path: Path, lm_name: str) -> Dict[str, Any]:
+    """The DAG a session reads its input contract from: the executor's
+    parsed DAG (the triton path always has its executor by the time a
+    session is created); the graph.json file only for an executor-less
+    context. ZERO FALLBACK on a live executor without a DAG. Compiled
+    mirror: core/flow/autoregressive.py::_session_dag (R30)."""
+    if executor is not None:
+        dag = getattr(executor, "dag", None)
+        if dag is None:
+            raise RuntimeError(
+                f"ZERO FALLBACK: executor for '{lm_name}' holds no DAG "
+                f"(load_graph_from_dict never ran) — cannot create a session.")
+        return dag
+    if not graph_path.exists():
+        raise RuntimeError(
+            f"ZERO FALLBACK: graph.json not found for '{lm_name}'.\n"
+            f"Expected at: {graph_path}"
+        )
+    with open(graph_path, 'r') as f:
+        return json.load(f)
+
+
 class TritonAutoregressiveHandler:
     """Zero-torch autoregressive generation handler.
 
@@ -98,8 +122,30 @@ class TritonAutoregressiveHandler:
         rng_stream.set_run_seed(
             _ov.get("global.seed", self.ctx.pkg.defaults.get("seed")))
 
+        # Serve TTFT reconciliation instrument (NBX_PHASE_TRACE=1): one
+        # stamp per phase boundary; the prefill stamp waits for the GPU.
+        # R30 mirror of core/flow/autoregressive.py.
+        from neurobrix.core.runtime.phase_trace import mark as _phase_mark
+        from neurobrix.kernels.nbx_tensor import DeviceAllocator as _DA
+        from neurobrix.triton.device_transfer import parse_device_idxs as _pdi
+
+        def _dev_sync():  # every device of the (possibly compound) primary device
+            prev = _DA.get_device()
+            for _i in _pdi(self.ctx.primary_device):
+                _DA.set_device(_i)
+                _DA.sync_device()
+            _DA.set_device(prev)
+
+        def _mem_note():  # allocator baseline at the boundary (diagnostic only)
+            d = _DA.get_device()
+            live = _DA._cuda_live_bytes.get(d, 0) / 2**20
+            pooled = _DA._pool_cached_bytes.get(d, 0) / 2**20
+            free = _DA.device_free_bytes() / 2**20
+            return f"live={live:.0f}MB pool={pooled:.0f}MB free={free:.0f}MB"
+
         session = self._create_session(gen_info)
         self._active_session = session
+        _phase_mark("flow.session.created", _dev_sync, _mem_note)
         strategy = self._create_strategy(gen_info, session)
         generator = strategy.create_generator(
             self.ctx.pkg.defaults, self.ctx.variable_resolver)
@@ -109,11 +155,13 @@ class TritonAutoregressiveHandler:
 
         input_ids = self._tokenize(gen_info, device_idx)
         batch_size = input_ids.shape[0]
+        _phase_mark("flow.tokenized", None, _mem_note)
 
         generator.set_prompt_ids(self._read_ids_to_list(input_ids))
 
         # Prefill
         hidden = session.prefill(input_ids, batch_size)
+        _phase_mark("flow.prefill.done", _dev_sync, _mem_note)
 
         # Teacher-forced scoring mode (quant-ppl-scoring, tier row
         # clause 2): --set global.score_mode=1 turns the request into
@@ -124,6 +172,7 @@ class TritonAutoregressiveHandler:
         if self.ctx.variable_resolver.resolved.get("global.score_mode"):
             self._execute_score(strategy, hidden, input_ids)
             rv = self.ctx.variable_resolver.resolved
+            session.cleanup()
             return {"status": "success",
                     "global.transcription": rv["global.transcription"],
                     "output_tokens": []}
@@ -167,6 +216,8 @@ class TritonAutoregressiveHandler:
                 print(f"[NBX_DUMP_LOGITS] triton dumped top10 to {_dump_path}",
                       flush=True)
             next_token, is_done = generator.step(logits, step_idx)
+            if step_idx == 0:
+                _phase_mark("flow.first_token")
 
             # Per-step token diagnostic (mirrors the compiled flow's NBX_DEBUG_DECODE)
             # for triton-seq-vs-sequential decode parity. R33-pure scalar read
@@ -469,7 +520,9 @@ class TritonAutoregressiveHandler:
         # Load weights via lifecycle (same as native mode).
         # In triton mode, load_weights() routes to _load_weights_triton
         # which loads as NBXTensor directly. Same lifecycle, different format.
+        from neurobrix.core.runtime.phase_trace import mark as _phase_mark
         self._ensure_weights_loaded(lm_name)
+        _phase_mark("flow.session.weights_ensured")
 
         # Get executor from context
         executor = self.ctx.executors.get(lm_name)
@@ -516,11 +569,13 @@ class TritonAutoregressiveHandler:
         hidden_dim = lm_config.get("hidden_size", 2048)
         num_heads = lm_config.get("num_heads") or 32
 
-        # Graph inputs
+        # Graph inputs — from the executor's OWN parsed DAG (R30 mirror of
+        # the compiled _session_dag rule): the 244 MB graph.json of a 30B
+        # MoE parses in 4 s; re-read per request it was 8.3 s of the
+        # 44.7 s serve TTFT at 8.3k context (2026-09-03 reconciliation).
         cache_path = Path(self.ctx.pkg.cache_path)
         graph_path = cache_path / "components" / lm_name / "graph.json"
-        with open(graph_path, 'r') as f:
-            dag = json.load(f)
+        dag = _session_dag(executor, graph_path, lm_name)
 
         graph_inputs = []
         for tid in dag.get("input_tensor_ids", []):
@@ -600,6 +655,10 @@ class TritonAutoregressiveHandler:
                     dtype=cache_dtype,
                     window_ceiling=_window,
                     decode_budget=_decode_budget,
+                    # Serve plans carry a small initial size (the compiled
+                    # cache honours it; the triton cache now does too —
+                    # the serve prefill lever, 2026-09-03).
+                    initial_cache_len=int(getattr(kv_plan, "initial_cache_len", 0) or 0),
                 )
             else:
                 # Legacy fallback from lm_config
@@ -636,8 +695,10 @@ class TritonAutoregressiveHandler:
             # buffers the recorded replay tuples do not point at (the
             # silently-split-state failure the comment above records).
             # The FIRST request's cache stands for the executor's
-            # lifetime; a later longer need hits the loud overflow
-            # (D-SERVE-WARM-KV-GROWTH-ASYMMETRY, ledgered).
+            # lifetime; a later longer need REPLACES the layers' buffers
+            # at that request's prefill and retires the replay plans of
+            # the previous generation (D-SERVE-WARM-KV-GROWTH-ASYMMETRY,
+            # closed 2026-09-03 with the serve initial-size fix).
             key = tuple(sorted(
                 (k, str(v)) for k, v in kv_params.items()
                 if k not in ("window_ceiling", "decode_budget")))
@@ -647,6 +708,12 @@ class TritonAutoregressiveHandler:
                 kv_cache = TritonKVCache(**kv_params)
                 memo[key] = kv_cache
             else:
+                # Warm hit: the per-request sizing inputs follow THIS
+                # request (a larger --max-tokens must size the need the
+                # replacement rule measures at the prefill — gardien
+                # 2026-09-03), then the contents reset in place.
+                kv_cache.decode_budget = int(kv_params.get("decode_budget") or 0)
+                kv_cache.window_ceiling = int(kv_params.get("window_ceiling") or 0)
                 kv_cache.clear()
 
             kv_interceptor = TritonAttentionInterceptor(
@@ -677,6 +744,7 @@ class TritonAutoregressiveHandler:
                 interceptors["aten::arange"] = kv_interceptor.intercept_arange
             executor.register_triton_interceptors(interceptors)
 
+        _phase_mark("flow.session.kv_ready")
         return TritonLMSession(
             executor=executor,
             kv_wrapper=kv_interceptor,

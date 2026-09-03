@@ -140,6 +140,14 @@ def run_nbx_arm(args, env_spec: dict, outdir: Path) -> list:
     if hardware and hardware != "auto":
         cmd += ["--hardware", hardware]
     cmd += [flag, "--foreground"]
+    # NBX_SERVE_CMD_PREFIX (2026-09-02, serve TTFT reconciliation): a
+    # shell-split prefix in front of the daemon command — the profiler
+    # wraps the SAME daemon the locked protocol measures ("nsys profile
+    # -t cuda -o …"); the daemon log keeps the NBX_PHASE_TRACE stamps.
+    prefix = env_spec.get("NBX_SERVE_CMD_PREFIX", "")
+    if prefix:
+        import shlex
+        cmd = shlex.split(prefix) + cmd
     proc = subprocess.Popen(
         cmd, env=env, stdout=open(outdir / f"daemon_{flag.strip('-')}.log", "w"),
         stderr=subprocess.STDOUT, text=True)

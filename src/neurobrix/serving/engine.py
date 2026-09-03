@@ -229,12 +229,15 @@ class InferenceEngine:
             device_seed(self._device, seed)
 
         # Execute
+        from neurobrix.core.runtime.phase_trace import mark as _phase_mark
         t_start = time.time()
         device_sync(self._device)
+        _phase_mark("engine.execute.begin")
 
         outputs = self._executor.execute(inputs)
 
         device_sync(self._device)
+        _phase_mark("engine.execute.end")
         t_total = time.time() - t_start
 
         # Build result — DATA-DRIVEN by family output_format
@@ -276,12 +279,15 @@ class InferenceEngine:
             device_seed(self._device, seed)
 
         # Execute
+        from neurobrix.core.runtime.phase_trace import mark as _phase_mark
         t_start = time.time()
         device_sync(self._device)
+        _phase_mark("engine.execute.begin")
 
         outputs = self._executor.execute(inputs)
 
         device_sync(self._device)
+        _phase_mark("engine.execute.end")
         t_total = time.time() - t_start
 
         result = {"timing": {"total_s": round(t_total, 3)}, "family": self._family}

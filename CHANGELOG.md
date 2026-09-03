@@ -43,6 +43,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Serve time-to-first-token no longer pays a per-request graph reload.**
+  Every generation request re-read and re-parsed the model's graph
+  description from the runtime cache (244 MB for a 30B mixture-of-experts
+  model, 8 s per request over the network cache) although the loaded
+  executor already holds it. Both engines now read it from the executor;
+  the file is opened only once, when the executor is first created.
+- **`--triton` serving no longer reserves the whole card for the
+  key-value cache on the first request.** The serving plan sizes the
+  cache for the model's full context window as a ceiling and carries a
+  small initial size; the Triton cache allocated the ceiling up front —
+  10.8 GB pinned by a short first request on a 32 GB card for a 30B
+  mixture-of-experts model — so every later long prompt ran its attention
+  at the memory edge (chunks halved and retried hundreds of times). The
+  cache now starts at the plan's initial size and re-allocates a layer
+  when a longer request arrives, as the PyTorch engine's cache always did.
+- **`--triton` gathers and scatters now fail loudly on an out-of-range
+  index, exactly where PyTorch raises.** The index-select, index-put and
+  embedding kernels used to be silent: a bad index skipped the store,
+  wrote outside the tensor, or read the row at the wrong address, and
+  the run went on with corrupted values. Each kernel now traps on the
+  bound (index-put also accepts negative indices, as PyTorch does) and
+  the next device sync raises with the kernel line and the message
+  `index out of range`.
 - **`--triton` gathers now honour negative indices like PyTorch.** The
   index-select kernel treated a negative index as invalid and left the
   corresponding output element unwritten, so it held whatever the
