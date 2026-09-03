@@ -307,10 +307,22 @@ _GPU_BACKENDS = {
         "stream_destroy": "cudaStreamDestroy",
         "stream_sync": "cudaStreamSynchronize",
         "event_create": "cudaEventCreate",
+        "event_create_flags": "cudaEventCreateWithFlags",
         "event_destroy": "cudaEventDestroy",
         "event_record": "cudaEventRecord",
         "stream_wait_event": "cudaStreamWaitEvent",
         "memcpy_async": "cudaMemcpyAsync",
+        # Event timing — the ONLY way to measure a device-side interval
+        # without a host round-trip. `event_elapsed` is undefined across
+        # devices, so both events of a pair must be recorded on streams of
+        # the SAME device (see DeviceAllocator.event_elapsed_ms).
+        "event_sync": "cudaEventSynchronize",
+        "event_elapsed": "cudaEventElapsedTime",
+        # Peer access. Without it a cross-device D2D copy is STAGED THROUGH
+        # HOST MEMORY by the driver — it never touches NVLink. Enabling it
+        # is per ORDERED pair and per process.
+        "device_can_access_peer": "cudaDeviceCanAccessPeer",
+        "device_enable_peer_access": "cudaDeviceEnablePeerAccess",
     },
     "hip": {
         "rt_libs": ["libamdhip64.so", "libamdhip64.so.5"],
@@ -329,10 +341,17 @@ _GPU_BACKENDS = {
         "stream_destroy": "hipStreamDestroy",
         "stream_sync": "hipStreamSynchronize",
         "event_create": "hipEventCreate",
+        "event_create_flags": "hipEventCreateWithFlags",
         "event_destroy": "hipEventDestroy",
         "event_record": "hipEventRecord",
         "stream_wait_event": "hipStreamWaitEvent",
         "memcpy_async": "hipMemcpyAsync",
+        "event_sync": "hipEventSynchronize",
+        "event_elapsed": "hipEventElapsedTime",
+        # ROCm exposes peer access under the same semantics; xGMI plays the
+        # role NVLink plays here.
+        "device_can_access_peer": "hipDeviceCanAccessPeer",
+        "device_enable_peer_access": "hipDeviceEnablePeerAccess",
     },
 }
 
@@ -1220,16 +1239,34 @@ class DeviceAllocator:
         getattr(rt, fn_name)(ctypes.c_void_p(stream))
 
     @staticmethod
-    def create_event() -> int:
-        """Create a new event. Returns opaque handle."""
+    def create_event(timing: bool = True) -> int:
+        """Create a new event. Returns opaque handle.
+
+        `timing=False` asks for an event that can order streams but cannot be
+        used to measure an interval, and that is what almost every event in
+        this engine actually wants. It is not a micro-optimisation: recording
+        a timing-enabled event costs **9.5 us** on this rig against ~1 us for
+        an ordering-only one, because the runtime has to place a clock read
+        in the stream and keep the result addressable. Measured 2026-09-03 —
+        it was 28 % of a cross-GPU collective's entire host cost.
+
+        Pass timing=True (the default, kept for compatibility) only when the
+        handle is going to reach `event_elapsed_ms`.
+        """
         rt = _gpu_runtime()
         backend = _active_backend()
-        fn_name = backend.get("event_create")
-        if fn_name is None:
-            raise RuntimeError(
-                f"Event create unsupported on backend {_detect_gpu_backend()!r}")
         h = ctypes.c_void_p()
-        ret = getattr(rt, fn_name)(ctypes.byref(h))
+        flags_fn = backend.get("event_create_flags")
+        if not timing and flags_fn is not None:
+            # 0x02 = cudaEventDisableTiming / hipEventDisableTiming.
+            ret = getattr(rt, flags_fn)(ctypes.byref(h), ctypes.c_uint(0x02))
+        else:
+            fn_name = backend.get("event_create")
+            if fn_name is None:
+                raise RuntimeError(
+                    f"Event create unsupported on backend "
+                    f"{_detect_gpu_backend()!r}")
+            ret = getattr(rt, fn_name)(ctypes.byref(h))
         if ret != 0:
             raise RuntimeError(f"event create failed (error {ret})")
         return h.value or 0
@@ -1290,6 +1327,105 @@ class DeviceAllocator:
             ctypes.c_void_p(dst), ctypes.c_void_p(src),
             ctypes.c_size_t(nbytes), ctypes.c_int(kind),
             ctypes.c_void_p(stream))
+
+    @staticmethod
+    def event_synchronize(event: int):
+        """Block the host until `event` has been reached."""
+        if not event:
+            return
+        rt = _gpu_runtime()
+        fn_name = _active_backend().get("event_sync")
+        if fn_name is None:
+            DeviceAllocator.sync_device()
+            return
+        ret = getattr(rt, fn_name)(ctypes.c_void_p(event))
+        if ret != 0:
+            raise RuntimeError(f"event synchronize failed (error {ret})")
+
+    @staticmethod
+    def event_elapsed_ms(start: int, end: int) -> float:
+        """Milliseconds between two recorded events, measured ON THE DEVICE.
+
+        Both events MUST have been recorded on streams of the SAME device:
+        the runtime's elapsed-time query is undefined across devices because
+        each device has its own clock domain. To time a multi-device
+        collective, record both events on one device's stream and make that
+        stream `stream_wait_event` on the other devices' completion events —
+        then the interval covers the critical path without ever comparing
+        two clocks.
+
+        The caller is responsible for having synchronized `end`.
+        """
+        rt = _gpu_runtime()
+        fn_name = _active_backend().get("event_elapsed")
+        if fn_name is None:
+            raise RuntimeError(
+                f"event timing unsupported on backend "
+                f"{_detect_gpu_backend()!r}")
+        fn = getattr(rt, fn_name)
+        fn.restype = ctypes.c_int
+        out = ctypes.c_float()
+        ret = fn(ctypes.byref(out), ctypes.c_void_p(start), ctypes.c_void_p(end))
+        if ret != 0:
+            raise RuntimeError(
+                f"event elapsed failed (error {ret}) — the usual cause is "
+                f"two events recorded on DIFFERENT devices, which has no "
+                f"defined answer.")
+        return float(out.value)
+
+    @staticmethod
+    def can_access_peer(src_dev: int, dst_dev: int) -> bool:
+        """Whether `src_dev` can address `dst_dev`'s memory directly.
+
+        False does not mean a copy will fail — it means the driver will
+        stage it through host memory, at host-link speed rather than
+        interconnect speed.
+        """
+        if src_dev == dst_dev:
+            return True
+        rt = _gpu_runtime()
+        fn_name = _active_backend().get("device_can_access_peer")
+        if fn_name is None:
+            return False
+        out = ctypes.c_int()
+        ret = getattr(rt, fn_name)(
+            ctypes.byref(out), ctypes.c_int(src_dev), ctypes.c_int(dst_dev))
+        return ret == 0 and bool(out.value)
+
+    @staticmethod
+    def enable_peer_access(src_dev: int, dst_dev: int) -> bool:
+        """Let `src_dev` reach `dst_dev` over the interconnect directly.
+
+        Direction matters: this grants src -> dst only, so a bidirectional
+        pair needs both calls. Returns True if access is in force afterwards
+        (including when it already was), False if the hardware cannot do it.
+
+        Why this exists: a cross-device `memcpy(kind=3)` with peer access
+        OFF is bounced through host memory by the driver. On this rig every
+        GPU pair reports NV2 (two bonded NVLinks) and the copy still would
+        not use them. Measured cost of the difference:
+        `validation_outputs/tp_collective_latency_2026_09_03/`.
+        """
+        if src_dev == dst_dev:
+            return True
+        if not DeviceAllocator.can_access_peer(src_dev, dst_dev):
+            return False
+        rt = _gpu_runtime()
+        fn_name = _active_backend().get("device_enable_peer_access")
+        if fn_name is None:
+            return False
+        previous = DeviceAllocator.get_device()
+        try:
+            DeviceAllocator.set_device(src_dev)
+            ret = getattr(rt, fn_name)(ctypes.c_int(dst_dev), ctypes.c_uint(0))
+        finally:
+            DeviceAllocator.set_device(previous)
+        # 704 = cudaErrorPeerAccessAlreadyEnabled. Idempotence is the point:
+        # callers enable defensively and must not have to track state.
+        if ret in (0, 704):
+            return True
+        raise RuntimeError(
+            f"enable peer access {src_dev}->{dst_dev} failed (error {ret})")
 
     @staticmethod
     def ensure_triton_device(device_idx: int):

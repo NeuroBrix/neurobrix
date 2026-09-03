@@ -25,6 +25,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Multi-GPU transfers never used your NVLink.** When a model is split across
+  several GPUs, the activations handed from one card to the next were being
+  routed through system memory instead of the direct card-to-card links,
+  because direct access between cards was never switched on. On a machine
+  whose cards are all directly linked, a 34 MB hand-off took 48 ms where it
+  should take 5.5 ms — nearly 9x. Small transfers were 2.4x slower. Direct
+  access is now available to the placement strategies, and the engine can
+  report which pairs of cards support it.
+
 - **The `--triton` engine hardcoded the NVIDIA runtime in five places.** Token
   sampling, the audio-language and autoregressive flows loaded `libcudart.so`
   by name and copied memory through it directly, so those paths could not work
