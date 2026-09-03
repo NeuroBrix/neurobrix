@@ -6,6 +6,7 @@ emits async copy instructions that cause CUDA_ERROR_MISALIGNED_ADDRESS on Volta.
 """
 
 import inspect
+import sys
 import warnings
 from typing import Dict, List, Optional
 
@@ -63,7 +64,69 @@ def nbx_autotune(*args, **kwargs):
                 stacklevel=2,
             )
         kwargs = {k: v for k, v in kwargs.items() if k not in unsupported}
-    return triton.autotune(*args, **kwargs)
+
+    decorator = triton.autotune(*args, **kwargs)
+
+    def announce_then_decorate(fn):
+        return _announce_first_sweep(decorator(fn))
+
+    return announce_then_decorate
+
+
+# Said once per process, the first time the autotuner actually measures.
+_SWEEP_ANNOUNCED = [False]
+
+_SWEEP_NOTICE = (
+    "[neurobrix] First run for these tensor shapes on this machine: measuring "
+    "kernel configurations.\n"
+    "[neurobrix] This happens ONCE per shape per machine and is cached to disk "
+    "(~/.triton/cache).\n"
+    "[neurobrix] Later runs skip it entirely — measured 254.9 s -> 7.9 s on "
+    "whisper-large-v3-turbo, 15.5 s -> 7.4 s on TinyLlama-1.1B.\n"
+)
+
+
+def _announce_first_sweep(tuned):
+    """Say, once, that the engine is tuning rather than hung.
+
+    A first `whisper-large-v3-turbo` transcription spends **247 seconds**
+    autotuning before it produces a word, and said nothing at all while it did
+    — measured 2026-09-03,
+    `validation_outputs/audio_launch_census_2026_09_03/VERDICT.md`. The second
+    run of the same command takes 7.9 s. A user whose first run looks hung for
+    four minutes concludes the engine is broken, and they are not being
+    unreasonable: nothing on screen distinguished it from a hang.
+
+    The cost is not a defect — it buys ~12 % throughput per the autotune policy
+    and it is paid once per shape per machine. Being silent about it was.
+
+    The wrapper REMOVES ITSELF once it has spoken, restoring the class method,
+    so the warm path (the overwhelming majority of launches) pays nothing for
+    an announcement that has already happened.
+    """
+    cache = getattr(tuned, "cache", None)
+    if cache is None:                 # not an Autotuner — nothing to watch
+        return tuned
+    original = tuned.run
+
+    def run_with_notice(*args, **kwargs):
+        if _SWEEP_ANNOUNCED[0]:
+            # Someone else announced: drop the instance override and get out
+            # of the hot path for good.
+            try:
+                del tuned.run
+            except AttributeError:                        # pragma: no cover
+                pass
+            return original(*args, **kwargs)
+        before = len(cache)
+        result = original(*args, **kwargs)
+        if len(cache) > before and not _SWEEP_ANNOUNCED[0]:
+            _SWEEP_ANNOUNCED[0] = True
+            print(_SWEEP_NOTICE, file=sys.stderr, end="")
+        return result
+
+    tuned.run = run_with_notice
+    return tuned
 
 
 def _safe_num_stages(n: int) -> int:
