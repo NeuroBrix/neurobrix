@@ -242,16 +242,39 @@ def arch_smem_budget() -> Optional[int]:
         import yaml
     except ImportError:                                   # pragma: no cover
         return None
+
+    exact, same_family = None, None
     for path in sorted(vendors.glob("*/*.yml")):
         try:
             cfg = yaml.safe_load(path.read_text()) or {}
         except Exception:                                 # pragma: no cover
             continue
-        if str(cfg.get("compute_capability", "")).strip().lower() != wanted:
+        declared = str(cfg.get("compute_capability", "")).strip().lower()
+        if not declared:
             continue
         budget = (cfg.get("memory") or {}).get("max_shared_memory_per_block")
-        return int(budget) if budget else None
-    return None
+        if not budget:
+            continue
+        if declared == wanted:
+            exact = int(budget)
+        elif (declared.split(".")[0] == wanted.split(".")[0]
+                and "." in declared and "." in wanted):
+            # Same NVIDIA capability MAJOR. Only three NVIDIA profiles exist
+            # — 7.0, 8.0, 9.0 — so an exact match covers V100, A100 and H100
+            # and nothing else: a T4 (7.5), an A10 or 3090 (8.6) and an L4 or
+            # 4090 (8.9) would resolve to no profile and get no filtering at
+            # all. Falling back to the major mirrors what Prism's runtime
+            # detection already does (`_NVIDIA_ARCH_MAP`: "8" -> ampere), and
+            # the two MUST agree — a card whose runtime profile is ampere
+            # while its autotune space was chosen as if no profile existed is
+            # a disagreement inside the engine about its own hardware.
+            #
+            # That map is not imported here on purpose: `autodetect` pulls
+            # torch, and this module is imported by every Triton kernel (R33).
+            # Matching majors reads the same fact out of the profiles instead
+            # of copying the table.
+            same_family = int(budget)
+    return exact if exact is not None else same_family
 
 
 def configs_within_smem_budget(configs, budget: Optional[int],
