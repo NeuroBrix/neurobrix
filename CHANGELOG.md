@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The `--triton` engine hardcoded the NVIDIA runtime in five places.** Token
+  sampling, the audio-language and autoregressive flows loaded `libcudart.so`
+  by name and copied memory through it directly, so those paths could not work
+  on AMD (where the library is `libamdhip64`) or on any future non-CUDA
+  device — and they ignored the copy's return code, so a failed transfer
+  returned silent garbage instead of an error. They now go through the
+  engine's own device allocator, which selects the right runtime and checks
+  the result. Verified byte-identical output across both engines.
+
+
 - **Audio models could not be found by category from the CLI.**
   `neurobrix hub --category TTS` (and `STT`, `AUDIO_LLM`) was rejected before
   the request was even made, because the CLI carried its own copy of the
