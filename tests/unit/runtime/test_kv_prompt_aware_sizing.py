@@ -153,6 +153,7 @@ def test_warm_layer_is_replaced_for_a_longer_request() -> None:
     assert c._layers[0] is layer2 and c.regrowths == 1
 
 
+@pytest.mark.skipif(not _gpu(), reason="needs a CUDA device for the layer buffers")
 def test_replacement_retires_the_old_generation_replay_plans() -> None:
     """The plans dict is keyed by the FULL `replay.signature()` tuple (the
     owner contributions sit nested at sig[-2]); a buffer replacement bumps
