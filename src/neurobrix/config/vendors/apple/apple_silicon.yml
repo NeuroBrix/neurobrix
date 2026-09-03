@@ -1,0 +1,142 @@
+# Apple Silicon GPU Compute Configuration
+# M1, M2, M3, M4 families (Apple GPU family 7/8/9)
+#
+# validation_status: hand_curated_from_docs — NO APPLE HARDWARE ON SITE.
+#   Every value here is read from Apple's Metal feature-set tables and the
+#   Metal Shading Language specification, and NONE of it has been measured.
+#   No Apple support is claimed until first light. The values are chosen so
+#   that being wrong costs throughput, never correctness.
+#
+# Why this file exists at all: Prism autodetect maps an Apple GPU to
+# (vendor=apple, architecture=apple_silicon), and `get_vendor_config` is
+# ZERO-FALLBACK — so before this file, every code path that asked for the
+# hardware profile on a Mac raised FileNotFoundError, while
+# ROADMAP_INTERNAL listed Apple Silicon MPS as validated since v0.1.1. The
+# same class as the AMD MI200/MI300 crash fixed on 2026-09-03.
+
+architecture: apple_silicon
+compute_capability: "apple9"   # M3/M4 family; M1 = apple7, M2 = apple8
+
+# Metal exposes no CUDA-style device string. The compiled (PyTorch) path
+# reaches Apple GPUs through the MPS backend, whose device string is "mps".
+device_prefix: "mps"
+
+# Kernel block sizes — Apple GPUs execute in 32-wide SIMD groups (like a
+# warp) with a 1024-thread threadgroup ceiling, so the NVIDIA-shaped
+# defaults transfer in structure. Tile sizes are deliberately conservative
+# for the 32 KB threadgroup-memory budget, which is a QUARTER of Volta's
+# 96 KB — the tightest constraint on this platform.
+block_sizes:
+  default: 1024
+
+  # GEMM — Apple's simdgroup_matrix units are the equivalent of tensor
+  # cores. Kept small until the 32 KB budget is measured rather than assumed.
+  gemm:
+    block_m: 32
+    block_n: 32
+    block_k: 32
+    num_warps: 4
+    num_stages: 2
+
+  bmm:
+    block_m: 32
+    block_n: 32
+    block_k: 32
+    num_warps: 4
+
+  conv2d:
+    block_h: 16
+    block_w: 16
+    num_warps: 4
+
+  resize: 256
+  softmax_cap: 8192
+  layernorm_tile: 1024
+  groupnorm_cap: 65536
+  reduction: 1024
+
+  # M=1 dequant-GEMV occupancy rule — see nvidia/volta.yml for the rationale
+  # (the wrapper halves BLOCK_N until the grid reaches min_programs).
+  # 2 waves x 40 GPU cores (M3/M4 Max class); validation_status: analytical.
+  # Key absent or 0 -> no adaptation.
+  dequant_gemv:
+    min_programs: 80
+
+# SDPA block-size thresholds. Schema documented in volta.yml. Decode first.
+# Every tile here is sized for 32 KB of threadgroup memory, so they are
+# smaller than the Volta equivalents at the same head_dim.
+sdpa_thresholds:
+  - seqlen_q_le: 16
+    head_dim_ge: 256
+    block_m: 16
+    block_n: 16
+    num_warps: 4
+  - seqlen_q_le: 16
+    block_m: 16
+    block_n: 32
+    num_warps: 4
+  - head_dim_ge: 256
+    block_m: 16
+    block_n: 16
+    num_warps: 4
+  - head_dim_ge: 128
+    block_m: 32
+    block_n: 32
+    num_warps: 4
+  - head_dim_lt: 128
+    block_m: 32
+    block_n: 64
+    num_warps: 4
+
+memory:
+  # 32 KB of threadgroup memory per threadgroup (Apple GPU family 7+).
+  # The single most binding difference from every NVIDIA profile here.
+  max_shared_memory_per_block: 32768
+  max_registers_per_block: 32768
+  # Apple GPUs schedule in 32-wide SIMD groups. Named `warp_size` for schema
+  # parity with the NVIDIA profiles (AMD uses `wavefront_size` at 64).
+  warp_size: 32
+
+  # SDPA deterministic-routing budget. 0 = NOT APPLICABLE: the
+  # non-determinism this routes around is a Volta-SIMT MMA issue and does
+  # not transfer to Apple's simdgroup path. Left 0 until shown otherwise on
+  # real hardware.
+  sdpa_math_max_scores_bytes: 0
+  sdpa_math_min_chunk_rows: 128
+
+  # Allocator pool: fraction of device memory the free-list may keep parked.
+  # Apple Silicon is UNIFIED memory — the "device" budget is system RAM
+  # shared with everything else on the machine, so parking is far less
+  # polite here than on a discrete card. Halved accordingly.
+  alloc_pool_parked_cap_fraction: 0.25
+
+  # Triton deferred-free queue policy. Unified memory means a free returns
+  # pages to the whole system, so the cliff is lower than on a discrete GPU.
+  deferred_drain_cliff_bytes: 1000000000
+  deferred_drain_floor_bytes: 268435456
+  deferred_drain_pressure_reserve_bytes: 4294967296
+  deferred_drain_freecheck_interval: 8
+
+# SMEM budget safety factor — see volta.yml. Same 0.7 across vendors.
+sdpa_smem_safety: 0.7
+
+precision:
+  supports_fp16: true
+  supports_bf16: true    # Apple GPU family 9 (M3+); M1/M2 emulate
+  supports_tf32: false   # NVIDIA-only format
+  supports_fp8: false    # no hardware FP8 on Apple GPUs
+  # Metal GPUs have NO double precision at all. This is not a tuning
+  # choice: `tl.float64` cannot be lowered, and the three device-scalar
+  # kernels in kernels/ops/{add,mul,div}.py that widen through f64 for
+  # bit-exactness with the host path must take their host-sync route here.
+  supports_fp64: false
+
+# Software-pipelining budget — see nvidia/volta.yml for the schema.
+#
+# validation_status: conservative_pending_first_light. cp.async is a PTX
+# instruction with no Apple equivalent, and the Metal backend stages through
+# threadgroup memory by a different mechanism. Neither Volta's measured
+# fault nor Ampere's clearance transfers, so the budget stays at 2 until an
+# Apple GPU measures it: clamping can only cost throughput.
+pipelining:
+  max_num_stages: 2

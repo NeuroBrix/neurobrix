@@ -220,17 +220,29 @@ def cmd_run(args):
     if args.sequential:
         execution_mode = "sequential"
     elif args.triton or getattr(args, 'triton_sequential', False):
-        # Triton mode: validate hardware compatibility
-        if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-            print("\n[ERROR] --triton mode is not compatible with Apple Metal GPUs.")
-            print("   Metal/MPS backend does not support Triton kernels.")
-            print("   This will be supported in a future version of NeuroBrix.")
-            print("   Use default mode (without --triton) for Metal GPU inference.")
-            return
-        if not torch.cuda.is_available():
-            import os
-            os.environ.setdefault("TRITON_CPU_BACKEND", "1")
-            print("   [Triton] No GPU detected — using Triton CPU backend (experimental)")
+        # Triton mode: the backend for this hardware must actually be present.
+        # Both gates below REFUSE with an install command instead of letting
+        # the run die later inside the Triton driver — and neither of them
+        # fetches anything on the user's behalf.
+        from neurobrix.triton.cpu_backend import (
+            TritonCPUNotInstalledError, ensure_triton_cpu_or_raise,
+        )
+        from neurobrix.triton.metal_backend import (
+            TritonMetalNotInstalledError, ensure_triton_metal_or_raise,
+        )
+        try:
+            # Apple GPUs: upstream Triton has no Metal target, but an
+            # out-of-tree backend exists. This replaced a hardcoded
+            # "supported in a future version" message that was already
+            # out of date.
+            ensure_triton_metal_or_raise()
+            # CPU-only profile: triton-cpu is a separate upstream package.
+            # Previously TRITON_CPU_BACKEND was set without checking it was
+            # installed, so the run died in the driver a step later.
+            ensure_triton_cpu_or_raise()
+        except (TritonMetalNotInstalledError, TritonCPUNotInstalledError) as exc:
+            print(f"\n[ERROR] {exc}")
+            return 1
         if getattr(args, 'triton_sequential', False):
             execution_mode = "triton_sequential"
         else:
