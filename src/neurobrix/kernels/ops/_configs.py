@@ -7,7 +7,9 @@ emits async copy instructions that cause CUDA_ERROR_MISALIGNED_ADDRESS on Volta.
 
 import inspect
 import warnings
-from typing import Dict, List
+from typing import Dict, List, Optional
+
+from pathlib import Path
 
 import triton
 from triton import next_power_of_2
@@ -110,6 +112,105 @@ def _safe_num_stages(n: int) -> int:
     # AMD ("gfx90a") and any other string-arch target: conservative, since
     # cp.async does not exist there and their pipelining is unvalidated.
     return min(n, 2)
+
+
+# ---------------------------------------------------------------------------
+# SHARED-MEMORY BUDGET — the physical limit on which autotune tiles can run
+# ---------------------------------------------------------------------------
+#
+# Every vendor profile has declared `memory.max_shared_memory_per_block` since
+# the profiles were written, and until 2026-09-03 NOTHING read it. The autotune
+# config space was instead chosen by an architecture NAME, with the reasoning
+# that anything unrecognised should take "the Volta subset, which fits the
+# smallest budget". That reasoning is false on Apple: Volta declares 96 KB and
+# an Apple GPU has 32 KB, so a BM=64/BN=128/BK=64 tile at 3 stages wants 72 KB
+# and cannot run there at all. The same silence sent every CDNA card into the
+# Volta space by coincidence rather than by decision, which the arch-selection
+# docstring already flagged as a first-light task.
+#
+# The budget is a hardware parameter, so it comes from the profile (R23/R24).
+# Resolution is data, not a mapping table: each profile declares a
+# `compute_capability` in exactly the form the Triton target reports it
+# ("7.0" / "gfx90a" / "apple9"), so the right file is found by matching, and a
+# new architecture is a new YAML rather than a new branch.
+
+
+def smem_bytes_for_config(config, dtype_bytes: int = 2) -> int:
+    """Shared memory one matmul-class tile needs, in bytes.
+
+    A blocked matmul stages an `[BLOCK_M, BLOCK_K]` slab of A and a
+    `[BLOCK_K, BLOCK_N]` slab of B per pipeline stage. That working set is what
+    saturates and spills — the measured Phase 1.5 collapse to 98-145 ms on
+    Volta was this quantity exceeding 96 KB.
+
+    Returns 0 for a config that names no tile (element-wise spaces), which the
+    filter reads as "no constraint to check".
+    """
+    kw = getattr(config, "kwargs", {}) or {}
+    m, n, k = kw.get("BLOCK_M"), kw.get("BLOCK_N"), kw.get("BLOCK_K")
+    if not (m and n and k):
+        return 0
+    stages = max(1, int(getattr(config, "num_stages", 1) or 1))
+    return (m * k + k * n) * dtype_bytes * stages
+
+
+def arch_smem_budget() -> Optional[int]:
+    """`memory.max_shared_memory_per_block` for the executing hardware.
+
+    Read from the vendor YAML, never from the driver — the driver is asked
+    only WHICH profile applies, which is identification and not a hardware
+    parameter. Returns None when no profile matches, and the caller must then
+    leave the config space alone rather than guess a budget: filtering on an
+    invented number would silently delete working configs.
+    """
+    try:
+        import triton
+        arch = triton.runtime.driver.active.get_current_target().arch
+    except Exception:
+        return None
+
+    # NVIDIA reports capability x 10 (sm_70 -> 70); the profiles spell it
+    # "7.0". AMD and Apple report the profile's string form directly.
+    wanted = (f"{arch // 10}.{arch % 10}" if isinstance(arch, int)
+              else str(arch).strip().lower())
+
+    vendors = Path(__file__).resolve().parents[2] / "config" / "vendors"
+    try:
+        import yaml
+    except ImportError:                                   # pragma: no cover
+        return None
+    for path in sorted(vendors.glob("*/*.yml")):
+        try:
+            cfg = yaml.safe_load(path.read_text()) or {}
+        except Exception:                                 # pragma: no cover
+            continue
+        if str(cfg.get("compute_capability", "")).strip().lower() != wanted:
+            continue
+        budget = (cfg.get("memory") or {}).get("max_shared_memory_per_block")
+        return int(budget) if budget else None
+    return None
+
+
+def configs_within_smem_budget(configs, budget: Optional[int],
+                               dtype_bytes: int = 2):
+    """Drop the tiles that cannot physically fit in `budget` bytes.
+
+    `budget=None` (no profile matched) returns the space untouched: removing
+    configs on a guessed budget is worse than exploring a few that spill,
+    because the autotuner measures spilling configs and rejects them, whereas
+    a config that was never offered can never be chosen.
+
+    The smallest tile is always kept even if it exceeds the budget, so the
+    space is never emptied — an empty autotune list is an import-time crash,
+    and a wrong-but-present config is a slow kernel.
+    """
+    if not budget:
+        return configs
+    fitting = [c for c in configs
+               if smem_bytes_for_config(c, dtype_bytes) <= budget]
+    if fitting:
+        return fitting
+    return [min(configs, key=lambda c: smem_bytes_for_config(c, dtype_bytes))]
 
 
 def element_wise_configs() -> List[triton.Config]:
