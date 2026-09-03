@@ -93,21 +93,42 @@ _MATMUL_AUTOTUNE_AMPERE_PLUS = [
 
 
 def _detect_arch_configs():
-    """Return autotune configs for the active CUDA arch.
+    """Return the autotune config space for the active architecture.
 
-    sm_70 (Volta V100) → Volta-viable subset (no SMEM-saturating blocks).
-    sm_80+ (Ampere/Hopper) → tutorial canonical + Volta subset.
-    Cached at module import time. Falls back to Volta subset if detection
-    fails (safe choice — won't OOM on any arch).
+    WHY THIS ASKS THE DRIVER, when R23/R24 put hardware parameters in
+    `config/vendors/<vendor>/<arch>.yml`: autotune configs are bound at
+    DECORATION time, which is module import — before `set_hardware_profile()`
+    has run at executor construction. There is no profile to read yet. This is
+    the documented bootstrap exception, not a licence to query the driver
+    elsewhere; every parameter that CAN wait for the profile reads the YAML
+    (see `_safe_num_stages`, which moved to `pipelining.max_num_stages`).
+
+    The spaces:
+
+    * sm_80+ (Ampere/Hopper) — tutorial canonical plus the Volta subset.
+    * sm_70 (Volta) — Volta-viable subset only: larger blocks saturate the
+      96 KB SMEM, spill registers and collapse throughput (measured, Phase 1.5).
+    * CDNA (gfx*) — the Volta-viable subset. AMD's Triton target reports `arch`
+      as a STRING ("gfx90a"), so the old `isinstance(cap, int)` test silently
+      dropped every AMD card into the Volta space *by accident*. It lands in the
+      same place deliberately now, and for a stated reason: CDNA exposes 64 KB
+      of LDS against Volta's 96 KB, so the small-block space is the safe one
+      until an MI-series card measures a better one. Named as a first-light
+      task, not left as a coincidence.
+    * anything else (Apple, unknown) — the Volta subset, which is the space
+      that fits the smallest budget and will not OOM anywhere.
     """
     try:
-        cap = triton.runtime.driver.active.get_current_target().arch
-        # Triton arch on NVIDIA = compute cap × 10 (sm_70 → 70, sm_80 → 80)
-        if isinstance(cap, int) and cap >= 80:
-            return _MATMUL_AUTOTUNE_AMPERE_PLUS
-        return _MATMUL_AUTOTUNE_VOLTA
+        arch = triton.runtime.driver.active.get_current_target().arch
     except Exception:
         return _MATMUL_AUTOTUNE_VOLTA
+
+    # NVIDIA: Triton reports compute capability x 10 (sm_70 -> 70, sm_80 -> 80)
+    if isinstance(arch, int):
+        return _MATMUL_AUTOTUNE_AMPERE_PLUS if arch >= 80 else _MATMUL_AUTOTUNE_VOLTA
+
+    # AMD CDNA/RDNA and any other string-arch target (Apple included).
+    return _MATMUL_AUTOTUNE_VOLTA
 
 
 _MATMUL_AUTOTUNE_CONFIGS = maybe_pin_single(
