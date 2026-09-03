@@ -157,3 +157,59 @@ def test_the_running_machine_resolves_to_its_own_profile():
     declared = {_budget(p.parent.name, p.stem) for p in VENDORS.glob("*/*.yml")}
     assert budget in declared, (
         "the resolved budget came from somewhere other than a vendor profile")
+
+
+# --- the schema is uniform, or consumers must branch on vendor --------------
+
+_REFERENCE = "nvidia/volta"
+
+# Keys the reference declares that another profile may legitimately omit,
+# each with the reason. Anything NOT on this list is a schema gap.
+_MAY_OMIT = {
+    "memory.sdpa_math_max_chunks":
+        "the deterministic-SDPA routing budget is a Volta-SIMT remedy "
+        "(P-TRITON-MOE-DETERMINISM-RESIDUAL); the race does not transfer to "
+        "other backends, and every other profile records that as 0 or absent",
+    "memory.sdpa_math_scores_device_fraction": "same routing budget",
+}
+
+
+def _flatten(d, prefix=""):
+    out = {}
+    for key, value in (d or {}).items():
+        full = f"{prefix}{key}"
+        if isinstance(value, dict):
+            out.update(_flatten(value, full + "."))
+        else:
+            out[full] = value
+    return out
+
+
+@pytest.mark.parametrize("path", sorted(VENDORS.glob("*/*.yml")),
+                         ids=lambda p: f"{p.parent.name}/{p.stem}")
+def test_every_profile_declares_what_the_reference_declares(path):
+    """One hardware concept, one key name, in every profile.
+
+    The AMD profiles declared 64-wide wavefronts as `memory.wavefront_size`
+    while every other profile called the same concept `memory.warp_size`. No
+    consumer existed yet, which is exactly what made it dangerous: the first
+    reader of `memory.warp_size` would have got nothing on AMD and fallen back
+    to 32 — wrong by 2x, silently, on every CDNA card.
+
+    A schema whose key names depend on the vendor forces every consumer to
+    branch on vendor to find a value, which is the anti-pattern the data-driven
+    hardware engine exists to remove.
+    """
+    name = f"{path.parent.name}/{path.stem}"
+    if name == _REFERENCE:
+        return
+    reference = set(_flatten(yaml.safe_load(
+        (VENDORS / "nvidia" / "volta.yml").read_text())))
+    mine = set(_flatten(yaml.safe_load(path.read_text())))
+    missing = sorted(reference - mine - set(_MAY_OMIT))
+    assert not missing, (
+        f"{name} does not declare, and has no recorded reason to omit:\n  "
+        + "\n  ".join(missing)
+        + f"\n\nEither add the key, or add it to _MAY_OMIT in this file with "
+          f"the reason it does not apply to this architecture."
+    )

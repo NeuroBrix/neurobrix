@@ -93,8 +93,9 @@ memory:
   # The single most binding difference from every NVIDIA profile here.
   max_shared_memory_per_block: 32768
   max_registers_per_block: 32768
-  # Apple GPUs schedule in 32-wide SIMD groups. Named `warp_size` for schema
-  # parity with the NVIDIA profiles (AMD uses `wavefront_size` at 64).
+  # Apple GPUs schedule in 32-wide SIMD groups. Named `warp_size` because one
+  # hardware concept has ONE key across every profile — AMD's 64-wide
+  # wavefronts are declared under the same name.
   warp_size: 32
 
   # SDPA deterministic-routing budget. 0 = NOT APPLICABLE: the
