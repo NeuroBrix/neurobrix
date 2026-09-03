@@ -7,6 +7,7 @@ All commands that manage ~/.neurobrix/store/ and ~/.neurobrix/cache/.
 import os
 import sys
 import json
+import re
 
 from neurobrix import __version__
 from neurobrix.cli.utils import (
@@ -244,7 +245,55 @@ def cmd_import(args):
     print("=" * 70)
     print(f"Model: {org}/{name}")
     print(f"Cache: {cache_path}")
-    print(f"\nRun with: neurobrix run --model {name} --prompt \"...\"")
+    print(f"\nRun with: {_suggest_run_command(name, cache_path)}")
+
+
+def _suggest_run_command(name: str, cache_path) -> str:
+    """The closing line of `import`, built from the family's declared inputs.
+
+    It used to assume every model is prompt-driven and printed
+    `--prompt "..."` for all of them, so the last line a newcomer read before
+    their first run was a command that could not work — an upscaler answered
+    it with `ZERO FALLBACK: family 'upscaler' requires --input-image`
+    (hub walkthrough, 2026-09-03).
+
+    The family YAML already declares `inputs.required`, so the suggestion is
+    read from there. No family cascade: adding a family to the taxonomy must
+    not require touching this function (R32).
+    """
+    try:
+        import json as _json
+
+        manifest = _json.loads((Path(cache_path) / "manifest.json").read_text())
+        family = manifest.get("family")
+        if not family:
+            raise ValueError("no family in manifest")
+
+        from neurobrix.core.runtime.output_dispatch import get_family_config
+
+        required = (get_family_config(family).get("inputs") or {}).get("required") or []
+    except Exception:
+        # Unknown family or unreadable manifest: fall back to the bare command
+        # rather than inventing flags the model may not accept.
+        return f"neurobrix run --model {name}"
+
+    parts = [f"neurobrix run --model {name}"]
+    for flag in required:
+        # Placeholder derived mechanically from the flag, so a new required
+        # input needs no table here: --input-image -> IMAGE, --audio -> AUDIO.
+        placeholder = flag.lstrip("-").split("-")[-1].upper()
+        parts.append(f'{flag} "..."' if placeholder == "PROMPT"
+                     else f"{flag} <{placeholder}>")
+    return " ".join(parts)
+
+
+def _strip_build_stamp(stem: str) -> str:
+    """`Model.20260828T183831` -> `Model`.
+
+    Store filenames carry a build stamp; extracted cache directories do not.
+    Anything comparing the two must normalise first.
+    """
+    return re.sub(r"\.\d{8}T\d{6}$", "", stem)
 
 
 def cmd_list(args):
@@ -319,11 +368,18 @@ def cmd_list(args):
                     "license": license_id,
                 })
 
-    # Also show store-only entries (downloaded but not extracted)
+    # Also show store-only entries (downloaded but not extracted).
+    #
+    # The store filename carries a build stamp — "Swin2SR-Classical-x4
+    # .20260828T183831.nbx" — while the extracted cache directory is the bare
+    # model name. Comparing the two directly never matched, so a model that
+    # HAD just been extracted was listed as installed and as "store only (not
+    # extracted)" on the same screen, with an instruction to import it again
+    # (hub walkthrough, 2026-09-03). Strip the stamp before comparing.
     cached_names = {m["name"] for m in models}
     store_only = []
     for stem, size in store_files.items():
-        if stem not in cached_names:
+        if _strip_build_stamp(stem) not in cached_names:
             store_only.append({"name": stem, "size": size})
 
     if not models and not store_only:
@@ -345,7 +401,12 @@ def cmd_list(args):
         print(f"\nStore only (not extracted):")
         for s in store_only:
             print(f"  {s['name']}.nbx  ({format_size(s['size'])})")
-        print(f"  Extract with: neurobrix import <org>/{store_only[0]['name']} --force")
+        # `<org>` was printed as a literal, so the suggested command could not
+        # be pasted. The org is not recoverable from the store filename, so
+        # point at the command that finds it instead of inventing a value.
+        _first = _strip_build_stamp(store_only[0]["name"])
+        print(f"  Find its org:  neurobrix hub --search {_first}")
+        print(f"  Then extract:  neurobrix import <org>/{_first} --force")
 
     if store_files:
         total_store = sum(store_files.values())
@@ -526,6 +587,26 @@ def cmd_hub(args):
         })
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        # HTTPError subclasses URLError, so it used to land in the branch
+        # below and every rejected request was reported as a connectivity
+        # failure — sending a user who had merely mistyped a category off to
+        # check their firewall. The registry answered, and it answered
+        # usefully: the body carries the reason and the vocabulary.
+        detail = {}
+        try:
+            detail = json.loads(e.read().decode())
+        except Exception:
+            pass
+        if e.code < 500 and detail:
+            print(f"\nERROR: {detail.get('error', e)}")
+            valid = detail.get("validCategories")
+            if valid:
+                print(f"  Valid categories: {', '.join(valid)}")
+            sys.exit(2)
+        print(f"\nERROR: registry returned HTTP {e.code} for {url}")
+        print(f"  {e}")
+        sys.exit(1)
     except urllib.error.URLError as e:
         print(f"\nERROR: Cannot connect to registry at {registry}")
         print(f"  {e}")

@@ -34,10 +34,12 @@ Usage
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Dict, List
 
@@ -45,6 +47,7 @@ import pytest
 
 
 REPO = Path(__file__).resolve().parents[2]
+CACHE_DIR = Path.home() / ".neurobrix" / "cache"
 GOLDEN_DIR = Path(__file__).parent / "golden"
 GOLDEN_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -458,3 +461,72 @@ def test_model_runs(model_meta: Dict[str, str | int], mode: str) -> None:
         f"UPDATE_GOLDEN=1 pytest tests/regression/ -k "
         f"'{name} and {mode}'"
     )
+
+
+# ---------------------------------------------------------------------------
+# CPU-only cell
+# ---------------------------------------------------------------------------
+
+def test_upscaler_runs_with_no_gpu() -> None:
+    """The engine must keep working on a machine with no GPU at all.
+
+    Nothing covered this path until 2026-09-03, when a newcomer walkthrough on
+    a 2 vCPU / 1.9 GB box with no NVIDIA device produced a correct x4 upscale
+    in 1.93 s with no configuration: hardware auto-detection wrote a CPU
+    profile and chose `cpu_execution` on its own.
+
+    That is the first thing anyone without a graphics card will try, and it
+    was one silent regression away from disappearing. The cell is deliberately
+    the cheapest real generation in the catalogue — a 59 MB upscaler — so it
+    can run anywhere, including CI without a GPU.
+
+    CUDA is hidden with `CUDA_VISIBLE_DEVICES=""`, which is how a GPU-less
+    machine looks to the process, rather than by mocking anything.
+    """
+    from PIL import Image
+
+    candidates = sorted(
+        d for d in CACHE_DIR.iterdir()
+        if d.is_dir() and (d / "manifest.json").exists()
+        and json.loads((d / "manifest.json").read_text()).get("family") == "upscaler"
+    ) if CACHE_DIR.exists() else []
+    if not candidates:
+        pytest.skip("no upscaler in the local cache")
+
+    model = candidates[0].name
+    out_path = _upscale_out_path(model, "cpu")
+    if out_path.exists():
+        out_path.unlink()
+
+    env = dict(os.environ)
+    env["CUDA_VISIBLE_DEVICES"] = ""          # exactly what a GPU-less host looks like
+    env.pop("NBX_HARDWARE_PROFILE", None)     # auto-detection must do the work
+
+    started = time.time()
+    proc = subprocess.run(
+        [_runtime_python(), "-u", "-m", "neurobrix", "upscale",
+         "--model", model, "--input", str(IMAGE_REF), "--output", str(out_path)],
+        capture_output=True, timeout=900, env=env,
+    )
+    elapsed = time.time() - started
+
+    stdout = proc.stdout.decode(errors="replace")
+    assert proc.returncode == 0, (
+        f"CPU-only upscale failed (rc={proc.returncode}).\n"
+        f"  stdout tail: {stdout[-800:]}\n"
+        f"  stderr tail: {proc.stderr.decode(errors='replace')[-800:]}"
+    )
+    assert out_path.exists(), "CPU-only run reported success but wrote no image"
+
+    # It must have chosen a CPU path, not silently found a GPU.
+    assert "cpu" in stdout.lower(), (
+        "expected a CPU profile / cpu_execution strategy in the output; "
+        f"got:\n{stdout[-800:]}"
+    )
+
+    # And the result must be a real upscale, not a copy.
+    with Image.open(IMAGE_REF) as src, Image.open(out_path) as dst:
+        assert dst.size[0] > src.size[0] and dst.size[1] > src.size[1], (
+            f"output {dst.size} is not larger than input {src.size}"
+        )
+    print(f"[cpu-only] {model}: {elapsed:.2f}s, {out_path.name}")

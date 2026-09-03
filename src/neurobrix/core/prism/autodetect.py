@@ -640,6 +640,15 @@ def _detect_gpus_linux() -> Tuple[List[Dict[str, Any]], str]:
     Linux GPU detection cascade:
     nvidia-smi → rocm → xpu-smi → tt-smi → chinese SMI → lspci → PyTorch
     """
+    # An explicitly EMPTY CUDA_VISIBLE_DEVICES means "no GPU", conclusively.
+    # Checked before the cascade: filtering only the nvidia-smi result made
+    # that detector look like it had FAILED, so detection fell through to the
+    # lspci fallback — which reads the PCI bus and cannot see the variable at
+    # all — and rebuilt a four-GPU profile on a process that could address
+    # none of them. Caught by the CPU-only regression cell, 2026-09-03.
+    if _visible_device_filter() == []:
+        return [], "none"
+
     for detector, brand in [
         (_parse_nvidia_smi, "nvidia"),
         (_parse_rocm, "amd"),
@@ -652,7 +661,7 @@ def _detect_gpus_linux() -> Tuple[List[Dict[str, Any]], str]:
     ]:
         devices = detector()
         if devices:
-            return devices, brand
+            return _apply_visible_filter(devices), brand
 
     # lspci fallback (Linux only)
     devices, brand = _parse_lspci()
@@ -732,6 +741,26 @@ def _visible_device_filter() -> "Optional[List[int]]":
     return visible
 
 
+def _apply_visible_filter(devices: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Restrict a detected device list to CUDA_VISIBLE_DEVICES and RE-INDEX.
+
+    CUDA renumbers the visible set 0..N-1 in the order the variable lists
+    them, so a plan built on physical indices would address the wrong card,
+    or one the process cannot address at all.
+    """
+    visible = _visible_device_filter()
+    if visible is None:
+        return devices
+    by_physical = {d.get("index"): d for d in devices}
+    out: List[Dict[str, Any]] = []
+    for new_index, physical in enumerate(visible):
+        device = by_physical.get(physical)
+        if device is None:
+            break                  # CUDA stops at the first invalid entry
+        out.append(dict(device, index=new_index, physical_index=physical))
+    return out
+
+
 def _parse_nvidia_smi() -> List[Dict[str, Any]]:
     """Detect NVIDIA GPUs via nvidia-smi, restricted to the visible set."""
     try:
@@ -775,21 +804,6 @@ def _parse_nvidia_smi() -> List[Dict[str, Any]]:
             "architecture": arch,
             "pcie_version": pcie_ver,
         })
-
-    # Restrict to CUDA_VISIBLE_DEVICES and RE-INDEX to the ordinals the
-    # process will really see: CUDA renumbers the visible set 0..N-1 in the
-    # order the variable lists them, so a plan built on physical indices
-    # would address the wrong card (or none).
-    visible = _visible_device_filter()
-    if visible is not None:
-        by_physical = {d["index"]: d for d in devices}
-        devices = []
-        for new_index, physical in enumerate(visible):
-            device = by_physical.get(physical)
-            if device is None:
-                break              # CUDA stops at the first invalid entry
-            device = dict(device, index=new_index, physical_index=physical)
-            devices.append(device)
 
     return devices
 
