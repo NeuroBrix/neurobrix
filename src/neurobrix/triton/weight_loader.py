@@ -395,8 +395,44 @@ def _load_to_pinned_cpu(
             arr = np.ascontiguousarray(
                 (fp32.view(np.uint32) >> 16).astype(np.uint16))
 
+    # Any remaining source->target pair: cast through numpy.
+    #
+    # The two bit-level paths above cover bf16, which numpy cannot represent.
+    # Everything else is an ordinary cast, and it MUST happen: before
+    # 2026-09-03 only the two bf16 pairs were converted, so a float32 weight
+    # with a float16 target reached the copy still 4 bytes wide and wrote
+    # `arr.nbytes` into a buffer sized for the TARGET dtype — 1024 bytes into
+    # 512. Kokoro-82M's decoder is exactly that case (a (256,) fp32 tensor),
+    # and the full-zoo gate recorded it as a 240 s TIMEOUT rather than as the
+    # overflow it is, because the run never got far enough to fail.
+    _NUMPY_FOR = {
+        NBXDtype.float16: np.float16, NBXDtype.float32: np.float32,
+        NBXDtype.float64: np.float64, NBXDtype.int64: np.int64,
+        NBXDtype.int32: np.int32, NBXDtype.int16: np.int16,
+        NBXDtype.int8: np.int8, NBXDtype.uint8: np.uint8,
+        NBXDtype.bool_: np.bool_,
+    }
+    want = _NUMPY_FOR.get(target_dtype)
+    if want is not None and arr.dtype != want:
+        arr = np.ascontiguousarray(arr.astype(want))
+
     # Allocate pinned host memory and copy in (kind=0 = H2H).
     dst = NBXTensor.empty_cpu(shape, target_dtype, pinned=True)
+
+    # The copy is sized from the SOURCE and the buffer from the TARGET, so a
+    # dtype pair nobody converted is a write past the end of a cudaMallocHost
+    # region. That is only caught at all because a pinned range is registered
+    # with the driver; the same defect on ordinary host memory corrupts the
+    # heap in silence. Refuse here, naming the pair, rather than rely on the
+    # driver noticing.
+    if arr.nbytes != dst.nbytes():
+        raise RuntimeError(
+            f"weight staging would overflow: {source_dtype!r} -> "
+            f"{target_dtype!r} for shape {tuple(shape)} produced "
+            f"{arr.nbytes} bytes for a {dst.nbytes()}-byte buffer. "
+            f"This dtype pair has no conversion in _load_to_pinned_cpu — add "
+            f"one; never widen the buffer to match."
+        )
     DeviceAllocator.memcpy(dst.data_ptr(), arr.ctypes.data,
                            arr.nbytes, kind=0)
     return dst
