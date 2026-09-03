@@ -20,6 +20,23 @@ generation.
 
 ### Fixed
 
+- **`--triton` on an Apple Silicon Mac gave an out-of-date refusal, and
+  exited as if it had succeeded.** The message said Triton support on Metal
+  "will be supported in a future version"; an out-of-tree Triton backend for
+  Apple GPUs now exists. NeuroBrix now checks whether one is installed and,
+  if not, names it and the install command — and exits with an error code
+  instead of reporting success. Apple GPUs are also no longer missing their
+  hardware profile, which made any code path that asked for one fail with a
+  missing-config error. As with AMD, these paths are prepared but not
+  validated: no Apple GPU was available, and no support is claimed until
+  they run on one.
+
+- **`--triton` on a CPU-only machine no longer fails deep inside the
+  compiler.** NeuroBrix enabled its CPU Triton path without checking that
+  the required `triton-cpu` package was installed, so the run died later
+  with an unrelated-looking driver error. It now says what is missing, how
+  to install it, and that `--compiled` already works on CPU today.
+
 - **A clean install could not run a single model on many machines — present
   in every release since v0.3.0 (2026-07-07).** After
   `pip install neurobrix`, the first run failed with
