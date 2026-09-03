@@ -182,18 +182,20 @@ class CombinedSampler:
         import numpy as np
         n = input_ids.numel()
         buf = (ctypes.c_char * (n * 8))()  # int64 = 8 bytes
-        ctypes.cdll.LoadLibrary('libcudart.so').cudaMemcpy(
-            ctypes.byref(buf), ctypes.c_void_p(input_ids.data_ptr()),
-            n * 8, 2)  # D2H
+        # Through DeviceAllocator, not a hardcoded libcudart: this is the
+        # triton path, and `libcudart.so` does not exist on ROCm or Apple.
+        # It also checks the return code, which the raw call did not — a
+        # failed copy used to return silent garbage.
+        DeviceAllocator.memcpy(ctypes.addressof(buf), input_ids.data_ptr(),
+                               n * 8, 2)  # D2H
         ids = np.frombuffer(bytes(buf), dtype=np.int64)
 
         # Read logits to CPU, apply penalty, write back
         vocab = logits.shape[-1]
         logits_bytes = vocab * 4  # float32
         lbuf = (ctypes.c_char * logits_bytes)()
-        ctypes.cdll.LoadLibrary('libcudart.so').cudaMemcpy(
-            ctypes.byref(lbuf), ctypes.c_void_p(logits.data_ptr()),
-            logits_bytes, 2)
+        DeviceAllocator.memcpy(ctypes.addressof(lbuf), logits.data_ptr(),
+                               logits_bytes, 2)  # D2H
         logits_np = np.frombuffer(bytes(lbuf), dtype=np.float32).copy()
 
         for token_id in set(ids.tolist()):
@@ -208,10 +210,8 @@ class CombinedSampler:
         # call coerces to a 32-bit C int → the 64-bit host address is truncated
         # → invalid src pointer → segfault. (The D2H reads above already wrap
         # both ends, which is why only this H2D write crashed.)
-        ctypes.cdll.LoadLibrary('libcudart.so').cudaMemcpy(
-            ctypes.c_void_p(logits.data_ptr()),
-            ctypes.c_void_p(logits_np.ctypes.data),
-            logits_bytes, 1)  # H2D
+        DeviceAllocator.memcpy(logits.data_ptr(), logits_np.ctypes.data,
+                               logits_bytes, 1)  # H2D
         return logits
 
     def _shift_mask_right(self, mask: NBXTensor) -> NBXTensor:
