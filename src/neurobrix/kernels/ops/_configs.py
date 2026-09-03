@@ -9,7 +9,6 @@ import inspect
 import warnings
 from typing import Dict, List
 
-import torch
 import triton
 from triton import next_power_of_2
 
@@ -93,11 +92,24 @@ def _safe_num_stages(n: int) -> int:
     except Exception:
         pass
 
-    if not torch.cuda.is_available():
-        return n
-    if getattr(torch.version, "hip", None):
-        return min(n, 2)
-    return 2 if torch.cuda.get_device_capability()[0] < 8 else n
+    # Ask the TRITON target, not torch. This module is imported by every
+    # triton kernel (rmsnorm, softmax, conv2d, matmul, baddbmm,
+    # depthwise_conv2d), so a module-level `import torch` here pulled torch
+    # into the process on the branch that exists to contain none — the widest
+    # torch surface under kernels/ (R33 inventory, 2026-09-03). The same
+    # question is answerable from the Triton runtime, which is the documented
+    # bootstrap mechanism already used by `matmul._detect_arch_configs`.
+    try:
+        import triton
+        arch = triton.runtime.driver.active.get_current_target().arch
+    except Exception:
+        return n                       # no runtime to ask: change nothing
+    if isinstance(arch, int):
+        # NVIDIA: Triton reports compute capability x 10 (sm_70 -> 70).
+        return n if arch >= 80 else min(n, 2)
+    # AMD ("gfx90a") and any other string-arch target: conservative, since
+    # cp.async does not exist there and their pipelining is unvalidated.
+    return min(n, 2)
 
 
 def element_wise_configs() -> List[triton.Config]:
