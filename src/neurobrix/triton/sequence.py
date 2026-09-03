@@ -3003,6 +3003,7 @@ class TritonSequence:
                 "is_complex": bool(getattr(
                     tensor, "is_complex", lambda: False)()),
                 "head10": [],
+                "last_pos10": None,
                 "l2_norm": 0.0,
                 "batch_norms": None,
             }
@@ -3034,6 +3035,22 @@ class TritonSequence:
                                N * 4, kind=2)
         vals = list(fbuf)
         norm = (sum(v * v for v in vals)) ** 0.5
+        # Last-position window — mirror of the compiled and sequential
+        # dumpers (D-TSEQ-ORPHEUS-STEP110): first ten elements of the last
+        # index along axis 1 (rank >= 3, batch 0) or axis 0 (rank 2) of the
+        # (real-view) tensor; None below rank 2. `full` is contiguous, so
+        # the row offset is plain arithmetic on its shape.
+        _sshp = list(full.shape)
+        last = None
+        if len(_sshp) >= 3:
+            _row = 1
+            for _d in _sshp[2:]:
+                _row *= _d
+            _off = (_sshp[1] - 1) * _row
+            last = vals[_off:_off + min(10, _row)]     # never past the row
+        elif len(_sshp) == 2:
+            _off = (_sshp[0] - 1) * _sshp[1]
+            last = vals[_off:_off + min(10, _sshp[1])]
         _batch_norms = None
         _shp = list(tensor.shape)
         if len(_shp) >= 2 and _shp[0] in (2, 3) and N % _shp[0] == 0:
@@ -3046,6 +3063,7 @@ class TritonSequence:
             "dtype": str(tensor.dtype),
             "is_complex": bool(getattr(tensor, "is_complex", lambda: False)()),
             "head10": head,
+            "last_pos10": last,
             "l2_norm": norm,
             "batch_norms": _batch_norms,
         }

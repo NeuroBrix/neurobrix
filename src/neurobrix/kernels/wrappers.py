@@ -2554,7 +2554,8 @@ def embedding(weight, indices, padding_idx=-1, **kwargs) :
         indices = new_indices
     output = NBXTensor.empty((*indices.shape, N), dtype=weight.nbx_dtype if hasattr(weight, 'nbx_dtype') else weight.dtype, device=dev)
     _set_device(weight)
-    embedding_kernel[M,](output, indices, weight, N, BLOCK_SIZE)
+    # weight.shape[0] = the id bound the kernel traps on (OOB parity with torch).
+    embedding_kernel[M,](output, indices, weight, weight.shape[0], N, BLOCK_SIZE)
     return output
 
 
@@ -5259,7 +5260,7 @@ def index_put_wrapper(x, indices, values, accumulate: bool = False):
     _set_device(out)
     index_put_kernel[_1d_grid(N)](
         out, idx, vbuf,
-        T, N,
+        T, N, out.shape[0],  # R: the row bound the kernel traps on (OOB parity with torch)
         VAL_SCALAR=val_scalar,
         ACCUMULATE=bool(accumulate),
         BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS,

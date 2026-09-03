@@ -361,6 +361,83 @@ class _State:
 
 
 STATE = _State()
+
+# Sequences that hold recorded plans (weak registry: the dict dies with
+# the sequence, the SLABS do not — `retire_sequence_plans` is the release
+# path an executor calls when it drops a sequence). The KV cache reaches
+# the plans through `drop_plans_by_contribution` when it replaces a
+# layer's buffers for a longer request — every plan recorded against the
+# old addresses must go (D-SERVE-WARM-KV-GROWTH-ASYMMETRY: "replay-plan
+# invalidation on growth"): a plan that survived the swap would replay
+# kernel tuples, memcpys and captured graphs against freed or re-served
+# memory. The signature LAYOUT is owned here (`signature()`): the owner
+# contributions sit in one tuple at `sig[-2]`; callers match on a
+# contribution, never on a position of the full key.
+import weakref as _weakref
+_PLAN_SEQS: "_weakref.WeakSet" = _weakref.WeakSet()
+
+
+def _plan_of(state):
+    """The FrozenPlan behind a plans-dict state, if it holds resources:
+    a frozen plan, or a pending ("VERIFY", plan) whose slab was already
+    allocated and whose verify pass has not run yet."""
+    if isinstance(state, FrozenPlan):
+        return state
+    if isinstance(state, tuple) and len(state) == 2 and state[0] == "VERIFY" \
+            and isinstance(state[1], FrozenPlan):
+        return state[1]
+    return None
+
+
+def _drop_plan(plans: dict, sig) -> None:
+    plan = _plan_of(plans.pop(sig, None))
+    if plan is not None:
+        plan.slab.retire()   # deferred: frees once carved tensors die
+        if plan.graph is not None:
+            try:
+                plan.graph.destroy()
+            finally:
+                plan.graph = None
+
+
+def _contributions(sig):
+    if isinstance(sig, tuple) and len(sig) >= 2 and isinstance(sig[-2], tuple):
+        return sig[-2]
+    return ()
+
+
+def drop_plans_by_contribution(pred) -> int:
+    """Retire every recorded plan one of whose owner contributions
+    satisfies `pred(contribution)` — frozen plans and pending VERIFY
+    plans (slab retired, captured graph destroyed), plus the measuring /
+    unreplayable states behind the same keys. Returns the number of keys
+    dropped. Called by `TritonKVCache` at a buffer replacement with a
+    predicate scoped to THAT cache's previous generation."""
+    dropped = 0
+    for seq in list(_PLAN_SEQS):
+        plans = seq.__dict__.get("_replay_plans")
+        if not plans:
+            continue
+        for sig in [k for k in plans if any(pred(c) for c in _contributions(k))]:
+            _drop_plan(plans, sig)
+            dropped += 1
+    return dropped
+
+
+def retire_sequence_plans(seq) -> int:
+    """Release every plan a sequence holds (its slabs and captured
+    graphs) — the executor's teardown path when it drops the sequence.
+    The weak registry alone does not free them: a retired-less slab
+    stays in `_ACTIVE_SLABS` with its base allocation for the process."""
+    plans = seq.__dict__.get("_replay_plans")
+    if not plans:
+        return 0
+    n = 0
+    for sig in list(plans):
+        _drop_plan(plans, sig)
+        n += 1
+    _PLAN_SEQS.discard(seq)
+    return n
 _INSTALLED = False
 _ORIG_MALLOC = DeviceAllocator.malloc_cuda
 _ORIG_FREE = DeviceAllocator.free_cuda
@@ -971,6 +1048,7 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
         if comp not in only.split(","):
             return False
     plans = seq.__dict__.setdefault("_replay_plans", {})
+    _PLAN_SEQS.add(seq)
     state = plans.get(sig)
 
     owners = seq.__dict__.get("_replay_state_owners", ())

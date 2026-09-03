@@ -299,14 +299,17 @@ class ServingDaemon:
     def _handle_connection(self, conn: socket.socket) -> None:
         """Handle a single client connection (may have multiple requests)."""
         conn.settimeout(None)  # No timeout on established connections
+        from neurobrix.core.runtime.phase_trace import mark as _phase_mark
 
         while self._running:
             request = recv_message(conn)
             if request is None:
                 break  # Client disconnected
 
+            _phase_mark(f"server.recv.{request.get('method', '?')}")
             response = self._dispatch(request, conn)
             send_message(conn, response)
+            _phase_mark("server.sent")
 
             # Check if shutdown was requested
             if request.get("method") == "shutdown":

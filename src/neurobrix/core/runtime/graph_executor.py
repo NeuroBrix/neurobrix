@@ -4260,6 +4260,16 @@ class GraphExecutor:
                 try:
                     _flat = _t.detach().reshape(-1)
                     _head = _flat[:10].float().cpu().tolist()
+                    # Last-position window — mirror of the compiled and
+                    # triton dumpers (D-TSEQ-ORPHEUS-STEP110): first ten
+                    # elements of the last index along axis 1 (rank >= 3,
+                    # batch 0) or axis 0 (rank 2); None below rank 2.
+                    _srcl = torch.view_as_real(_t) if _t.is_complex() else _t
+                    _last = None
+                    if _srcl.dim() >= 3:
+                        _last = _srcl[0, -1].detach().reshape(-1)[:10].float().cpu().tolist()
+                    elif _srcl.dim() == 2:
+                        _last = _srcl[-1].detach().reshape(-1)[:10].float().cpu().tolist()
                     _fflat = _flat if _flat.is_floating_point() else _flat.float()
                     _norm = float(torch.linalg.vector_norm(
                         _fflat, dtype=torch.float32).item())
@@ -4308,7 +4318,8 @@ class GraphExecutor:
                             "component": self._component_name,
                             "shape": list(_t.shape), "dtype": str(_t.dtype),
                             "is_complex": bool(_t.is_complex()),
-                            "head10": _head, "l2_norm": _norm,
+                            "head10": _head, "last_pos10": _last,
+                            "l2_norm": _norm,
                             "batch_norms": _bn,
                             "hasym": _hasym}}, _f)
                         _f.write("\n")
@@ -4646,6 +4657,12 @@ class GraphExecutor:
             from neurobrix.kernels.nbx_tensor import DeviceAllocator as _DA
             _DA.sync_device()
             self._triton_seq._arena.clear_all()  # type: ignore[attr-defined]
+            _seq = self._triton_seq
+            if _seq is not None:
+                # Release the sequence's recorded replay plans (slabs +
+                # captured graphs) with it — the weak registry does not.
+                from neurobrix.triton.replay import retire_sequence_plans
+                retire_sequence_plans(_seq)
             self._triton_seq = None
 
         # Step 1c: Drop the triton_sequential per-run capture (holds NBXTensor

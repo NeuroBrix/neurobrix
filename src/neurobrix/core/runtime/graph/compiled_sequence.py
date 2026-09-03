@@ -3565,6 +3565,17 @@ class CompiledSequence:
             # casting the full tensor.
             flat = src.detach().reshape(-1)
             head = flat[:10].float().cpu().tolist()
+            # Last-position window (D-TSEQ-ORPHEUS-STEP110, 2026-09-03): the
+            # first ten elements of the LAST index along the sequence axis
+            # — axis 1 (batch 0) for rank >= 3, axis 0 for rank 2, absent
+            # below rank 2. A position-local divergence (the last logits
+            # row at context 128) is invisible to head10, which samples
+            # position 0. Same field in the sequential and triton dumpers.
+            last = None
+            if src.dim() >= 3:
+                last = src[0, -1].detach().reshape(-1)[:10].float().cpu().tolist()
+            elif src.dim() == 2:
+                last = src[-1].detach().reshape(-1)[:10].float().cpu().tolist()
             try:
                 norm = float(torch.linalg.vector_norm(
                     flat, dtype=torch.float32).item())
@@ -3583,7 +3594,8 @@ class CompiledSequence:
                 "component": self.dag.get("component_name", "?"),
                 "tid": tid, "op_uid": op.op_uid, "op_type": op.op_type,
                 "shape": list(tensor.shape), "dtype": str(tensor.dtype),
-                "head10": head, "l2_norm": norm, "batch_norms": _bn,
+                "head10": head, "last_pos10": last, "l2_norm": norm,
+                "batch_norms": _bn,
             }
             state["records"].append(new_record)
             # JSONL append-mode write — O(1) IO per call vs the

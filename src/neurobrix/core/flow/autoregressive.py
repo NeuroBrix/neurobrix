@@ -522,6 +522,29 @@ class ImageStrategy(GenerationStrategy):
 # AutoregressiveHandler — Universal Loop
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _session_dag(executor, graph_path: Path, lm_name: str) -> Dict[str, Any]:
+    """The DAG a session reads its input contract from: the executor's
+    parsed DAG when the executor exists (warm serve, every request after
+    the first), the graph.json file only when the executor has yet to be
+    created (cold CLI path, first serve request). ZERO FALLBACK on a
+    live executor without a DAG. Triton mirror: triton/flow/
+    autoregressive.py::_session_dag (R30, separate implementation)."""
+    if executor is not None:
+        dag = getattr(executor, "dag", None)
+        if dag is None:
+            raise RuntimeError(
+                f"ZERO FALLBACK: executor for '{lm_name}' holds no DAG "
+                f"(load_graph_from_dict never ran) — cannot create a session.")
+        return dag
+    if not graph_path.exists():
+        raise RuntimeError(
+            f"ZERO FALLBACK: graph.json not found for '{lm_name}'.\n"
+            f"Expected at: {graph_path}"
+        )
+    with open(graph_path, 'r') as f:
+        return json.load(f)
+
+
 @register_flow("autoregressive_generation")
 class AutoregressiveHandler(FlowHandler):
     """
@@ -563,8 +586,26 @@ class AutoregressiveHandler(FlowHandler):
             )
         gen_type = gen_info.get("type")
 
+        # Serve TTFT reconciliation instrument (NBX_PHASE_TRACE=1): one
+        # stamp per phase boundary; the prefill stamp waits for the GPU.
+        from neurobrix.core.runtime.phase_trace import mark as _phase_mark
+
+        def _dev_sync():  # every visible device (block_scatter rows span the node)
+            if torch.cuda.is_available():
+                for _i in range(torch.cuda.device_count()):
+                    torch.cuda.synchronize(_i)
+
+        def _mem_note():  # torch allocator baseline at the boundary (diagnostic only)
+            if not torch.cuda.is_available():
+                return ""
+            a = torch.cuda.memory_allocated() / 2**20
+            r = torch.cuda.memory_reserved() / 2**20
+            free, _tot = torch.cuda.mem_get_info()
+            return f"alloc={a:.0f}MB reserved={r:.0f}MB free={free / 2**20:.0f}MB"
+
         session = self._create_session(gen_info)
         self._active_session = session
+        _phase_mark("flow.session.created", _dev_sync, _mem_note)
         strategy = self._create_strategy(gen_info, session)
         generator: Any = strategy.create_generator(self.ctx.pkg.defaults, self.ctx.variable_resolver)
 
@@ -573,6 +614,7 @@ class AutoregressiveHandler(FlowHandler):
 
         input_ids = self._tokenize(gen_info, device)
         batch_size = input_ids.shape[0]
+        _phase_mark("flow.tokenized", None, _mem_note)
 
         # Pass prompt token IDs to generator for repetition penalty context.
         # HuggingFace penalizes tokens from BOTH prompt and generated text.
@@ -584,6 +626,7 @@ class AutoregressiveHandler(FlowHandler):
         with torch.inference_mode():
             # ── PREFILL ────────────────────────────────────
             hidden = session.prefill(input_ids, batch_size)
+            _phase_mark("flow.prefill.done", _dev_sync, _mem_note)
 
             # ── DECODE LOOP ────────────────────────────────
             _debug_decode = os.environ.get("NBX_DEBUG_DECODE", "0") == "1"
@@ -610,6 +653,8 @@ class AutoregressiveHandler(FlowHandler):
                     print(f"[NBX_DUMP_LOGITS] compiled dumped top10 "
                           f"to {_dump_path}", flush=True)
                 next_token, is_done = generator.step(logits, step_idx)
+                if step_idx == 0:
+                    _phase_mark("flow.first_token")
 
                 if _debug_decode and step_idx < 15:
                     h_last = hidden[0, -1, :].float()
@@ -707,16 +752,15 @@ class AutoregressiveHandler(FlowHandler):
         # Get/create GraphExecutor
         cache_path = Path(self.ctx.pkg.cache_path)
         graph_path = cache_path / "components" / lm_name / "graph.json"
-        if not graph_path.exists():
-            raise RuntimeError(
-                f"ZERO FALLBACK: graph.json not found for '{lm_name}'.\n"
-                f"Expected at: {graph_path}"
-            )
-
-        with open(graph_path, 'r') as f:
-            dag = json.load(f)
 
         executor = self.ctx.executors.get(lm_name)
+        # The session reads the graph's input table (names, position_ids
+        # rank, visual stubs, sdpa presence) from the executor's OWN parsed
+        # DAG once it exists — never from the file again. The 244 MB
+        # graph.json of a 30B MoE parses in 4 s on the NFS runtime cache;
+        # re-parsed per request it was 8.3 s of the 44.7 s serve TTFT at
+        # 8.3k context (2026-09-03 reconciliation, xlong int4 row).
+        dag = _session_dag(executor, graph_path, lm_name)
         if executor is None:
             allocation = None
             if hasattr(self.ctx.plan, 'components') and self.ctx.plan.components:
@@ -760,8 +804,11 @@ class AutoregressiveHandler(FlowHandler):
         if self.ctx.persistent_mode and hasattr(executor, '_persistent'):
             executor._persistent = True
 
-        # Ensure weights loaded
+        # Ensure weights loaded (serve TTFT reconciliation stamps — R30
+        # mirror of the triton _create_session: weights_ensured / kv_ready)
+        from neurobrix.core.runtime.phase_trace import mark as _phase_mark
         self._ensure_weights_loaded(lm_name)
+        _phase_mark("flow.session.weights_ensured")
 
         # Get lm_config
         lm_config = self.ctx.pkg.defaults.get("lm_config", {})
@@ -875,6 +922,7 @@ class AutoregressiveHandler(FlowHandler):
                 f"ZERO FALLBACK: 'hidden_size' not found for '{lm_name}'."
             )
 
+        _phase_mark("flow.session.kv_ready")
         return GraphLMSession(
             executor=executor,
             kv_wrapper=kv_wrapper,

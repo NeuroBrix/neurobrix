@@ -208,15 +208,23 @@ class TritonKVCache:
     sizes itself there: when `prompt + decode_budget` exceeds the plan
     size, the buffer allocates at that need, bounded by the model's own
     context window (`window_ceiling`, from lm_config, data-driven).
-    Short prompts allocate exactly the plan size, byte-unchanged. No
-    reallocation ever happens (addresses stay fixed from creation —
-    the recorded-replay contract that forbids buffer swaps is honored
-    by construction). A prompt at or beyond the window raises the
-    loud overflow: that is the model's true limit, not a budget."""
+    Short prompts allocate the plan's initial size (serve plans) or the
+    plan size (run mode), byte-unchanged. Buffers are never resized in
+    place: a warm layer that cannot hold a later request is REPLACED at
+    that request's prefill, the cache generation bumps and the replay
+    plans recorded under the previous generation are retired (the
+    recorded-replay contract — addresses baked into plans — is kept by
+    invalidation, not by pinning). A prompt at or beyond the window
+    raises the loud overflow: that is the model's true limit, not a
+    budget."""
+
+    import itertools as _itertools
+    _uids = _itertools.count(1)
 
     def __init__(self, num_layers: int, num_kv_heads: int, k_head_dim: int,
                  v_head_dim: int, max_cache_len: int, dtype: NBXDtype,
-                 window_ceiling: int = 0, decode_budget: int = 0):
+                 window_ceiling: int = 0, decode_budget: int = 0,
+                 initial_cache_len: int = 0):
         self.num_layers = num_layers
         self.num_kv_heads = num_kv_heads
         self.k_head_dim = k_head_dim
@@ -225,6 +233,25 @@ class TritonKVCache:
         self.dtype = dtype
         self.window_ceiling = int(window_ceiling or 0)
         self.decode_budget = int(decode_budget or 0)
+        # Prism's `initial_cache_len` (serve-mode plans: max_tokens +
+        # margin; 0 = the plan size, the run-mode legacy). The compiled
+        # cache always honoured it (initial allocation + growth toward
+        # the ceiling); this cache allocated the ceiling up front — in
+        # serve the ceiling is the whole remaining VRAM, so the first
+        # request pinned 10.8 GB of KV for a 30B MoE on a 32 GB card and
+        # every later prefill ran at the memory edge (190 attention-chunk
+        # halvings, 480 pool flushes, 46 s instead of the CLI's 24 s at
+        # 8.3k context — measured 2026-09-03). R30 mirror of the compiled
+        # `StateCacheFactory` semantics: initial size, grow on need.
+        self.initial_cache_len = int(initial_cache_len or 0)
+        self.regrowths = 0   # layers replaced for a longer request (diagnostic)
+        # Replay identity: the bucket signature carries (uid, generation);
+        # a buffer replacement bumps the generation ONCE per request and
+        # retires every plan recorded under the previous one (the plans
+        # bake buffer addresses, strides and captured graphs).
+        self._uid = next(TritonKVCache._uids)
+        self.generation = 0
+        self._generation_bumped = False
         self._layers: Dict[int, KVCacheLayer] = {}
 
     def _alloc_len_for(self, first_len: int) -> int:
@@ -232,10 +259,13 @@ class TritonKVCache:
         `first_len` positions (the prefill). Plan size when it fits;
         prompt + decode budget when it does not; the model window is
         the ceiling."""
-        alloc = self.max_cache_len
+        alloc = self.initial_cache_len or self.max_cache_len
         needed = first_len + self.decode_budget if self.decode_budget \
             else first_len + 1
         if needed > alloc:
+            # Grow to the need: up to the plan ceiling first, then (the
+            # 2026-09-01 rule) up to the model window when the plan
+            # itself cannot hold the prompt.
             grown = needed if not self.window_ceiling \
                 else min(needed, self.window_ceiling)
             if grown > alloc:
@@ -248,6 +278,35 @@ class TritonKVCache:
         return alloc
 
     def _get_layer(self, layer_idx: int, k) -> KVCacheLayer:
+        if layer_idx in self._layers:
+            layer = self._layers[layer_idx]
+            if layer.current_len == 0:
+                # First update of a request (the prefill) on a WARM layer:
+                # a request the buffers cannot hold is served by REPLACING
+                # the layer's buffers (fresh allocation by the ONE sizing
+                # rule, `_alloc_len_for` — which raises the loud window
+                # limit before any side effect), never by growing them in
+                # place under a live view. Addresses change: the cache
+                # generation is bumped once per request and every replay
+                # plan recorded under the previous generation is retired
+                # (its bucket signature carries the generation, so a
+                # surviving plan could never match; the retirement frees
+                # the slabs and captured graphs it pinned).
+                first_len = int(k.shape[2])
+                if self._alloc_len_for(first_len) > layer._buffer_len:
+                    if not self._generation_bumped:
+                        old_gen = self.generation
+                        self.generation += 1
+                        self._generation_bumped = True
+                        from neurobrix.triton import replay as _replay
+                        uid = self._uid
+                        _replay.drop_plans_by_contribution(
+                            lambda c: (isinstance(c, tuple) and len(c) >= 5
+                                       and c[0] == "kv_decode"
+                                       and c[3] == uid and c[4] == old_gen))
+                    del self._layers[layer_idx]
+                    del layer
+                    self.regrowths += 1
         if layer_idx not in self._layers:
             device_idx = k._device_idx if hasattr(k, '_device_idx') else 0
             batch_size = k.shape[0]
@@ -270,6 +329,7 @@ class TritonKVCache:
         return self._get_layer(layer_idx, k).update_bucketed(k, v, bucket)
 
     def clear(self):
+        self._generation_bumped = False
         for layer in self._layers.values():
             layer.clear()
 
@@ -544,7 +604,10 @@ class TritonAttentionInterceptor:
         # current_len before the padded views are taken.
         padded = min(((length + 1 + bucket - 1) // bucket) * bucket,
                      buffer_len)
-        return ("kv_decode", bucket, padded)
+        # Buffer identity in the bucket key: a layer replacement (longer
+        # request on a warm cache) changes the generation, so no plan
+        # recorded against the old buffers can ever match again.
+        return ("kv_decode", bucket, padded, self.cache._uid, self.cache.generation)
 
     def replay_advance(self):
         """The replayed launches appended one position per layer and
