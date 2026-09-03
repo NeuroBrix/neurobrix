@@ -25,10 +25,10 @@ from transformers import AutoProcessor, VoxtralForConditionalGeneration
 
 proc = AutoProcessor.from_pretrained(a.snapshot)
 model = VoxtralForConditionalGeneration.from_pretrained(
-    a.snapshot, torch_dtype=torch.float16, device_map="cuda")
+    a.snapshot, torch_dtype=torch.float16, device_map="auto")   # 20 stacked 30 s windows + a 7.5k-token prompt exceed one 32 GB card
 inputs = proc.apply_transcription_request(
     language=a.lang, audio=a.audio, model_id=a.snapshot, return_tensors="pt")
-inputs = inputs.to("cuda", dtype=torch.float16)
+inputs = inputs.to(model.device, dtype=torch.float16)
 print(f"input_features {tuple(inputs['input_features'].shape)} "
       f"input_ids {tuple(inputs['input_ids'].shape)}", flush=True)
 torch.cuda.synchronize()
