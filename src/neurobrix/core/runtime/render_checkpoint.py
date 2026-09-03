@@ -46,6 +46,46 @@ from typing import Any
 
 import numpy as np
 
+
+# --- scheduler state <-> npz, without pickle --------------------------------
+#
+# `np.load(allow_pickle=True)` would execute arbitrary code from a file the
+# render wrote; a checkpoint is data, so it stays data. The scheduler state is
+# a shallow dict of scalars, None, arrays, and lists of those — enough
+# structure to need describing, little enough to describe in JSON. Arrays go
+# to their own npz entries and the JSON carries their keys.
+
+_ARRAY_TAG = "__nbx_array__"
+
+
+def _flatten_state(state: dict[str, Any]) -> tuple[str, dict[str, np.ndarray]]:
+    arrays: dict[str, np.ndarray] = {}
+
+    def encode(value, path):
+        if isinstance(value, np.ndarray):
+            key = f"sched_{path}"
+            arrays[key] = value
+            return {_ARRAY_TAG: key}
+        if isinstance(value, (list, tuple)):
+            return [encode(v, f"{path}_{i}") for i, v in enumerate(value)]
+        if isinstance(value, (int, float, str, bool)) or value is None:
+            return value
+        raise TypeError(f"scheduler state field {path!r} is {type(value).__name__}, "
+                        f"which cannot travel in a checkpoint")
+
+    return json.dumps({k: encode(v, k) for k, v in state.items()}), arrays
+
+
+def _unflatten_state(blob: str, data) -> dict[str, Any]:
+    def decode(value):
+        if isinstance(value, dict) and _ARRAY_TAG in value:
+            return data[value[_ARRAY_TAG]]
+        if isinstance(value, list):
+            return [decode(v) for v in value]
+        return value
+
+    return {k: decode(v) for k, v in json.loads(blob).items()}
+
 _ENV_ENABLE = "NBX_RENDER_CHECKPOINT"
 _ENV_EVERY = "NBX_RENDER_CHECKPOINT_EVERY"
 _DEFAULT_DIR = Path.home() / ".neurobrix" / "checkpoints"
@@ -101,8 +141,8 @@ class RenderCheckpoint:
 
     # --- read ---------------------------------------------------------------
 
-    def load(self) -> tuple[int, np.ndarray] | None:
-        """`(next_step_index, latent)` to resume from, or None to start fresh.
+    def load(self) -> tuple[int, np.ndarray, dict[str, Any]] | None:
+        """`(next_step_index, latent, scheduler_state)`, or None to start fresh.
 
         Returns None — never raises — for every "cannot resume" case: no
         checkpoint, a different run, or a file the cut left unreadable. The
@@ -122,13 +162,22 @@ class RenderCheckpoint:
                     return None
                 step = int(data["step"])
                 latent = data["latent"]
-        except (OSError, ValueError, KeyError, EOFError) as exc:
+                sched = _unflatten_state(str(data["sched"]), data)
+        except Exception as exc:  # noqa: BLE001 — deliberate, see below
+            # Deliberately broad. A checkpoint is INSURANCE on a render, and
+            # the correct response to every way of failing to read one is
+            # identical: start from step 0. A truncated npz alone can surface
+            # as OSError, ValueError, EOFError, KeyError or zipfile.BadZipFile
+            # depending on where the cut landed — enumerating them invites the
+            # one that was missed to abort a render that is otherwise fine.
+            # (BadZipFile is how it actually failed first; the test found it.)
+
             print(f"   [Checkpoint] {self.path.name} is unreadable ({exc}); "
                   f"starting from step 0.")
             return None
 
         print(f"   [Checkpoint] resuming at step {step + 1} from {self.path}")
-        return step + 1, latent
+        return step + 1, latent, sched
 
     # --- write --------------------------------------------------------------
 
@@ -136,7 +185,8 @@ class RenderCheckpoint:
         """Save on the interval, and always on the last step."""
         return (step_idx + 1) % self.every == 0 or step_idx == num_steps - 1
 
-    def save(self, step_idx: int, latent: np.ndarray) -> None:
+    def save(self, step_idx: int, latent: np.ndarray,
+             sched_state: dict[str, Any] | None = None) -> None:
         """Write step state atomically: temp file, then replace.
 
         A failure here is reported and swallowed: losing a checkpoint costs
@@ -146,8 +196,14 @@ class RenderCheckpoint:
         """
         tmp = self.path.with_suffix(".npz.tmp")
         try:
-            np.savez(tmp, step=np.int64(step_idx),
-                     fingerprint=np.str_(self.fingerprint), latent=latent)
+            blob, arrays = _flatten_state(sched_state or {})
+            # np.savez APPENDS ".npz" to a path that does not end in it, which
+            # would write beside the temp name and leave the rename with
+            # nothing to move. Handing it an open file keeps the name exact.
+            with open(tmp, "wb") as fh:
+                np.savez(fh, step=np.int64(step_idx),
+                         fingerprint=np.str_(self.fingerprint),
+                         sched=np.str_(blob), latent=latent, **arrays)
             os.replace(tmp, self.path)
         except (OSError, ValueError) as exc:
             print(f"   [Checkpoint] could not write step {step_idx}: {exc}")
