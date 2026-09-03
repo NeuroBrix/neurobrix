@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A clean install could not run a single model on many machines.** After
+  `pip install neurobrix`, the first run failed with
+  `autotune() got an unexpected keyword argument 'cache_results'`. The
+  engine used a Triton option that only exists in recent Triton versions,
+  while the install path documented in the README (`pip install torch
+  --index-url .../cu121`, needed by anyone on a pre-Ampere GPU) brings an
+  older one. NeuroBrix now adapts to the Triton it finds and says so once,
+  instead of crashing: results are identical, autotuning is simply
+  re-measured per process rather than cached to disk.
+
+- **`neurobrix doctor` now checks whether the engine can actually use your
+  GPU.** It used to check only that the command was on PATH and reported
+  "No action needed" even when PyTorch could not see the GPU at all. It now
+  reports the PyTorch and CUDA build, the driver, and each GPU — and when
+  the GPU cannot be used it says why and prints the exact command that
+  fixes it. This matters most on a plain `pip install neurobrix`: pip takes
+  whatever CUDA build is current, which may be newer than your driver, and
+  CUDA 13 dropped support for V100-class cards entirely. `doctor` now exits
+  non-zero when it finds something that will block a real run.
+
+- **`CUDA_VISIBLE_DEVICES` is now respected when choosing GPUs.** Hardware
+  detection listed every card in the machine and ignored the variable, so a
+  process restricted to one GPU could be planned onto a card it was not
+  allowed to use — failing with `invalid device ordinal` after the model had
+  already loaded, or running on a GPU the user had deliberately excluded.
+  Devices are now filtered and renumbered exactly as CUDA does, and a saved
+  automatic profile is regenerated when the visible GPUs change instead of
+  being reused.
+
+
 - **AMD Instinct MI200 and MI300 cards no longer fail before running
   anything.** NeuroBrix recognised these cards but had no matching
   hardware profile for them, so startup stopped with a missing-config

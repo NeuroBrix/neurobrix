@@ -28,6 +28,7 @@ Called when --hardware is omitted. Creates config/hardware/default.yml once.
 
 import platform
 import re
+import os
 import subprocess
 import yaml
 from pathlib import Path
@@ -161,6 +162,37 @@ _PCIE_BW_MAP = {
 # PUBLIC API
 # ============================================================================
 
+def _cached_profile_matches_visible_gpus() -> bool:
+    """True when the cached default profile still describes what this process
+    can see.
+
+    The profile is written once and reused, but the set of visible GPUs is a
+    property of the ENVIRONMENT, not of the machine: `CUDA_VISIBLE_DEVICES`
+    can change between two runs on the same host. Reusing a four-GPU profile
+    inside a process pinned to one card makes Prism place components on
+    ordinals that do not exist, and the CUDA runtime refuses with "invalid
+    device ordinal" — after the model has already been read from disk.
+
+    Compared on device count and models, which is what placement depends on.
+    Any doubt (unreadable or malformed cache) re-detects: detection is cheap
+    and a wrong profile is not.
+    """
+    try:
+        with open(DEFAULT_PROFILE_PATH) as fh:
+            cached = yaml.safe_load(fh) or {}
+    except (OSError, yaml.YAMLError):
+        return False
+
+    cached_gpus = [d.get("model") for d in (cached.get("devices") or [])]
+    try:
+        devices, _ = _detect_gpus(platform.system())
+        current_gpus = [d.get("model") for d in devices]
+    except Exception:
+        return True          # detection unavailable: keep the cache rather
+                             # than churn it on every run
+    return cached_gpus == current_gpus
+
+
 def get_or_create_default_profile() -> str:
     """
     Ensure default.yml exists in config/hardware/ (same dir as all profiles).
@@ -168,8 +200,12 @@ def get_or_create_default_profile() -> str:
     Returns:
         The hardware_id string "default" (usable with load_profile("default")).
     """
-    if DEFAULT_PROFILE_PATH.exists():
+    if DEFAULT_PROFILE_PATH.exists() and _cached_profile_matches_visible_gpus():
         return "default"
+
+    if DEFAULT_PROFILE_PATH.exists():
+        print("   [Auto-detect] Visible GPUs differ from the cached profile "
+              "(CUDA_VISIBLE_DEVICES changed?) — re-detecting.")
 
     print("   [Auto-detect] No --hardware specified, detecting system hardware...")
     profile_data = detect_hardware()
@@ -668,8 +704,36 @@ def _detect_gpus_windows() -> Tuple[List[Dict[str, Any]], str]:
 # GPU VENDOR PARSERS (shared by Linux + Windows where CLI is identical)
 # ============================================================================
 
+def _visible_device_filter() -> "Optional[List[int]]":
+    """Physical indices the process may actually use, per CUDA_VISIBLE_DEVICES.
+
+    `nvidia-smi` reports every card in the machine and ignores the variable
+    entirely. Prism planning on that raw list places components on devices
+    the process cannot address — the CUDA runtime then refuses with
+    "invalid device ordinal", or, worse, the user who deliberately pinned a
+    card watches work land on one they excluded.
+
+    Returns None when there is nothing to filter (variable unset, or set to
+    a form we will not guess at, such as GPU-UUID entries). CUDA itself
+    stops at the first entry it cannot parse, and so do we.
+    """
+    raw = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if raw is None:
+        return None
+    entries = [e.strip() for e in raw.split(",") if e.strip()]
+    if not entries:
+        return []                      # explicitly set to empty: no GPU visible
+    visible: List[int] = []
+    for entry in entries:
+        try:
+            visible.append(int(entry))
+        except ValueError:
+            return None                # UUID form — do not guess
+    return visible
+
+
 def _parse_nvidia_smi() -> List[Dict[str, Any]]:
-    """Detect NVIDIA GPUs via nvidia-smi."""
+    """Detect NVIDIA GPUs via nvidia-smi, restricted to the visible set."""
     try:
         result = subprocess.run(
             ["nvidia-smi",
@@ -711,6 +775,21 @@ def _parse_nvidia_smi() -> List[Dict[str, Any]]:
             "architecture": arch,
             "pcie_version": pcie_ver,
         })
+
+    # Restrict to CUDA_VISIBLE_DEVICES and RE-INDEX to the ordinals the
+    # process will really see: CUDA renumbers the visible set 0..N-1 in the
+    # order the variable lists them, so a plan built on physical indices
+    # would address the wrong card (or none).
+    visible = _visible_device_filter()
+    if visible is not None:
+        by_physical = {d["index"]: d for d in devices}
+        devices = []
+        for new_index, physical in enumerate(visible):
+            device = by_physical.get(physical)
+            if device is None:
+                break              # CUDA stops at the first invalid entry
+            device = dict(device, index=new_index, physical_index=physical)
+            devices.append(device)
 
     return devices
 

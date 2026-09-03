@@ -25,12 +25,14 @@ for the doctrinal exception.
 """
 
 import triton
+
+from ._configs import nbx_autotune
 import triton.language as tl
 
 from neurobrix.kernels.ops.matmul import _MATMUL_AUTOTUNE_CONFIGS
 
 
-@triton.autotune(configs=_MATMUL_AUTOTUNE_CONFIGS,
+@nbx_autotune(configs=_MATMUL_AUTOTUNE_CONFIGS,
                  key=['M', 'N', 'K', 'IEEE_PRECISION', 'PROMOTE_B',
                       'HAS_BIAS'],
                  cache_results=True)

@@ -5,11 +5,64 @@ V100 (sm_70) lacks cp.async — Triton's software pipelining with num_stages > 2
 emits async copy instructions that cause CUDA_ERROR_MISALIGNED_ADDRESS on Volta.
 """
 
+import inspect
+import warnings
 from typing import Dict, List
 
 import torch
 import triton
 from triton import next_power_of_2
+
+
+# ---------------------------------------------------------------------------
+# Autotune compatibility across Triton versions
+# ---------------------------------------------------------------------------
+
+_AUTOTUNE_DROPPED: set = set()
+
+
+def nbx_autotune(*args, **kwargs):
+    """`triton.autotune`, minus any keyword the installed Triton lacks.
+
+    NeuroBrix passes `cache_results=True` so autotune results persist to
+    disk instead of being re-measured every process. That keyword arrived
+    in a later Triton than the one `pip install torch --index-url .../cu121`
+    resolves (Triton 3.1 for torch 2.5), and passing it there raises
+
+        TypeError: autotune() got an unexpected keyword argument 'cache_results'
+
+    at the FIRST kernel launch — which made a clean install of NeuroBrix
+    unable to run a single model on any GPU whose torch build ships an
+    older Triton. That is what this shim exists to stop.
+
+    The degradation is real but bounded, and it is announced rather than
+    hidden: `cache_results` is a caching optimisation, so dropping it costs
+    one autotune sweep per process and changes no result. Anything that
+    would change a RESULT must never be dropped this way — it would be a
+    silent fallback, which this engine does not do.
+    """
+    import triton
+
+    try:
+        supported = set(inspect.signature(triton.autotune).parameters)
+    except (TypeError, ValueError):
+        return triton.autotune(*args, **kwargs)
+
+    unsupported = {k for k in kwargs if k not in supported}
+    if unsupported:
+        for name in sorted(unsupported - _AUTOTUNE_DROPPED):
+            _AUTOTUNE_DROPPED.add(name)
+            warnings.warn(
+                f"Triton {getattr(triton, '__version__', '?')} does not support "
+                f"@triton.autotune({name}=...); continuing without it. "
+                f"Autotune results will be re-measured once per process instead "
+                f"of persisted to disk (slower first launch, identical results). "
+                f"Triton 3.6+ restores it.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        kwargs = {k: v for k, v in kwargs.items() if k not in unsupported}
+    return triton.autotune(*args, **kwargs)
 
 
 def _safe_num_stages(n: int) -> int:
