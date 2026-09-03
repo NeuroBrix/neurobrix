@@ -213,3 +213,55 @@ def test_every_profile_declares_what_the_reference_declares(path):
         + f"\n\nEither add the key, or add it to _MAY_OMIT in this file with "
           f"the reason it does not apply to this architecture."
     )
+
+
+# --- the resolver must agree with runtime detection -------------------------
+
+def test_capability_resolution_covers_more_than_three_cards(monkeypatch):
+    """Only three NVIDIA profiles exist (7.0, 8.0, 9.0). Matching the
+    capability EXACTLY therefore covered V100, A100 and H100 and nothing else:
+    a T4 (7.5), an A10 or 3090 (8.6), and an L4 or 4090 (8.9) resolved to no
+    profile and got no filtering at all.
+
+    Prism's runtime detection maps these by capability MAJOR
+    (`_NVIDIA_ARCH_MAP`: "8" -> ampere), so a card whose runtime profile is
+    ampere while its autotune space was chosen as if no profile existed is a
+    disagreement inside the engine about its own hardware.
+    """
+    import types
+
+    from neurobrix.kernels.ops import _configs
+
+    def fake_target(sm):
+        mod = types.SimpleNamespace(
+            runtime=types.SimpleNamespace(
+                driver=types.SimpleNamespace(
+                    active=types.SimpleNamespace(
+                        get_current_target=lambda: types.SimpleNamespace(arch=sm)))))
+        return mod
+
+    import sys
+    for sm, expect in ((70, "nvidia/volta"), (75, "nvidia/volta"),
+                       (80, "nvidia/ampere"), (86, "nvidia/ampere"),
+                       (89, "nvidia/ampere"), (90, "nvidia/hopper")):
+        monkeypatch.setitem(sys.modules, "triton", fake_target(sm))
+        got = _configs.arch_smem_budget()
+        vendor, arch = expect.split("/")
+        assert got == _budget(vendor, arch), (
+            f"sm_{sm} resolved to {got}, expected {expect}'s "
+            f"{_budget(vendor, arch)}")
+
+
+def test_an_unknown_capability_still_declines_to_guess(monkeypatch):
+    """A major with no profile at all must return None, not the nearest
+    number — filtering on an invented budget deletes working configs."""
+    import sys
+    import types
+
+    from neurobrix.kernels.ops import _configs
+
+    monkeypatch.setitem(sys.modules, "triton", types.SimpleNamespace(
+        runtime=types.SimpleNamespace(driver=types.SimpleNamespace(
+            active=types.SimpleNamespace(
+                get_current_target=lambda: types.SimpleNamespace(arch=30))))))
+    assert _configs.arch_smem_budget() is None
