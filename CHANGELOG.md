@@ -7,9 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-09-03
+
+This release exists for one reason: a clean `pip install neurobrix` could
+not run a single model on a large class of machines, and had not been able
+to since v0.3.0. The new-user path was walked by hand from an empty
+virtualenv and was broken three times over — the first-run crash below, a
+`doctor` command that reported no problem while PyTorch could not see the
+GPU at all, and GPU pinning being ignored. All three are fixed and the
+whole path is verified end to end: install, diagnose, fix, import, first
+generation.
+
 ### Fixed
 
-- **A clean install could not run a single model on many machines.** After
+- **A clean install could not run a single model on many machines — present
+  in every release since v0.3.0 (2026-07-07).** After
   `pip install neurobrix`, the first run failed with
   `autotune() got an unexpected keyword argument 'cache_results'`. The
   engine used a Triton option that only exists in recent Triton versions,
