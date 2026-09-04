@@ -26,9 +26,44 @@ def checkpoint(tmp_path, monkeypatch):
 
 # --- enable / disable -------------------------------------------------------
 
-def test_disabled_by_default(monkeypatch):
+def test_ENABLED_by_default(monkeypatch, tmp_path):
+    """POLICY REVERSED 2026-09-04, on the supervisor's instruction.
+
+    It was off unless asked for. The rack has one breaker and no UPS, and a cut
+    at hour thirteen of a fourteen-hour render loses everything — so a resume
+    point that must be remembered is one nobody has when they need it.
+
+    The cost objection that justified opt-in is answered by the TIME GATE
+    instead (below): a render finishing inside the interval writes nothing.
+    """
     monkeypatch.delenv("NBX_RENDER_CHECKPOINT", raising=False)
-    assert RenderCheckpoint.from_env(model="m", num_steps=8) is None
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert RenderCheckpoint.from_env(model="m", num_steps=8) is not None
+
+
+def test_a_short_render_writes_nothing(monkeypatch, tmp_path):
+    """Default-on must not mean every render pays. The save is gated on
+    ELAPSED TIME, so a render that finishes inside the gate never writes —
+    which is what makes 'always on' affordable."""
+    monkeypatch.setenv("NBX_RENDER_CHECKPOINT", str(tmp_path))
+    monkeypatch.delenv("NBX_RENDER_CHECKPOINT_EVERY", raising=False)
+    ck = RenderCheckpoint.from_env(model="m", num_steps=20)
+    assert ck is not None and ck.min_interval_s > 0
+    assert [i for i in range(19) if ck.should_save(i, 20)] == [], (
+        "a render finishing inside the time gate must not write at all")
+
+
+def test_an_explicit_step_interval_overrides_the_time_gate(monkeypatch, tmp_path):
+    """Asking for every N steps is asking for every N steps."""
+    monkeypatch.setenv("NBX_RENDER_CHECKPOINT", str(tmp_path))
+    monkeypatch.setenv("NBX_RENDER_CHECKPOINT_EVERY", "4")
+    ck = RenderCheckpoint.from_env(model="m", num_steps=20)
+    assert ck is not None and ck.min_interval_s == 0
+
+
+def test_a_one_step_render_has_nothing_to_resume_into(monkeypatch, tmp_path):
+    monkeypatch.setenv("NBX_RENDER_CHECKPOINT", str(tmp_path))
+    assert RenderCheckpoint.from_env(model="m", num_steps=1) is None
 
 
 def test_explicit_zero_is_disabled(monkeypatch):
