@@ -142,18 +142,24 @@ configure_fp16_matmul_precision()
 #     the output dtype, so the only overflow site is the fp16 result — a
 #     property of the model's activations that its vendor has already
 #     answered (a torch_dtype=float16 recipe, a keep-in-fp32 module list).
-#     `activations_fp16_safe` (resolved per component by the executor from
-#     the backbone contract in config/dtype_contracts.yml and the registry
-#     flag of the same name — the flag the triton engine already reads)
+#     `activations_fp16_safe` (resolved per component by
+#     core/runtime/precision_contract.py from the registry flag and the
+#     backbone contract; the triton engine consumes the registry flag only
+#     until it carries per-op pins — D-PRECISION-CONTRACT-TRITON-PARITY)
 #     means "the vendor runs this component's forward in plain fp16 and
 #     its activations fit". Under it: mm/bmm/addmm take PyTorch AMP's own
 #     fp16 path (the tensor-core path, 8x the fp32 rate on sm_70); the
 #     FP32-class ops whose fp16 kernels already accumulate in fp32
-#     (layer_norm, group_norm, softmax) take fp16 IO like the vendor's;
-#     every other FP32-class op and the epsilon-protected `div` keep fp32
-#     COMPUTE but store fp16, so an fp32 output no longer drags the rest
-#     of the layer into fp32 (measured 2026-09-04: 1.3 s of fp32
-#     elementwise + 4,300 cast copies per 20-step PixArt request).
+#     (layer_norm, group_norm, softmax) take fp16 IO — the kernels the
+#     vendor's plain-fp16 forward runs; every other FP32-class op and the
+#     epsilon-protected `div` keep fp32 COMPUTE but store fp16 (more
+#     precise per op than the vendor's fp16, and the fp32 output no longer
+#     drags the rest of the layer into fp32 — measured 2026-09-04: 1.3 s
+#     of fp32 elementwise + 4,300 cast copies per 20-step PixArt request).
+#     NOT narrowed: the guarded square `x*x` (its fp32 output IS the
+#     protection — mean/rsqrt consume it in fp32, the next FP16 op casts)
+#     and plain `mul` (a passthrough: an fp32 operand there is a vendor
+#     island the graph marked with an explicit fp32 `_to_copy`).
 #     `fp32_op_uids` pins the individual ops the vendor keeps in fp32
 #     (T5 `wo`) whatever the contract and whatever the AMP gate.
 # ============================================================================
@@ -505,8 +511,9 @@ class DtypeEngine:
             # range equals fp32's, so no guard is installed. See
             # _make_square_safe_mul.
             if op_name == "mul" and self.compute_dtype == torch.float16:
-                guarded = self._make_square_safe_mul(func)
-                return self._make_store_in_compute_dtype(guarded) if contract else guarded
+                # Never narrowed under the contract: the guard's fp32 output
+                # is the protection (x*x > 65504 stored fp16 = inf).
+                return self._make_square_safe_mul(func)
 
         return func
 
@@ -941,9 +948,10 @@ class DtypeEngine:
 
         Standard PyTorch AMP does no output processing. Under the
         activations_fp16_safe contract the fp32-COMPUTED ops (FP32-class
-        ops that are not half-IO kernels, `div`, the guarded square) store
-        their result in compute_dtype — same rule as compile_op. Vendor
-        fp32 pins (fp32_op_uids) keep their fp32 result.
+        ops that are not half-IO kernels, and `div`) store their result in
+        compute_dtype — same rule as compile_op; `mul` (the guarded square
+        included) is never narrowed. Vendor fp32 pins (fp32_op_uids) keep
+        their fp32 result.
         """
         if not (self.activations_fp16_safe and self.compute_dtype == torch.float16):
             return result
@@ -951,7 +959,7 @@ class DtypeEngine:
             return result
         op_name = strip_aten_prefix(op_type)
         if ((op_name in AMP_FP32_OPS and op_name not in _FP32_OPS_HALF_IO)
-                or op_name == "div" or op_name == "mul"):
+                or op_name == "div"):
             return self._to_compute_dtype(result)
         return result
 
