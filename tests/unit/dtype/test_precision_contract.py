@@ -5,6 +5,7 @@ every component without a declared contract; a declared-safe component
 takes PyTorch AMP's fp16 path; a vendor keep-in-fp32 pin wins over both.
 Lever record: validation_outputs/image_fp16_2026_09_04.
 """
+import pytest
 import torch
 
 from neurobrix.core.config.loader import get_backbone_dtype_contract
@@ -103,10 +104,13 @@ def test_executor_resolver_pins_matmuls_by_parent_module_suffix(tmp_path):
         "aten.mm::1": {"op_type": "aten::mm", "parent_module": "encoder.block.0.block.1.ffn.up_0"},
         "aten.mm::2": {"op_type": "aten::mm", "parent_module": "encoder.block.0.block.0.attn.down"},
         "aten.add::0": {"op_type": "aten::add", "parent_module": "encoder.block.0.block.1.ffn.down"},
+        "aten.view::0": {"op_type": "aten::view", "parent_module": "encoder.block.0.block.1.ffn.down"},
+        "aten.add_::0": {"op_type": "aten::add_", "parent_module": "encoder.block.0.block.1.ffn.down"},
     }}
     safe, pinned = ex._resolve_fp16_activation_policy(torch.float16)
     assert safe is True
-    assert pinned == frozenset({"aten.mm::0", "aten.add::0"})   # the whole module, every op class
+    # every COMPUTE op of the module; never a view (no kernel) nor an in-place op
+    assert pinned == frozenset({"aten.mm::0", "aten.add::0"})
     # a per-model registry list unions with the contract (monkeypatched flag reader)
     import neurobrix.core.runtime.graph_executor as GE
     from neurobrix.core.runtime import registry_flags as RF
@@ -160,7 +164,18 @@ def test_sequential_mirror_of_the_contract():
     assert eng.amp_cast_inputs("aten::native_layer_norm", [x])[0].dtype == torch.float16
     assert eng.amp_cast_result("aten::exp", x).dtype == torch.float16
     assert eng.amp_cast_result("aten::exp", x, op_uid="aten.exp::9").dtype == torch.float32
+    assert eng.amp_cast_result("aten::mul", x).dtype == torch.float32   # never narrowed
     assert DtypeEngine(torch.float16).amp_cast_result("aten::exp", x).dtype == torch.float32
+
+
+def test_guarded_square_keeps_its_fp32_output_under_the_contract():
+    eng = DtypeEngine(torch.float16, activations_fp16_safe=True)
+    mul = eng.compile_op("aten::mul", torch.mul, {})
+    x = torch.full((4,), 300.0, dtype=torch.float16)      # x*x = 90000 > 65504
+    out = mul(x, x)
+    assert out.dtype == torch.float32 and torch.isfinite(out).all()
+    y = torch.randn(4, dtype=torch.float16)
+    assert mul(x, y).dtype == torch.float16                 # plain mul: passthrough
 
 
 def test_fnmatch_pattern_pins_block_level_ops_only(tmp_path):
@@ -196,3 +211,12 @@ def test_pin_applies_to_pass_through_op_classes():
     x = torch.randn(4, dtype=torch.float16)
     assert eng.compile_op("aten::add", torch.add, {}, op_uid="aten.add::7")(x, x).dtype == torch.float32
     assert eng.compile_op("aten::add", torch.add, {}, op_uid="aten.add::8")(x, x).dtype == torch.float16
+
+
+def test_broken_manifest_raises_instead_of_defaulting(tmp_path):
+    from neurobrix.core.runtime.precision_contract import registry_model_name
+    cache = tmp_path / "ModelZ"; cache.mkdir()
+    (cache / "manifest.json").write_text("{not json")
+    with pytest.raises(ValueError):
+        registry_model_name(str(cache))
+    assert registry_model_name(None) is None
