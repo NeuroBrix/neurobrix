@@ -1,0 +1,56 @@
+# ============================================================================
+# DTYPE CONTRACTS — per-BACKBONE half-precision facts, sourced from the vendor
+# ============================================================================
+#
+# Read by graph_executor._resolve_fp16_activation_policy() through
+# core.config.loader.get_backbone_dtype_contract(). Keyed by the component
+# backbone recorded in manifest.json (taxonomy, never a model name).
+#
+# Why this file exists. On fp16-only hardware (V100) the compiled DtypeEngine
+# keeps matrix multiplies in fp32 by default: the product accumulates in fp32
+# inside cuBLAS whatever the input dtype, but the STORED fp16 output overflows
+# at 65504 — a property of the model's activations, not of the arithmetic.
+# Vendors ship a per-architecture answer to that risk (a torch_dtype=float16
+# recipe, or a keep-in-fp32 module list). This file carries those answers as
+# data so the engine can run the vendor's precision on the vendor's terms and
+# take the tensor-core path (8x the fp32 rate on sm_70) where the vendor does.
+#
+# A backbone absent from this file keeps the conservative default (fp32
+# matmul on fp16 hardware). The per-model registry flag `activations_fp16_safe`
+# overrides the contract in either direction (manual > contract).
+#
+# Fields per backbone:
+#   activations_fp16_safe : true = the vendor runs this component in plain
+#                           fp16 (matmuls fp16-out, norms fp16-IO, fp32-computed
+#                           ops stored fp16); same flag name as the registry
+#   keep_in_fp32_modules  : parent_module SUFFIXES whose matmuls stay fp32
+#                           (the vendor's keep-in-fp32 list in NeuroTax names)
+#   source                : where the fact was read (R16)
+# ============================================================================
+
+backbones:
+  diffusion_transformer_spatial:
+    # PixArt-alpha / PixArt-Sigma DiT. Vendor recipe: the whole pipeline at
+    # torch_dtype=float16 (HF model card, diffusers PixArtSigmaPipeline docs).
+    # Locked-slot 2026-08-30 diffusers arm rendered fp16 clean (R29).
+    activations_fp16_safe: true
+    source: "huggingface.co/PixArt-alpha/PixArt-Sigma-XL-2-1024-MS model card; diffusers arm 2026-08-30"
+
+  text_encoder_t5:
+    # T5 / T5-v1.1 / UMT5 encoders. transformers keeps the feed-forward
+    # OUTPUT projection in fp32 (`_keep_in_fp32_modules = ["wo"]`): its
+    # fp16 output overflows — measured 2026-09-04 on PixArt-Sigma, first
+    # non-finite op aten::mm [300,10240]x[10240,4096], 11 inf elements
+    # (validation_outputs/image_fp16_2026_09_04). NeuroTax names that
+    # projection `ffn.down`. Every other matmul of the encoder is the
+    # vendor's fp16.
+    activations_fp16_safe: true
+    keep_in_fp32_modules: ["ffn.down"]
+    source: "transformers/models/t5/modeling_t5.py _keep_in_fp32_modules; diffusers issues #8604 #8612"
+
+  diffusion_transformer_flux:
+    # FLUX-class DiT (Flex.1-alpha). Vendor recipe on Volta/Turing: the
+    # transformer at torch_dtype=float16, text encoders fp32, cpu offload
+    # (HF Flux docs; diffusers arm 2026-08-30 S3, rendered clean R29).
+    activations_fp16_safe: true
+    source: "huggingface.co/docs/diffusers/api/pipelines/flux (fp16 on Turing/Volta note); diffusers arm 2026-08-30"

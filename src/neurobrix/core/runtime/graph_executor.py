@@ -854,8 +854,15 @@ class GraphExecutor:
             # and by zero3 offload.
             if str(getattr(self, "device", "") or "").startswith("cpu"):
                 compute_dtype = torch.float32
+            # Precision contract of THIS component (vendor facts as data:
+            # config/dtype_contracts.yml by backbone, registry flag by
+            # model). See DtypeEngine header.
+            self._activations_fp16_safe, self._fp32_op_uids = \
+                self._resolve_fp16_activation_policy(compute_dtype)
             self._dtype_engine = DtypeEngine(compute_dtype, graph_dtype=self._graph_dtype,
-                                             amp_enabled=amp_enabled)
+                                             amp_enabled=amp_enabled,
+                                             activations_fp16_safe=self._activations_fp16_safe,
+                                             fp32_op_uids=self._fp32_op_uids)
         else:
             self._dtype_engine = None  # Triton uses TritonDtypeEngine in sequence.py
 
@@ -1020,6 +1027,113 @@ class GraphExecutor:
         # after __init__. Compiling here wastes time — it gets recompiled on interceptor
         # registration. Instead, _execute_compiled_graph() handles: _compiled_seq is None → compile.
 
+    def _registry_model_name(self):
+        """The name registry flags are keyed by: the manifest's model_name
+        (the vendor's), falling back to the cache directory name.
+
+        A hub-slug install (`Sana-1600M-MultiLing`) has a directory name
+        that differs from the registry key (`Sana_1600M_1024px_MultiLing`),
+        so a lookup by directory name silently resolved every flag to its
+        default (2026-09-04, found while resolving the matmul contract).
+        """
+        cache_path = getattr(self, "_cache_path", None)
+        if cache_path is None:
+            return None
+        manifest_path = Path(cache_path) / "manifest.json"
+        if manifest_path.exists():
+            try:
+                name = json.loads(manifest_path.read_text()).get("model_name")
+                if name:
+                    return name
+            except (OSError, ValueError):
+                pass
+        return Path(cache_path).name
+
+    def _resolve_fp16_activation_policy(self, compute_dtype) -> tuple:
+        """Precision contract of this component on this hardware.
+
+        Returns (activations_fp16_safe, fp32_op_uids) for the DtypeEngine:
+
+        * activations_fp16_safe — does the vendor run this component in
+          plain fp16 (matmuls fp16-in/fp16-out on the tensor-core path,
+          norms with fp16 IO, fp32-computed ops stored fp16) instead of
+          the conservative fp32 upcasts the engine applies on fp16-only
+          hardware? Sources, in precedence order: the per-model registry
+          flag `activations_fp16_safe` (env NBX_ACTIVATIONS_FP16_SAFE —
+          the flag the triton engine reads for the same fact) > the
+          backbone contract in config/dtype_contracts.yml > False. Absent
+          everywhere = False = the behaviour every undeclared component
+          has always had.
+        * fp32_op_uids — the matmuls the vendor keeps in fp32 whatever the
+          contract (contract `keep_in_fp32_modules`, matched as suffixes
+          of the op's `parent_module` in graph.json — T5 `ffn.down`).
+
+        Only meaningful when the component computes in fp16: on bf16 or
+        fp32 compute the engine never upcasts matmuls, so the contract is
+        moot and the default is returned without reading anything.
+        """
+        if compute_dtype != torch.float16:
+            return False, frozenset()
+        from neurobrix.core.config.loader import get_backbone_dtype_contract
+        from neurobrix.core.runtime.registry_flags import get_component_flag
+
+        model_name = None
+        backbone = None
+        cache_path = getattr(self, "_cache_path", None)
+        if cache_path is not None:
+            # Registry entries are keyed by the model's own name, which the
+            # manifest records; the cache DIRECTORY carries the hub slug
+            # (Sana-1600M-MultiLing vs Sana_1600M_1024px_MultiLing) and
+            # matches nothing — see _registry_model_name.
+            model_name = self._registry_model_name()
+            manifest_path = Path(cache_path) / "manifest.json"
+            if manifest_path.exists():
+                manifest = json.loads(manifest_path.read_text())
+                comp = (manifest.get("components") or {}).get(self._component_name) or {}
+                backbone = comp.get("backbone") if isinstance(comp, dict) else None
+
+        contract = get_backbone_dtype_contract(backbone)
+        safe = get_component_flag(model_name, self._component_name, "activations_fp16_safe",
+                                  default=None, env_override="NBX_ACTIVATIONS_FP16_SAFE")
+        if safe is None:
+            safe = bool(contract.get("activations_fp16_safe", False))
+        safe = bool(safe)
+
+        pinned = set()
+        # The vendor's keep-in-fp32 list: backbone contract ∪ per-model
+        # registry list (`keep_in_fp32_modules`, for components whose
+        # manifest backbone is 'unknown' — Sana's linear attention computes
+        # value·keyᵀ and scores·query in an explicit fp32 island that an
+        # fp32 trace elides; NeuroTax module `self_attn`).
+        registry_list = get_component_flag(model_name, self._component_name,
+                                           "keep_in_fp32_modules", default=None)
+        suffixes = tuple(contract.get("keep_in_fp32_modules") or ())
+        if isinstance(registry_list, (list, tuple)):
+            suffixes = suffixes + tuple(str(x) for x in registry_list)
+        if suffixes:
+            # A pattern names a MODULE: every op the module owns stays fp32,
+            # whatever its type — the vendor casts a region, not an op
+            # (Sana: value·keyᵀ, scores·query, the +1e-15 and the division
+            # all sit in one float32 island). Two spellings: a plain
+            # suffix (`ffn.down` = the module and nothing below it) or an
+            # fnmatch pattern on the full module path (`block.[0-9]*`).
+            import fnmatch
+            for op_uid, op_data in (self._dag.get("ops") or {}).items():
+                parent = op_data.get("parent_module") or ""
+                for pat in suffixes:
+                    if any(ch in pat for ch in "*?["):
+                        hit = fnmatch.fnmatchcase(parent, pat)
+                    else:
+                        hit = parent == pat or parent.endswith("." + pat)
+                    if hit:
+                        pinned.add(op_uid)
+                        break
+        if safe or pinned:
+            print(f"[DtypeEngine] {self._component_name}: precision contract "
+                  f"activations_fp16_safe={safe} (backbone={backbone}), "
+                  f"{len(pinned)} op(s) pinned fp32 by the vendor's keep-in-fp32 list")
+        return safe, frozenset(pinned)
+
     def _should_enable_amp(self) -> bool:
         """Determine whether AMP should be enabled for this component.
 
@@ -1172,6 +1286,8 @@ class GraphExecutor:
             amp_enabled=self._dtype_engine.amp_enabled,
             use_triton=(self.mode == "triton"),
             config_constants=self._resolve_config_constants(),
+            activations_fp16_safe=self._dtype_engine.activations_fp16_safe,
+            fp32_op_uids=self._dtype_engine.fp32_op_uids,
         )
 
         # Register any op interceptors BEFORE compilation (Phase 2.2: KV cache support)
@@ -2105,12 +2221,7 @@ class GraphExecutor:
         # instead of self._pkg.cache_path (which doesn't exist on
         # GraphExecutor — pre-existing latent bug).
         from neurobrix.core.runtime.registry_flags import get_component_flag
-        _seq_model_name = None
-        try:
-            if getattr(self, '_cache_path', None) is not None:
-                _seq_model_name = Path(self._cache_path).name
-        except Exception:
-            pass
+        _seq_model_name = self._registry_model_name()
         _seq_fp16_safe = get_component_flag(
             _seq_model_name, self._component_name,
             "activations_fp16_safe", default=False,
@@ -2852,12 +2963,7 @@ class GraphExecutor:
         # default False, neutralising every activations_fp16_safe
         # annotation in the registry until now).
         from neurobrix.core.runtime.registry_flags import get_component_flag
-        _model_name = None
-        try:
-            if getattr(self, '_cache_path', None) is not None:
-                _model_name = Path(self._cache_path).name
-        except Exception:
-            pass
+        _model_name = self._registry_model_name()
         _fp16_safe = get_component_flag(
             _model_name, self._component_name,
             "activations_fp16_safe", default=False,
@@ -3997,7 +4103,8 @@ class GraphExecutor:
             normalized_inputs[0] = resolved_inputs[0]
 
         # AMP: Cast inputs per DtypeEngine rules (fp32 for pow/rsqrt/softmax, etc.)
-        normalized_inputs = self._dtype_engine.amp_cast_inputs(op_type, normalized_inputs)
+        normalized_inputs = self._dtype_engine.amp_cast_inputs(op_type, normalized_inputs,
+                                                               op_uid=op_uid)
 
         # Check for op interceptors. Priority order matches CompiledSequence
         # and TritonSequence: op_uid (fine-grained, op-level tiling Prism)
@@ -4028,7 +4135,7 @@ class GraphExecutor:
             result = self._sequential_dispatcher.dispatch(op_type, normalized_inputs, attrs)
 
         # AMP: Post-process result (overflow protection, inf clamping)
-        result = self._dtype_engine.amp_cast_result(op_type, result)
+        result = self._dtype_engine.amp_cast_result(op_type, result, op_uid=op_uid)
 
         # === NBX_DUMP_RAW (sequential path, default-off) ===
         # "<dir>:<csv of tid/op_uid substrings>" — saves matching outputs as

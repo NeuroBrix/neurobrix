@@ -3750,7 +3750,24 @@ class PrismSolver:
         if os.environ.get("NBX_DISABLE_AUTO_FP32", "0") == "1":
             return forced
         auto = self._auto_fp32_components(container, profile, family)
-        return forced | auto
+        # (3) A conv-cascade component the registry DECLARES fp16-safe
+        # (`fp16_conv_cascade_safe`) is exempt from the auto pin: the pin
+        # is a structural GUESS at overflow risk, the flag is a measured
+        # fact — manual wins in this direction too. Its OWN flag, not
+        # `activations_fp16_safe`: that one carries the triton cast-back
+        # meaning and is set on the Sana DC-AE, whose fp16 decode renders
+        # BLACK in compiled mode (2026-09-04, sana_G3) — the two facts are
+        # not the same fact. Gate that motivated the exemption: PixArt-Sigma
+        # VAE fp16 vs fp32 at 1024², PSNR 59.5 dB, no non-finite
+        # (validation_outputs/image_fp16_2026_09_04). Manual fp32 pins (1)
+        # are never removed by it.
+        declared_safe = {
+            comp.name for comp in container.get_neural_components()
+            if comp.name not in forced and get_component_flag(
+                model_name, comp.name, "fp16_conv_cascade_safe", default=False,
+                env_override="NBX_FP16_CONV_CASCADE_SAFE")
+        }
+        return forced | (auto - declared_safe)
 
     def _auto_fp32_components(self, container: "NBXContainer",
                               profile: "Optional[PrismProfile]",

@@ -51,6 +51,31 @@ def get_family_config(family: str) -> Dict[str, Any]:
         return yaml.safe_load(f)
 
 
+@lru_cache(maxsize=1)
+def get_dtype_contracts() -> Dict[str, Any]:
+    """Load config/dtype_contracts.yml (per-backbone half-precision facts).
+
+    ZERO FALLBACK: a missing file raises — the engine never guesses a
+    precision contract. An absent BACKBONE inside the file is legitimate
+    (see get_backbone_dtype_contract).
+    """
+    config_path = CONFIG_ROOT / "dtype_contracts.yml"
+    if not config_path.exists():
+        raise FileNotFoundError(
+            f"ZERO FALLBACK: dtype contracts not found: {config_path}"
+        )
+    with open(config_path) as f:
+        return yaml.safe_load(f) or {}
+
+
+def get_backbone_dtype_contract(backbone: Optional[str]) -> Dict[str, Any]:
+    """Return the dtype contract of one backbone, or {} when the backbone
+    is unknown / not listed (the conservative default applies then)."""
+    if not backbone:
+        return {}
+    return dict((get_dtype_contracts().get("backbones") or {}).get(backbone) or {})
+
+
 class UnsupportedArchitectureError(FileNotFoundError):
     """No hardware profile describes the detected GPU.
 

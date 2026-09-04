@@ -203,12 +203,10 @@ rows:
     family: image
     metric_class: image
     reference: true
-    env:
-      # F1 drift verdict (Hocine 2026-08-15): thr=0.15 = ROW DEFAULT
-      # (0.25 = opt-up per row only, never a default without
-      # re-inspection). validation_outputs/f1_step_cache_2026_08_13/.
-      NBX_STEP_CACHE_THRESHOLD: "0.15"
-      NBX_STEP_CACHE_MAX_SKIPS: "3"
+    # 2026-09-04: the NBX_STEP_CACHE_* pins (0.15 / 3) that rode these rows since
+    # the F1 campaign are REMOVED — the verbatim-reuse cache skips 12/20 steps and
+    # fails the quality gate (PSNR 9.8 dB vs cache-off; one skip already 17.5 dB),
+    # and the diffusers arm never carried it. validation_outputs/image_fp16_2026_09_04.
     checkpoint: Efficient-Large-Model/Sana_1600M_1024px_MultiLing
     diffusers_checkpoint: Efficient-Large-Model/Sana_1600M_1024px_MultiLing_diffusers
     # 2026-08-26: local artifact renamed to the hub slug — the legacy
@@ -227,9 +225,10 @@ rows:
     family: image
     metric_class: image
     reference: true
-    env:
-      NBX_STEP_CACHE_THRESHOLD: "0.15"
-      NBX_STEP_CACHE_MAX_SKIPS: "3"
+    # 2026-09-04: the NBX_STEP_CACHE_* pins (0.15 / 3) that rode these rows since
+    # the F1 campaign are REMOVED — the verbatim-reuse cache skips 12/20 steps and
+    # fails the quality gate (PSNR 9.8 dB vs cache-off; one skip already 17.5 dB),
+    # and the diffusers arm never carried it. validation_outputs/image_fp16_2026_09_04.
     checkpoint: PixArt/PixArt-XL-1024
     diffusers_checkpoint: /home/mlops/hf_snapshots/PixArt-XL-2-1024-MS
     neurobrix_model: PixArt-XL-1024
@@ -244,9 +243,10 @@ rows:
     family: image
     metric_class: image
     reference: true
-    env:
-      NBX_STEP_CACHE_THRESHOLD: "0.15"
-      NBX_STEP_CACHE_MAX_SKIPS: "3"
+    # 2026-09-04: the NBX_STEP_CACHE_* pins (0.15 / 3) that rode these rows since
+    # the F1 campaign are REMOVED — the verbatim-reuse cache skips 12/20 steps and
+    # fails the quality gate (PSNR 9.8 dB vs cache-off; one skip already 17.5 dB),
+    # and the diffusers arm never carried it. validation_outputs/image_fp16_2026_09_04.
     checkpoint: PixArt/PixArt-Sigma-XL-1024
     diffusers_checkpoint: /home/mlops/hf_snapshots/PixArt-Sigma-XL-2-1024-MS
     neurobrix_model: PixArt-Sigma-XL-1024

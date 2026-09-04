@@ -135,8 +135,27 @@ configure_fp16_matmul_precision()
 #     bf16 has fp32 exponent range (±3.4e38). Overflow impossible.
 #     All wrappers are pure input-cast only — zero Python overhead.
 #   - fp16 hardware (V100): TARGETED fp32 upcast on _FP16_NEED_FP32
-#     only (bmm, div, addmm). All other ops get clean input-cast wrappers.
-#     fp32 preserves tiny epsilons and prevents accumulation overflow.
+#     only (mm, bmm, addmm, div). All other ops get clean input-cast wrappers.
+#     fp32 preserves tiny epsilons and prevents the fp16 STORE overflow.
+#   - The matmul part of that upcast is a conservative DEFAULT, not a law
+#     of the arithmetic: cuBLAS accumulates fp16 products in fp32 whatever
+#     the output dtype, so the only overflow site is the fp16 result — a
+#     property of the model's activations that its vendor has already
+#     answered (a torch_dtype=float16 recipe, a keep-in-fp32 module list).
+#     `activations_fp16_safe` (resolved per component by the executor from
+#     the backbone contract in config/dtype_contracts.yml and the registry
+#     flag of the same name — the flag the triton engine already reads)
+#     means "the vendor runs this component's forward in plain fp16 and
+#     its activations fit". Under it: mm/bmm/addmm take PyTorch AMP's own
+#     fp16 path (the tensor-core path, 8x the fp32 rate on sm_70); the
+#     FP32-class ops whose fp16 kernels already accumulate in fp32
+#     (layer_norm, group_norm, softmax) take fp16 IO like the vendor's;
+#     every other FP32-class op and the epsilon-protected `div` keep fp32
+#     COMPUTE but store fp16, so an fp32 output no longer drags the rest
+#     of the layer into fp32 (measured 2026-09-04: 1.3 s of fp32
+#     elementwise + 4,300 cast copies per 20-step PixArt request).
+#     `fp32_op_uids` pins the individual ops the vendor keeps in fp32
+#     (T5 `wo`) whatever the contract and whatever the AMP gate.
 # ============================================================================
 
 # Ops with NO fp16 kernel on the CPU backend.
@@ -266,6 +285,21 @@ AMP_FP16_OPS: FrozenSet[str] = frozenset({
 # NOT a separate concept — this is a conditional refinement of AMP_FP16_OPS.
 _FP16_NEED_FP32: FrozenSet[str] = frozenset({"mm", "bmm", "div", "addmm"})
 
+# The matmul members of _FP16_NEED_FP32. Their fp32 upcast is lifted per
+# component when the vendor's precision contract says the activations fit
+# fp16 (DtypeEngine.activations_fp16_safe); `div` keeps its fp32 compute
+# always and only stores fp16 under the contract.
+_FP16_GEMM_OPS: FrozenSet[str] = frozenset({"mm", "bmm", "addmm"})
+
+# FP32-class ops whose fp16 CUDA kernels accumulate in fp32 internally
+# (vectorized_layer_norm_kernel<Half, float>, RowwiseMoments<Half>,
+# cunn_SoftMaxForward<..., float>): under the contract they take fp16 IO —
+# the vendor's plain-fp16 forward runs exactly these kernels.
+_FP32_OPS_HALF_IO: FrozenSet[str] = frozenset({
+    "native_layer_norm", "layer_norm", "native_group_norm", "group_norm",
+    "_softmax", "softmax", "_log_softmax", "log_softmax",
+})
+
 # Ops that promote to widest input type.
 # From AT_FORALL_PROMOTE. (PyTorch 100% match — all 11 ops)
 AMP_PROMOTE_OPS: FrozenSet[str] = frozenset({
@@ -354,16 +388,25 @@ class DtypeEngine:
     """
 
     def __init__(self, compute_dtype: Optional[torch.dtype], graph_dtype: Optional[torch.dtype] = None,
-                 amp_enabled: bool = True):
+                 amp_enabled: bool = True, activations_fp16_safe: bool = False,
+                 fp32_op_uids: Optional[FrozenSet[str]] = None):
         self.compute_dtype = compute_dtype
         self.graph_dtype = graph_dtype
         self.amp_enabled = amp_enabled
+        # Per-component precision contract (see the header). Default False
+        # = the conservative fp32 upcasts on fp16 hardware, unchanged for
+        # every component without a declared contract.
+        self.activations_fp16_safe = bool(activations_fp16_safe)
+        # Individual ops the vendor keeps in fp32 whatever the contract
+        # (T5 `ffn.down`). Matched by op_uid, resolved once by the executor.
+        self.fp32_op_uids: FrozenSet[str] = frozenset(fp32_op_uids or ())
 
     # ========================================================================
     # PUBLIC API
     # ========================================================================
 
-    def compile_op(self, op_type: str, func: Optional[Callable], attrs: Dict[str, Any]) -> Callable:
+    def compile_op(self, op_type: str, func: Optional[Callable], attrs: Dict[str, Any],
+                   op_uid: Optional[str] = None) -> Callable:
         """
         Compile-time entry point. Wraps ops with AMP autocast rules.
 
@@ -388,6 +431,16 @@ class DtypeEngine:
         if op_name in AMP_CREATION_FILL_OPS:
             return self._make_creation_fill_guard(func)
 
+        # Vendor keep-in-fp32 pin on this exact op (fp32_op_uids): applied
+        # whatever the AMP gate says and whatever the op's AMP class — with
+        # AMP off the component mirrors a plain torch_dtype=float16 forward,
+        # and the vendor's own forward keeps these MODULES fp32 (transformers
+        # _keep_in_fp32_modules, diffusers' float32 islands).
+        if op_uid is not None and op_uid in self.fp32_op_uids and func is not None:
+            if op_name in ("_softmax", "_log_softmax"):
+                return self._make_safe_softmax(func)
+            return self._make_fp32_wrapper(func)
+
         # AMP disabled: skip all autocast wrapping (no fp32 upcasting).
         if not self.amp_enabled:
             return func
@@ -401,18 +454,38 @@ class DtypeEngine:
 
         # AMP rules only apply when compute_dtype is half-precision
         if self.compute_dtype in (torch.float16, torch.bfloat16):
+            contract = (self.activations_fp16_safe
+                        and self.compute_dtype == torch.float16)
             if op_name in AMP_FP32_OPS:
+                if contract and op_name in _FP32_OPS_HALF_IO:
+                    # The vendor's kernel: fp16 in/out, fp32 inside.
+                    return self._make_lower_precision_wrapper(func)
                 # _softmax/_log_softmax have half_to_float that crashes if input
                 # is already fp32 ("conversion is supported for Half type only").
                 # Wrap with a guard that disables half_to_float when input is fp32.
                 if op_name in ("_softmax", "_log_softmax"):
-                    return self._make_safe_softmax(func)
-                return self._make_fp32_wrapper(func)
+                    inner = self._make_safe_softmax(func)
+                else:
+                    inner = self._make_fp32_wrapper(func)
+                # Contract: fp32 compute, fp16 store — the chain stops here.
+                return self._make_store_in_compute_dtype(inner) if contract else inner
 
             if op_name in AMP_FP16_OPS:
+                # Vendor keep-in-fp32 pin on this exact op (fp32_op_uids):
+                # wins over every contract, on any hardware.
+                if op_uid is not None and op_uid in self.fp32_op_uids:
+                    return self._make_fp32_wrapper(func)
                 # fp16 hardware: certain FP16 ops need fp32 for numerical safety.
                 # bf16 hardware: all FP16 ops run clean (bf16 range = fp32 range).
                 if self.compute_dtype == torch.float16 and op_name in _FP16_NEED_FP32:
+                    # Declared-safe component: PyTorch AMP's own rule for the
+                    # matmuls (fp16 in, fp32 accumulate, fp16 out); `div`
+                    # keeps its fp32 compute and stores fp16.
+                    if contract:
+                        if op_name in _FP16_GEMM_OPS:
+                            return self._make_lower_precision_wrapper(func)
+                        return self._make_store_in_compute_dtype(
+                            self._make_fp32_wrapper(func))
                     # Diagnostic, read-only (default off): NBX_DISABLE_MATMUL_FP32=1
                     # runs mm/bmm/addmm/div in fp16 (vendor-equivalent — a plain
                     # torch_dtype=float16 forward keeps matmul in fp16, only
@@ -432,7 +505,8 @@ class DtypeEngine:
             # range equals fp32's, so no guard is installed. See
             # _make_square_safe_mul.
             if op_name == "mul" and self.compute_dtype == torch.float16:
-                return self._make_square_safe_mul(func)
+                guarded = self._make_square_safe_mul(func)
+                return self._make_store_in_compute_dtype(guarded) if contract else guarded
 
         return func
 
@@ -723,7 +797,8 @@ class DtypeEngine:
     # RUNTIME AMP — for native/triton mode (per-call, not pre-compiled)
     # ========================================================================
 
-    def amp_cast_inputs(self, op_type: str, args: list) -> list:
+    def amp_cast_inputs(self, op_type: str, args: list,
+                        op_uid: Optional[str] = None) -> list:
         """
         Apply AMP input casting for a single op call at runtime.
 
@@ -737,6 +812,17 @@ class DtypeEngine:
             return args
 
         op_name = strip_aten_prefix(op_type)
+
+        # Vendor keep-in-fp32 pin (see compile_op): whatever the AMP gate.
+        if op_uid is not None and op_uid in self.fp32_op_uids:
+            return [
+                a.float().contiguous()
+                if isinstance(a, torch.Tensor) and a.is_floating_point()
+                and a.dtype != torch.float32
+                else (a.contiguous() if isinstance(a, torch.Tensor)
+                      and not a.is_contiguous() else a)
+                for a in args
+            ]
 
         if op_name in AMP_SCALAR_FILL_OPS:
             # Clamp the Python-scalar fill to the finite range of the tensor it
@@ -758,7 +844,17 @@ class DtypeEngine:
                 ]
             return args
 
+        contract = (self.activations_fp16_safe
+                    and self.compute_dtype == torch.float16)
         if op_name in AMP_FP32_OPS:
+            if contract and op_name in _FP32_OPS_HALF_IO:
+                # Contract: the vendor's fp16-IO kernel (fp32 inside).
+                return [
+                    a.to(self.compute_dtype)
+                    if isinstance(a, torch.Tensor) and a.is_floating_point()
+                    and a.dtype != self.compute_dtype else a
+                    for a in args
+                ]
             new_args = [
                 a.float().contiguous()
                 if isinstance(a, torch.Tensor) and a.is_floating_point()
@@ -775,8 +871,13 @@ class DtypeEngine:
 
         if op_name in AMP_FP16_OPS:
             # fp16 hardware: _FP16_NEED_FP32 (mm, bmm, div, addmm) need fp32
-            # to prevent overflow in fp16 accumulation. bf16 is safe (same exponent as fp32).
-            if self.compute_dtype == torch.float16 and op_name in _FP16_NEED_FP32:
+            # to prevent the fp16 store overflow. bf16 is safe (same exponent as fp32).
+            # Same two exceptions as compile_op: the vendor's per-op fp32 pin,
+            # and the declared-safe matmul contract.
+            pinned = op_uid is not None and op_uid in self.fp32_op_uids
+            gemm_ok = (op_name in _FP16_GEMM_OPS and contract and not pinned)
+            if pinned or (self.compute_dtype == torch.float16
+                          and op_name in _FP16_NEED_FP32 and not gemm_ok):
                 return [
                     a.float().contiguous()
                     if isinstance(a, torch.Tensor) and a.is_floating_point()
@@ -832,11 +933,38 @@ class DtypeEngine:
 
         return args
 
-    def amp_cast_result(self, op_type: str, result: Any) -> Any:
+    def amp_cast_result(self, op_type: str, result: Any,
+                        op_uid: Optional[str] = None) -> Any:
         """
-        Apply AMP output processing for a single op call at runtime.
+        Apply AMP output processing for a single op call at runtime
+        (the --sequential mirror of compile_op's wrappers).
 
-        Standard PyTorch AMP does no output clamping. This method is a no-op
-        but kept for API compatibility with native/triton mode callers.
+        Standard PyTorch AMP does no output processing. Under the
+        activations_fp16_safe contract the fp32-COMPUTED ops (FP32-class
+        ops that are not half-IO kernels, `div`, the guarded square) store
+        their result in compute_dtype — same rule as compile_op. Vendor
+        fp32 pins (fp32_op_uids) keep their fp32 result.
         """
+        if not (self.activations_fp16_safe and self.compute_dtype == torch.float16):
+            return result
+        if op_uid is not None and op_uid in self.fp32_op_uids:
+            return result
+        op_name = strip_aten_prefix(op_type)
+        if ((op_name in AMP_FP32_OPS and op_name not in _FP32_OPS_HALF_IO)
+                or op_name == "div" or op_name == "mul"):
+            return self._to_compute_dtype(result)
         return result
+
+    def _to_compute_dtype(self, out: Any) -> Any:
+        cd = self.compute_dtype
+        if isinstance(out, torch.Tensor):
+            return out.to(cd) if out.is_floating_point() and out.dtype != cd else out
+        if isinstance(out, (tuple, list)):
+            return type(out)(self._to_compute_dtype(o) for o in out)
+        return out
+
+    def _make_store_in_compute_dtype(self, func: Callable) -> Callable:
+        """fp32 compute, compute_dtype store (activations_fp16_safe contract)."""
+        def store_in_compute_dtype(*args, **kwargs):
+            return self._to_compute_dtype(func(*args, **kwargs))
+        return store_in_compute_dtype
