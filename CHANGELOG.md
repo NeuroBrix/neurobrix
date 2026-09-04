@@ -23,6 +23,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   NeuroBrix compares every viable strategy on estimated speed rather than
   taking the first that fits, and that decision was previously invisible.
 
+### Added
+
+- **Long renders now report progress.** A hundred-step video render can take
+  many hours, and it used to print nothing at all for the whole of it — there
+  was no way to tell a healthy run from a stuck one. It now prints the step it
+  is on, how long it has been going and roughly how much is left. Short renders
+  stay silent: the line only appears on runs long enough to need it. Set
+  `NBX_PROGRESS_EVERY` to change how often it speaks, or `NBX_NO_PROGRESS=1` to
+  turn it off.
+
 ### Fixed
 
 - **Some models failed to load, or loaded corrupted weights, when part of the

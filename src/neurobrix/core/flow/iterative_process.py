@@ -19,6 +19,7 @@ from neurobrix.core.runtime.resolution import i2v_conditioning
 from neurobrix.core.runtime.resolution import vace_control_conditioning
 from neurobrix.core.runtime.resolution import flux_video_conditioning
 from .base import FlowHandler, FlowContext, register_flow
+from neurobrix.core.runtime.progress import StepProgress
 
 
 def _gate_loop_state_finite(state: Any, step_idx: int, timestep: Any,
@@ -486,6 +487,13 @@ class IterativeProcessHandler(FlowHandler):
         _sc = self._setup_step_cache(components, dual, num_steps)
 
         # Main loop
+        # Heartbeat. A 100-step 720p render takes ~14 h on a V100 and printed
+        # NOTHING for the whole of it until 2026-09-04 — indistinguishable from
+        # a hang, which is the trap this engine has already named elsewhere.
+        # Time-gated, so a 20-step image render stays silent and a video render
+        # speaks. Shared brick: the compiled and triton loops use the SAME
+        # implementation (R30), and it imports no torch (R33).
+        _progress = StepProgress(num_steps, label=self._progress_label())
         for step_idx, timestep in enumerate(iterator):
             if DEBUG:
                 ts_val = timestep.item() if isinstance(timestep, torch.Tensor) else timestep
@@ -704,6 +712,8 @@ class IterativeProcessHandler(FlowHandler):
                                             timestep, comp_name)
 
                     self.ctx.variable_resolver.set(state_key, current_state)
+            _progress.step(step_idx)
+        _progress.done()
 
         # F1 rates line (clause 4): activation + skip-rate proof.
         if _sc is not None:
@@ -715,6 +725,21 @@ class IterativeProcessHandler(FlowHandler):
     # image_gen leg); only flow-specific eligibility stays here.
     # R30 mirror: triton/flow/iterative_process.py.
     # ------------------------------------------------------------------
+
+    def _progress_label(self) -> str:
+        """Name the run in its heartbeat, so a terminal with several renders in
+        it says which one is moving."""
+        # The name lives in the MANIFEST, not the topology — the topology
+        # describes the graph, the manifest describes the artifact.
+        for src in ("manifest", "topology"):
+            try:
+                blob = getattr(self.ctx.pkg, src, None)
+                name = (blob or {}).get("model_name") or (blob or {}).get("name")
+                if name:
+                    return str(name)
+            except Exception:
+                continue
+        return "render"
 
     def _setup_step_cache(self, components, dual, num_steps):
         """Flow eligibility (v1 scope: single loop component, no
