@@ -47,6 +47,21 @@ from neurobrix.kernels.nbx_tensor import NBXTensor, DeviceAllocator
 
 ENABLED = os.environ.get("NBX_TRITON_REPLAY") == "1"
 
+# Multi-device replay is LOCKED by default and this flag is how the lock is
+# exercised for its equivalence proof — it is not a feature switch.
+#
+# The lock exists because a replay without the device action ran kernels on
+# whatever card was current, and the slab served the wrong card's memory: both
+# silently wrong rather than errors. Those two capabilities now exist
+# (_SETDEV, per-device slabs), but "the capability exists" is not "the replay
+# is correct". The lock comes off only when a multi-device replay is proven
+# BIT-IDENTICAL to direct execution on a model that actually shards.
+#
+# Until that proof is recorded, this stays opt-in and the default path is
+# unchanged. A lock that guards against a silent wrong answer is worth more
+# than a capability opened early.
+MULTIDEV_PROOF = os.environ.get("NBX_REPLAY_MULTIDEV") == "1"
+
 # E2 (persistable part, v1): per-bucket slab sizes survive the process
 # so a warm restart goes straight to the recording pass with the right
 # slab (saves the measure step AND the shortfall-retry step; probe run
@@ -865,7 +880,7 @@ def _output_hashes(seq) -> Dict[str, str]:
 
 
 def signature(seq) -> Optional[tuple]:
-    if getattr(seq, "_is_multi_device", False):
+    if getattr(seq, "_is_multi_device", False) and not MULTIDEV_PROOF:
         return None
     # Stage-driven sequences (core/flow/stages/ calling convention —
     # the documented R33-exception path) live outside the standard
