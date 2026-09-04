@@ -56,9 +56,16 @@ _NVIDIA_ARCH_MAP = {
     "9": "hopper",      # 9.0 = H100
     "10": "blackwell",  # 10.0 = B200
 }
+# Capabilities that share a MAJOR with a profiled datacentre part but are not
+# that part. Without an entry here they silently inherit the datacentre
+# profile, and the values that profile declares are wrong for them in the
+# unsafe direction — a shared-memory budget larger than the card has offers
+# autotune tiles it cannot hold. Naming them makes the loader REFUSE, which is
+# the doctrine: guessing a block size produces a wrong result, not an error.
 _NVIDIA_ARCH_REFINE = {
-    "7.5": "turing",    # RTX 2080, T4
-    "8.9": "ada",       # RTX 4090, L40S
+    "7.5": "turing",            # RTX 2080, T4 — 64 KB smem vs volta's 96 KB
+    "8.6": "ampere_consumer",   # A10, RTX 3090 — 100 KB smem vs ampere's 164 KB
+    "8.9": "ada",               # RTX 4090, L40S — 100 KB smem
 }
 
 # NVIDIA: compute capability major → supported dtypes
