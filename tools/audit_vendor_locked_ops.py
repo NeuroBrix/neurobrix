@@ -42,6 +42,12 @@ VENDOR_TOKENS = {
     "cufft": "NVIDIA (cuFFT)",
     "cusparse": "NVIDIA (cuSPARSE)",
     "nvrtc": "NVIDIA",
+    # `_thnn_fused_lstm_cell` dispatches to `_thnn_fused_lstm_cell_cuda` and
+    # exists on no other backend. It was NOT in this list on 2026-09-04, which
+    # is precisely why a tracer change that replaced `cudnn_batch_norm` with
+    # 298 of these looked like a fix: the census could not see what it
+    # introduced. A census is only as wide as its token list.
+    "thnn": "NVIDIA (THNN fused cell)",
     "miopen": "AMD (MIOpen)",
     "mkldnn": "Intel (oneDNN)",
     "onednn": "Intel (oneDNN)",
