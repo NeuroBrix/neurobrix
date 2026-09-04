@@ -58,13 +58,33 @@ and the competitor's version or configuration. Medians. Interleaved arms.
 so.** The number that matters is the movement: this same row was **×84** behind
 on 2026-08-05 (0.09 tok/s against 7.56). It is ×1.69 today.
 
-### Image diffusion — *slot 2026-08-30 00:15–00:25*
+### Image diffusion — *slot 2026-09-04/05 00:30–01:10*
 
 | row | NeuroBrix (compiled) | vendor `diffusers` | gap |
 |---|---:|---:|---|
-| PixArt-XL 1024 | 11.44 s | **8.15 s** | ×1.40 |
-| PixArt-Sigma 1024 | 13.46 s | **8.54 s** | ×1.58 |
-| Sana-1600M 1024 | 6.16 s | — | ×1.50 (08-26 anchor) |
+| PixArt-Sigma 1024, 20 steps | **9.29 s** | 8.62 s | ×1.08 |
+| PixArt-XL 1024, 20 steps | **8.91 s** | 8.23 s | ×1.08 |
+| Sana-1600M 1024, 20 steps | 9.25 s | **4.17 s** | ×2.2 |
+
+Seconds per image, median of five, warm engine on both arms, same seed, same
+GPU, arms run back to back; every arm sha-identical across its five requests.
+Per executed step on PixArt-Sigma: 0.42 s.
+
+**Correction of the 08-30 image rows.** The 08-30 NeuroBrix numbers (11.44 s,
+13.46 s) were produced with a step cache enabled on our arm and not on the
+vendor's; that cache skips 12 of 20 steps and fails our own quality gate
+(PSNR 9.8 dB against the cache-off render), so those rows are withdrawn. The
+like-for-like 08-30 baseline was 31.35 s (PixArt-Sigma) and 30.25 s (PixArt-XL):
+the engine ran the whole transformer in fp32 on a GPU whose fp32 rate is one
+eighth of its tensor-core rate. This slot's numbers come from a per-backbone
+precision contract that runs the vendor's fp16 with the vendor's fp32 islands;
+fidelity against our own fp32 render is 30.9 dB PSNR, the vendor's own fp16
+sits at 30.05 dB against its fp32 on the same model and seed.
+
+**Sana** stays fp32 on our side: its fp16 path is measured at 5.78 s but drifts
+21 dB from our fp32 render (the vendor's own fp16 drifts 27 dB) and is refused
+under our quality bound for now. Method and every gate:
+`validation_outputs/image_fp16_2026_09_04/LEVER.md`.
 
 Our `--triton` engine is far slower here (65–78 s) for a **structural** reason
 we can name: on sm_70, Triton does not lower fp16 matmul to the tensor-core

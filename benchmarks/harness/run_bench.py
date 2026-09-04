@@ -291,6 +291,8 @@ def _neurobrix_daemon(row: dict, gpu: int | None, triton: bool,
     from neurobrix.serving.client import DaemonClient
     env = {**os.environ, **_gpu_env(gpu),
            **{k: str(v) for k, v in (row.get("env") or {}).items()}}
+    # An empty pin means "unset" (StepCache reads presence, not truthiness).
+    env = {k: v for k, v in env.items() if v != ""}
     cmd = [sys.executable, "-m", "neurobrix", "serve",
            "--model", row["neurobrix_model"], "--foreground"]
     if gpu is not None:
@@ -618,6 +620,11 @@ def main() -> int:
                          "machine = whole rig visible, Prism free and "
                          "competitors' best weapons; both = the two, "
                          "intersected with the row's serving_configs")
+    ap.add_argument("--env", action="append", default=[],
+                    help="KEY=VALUE applied AFTER the row's env pins (a "
+                         "campaign weapon or its removal, e.g. "
+                         "NBX_STEP_CACHE_THRESHOLD=). Recorded in the "
+                         "artifact as env_overrides — never silent.")
     ap.add_argument("--force", action="store_true",
                     help="re-run cells whose result JSON is already ok")
     args = ap.parse_args()
@@ -625,6 +632,16 @@ def main() -> int:
     rows = {r["id"]: r for r in
             load_yaml(REPO / "benchmarks" / "config" / "rows.yml")["rows"]}
     row = rows[args.row]
+    # --env KEY=VALUE: applied after the row's own env pins, recorded in
+    # every artifact of this invocation (a removed weapon reads as an
+    # empty value, e.g. NBX_STEP_CACHE_THRESHOLD= disables the cache).
+    env_overrides = {}
+    for kv in args.env:
+        k, _, v = kv.partition("=")
+        env_overrides[k] = v
+    if env_overrides:
+        row = dict(row)
+        row["env"] = {**(row.get("env") or {}), **env_overrides}
     out_dir = REPO / "benchmarks" / "results" / args.date
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "env_manifest.json").write_text(
@@ -699,6 +716,8 @@ def main() -> int:
                 "peak_gpu_mem_mib": peak[0],
                 "started_unix": t0, **result,
             }
+            if env_overrides:
+                artifact["env_overrides"] = env_overrides
             path.write_text(json.dumps(artifact, indent=1) + "\n")
             print(f"[bench] {args.row}/{col}[{cfg}]: {status} "
                   f"peak={peak[0]}MiB -> {path.name}", flush=True)

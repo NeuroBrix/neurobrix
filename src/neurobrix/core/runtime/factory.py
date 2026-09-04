@@ -410,17 +410,22 @@ class ExecutorFactory:
             mode=mode,
         )
 
+        # POINT 2bis — the cache_path rides on the executor so that
+        # graph_executor.py can resolve the model name for registry-flag
+        # lookups (the lookup used to depend on self._pkg, which does not
+        # exist on GraphExecutor — a silent default-False). It is set
+        # BEFORE the DAG is loaded: _init_from_dag builds the DtypeEngine
+        # and resolves the component's matmul precision contract from the
+        # manifest at that point (2026-09-04: set after load, the contract
+        # resolved against no manifest and silently kept the default).
+        cache_path = str(ensure_extracted(Path(nbx_path)))
+        executor._cache_path = cache_path
+
         # Load DAG directly (NO reconstruction)
         executor.load_graph_from_dict(dag)
         executor._component_name = component
 
         # Create and attach component handler (DATA-DRIVEN)
-        cache_path = str(ensure_extracted(Path(nbx_path)))
-        # POINT 2bis — pose le cache_path sur l'executor pour que
-        # graph_executor.py puisse résoudre _model_name au flag init
-        # (registry lookup depended on self._pkg which doesn't exist
-        # on GraphExecutor — was a pre-existing silent default-False).
-        executor._cache_path = cache_path
         component_type = cls._infer_component_type(component, dag)
         handler = cls._create_component_handler(component, component_type, cache_path)
         executor._component_handler = handler

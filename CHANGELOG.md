@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Image generation is up to 3.4x faster on fp16-only GPUs (V100).** The
+  engine used to run every matrix multiply of a diffusion transformer in fp32
+  on hardware whose fp32 rate is one eighth of its tensor-core rate. It now
+  runs each model at the precision its vendor validated, keeping in fp32
+  exactly the modules the vendor keeps in fp32 (the T5 encoder's output
+  projection, Sana's linear-attention products). PixArt-Sigma 1024, 20 steps:
+  31.4 s → 9.3 s per image on one V100, images at the vendor's own fp16
+  fidelity. Models without a declared contract are unchanged.
+
+- **The engine refuses to write a corrupt image.** A decoder whose output is
+  not finite (a VAE that overflowed in half precision) now stops the run with
+  the offending component named, instead of saving a black picture.
+
+- **Benchmark harness:** `--env KEY=VALUE` overrides a row's environment pins
+  and is recorded in the result; each invocation gets its own daemon socket,
+  so two rows can run on two GPUs at once.
+
 - **NeuroBrix no longer tells you a model will not run.** When nothing fitted
   on the available hardware, planning stopped with "No strategy can fit this
   model". It now adds a final option — components loaded and released one at a
