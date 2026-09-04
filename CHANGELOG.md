@@ -25,6 +25,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Long renders now save a resume point.** If a render is interrupted — a
+  power cut, a killed process — its progress is written to disk as it goes, so
+  the work is not simply lost. This is on by default and costs nothing on short
+  renders: the save only happens once a render has been running for a while.
+  Restoring from that saved point is not yet enabled by default, because it
+  does not yet reproduce an uninterrupted render exactly; the engine says so
+  rather than silently producing a different image.
+
 - **Long renders now report progress.** A hundred-step video render can take
   many hours, and it used to print nothing at all for the whole of it — there
   was no way to tell a healthy run from a stuck one. It now prints the step it

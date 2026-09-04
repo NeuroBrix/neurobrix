@@ -24,16 +24,24 @@ Design, in the order the constraints bind:
 * **No torch.** The triton engine has the same need and R33 keeps that tree
   sealed, so the state crosses as a plain numpy array and each engine
   converts at its own boundary. numpy is allowed CPU glue on both sides.
-* **Off by default.** Enabled per run with ``NBX_RENDER_CHECKPOINT``; the
-  cost is one array write per step, which is worth paying on a render
-  measured in hours and not on one measured in seconds.
+* **ON by default, and free on short renders.** This rack has one breaker and
+  no UPS, and a cut at the thirteenth hour of a fourteen-hour render loses
+  everything. A resume point that must be remembered is a resume point nobody
+  has when they need it, so it is the default and not an option.
+
+  Short renders still pay nothing, because the save is gated on ELAPSED TIME
+  rather than on step count: a render that finishes inside the interval never
+  writes at all. One rule covers a 20-step image render and a 100-step video
+  render, which is the same reasoning as the progress heartbeat.
 
 Environment:
 
-* ``NBX_RENDER_CHECKPOINT=1`` — enable, storing under
-  ``~/.neurobrix/checkpoints/``; or set it to a directory path to choose
-  where.
-* ``NBX_RENDER_CHECKPOINT_EVERY=N`` — save every N steps (default 1).
+* ``NBX_RENDER_CHECKPOINT=0`` — disable. Any other value is a directory to
+  store under; unset means ``~/.neurobrix/checkpoints/``.
+* ``NBX_RENDER_CHECKPOINT_EVERY=N`` — save every N steps. Setting this is an
+  explicit request for step-based saving and it **overrides the time gate**:
+  if you asked for every N steps, you get every N steps.
+* ``NBX_RENDER_CHECKPOINT_SECONDS=S`` — change the time gate (default 60).
 """
 
 from __future__ import annotations
@@ -41,6 +49,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -88,6 +97,9 @@ def _unflatten_state(blob: str, data) -> dict[str, Any]:
 
 _ENV_ENABLE = "NBX_RENDER_CHECKPOINT"
 _ENV_EVERY = "NBX_RENDER_CHECKPOINT_EVERY"
+_ENV_SECONDS = "NBX_RENDER_CHECKPOINT_SECONDS"
+# A render that finishes inside this never writes a checkpoint at all.
+_DEFAULT_SECONDS = 60.0
 _DEFAULT_DIR = Path.home() / ".neurobrix" / "checkpoints"
 
 
@@ -105,17 +117,27 @@ def _fingerprint(parts: dict[str, Any]) -> str:
 class RenderCheckpoint:
     """Per-step state for one render, on disk, atomically."""
 
-    def __init__(self, path: Path, fingerprint: str, every: int = 1) -> None:
+    def __init__(self, path: Path, fingerprint: str, every: int = 1,
+                 min_interval_s: float = 0.0) -> None:
         self.path = path
         self.fingerprint = fingerprint
         self.every = max(1, every)
+        # 0 means "no time gate" — step-based saving, which is what an explicit
+        # NBX_RENDER_CHECKPOINT_EVERY asks for.
+        self.min_interval_s = max(0.0, min_interval_s)
+        self._last_save = time.monotonic()
 
     # --- construction -------------------------------------------------------
 
     @classmethod
     def from_env(cls, *, model: str, num_steps: int,
                  extra: dict[str, Any] | None = None) -> "RenderCheckpoint | None":
-        """Build one if the environment asked for it, else None.
+        """Build one unless the environment turned it off.
+
+        The rack has one breaker and no UPS. A resume point that has to be
+        asked for is one nobody has at hour thirteen, so this is ON unless
+        explicitly disabled — and the time gate keeps it free for the short
+        renders that do not need it.
 
         `extra` carries the rest of the run identity (seed, guidance, spatial
         dims, engine). Callers pass what they have; what they omit simply is
@@ -123,21 +145,34 @@ class RenderCheckpoint:
         module — decides what defines its run.
         """
         setting = os.environ.get(_ENV_ENABLE, "").strip()
-        if not setting or setting == "0":
+        if setting == "0":
             return None
+        if not num_steps or num_steps < 2:
+            return None            # nothing to resume into
 
-        directory = _DEFAULT_DIR if setting in ("1", "true", "yes") else Path(setting)
+        directory = (_DEFAULT_DIR if not setting or setting in ("1", "true", "yes")
+                     else Path(setting))
         parts = {"model": model, "num_steps": num_steps}
         parts.update(extra or {})
         fingerprint = _fingerprint(parts)
 
+        explicit_every = os.environ.get(_ENV_EVERY, "").strip()
         try:
-            every = int(os.environ.get(_ENV_EVERY, "1"))
+            every = int(explicit_every) if explicit_every else 1
         except ValueError:
             every = 1
+        # An explicit step interval overrides the time gate.
+        if explicit_every:
+            seconds = 0.0
+        else:
+            try:
+                seconds = float(os.environ.get(_ENV_SECONDS, "") or _DEFAULT_SECONDS)
+            except ValueError:
+                seconds = _DEFAULT_SECONDS
 
         directory.mkdir(parents=True, exist_ok=True)
-        return cls(directory / f"{model}-{fingerprint}.npz", fingerprint, every)
+        return cls(directory / f"{model}-{fingerprint}.npz", fingerprint,
+                   every, seconds)
 
     # --- read ---------------------------------------------------------------
 
@@ -182,8 +217,24 @@ class RenderCheckpoint:
     # --- write --------------------------------------------------------------
 
     def should_save(self, step_idx: int, num_steps: int) -> bool:
-        """Save on the interval, and always on the last step."""
-        return (step_idx + 1) % self.every == 0 or step_idx == num_steps - 1
+        """Save on the interval, and always on the last step.
+
+        With a time gate set (the default), a step that is due by COUNT is
+        still skipped until the gate has elapsed — so a render finishing inside
+        the interval writes nothing and costs nothing. An explicit step
+        interval clears the gate, because asking for every N steps is asking
+        for every N steps.
+        """
+        due = (step_idx + 1) % self.every == 0 or step_idx == num_steps - 1
+        if not due:
+            return False
+        if self.min_interval_s <= 0:
+            return True
+        now = time.monotonic()
+        if now - self._last_save < self.min_interval_s:
+            return False
+        self._last_save = now
+        return True
 
     def save(self, step_idx: int, latent: np.ndarray,
              sched_state: dict[str, Any] | None = None) -> None:
