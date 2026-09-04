@@ -58,7 +58,7 @@ and the competitor's version or configuration. Medians. Interleaved arms.
 so.** The number that matters is the movement: this same row was **×84** behind
 on 2026-08-05 (0.09 tok/s against 7.56). It is ×1.69 today.
 
-### Image diffusion — *slot 2026-09-04/05 00:30–01:10*
+### Image diffusion — *slot 2026-09-04 22:30–23:15*
 
 | row | NeuroBrix (compiled) | vendor `diffusers` | gap |
 |---|---:|---:|---|

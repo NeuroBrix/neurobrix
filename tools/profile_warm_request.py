@@ -26,6 +26,7 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--mode", default="compiled")
     ap.add_argument("--output", default="/tmp/warm_profiled.png")
+    ap.add_argument("--audio", default=None, help="audio_path for STT / audio-LLM rows")
     args = ap.parse_args()
 
     import torch
@@ -34,6 +35,8 @@ def main() -> int:
     eng = InferenceEngine(args.model, args.hardware, args.mode)
     t0 = time.perf_counter(); eng.load(); print(f"[warm] load {time.perf_counter()-t0:.2f}s", flush=True)
     kw = dict(steps=args.steps, seed=args.seed)
+    if args.audio:
+        kw["audio_path"] = args.audio
     t0 = time.perf_counter(); eng.generate(args.prompt, **kw); print(f"[warm] warm-up request {time.perf_counter()-t0:.2f}s", flush=True)
     torch.cuda.synchronize()
     torch.cuda.cudart().cudaProfilerStart()
