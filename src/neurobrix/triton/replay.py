@@ -100,6 +100,12 @@ def _store_slab_size(seq, sig: tuple, nbytes: int) -> None:
 _KERNEL = "k"     # (kernel, g0, g1, g2, stream, flat_vals)
 _MEMCPY = "m"     # (dst, src, nbytes, kind) — device-side pointers only
 _MEMSET = "s"     # (ptr, value, nbytes)
+_SETDEV = "d"     # (device_idx,) — the card the following actions run on.
+                  # Emitted only when the device CHANGES, so a single-device
+                  # plan carries one of these and costs nothing. Without it a
+                  # replay runs every recorded launch on whatever card happens
+                  # to be current: silently wrong, not an error. One of the two
+                  # reasons multi-device was locked out of replay.
 _H2D = "h"        # (dst, host_snapshot: bytes) — the recorded host
                   # source is transient (probe 5: a dangling 16-B host
                   # staging pointer at replay); the plan owns a byte
@@ -330,6 +336,17 @@ class _State:
         self.records: List[Tuple[str, tuple]] = []
         self.broken: Optional[str] = None
         self.slab: Optional[SlabAllocator] = None
+        # One slab PER DEVICE. `malloc_cuda` routed every allocation to the
+        # single `slab` regardless of the requested `dev_idx`, so a
+        # multi-device run would be served device 0's memory for a device 1
+        # tensor — the second reason multi-device was locked out.
+        self.slabs: Dict[int, SlabAllocator] = {}
+        self.rec_dev: Optional[int] = None
+        # Per-device measurement: one high-water mark cannot size slabs for a
+        # run allocating on several cards without sizing each to the SUM.
+        self.live_by_dev: Dict[int, int] = {}
+        self.high_water_by_dev: Dict[int, int] = {}
+        self.measured_dev: Dict[int, int] = {}
         # P-REPLAY-KV-DECODE step A: tuple census (pure observation —
         # per-run launch-tuple capture + consecutive-run diff; no
         # eligibility gates, no replay ever). NBX_REPLAY_TUPLE_CENSUS=1.
@@ -349,6 +366,21 @@ class _State:
         self.high_water = 0
         self.measured: Dict[int, int] = {}  # ptr -> aligned size
         self.total_measured = 0             # cumulative (never decremented)
+
+    def note_device(self) -> None:
+        """Emit a device action when the current card differs from the last.
+
+        Called before each recorded action rather than by wrapping
+        `set_device`, because what has to be reproduced is the device each
+        ACTION ran on, not every call that changed it.
+        """
+        try:
+            dev = DeviceAllocator.get_device()
+        except Exception:                                   # pragma: no cover
+            return
+        if dev != self.rec_dev:
+            self.rec_dev = dev
+            self.records.append((_SETDEV, (int(dev),)))
 
     def break_plan(self, reason: str) -> None:
         if self.broken is None:
@@ -480,6 +512,8 @@ def _install_seams() -> None:
             flat = tuple(
                 int(v.data_ptr()) if hasattr(v, "data_ptr") else v
                 for v in vals)
+           
+            STATE.note_device()
             STATE.records.append(
                 (_KERNEL, (self, g0, g1, g2, stream, flat)))
             return raw(g0, g1, g2, stream, function, packed_metadata,
@@ -490,12 +524,21 @@ def _install_seams() -> None:
     CompiledKernel.run = property(_run_prop)
 
     def malloc_cuda(nbytes: int, dev_idx: Optional[int] = None) -> int:
-        if STATE.recording and STATE.slab is not None:
-            ptr = STATE.slab.malloc(nbytes)
-            if ptr:
-                return ptr
-            STATE.break_plan(
-                f"slab exhausted (short {STATE.slab.shortfall} B)")
+        if STATE.recording and (STATE.slab is not None or STATE.slabs):
+            # Route to the slab of the REQUESTED device. Serving a device-1
+            # tensor from device 0's slab yields a pointer into the wrong
+            # card's memory — a wrong result or an illegal access, never a
+            # clear error.
+            _dev = dev_idx if dev_idx is not None else DeviceAllocator.get_device()
+            _slab = STATE.slabs.get(_dev, STATE.slab)
+            if _slab is not None:
+                ptr = _slab.malloc(nbytes)
+                if ptr:
+                    return ptr
+                STATE.break_plan(
+                    f"slab exhausted on device {_dev} (short {_slab.shortfall} B)")
+            else:
+                STATE.break_plan(f"no slab recorded for device {_dev}")
             return _ORIG_MALLOC(nbytes, dev_idx)
         if STATE.stab_slab is not None:
             ptr = STATE.stab_slab.malloc(nbytes)
@@ -512,6 +555,11 @@ def _install_seams() -> None:
             STATE.live += need
             if STATE.live > STATE.high_water:
                 STATE.high_water = STATE.live
+            _d = dev_idx if dev_idx is not None else DeviceAllocator.get_device()
+            STATE.measured_dev[ptr] = _d
+            STATE.live_by_dev[_d] = STATE.live_by_dev.get(_d, 0) + need
+            if STATE.live_by_dev[_d] > STATE.high_water_by_dev.get(_d, 0):
+                STATE.high_water_by_dev[_d] = STATE.live_by_dev[_d]
         return ptr
 
     def free_cuda(ptr: int):
@@ -521,6 +569,9 @@ def _install_seams() -> None:
         if STATE.measuring:
             need = STATE.measured.pop(ptr, 0)
             STATE.live -= need
+            _d = STATE.measured_dev.pop(ptr, None)
+            if _d is not None:
+                STATE.live_by_dev[_d] = STATE.live_by_dev.get(_d, 0) - need
         return _ORIG_FREE(ptr)
 
     DeviceAllocator.malloc_cuda = staticmethod(malloc_cuda)
@@ -535,8 +586,10 @@ def _install_seams() -> None:
             elif kind == 1:
                 import ctypes
                 snap = ctypes.string_at(int(src), int(nbytes))
+                STATE.note_device()
                 STATE.records.append((_H2D, (int(dst), snap)))
             else:
+                STATE.note_device()
                 STATE.records.append((_MEMCPY, (int(dst), int(src),
                                                 int(nbytes), kind)))
         return orig_memcpy(dst, src, nbytes, kind, *a, **kw)
@@ -547,6 +600,7 @@ def _install_seams() -> None:
 
     def memset_cuda(ptr, value, nbytes):
         if STATE.recording:
+            STATE.note_device()
             STATE.records.append((_MEMSET, (int(ptr), int(value),
                                             int(nbytes))))
         return orig_memset(ptr, value, nbytes)
@@ -751,7 +805,12 @@ class FrozenPlan:
             records = self.records
         for idx, (tag, rec) in enumerate(records):
             try:
-                if tag == _KERNEL:
+                if tag == _SETDEV:
+                    # Triton keeps its OWN current device, so setting the
+                    # runtime's alone would still launch on the wrong card.
+                    DeviceAllocator.set_device(rec[0])
+                    DeviceAllocator.ensure_triton_device(rec[0])
+                elif tag == _KERNEL:
                     kernel, g0, g1, g2, stream, flat = rec
                     kernel.run(g0, g1, g2, stream, kernel.function,
                                kernel.packed_metadata, None, None, None,
