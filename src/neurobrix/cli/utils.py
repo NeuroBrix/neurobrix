@@ -57,9 +57,17 @@ def find_model(model_name: str) -> Path:
     if available:
         error_msg += "Installed models:\n" + "\n".join(available)
     else:
+        # Name the directory that was searched. Models live under the
+        # INVOKING user's home, so running the same command under sudo finds
+        # an empty cache and reports "no models installed" about a machine
+        # that has them — someone reaching for sudo over a permissions hunch
+        # then has no way to see why (hub walkthrough, 2026-09-03).
         error_msg += (
-            "No models installed.\n"
-            "  Install from registry: neurobrix import <org>/<model>"
+            f"No models installed in {CACHE_DIR}\n"
+            "  Install from registry: neurobrix import <org>/<model>\n"
+            "  Note: models live under the invoking user's home directory, so "
+            "`sudo neurobrix ...`\n"
+            "  searches root's cache, not yours."
         )
 
     raise FileNotFoundError(error_msg)

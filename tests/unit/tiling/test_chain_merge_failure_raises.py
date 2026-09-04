@@ -23,7 +23,16 @@ import pytest
 import torch
 
 import neurobrix.core.runtime  # noqa: F401  (pre-resolve the cfg<->runtime import cycle)
+# The compiled half of the band-streamed chain was split out of
+# residual_chain.py on 2026-09-03 so the NBX half imports no torch (R33), so
+# the two symbols this file patches now live in DIFFERENT modules:
+#   resolve_chain_weights      -> residual_chain      (shared, torch-free)
+#   band_streamed_chain_torch  -> residual_chain_torch (compiled branch only)
+# tiling_engine imports the second DEFERRED, inside the call, so patching its
+# source module is what intercepts it — patching the old one would silently
+# patch nothing, which is the failure mode this file exists to prevent.
 import neurobrix.kernels.ops.residual_chain as _rc
+import neurobrix.kernels.ops.residual_chain_torch as _rc_torch
 from neurobrix.core.module.tiling_engine import (
     OpLevelTilingEngine,
     OpLevelTilingPlan,
@@ -74,7 +83,7 @@ def test_failed_chain_merge_raises_and_does_not_substitute(monkeypatch):
     def _boom(*args, **kwargs):
         raise ValueError("injected merge failure")
 
-    monkeypatch.setattr(_rc, "band_streamed_chain_torch", _boom)
+    monkeypatch.setattr(_rc_torch, "band_streamed_chain_torch", _boom)
 
     engine = _make_engine_with_chain()
     ge = _FakeGraphExecutor()
@@ -134,7 +143,7 @@ def test_successful_chain_merge_still_registers_result(monkeypatch):
     monkeypatch.setattr(_rc, "resolve_chain_weights",
                         lambda spec, dag, weights: {"w0": object()})
     merged = torch.full((1, 3, 8, 8), 7.0)
-    monkeypatch.setattr(_rc, "band_streamed_chain_torch",
+    monkeypatch.setattr(_rc_torch, "band_streamed_chain_torch",
                         lambda *a, **k: merged)
 
     engine = _make_engine_with_chain()

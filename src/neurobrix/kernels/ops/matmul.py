@@ -17,7 +17,8 @@ Handles mm (2D) + addmm (with bias). bmm handled in wrappers via batch loop.
 
 import triton
 
-from ._configs import nbx_autotune
+from ._configs import (arch_smem_budget, configs_within_smem_budget,
+                       nbx_autotune)
 import triton.language as tl
 
 from ._autotune_policy import maybe_pin_single, is_matmul_pinned
@@ -115,8 +116,24 @@ def _detect_arch_configs():
       of LDS against Volta's 96 KB, so the small-block space is the safe one
       until an MI-series card measures a better one. Named as a first-light
       task, not left as a coincidence.
-    * anything else (Apple, unknown) — the Volta subset, which is the space
-      that fits the smallest budget and will not OOM anywhere.
+    * anything else (Apple, unknown) — the Volta subset as the STARTING space.
+
+    Whichever space is chosen, it is then filtered against the executing
+    hardware's `memory.max_shared_memory_per_block`, read from its vendor YAML.
+    Choosing by architecture NAME alone was wrong in two directions and both
+    are now decided rather than inherited:
+
+    * **Apple** was sent to the Volta subset because that space "fits the
+      smallest budget". It does not: Volta declares 96 KB and an Apple GPU has
+      32 KB, so a BM=64/BN=128/BK=64 tile at 3 stages wants 72 KB and cannot
+      run there. Nine of the seventeen Volta configs survive the real budget.
+    * **CDNA** landed in the Volta space by accident (a string arch failed an
+      `isinstance(cap, int)` test), was later made deliberate, and still had no
+      budget applied — CDNA1/2 declare 64 KB, which excludes the largest Volta
+      tile at 72 KB.
+
+    Filtering never empties the space and never invents a budget: with no
+    matching profile the space is returned untouched.
     """
     try:
         arch = triton.runtime.driver.active.get_current_target().arch
@@ -125,10 +142,13 @@ def _detect_arch_configs():
 
     # NVIDIA: Triton reports compute capability x 10 (sm_70 -> 70, sm_80 -> 80)
     if isinstance(arch, int):
-        return _MATMUL_AUTOTUNE_AMPERE_PLUS if arch >= 80 else _MATMUL_AUTOTUNE_VOLTA
+        space = (_MATMUL_AUTOTUNE_AMPERE_PLUS if arch >= 80
+                 else _MATMUL_AUTOTUNE_VOLTA)
+    else:
+        # AMD CDNA/RDNA and any other string-arch target (Apple included).
+        space = _MATMUL_AUTOTUNE_VOLTA
 
-    # AMD CDNA/RDNA and any other string-arch target (Apple included).
-    return _MATMUL_AUTOTUNE_VOLTA
+    return configs_within_smem_budget(space, arch_smem_budget())
 
 
 _MATMUL_AUTOTUNE_CONFIGS = maybe_pin_single(

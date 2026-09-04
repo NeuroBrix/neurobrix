@@ -67,6 +67,19 @@ STRATEGY_REGISTRY = {
 
     # === CPU-only (Doctrine R35 last-resort cascade) ===
     "cpu_execution": CPUExecutionStrategy,
+    # Same PLACEMENT as cpu_execution — every component on the host — and the
+    # same class, exactly as single_gpu_lifecycle reuses SingleGPUStrategy.
+    # What differs is the PLAN: the solver forces `loading_mode = "lazy"` so
+    # the requirement drops from sum(components) to max(component), which is
+    # the whole reason the rung exists. Two names, one placement, different
+    # plan semantics.
+    #
+    # Added to the solver's cascade on 2026-09-03 and NOT registered here, so
+    # the last rung of the ladder — the one that exists to guarantee a model
+    # always runs — crashed with "Unknown strategy 'cpu_streaming'" the moment
+    # it was selected. Caught by the CPU-only battery cell added in the same
+    # session, on the full-zoo gate.
+    "cpu_streaming": CPUExecutionStrategy,
 }
 
 

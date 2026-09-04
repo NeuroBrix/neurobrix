@@ -2899,7 +2899,8 @@ class TritonSequence:
             # normal paths untouched. Contract + design: scoping doc
             # "Phase 4a".
             _parked = self.__dict__.pop("_deferred_weight_bind", None)
-            if _replay.ENABLED and not self._is_multi_device:
+            if _replay.ENABLED and (not self._is_multi_device
+                                    or _replay.MULTIDEV_PROOF):
                 if _replay.maybe_run(self, skip_kills, pre_op_callback):
                     return
             if _parked is not None:

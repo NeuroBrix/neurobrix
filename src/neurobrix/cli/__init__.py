@@ -193,10 +193,13 @@ For more information: https://neurobrix.es
     # ========================================
     inspect_parser = subparsers.add_parser(
         'inspect',
-        help='Inspect a .nbx file',
-        description='Show contents and metadata of a .nbx container'
+        help='Inspect a .nbx file or an installed model',
+        description='Show contents and metadata of a .nbx container. Accepts '
+                    'either a path to a .nbx file or the name of an installed '
+                    'model.'
     )
-    inspect_parser.add_argument('nbx_path', help='Path to .nbx file')
+    inspect_parser.add_argument('nbx_path', metavar='PATH_OR_MODEL',
+                                help='Path to a .nbx file, or an installed model name')
     inspect_parser.add_argument('--topology', action='store_true', help='Show topology details')
     inspect_parser.add_argument('--weights', action='store_true', help='Show weight statistics')
 
@@ -284,12 +287,17 @@ Examples:
   neurobrix hub --category LLM -s chat # LLM models matching "chat"
         """
     )
+    # NO `choices=` HERE, DELIBERATELY. The category vocabulary belongs to the
+    # registry, and a copy of it compiled into the CLI drifts: the previous
+    # list still offered the retired AUDIO and SPEECH and had no value at all
+    # for TTS, STT or AUDIO_LLM, which made 11 of 45 published models
+    # unreachable by category (hub walkthrough, 2026-09-03). The value is
+    # validated against the registry's own vocabulary at request time, and an
+    # invalid one is answered with the list the registry publishes.
     hub_parser.add_argument('--category', '-c', default=None,
-                            choices=['IMAGE', 'VIDEO', 'TTS', 'STT', 'AUDIO_LLM', 'LLM',
-                                     'CODE', 'VLM', 'MULTIMODAL', 'UPSCALER',
-                                     'image', 'video', 'tts', 'stt', 'audio_llm', 'llm',
-                                     'code', 'vlm', 'multimodal', 'upscaler'],
-                            help='Filter by model category (registry vocabulary)')
+                            help='Filter by category. Any category the registry '
+                                 'serves is accepted; an invalid value prints the '
+                                 'valid ones.')
     hub_parser.add_argument('--search', '-s', default=None, help='Search models by name, tag, or description')
     hub_parser.add_argument('--registry', default=None, help=f'Registry URL (default: {REGISTRY_URL})')
 
@@ -433,8 +441,13 @@ Validation levels:
     upscale_parser.add_argument('--model', required=True,
                                 help='Upscaler model name (e.g. '
                                      'swin2SR-realworld-sr-x4-64-bsrgan-psnr)')
-    upscale_parser.add_argument('--input', required=True,
-                                help='Input image path (PNG/JPEG)')
+    # `--input-image` is what `neurobrix run` calls the same file for the same
+    # family; accepting both here removes a trap that depended only on which
+    # subcommand the user reached first (hub walkthrough, 2026-09-03).
+    upscale_parser.add_argument('--input', '--input-image', required=True,
+                                dest='input',
+                                help='Input image path (PNG/JPEG). '
+                                     '`--input-image` is accepted as an alias.')
     upscale_parser.add_argument('--output', required=True,
                                 help='Output image path (PNG)')
     upscale_parser.add_argument('--mode', default='compiled',

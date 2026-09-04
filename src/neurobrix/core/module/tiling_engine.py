@@ -1528,15 +1528,21 @@ class OpLevelTilingEngine:
             from neurobrix.kernels.ops.residual_chain import (
                 ChainSentinel,
                 resolve_chain_weights,
-                band_streamed_chain_torch,
                 band_streamed_chain_nbx,
             )
-            # Pick the chain wrapper for the runtime mode.
+            # Pick the chain wrapper for the runtime mode. The torch variant
+            # lives in its own module and is imported ONLY on the compiled
+            # branch: importing it here unconditionally would pull torch into
+            # the triton path, which is what splitting the file was for
+            # (R33 inventory, 2026-09-03).
             _is_triton_mode = _mode in ("triton", "triton_sequential")
-            _band_streamed_chain = (
-                band_streamed_chain_nbx if _is_triton_mode
-                else band_streamed_chain_torch
-            )
+            if _is_triton_mode:
+                _band_streamed_chain = band_streamed_chain_nbx
+            else:
+                from neurobrix.kernels.ops.residual_chain_torch import (
+                    band_streamed_chain_torch,
+                )
+                _band_streamed_chain = band_streamed_chain_torch
             # Per-engine chain registry: chain_id → precomputed merge tensor.
             if not hasattr(self, "_chain_registry"):
                 self._chain_registry: Dict[str, Any] = {}

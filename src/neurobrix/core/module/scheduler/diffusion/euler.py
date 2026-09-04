@@ -261,6 +261,16 @@ class EulerDiscreteScheduler(DiffusionSchedulerBase):
             return self.sigmas[0].item()
         return 1.0
 
+    # --- resumable renders (see core/runtime/render_checkpoint.py) ---------
+
+    def checkpoint_state(self):
+        """Resumable: this solver's step is a function of (sample, sigma) with
+        no history across steps, so only the step index travels."""
+        return {"_step_index": self._step_index}
+
+    def restore_state(self, state) -> None:
+        self._step_index = state.get("_step_index")
+
     @classmethod
     def from_config(cls, config: Dict[str, Any]) -> "EulerDiscreteScheduler":
         """Create scheduler from NBX config."""
@@ -486,6 +496,16 @@ class EulerAncestralDiscreteScheduler(DiffusionSchedulerBase):
         if self.sigmas is not None and len(self.sigmas) > 0:
             return self.sigmas[0].item()
         return 1.0
+
+    # --- resumable renders (see core/runtime/render_checkpoint.py) ---------
+
+    def checkpoint_state(self):
+        """NOT resumable. Ancestral sampling draws fresh noise at every step,
+        so resuming would need the RNG state as well as the solver state —
+        and a resume that re-draws different noise produces a different image
+        while reporting success. Refusing is the correct answer until the
+        generator state travels too."""
+        return None
 
     @classmethod
     def from_config(cls, config: Dict[str, Any]) -> "EulerAncestralDiscreteScheduler":

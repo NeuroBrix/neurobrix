@@ -7,6 +7,130 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **NeuroBrix no longer tells you a model will not run.** When nothing fitted
+  on the available hardware, planning stopped with "No strategy can fit this
+  model". It now adds a final option — components loaded and released one at a
+  time, streaming from disk — so a model that is too large for your GPUs, and
+  even for your memory all at once, still runs. It will be slow, and it says
+  so. Planning refuses only when a single component cannot fit on its own, and
+  then it names that component and what would make it run.
+
+- **The engine now says which strategy it chose, and why.** Every run prints
+  the strategy, the devices it will use, the memory it plans to use, and the
+  reason that strategy was preferred over the others that also fitted.
+  NeuroBrix compares every viable strategy on estimated speed rather than
+  taking the first that fits, and that decision was previously invisible.
+
+### Added
+
+- **Long renders now save a resume point.** If a render is interrupted — a
+  power cut, a killed process — its progress is written to disk as it goes, so
+  the work is not simply lost. This is on by default and costs nothing on short
+  renders: the save only happens once a render has been running for a while.
+  Restoring from that saved point is not yet enabled by default, because it
+  does not yet reproduce an uninterrupted render exactly; the engine says so
+  rather than silently producing a different image.
+
+- **Long renders now report progress.** A hundred-step video render can take
+  many hours, and it used to print nothing at all for the whole of it — there
+  was no way to tell a healthy run from a stuck one. It now prints the step it
+  is on, how long it has been going and roughly how much is left. Short renders
+  stay silent: the line only appears on runs long enough to need it. Set
+  `NBX_PROGRESS_EVERY` to change how often it speaks, or `NBX_NO_PROGRESS=1` to
+  turn it off.
+
+### Fixed
+
+- **Some models failed to load, or loaded corrupted weights, when part of the
+  model was staged through system memory.** Weights whose stored precision
+  differed from the precision the model runs at were copied at their original
+  width into a buffer sized for the target width. Kokoro-82M could not run on
+  the `--triton` engine at all because of it. Any weight precision is now
+  converted before it is copied, and a mismatch refuses with a message naming
+  the pair instead of writing past the buffer.
+
+- **The first run of a model no longer looks like a hang.** The engine measures
+  kernel configurations the first time it sees a set of tensor shapes on your
+  machine, and it used to do that in complete silence — a first
+  `whisper-large-v3-turbo` transcription spent nearly four minutes producing no
+  output at all, where the second run of the same command took eight seconds.
+  It now says what it is doing, once, and says that the result is cached and
+  will not happen again.
+
+- **Multi-GPU transfers never used your NVLink.** When a model is split across
+  several GPUs, the activations handed from one card to the next were being
+  routed through system memory instead of the direct card-to-card links,
+  because direct access between cards was never switched on. On a machine
+  whose cards are all directly linked, a 34 MB hand-off took 48 ms where it
+  should take 5.5 ms — nearly 9x. Small transfers were 2.4x slower. Direct
+  access is now available to the placement strategies, and the engine can
+  report which pairs of cards support it.
+
+- **The `--triton` engine hardcoded the NVIDIA runtime in five places.** Token
+  sampling, the audio-language and autoregressive flows loaded `libcudart.so`
+  by name and copied memory through it directly, so those paths could not work
+  on AMD (where the library is `libamdhip64`) or on any future non-CUDA
+  device — and they ignored the copy's return code, so a failed transfer
+  returned silent garbage instead of an error. They now go through the
+  engine's own device allocator, which selects the right runtime and checks
+  the result. Verified byte-identical output across both engines.
+
+
+- **Audio models could not be found by category from the CLI.**
+  `neurobrix hub --category TTS` (and `STT`, `AUDIO_LLM`) was rejected before
+  the request was even made, because the CLI carried its own copy of the
+  category list and that copy had gone stale — it still offered `AUDIO` and
+  `SPEECH`, which the registry retired. **11 of the 45 published models were
+  unreachable by category**, all of them audio, so filtering and finding
+  nothing looked like an absence of audio support. The CLI no longer keeps a
+  copy: any category the registry serves is accepted.
+
+- **A mistyped category was reported as a network failure.** `--category AUDIO`
+  answered `Cannot connect to registry`, sending people to check their
+  firewall over a typo. The registry had in fact answered, and its reply named
+  both the problem and the valid values; the CLI discarded it. It now prints
+  the registry's own reason and the list of valid categories, and exits with a
+  usage error rather than a connection error.
+
+- **`neurobrix list` no longer contradicts the import it just performed.** A
+  freshly extracted model appeared both as installed and as "store only (not
+  extracted)", with an instruction to import it again — the two lists were
+  compared using filenames that carry a build stamp against directory names
+  that do not. The suggested command was also not copy-pasteable (it printed
+  `<org>` literally); it now points at the search command that finds the org.
+
+- **After importing, the suggested first command now fits the model.** Every
+  import ended with `--prompt "..."`, so importing an upscaler closed with a
+  command that cannot work. The suggestion is now built from the family's own
+  declared inputs — an upscaler gets `--input-image`, a speech model gets
+  `--audio`.
+
+- **`neurobrix inspect` accepts a model name**, not only a path to a `.nbx`
+  file. `inspect <model>` previously answered `File not found: <model>` with
+  no hint that a path was expected.
+
+- **`neurobrix upscale` accepts `--input-image`** as an alias for `--input`,
+  which is what `neurobrix run` calls the same file for the same models.
+
+- **"No models installed" now says where it looked.** Models live under the
+  invoking user's home, so running under `sudo` searched root's cache and
+  reported that a machine full of models had none.
+
+- **Running with no GPU at all is now covered by the test suite.** The engine
+  auto-detects a CPU profile and runs small models without configuration —
+  a 59 MB upscaler completes in seconds — but nothing tested that path, and a
+  regression in GPU detection had already broken it: hiding every GPU made
+  detection fall through to a fallback that reads the PCI bus, which rebuilt a
+  multi-GPU profile on a machine that could not use one, and the run died on
+  the first tensor transfer.
+
+- **`neurobrix doctor` on a machine with no GPU** now points out when PyTorch
+  was installed with CUDA support anyway — several GB of wheels that will
+  never be used — and prints the CPU-only install command.
+
+
 ## [0.5.3] - 2026-09-03
 
 This release exists for one reason: a clean `pip install neurobrix` could

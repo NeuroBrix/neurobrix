@@ -184,8 +184,9 @@ def fused_upsample_conv2d(
     materializing the full upsampled tensor. The conv output IS materialized
     in full because downstream consumers in the DAG read it as a whole.
     """
-    # Detect backend by tensor type
-    import torch
+    # Detect backend by tensor type. Testing for NBXTensor rather than for
+    # torch.Tensor is what keeps torch out of this dispatcher entirely — the
+    # `import torch` that used to sit here was already unused.
     use_nbx = False
     try:
         from neurobrix.kernels.nbx_tensor import NBXTensor
@@ -540,17 +541,25 @@ def tiled_rms_norm_spatial(
     [1, H, W, C] fp32 8 GB tensors that accumulate live until the next
     block consumes them.
     """
-    import torch
 
     # Resolve the canonical signature. Accept legacy positional or keyword.
     # Standard SDPA-style sig: (x, weight, eps).
-    if not isinstance(input_tensor, torch.Tensor):
+    # Test for OUR type, not torch's. This entry is registered as an
+    # interceptor in BOTH modes, so testing `isinstance(x, torch.Tensor)`
+    # imported torch on the triton path just to discover it was not needed
+    # (R33 inventory, 2026-09-03). Asking whether it is an NBXTensor answers
+    # the same question and imports nothing.
+    from neurobrix.kernels.nbx_tensor import NBXTensor as _NBXTensor
+    if isinstance(input_tensor, _NBXTensor):
         # NBXTensor path — defer to the standard wrapper, no tiling
         # (single rms_norm rarely overflows alone in triton mode where
         # kernels stream). Function is named `rms_norm` (no `_wrapper`
         # suffix) in wrappers.py.
         from neurobrix.kernels.wrappers import rms_norm as nbx_rms_norm
         return nbx_rms_norm(input_tensor, weight, eps)
+
+    # Torch branch only — never reached on the triton path.
+    import torch
 
     x = input_tensor
     # Channels is the LAST dim

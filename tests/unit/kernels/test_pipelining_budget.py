@@ -74,7 +74,11 @@ def test_amd_architectures_resolve_at_all():
     for arch in ("cdna", "cdna2", "cdna3"):
         cfg = get_vendor_config("amd", arch)
         assert cfg["architecture"] == arch
-        assert cfg["memory"]["wavefront_size"] == 64
+        # 64-wide wavefronts, declared under the SAME key every other
+        # profile uses. It was `wavefront_size` until 2026-09-03, so a
+        # consumer asking for `memory.warp_size` got nothing on AMD and
+        # would have fallen back to 32 — wrong by 2x on every CDNA card.
+        assert cfg["memory"]["warp_size"] == 64
 
 
 def test_cdna_generations_are_distinct():
