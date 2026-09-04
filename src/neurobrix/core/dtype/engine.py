@@ -139,6 +139,32 @@ configure_fp16_matmul_precision()
 #     fp32 preserves tiny epsilons and prevents accumulation overflow.
 # ============================================================================
 
+# Ops with NO fp16 kernel on the CPU backend.
+#
+# The header above says the autocast rules are "the CUDA autocast rules —
+# universally applicable". They are not: PyTorch's CPU backend has NARROWER
+# fp16 coverage than CUDA, and its own CPU autocast defaults to bfloat16 for
+# exactly this reason. Any Prism plan that places compute on the host —
+# lazy_sequential, cpu_execution, cpu_streaming, zero3 offload — therefore runs
+# ops CUDA would have accepted in fp16 on a backend that refuses them.
+#
+# Every entry is here because it was MEASURED to fail, and
+# tests/unit/dtype/test_cpu_half_coverage.py re-measures each one so the set
+# shrinks by construction when upstream implements a kernel. Nothing is added
+# here by reading a doc or guessing.
+#
+#   _weight_norm_interface — measured 2026-09-04, PyTorch 2.x:
+#       cpu/fp16  -> RuntimeError: "weight_norm_kernel" not implemented for 'Half'
+#       cpu/fp32  -> ok      cuda/fp16 -> ok      cuda/fp32 -> ok
+#     Reached by Kokoro-82M on a single 16 GB card, where Prism picks
+#     lazy_sequential and places `decoder` on the host. On three cards it picks
+#     single_gpu, the op stays on CUDA, and it never fails — which is why the
+#     full-zoo battery, pinned to 0,1,3, has never seen it.
+CPU_NO_HALF_OPS: FrozenSet[str] = frozenset({
+    "_weight_norm_interface",
+})
+
+
 # Ops that MUST run in float32 for numerical stability.
 # Combines AT_FORALL_FP32 + AT_FORALL_FP32_SET_OPT_DTYPE.
 # Output stays in fp32 — downstream FP16 ops bring it back to compute_dtype.
@@ -359,6 +385,13 @@ class DtypeEngine:
         if not self.amp_enabled:
             return func
 
+        # Host-placed compute: the CPU backend refuses fp16 for some ops that
+        # CUDA accepts, so the wrapper is chosen on the DEVICE the tensors
+        # arrive on, not only on the compute dtype. Checked before the AMP
+        # rules because it applies whatever those rules say about the op.
+        if op_name in CPU_NO_HALF_OPS:
+            return self._make_cpu_fp32_wrapper(func)
+
         # AMP rules only apply when compute_dtype is half-precision
         if self.compute_dtype in (torch.float16, torch.bfloat16):
             if op_name in AMP_FP32_OPS:
@@ -436,6 +469,38 @@ class DtypeEngine:
             # Standard path: fp16 input with half_to_float=True
             return func(inp, dim, half_to_float)
         return safe_softmax
+
+    def _make_cpu_fp32_wrapper(self, func):
+        """Run in fp32 when the inputs are on the HOST, untouched otherwise.
+
+        Not a blanket upcast: the same op in the same model runs fp16 happily
+        on CUDA, and forcing fp32 there would cost throughput to work around a
+        limitation that is not present. The decision is per CALL because a
+        Prism plan can place one component on the host and the next on a GPU.
+        """
+        def wrapper(*args, **kwargs):
+            on_host = any(isinstance(a, torch.Tensor) and a.device.type == "cpu"
+                          and a.is_floating_point() and a.dtype != torch.float32
+                          for a in args)
+            if not on_host:
+                return func(*args, **kwargs)
+            cast = [a.float() if isinstance(a, torch.Tensor)
+                    and a.is_floating_point() and a.dtype != torch.float32
+                    else a for a in args]
+            out = func(*cast, **kwargs)
+            # Hand the result back in the dtype the graph expects, so the op is
+            # invisible to everything downstream.
+            src = next((a.dtype for a in args if isinstance(a, torch.Tensor)
+                        and a.is_floating_point()), None)
+            if src is None or src == torch.float32:
+                return out
+            if isinstance(out, torch.Tensor):
+                return out.to(src)
+            if isinstance(out, (tuple, list)):
+                return type(out)(o.to(src) if isinstance(o, torch.Tensor)
+                                 and o.is_floating_point() else o for o in out)
+            return out
+        return wrapper
 
     def _make_fp32_wrapper(self, func: Callable) -> Callable:
         """
