@@ -54,6 +54,11 @@ GOLDEN_DIR.mkdir(parents=True, exist_ok=True)
 MODES = ["native", "triton"]
 
 # Default LLM probe — short, stable, deterministic.
+# The engine prints this, once, when it measures kernel configurations for
+# shapes it has not seen on this machine. It is how this harness tells a COLD
+# cell from a broken one; see the timeout branch in test_model_runs.
+_TUNING_NOTICE = b"measuring kernel configurations"
+
 LLM_PROMPT = "Hello"
 LLM_MAX_TOKENS = 5
 LLM_TEMPERATURE = 0.0
@@ -393,10 +398,42 @@ def test_model_runs(model_meta: Dict[str, str | int], mode: str) -> None:
     try:
         r = _run_neurobrix(name, mode, family, flow, gen_type, timeout_s)
     except subprocess.TimeoutExpired as e:
-        pytest.fail(
-            f"{name} / {mode}: timeout after {timeout_s}s. "
-            f"Partial stdout: {(e.stdout or b'')[-400:]!r}"
-        )
+        partial = (e.stdout or b"") + (e.stderr or b"")
+        if _TUNING_NOTICE in partial:
+            # COLD, not broken. The engine says when it is measuring kernel
+            # configurations for shapes it has not seen on this machine, and
+            # that costs up to 247 s on an encoder-decoder — more than several
+            # of these budgets. Measured 2026-09-04: whisper-large-v3-turbo
+            # 254.9 s cold against 7.9 s warm, a 32x difference on the SAME
+            # command.
+            #
+            # These budgets were all set before that was measured, so a cold
+            # cell and a broken cell were indistinguishable in this harness —
+            # which is exactly how Kokoro-82M's 1024-into-512-byte pinned
+            # overflow was recorded twice as "slow" and read as contention.
+            #
+            # The sweep is cached, so ONE retry runs warm. Inflating every
+            # budget to absorb a one-time cost would instead hide genuinely
+            # slow cells behind it.
+            print(f"\n[cold] {name} / {mode}: budget spent autotuning; "
+                  f"retrying once with the cache warm", flush=True)
+            try:
+                r = _run_neurobrix(name, mode, family, flow, gen_type, timeout_s)
+            except subprocess.TimeoutExpired as second:
+                pytest.fail(
+                    f"{name} / {mode}: TIMEOUT after {timeout_s}s on a WARM "
+                    f"retry (the first attempt was spent autotuning). This is "
+                    f"slow or broken, not cold.\n"
+                    f"Partial stdout: {(second.stdout or b'')[-400:]!r}"
+                )
+        else:
+            pytest.fail(
+                f"{name} / {mode}: TIMEOUT after {timeout_s}s, and the engine "
+                f"was NOT autotuning — so this is slow or broken, not cold. "
+                f"Re-run it without a limit before calling it contention: a "
+                f"timeout is not a diagnosis.\n"
+                f"Partial stdout: {(e.stdout or b'')[-400:]!r}"
+            )
 
     if r.returncode != 0:
         tail = (r.stderr or r.stdout or "")[-800:]
