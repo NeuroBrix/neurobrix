@@ -21,6 +21,7 @@ from neurobrix.triton.cfg import TritonCFGEngine
 from neurobrix.triton import i2v_conditioning
 from neurobrix.triton import vace_control_conditioning
 from neurobrix.triton import flux_video_conditioning
+from neurobrix.core.runtime.progress import StepProgress
 
 _FLOAT_NBX_DTYPES = (NBXDtype.float16, NBXDtype.bfloat16,
                      NBXDtype.float32, NBXDtype.float64)
@@ -619,7 +620,21 @@ class TritonIterativeProcessHandler:
         _sc = self._setup_step_cache(components, dual, num_steps)
 
         # Main loop
+        # Heartbeat. A 100-step 720p render takes ~14 h on a V100 and printed
+        # NOTHING for the whole of it until 2026-09-04 — indistinguishable from
+        # a hang, which is the trap this engine has already named elsewhere.
+        # Time-gated, so a 20-step image render stays silent and a video render
+        # speaks. Shared brick: the compiled and triton loops use the SAME
+        # implementation (R30), and it imports no torch (R33).
+        _progress = StepProgress(num_steps, label=self._progress_label())
+
+        # Resume point. ON by default (one breaker, no UPS); the time gate
+        # inside means a render finishing in seconds never writes at all.
+        _ckpt = self._open_checkpoint(num_steps)
+        _resume_from = self._checkpoint_resume(_ckpt, state_key, driver)
         for step_idx, timestep in enumerate(iterator):
+            if step_idx < _resume_from:
+                continue          # already done in the interrupted run
             if DEBUG:
                 # timestep may be NBXTensor or Python scalar
                 ts_val = timestep.item() if isinstance(timestep, NBXTensor) else timestep
@@ -798,6 +813,11 @@ class TritonIterativeProcessHandler:
                                             timestep, comp_name)
 
                     self.ctx.variable_resolver.set(state_key, current_state)
+            self._checkpoint_save(_ckpt, step_idx, num_steps, state_key, driver)
+            _progress.step(step_idx)
+        _progress.done()
+        if _ckpt is not None:
+            _ckpt.clear()         # the render finished; the insurance expires
 
         # F1 rates line (clause 4): activation + skip-rate proof.
         if _sc is not None:
@@ -808,6 +828,143 @@ class TritonIterativeProcessHandler:
     # Design + the six-clause drift discipline: scoping doc "F1".
     # R30 mirror of core/flow/iterative_process.py.
     # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+
+    def _open_checkpoint(self, num_steps: int):
+        """Resume point for this render, or None.
+
+        ON by default: the rack has one breaker and no UPS, and a cut at hour
+        thirteen of a fourteen-hour render loses everything. The time gate
+        inside keeps it free for renders that finish in seconds.
+
+        The fingerprint is built from whatever identifies THIS run — resuming
+        into a different render would produce an output matching neither, so
+        anything that changes the result must be in it.
+        """
+        from neurobrix.core.runtime.render_checkpoint import RenderCheckpoint
+
+        extra = {}
+        for key in ("global.seed", "global.guidance_scale", "global.height",
+                    "global.width", "global.num_frames"):
+            try:
+                v = self.ctx.variable_resolver.get(key)
+            except Exception:
+                continue
+            if isinstance(v, (int, float, str)):
+                extra[key] = v
+        extra["engine"] = "triton"
+        try:
+            return RenderCheckpoint.from_env(
+                model=self._progress_label(), num_steps=num_steps, extra=extra)
+        except Exception as exc:                       # noqa: BLE001
+            print(f"   [checkpoint] unavailable ({exc}); render continues")
+            return None
+
+    def _checkpoint_resume(self, ck, state_key: str, driver):
+        """Return the step to start from; 0 when there is nothing to resume."""
+        if ck is None:
+            return 0
+        if os.environ.get("NBX_RENDER_RESUME") != "1":
+            # SAVING is on by default and proven harmless: an uninterrupted
+            # render with checkpointing enabled is BYTE-IDENTICAL to one
+            # without it (measured 2026-09-04). So the state is on disk after
+            # a cut, which is the half that matters when the breaker trips.
+            #
+            # RESTORING is not on by default, because it is not yet proven
+            # bit-identical: resuming a 40-step PixArt render from step 27
+            # produced an image differing from the uninterrupted run in 99.7 %
+            # of pixels. The contract for this capability is "bit-identical or
+            # refused", and an image that is silently DIFFERENT is the worst
+            # outcome this engine admits — worse than losing the render, which
+            # the operator would at least know about.
+            #
+            # Opt in with NBX_RENDER_RESUME=1 if a possibly-different image is
+            # acceptable. Tracked as D-RENDER-RESUME-NOT-BIT-IDENTICAL.
+            if ck.path.exists():
+                print(f"   [checkpoint] a resume point exists ({ck.path.name}) "
+                      f"but resuming is not yet proven bit-identical, so this "
+                      f"render starts from step 0. Set NBX_RENDER_RESUME=1 to "
+                      f"resume anyway.")
+            return 0
+        try:
+            resumed = ck.load()
+        except Exception:                              # noqa: BLE001
+            return 0
+        if resumed is None:
+            return 0
+        step, latent, sched = resumed
+        try:
+            cur = self.ctx.variable_resolver.get(state_key)
+            from neurobrix.kernels.nbx_tensor import NBXTensor
+            tensor = NBXTensor.from_numpy(latent)
+            idx = getattr(cur, "_device_idx", 0) or 0
+            tensor = tensor.to_cuda(idx)
+            self.ctx.variable_resolver.set(state_key, tensor)
+            if sched and hasattr(driver, "restore_state"):
+                # The scheduler expects NUMPY — it does its own conversion, so
+                # converting here first would break it. But it infers the
+                # device from `self.sigmas`, which is built with
+                # `torch.from_numpy` and never moved off the host, so a
+                # multistep solver's restored history lands on CPU beside a
+                # CUDA latent and the second-order update raises "Expected all
+                # tensors to be on the same device".
+                #
+                # The scheduler cannot know the compute device; the flow
+                # handler holds the latent and does. So placement is repaired
+                # HERE, which is where placement decisions belong.
+                driver.restore_state(sched)
+                _place_scheduler_state(driver, tensor)
+        except Exception as exc:                       # noqa: BLE001
+            # A checkpoint that cannot be applied is worth nothing, and must
+            # never be worth LESS than nothing. `restore_state` mutates the
+            # scheduler field by field, so a failure part-way leaves it
+            # half-restored — continuing from step 0 with a scheduler that
+            # thinks it is at step 13 produces a WRONG image with no error,
+            # which is the outcome this engine refuses above all others.
+            #
+            # So: discard the checkpoint and stop. Re-running is correct;
+            # finishing on corrupted solver state is not.
+            if ck is not None:
+                ck.clear()
+            raise RuntimeError(
+                f"render checkpoint could not be applied ({exc}). The "
+                f"checkpoint has been discarded and the scheduler may be "
+                f"partly restored, so this run is stopped rather than "
+                f"finished on inconsistent state. Re-run to render from "
+                f"step 0."
+            ) from exc
+        print(f"   [checkpoint] resuming at step {step}")
+        return step
+
+    def _checkpoint_save(self, ck, step_idx: int, num_steps: int,
+                         state_key: str, driver) -> None:
+        if ck is None or not ck.should_save(step_idx, num_steps):
+            return
+        try:
+            cur = self.ctx.variable_resolver.get(state_key)
+            if not hasattr(cur, "numpy"):
+                return
+            sched = (driver.checkpoint_state()
+                     if hasattr(driver, "checkpoint_state") else None)
+            ck.save(step_idx, cur.numpy(), sched)
+        except Exception as exc:                       # noqa: BLE001
+            print(f"   [checkpoint] save skipped ({exc})")
+
+    def _progress_label(self) -> str:
+        """Name the run in its heartbeat, so a terminal with several renders in
+        it says which one is moving."""
+        # The name lives in the MANIFEST, not the topology — the topology
+        # describes the graph, the manifest describes the artifact.
+        for src in ("manifest", "topology"):
+            try:
+                blob = getattr(self.ctx.pkg, src, None)
+                name = (blob or {}).get("model_name") or (blob or {}).get("name")
+                if name:
+                    return str(name)
+            except Exception:
+                continue
+        return "render"
 
     def _setup_step_cache(self, components, dual, num_steps):
         """Flow eligibility (v1 scope: single loop component, no
@@ -1265,3 +1422,26 @@ class TritonIterativeProcessHandler:
 
         except Exception as e:
             raise RuntimeError(f"Tokenization failed: {e}") from e
+
+
+def _place_scheduler_state(driver, ref) -> None:
+    """Move a restored scheduler's tensors onto the latent's device.
+
+    Triton side: NBXTensor carries its own device and `to_cuda` is the move,
+    so there is no torch here (R33).
+    """
+    idx = getattr(ref, "_device_idx", 0) or 0
+    # NOT `sigmas`: an uninterrupted run leaves them exactly where the
+    # scheduler built them (on the host), so moving them here would make the
+    # resumed run compute somewhere the reference run did not — the resume
+    # must change nothing except WHERE it starts.
+    for attr in ("model_outputs", "last_sample"):
+        if not hasattr(driver, attr):
+            continue
+        value = getattr(driver, attr)
+        if hasattr(value, "to_cuda"):
+            setattr(driver, attr, value.to_cuda(idx))
+        elif isinstance(value, list):
+            setattr(driver, attr,
+                    [v.to_cuda(idx) if hasattr(v, "to_cuda") else v
+                     for v in value])

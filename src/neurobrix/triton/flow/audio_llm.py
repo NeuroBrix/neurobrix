@@ -22,7 +22,7 @@ import time
 import numpy as np
 from typing import Any, Callable, Dict, List, Optional
 
-from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype
+from neurobrix.kernels.nbx_tensor import DeviceAllocator, NBXTensor, NBXDtype
 from neurobrix.triton.memory_pool import release_flow_memory
 from neurobrix.kernels import wrappers as w
 
@@ -41,8 +41,9 @@ def _nbx_f32_to_numpy(t: NBXTensor) -> np.ndarray:
     f = t.to(NBXDtype.float32).contiguous()
     n = f.numel()
     buf = (ctypes.c_char * (n * 4))()
-    ctypes.cdll.LoadLibrary("libcudart.so").cudaMemcpy(
-        ctypes.byref(buf), ctypes.c_void_p(f.data_ptr()), n * 4, 2)  # D2H
+    # Through DeviceAllocator, not a hardcoded libcudart (ROCm/Metal have no
+    # such library), and with the return code checked.
+    DeviceAllocator.memcpy(ctypes.addressof(buf), f.data_ptr(), n * 4, 2)  # D2H
     return np.frombuffer(bytes(buf), dtype=np.float32).copy()
 
 

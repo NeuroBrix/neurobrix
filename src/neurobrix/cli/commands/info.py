@@ -71,8 +71,20 @@ def cmd_inspect(args):
 
     nbx_path = Path(args.nbx_path)
     if not nbx_path.exists():
-        print(f"ERROR: File not found: {nbx_path}")
-        sys.exit(1)
+        # `inspect <model-name>` is the signature people reach for — it was
+        # documented that way and it reads naturally — but only a path was
+        # accepted, so a model name answered "File not found: <name>" with no
+        # hint that a path was wanted (hub walkthrough, 2026-09-03). Resolve a
+        # name against the installed models before giving up.
+        try:
+            from neurobrix.cli.utils import find_model
+
+            nbx_path = Path(find_model(args.nbx_path))
+        except FileNotFoundError as exc:
+            print(f"ERROR: '{args.nbx_path}' is neither a file nor an "
+                  f"installed model.")
+            print(f"  {exc}")
+            sys.exit(1)
 
     print("=" * 70)
     print(f"NBX Inspect: {nbx_path.name}")

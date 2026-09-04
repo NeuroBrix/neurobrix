@@ -363,7 +363,11 @@ class Zero3Strategy(ExecutionStrategy):
         # before consuming any of its weights.
         if is_triton and stream:
             from neurobrix.kernels.nbx_tensor import DeviceAllocator as DA
-            ev = DA.create_event()
+            # Ordering only — this handle never reaches a timing query, and a
+            # timing-enabled event costs 9.6 us to record against 1.6 us for
+            # an ordering-only one (measured 2026-09-03,
+            # validation_outputs/tp_collective_latency_2026_09_03/).
+            ev = DA.create_event(timing=False)
             DA.record_event(ev, stream=stream)
             state['block_events'][bidx] = ev
         elif not is_triton and state['transfer_stream_torch'] is not None:

@@ -484,9 +484,12 @@ class TritonAutoregressiveHandler:
         import ctypes
         n = input_ids.numel()
         buf = (ctypes.c_char * (n * 8))()
-        ctypes.cdll.LoadLibrary('libcudart.so').cudaMemcpy(
-            ctypes.byref(buf), ctypes.c_void_p(input_ids.data_ptr()),
-            n * 8, 2)  # D2H
+        # Through DeviceAllocator, not a hardcoded libcudart: this is the
+        # triton path, and `libcudart.so` does not exist on ROCm or Apple.
+        # It also checks the return code, which the raw call did not — a
+        # failed copy used to return silent garbage.
+        DeviceAllocator.memcpy(ctypes.addressof(buf), input_ids.data_ptr(),
+                               n * 8, 2)  # D2H
         return list(np.frombuffer(bytes(buf), dtype=np.int64))
 
     def _create_session(self, gen_info: Dict) -> TritonLMSession:

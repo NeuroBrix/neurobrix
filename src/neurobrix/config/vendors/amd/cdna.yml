@@ -108,7 +108,14 @@ sdpa_thresholds:
 memory:
   max_shared_memory_per_block: 65536    # 64 KB (CDNA1/2)
   max_registers_per_block: 65536
-  wavefront_size: 64    # AMD uses 64-wide wavefronts (vs 32 warps)
+  # AMD schedules in 64-wide WAVEFRONTS where NVIDIA uses 32-wide warps.
+  # Named `warp_size` for schema uniformity, the same convention
+  # apple_silicon.yml follows for its SIMD groups: one hardware concept has
+  # ONE key across every profile, so a consumer never branches on vendor to
+  # find it. Declaring it as `wavefront_size` meant a reader asking for
+  # `memory.warp_size` got nothing on AMD and would fall back to 32 — wrong
+  # by 2x, silently, on every CDNA card.
+  warp_size: 64
   # SDPA deterministic-routing budget (R10 schema parity with
   # volta.yml). 0 = NOT APPLICABLE: the flash-attention
   # non-determinism diagnosed in P-TRITON-MOE-DETERMINISM-RESIDUAL
