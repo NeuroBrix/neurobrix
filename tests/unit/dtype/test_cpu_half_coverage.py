@@ -31,6 +31,9 @@ def _probe(op_name: str, device: str, dtype: torch.dtype):
         v = torch.randn(4, 4, device=device, dtype=dtype)
         g = torch.randn(4, 1, device=device, dtype=dtype)
         return torch._weight_norm_interface(v, g, 0)
+    if op_name == "reflection_pad1d":
+        x = torch.randn(1, 4, 16, device=device, dtype=dtype)
+        return torch.nn.functional.pad(x, (2, 2), mode="reflect")
     raise AssertionError(
         f"no probe for '{op_name}' — an entry in CPU_NO_HALF_OPS without a "
         f"probe here is an unverified claim, which is what this file exists "

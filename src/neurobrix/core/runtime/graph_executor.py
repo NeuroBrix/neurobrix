@@ -833,7 +833,28 @@ class GraphExecutor:
         if self.mode not in ("triton", "triton_sequential"):
             from neurobrix.core.dtype.engine import DtypeEngine
             amp_enabled = self._should_enable_amp()
-            self._dtype_engine = DtypeEngine(get_torch_dtype(self.dtype), graph_dtype=self._graph_dtype,
+            compute_dtype = get_torch_dtype(self.dtype)
+            # A component PLACED ON THE HOST computes in fp32, whatever the
+            # model's dtype. Half precision on CPU is not an optimisation
+            # there — x86 has no native fp16 arithmetic, so PyTorch emulates
+            # it. Measured 2026-09-04 on this host:
+            #
+            #     matmul  512x512   fp32   0.95 ms    fp16   178.73 ms   (188x)
+            #     matmul 1024x1024  fp32   2.23 ms    fp16  3008.11 ms  (1349x)
+            #
+            # And coverage is thin on top of being slow: _weight_norm_interface,
+            # reflection_pad1d and exp-on-ComplexHalf all raise "not implemented
+            # for 'Half'" on CPU while working in fp16 on CUDA. PyTorch's own
+            # CPU autocast uses bfloat16 for exactly this reason.
+            #
+            # So this is decided at PLAN time, where the placement is known,
+            # rather than op by op — one decision, no per-call cost, and every
+            # op covered at once instead of a list that grows by one failure at
+            # a time. Reached by lazy_sequential / cpu_execution / cpu_streaming
+            # and by zero3 offload.
+            if str(getattr(self, "device", "") or "").startswith("cpu"):
+                compute_dtype = torch.float32
+            self._dtype_engine = DtypeEngine(compute_dtype, graph_dtype=self._graph_dtype,
                                              amp_enabled=amp_enabled)
         else:
             self._dtype_engine = None  # Triton uses TritonDtypeEngine in sequence.py

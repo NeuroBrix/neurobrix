@@ -160,8 +160,15 @@ configure_fp16_matmul_precision()
 #     lazy_sequential and places `decoder` on the host. On three cards it picks
 #     single_gpu, the op stays on CUDA, and it never fails — which is why the
 #     full-zoo battery, pinned to 0,1,3, has never seen it.
+#   reflection_pad1d — measured 2026-09-04, PyTorch 2.x:
+#       cpu/fp16  -> RuntimeError: "reflection_pad1d" not implemented for 'Half'
+#       cpu/fp32  -> ok      cuda/fp16 -> ok      cuda/fp32 -> ok
+#     Same Kokoro decoder, one op after _weight_norm_interface. The set grows
+#     only by measurement, one entry per observed failure — never by guessing
+#     what else "might" be missing, which would cost fp32 on ops that work.
 CPU_NO_HALF_OPS: FrozenSet[str] = frozenset({
     "_weight_norm_interface",
+    "reflection_pad1d",
 })
 
 
