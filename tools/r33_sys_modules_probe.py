@@ -10,6 +10,8 @@ or upstream Triton's — that pulled it, with its file and line.
     python tools/r33_sys_modules_probe.py --triton --model TinyLlama-1.1B-Chat \\
         --prompt "The sky is" --max-tokens 8 --output /tmp/x.txt
 Exit code 1 when torch is in sys.modules at the end of a --triton run.
+`--warm` runs the serving engine in-process instead of the CLI (two requests,
+the second warm) — the daemon's proof without a socket.
 """
 from __future__ import annotations
 
@@ -140,9 +142,54 @@ def _report():
         os._exit(1)
 
 
+def _warm(argv):
+    """The serving warm path in-process: the InferenceEngine the daemon holds,
+    loaded once, asked twice (the second request is the warm one), then the
+    same report. `--warm --model M [--prompt P] [--max-tokens N] [--audio A]
+    [--input-image I] [--triton]`."""
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--model", required=True)
+    ap.add_argument("--prompt", default="The sky is")
+    ap.add_argument("--max-tokens", type=int, default=8)
+    ap.add_argument("--audio", default=None)
+    ap.add_argument("--input-image", default=None)
+    ap.add_argument("--steps", type=int, default=None)
+    ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--triton", action="store_true")
+    ap.add_argument("--output", default=None)
+    a = ap.parse_args(argv)
+    from neurobrix.core.prism.autodetect import get_or_create_default_profile
+    from neurobrix.serving.engine import InferenceEngine
+    engine = InferenceEngine(a.model, get_or_create_default_profile(), "triton" if a.triton else "compiled")
+    engine.load()
+    kwargs = {"max_tokens": a.max_tokens, "seed": a.seed}
+    if a.audio:
+        kwargs["audio_path"] = a.audio
+    if a.input_image:
+        kwargs["image_path"] = a.input_image
+    if a.steps is not None:
+        kwargs["steps"] = a.steps
+    for i in range(2):
+        result = engine.generate(prompt=a.prompt, **kwargs)
+        print(f"[R33 probe] warm request {i + 1}: keys={sorted(k for k in result if not k.startswith('_'))}", flush=True)
+    if a.output:
+        text = result.get("text") or result.get("transcription") or ""
+        with open(a.output, "w") as fh:
+            fh.write(str(text))
+
+
 def main():
     sys.meta_path.insert(0, _TorchWatcher())
     atexit.register(_report)
+    if "--warm" in sys.argv:
+        argv = [x for x in sys.argv[1:] if x != "--warm"]
+        try:
+            _warm(argv)
+        except SystemExit as e:
+            if e.code not in (0, None):
+                print(f"[R33 probe] the warm run exited {e.code}", flush=True)
+        return
     from neurobrix.cli import main as cli_main
     sys.argv = ["neurobrix", "run"] + sys.argv[1:]
     try:
