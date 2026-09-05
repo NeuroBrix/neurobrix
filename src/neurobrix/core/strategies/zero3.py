@@ -85,7 +85,12 @@ import logging
 import os
 from typing import Any, Dict, List, Optional, Set
 
-import torch
+from typing import TYPE_CHECKING
+
+from neurobrix.core.runtime.tensor_compat import is_torch_tensor
+
+if TYPE_CHECKING:  # R33: the ATen branch imports it; the shared strategy only branches on it
+    import torch
 
 from neurobrix.core.device_utils import device_empty_cache
 
@@ -140,6 +145,7 @@ class Zero3Strategy(ExecutionStrategy):
                 device_str = device_str.split(":", 1)[1]
             if device_str and device_str.startswith(("cuda", "hip", "xpu", "mps")):
                 return device_str
+        import torch  # the ATen branch's device probe (the triton subclass overrides this method)
         if torch.cuda.is_available():
             return "cuda:0"
         if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
@@ -183,7 +189,7 @@ class Zero3Strategy(ExecutionStrategy):
 
         total_mb = 0.0
         for t in weights.values():
-            if isinstance(t, torch.Tensor) and t.device.type == "cpu":
+            if is_torch_tensor(t) and t.device.type == "cpu":
                 total_mb += t.numel() * t.element_size()
             elif hasattr(t, '_device') and getattr(t, '_device', None) == 'cpu':
                 total_mb += t.numel() * t.element_size()
@@ -211,7 +217,7 @@ class Zero3Strategy(ExecutionStrategy):
 
         pinned = 0
         for name, tensor in list(weights.items()):
-            if isinstance(tensor, torch.Tensor) and tensor.device.type == "cpu":
+            if is_torch_tensor(tensor) and tensor.device.type == "cpu":
                 if not tensor.is_pinned():
                     weights[name] = tensor.contiguous().pin_memory()
                     pinned += 1
@@ -337,6 +343,7 @@ class Zero3Strategy(ExecutionStrategy):
             from neurobrix.kernels.nbx_tensor import DeviceAllocator as DA
             DA.set_device(dev_idx)
         else:
+            import torch
             torch.cuda.set_device(dev_idx)
         for tid in entry['weight_tensor_ids']:
             cpu_t = state['cpu_originals'].get(tid)
@@ -350,8 +357,9 @@ class Zero3Strategy(ExecutionStrategy):
                 else:
                     moved[tid] = cpu_t.to_cuda(dev_idx)
             else:
-                if not (isinstance(cpu_t, torch.Tensor) and cpu_t.device.type == 'cpu'):
+                if not (is_torch_tensor(cpu_t) and cpu_t.device.type == 'cpu'):
                     continue
+                import torch
                 target = torch.device(f"cuda:{dev_idx}")
                 if cpu_t.is_pinned() and state['transfer_stream_torch'] is not None:
                     with torch.cuda.stream(state['transfer_stream_torch']):
@@ -371,6 +379,7 @@ class Zero3Strategy(ExecutionStrategy):
             DA.record_event(ev, stream=stream)
             state['block_events'][bidx] = ev
         elif not is_triton and state['transfer_stream_torch'] is not None:
+            import torch
             ev = torch.cuda.Event()
             ev.record(state['transfer_stream_torch'])
             state['block_events'][bidx] = ev
@@ -453,6 +462,7 @@ class Zero3Strategy(ExecutionStrategy):
             from neurobrix.kernels.nbx_tensor import DeviceAllocator as DA
             DA.sync_device()
         else:
+            import torch
             torch.cuda.synchronize()
 
     def _reset_ratchet(self, component_name: str) -> None:
@@ -480,6 +490,7 @@ class Zero3Strategy(ExecutionStrategy):
                 )
                 DA.reset_peak_memory(dev_idx)
             else:
+                import torch
                 peak_mb = torch.cuda.max_memory_allocated(dev_idx) / 1e6
                 live_mb = torch.cuda.memory_allocated(dev_idx) / 1e6
                 print(
@@ -540,7 +551,7 @@ class Zero3Strategy(ExecutionStrategy):
         # for some reason. Skip pipelining; fall back to priming only.
         has_cpu_block_weights = any(
             (hasattr(t, '_device') and getattr(t, '_device', None) == 'cpu')
-            or (isinstance(t, torch.Tensor) and t.device.type == 'cpu')
+            or (is_torch_tensor(t) and t.device.type == 'cpu')
             for t in cpu_originals.values()
         )
         if not has_cpu_block_weights:
@@ -567,6 +578,7 @@ class Zero3Strategy(ExecutionStrategy):
                 )
                 transfer_stream = 0
         else:
+            import torch
             try:
                 transfer_stream_torch = torch.cuda.Stream(device=dev_idx)
             except Exception:
@@ -613,6 +625,7 @@ class Zero3Strategy(ExecutionStrategy):
             seq.override_weightless_op_devices(dev)
             path_label = f"triton/cuda:{dev}"
         else:
+            import torch
             exec_dev_t = torch.device(self.exec_device)
             n_flipped = seq.mark_cpu_weighted_ops_for_transfer(exec_dev_t)
             seq.override_weightless_op_devices(exec_dev_t)

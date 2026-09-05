@@ -17,8 +17,6 @@ ZERO HARDCODE: Import from here for all dtype operations.
 
 # Config - constants and mappings
 from neurobrix.core.dtype.config import (
-    DTYPE_MAP,
-    DTYPE_TO_STR,
     BYTES_MAP,
     HARDWARE_DTYPE_SUPPORT,
     get_dtype_bytes,
@@ -37,8 +35,20 @@ from neurobrix.core.dtype.converter import (
     resolve_safe_fallback,
 )
 
-# DtypeEngine - single entry point for all dtype decisions
-from neurobrix.core.dtype.engine import DtypeEngine
+# DtypeEngine (the ATen branch's engine) and the torch dtype maps resolve
+# on request: a --triton process imports this package for BYTES_MAP and the
+# string helpers and must not load torch (R33).
+_LAZY = {"DtypeEngine": "neurobrix.core.dtype.engine",
+         "DTYPE_MAP": "neurobrix.core.dtype.config",
+         "DTYPE_TO_STR": "neurobrix.core.dtype.config"}
+
+
+def __getattr__(name):
+    module = _LAZY.get(name)
+    if module is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    import importlib
+    return getattr(importlib.import_module(module), name)
 
 __all__ = [
     # Config

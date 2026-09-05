@@ -17,8 +17,12 @@ Usage:
     concrete_shape = resolver.resolve(["s0", 4, 128, 128])
     # Returns: [2, 4, 128, 128] if s0=2
 """
+from __future__ import annotations
 
-import torch
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # R33: the ATen branch imports it; shared code only annotates
+    import torch
 import logging
 import re
 from typing import Dict, List, Any, Optional, Union, Tuple

@@ -20,6 +20,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`~/.neurobrix/replay_cache/autotune_configs_<arch>.json`), seeded once per process on both engines;
   Triton's on-disk autotune cache is no longer used. Gate: an autotuned matmul launched and benchmarked
   in a process whose `sys.modules` never held torch.
+- **A `--triton` run no longer loads torch at all.** The shared orchestrator (the executor stack,
+  the registries, the dtype table, the container loader, the device utilities, the resolvers, the
+  tiling engine) imports without torch: the compiled flow handlers, strategies, CFG engine,
+  scheduler samplers, compiled sequence and DtypeEngine are imported by the compiled branch when it
+  is chosen, never at package import; shared code binds torch only on the compiled branch. The
+  boundaries are engine-neutral: the tokenizer runners, the text preprocessor and the image/audio
+  processors produce arrays that the executor puts in the engine's own container (torch on the
+  compiled engine, NBXTensor on the Triton engine); inputs synthesised from the topology, the
+  loop tensors a diffusion graph allocates (its initial noise now drawn by the Triton engine's own
+  seeded stream, no longer torch's generator smuggled across the boundary) and the computed
+  positional buffers are built per engine; images, videos and waveforms are saved from arrays. The
+  CLI seeds and drains the device through the engine it chose. Proof recorded per model
+  (`tools/r33_sys_modules_probe.py`): `sys.modules` free of torch at the end of complete `--triton`
+  runs (TinyLlama, whisper-large-v3-turbo, real-esrgan-x4, PixArt-XL-1024), compiled outputs
+  byte-identical to the previous release on the same four; a gate imports the shared orchestrator
+  with torch blocked (`tests/unit/runtime/test_r33_orchestrator_imports.py`, seen failing on
+  injected imports). Consequence to know: a Triton-engine diffusion render draws its noise from the
+  engine's stream, so its pixels differ from the previous release's at the same seed (reproducible
+  run to run); the compiled engine's renders are unchanged.
 - `tools/kernel_reference_bank.py` builds the CUDA reference bank of the kernel library: for every ATen
   op the dispatch layer implements, at the engine's tiles and their edges, the kernel's output next to
   an fp64 oracle with relative / absolute / ULP error, one `.npz` per kernel per shape under

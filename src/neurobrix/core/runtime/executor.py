@@ -7,7 +7,11 @@ Flow logic is delegated to flow handlers in core/runtime/flow/.
 ZERO SEMANTIC: Executes flow defined in topology.json mechanically.
 ZERO HARDCODE: All bindings come from topology.json connections.
 """
-import torch
+from __future__ import annotations
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # R33: the ATen branch imports it; shared code only annotates
+    import torch
 import json
 import gc
 import logging
@@ -21,7 +25,6 @@ from neurobrix.core.runtime.resolution.variable_resolver import VariableResolver
 from neurobrix.core.runtime.factory import ExecutorFactory
 from neurobrix.core.config import get_family_defaults, get_family_config, get_device_prefix
 from neurobrix.core.strategies import get_strategy, StrategyContext, ExecutionStrategy
-from neurobrix.core.module.scheduler.factory import SchedulerFactory
 from neurobrix.nbx.cache import ensure_extracted
 
 # Import modular components
@@ -29,9 +32,8 @@ from neurobrix.core.flow import FlowContext, get_flow_handler
 from neurobrix.core.runtime.resolution.input_resolver import InputResolver
 from neurobrix.core.runtime.resolution.input_synthesizer import InputSynthesizer
 from neurobrix.core.runtime.resolution.output_extractor import OutputExtractor
-from neurobrix.core.cfg.engine import CFGEngine
 from neurobrix.core.module.tiling_engine import TilingEngine
-from neurobrix.core.runtime.tensor_compat import is_tensor as _is_tensor
+from neurobrix.core.runtime.tensor_compat import is_tensor as _is_tensor, is_torch_tensor
 
 
 
@@ -329,6 +331,12 @@ class RuntimeExecutor:
         self.setup()
 
         # 2. Variable Resolution Phase
+        # The input boundary: arrays from the media processors (image,
+        # audio, tokens) enter the engine's container here — torch on the
+        # ATen branch, NBXTensor on the Triton branch (R33) — before the
+        # resolver binds them.
+        from neurobrix.core.runtime.resolution.variable_resolver import to_engine_container
+        inputs = to_engine_container(inputs, self.mode)
         merged_defaults = self._prepare_defaults(inputs)
         self._init_variable_resolver(inputs, merged_defaults)
         self._set_runtime_resolution_on_executors(merged_defaults)
@@ -413,7 +421,8 @@ class RuntimeExecutor:
             component_configs=comp_configs,
             modules=self.modules,
             loop_state={},
-            device=self._get_primary_device()
+            device=self._get_primary_device(),
+            mode=self.mode,
         )
 
         # Inject user inputs
@@ -567,7 +576,9 @@ class RuntimeExecutor:
                     cfg_engine=cfg_engine,
                     output_extractor=self._output_extractor
                 )
-            # Native mode: use CFGEngine (torch-based)
+            # Native mode: use CFGEngine (torch-based) — imported here, on
+            # the compiled branch only (R33).
+            from neurobrix.core.cfg.engine import CFGEngine
             cfg_engine = CFGEngine.from_topology(
                 ctx=ctx,
                 execute_component_fn=self._execute_component,
@@ -801,6 +812,7 @@ class RuntimeExecutor:
                     from neurobrix.triton.scheduler.factory import TritonSchedulerFactory
                     self.modules[mod_name] = TritonSchedulerFactory.create(config)
                 else:
+                    from neurobrix.core.module.scheduler.factory import SchedulerFactory
                     self.modules[mod_name] = SchedulerFactory.create(config)
             elif mod_type == "tokenizer":
                 self._setup_tokenizer(mod_name, mod_data)
@@ -1420,7 +1432,7 @@ class RuntimeExecutor:
 
         return fixed_inputs
 
-    def get_final_output(self, outputs: Dict[str, Any]) -> Optional[torch.Tensor]:
+    def get_final_output(self, outputs: Dict[str, Any]) -> Optional[Any]:
         """
         Get the final tensor output from execution outputs.
 
@@ -1436,14 +1448,13 @@ class RuntimeExecutor:
             Final tensor output, or None if not found
         """
         def _is_tensor(v):
-            return isinstance(v, torch.Tensor) or hasattr(v, 'data_ptr')
+            return is_torch_tensor(v) or hasattr(v, 'data_ptr')
 
         def _to_torch(v):
-            if isinstance(v, torch.Tensor):
-                return v
-            if hasattr(v, 'data_ptr'):
-                from neurobrix.kernels.nbx_tensor import nbx_to_torch
-                return nbx_to_torch(v)
+            # The engine's own container comes back — torch on the ATen
+            # branch, NBXTensor on the Triton branch; the output boundary
+            # (output_dispatch) reads either as an array (R33: no NBX→torch
+            # round trip on the Triton branch).
             return v
 
         # Try known output keys (order: AR image → diffusion → generic)

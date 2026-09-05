@@ -4,7 +4,7 @@ Universal image input preprocessing (compiled mode).
 DATA-DRIVEN mirror of `core.module.audio.input_processor.AudioInputProcessor`:
 the preprocessing type is a topology/config-declared string, the DSP is the
 vendor-free numpy core `image_dsp` (shared with the triton path, R34), and
-compiled mode converts the numpy result to torch only at the boundary.
+the executor puts the arrays in the engine's container (R33: no torch here).
 ZERO FALLBACK: an unknown preprocessing type raises, never guesses.
 ZERO model-specific branches: the type string is the only discriminator.
 
@@ -29,7 +29,6 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
-import torch
 
 from neurobrix.core.module.vision import image_dsp
 
@@ -53,12 +52,13 @@ class ImageInputProcessor:
     ):
         """Preprocess an image file into model input tensor(s).
 
-        Returns a CPU float32 torch.Tensor for single-tensor types
-        (i2v_vae_condition, clip_centercrop — identical contract to the
-        former inline CLI block), or a dict of named CPU tensors for
-        multi-tensor types (native_patch_grid → pixel_values +
-        image_grid_thw, vendor model_input_names). The runtime resolver
-        owns the later device/dtype placement.
+        Returns a float32 array for single-tensor types (i2v_vae_condition,
+        clip_centercrop — the values of the former inline CLI block), or a
+        dict of named arrays for multi-tensor types (native_patch_grid →
+        pixel_values + image_grid_thw, vendor model_input_names). Arrays
+        are the input boundary's container: the executor puts them in the
+        engine's own (torch on the ATen branch, NBXTensor on the Triton
+        branch — R33: no torch here) and the resolver owns placement.
         """
         if preprocessing_type not in ImageInputProcessor.SUPPORTED:
             raise RuntimeError(
@@ -82,8 +82,7 @@ class ImageInputProcessor:
             # Keys mirror the traced vpm graph's input:: names; dtypes are
             # the graph contract (float32 / bool / int32 — tgt_sizes values
             # feed in-graph position arithmetic and must stay exact ints).
-            return {k: torch.from_numpy(np.ascontiguousarray(v))
-                    for k, v in out.items()}
+            return {k: np.ascontiguousarray(v) for k, v in out.items()}
 
         if preprocessing_type == "native_patch_grid":
             if not isinstance(preprocessor_config, dict):
@@ -96,8 +95,8 @@ class ImageInputProcessor:
             flat, grid = image_dsp.native_patch_grid_np(
                 str(image_path), preprocessor_config)
             return {
-                "pixel_values": torch.from_numpy(np.ascontiguousarray(flat)),
-                "image_grid_thw": torch.from_numpy(np.ascontiguousarray(grid)),
+                "pixel_values": np.ascontiguousarray(flat),
+                "image_grid_thw": np.ascontiguousarray(grid),
             }
 
         if preprocessing_type == "native_patch_grid_video":
@@ -110,12 +109,9 @@ class ImageInputProcessor:
             flat, grid, second_per_grid = image_dsp.native_patch_grid_video_np(
                 str(image_path), preprocessor_config, fps=fps)
             return {
-                "pixel_values_videos":
-                    torch.from_numpy(np.ascontiguousarray(flat)),
-                "video_grid_thw":
-                    torch.from_numpy(np.ascontiguousarray(grid)),
-                "video_second_per_grid":
-                    torch.tensor([second_per_grid], dtype=torch.float32),
+                "pixel_values_videos": np.ascontiguousarray(flat),
+                "video_grid_thw": np.ascontiguousarray(grid),
+                "video_second_per_grid": np.asarray([second_per_grid], dtype=np.float32),
             }
 
         if preprocessing_type == "i2v_vae_condition":
@@ -133,8 +129,7 @@ class ImageInputProcessor:
             arr = image_dsp.clip_centercrop_np(
                 str(image_path), preprocessor_config)
 
-        # Torch only at the compiled boundary; stays CPU float32.
-        return torch.from_numpy(np.ascontiguousarray(arr))
+        return np.ascontiguousarray(arr)
 
 
 def find_upscale_input_variable(topology: dict) -> str:
@@ -165,19 +160,18 @@ def find_upscale_input_variable(topology: dict) -> str:
 
 
 def load_upscale_image(image_path: str, cache_path: Path):
-    """PIL load → NCHW float tensor with container-declared preprocessing.
+    """PIL load → NCHW float32 array with container-declared preprocessing.
 
     Reads ``modules/processor/preprocessor_config.json`` for the
     rescale factor and pad alignment. Falls back to the standard
     1/255 rescale + multiple-of-8 reflect pad when the processor
     config is absent (the conventional SR defaults). Returns
-    ``(tensor, (orig_h, orig_w))``. Shared by ``nbx upscale`` and the
+    ``(array, (orig_h, orig_w))`` — the executor puts the array in the
+    engine's container (R33: no torch here). Shared by ``nbx upscale`` and the
     serving warm path — one preprocessing, every entry point.
     """
     import json
 
-    import numpy as np
-    import torch
     from PIL import Image
 
     img = Image.open(image_path).convert("RGB")
@@ -222,18 +216,17 @@ def load_upscale_image(image_path: str, cache_path: Path):
 
     arr = np.asarray(img, dtype=np.float32) * float(rescale_factor)
     # HWC → CHW → NCHW
-    tensor = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0).contiguous()
+    tensor = np.ascontiguousarray(arr.transpose(2, 0, 1)[None])
 
-    # Pad H and W up to a multiple of `pad_size` (reflect padding,
-    # matching the Swin2SR image processor convention).
+    # Pad H and W up to a multiple of `pad_size` (reflect padding — the
+    # mirror without its edge, the Swin2SR image processor convention).
     _, _, h, w = tensor.shape
     pad_h = (pad_size - h % pad_size) % pad_size
     pad_w = (pad_size - w % pad_size) % pad_size
     if pad_h or pad_w:
-        tensor = torch.nn.functional.pad(
-            tensor, (0, pad_w, 0, pad_h), mode="reflect")
+        tensor = np.pad(tensor, ((0, 0), (0, 0), (0, pad_h), (0, pad_w)), mode="reflect")
 
-    return tensor, (h, w)
+    return np.ascontiguousarray(tensor), (h, w)
 
 
 def prepare_image_inputs(topology: dict, model_name: Optional[str],
@@ -262,7 +255,8 @@ def prepare_image_inputs(topology: dict, model_name: Optional[str],
     temporal-VAE class), and ``global.pixel_values`` = the CLIP view
     of the SAME image when the build embeds
     ``modules/image_processor/preprocessor_config.json``.
-    All tensors stay CPU; the runtime resolver owns placement.
+    Every value is an array; the executor puts it in the engine's
+    container and the runtime resolver owns placement.
     """
     import json
 

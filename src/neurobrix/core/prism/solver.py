@@ -13,7 +13,10 @@ import json
 import logging
 import os
 import re
-import torch
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # R33: the ATen branch imports it; shared code only annotates
+    import torch
 from datetime import datetime
 from pathlib import Path
 from dataclasses import dataclass, field
@@ -3674,7 +3677,7 @@ class PrismSolver:
                 with safe_open(str(shard), framework="pt") as f:
                     for key in f.keys():
                         tensor = f.get_tensor(key)
-                        if tensor.dtype == torch.bfloat16:
+                        if str(tensor.dtype) == "torch.bfloat16":
                             total_params += tensor.numel()
                             abs_max = tensor.abs().max().item()
                             if abs_max > FP16_MAX:

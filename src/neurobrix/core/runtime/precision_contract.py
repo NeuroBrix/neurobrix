@@ -37,7 +37,6 @@ import os
 from pathlib import Path
 from typing import Any, Dict, FrozenSet, Optional, Tuple
 
-import torch
 
 from neurobrix.core.config.loader import get_precision_calibration_policy
 from neurobrix.core.dtype import calibration as _cal
@@ -210,7 +209,7 @@ def load_calibration(cache_path: Optional[str], component_name: str,
 
 
 def resolve(cache_path: Optional[str], component_name: str,
-            dag: Optional[Dict[str, Any]], *, compute_dtype: torch.dtype,
+            dag: Optional[Dict[str, Any]], *, compute_dtype,
             supports_op_pins: bool = True) -> Tuple[bool, FrozenSet[str], FrozenSet[str]]:
     """(activations_fp16_safe, fp32_op_uids, narrow_op_uids) for one component.
 
@@ -218,7 +217,10 @@ def resolve(cache_path: Optional[str], component_name: str,
     compute no engine upcasts matmuls, so nothing is read and the default
     is returned. ``supports_op_pins=False`` (an engine without per-op
     islands) takes the contract only when the record needs none."""
-    if compute_dtype != torch.float16:
+    # A dtype name or a torch dtype; compared by name so the Triton branch
+    # resolves the same contract without torch (R33).
+    compute_dtype = str(compute_dtype).replace("torch.", "")
+    if compute_dtype != "float16":
         return False, frozenset(), frozenset()
     forced = _env_force()
     if forced is False:

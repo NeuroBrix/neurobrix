@@ -9,11 +9,15 @@ Consolidates memory cleanup patterns previously duplicated across:
 
 SINGLE SOURCE OF TRUTH: All memory cleanup operations defined here.
 """
+from __future__ import annotations
 
 import gc
 from typing import Dict, Optional, Any
 
-import torch
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # R33: the ATen branch imports it; shared code only annotates
+    import torch
 from neurobrix.core.device_utils import device_empty_cache, device_sync, device_memory_stats
 
 

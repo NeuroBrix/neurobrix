@@ -9,10 +9,15 @@ Responsibilities:
 
 ZERO HARDCODE: All values from config, none hardcoded.
 """
+from __future__ import annotations
 
 from typing import Dict, Any, Optional, List
 
-import torch
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # R33: the ATen branch imports it; shared code only annotates
+    import torch
+from neurobrix.core.runtime.tensor_compat import is_torch_tensor
 
 from ..base import ComponentHandler, ComponentConfig
 from ..registry import register_handler
@@ -84,11 +89,12 @@ class VAEComponentHandler(ComponentHandler):
         # into texture).
         import os as _os
         _dbg = _os.environ.get("NBX_DEBUG") == "1"
-        if _dbg and isinstance(latent, torch.Tensor):
+        if _dbg and is_torch_tensor(latent):
             print(f"[VAE-SEAM] pre-denorm  key={latent_key} shape={list(latent.shape)} "
                   f"mean={latent.float().mean().item():.4f} std={latent.float().std().item():.4f}")
         _dump = _os.environ.get("NBX_DUMP_LATENT")
-        if _dump and isinstance(latent, torch.Tensor):
+        if _dump and is_torch_tensor(latent):
+            import torch
             torch.save(latent.detach().cpu(), _dump)
             print(f"[VAE-SEAM] dumped pre-denorm latent -> {_dump}")
 
@@ -99,7 +105,8 @@ class VAEComponentHandler(ComponentHandler):
         latents_std = self.config.get("latents_std")
         if latents_mean is not None and latents_std is not None:
             view_shape = [1, -1] + [1] * (latent.dim() - 2)
-            if isinstance(latent, torch.Tensor):
+            if is_torch_tensor(latent):
+                import torch
                 mean_t = torch.tensor(latents_mean, device=latent.device, dtype=latent.dtype)
                 std_t = torch.tensor(latents_std, device=latent.device, dtype=latent.dtype)
                 mean_t = mean_t.view(*view_shape)
@@ -124,7 +131,7 @@ class VAEComponentHandler(ComponentHandler):
         if scaling_factor is not None and scaling_factor != 0 and scaling_factor != 1.0:
             latent = latent / scaling_factor
 
-        if _dbg and isinstance(latent, torch.Tensor):
+        if _dbg and is_torch_tensor(latent):
             _ls = self.config.get("latents_std")
             print(f"[VAE-SEAM] post-denorm shape={list(latent.shape)} "
                   f"mean={latent.float().mean().item():.4f} std={latent.float().std().item():.4f} "
@@ -179,7 +186,7 @@ class VAEComponentHandler(ComponentHandler):
         for key in latent_keys:
             if key in inputs:
                 value = inputs[key]
-                if isinstance(value, torch.Tensor) and value.dim() in (4, 5):
+                if is_torch_tensor(value) and value.dim() in (4, 5):
                     return key
 
         # Search for any 4D/5D tensor

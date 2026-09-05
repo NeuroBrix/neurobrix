@@ -10,10 +10,14 @@ Responsibilities:
 
 ZERO HARDCODE: All values from config, none hardcoded.
 """
+from __future__ import annotations
 
 from typing import Dict, Any, Optional, List
 
-import torch
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # R33: the ATen branch imports it; shared code only annotates
+    import torch
 
 from ..base import ComponentHandler, ComponentConfig
 from ..registry import register_handler
@@ -28,6 +32,7 @@ def _cat(tensors, dim):
     """
     if hasattr(type(tensors[0]), 'cat'):
         return type(tensors[0]).cat(tensors, dim=dim)
+    import torch
     return torch.cat(tensors, dim=dim)
 
 

@@ -75,17 +75,17 @@ def _reference_clip(image_path, pc):
 
 @pytest.mark.parametrize("h,w", [(None, None), (256, 384), (480, 640)])
 def test_i2v_single_frame_bit_identical(synthetic_png, h, w):
-    got = ImageInputProcessor.process(
-        "i2v_vae_condition", synthetic_png, height=h, width=w)
+    got = torch.from_numpy(ImageInputProcessor.process(
+        "i2v_vae_condition", synthetic_png, height=h, width=w))
     ref = _reference_i2v(synthetic_png, h, w, 0)
     assert got.shape == ref.shape and got.dtype == ref.dtype == torch.float32
     assert torch.equal(got, ref.contiguous())
 
 
 def test_i2v_temporal_pad_bit_identical(synthetic_png):
-    got = ImageInputProcessor.process(
+    got = torch.from_numpy(ImageInputProcessor.process(
         "i2v_vae_condition", synthetic_png, height=128, width=128,
-        pad_to_num_frames=13)
+        pad_to_num_frames=13))
     ref = _reference_i2v(synthetic_png, 128, 128, 13)
     assert got.shape == ref.shape == (1, 3, 13, 128, 128)
     assert torch.equal(got, ref.contiguous())
@@ -101,8 +101,8 @@ def test_i2v_temporal_pad_bit_identical(synthetic_png):
     {"do_normalize": False},
 ])
 def test_clip_centercrop_bit_identical(synthetic_png, pc):
-    got = ImageInputProcessor.process(
-        "clip_centercrop", synthetic_png, preprocessor_config=dict(pc))
+    got = torch.from_numpy(ImageInputProcessor.process(
+        "clip_centercrop", synthetic_png, preprocessor_config=dict(pc)))
     ref = _reference_clip(synthetic_png, dict(pc))
     assert got.shape == ref.shape and got.dtype == torch.float32
     assert torch.equal(got, ref)
@@ -167,8 +167,8 @@ def _reference_native_patch_grid(image_path, cfg):
 
 
 def test_native_patch_grid_bit_identical(synthetic_png):
-    got = ImageInputProcessor.process(
-        "native_patch_grid", synthetic_png, preprocessor_config=dict(_GLM_PREPROC))
+    got = {k: torch.from_numpy(v) for k, v in ImageInputProcessor.process(
+        "native_patch_grid", synthetic_png, preprocessor_config=dict(_GLM_PREPROC)).items()}
     ref_px, ref_grid = _reference_native_patch_grid(synthetic_png, _GLM_PREPROC)
     assert set(got.keys()) == {"pixel_values", "image_grid_thw"}
     assert got["pixel_values"].dtype == torch.float32

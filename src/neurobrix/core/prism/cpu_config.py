@@ -10,7 +10,10 @@ ZERO FALLBACK: Missing required cpu: fields = crash with explicit error.
 
 import os
 import logging
-import torch
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # R33: the ATen branch imports it; shared code only annotates
+    import torch
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -104,6 +107,7 @@ def apply_thread_config(cpu: CPUConfig, involves_cpu: bool) -> None:
     intra_threads = cpu.cores
     inter_threads = max(1, min(4, cpu.cores // 4))
 
+    import torch  # the ATen branch's thread pool; CPU execution is its path
     try:
         torch.set_num_threads(intra_threads)
     except RuntimeError:

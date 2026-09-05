@@ -1,5 +1,27 @@
-import torch
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # R33: the ATen branch draws through torch; the Triton flows carry their own stream
+    import torch
 from typing import Dict, Any, List, Optional, Union
+
+def to_engine_container(value: Any, mode: str) -> Any:
+    """Arrays (the tokenizer engine's output, the media processors' output)
+    become the executing engine's tensors: torch.from_numpy on the ATen
+    branch, NBXTensor.from_numpy on the Triton branch (R33: that branch
+    never imports torch). Nested dicts are walked; anything else passes."""
+    import numpy as np
+    if isinstance(value, dict):
+        return {k: to_engine_container(v, mode) for k, v in value.items()}
+    if not isinstance(value, np.ndarray):
+        return value
+    if mode in ("triton", "triton_sequential"):
+        from neurobrix.kernels.nbx_tensor import NBXTensor
+        return NBXTensor.from_numpy(np.ascontiguousarray(value))
+    import torch
+    return torch.from_numpy(np.ascontiguousarray(value))
+
 
 class VariableResolver:
     """
@@ -15,9 +37,14 @@ class VariableResolver:
         component_configs: Dict[str, Dict[str, Any]],
         modules: Dict[str, Any],
         loop_state: Dict[str, Any],
-        device: str = "cuda"
+        device: str = "cuda",
+        mode: str = "compiled",
     ):
         self.contract = variables_contract
+        # The executing engine: module outputs (arrays from the tokenizer
+        # engine) enter its container here — torch on the ATen branch,
+        # NBXTensor on the Triton branch (R33).
+        self.mode = mode
         self.defaults = runtime_defaults
         self.component_configs = component_configs
         self.modules = modules
@@ -45,9 +72,59 @@ class VariableResolver:
             seed = self.defaults.get("seed")
             if seed is None:
                 return None
+            import torch
             self._sampling_generator = torch.Generator(
                 device=self.device).manual_seed(int(seed))
         return self._sampling_generator
+
+    def to_engine_container(self, value: Any) -> Any:
+        """Module outputs enter the executing engine's container (see the
+        module-level ``to_engine_container``)."""
+        return to_engine_container(value, self.mode)
+
+    def _allocate_nbx(self, name: str, init_type: str, shape: tuple, dtype_str: str,
+                      resolver_node: Dict[str, Any]):
+        """The Triton branch's `allocate`: NBXTensor end-to-end. The random
+        inits are drawn by the house random kernels from the branch's own
+        run-scoped seeded stream (`kernels/rng_stream`, armed by the flow
+        from the same data-driven seed) — never torch's generator (R33).
+        The engines' noise streams are therefore distinct by construction;
+        each is reproducible per (seed, draw order)."""
+        import os
+        import numpy as np
+        from neurobrix.kernels.nbx_tensor import NBXTensor, parse_dtype
+        from neurobrix.kernels import wrappers as W
+        dt = parse_dtype(str(dtype_str).replace("torch.", ""))
+        dev = self.device if isinstance(self.device, str) else "cuda"
+        if init_type == "empty":
+            return NBXTensor.empty(shape, dtype=dt, device=dev)
+        if init_type == "zeros":
+            return NBXTensor.zeros(shape, dtype=dt, device=dev)
+        if init_type == "ones":
+            return NBXTensor.ones(shape, dtype=dt, device=dev)
+        if init_type == "randn":
+            # Diagnostic, read-only (default off): NBX_FIXED_LATENT=<path.npy>
+            # loads the initial noise from an array of the same shape so the
+            # two engines (or a vendor pipeline) start from a bit-identical
+            # latent for an op-by-op divergence diff.
+            fixed = os.environ.get("NBX_FIXED_LATENT")
+            if fixed and fixed.endswith(".npy") and os.path.exists(fixed):
+                arr = np.load(fixed)
+                if tuple(arr.shape) == tuple(shape):
+                    return NBXTensor.from_numpy(np.ascontiguousarray(arr)).to(dt)
+            return W.randn_wrapper(list(shape), dtype=dt, device=dev)
+        if init_type == "uniform":
+            return W.rand_wrapper(list(shape), dtype=dt, device=dev)
+        if init_type == "full":
+            fill_value = resolver_node.get("fill_value")
+            if fill_value is None:
+                raise RuntimeError(f"Variable '{name}' uses init='full' but no 'fill_value' specified")
+            np_dt = np.float32 if str(dt).endswith("bfloat16") else np.dtype(str(dt).split(".")[-1].rstrip("_"))
+            return NBXTensor.from_numpy(np.full(tuple(shape), fill_value, dtype=np_dt)).to(dt)
+        raise RuntimeError(
+            f"Variable '{name}' has unknown init type '{init_type}'.\n"
+            f"Supported: empty, zeros, ones, randn, uniform, full"
+        )
 
     def register_module_handler(self, module_name: str, handler: Any):
         """Registers a custom handler for a module (e.g. neural component executor)."""
@@ -222,10 +299,6 @@ class VariableResolver:
                 raise RuntimeError(
                     f"Variable '{name}' requires dtype but 'dtype' not found in runtime/defaults.json"
                 )
-            if not hasattr(torch, dtype_str):
-                raise RuntimeError(f"Invalid torch dtype: {dtype_str}")
-            dtype = getattr(torch, dtype_str)
-
             shape_tuple = tuple(shape)
 
             # Get initialization type (ZERO FALLBACK: must be declared)
@@ -235,6 +308,14 @@ class VariableResolver:
                     f"Variable '{name}' uses 'allocate' method but 'init' type not specified.\n"
                     f"Supported: empty, zeros, ones, randn, uniform, full"
                 )
+
+            if self.mode in ("triton", "triton_sequential"):
+                return self._allocate_nbx(name, init_type, shape_tuple, dtype_str, resolver_node)
+
+            import torch  # the ATen branch's allocation and generator
+            if not hasattr(torch, dtype_str):
+                raise RuntimeError(f"Invalid torch dtype: {dtype_str}")
+            dtype = getattr(torch, dtype_str)
 
             if init_type == "empty":
                 return torch.empty(shape_tuple, dtype=dtype, device=self.device)
@@ -304,6 +385,7 @@ class VariableResolver:
                 outputs = module_instance(**inputs)
             except Exception as e:
                 raise RuntimeError(f"Failed to execute module '{module_name}' for variable '{name}': {str(e)}")
+            outputs = self.to_engine_container(outputs)
 
             # Extract specific key if defined
             output_key = resolver_node.get("output_key")

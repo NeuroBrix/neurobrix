@@ -9,8 +9,12 @@ Consolidates dtype conversion logic previously duplicated across:
 Prism is the master for dtype decisions. bf16→fp16 is allowed when Prism
 has verified all weight values fit within ±65504 (fp16 range).
 """
+from __future__ import annotations
 
-import torch
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # R33: the ATen branch imports it; shared code only annotates
+    import torch
 from typing import Dict
 
 from neurobrix.core.dtype.config import get_dtype_bytes
@@ -41,6 +45,7 @@ def safe_dtype_convert(
         return tensor.to(target_dtype)
 
     # bf16→fp16: clamp to fp16 range to prevent overflow → inf → NaN
+    import torch
     if tensor.dtype == torch.bfloat16 and target_dtype == torch.float16:
         return tensor.clamp(-65504.0, 65504.0).to(torch.float16)
 

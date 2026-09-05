@@ -13,9 +13,14 @@ Usage:
     input_ids = tp.tokenize(prompt, device)
     neg_ids = tp.tokenize_negative(device, encoder_name="text_encoder")
 """
+from __future__ import annotations
 
-import torch
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
+
+import numpy as np
+
+if TYPE_CHECKING:  # R33: the ATen branch imports it; this brick serves both engines
+    import torch
 
 
 class TextProcessor:
@@ -46,6 +51,26 @@ class TextProcessor:
 
         # Pre-compute extracted values
         self._tokenizer_vals = topology.get("extracted_values", {}).get(tokenizer_name, {})
+        # The executing engine's container for the token tensors this brick
+        # returns: torch on the ATen branch, NBXTensor on the Triton branch
+        # (R33: that branch never imports torch). Read from the resolver.
+        self._mode = getattr(variable_resolver, "mode", "compiled")
+
+    def _place(self, ids, device: str):
+        """int64 [1, L] from a list/array of ids, in the engine's container on ``device``."""
+        arr = np.ascontiguousarray(np.asarray(ids, dtype=np.int64))
+        if arr.ndim == 1:
+            arr = arr[None, :]
+        if self._mode in ("triton", "triton_sequential"):
+            from neurobrix.kernels.nbx_tensor import NBXTensor
+            t = NBXTensor.from_numpy(arr)
+            if isinstance(device, str) and ":" in device:
+                idx = int(device.split(":")[1])
+                if idx != t._device_idx:
+                    t = t.to_cuda(idx)
+            return t
+        import torch
+        return torch.from_numpy(arr).to(device)
 
     # =========================================================================
     # PUBLIC API
@@ -134,7 +159,7 @@ class TextProcessor:
                 tokenize=True,
                 add_generation_prompt=True
             )
-            input_ids = torch.tensor([token_ids], dtype=torch.long, device=device)
+            input_ids = self._place(token_ids, device)
             return input_ids
 
         # Priority 2: SFT format (Janus-style)
@@ -148,7 +173,7 @@ class TextProcessor:
                 special_token_ids=special_token_ids,
                 is_unconditional=is_unconditional,
             )
-            input_ids = torch.tensor([token_ids], dtype=torch.long, device=device)
+            input_ids = self._place(token_ids, device)
             return input_ids
 
         # Priority 3: Basic tokenization
@@ -164,10 +189,10 @@ class TextProcessor:
                 padding=False,
                 add_special_tokens=True
             )
-            input_ids = torch.tensor([token_result["input_ids"]], dtype=torch.long, device=device)
+            input_ids = self._place(token_result["input_ids"], device)
         else:
             token_ids = self._tokenizer.encode(prompt, add_special_tokens=True)
-            input_ids = torch.tensor([token_ids], dtype=torch.long, device=device)
+            input_ids = self._place(token_ids, device)
         return input_ids
 
     def tokenize_for_diffusion(
@@ -215,8 +240,8 @@ class TextProcessor:
             result = self._tokenizer.encode_chat_for_diffusion(
                 prompt, system_message, max_length,
             )
-            input_ids = torch.tensor([result["input_ids"]], dtype=torch.long, device=device)
-            attention_mask = torch.tensor([result["attention_mask"]], dtype=torch.long, device=device)
+            input_ids = self._place(result["input_ids"], device)
+            attention_mask = self._place(result["attention_mask"], device)
             return input_ids, attention_mask
 
         # Fallback: basic tokenization (non-chat models)
@@ -224,7 +249,6 @@ class TextProcessor:
         tokens = self._tokenizer(
             prompt,
             max_length=max_length,
-            return_tensors="pt",
             padding="max_length",
             truncation=True
         )
@@ -239,9 +263,9 @@ class TextProcessor:
         if input_ids is None:
             raise RuntimeError(f"ZERO FALLBACK: Tokenizer returned no input_ids: {type(tokens)}")
 
-        input_ids = input_ids.to(device)
+        input_ids = self._place(input_ids, device)
         if attention_mask is not None:
-            attention_mask = attention_mask.to(device)
+            attention_mask = self._place(attention_mask, device)
 
         return input_ids, attention_mask
 
@@ -294,7 +318,7 @@ class TextProcessor:
             )
 
         neg_tokens = self._tokenizer(text=negative_prompt, max_length=neg_max_length)
-        neg_input_ids = neg_tokens["input_ids"].to(device)
-        neg_attention_mask = neg_tokens["attention_mask"].to(device)
+        neg_input_ids = self._place(neg_tokens["input_ids"], device)
+        neg_attention_mask = self._place(neg_tokens["attention_mask"], device)
 
         return neg_input_ids, neg_attention_mask

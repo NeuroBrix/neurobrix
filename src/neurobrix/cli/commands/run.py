@@ -136,7 +136,6 @@ def _try_warm_path(args) -> bool:
 
 def cmd_run(args):
     """Generate output using NeuroBrix Runtime."""
-    import torch
     from neurobrix.nbx import NBXContainer
     from neurobrix.core.prism import PrismSolver, load_profile, InputConfig
     from neurobrix.core.prism.autodetect import get_or_create_default_profile
@@ -496,12 +495,19 @@ def cmd_run(args):
         from neurobrix.core.runtime.registry_flags import get_component_flag as _gcf
         if _gcf(getattr(args, "model", None), "transformer",
                 "vace_control_conditioning", default=None):
-            import torch as _torch
             _nf = int(getattr(args, "num_frames", 0) or 1)
             _h = int(args.height) if args.height else 480
             _w = int(args.width) if args.width else 832
-            inputs["global.image"] = _torch.zeros(1, 3, _nf, _h, _w,
-                                                  dtype=_torch.float32)
+            if execution_mode in ("triton", "triton_sequential"):
+                # The Triton branch's container (R33: no torch in this process).
+                import numpy as _np
+                from neurobrix.kernels.nbx_tensor import NBXTensor as _NBXT
+                inputs["global.image"] = _NBXT.from_numpy(
+                    _np.zeros((1, 3, _nf, _h, _w), dtype=_np.float32))
+            else:
+                import torch as _torch
+                inputs["global.image"] = _torch.zeros(1, 3, _nf, _h, _w,
+                                                      dtype=_torch.float32)
             print(f"   VACE all-generate control: zeros clip "
                   f"[1,3,{_nf},{_h},{_w}] -> vae_encoder")
 
@@ -532,9 +538,13 @@ def cmd_run(args):
 
     if args.seed is not None:
         inputs["global.seed"] = args.seed
-        torch.manual_seed(args.seed)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(args.seed)
+        if execution_mode in ("compiled", "sequential"):
+            # The ATen branch's RNG. The Triton flows seed their own
+            # streams from global.seed (R33: a --triton run never loads torch).
+            import torch
+            torch.manual_seed(args.seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(args.seed)
         print(f"   global.seed = {args.seed}")
 
     # Universal --set injection
@@ -568,13 +578,24 @@ def cmd_run(args):
     set_hardware_profile(hw_profile)
     executor = RuntimeExecutor(pkg, execution_plan, mode=execution_mode)
 
+    def _drain_device():
+        # The wall clock below brackets the device work: each engine drains
+        # its own device — the ATen branch through torch, the Triton branch
+        # through the allocator's runtime (R33: no torch in that process).
+        if execution_mode in ("compiled", "sequential"):
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+        else:
+            from neurobrix.kernels.nbx_tensor import DeviceAllocator
+            if DeviceAllocator.device_count() > 0:
+                DeviceAllocator.device_synchronize()
+
     try:
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
+        _drain_device()
         t_exec_start = time.time()
         outputs = executor.execute(inputs)
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
+        _drain_device()
         t_exec_total = time.time() - t_exec_start
     except Exception as e:
         print(f"\n[ERROR] Pipeline failed: {e}")
