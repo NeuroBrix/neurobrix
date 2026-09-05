@@ -49,6 +49,122 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 # The same bar as tools/metal_first_light.py.
 _FP16_DRIFT_BAR = 1e-3
 
+# The kernel's own signature, spelled once. Types are read from what the
+# wrapper passes in `kernels/wrappers.py::rms_norm`: three buffers, four
+# strides and two dims as i32, `eps` as a float, and the three constexprs.
+_RMS_NORM_SIGNATURE = {
+    "input_ptr": "*fp32", "weight_ptr": "*fp32", "output_ptr": "*fp32",
+    "batch_dim": "i32", "feat_dim": "i32",
+    "input_batch_stride": "i32", "input_feat_stride": "i32",
+    "output_batch_stride": "i32", "output_feat_stride": "i32",
+    "eps": "fp32",
+    "scale_by_weight": "constexpr",
+    "BLOCK_SIZE_BATCH": "constexpr", "BLOCK_SIZE_FEAT": "constexpr",
+}
+
+
+def cmd_compile_only(ref_path) -> int:
+    """Can the milestone kernel be LOWERED, at the milestone's own shapes?
+
+    A separate question from whether it runs, and answerable on a machine
+    where nothing runs. Apple's offline shader compiler is needed only by the
+    pipeline's last stage (`metallib`); everything that decides *coverage*
+    happens in `msl`, one stage earlier. So this compiles `rms_norm` through
+    the `msl` stage at the exact tile sizes the engine would choose for each
+    shape in the reference file — `BLOCK_SIZE_BATCH` from
+    `wrappers._batch_block`, `BLOCK_SIZE_FEAT` from `next_power_of_2(feat)` —
+    and reports whether the backend can lower it.
+
+    It exists because the compile census, which has to invent tile sizes for
+    kernels whose real ones come from a runtime heuristic, refuses this kernel
+    at ITS invented (64, 64) tile. That refusal says nothing about the
+    milestone, and the difference is worth measuring rather than assuming.
+    """
+    import triton
+    from triton.backends.compiler import GPUTarget
+    from triton.compiler.compiler import ASTSource
+    from triton_msl.backend.compiler import MetalBackend
+    from triton_msl.backend.driver import _detect_metal_arch
+
+    from neurobrix.kernels.ops.rmsnorm import rms_norm_forward_kernel
+    from neurobrix.kernels.wrappers import _batch_block
+
+    jit_fn = rms_norm_forward_kernel.fn          # peel @triton.heuristics
+    target = GPUTarget("metal", _detect_metal_arch(), 32)
+
+    class _StopAfterMSL(Exception):
+        pass
+
+    original = MetalBackend.add_stages
+
+    def stop_after_msl(self, stages, options, language=None):
+        original(self, stages, options, language)
+        msl_stage = stages["msl"]
+
+        def wrapped(src, metadata):
+            msl_stage(src, metadata)
+            raise _StopAfterMSL()
+
+        stages["msl"] = wrapped
+
+    MetalBackend.add_stages = stop_after_msl
+    print(f"target: {target}")
+    print("compiling rms_norm through the `msl` stage only — no execution, "
+          "and no offline shader compiler needed.\n")
+
+    shapes = _shapes_in(ref_path)
+    failures = []
+    try:
+        for batch_dim, feat_dim in shapes:
+            bsb = _batch_block(batch_dim, feat_dim)
+            bsf = triton.next_power_of_2(feat_dim)
+            constexprs = {"scale_by_weight": True,
+                          "BLOCK_SIZE_BATCH": bsb, "BLOCK_SIZE_FEAT": bsf}
+            label = f"{batch_dim}x{feat_dim}"
+            try:
+                triton.compile(
+                    ASTSource(fn=jit_fn, signature=_RMS_NORM_SIGNATURE,
+                              constexprs=constexprs),
+                    target=target, options={"num_warps": 4})
+                verdict = "reached metallib (shader compiler present)"
+            except _StopAfterMSL:
+                verdict = "LOWERS to MSL"
+            except Exception as exc:
+                verdict = f"REFUSED — {type(exc).__name__}: " \
+                          f"{str(exc).splitlines()[0][:110]}"
+                failures.append((label, verdict))
+            print(f"  {label:>12}  BLOCK_SIZE_BATCH={bsb:<5} "
+                  f"BLOCK_SIZE_FEAT={bsf:<6} {verdict}")
+    finally:
+        MetalBackend.add_stages = original
+
+    print()
+    if failures:
+        print(f"LOWERING FAILED on {len(failures)} shape(s). The milestone "
+              f"cannot pass at these shapes even once the shader compiler is "
+              f"installed.")
+        return 1
+    print("The milestone kernel LOWERS at every shape in the reference. "
+          "Nothing in\nthe backend's coverage blocks it — what blocks it is "
+          "the toolchain and the\nNBXTensor allocator, neither of which is "
+          "about this kernel.")
+    return 0
+
+
+def _shapes_in(ref_path):
+    """The distinct (batch, feat) shapes the reference file records."""
+    with np.load(ref_path, allow_pickle=False) as data:
+        shapes = set()
+        for key in data.files:
+            if key.startswith("__") or "__" not in key:
+                continue
+            head = key.split("__")[0]
+            dims = head.split("_")[-1]
+            if "x" in dims:
+                b, f = dims.split("x")
+                shapes.add((int(b), int(f)))
+    return sorted(shapes)
+
 
 def _run_kernel(x_np, w_np, device, eps=1e-6):
     """Launch the engine's own rms_norm kernel, unmodified, on `device`."""
@@ -92,12 +208,20 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--ref", required=True,
                     help="the metal_reference.npz recorded on the CUDA box")
+    ap.add_argument("--compile-only", action="store_true",
+                    help="do not run anything: compile the kernel through the "
+                         "`msl` lowering stage at the reference's own shapes. "
+                         "Answers whether the backend CAN lower the milestone "
+                         "kernel on a machine with no offline shader compiler.")
     ap.add_argument("--device", default="cpu",
                     help="torch device holding the buffers (cpu or mps). The "
                          "KERNEL runs on the Apple GPU either way — the Metal "
                          "backend compiles and dispatches it; this only says "
                          "where the buffers live.")
     args = ap.parse_args()
+
+    if args.compile_only:
+        return cmd_compile_only(args.ref)
 
     backend = _device_label()
     print(f"triton target backend : {backend}")
