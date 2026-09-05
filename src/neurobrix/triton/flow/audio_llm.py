@@ -450,10 +450,32 @@ def _effective_sampling(ctx, defaults):
         # top_k=20 nobody had asked for. Re-requesting the default value
         # lands in the inherited branch, which is harmless: it is the
         # same value that was going to be ignored either way.
-        try:
-            same = float(val) == float(defaults.get(name))
-        except (TypeError, ValueError):
-            same = val == defaults.get(name)
+        # The default cascade has two rungs: the model's defaults.json and
+        # the family's defaults (config/families/<family>.yml). A value
+        # equal to EITHER is inherited — the family rung populates
+        # `global.*` for a model whose defaults carry no such key
+        # (audio_llm top_k=50, 2026-09-05: every model of the family refused).
+        inherited = [defaults.get(name), _family_default(ctx, name)]
+        same = False
+        for ref in inherited:
+            if ref is None:
+                continue
+            try:
+                same = same or float(val) == float(ref)
+            except (TypeError, ValueError):
+                same = same or val == ref
         if not same:
             explicit.add(name)
     return config, explicit
+
+
+def _family_default(ctx, name):
+    """The family-level default of a sampling parameter, or None."""
+    try:
+        family = (getattr(getattr(ctx, "pkg", None), "manifest", None) or {}).get("family")
+        if not family:
+            return None
+        from neurobrix.core.config.loader import get_family_config
+        return ((get_family_config(family) or {}).get("defaults") or {}).get(name)
+    except Exception:
+        return None
