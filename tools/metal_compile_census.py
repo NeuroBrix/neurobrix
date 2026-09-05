@@ -622,16 +622,32 @@ def write_report(records, import_failures, meta, out_dir: Path):
                 w(f"| `{f['module']}` | {f['error'][:140]} |\n")
             w("\n")
 
-        w("## Provenance of the constexpr values\n\n")
-        w("A census compiles kernels nobody called, so every "
-          "`tl.constexpr` needed a value. Per-kernel provenance is in the "
-          "JSON beside this file.\n\n")
-        counts = {}
+        w("## Where the census got its values\n\n")
+        w("A census compiles kernels nobody called, so every parameter "
+          "needed a type and every `tl.constexpr` a value. Per-kernel "
+          "provenance is in the JSON beside this file.\n\n")
+
+        cx_counts, ty_counts = {}, {}
         for r in records:
-            for src in (r.get("constexpr_provenance") or {}).values():
-                counts[src] = counts.get(src, 0) + 1
+            prov = r.get("constexpr_provenance") or {}
+            cx_names = set(r.get("constexprs") or {})
+            for name, src in prov.items():
+                bucket = cx_counts if name in cx_names else ty_counts
+                bucket[src] = bucket.get(src, 0) + 1
+
+        w("**`tl.constexpr` values.** `autotune` and `default` are the "
+          "kernel's own; `heuristic` is this tool's declared name table, and "
+          "any refusal resting on one is reported apart, above.\n\n")
+        w("| source | constexprs |\n|---|---:|\n")
+        for k, v in sorted(cx_counts.items(), key=lambda kv: -kv[1]):
+            w(f"| `{k}` | {v} |\n")
+        w("\n**Runtime parameter types.** `annotation` is the kernel's own; "
+          "`source` means pointer-ness was read from the kernel's AST — the "
+          "parameter appears inside a `tl.load` / `tl.store` address — which "
+          "is how 56 kernels stopped being harness noise; `heuristic` is the "
+          "name test or the i32/fp32 fallback.\n\n")
         w("| source | parameters |\n|---|---:|\n")
-        for k, v in sorted(counts.items(), key=lambda kv: -kv[1]):
+        for k, v in sorted(ty_counts.items(), key=lambda kv: -kv[1]):
             w(f"| `{k}` | {v} |\n")
         w(f"\nMachine-readable record: `{json_path.name}`\n")
 
