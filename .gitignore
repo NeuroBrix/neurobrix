@@ -205,3 +205,35 @@ CLAUDE.md
 # S2 long-clip fixture: derived locally (recipe in S2_STT_PREREG.md), too large for the repo
 benchmarks/assets/librivox_aow0506_600s.wav
 benchmarks/micro/_noassert/
+
+# --- Secrets: nothing that carries a credential enters this repository ------
+# Added 2026-09-05 when the Mac took the Dell's own git identity. The key and
+# the GitLab credentials live OUTSIDE the work tree (~/.ssh and
+# ~/.config/neurobrix), which is the real protection; this list is the second
+# line, so a copy made inside the tree by accident is refused rather than
+# committed. Deliberately broad: a false positive costs one `git add -f`, a
+# false negative costs a rotated credential and a rewritten history.
+.env
+.env.*
+*.env
+!.env.example
+*credential*
+*credentials*
+.git-credentials
+.netrc
+_netrc
+id_rsa
+id_dsa
+id_ecdsa
+id_ed25519
+id_*_neurobrix
+*.pem
+*.p12
+*.pfx
+*.keystore
+*_rsa
+*_ed25519
+*.key
+!**/*.pub
+secrets.*
+*.secret
