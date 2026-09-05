@@ -116,3 +116,37 @@ def test_our_binder_returns_triton_s_triple_on_a_real_kernel():
     assert list(b1.keys()) == list(b2.keys()) and all(b1[k] is b2[k] or b1[k] == b2[k] for k in b1)
     assert [tuple(x) for x in s1] == [tuple(x) for x in s2], (s1, s2)
     assert o1 == o2
+
+
+def test_an_autotuned_kernel_launches_and_benchmarks_without_torch():
+    """The Autotuner's path (`JITFunction.run`) and its sweep (the engine's
+    `do_bench`) — measured in a subprocess on the matmul wrapper, whose
+    kernels are autotuned."""
+    code = r"""
+import sys
+import numpy as np
+from neurobrix.kernels.nbx_tensor import NBXTensor, DeviceAllocator
+from neurobrix.kernels.dispatch import dispatch
+DeviceAllocator.set_device(0)
+rng = np.random.default_rng(3)
+a = NBXTensor.from_numpy(rng.standard_normal((67, 33)).astype(np.float16))
+b = NBXTensor.from_numpy(rng.standard_normal((33, 65)).astype(np.float16))
+out = dispatch("aten::mm")(a, b)
+buf = np.empty(out._nbytes, dtype=np.uint8); DeviceAllocator.memcpy(buf.ctypes.data, out.data_ptr(), out._nbytes, 2)
+assert np.isfinite(buf.view(np.float16).astype(np.float32)).all()
+print("torch" in sys.modules)
+"""
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=1200,
+                         env={"PYTHONPATH": str(SRC), "PATH": "/usr/bin:/bin", "CUDA_VISIBLE_DEVICES": "0",
+                              "HOME": str(Path.home()), "NBX_DISABLE_AUTOTUNE": "0"})
+    assert out.returncode == 0, out.stderr[-1500:]
+    assert out.stdout.strip() == "False", f"the autotuned launch path pulled torch:\n{out.stderr[-800:]}"
+
+
+def test_do_bench_returns_quantiles_in_milliseconds():
+    from neurobrix.kernels.launcher import do_bench
+    from neurobrix.kernels.ops.fft_op import scale_kernel
+    n = 4096
+    r, i = _nbx(np.ones(n, dtype=np.float32)), _nbx(np.ones(n, dtype=np.float32))
+    q = do_bench(lambda: scale_kernel[(4,)](r, i, n, 1.0, BLOCK_SIZE=1024), warmup=2, rep=5, quantiles=(0.5, 0.2, 0.8))
+    assert len(q) == 3 and all(0 < x < 50 for x in q), q

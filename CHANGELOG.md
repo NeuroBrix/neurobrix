@@ -14,6 +14,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   path, byte-identical outputs to upstream's launcher (`NBX_LAUNCHER=triton` keeps the latter for a
   differential). The GPU backend and the compile target come from the engine's data, never from
   Triton's driver probe.
+- The launcher also covers the autotuned kernels (`mm`, `bmm`, `addmm`, `conv2d`, `rms_norm`): the
+  sweep is timed by the engine's own benchmarker (CUDA events through the allocator, an NBXTensor
+  cache flush) and its result persists in the engine's replay-cache artifact
+  (`~/.neurobrix/replay_cache/autotune_configs_<arch>.json`), seeded once per process on both engines;
+  Triton's on-disk autotune cache is no longer used. Gate: an autotuned matmul launched and benchmarked
+  in a process whose `sys.modules` never held torch.
+- `tools/kernel_reference_bank.py` builds the CUDA reference bank of the kernel library: for every ATen
+  op the dispatch layer implements, at the engine's tiles and their edges, the kernel's output next to
+  an fp64 oracle with relative / absolute / ULP error, one `.npz` per kernel per shape under
+  `validation_outputs/kernel_reference_bank/` and an index with the coverage — the numerical gate of
+  every future port (ROCm, Metal).
 - The R33 gate now covers the whole triton branch and the Metal backend with a pin per file, and its
   probes run against the package as installed; an end-of-run probe (`tools/r33_sys_modules_probe.py`)
   reports whether torch was loaded by a `--triton` run and by which import path.
@@ -34,6 +45,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   drops from 1073 s to 45 s.
 
 ### Fixed
+- `aten::max` / `aten::min` with a `dim` on the Triton engine passed four arguments to a five-argument
+  kernel (a crash on any such reduction, on both launchers; found by the reference bank); they now
+  return the values and the indices as ATen does.
+- A refused runtime call (a device ordinal the process cannot see under `CUDA_VISIBLE_DEVICES` pinning,
+  an interval asked of an ordering-only event) left the CUDA runtime's sticky last error for the next
+  unrelated check to report as its own (`invalid device ordinal` on an fp16 op in the compiled engine);
+  every refusal now clears it and `set_device` fails loudly.
 - The inverse-FFT wrapper scaled its result with a torch-style in-place multiply that an NBXTensor
   does not have (a latent crash on an unexercised path); it now uses the house scale kernel.
 - The sampling-parameter guard no longer refuses a value inherited from the family defaults: a model

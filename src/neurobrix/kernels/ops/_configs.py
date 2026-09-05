@@ -49,6 +49,19 @@ def nbx_autotune(*args, **kwargs):
         supported = set(inspect.signature(triton.autotune).parameters)
     except (TypeError, ValueError):
         return triton.autotune(*args, **kwargs)
+    # Triton's own on-disk autotune cache (`cache_results`) keys its files by
+    # `make_backend(driver.active.get_current_target()).hash()` — the driver
+    # probe that imports torch (R33, universal since 2026-09-05). The engine
+    # persists its sweeps itself (triton/autotune_cache.py seeds the tuner's
+    # cache from ~/.neurobrix/replay_cache), so the upstream file cache is
+    # dropped here: same results, one persistence, no probe.
+    kwargs.pop("cache_results", None)
+    if "do_bench" in supported and "do_bench" not in kwargs:
+        # The sweep's timing through the engine's runtime (CUDA events via
+        # the allocator), not Triton's benchmarker, which asks torch for its
+        # events and its flush buffer (R33, universal since 2026-09-05).
+        from neurobrix.kernels.launcher import do_bench as _nbx_do_bench
+        kwargs["do_bench"] = _nbx_do_bench
 
     unsupported = {k for k in kwargs if k not in supported}
     if unsupported:
@@ -75,12 +88,13 @@ def nbx_autotune(*args, **kwargs):
 
 # Said once per process, the first time the autotuner actually measures.
 _SWEEP_ANNOUNCED = [False]
+_SEEDED = [False]
 
 _SWEEP_NOTICE = (
     "[neurobrix] First run for these tensor shapes on this machine: measuring "
     "kernel configurations.\n"
-    "[neurobrix] This happens ONCE per shape per machine and is cached to disk "
-    "(~/.triton/cache).\n"
+    "[neurobrix] This happens ONCE per shape per machine and is kept in the engine's "
+    "artifact (~/.neurobrix/replay_cache/autotune_configs_<arch>.json).\n"
     "[neurobrix] Later runs skip it entirely — measured 254.9 s -> 7.9 s on "
     "whisper-large-v3-turbo, 15.5 s -> 7.4 s on TinyLlama-1.1B.\n"
 )
@@ -110,19 +124,26 @@ def _announce_first_sweep(tuned):
     original = tuned.run
 
     def run_with_notice(*args, **kwargs):
-        if _SWEEP_ANNOUNCED[0]:
-            # Someone else announced: drop the instance override and get out
-            # of the hot path for good.
+        # The engine's artifact is the ONLY persistence of a sweep since
+        # 2026-09-05 (upstream's on-disk cache was dropped: its key was a
+        # torch-importing driver probe): seed once, capture every growth.
+        from neurobrix.triton import autotune_cache as _atc
+        if not _SEEDED[0]:
+            _SEEDED[0] = True
             try:
-                del tuned.run
-            except AttributeError:                        # pragma: no cover
+                _atc.seed()
+            except Exception:              # the artifact is an optimisation, never a failure source
                 pass
-            return original(*args, **kwargs)
         before = len(cache)
         result = original(*args, **kwargs)
-        if len(cache) > before and not _SWEEP_ANNOUNCED[0]:
-            _SWEEP_ANNOUNCED[0] = True
-            print(_SWEEP_NOTICE, file=sys.stderr, end="")
+        if len(cache) > before:
+            if not _SWEEP_ANNOUNCED[0]:
+                _SWEEP_ANNOUNCED[0] = True
+                print(_SWEEP_NOTICE, file=sys.stderr, end="")
+            try:
+                _atc.capture()
+            except Exception:
+                pass
         return result
 
     tuned.run = run_with_notice

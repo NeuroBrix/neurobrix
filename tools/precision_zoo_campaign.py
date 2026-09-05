@@ -8,7 +8,12 @@ For every cached model of a family (or a list), on one pinned GPU:
   4. the quality gate by output kind — text: byte identity (first differing
      character otherwise); image: PSNR / SSIM / moved-pixel fraction against A
      (tools/image_fidelity.py); audio: SNR of B against A; video: sha only;
-  5. the cold execute time of both arms (`[Timing] Total execution`).
+  5. the cold execute time of both arms (`[Timing] Total execution`), each arm
+     run twice (A B A B) and the min kept — the first execute of a cold
+     process reads the weights from disk; outputs checked run-to-run identical.
+  The census and the arms are cold CLI processes: no serving daemon may run
+  meanwhile (the engine runs one task at a time) — the locked warm rows of the
+  reference models are a separate, serialized stage (benchmarks/harness/run_bench.py).
 Artefacts per model under <out>/<model>/ (R29); `table` renders the per-lever
 table: who won, by how much, who did not move, who regressed.
 
@@ -39,9 +44,11 @@ _MEDIA = {
     "vlm": ["--input-image", str(ASSETS / "apple_448.png"), "--prompt", "Describe this image in one sentence."],
     "upscaler": ["--input-image", str(ASSETS / "apple_448.png")],
 }
+# audio_llm: the model's own sampling contract (an explicit --temperature turns
+# the vendor's top_k into an "explicit" parameter the path refuses).
 _TEXT_BOUND = {"llm": ["--max-tokens", "64", "--temperature", "0"],
                "vlm": ["--max-tokens", "64", "--temperature", "0"],
-               "audio_llm": ["--max-tokens", "64", "--temperature", "0"],
+               "audio_llm": ["--max-tokens", "64"],
                "multimodal": ["--max-tokens", "64", "--temperature", "0"]}
 
 
@@ -49,12 +56,39 @@ def manifest(model: str) -> dict:
     return json.loads((CACHE / model / "manifest.json").read_text())
 
 
+def weight_gb(model: str) -> float:
+    """Bytes of every safetensors shard under the model's cache directory
+    (the profiles of transformers-format artifacts carry no weight size)."""
+    total = 0
+    for root, _dirs, files in os.walk(CACHE / model):
+        for f in files:
+            if f.endswith(".safetensors"):
+                total += os.path.getsize(os.path.join(root, f))
+    return total / 1e9
+
+
 def family_of(model: str) -> str:
     return manifest(model)["family"]
 
 
+def family_stimulus(family: str) -> list:
+    """The family's `calibration:` section as explicit request flags — the
+    same request for `calibrate` and both arms (the calibrate command fills
+    them itself; `run` does not)."""
+    import yaml
+    cfg = yaml.safe_load((REPO / "src" / "neurobrix" / "config" / "families" / f"{family}.yml").read_text()) or {}
+    out = []
+    for k, v in (cfg.get("calibration") or {}).items():
+        out += [f"--{k.replace('_', '-')}", str(v)]
+    return out
+
+
 def request_args(model: str, family: str, extra: list) -> list:
-    args = list(_MEDIA.get(family, [])) + list(_TEXT_BOUND.get(family, []))
+    args = family_stimulus(family) + list(_MEDIA.get(family, []))
+    bound = list(_TEXT_BOUND.get(family, []))
+    for i in range(0, len(bound), 2):           # a family stimulus value wins over the campaign bound
+        if bound[i] not in args:
+            args += bound[i:i + 2]
     if family == "multimodal":
         topo = json.loads((CACHE / model / "topology.json").read_text())
         gen = ((topo.get("flow") or {}).get("generation") or {}).get("type", "")
@@ -127,7 +161,9 @@ def gate(a: Path, b: Path) -> dict:
     return {"kind": ext.lstrip("."), "identical": ha == hb, "pass": ha == hb, "sha_a": ha, "sha_b": hb}
 
 
-def one_model(model: str, gpu: int, out: Path, extra: list, timeout: int) -> dict:
+def one_model(model: str, gpu, out: Path, extra: list, timeout: int) -> dict:
+    """gpu=None → the whole rig visible (Prism free): the stage for models
+    whose weights do not fit one card; an int → one pinned card."""
     fam = family_of(model)
     d = out / model
     d.mkdir(parents=True, exist_ok=True)
@@ -136,19 +172,53 @@ def one_model(model: str, gpu: int, out: Path, extra: list, timeout: int) -> dic
     req = request_args(model, fam, extra)
     if fam == "multimodal" and "--mode" in req and req[req.index("--mode") + 1] == "image":
         ext = ".png"
-    base_env = {**os.environ, "CUDA_VISIBLE_DEVICES": str(gpu)}
-    res = {"model": model, "family": fam, "model_name": manifest(model).get("model_name"), "request": req}
+    base_env = {**os.environ}
+    if gpu is None:
+        base_env.pop("CUDA_VISIBLE_DEVICES", None)
+    else:
+        base_env["CUDA_VISIBLE_DEVICES"] = str(gpu)
+    res = {"model": model, "family": fam, "model_name": manifest(model).get("model_name"), "request": req,
+           "weight_gb": round(weight_gb(model), 2), "config": "machine" if gpu is None else f"pinned:{gpu}"}
     rc, wall = run([NBX, "calibrate", "--model", model] + req, base_env, d / "calibrate.log", timeout)
     res["calibrate"] = {"rc": rc, "wall_s": wall, "exec_s": exec_time(d / "calibrate.log")}
-    for arm, env in (("A", {**base_env, "NBX_ACTIVATIONS_FP16_SAFE": "0"}),
-                     ("B", {**base_env, "NBX_PRECISION_ISLANDS": str(d / "islands.tsv")})):
-        for k in ("NBX_ACTIVATIONS_FP16_SAFE", "NBX_PRECISION_ISLANDS"):
-            env.pop(k, None) if k not in env or env.get(k) is None else None
-        if arm == "B":
-            (d / "islands.tsv").unlink(missing_ok=True)
-        outp = d / f"{arm}{ext}"
-        rc, wall = run([NBX, "run", "--model", model] + req + ["--output", str(outp)], env, d / f"{arm}.log", timeout)
-        res[arm] = {"rc": rc, "wall_s": wall, "exec_s": exec_time(d / f"{arm}.log"), "output": str(outp)}
+    if rc:
+        # No record → the arms would both run the conservative path and the
+        # table would read a speed-up that does not exist. Fail the model.
+        res["A"] = {"rc": rc, "exec_s": None}; res["B"] = {"rc": rc, "exec_s": None}
+        res["islands"] = {}; res["gate"] = {"kind": "missing", "pass": False}; res["speedup"] = None
+        log = (d / "calibrate.log").read_text(errors="replace")
+        res["error"] = ("triton-only build" if "UNSUPPORTED PATH" in log and "encoding" in log
+                        else "calibrate failed")
+        (d / "result.json").write_text(json.dumps(res, indent=1))
+        return res
+    # Each arm twice, A B A B: a cold process reads the weights from disk on
+    # its first execute (NFS-cold vs page-cache), so the kept execute time
+    # is the MIN of the two runs — the cold-execute protocol with the disk
+    # out of the picture. Outputs are from the second run; the first run's
+    # output must be byte-identical to it (determinism check).
+    arms = (("A", {**base_env, "NBX_ACTIVATIONS_FP16_SAFE": "0"}),
+            ("B", {**base_env, "NBX_PRECISION_ISLANDS": str(d / "islands.tsv")}))
+    for rep in (1, 2):
+        for arm, env in arms:
+            if arm == "B":
+                (d / "islands.tsv").unlink(missing_ok=True)
+            outp = d / f"{arm}{ext}"
+            if rep == 1:
+                outp = d / f"{arm}.run1{ext}"
+            rc, wall = run([NBX, "run", "--model", model] + req + ["--output", str(outp)], env,
+                           d / f"{arm}.run{rep}.log", timeout)
+            e = exec_time(d / f"{arm}.run{rep}.log")
+            prev = res.get(arm)
+            res[arm] = {"rc": rc if prev is None else (prev["rc"] or rc),
+                        "exec_runs": (prev["exec_runs"] if prev else []) + [e],
+                        "output": str(d / f"{arm}{ext}")}
+    for arm, _ in arms:
+        runs = [x for x in res[arm]["exec_runs"] if x is not None]
+        res[arm]["exec_s"] = min(runs) if runs else None
+        r1, r2 = d / f"{arm}.run1{ext}", d / f"{arm}{ext}"
+        res[arm]["run_to_run_identical"] = (r1.exists() and r2.exists() and r1.read_bytes() == r2.read_bytes())
+    res["stochastic_reference"] = not res["A"]["run_to_run_identical"]
+    (d / "B.log").write_text((d / "B.run2.log").read_text(errors="replace")) if (d / "B.run2.log").exists() else None
     res["islands"] = islands_from_log(d / "B.log")
     res["gate"] = gate(d / f"A{ext}", d / f"B{ext}")
     a, b = res["A"]["exec_s"], res["B"]["exec_s"]
@@ -157,9 +227,56 @@ def one_model(model: str, gpu: int, out: Path, extra: list, timeout: int) -> dic
     return res
 
 
+def launcher_ab(model: str, gpu, out: Path, extra: list, timeout: int) -> dict:
+    """The launcher gate on one model: `--triton` with upstream's launcher
+    (NBX_LAUNCHER=triton) vs the NeuroBrix launcher, outputs byte-compared."""
+    fam = family_of(model)
+    d = out / model
+    d.mkdir(parents=True, exist_ok=True)
+    ext = {"llm": ".txt", "stt": ".txt", "vlm": ".txt", "audio_llm": ".txt", "tts": ".wav",
+           "video": ".mp4", "image": ".png", "upscaler": ".png"}.get(fam, ".txt")
+    req = request_args(model, fam, extra) + ["--triton"]
+    base_env = {**os.environ}
+    if gpu is None:
+        base_env.pop("CUDA_VISIBLE_DEVICES", None)
+    else:
+        base_env["CUDA_VISIBLE_DEVICES"] = str(gpu)
+    res = {"model": model, "family": fam, "weight_gb": round(weight_gb(model), 2),
+           "config": "machine" if gpu is None else f"pinned:{gpu}", "request": req, "lever": "launcher"}
+    for arm, env in (("A", {**base_env, "NBX_LAUNCHER": "triton"}), ("B", {**base_env, "NBX_LAUNCHER": "nbx"})):
+        outp = d / f"{arm}{ext}"
+        rc, wall = run([NBX, "run", "--model", model] + req + ["--output", str(outp)], env, d / f"{arm}.log", timeout)
+        res[arm] = {"rc": rc, "wall_s": wall, "exec_s": exec_time(d / f"{arm}.log"), "output": str(outp)}
+    a, b = d / f"A{ext}", d / f"B{ext}"
+    same = a.exists() and b.exists() and a.read_bytes() == b.read_bytes()
+    res["gate"] = {"kind": "bytes", "identical": same, "pass": same}
+    res["islands"] = {}
+    x, y = res["A"]["exec_s"], res["B"]["exec_s"]
+    res["speedup"] = (x / y) if x and y else None
+    (d / "result.json").write_text(json.dumps(res, indent=1))
+    return res
+
+
 def verdict(r: dict) -> str:
+    if r.get("lever") == "launcher":
+        if r["A"]["rc"] or r["B"]["rc"]:
+            return "FAILED (a --triton arm did not run)"
+        return "IDENTICAL" if r["gate"].get("identical") else "DIFFERENT"
+    if r.get("error") == "calibrate failed":
+        try:
+            log = (OUT_DEFAULT / r["model"] / "calibrate.log").read_text(errors="replace")
+            if "UNSUPPORTED PATH" in log and "encoding" in log:
+                r["error"] = "triton-only build"
+        except OSError:
+            pass
+    if r.get("error") == "triton-only build":
+        return "N/A (triton-only build: the census needs the compiled reference)"
+    if r.get("error") == "calibrate failed":
+        return "FAILED (calibrate)"
     if r["A"]["rc"] or r["B"]["rc"] or not r.get("speedup"):
         return "FAILED"
+    if r.get("stochastic_reference"):
+        return "UNGATED (A differs run to run)"   # the request draws its own randomness: no byte gate
     if not r["gate"].get("pass"):
         return "REGRESSED (gate)"
     s = r["speedup"]
@@ -185,10 +302,10 @@ def table(out: Path) -> str:
         else:
             gs = "identical" if g.get("identical") else g.get("kind", "?")
         a, b = r["A"].get("exec_s"), r["B"].get("exec_s")
-        rows.append(f"| {r['model']} | {r['family']} | {isl} | {a if a is None else f'{a:.2f}'} | "
+        rows.append(f"| {r['model']} | {r['family']} | {r.get('weight_gb', '?')} GB, {r.get('config', '?')} | {isl} | {a if a is None else f'{a:.2f}'} | "
                     f"{b if b is None else f'{b:.2f}'} | {('×%.2f' % r['speedup']) if r.get('speedup') else '—'} | {gs} | {verdict(r)} |")
-    head = ("| model | family | islands per component | A conservative (cold s) | B calibrated (cold s) | B/A | gate vs A | verdict |\n"
-            "|---|---|---|---|---|---|---|---|\n")
+    head = ("| model | family | weights, config | islands per component | A conservative (cold s) | B calibrated (cold s) | A/B | gate vs A | verdict |\n"
+            "|---|---|---|---|---|---|---|---|---|\n")
     return head + "\n".join(rows) + "\n"
 
 
@@ -198,11 +315,17 @@ def main():
     r = sub.add_parser("run")
     r.add_argument("--family")
     r.add_argument("--models")
-    r.add_argument("--gpu", type=int, required=True)
+    r.add_argument("--gpu", type=int, default=None, help="one pinned card; omit for the whole rig (--machine)")
+    r.add_argument("--machine", action="store_true", help="whole rig visible, Prism free (models that do not fit one card)")
+    r.add_argument("--max-weight-gb", type=float, default=None,
+                   help="pinned stage: skip (and list) models whose weights exceed this — they belong to the machine stage")
+    r.add_argument("--min-weight-gb", type=float, default=None, help="machine stage: only models above this")
     r.add_argument("--out", default=str(OUT_DEFAULT))
     r.add_argument("--timeout", type=int, default=7200)
     r.add_argument("--extra", default="", help="extra request args, space separated (e.g. '--num-frames 9')")
     r.add_argument("--skip-done", action="store_true")
+    r.add_argument("--launcher-ab", action="store_true",
+                   help="the launcher gate instead of the precision lever: --triton with upstream's launcher vs NeuroBrix's, bytes compared")
     t = sub.add_parser("table")
     t.add_argument("--out", default=str(OUT_DEFAULT))
     args = ap.parse_args()
@@ -216,18 +339,33 @@ def main():
         models = sorted(m.name for m in CACHE.iterdir() if (m / "manifest.json").exists()
                         and family_of(m.name) == args.family)
     extra = args.extra.split() if args.extra else []
+    if not args.machine and args.gpu is None:
+        ap.error("--gpu <n> for the pinned stage, or --machine for the whole rig")
+    gpu = None if args.machine else args.gpu
     for m in models:
         if args.skip_done and (out / m / "result.json").exists():
             print(f"[zoo] {m}: done, skipped"); continue
-        print(f"[zoo] {m} ({family_of(m)}) on GPU {args.gpu} …", flush=True)
+        lock = out / m / ".running"
+        if lock.exists():
+            print(f"[zoo] {m}: running elsewhere ({lock.read_text().strip()}), skipped"); continue
+        wgb = weight_gb(m)
+        if args.max_weight_gb is not None and wgb > args.max_weight_gb:
+            print(f"[zoo] {m}: {wgb:.1f} GB of weights > {args.max_weight_gb} GB — machine stage", flush=True); continue
+        if args.min_weight_gb is not None and wgb < args.min_weight_gb:
+            print(f"[zoo] {m}: {wgb:.1f} GB of weights < {args.min_weight_gb} GB — pinned stage", flush=True); continue
+        print(f"[zoo] {m} ({family_of(m)}, {wgb:.1f} GB) on {'the whole rig' if gpu is None else f'GPU {gpu}'} …", flush=True)
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        lock.write_text(f"gpu={gpu} pid={os.getpid()} {time.strftime('%H:%M:%S')}\n")
         try:
-            res = one_model(m, args.gpu, out, extra, args.timeout)
+            res = (launcher_ab if args.launcher_ab else one_model)(m, gpu, out, extra, args.timeout)
             print(f"[zoo] {m}: {verdict(res)} A={res['A']['exec_s']} B={res['B']['exec_s']} gate={res['gate']}", flush=True)
         except Exception as e:  # one model's failure never stops the campaign
             print(f"[zoo] {m}: ERROR {type(e).__name__}: {e}", flush=True)
             (out / m).mkdir(parents=True, exist_ok=True)
             (out / m / "result.json").write_text(json.dumps({"model": m, "family": family_of(m), "error": str(e),
                                                               "A": {"rc": 1}, "B": {"rc": 1}, "gate": {}}, indent=1))
+        finally:
+            lock.unlink(missing_ok=True)
     print(table(out))
     return 0
 

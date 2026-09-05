@@ -357,9 +357,15 @@ def prepare(kernel, args, kwargs) -> Tuple[_Prepared, Dict[str, Any]]:
     return prep, bound_args
 
 
+_TRACE = os.environ.get("NBX_LAUNCH_TRACE")     # a file: one line per launch, "<kernel>\t<grid>"
+
+
 def launch(kernel, grid, *args, **kwargs):
     """The one entry point: `launch(kernel, grid, *args, **constexprs_and_options)`."""
     prep, bound_args = prepare(kernel, args, kwargs)
+    if _TRACE:
+        with open(_TRACE, "a") as fh:
+            fh.write(f"{kernel.__name__}\t{grid if not callable(grid) else 'callable'}\n")
     if callable(grid):
         grid = grid(bound_args)
     grid = tuple(int(g) for g in grid) + (1,) * (3 - len(grid))
@@ -395,6 +401,59 @@ def install(force: Optional[bool] = None) -> bool:
     def __getitem__(self, grid):
         return lambda *args, **kwargs: launch(self, grid, *args, **kwargs)
 
+    def run(self, *args, grid, warmup=False, **kwargs):
+        """`JITFunction.run` is the Autotuner's launch path (every autotuned
+        kernel: mm, bmm, addmm, conv2d, ...) and `warmup`'s — both routed here."""
+        if warmup:
+            prepare(self, args, kwargs)
+            return None
+        return launch(self, grid, *args, **kwargs)
+
     JITFunction.__getitem__ = __getitem__
+    JITFunction.run = run
     _installed = True
     return True
+
+
+# ---------------------------------------------------------------------------
+# The benchmarker the autotuner uses: CUDA events through the allocator's
+# runtime handle — Triton's own asks torch for its timing and its buffers.
+# ---------------------------------------------------------------------------
+
+def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_mode="mean", **_):
+    """Same contract as `triton.testing.do_bench` (milliseconds; quantiles or
+    a mean/min/max), with the L2 flush and the timing done through the
+    engine's runtime (`DeviceAllocator`: events on the legacy stream)."""
+    import numpy as np
+    from neurobrix.kernels.nbx_tensor import DeviceAllocator, NBXTensor, NBXDtype
+    fn()
+    DeviceAllocator.stream_synchronize(0)
+    # an L2-sized scratch flushed before every timed call, as upstream does
+    flush = NBXTensor.empty((256 * 1024 * 1024 // 4,), dtype=NBXDtype.float32, device="cuda")
+    t_est = _time_ms(fn, 5)
+    n_warmup = max(1, int(warmup / max(t_est, 1e-3)))
+    n_repeat = max(1, int(rep / max(t_est, 1e-3)))
+    for _i in range(n_warmup):
+        fn()
+    times = []
+    for _i in range(n_repeat):
+        DeviceAllocator.memset_cuda(flush.data_ptr(), 0, flush._nbytes)
+        times.append(_time_ms(fn, 1))
+    times = np.asarray(times, dtype=np.float64)
+    if quantiles is not None:
+        return [float(q) for q in np.quantile(times, quantiles)]
+    return float(getattr(np, return_mode)(times)) if return_mode in ("mean", "min", "max", "median") else float(times.mean())
+
+
+def _time_ms(fn, n: int) -> float:
+    """Wall time of n calls on the device, by CUDA events on the legacy stream."""
+    from neurobrix.kernels.nbx_tensor import DeviceAllocator
+    start = DeviceAllocator.create_event(timing=True); end = DeviceAllocator.create_event(timing=True)
+    DeviceAllocator.record_event(start, 0)
+    for _i in range(n):
+        fn()
+    DeviceAllocator.record_event(end, 0)
+    DeviceAllocator.event_synchronize(end)
+    ms = DeviceAllocator.event_elapsed_ms(start, end)
+    DeviceAllocator.destroy_event(start); DeviceAllocator.destroy_event(end)
+    return ms / n

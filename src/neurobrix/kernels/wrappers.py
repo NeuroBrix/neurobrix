@@ -4438,16 +4438,23 @@ def min_wrapper(x, dim=None, keepdim=False):
         M = x.numel() // N
         x_perm = x.movedim(dim, -1).contiguous().reshape(M, N)
         out = NBXTensor.empty(M, dtype=x.dtype, device=x.device)
+        out_index = NBXTensor.empty(M, dtype=NBXDtype.int64, device=x.device)
         grid = (triton.cdiv(M, _RED_BM),)
         _set_device(x_perm)
-        min_kernel[grid](x_perm, out, M, N,
+        # The kernel writes the value AND its index (ATen's min.dim returns
+        # both); the wrapper passed four arguments to a five-argument kernel
+        # — a latent defect on a path no model of the zoo exercised, found by
+        # the kernel reference bank (2026-09-05).
+        min_kernel[grid](x_perm, out, out_index, M, N,
                          BLOCK_M=_RED_BM, BLOCK_N=_RED_BN,
                          num_warps=4)
         shape[dim] = 1
-        result = out.view(shape)
+        values = out.view(shape)
+        indices = out_index.view(shape)
         if not keepdim:
-            result = result.squeeze(dim)
-        return result
+            values = values.squeeze(dim)
+            indices = indices.squeeze(dim)
+        return values, indices
 
 
 def max_wrapper(x, dim=None, keepdim=False):
@@ -4473,16 +4480,23 @@ def max_wrapper(x, dim=None, keepdim=False):
         M = x.numel() // N
         x_perm = x.movedim(dim, -1).contiguous().reshape(M, N)
         out = NBXTensor.empty(M, dtype=x.dtype, device=x.device)
+        out_index = NBXTensor.empty(M, dtype=NBXDtype.int64, device=x.device)
         grid = (triton.cdiv(M, _RED_BM),)
         _set_device(x_perm)
-        max_kernel[grid](x_perm, out, M, N,
+        # The kernel writes the value AND its index (ATen's max.dim returns
+        # both); the wrapper passed four arguments to a five-argument kernel
+        # — a latent defect on a path no model of the zoo exercised, found by
+        # the kernel reference bank (2026-09-05).
+        max_kernel[grid](x_perm, out, out_index, M, N,
                          BLOCK_M=_RED_BM, BLOCK_N=_RED_BN,
                          num_warps=4)
         shape[dim] = 1
-        result = out.view(shape)
+        values = out.view(shape)
+        indices = out_index.view(shape)
         if not keepdim:
-            result = result.squeeze(dim)
-        return result
+            values = values.squeeze(dim)
+            indices = indices.squeeze(dim)
+        return values, indices
 
 
 # ---------------------------------------------------------------------------

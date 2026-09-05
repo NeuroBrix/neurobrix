@@ -66,16 +66,19 @@ def test_it_is_said_once_not_once_per_kernel(capsys):
     assert err.count("measuring kernel configurations") == 1
 
 
-def test_the_wrapper_removes_itself_from_the_hot_path():
-    """Instrumentation that outlives its purpose is a permanent tax on every
-    launch. Once the notice is out, the override is dropped and the class
-    method takes over again."""
+def test_the_wrapper_stays_and_announces_once():
+    """Since 2026-09-05 the wrapper is the engine's persistence of a sweep
+    (upstream's on-disk cache was dropped: its key was a torch-importing
+    driver probe): it stays installed to capture every new selection, and
+    what it costs a warm launch is one `len(cache)` comparison. The notice
+    is printed once."""
+    import io
+    import sys
     tuned = _configs._announce_first_sweep(_FakeAutotuner())
     assert "run" in tuned.__dict__, "the override should be installed"
     tuned.run("a", miss=True)          # announces
-    tuned.run("b", miss=False)         # sees the flag, removes itself
-    assert "run" not in tuned.__dict__, (
-        "the instance override must be gone once it has nothing left to say")
+    tuned.run("b", miss=False)         # stays: a later sweep must be captured too
+    assert "run" in tuned.__dict__, "the override persists the sweeps; it must stay"
 
 
 def test_the_notice_names_the_cost_and_where_it_goes(capsys):
@@ -86,7 +89,7 @@ def test_the_notice_names_the_cost_and_where_it_goes(capsys):
     tuned.run("a", miss=True)
     err = capsys.readouterr().err
     assert "ONCE" in err, "must say it does not recur"
-    assert "~/.triton/cache" in err, "must say where the result is kept"
+    assert "~/.neurobrix/replay_cache" in err, "must say where the result is kept (the engine's artifact)"
     assert "254.9" in err and "7.9" in err, "must carry the measured figures"
 
 
