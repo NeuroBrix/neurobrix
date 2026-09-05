@@ -447,7 +447,16 @@ class MetalKernel:
         declares.
         """
         import Metal
+        import objc
 
+        # An autorelease pool per dispatch, so the transient Objective-C
+        # objects go away promptly in a process that has no run loop to drain
+        # one. Hygiene, not the fix for the hang below — measured: removing
+        # it changes nothing over 256 launches.
+        with objc.autorelease_pool():
+            self._dispatch(Metal, grid, args, stream)
+
+    def _dispatch(self, Metal, grid, args, stream: int) -> None:
         runtime = self._runtime
         encoder_queue = runtime._resolve_queue(int(stream or 0))
         if encoder_queue is None:
@@ -456,6 +465,43 @@ class MetalKernel:
                 f"allocator handed out")
         command_buffer = encoder_queue.commandBuffer()
         encoder = command_buffer.computeCommandEncoder()
+        try:
+            self._encode_and_run(Metal, command_buffer, encoder, grid, args,
+                                 runtime)
+        except BaseException:
+            # A command buffer counts against the queue's in-flight limit
+            # from the moment it is created until it COMPLETES. One that is
+            # abandoned — because encoding raised — never completes, and its
+            # slot is gone for the life of the process. After 64 the queue
+            # blocks in `commandBuffer()` and nothing on this device runs
+            # again.
+            #
+            # Measured 2026-09-05: the kernels suite reached ~90% and stopped
+            # dead, 25 seconds of CPU across an hour of wall clock, parked in
+            # `_dispatch_semaphore_wait_slow` under
+            # `[AGXG16XFamilyCommandQueue commandBuffer]`. That suite has
+            # ~219 failing tests and most fail inside a launch: each one
+            # leaked a slot. It surfaced now only because the launcher routes
+            # every kernel launch through here.
+            #
+            # Committing an abandoned buffer lets it complete empty and
+            # returns the slot. The encoder must be closed first — Metal
+            # aborts the process on `commit command buffer with uncommitted
+            # encoder`, which is a worse failure than the one being reported.
+            # The exception is re-raised unchanged: a refusal must stay as
+            # loud as it was.
+            try:
+                encoder.endEncoding()
+            except Exception:                           # pragma: no cover
+                pass
+            try:
+                command_buffer.commit()
+            except Exception:                           # pragma: no cover
+                pass
+            raise
+
+    def _encode_and_run(self, Metal, command_buffer, encoder, grid, args,
+                        runtime) -> None:
         encoder.setComputePipelineState_(self._pipeline)
 
         if len(args) != len(self._msl_binding):
