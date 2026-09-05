@@ -1559,8 +1559,23 @@ def _detect_gpu_backend() -> str:
     asks it, because the property that matters is unified memory (which is
     what makes one address valid for both processors) and that is a device
     answer, not an `arm64` answer.
+
+    **Metal is probed FIRST, and that ordering is R33.** Asking Triton which
+    backend is active makes it call `is_active()` on every registered backend,
+    and upstream's AMD probe does `import torch` inside its own — so merely
+    asking the question puts torch in the process, on a machine with no AMD
+    card, for the whole life of the run. R33 has no Apple exception, so on a
+    machine that already answers "Metal" the question is not asked.
+
+    It does not cost CUDA its precedence, because the Metal probe requires
+    UNIFIED memory: an Intel Mac with a discrete NVIDIA card has a Metal
+    device and it does not report unified memory, so the probe declines and
+    the Triton question is reached exactly as before.
     """
-    # Try Triton runtime first (most reliable)
+    from .metal_device import metal_device_available
+    if metal_device_available():
+        return "metal"
+    # Try Triton runtime next (most reliable off Apple)
     try:
         import triton.runtime.driver
         backend = triton.runtime.driver.active.get_current_target().backend
@@ -1582,12 +1597,6 @@ def _detect_gpu_backend() -> str:
             return "hip"
         except OSError:
             continue
-    # Apple GPUs. Not a "fallback" in the sense the two above are: there is
-    # no library to dlopen, so the probe opens the device itself and answers
-    # only when a usable one came back.
-    from .metal_device import metal_device_available
-    if metal_device_available():
-        return "metal"
     raise RuntimeError(
         "No GPU runtime found (tried CUDA, ROCm/HIP and Metal)")
 

@@ -29,7 +29,16 @@ from pathlib import Path
 
 import pytest
 
-KERNELS = Path(__file__).resolve().parents[3] / "src" / "neurobrix" / "kernels"
+_SRC = Path(__file__).resolve().parents[3] / "src" / "neurobrix"
+KERNELS = _SRC / "kernels"
+
+# R33 is about the TRITON BRANCH, not about one directory. `kernels/` was the
+# whole of it until the Metal port added `triton/metal_backend.py` and
+# `kernels/metal_device.py`; scanning only `kernels/` would have let a torch
+# import into the Metal driver unseen. Apple gets no exception: the container
+# is NBXTensor there exactly as it is on CUDA, and a capability Metal needs
+# and NBXTensor lacks is added to NBXTensor, never borrowed from torch.
+TRITON_BRANCH = (KERNELS, _SRC / "triton")
 
 # Every file under kernels/ still allowed to import torch, with the reason it
 # is allowed and what would remove it. Adding a line here is a deliberate act
@@ -74,7 +83,8 @@ def _torch_importers() -> dict[str, list[int]]:
     regression.
     """
     found: dict[str, list[int]] = {}
-    for path in sorted(KERNELS.rglob("*.py")):
+    paths = sorted(q for root in TRITON_BRANCH for q in root.rglob("*.py"))
+    for path in paths:
         if "triton_kernels_ref" in str(path):
             continue                      # reference tree, never executed
         try:
@@ -92,8 +102,49 @@ def _torch_importers() -> dict[str, list[int]]:
                                     or node.module.startswith("torch.")):
                     lines.append(node.lineno)
         if lines:
-            found[str(path.relative_to(KERNELS))] = sorted(lines)
+            key = (str(path.relative_to(KERNELS))
+                   if KERNELS in path.parents or path.parent == KERNELS
+                   else str(path.relative_to(_SRC)))
+            found[key] = sorted(lines)
     return found
+
+
+# The Metal port's own modules. Named rather than merely covered by the sweep
+# above, because a rule everyone agrees with is still worth an assertion that
+# says which files it was written for.
+METAL_TRITON_PATH = (
+    "triton/metal_backend.py",
+    "triton/metal_driver.py",
+    "metal_device.py",
+)
+
+
+@pytest.mark.parametrize("filename", METAL_TRITON_PATH)
+def test_the_metal_path_imports_no_torch(filename):
+    """Apple is not an exception to R33.
+
+    triton-msl's own driver imports torch in eight places and its zero-copy
+    dispatch is built on `torch.mps`; taking any of it would put torch back in
+    the execution path through the side door. We take its LOWERER — TTGIR to
+    MSL, which is text — and compile, load and dispatch ourselves, on
+    NBXTensor buffers from the Metal allocator.
+
+    A file listed here that does not exist yet is not a failure: the pin is
+    "if it exists, it is torch-free", so it guards the modules as they land.
+    """
+    path = _SRC / filename
+    if not path.exists():
+        pytest.skip(f"{filename} does not exist yet")
+    found = _torch_importers()
+    key = (str(path.relative_to(KERNELS))
+           if path.parent == KERNELS else str(path.relative_to(_SRC)))
+    assert key not in found, (
+        f"{filename} imports torch (lines {found.get(key)}).\n"
+        f"The Metal path is the triton branch: its container is NBXTensor and "
+        f"its device work goes through the allocator. A capability it needs "
+        f"and NBXTensor lacks is added to NBXTensor, in the seam, with pins — "
+        f"never borrowed from torch."
+    )
 
 
 def test_no_unlisted_torch_import_under_kernels():
@@ -137,7 +188,7 @@ def test_the_kernels_package_does_not_pull_torch():
     import subprocess
     import sys
 
-    repo = KERNELS.parents[2]
+    src_root = KERNELS.parents[1]
     code = (
         "import sys, importlib;"
         "importlib.import_module('neurobrix.kernels');"
@@ -145,7 +196,7 @@ def test_the_kernels_package_does_not_pull_torch():
     )
     out = subprocess.run(
         [sys.executable, "-c", code], capture_output=True, text=True,
-        env={"PYTHONPATH": str(repo), "PATH": "/usr/bin:/bin"}, timeout=120,
+        env={"PYTHONPATH": str(src_root), "PATH": "/usr/bin:/bin"}, timeout=120,
     )
     assert out.stdout.strip().endswith("False"), (
         f"importing neurobrix.kernels pulled torch into the process.\n"
@@ -165,7 +216,7 @@ def test_pure_kernel_modules_stay_torch_free():
     import subprocess
     import sys
 
-    repo = KERNELS.parents[2]
+    src_root = KERNELS.parents[1]
     for module in ("neurobrix.kernels.ops._configs",
                    "neurobrix.kernels.ops.rmsnorm",
                    "neurobrix.kernels.ops.residual_chain"):
@@ -174,7 +225,7 @@ def test_pure_kernel_modules_stay_torch_free():
                 f"print('torch' in sys.modules)")
         out = subprocess.run(
             [sys.executable, "-c", code], capture_output=True, text=True,
-            env={"PYTHONPATH": str(repo), "PATH": "/usr/bin:/bin"}, timeout=120,
+            env={"PYTHONPATH": str(src_root), "PATH": "/usr/bin:/bin"}, timeout=120,
         )
         assert out.stdout.strip().endswith("False"), (
             f"importing {module} pulled torch.\n"
