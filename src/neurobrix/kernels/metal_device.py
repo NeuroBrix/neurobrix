@@ -585,6 +585,30 @@ class MetalRuntime:
         _deref(out_ms).value = max(0.0, delta)
         return _OK
 
+    # -- binding ------------------------------------------------------------
+
+    def buffer_for_pointer(self, address: int):
+        """The `MTLBuffer` backing an address this allocator handed out.
+
+        How a launch path SHOULD bind our memory. The alternative — wrapping
+        the raw address with
+        `newBufferWithBytesNoCopy:length:options:deallocator:`, which is what
+        the Triton Metal driver does — asks Metal to take over pages it
+        already owns, requires page alignment to be defined at all, and was
+        observed returning nil under memory pressure. The buffer already
+        exists; the registry can simply hand it back.
+
+        Returns `(MTLBuffer, offset)`, the offset always 0 today because each
+        allocation is its own buffer. Returns `(None, 0)` for an address this
+        allocator did not produce — the caller decides, and is not handed
+        something that merely looks right.
+        """
+        with self._lock:
+            entry = self._buffers.get(address) or self._host_buffers.get(address)
+        if entry is None:
+            return None, 0
+        return entry[0], 0
+
     # -- diagnostics --------------------------------------------------------
 
     def live_allocation_count(self) -> int:
