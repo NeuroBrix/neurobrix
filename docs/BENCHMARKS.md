@@ -58,17 +58,19 @@ and the competitor's version or configuration. Medians. Interleaved arms.
 so.** The number that matters is the movement: this same row was **×84** behind
 on 2026-08-05 (0.09 tok/s against 7.56). It is ×1.69 today.
 
-### Image diffusion — *slot 2026-09-05 13:00 (quiet host)*
+### Image diffusion — *slot 2026-09-05 13:09 (quiet host)*
 
 | row | NeuroBrix (compiled) | vendor `diffusers` | gap |
 |---|---:|---:|---|
-| PixArt-Sigma 1024, 20 steps | **8.88 s** | 8.69 s | ×1.02 |
-| PixArt-XL 1024, 20 steps | **8.61 s** | 8.31 s | ×1.04 |
+| PixArt-Sigma 1024, 20 steps | **8.59 s** | 8.67 s | ×0.99 |
+| PixArt-XL 1024, 20 steps | **8.31 s** | 8.34 s | ×1.00 |
 | Sana-1600M 1024, 20 steps | 9.25 s | **4.17 s** | ×2.2 |
 
 Seconds per image, median of five, warm engine on both arms, same seed, same
 GPU, arms run back to back, both arms writing their PNG inside the measured
-request; every arm sha-identical across its five requests.
+request (NeuroBrix at PNG level 1, diffusers at PIL's default 6 — both lossless);
+every arm sha-identical across its five requests. The medians cross by 1 % and
+0.4 %, inside the spread of either arm: parity with a thin edge, not a wide lead.
 
 **Correction of the 08-30 image rows.** The 08-30 NeuroBrix numbers (11.44 s,
 13.46 s) were produced with a step cache enabled on our arm and not on the
