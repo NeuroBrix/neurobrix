@@ -29,6 +29,110 @@ from neurobrix import __version__
 from neurobrix.cli.utils import REGISTRY_URL
 
 
+def _add_run_arguments(p):
+    """The request arguments shared by `run` and `calibrate` (one list, one help)."""
+    p.add_argument('--model', default=None, help='Model name (auto-detected from running daemon if omitted)')
+    p.add_argument('--hardware', default=None, help='Hardware profile ID (e.g., "v100-32g"). Auto-detected if omitted.')
+    p.add_argument('--prompt', default=None, help='Text prompt for generation')
+    p.add_argument('--audio', default=None, help='Input audio file path (for speech-to-text models)')
+    p.add_argument('--steps', type=int, default=None, help='Number of inference steps')
+    p.add_argument('--cfg', type=float, default=None, help='Guidance scale')
+    p.add_argument('--height', type=int, default=None, help='Output height in pixels')
+    p.add_argument('--width', type=int, default=None, help='Output width in pixels')
+    p.add_argument('--output', help='Output file path (default: output.png)')
+    p.add_argument('--seed', type=int, help='Random seed for reproducibility')
+    p.add_argument('--temperature', type=float, default=None, help='Sampling temperature (0 = greedy)')
+    p.add_argument('--repetition-penalty', type=float, default=None, dest='repetition_penalty',
+                            help='Repetition penalty (1.0 = none, 1.1-1.5 recommended)')
+    # top-k / top-p were already honoured by both engines through the
+    # flow's global.top_k / global.top_p overrides; only the flags were
+    # missing, so asking for them meant knowing to write
+    # `--set global.top_k=0`. A setting the engine reads and the CLI
+    # cannot name is an interface that hides its own capability.
+    p.add_argument('--top-k', type=int, default=None, dest='top_k',
+                            help='Keep only the k highest-probability tokens '
+                                 '(0 = disabled)')
+    p.add_argument('--top-p', type=float, default=None, dest='top_p',
+                            help='Nucleus sampling: keep the smallest set of '
+                                 'tokens whose probability sums to p '
+                                 '(1.0 = disabled)')
+    p.add_argument('--set', action='append', metavar='KEY=VALUE',
+                            help='Set arbitrary runtime variable (e.g., --set global.cfg=7.5)')
+    # Execution modes (mutually exclusive). When no flag is passed the
+    # default is --compiled. See CLAUDE.md "Execution Modes" section.
+    p.add_argument('--compiled', action='store_true',
+                            help='Default mode: PyTorch fused graph + cuDNN/cuBLAS '
+                                 '(CompiledSequence). Production PyTorch performance. '
+                                 'Used when no execution flag is passed; this flag '
+                                 'makes the choice explicit.')
+    p.add_argument('--sequential', action='store_true',
+                            help='PyTorch eager op-by-op (no fusion, ATen dispatcher). '
+                                 'Useful for debugging individual ATen ops. '
+                                 'Slower than --compiled.')
+    p.add_argument('--triton', action='store_true',
+                            help='Triton-pure compiled mode: NeuroBrix Triton kernels '
+                                 'with arena + closures + fused kernels (TritonSequence). '
+                                 'Production NeuroBrix Triton mode. Should match or beat '
+                                 '--compiled on target shapes (project bet: custom '
+                                 'kernels > cuDNN).')
+    p.add_argument('--triton-sequential', action='store_true', dest='triton_sequential',
+                            help='Triton-pure eager mode: Triton kernels op-by-op (no '
+                                 'fusion, TritonSequentialDispatcher). Equivalent of '
+                                 '--sequential but for the Triton backend. Useful for '
+                                 'debugging individual Triton kernels.')
+    p.add_argument('--max-tokens', type=int, default=None, dest='max_tokens',
+                            help='Maximum number of tokens to generate (LLM only)')
+
+    # ── 9-family inputs ──
+    p.add_argument('--input-image', default=None, dest='input_image',
+                            help='Input image path (vlm, img2img, inpainting, upscaler, multimodal)')
+    p.add_argument('--input-video', default=None, dest='input_video',
+                            help='Input video path for understanding (vlm/multimodal)')
+    p.add_argument('--mask-image', default=None, dest='mask_image',
+                            help='Inpainting mask image path (image inpainting mode)')
+    p.add_argument('--reference-image', default=None, dest='reference_image',
+                            help='Style reference image path (image)')
+    p.add_argument('--reference-audio', default=None, dest='reference_audio',
+                            help='Voice clone reference audio path (tts)')
+    p.add_argument('--speaker', default=None,
+                            help='Speaker preset id (tts)')
+    p.add_argument('--video', default=None, dest='video',
+                            help='Input video path (video v2v)')
+    p.add_argument('--num-frames', type=int, default=None, dest='num_frames',
+                            help='Number of frames to generate (video)')
+    p.add_argument('--fps', type=int, default=None,
+                            help='Output frame rate (video)')
+    p.add_argument('--system', default=None,
+                            help='System prompt for chat-style models (llm, vlm, audio_llm)')
+    p.add_argument('--mode', default=None,
+                            choices=['auto', 'text', 'chat', 'agent', 'image', 'audio', 'video',
+                                     't2i', 'img2img', 'inpainting', 't2v', 'i2v', 'v2v'],
+                            help='Execution mode. Required for multimodal (text|image). '
+                                 'Auto-deduced for other families from inputs provided.')
+
+    # Agent-mode flags (run --mode agent); sandbox policy per the P-AGENTIC scoping
+    p.add_argument('--workdir', default=None,
+                            help='Agent workdir jail (default: current directory)')
+    p.add_argument('--max-turns', type=int, default=None, dest='max_turns',
+                            help='Agent loop turn bound (default from family YAML)')
+    p.add_argument('--bash-timeout', type=int, default=None, dest='bash_timeout',
+                            help='Agent bash timeout in seconds (default from family YAML)')
+    p.add_argument('--allow-network', action='store_true', dest='allow_network',
+                            help='Allow network inside the agent sandbox (off by default)')
+    p.add_argument('--approve-all', action='store_true', dest='approve_all',
+                            help='Confirm every agent tool execution interactively')
+    p.add_argument('--yolo', action='store_true',
+                            help='No confirmations (jail still enforced)')
+    p.add_argument('--transcript-dir', default=None, dest='transcript_dir',
+                            help='Agent transcript directory (default: <workdir>/.nbx_agent/<ts>)')
+
+    chat_group = p.add_mutually_exclusive_group()
+    chat_group.add_argument('--chat', action='store_true', default=None, dest='chat_mode',
+                            help='Force chat template formatting')
+    chat_group.add_argument('--no-chat', action='store_false', dest='chat_mode',
+                            help='Force raw text completion')
+
+
 def create_parser():
     """Create the main argument parser with subcommands."""
 
@@ -75,106 +179,21 @@ For more information: https://neurobrix.es
         help='Run inference using NBX Engine',
         description='Run inference using Prism ExecutionPlan + NBX Engine. Family is read from manifest.'
     )
-    run_parser.add_argument('--model', default=None, help='Model name (auto-detected from running daemon if omitted)')
-    run_parser.add_argument('--hardware', default=None, help='Hardware profile ID (e.g., "v100-32g"). Auto-detected if omitted.')
-    run_parser.add_argument('--prompt', default=None, help='Text prompt for generation')
-    run_parser.add_argument('--audio', default=None, help='Input audio file path (for speech-to-text models)')
-    run_parser.add_argument('--steps', type=int, default=None, help='Number of inference steps')
-    run_parser.add_argument('--cfg', type=float, default=None, help='Guidance scale')
-    run_parser.add_argument('--height', type=int, default=None, help='Output height in pixels')
-    run_parser.add_argument('--width', type=int, default=None, help='Output width in pixels')
-    run_parser.add_argument('--output', help='Output file path (default: output.png)')
-    run_parser.add_argument('--seed', type=int, help='Random seed for reproducibility')
-    run_parser.add_argument('--temperature', type=float, default=None, help='Sampling temperature (0 = greedy)')
-    run_parser.add_argument('--repetition-penalty', type=float, default=None, dest='repetition_penalty',
-                            help='Repetition penalty (1.0 = none, 1.1-1.5 recommended)')
-    # top-k / top-p were already honoured by both engines through the
-    # flow's global.top_k / global.top_p overrides; only the flags were
-    # missing, so asking for them meant knowing to write
-    # `--set global.top_k=0`. A setting the engine reads and the CLI
-    # cannot name is an interface that hides its own capability.
-    run_parser.add_argument('--top-k', type=int, default=None, dest='top_k',
-                            help='Keep only the k highest-probability tokens '
-                                 '(0 = disabled)')
-    run_parser.add_argument('--top-p', type=float, default=None, dest='top_p',
-                            help='Nucleus sampling: keep the smallest set of '
-                                 'tokens whose probability sums to p '
-                                 '(1.0 = disabled)')
-    run_parser.add_argument('--set', action='append', metavar='KEY=VALUE',
-                            help='Set arbitrary runtime variable (e.g., --set global.cfg=7.5)')
-    # Execution modes (mutually exclusive). When no flag is passed the
-    # default is --compiled. See CLAUDE.md "Execution Modes" section.
-    run_parser.add_argument('--compiled', action='store_true',
-                            help='Default mode: PyTorch fused graph + cuDNN/cuBLAS '
-                                 '(CompiledSequence). Production PyTorch performance. '
-                                 'Used when no execution flag is passed; this flag '
-                                 'makes the choice explicit.')
-    run_parser.add_argument('--sequential', action='store_true',
-                            help='PyTorch eager op-by-op (no fusion, ATen dispatcher). '
-                                 'Useful for debugging individual ATen ops. '
-                                 'Slower than --compiled.')
-    run_parser.add_argument('--triton', action='store_true',
-                            help='Triton-pure compiled mode: NeuroBrix Triton kernels '
-                                 'with arena + closures + fused kernels (TritonSequence). '
-                                 'Production NeuroBrix Triton mode. Should match or beat '
-                                 '--compiled on target shapes (project bet: custom '
-                                 'kernels > cuDNN).')
-    run_parser.add_argument('--triton-sequential', action='store_true', dest='triton_sequential',
-                            help='Triton-pure eager mode: Triton kernels op-by-op (no '
-                                 'fusion, TritonSequentialDispatcher). Equivalent of '
-                                 '--sequential but for the Triton backend. Useful for '
-                                 'debugging individual Triton kernels.')
-    run_parser.add_argument('--max-tokens', type=int, default=None, dest='max_tokens',
-                            help='Maximum number of tokens to generate (LLM only)')
+    _add_run_arguments(run_parser)
 
-    # ── 9-family inputs ──
-    run_parser.add_argument('--input-image', default=None, dest='input_image',
-                            help='Input image path (vlm, img2img, inpainting, upscaler, multimodal)')
-    run_parser.add_argument('--input-video', default=None, dest='input_video',
-                            help='Input video path for understanding (vlm/multimodal)')
-    run_parser.add_argument('--mask-image', default=None, dest='mask_image',
-                            help='Inpainting mask image path (image inpainting mode)')
-    run_parser.add_argument('--reference-image', default=None, dest='reference_image',
-                            help='Style reference image path (image)')
-    run_parser.add_argument('--reference-audio', default=None, dest='reference_audio',
-                            help='Voice clone reference audio path (tts)')
-    run_parser.add_argument('--speaker', default=None,
-                            help='Speaker preset id (tts)')
-    run_parser.add_argument('--video', default=None, dest='video',
-                            help='Input video path (video v2v)')
-    run_parser.add_argument('--num-frames', type=int, default=None, dest='num_frames',
-                            help='Number of frames to generate (video)')
-    run_parser.add_argument('--fps', type=int, default=None,
-                            help='Output frame rate (video)')
-    run_parser.add_argument('--system', default=None,
-                            help='System prompt for chat-style models (llm, vlm, audio_llm)')
-    run_parser.add_argument('--mode', default=None,
-                            choices=['auto', 'text', 'chat', 'agent', 'image', 'audio', 'video',
-                                     't2i', 'img2img', 'inpainting', 't2v', 'i2v', 'v2v'],
-                            help='Execution mode. Required for multimodal (text|image). '
-                                 'Auto-deduced for other families from inputs provided.')
+    # ========================================
+    # CALIBRATE command — the precision calibration record (DtypeEngine fp32 islands)
+    # ========================================
+    calibrate_parser = subparsers.add_parser(
+        'calibrate',
+        help='Measure the precision calibration record of a model (DtypeEngine fp32 islands)',
+        description='Run one request on the conservative reference path with the per-op '
+                    'magnitude census installed and write the calibration record every '
+                    'later run derives its fp32 islands from. Same request arguments as `run`; '
+                    'a family without media inputs takes its stimulus from config/families/<family>.yml.'
+    )
+    _add_run_arguments(calibrate_parser)
 
-    # Agent-mode flags (run --mode agent); sandbox policy per the P-AGENTIC scoping
-    run_parser.add_argument('--workdir', default=None,
-                            help='Agent workdir jail (default: current directory)')
-    run_parser.add_argument('--max-turns', type=int, default=None, dest='max_turns',
-                            help='Agent loop turn bound (default from family YAML)')
-    run_parser.add_argument('--bash-timeout', type=int, default=None, dest='bash_timeout',
-                            help='Agent bash timeout in seconds (default from family YAML)')
-    run_parser.add_argument('--allow-network', action='store_true', dest='allow_network',
-                            help='Allow network inside the agent sandbox (off by default)')
-    run_parser.add_argument('--approve-all', action='store_true', dest='approve_all',
-                            help='Confirm every agent tool execution interactively')
-    run_parser.add_argument('--yolo', action='store_true',
-                            help='No confirmations (jail still enforced)')
-    run_parser.add_argument('--transcript-dir', default=None, dest='transcript_dir',
-                            help='Agent transcript directory (default: <workdir>/.nbx_agent/<ts>)')
-
-    chat_group = run_parser.add_mutually_exclusive_group()
-    chat_group.add_argument('--chat', action='store_true', default=None, dest='chat_mode',
-                            help='Force chat template formatting')
-    chat_group.add_argument('--no-chat', action='store_false', dest='chat_mode',
-                            help='Force raw text completion')
 
     # ========================================
     # INFO command
@@ -467,7 +486,12 @@ def main():
     args = parser.parse_args()
 
     try:
-        if args.command == 'run':
+        if args.command == 'calibrate':
+            from neurobrix.cli.commands.calibrate import cmd_calibrate
+            _rc = cmd_calibrate(args)
+            if _rc:
+                sys.exit(int(_rc))
+        elif args.command == 'run':
             from neurobrix.cli.commands.run import cmd_run
             # cmd_run returns a non-zero status on refusal paths (mode-flag
             # conflict, gate errors) — a loud refusal that exits 0 turns

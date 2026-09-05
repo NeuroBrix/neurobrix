@@ -64,7 +64,7 @@ def cmd_serve(args):
         )
         _mod = importlib.util.module_from_spec(_spec)
         _spec.loader.exec_module(_mod)
-        hardware_id = _mod.get_or_create_default_profile()  # Returns "default"
+        hardware_id = _mod.get_or_create_default_profile()  # the profile of THIS environment's visible GPUs
 
     print(f"[Serve] Starting NeuroBrix Serving Daemon")
     print(f"[Serve] Model: {args.model}")

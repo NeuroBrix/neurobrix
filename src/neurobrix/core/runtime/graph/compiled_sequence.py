@@ -3516,7 +3516,13 @@ class CompiledSequence:
                     {"seen": set(), "records": [],
                      "slot_to_tid": {s_: t_ for t_, s_ in self._tensor_id_to_slot.items()}})
                 _st["pass"] = _st.get("pass", -1) + 1
-            self._run_inner(arena, debug, pre_op_callback)
+            # Precision calibration: the component's census, None outside a
+            # calibration — one lookup per run, nothing per op.
+            from neurobrix.core.dtype import calibration as _cal
+            census = _cal.active_census(self.dag.get("component_name"))
+            self._run_inner(arena, debug, pre_op_callback, census)
+            if census is not None:
+                census.pass_done()
 
     def _maybe_dump_tid_native(self, op, out_slot: int, tensor) -> None:
         """TEMP diagnostic: mirror of TritonSequence._maybe_dump_tid.
@@ -3625,8 +3631,11 @@ class CompiledSequence:
         arena,
         debug: bool = False,
         pre_op_callback: Optional[Callable[[int, "CompiledOp"], None]] = None,
+        census=None,
     ) -> None:
-        """Inner loop extracted for inference_mode wrapping."""
+        """Inner loop extracted for inference_mode wrapping. ``census`` is the
+        precision-calibration observer (core/dtype/calibration.RangeCensus)
+        while a calibration runs, None otherwise."""
         trace_nan = _TRACE_NAN
         # Diagnostic switches read ONCE per run, not once per op: two
         # os.environ lookups per op were 7,800 reads on a warm whisper
@@ -3636,22 +3645,9 @@ class CompiledSequence:
         nan_guard = _NAN_GUARD
         nan_guard_verbose = _NAN_GUARD_VERBOSE
         trace_zeros = _TRACE_ZEROS
-        # NBX_TRACE_RANGES=op1,op2,... — log per-op output max(abs) to
-        # NBX_RANGE_LOG (default /tmp/nbx_ranges.tsv). Used by
-        # neurobrix.tools.measure_activation_ranges to decide the
-        # per-component activations_fp16_safe flag opt-in.
-        _trace_ranges_env = os.environ.get("NBX_TRACE_RANGES", "")
-        _trace_ranges_set = set(_trace_ranges_env.split(",")) if _trace_ranges_env else set()
-        _range_log_path = os.environ.get("NBX_RANGE_LOG", "/tmp/nbx_ranges.tsv")
-        _range_log_fh = None
-        if _trace_ranges_set:
-            _range_log_fh = open(_range_log_path, "a")
-            _range_log_fh.write(f"# new run, ops={_trace_ranges_env}\n")
-            _range_log_fh.write("op_idx\top_uid\top_type\tmax_abs\tdtype\tnumel\n")
-
         # Set CUDA device to match component placement
         if self._is_multi_device:
-            self._run_inner_multi_device(arena, debug, pre_op_callback)
+            self._run_inner_multi_device(arena, debug, pre_op_callback, census)
             return
 
         # NaN-guard counters for summary (only if verbose)
@@ -3892,13 +3888,9 @@ class CompiledSequence:
 
                     arena[s] = item
 
-            # === TEMP RANGE TRACE ===
-            if _range_log_fh is not None and isinstance(result, torch.Tensor) and result.is_floating_point():
-                bare = op.op_type.split("::")[-1] if "::" in op.op_type else op.op_type
-                if bare in _trace_ranges_set:
-                    _ma = result.detach().abs().max().item() if result.numel() > 0 else 0.0
-                    _range_log_fh.write(f"{op_idx}\t{op.op_uid}\t{op.op_type}\t{_ma:.6g}\t{result.dtype}\t{result.numel()}\n")
-            # =========================
+            # Precision calibration census: the final result of this op
+            if census is not None:
+                census.observe(op.op_uid, result)
 
             # NaN/Inf TRACING: Find ALL CREATORS of NaN or Inf (NBX_TRACE_NAN=1)
             # This is diagnostic-only, doesn't modify values
@@ -4008,6 +4000,7 @@ class CompiledSequence:
         arena,
         _debug: bool = False,  # noqa: ARG002
         pre_op_callback: Optional[Callable[[int, "CompiledOp"], None]] = None,
+        census=None,
     ) -> None:
         """
         FGP multi-device hot loop with cross-device activation transfer.
@@ -4209,6 +4202,9 @@ class CompiledSequence:
                 except Exception:
                     pass
             # ============================================================
+            # Precision calibration census: the final result of this op
+            if census is not None:
+                census.observe(op.op_uid, result)
             if len(slots) == 1:
                 # Single-chunk multi-output op (split/chunk/unbind) returns a
                 # 1-element tuple for one traced slot — unwrap (see single-device

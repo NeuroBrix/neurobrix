@@ -437,6 +437,15 @@ class DtypeEngine:
     # PUBLIC API
     # ========================================================================
 
+    def set_precision_contract(self, activations_fp16_safe: bool,
+                               fp32_op_uids=None, narrow_op_uids=None) -> None:
+        """Install the component's precision contract (the calibration
+        record's verdict) after the engine exists — the executor resolves it
+        once the graph-rewriting passes have run, before any op compiles."""
+        self.activations_fp16_safe = bool(activations_fp16_safe)
+        self.fp32_op_uids = frozenset(fp32_op_uids or ())
+        self.narrow_op_uids = frozenset(narrow_op_uids or ())
+
     def compile_op(self, op_type: str, func: Optional[Callable], attrs: Dict[str, Any],
                    op_uid: Optional[str] = None) -> Callable:
         """

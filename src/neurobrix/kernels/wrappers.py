@@ -311,11 +311,11 @@ def get_hardware_profile():
 # - _NBX_COMPUTE_DTYPE: the per-component compute dtype Prism allocated
 #   for this sequence. Read by self-managed wrappers (conv2d_wrapper)
 #   to decide output dtype, mirroring what cuDNN does in compiled mode.
-# - _NBX_ACTIVATIONS_FP16_SAFE: per-component opt-in flag from
-#   the model registry. When True, ops in AMP_FP32_OPS
+# - _NBX_ACTIVATIONS_FP16_SAFE: per-component flag of the precision
+#   contract (calibration record). When True, ops in AMP_FP32_OPS
 #   that produce fp32 internally cast their output back to compute_dtype
 #   (rms_norm, div, etc.) — VRAM-preserving for models whose activations
-#   are confirmed within fp16 range by measure_activation_ranges. Default
+#   are confirmed within fp16 range by the calibration record (neurobrix calibrate). Default
 #   False keeps the conservative fp32-output behavior.
 # ---------------------------------------------------------------------------
 _NBX_COMPUTE_DTYPE = None

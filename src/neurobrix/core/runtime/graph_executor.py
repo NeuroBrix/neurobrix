@@ -830,6 +830,7 @@ class GraphExecutor:
         # spatially-structured quantization noise that CFG amplifies into grid lines.
         # Text encoders KEEP AMP: T5/Gemma have residual accumulation that overflows fp16.
         # LLM family keeps AMP everywhere: RMSNorm pow→mean→rsqrt overflows without it.
+
         if self.mode not in ("triton", "triton_sequential"):
             from neurobrix.core.dtype.engine import DtypeEngine
             amp_enabled = self._should_enable_amp()
@@ -854,16 +855,14 @@ class GraphExecutor:
             # and by zero3 offload.
             if str(getattr(self, "device", "") or "").startswith("cpu"):
                 compute_dtype = torch.float32
-            # Precision contract of THIS component (vendor facts as data:
-            # config/dtype_contracts.yml by backbone, registry flag by
-            # model). See DtypeEngine header.
+            # The engine is built here, BEFORE the constants load (they are
+            # converted through it) and before the graph-rewriting passes;
+            # its precision contract is set AFTER those passes, on the graph
+            # the engines execute (see the block below the passes).
             self._activations_fp16_safe, self._fp32_op_uids, self._narrow_op_uids = \
-                self._resolve_fp16_activation_policy(compute_dtype)
+                False, frozenset(), frozenset()
             self._dtype_engine = DtypeEngine(compute_dtype, graph_dtype=self._graph_dtype,
-                                             amp_enabled=amp_enabled,
-                                             activations_fp16_safe=self._activations_fp16_safe,
-                                             fp32_op_uids=self._fp32_op_uids,
-                                             narrow_op_uids=self._narrow_op_uids)
+                                             amp_enabled=amp_enabled)
         else:
             self._dtype_engine = None  # Triton uses TritonDtypeEngine in sequence.py
 
@@ -979,6 +978,18 @@ class GraphExecutor:
         # plan as cse so both share one lowering. Floating-point
         # "identities" (x*1, x/1, x+0) are counted and deliberately NOT
         # removed: they belong to `cancellation` under a drift gate.
+        # Precision contract of THIS component — resolved AFTER every pass
+        # that rewrites the graph (attention rescale normalisation, expert
+        # fusion, horizontal fusion, dead code): the calibration record is
+        # signed and its islands walked on the graph the engines execute,
+        # not on the trace as loaded (doctrine review 2026-09-05: a record
+        # signed on the rewritten graph was refused at every later load).
+        if self._dtype_engine is not None:
+            self._activations_fp16_safe, self._fp32_op_uids, self._narrow_op_uids = \
+                self._resolve_fp16_activation_policy(self._dtype_engine.compute_dtype)
+            self._dtype_engine.set_precision_contract(
+                self._activations_fp16_safe, self._fp32_op_uids, self._narrow_op_uids)
+
         if os.environ.get("NBX_OPTIM_ALGEBRAIC") == "1":
             from neurobrix.core.optim.passes.algebraic import (
                 PLAN_KEY as _ALG_KEY, plan_algebraic)
@@ -1035,13 +1046,19 @@ class GraphExecutor:
 
     def _resolve_fp16_activation_policy(self, compute_dtype) -> tuple:
         """(activations_fp16_safe, fp32_op_uids, narrow_op_uids) for the DtypeEngine — the
-        shared resolver in core/runtime/precision_contract.py (registry flag
-        > backbone contract > False; module patterns pin every compute op of
-        a module). This is the compiled / sequential consumer, contract ON."""
+        shared resolver in core/runtime/precision_contract.py: the component's
+        calibration record (islands measured on the conservative path) or the
+        conservative default. This is the compiled / sequential consumer, with
+        per-op islands. While a calibration runs, the component's census is
+        bound to this graph so the record can be written at the end."""
+        from neurobrix.core.dtype import calibration as _cal
         from neurobrix.core.runtime.precision_contract import resolve
-        return resolve(getattr(self, "_cache_path", None), self._component_name,
-                       getattr(self, "_dag", None),
-                       compute_is_fp16=(compute_dtype == torch.float16))
+        dag = getattr(self, "_dag", None)
+        cache_path = getattr(self, "_cache_path", None)
+        census = _cal.active_census(self._component_name)
+        if census is not None and dag is not None:
+            census.bind(dag, cache_path)
+        return resolve(cache_path, self._component_name, dag, compute_dtype=compute_dtype)
 
     def _should_enable_amp(self) -> bool:
         """Determine whether AMP should be enabled for this component.
@@ -2123,20 +2140,16 @@ class GraphExecutor:
         from neurobrix.triton.symbols import SymbolResolver
         from neurobrix.kernels.nbx_tensor import NBXTensor, parse_dtype
 
-        # POINT 2 — read activations_fp16_safe from registry, mirror of
-        # compiled-mode flag init at _ensure_triton_compiled (line 1909-1917).
-        # Sequential mode dispatcher needs the flag for the uniform
-        # AMP_FP32_OPS cast-back path in TritonDtypeEngine.
-        # POINT 2bis — read self._cache_path (set by ExecutorFactory)
-        # instead of self._pkg.cache_path (which doesn't exist on
-        # GraphExecutor — pre-existing latent bug).
-        from neurobrix.core.runtime.registry_flags import get_component_flag
-        _seq_model_name = self._registry_model_name()
-        _seq_fp16_safe = get_component_flag(
-            _seq_model_name, self._component_name,
-            "activations_fp16_safe", default=False,
-            env_override="NBX_ACTIVATIONS_FP16_SAFE",
-        )
+        # Precision contract of THIS component for the triton-sequential
+        # engine: the same resolver as the compiled and triton paths, flag
+        # only — no per-op island in that dispatcher yet, so the contract is
+        # taken only when the record needs none (D-PRECISION-CONTRACT-TRITON-PARITY).
+        from neurobrix.core.runtime.precision_contract import resolve as _resolve_contract_seq
+        _seq_fp16_safe = _resolve_contract_seq(
+            getattr(self, "_cache_path", None), self._component_name,
+            getattr(self, "_dag", None),
+            compute_dtype=torch.float16 if str(self.dtype) in ("float16", "torch.float16") else torch.float32,
+            supports_op_pins=False)[0]
         dispatcher = TritonSequentialDispatcher(
             device_idx=device_idx, compute_dtype=parse_dtype(self.dtype),
             activations_fp16_safe=bool(_seq_fp16_safe))
@@ -2861,24 +2874,16 @@ class GraphExecutor:
             compute_dtype=parse_dtype(self.dtype),
             config_constants=self._resolve_config_constants())
 
-        # Phase 1 — read per-component opt-in flag from
-        # the build toolchain's config/model_registry.yml (no toolchain re-build required;
-        # runtime-direct read keeps the .nbx contract immutable per R18).
-        # Defaults to False (conservative). Annotated only for models whose
-        # activation ranges have been validated fp16-safe via
-        # neurobrix.tools.measure_activation_ranges.
-        # POINT 2bis — read self._cache_path (set by ExecutorFactory)
-        # instead of self._pkg.cache_path (latent bug — self._pkg never
-        # existed on GraphExecutor; the lookup silently fell back to
-        # default False, neutralising every activations_fp16_safe
-        # annotation in the registry until now).
-        from neurobrix.core.runtime.registry_flags import get_component_flag
-        _model_name = self._registry_model_name()
-        _fp16_safe = get_component_flag(
-            _model_name, self._component_name,
-            "activations_fp16_safe", default=False,
-            env_override="NBX_ACTIVATIONS_FP16_SAFE",
-        )
+        # Precision contract of THIS component for the triton engine: the
+        # same resolver as the compiled path, flag only — that engine has no
+        # per-op island yet, so the contract is taken only when the record
+        # needs none (D-PRECISION-CONTRACT-TRITON-PARITY).
+        from neurobrix.core.runtime.precision_contract import resolve as _resolve_contract
+        _fp16_safe = _resolve_contract(
+            getattr(self, "_cache_path", None), self._component_name,
+            getattr(self, "_dag", None),
+            compute_dtype=torch.float16 if str(self.dtype) in ("float16", "torch.float16") else torch.float32,
+            supports_op_pins=False)[0]
         self._triton_seq.set_activations_fp16_safe(bool(_fp16_safe))
 
         self._triton_seq.compile()
@@ -3446,6 +3451,10 @@ class GraphExecutor:
         Returns:
             ExecutionStats with timing and counts
         """
+        # Precision calibration: the component's census, None outside a
+        # calibration — one lookup per run, read per op in _store_op_outputs.
+        from neurobrix.core.dtype import calibration as _cal_seq
+        self._range_census = _cal_seq.active_census(self._component_name)
         # COMPILED MODE (default): uses CompiledSequence with PyTorch ops
         if self.mode == "compiled":
             return self._execute_compiled_graph()
@@ -3551,6 +3560,12 @@ class GraphExecutor:
                           flush=True)
                 except Exception:
                     pass
+
+        # Precision calibration: one pass of this component is complete
+        from neurobrix.core.dtype import calibration as _cal
+        _census = _cal.active_census(self._component_name)
+        if _census is not None:
+            _census.pass_done()
 
         return ExecutionStats(
             total_ops=total_ops,
@@ -4248,13 +4263,18 @@ class GraphExecutor:
         result: Any
     ) -> None:
         """
-        Store operation outputs in context.
+        Store operation outputs in context. While a precision calibration
+        runs, the component's census observes every result here (the
+        sequential mirror of the compiled loop's observation).
 
         Args:
             op_uid: Operation UID
             op_data: Operation data from DAG
             result: Result from op execution
         """
+        _census = getattr(self, "_range_census", None)
+        if _census is not None:
+            _census.observe(op_uid, result)
         output_tensor_ids = op_data.get("output_tensor_ids", [])
 
         if isinstance(result, torch.Tensor):
