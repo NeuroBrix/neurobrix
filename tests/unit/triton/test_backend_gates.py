@@ -79,10 +79,98 @@ def test_apple_without_backend_refuses_with_an_actionable_message(monkeypatch):
     assert "does not install it for you" in message, "we never auto-fetch"
 
 
-def test_apple_with_backend_passes(monkeypatch):
+def test_apple_with_backend_and_compiler_passes(monkeypatch):
+    """Both conditions satisfied is what "ready" means.
+
+    This pin used to stub only `triton_metal_available`. Written without a
+    Mac, it encoded a premise the first Apple machine refuted on 2026-09-05:
+    the package being importable is not enough, because the backend's compile
+    path ends in Apple's offline shader compiler. Stubbing one probe and
+    calling that "passes" is how the gate came to report ready on a machine
+    where nothing runs.
+    """
     monkeypatch.setattr(metal_backend, "is_apple_silicon", lambda: True)
     monkeypatch.setattr(metal_backend, "triton_metal_available", lambda: True)
+    monkeypatch.setattr(metal_backend, "metal_shader_compiler_available",
+                        lambda: True)
     metal_backend.ensure_triton_metal_or_raise()   # must not raise
+
+
+# --- the offline shader compiler -------------------------------------------
+
+def test_backend_installed_without_shader_compiler_refuses(monkeypatch):
+    """The condition this whole file exists for, one layer down.
+
+    Measured on an M4 Pro with Command Line Tools and no Xcode: triton-msl
+    imports, the old gate passed, and the run died later inside Triton with
+    "0 active drivers". The gate must refuse HERE, and say what to install.
+    """
+    monkeypatch.setattr(metal_backend, "is_apple_silicon", lambda: True)
+    monkeypatch.setattr(metal_backend, "triton_metal_available", lambda: True)
+    monkeypatch.setattr(metal_backend, "metal_shader_compiler_available",
+                        lambda: False)
+
+    with pytest.raises(
+            metal_backend.TritonMetalShaderCompilerMissingError) as excinfo:
+        metal_backend.ensure_triton_metal_or_raise()
+
+    message = str(excinfo.value)
+    assert "xcodebuild -downloadComponent MetalToolchain" in message, (
+        "a refusal without the install command is half a refusal"
+    )
+    assert "Command Line Tools" in message, (
+        "the trap is that CLT look sufficient and are not"
+    )
+    assert "compiled" in message, "must name the path that works today"
+
+
+def test_shader_compiler_refusal_is_catchable_as_the_old_error(monkeypatch):
+    """Call sites already catch `TritonMetalNotInstalledError`; the new
+    condition must not slip past them."""
+    assert issubclass(metal_backend.TritonMetalShaderCompilerMissingError,
+                      metal_backend.TritonMetalNotInstalledError)
+
+
+def test_shader_compiler_probe_is_false_off_darwin(monkeypatch):
+    monkeypatch.setattr(metal_backend.platform, "system", lambda: "Linux")
+    assert metal_backend.metal_shader_compiler_available() is False
+
+
+def test_shader_compiler_probe_survives_a_missing_xcrun(monkeypatch):
+    """A probe that takes the run down is not a probe."""
+    monkeypatch.setattr(metal_backend.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(metal_backend.shutil, "which", lambda _n: None)
+    assert metal_backend.metal_shader_compiler_available() is False
+
+
+def test_shader_compiler_probe_survives_a_raising_subprocess(monkeypatch):
+    monkeypatch.setattr(metal_backend.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(metal_backend.shutil, "which", lambda _n: "/usr/bin/xcrun")
+
+    def boom(*_a, **_k):
+        raise OSError("no fork for you")
+
+    monkeypatch.setattr(metal_backend.subprocess, "run", boom)
+    assert metal_backend.metal_shader_compiler_available() is False
+
+
+def test_shader_compiler_probe_reads_the_return_code(monkeypatch):
+    """`xcrun` exists even when the `metal` sub-tool does not — which is the
+    Command-Line-Tools case — so the probe must read the exit status, not the
+    presence of xcrun."""
+    monkeypatch.setattr(metal_backend.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(metal_backend.shutil, "which", lambda _n: "/usr/bin/xcrun")
+
+    class _Result:
+        def __init__(self, code):
+            self.returncode = code
+
+    monkeypatch.setattr(metal_backend.subprocess, "run",
+                        lambda *_a, **_k: _Result(1))
+    assert metal_backend.metal_shader_compiler_available() is False
+    monkeypatch.setattr(metal_backend.subprocess, "run",
+                        lambda *_a, **_k: _Result(0))
+    assert metal_backend.metal_shader_compiler_available() is True
 
 
 # --- backend probing --------------------------------------------------------
@@ -119,6 +207,7 @@ def test_known_gaps_are_declared_in_one_place():
     assert metal_backend.TRITON_METAL_BATCHED_MATMUL_BLOCKED is True
     assert metal_backend.TRITON_METAL_BF16_ATTENTION_BLOCKED is True
     assert metal_backend.TRITON_METAL_FP64_UNAVAILABLE is True
+    assert metal_backend.TRITON_METAL_NEEDS_OFFLINE_SHADER_COMPILER is True
 
 
 def test_metal_backend_imports_no_torch():
