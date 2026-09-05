@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Warm `--triton` image and video requests no longer crash at the resume
+  check.** Since the resume point landed, every diffusion request served warm
+  by the Triton engine stopped with `NameError: name 'os' is not defined`
+  before its first step; the one-shot CLI path was unaffected. Found by the
+  serve-warm regression cells.
+
 ### Changed
 
 - **Image generation is up to 3.4x faster on fp16-only GPUs (V100).** The

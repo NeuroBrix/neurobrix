@@ -11,6 +11,7 @@ Handles diffusion models with denoising loop:
 3. Post-loop components (VAE decoder)
 """
 
+import os
 from typing import Any, Callable, Dict, List, Optional
 
 from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, parse_dtype
