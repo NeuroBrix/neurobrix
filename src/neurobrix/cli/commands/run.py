@@ -403,6 +403,7 @@ def cmd_run(args):
             strategy=execution_plan.strategy,
             device_count=hw_profile.device_count,
             preferred_dtype=hw_profile.preferred_dtype,
+            mode=execution_mode,
         )
 
     print(f"   Strategy: {execution_plan.strategy}")

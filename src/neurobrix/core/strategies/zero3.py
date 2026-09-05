@@ -192,7 +192,9 @@ class Zero3Strategy(ExecutionStrategy):
             if is_torch_tensor(t) and t.device.type == "cpu":
                 total_mb += t.numel() * t.element_size()
             elif hasattr(t, '_device') and getattr(t, '_device', None) == 'cpu':
-                total_mb += t.numel() * t.element_size()
+                # NBXTensor and QuantizedTensor both carry their byte size
+                # (a quantized weight has no element size: int4 packed + scales).
+                total_mb += t._nbytes
         total_mb /= (1024 * 1024)
         if total_mb == 0:
             return
