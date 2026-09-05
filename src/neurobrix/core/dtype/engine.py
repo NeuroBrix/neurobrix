@@ -90,6 +90,25 @@ def _maybe_log_clamp(site: str, inp: torch.Tensor) -> None:
 
 
 
+_FP16_MIN_NORMAL = 6.103515625e-05
+
+
+def _scalar_divisor_is_plain(attrs: Dict[str, Any]) -> bool:
+    """True when a div's divisor is a graph scalar of magnitude at least the
+    fp16 minimum normal — a division fp16 represents like the vendor's fp16
+    forward does. Epsilon-class scalars and tensor divisors return False."""
+    try:
+        args = (attrs or {}).get("args") or []
+        if len(args) < 2 or not isinstance(args[1], dict):
+            return False
+        if args[1].get("type") != "scalar":
+            return False
+        v = float(args[1].get("value"))
+    except (TypeError, ValueError):
+        return False
+    return abs(v) >= _FP16_MIN_NORMAL
+
+
 def configure_fp16_matmul_precision():
     """
     Configure PyTorch for stable fp16 matrix multiplication.
@@ -500,6 +519,15 @@ class DtypeEngine:
                     # keeps its fp32 compute and stores fp16.
                     if contract:
                         if op_name in _FP16_GEMM_OPS:
+                            return self._make_lower_precision_wrapper(func)
+                        # `div` by a compile-time SCALAR that is no epsilon
+                        # (|s| >= fp16 min normal), outside any island: the
+                        # vendor's fp16 forward divides in fp16 (the attention
+                        # rescale `/ 1.0` on every block — 3 passes as upcast,
+                        # divide, narrow, 2,240 cast copies per PixArt request).
+                        # A tensor divisor keeps the fp32 compute (epsilon).
+                        if (op_name == "div" and _scalar_divisor_is_plain(attrs)
+                                and op_uid is not None and op_uid in self.narrow_op_uids):
                             return self._make_lower_precision_wrapper(func)
                         inner = self._make_fp32_wrapper(func)
                         if op_uid is not None and op_uid in self.narrow_op_uids:
