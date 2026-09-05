@@ -201,6 +201,18 @@ class MetalRuntime:
         return str(self._device.name())
 
     @property
+    def arch_name(self) -> str:
+        """The Triton target arch string for this GPU.
+
+        The Metal device name, lowercased and hyphenated — "apple-m4-pro".
+        Computed here rather than imported from the Metal backend's driver:
+        that module carries torch imports, and R33 does not make an exception
+        for Apple. The rule is one line of string handling, and the profile
+        matches it by prefix (`config/vendors/apple/apple_silicon.yml`).
+        """
+        return str(self._device.name()).lower().replace(" ", "-")
+
+    @property
     def has_unified_memory(self) -> bool:
         return bool(self._device.hasUnifiedMemory())
 
