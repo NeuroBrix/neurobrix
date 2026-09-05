@@ -23,13 +23,32 @@ This has two halves because the two machines are different machines:
 `record` runs the kernel and writes inputs AND outputs. `compare` re-runs it
 on whatever device it finds and holds the result to the same bar:
 
-* **fp32 is compared BIT-EXACTLY.** RMSNorm in fp32 is a deterministic
-  sequence of IEEE operations; a correct port reproduces it exactly. "Close"
-  is not the bar for a first-light check — a backend that is merely close is
-  a backend whose reduction order or accumulation width differs, and that is
-  precisely what this exists to detect.
-* **fp16 is drift-gated**, because the accumulation happens in fp32 and the
-  final narrowing can legitimately differ by an ulp.
+* **fp32 was compared BIT-EXACTLY** until 2026-09-05, on the reasoning that
+  RMSNorm in fp32 is a deterministic sequence of IEEE operations that a
+  correct port reproduces exactly. **That premise was wrong**, and the first
+  Apple GPU showed why: it holds only for a FIXED summation order, and
+  `tl.sum` does not promise one across targets. Metal reduces with
+  `simd_sum` per simdgroup and then a threadgroup pass; CUDA's tree groups
+  differently; floating-point addition is not associative. Measured: three of
+  four shapes diverged by 4.8e-07 to 9.5e-07, while BOTH sides sat within
+  3 ULP of an exact fp64 oracle — and at one shape Metal was CLOSER to the
+  truth than the CUDA reference. Bit-identity was asking for a coincidence of
+  reduction trees, not for correctness.
+
+  The bar since is two things a correct port must satisfy and a merely-close
+  one cannot fake:
+
+  1. **Determinism**, run to run: five executions per shape must produce one
+     distinct byte pattern. A differing tree is a fixed property of the
+     target; a race is not, and this separates them.
+  2. **No worse than the reference**, in ULP against an fp64 oracle. The
+     bound is READ from the reference — whatever distance CUDA achieved for
+     that shape is the bar — never written into this file. A port that lands
+     closer to the truth than CUDA passes, which is the correct answer and
+     the old bar called it a failure.
+
+* **fp16 is drift-gated**, unchanged, because the accumulation happens in
+  fp32 and the final narrowing can legitimately differ by an ulp.
 
 A failure here is information, not a defeat: it names which shape and which
 dtype diverged, which is the first line of the port's bug report.
@@ -110,6 +129,40 @@ def cmd_record(args) -> int:
     return 0
 
 
+# Five, because the property being tested is "one distinct result", and a
+# single repeat cannot distinguish a stable answer from a lucky one.
+_DETERMINISM_RUNS = 5
+
+# The fp16 bar, unchanged.
+_FP16_DRIFT_BAR = 1e-3
+
+
+def _oracle(x, w, eps=1e-6):
+    """RMSNorm computed in float64 — the truth both sides are measured against.
+
+    Not a third implementation to be compared with: an oracle. It is the same
+    arithmetic the kernel performs, carried out with enough precision that its
+    own rounding is far below an fp32 ulp.
+    """
+    x64 = x.astype(np.float64)
+    mean_square = (x64 * x64).sum(axis=1) / x.shape[1]
+    return x64 * (1.0 / np.sqrt(mean_square + eps))[:, None] * w.astype(np.float64)
+
+
+def _ulp_distance(a, b):
+    """Distance in fp32 ulps, elementwise, as a monotone integer.
+
+    Reinterpreting a float's bits as an int makes adjacent representable
+    values adjacent integers, so subtracting them counts representable steps.
+    Negative floats are folded so the ordering stays monotone across zero.
+    """
+    def ordered(v):
+        i = np.asarray(v, dtype=np.float32).view(np.int32).astype(np.int64)
+        return np.where(i < 0, np.int64(0x80000000) - i, i)
+
+    return np.abs(ordered(a) - ordered(b))
+
+
 def cmd_compare(args) -> int:
     with np.load(args.ref, allow_pickle=False) as data:
         recorded_on = str(data["__device"])
@@ -120,32 +173,61 @@ def cmd_compare(args) -> int:
         for key in keys:
             x, w = data[f"{key}__x"], data[f"{key}__w"]
             expected = data[f"{key}__out"]
-            got, device = _run_kernel(x, w)
+
+            runs = []
+            for _ in range(_DETERMINISM_RUNS):
+                out, device = _run_kernel(x, w)
+                runs.append(out)
+            distinct = {r.tobytes() for r in runs}
+            got = runs[0]
+
+            if len(distinct) != 1:
+                failures.append(
+                    (key, f"{len(distinct)} distinct results in "
+                          f"{_DETERMINISM_RUNS} runs"))
+                print(f"  {key:24} on {device:5}  NON-DETERMINISTIC "
+                      f"({len(distinct)} distinct in {_DETERMINISM_RUNS})")
+                continue
 
             if x.dtype == np.float32:
+                truth = _oracle(x, w).astype(np.float32)
+                ours = int(_ulp_distance(got, truth).max())
+                theirs = int(_ulp_distance(expected, truth).max())
                 identical = np.array_equal(got, expected)
-                verdict = "BIT-IDENTICAL" if identical else "DIVERGED"
-                if not identical:
-                    failures.append((key, float(np.abs(got - expected).max())))
+                ok = ours <= theirs
+                verdict = (f"det x{_DETERMINISM_RUNS}  ulp_vs_oracle "
+                           f"{ours} (reference {theirs})")
+                if identical:
+                    verdict += "  BIT-IDENTICAL"
+                if not ok:
+                    verdict += "  WORSE THAN REFERENCE"
+                    failures.append(
+                        (key, f"{ours} ulp against the oracle, "
+                              f"reference achieves {theirs}"))
             else:
                 diff = float(np.abs(got.astype(np.float64)
                                     - expected.astype(np.float64)).max())
                 scale = float(np.abs(expected.astype(np.float64)).max()) or 1.0
-                ok = diff / scale < 1e-3
-                verdict = f"drift {diff/scale:.2e}" + ("" if ok else "  OVER BAR")
+                drift = diff / scale
+                ok = drift < _FP16_DRIFT_BAR
+                verdict = (f"det x{_DETERMINISM_RUNS}  drift {drift:.2e}"
+                           + ("" if ok else "  OVER BAR"))
                 if not ok:
-                    failures.append((key, diff / scale))
+                    failures.append((key, f"drift {drift:.3e}"))
             print(f"  {key:24} on {device:5}  {verdict}")
 
     print()
     if failures:
         print(f"FIRST LIGHT FAILED on {len(failures)} case(s):")
         for key, value in failures:
-            print(f"  {key}: {value:.3e}")
+            print(f"  {key}: {value}")
         print("\nThat is the port's first bug report: the shape and dtype above "
-              "are where\nthe backend's reduction differs from ours.")
+              "are where\nthis device is either unstable or further from the "
+              "truth than CUDA is.")
         return 1
-    print("FIRST LIGHT PASSED — the kernel produces our result on this device.")
+    print("FIRST LIGHT PASSED — deterministic at every shape, and no further "
+          "from the\nfp64 oracle than the CUDA reference is. fp16 within the "
+          "drift gate.")
     return 0
 
 
