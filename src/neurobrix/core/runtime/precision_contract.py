@@ -183,6 +183,17 @@ def load_calibration(cache_path: Optional[str], component_name: str,
     record = _cal.load_record(model_name, component_name)
     if record is None or dag is None:
         return record
+    if record.passes < 1 or not record.max_abs:
+        # A record that observed nothing (the component ran on a path the
+        # census does not see) carries no information: the contract would
+        # switch on blind. Refused loudly; the component stays conservative.
+        import sys
+        print(f"[DtypeEngine] REFUSED RECORD {component_name}: calibration "
+              f"{record.graph_signature} observed no op ({record.passes} pass(es), "
+              f"{len(record.max_abs)} op(s) recorded) — its execution path is not "
+              f"observed by the census. Not applied — conservative path.",
+              file=sys.stderr, flush=True)
+        return None
     if not record.matches(dag):
         # Present-but-inconsistent: said loudly on stderr at every load, and
         # the record is NOT applied. The component runs the conservative
