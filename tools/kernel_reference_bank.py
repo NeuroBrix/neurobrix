@@ -189,7 +189,7 @@ def gen_clamp(op, rng, T):
 GENERATORS = {
     **{o: gen_elementwise_unary for o in ("exp", "log", "sin", "cos", "tanh", "sigmoid", "gelu", "silu", "relu",
                                           "sqrt", "rsqrt", "neg", "abs", "erf", "log1p",
-                                          "floor", "ceil", "trunc")},
+                                          "floor", "ceil", "trunc", "round")},
     **{o: gen_elementwise_binary for o in ("add", "sub", "mul", "div", "pow", "maximum", "minimum", "remainder")},
     **{o: gen_mm for o in ("mm", "addmm", "bmm", "baddbmm", "matmul")},
     "_softmax": gen_softmax, "_log_softmax": gen_softmax,

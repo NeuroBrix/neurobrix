@@ -64,11 +64,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   drops from 1073 s to 45 s.
 
 ### Fixed
-- The Triton engine's `floor`, `ceil` and `remainder` kernels refused half-precision inputs
+- The Triton engine's `floor`, `ceil`, `round` and `remainder` kernels refused half-precision inputs
   (Triton's rounding functions take fp32/fp64 only: `Expected dtype ['fp32', 'fp64'] but got fp16`
-  — every `--triton` run of the RNNT speech model stopped at its first `floor`); a half value is now
+  — every `--triton` run of the RNNT speech model stopped at its first `floor`, every one of the
+  Kokoro speech model at its first `round`); a half value is now
   rounded in fp32, exactly, and stored back in its own dtype. `trunc` could never compile (no such
-  function in Triton's math) and is now floor-or-ceil by sign. All four are in the reference bank.
+  function in Triton's math) and is now floor-or-ceil by sign. All five are in the reference bank.
+- The zoo campaign's video gate compares frames (per-frame PSNR, 30 dB bar) instead of file bytes,
+  and `regate` re-runs a gate on existing outputs without the GPU.
 - `aten::max` / `aten::min` with a `dim` on the Triton engine passed four arguments to a five-argument
   kernel (a crash on any such reduction, on both launchers; found by the reference bank); they now
   return the values and the indices as ATen does.

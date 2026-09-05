@@ -135,6 +135,36 @@ def gate(a: Path, b: Path) -> dict:
     if not a.exists() or not b.exists():
         return {"kind": "missing", "pass": False}
     ext = a.suffix.lower()
+    if ext == ".mp4":
+        # Frame fidelity: both clips decoded (imageio-ffmpeg), the mean and
+        # the worst per-frame PSNR of B against A over the common length; the
+        # same 30 dB bar as the image gate; sha kept for the record.
+        import hashlib
+        import numpy as np
+        try:
+            import imageio.v3 as iio
+            fa = np.asarray(list(iio.imiter(str(a))))
+            fb = np.asarray(list(iio.imiter(str(b))))
+        except Exception as e:  # noqa: BLE001 — the gate says why it could not read
+            return {"kind": "video", "pass": False, "error": f"decode: {e}"[:300],
+                    "sha_a": hashlib.sha256(a.read_bytes()).hexdigest()[:12],
+                    "sha_b": hashlib.sha256(b.read_bytes()).hexdigest()[:12]}
+        n = min(len(fa), len(fb))
+        if n == 0 or fa.shape[1:] != fb.shape[1:]:
+            return {"kind": "video", "pass": False, "error": f"frames {fa.shape} vs {fb.shape}"}
+        psnr = []
+        for i in range(n):
+            x, y = fa[i].astype(np.float64), fb[i].astype(np.float64)
+            mse = float(np.mean((x - y) ** 2))
+            psnr.append(float("inf") if mse == 0 else 10 * np.log10(255.0 ** 2 / mse))
+        finite = [v for v in psnr if v != float("inf")]
+        mean_psnr = float(np.mean(psnr)) if finite else float("inf")
+        min_psnr = float(min(psnr))
+        identical = a.read_bytes() == b.read_bytes()
+        return {"kind": "video", "pass": identical or min_psnr >= 30.0, "identical": identical,
+                "frames_a": int(len(fa)), "frames_b": int(len(fb)), "psnr_mean_db": mean_psnr,
+                "psnr_min_db": min_psnr, "sha_a": hashlib.sha256(a.read_bytes()).hexdigest()[:12],
+                "sha_b": hashlib.sha256(b.read_bytes()).hexdigest()[:12]}
     if ext == ".txt":
         ta, tb = a.read_bytes(), b.read_bytes()
         if ta == tb:
@@ -369,6 +399,10 @@ def table(out: Path) -> str:
             gs = "identical" if g.get("identical") else f"diff @{g.get('first_diff_at')}"
         elif g.get("kind") == "audio":
             gs = "identical" if g.get("identical") else f"SNR {g.get('snr_db', 0):.1f} dB"
+        elif g.get("kind") == "video":
+            gs = ("identical" if g.get("identical") else
+                  (f"{g.get('psnr_min_db', 0):.1f} dB min / {g.get('psnr_mean_db', 0):.1f} dB mean, {g.get('frames_b')} frames"
+                   if "psnr_min_db" in g else g.get("error", "?")))
         else:
             gs = "identical" if g.get("identical") else g.get("kind", "?")
         a, b = r["A"].get("exec_s"), r["B"].get("exec_s")
@@ -401,9 +435,22 @@ def main():
                    help="the launcher gate instead of the precision lever: --triton with upstream's launcher vs NeuroBrix's, bytes compared")
     t = sub.add_parser("table")
     t.add_argument("--out", default=str(OUT_DEFAULT))
+    g = sub.add_parser("regate", help="re-run the quality gate on the existing A/B outputs of a model (no GPU)")
+    g.add_argument("--models", required=True)
+    g.add_argument("--out", default=str(OUT_DEFAULT))
     args = ap.parse_args()
     if args.cmd == "table":
         print(table(Path(args.out)))
+        return 0
+    if args.cmd == "regate":
+        out = Path(args.out)
+        for m in args.models.split(","):
+            rj = out / m / "result.json"
+            r = json.loads(rj.read_text())
+            a = Path(r["A"]["output"]); b = Path(r["B"]["output"])
+            r["gate"] = gate(a, b)
+            rj.write_text(json.dumps(r, indent=1))
+            print(f"[zoo] {m}: {verdict(r)} gate={r['gate']}")
         return 0
     out = Path(args.out)
     if args.models:
