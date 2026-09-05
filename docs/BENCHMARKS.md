@@ -114,21 +114,33 @@ NeuroBrix compiled runs the Swin family between **parity and +21 %**:
 vendor, three are 10–21 % behind. This is the only category where any row of
 ours is faster than a specialised competitor.
 
-### Speech-to-text — *slot 2026-08-30 01:41–01:56*
+### Speech-to-text — *slot 2026-09-05 13:20–13:55 (quiet host)*
 
-RTFx, higher is better: faster-whisper **15–29×**; vendor transformers 8–14×;
-NeuroBrix compiled 1.4–3.9×; NeuroBrix triton 0.30–1.7×.
+Two definitions, both stated, because the two tools do not measure the same
+thing. *Warm request*: the engine is loaded and has served once; one request
+is timed end to end, including the transcript's return. *Cold execute*: a fresh
+process, the transcription phase timed on its own — first-request costs
+(kernel loading, buffers, plan compilation) inside, model loading outside;
+this is the definition the earlier campaigns published.
 
-**This is our widest deficit and it is not optimised.** It is the
-encoder-decoder path before any decode-band work — the same work that took the
-text rows from ×84 to ×1.69 has never touched it. The baseline is dated so that
-the improvement, when it comes, has a "before".
+| whisper-large-v3-turbo, jfk 11 s | NeuroBrix (compiled) | faster-whisper 1.2.1 fp16 | gap |
+|---|---:|---:|---|
+| warm request, seconds per clip | **0.336 s** (RTFx 33) | 0.44–0.80 s per call after load (RTFx 14–25; 0.48 s on 08-30) | we lead |
+| cold execute, seconds per clip | 2.7 s (RTFx 4.0) | 0.59 s (RTFx 18.8) | ×4.6 behind |
 
-**Long-form (600 s), closed 2026-09-02:** both flows now transcribe complete
-audio — Parakeet 22 windows at **1.00** of the NeMo reference bytes, Whisper 24
-windows at **0.99** of the faster-whisper bytes, byte-identical across our two
-engines. The greedy loop was made NeMo-exact: word agreement with the vendor's
-own output rose **95.6 % → 99.0 %**.
+Transcript shas are identical between the two tools on both test clips. The
+cold gap is the first request's cost — lazy kernel loading, pinned buffers,
+plan compilation — not transcription: the same engine's warm request is
+9× faster than its own cold execute. What changed on 09-05: the compiled
+engine runs the encoder and decoder at the vendor's half precision (warm
+0.72 → 0.47 s), and the decoder keeps its keys and values across tokens in
+both engines instead of recomputing the whole transcript at every token
+(byte-identical transcripts; the `--triton` engine's 600 s transcription
+drops from 1073 s to 45 s). Method and every gate:
+`validation_outputs/audio_lot_2026_09_05/RESEARCH.md`.
+
+Parakeet-TDT and the other speech rows keep their 08-30 numbers (RTFx
+2.5–3.0 compiled against NeMo's 12–15); they have not been touched yet.
 
 ### Text-to-speech — *slot 2026-08-30 10:57–12:50, five rows*
 
@@ -185,8 +197,14 @@ sourced.
 ## 3. Limits, stated plainly
 
 - **Text decode is ×1.69–2.34 behind ollama.** Closed from ×84; not closed.
-- **Speech-to-text is our largest gap** (1.4–3.9× against faster-whisper's
-  15–29× RTFx) and has never been optimised.
+- **Speech-to-text: ahead on a warm request, ×5 behind on a cold execute.**
+  faster-whisper's 0.44–0.80 s per call after load against our 0.34 s warm;
+  its 0.59 s against our 2.7 s when a fresh process pays kernel loading,
+  buffers and plan compilation inside the timed phase. The cold cost is the
+  open item, and it is a one-time cost per process, not transcription.
+- **Image diffusion is at parity with diffusers on PixArt** (medians 1 % and
+  0.4 % ahead, inside the spread) and **×2.2 behind on Sana**, whose fp16 path we
+  refuse under our quality bound for now.
 - **The `--triton` engine is much slower than `compiled` on image and
   upscaler work** — a structural sm_70 limit, measured at ~12 % of cuBLAS.
 - **Time-to-first-token is ×3.9–4.1 behind ollama** at long contexts on the
