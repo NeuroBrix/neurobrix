@@ -169,61 +169,33 @@ _PCIE_BW_MAP = {
 # PUBLIC API
 # ============================================================================
 
-def _cached_profile_matches_visible_gpus() -> bool:
-    """True when the cached default profile still describes what this process
-    can see.
-
-    The profile is written once and reused, but the set of visible GPUs is a
-    property of the ENVIRONMENT, not of the machine: `CUDA_VISIBLE_DEVICES`
-    can change between two runs on the same host. Reusing a four-GPU profile
-    inside a process pinned to one card makes Prism place components on
-    ordinals that do not exist, and the CUDA runtime refuses with "invalid
-    device ordinal" — after the model has already been read from disk.
-
-    Compared on device count and models, which is what placement depends on.
-    Any doubt (unreadable or malformed cache) re-detects: detection is cheap
-    and a wrong profile is not.
-    """
-    try:
-        with open(DEFAULT_PROFILE_PATH) as fh:
-            cached = yaml.safe_load(fh) or {}
-    except (OSError, yaml.YAMLError):
-        return False
-
-    cached_gpus = [d.get("model") for d in (cached.get("devices") or [])]
+def _visible_set_tag() -> Optional[str]:
+    """A short tag naming WHAT THIS PROCESS SEES (GPU models in order): the
+    per-environment profile file is keyed by it, so two processes pinned to
+    different cards never rewrite each other's profile. None when detection
+    is unavailable (the shared default.yml serves then)."""
     try:
         devices, _ = _detect_gpus(platform.system())
-        current_gpus = [d.get("model") for d in devices]
     except Exception:
-        return True          # detection unavailable: keep the cache rather
-                             # than churn it on every run
-    return cached_gpus == current_gpus
+        return None
+    models = [str(d.get("model")) for d in devices]
+    if not models:
+        return None
+    import hashlib
+    return hashlib.sha1("|".join(models).encode()).hexdigest()[:8]
 
 
-def get_or_create_default_profile() -> str:
-    """
-    Ensure default.yml exists in config/hardware/ (same dir as all profiles).
-
-    Returns:
-        The hardware_id string "default" (usable with load_profile("default")).
-    """
-    if DEFAULT_PROFILE_PATH.exists() and _cached_profile_matches_visible_gpus():
-        return "default"
-
-    if DEFAULT_PROFILE_PATH.exists():
-        print("   [Auto-detect] Visible GPUs differ from the cached profile "
-              "(CUDA_VISIBLE_DEVICES changed?) — re-detecting.")
-
-    print("   [Auto-detect] No --hardware specified, detecting system hardware...")
-    profile_data = detect_hardware()
-
-    HARDWARE_DIR.mkdir(parents=True, exist_ok=True)
-
+def _write_profile_atomically(path: Path, profile_data: dict) -> None:
+    """Whole file or nothing: a reader in another process never sees a torn
+    profile (two pinned processes re-detecting at once tore default.yml on
+    2026-09-05 — `devices: [null]` at load)."""
     class _NoAliasDumper(yaml.SafeDumper):
         def ignore_aliases(self, data: object) -> bool:  # noqa: ARG002
             return True
 
-    with open(DEFAULT_PROFILE_PATH, "w") as f:
+    HARDWARE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + f".{os.getpid()}.tmp")
+    with open(tmp, "w") as f:
         summary = profile_data.get("notes", "Auto-detected hardware profile")
         first_line = summary.strip().split("\n")[0]
         f.write(f"# Hardware Profile: {first_line}\n")
@@ -231,9 +203,43 @@ def get_or_create_default_profile() -> str:
         f.write("# Regenerate: delete this file and run neurobrix without --hardware\n\n")
         yaml.dump(profile_data, f, Dumper=_NoAliasDumper,
                   default_flow_style=False, sort_keys=False, allow_unicode=True)
+    os.replace(tmp, path)
 
-    print(f"   [Auto-detect] Created profile: {DEFAULT_PROFILE_PATH}")
-    return "default"
+
+def get_or_create_default_profile() -> str:
+    """
+    Ensure the auto-detected profile of THIS environment exists in
+    config/hardware/ (same dir as all profiles) and return its hardware_id.
+
+    The profile is keyed by the visible GPU set (`default-<tag>.yml`): the set
+    is a property of the ENVIRONMENT (`CUDA_VISIBLE_DEVICES`), not of the
+    machine, and concurrent processes pinned to different cards must each
+    read their own. `default.yml` is refreshed alongside as the human-facing
+    latest detection. Detection unavailable → the shared `default.yml`.
+
+    Returns:
+        The hardware_id string (usable with load_profile(id)).
+    """
+    tag = _visible_set_tag()
+    if tag is None:
+        if DEFAULT_PROFILE_PATH.exists():
+            return "default"
+        profile_data = detect_hardware()
+        _write_profile_atomically(DEFAULT_PROFILE_PATH, profile_data)
+        print(f"   [Auto-detect] Created profile: {DEFAULT_PROFILE_PATH}")
+        return "default"
+
+    hardware_id = f"default-{tag}"
+    path = HARDWARE_DIR / f"{hardware_id}.yml"
+    if path.exists():
+        return hardware_id
+
+    print("   [Auto-detect] No --hardware specified, detecting system hardware...")
+    profile_data = detect_hardware()
+    _write_profile_atomically(path, profile_data)
+    _write_profile_atomically(DEFAULT_PROFILE_PATH, profile_data)
+    print(f"   [Auto-detect] Created profile: {path}")
+    return hardware_id
 
 
 def load_default_profile():
@@ -243,9 +249,9 @@ def load_default_profile():
     Creates default.yml in config/hardware/ if it doesn't exist,
     then loads it through the standard load_profile() path.
     """
-    get_or_create_default_profile()
+    hardware_id = get_or_create_default_profile()
     from neurobrix.core.prism.loader import load_profile
-    return load_profile("default")
+    return load_profile(hardware_id)
 
 
 # ============================================================================

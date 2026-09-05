@@ -50,16 +50,18 @@ AMP_FP32_OPS: FrozenSet[str] = frozenset({
 
 # Phase 2 — UNIFORM cast-back doctrine: every AMP_FP32_OPS goes through
 # the fp32-internal-compute-then-conditional-cast-back wrap. The cast-back
-# is gated SOLELY by the per-component `activations_fp16_safe` flag from
-# model_registry.yml (read at call time via _w._NBX_ACTIVATIONS_FP16_SAFE).
-# When False (default, conservative — typical LLMs without an explicit
-# fp16-safe annotation), output stays fp32 (matches PyTorch oracle).
-# When True (annotated VAE/UNet on diffusion models), output is cast back
-# to compute_dtype for VRAM-preserving fp16-throughout flow.
+# is gated SOLELY by the per-component `activations_fp16_safe` flag of the
+# precision contract — the component's calibration record, resolved by
+# core/runtime/precision_contract.resolve (read at call time via
+# _w._NBX_ACTIVATIONS_FP16_SAFE). When False (default, conservative —
+# no record, or a record whose islands this engine cannot pin per op),
+# output stays fp32 (matches PyTorch oracle). When True (a calibrated
+# component with no island), output is cast back to compute_dtype for
+# VRAM-preserving fp16-throughout flow.
 # The previous `_AMP_FP32_OPS_OPT_IN_CAST_BACK` set was an additional
 # membership gate that fragmented the doctrine: rms_norm and div had
 # the cast-back hook but rsqrt/exp/layer_norm/batch_norm/etc did not.
-# Removed in favor of a single uniform gate (the registry flag).
+# Removed in favor of a single uniform gate (the contract flag).
 
 AMP_FP16_OPS: FrozenSet[str] = frozenset({
     "_convolution", "conv1d", "conv2d", "conv3d", "convolution",
@@ -291,9 +293,9 @@ class TritonDtypeEngine:
             # Phase 2 — uniform cast-back: all AMP_FP32_OPS go through the
             # fp32-internal-then-conditional-cast-back wrap. The cast-back
             # decision is gated solely by the `activations_fp16_safe`
-            # registry flag (read at call time via _w global). When False
+            # contract flag (read at call time via _w global). When False
             # (default), output stays fp32 (PyTorch-oracle parity). When
-            # True (annotated fp16-safe model), output cast to compute_dtype.
+            # True (calibrated, no island), output cast to compute_dtype.
             return self._wrap_fp32_internal_compute_dtype_output(func)
 
         if op_name in AMP_FP16_OPS:
@@ -325,7 +327,7 @@ class TritonDtypeEngine:
         compute_dtype.
 
         Used when `_NBX_ACTIVATIONS_FP16_SAFE` is True (per-component flag
-        from model_registry.yml). The op's internal precision rationale
+        of the precision contract, from the calibration record). The op's internal precision rationale
         (RMSNorm pow→mean→rsqrt overflow risk, div epsilon underflow) is
         preserved by upcasting inputs to fp32, but the output is brought
         back to compute_dtype so downstream ops don't propagate fp32 in

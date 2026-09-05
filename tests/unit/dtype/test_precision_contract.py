@@ -1,14 +1,15 @@
 """Precision contract — DtypeEngine.activations_fp16_safe + fp32_op_uids.
 
 The conservative default (fp32 matmul on fp16 hardware) is unchanged for
-every component without a declared contract; a declared-safe component
-takes PyTorch AMP's fp16 path; a vendor keep-in-fp32 pin wins over both.
-Lever record: validation_outputs/image_fp16_2026_09_04.
+every component without a calibration record; a calibrated component takes
+PyTorch AMP's fp16 path with the record's fp32 islands pinned. No model
+name, module name or hand-written list takes part (2026-09-05 reframe).
+Lever records: validation_outputs/image_fp16_2026_09_04 (the contract),
+validation_outputs/precision_census_2026_09_05 (the calibration).
 """
 import pytest
 import torch
 
-from neurobrix.core.config.loader import get_backbone_dtype_contract
 from neurobrix.core.dtype.engine import DtypeEngine, _FP16_GEMM_OPS, _FP16_NEED_FP32
 
 
@@ -78,60 +79,6 @@ def test_bf16_compute_is_untouched_by_the_contract():
         assert fn(a, a).dtype == torch.bfloat16
 
 
-def test_contract_file_carries_the_t5_keep_in_fp32_list():
-    t5 = get_backbone_dtype_contract("text_encoder_t5")
-    assert t5["activations_fp16_safe"] is True
-    assert "ffn.down" in t5["keep_in_fp32_modules"]
-    assert get_backbone_dtype_contract("no_such_backbone") == {}
-    assert get_backbone_dtype_contract(None) == {}
-
-
-def test_executor_resolver_pins_matmuls_by_parent_module_suffix(tmp_path):
-    """The executor's resolver reads manifest + contract and pins by
-    parent_module suffix — exercised on a synthetic component."""
-    import json
-    from neurobrix.core.runtime.graph_executor import GraphExecutor
-
-    cache = tmp_path / "ModelX"
-    cache.mkdir()
-    (cache / "manifest.json").write_text(json.dumps({
-        "model_name": "ModelX",
-        "components": {"text_encoder": {"backbone": "text_encoder_t5"}}}))
-    ex = GraphExecutor.__new__(GraphExecutor)
-    ex._cache_path = str(cache)
-    ex._component_name = "text_encoder"
-    ex._dag = {"ops": {
-        "aten.mm::0": {"op_type": "aten::mm", "parent_module": "encoder.block.0.block.1.ffn.down"},
-        "aten.mm::1": {"op_type": "aten::mm", "parent_module": "encoder.block.0.block.1.ffn.up_0"},
-        "aten.mm::2": {"op_type": "aten::mm", "parent_module": "encoder.block.0.block.0.attn.down"},
-        "aten.add::0": {"op_type": "aten::add", "parent_module": "encoder.block.0.block.1.ffn.down"},
-        "aten.view::0": {"op_type": "aten::view", "parent_module": "encoder.block.0.block.1.ffn.down"},
-        "aten.add_::0": {"op_type": "aten::add_", "parent_module": "encoder.block.0.block.1.ffn.down"},
-    }}
-    safe, pinned, narrow = ex._resolve_fp16_activation_policy(torch.float16)
-    assert safe is True
-    # every COMPUTE op of the module; never a view (no kernel) nor an in-place op
-    assert pinned == frozenset({"aten.mm::0", "aten.add::0"})
-    # a per-model registry list unions with the contract (monkeypatched flag reader)
-    import neurobrix.core.runtime.graph_executor as GE
-    from neurobrix.core.runtime import registry_flags as RF
-    orig = RF.get_component_flag
-    def fake(model, comp, flag, default=None, env_override=None):
-        if flag == "keep_in_fp32_modules":
-            return ["attn.down"]
-        if flag == "activations_fp16_safe":
-            return None
-        return default
-    RF.get_component_flag = fake
-    try:
-        safe, pinned, _ = ex._resolve_fp16_activation_policy(torch.float16)
-    finally:
-        RF.get_component_flag = orig
-    assert pinned == frozenset({"aten.mm::0", "aten.add::0", "aten.mm::2"})
-    # bf16 / fp32 compute: contract is moot, nothing is read
-    assert ex._resolve_fp16_activation_policy(torch.float32) == (False, frozenset(), frozenset())
-
-
 def test_vendor_pin_survives_amp_off():
     """AMP off = the vendor's plain fp16 forward; the vendor still keeps its
     keep-in-fp32 modules in fp32, so the pin must apply with AMP off too."""
@@ -182,33 +129,6 @@ def test_guarded_square_keeps_its_fp32_output_under_the_contract():
     assert out.dtype == torch.float32 and torch.isfinite(out).all()
     y = torch.randn(4, dtype=torch.float16)
     assert mul(x, y).dtype == torch.float16                 # plain mul: passthrough
-
-
-def test_fnmatch_pattern_pins_block_level_ops_only(tmp_path):
-    import json
-    from neurobrix.core.runtime.graph_executor import GraphExecutor
-    from neurobrix.core.runtime import registry_flags as RF
-    cache = tmp_path / "ModelY"; cache.mkdir()
-    (cache / "manifest.json").write_text(json.dumps({
-        "model_name": "ModelY", "components": {"transformer": {"backbone": "unknown"}}}))
-    ex = GraphExecutor.__new__(GraphExecutor)
-    ex._cache_path = str(cache); ex._component_name = "transformer"
-    ex._dag = {"ops": {
-        "aten.add::0": {"op_type": "aten::add", "parent_module": "block.0"},
-        "aten.add::1": {"op_type": "aten::add", "parent_module": "block.12"},
-        "aten.mm::0": {"op_type": "aten::mm", "parent_module": "block.0.self_attn.query"},
-        "aten.bmm::0": {"op_type": "aten::bmm", "parent_module": "block.0.self_attn"},
-    }}
-    orig = RF.get_component_flag
-    RF.get_component_flag = lambda m, c, flag, default=None, env_override=None: (
-        ["self_attn", "block.[0-9]", "block.[0-9][0-9]"] if flag == "keep_in_fp32_modules"
-        else (True if flag == "activations_fp16_safe" else default))
-    try:
-        safe, pinned, _ = ex._resolve_fp16_activation_policy(torch.float16)
-    finally:
-        RF.get_component_flag = orig
-    assert safe is True
-    assert pinned == frozenset({"aten.add::0", "aten.add::1", "aten.bmm::0"})
 
 
 def test_pin_applies_to_pass_through_op_classes():
@@ -274,3 +194,148 @@ def test_scalar_div_outside_an_island_runs_fp16_under_the_contract():
     assert seen["in"] == torch.float32
     eng.compile_op("aten::div", spy_div, eps, op_uid="aten.div::1")(x, 1e-15)   # epsilon: fp32 compute
     assert seen["in"] == torch.float32
+
+
+def _executor(tmp_path, model, component, dag):
+    import json
+    from neurobrix.core.runtime.graph_executor import GraphExecutor
+    cache = tmp_path / model
+    cache.mkdir(exist_ok=True)
+    (cache / "manifest.json").write_text(json.dumps({"model_name": model, "components": {component: {}}}))
+    ex = GraphExecutor.__new__(GraphExecutor)
+    ex._cache_path = str(cache)
+    ex._component_name = component
+    ex._dag = dag
+    return ex
+
+
+def _dag_with_over_range_down_projection():
+    return {"component_name": "text_encoder", "ops": {
+        "aten.mm::0": {"op_type": "aten::mm", "input_tensor_ids": ["x", "w0"], "output_tensor_ids": ["m0"]},
+        "aten.view::0": {"op_type": "aten::view", "input_tensor_ids": ["m0"], "output_tensor_ids": ["v0"]},
+        "aten.add::0": {"op_type": "aten::add", "input_tensor_ids": ["v0", "x"], "output_tensor_ids": ["r0"]},
+        "aten.mm::1": {"op_type": "aten::mm", "input_tensor_ids": ["r0", "w1"], "output_tensor_ids": ["m1"]},
+        "aten.mm::2": {"op_type": "aten::mm", "input_tensor_ids": ["x", "w2"], "output_tensor_ids": ["m2"]},
+    }, "execution_order": ["aten.mm::0", "aten.view::0", "aten.add::0", "aten.mm::1", "aten.mm::2"]}
+
+
+def test_executor_resolver_islands_from_the_calibration_record(tmp_path, monkeypatch):
+    """No record → conservative. A record measured on this graph → the
+    contract with the ops above the bound (and every reader of such a
+    value) pinned fp32; a view never; bf16 / fp32 compute reads nothing."""
+    from neurobrix.core.dtype import calibration as cal
+    monkeypatch.setattr(cal, "STORE_ROOT", tmp_path / "store")
+    monkeypatch.delenv("NBX_ACTIVATIONS_FP16_SAFE", raising=False)
+    dag = _dag_with_over_range_down_projection()
+    ex = _executor(tmp_path, "ModelX", "text_encoder", dag)
+    assert ex._resolve_fp16_activation_policy(torch.float16) == (False, frozenset(), frozenset())
+    rec = cal.CalibrationRecord.build("ModelX", "text_encoder", dag,
+                                      {"aten.mm::0": 1.41e5, "aten.view::0": 1.41e5, "aten.add::0": 2.3e5,
+                                       "aten.mm::1": 40.0, "aten.mm::2": 9.0},
+                                      stimulus={"prompt": "p"}, passes=2, reference="conservative")
+    rec.save(cal.store_path("ModelX", "text_encoder"))
+    safe, pinned, narrow = ex._resolve_fp16_activation_policy(torch.float16)
+    assert safe is True
+    assert pinned == frozenset({"aten.mm::0", "aten.add::0", "aten.mm::1"})
+    assert "aten.mm::2" not in pinned and "aten.view::0" not in pinned
+    assert ex._resolve_fp16_activation_policy(torch.float32) == (False, frozenset(), frozenset())
+    assert ex._resolve_fp16_activation_policy(torch.bfloat16) == (False, frozenset(), frozenset())
+
+
+def test_a_record_from_another_trace_is_ignored_and_the_env_switch_rules(tmp_path, monkeypatch):
+    from neurobrix.core.dtype import calibration as cal
+    monkeypatch.setattr(cal, "STORE_ROOT", tmp_path / "store")
+    dag = _dag_with_over_range_down_projection()
+    other = _dag_with_over_range_down_projection()
+    other["ops"]["aten.mm::2"]["op_type"] = "aten::addmm"
+    cal.CalibrationRecord.build("ModelX", "text_encoder", other, {"aten.mm::0": 1e6},
+                                stimulus={}, passes=1, reference="conservative"
+                                ).save(cal.store_path("ModelX", "text_encoder"))
+    ex = _executor(tmp_path, "ModelX", "text_encoder", dag)
+    monkeypatch.delenv("NBX_ACTIVATIONS_FP16_SAFE", raising=False)
+    assert ex._resolve_fp16_activation_policy(torch.float16) == (False, frozenset(), frozenset())
+    monkeypatch.setenv("NBX_ACTIVATIONS_FP16_SAFE", "1")   # forced, no island
+    safe, pinned, narrow = ex._resolve_fp16_activation_policy(torch.float16)
+    assert safe is True and pinned == frozenset() and narrow
+    monkeypatch.setenv("NBX_ACTIVATIONS_FP16_SAFE", "0")   # the reference path
+    cal.CalibrationRecord.build("ModelX", "text_encoder", dag, {"aten.mm::0": 1e6},
+                                stimulus={}, passes=1, reference="conservative"
+                                ).save(cal.store_path("ModelX", "text_encoder"))
+    assert ex._resolve_fp16_activation_policy(torch.float16) == (False, frozenset(), frozenset())
+
+
+def test_an_engine_without_per_op_islands_takes_the_contract_only_when_none_is_needed(tmp_path, monkeypatch):
+    from neurobrix.core.dtype import calibration as cal
+    from neurobrix.core.runtime.precision_contract import resolve
+    monkeypatch.setattr(cal, "STORE_ROOT", tmp_path / "store")
+    monkeypatch.delenv("NBX_ACTIVATIONS_FP16_SAFE", raising=False)
+    dag = _dag_with_over_range_down_projection()
+    ex = _executor(tmp_path, "ModelX", "text_encoder", dag)
+    cal.CalibrationRecord.build("ModelX", "text_encoder", dag, {"aten.mm::0": 1e6},
+                                stimulus={}, passes=1, reference="conservative"
+                                ).save(cal.store_path("ModelX", "text_encoder"))
+    assert resolve(ex._cache_path, "text_encoder", dag, compute_dtype=torch.float16,
+                   supports_op_pins=False)[0] is False
+    cal.CalibrationRecord.build("ModelX", "text_encoder", dag, {"aten.mm::0": 10.0},
+                                stimulus={}, passes=1, reference="conservative"
+                                ).save(cal.store_path("ModelX", "text_encoder"))
+    assert resolve(ex._cache_path, "text_encoder", dag, compute_dtype=torch.float16,
+                   supports_op_pins=False)[0] is True
+
+
+def test_an_unrecognised_env_switch_value_raises(monkeypatch):
+    from neurobrix.core.runtime.precision_contract import resolve
+    monkeypatch.setenv("NBX_ACTIVATIONS_FP16_SAFE", "maybe")
+    with pytest.raises(ValueError):
+        resolve(None, "c", {"ops": {}}, compute_dtype=torch.float16)
+
+
+def test_a_corrupt_existing_record_raises_instead_of_defaulting(tmp_path, monkeypatch):
+    from neurobrix.core.dtype import calibration as cal
+    monkeypatch.setattr(cal, "STORE_ROOT", tmp_path / "store")
+    p = cal.store_path("ModelX", "text_encoder")
+    p.parent.mkdir(parents=True)
+    p.write_text("{not json")
+    with pytest.raises(ValueError):
+        cal.load_record("ModelX", "text_encoder")
+    p.write_text('{"format": "something-else"}')
+    with pytest.raises(ValueError):
+        cal.load_record("ModelX", "text_encoder")
+
+
+def test_a_stale_record_is_refused_loudly_and_never_applied(tmp_path, monkeypatch, capsys):
+    from neurobrix.core.dtype import calibration as cal
+    monkeypatch.setattr(cal, "STORE_ROOT", tmp_path / "store")
+    monkeypatch.delenv("NBX_ACTIVATIONS_FP16_SAFE", raising=False)
+    dag = _dag_with_over_range_down_projection()
+    other = _dag_with_over_range_down_projection()
+    other["ops"]["aten.mm::2"]["op_type"] = "aten::addmm"
+    cal.CalibrationRecord.build("ModelX", "text_encoder", other, {"aten.mm::0": 1e6},
+                                stimulus={}, passes=1, reference="conservative"
+                                ).save(cal.store_path("ModelX", "text_encoder"))
+    ex = _executor(tmp_path, "ModelX", "text_encoder", dag)
+    assert ex._resolve_fp16_activation_policy(torch.float16) == (False, frozenset(), frozenset())
+    err = capsys.readouterr().err
+    assert "REFUSED RECORD" in err and "neurobrix calibrate --model ModelX" in err
+
+
+def test_calibrate_refuses_the_triton_engines_upfront(monkeypatch):
+    import types
+    from neurobrix.cli.commands import calibrate as C
+    monkeypatch.setattr(C, "_identity_of", lambda m: ("image", m))
+    from neurobrix.serving import client as SC
+    monkeypatch.setattr(SC.DaemonClient, "is_running", staticmethod(lambda: False))
+    args = types.SimpleNamespace(model="M", triton=True, triton_sequential=False, output=None, mode=None)
+    assert C.cmd_calibrate(args) == 2
+
+
+def test_the_contract_can_be_set_after_the_engine_exists():
+    """The executor builds the engine before the graph-rewriting passes
+    (constants convert through it) and installs the contract after them."""
+    eng = DtypeEngine(torch.float16)
+    assert _mm_out_dtype(eng, op_uid="aten.mm::1") == torch.float32
+    eng.set_precision_contract(True, frozenset({"aten.mm::0"}), frozenset())
+    assert _mm_out_dtype(eng, op_uid="aten.mm::1") == torch.float16
+    assert _mm_out_dtype(eng, op_uid="aten.mm::0") == torch.float32
+    eng.set_precision_contract(False)
+    assert _mm_out_dtype(eng, op_uid="aten.mm::1") == torch.float32

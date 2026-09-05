@@ -1,0 +1,27 @@
+# ============================================================================
+# PRECISION CALIBRATION POLICY — the DtypeEngine fp32-island detector
+# ============================================================================
+#
+# Read by core/dtype/calibration.py through core.config.loader.
+#
+# Which ops a component must keep in fp32 on half-precision hardware is a
+# MEASUREMENT recorded per artifact (`neurobrix calibrate`, engine store
+# ~/.neurobrix/calibration/): the largest finite magnitude every op produced
+# on the conservative reference path over a whole request.
+# The engine derives the islands from that record and this policy — no model
+# name, no module name, no hand-written list anywhere.
+#
+#   headroom_bits : an op is islanded in fp32 when its calibrated magnitude
+#                   exceeds finfo(compute_dtype).max / 2^headroom_bits — the
+#                   margin that absorbs inputs the calibration did not see.
+#                   2 = a quarter of the range (16376 on fp16). On bf16 / fp32
+#                   compute the bound is beyond any activation: no island.
+#   reference     : the path the census runs on. `conservative` = the
+#                   engine's default on fp16 hardware (fp32 matmul store).
+#                   A component Prism pins to fp32 compute as a whole
+#                   (requires_fp32_compute, conv cascades) calibrates there,
+#                   in fp32: its record then shows no island by construction
+#                   and the whole-component pin stays the protection.
+# ============================================================================
+headroom_bits: 2
+reference: conservative

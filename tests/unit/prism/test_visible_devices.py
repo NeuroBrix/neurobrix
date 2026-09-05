@@ -125,65 +125,41 @@ def test_invalid_entry_truncates_like_cuda(four_gpus, monkeypatch):
 
 # --- the cached profile must not outlive the environment it describes -------
 
-def test_cached_profile_is_rejected_when_the_visible_set_changed(monkeypatch, tmp_path):
-    """A four-GPU profile reused inside a one-GPU process is exactly how
-    'invalid device ordinal' reached users."""
-    cache = tmp_path / "default.yml"
-    cache.write_text(
-        "id: auto-4xv100\n"
-        "devices:\n"
-        "  - {model: Tesla V100-SXM2-16GB}\n"
-        "  - {model: Tesla V100-SXM2-16GB}\n"
-        "  - {model: Tesla V100-SXM2-32GB}\n"
-        "  - {model: Tesla V100-SXM2-32GB}\n"
-    )
-    monkeypatch.setattr(autodetect, "DEFAULT_PROFILE_PATH", cache)
+def _two_environments(monkeypatch, tmp_path):
+    """Two processes on one host, pinned to different cards."""
+    monkeypatch.setattr(autodetect, "HARDWARE_DIR", tmp_path)
+    monkeypatch.setattr(autodetect, "DEFAULT_PROFILE_PATH", tmp_path / "default.yml")
+    seen = {"models": ["Tesla V100-SXM2-32GB"]}
     monkeypatch.setattr(autodetect, "_detect_gpus",
-                        lambda _os: ([{"model": "Tesla V100-SXM2-16GB"}], "nvidia"))
-    assert autodetect._cached_profile_matches_visible_gpus() is False
+                        lambda _sys: ([{"model": m} for m in seen["models"]], "nvidia"))
+    monkeypatch.setattr(autodetect, "detect_hardware",
+                        lambda: {"devices": [{"model": m, "memory_mb": 32768 if "32GB" in m else 16384}
+                                             for m in seen["models"]], "notes": "test"})
+    return seen
 
 
-def test_cached_profile_is_kept_when_the_machine_is_unchanged(monkeypatch, tmp_path):
-    cache = tmp_path / "default.yml"
-    cache.write_text(
-        "id: auto-2xv100\n"
-        "devices:\n"
-        "  - {model: Tesla V100-SXM2-16GB}\n"
-        "  - {model: Tesla V100-SXM2-32GB}\n"
-    )
-    monkeypatch.setattr(autodetect, "DEFAULT_PROFILE_PATH", cache)
-    monkeypatch.setattr(autodetect, "_detect_gpus", lambda _os: (
-        [{"model": "Tesla V100-SXM2-16GB"}, {"model": "Tesla V100-SXM2-32GB"}], "nvidia"))
-    assert autodetect._cached_profile_matches_visible_gpus() is True
+def test_each_visible_set_reads_its_own_profile_file(monkeypatch, tmp_path):
+    seen = _two_environments(monkeypatch, tmp_path)
+    id_32 = autodetect.get_or_create_default_profile()
+    seen["models"] = ["Tesla V100-SXM2-16GB"]
+    id_16 = autodetect.get_or_create_default_profile()
+    assert id_32 != id_16 and id_32.startswith("default-") and id_16.startswith("default-")
+    assert (tmp_path / f"{id_32}.yml").exists() and (tmp_path / f"{id_16}.yml").exists()
+    import yaml
+    assert yaml.safe_load((tmp_path / f"{id_32}.yml").read_text())["devices"][0]["memory_mb"] == 32768
+    assert yaml.safe_load((tmp_path / f"{id_16}.yml").read_text())["devices"][0]["memory_mb"] == 16384
+    # the second detection did not touch the first environment's file
+    seen["models"] = ["Tesla V100-SXM2-32GB"]
+    assert autodetect.get_or_create_default_profile() == id_32
+    # the human-facing default.yml mirrors the latest detection, whole file, no leftovers
+    assert (tmp_path / "default.yml").exists()
+    assert not list(tmp_path.glob("*.tmp"))
 
 
-def test_unreadable_cache_redetects_rather_than_trusting_it(monkeypatch, tmp_path):
-    cache = tmp_path / "default.yml"
-    cache.write_text("id: [unclosed\n")
-    monkeypatch.setattr(autodetect, "DEFAULT_PROFILE_PATH", cache)
-    assert autodetect._cached_profile_matches_visible_gpus() is False
-
-
-def test_hiding_every_gpu_is_conclusive(four_gpus, monkeypatch):
-    """`CUDA_VISIBLE_DEVICES=""` means no GPU, and must not send detection
-    looking for another source. It used to fall through to the lspci
-    fallback, which reads the PCI bus and rebuilt a four-GPU profile — the
-    process then planned onto cards it could not address and died at the
-    first `.to(device)`."""
-    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "")
-    devices, brand = autodetect._detect_gpus_linux()
-    assert devices == []
-    assert brand == "none"
-
-
-def test_the_filter_is_reusable_across_detectors():
-    """It is a cascade-level step, so it must work on any detector's output,
-    not only nvidia-smi's."""
-    rocm_like = [{"index": 0, "model": "MI250X"}, {"index": 1, "model": "MI250X"}]
-    import os
-    os.environ["CUDA_VISIBLE_DEVICES"] = "1"
-    try:
-        out = autodetect._apply_visible_filter(rocm_like)
-        assert [(d["index"], d["physical_index"]) for d in out] == [(0, 1)]
-    finally:
-        os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+def test_detection_unavailable_falls_back_to_the_shared_default(monkeypatch, tmp_path):
+    monkeypatch.setattr(autodetect, "HARDWARE_DIR", tmp_path)
+    monkeypatch.setattr(autodetect, "DEFAULT_PROFILE_PATH", tmp_path / "default.yml")
+    monkeypatch.setattr(autodetect, "_detect_gpus", lambda _sys: (_ for _ in ()).throw(RuntimeError("no smi")))
+    monkeypatch.setattr(autodetect, "detect_hardware", lambda: {"devices": [], "notes": "cpu"})
+    assert autodetect.get_or_create_default_profile() == "default"
+    assert (tmp_path / "default.yml").exists()

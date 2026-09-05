@@ -52,28 +52,20 @@ def get_family_config(family: str) -> Dict[str, Any]:
 
 
 @lru_cache(maxsize=1)
-def get_dtype_contracts() -> Dict[str, Any]:
-    """Load config/dtype_contracts.yml (per-backbone half-precision facts).
-
-    ZERO FALLBACK: a missing file raises — the engine never guesses a
-    precision contract. An absent BACKBONE inside the file is legitimate
-    (see get_backbone_dtype_contract).
-    """
-    config_path = CONFIG_ROOT / "dtype_contracts.yml"
+def get_precision_calibration_policy() -> Dict[str, Any]:
+    """Load config/precision_calibration.yml (the DtypeEngine fp32-island
+    policy: headroom, reference path). ZERO FALLBACK: a missing file raises —
+    the engine never guesses how much margin an fp16 store needs."""
+    config_path = CONFIG_ROOT / "precision_calibration.yml"
     if not config_path.exists():
         raise FileNotFoundError(
-            f"ZERO FALLBACK: dtype contracts not found: {config_path}"
+            f"ZERO FALLBACK: precision calibration policy not found: {config_path}"
         )
     with open(config_path) as f:
-        return yaml.safe_load(f) or {}
-
-
-def get_backbone_dtype_contract(backbone: Optional[str]) -> Dict[str, Any]:
-    """Return the dtype contract of one backbone, or {} when the backbone
-    is unknown / not listed (the conservative default applies then)."""
-    if not backbone:
-        return {}
-    return dict((get_dtype_contracts().get("backbones") or {}).get(backbone) or {})
+        policy = yaml.safe_load(f) or {}
+    if "headroom_bits" not in policy:
+        raise KeyError("ZERO FALLBACK: precision_calibration.yml carries no headroom_bits")
+    return policy
 
 
 class UnsupportedArchitectureError(FileNotFoundError):
