@@ -20,6 +20,11 @@ table: who won, by how much, who did not move, who regressed.
     python tools/precision_zoo_campaign.py run --family stt --gpu 1
     python tools/precision_zoo_campaign.py run --models TinyLlama-1.1B-Chat --gpu 1
     python tools/precision_zoo_campaign.py table
+
+The R33 lever (`--probe`): one complete `--triton` request per model under
+tools/r33_sys_modules_probe.py — torch in sys.modules at exit, the first
+import path when it is there, the run's exit code and the output's sha.
+`--src <dir>` puts a frozen worktree's src on the probe's PYTHONPATH.
 """
 import argparse
 import json
@@ -257,7 +262,62 @@ def launcher_ab(model: str, gpu, out: Path, extra: list, timeout: int) -> dict:
     return res
 
 
+def r33_probe(model: str, gpu, out: Path, extra: list, timeout: int, src: Path = None) -> dict:
+    """The R33 proof on one model: a complete `--triton` request in-process
+    under the sys.modules probe; the verdict is whether torch is in
+    sys.modules at exit, with the first import path when it is."""
+    fam = family_of(model)
+    d = out / model
+    d.mkdir(parents=True, exist_ok=True)
+    ext = {"llm": ".txt", "stt": ".txt", "vlm": ".txt", "audio_llm": ".txt", "tts": ".wav",
+           "video": ".mp4", "image": ".png", "upscaler": ".png"}.get(fam, ".txt")
+    req = request_args(model, fam, extra)
+    env = {**os.environ, "PYTHONPATH": str((src or (REPO / "src")).resolve())}
+    if gpu is None:
+        env.pop("CUDA_VISIBLE_DEVICES", None)
+    else:
+        env["CUDA_VISIBLE_DEVICES"] = str(gpu)
+    outp = d / f"probe{ext}"
+    log = d / "probe.log"
+    probe = str((src.parent if src else REPO) / "tools" / "r33_sys_modules_probe.py")
+    if not Path(probe).exists():
+        probe = str(REPO / "tools" / "r33_sys_modules_probe.py")
+    rc, wall = run([PY, probe, "--triton", "--model", model] + req + ["--output", str(outp)], env, log, timeout)
+    text = log.read_text(errors="replace")
+    m = re.search(r"torch in sys\.modules at exit: (True|False)", text)
+    torch_at_exit = None if m is None else (m.group(1) == "True")
+    m = re.search(r"the run exited (-?\d+)", text)
+    run_rc = int(m.group(1)) if m else (0 if torch_at_exit is not None else rc)
+    site = None
+    blk = re.search(r"the stack that requested it:(.*?)\[R33 probe\]", text, re.S)
+    if blk:
+        frames = re.findall(r'File "[^"]*?/src/neurobrix/([^"]+)", line (\d+)', blk.group(1))
+        if frames:
+            site = f"{frames[-1][0]}:{frames[-1][1]}"
+    sha = None
+    if outp.exists():
+        import hashlib
+        sha = hashlib.sha256(outp.read_bytes()).hexdigest()[:12]
+    res = {"model": model, "family": fam, "weight_gb": round(weight_gb(model), 2),
+           "config": "machine" if gpu is None else f"pinned:{gpu}", "request": req, "lever": "r33",
+           "src": str(src) if src else str(REPO / "src"),
+           "torch_at_exit": torch_at_exit, "run_rc": run_rc, "probe_rc": rc, "wall_s": wall,
+           "first_import_site": site, "output_sha": sha, "exec_s": exec_time(log),
+           "A": {"rc": run_rc, "exec_s": exec_time(log)}, "B": {"rc": run_rc, "exec_s": None},
+           "gate": {"kind": "r33", "pass": (torch_at_exit is False and run_rc == 0)}}
+    (d / "result.json").write_text(json.dumps(res, indent=1))
+    return res
+
+
 def verdict(r: dict) -> str:
+    if r.get("lever") == "r33":
+        if r.get("run_rc"):
+            return f"FAILED (the run exited {r['run_rc']})" + (f"; torch via {r['first_import_site']}" if r.get("torch_at_exit") else "")
+        if r.get("torch_at_exit") is False:
+            return "NO TORCH"
+        if r.get("torch_at_exit") is True:
+            return f"TORCH ({r.get('first_import_site') or '?'})"
+        return "FAILED (no verdict in the log)"
     if r.get("lever") == "launcher":
         if r["A"]["rc"] or r["B"]["rc"]:
             return "FAILED (a --triton arm did not run)"
@@ -289,8 +349,18 @@ def verdict(r: dict) -> str:
 
 def table(out: Path) -> str:
     rows = []
-    for rj in sorted(out.glob("*/result.json")):
-        r = json.loads(rj.read_text())
+    results = [json.loads(rj.read_text()) for rj in sorted(out.glob("*/result.json"))]
+    if results and all(r.get("lever") == "r33" for r in results):
+        head = ("| model | family | weights, config | run | torch in sys.modules at exit | first import path | exec (s) | output sha | verdict |\n"
+                "|---|---|---|---|---|---|---|---|---|\n")
+        for r in results:
+            e = r.get("exec_s")
+            rows.append(f"| {r['model']} | {r['family']} | {r.get('weight_gb', '?')} GB, {r.get('config', '?')} | "
+                        f"{'ok' if not r.get('run_rc') else 'exit ' + str(r.get('run_rc'))} | "
+                        f"{'NO' if r.get('torch_at_exit') is False else ('YES' if r.get('torch_at_exit') else '?')} | "
+                        f"{r.get('first_import_site') or '—'} | {e if e is None else f'{e:.2f}'} | {r.get('output_sha') or '—'} | {verdict(r)} |")
+        return head + "\n".join(rows) + "\n"
+    for r in results:
         isl = ", ".join(f"{c}:{v.get('islands')}" for c, v in (r.get("islands") or {}).items()) or "—"
         g = r.get("gate") or {}
         if g.get("kind") == "image":
@@ -324,6 +394,9 @@ def main():
     r.add_argument("--timeout", type=int, default=7200)
     r.add_argument("--extra", default="", help="extra request args, space separated (e.g. '--num-frames 9')")
     r.add_argument("--skip-done", action="store_true")
+    r.add_argument("--probe", action="store_true",
+                   help="the R33 lever: one complete --triton request per model under the sys.modules probe")
+    r.add_argument("--src", default=None, help="a frozen worktree's src for the probe's PYTHONPATH (default: this repo)")
     r.add_argument("--launcher-ab", action="store_true",
                    help="the launcher gate instead of the precision lever: --triton with upstream's launcher vs NeuroBrix's, bytes compared")
     t = sub.add_parser("table")
@@ -357,8 +430,12 @@ def main():
         lock.parent.mkdir(parents=True, exist_ok=True)
         lock.write_text(f"gpu={gpu} pid={os.getpid()} {time.strftime('%H:%M:%S')}\n")
         try:
-            res = (launcher_ab if args.launcher_ab else one_model)(m, gpu, out, extra, args.timeout)
-            print(f"[zoo] {m}: {verdict(res)} A={res['A']['exec_s']} B={res['B']['exec_s']} gate={res['gate']}", flush=True)
+            if args.probe:
+                res = r33_probe(m, gpu, out, extra, args.timeout, Path(args.src) if args.src else None)
+                print(f"[zoo] {m}: {verdict(res)} exec={res.get('exec_s')} sha={res.get('output_sha')}", flush=True)
+            else:
+                res = (launcher_ab if args.launcher_ab else one_model)(m, gpu, out, extra, args.timeout)
+                print(f"[zoo] {m}: {verdict(res)} A={res['A']['exec_s']} B={res['B']['exec_s']} gate={res['gate']}", flush=True)
         except Exception as e:  # one model's failure never stops the campaign
             print(f"[zoo] {m}: ERROR {type(e).__name__}: {e}", flush=True)
             (out / m).mkdir(parents=True, exist_ok=True)

@@ -27,7 +27,7 @@ def remainder_forward_kernel(
 
     x = tl.load(x_ptr + offset, mask=mask)
     y = tl.load(y_ptr + offset, mask=mask)
-    result = x - tl.math.floor(x / y) * y
+    result = x - tl.math.floor((x / y).to(tl.float32)).to(x.dtype) * y
     tl.store(output_ptr + offset, result, mask=mask)
 
 @triton.jit
@@ -42,5 +42,5 @@ def remainder_scalar_kernel(
     mask = offset < n_elements
 
     x = tl.load(x_ptr + offset, mask=mask)
-    result = x - tl.math.floor(x / divisor) * divisor
+    result = x - tl.math.floor((x / divisor).to(tl.float32)).to(x.dtype) * divisor
     tl.store(output_ptr + offset, result, mask=mask)
