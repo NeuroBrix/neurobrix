@@ -125,7 +125,7 @@ this is the definition the earlier campaigns published.
 
 | whisper-large-v3-turbo, jfk 11 s | NeuroBrix (compiled) | faster-whisper 1.2.1 fp16 | gap |
 |---|---:|---:|---|
-| warm request, seconds per clip | **0.336 s** (RTFx 33) | 0.44–0.80 s per call after load (RTFx 14–25; 0.48 s on 08-30) | we lead |
+| warm request, seconds per clip | **0.27–0.30 s** (RTFx 36–40) | 0.44–0.80 s per call after load (RTFx 14–25; 0.48 s on 08-30) | we lead |
 | cold execute, seconds per clip | 2.7 s (RTFx 4.0) | 0.59 s (RTFx 18.8) | ×4.6 behind |
 
 Transcript shas are identical between the two tools on both test clips. The
@@ -198,7 +198,7 @@ sourced.
 
 - **Text decode is ×1.69–2.34 behind ollama.** Closed from ×84; not closed.
 - **Speech-to-text: ahead on a warm request, ×5 behind on a cold execute.**
-  faster-whisper's 0.44–0.80 s per call after load against our 0.34 s warm;
+  faster-whisper's 0.44–0.80 s per call after load against our 0.27–0.30 s warm;
   its 0.59 s against our 2.7 s when a fresh process pays kernel loading,
   buffers and plan compilation inside the timed phase. The cold cost is the
   open item, and it is a one-time cost per process, not transcription.
