@@ -15,6 +15,22 @@ import triton
 from .nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, _broadcast_shapes, _set_device, dtype_size
 from .nbx_tensor import DeviceOOMError
 
+# Route every `kernel[grid](...)` below through the NeuroBrix launcher.
+#
+# There are 64 launch sites in this file and not one of them changes: the
+# launcher intercepts what `kernel[grid]` resolves to, so a site added
+# tomorrow is covered without anyone remembering to route it, and the sites
+# keep reading as what they mean.
+#
+# `activate()` registers a driver only for a backend that has one. On a
+# machine with none — CUDA today — nothing is installed and these launches
+# resolve to Triton's own path exactly as before (proven by
+# `tests/unit/kernels/test_launcher.py::
+#  test_launcher_is_transparent_without_a_driver`).
+from .driver_registry import activate as _activate_launcher
+
+_activate_launcher()
+
 
 def _autotune_headroom_guard(launch):
     """Wrap an autotuned kernel launch (`kernel[grid]`) against the ONE
