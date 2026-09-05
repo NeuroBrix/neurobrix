@@ -376,3 +376,28 @@ def matmul_configs() -> List[triton.Config]:
         triton.Config({'BLOCK_M': 32, 'BLOCK_N': 64, 'BLOCK_K': 32, 'GROUP_M': 8},
                       num_stages=_safe_num_stages(5), num_warps=2),
     ]
+
+
+# --- R33: identify the backend before any kernel module asks Triton --------
+#
+# `matmul.py` calls `triton.runtime.driver.active.get_current_target()` at
+# MODULE IMPORT to choose its autotune space. That question makes Triton probe
+# every registered backend, and upstream's AMD probe runs `import torch`
+# inside its own `is_active()` — so importing a kernel module pulled torch
+# into the process, on a CUDA box as much as on a Mac.
+#
+# `_detect_gpu_backend()` answers the same question with three torch-free
+# probes and records the result in `TRITON_DEFAULT_BACKEND`, after which
+# Triton resolves straight to that backend and probes nothing else. Doing it
+# here, in the module every kernel imports before it asks anything, is what
+# makes the ordering reliable rather than accidental.
+#
+# Wrapped: on a machine with no GPU at all this raises, and a kernel module
+# must still be importable — the refusal belongs at the call site, not at
+# import.
+try:                                          # pragma: no cover - env-dependent
+    from ..nbx_tensor import _detect_gpu_backend as _r33_pin_backend
+
+    _r33_pin_backend()
+except Exception:
+    pass

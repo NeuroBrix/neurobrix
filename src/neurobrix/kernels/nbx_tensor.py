@@ -1545,60 +1545,84 @@ def _set_device(t):
         DeviceAllocator.ensure_triton_device(t._device_idx)
 
 
+def _pin_triton_backend(name: str) -> str:
+    """Tell Triton which backend is here, then return the name.
+
+    R33, and it applies on every backend, not just Apple. Asking
+    `triton.runtime.driver.active` for anything makes Triton call
+    `is_active()` on EVERY registered backend to find the live one, and
+    upstream's AMD probe runs `import torch` inside its own — so a CUDA box
+    with no AMD card pays a torch import the moment any module asks the
+    driver a question. `kernels/ops/matmul.py` asks one at import time, which
+    is how it reached us.
+
+    `TRITON_DEFAULT_BACKEND` makes `_create_driver` select the named backend
+    directly and probe nothing else. We already know the answer here — this
+    function found it without importing anything — so we say so. `setdefault`,
+    because an explicit choice by the user or a test outranks ours.
+    """
+    os.environ.setdefault("TRITON_DEFAULT_BACKEND", name)
+    return name
+
+
 @functools.lru_cache(maxsize=1)
 def _detect_gpu_backend() -> str:
     """Detect GPU backend: 'cuda', 'hip' or 'metal'.
 
-    Metal is probed LAST, and the order is load-bearing rather than
-    incidental: a Hackintosh carries both a CUDA runtime and a Metal device,
-    and CUDA is the complete implementation, so it must win. Probing last
-    also leaves the cuda/hip resolution byte-for-byte what it was — every
-    return above is reached before Metal is considered.
+    **Every probe here is torch-free, and the order is R33 rather than
+    taste.** Asking Triton which backend is active — the obvious first
+    question, and what this function used to do — makes Triton call
+    `is_active()` on EVERY registered backend to find the live one, and
+    upstream's AMD probe runs `import torch` inside its own. So merely asking
+    puts torch in the process, on a CUDA box with no AMD card as much as on a
+    Mac. `kernels/ops/matmul.py` asks that question at module import, which is
+    how it reached the engine.
 
-    The Metal probe carries no platform strings. It opens the device and
-    asks it, because the property that matters is unified memory (which is
-    what makes one address valid for both processors) and that is a device
-    answer, not an `arm64` answer.
+    The three direct probes come first and none of them imports anything:
+    Metal opens the device, CUDA and ROCm try to load their runtime library.
+    Triton's own question is kept as a LAST RESORT, for a machine none of the
+    three identified — where the alternative is not knowing at all.
 
-    **Metal is probed FIRST, and that ordering is R33.** Asking Triton which
-    backend is active makes it call `is_active()` on every registered backend,
-    and upstream's AMD probe does `import torch` inside its own — so merely
-    asking the question puts torch in the process, on a machine with no AMD
-    card, for the whole life of the run. R33 has no Apple exception, so on a
-    machine that already answers "Metal" the question is not asked.
+    Metal is probed before the two libraries and does not cost CUDA its
+    precedence: the probe requires UNIFIED memory, so an Intel Mac with a
+    discrete card declines it and falls through to `libcudart`.
 
-    It does not cost CUDA its precedence, because the Metal probe requires
-    UNIFIED memory: an Intel Mac with a discrete NVIDIA card has a Metal
-    device and it does not report unified memory, so the probe declines and
-    the Triton question is reached exactly as before.
+    Whatever answers, `_pin_triton_backend` records it in
+    `TRITON_DEFAULT_BACKEND` so that any later `triton.runtime.driver.active`
+    — ours or a kernel module's — resolves straight to that backend and
+    probes nothing else.
     """
     from .metal_device import metal_device_available
     if metal_device_available():
-        return "metal"
-    # Try Triton runtime next (most reliable off Apple)
+        return _pin_triton_backend("metal")
+
+    for name in ("libcudart.so", "libcudart.so.12", "libcudart.dylib"):
+        try:
+            ctypes.cdll.LoadLibrary(name)
+            return _pin_triton_backend("cuda")
+        except OSError:
+            continue
+
+    for name in ("libamdhip64.so", "libamdhip64.so.5"):
+        try:
+            ctypes.cdll.LoadLibrary(name)
+            return _pin_triton_backend("hip")
+        except OSError:
+            continue
+
+    # Last resort. This one is NOT torch-free — see the docstring — so it runs
+    # only when the three direct probes have all declined, i.e. when the
+    # alternative is refusing on a machine that may well have a GPU.
     try:
         import triton.runtime.driver
         backend = triton.runtime.driver.active.get_current_target().backend
         if backend in ("cuda", "hip"):
-            return backend
+            return _pin_triton_backend(backend)
     except Exception:
         pass
-    # Fallback: try loading CUDA runtime
-    for name in ("libcudart.so", "libcudart.so.12"):
-        try:
-            ctypes.cdll.LoadLibrary(name)
-            return "cuda"
-        except OSError:
-            continue
-    # Fallback: try HIP runtime
-    for name in ("libamdhip64.so", "libamdhip64.so.5"):
-        try:
-            ctypes.cdll.LoadLibrary(name)
-            return "hip"
-        except OSError:
-            continue
+
     raise RuntimeError(
-        "No GPU runtime found (tried CUDA, ROCm/HIP and Metal)")
+        "No GPU runtime found (tried Metal, CUDA, ROCm/HIP)")
 
 
 def _active_backend() -> dict:

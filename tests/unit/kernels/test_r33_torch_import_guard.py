@@ -147,6 +147,62 @@ def test_the_metal_path_imports_no_torch(filename):
     )
 
 
+def test_the_gate_itself_catches_an_injected_import(tmp_path):
+    """A green gate is worth nothing until it has been seen to go red.
+
+    R33, 2026-09-05: *"un gate vert ne vaut que s'il a été vu échouer sur un
+    import torch injecté."* This file spent its whole life passing on an empty
+    subprocess — PYTHONPATH pointed at the repo root, the import raised
+    ModuleNotFoundError, the assertion compared an empty string, and two
+    failures sat classified as "pre-existing" on both machines for weeks. The
+    lesson is not "fix the path", it is that a guard nobody has watched fail
+    is a decoration.
+
+    So the guard is exercised against a file that violates it, every run: a
+    module carrying a torch import is written into the scanned tree, the
+    scanner must name it, and it is removed again. If this ever passes while
+    the scanner is blind, the whole file is worthless and this says so.
+    """
+    injected = _SRC / "triton" / "_r33_negative_control.py"
+    assert not injected.exists(), (
+        "the negative control's file already exists — a previous run did not "
+        "clean up, and the gate may have been scanning it as real code"
+    )
+    injected.write_text(
+        "# Written and deleted by test_the_gate_itself_catches_an_injected_import.\n"
+        "# If you are reading this in a working tree, that test died mid-run.\n"
+        "import torch  # noqa: F401\n"
+    )
+    try:
+        found = _torch_importers()
+        key = str(injected.relative_to(_SRC))
+        assert key in found, (
+            "THE GATE IS BLIND. A file importing torch was placed under "
+            f"{injected.parent} and the scanner did not report it. Every "
+            "green run of this file until now proved nothing."
+        )
+        assert found[key] == [3], (
+            f"the scanner found the import but at the wrong line: {found[key]}"
+        )
+    finally:
+        injected.unlink(missing_ok=True)
+
+
+def test_the_gate_covers_the_dispatch_layer():
+    """R33 names the dispatch layer explicitly, because that is where the
+    vendor-agnostic launcher replacing Triton's `kernel[grid]` will live.
+
+    A perimeter that stops at today's files would let the launcher land
+    outside it on the day it is written, which is exactly the day it matters.
+    """
+    scanned = {q.resolve() for root in TRITON_BRANCH for q in root.rglob("*.py")}
+    for required in (KERNELS / "dispatch.py", KERNELS / "wrappers.py",
+                     KERNELS / "nbx_tensor.py"):
+        assert required.resolve() in scanned, (
+            f"{required.name} is not inside the R33 scan perimeter"
+        )
+
+
 def test_no_unlisted_torch_import_under_kernels():
     """The gate. A new torch import here is a regression of R33."""
     found = _torch_importers()
