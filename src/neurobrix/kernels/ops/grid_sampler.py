@@ -58,17 +58,18 @@ def grid_sampler_2d_kernel(
     pid_c = tl.program_id(1)     # channel block
     pid_n = tl.program_id(2)     # batch
 
-    if pid_s >= OUT_SPATIAL:
-        return
+    # A program beyond the output extent reads and writes nothing (masked,
+    # no early exit — unstructured control flow has no lowering on every backend).
+    s_valid = pid_s < OUT_SPATIAL
 
     c_offs = pid_c * BLOCK_C + tl.arange(0, BLOCK_C)
-    c_mask = c_offs < C
+    c_mask = (c_offs < C) & s_valid
 
     # grid holds (x, y) pairs, channels-last
     gx = tl.load(grid_ptr + pid_n * stride_gn + pid_s * stride_gs
-                 + 0 * stride_gc).to(tl.float32)
+                 + 0 * stride_gc, mask=s_valid, other=0.0).to(tl.float32)
     gy = tl.load(grid_ptr + pid_n * stride_gn + pid_s * stride_gs
-                 + 1 * stride_gc).to(tl.float32)
+                 + 1 * stride_gc, mask=s_valid, other=0.0).to(tl.float32)
 
     Wf = W.to(tl.float32)
     Hf = H.to(tl.float32)

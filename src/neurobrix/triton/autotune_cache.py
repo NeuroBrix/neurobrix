@@ -48,8 +48,8 @@ def _arch_fingerprint() -> Optional[str]:
     (an sm_80 config seeded onto sm_70 fails at compile inside a user
     run)."""
     try:
-        from triton.runtime import driver
-        target = driver.active.get_current_target()
+        from neurobrix.kernels.launcher import target as _nbx_target   # engine data, no driver probe (R33)
+        target = _nbx_target()
         return f"{target.backend}-{target.arch}"
     except Exception:
         return None

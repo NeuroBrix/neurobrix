@@ -56,17 +56,20 @@ def fused_moe_kernel(
     pid_n = (pid % num_pid_in_group) // group_size_m
 
     num_tokens_post_padded = tl.load(num_tokens_post_padded_ptr)
-    if pid_m * BLOCK_SIZE_M >= num_tokens_post_padded:
-        return
+    # A block beyond the padded token count reads and writes nothing: its
+    # sorted-token and expert entries are not written by moe_align, so every
+    # access below carries `block_valid` (no early exit — unstructured
+    # control flow has no lowering on every backend).
+    block_valid = pid_m * BLOCK_SIZE_M < num_tokens_post_padded
 
     # Load sorted token IDs for this block
     offs_token_id = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
-    offs_token = tl.load(sorted_token_ids_ptr + offs_token_id).to(tl.int64)
-    token_mask = offs_token < num_valid_tokens
+    offs_token = tl.load(sorted_token_ids_ptr + offs_token_id, mask=block_valid, other=0).to(tl.int64)
+    token_mask = (offs_token < num_valid_tokens) & block_valid
 
     # Load expert id → load absolute weight pointer from table
-    off_experts = tl.load(expert_ids_ptr + pid_m)
-    expert_ptr_int = tl.load(expert_ptrs_ptr + off_experts)
+    off_experts = tl.load(expert_ids_ptr + pid_m, mask=block_valid, other=0)
+    expert_ptr_int = tl.load(expert_ptrs_ptr + off_experts, mask=block_valid, other=0)
     # Bitcast int64 to pointer — reinterpret bits as address
     b_base = tl.cast(expert_ptr_int, tl.pointer_type(compute_type), bitcast=True)
 
@@ -92,7 +95,7 @@ def fused_moe_kernel(
         )
         b = tl.load(
             b_ptrs,
-            mask=offs_k[:, None] < K - k * BLOCK_SIZE_K,
+            mask=(offs_k[:, None] < K - k * BLOCK_SIZE_K) & block_valid,
             other=0.0,
         )
         # NOTE: Phase 1.5 Étape 1 (2026-05) tested 3-arg `tl.dot(a, b, acc)`
@@ -169,19 +172,22 @@ def fused_moe_wna16_kernel(
     pid_n = (pid % num_pid_in_group) // group_size_m
 
     num_tokens_post_padded = tl.load(num_tokens_post_padded_ptr)
-    if pid_m * BLOCK_SIZE_M >= num_tokens_post_padded:
-        return
+    # A block beyond the padded token count reads and writes nothing: its
+    # sorted-token and expert entries are not written by moe_align, so every
+    # access below carries `block_valid` (no early exit — unstructured
+    # control flow has no lowering on every backend).
+    block_valid = pid_m * BLOCK_SIZE_M < num_tokens_post_padded
 
     offs_token_id = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
-    offs_token = tl.load(sorted_token_ids_ptr + offs_token_id).to(tl.int64)
-    token_mask = offs_token < num_valid_tokens
+    offs_token = tl.load(sorted_token_ids_ptr + offs_token_id, mask=block_valid, other=0).to(tl.int64)
+    token_mask = (offs_token < num_valid_tokens) & block_valid
 
-    off_experts = tl.load(expert_ids_ptr + pid_m)
-    qw_base = tl.cast(tl.load(qw_ptrs_ptr + off_experts),
+    off_experts = tl.load(expert_ids_ptr + pid_m, mask=block_valid, other=0)
+    qw_base = tl.cast(tl.load(qw_ptrs_ptr + off_experts, mask=block_valid, other=0),
                       tl.pointer_type(tl.int32), bitcast=True)
-    sc_base = tl.cast(tl.load(sc_ptrs_ptr + off_experts),
+    sc_base = tl.cast(tl.load(sc_ptrs_ptr + off_experts, mask=block_valid, other=0),
                       tl.pointer_type(tl.float16), bitcast=True)
-    mn_base = tl.cast(tl.load(mn_ptrs_ptr + off_experts),
+    mn_base = tl.cast(tl.load(mn_ptrs_ptr + off_experts, mask=block_valid, other=0),
                       tl.pointer_type(tl.float16), bitcast=True)
 
     offs_bn = (pid_n * BLOCK_SIZE_N
@@ -206,11 +212,11 @@ def fused_moe_wna16_kernel(
         packed = tl.load(
             qw_base + (cur_k[:, None] // QPACK) * stride_qk
             + offs_bn[None, :] * stride_qn,
-            mask=offs_k[:, None] < k_rem, other=0)
+            mask=(offs_k[:, None] < k_rem) & block_valid, other=0)
         q = (packed >> ((cur_k[:, None] % QPACK) * 4)) & 0xF
         g = k * BLOCK_SIZE_K // QGROUP  # BLOCK_SIZE_K divides QGROUP
-        scale = tl.load(sc_base + g * stride_sg + offs_bn * stride_sn)
-        mn = tl.load(mn_base + g * stride_sg + offs_bn * stride_sn)
+        scale = tl.load(sc_base + g * stride_sg + offs_bn * stride_sn, mask=block_valid, other=0.0)
+        mn = tl.load(mn_base + g * stride_sg + offs_bn * stride_sn, mask=block_valid, other=0.0)
         # Canonical dequant — the tier's contraction-immune fp32 form,
         # textually identical to the GEMV family's.
         b = (q.to(tl.float32) * scale[None, :].to(tl.float32)
@@ -272,15 +278,18 @@ def fused_moe_fp32b_kernel(
     pid_n = (pid % num_pid_in_group) // group_size_m
 
     num_tokens_post_padded = tl.load(num_tokens_post_padded_ptr)
-    if pid_m * BLOCK_SIZE_M >= num_tokens_post_padded:
-        return
+    # A block beyond the padded token count reads and writes nothing: its
+    # sorted-token and expert entries are not written by moe_align, so every
+    # access below carries `block_valid` (no early exit — unstructured
+    # control flow has no lowering on every backend).
+    block_valid = pid_m * BLOCK_SIZE_M < num_tokens_post_padded
 
     offs_token_id = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
-    offs_token = tl.load(sorted_token_ids_ptr + offs_token_id).to(tl.int64)
-    token_mask = offs_token < num_valid_tokens
+    offs_token = tl.load(sorted_token_ids_ptr + offs_token_id, mask=block_valid, other=0).to(tl.int64)
+    token_mask = (offs_token < num_valid_tokens) & block_valid
 
-    off_experts = tl.load(expert_ids_ptr + pid_m)
-    b_base = tl.cast(tl.load(expert_ptrs_ptr + off_experts),
+    off_experts = tl.load(expert_ids_ptr + pid_m, mask=block_valid, other=0)
+    b_base = tl.cast(tl.load(expert_ptrs_ptr + off_experts, mask=block_valid, other=0),
                      tl.pointer_type(tl.float32), bitcast=True)
 
     offs_bn = (pid_n * BLOCK_SIZE_N
@@ -305,7 +314,7 @@ def fused_moe_fp32b_kernel(
         )
         b = tl.load(
             b_ptrs,
-            mask=offs_k[:, None] < k_rem,
+            mask=(offs_k[:, None] < k_rem) & block_valid,
             other=0.0,
         )
         accumulator += tl.dot(a.to(tl.float32), b)

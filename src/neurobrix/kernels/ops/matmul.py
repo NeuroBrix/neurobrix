@@ -136,7 +136,8 @@ def _detect_arch_configs():
     matching profile the space is returned untouched.
     """
     try:
-        arch = triton.runtime.driver.active.get_current_target().arch
+        from neurobrix.kernels.launcher import target as _nbx_target   # engine data, no driver probe (R33)
+        arch = _nbx_target().arch
     except Exception:
         return _MATMUL_AUTOTUNE_VOLTA
 

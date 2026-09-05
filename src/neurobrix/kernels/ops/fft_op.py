@@ -29,9 +29,10 @@ def bit_reverse_kernel(
     Each thread handles one element. Grid size = N.
     """
     tid = tl.program_id(0)
-
-    if tid >= n:
-        return
+    # A program beyond n contributes nothing: every access below is masked
+    # (no early exit — unstructured control flow has no lowering on every
+    # backend; the Metal census, 2026-09-05).
+    m = tid < n
 
     # Compute bit-reversed index
     temp_n = n
@@ -61,10 +62,6 @@ def fft_stage_kernel(
     """
     PI = math.pi
     tid = tl.program_id(0)
-
-    if tid >= n // 2:
-        return
-
     half_block = 1 << (stage - 1)
 
     # Which butterfly group and position within group
@@ -74,15 +71,16 @@ def fft_stage_kernel(
     # Indices of the two elements in this butterfly pair
     first_idx = butterfly_group * half_block * 2 + pos_in_group
     second_idx = first_idx + half_block
-
-    if second_idx >= n:
-        return
+    # One mask for the butterfly: a program beyond n // 2, or a pair whose
+    # second element lies beyond n, reads and writes nothing (no early
+    # exit — the portable form is the mask).
+    m = (tid < n // 2) & (second_idx < n)
 
     # Load values
-    a_real = tl.load(real_ptr + first_idx)
-    a_imag = tl.load(imag_ptr + first_idx)
-    b_real = tl.load(real_ptr + second_idx)
-    b_imag = tl.load(imag_ptr + second_idx)
+    a_real = tl.load(real_ptr + first_idx, mask=m, other=0.0)
+    a_imag = tl.load(imag_ptr + first_idx, mask=m, other=0.0)
+    b_real = tl.load(real_ptr + second_idx, mask=m, other=0.0)
+    b_imag = tl.load(imag_ptr + second_idx, mask=m, other=0.0)
 
     # Twiddle factor: W = e^(-i * pi * k / half_block)
     angle = PI * pos_in_group / half_block
@@ -100,10 +98,10 @@ def fft_stage_kernel(
     result_b_imag = a_imag - tw_imag
 
     # Store
-    tl.store(real_ptr + first_idx, result_a_real)
-    tl.store(imag_ptr + first_idx, result_a_imag)
-    tl.store(real_ptr + second_idx, result_b_real)
-    tl.store(imag_ptr + second_idx, result_b_imag)
+    tl.store(real_ptr + first_idx, result_a_real, mask=m)
+    tl.store(imag_ptr + first_idx, result_a_imag, mask=m)
+    tl.store(real_ptr + second_idx, result_b_real, mask=m)
+    tl.store(imag_ptr + second_idx, result_b_imag, mask=m)
 
 
 @triton.jit
@@ -117,24 +115,18 @@ def ifft_stage_kernel(
     """
     PI = math.pi
     tid = tl.program_id(0)
-
-    if tid >= n // 2:
-        return
-
     half_block = 1 << (stage - 1)
     butterfly_group = tid // half_block
     pos_in_group = tid % half_block
 
     first_idx = butterfly_group * half_block * 2 + pos_in_group
     second_idx = first_idx + half_block
+    m = (tid < n // 2) & (second_idx < n)
 
-    if second_idx >= n:
-        return
-
-    a_real = tl.load(real_ptr + first_idx)
-    a_imag = tl.load(imag_ptr + first_idx)
-    b_real = tl.load(real_ptr + second_idx)
-    b_imag = tl.load(imag_ptr + second_idx)
+    a_real = tl.load(real_ptr + first_idx, mask=m, other=0.0)
+    a_imag = tl.load(imag_ptr + first_idx, mask=m, other=0.0)
+    b_real = tl.load(real_ptr + second_idx, mask=m, other=0.0)
+    b_imag = tl.load(imag_ptr + second_idx, mask=m, other=0.0)
 
     # INVERSE: positive angle (conjugate twiddle)
     angle = PI * pos_in_group / half_block
@@ -149,10 +141,10 @@ def ifft_stage_kernel(
     result_b_real = a_real - tw_real
     result_b_imag = a_imag - tw_imag
 
-    tl.store(real_ptr + first_idx, result_a_real)
-    tl.store(imag_ptr + first_idx, result_a_imag)
-    tl.store(real_ptr + second_idx, result_b_real)
-    tl.store(imag_ptr + second_idx, result_b_imag)
+    tl.store(real_ptr + first_idx, result_a_real, mask=m)
+    tl.store(imag_ptr + first_idx, result_a_imag, mask=m)
+    tl.store(real_ptr + second_idx, result_b_real, mask=m)
+    tl.store(imag_ptr + second_idx, result_b_imag, mask=m)
 
 
 @triton.jit

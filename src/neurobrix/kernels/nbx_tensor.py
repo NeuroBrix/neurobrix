@@ -1502,9 +1502,14 @@ class DeviceAllocator:
         backend = _active_backend()
         rt = _gpu_runtime()
         getattr(rt, backend["set_device"])(ctypes.c_int(device_idx))
-        # 2. Tell Triton which device to target
-        import triton.runtime.driver
-        triton.runtime.driver.active.set_current_device(device_idx)
+        # 2. Tell the launcher which device to target. The NeuroBrix launcher
+        #    binds the runtime's primary context of the current device at each
+        #    launch; only the differential arm (NBX_LAUNCHER=triton) still
+        #    drives upstream's launcher, whose driver must be told (and whose
+        #    backend probes import torch — R33, universal since 2026-09-05).
+        if os.environ.get("NBX_LAUNCHER", "nbx").lower() == "triton":
+            import triton.runtime.driver
+            triton.runtime.driver.active.set_current_device(device_idx)
         # Cache only after BOTH calls succeeded (this thread's state).
         _DEVICE_CACHE.idx = device_idx
 
@@ -1526,29 +1531,25 @@ def _set_device(t):
 
 @functools.lru_cache(maxsize=1)
 def _detect_gpu_backend() -> str:
-    """Detect GPU backend: 'cuda' or 'hip'."""
-    # Try Triton runtime first (most reliable)
-    try:
-        import triton.runtime.driver
-        backend = triton.runtime.driver.active.get_current_target().backend
-        if backend in ("cuda", "hip"):
-            return backend
-    except Exception:
-        pass
-    # Fallback: try loading CUDA runtime
-    for name in ("libcudart.so", "libcudart.so.12"):
-        try:
-            ctypes.cdll.LoadLibrary(name)
-            return "cuda"
-        except OSError:
-            continue
-    # Fallback: try HIP runtime
-    for name in ("libamdhip64.so", "libamdhip64.so.5"):
-        try:
-            ctypes.cdll.LoadLibrary(name)
-            return "hip"
-        except OSError:
-            continue
+    """Detect GPU backend: 'cuda' or 'hip' — from the vendor runtime library
+    the process can load, or `NBX_GPU_BACKEND`. Never through Triton's
+    driver probe: `triton.runtime.driver.active` asks every backend
+    `is_active()`, and those probes import torch (R33, universal since
+    2026-09-05 — this call was the first torch import of the launch path)."""
+    forced = os.environ.get("NBX_GPU_BACKEND")
+    if forced:
+        if forced not in _GPU_BACKENDS:
+            raise RuntimeError(f"NBX_GPU_BACKEND={forced!r} is not a known backend ({sorted(_GPU_BACKENDS)})")
+        return forced
+    # The backend TABLE decides: the first vendor runtime the process can
+    # load names the backend — adding a backend is adding a table entry.
+    for name, backend in _GPU_BACKENDS.items():
+        for lib in backend["rt_libs"]:
+            try:
+                ctypes.cdll.LoadLibrary(lib)
+                return name
+            except OSError:
+                continue
     raise RuntimeError("No GPU runtime found (tried CUDA and ROCm/HIP)")
 
 

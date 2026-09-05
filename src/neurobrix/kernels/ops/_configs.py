@@ -165,8 +165,8 @@ def _safe_num_stages(n: int) -> int:
     # question is answerable from the Triton runtime, which is the documented
     # bootstrap mechanism already used by `matmul._detect_arch_configs`.
     try:
-        import triton
-        arch = triton.runtime.driver.active.get_current_target().arch
+        from neurobrix.kernels.launcher import target as _nbx_target   # engine data, no driver probe (R33)
+        arch = _nbx_target().arch
     except Exception:
         return n                       # no runtime to ask: change nothing
     if isinstance(arch, int):
@@ -227,8 +227,8 @@ def arch_smem_budget() -> Optional[int]:
     invented number would silently delete working configs.
     """
     try:
-        import triton
-        arch = triton.runtime.driver.active.get_current_target().arch
+        from neurobrix.kernels.launcher import target as _nbx_target   # engine data, no driver probe (R33)
+        arch = _nbx_target().arch
     except Exception:
         return None
 

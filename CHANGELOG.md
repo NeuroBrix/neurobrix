@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Kernel launches of the house library go through a NeuroBrix launcher in the dispatch layer
+  (`neurobrix.kernels.launcher`): Triton compiles, the engine specialises the arguments itself and
+  launches through the CUDA driver with integer pointers and typed scalars — no torch on the launch
+  path, byte-identical outputs to upstream's launcher (`NBX_LAUNCHER=triton` keeps the latter for a
+  differential). The GPU backend and the compile target come from the engine's data, never from
+  Triton's driver probe.
+- The R33 gate now covers the whole triton branch and the Metal backend with a pin per file, and its
+  probes run against the package as installed; an end-of-run probe (`tools/r33_sys_modules_probe.py`)
+  reports whether torch was loaded by a `--triton` run and by which import path.
+- No bare `return` remains in any `@triton.jit` body (nine sites in the FFT, fused-MoE and grid-sampler
+  kernels became masks, bit-identical on CUDA); a gate refuses new ones.
 - Half-precision islands are now measured, never declared. `neurobrix calibrate --model <name>` runs one
   request on the conservative path with a per-op magnitude census and writes a calibration record
   (`~/.neurobrix/calibration/<model>/<component>.json`); every later run derives from it which ops stay
@@ -23,6 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   drops from 1073 s to 45 s.
 
 ### Fixed
+- The inverse-FFT wrapper scaled its result with a torch-style in-place multiply that an NBXTensor
+  does not have (a latent crash on an unexercised path); it now uses the house scale kernel.
 - The sampling-parameter guard no longer refuses a value inherited from the family defaults: a model
   whose own defaults carry no `top_k` took the family's 50 as an explicit request and every audio-LLM
   run was refused (`top_k=50 — you asked for it explicitly`).

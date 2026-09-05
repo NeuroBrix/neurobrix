@@ -8261,9 +8261,11 @@ def _triton_ifft_1d(x_real, x_imag) -> tuple:
         _set_device(temp_real)
         ifft_stage_kernel[(N // 2,)](temp_real, temp_imag, N, stage)
 
-    # Scale by 1/N — simple element-wise multiply
-    temp_real.mul_(1.0 / N)
-    temp_imag.mul_(1.0 / N)
+    # 1/N through the house scale kernel (an NBXTensor has no torch-style
+    # in-place multiply — the previous form was a latent crash on a path no
+    # model of the zoo had exercised, found by the 2026-09-05 bit gate).
+    _BLOCK = 1024
+    scale_kernel[(triton.cdiv(N, _BLOCK),)](temp_real, temp_imag, N, 1.0 / N, BLOCK_SIZE=_BLOCK)
 
     return temp_real, temp_imag
 
