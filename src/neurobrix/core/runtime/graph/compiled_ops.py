@@ -49,6 +49,34 @@ def _align_qkv_dtypes(q, k, v):
     return q, k, v
 
 
+# Read-only placeholders for the side outputs of the ATen attention variants
+# (no consumer in an inference graph). Cached: a fresh torch.tensor(0, device=)
+# per call is a pageable host-to-device copy followed by a stream sync.
+_PLACEHOLDER_PHILOX: Dict[Any, tuple] = {}
+_PLACEHOLDER_ZEROS: Dict[tuple, torch.Tensor] = {}
+
+
+def _placeholder_philox(device) -> tuple:
+    key = str(device)
+    pair = _PLACEHOLDER_PHILOX.get(key)
+    if pair is None:
+        pair = (torch.zeros((), device=device, dtype=torch.int64),
+                torch.zeros((), device=device, dtype=torch.int64))
+        _PLACEHOLDER_PHILOX[key] = pair
+    return pair
+
+
+def _placeholder_zeros(shape, device, dtype) -> torch.Tensor:
+    key = (tuple(shape), str(device), dtype)
+    t = _PLACEHOLDER_ZEROS.get(key)
+    if t is None:
+        if len(_PLACEHOLDER_ZEROS) > 64:   # bounded: shapes change with the request
+            _PLACEHOLDER_ZEROS.clear()
+        t = torch.zeros(shape, device=device, dtype=dtype)
+        _PLACEHOLDER_ZEROS[key] = t
+    return t
+
+
 def _safe_is_causal(val: Any) -> bool:
     """Convert is_causal to Python bool. Handles tensor, int, bool, and float args.
 
@@ -532,10 +560,17 @@ class CompiledOpResolver:
                     is_causal=_safe_is_causal(is_causal),
                     scale=scale,
                 )
-                lse = torch.zeros((q.shape[0], q.shape[1], q.shape[2]),
-                                  device=q.device, dtype=q.dtype)
-                philox_seed = torch.tensor(0, device=q.device, dtype=torch.int64)
-                philox_offset = torch.tensor(0, device=q.device, dtype=torch.int64)
+                # The ATen signature's side outputs (logsumexp, philox seed and
+                # offset) have no consumer in an inference graph; they are
+                # placeholders. Building them per call cost two pageable
+                # host-to-device copies + two stream syncs per attention
+                # (2,240 syncs on a 20-step PixArt request, measured
+                # 2026-09-05: the host stalled at every attention and could
+                # never run ahead of the GPU) and one fill kernel. They are
+                # cached per device / shape and shared read-only.
+                lse = _placeholder_zeros((q.shape[0], q.shape[1], q.shape[2]),
+                                         q.device, q.dtype)
+                philox_seed, philox_offset = _placeholder_philox(q.device)
                 return output, lse, philox_seed, philox_offset
             return efficient_attention
 
