@@ -5807,10 +5807,14 @@ def conv_depthwise2d_wrapper(x, weight, bias=None,
 
 
 def logical_xor_wrapper(a, b) :
-    a, b = a.contiguous(), b.contiguous()
-    output = NBXTensor.empty(a.shape, dtype=NBXDtype.bool_, device=a.device)
-    _set_device(a)
-    logical_xor_kernel[_1d_grid(a.numel())](a, b, output, a.numel(), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
+    # The universal binary contract (dtype align, device align, BROADCAST,
+    # contiguous) like logical_and / logical_or: the former form read a
+    # broadcast operand flat past its end — 34 % of the bank's broadcast
+    # case was wrong (found by the reference bank, 2026-09-05).
+    a, b, output, n, dev_ctx, scalar = _prepare_comparison(a, b)
+    if scalar:
+        b = NBXTensor.empty_like(a).fill_(b)
+    logical_xor_kernel[_1d_grid(n)](a, b, output, n, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
     return output
 
 
