@@ -23,6 +23,12 @@ import logging
 import re
 from typing import Dict, List, Any, Optional, Union, Tuple
 
+import os as _os_shape
+
+# Read once: a per-bind os.environ lookup sat in the warm request's hot path
+# (2026-09-05 profile: 16,802 environ reads per whisper request).
+_SHAPE_DEBUG = _os_shape.environ.get("NBX_DEBUG") == "1"
+
 # Import SymInt support (from core/runtime, no trace/ dependency)
 try:
     from neurobrix.core.runtime.symint import SymInt
@@ -230,8 +236,7 @@ class SymbolicShapeResolver:
 
         self._bound = True
         logger.debug(f"Bound symbols: {self._runtime_values}")
-        import os as _os_dbg
-        if _os_dbg.environ.get("NBX_DEBUG") == "1":
+        if _SHAPE_DEBUG:
             _shapes = {k: tuple(v.shape) for k, v in inputs.items()
                        if hasattr(v, "shape")}
             print(f"[SYMBOLS] bound={self._runtime_values} from inputs={_shapes}",
