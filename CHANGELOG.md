@@ -70,6 +70,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Kokoro speech model at its first `round`); a half value is now
   rounded in fp32, exactly, and stored back in its own dtype. `trunc` could never compile (no such
   function in Triton's math) and is now floor-or-ceil by sign. All five are in the reference bank.
+- `aten::logical_xor` on the Triton engine read a broadcast operand flat past its end (a third of the
+  bank's broadcast case was wrong); it takes the universal binary contract like `logical_and` / `logical_or`.
 - The zoo campaign's video gate compares frames (per-frame PSNR, 30 dB bar) instead of file bytes,
   and `regate` re-runs a gate on existing outputs without the GPU.
 - `aten::max` / `aten::min` with a `dim` on the Triton engine passed four arguments to a five-argument
