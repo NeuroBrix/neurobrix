@@ -29,7 +29,9 @@ from pathlib import Path
 
 import pytest
 
-KERNELS = Path(__file__).resolve().parents[3] / "src" / "neurobrix" / "kernels"
+SRC = Path(__file__).resolve().parents[3] / "src" / "neurobrix"
+KERNELS = SRC / "kernels"          # the dispatch layer: dispatch, wrappers, adapter, classification, ops/
+TRITON = SRC / "triton"            # the whole triton branch, Metal backend included
 
 # Every file under kernels/ still allowed to import torch, with the reason it
 # is allowed and what would remove it. Adding a line here is a deliberate act
@@ -66,15 +68,15 @@ ALLOWED = {
 }
 
 
-def _torch_importers() -> dict[str, list[int]]:
-    """Every file under kernels/ that imports torch, and where.
+def _torch_importers(root: Path = KERNELS) -> dict[str, list[int]]:
+    """Every file under `root` that imports torch, and where.
 
     Parsed with `ast`, not grepped: a string or a comment mentioning torch is
     not an import, and the difference matters when the gate is what stops a
     regression.
     """
     found: dict[str, list[int]] = {}
-    for path in sorted(KERNELS.rglob("*.py")):
+    for path in sorted(root.rglob("*.py")):
         if "triton_kernels_ref" in str(path):
             continue                      # reference tree, never executed
         try:
@@ -92,8 +94,59 @@ def _torch_importers() -> dict[str, list[int]]:
                                     or node.module.startswith("torch.")):
                     lines.append(node.lineno)
         if lines:
-            found[str(path.relative_to(KERNELS))] = sorted(lines)
+            found[str(path.relative_to(root))] = sorted(lines)
     return found
+
+
+# The triton branch: a pin per file, and the pinned set is EMPTY. Any file
+# listed here would be a file the owner's 2026-09-05 rule forbids outright.
+TRITON_ALLOWED: dict[str, str] = {}
+METAL_FILES = ("metal_backend.py",)
+
+
+def test_no_torch_import_anywhere_under_triton():
+    """The owner's universal R33 (2026-09-05): zero torch under src/neurobrix/triton,
+    the Metal backend included, conditional and dead-branch imports counted."""
+    found = _torch_importers(TRITON)
+    unlisted = {f: n for f, n in found.items() if f not in TRITON_ALLOWED}
+    assert not unlisted, (
+        "torch imported under src/neurobrix/triton:\n"
+        + "\n".join(f"  {f} (lines {n})" for f, n in unlisted.items())
+        + "\n\nA missing capability is added to NBXTensor and the allocator in the seam, "
+          "never substituted with torch — on every backend."
+    )
+
+
+@pytest.mark.parametrize("filename", METAL_FILES)
+def test_the_metal_files_exist_and_carry_no_torch(filename):
+    path = TRITON / filename
+    assert path.exists(), f"{filename} is not where the gate expects it — update METAL_FILES"
+    assert filename not in _torch_importers(TRITON)
+
+
+def test_the_gate_is_seen_failing_on_an_injected_import(tmp_path):
+    """A green gate is worth something only once it has been seen failing:
+    the same scanner over a tree carrying an injected torch import must name
+    it — a conditional one, a deferred one inside a function, and a dead
+    branch alike (the owner's rule counts all three)."""
+    (tmp_path / "clean.py").write_text("x = 1\n")
+    (tmp_path / "conditional.py").write_text("if False:\n    import torch\n")
+    (tmp_path / "deferred.py").write_text("def f():\n    from torch import cuda\n    return cuda\n")
+    (tmp_path / "dead.py").write_text("try:\n    pass\nexcept Exception:\n    import torch.nn as nn\n")
+    found = _torch_importers(tmp_path)
+    assert set(found) == {"conditional.py", "deferred.py", "dead.py"}, found
+    assert found["conditional.py"] == [2] and found["deferred.py"] == [2]
+
+
+def test_the_runtime_probe_is_seen_failing_on_an_injected_import():
+    """The dynamic half: the same subprocess probe, given a module that
+    imports torch, must report True — otherwise a False from it means nothing."""
+    import subprocess
+    import sys
+    out = subprocess.run(
+        [sys.executable, "-c", "import sys, torch; print('torch' in sys.modules)"],
+        capture_output=True, text=True, env={"PATH": "/usr/bin:/bin"}, timeout=120)
+    assert out.returncode == 0 and out.stdout.strip() == "True", out.stderr[-300:]
 
 
 def test_no_unlisted_torch_import_under_kernels():
@@ -137,7 +190,7 @@ def test_the_kernels_package_does_not_pull_torch():
     import subprocess
     import sys
 
-    repo = KERNELS.parents[2]
+    src = KERNELS.parents[1]          # the package lives under src/, not at the repo root
     code = (
         "import sys, importlib;"
         "importlib.import_module('neurobrix.kernels');"
@@ -145,9 +198,14 @@ def test_the_kernels_package_does_not_pull_torch():
     )
     out = subprocess.run(
         [sys.executable, "-c", code], capture_output=True, text=True,
-        env={"PYTHONPATH": str(repo), "PATH": "/usr/bin:/bin"}, timeout=120,
+        env={"PYTHONPATH": str(src), "PATH": "/usr/bin:/bin"}, timeout=120,
     )
-    assert out.stdout.strip().endswith("False"), (
+    # A harness that cannot import the package proves nothing: the 2026-09-05
+    # addendum found this gate dying on ModuleNotFoundError at every land
+    # (PYTHONPATH on the repo root) and its assertion failing on an empty
+    # string — two "pre-existing" failures that were the harness itself.
+    assert out.returncode == 0, f"the probe process failed:\n{out.stderr[-600:]}"
+    assert out.stdout.strip() == "False", (
         f"importing neurobrix.kernels pulled torch into the process.\n"
         f"stdout: {out.stdout!r}\nstderr: {out.stderr[-400:]!r}"
     )
@@ -165,7 +223,7 @@ def test_pure_kernel_modules_stay_torch_free():
     import subprocess
     import sys
 
-    repo = KERNELS.parents[2]
+    src = KERNELS.parents[1]          # the package lives under src/, not at the repo root
     for module in ("neurobrix.kernels.ops._configs",
                    "neurobrix.kernels.ops.rmsnorm",
                    "neurobrix.kernels.ops.residual_chain"):
@@ -174,9 +232,10 @@ def test_pure_kernel_modules_stay_torch_free():
                 f"print('torch' in sys.modules)")
         out = subprocess.run(
             [sys.executable, "-c", code], capture_output=True, text=True,
-            env={"PYTHONPATH": str(repo), "PATH": "/usr/bin:/bin"}, timeout=120,
+            env={"PYTHONPATH": str(src), "PATH": "/usr/bin:/bin"}, timeout=120,
         )
-        assert out.stdout.strip().endswith("False"), (
+        assert out.returncode == 0, f"the probe process failed for {module}:\n{out.stderr[-600:]}"
+        assert out.stdout.strip() == "False", (
             f"importing {module} pulled torch.\n"
             f"stderr: {out.stderr[-400:]!r}"
         )

@@ -6,6 +6,13 @@ If an op is not here → CRASH. No fallback, no second path.
 Compute wrappers: wrappers.py. Metadata: NBXTensor methods.
 Dependencies: wrappers.py, NBXTensor. Used exclusively in --triton mode.
 """
+# The launch seam (R33, universal since 2026-09-05): every `kernel[grid](...)`
+# of the house library goes through the NeuroBrix launcher (Triton compiles,
+# the dispatch layer launches through a vendor driver of its own).
+# NBX_LAUNCHER=triton keeps upstream's launcher for the differential arm.
+from .launcher import install as _install_launcher
+_install_launcher()
+
 
 from typing import Optional, Callable, Dict
 import os

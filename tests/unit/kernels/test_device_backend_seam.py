@@ -137,10 +137,13 @@ def test_the_contract_covers_what_a_port_must_provide():
 
 
 def test_backend_selection_is_data_not_branching():
-    """Selection reads the active Triton target and indexes the table; it does
-    not branch on vendor names, so adding a backend is adding data."""
+    """Selection walks the backend TABLE (the vendor runtime libraries each
+    entry names) and never asks Triton's driver — whose backend probes import
+    torch (R33, universal since 2026-09-05). Adding a backend is adding data."""
     source = inspect.getsource(nbx_tensor._detect_gpu_backend)
-    assert "get_current_target" in source, "selection should ask the runtime"
+    assert "driver.active" not in source.replace("`triton.runtime.driver.active`", ""), \
+        "selection must not ask Triton's driver (its probes import torch)"
+    assert "_GPU_BACKENDS.items()" in source, "selection should walk the backend table"
     assert source.count("if ") <= 3, (
         "backend selection is growing branches; it should stay a table lookup"
     )

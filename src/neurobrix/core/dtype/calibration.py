@@ -156,17 +156,20 @@ class RangeCensus:
 
     @staticmethod
     def _magnitude(result: Any):
-        """(largest finite |x|, any non-finite) as device scalars, or None."""
+        """(largest finite |x|, any non-finite) as device scalars, or None.
+
+        The inf-norm reads the tensor once with no copy; only when it comes
+        back non-finite (an inf or NaN somewhere) is the finite maximum
+        recomputed through a masked copy — a 4K render's 8 GiB activations
+        cannot afford a copy per op (Sana 4K OOM under the census, 2026-09-05)."""
         if isinstance(result, torch.Tensor):
             if result.numel() == 0 or not (result.is_floating_point() or result.is_complex()):
                 return None
-            a = result.detach().abs()                      # real for complex
-            if a.dtype != torch.float32:
-                a = a.float()
-            nonfinite = ~torch.isfinite(a)
-            any_nonfinite = nonfinite.any()
-            a.masked_fill_(nonfinite, 0.0)
-            return a.amax(), any_nonfinite
+            x = result.detach()
+            m = torch.linalg.vector_norm(x, ord=math.inf).float()
+            nonfinite = ~torch.isfinite(m)
+            finite_max = torch.where(nonfinite, RangeCensus._finite_max_masked(x), m)
+            return finite_max, nonfinite
         if isinstance(result, (tuple, list)):
             parts = [m for m in (RangeCensus._magnitude(r) for r in result) if m is not None]
             if not parts:
@@ -177,6 +180,15 @@ class RangeCensus:
                 nf = nf | f.to(nf.device)
             return mx, nf
         return None
+
+    @staticmethod
+    def _finite_max_masked(x: torch.Tensor) -> torch.Tensor:
+        """max|x| over the finite elements — the copy path, taken lazily."""
+        a = x.abs()
+        if a.dtype != torch.float32:
+            a = a.float()
+        a.masked_fill_(~torch.isfinite(a), 0.0)
+        return a.amax()
 
     def observe(self, op_uid: str, result: Any) -> None:
         m = self._magnitude(result)
