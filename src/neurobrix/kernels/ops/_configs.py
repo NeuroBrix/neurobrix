@@ -274,6 +274,22 @@ def arch_smem_budget() -> Optional[int]:
             # Matching majors reads the same fact out of the profiles instead
             # of copying the table.
             same_family = int(budget)
+        elif any(wanted.startswith(prefix) for prefix in
+                 (str(m).strip().lower()
+                  for m in (cfg.get("compute_capability_matches") or []))):
+            # A profile may also declare the target strings it covers, as
+            # prefixes. Needed because not every backend reports a family:
+            # the Triton Metal target reports the Metal DEVICE NAME
+            # ("apple-m4-pro"), so no Apple profile could ever match on
+            # `compute_capability` alone and the budget resolved to None on
+            # every real Mac — the 32 KB filter silently not applying.
+            #
+            # It stays DATA: the prefixes live in the profile beside the
+            # budget they select, so a new chip family is a YAML line rather
+            # than a branch here. Profiles that declare none are unaffected,
+            # which is every NVIDIA and AMD profile — their exact and
+            # major-family matches are reached before this and are unchanged.
+            same_family = int(budget)
     return exact if exact is not None else same_family
 
 

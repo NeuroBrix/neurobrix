@@ -1,11 +1,12 @@
 # Apple Silicon GPU Compute Configuration
 # M1, M2, M3, M4 families (Apple GPU family 7/8/9)
 #
-# validation_status: hand_curated_from_docs — NO APPLE HARDWARE ON SITE.
-#   Every value here is read from Apple's Metal feature-set tables and the
-#   Metal Shading Language specification, and NONE of it has been measured.
-#   No Apple support is claimed until first light. The values are chosen so
-#   that being wrong costs throughput, never correctness.
+# validation_status: hand_curated_from_docs, EXCEPT where a line says
+#   "MEASURED". Written with no Apple hardware on site; an M4 Pro arrived
+#   2026-09-05 and the values it can answer for are now read from the device
+#   rather than from Apple's tables. Everything still unmarked is unmeasured
+#   and chosen so that being wrong costs throughput, never correctness.
+#   No Apple support is claimed until the rms_norm milestone passes.
 #
 # Why this file exists at all: Prism autodetect maps an Apple GPU to
 # (vendor=apple, architecture=apple_silicon), and `get_vendor_config` is
@@ -16,6 +17,22 @@
 
 architecture: apple_silicon
 compute_capability: "apple9"   # M3/M4 family; M1 = apple7, M2 = apple8
+
+# What the Triton target actually reports, which is NOT the family above.
+# MEASURED 2026-09-05 on an M4 Pro: the Metal backend builds its arch string
+# from the Metal DEVICE NAME, lowercased and hyphenated
+# (`triton_msl/backend/driver.py::_detect_metal_arch`), so it says
+# "apple-m4-pro" where this file says "apple9". Matching on the family alone,
+# the smem budget below resolved to NOTHING on a real Mac and the 32 KB
+# filter silently did not apply — all 17 Volta tiles were offered, including
+# the 72 KB one that cannot run here.
+#
+# These are prefixes, matched against the reported target. "apple-m" covers
+# the whole M-series, which is exactly the scope this file claims in its
+# header (M1..M4, GPU family 7/8/9). A chip outside it matches nothing and
+# gets no filtering, which is the same zero-fallback answer as before.
+compute_capability_matches:
+  - "apple-m"
 
 # Metal exposes no CUDA-style device string. The compiled (PyTorch) path
 # reaches Apple GPUs through the MPS backend, whose device string is "mps".
@@ -91,6 +108,8 @@ sdpa_thresholds:
 memory:
   # 32 KB of threadgroup memory per threadgroup (Apple GPU family 7+).
   # The single most binding difference from every NVIDIA profile here.
+  # MEASURED 2026-09-05 on an M4 Pro: `MTLDevice.maxThreadgroupMemoryLength()`
+  # returns exactly 32768, so the documented figure holds on real hardware.
   max_shared_memory_per_block: 32768
   max_registers_per_block: 32768
   # Apple GPUs schedule in 32-wide SIMD groups. Named `warp_size` because one
@@ -126,10 +145,17 @@ precision:
   supports_bf16: true    # Apple GPU family 9 (M3+); M1/M2 emulate
   supports_tf32: false   # NVIDIA-only format
   supports_fp8: false    # no hardware FP8 on Apple GPUs
-  # Metal GPUs have NO double precision at all. This is not a tuning
-  # choice: `tl.float64` cannot be lowered, and the three device-scalar
-  # kernels in kernels/ops/{add,mul,div}.py that widen through f64 for
-  # bit-exactness with the host path must take their host-sync route here.
+  # Metal GPUs have NO double precision at all. The hardware fact stands;
+  # the consequence written here did not.
+  #
+  # MEASURED 2026-09-05: the three device-scalar kernels in
+  # kernels/ops/{add,mul,div}.py that widen through f64 do NOT fail to lower
+  # and are NOT refused. The f64 survives Triton's middle end intact and the
+  # Metal backend's MSL emitter silently narrows it to `float`. For these
+  # three that is exact — the product of two f32 values is representable in
+  # f64, checked over 20,000,000 random pairs plus subnormals, every one
+  # bit-identical — so no host-sync route is needed. What to expect from any
+  # FUTURE f64 expression is silent narrowing, not a loud refusal.
   supports_fp64: false
 
 # Software-pipelining budget — see nvidia/volta.yml for the schema.
