@@ -854,8 +854,15 @@ class GraphExecutor:
             # and by zero3 offload.
             if str(getattr(self, "device", "") or "").startswith("cpu"):
                 compute_dtype = torch.float32
+            # Precision contract of THIS component (vendor facts as data:
+            # config/dtype_contracts.yml by backbone, registry flag by
+            # model). See DtypeEngine header.
+            self._activations_fp16_safe, self._fp32_op_uids = \
+                self._resolve_fp16_activation_policy(compute_dtype)
             self._dtype_engine = DtypeEngine(compute_dtype, graph_dtype=self._graph_dtype,
-                                             amp_enabled=amp_enabled)
+                                             amp_enabled=amp_enabled,
+                                             activations_fp16_safe=self._activations_fp16_safe,
+                                             fp32_op_uids=self._fp32_op_uids)
         else:
             self._dtype_engine = None  # Triton uses TritonDtypeEngine in sequence.py
 
@@ -1020,6 +1027,21 @@ class GraphExecutor:
         # after __init__. Compiling here wastes time — it gets recompiled on interceptor
         # registration. Instead, _execute_compiled_graph() handles: _compiled_seq is None → compile.
 
+    def _registry_model_name(self):
+        """Registry key of this executor's model — see precision_contract."""
+        from neurobrix.core.runtime.precision_contract import registry_model_name
+        return registry_model_name(getattr(self, "_cache_path", None))
+
+    def _resolve_fp16_activation_policy(self, compute_dtype) -> tuple:
+        """(activations_fp16_safe, fp32_op_uids) for the DtypeEngine — the
+        shared resolver in core/runtime/precision_contract.py (registry flag
+        > backbone contract > False; module patterns pin every compute op of
+        a module). This is the compiled / sequential consumer, contract ON."""
+        from neurobrix.core.runtime.precision_contract import resolve
+        return resolve(getattr(self, "_cache_path", None), self._component_name,
+                       getattr(self, "_dag", None),
+                       compute_is_fp16=(compute_dtype == torch.float16))
+
     def _should_enable_amp(self) -> bool:
         """Determine whether AMP should be enabled for this component.
 
@@ -1172,6 +1194,8 @@ class GraphExecutor:
             amp_enabled=self._dtype_engine.amp_enabled,
             use_triton=(self.mode == "triton"),
             config_constants=self._resolve_config_constants(),
+            activations_fp16_safe=self._dtype_engine.activations_fp16_safe,
+            fp32_op_uids=self._dtype_engine.fp32_op_uids,
         )
 
         # Register any op interceptors BEFORE compilation (Phase 2.2: KV cache support)
@@ -2105,12 +2129,7 @@ class GraphExecutor:
         # instead of self._pkg.cache_path (which doesn't exist on
         # GraphExecutor — pre-existing latent bug).
         from neurobrix.core.runtime.registry_flags import get_component_flag
-        _seq_model_name = None
-        try:
-            if getattr(self, '_cache_path', None) is not None:
-                _seq_model_name = Path(self._cache_path).name
-        except Exception:
-            pass
+        _seq_model_name = self._registry_model_name()
         _seq_fp16_safe = get_component_flag(
             _seq_model_name, self._component_name,
             "activations_fp16_safe", default=False,
@@ -2852,12 +2871,7 @@ class GraphExecutor:
         # default False, neutralising every activations_fp16_safe
         # annotation in the registry until now).
         from neurobrix.core.runtime.registry_flags import get_component_flag
-        _model_name = None
-        try:
-            if getattr(self, '_cache_path', None) is not None:
-                _model_name = Path(self._cache_path).name
-        except Exception:
-            pass
+        _model_name = self._registry_model_name()
         _fp16_safe = get_component_flag(
             _model_name, self._component_name,
             "activations_fp16_safe", default=False,
@@ -3997,7 +4011,8 @@ class GraphExecutor:
             normalized_inputs[0] = resolved_inputs[0]
 
         # AMP: Cast inputs per DtypeEngine rules (fp32 for pow/rsqrt/softmax, etc.)
-        normalized_inputs = self._dtype_engine.amp_cast_inputs(op_type, normalized_inputs)
+        normalized_inputs = self._dtype_engine.amp_cast_inputs(op_type, normalized_inputs,
+                                                               op_uid=op_uid)
 
         # Check for op interceptors. Priority order matches CompiledSequence
         # and TritonSequence: op_uid (fine-grained, op-level tiling Prism)
@@ -4028,7 +4043,7 @@ class GraphExecutor:
             result = self._sequential_dispatcher.dispatch(op_type, normalized_inputs, attrs)
 
         # AMP: Post-process result (overflow protection, inf clamping)
-        result = self._dtype_engine.amp_cast_result(op_type, result)
+        result = self._dtype_engine.amp_cast_result(op_type, result, op_uid=op_uid)
 
         # === NBX_DUMP_RAW (sequential path, default-off) ===
         # "<dir>:<csv of tid/op_uid substrings>" — saves matching outputs as

@@ -361,6 +361,8 @@ class CompiledSequence:
         amp_enabled: bool = True,
         use_triton: bool = False,
         config_constants=None,
+        activations_fp16_safe: bool = False,
+        fp32_op_uids=None,
     ):
         """
         Initialize CompiledSequence.
@@ -374,6 +376,9 @@ class CompiledSequence:
             dtype: The target dtype (e.g., torch.float16)
             amp_enabled: Whether to apply AMP autocast rules.
             use_triton: Use Triton kernels instead of PyTorch native ops.
+            activations_fp16_safe: the component's precision contract
+                (DtypeEngine.activations_fp16_safe), resolved by the executor.
+            fp32_op_uids: matmuls the vendor keeps in fp32 (DtypeEngine).
         """
         self.dag = dag
         # Architectural integer constants (profile.json config) — protected
@@ -390,7 +395,9 @@ class CompiledSequence:
         # 100% Autonomous op resolution - no sequential_dispatcher dependency
         self.op_resolver = CompiledOpResolver(device, dtype, graph_dtype=graph_dtype,
                                               amp_enabled=amp_enabled,
-                                              use_triton=use_triton)
+                                              use_triton=use_triton,
+                                              activations_fp16_safe=activations_fp16_safe,
+                                              fp32_op_uids=fp32_op_uids)
 
         # Compilation outputs
         self._ops: List[CompiledOp] = []
@@ -1865,7 +1872,7 @@ class CompiledSequence:
             func = self._op_interceptors[op_type]
         else:
             # Get function from autonomous op resolver (100% independent from sequential_dispatcher)
-            func = self.op_resolver.get_op_func(op_name, attrs)
+            func = self.op_resolver.get_op_func(op_name, attrs, op_uid=op_uid)
 
         # Allocate slots for output tensors not yet assigned
         output_slots = []

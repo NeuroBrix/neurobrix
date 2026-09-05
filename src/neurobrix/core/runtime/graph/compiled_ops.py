@@ -100,7 +100,8 @@ class CompiledOpResolver:
     """
 
     def __init__(self, device: torch.device, dtype: torch.dtype, graph_dtype: Optional[torch.dtype] = None,
-                 amp_enabled: bool = True, use_triton: bool = False):
+                 amp_enabled: bool = True, use_triton: bool = False,
+                 activations_fp16_safe: bool = False, fp32_op_uids=None):
         self.device = device
         self.dtype = dtype
         self.use_triton = False  # triton mode now uses triton/ package directly
@@ -108,13 +109,16 @@ class CompiledOpResolver:
 
         # DtypeEngine: single entry point for all dtype decisions
         from neurobrix.core.dtype.engine import DtypeEngine
-        self.dtype_engine = DtypeEngine(dtype, graph_dtype=graph_dtype, amp_enabled=amp_enabled)
+        self.dtype_engine = DtypeEngine(dtype, graph_dtype=graph_dtype, amp_enabled=amp_enabled,
+                                        activations_fp16_safe=activations_fp16_safe,
+                                        fp32_op_uids=fp32_op_uids)
 
     # ========================================================================
     # PUBLIC API
     # ========================================================================
 
-    def get_op_func(self, op_name: str, attrs: Dict[str, Any]) -> Callable:
+    def get_op_func(self, op_name: str, attrs: Dict[str, Any],
+                    op_uid: Optional[str] = None) -> Callable:
         """
         Get the function for an operation with all logic pre-baked.
 
@@ -139,7 +143,7 @@ class CompiledOpResolver:
         # DtypeEngine wraps with AMP casting at compile time
         # Custom ops already have their prefix; only add aten:: for standard ops
         dtype_op_type = op_name if "::" in op_name else f"aten::{op_name}"
-        return self.dtype_engine.compile_op(dtype_op_type, func, attrs)
+        return self.dtype_engine.compile_op(dtype_op_type, func, attrs, op_uid=op_uid)
 
     def _resolve_op_func(self, op_name: str, attrs: Dict[str, Any]) -> Callable:
         """Resolve raw op function (before DtypeEngine wrapping).

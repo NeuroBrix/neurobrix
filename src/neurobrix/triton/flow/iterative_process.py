@@ -11,6 +11,7 @@ Handles diffusion models with denoising loop:
 3. Post-loop components (VAE decoder)
 """
 
+import os
 from typing import Any, Callable, Dict, List, Optional
 
 from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, parse_dtype
@@ -25,6 +26,25 @@ from neurobrix.core.runtime.progress import StepProgress
 
 _FLOAT_NBX_DTYPES = (NBXDtype.float16, NBXDtype.bfloat16,
                      NBXDtype.float32, NBXDtype.float64)
+
+
+def _gate_component_outputs_finite(resolved: Any, comp_name: str) -> None:
+    """R30 mirror of core/flow/iterative_process._gate_component_outputs_finite
+    (R33: NBXTensor + the isfinite/all Triton wrappers, no torch)."""
+    from neurobrix.kernels.wrappers import all_wrapper, isfinite_wrapper
+    from neurobrix.kernels.nbx_tensor import NBXTensor
+    for key, val in list(resolved.items()):
+        if not str(key).startswith(f"{comp_name}.output"):
+            continue
+        if not isinstance(val, NBXTensor) or not val.is_floating_point():
+            continue
+        if bool(all_wrapper(isfinite_wrapper(val)).item()):
+            continue
+        raise RuntimeError(
+            f"ZERO FALLBACK: non-finite output of post-loop component "
+            f"'{comp_name}' ({key}): shape={list(val.shape)} dtype={val.dtype}. "
+            f"Refusing to write a corrupt image."
+        )
 
 
 def _gate_loop_state_finite(state: Any, step_idx: int, timestep: Any,
@@ -1065,6 +1085,10 @@ class TritonIterativeProcessHandler:
         # Execute post-loop components
         for comp_name in post_loop:
             self._execute_component(comp_name, "post_loop", None)
+            # R30 mirror of the compiled post-loop gate: refuse a decoder
+            # output that is not finite before anything is saved.
+            _gate_component_outputs_finite(
+                self.ctx.variable_resolver.resolved, comp_name)
 
         # Unload post-loop components
         for comp_name in post_loop:

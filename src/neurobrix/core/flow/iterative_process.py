@@ -23,6 +23,28 @@ from .base import FlowHandler, FlowContext, register_flow
 from neurobrix.core.runtime.progress import StepProgress
 
 
+def _gate_component_outputs_finite(resolved: Any, comp_name: str) -> None:
+    """ZERO FALLBACK: a post-loop component (VAE / decoder) whose output
+    holds NaN/Inf cannot produce a valid image — refuse before saving.
+    Scans the component's `<name>.output_*` entries in the resolver."""
+    for key, val in list(resolved.items()):
+        if not str(key).startswith(f"{comp_name}.output"):
+            continue
+        if not isinstance(val, torch.Tensor) or not val.is_floating_point():
+            continue
+        if bool(torch.isfinite(val).all()):
+            continue
+        n_nan = int(torch.isnan(val).sum())
+        n_inf = int(torch.isinf(val).sum())
+        raise RuntimeError(
+            f"ZERO FALLBACK: non-finite output of post-loop component "
+            f"'{comp_name}' ({key}): {n_nan} NaN / {n_inf} Inf elements in "
+            f"shape={list(val.shape)} dtype={val.dtype}. Refusing to write a "
+            f"corrupt image. Set NBX_TRACE_NAN=1 to localise the first "
+            f"offending op."
+        )
+
+
 def _gate_loop_state_finite(state: Any, step_idx: int, timestep: Any,
                             comp_name: str) -> None:
     """Always-on NaN/Inf gate on the diffusion loop state.
@@ -972,6 +994,12 @@ class IterativeProcessHandler(FlowHandler):
         # Execute post-loop components
         for comp_name in post_loop:
             self._execute_component(comp_name, "post_loop", None)
+            # The loop gate proves the LATENT finite; the decoder can still
+            # overflow on its own (a DC-AE decoded in fp16 wrote an all-black
+            # PNG, 2026-09-04) — refuse a corrupt image at the same
+            # boundary, before anything is saved.
+            _gate_component_outputs_finite(
+                self.ctx.variable_resolver.resolved, comp_name)
 
         # Unload post-loop components
         for comp_name in post_loop:
