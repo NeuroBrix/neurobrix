@@ -698,7 +698,63 @@ def metal_device_available() -> bool:
 
 
 def reset_runtime_for_tests() -> None:
-    """Drop the cached runtime. Tests only."""
+    """Drop the cached runtime — and everything compiled against it.
+
+    A compiled kernel captures the runtime it was built with: that runtime's
+    device, its pipelines, and its registry of which addresses the allocator
+    handed out. Replacing the runtime while compiled kernels survive leaves
+    those kernels resolving buffer addresses through a registry that never
+    issued them, and the next launch refuses a perfectly good tensor with
+    "which the Metal allocator did not hand out".
+
+    Measured 2026-09-05: this made `test_cumsum_is_correct[128]` fail in the
+    full kernels suite and pass in every smaller selection — the contaminating
+    file was `test_metal_allocator.py`, the only caller of this function.
+    Tests only, but the invariant is general: the caches and the runtime have
+    the same lifetime.
+    """
     global _RUNTIME
+
+    # BEFORE dropping it, hand everything the old runtime owns back to the
+    # old runtime — while it is still the one a free would reach.
+    #
+    #   * the allocator's free pool parks blocks for reuse. A block parked
+    #     under the old runtime and handed out after the reset is an address
+    #     the new runtime never issued, and the first launch that touches it
+    #     refuses a perfectly good tensor.
+    #   * `_INT64_ARRAY_CACHE` holds shape/stride tensors forever by design
+    #     (a frozen replay plan records their raw device pointers), which
+    #     also means forever across a reset.
+    from . import nbx_tensor
+    try:
+        nbx_tensor.DeviceAllocator.empty_cache_pool()
+    except Exception:                                   # pragma: no cover
+        pass                                            # nothing to release
+    nbx_tensor._INT64_ARRAY_CACHE.clear()
+
     with _RUNTIME_LOCK:
         _RUNTIME = None
+
+    # Everything that captured the old runtime goes with it. Lazily and
+    # after the lock, because both of these import this module.
+    #
+    # There are three caches, and they must have ONE lifetime:
+    #   * `_RUNTIME` here,
+    #   * the compiled kernels in `metal_driver`, which hold the device and
+    #     the pipelines they were built on,
+    #   * `nbx_tensor._gpu_runtime`, an lru_cache the allocator resolves
+    #     every malloc through.
+    #
+    # Clearing any subset is worse than clearing none: the tensors then come
+    # from one runtime and the kernels from another, and a launch refuses a
+    # perfectly good address with "which the Metal allocator did not hand
+    # out". Measured 2026-09-05 as an order-dependent failure of
+    # `test_cumsum_is_correct[128]` in the full kernels suite.
+    from ..triton import metal_driver
+    metal_driver.clear_cache()
+
+    for cached in (getattr(nbx_tensor, "_gpu_runtime", None),
+                   getattr(nbx_tensor, "_metal_backend_table", None)):
+        clear = getattr(cached, "cache_clear", None)
+        if clear is not None:
+            clear()
