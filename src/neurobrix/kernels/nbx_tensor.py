@@ -1502,9 +1502,30 @@ class DeviceAllocator:
         backend = _active_backend()
         rt = _gpu_runtime()
         getattr(rt, backend["set_device"])(ctypes.c_int(device_idx))
-        # 2. Tell Triton which device to target
+        # 2. Tell Triton which device to target.
+        #
+        # A single-GPU backend has nothing to set and need not implement the
+        # setter: triton-msl's `MetalDriver` provides `get_current_device`
+        # and no `set_current_device` (measured 2026-09-05). Falling through
+        # would raise AttributeError at the first launch; assuming it worked
+        # would risk launching on a device nobody selected. So the absence is
+        # handled by VERIFYING instead — ask the backend which device is
+        # current and refuse if it is not the one requested, because there
+        # would be no way to make it so.
         import triton.runtime.driver
-        triton.runtime.driver.active.set_current_device(device_idx)
+        active = triton.runtime.driver.active
+        set_current = getattr(active, "set_current_device", None)
+        if set_current is not None:
+            set_current(device_idx)
+        else:
+            current = active.get_current_device()
+            if current != device_idx:
+                raise RuntimeError(
+                    f"Triton backend "
+                    f"{active.get_current_target().backend!r} exposes no "
+                    f"set_current_device and reports device {current}, but "
+                    f"device {device_idx} was requested. The kernel would "
+                    f"launch on the wrong device, so this refuses instead.")
         # Cache only after BOTH calls succeeded (this thread's state).
         _DEVICE_CACHE.idx = device_idx
 
@@ -1584,9 +1605,24 @@ def _active_backend() -> dict:
     """
     name = _detect_gpu_backend()
     if name == "metal":
-        from .metal_device import METAL_BACKEND
-        return METAL_BACKEND
+        return _metal_backend_table()
     return _GPU_BACKENDS[name]
+
+
+@functools.lru_cache(maxsize=1)
+def _metal_backend_table() -> dict:
+    """The Metal entry-point table, imported ONCE and then cached.
+
+    Cached rather than imported per call because `_active_backend` runs
+    inside `NBXTensor.__del__`, and a finalizer can fire during interpreter
+    shutdown when `sys.meta_path` is already None — an import there raises
+    `ImportError: Python is likely shutting down` and every tensor still
+    alive prints a traceback on the way out. The cuda/hip path never had the
+    problem: `_GPU_BACKENDS` is a module global with no import behind it.
+    One `lru_cache` gives Metal the same property.
+    """
+    from .metal_device import METAL_BACKEND
+    return METAL_BACKEND
 
 
 @functools.lru_cache(maxsize=1)
@@ -1594,7 +1630,7 @@ def _gpu_runtime():
     name = _detect_gpu_backend()
     if name == "metal":
         from .metal_device import runtime
-        return runtime()
+        return runtime()          # itself cached; see _metal_backend_table
     backend = _active_backend()
     for lib in backend["rt_libs"]:
         try:

@@ -55,6 +55,7 @@ R34 preserved — nothing here is keyed on a model name.
 from __future__ import annotations
 
 import ctypes
+import os
 import threading
 from typing import Dict, Optional, Tuple
 
@@ -145,6 +146,22 @@ class MetalRuntime:
             raise MetalUnavailableError(
                 "Metal device present but `newCommandQueue()` returned nil.")
 
+        # The VM page size, read from the system. Every allocation is rounded
+        # up to a multiple of it, and that is not a micro-optimisation:
+        # `MTLDevice.newBufferWithBytesNoCopy:length:options:deallocator:` —
+        # which is how the Triton Metal backend turns one of our pointers
+        # into a buffer it can bind — requires a PAGE-ALIGNED pointer and a
+        # page-multiple length. Metal sub-allocates buffers smaller than a
+        # page inside one, so `contents()` for them lands mid-page. Measured
+        # 2026-09-05: of twelve sizes from 1 byte to 64 KB, the eight below
+        # one page all came back unaligned (offsets 1280, 1536, 1792, 2048,
+        # 2304, 3328, 7424, 15616) and every one of them was page-aligned
+        # once the length was rounded up. Handing a sub-page pointer to
+        # NoCopy is undefined behaviour, and it showed as
+        # "Failed to create Metal buffer" under memory pressure and, once, a
+        # SIGBUS.
+        self._page_size = int(os.sysconf("SC_PAGESIZE"))
+
         self._lock = threading.RLock()
         # address -> (MTLBuffer, memoryview, nbytes). The buffer entry is what
         # keeps the allocation alive: dropping it is the free.
@@ -226,22 +243,29 @@ class MetalRuntime:
         the device, never guessed.
         """
         Metal = self._Metal
+        page = self._page_size
+        allocated = (nbytes + page - 1) // page * page
         with self._lock:
             live = self._live_bytes
-        if live + nbytes > self._budget_bytes():
-            return None, None, 0
+        if live + allocated > self._budget_bytes():
+            return None, None, 0, 0
         buffer = self._device.newBufferWithLength_options_(
-            nbytes, Metal.MTLResourceStorageModeShared)
+            allocated, Metal.MTLResourceStorageModeShared)
         if buffer is None:
-            return None, None, 0
-        view = buffer.contents().as_buffer(nbytes)
+            return None, None, 0, 0
+        view = buffer.contents().as_buffer(allocated)
         # `from_buffer` holds an export on the view only for as long as the
         # returned object lives; the address belongs to the MTLBuffer, which
         # the registry keeps alive, so it stays valid once the keeper goes.
         keeper = ctypes.c_char.from_buffer(view)
         address = ctypes.addressof(keeper)
         del keeper
-        return buffer, view, address
+        if address % page:                              # pragma: no cover
+            # Rounding is supposed to guarantee this. If Metal ever stops
+            # honouring it, refuse rather than hand out a pointer the
+            # backend will wrap into a buffer with undefined behaviour.
+            return None, None, 0, 0
+        return buffer, view, address, allocated
 
     def malloc(self, out_ptr, size) -> int:
         """`cudaMalloc(&ptr, size)`."""
@@ -250,13 +274,13 @@ class MetalRuntime:
         if nbytes <= 0:
             slot.value = 0
             return _ERR_BAD_ARGUMENT if nbytes < 0 else _OK
-        buffer, view, address = self._new_shared_buffer(nbytes)
+        buffer, view, address, allocated = self._new_shared_buffer(nbytes)
         if buffer is None or not address:
             slot.value = 0
             return _ERR_ALLOC
         with self._lock:
-            self._buffers[address] = (buffer, view, nbytes)
-            self._live_bytes += nbytes
+            self._buffers[address] = (buffer, view, allocated)
+            self._live_bytes += allocated
         slot.value = address
         return _OK
 
@@ -290,13 +314,13 @@ class MetalRuntime:
         if nbytes <= 0:
             slot.value = 0
             return _ERR_BAD_ARGUMENT if nbytes < 0 else _OK
-        buffer, view, address = self._new_shared_buffer(nbytes)
+        buffer, view, address, allocated = self._new_shared_buffer(nbytes)
         if buffer is None or not address:
             slot.value = 0
             return _ERR_ALLOC
         with self._lock:
-            self._host_buffers[address] = (buffer, view, nbytes)
-            self._live_bytes += nbytes
+            self._host_buffers[address] = (buffer, view, allocated)
+            self._live_bytes += allocated
         slot.value = address
         return _OK
 

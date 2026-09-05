@@ -166,13 +166,64 @@ def test_an_allocation_past_the_device_budget_refuses():
 @metal_only
 def test_alloc_and_free_return_the_live_count_to_zero():
     runtime = metal_device.runtime()
+    page = runtime._page_size
     start = runtime._live_bytes
     out = ctypes.c_void_p()
     assert runtime.malloc(ctypes.byref(out), ctypes.c_size_t(4096)) == 0
-    assert out.value and out.value % 16 == 0, "Triton assumes 16-byte alignment"
-    assert runtime._live_bytes == start + 4096
+    assert out.value
+    # Rounded up to a page, and the live count follows the bytes actually
+    # taken rather than the bytes asked for.
+    assert runtime._live_bytes == start + page
     assert runtime.free(ctypes.c_void_p(out.value)) == 0
     assert runtime._live_bytes == start
+
+
+@metal_only
+@pytest.mark.parametrize("size", [1, 16, 64, 256, 1024, 4096, 8192, 12288,
+                                  16384, 16385, 32768, 65536])
+def test_every_allocation_is_page_aligned(size):
+    """Not a nicety — a correctness requirement of the backend's own binding.
+
+    The Triton Metal driver turns one of our pointers into something it can
+    bind with
+    `newBufferWithBytesNoCopy:length:options:deallocator:`, which Apple
+    documents as requiring a PAGE-ALIGNED pointer and a page-multiple length.
+    Metal sub-allocates buffers smaller than a page inside one, so
+    `contents()` for them lands mid-page: measured 2026-09-05, the eight
+    sizes below one page came back at offsets 1280, 1536, 1792, 2048, 2304,
+    3328, 7424 and 15616. Handing those to NoCopy is undefined behaviour, and
+    it showed as "Failed to create Metal buffer" under memory pressure.
+    """
+    runtime = metal_device.runtime()
+    page = runtime._page_size
+    out = ctypes.c_void_p()
+    assert runtime.malloc(ctypes.byref(out), ctypes.c_size_t(size)) == 0
+    try:
+        assert out.value % page == 0, (
+            f"{size}-byte allocation landed at offset {out.value % page} "
+            f"inside a page")
+    finally:
+        assert runtime.free(ctypes.c_void_p(out.value)) == 0
+
+
+@metal_only
+@pytest.mark.parametrize("size", [1, 4096, 12288, 16384, 20000])
+def test_a_page_aligned_pointer_is_acceptable_to_nocopy(size):
+    """The property above, checked against the API that actually needs it."""
+    import Metal
+    runtime = metal_device.runtime()
+    out = ctypes.c_void_p()
+    assert runtime.malloc(ctypes.byref(out), ctypes.c_size_t(size)) == 0
+    try:
+        block = (ctypes.c_char * size).from_address(out.value)
+        wrapped = runtime._device.\
+            newBufferWithBytesNoCopy_length_options_deallocator_(
+                block, size, Metal.MTLResourceStorageModeShared, None)
+        assert wrapped is not None, (
+            f"newBufferWithBytesNoCopy refused a {size}-byte allocation at "
+            f"{out.value:#x}")
+    finally:
+        assert runtime.free(ctypes.c_void_p(out.value)) == 0
 
 
 @metal_only
