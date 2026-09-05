@@ -11,7 +11,8 @@ import time
 import numpy as np
 from typing import Any, Callable, Dict, List, Optional
 
-from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator
+import os
+from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, parse_dtype
 from neurobrix.triton.memory_pool import release_flow_memory
 from neurobrix.triton.device_transfer import parse_device_idx
 
@@ -167,6 +168,43 @@ class TritonEncoderDecoderEngine:
 
         return self.ctx.variable_resolver.resolve_all()
 
+    def _decoder_kv_interceptor(self, dec_name: str, max_tokens: int):
+        """Build and register the decoder's NBXTensor KV cache for one window,
+        or None (recompute oracle requested, or no self-attention)."""
+        if os.environ.get("NBX_KV_RECOMPUTE") == "1":
+            return None
+        executor = self.ctx.executors.get(dec_name)
+        dag = getattr(executor, "_dag", None) if executor is not None else None
+        if not dag:
+            return None
+        from neurobrix.core.flow.decoder_kv import decoder_self_attention_plan
+        plan = decoder_self_attention_plan(dag)
+        if plan is None:
+            return None
+        from neurobrix.triton.kv_cache import TritonKVCache, TritonAttentionInterceptor
+        interceptor = getattr(executor, "_decoder_kv_interceptor", None)
+        if interceptor is None:
+            dtype = parse_dtype(str(getattr(executor, "dtype", None) or "float16"))
+            cache = TritonKVCache(num_layers=plan["num_layers"], num_kv_heads=plan["num_heads"],
+                                  k_head_dim=plan["head_dim"], v_head_dim=plan["head_dim"],
+                                  max_cache_len=int(max_tokens), dtype=dtype)
+            interceptor = TritonAttentionInterceptor(cache=cache, num_heads=plan["num_heads"])
+            variant = {
+                "aten::_scaled_dot_product_efficient_attention": interceptor.intercept_efficient,
+                "aten::_scaled_dot_product_cudnn_attention": interceptor.intercept_efficient,
+                "aten::_scaled_dot_product_flash_attention": interceptor.intercept_flash,
+            }
+            per_uid = {uid: variant.get(dag["ops"][uid]["op_type"], interceptor.intercept)
+                       for uid in plan["self_attn_uids"]}
+            for uid in plan["arange_uids"]:
+                per_uid[uid] = interceptor.intercept_arange
+            executor.register_op_uid_interceptors(per_uid)
+            executor._decoder_kv_interceptor = interceptor
+            print(f"   [{dec_name}] KV cache (triton): {plan['num_layers']} self-attention layers cached, "
+                  f"{len(plan['cross_attn_uids'])} cross-attentions native")
+        interceptor.reset()
+        return interceptor
+
     def _decode_one_window(self, decoder_stage, dec_name, defaults,
                            _all_ids, _all_texts, seek_ctx=None, ts_ids=None,
                            mel_frames=None, encoder_frames=None):
@@ -229,14 +267,24 @@ class TritonEncoderDecoderEngine:
         DeviceAllocator.set_device(device_idx)
         generated_ids = [decoder_start_token_id]
 
+        # R30 mirror of the compiled flow's decoder KV cache (NBXTensor brick):
+        # self-attentions cached, cross-attentions native, positional arange
+        # offset, one token per step. NBX_KV_RECOMPUTE=1 = the recompute oracle.
+        kv = self._decoder_kv_interceptor(dec_name, max_tokens)
         for step in range(1, max_tokens):
-            # Build input_ids as NBXTensor
-            ids_np = np.array([generated_ids], dtype=np.int64)
+            if kv is not None:
+                if step > 1:
+                    kv.update_position_offset()
+                ids_np = np.array([generated_ids[-1:]], dtype=np.int64)
+            else:
+                ids_np = np.array([generated_ids], dtype=np.int64)
             input_ids = NBXTensor.from_numpy(ids_np)
             self.ctx.variable_resolver.resolved["global.input_ids"] = input_ids
             self.ctx.variable_resolver.resolved["input_ids"] = input_ids
 
             self._execute_component(dec_name, "forward", None)
+            if kv is not None and step == 1:
+                kv.set_decode_mode()
 
             decoder_output = _get_component_output(self.ctx, dec_name)
             if decoder_output is None:

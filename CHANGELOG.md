@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Speech-to-text decoding no longer recomputes the whole transcript at every
+  token.** The Whisper-class decoder now keeps its self-attention keys and
+  values across tokens in both engines, feeding one token per step, and the
+  cross-attention stays on its native path. Transcripts are byte-identical to
+  the previous path on three clips; the Triton engine's 600-second transcription
+  drops from 1073 s to 45 s.
+
 ### Fixed
 
 - **Attention inputs and masks are no longer copied before every attention.**

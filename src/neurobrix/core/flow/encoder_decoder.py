@@ -172,6 +172,47 @@ class EncoderDecoderEngine(FlowHandler):
 
         return self.ctx.variable_resolver.resolve_all()
 
+    def _decoder_kv_wrapper(self, dec_name: str, max_tokens: int):
+        """Build and register the decoder's KV cache for one window, or None
+        (recompute oracle requested, or a graph without self-attention)."""
+        import os as _os
+        if _os.environ.get("NBX_KV_RECOMPUTE") == "1":
+            return None
+        executor = self.ctx.executors.get(dec_name)
+        dag = getattr(executor, "_dag", None) if executor is not None else None
+        if not dag:
+            return None
+        from neurobrix.core.flow.decoder_kv import decoder_self_attention_plan
+        plan = decoder_self_attention_plan(dag)
+        if plan is None:
+            return None
+        from neurobrix.core.runtime.graph.kv_cache_wrapper import (
+            KVCacheAttentionWrapper, KVCacheConfig)
+        wrapper = getattr(executor, "_decoder_kv_wrapper", None)
+        if wrapper is None:
+            dtype = getattr(executor, "dtype", None) or "float16"
+            config = KVCacheConfig(
+                num_layers=plan["num_layers"], num_kv_heads=plan["num_heads"],
+                k_head_dim=plan["head_dim"], v_head_dim=plan["head_dim"],
+                max_cache_len=int(max_tokens), dtype=str(dtype))
+            wrapper = KVCacheAttentionWrapper(config, num_heads=plan["num_heads"])
+            by_type = wrapper.get_interceptors()
+            per_uid = {}
+            for uid in plan["self_attn_uids"]:
+                fn = by_type.get(dag["ops"][uid]["op_type"])
+                if fn is None:
+                    raise RuntimeError(f"ZERO FALLBACK: no KV interceptor for {dag['ops'][uid]['op_type']}")
+                per_uid[uid] = fn
+            for uid in plan["arange_uids"]:
+                per_uid[uid] = wrapper.intercept_arange
+            executor.register_op_uid_interceptors(per_uid)
+            executor._decoder_kv_wrapper = wrapper
+            print(f"   [{dec_name}] KV cache: {plan['num_layers']} self-attention layers cached, "
+                  f"{len(plan['cross_attn_uids'])} cross-attentions native, "
+                  f"heads={plan['num_heads']} d={plan['head_dim']} max={max_tokens}")
+        wrapper.reset_for_new_sequence()
+        return wrapper
+
     def _decode_one_window(self, decoder_stage, dec_name, defaults,
                            _all_ids, _all_texts, seek_ctx=None, ts_ids=None,
                            mel_frames=None, encoder_frames=None):
@@ -233,12 +274,29 @@ class EncoderDecoderEngine(FlowHandler):
         device = self.ctx.primary_device
         generated_ids = [decoder_start_token_id]
 
+        # Decoder KV cache (the text flow's brick, adopted here): the
+        # self-attentions cache their keys/values, the cross-attentions keep
+        # the native path (their K/V are the encoder's, constant per window),
+        # the positional arange is offset by the cache length, and every step
+        # feeds ONE token — the prompt is forced token by token, so the first
+        # step is a one-token prefill. Without it the decoder re-ran the whole
+        # growing sequence every token (31 passes for 31 tokens, 2026-09-05).
+        # NBX_KV_RECOMPUTE=1 keeps the recompute path as the oracle.
+        kv = self._decoder_kv_wrapper(dec_name, max_tokens)
         for step in range(1, max_tokens):
-            input_ids = torch.tensor([generated_ids], dtype=torch.long, device=device)
+            if kv is not None:
+                if step > 1:
+                    kv.update_position_offset()
+                token_ids = [generated_ids[-1:]]
+            else:
+                token_ids = [generated_ids]
+            input_ids = torch.tensor(token_ids, dtype=torch.long, device=device)
             self.ctx.variable_resolver.resolved["global.input_ids"] = input_ids
             self.ctx.variable_resolver.resolved["input_ids"] = input_ids
 
             self._execute_component(dec_name, "forward", None)
+            if kv is not None and step == 1:
+                kv.set_decode_mode(actual_seq_len=1)
 
             decoder_output = self._get_component_output(dec_name)
             if decoder_output is None:
