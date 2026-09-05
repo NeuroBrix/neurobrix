@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The host no longer stalls at every attention of a compiled diffusion
+  request.** The attention variant rebuilt two placeholder scalars on the GPU at
+  each call, which is a host-to-device copy plus a stream sync — 2,240 of them
+  on a 20-step PixArt request. They are now shared; the GPU queue stays full.
+
 - **Warm `--triton` image and video requests no longer crash at the resume
   check.** Since the resume point landed, every diffusion request served warm
   by the Triton engine stopped with `NameError: name 'os' is not defined`
