@@ -31,6 +31,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   31.4 s → 9.3 s per image on one V100, images at the vendor's own fp16
   fidelity. Models without a declared contract are unchanged.
 
+- **Half-precision image models keep the vendor's fp32 islands.** Where a
+  model's own code computes in fp32 inside an otherwise fp16 forward (the
+  timestep sinusoid, hand-written norms), the engine now recognises the island
+  from the graph and keeps it in fp32, narrowing where the vendor narrows.
+  Measured on PixArt's timestep embedding: error 0.27 → 0.0002.
+
 - **The engine refuses to write a corrupt image.** A decoder whose output is
   not finite (a VAE that overflowed in half precision) now stops the run with
   the offending component named, instead of saving a black picture.

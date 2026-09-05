@@ -52,8 +52,9 @@ def test_div_computes_fp32_and_stores_per_contract():
         seen["in"] = a.dtype
         return torch.div(a, b)
 
-    safe = DtypeEngine(torch.float16, activations_fp16_safe=True)
-    assert safe.compile_op("aten::div", spy_div, {})(x, x).dtype == torch.float16
+    safe = DtypeEngine(torch.float16, activations_fp16_safe=True,
+                       narrow_op_uids=frozenset({"aten.div::0"}))
+    assert safe.compile_op("aten::div", spy_div, {}, op_uid="aten.div::0")(x, x).dtype == torch.float16
     assert seen["in"] == torch.float32
     default = DtypeEngine(torch.float16)
     assert default.compile_op("aten::div", spy_div, {})(x, x).dtype == torch.float32
@@ -107,7 +108,7 @@ def test_executor_resolver_pins_matmuls_by_parent_module_suffix(tmp_path):
         "aten.view::0": {"op_type": "aten::view", "parent_module": "encoder.block.0.block.1.ffn.down"},
         "aten.add_::0": {"op_type": "aten::add_", "parent_module": "encoder.block.0.block.1.ffn.down"},
     }}
-    safe, pinned = ex._resolve_fp16_activation_policy(torch.float16)
+    safe, pinned, narrow = ex._resolve_fp16_activation_policy(torch.float16)
     assert safe is True
     # every COMPUTE op of the module; never a view (no kernel) nor an in-place op
     assert pinned == frozenset({"aten.mm::0", "aten.add::0"})
@@ -123,12 +124,12 @@ def test_executor_resolver_pins_matmuls_by_parent_module_suffix(tmp_path):
         return default
     RF.get_component_flag = fake
     try:
-        safe, pinned = ex._resolve_fp16_activation_policy(torch.float16)
+        safe, pinned, _ = ex._resolve_fp16_activation_policy(torch.float16)
     finally:
         RF.get_component_flag = orig
     assert pinned == frozenset({"aten.mm::0", "aten.add::0", "aten.mm::2"})
     # bf16 / fp32 compute: contract is moot, nothing is read
-    assert ex._resolve_fp16_activation_policy(torch.float32) == (False, frozenset())
+    assert ex._resolve_fp16_activation_policy(torch.float32) == (False, frozenset(), frozenset())
 
 
 def test_vendor_pin_survives_amp_off():
@@ -141,14 +142,17 @@ def test_vendor_pin_survives_amp_off():
 
 
 def test_contract_norms_take_fp16_io_and_fp32_ops_store_fp16():
-    eng = DtypeEngine(torch.float16, activations_fp16_safe=True)
+    eng = DtypeEngine(torch.float16, activations_fp16_safe=True,
+                      narrow_op_uids=frozenset({"aten.exp::1", "aten.div::1"}))
     x = torch.randn(2, 8, dtype=torch.float32)
     ln = eng.compile_op("aten::native_layer_norm", torch.native_layer_norm, {})
     out = ln(x, [8], None, None, 1e-5)
     assert out[0].dtype == torch.float16          # the vendor's fp16-IO kernel
-    ex = eng.compile_op("aten::exp", torch.exp, {})
-    assert ex(x.half()).dtype == torch.float16    # fp32 compute, fp16 store
-    dv = eng.compile_op("aten::div", torch.div, {})
+    ex = eng.compile_op("aten::exp", torch.exp, {}, op_uid="aten.exp::1")
+    assert ex(x.half()).dtype == torch.float16    # fp32 compute, fp16 store (narrowable)
+    ex2 = eng.compile_op("aten::exp", torch.exp, {}, op_uid="aten.exp::2")
+    assert ex2(x.half()).dtype == torch.float32   # feeds a precision consumer: stays fp32
+    dv = eng.compile_op("aten::div", torch.div, {}, op_uid="aten.div::1")
     assert dv(x.half(), x.half()).dtype == torch.float16
     # default: unchanged fp32 outputs
     default = DtypeEngine(torch.float16)
@@ -159,10 +163,12 @@ def test_contract_norms_take_fp16_io_and_fp32_ops_store_fp16():
 
 def test_sequential_mirror_of_the_contract():
     eng = DtypeEngine(torch.float16, activations_fp16_safe=True,
-                      fp32_op_uids=frozenset({"aten.exp::9"}))
+                      fp32_op_uids=frozenset({"aten.exp::9"}),
+                      narrow_op_uids=frozenset({"aten.exp::1"}))
     x = torch.randn(2, 8, dtype=torch.float32)
     assert eng.amp_cast_inputs("aten::native_layer_norm", [x])[0].dtype == torch.float16
-    assert eng.amp_cast_result("aten::exp", x).dtype == torch.float16
+    assert eng.amp_cast_result("aten::exp", x, op_uid="aten.exp::1").dtype == torch.float16
+    assert eng.amp_cast_result("aten::exp", x, op_uid="aten.exp::2").dtype == torch.float32
     assert eng.amp_cast_result("aten::exp", x, op_uid="aten.exp::9").dtype == torch.float32
     assert eng.amp_cast_result("aten::mul", x).dtype == torch.float32   # never narrowed
     assert DtypeEngine(torch.float16).amp_cast_result("aten::exp", x).dtype == torch.float32
@@ -198,7 +204,7 @@ def test_fnmatch_pattern_pins_block_level_ops_only(tmp_path):
         ["self_attn", "block.[0-9]", "block.[0-9][0-9]"] if flag == "keep_in_fp32_modules"
         else (True if flag == "activations_fp16_safe" else default))
     try:
-        safe, pinned = ex._resolve_fp16_activation_policy(torch.float16)
+        safe, pinned, _ = ex._resolve_fp16_activation_policy(torch.float16)
     finally:
         RF.get_component_flag = orig
     assert safe is True
@@ -220,3 +226,27 @@ def test_broken_manifest_raises_instead_of_defaulting(tmp_path):
     with pytest.raises(ValueError):
         registry_model_name(str(cache))
     assert registry_model_name(None) is None
+
+
+def test_narrowable_set_follows_the_graph_consumers():
+    """The timestep sinusoid (div → exp → mul → sin/cos) stays fp32 — the
+    vendor's island; the attention rescale div consumed by mul/add narrows."""
+    from neurobrix.core.runtime.precision_contract import narrowable_op_uids
+    dag = {"ops": {
+        "aten.div::0": {"op_type": "aten::div", "input_tensor_ids": ["a"], "output_tensor_ids": ["d0"]},
+        "aten.exp::0": {"op_type": "aten::exp", "input_tensor_ids": ["d0"], "output_tensor_ids": ["e0"]},
+        "aten.mul::0": {"op_type": "aten::mul", "input_tensor_ids": ["e0", "t"], "output_tensor_ids": ["m0"]},
+        "aten.sin::0": {"op_type": "aten::sin", "input_tensor_ids": ["m0"], "output_tensor_ids": ["s0"]},
+        "aten.div::1": {"op_type": "aten::div", "input_tensor_ids": ["attn"], "output_tensor_ids": ["d1"]},
+        "aten.mul::1": {"op_type": "aten::mul", "input_tensor_ids": ["gate", "d1"], "output_tensor_ids": ["m1"]},
+        "aten.add::0": {"op_type": "aten::add", "input_tensor_ids": ["x", "m1"], "output_tensor_ids": ["out"]},
+        "aten.addmm::0": {"op_type": "aten::addmm", "input_tensor_ids": ["b", "out", "w"], "output_tensor_ids": ["y"]},
+        "aten.add::1": {"op_type": "aten::add", "input_tensor_ids": ["y", "x"], "output_tensor_ids": ["final"]},
+    }}
+    n = narrowable_op_uids(dag)
+    assert "aten.div::0" not in n          # feeds exp
+    assert "aten.exp::0" not in n          # feeds mul → sin: the island propagates back
+    assert "aten.mul::0" not in n          # feeds sin
+    assert "aten.div::1" in n              # feeds mul / add → addmm (casts anyway)
+    assert "aten.add::0" in n              # ends in a casting consumer
+    assert "aten.add::1" not in n          # component output: no consumer shown

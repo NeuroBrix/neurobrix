@@ -363,6 +363,7 @@ class CompiledSequence:
         config_constants=None,
         activations_fp16_safe: bool = False,
         fp32_op_uids=None,
+        narrow_op_uids=None,
     ):
         """
         Initialize CompiledSequence.
@@ -397,7 +398,8 @@ class CompiledSequence:
                                               amp_enabled=amp_enabled,
                                               use_triton=use_triton,
                                               activations_fp16_safe=activations_fp16_safe,
-                                              fp32_op_uids=fp32_op_uids)
+                                              fp32_op_uids=fp32_op_uids,
+                                              narrow_op_uids=narrow_op_uids)
 
         # Compilation outputs
         self._ops: List[CompiledOp] = []

@@ -395,7 +395,8 @@ class DtypeEngine:
 
     def __init__(self, compute_dtype: Optional[torch.dtype], graph_dtype: Optional[torch.dtype] = None,
                  amp_enabled: bool = True, activations_fp16_safe: bool = False,
-                 fp32_op_uids: Optional[FrozenSet[str]] = None):
+                 fp32_op_uids: Optional[FrozenSet[str]] = None,
+                 narrow_op_uids: Optional[FrozenSet[str]] = None):
         self.compute_dtype = compute_dtype
         self.graph_dtype = graph_dtype
         self.amp_enabled = amp_enabled
@@ -406,6 +407,12 @@ class DtypeEngine:
         # Individual ops the vendor keeps in fp32 whatever the contract
         # (T5 `ffn.down`). Matched by op_uid, resolved once by the executor.
         self.fp32_op_uids: FrozenSet[str] = frozenset(fp32_op_uids or ())
+        # Under the contract, an fp32-COMPUTED output is stored in compute
+        # dtype only for these ops (island-aware: the executor derives the
+        # set from the graph — no consumer is a precision-class op). None =
+        # narrow nothing but the half-IO kernels (the conservative choice
+        # when the executor cannot see the graph).
+        self.narrow_op_uids: FrozenSet[str] = frozenset(narrow_op_uids or ())
 
     # ========================================================================
     # PUBLIC API
@@ -473,8 +480,12 @@ class DtypeEngine:
                     inner = self._make_safe_softmax(func)
                 else:
                     inner = self._make_fp32_wrapper(func)
-                # Contract: fp32 compute, fp16 store — the chain stops here.
-                return self._make_store_in_compute_dtype(inner) if contract else inner
+                # Contract: fp32 compute, fp16 store — only where the graph
+                # shows no precision-class consumer (the vendor's island
+                # otherwise; narrowed at the next matmul's own input cast).
+                if contract and op_uid is not None and op_uid in self.narrow_op_uids:
+                    return self._make_store_in_compute_dtype(inner)
+                return inner
 
             if op_name in AMP_FP16_OPS:
                 # Vendor keep-in-fp32 pin on this exact op (fp32_op_uids):
@@ -490,8 +501,10 @@ class DtypeEngine:
                     if contract:
                         if op_name in _FP16_GEMM_OPS:
                             return self._make_lower_precision_wrapper(func)
-                        return self._make_store_in_compute_dtype(
-                            self._make_fp32_wrapper(func))
+                        inner = self._make_fp32_wrapper(func)
+                        if op_uid is not None and op_uid in self.narrow_op_uids:
+                            return self._make_store_in_compute_dtype(inner)
+                        return inner
                     # Diagnostic, read-only (default off): NBX_DISABLE_MATMUL_FP32=1
                     # runs mm/bmm/addmm/div in fp16 (vendor-equivalent — a plain
                     # torch_dtype=float16 forward keeps matmul in fp16, only
@@ -958,6 +971,8 @@ class DtypeEngine:
         if op_uid is not None and op_uid in self.fp32_op_uids:
             return result
         op_name = strip_aten_prefix(op_type)
+        if op_uid is None or op_uid not in self.narrow_op_uids:
+            return result
         if ((op_name in AMP_FP32_OPS and op_name not in _FP32_OPS_HALF_IO)
                 or op_name == "div"):
             return self._to_compute_dtype(result)
