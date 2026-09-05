@@ -59,14 +59,77 @@ class MetalKernelError(RuntimeError):
     """Compilation, loading or dispatch of a Metal kernel failed."""
 
 
-def _arg_slots(binding):
-    """The MSL binding, expressed in the launcher contract's terms."""
+#: Emitted MSL names a scalar's buffer parameter `<param>_buf`.
+_SCALAR_BUFFER_SUFFIX = "_buf"
+
+#: What the launcher must supply for one slot, and how the driver binds it.
+POINTER = "pointer"                 # a device address, bound as a buffer
+SCALAR_BY_VALUE = "scalar_value"    # an int/float, bound with setBytes
+SCALAR_BY_BUFFER = "scalar_buffer"  # an int/float the MSL reads THROUGH a
+                                    # pointer, so the driver must put it in a
+                                    # device buffer first
+
+
+def _slot_kinds(binding, signature):
+    """How each MSL parameter must be bound, decided from the signature.
+
+    The Metal emitter does not pass every scalar the same way. `rms_norm`'s
+    scalars arrive by value; `matmul`'s arrive as `device int* M_buf`, read
+    through a pointer inside the kernel. Both are correct MSL and neither is
+    visible from the argument the launcher passes — an `int` 128 and a device
+    address 0x80 are the same Python object.
+
+    So the decision is made HERE, at compile time, where both facts are
+    known: what Triton says the parameter is (`signature`), and how the
+    emitter declared it (`binding`). Guessing at launch time from the value
+    is not possible, and was the bug: `matmul` refused every autotune config
+    with "address 0x80, which the Metal allocator did not hand out" — 0x80
+    being M=128.
+
+    Without `signature` the emitter's own view is used, which is right for
+    every kernel whose scalars are passed by value and wrong in exactly the
+    way described above for the rest. Callers that have the signature pass it.
+    """
+    kinds = []
+    for index, name, mtype, is_pointer in binding:
+        if not is_pointer:
+            kinds.append(SCALAR_BY_VALUE)
+            continue
+        if signature is None:
+            kinds.append(POINTER)
+            continue
+        triton_name = name
+        if triton_name not in signature and \
+                triton_name.endswith(_SCALAR_BUFFER_SUFFIX):
+            triton_name = triton_name[:-len(_SCALAR_BUFFER_SUFFIX)]
+        declared = signature.get(triton_name)
+        if declared is None:
+            raise MetalKernelError(
+                f"the emitted MSL binds a parameter {name!r} that is not in "
+                f"the Triton signature {sorted(signature)}; the driver will "
+                f"not guess what to put in it")
+        kinds.append(POINTER if declared.startswith("*")
+                     else SCALAR_BY_BUFFER)
+    return tuple(kinds)
+
+
+def _arg_slots(binding, kinds=None):
+    """The MSL binding, expressed in the launcher contract's terms.
+
+    `is_pointer` is what the LAUNCHER must supply, not how Metal binds it: a
+    scalar the emitter reads through a pointer is still a scalar to the
+    engine, and declaring it a pointer would make every backend's contract
+    describe Metal's code generator.
+    """
     from .launcher_contract import ArgSlot
 
     scalar = {"int": "i32", "uint": "u32", "short": "i16", "ushort": "u16",
               "char": "i8", "long": "i64", "float": "fp32", "half": "fp16"}
+    kinds = kinds or tuple(POINTER if b[3] else SCALAR_BY_VALUE
+                           for b in binding)
     slots = []
-    for index, name, mtype, is_pointer in binding:
+    for (index, name, mtype, _emitted_pointer), kind in zip(binding, kinds):
+        is_pointer = kind == POINTER
         slots.append(ArgSlot(index=index, name=name, is_pointer=is_pointer,
                              dtype="*fp32" if is_pointer
                              else scalar.get(mtype, "i32")))
@@ -121,16 +184,58 @@ def metal_target():
     return GPUTarget("metal", runtime().arch_name, 32)
 
 
+def _attrs_from_specialization(jit_fn, specialization):
+    """Triton's `attrs` dict, from the launcher's per-argument markers.
+
+    Triton builds this in `JITFunction.run` from the same markers, and the
+    middle end reads `tt.divisibility` to decide whether a load or a store
+    may be vectorized. The translation lives here rather than in the launcher
+    because it is the compiler's spelling, not the engine's: another backend
+    wanting a different one changes this function and nothing else.
+
+    Dropping it is not cosmetic. Compiling rms_norm without these attributes
+    changed its fp16 result at two of the four milestone shapes on 2026-09-05
+    — same inputs, same driver, different vectorization, different summation
+    order — while fp32 was untouched, which is exactly how it would have gone
+    unnoticed.
+
+    `BaseBackend.parse_attr` is Triton's own, a staticmethod on the base class
+    every backend inherits, and imports no torch.
+    """
+    if not specialization:
+        return None
+    from triton.backends.compiler import BaseBackend
+
+    attrs = {}
+    for index, name in enumerate(jit_fn.arg_names):
+        marker = specialization.get(name)
+        if isinstance(marker, str):
+            attrs[(index, )] = BaseBackend.parse_attr(marker)
+    return attrs
+
+
 def compile_to_msl(jit_fn, signature: dict, constexprs: dict,
-                   num_warps: int = 4):
-    """Lower a `@triton.jit` function to MSL. Returns (msl, metadata)."""
+                   num_warps: int = 4, specialization: dict | None = None,
+                   num_stages: int | None = None):
+    """Lower a `@triton.jit` function to MSL. Returns (msl, metadata).
+
+    `num_stages` is accepted and forwarded, and measured to change nothing in
+    the emitted MSL on this backend (2026-09-05: identical bytes at 1, 2 and
+    4) because the Metal lowerer does not software-pipeline. It is forwarded
+    rather than dropped so that the value the autotuner chose is what the
+    compiler saw, whatever the compiler does with it.
+    """
     import triton
     from triton.compiler.compiler import ASTSource
 
+    options = {"num_warps": num_warps}
+    if num_stages is not None:
+        options["num_stages"] = int(num_stages)
     with _MSLOnly():
         compiled = triton.compile(
-            ASTSource(fn=jit_fn, signature=signature, constexprs=constexprs),
-            target=metal_target(), options={"num_warps": num_warps})
+            ASTSource(fn=jit_fn, signature=signature, constexprs=constexprs,
+                      attrs=_attrs_from_specialization(jit_fn, specialization)),
+            target=metal_target(), options=options)
     msl = compiled.asm.get("msl")
     if not msl:
         raise MetalKernelError(
@@ -169,13 +274,54 @@ def parse_kernel_signature(msl: str):
 
 # --- libraries: from source (framework) or from a prebuilt metallib ---------
 
-def library_from_source(device, msl: str):
-    """Compile MSL in-process. No toolchain, no subprocess, no Xcode."""
+#: Metal's math mode. `MTLCompileOptions` defaults to FAST (mathMode 2,
+#: measured 2026-09-05), which lets the compiler reassociate float arithmetic
+#: and substitute fast approximations for divide, rsqrt and the transcendental
+#: functions. That is a numerical policy, and taking it by default means the
+#: engine's fp32 results on Apple are decided by a flag nobody chose.
+#:
+#: It is not hypothetical: with fast math on, rms_norm fp32 at 2x4096 sat 3
+#: ULP from the fp64 oracle where the CUDA reference sits at 1, and the
+#: milestone bar — no further from the oracle than CUDA — failed at that
+#: shape. Under SAFE the same kernel is BIT-IDENTICAL to CUDA. Safe is IEEE
+#: semantics, which is what these kernels are written against everywhere else.
+#:
+#: 0 = MTLMathModeSafe, 1 = Relaxed, 2 = Fast.
+METAL_MATH_MODE_SAFE = 0
+
+
+def compile_options():
+    """The `MTLCompileOptions` every kernel of this engine is built with.
+
+    A function rather than an inline object so the policy is one thing that
+    can be read and asserted, instead of a line inside a compile call.
+    """
     import Metal
 
     options = Metal.MTLCompileOptions.alloc().init()
+    # `mathMode` is the current spelling, `fastMathEnabled` the deprecated one
+    # kept for older macOS. Setting whichever exists is not a fallback — both
+    # name the same switch — and the check below refuses if neither took.
+    if hasattr(options, "setMathMode_"):
+        options.setMathMode_(METAL_MATH_MODE_SAFE)
+    elif hasattr(options, "setFastMathEnabled_"):
+        options.setFastMathEnabled_(False)
+    else:
+        raise MetalKernelError(
+            "MTLCompileOptions exposes neither mathMode nor fastMathEnabled; "
+            "the engine will not compile kernels under an unknown float "
+            "policy")
+    if hasattr(options, "mathMode") \
+            and options.mathMode() != METAL_MATH_MODE_SAFE:
+        raise MetalKernelError(
+            f"asked for safe math, got mathMode {options.mathMode()}")
+    return options
+
+
+def library_from_source(device, msl: str):
+    """Compile MSL in-process. No toolchain, no subprocess, no Xcode."""
     library, error = device.newLibraryWithSource_options_error_(
-        msl, options, None)
+        msl, compile_options(), None)
     if library is None:
         raise MetalKernelError(f"framework MSL compile failed: {error}")
     return library
@@ -212,15 +358,24 @@ def library_from_metallib(device, blob: bytes):
 class MetalKernel:
     """One compiled MSL kernel, ready to dispatch on allocator buffers."""
 
-    def __init__(self, msl: str, metadata, library=None, constexprs=None):
+    def __init__(self, msl: str, metadata, library=None, constexprs=None,
+                 specialization=None, signature=None):
         from ..kernels.metal_device import runtime
 
         self._runtime = runtime()
         self._msl = msl
         self.name, self._msl_binding = parse_kernel_signature(msl)
+        # How each parameter must be bound — decided here, from the Triton
+        # signature and the emitted declaration together. See `_slot_kinds`.
+        self._slot_kinds = _slot_kinds(self._msl_binding, signature)
         # The launcher contract's view of the same thing.
-        self.binding = _arg_slots(self._msl_binding)
+        self.binding = _arg_slots(self._msl_binding, self._slot_kinds)
+        #: Device buffers holding scalars the MSL reads through a pointer.
+        #: One per such slot, allocated on first use and reused: launches are
+        #: synchronous here, so the value is consumed before it is rewritten.
+        self._scalar_buffers: dict = {}
         self.constexprs = dict(constexprs or {})
+        self.specialization = dict(specialization or {})
         # This driver reloads from MSL source through the framework, so the
         # artifact it caches IS the source. A metallib is the alternative and
         # `library_from_metallib` loads one; the kind is declared so a cache
@@ -248,8 +403,42 @@ class MetalKernel:
     def msl(self) -> str:
         return self._msl
 
-    def launch(self, grid, args, queue=None) -> None:
-        """Dispatch `grid` threadgroups.
+    def _scalar_buffer(self, index: int, value, mtype: str):
+        """A device buffer holding one scalar the kernel reads by pointer.
+
+        The address comes from the allocator like every other device buffer —
+        the driver does not get a private allocation path — so
+        `buffer_for_pointer` resolves it and the ownership rule that refuses
+        foreign addresses keeps applying.
+        """
+        from ..kernels.nbx_tensor import DeviceAllocator
+
+        address = self._scalar_buffers.get(index)
+        if address is None:
+            address = DeviceAllocator.malloc_cuda(4)
+            self._scalar_buffers[index] = address
+
+        payload = _pack_scalar(value, mtype)
+        host = (ctypes.c_char * len(payload)).from_buffer_copy(payload)
+        DeviceAllocator.memcpy(address, ctypes.addressof(host), len(payload),
+                               kind=1)
+
+        buffer, offset = self._runtime.buffer_for_pointer(address)
+        if buffer is None:                              # pragma: no cover
+            raise MetalKernelError(
+                f"{self.name}: the allocator does not recognise the scalar "
+                f"buffer it just handed out for {index}")
+        return buffer, offset
+
+    def launch(self, grid, args, stream: int = 0) -> None:
+        """Dispatch `grid` threadgroups on `stream`.
+
+        `stream` is the contract's spelling and the allocator's handle: 0 is
+        the allocator's own queue, anything else a queue from
+        `create_stream`. It matters for more than tidiness — an event
+        recorded on one queue says nothing about work submitted on another,
+        so the launcher's autotune benchmark would time an empty queue if
+        this ignored the argument.
 
         `args` is positional and must match the MSL binding order, which
         `parse_kernel_signature` read from the source. Pointer parameters take
@@ -260,7 +449,11 @@ class MetalKernel:
         import Metal
 
         runtime = self._runtime
-        encoder_queue = queue or runtime._queue
+        encoder_queue = runtime._resolve_queue(int(stream or 0))
+        if encoder_queue is None:
+            raise MetalKernelError(
+                f"{self.name}: stream handle {stream!r} is not one the "
+                f"allocator handed out")
         command_buffer = encoder_queue.commandBuffer()
         encoder = command_buffer.computeCommandEncoder()
         encoder.setComputePipelineState_(self._pipeline)
@@ -270,8 +463,10 @@ class MetalKernel:
                 f"{self.name} binds {len(self._msl_binding)} arguments, "
                 f"{len(args)} given")
 
-        for (index, pname, mtype, is_pointer), value in zip(self._msl_binding, args):
-            if is_pointer:
+        for (slot, value, kind) in zip(self._msl_binding, args,
+                                       self._slot_kinds):
+            index, pname, mtype, _emitted = slot
+            if kind == POINTER:
                 address = getattr(value, "data_ptr", None)
                 address = address() if callable(address) else int(value)
                 buffer, offset = runtime.buffer_for_pointer(address)
@@ -281,6 +476,9 @@ class MetalKernel:
                         f"{address:#x}, which the Metal allocator did not "
                         f"hand out. Every device buffer must come from "
                         f"NBXTensor / DeviceAllocator.")
+                encoder.setBuffer_offset_atIndex_(buffer, offset, index)
+            elif kind == SCALAR_BY_BUFFER:
+                buffer, offset = self._scalar_buffer(index, value, mtype)
                 encoder.setBuffer_offset_atIndex_(buffer, offset, index)
             else:
                 encoder.setBytes_length_atIndex_(
@@ -316,30 +514,58 @@ def _pack_scalar(value, msl_type: str) -> bytes:
 
 # --- the cache --------------------------------------------------------------
 
-_KERNEL_CACHE: Dict[str, MetalKernel] = {}
+#: (MSL text, specialization) -> kernel. See `kernel_from_msl`.
+_KERNEL_CACHE: Dict[tuple, MetalKernel] = {}
+#: MSL text -> compiled library, shared by every kernel built from it.
+_LIBRARY_CACHE: Dict[str, object] = {}
 _CACHE_LOCK = threading.Lock()
 
 
-def kernel_from_msl(msl: str, metadata, constexprs=None) -> MetalKernel:
-    """A compiled kernel for this MSL, compiled once per process."""
+def kernel_from_msl(msl: str, metadata, constexprs=None,
+                    specialization=None, signature=None) -> MetalKernel:
+    """A compiled kernel for this MSL, built once per process.
+
+    Two caches, because two different things are being reused:
+
+    * the **library** is keyed on the MSL text alone. That text already
+      encodes the constexprs and whatever the divisibility attributes
+      changed, so two compilations producing identical source really are the
+      same compiled code and the expensive part is shared.
+
+    * the **kernel object** is keyed on the MSL *and* the specialization it
+      was compiled with. A kernel handed back from the first cache would
+      otherwise report the markers of whoever compiled it first — for a
+      kernel the markers do not change, `add_one` say, that is a lie the
+      launcher contract catches and should catch.
+    """
+    spec = dict(specialization or {})
+    key = (msl, tuple(sorted(spec.items())))
     with _CACHE_LOCK:
-        cached = _KERNEL_CACHE.get(msl)
+        cached = _KERNEL_CACHE.get(key)
         if cached is None:
-            cached = MetalKernel(msl, metadata, constexprs=constexprs)
-            _KERNEL_CACHE[msl] = cached
+            library = _LIBRARY_CACHE.get(msl)
+            cached = MetalKernel(msl, metadata, library=library,
+                                 constexprs=constexprs, specialization=spec,
+                                 signature=signature)
+            _LIBRARY_CACHE.setdefault(msl, cached._library)
+            _KERNEL_CACHE[key] = cached
         return cached
 
 
 def compile_kernel(jit_fn, signature: dict, constexprs: dict,
-                   num_warps: int = 4) -> MetalKernel:
+                   num_warps: int = 4, specialization: dict | None = None,
+                   num_stages: int | None = None) -> MetalKernel:
     """Lower, compile and return a launchable kernel. No torch, no xcrun."""
-    msl, metadata = compile_to_msl(jit_fn, signature, constexprs, num_warps)
-    return kernel_from_msl(msl, metadata, constexprs)
+    msl, metadata = compile_to_msl(jit_fn, signature, constexprs, num_warps,
+                                   specialization, num_stages)
+    return kernel_from_msl(msl, metadata, constexprs, specialization,
+                           signature)
 
 
 def clear_cache() -> None:
     with _CACHE_LOCK:
         _KERNEL_CACHE.clear()
+        _LIBRARY_CACHE.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -358,8 +584,10 @@ class MetalDriver:
 
     backend = "metal"
 
-    def compile(self, jit_fn, signature, constexprs, num_warps: int = 4):
-        return compile_kernel(jit_fn, signature, constexprs, num_warps)
+    def compile(self, jit_fn, signature, constexprs, num_warps: int = 4,
+                specialization=None, num_stages=None):
+        return compile_kernel(jit_fn, signature, constexprs, num_warps,
+                              specialization, num_stages)
 
     # -- ordering: the allocator owns streams and events on every backend ----
 

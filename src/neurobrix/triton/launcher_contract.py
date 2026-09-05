@@ -109,6 +109,13 @@ class CompiledKernel(Protocol):
     #: wrong and this makes that visible.
     constexprs: Mapping[str, Any]
 
+    #: The specialization markers this kernel was compiled with — the same
+    #: mapping `compile()` was given. Also part of the compilation's
+    #: identity: the same source and the same constexprs, compiled once
+    #: claiming 16-byte alignment and once not, are two different kernels,
+    #: and handing one back for the other is silently wrong numbers.
+    specialization: Mapping[str, str]
+
     #: The arguments the launcher must supply, in binding order.
     binding: Sequence[ArgSlot]
 
@@ -136,13 +143,38 @@ class LauncherDriver(Protocol):
 
     def compile(self, jit_fn, signature: Mapping[str, str],
                 constexprs: Mapping[str, Any],
-                num_warps: int = 4) -> CompiledKernel:
+                num_warps: int = 4,
+                specialization: Mapping[str, str] | None = None,
+                num_stages: int | None = None,
+                ) -> CompiledKernel:
         """Compile one `@triton.jit` function.
 
         `signature` maps parameter name to a Triton signature string —
         `"*fp32"` for a pointer, `"i32"` / `"fp32"` for a scalar, and
         `"constexpr"` for a compile-time parameter whose value is in
         `constexprs`. Raises rather than returning a partial result.
+
+        `specialization` maps parameter name to Triton's per-argument marker:
+        `"D"` when the argument is a multiple of 16 (a pointer's address, an
+        integer's value), `""` when it is not, absent when the argument takes
+        no marker at all. It is NOT decoration — the compiler turns "D" into
+        a divisibility attribute and vectorizes loads and stores on it, so a
+        driver that ignores this argument compiles a different kernel from
+        the one the launcher asked for, at the same shape, with the same
+        arguments. Measured on Metal 2026-09-05: dropping it changed
+        rms_norm's fp16 output at two of four shapes while leaving fp32
+        untouched.
+
+        A driver is free to have no use for it, but must then say so
+        explicitly rather than accept and discard it.
+
+        `num_stages` is the software-pipelining depth, which an autotuner
+        config carries alongside `num_warps`. Measured on Metal 2026-09-05:
+        it changes nothing in the emitted MSL, because that lowerer does not
+        pipeline — but it changes CUDA's generated code substantially, so the
+        launcher passes it and each backend decides. Dropping it in the
+        launcher would silently discard the autotuner's choice on the first
+        backend that reads it.
         """
 
     # -- ordering ------------------------------------------------------------
@@ -213,6 +245,26 @@ def verify_driver_contract(driver, jit_fn, signature, constexprs,
 
     # -- compile -------------------------------------------------------------
     kernel = driver.compile(jit_fn, signature, constexprs, num_warps=4)
+
+    # The specialization markers must reach the compiler, and the compiled
+    # kernel must say which ones it was built with. Checked as a round-trip
+    # rather than by diffing artifacts: whether the markers CHANGE the code
+    # is the kernel's business — a trivial elementwise kernel is genuinely
+    # insensitive to them, while rms_norm is not — so demanding a difference
+    # would fail correct drivers. What the contract can demand is that the
+    # driver neither refuses the argument nor silently discards it.
+    marks = {name: ("D" if kind.startswith("*") else "")
+             for name, kind in signature.items()}
+    try:
+        marked = driver.compile(jit_fn, signature, constexprs, num_warps=4,
+                                specialization=marks)
+        check(dict(getattr(marked, "specialization", None) or {}) == marks,
+              "compile() accepted `specialization` but the compiled kernel "
+              "does not report it back; a driver that discards the markers "
+              "compiles a different kernel from the one the launcher asked "
+              "for and nothing says so")
+    except TypeError as exc:
+        failures.append(f"compile() does not accept `specialization`: {exc}")
 
     check(isinstance(kernel.name, str) and kernel.name,
           "CompiledKernel.name must be a non-empty string")
