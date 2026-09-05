@@ -97,9 +97,14 @@ def _pinnable(op_type: str) -> bool:
 # activations (gelu, silu, tanh, sigmoid, erf) the vendor runs in fp16: under
 # the contract they cast their own input, so a value reaching them ends its
 # island there, like a matmul.
+# TERMINAL precision-sensitive consumers only. `pow`, `exp`, `sqrt` are not
+# listed: the vendor's fp16 forward runs them in fp16 inside GELU / SiLU
+# chains (T5's gated GELU: x + 0.044715·pow(x,3) → tanh), and when they open
+# a real island (a sinusoid: exp → mul → sin; a hand-rolled norm: pow → mean)
+# the terminal op at its end names it — the fixpoint below walks back to them.
 _PRECISION_CONSUMERS = frozenset({
-    "sin", "cos", "exp", "expm1", "log", "log1p", "pow", "rsqrt", "sqrt",
-    "reciprocal", "div", "cumsum", "sum", "mean", "var", "std", "norm",
+    "sin", "cos", "log", "log1p", "rsqrt", "reciprocal", "div",
+    "cumsum", "sum", "mean", "var", "std", "norm",
 })
 
 

@@ -250,3 +250,27 @@ def test_narrowable_set_follows_the_graph_consumers():
     assert "aten.div::1" in n              # feeds mul / add → addmm (casts anyway)
     assert "aten.add::0" in n              # ends in a casting consumer
     assert "aten.add::1" not in n          # component output: no consumer shown
+
+
+def test_scalar_div_outside_an_island_runs_fp16_under_the_contract():
+    from neurobrix.core.dtype.engine import _scalar_divisor_is_plain
+    plain = {"args": [{"type": "tensor"}, {"type": "scalar", "value": 1.0}]}
+    eps = {"args": [{"type": "tensor"}, {"type": "scalar", "value": 1e-15}]}
+    tensor = {"args": [{"type": "tensor"}, {"type": "tensor", "tensor_id": "x"}]}
+    assert _scalar_divisor_is_plain(plain) and not _scalar_divisor_is_plain(eps) \
+        and not _scalar_divisor_is_plain(tensor)
+    x = torch.randn(4, dtype=torch.float16)
+    seen = {}
+
+    def spy_div(a, b):
+        seen["in"] = a.dtype
+        return torch.div(a, b)
+
+    eng = DtypeEngine(torch.float16, activations_fp16_safe=True,
+                      narrow_op_uids=frozenset({"aten.div::1"}))
+    assert eng.compile_op("aten::div", spy_div, plain, op_uid="aten.div::1")(x, 1.0).dtype == torch.float16
+    assert seen["in"] == torch.float16                      # the vendor's fp16 divide
+    eng.compile_op("aten::div", spy_div, plain, op_uid="aten.div::0")(x, 128)   # island: fp32 compute
+    assert seen["in"] == torch.float32
+    eng.compile_op("aten::div", spy_div, eps, op_uid="aten.div::1")(x, 1e-15)   # epsilon: fp32 compute
+    assert seen["in"] == torch.float32
