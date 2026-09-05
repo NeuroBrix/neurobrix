@@ -231,20 +231,15 @@ def test_capability_resolution_covers_more_than_three_cards(monkeypatch):
     import types
 
     from neurobrix.kernels.ops import _configs
+    from neurobrix.kernels import launcher
 
-    def fake_target(sm):
-        mod = types.SimpleNamespace(
-            runtime=types.SimpleNamespace(
-                driver=types.SimpleNamespace(
-                    active=types.SimpleNamespace(
-                        get_current_target=lambda: types.SimpleNamespace(arch=sm)))))
-        return mod
-
-    import sys
+    # The capability comes from the launcher's target (engine data), never
+    # from Triton's driver probe (R33, universal since 2026-09-05).
     for sm, expect in ((70, "nvidia/volta"), (75, "nvidia/volta"),
                        (80, "nvidia/ampere"), (86, "nvidia/ampere"),
                        (89, "nvidia/ampere"), (90, "nvidia/hopper")):
-        monkeypatch.setitem(sys.modules, "triton", fake_target(sm))
+        monkeypatch.setattr(launcher, "target",
+                            lambda sm=sm: types.SimpleNamespace(arch=sm, backend="cuda"))
         got = _configs.arch_smem_budget()
         vendor, arch = expect.split("/")
         assert got == _budget(vendor, arch), (
@@ -255,13 +250,10 @@ def test_capability_resolution_covers_more_than_three_cards(monkeypatch):
 def test_an_unknown_capability_still_declines_to_guess(monkeypatch):
     """A major with no profile at all must return None, not the nearest
     number — filtering on an invented budget deletes working configs."""
-    import sys
     import types
 
     from neurobrix.kernels.ops import _configs
-
-    monkeypatch.setitem(sys.modules, "triton", types.SimpleNamespace(
-        runtime=types.SimpleNamespace(driver=types.SimpleNamespace(
-            active=types.SimpleNamespace(
-                get_current_target=lambda: types.SimpleNamespace(arch=30))))))
+    from neurobrix.kernels import launcher
+    monkeypatch.setattr(launcher, "target",
+                        lambda: types.SimpleNamespace(arch=30, backend="cuda"))
     assert _configs.arch_smem_budget() is None
