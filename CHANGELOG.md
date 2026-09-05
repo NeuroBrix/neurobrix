@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Attention inputs and masks are no longer copied before every attention.**
+  The compiled attention handler forced q/k/v contiguous (three copies per
+  attention) and materialised the cross-attention mask at full size twice
+  (79 MB each on PixArt at 1024²). The kernel takes the strided views, and
+  the mask is prepared once at its small base size with an aligned row
+  stride. Renders are byte-identical; a 20-step PixArt request drops 3,900
+  launches and 0.47 s of copies.
+
 - **The host no longer stalls at every attention of a compiled diffusion
   request.** The attention variant rebuilt two placeholder scalars on the GPU at
   each call, which is a host-to-device copy plus a stream sync — 2,240 of them
