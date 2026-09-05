@@ -3628,6 +3628,11 @@ class CompiledSequence:
     ) -> None:
         """Inner loop extracted for inference_mode wrapping."""
         trace_nan = _TRACE_NAN
+        # Diagnostic switches read ONCE per run, not once per op: two
+        # os.environ lookups per op were 7,800 reads on a warm whisper
+        # request (2026-09-05 profile).
+        oplog_path = os.environ.get("NBX_OPLOG")
+        dump_tids = bool(os.environ.get("NBX_DUMP_TIDS"))
         nan_guard = _NAN_GUARD
         nan_guard_verbose = _NAN_GUARD_VERBOSE
         trace_zeros = _TRACE_ZEROS
@@ -3804,8 +3809,7 @@ class CompiledSequence:
             slots = op.output_slots
             # === NBX_OPLOG: every-op execution log (None vs l2) — covers the
             # tid-dump's blind spots (NOP'd ops, aliases). Gated, append-only.
-            import os as _os_ol1
-            _olp1 = _os_ol1.environ.get("NBX_OPLOG")
+            _olp1 = oplog_path
             if _olp1:
                 try:
                     if result is None:
@@ -3836,8 +3840,7 @@ class CompiledSequence:
                     result = result[0] if len(result) >= 1 else None
                 arena[slots[0]] = result
                 # === TEMP TID DUMP: compare native vs triton per-op output ===
-                import os as _os_d
-                if _os_d.environ.get("NBX_DUMP_TIDS"):
+                if dump_tids:
                     self._maybe_dump_tid_native(op, slots[0], result)
                 # ==============================================================
             elif len(slots) > 1:
