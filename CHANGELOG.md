@@ -72,6 +72,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   function in Triton's math) and is now floor-or-ceil by sign. All five are in the reference bank.
 - `aten::logical_xor` on the Triton engine read a broadcast operand flat past its end (a third of the
   bank's broadcast case was wrong); it takes the universal binary contract like `logical_and` / `logical_or`.
+- A component placed on the host no longer pulls torch into a `--triton` process: the host thread pool
+  is configured for the engine that runs (the OpenMP pool of the Triton CPU backend, torch's on the
+  compiled engine). A zero3 offload of an int4 weight crashed on the quantized container's size
+  (`'QuantizedTensor' object has no attribute 'element_size'`); the containers report their bytes
+  and pin their parts.
 - The zoo campaign's video gate compares frames (per-frame PSNR, 30 dB bar) instead of file bytes,
   and `regate` re-runs a gate on existing outputs without the GPU.
 - `aten::max` / `aten::min` with a `dim` on the Triton engine passed four arguments to a five-argument

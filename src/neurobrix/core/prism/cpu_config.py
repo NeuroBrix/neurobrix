@@ -91,9 +91,12 @@ def strategy_involves_cpu(strategy: str, device_count: int) -> bool:
     return strategy in _CPU_COMPUTE_STRATEGIES
 
 
-def apply_thread_config(cpu: CPUConfig, involves_cpu: bool) -> None:
+def apply_thread_config(cpu: CPUConfig, involves_cpu: bool, mode: str = "compiled") -> None:
     """
-    Set PyTorch thread configuration from CPU profile.
+    Set the host thread configuration from the CPU profile, for the engine
+    that runs: the ATen branch's thread pool (torch) on the compiled /
+    sequential engines, the OpenMP pool the Triton CPU backend reads on the
+    Triton engines (R33: no torch on that path).
 
     Physical cores for intra-op (avoids hyperthreading contention).
     cores//4 (capped at 4) for inter-op parallelism.
@@ -107,7 +110,13 @@ def apply_thread_config(cpu: CPUConfig, involves_cpu: bool) -> None:
     intra_threads = cpu.cores
     inter_threads = max(1, min(4, cpu.cores // 4))
 
-    import torch  # the ATen branch's thread pool; CPU execution is its path
+    if mode in ("triton", "triton_sequential"):
+        import os
+        for var in ("OMP_NUM_THREADS", "TRITON_CPU_MAX_THREADS"):
+            os.environ.setdefault(var, str(intra_threads))
+        logger.info(f"[CPU] Threads: {intra_threads} (physical cores) for the Triton CPU backend — {cpu.model}")
+        return
+    import torch  # the ATen branch's thread pool
     try:
         torch.set_num_threads(intra_threads)
     except RuntimeError:
@@ -213,13 +222,15 @@ def apply_cpu_config(
     strategy: str,
     device_count: int,
     preferred_dtype: Optional[str] = None,
+    mode: str = "compiled",
 ) -> None:
     """
     Apply all CPU optimizations from hardware profile.
 
-    Single entry point — call after Prism solve, before execution.
+    Single entry point — call after Prism solve, before execution; ``mode``
+    names the engine whose host pool is configured.
     """
     involves_cpu = strategy_involves_cpu(strategy, device_count)
     apply_dnnl_isa(cpu)
-    apply_thread_config(cpu, involves_cpu)
+    apply_thread_config(cpu, involves_cpu, mode)
     validate_dtype_isa(cpu, preferred_dtype)

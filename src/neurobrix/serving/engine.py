@@ -117,6 +117,7 @@ class InferenceEngine:
                 strategy=self._plan.strategy,
                 device_count=hw_profile.device_count,
                 preferred_dtype=hw_profile.preferred_dtype,
+                mode=self.mode,
             )
 
         # 4. Determine warm serving compatibility

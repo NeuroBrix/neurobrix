@@ -103,6 +103,15 @@ class QuantizedTensor:
         — stable for the triplet's lifetime)."""
         return self.qweight.data_ptr()
 
+    def pin_host(self) -> "QuantizedTensor":
+        """The three host parts pinned (zero3 offload of an int4 weight)."""
+        return QuantizedTensor(self.qweight.pin_host(), self.scales.pin_host(), self.qmins.pin_host(),
+                               self.logical_shape, self.transposed)
+
+    @property
+    def _pinned(self) -> bool:
+        return bool(getattr(self.qweight, "_pinned", False))
+
     def t(self) -> "QuantizedTensor":
         return QuantizedTensor(self.qweight, self.scales, self.qmins,
                                self.logical_shape,
