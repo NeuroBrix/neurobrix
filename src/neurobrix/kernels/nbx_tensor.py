@@ -1623,15 +1623,30 @@ def _set_device(t):
 
 @functools.lru_cache(maxsize=1)
 def _detect_gpu_backend() -> str:
-    """Detect GPU backend: 'cuda' or 'hip' — from the vendor runtime library
-    the process can load, or `NBX_GPU_BACKEND`. Never through Triton's
-    driver probe: `triton.runtime.driver.active` asks every backend
-    `is_active()`, and those probes import torch (R33, universal since
-    2026-09-05 — this call was the first torch import of the launch path)."""
+    """Detect GPU backend: 'cuda', 'hip' or 'metal' — from the vendor runtime
+    the process can load, or `NBX_GPU_BACKEND`. Never through Triton's driver
+    probe: `triton.runtime.driver.active` asks every backend `is_active()`,
+    and those probes import torch (R33, universal since 2026-09-05 — this
+    call was the first torch import of the launch path).
+
+    Metal is probed LAST, and the order is load-bearing rather than
+    incidental: a Hackintosh carries both a CUDA runtime and a Metal device,
+    and CUDA is the complete implementation, so it must win. Probing last
+    also leaves the cuda/hip resolution byte-for-byte what it was — every
+    return above is reached before Metal is considered.
+
+    The Metal probe carries no platform strings. It opens the device and asks
+    it, because the property that matters is unified memory (which is what
+    makes one address valid for both processors) and that is a device answer,
+    not an `arm64` answer. It has no `rt_libs` row to try, which is why it is
+    not an entry in `_GPU_BACKENDS`: that dict holds symbol tables over one C
+    ABI and `test_device_backend_seam.py` pins it to exactly {cuda, hip}.
+    """
     forced = os.environ.get("NBX_GPU_BACKEND")
     if forced:
-        if forced not in _GPU_BACKENDS:
-            raise RuntimeError(f"NBX_GPU_BACKEND={forced!r} is not a known backend ({sorted(_GPU_BACKENDS)})")
+        if forced not in _GPU_BACKENDS and forced != "metal":
+            raise RuntimeError(f"NBX_GPU_BACKEND={forced!r} is not a known backend "
+                               f"({sorted(_GPU_BACKENDS) + ['metal']})")
         return forced
     # The backend TABLE decides: the first vendor runtime the process can
     # load names the backend — adding a backend is adding a table entry.
@@ -1642,22 +1657,46 @@ def _detect_gpu_backend() -> str:
                 return name
             except OSError:
                 continue
-    raise RuntimeError("No GPU runtime found (tried CUDA and ROCm/HIP)")
+    # Apple GPUs. Not a "fallback" in the sense the loop above is: there is
+    # no library to dlopen, so the probe opens the device itself and answers
+    # only when a usable one came back.
+    from .metal_device import metal_device_available
+    if metal_device_available():
+        return "metal"
+    raise RuntimeError("No GPU runtime found (tried CUDA, ROCm/HIP and Metal)")
 
 
 def _active_backend() -> dict:
-    return _GPU_BACKENDS[_detect_gpu_backend()]
+    """The entry-point name table for the detected backend.
+
+    Metal resolves to a table that is deliberately NOT a row in
+    `_GPU_BACKENDS`. That dict holds symbol tables over one C ABI, and
+    `test_device_backend_seam.py` pins it to exactly `{"cuda", "hip"}`
+    because a key in one row and missing from the other is a crash on that
+    hardware alone. Metal is a different API with a different set of honest
+    entry points, so it gets its own table — the second *implementation*
+    behind this seam that the seam's own docstring describes.
+    """
+    name = _detect_gpu_backend()
+    if name == "metal":
+        from .metal_device import METAL_BACKEND
+        return METAL_BACKEND
+    return _GPU_BACKENDS[name]
 
 
 @functools.lru_cache(maxsize=1)
 def _gpu_runtime():
+    name = _detect_gpu_backend()
+    if name == "metal":
+        from .metal_device import runtime
+        return runtime()
     backend = _active_backend()
-    for name in backend["rt_libs"]:
+    for lib in backend["rt_libs"]:
         try:
-            return ctypes.cdll.LoadLibrary(name)
+            return ctypes.cdll.LoadLibrary(lib)
         except OSError:
             continue
-    raise RuntimeError(f"GPU runtime not found for {_detect_gpu_backend()}")
+    raise RuntimeError(f"GPU runtime not found for {name}")
 
 
 # ============================================================================
