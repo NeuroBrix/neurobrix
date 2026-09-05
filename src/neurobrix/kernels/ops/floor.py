@@ -36,7 +36,8 @@ def round_forward_kernel(input_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.const
     # tl.math.nearbyint does not exist in Triton 3.6; libdevice.nearbyint is the
     # round-half-to-even primitive matching torch.round (cf. pow.py using
     # tl.extra.cuda.libdevice.pow). The round kernel was crashing before this.
-    tl.store(output_ptr + offset, tl.extra.cuda.libdevice.nearbyint(x), mask=mask)
+    # A half input is rounded in fp32 (exact) and stored back in its dtype (Kokoro --triton, 2026-09-05).
+    tl.store(output_ptr + offset, tl.extra.cuda.libdevice.nearbyint(x.to(tl.float32)).to(x.dtype), mask=mask)
 
 
 @triton.jit
