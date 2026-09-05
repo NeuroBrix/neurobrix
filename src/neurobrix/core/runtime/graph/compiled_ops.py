@@ -22,11 +22,47 @@ import torch.nn.functional as F
 from typing import Any, Callable, Dict, Optional
 
 
+# Row-stride alignment the memory-efficient attention kernel wants on its bias
+# (PyTorch pads the LAST dim of the bias to this multiple and slices it back;
+# on a broadcast [B,H,Sq,Sk] view that pad materialises B*H*Sq*Sk elements).
+_ATTN_BIAS_ALIGN = 16
+
+
 def _cast_attn_mask(mask, query):
-    """Cast attention mask to query dtype if needed. Shared across attention variants."""
-    if mask is not None and isinstance(mask, torch.Tensor) and mask.dtype != query.dtype:
-        return mask.to(query.dtype)
-    return mask
+    """Prepare the attention bias for the SDPA variants: the query's dtype,
+    an aligned row stride, and NO full-size materialisation.
+
+    A traced mask reaches the attention as an EXPANDED view — a [B, 1, 1, Sk]
+    (or [B, H, 1, Sk]) tensor broadcast to [B, H, Sq, Sk] with zero strides.
+    Casting that view materialises B*H*Sq*Sk elements (79 MB per PixArt
+    cross-attention, twice per block per step), and PyTorch then pads the
+    result again for alignment. Instead: collapse the zero-stride dims to the
+    base, cast the base, write it into a buffer whose last dim is a multiple
+    of the kernel's alignment, keep the logical [.., Sk] slice (its row stride
+    is now aligned, so PyTorch pads nothing), and re-expand as a view. Values
+    and shape are unchanged; the kernel reads the same numbers (2026-09-05:
+    0.29 s of copies per 20-step PixArt request).
+    """
+    if mask is None or not isinstance(mask, torch.Tensor):
+        return mask
+    if mask.dtype == torch.bool or mask.dim() == 0:
+        return mask if mask.dtype == query.dtype or mask.dtype == torch.bool else mask.to(query.dtype)
+    full_shape = tuple(mask.shape)
+    # collapse broadcast (zero-stride) dims to size 1 — a view, no copy
+    idx = tuple(slice(0, 1) if st == 0 and sz > 1 else slice(None)
+                for sz, st in zip(mask.shape, mask.stride()))
+    base = mask[idx] if any(st == 0 and sz > 1 for sz, st in zip(mask.shape, mask.stride())) else mask
+    sk = base.shape[-1]
+    aligned = ((sk + _ATTN_BIAS_ALIGN - 1) // _ATTN_BIAS_ALIGN) * _ATTN_BIAS_ALIGN
+    if base.dtype == query.dtype and base.stride(-1) == 1 and (aligned == sk or base.stride(-2) % _ATTN_BIAS_ALIGN == 0):
+        prepared = base
+    else:
+        buf = torch.empty(base.shape[:-1] + (aligned,), dtype=query.dtype, device=base.device)
+        buf[..., :sk].copy_(base)
+        if aligned != sk:
+            buf[..., sk:].zero_()
+        prepared = buf[..., :sk]
+    return prepared.expand(full_shape) if tuple(prepared.shape) != full_shape else prepared
 
 
 def _align_qkv_dtypes(q, k, v):
@@ -548,11 +584,17 @@ class CompiledOpResolver:
             def efficient_attention(q, k, v, attn_bias=None, compute_lse=False,
                                    dropout_p=0.0, is_causal=False, scale=None, *args):
                 q, k, v = _align_qkv_dtypes(q, k, v)
-                if not q.is_contiguous():
+                # The memory-efficient kernel takes strided [B, H, S, D]
+                # views as long as the head dim is contiguous — the layout
+                # every `view → transpose` produces. Forcing .contiguous()
+                # here copied q, k and v before each attention (2,240 copies
+                # per 20-step PixArt request, 2026-09-05); only a last-dim
+                # stride != 1 needs the copy.
+                if q.stride(-1) != 1:
                     q = q.contiguous()
-                if not k.is_contiguous():
+                if k.stride(-1) != 1:
                     k = k.contiguous()
-                if not v.is_contiguous():
+                if v.stride(-1) != 1:
                     v = v.contiguous()
                 attn_bias = _cast_attn_mask(attn_bias, q)
                 output = F.scaled_dot_product_attention(
