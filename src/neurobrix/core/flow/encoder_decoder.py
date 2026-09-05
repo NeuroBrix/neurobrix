@@ -186,6 +186,15 @@ class EncoderDecoderEngine(FlowHandler):
         plan = decoder_self_attention_plan(dag)
         if plan is None:
             return None
+        if not plan["arange_uids"] and not plan.get("position_slice_uids"):
+            # One token per step needs a positional mechanism the cache can
+            # offset; a graph with neither would decode every token at
+            # position 0. Loud, and the recompute path (correct) instead.
+            import sys as _sys
+            print(f"[{dec_name}] KV cache REFUSED: the decoder graph carries no positional "
+                  f"arange and no positional-table slice the cache could offset — "
+                  f"recompute path (D-STT-KV-WHISPER-LARGE)", file=_sys.stderr, flush=True)
+            return None
         from neurobrix.core.runtime.graph.kv_cache_wrapper import (
             KVCacheAttentionWrapper, KVCacheConfig)
         wrapper = getattr(executor, "_decoder_kv_wrapper", None)
@@ -205,6 +214,8 @@ class EncoderDecoderEngine(FlowHandler):
                 per_uid[uid] = fn
             for uid in plan["arange_uids"]:
                 per_uid[uid] = wrapper.intercept_arange
+            for uid in plan.get("position_slice_uids") or []:
+                per_uid[uid] = wrapper.intercept_position_slice
             executor.register_op_uid_interceptors(per_uid)
             executor._decoder_kv_wrapper = wrapper
             print(f"   [{dec_name}] KV cache: {plan['num_layers']} self-attention layers cached, "

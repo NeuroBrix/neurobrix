@@ -638,6 +638,18 @@ class KVCacheAttentionWrapper:
 
         return torch.arange(*args, **kwargs)
 
+    def intercept_position_slice(self, table, dim=0, start=0, end=None, step=1):
+        """Intercept `aten::slice(table, dim, 0, seq_len)` — the rows of a
+        positional table a whisper-class decoder reads for its tokens. At
+        decode the graph asks for rows [0, 1): the token would sit at
+        position 0 every step (whisper-large, 2026-09-05: the language token
+        re-predicted 448 times). Shift the window by the cache length, same
+        size, same semantics as intercept_arange."""
+        if self._is_prefill or self._position_offset <= 0 or end is None:
+            return torch.ops.aten.slice(table, dim, start, end, step)
+        cache_len = self._position_offset
+        return torch.ops.aten.slice(table, dim, cache_len + start, cache_len + end, step)
+
     def get_cache_info(self) -> Dict:
         """Get cache statistics."""
         return {

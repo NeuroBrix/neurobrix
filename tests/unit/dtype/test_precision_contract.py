@@ -339,3 +339,31 @@ def test_the_contract_can_be_set_after_the_engine_exists():
     assert _mm_out_dtype(eng, op_uid="aten.mm::0") == torch.float32
     eng.set_precision_contract(False)
     assert _mm_out_dtype(eng, op_uid="aten.mm::1") == torch.float32
+
+
+def test_a_record_that_observed_nothing_never_switches_the_contract_on(tmp_path, monkeypatch, capsys):
+    from neurobrix.core.dtype import calibration as cal
+    monkeypatch.setattr(cal, "STORE_ROOT", tmp_path / "store")
+    monkeypatch.delenv("NBX_ACTIVATIONS_FP16_SAFE", raising=False)
+    dag = _dag_with_over_range_down_projection()
+    cal.CalibrationRecord.build("ModelX", "text_encoder", dag, {}, stimulus={}, passes=0,
+                                reference="conservative").save(cal.store_path("ModelX", "text_encoder"))
+    ex = _executor(tmp_path, "ModelX", "text_encoder", dag)
+    assert ex._resolve_fp16_activation_policy(torch.float16) == (False, frozenset(), frozenset())
+    assert "observed no op" in capsys.readouterr().err
+
+
+def test_grid_sampler_2d_promotes_input_and_grid_under_the_contract():
+    """The trace carries aten::grid_sampler_2d (the autocast table names the
+    composite grid_sampler): fp16 features and an fp32 grid must meet on the
+    widest dtype, or the kernel refuses (GLM-4.1V visual, 2026-09-05)."""
+    eng = DtypeEngine(torch.float16, activations_fp16_safe=True)
+    seen = {}
+
+    def spy(inp, grid, *rest):
+        seen["dtypes"] = (inp.dtype, grid.dtype)
+        return inp
+
+    fn = eng.compile_op("aten::grid_sampler_2d", spy, {}, op_uid="aten.grid_sampler_2d::0")
+    fn(torch.zeros(1, 3, 4, 4, dtype=torch.float16), torch.zeros(1, 4, 4, 2, dtype=torch.float32), 0, 0, False)
+    assert seen["dtypes"] == (torch.float32, torch.float32)

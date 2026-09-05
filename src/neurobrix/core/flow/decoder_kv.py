@@ -49,7 +49,12 @@ def decoder_self_attention_plan(dag: Dict[str, Any],
 
     keys: num_layers (self-attention ops), num_heads, head_dim (from the
     traced q shape [B, H, S, D]), self_attn_uids, cross_attn_uids,
-    arange_uids (the positional arange the cache offsets during decode).
+    arange_uids (the positional arange the cache offsets during decode),
+    position_slice_uids (the other positional form: a slice of a parameter
+    table by [0 : token-length symbol] — whisper-class decoders traced by
+    older vendors; the cache offsets its window during decode). A decoder
+    with neither cannot be offset one token at a time: the caller refuses
+    the cache and keeps the recompute path (D-STT-KV-WHISPER-LARGE).
     """
     ops = dag.get("ops") or {}
     inputs = list(dag.get("input_tensor_ids") or [])
@@ -78,8 +83,30 @@ def decoder_self_attention_plan(dag: Dict[str, Any],
     if num_heads is None:
         raise RuntimeError("ZERO FALLBACK: decoder self-attention has no traced q shape")
     arange_uids = [uid for uid, op in ops.items() if op.get("op_type") == "aten::arange"]
+    position_slice_uids = _positional_table_slices(dag, {t for t in inputs if t != encoder_input})
     return {
         "num_layers": len(self_uids), "num_heads": num_heads, "head_dim": head_dim,
         "self_attn_uids": self_uids, "cross_attn_uids": cross_uids,
-        "arange_uids": arange_uids,
+        "arange_uids": arange_uids, "position_slice_uids": position_slice_uids,
     }
+
+
+def _positional_table_slices(dag: Dict[str, Any], token_inputs: Set[str]) -> List[str]:
+    """`aten::slice(param, dim, 0, <symbol>)` where the symbol is a dimension
+    of a token input: the rows [0, seq_len) of a positional table. Pure
+    graph data — no module name takes part."""
+    symbols = (dag.get("symbolic_context") or {}).get("symbols") or {}
+    token_syms = {sid for sid, sym in symbols.items()
+                  if any(str(sym.get("source", "")).startswith(t + "::") for t in token_inputs)}
+    found: List[str] = []
+    for uid, op in (dag.get("ops") or {}).items():
+        if op.get("op_type") != "aten::slice":
+            continue
+        args = (op.get("attributes") or {}).get("args") or []
+        if len(args) < 4 or not str(args[0].get("tensor_id", "")).startswith("param::"):
+            continue
+        start, end = args[2], args[3]
+        if start.get("type") == "scalar" and start.get("value") == 0 \
+                and end.get("type") == "symbol" and end.get("id") in token_syms:
+            found.append(uid)
+    return found

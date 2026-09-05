@@ -83,7 +83,11 @@ _FP16_NEED_FP32: FrozenSet[str] = frozenset({"div"})
 
 AMP_PROMOTE_OPS: FrozenSet[str] = frozenset({
     "addcdiv", "addcmul", "atan2", "bilinear", "cross",
-    "dot", "vdot", "grid_sampler", "index_put",
+    "dot", "vdot", "grid_sampler", "grid_sampler_2d", "grid_sampler_3d", "index_put",
+    # grid_sampler_2d/3d: the ATen names the trace carries (the autocast
+    # table lists the composite `grid_sampler`); input and grid must agree
+    # on the widest float type — under the contract the sampled features
+    # arrive fp16 and the grid fp32 (GLM-4.1V visual, 2026-09-05).
     "scatter_add", "tensordot", "linalg_cross",
 })
 

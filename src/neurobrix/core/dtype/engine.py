@@ -329,7 +329,11 @@ _FP32_OPS_HALF_IO: FrozenSet[str] = frozenset({
 # From AT_FORALL_PROMOTE. (PyTorch 100% match — all 11 ops)
 AMP_PROMOTE_OPS: FrozenSet[str] = frozenset({
     "addcdiv", "addcmul", "atan2", "bilinear", "cross",
-    "dot", "vdot", "grid_sampler", "index_put",
+    "dot", "vdot", "grid_sampler", "grid_sampler_2d", "grid_sampler_3d", "index_put",
+    # grid_sampler_2d/3d: the ATen names the trace carries (the autocast
+    # table lists the composite `grid_sampler`); input and grid must agree
+    # on the widest float type — under the contract the sampled features
+    # arrive fp16 and the grid fp32 (GLM-4.1V visual, 2026-09-05).
     "tensordot", "scatter_add", "index_add",
     # index_add: same promote class as its sibling scatter_add in the
     # torch autocast tables — self/index/source must agree on the widest
