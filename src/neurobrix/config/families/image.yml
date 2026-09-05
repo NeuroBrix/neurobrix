@@ -76,6 +76,10 @@ output:
     t2i: ".png"
     img2img: ".png"
     inpainting: ".png"
+  # zlib level of the PNG encoder (lossless at every level). Level 1 writes a
+  # 1024² image in ~0.1 s where PIL's default (6) takes ~0.38 s for a file
+  # ~10 % smaller (measured 2026-09-05); the file is what the user waits for.
+  png_compress_level: 1
 
 # ============================================================================
 # DTYPE POLICY — auto-detect components that need fp32 to avoid the documented
