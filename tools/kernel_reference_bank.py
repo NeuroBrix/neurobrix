@@ -40,7 +40,7 @@ os.environ["NBX_LAUNCH_TRACE"] = TRACE      # read once by the launcher at impor
 
 def tiles() -> dict:
     import yaml
-    cfg = yaml.safe_load((REPO / "src/neurobrix/config/vendors/nvidia/volta.yml").read_text())
+    cfg = yaml.safe_load((REPO / "src/neurobrix/config/vendors/nvidia/volta.yml").read_text(encoding="utf-8"))
     bs = cfg.get("block_sizes") or {}
     return {"gemm": bs.get("gemm", {}), "bmm": bs.get("bmm", {}), "conv2d": bs.get("conv2d", {}),
             "default": int(bs.get("default", 1024)), "softmax_cap": int(bs.get("softmax_cap", 8192)),
@@ -182,6 +182,12 @@ def gen_where(op, rng, T):
     yield f"n1025", ((a > 0), a, b), {}
 
 
+def gen_elementwise_scalar(op, rng, T):
+    """(x, 2.0) at the elementwise tiles and their edges."""
+    for tag, n in (("n1024", T.get("default", 1024)), ("n1025", T.get("default", 1024) + 1), ("n511", 511)):
+        yield tag, (_n(rng, n, scale=2.0), 2.0), {}
+
+
 def gen_clamp(op, rng, T):
     yield f"n1025", (_n(rng, 1025, scale=2.0), -1.0, 1.0), {}
 
@@ -189,8 +195,15 @@ def gen_clamp(op, rng, T):
 GENERATORS = {
     **{o: gen_elementwise_unary for o in ("exp", "log", "sin", "cos", "tanh", "sigmoid", "gelu", "silu", "relu",
                                           "sqrt", "rsqrt", "neg", "abs", "erf", "log1p",
-                                          "floor", "ceil", "trunc", "round")},
-    **{o: gen_elementwise_binary for o in ("add", "sub", "mul", "div", "pow", "maximum", "minimum", "remainder")},
+                                          "floor", "ceil", "trunc", "round",
+                                          # found by the discovery pass over the unreached list (2026-09-05)
+                                          "celu", "elu", "exp2", "glu", "hardsigmoid", "hardswish", "isfinite",
+                                          "isinf", "isnan", "leaky_relu", "log_sigmoid", "logical_not", "mish",
+                                          "nan_to_num", "prod", "reciprocal", "selu", "softplus", "tan")},
+    **{o: gen_elementwise_binary for o in ("add", "sub", "mul", "div", "pow", "maximum", "minimum", "remainder",
+                                           "eq", "ge", "gt", "le", "lt", "ne",
+                                           "logical_and", "logical_or", "logical_xor")},
+    **{o: gen_elementwise_scalar for o in ("clamp_min", "rsub", "fill")},
     **{o: gen_mm for o in ("mm", "addmm", "bmm", "baddbmm", "matmul")},
     "_softmax": gen_softmax, "_log_softmax": gen_softmax,
     "native_layer_norm": gen_layer_norm, "rms_norm": gen_rms_norm, "native_group_norm": gen_group_norm,
@@ -363,7 +376,7 @@ def index(out: Path) -> str:
         if "triton_kernels_ref" in str(p):
             continue
         try:
-            tree = ast.parse(p.read_text())
+            tree = ast.parse(p.read_text(encoding="utf-8"))
         except SyntaxError:
             continue
         for n in ast.walk(tree):
