@@ -35,7 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`~/.neurobrix/calibration/<model>/<component>.json`); every later run derives from it which ops stay
   in fp32 on fp16 hardware (`config/precision_calibration.yml` sets the headroom). The per-backbone
   contract file and the per-model precision flags are retired; a component without a record keeps the
-  conservative default. A record measured on another trace is ignored, never applied.
+  conservative default. A record measured on another trace, or one that observed no op, is ignored, never applied.
 
 - **Speech-to-text decoding no longer recomputes the whole transcript at every
   token.** The Whisper-class decoder now keeps its self-attention keys and
