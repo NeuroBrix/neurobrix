@@ -857,12 +857,13 @@ class GraphExecutor:
             # Precision contract of THIS component (vendor facts as data:
             # config/dtype_contracts.yml by backbone, registry flag by
             # model). See DtypeEngine header.
-            self._activations_fp16_safe, self._fp32_op_uids = \
+            self._activations_fp16_safe, self._fp32_op_uids, self._narrow_op_uids = \
                 self._resolve_fp16_activation_policy(compute_dtype)
             self._dtype_engine = DtypeEngine(compute_dtype, graph_dtype=self._graph_dtype,
                                              amp_enabled=amp_enabled,
                                              activations_fp16_safe=self._activations_fp16_safe,
-                                             fp32_op_uids=self._fp32_op_uids)
+                                             fp32_op_uids=self._fp32_op_uids,
+                                             narrow_op_uids=self._narrow_op_uids)
         else:
             self._dtype_engine = None  # Triton uses TritonDtypeEngine in sequence.py
 
@@ -1033,7 +1034,7 @@ class GraphExecutor:
         return registry_model_name(getattr(self, "_cache_path", None))
 
     def _resolve_fp16_activation_policy(self, compute_dtype) -> tuple:
-        """(activations_fp16_safe, fp32_op_uids) for the DtypeEngine — the
+        """(activations_fp16_safe, fp32_op_uids, narrow_op_uids) for the DtypeEngine — the
         shared resolver in core/runtime/precision_contract.py (registry flag
         > backbone contract > False; module patterns pin every compute op of
         a module). This is the compiled / sequential consumer, contract ON."""
@@ -1196,6 +1197,7 @@ class GraphExecutor:
             config_constants=self._resolve_config_constants(),
             activations_fp16_safe=self._dtype_engine.activations_fp16_safe,
             fp32_op_uids=self._dtype_engine.fp32_op_uids,
+            narrow_op_uids=self._dtype_engine.narrow_op_uids,
         )
 
         # Register any op interceptors BEFORE compilation (Phase 2.2: KV cache support)

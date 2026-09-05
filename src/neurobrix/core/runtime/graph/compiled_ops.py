@@ -129,7 +129,8 @@ class CompiledOpResolver:
 
     def __init__(self, device: torch.device, dtype: torch.dtype, graph_dtype: Optional[torch.dtype] = None,
                  amp_enabled: bool = True, use_triton: bool = False,
-                 activations_fp16_safe: bool = False, fp32_op_uids=None):
+                 activations_fp16_safe: bool = False, fp32_op_uids=None,
+                 narrow_op_uids=None):
         self.device = device
         self.dtype = dtype
         self.use_triton = False  # triton mode now uses triton/ package directly
@@ -139,7 +140,8 @@ class CompiledOpResolver:
         from neurobrix.core.dtype.engine import DtypeEngine
         self.dtype_engine = DtypeEngine(dtype, graph_dtype=graph_dtype, amp_enabled=amp_enabled,
                                         activations_fp16_safe=activations_fp16_safe,
-                                        fp32_op_uids=fp32_op_uids)
+                                        fp32_op_uids=fp32_op_uids,
+                                        narrow_op_uids=narrow_op_uids)
 
     # ========================================================================
     # PUBLIC API
