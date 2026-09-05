@@ -23,6 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   drops from 1073 s to 45 s.
 
 ### Fixed
+- The sampling-parameter guard no longer refuses a value inherited from the family defaults: a model
+  whose own defaults carry no `top_k` took the family's 50 as an explicit request and every audio-LLM
+  run was refused (`top_k=50 — you asked for it explicitly`).
 - The decoder KV cache now offsets a positional-table slice (a decoder whose positions are the rows
   `[0, seq_len)` of a position table, no arange) and refuses a graph that carries neither mechanism:
   whisper-large decoded every token at position 0 with the cache and never terminated; transcripts
