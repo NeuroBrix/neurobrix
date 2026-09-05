@@ -53,6 +53,15 @@ signature. The provenance of every value is recorded per kernel in the JSON:
 * `heuristic` — this tool's declared name table (below). Lowest fidelity, and
                 the reason `ttir` failures are counted as harness noise.
 
+One more thing the census does not supply: **specialization attributes**. A
+real launch tells the compiler which pointers are 16-byte aligned and which
+integers happen to equal 1, and Triton specializes on that. The census passes
+none, so it measures the *general* lowering of each kernel rather than the
+specialized one the engine would get at runtime. That is the conservative
+direction — a kernel that lowers without specialization lowers with it — but
+it means the census cannot see a refusal that only a specialized layout would
+trigger.
+
 R33 preserved — this tool imports triton, never torch.
 R34 preserved — nothing here is keyed on a model name.
 """
@@ -109,6 +118,79 @@ _FLOAT_SCALAR_TOKENS = ("eps", "epsilon", "scale", "alpha", "beta", "gamma",
                         "value", "tol", "delta", "lr", "weight_decay", "p_")
 
 
+# Builtins whose first argument is a pointer (or a tensor of pointers).
+_POINTER_BUILTINS = ("load", "store", "atomic_add", "atomic_max", "atomic_min",
+                     "atomic_and", "atomic_or", "atomic_xor", "atomic_xchg",
+                     "atomic_cas", "make_block_ptr", "advance")
+
+
+def _pointer_params_from_source(jit_fn) -> set:
+    """Which parameters are pointers, read from the kernel's own source.
+
+    Naming was the first attempt and it was wrong for a third of the corpus:
+    plenty of kernels call their buffers `x`, `inp`, `out` or `w`, and typing
+    those as `i32` makes Triton reject the call with *"Unsupported ptr type
+    ... in tl.load"* — a failure of the census, not of Metal. So pointer-ness
+    is read structurally instead: any parameter that appears anywhere inside
+    the address argument of `tl.load` / `tl.store` / the atomics /
+    `make_block_ptr` is a pointer.
+
+    Returns an empty set when the source cannot be parsed, in which case the
+    caller falls back to the name test.
+    """
+    import ast as _ast
+    try:
+        src = _ast.parse(_dedent(jit_fn.src if hasattr(jit_fn, "src")
+                                 else _getsource(jit_fn)))
+    except Exception:
+        return set()
+
+    names = set()
+    for node in _ast.walk(src):
+        if not isinstance(node, _ast.Call):
+            continue
+        func = node.func
+        attr = getattr(func, "attr", None) or getattr(func, "id", None)
+        if attr not in _POINTER_BUILTINS or not node.args:
+            continue
+        for sub in _ast.walk(node.args[0]):
+            if isinstance(sub, _ast.Name):
+                names.add(sub.id)
+    return names
+
+
+def _dedent(text: str) -> str:
+    import textwrap
+    return textwrap.dedent(text)
+
+
+def _getsource(fn) -> str:
+    import inspect
+    return inspect.getsource(fn.fn if hasattr(fn, "fn") else fn)
+
+
+def _looks_like_device_function(jit_fn, pointer_params) -> bool:
+    """True for a `@triton.jit` helper that is not a launchable kernel.
+
+    `kernels/ops/_common.py` holds `@triton.jit` device functions —
+    `relu_fn`, `sigmoid`, `tanh_fn` — which take a *tensor* and return a
+    value. They are inlined into kernels, never launched, so compiling one as
+    a kernel is meaningless: Triton types the scalar parameter `i32` and the
+    body fails on a dtype it was never going to receive. Detected as: no
+    pointer parameter anywhere, and a `return` that yields a value.
+    """
+    import ast as _ast
+    if pointer_params:
+        return False
+    try:
+        tree = _ast.parse(_dedent(jit_fn.src if hasattr(jit_fn, "src")
+                                  else _getsource(jit_fn)))
+    except Exception:
+        return False
+    return any(isinstance(n, _ast.Return) and n.value is not None
+               for n in _ast.walk(tree))
+
+
 def _is_pointer(name: str) -> bool:
     lowered = name.lower()
     return lowered.endswith("_ptr") or lowered.endswith("_ptrs") or "ptr" in lowered
@@ -152,9 +234,13 @@ def _unwrap(obj):
     peeling for: it carries the constexpr values the engine itself uses, which
     is the difference between censusing our kernel and censusing a guess.
     """
+    from triton.runtime.jit import JITFunction
+
     autotune_kwargs = None
     seen = 0
-    while hasattr(obj, "fn") and seen < 8:
+    # Stop AT the JITFunction: it also carries a `.fn` (the plain Python
+    # function), and peeling that one loses the kernel.
+    while not isinstance(obj, JITFunction) and hasattr(obj, "fn") and seen < 8:
         configs = getattr(obj, "configs", None)
         if configs and autotune_kwargs is None:
             try:
@@ -213,9 +299,10 @@ def discover_kernels():
 # Signature synthesis
 # ---------------------------------------------------------------------------
 
-def build_signature(jit_fn, autotune_kwargs):
+def build_signature(jit_fn, autotune_kwargs, pointer_params=None):
     """Return (signature, constexprs, provenance) for one kernel."""
     signature, constexprs, provenance = {}, {}, {}
+    pointer_params = pointer_params or set()
 
     for param in jit_fn.params:
         name = param.name
@@ -239,6 +326,9 @@ def build_signature(jit_fn, autotune_kwargs):
                                                         "fp32", "fp64", "bf16"):
             signature[name] = annotation
             provenance[name] = "annotation"
+        elif name in pointer_params:
+            signature[name] = "*fp32"
+            provenance[name] = "source"
         elif _is_pointer(name):
             signature[name] = "*fp32"
             provenance[name] = "heuristic"
@@ -345,9 +435,17 @@ def compile_one(kernel, tracer, target, backend_options):
         "module": kernel["module"],
         "kernel": kernel["name"],
     }
+    pointer_params = _pointer_params_from_source(jit_fn)
+    if _looks_like_device_function(jit_fn, pointer_params):
+        record.update(status="device_function", stage="n/a",
+                      category="device_function",
+                      reason="a @triton.jit device helper, inlined into "
+                             "kernels and never launched; not a compilable "
+                             "kernel on any backend")
+        return record
     try:
         signature, constexprs, provenance = build_signature(
-            jit_fn, kernel["autotune_kwargs"])
+            jit_fn, kernel["autotune_kwargs"], pointer_params)
     except Exception as exc:
         record.update(status="harness", stage="signature", category="harness",
                       reason=f"{type(exc).__name__}: {exc}")
@@ -405,6 +503,23 @@ def write_report(records, import_failures, meta, out_dir: Path):
     compiled = [r for r in records if r["status"] == "compiled"]
     refused = [r for r in records if r["status"] == "refused"]
     harness = [r for r in records if r["status"] == "harness"]
+    device_fns = [r for r in records if r["status"] == "device_function"]
+
+    def _engine_sourced(rec):
+        """True when every tl.constexpr came from the kernel, not the census.
+
+        A refusal only counts as a finding about OUR kernel if the tile sizes
+        that produced it are tile sizes the engine would actually use. Where
+        the census had to invent one, the backend's answer is still true —
+        but it is an answer about that invented tile, and it is reported
+        separately rather than mixed in.
+        """
+        prov = rec.get("constexpr_provenance") or {}
+        cx = rec.get("constexprs") or {}
+        return all(prov.get(k) in ("autotune", "default") for k in cx)
+
+    refused_engine = [r for r in refused if _engine_sourced(r)]
+    refused_invented = [r for r in refused if not _engine_sourced(r)]
 
     by_category = {}
     for r in refused:
@@ -418,20 +533,35 @@ def write_report(records, import_failures, meta, out_dir: Path):
           f"triton {meta['triton_version']}, "
           f"triton-msl {meta['triton_msl_version']}, "
           f"target `{meta['target']}`.\n\n")
+        w(f"Target obtained from: {meta['target_source']}.\n\n")
         w(f"Pipeline run through stage **`{meta['through']}`** "
           f"of `{' -> '.join(_STAGE_ORDER)}`. "
           f"Compile only; no kernel was executed.\n\n")
         w(f"Scope: `src/neurobrix/kernels/ops/` — "
-          f"{meta['modules_scanned']} modules, "
-          f"{meta['kernels_found']} `@triton.jit` kernels discovered.\n\n")
+          f"{meta['kernels_found']} `@triton.jit` objects discovered across "
+          f"{meta['modules_with_kernels']} modules "
+          f"({meta['py_files_scanned']} .py files scanned).\n\n")
 
         w("## Result\n\n")
         w("| outcome | kernels |\n|---|---:|\n")
         w(f"| compiled through `{meta['through']}` | **{len(compiled)}** |\n")
-        w(f"| refused by the backend | **{len(refused)}** |\n")
+        w(f"| refused — at tile sizes the **engine itself** uses "
+          f"| **{len(refused_engine)}** |\n")
+        w(f"| refused — at tile sizes the **census invented** "
+          f"| {len(refused_invented)} |\n")
+        w(f"| `@triton.jit` device helpers, not launchable kernels "
+          f"| {len(device_fns)} |\n")
         w(f"| not censused (harness could not build a valid call) "
           f"| {len(harness)} |\n")
         w(f"| **total** | **{len(records)}** |\n\n")
+        w("The two refusal rows are kept apart deliberately. A kernel that "
+          "the backend refuses at a tile the engine actually launches is a "
+          "gap in our path. A kernel refused at a tile this census invented "
+          "is a true statement about that tile and nothing more — the "
+          "engine's own tile comes from `@triton.heuristics` evaluated on "
+          "runtime shapes, which a compile-only census cannot evaluate. "
+          "Every refusal below prints the exact `tl.constexpr` values that "
+          "produced it and where each one came from.\n\n")
 
         if refused:
             w("## Refusals by category\n\n")
@@ -446,10 +576,30 @@ def write_report(records, import_failures, meta, out_dir: Path):
                                     key=lambda kv: -len(kv[1])):
                 w(f"### `{cat}` — {len(rows)} kernel(s)\n\n")
                 for r in sorted(rows, key=lambda x: (x["module"], x["kernel"])):
+                    origin = ("engine-sourced tile" if _engine_sourced(r)
+                              else "census-invented tile")
                     w(f"**`{r['module']}::{r['kernel']}`** — "
                       f"failed at stage `{r['stage']}` "
-                      f"(`{r.get('exception', '?')}`)\n\n")
+                      f"(`{r.get('exception', '?')}`) — {origin}\n\n")
+                    cx = r.get("constexprs") or {}
+                    prov = r.get("constexpr_provenance") or {}
+                    if cx:
+                        w("constexprs: " + ", ".join(
+                            f"`{k}={v}` ({prov.get(k, '?')})"
+                            for k, v in sorted(cx.items())) + "\n\n")
                     w("```\n" + r["reason"].strip() + "\n```\n\n")
+
+        if device_fns:
+            w("## `@triton.jit` device helpers — outside the census\n\n")
+            w("These carry the decorator but are not kernels: they take a "
+              "value and return one, are inlined into the kernels that call "
+              "them, and are never launched. Compiling one as a kernel is "
+              "meaningless on any backend, so they are counted apart rather "
+              "than reported as coverage or as a gap.\n\n")
+            w("| module | function |\n|---|---|\n")
+            for r in sorted(device_fns, key=lambda x: (x["module"], x["kernel"])):
+                w(f"| `{r['module']}` | `{r['kernel']}` |\n")
+            w("\n")
 
         if harness:
             w("## Not censused — the harness, not the backend\n\n")
@@ -488,6 +638,48 @@ def write_report(records, import_failures, meta, out_dir: Path):
     return md_path, json_path
 
 
+def resolve_target():
+    """Return (GPUTarget, how-it-was-obtained), or (None, reason) after printing.
+
+    Normally the active driver names the target. On a machine with no Metal
+    Toolchain the triton-msl driver's `is_active()` returns False (it probes
+    `xcrun --find metal`), so Triton reports **zero** active drivers and cannot
+    name a target at all. That is a toolchain fact, not a coverage one, and it
+    must not stop a coverage census: the compile pipeline accepts an explicit
+    target, and the stages that measure coverage (`ttir`/`ttgir`/`msl`) never
+    touch the driver. So the target is rebuilt from the same source the driver
+    would have used — `triton_msl.backend.driver._detect_metal_arch()`, which
+    reads the Metal device name — and the report says it was explicit.
+    """
+    from triton.backends.compiler import GPUTarget
+    from triton.runtime import driver
+
+    try:
+        target = driver.active.get_current_target()
+        if target.backend != "metal":
+            print(f"REFUSING: the active Triton target is '{target.backend}', "
+                  f"not 'metal'. A census run anywhere but on the Metal "
+                  f"backend would measure the wrong compiler.",
+                  file=sys.stderr)
+            return None, "wrong backend"
+        return target, "active driver"
+    except Exception as exc:
+        from triton_msl.backend.driver import _detect_metal_arch, MetalDriver
+        if not MetalDriver.is_active():
+            arch = _detect_metal_arch()
+            if arch == "apple-unknown":
+                print("REFUSING: no Metal device found. This is not an Apple "
+                      "GPU machine.", file=sys.stderr)
+                return None, "no device"
+            return (GPUTarget("metal", arch, 32),
+                    f"explicit — the Metal driver is INACTIVE ({exc.__class__.__name__}: "
+                    f"no offline shader compiler), so the target was rebuilt "
+                    f"from the Metal device name")
+        print(f"REFUSING: could not resolve a Metal target: "
+              f"{type(exc).__name__}: {exc}", file=sys.stderr)
+        return None, "unresolved"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__,
@@ -510,14 +702,11 @@ def main() -> int:
     import triton
     import triton_msl
     from triton.backends.compiler import GPUTarget
-    import triton.runtime.driver as driver_mod
 
-    target = driver_mod.driver.active.get_current_target()
-    if target.backend != "metal":
-        print(f"REFUSING: the active Triton target is '{target.backend}', "
-              f"not 'metal'. A census run anywhere but on the Metal backend "
-              f"would measure the wrong compiler.", file=sys.stderr)
+    target, target_source = resolve_target()
+    if target is None:
         return 2
+    print(f"target source: {target_source}")
 
     kernels, import_failures = discover_kernels()
     if args.limit:
@@ -535,7 +724,8 @@ def main() -> int:
             rec = compile_one(kernel, tracer, target, None)
             records.append(rec)
             mark = {"compiled": "ok", "refused": "REFUSED",
-                    "harness": "--"}[rec["status"]]
+                    "harness": "--", "device_function": "(device fn)"
+                    }[rec["status"]]
             print(f"  [{i:3}/{len(kernels)}] {rec['module']:32} "
                   f"{rec['kernel']:44} {mark}")
     finally:
@@ -552,7 +742,9 @@ def main() -> int:
         "triton_msl_codegen": getattr(triton_msl, "CODEGEN_VERSION", "unknown"),
         "target": f"{target.backend}/{target.arch}",
         "through": args.through,
-        "modules_scanned": len(sorted(OPS_DIR.glob("*.py"))) - 1,
+        "target_source": target_source,
+        "py_files_scanned": len(sorted(OPS_DIR.glob("*.py"))),
+        "modules_with_kernels": len({k["module"] for k in kernels}),
         "kernels_found": len(kernels),
         "metal_toolchain_present": bool(
             os.system("xcrun -f metal >/dev/null 2>&1") == 0),
