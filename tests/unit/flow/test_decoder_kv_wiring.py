@@ -49,3 +49,26 @@ def test_recompute_oracle_switch_disables_the_cache(monkeypatch):
     ex = _Executor()
     assert _handler(ex)._decoder_kv_wrapper("dec", max_tokens=64) is None
     assert ex.registered == {}
+
+
+def test_a_positional_table_slice_is_registered_like_the_arange(monkeypatch):
+    from tests.unit.flow.test_decoder_kv_plan import _dag_with_positional_table_slice
+    monkeypatch.delenv("NBX_KV_RECOMPUTE", raising=False)
+    ex = _Executor()
+    ex._dag = _dag_with_positional_table_slice()
+    kv = _handler(ex)._decoder_kv_wrapper("dec", max_tokens=64)
+    assert kv is not None
+    assert "aten.slice::0" in ex.registered and ex.registered["aten.slice::0"] == kv.intercept_position_slice
+    assert "aten.slice::1" not in ex.registered
+
+
+def test_a_decoder_with_no_positional_mechanism_refuses_the_cache(monkeypatch, capsys):
+    """Neither an arange nor a positional-table slice: one token per step
+    would sit at position 0 every step (whisper-large, 2026-09-05) — the
+    cache is refused loudly and the recompute path keeps the transcript right."""
+    monkeypatch.delenv("NBX_KV_RECOMPUTE", raising=False)
+    ex = _Executor()
+    del ex._dag["ops"]["aten.arange::0"]
+    assert _handler(ex)._decoder_kv_wrapper("dec", max_tokens=64) is None
+    assert ex.registered == {}
+    assert "KV cache REFUSED" in capsys.readouterr().err

@@ -519,6 +519,15 @@ class TritonAttentionInterceptor:
         if not self._is_prefill:
             self._position_offset = self.get_cache_len()
 
+    def intercept_position_slice(self, table, dim=0, start=0, end=None, step=1):
+        """Mirror of core kv_cache_wrapper.intercept_position_slice: the rows
+        [0, seq_len) of a positional table, shifted by the cache length at
+        decode. R33-pure: an NBXTensor narrow (a view)."""
+        if self._is_prefill or self._position_offset <= 0 or end is None:
+            return table.narrow(int(dim), int(start), int(end - start) if end is not None else table.shape[int(dim)] - int(start))
+        cache_len = self._position_offset
+        return table.narrow(int(dim), cache_len + int(start), int(end - start))
+
     def intercept_arange(self, *args, **kwargs):
         """Intercept aten::arange to fix RoPE positions during decode.
 

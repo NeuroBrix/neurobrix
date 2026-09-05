@@ -181,6 +181,15 @@ class TritonEncoderDecoderEngine:
         plan = decoder_self_attention_plan(dag)
         if plan is None:
             return None
+        if not plan["arange_uids"] and not plan.get("position_slice_uids"):
+            # One token per step needs a positional mechanism the cache can
+            # offset; a graph with neither would decode every token at
+            # position 0. Loud, and the recompute path (correct) instead.
+            import sys as _sys
+            print(f"[{dec_name}] KV cache REFUSED: the decoder graph carries no positional "
+                  f"arange and no positional-table slice the cache could offset — "
+                  f"recompute path (D-STT-KV-WHISPER-LARGE)", file=_sys.stderr, flush=True)
+            return None
         from neurobrix.triton.kv_cache import TritonKVCache, TritonAttentionInterceptor
         interceptor = getattr(executor, "_decoder_kv_interceptor", None)
         if interceptor is None:
@@ -198,6 +207,8 @@ class TritonEncoderDecoderEngine:
                        for uid in plan["self_attn_uids"]}
             for uid in plan["arange_uids"]:
                 per_uid[uid] = interceptor.intercept_arange
+            for uid in plan.get("position_slice_uids") or []:
+                per_uid[uid] = interceptor.intercept_position_slice
             executor.register_op_uid_interceptors(per_uid)
             executor._decoder_kv_interceptor = interceptor
             print(f"   [{dec_name}] KV cache (triton): {plan['num_layers']} self-attention layers cached, "

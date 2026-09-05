@@ -23,6 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   drops from 1073 s to 45 s.
 
 ### Fixed
+- The decoder KV cache now offsets a positional-table slice (a decoder whose positions are the rows
+  `[0, seq_len)` of a position table, no arange) and refuses a graph that carries neither mechanism:
+  whisper-large decoded every token at position 0 with the cache and never terminated; transcripts
+  are byte-identical to the recompute path again on both engines.
+- `grid_sampler_2d/3d` join the promote class of both dtype engines: under the half-precision contract
+  a visual encoder's fp16 features met an fp32 grid and the kernel refused (GLM-4.1V).
 
 - **Attention inputs and masks are no longer copied before every attention.**
   The compiled attention handler forced q/k/v contiguous (three copies per

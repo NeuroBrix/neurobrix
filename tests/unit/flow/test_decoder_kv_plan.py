@@ -35,3 +35,51 @@ def test_self_and_cross_attentions_are_told_apart_by_dataflow():
 
 def test_graph_without_attention_yields_no_plan():
     assert decoder_self_attention_plan({"input_tensor_ids": [], "ops": {}}) is None
+
+
+def _dag_with_positional_table_slice():
+    """A whisper-class decoder traced with the positions as rows [0, seq_len)
+    of a parameter table (no arange anywhere)."""
+    d = _dag()
+    del d["ops"]["aten.arange::0"]
+    d["symbolic_context"] = {"symbols": {
+        "s0": {"name": "batch", "source": "input::input_ids::dim_0", "trace_value": 1},
+        "s1": {"name": "seq_len", "source": "input::input_ids::dim_1", "trace_value": 7},
+        "s3": {"name": "seq_len", "source": "input::encoder_hidden_states::dim_1", "trace_value": 1500}}}
+    d["ops"]["aten.slice::0"] = {
+        "op_type": "aten::slice", "input_tensor_ids": ["param::embed_positions.weight"],
+        "output_tensor_ids": ["pos"],
+        "attributes": {"args": [{"type": "tensor", "tensor_id": "param::embed_positions.weight"},
+                                {"type": "scalar", "value": 0}, {"type": "scalar", "value": 0},
+                                {"type": "symbol", "id": "s1", "trace": 7}]}}
+    # a slice of the ENCODER states by the encoder length is not a positional table
+    d["ops"]["aten.slice::1"] = {
+        "op_type": "aten::slice", "input_tensor_ids": ["param::other"], "output_tensor_ids": ["x"],
+        "attributes": {"args": [{"type": "tensor", "tensor_id": "param::other"},
+                                {"type": "scalar", "value": 0}, {"type": "scalar", "value": 0},
+                                {"type": "symbol", "id": "s3", "trace": 1500}]}}
+    return d
+
+
+def test_a_positional_table_slice_is_the_second_positional_mechanism():
+    p = decoder_self_attention_plan(_dag_with_positional_table_slice())
+    assert p["arange_uids"] == []
+    assert p["position_slice_uids"] == ["aten.slice::0"]
+
+
+def test_the_arange_form_reports_no_positional_slice():
+    p = decoder_self_attention_plan(_dag())
+    assert p["arange_uids"] == ["aten.arange::0"] and p["position_slice_uids"] == []
+
+
+def test_position_slice_interceptor_shifts_the_window_by_the_cache_length():
+    import torch
+    from neurobrix.core.runtime.graph.kv_cache_wrapper import KVCacheAttentionWrapper
+    w = KVCacheAttentionWrapper.__new__(KVCacheAttentionWrapper)
+    table = torch.arange(10, dtype=torch.float32).unsqueeze(1)   # row i holds value i
+    w._is_prefill = True; w._position_offset = 0
+    assert w.intercept_position_slice(table, 0, 0, 7, 1).squeeze(1).tolist() == list(range(7))
+    w._is_prefill = False; w._position_offset = 7
+    assert w.intercept_position_slice(table, 0, 0, 1, 1).squeeze(1).tolist() == [7.0]
+    w._position_offset = 8
+    assert w.intercept_position_slice(table, 0, 0, 1, 1).squeeze(1).tolist() == [8.0]
