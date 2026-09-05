@@ -287,7 +287,8 @@ _GPU_BACKENDS = {
         "rt_libs": ["libcudart.so", "libcudart.so.12", "libcudart.so.11.0"],
         "malloc": "cudaMalloc", "free": "cudaFree",
         "memcpy": "cudaMemcpy", "memset": "cudaMemset",
-        "set_device": "cudaSetDevice", "get_device": "cudaGetDevice",
+        "set_device": "cudaSetDevice",
+        "get_last_error": "cudaGetLastError", "get_device": "cudaGetDevice",
         "device_count": "cudaGetDeviceCount",
         "mem_get_info": "cudaMemGetInfo",
         "sync": "cudaDeviceSynchronize",
@@ -328,7 +329,8 @@ _GPU_BACKENDS = {
         "rt_libs": ["libamdhip64.so", "libamdhip64.so.5"],
         "malloc": "hipMalloc", "free": "hipFree",
         "memcpy": "hipMemcpy", "memset": "hipMemset",
-        "set_device": "hipSetDevice", "get_device": "hipGetDevice",
+        "set_device": "hipSetDevice",
+        "get_last_error": "hipGetLastError", "get_device": "hipGetDevice",
         "device_count": "hipGetDeviceCount",
         "mem_get_info": "hipMemGetInfo",
         "sync": "hipDeviceSynchronize",
@@ -507,7 +509,15 @@ class DeviceAllocator:
         which is called just before Triton kernel launches.
         """
         rt = _gpu_runtime()
-        getattr(rt, _active_backend()["set_device"])(ctypes.c_int(device_id))
+        ret = getattr(rt, _active_backend()["set_device"])(ctypes.c_int(device_id))
+        if ret != 0:
+            # An invalid ordinal (a device the process cannot see) must be
+            # loud here, not reported by the next unrelated launch check in
+            # the process as its own (2026-09-05: torch's, in the compiled
+            # branch — "invalid device ordinal" on an fp16 op).
+            DeviceAllocator.clear_last_error()
+            raise RuntimeError(f"set_device({device_id}) refused by the runtime (error {ret}) — "
+                               f"the process sees {DeviceAllocator.device_count()} device(s)")
         # C2 cache maintenance: a runtime-only switch to a device other
         # than the cached one breaks the "runtime AND Triton both point
         # at the cached idx" invariant — invalidate so the next
@@ -815,6 +825,7 @@ class DeviceAllocator:
         # whatever the other hooks freed; the original OOM raise (with full
         # diagnostics) still follows if the retry fails.
         if ret != 0 and DeviceAllocator._oom_reclaim_hooks:
+            DeviceAllocator.clear_last_error()   # a refused call must not poison the next one
             _reclaimed = 0
             for _hook in list(DeviceAllocator._oom_reclaim_hooks):
                 try:
@@ -833,6 +844,7 @@ class DeviceAllocator:
         # blocks, flush them back to the driver and retry. Defragments the
         # driver's internal heap before declaring failure.
         if ret != 0 and DeviceAllocator._pool_enabled:
+            DeviceAllocator.clear_last_error()   # a refused call must not poison the next one
             freed = DeviceAllocator._pool_flush(dev)
             if freed > 0:
                 ret = getattr(rt, backend["malloc"])(
@@ -845,12 +857,14 @@ class DeviceAllocator:
         # band loops; gc.collect() picks them up if they form a cycle.
         # Gated by NBX_GC_ON_OOM=1 (opt-in until validated cross-model).
         if ret != 0 and os.environ.get("NBX_GC_ON_OOM", "0") == "1":
+            DeviceAllocator.clear_last_error()   # a refused call must not poison the next one
             import gc as _gc_oom
             _gc_oom.collect()
             ret = getattr(rt, backend["malloc"])(
                 ctypes.byref(ptr_obj), ctypes.c_size_t(nbytes))
 
         if ret != 0:
+            DeviceAllocator.clear_last_error()   # a refused call must not poison the next one
             # Diagnostic: how much live + how big the pool was at OOM time.
             live_now = DeviceAllocator._cuda_live_bytes.get(dev, 0)
             pool_total = 0
@@ -995,6 +1009,7 @@ class DeviceAllocator:
         ret = getattr(rt, fn_name)(
             ctypes.byref(ptr), ctypes.c_size_t(nbytes))
         if ret != 0:
+            DeviceAllocator.clear_last_error()   # a refused call must not poison the next one
             raise RuntimeError(
                 f"Host pinned malloc failed (error {ret}) for {nbytes} bytes")
         p = ptr.value or 0
@@ -1225,8 +1240,32 @@ class DeviceAllocator:
         h = ctypes.c_void_p()
         ret = getattr(rt, fn_name)(ctypes.byref(h))
         if ret != 0:
+            DeviceAllocator.clear_last_error()   # a refused call must not poison the next one
             raise RuntimeError(f"stream create failed (error {ret})")
         return h.value or 0
+
+    @staticmethod
+    def clear_last_error() -> int:
+        """Read-and-reset the runtime's sticky "last error". A refused call
+        (an ordering event asked for an interval, a peer pair that cannot be
+        enabled) leaves its code there, and the next unrelated launch check
+        in the process — torch's, in the compiled branch — reports it as its
+        own (found 2026-09-05: `invalid device ordinal` on an fp16 op after
+        the stopwatch refusal test). Every expected refusal clears it."""
+        rt = _gpu_runtime()
+        fn_name = _active_backend().get("get_last_error")
+        return int(getattr(rt, fn_name)()) if fn_name else 0
+
+    @staticmethod
+    def _rt_call(key: str, *args):
+        rt = _gpu_runtime()
+        fn_name = _active_backend().get(key)
+        if fn_name is None:
+            raise RuntimeError(f"{key} unsupported on backend {_detect_gpu_backend()!r}")
+        ret = getattr(rt, fn_name)(*args)
+        if ret != 0:
+            DeviceAllocator.clear_last_error()
+            raise RuntimeError(f"{fn_name} failed (error {ret})")
 
     @staticmethod
     def destroy_stream(stream: int):
@@ -1280,6 +1319,7 @@ class DeviceAllocator:
                     f"{_detect_gpu_backend()!r}")
             ret = getattr(rt, fn_name)(ctypes.byref(h))
         if ret != 0:
+            DeviceAllocator.clear_last_error()   # a refused call must not poison the next one
             raise RuntimeError(f"event create failed (error {ret})")
         return h.value or 0
 
@@ -1352,6 +1392,7 @@ class DeviceAllocator:
             return
         ret = getattr(rt, fn_name)(ctypes.c_void_p(event))
         if ret != 0:
+            DeviceAllocator.clear_last_error()   # a refused call must not poison the next one
             raise RuntimeError(f"event synchronize failed (error {ret})")
 
     @staticmethod
@@ -1379,6 +1420,7 @@ class DeviceAllocator:
         out = ctypes.c_float()
         ret = fn(ctypes.byref(out), ctypes.c_void_p(start), ctypes.c_void_p(end))
         if ret != 0:
+            DeviceAllocator.clear_last_error()   # a refusal must not poison the next call
             raise RuntimeError(
                 f"event elapsed failed (error {ret}) — the usual cause is "
                 f"two events recorded on DIFFERENT devices, which has no "
@@ -1402,6 +1444,8 @@ class DeviceAllocator:
         out = ctypes.c_int()
         ret = getattr(rt, fn_name)(
             ctypes.byref(out), ctypes.c_int(src_dev), ctypes.c_int(dst_dev))
+        if ret != 0:
+            DeviceAllocator.clear_last_error()
         return ret == 0 and bool(out.value)
 
     # Pairs already granted, so the hot transfer path pays the query once.

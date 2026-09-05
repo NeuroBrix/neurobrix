@@ -63,15 +63,31 @@ def _artifact_path() -> Optional[str]:
 
 
 def _autotuners() -> Iterator[Tuple[str, object]]:
+    """Every Autotuner the process has loaded from the kernel library — the
+    five sanctioned sites first (imported on demand), then every other
+    `neurobrix.kernels.ops.*` module already in sys.modules. Since 2026-09-05
+    the engine is the only persistence of a sweep (upstream's on-disk cache
+    keyed its files by a torch-importing driver probe and was dropped), so
+    every tuner's selections are captured, not only the matmul class's."""
     import importlib
+    import sys
     from triton.runtime.autotuner import Autotuner
+    seen = set()
     for mod_name, attr in _KERNEL_SITES:
         try:
             obj = getattr(importlib.import_module(mod_name), attr, None)
         except Exception:
             continue
         if isinstance(obj, Autotuner):
+            seen.add(id(obj))
             yield f"{mod_name}.{attr}", obj
+    for mod_name, mod in list(sys.modules.items()):
+        if not mod_name.startswith("neurobrix.kernels.ops.") or mod is None:
+            continue
+        for attr, obj in list(vars(mod).items()):
+            if isinstance(obj, Autotuner) and id(obj) not in seen:
+                seen.add(id(obj))
+                yield f"{mod_name}.{attr}", obj
 
 
 def _config_to_dict(cfg) -> Dict:
