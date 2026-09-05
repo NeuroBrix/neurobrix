@@ -59,6 +59,20 @@ class MetalKernelError(RuntimeError):
     """Compilation, loading or dispatch of a Metal kernel failed."""
 
 
+def _arg_slots(binding):
+    """The MSL binding, expressed in the launcher contract's terms."""
+    from .launcher_contract import ArgSlot
+
+    scalar = {"int": "i32", "uint": "u32", "short": "i16", "ushort": "u16",
+              "char": "i8", "long": "i64", "float": "fp32", "half": "fp16"}
+    slots = []
+    for index, name, mtype, is_pointer in binding:
+        slots.append(ArgSlot(index=index, name=name, is_pointer=is_pointer,
+                             dtype="*fp32" if is_pointer
+                             else scalar.get(mtype, "i32")))
+    return tuple(slots)
+
+
 # --- turning a JITFunction into MSL, without ever reaching xcrun ------------
 
 class _MSLOnly:
@@ -198,12 +212,22 @@ def library_from_metallib(device, blob: bytes):
 class MetalKernel:
     """One compiled MSL kernel, ready to dispatch on allocator buffers."""
 
-    def __init__(self, msl: str, metadata, library=None):
+    def __init__(self, msl: str, metadata, library=None, constexprs=None):
         from ..kernels.metal_device import runtime
 
         self._runtime = runtime()
         self._msl = msl
-        self.name, self.binding = parse_kernel_signature(msl)
+        self.name, self._msl_binding = parse_kernel_signature(msl)
+        # The launcher contract's view of the same thing.
+        self.binding = _arg_slots(self._msl_binding)
+        self.constexprs = dict(constexprs or {})
+        # This driver reloads from MSL source through the framework, so the
+        # artifact it caches IS the source. A metallib is the alternative and
+        # `library_from_metallib` loads one; the kind is declared so a cache
+        # cannot hand a metallib to a backend expecting a cubin.
+        self.binary = msl.encode("utf-8")
+        self.binary_kind = "msl"
+        self.shared_memory = int(getattr(metadata, "shared", 0) or 0)
         self.block_size = int(getattr(metadata, "block_size", 0)
                               or getattr(metadata, "num_warps", 4) * 32)
         library = library or library_from_source(self._runtime._device, msl)
@@ -241,12 +265,12 @@ class MetalKernel:
         encoder = command_buffer.computeCommandEncoder()
         encoder.setComputePipelineState_(self._pipeline)
 
-        if len(args) != len(self.binding):
+        if len(args) != len(self._msl_binding):
             raise MetalKernelError(
-                f"{self.name} binds {len(self.binding)} arguments, "
+                f"{self.name} binds {len(self._msl_binding)} arguments, "
                 f"{len(args)} given")
 
-        for (index, pname, mtype, is_pointer), value in zip(self.binding, args):
+        for (index, pname, mtype, is_pointer), value in zip(self._msl_binding, args):
             if is_pointer:
                 address = getattr(value, "data_ptr", None)
                 address = address() if callable(address) else int(value)
@@ -296,12 +320,12 @@ _KERNEL_CACHE: Dict[str, MetalKernel] = {}
 _CACHE_LOCK = threading.Lock()
 
 
-def kernel_from_msl(msl: str, metadata) -> MetalKernel:
+def kernel_from_msl(msl: str, metadata, constexprs=None) -> MetalKernel:
     """A compiled kernel for this MSL, compiled once per process."""
     with _CACHE_LOCK:
         cached = _KERNEL_CACHE.get(msl)
         if cached is None:
-            cached = MetalKernel(msl, metadata)
+            cached = MetalKernel(msl, metadata, constexprs=constexprs)
             _KERNEL_CACHE[msl] = cached
         return cached
 
@@ -310,9 +334,71 @@ def compile_kernel(jit_fn, signature: dict, constexprs: dict,
                    num_warps: int = 4) -> MetalKernel:
     """Lower, compile and return a launchable kernel. No torch, no xcrun."""
     msl, metadata = compile_to_msl(jit_fn, signature, constexprs, num_warps)
-    return kernel_from_msl(msl, metadata)
+    return kernel_from_msl(msl, metadata, constexprs)
 
 
 def clear_cache() -> None:
     with _CACHE_LOCK:
         _KERNEL_CACHE.clear()
+
+
+# ---------------------------------------------------------------------------
+# The launcher contract, implemented
+# ---------------------------------------------------------------------------
+
+class MetalDriver:
+    """Metal, behind `launcher_contract.LauncherDriver`.
+
+    The first implementation of that contract, and deliberately thin: every
+    method below is either the compile path above or a call the allocator
+    already owns. A CUDA implementation is the same class over
+    `DeviceAllocator`'s cuda entry points, which is the point of writing the
+    contract down rather than letting the launcher learn Metal's habits.
+    """
+
+    backend = "metal"
+
+    def compile(self, jit_fn, signature, constexprs, num_warps: int = 4):
+        return compile_kernel(jit_fn, signature, constexprs, num_warps)
+
+    # -- ordering: the allocator owns streams and events on every backend ----
+
+    @staticmethod
+    def _allocator():
+        from ..kernels.nbx_tensor import DeviceAllocator
+        return DeviceAllocator
+
+    def create_stream(self) -> int:
+        return self._allocator().create_stream()
+
+    def destroy_stream(self, stream: int) -> None:
+        self._allocator().destroy_stream(stream)
+
+    def synchronize_stream(self, stream: int) -> None:
+        self._allocator().stream_synchronize(stream)
+
+    def create_event(self, timing: bool = False) -> int:
+        return self._allocator().create_event(timing=timing)
+
+    def destroy_event(self, event: int) -> None:
+        self._allocator().destroy_event(event)
+
+    def record_event(self, event: int, stream: int = 0) -> None:
+        self._allocator().record_event(event, stream)
+
+    def synchronize_event(self, event: int) -> None:
+        self._allocator().event_synchronize(event)
+
+    def wait_event(self, stream: int, event: int) -> None:
+        self._allocator().stream_wait_event(stream, event)
+
+    def elapsed_ms(self, start: int, end: int) -> float:
+        return self._allocator().event_elapsed_ms(start, end)
+
+
+def driver() -> MetalDriver:
+    """The process-wide Metal driver."""
+    return _DRIVER
+
+
+_DRIVER = MetalDriver()

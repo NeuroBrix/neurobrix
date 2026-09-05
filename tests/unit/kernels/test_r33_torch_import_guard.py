@@ -171,6 +171,22 @@ def test_the_runtime_probe_is_seen_failing_on_an_injected_import():
     assert out.returncode == 0 and out.stdout.strip() == "True", out.stderr[-300:]
 
 
+def test_the_gate_covers_the_dispatch_layer():
+    """R33 names the dispatch layer explicitly, because that is where the
+    vendor-agnostic launcher that replaced Triton's `kernel[grid]` lives.
+
+    A perimeter that stopped at the files of the day it was written would
+    have let the launcher land outside it on the day it was written, which is
+    exactly the day it mattered.
+    """
+    scanned = {q.resolve() for root in (KERNELS, TRITON) for q in root.rglob("*.py")}
+    for required in (KERNELS / "dispatch.py", KERNELS / "wrappers.py",
+                     KERNELS / "nbx_tensor.py", KERNELS / "launcher.py",
+                     KERNELS / "metal_device.py", TRITON / "metal_driver.py"):
+        assert required.resolve() in scanned, (
+            f"{required.name} is not inside the R33 scan perimeter")
+
+
 def test_no_unlisted_torch_import_under_kernels():
     """The gate. A new torch import here is a regression of R33."""
     found = _torch_importers()
