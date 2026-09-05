@@ -88,8 +88,19 @@ def family_stimulus(family: str) -> list:
     return out
 
 
+def _declares_image_input(model: str) -> bool:
+    """A container whose topology names `global.image` takes an image (TI2V,
+    I2V) — the campaign feeds the asset image, data-driven, never by family."""
+    try:
+        return '"global.image"' in (CACHE / model / "topology.json").read_text()
+    except OSError:
+        return False
+
+
 def request_args(model: str, family: str, extra: list) -> list:
     args = family_stimulus(family) + list(_MEDIA.get(family, []))
+    if "--input-image" not in args and family in ("video", "image") and _declares_image_input(model):
+        args += ["--input-image", str(ASSETS / "apple_448.png")]
     bound = list(_TEXT_BOUND.get(family, []))
     for i in range(0, len(bound), 2):           # a family stimulus value wins over the campaign bound
         if bound[i] not in args:
