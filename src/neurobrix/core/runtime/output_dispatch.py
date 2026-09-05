@@ -366,13 +366,17 @@ def save_image(
     # size (1024² RGB on this host: level 6 = 379 ms / 1.36 MB, level 1 =
     # 99 ms / 1.49 MB, 2026-09-05). Read from the family config — a product
     # default, never a constant here.
-    save_kwargs = {}
-    if str(output_path).lower().endswith(".png"):
-        level = (get_family_config(family).get("output") or {}).get("png_compress_level")
-        if level is not None:
-            save_kwargs["compress_level"] = int(level)
-    Image.fromarray(img_np).save(output_path, **save_kwargs)
+    Image.fromarray(img_np).save(output_path, **png_save_kwargs(family, output_path))
     return output_path
+
+
+def png_save_kwargs(family: str, output_path: str) -> Dict[str, Any]:
+    """PIL save kwargs for an image file: the PNG zlib level from the family
+    config (`output.png_compress_level`), nothing for other formats."""
+    if not str(output_path).lower().endswith(".png"):
+        return {}
+    level = (get_family_config(family).get("output") or {}).get("png_compress_level")
+    return {"compress_level": int(level)} if level is not None else {}
 
 
 def save_video(
