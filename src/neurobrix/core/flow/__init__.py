@@ -29,18 +29,35 @@ from .base import (
     get_flow_handler,
 )
 
-# Import flow handlers to register them
-from .iterative_process import IterativeProcessHandler
-from .static_graph import StaticGraphHandler
-from .forward_pass import ForwardPassHandler
-from .autoregressive import AutoregressiveHandler
-from .audio import AudioEngine
-from .encoder_decoder import EncoderDecoderEngine
-from .audio_llm import AudioLLMEngine
-from .vlm import VLMEngine
-from .dual_ar import DualAREngine
-from .tts_llm import TTSLLMEngine
-from .next_token_diffusion import NextTokenDiffusionEngine
+# The compiled (ATen) handlers are NOT imported here. They register
+# themselves when their module is imported, and `get_flow_handler` imports
+# the module of the flow type it is asked for (COMPILED_FLOW_MODULES in
+# base.py). R33: a --triton run takes its handlers from neurobrix.triton.flow
+# and must never load the ATen branch; the package exports below resolve
+# lazily so `from neurobrix.core.flow import AutoregressiveHandler` still
+# works for the compiled branch and its tests.
+_HANDLER_EXPORTS = {
+    "IterativeProcessHandler": "iterative_process",
+    "StaticGraphHandler": "static_graph",
+    "ForwardPassHandler": "forward_pass",
+    "AutoregressiveHandler": "autoregressive",
+    "AudioEngine": "audio",
+    "EncoderDecoderEngine": "encoder_decoder",
+    "AudioLLMEngine": "audio_llm",
+    "VLMEngine": "vlm",
+    "DualAREngine": "dual_ar",
+    "TTSLLMEngine": "tts_llm",
+    "NextTokenDiffusionEngine": "next_token_diffusion",
+}
+
+
+def __getattr__(name):
+    module = _HANDLER_EXPORTS.get(name)
+    if module is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    import importlib
+    return getattr(importlib.import_module(f"{__name__}.{module}"), name)
+
 
 __all__ = [
     "FlowContext",

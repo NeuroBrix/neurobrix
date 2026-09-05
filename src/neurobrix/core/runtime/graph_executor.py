@@ -27,8 +27,13 @@ The executor mechanically plays the DAG:
 3. Dispatch to kernel based on op_type
 4. Store outputs via ExecutionContext
 """
+from __future__ import annotations
 
-import torch
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # R33: the ATen branch imports it; shared code only annotates
+    import torch
+from neurobrix.core.runtime.tensor_compat import is_torch_tensor
 import json
 import time
 
@@ -42,11 +47,11 @@ from neurobrix.kernels.classification import OpExecution, get_execution_type
 
 if TYPE_CHECKING:
     from neurobrix.core.components.base import ComponentHandler
+    from .graph.compiled_sequence import CompiledSequence
 
 from .graph.execution_context import ExecutionContext
 from .graph.tensor_resolver import TensorResolver
 from .graph.memory_pool import MemoryPool
-from .graph.compiled_sequence import CompiledSequence
 from neurobrix.core.memory import MemoryManager
 
 
@@ -124,7 +129,7 @@ class GraphExecutor:
         vendor: str,
         arch: str,
         device: str,
-        dtype: torch.dtype = torch.float32,
+        dtype: str = "float32",
         mode: str = "compiled",
     ):
         """
@@ -149,7 +154,7 @@ class GraphExecutor:
         self.dtype = dtype
         self.mode = mode
         self._sequential_dispatcher = None  # For ATen op dispatch (sequential mode)
-        self._compiled_seq: Optional[CompiledSequence] = None  # For compiled mode (zero-overhead)
+        self._compiled_seq: Optional["CompiledSequence"] = None  # For compiled mode (zero-overhead)
         self._compiled_exec_count = 0  # Track executions for verbose control
 
         self._dag = None
@@ -445,18 +450,31 @@ class GraphExecutor:
             return
 
         if not hasattr(self, "_maybe_to_nbx"):
-            # Bind helper once. In triton modes a computed-at-runtime buffer
-            # (e.g. sincos 2D pos embed, interpolated pos embed) must enter
-            # the runtime as an NBXTensor; otherwise downstream ops crash
-            # with `'Tensor' object has no attribute '_dtype'` (PixArt path).
+            # Bind helper once. A computed-at-runtime buffer (sincos 2D pos
+            # embed, interpolated pos embed, traced buffer) is produced as an
+            # array and enters the engine's container HERE: torch on the ATen
+            # branch (cast + placed exactly as before), NBXTensor on the
+            # Triton branch — no torch on that path (R33).
             def _maybe_to_nbx(t):
-                if self.mode not in ("triton", "triton_sequential"):
-                    return t
-                if not isinstance(t, torch.Tensor):
+                import numpy as np
+                triton = self.mode in ("triton", "triton_sequential")
+                if isinstance(t, np.ndarray):
+                    if not triton:
+                        import torch
+                        return torch.from_numpy(t).to(dtype=get_torch_dtype(self.dtype), device=self.device)
+                    from neurobrix.kernels.nbx_tensor import (
+                        NBXTensor, DeviceAllocator, parse_dtype as _nbx_dtype)
+                    dev_idx = (int(self.device.split(':')[1])
+                               if isinstance(self.device, str) and ':' in self.device
+                               else 0)
+                    DeviceAllocator.set_device(dev_idx)
+                    out = NBXTensor.from_numpy(np.ascontiguousarray(t))
+                    want = _nbx_dtype(str(self.dtype).replace("torch.", ""))
+                    return out.to(want) if out.nbx_dtype != want else out
+                if not triton or not is_torch_tensor(t):
                     return t
                 from neurobrix.kernels.nbx_tensor import (
                     NBXTensor, DeviceAllocator)
-                import numpy as np
                 dev_idx = (int(self.device.split(':')[1])
                            if isinstance(self.device, str) and ':' in self.device
                            else 0)
@@ -520,9 +538,7 @@ class GraphExecutor:
                 arr = np.frombuffer(
                     base64.b64decode(traced_data), dtype=np.float32
                 ).reshape(traced_shape)
-                tensor = torch.from_numpy(arr.copy()).to(
-                    dtype=get_torch_dtype(self.dtype), device=self.device)
-                self._weights[weight_name] = self._maybe_to_nbx(tensor)
+                self._weights[weight_name] = self._maybe_to_nbx(arr.copy())
                 computed_count += 1
             elif method == "interpolate_learned_pos_embed":
                 # Bilinearly interpolate learned positional embeddings
@@ -565,7 +581,8 @@ class GraphExecutor:
             patch_size: Transformer patch size (1 for Sana, 2 for PixArt)
 
         Returns:
-            Positional embeddings tensor [1, seq_len, embed_dim]
+            Positional embeddings array [1, seq_len, embed_dim] (float64; the
+            caller places it in the engine's container at the compute dtype)
         """
         import numpy as np
 
@@ -609,10 +626,7 @@ class GraphExecutor:
         # Add batch dimension: [1, seq, embed_dim]
         pos_embed = pos_embed[np.newaxis, :, :]
 
-        # Convert to torch tensor with target dtype
-        pos_embed_tensor = torch.from_numpy(pos_embed).to(dtype=get_torch_dtype(self.dtype), device=self.device)
-
-        return pos_embed_tensor
+        return np.ascontiguousarray(pos_embed)
 
     def _interpolate_learned_pos_embed(
         self,
@@ -642,9 +656,10 @@ class GraphExecutor:
             patch_size: Transformer patch size (default 2 for PixArt)
 
         Returns:
-            Interpolated positional embeddings tensor [1, seq_len, embed_dim]
+            Interpolated positional embeddings [1, seq_len, embed_dim] — an
+            array when no interpolation is needed, else the engine's tensor
+            (the caller places either in the engine's container)
         """
-        import torch.nn.functional as F
 
         # DATA-DRIVEN: Get vae_scale from handler
         vae_scale = None
@@ -678,7 +693,7 @@ class GraphExecutor:
                 traced_bytes = base64.b64decode(traced_data)
                 traced_np = np.frombuffer(traced_bytes, dtype=np.float32).reshape(1, traced_seq, embed_dim)
                 if np.any(traced_np != 0):
-                    return torch.from_numpy(traced_np.copy()).to(dtype=get_torch_dtype(self.dtype), device=self.device)
+                    return traced_np.copy()
                 # traced_data is all zeros (VMM pool artifact) — recompute from sincos
                 return self._compute_sincos_2d_pos_embed(
                     runtime_height=runtime_height,
@@ -702,7 +717,7 @@ class GraphExecutor:
             if not np.any(traced_np != 0):
                 traced_np = None  # VMM pool artifact — skip zero data
             else:
-                traced_embed = torch.from_numpy(traced_np).to(dtype=get_torch_dtype(self.dtype), device=self.device)
+                traced_embed = traced_np
 
         # Try to load from weights file
         if traced_embed is None and weight_name in self._weights:
@@ -715,6 +730,27 @@ class GraphExecutor:
             )
 
         # Reshape to 2D grid: [1, seq, dim] -> [1, dim, h, w]
+        if self.mode in ("triton", "triton_sequential"):
+            # The Triton branch interpolates with the house bilinear kernel
+            # on an NBXTensor (R33): [1, D, gh, gw] fp32 → [1, D, gh', gw'].
+            import numpy as np
+            from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype
+            from neurobrix.kernels.wrappers import upsample_bilinear2d_wrapper
+            if isinstance(traced_embed, np.ndarray):
+                src_np = traced_embed
+            else:  # a loaded NBXTensor weight
+                src_np = (traced_embed.to(NBXDtype.float32)
+                          if traced_embed.nbx_dtype != NBXDtype.float32 else traced_embed).numpy()
+            src_np = np.ascontiguousarray(
+                src_np.reshape(traced_grid_h, traced_grid_w, embed_dim).transpose(2, 0, 1)[None].astype(np.float32))
+            scaled = upsample_bilinear2d_wrapper(
+                NBXTensor.from_numpy(src_np), (runtime_grid_h, runtime_grid_w), align_corners=False)
+            out = scaled.numpy().reshape(embed_dim, runtime_seq).T[None]
+            return np.ascontiguousarray(out)
+        import torch
+        import torch.nn.functional as F
+        if not is_torch_tensor(traced_embed):  # the traced array, placed as before
+            traced_embed = torch.from_numpy(traced_embed).to(dtype=get_torch_dtype(self.dtype), device=self.device)
         pos_2d = traced_embed.squeeze(0).transpose(0, 1).reshape(1, embed_dim, traced_grid_h, traced_grid_w)
 
         # Bilinear interpolation
@@ -818,10 +854,11 @@ class GraphExecutor:
 
         self._component_name = self._dag.get("component_name")
 
-        # Extract graph dtype for DtypeEngine
-        from neurobrix.core.dtype.config import parse_dtype as _cfg_parse_dtype
+        # The graph's dtype, for the ATen branch's DtypeEngine (parsed to a
+        # torch dtype in that branch only — R33: the Triton branch reads the
+        # name through its own parser).
         graph_dtype_str = self._dag.get("torch_dtype", "")
-        self._graph_dtype = _cfg_parse_dtype(graph_dtype_str) if graph_dtype_str else None
+        self._graph_dtype = None
 
         # DtypeEngine: single entry point for all dtype decisions.
         # AMP (Automatic Mixed Precision) is DISABLED for diffusion components
@@ -833,6 +870,9 @@ class GraphExecutor:
 
         if self.mode not in ("triton", "triton_sequential"):
             from neurobrix.core.dtype.engine import DtypeEngine
+            from neurobrix.core.dtype.config import parse_dtype as _cfg_parse_dtype
+            import torch
+            self._graph_dtype = _cfg_parse_dtype(graph_dtype_str) if graph_dtype_str else None
             amp_enabled = self._should_enable_amp()
             compute_dtype = get_torch_dtype(self.dtype)
             # A component PLACED ON THE HOST computes in fp32, whatever the
@@ -1204,7 +1244,10 @@ class GraphExecutor:
         All op resolution is handled by CompiledOpResolver internally.
         """
         # MoE fusion already applied in _init_from_dag() (runs for ALL modes).
-        # Create and compile the CompiledSequence (100% autonomous)
+        # Create and compile the CompiledSequence (100% autonomous) — the
+        # ATen branch's module, imported here on its own path (R33).
+        from .graph.compiled_sequence import CompiledSequence
+        import torch
         self._compiled_seq = CompiledSequence(
             dag=self._dag,
             device=torch.device(self.device),
@@ -1681,6 +1724,7 @@ class GraphExecutor:
 
     def _load_constant_native(self, b64_data: str, weight_name: str):
         """Load base64 constant via torch (native mode)."""
+        import torch  # the ATen branch's path
         import base64, io
         buffer = io.BytesIO(base64.b64decode(b64_data))
         tensor = torch.load(buffer, map_location='cpu', weights_only=True)
@@ -1861,6 +1905,7 @@ class GraphExecutor:
                 return self._run_triton(inputs, skip_kills=skip_kills)
 
             # NATIVE/COMPILED MODE: torch path
+            import torch
             with torch.inference_mode():
                 self._ctx = self._prepare_execution(inputs)
                 self._resolver = TensorResolver(self._ctx)
@@ -2148,7 +2193,7 @@ class GraphExecutor:
         _seq_fp16_safe = _resolve_contract_seq(
             getattr(self, "_cache_path", None), self._component_name,
             getattr(self, "_dag", None),
-            compute_dtype=torch.float16 if str(self.dtype) in ("float16", "torch.float16") else torch.float32,
+            compute_dtype="float16" if str(self.dtype) in ("float16", "torch.float16") else "float32",
             supports_op_pins=False)[0]
         dispatcher = TritonSequentialDispatcher(
             device_idx=device_idx, compute_dtype=parse_dtype(self.dtype),
@@ -2592,6 +2637,7 @@ class GraphExecutor:
                         _fn = _os_raw.path.join(
                             _raw_dir, _ot.replace(":", "_").replace("/", "_") + ".pt")
                         if not _os_raw.path.exists(_fn):
+                            import torch
                             torch.save(_t.detach().cpu(), _fn)
                             print(f"[NBX_DUMP_RAW] {_ot} {list(_t.shape)} -> {_fn}",
                                   flush=True)
@@ -2882,7 +2928,7 @@ class GraphExecutor:
         _fp16_safe = _resolve_contract(
             getattr(self, "_cache_path", None), self._component_name,
             getattr(self, "_dag", None),
-            compute_dtype=torch.float16 if str(self.dtype) in ("float16", "torch.float16") else torch.float32,
+            compute_dtype="float16" if str(self.dtype) in ("float16", "torch.float16") else "float32",
             supports_op_pins=False)[0]
         self._triton_seq.set_activations_fp16_safe(bool(_fp16_safe))
 
@@ -2915,6 +2961,7 @@ class GraphExecutor:
         Returns:
             ExecutionContext ready for execution
         """
+        import torch  # the ATen branch's path
         # Create context with immutable dag and settings
         assert self._dag is not None
         assert isinstance(self._component_name, str)
@@ -2939,11 +2986,11 @@ class GraphExecutor:
         # component's tensor inputs (CFG batching doubles dim0 EVERYWHERE, so
         # any input whose alignment would break batch coherence is wrong).
         _dim0s = [int(v.shape[0]) for v in inputs.values()
-                  if isinstance(v, torch.Tensor) and v.ndim >= 1]
+                  if is_torch_tensor(v) and v.ndim >= 1]
         _batch_hint = max(set(_dim0s), key=_dim0s.count) if _dim0s else None
 
         for input_name, val in inputs.items():
-            if isinstance(val, torch.Tensor):
+            if is_torch_tensor(val):
                 # Rank-align to the graph input contract. A custom component
                 # class may take an input with an extra STRUCTURAL unit dim vs
                 # the standard flow tensor (Allegro-TI2V caption_projection:
@@ -3011,14 +3058,14 @@ class GraphExecutor:
             elif isinstance(val, dict):
                 # Handle dictionary inputs (e.g. added_cond_kwargs)
                 ctx.inputs[input_name] = {
-                    k: v.to(self.device) if isinstance(v, torch.Tensor) else v
+                    k: v.to(self.device) if is_torch_tensor(v) else v
                     for k, v in val.items()
                 }
             else:
                 ctx.inputs[input_name] = val
 
             # Collect tensors for symbolic shape binding
-            if isinstance(val, torch.Tensor):
+            if is_torch_tensor(val):
                 tensor_inputs[input_name] = val
             elif isinstance(val, dict):
                 tensor_inputs[input_name] = val
@@ -3278,10 +3325,11 @@ class GraphExecutor:
         table (downstream may still error, but we've done what's
         recoverable without inv_freq).
         """
+        import torch  # the ATen branch's path
         # Find inv_freq across canonical naming conventions
         inv_freq = None
         for wname, w in self._weights.items():
-            if "rotary_embed.inv_freq" in wname and isinstance(w, torch.Tensor):
+            if "rotary_embed.inv_freq" in wname and is_torch_tensor(w):
                 inv_freq = w
                 break
         if inv_freq is None:
@@ -3336,7 +3384,7 @@ class GraphExecutor:
             if t is None:
                 return "tuple_empty"
         try:
-            if isinstance(t, torch.Tensor):
+            if is_torch_tensor(t):
                 n = t.numel()
                 if n == 0:
                     return "empty"
@@ -3537,6 +3585,7 @@ class GraphExecutor:
                     # the trace matches the NBX `_cuda_live_bytes` sum.
                     _live = 0.0
                     _peak = 0.0
+                    import torch
                     for _di in range(torch.cuda.device_count()):
                         _live += torch.cuda.memory_allocated(_di) / 1024 / 1024
                         _peak += torch.cuda.max_memory_allocated(_di) / 1024 / 1024
@@ -3678,7 +3727,7 @@ class GraphExecutor:
                     value = None
 
             # Apply Prism dtype + device conversion (same logic as sequential mode)
-            if isinstance(value, torch.Tensor):
+            if is_torch_tensor(value):
                 # For floating-point tensors, convert to Prism dtype
                 torch_dtype = get_torch_dtype(self.dtype)
                 if value.dtype.is_floating_point and value.dtype != torch_dtype:
@@ -3849,6 +3898,7 @@ class GraphExecutor:
         compute op, and allocator ops (aten::empty) legitimately expose
         uninitialised memory.
         """
+        import torch  # the ATen branch's path
         if exec_type == OpExecution.METADATA:
             return
 
@@ -3857,7 +3907,7 @@ class GraphExecutor:
             return
 
         for idx, out in enumerate(self._ctx.op_outputs[op_uid]):
-            if isinstance(out, torch.Tensor) and out.dtype in (torch.float32, torch.float16, torch.bfloat16):
+            if is_torch_tensor(out) and out.dtype in (torch.float32, torch.float16, torch.bfloat16):
                 has_nan = bool(torch.isnan(out).any())
                 has_pos_inf = bool((out == float('inf')).any())
 
@@ -3920,7 +3970,7 @@ class GraphExecutor:
                     # Phase 2+3: If memory pooling enabled, release to pool instead of deleting
                     if self._use_memory_pool and self._memory_pool is not None:
                         tensor = self._ctx.get_tensor(tid)
-                        if tensor is not None and isinstance(tensor, torch.Tensor):
+                        if tensor is not None and is_torch_tensor(tensor):
                             # Only pool contiguous tensors that own their storage
                             if tensor.is_contiguous() and tensor.storage_offset() == 0:
                                 self._memory_pool.release(tensor)
@@ -4024,7 +4074,7 @@ class GraphExecutor:
         # non-contiguous destinations natively; keep the ORIGINAL resolved
         # destination object.
         if op_type.startswith("aten::copy") and resolved_inputs \
-                and isinstance(resolved_inputs[0], torch.Tensor):
+                and is_torch_tensor(resolved_inputs[0]):
             normalized_inputs[0] = resolved_inputs[0]
 
         # AMP: Cast inputs per DtypeEngine rules (fp32 for pow/rsqrt/softmax, etc.)
@@ -4082,6 +4132,7 @@ class GraphExecutor:
                         _raw_dir,
                         f"{_comp}_" + _ot.replace(":", "_").replace("/", "_") + ".pt")
                     if not _os_raw.path.exists(_fn):
+                        import torch
                         torch.save(_t.detach().cpu(), _fn)
                         print(f"[NBX_DUMP_RAW] {_ot} {list(_t.shape)} -> {_fn}",
                               flush=True)
@@ -4100,6 +4151,7 @@ class GraphExecutor:
         routing + expert FFN + scatter-add. Without this, native mode uses
         hardcoded trace-time routing indices → garbage output.
         """
+        import torch  # the ATen branch's path
         import torch.nn.functional as F
 
         assert self._ctx is not None
@@ -4277,7 +4329,7 @@ class GraphExecutor:
             _census.observe(op_uid, result)
         output_tensor_ids = op_data.get("output_tensor_ids", [])
 
-        if isinstance(result, torch.Tensor):
+        if is_torch_tensor(result):
             current_outputs = [result]
         elif isinstance(result, (tuple, list)):
             current_outputs = list(result)
@@ -4306,12 +4358,13 @@ class GraphExecutor:
         _dpath_ds = _os_ds.environ.get("NBX_DUMP_TIDS")
         if _dpath_ds:
             import json as _json_ds
+            import torch
             _filters_ds = [f for f in _os_ds.environ.get(
                 "NBX_DUMP_TIDS_FILTER", "").split(",") if f]
             _ot_ds = op_data.get("op_type", "unknown")
             for idx, tid in enumerate(output_tensor_ids):
                 _t = current_outputs[idx]
-                if not isinstance(_t, torch.Tensor):
+                if not is_torch_tensor(_t):
                     continue
                 if _filters_ds and not any(f in tid or f in op_uid for f in _filters_ds):
                     continue

@@ -1280,6 +1280,54 @@ class DeviceAllocator:
         getattr(rt, fn_name)(ctypes.c_void_p(stream))
 
     @staticmethod
+    def device_synchronize(device_idx: Optional[int] = None):
+        """Block the caller until every stream of the device drains.
+
+        Selects the device first when one is given (the runtime's device
+        synchronize is per current device) and restores the previous one."""
+        rt = _gpu_runtime()
+        backend = _active_backend()
+        fn_name = backend.get("sync")
+        if fn_name is None:
+            return
+        prev = None
+        if device_idx is not None:
+            prev = DeviceAllocator.get_device()
+            if prev != device_idx:
+                DeviceAllocator.set_device(device_idx)
+        try:
+            ret = getattr(rt, fn_name)()
+            if ret != 0:
+                DeviceAllocator.clear_last_error()
+                raise RuntimeError(f"{fn_name} failed with error {ret}")
+        finally:
+            if prev is not None and prev != device_idx:
+                DeviceAllocator.set_device(prev)
+
+    @staticmethod
+    def mem_get_info(device_idx: Optional[int] = None) -> Tuple[int, int]:
+        """(free_bytes, total_bytes) of a device, from the runtime."""
+        rt = _gpu_runtime()
+        backend = _active_backend()
+        mem_fn = backend.get("mem_get_info", "cudaMemGetInfo")
+        prev = None
+        if device_idx is not None:
+            prev = DeviceAllocator.get_device()
+            if prev != device_idx:
+                DeviceAllocator.set_device(device_idx)
+        try:
+            free_b = ctypes.c_size_t()
+            total_b = ctypes.c_size_t()
+            ret = getattr(rt, mem_fn)(ctypes.byref(free_b), ctypes.byref(total_b))
+            if ret != 0:
+                DeviceAllocator.clear_last_error()
+                raise RuntimeError(f"{mem_fn} failed with error {ret}")
+            return int(free_b.value), int(total_b.value)
+        finally:
+            if prev is not None and prev != device_idx:
+                DeviceAllocator.set_device(prev)
+
+    @staticmethod
     def stream_synchronize(stream: int):
         """Block the caller until the given stream drains."""
         rt = _gpu_runtime()

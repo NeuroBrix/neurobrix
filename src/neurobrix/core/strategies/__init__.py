@@ -22,15 +22,56 @@ Strategies:
 - Zero3Strategy: CPU offload with GPU compute streaming
 """
 
+import importlib
+
 from .base import ExecutionStrategy, StrategyContext
-from .single_gpu import SingleGPUStrategy
-from .component_placement import ComponentPlacementStrategy, ComponentPlacementLazyStrategy
-from .pipeline_parallel import PipelineParallelStrategy
-from .block_scatter import BlockScatterStrategy
-from .weight_sharding import WeightShardingStrategy
-from .lazy_sequential import LazySequentialStrategy
-from .zero3 import Zero3Strategy
-from .cpu_execution import CPUExecutionStrategy
+
+# The compiled (ATen) strategy classes are imported when a name is resolved,
+# never at package import: a --triton run takes its strategies from
+# `.triton.TRITON_REGISTRY` and must not load the ATen branch (R33). The
+# registry keeps the `name -> class` contract (membership, iteration,
+# `registry[name] is Class`) through a lazy mapping.
+_STRATEGY_CLASSES = {
+    "SingleGPUStrategy": ".single_gpu",
+    "ComponentPlacementStrategy": ".component_placement",
+    "ComponentPlacementLazyStrategy": ".component_placement",
+    "PipelineParallelStrategy": ".pipeline_parallel",
+    "BlockScatterStrategy": ".block_scatter",
+    "WeightShardingStrategy": ".weight_sharding",
+    "LazySequentialStrategy": ".lazy_sequential",
+    "Zero3Strategy": ".zero3",
+    "CPUExecutionStrategy": ".cpu_execution",
+}
+
+
+def _strategy_class(class_name: str):
+    return getattr(importlib.import_module(_STRATEGY_CLASSES[class_name], __name__), class_name)
+
+
+class _LazyRegistry(dict):
+    """name -> strategy class; the class module is imported on first access."""
+
+    def __getitem__(self, name):
+        entry = dict.__getitem__(self, name)
+        if isinstance(entry, str):
+            entry = _strategy_class(entry)
+            dict.__setitem__(self, name, entry)
+        return entry
+
+    def get(self, name, default=None):
+        return self[name] if name in self else default
+
+    def values(self):
+        return [self[k] for k in self]
+
+    def items(self):
+        return [(k, self[k]) for k in self]
+
+
+def __getattr__(name):
+    if name in _STRATEGY_CLASSES:
+        return _strategy_class(name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 # =============================================================================
@@ -43,30 +84,30 @@ from .cpu_execution import CPUExecutionStrategy
 # The solver uses these exact string names in ExecutionPlan.strategy.
 # =============================================================================
 
-STRATEGY_REGISTRY = {
+STRATEGY_REGISTRY = _LazyRegistry({
     # === Single Device ===
-    "single_gpu": SingleGPUStrategy,
-    "single_gpu_lifecycle": SingleGPUStrategy,
+    "single_gpu": "SingleGPUStrategy",
+    "single_gpu_lifecycle": "SingleGPUStrategy",
 
     # === Component Placement (whole-component distribution) ===
-    "component_placement": ComponentPlacementStrategy,
-    "component_placement_lazy": ComponentPlacementLazyStrategy,
+    "component_placement": "ComponentPlacementStrategy",
+    "component_placement_lazy": "ComponentPlacementLazyStrategy",
 
     # === Pipeline Parallel (per-layer sequential fill) ===
-    "pipeline_parallel": PipelineParallelStrategy,
+    "pipeline_parallel": "PipelineParallelStrategy",
 
     # === Block Scatter (block-level best-fit distribution) ===
-    "block_scatter": BlockScatterStrategy,
+    "block_scatter": "BlockScatterStrategy",
 
     # === Weight Sharding (weight-file round-robin) ===
-    "weight_sharding": WeightShardingStrategy,
+    "weight_sharding": "WeightShardingStrategy",
 
     # === Sequential / Offload ===
-    "lazy_sequential": LazySequentialStrategy,
-    "zero3": Zero3Strategy,
+    "lazy_sequential": "LazySequentialStrategy",
+    "zero3": "Zero3Strategy",
 
     # === CPU-only (Doctrine R35 last-resort cascade) ===
-    "cpu_execution": CPUExecutionStrategy,
+    "cpu_execution": "CPUExecutionStrategy",
     # Same PLACEMENT as cpu_execution — every component on the host — and the
     # same class, exactly as single_gpu_lifecycle reuses SingleGPUStrategy.
     # What differs is the PLAN: the solver forces `loading_mode = "lazy"` so
@@ -79,8 +120,8 @@ STRATEGY_REGISTRY = {
     # always runs — crashed with "Unknown strategy 'cpu_streaming'" the moment
     # it was selected. Caught by the CPU-only battery cell added in the same
     # session, on the full-zoo gate.
-    "cpu_streaming": CPUExecutionStrategy,
-}
+    "cpu_streaming": "CPUExecutionStrategy",
+})
 
 
 def get_strategy(strategy_name: str, context: StrategyContext) -> ExecutionStrategy:

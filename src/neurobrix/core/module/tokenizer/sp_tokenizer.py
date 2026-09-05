@@ -117,7 +117,9 @@ class SPTokenizer:
         Callable interface for variable resolver compatibility.
 
         Accepts either 'text' or 'prompt' as input.
-        Returns dict with 'input_ids' and 'attention_mask' as torch tensors.
+        Returns dict with 'input_ids' and 'attention_mask' as int64 arrays
+        [1, L] — the tokenizer engine's container; the variable resolver puts
+        them in the executing engine's container (R33: no torch here).
 
         If complex_human_instruction is configured (Sana-style models),
         the instruction is prepended to the user prompt.
@@ -131,7 +133,7 @@ class SPTokenizer:
         Returns:
             Dict with 'input_ids' and 'attention_mask' tensors
         """
-        import torch
+        import numpy as np
 
         # Accept either 'text' or 'prompt'
         input_text = text if text is not None else prompt
@@ -148,10 +150,14 @@ class SPTokenizer:
         result = self.encode_with_mask(input_text, max_length=max_length)
 
         # Convert to tensors (add batch dimension)
-        return {
-            "input_ids": torch.tensor([result["input_ids"]], dtype=torch.long),
-            "attention_mask": torch.tensor([result["attention_mask"]], dtype=torch.long),
-        }
+        ids = np.asarray([result["input_ids"]], dtype=np.int64)
+        mask = np.asarray([result["attention_mask"]], dtype=np.int64)
+        if kwargs.get("return_tensors") == "pt":
+            # The caller asked for the ATen branch's container (its text
+            # preprocessor); the Triton branch never asks (R33).
+            import torch
+            return {"input_ids": torch.from_numpy(ids), "attention_mask": torch.from_numpy(mask)}
+        return {"input_ids": ids, "attention_mask": mask}
 
     def encode(
         self,
@@ -491,7 +497,9 @@ class BPETokenizer:
         Callable interface for variable resolver compatibility.
 
         Accepts either 'text' or 'prompt' as input.
-        Returns dict with 'input_ids' and 'attention_mask' as torch tensors.
+        Returns dict with 'input_ids' and 'attention_mask' as int64 arrays
+        [1, L] — the tokenizer engine's container; the variable resolver puts
+        them in the executing engine's container (R33: no torch here).
 
         Args:
             text: Text to tokenize
@@ -502,7 +510,7 @@ class BPETokenizer:
         Returns:
             Dict with 'input_ids' and 'attention_mask' tensors
         """
-        import torch
+        import numpy as np
 
         # Accept either 'text' or 'prompt'
         input_text = text if text is not None else prompt
@@ -515,10 +523,14 @@ class BPETokenizer:
         result = self.encode_with_mask(input_text, max_length=max_length)
 
         # Convert to tensors (add batch dimension)
-        return {
-            "input_ids": torch.tensor([result["input_ids"]], dtype=torch.long),
-            "attention_mask": torch.tensor([result["attention_mask"]], dtype=torch.long),
-        }
+        ids = np.asarray([result["input_ids"]], dtype=np.int64)
+        mask = np.asarray([result["attention_mask"]], dtype=np.int64)
+        if kwargs.get("return_tensors") == "pt":
+            # The caller asked for the ATen branch's container (its text
+            # preprocessor); the Triton branch never asks (R33).
+            import torch
+            return {"input_ids": torch.from_numpy(ids), "attention_mask": torch.from_numpy(mask)}
+        return {"input_ids": ids, "attention_mask": mask}
 
     def _tokenize_word(self, word: str) -> List[str]:
         """
@@ -995,7 +1007,9 @@ class HFTokenizer:
         Callable interface for variable resolver compatibility.
 
         Accepts either 'text' or 'prompt' as input.
-        Returns dict with 'input_ids' and 'attention_mask' as torch tensors.
+        Returns dict with 'input_ids' and 'attention_mask' as int64 arrays
+        [1, L] — the tokenizer engine's container; the variable resolver puts
+        them in the executing engine's container (R33: no torch here).
 
         Args:
             text: Text to tokenize
@@ -1006,7 +1020,7 @@ class HFTokenizer:
         Returns:
             Dict with 'input_ids' and 'attention_mask' tensors
         """
-        import torch
+        import numpy as np
 
         # Accept either 'text' or 'prompt'
         input_text = text if text is not None else prompt
@@ -1019,10 +1033,14 @@ class HFTokenizer:
         result = self.encode_with_mask(input_text, max_length=max_length)
 
         # Convert to tensors (add batch dimension)
-        return {
-            "input_ids": torch.tensor([result["input_ids"]], dtype=torch.long),
-            "attention_mask": torch.tensor([result["attention_mask"]], dtype=torch.long),
-        }
+        ids = np.asarray([result["input_ids"]], dtype=np.int64)
+        mask = np.asarray([result["attention_mask"]], dtype=np.int64)
+        if kwargs.get("return_tensors") == "pt":
+            # The caller asked for the ATen branch's container (its text
+            # preprocessor); the Triton branch never asks (R33).
+            import torch
+            return {"input_ids": torch.from_numpy(ids), "attention_mask": torch.from_numpy(mask)}
+        return {"input_ids": ids, "attention_mask": mask}
 
     def encode_chat_for_diffusion(
         self,

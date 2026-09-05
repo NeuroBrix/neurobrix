@@ -7,8 +7,12 @@ Extracted from GraphExecutor to make state management explicit.
 ZERO HARDCODE: All values come from DAG or Prism allocation.
 ZERO FALLBACK: Missing values raise explicit errors.
 """
+from __future__ import annotations
 
-import torch
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # R33: the ATen branch imports it; shared code only annotates
+    import torch
 from dataclasses import dataclass, field
 from typing import Dict, Any, Optional, TYPE_CHECKING
 

@@ -10,12 +10,15 @@ Responsibilities:
 
 ZERO HARDCODE: All values from config (patch_size, sample_size, interpolation_scale).
 """
+from __future__ import annotations
 
 import math
 from typing import Dict, Any, Optional, Tuple
 
-import torch
-import torch.nn.functional as F
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # R33: the ATen branch imports it; shared code only annotates
+    import torch
 
 from ..base import ComponentHandler, ComponentConfig
 from ..registry import register_handler
@@ -210,6 +213,7 @@ class TransformerComponentHandler(ComponentHandler):
         Returns:
             Recomputed positional embedding [1, seq, embed_dim]
         """
+        import torch  # the ATen branch's positional recompute
         # Create position grid
         grid_h_positions = torch.arange(grid_h, device=device, dtype=torch.float32)
         grid_w_positions = torch.arange(grid_w, device=device, dtype=torch.float32)
@@ -260,6 +264,7 @@ class TransformerComponentHandler(ComponentHandler):
         Returns:
             Sincos embeddings [seq, dim]
         """
+        import torch  # the ATen branch's positional recompute
         half = dim // 2
         freqs = torch.exp(
             -math.log(max_period) * torch.arange(0, half, device=device, dtype=torch.float32) / half
@@ -293,6 +298,8 @@ class TransformerComponentHandler(ComponentHandler):
         Returns:
             Interpolated embedding [1, new_seq, dim]
         """
+        import torch  # the ATen branch's positional recompute
+        import torch.nn.functional as F  # the ATen branch's positional recompute
         embed_dim = pos_embed.shape[2]
         runtime_seq = runtime_h * runtime_w
 

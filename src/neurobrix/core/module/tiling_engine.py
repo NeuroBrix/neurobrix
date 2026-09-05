@@ -19,8 +19,13 @@ Algorithm: Accumulate-and-divide (SwinIR/Swin2SR pattern)
 - Overlapping pixels get averaged (sum / count)
 - Proven across window-attention models, numerically stable
 """
+from __future__ import annotations
 
-import torch
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # R33: the ATen branch imports it; shared code only annotates
+    import torch
+from neurobrix.core.runtime.tensor_compat import is_torch_tensor
 import json
 import logging
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -456,6 +461,7 @@ class TilingEngine:
             output = NBXTensor.zeros(out_shape, dtype=first_result.dtype, device=dev)
             weight = NBXTensor.zeros(weight_shape, dtype=first_result.dtype, device=dev)
         else:
+            import torch
             output = torch.zeros(
                 *out_shape, device=first_result.device, dtype=first_result.dtype)
             weight = torch.zeros(
@@ -617,6 +623,7 @@ class TilingEngine:
                 from neurobrix.kernels.wrappers import pad_wrapper
                 tile = pad_wrapper(tile, [0, pad_w, 0, pad_h], mode='replicate')
             else:
+                import torch
                 tile = torch.nn.functional.pad(tile, (0, pad_w, 0, pad_h), mode='replicate')
 
         return tile
@@ -1347,7 +1354,7 @@ class OpLevelTilingEngine:
                                                alpha=float(alpha))
                     # Torch path (compiled / sequential modes).
                     import torch
-                    if isinstance(target, torch.Tensor):
+                    if is_torch_tensor(target):
                         # Cast `other` to target's dtype if needed (mirror
                         # the NBX wrapper's behaviour). If target is the
                         # narrower precision, fall back to non-in-place
@@ -1902,8 +1909,9 @@ class OpLevelTilingEngine:
                                 )
                                 value = add_inplace_nbx(
                                     _target, _other, alpha=float(alpha))
-                            elif (isinstance(_target, torch.Tensor)
-                                  and isinstance(_other, torch.Tensor)):
+                            elif (is_torch_tensor(_target)
+                                  and is_torch_tensor(_other)):
+                                import torch
                                 if _other.dtype != _target.dtype:
                                     if (torch.promote_types(
                                             _target.dtype, _other.dtype)
@@ -1916,9 +1924,9 @@ class OpLevelTilingEngine:
                                                  alpha=float(alpha))
                                     value = _target
                         if value is None:
-                            if (isinstance(args[0], torch.Tensor)
-                                    and isinstance(args[1],
-                                                   torch.Tensor)):
+                            if (is_torch_tensor(args[0])
+                                    and is_torch_tensor(args[1])):
+                                import torch
                                 value = torch.add(args[0], args[1],
                                                   alpha=float(alpha))
                             else:
@@ -1928,7 +1936,7 @@ class OpLevelTilingEngine:
                     # the fork result for deferred compute at the first
                     # intermediate call. Accept torch.Tensor (compiled
                     # mode) AND NBXTensor (triton modes). The original
-                    # `isinstance(value, torch.Tensor)` guard silently
+                    # `is_torch_tensor(value)` guard silently
                     # skipped NBXTensor → triton chain forks never
                     # populated _pending → chain wrapper never fired on
                     # triton (P-TRITON-LIVE-WATERMARK-AUDIT L4b).
@@ -1936,7 +1944,7 @@ class OpLevelTilingEngine:
                         NBXTensor as _NBXT,
                     )
                     for fork_spec in _node_roles["forks"]:
-                        if not isinstance(value, (torch.Tensor, _NBXT)):
+                        if not (is_torch_tensor(value) or isinstance(value, _NBXT)):
                             continue
                         _pending[fork_spec["chain_id"]] = value
 

@@ -12,7 +12,7 @@ They only know tensors, devices, and execution flow.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Dict, Any, Optional, List, TYPE_CHECKING
-import torch
+from neurobrix.core.runtime.tensor_compat import is_torch_tensor
 from neurobrix.core.device_utils import device_sync
 
 if TYPE_CHECKING:
@@ -260,7 +260,8 @@ class ExecutionStrategy(ABC):
                 return tensor.to_cpu()
             return tensor.to_cuda(dev_idx)
 
-        if isinstance(tensor, torch.Tensor):
+        if is_torch_tensor(tensor):
+            import torch
             if str(tensor.device) == target_device:
                 return tensor
             target = torch.device(target_device)
@@ -299,7 +300,7 @@ class ExecutionStrategy(ABC):
             # pipeline_parallel multi-GPU on the triton path. For single-GPU
             # (target == current device) transfer_tensor is a no-op
             # (NBXTensor.to_cuda returns self), so this is regression-free.
-            if isinstance(value, torch.Tensor) or (
+            if is_torch_tensor(value) or (
                     hasattr(value, 'to_cuda') and hasattr(value, '_device')):
                 result[key] = self.transfer_tensor(value, target_device, async_transfer)
             elif isinstance(value, dict):

@@ -12,8 +12,12 @@ Key concepts:
 ZERO HARDCODE: Shapes/dtypes come from DAG tensor metadata.
 ZERO FALLBACK: Missing metadata raises explicit errors.
 """
+from __future__ import annotations
 
-import torch
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # R33: the ATen branch imports it; shared code only annotates
+    import torch
 from neurobrix.core.device_utils import device_empty_cache
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -199,6 +203,7 @@ class MemoryPool:
 
         # Pool miss - allocate new
         self._misses += 1
+        import torch
         return torch.empty(shape, dtype=dtype, device=self._device)
 
     def release(self, tensor: torch.Tensor) -> None:

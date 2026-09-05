@@ -13,6 +13,7 @@ PERFORMANCE COMPARISON:
     safetensors.load_file(path, device="cuda") -> GPU tensors directly
     ~30 seconds estimated (3.5x faster)
 """
+from __future__ import annotations
 
 import json
 import time
@@ -21,8 +22,10 @@ from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, field
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-import torch
-from safetensors.torch import load_file as load_safetensors
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # R33: the ATen branch loads through torch; the Triton branch has its own loader
+    import torch
 
 from .cache import ensure_extracted
 
@@ -176,6 +179,7 @@ class FastNBXLoader:
 
         def load_shard(wf):
             """Load a single shard (for parallel execution)."""
+            from safetensors.torch import load_file as load_safetensors
             shard_weights = load_safetensors(str(wf), device=self.device)
             shard_bytes = sum(t.numel() * t.element_size() for t in shard_weights.values())
             if dtype is not None:

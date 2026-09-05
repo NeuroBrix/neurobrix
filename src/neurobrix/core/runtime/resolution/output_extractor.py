@@ -6,8 +6,13 @@ ZERO SEMANTIC: Minimal domain knowledge - uses topology connections.
 
 Extracts primary outputs and stores outputs in variable resolver.
 """
+from __future__ import annotations
 
-import torch
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # R33: the ATen branch imports it; shared code only annotates
+    import torch
+from neurobrix.core.runtime.tensor_compat import is_torch_tensor
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 # Primary-output surface names, in preference order — the SINGLE source of
@@ -282,13 +287,13 @@ class OutputExtractor:
         """
         # Try common output names first
         for key in ["hidden_states", "last_hidden_state"]:
-            if key in output and isinstance(output[key], torch.Tensor):
+            if key in output and is_torch_tensor(output[key]):
                 return output[key]
 
         # Collect all 3D tensors with seq_len > 0
         candidates = []
         for key, val in output.items():
-            if isinstance(val, torch.Tensor) and len(val.shape) == 3:
+            if is_torch_tensor(val) and len(val.shape) == 3:
                 batch_size, seq_len, last_dim = val.shape
                 if seq_len > 0:
                     candidates.append((key, val, last_dim))
@@ -319,11 +324,11 @@ class OutputExtractor:
             Logits tensor
         """
         for key in ["logits", "output_0", "output"]:
-            if key in output and isinstance(output[key], torch.Tensor):
+            if key in output and is_torch_tensor(output[key]):
                 return output[key]
 
         for key, val in output.items():
-            if isinstance(val, torch.Tensor):
+            if is_torch_tensor(val):
                 return val
 
         raise RuntimeError(
@@ -342,11 +347,11 @@ class OutputExtractor:
             Embedding tensor
         """
         for key in ["output", "embedding", "output_0", "hidden_states"]:
-            if key in output and isinstance(output[key], torch.Tensor):
+            if key in output and is_torch_tensor(output[key]):
                 return output[key]
 
         for key, val in output.items():
-            if isinstance(val, torch.Tensor):
+            if is_torch_tensor(val):
                 return val
 
         raise RuntimeError(
@@ -365,11 +370,11 @@ class OutputExtractor:
             Image tensor (4D: [B, C, H, W])
         """
         for key in ["output", "image", "output_0", "sample"]:
-            if key in output and isinstance(output[key], torch.Tensor):
+            if key in output and is_torch_tensor(output[key]):
                 return output[key]
 
         for key, val in output.items():
-            if isinstance(val, torch.Tensor) and len(val.shape) == 4:
+            if is_torch_tensor(val) and len(val.shape) == 4:
                 return val
 
         raise RuntimeError(

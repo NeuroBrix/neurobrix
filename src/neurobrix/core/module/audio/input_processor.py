@@ -17,12 +17,15 @@ Supported preprocessing types:
   nemo_mel         — NeMo-style mel models (Parakeet, Canary)
   none             — TTS models that take text, not audio
 """
+from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, TYPE_CHECKING
+
+if TYPE_CHECKING:  # R33: the ATen branch's flows call this with a torch device/dtype
+    import torch
 
 import numpy as np
-import torch
 
 from neurobrix.core.module.audio import mel_dsp
 
@@ -77,5 +80,6 @@ class AudioInputProcessor:
             params=params,
         )
 
-        # Convert to torch only at the device boundary (compiled mode = torch allowed).
+        # Convert to torch only at the device boundary (the ATen branch's flows are the callers).
+        import torch
         return torch.from_numpy(np.ascontiguousarray(feats)).to(device=device, dtype=dtype)

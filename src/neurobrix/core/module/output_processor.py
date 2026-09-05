@@ -11,11 +11,14 @@ Configuration is read from:
 
 ZERO HARDCODE: All behavior driven by configuration, not model names.
 """
+from __future__ import annotations
 
 import json
-import torch
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple, List, TYPE_CHECKING
+
+if TYPE_CHECKING:  # R33: the ATen branch imports it; shared code only annotates
+    import torch
 from dataclasses import dataclass
 
 if TYPE_CHECKING:
@@ -160,6 +163,21 @@ class OutputProcessor:
             tensor = tensor.pow(1.0 / self.config.gamma_correction)
 
         return tensor
+
+    def process_array(self, arr, output_range: Tuple[float, float]):
+        """The same steps as ``process`` on a float32 array — the output
+        boundary's container for both engines (R33: no torch on the Triton
+        branch). Clamp → normalise to [0, 1] → gamma, in float32."""
+        import numpy as np
+        min_val, max_val = output_range
+        arr = np.asarray(arr, dtype=np.float32)
+        if self.config.clamp_before_normalize:
+            arr = np.clip(arr, min_val, max_val)
+        if self.config.normalize:
+            arr = (arr - np.float32(min_val)) / np.float32(max_val - min_val)
+        if self.config.gamma_correction != 1.0:
+            arr = np.power(arr, np.float32(1.0 / self.config.gamma_correction))
+        return arr
 
     def get_info(self) -> Dict[str, Any]:
         """Return processor configuration for debugging."""

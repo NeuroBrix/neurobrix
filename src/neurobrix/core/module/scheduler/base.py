@@ -8,11 +8,15 @@ Provides unified interfaces for all scheduler types:
 
 Enterprise Grade: ZERO DIFFUSERS DEPENDENCY at runtime.
 """
+from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, Union, List, Tuple
 from enum import Enum
-import torch
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # R33: the ATen branch imports it; shared code only annotates
+    import torch
 
 
 class PredictionType(Enum):
@@ -325,4 +329,10 @@ class FlowSchedulerBase(ABC):
 # The canonical definition lives in core.module.autoregressive.samplers.
 # Re-exported here for backward compatibility only.
 
-from neurobrix.core.module.autoregressive.samplers import SamplerBase, SamplerConfig
+def __getattr__(name):
+    # Resolved on request, never at import: the samplers module is part of
+    # the ATen branch (R33) and the scheduler base is loaded by both engines.
+    if name in ("SamplerBase", "SamplerConfig"):
+        from neurobrix.core.module.autoregressive import samplers
+        return getattr(samplers, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

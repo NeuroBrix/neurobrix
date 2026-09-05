@@ -47,7 +47,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, FrozenSet, Optional
 
-import torch
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # R33: the ATen branch imports it; shared code only annotates
+    import torch
+from neurobrix.core.runtime.tensor_compat import is_torch_tensor
 
 from neurobrix.kernels.classification import is_metadata_op
 
@@ -59,10 +63,25 @@ STORE_ROOT = Path(os.path.expanduser("~")) / ".neurobrix" / "calibration"
 # The rule
 # ---------------------------------------------------------------------------
 
-def island_bound(compute_dtype: torch.dtype, headroom_bits: int) -> float:
+# Largest finite value of each compute dtype (IEEE 754 / bfloat16). Read
+# here rather than through torch.finfo so the Triton branch, which applies
+# the same islands, never imports torch (R33).
+_FINITE_MAX = {
+    "float16": 65504.0,
+    "bfloat16": 3.3895313892515355e38,
+    "float32": 3.4028234663852886e38,
+    "float64": 1.7976931348623157e308,
+}
+
+
+def island_bound(compute_dtype, headroom_bits: int) -> float:
     """Magnitude above which a value cannot be stored in ``compute_dtype``
-    with ``headroom_bits`` of margin (2 bits = a quarter of the range)."""
-    return float(torch.finfo(compute_dtype).max) / float(2 ** int(headroom_bits))
+    (a dtype name, or a torch dtype) with ``headroom_bits`` of margin
+    (2 bits = a quarter of the range)."""
+    name = str(compute_dtype).replace("torch.", "")
+    if name not in _FINITE_MAX:
+        raise RuntimeError(f"island_bound: no finite range known for compute dtype {compute_dtype!r}")
+    return _FINITE_MAX[name] / float(2 ** int(headroom_bits))
 
 
 def pinnable(op_type: str) -> bool:
@@ -162,7 +181,8 @@ class RangeCensus:
         back non-finite (an inf or NaN somewhere) is the finite maximum
         recomputed through a masked copy — a 4K render's 8 GiB activations
         cannot afford a copy per op (Sana 4K OOM under the census, 2026-09-05)."""
-        if isinstance(result, torch.Tensor):
+        if is_torch_tensor(result):
+            import torch
             if result.numel() == 0 or not (result.is_floating_point() or result.is_complex()):
                 return None
             x = result.detach()
@@ -175,6 +195,7 @@ class RangeCensus:
             if not parts:
                 return None
             mx, nf = parts[0]
+            import torch
             for m, f in parts[1:]:
                 mx = torch.maximum(mx, m.to(mx.device))
                 nf = nf | f.to(nf.device)
@@ -184,6 +205,7 @@ class RangeCensus:
     @staticmethod
     def _finite_max_masked(x: torch.Tensor) -> torch.Tensor:
         """max|x| over the finite elements — the copy path, taken lazily."""
+        import torch
         a = x.abs()
         if a.dtype != torch.float32:
             a = a.float()
@@ -200,6 +222,7 @@ class RangeCensus:
             self._acc[op_uid] = mx.clone()
             self._nonfinite[op_uid] = nf.clone()
         else:
+            import torch
             torch.maximum(acc, mx.to(acc.device), out=acc)
             flag = self._nonfinite[op_uid]
             torch.logical_or(flag, nf.to(flag.device), out=flag)

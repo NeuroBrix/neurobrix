@@ -6,11 +6,15 @@ component-specific handlers must implement.
 
 ZERO HARDCODE: All values come from config, never hardcoded.
 """
+from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Dict, Any, Optional, List, Tuple
-import torch
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # R33: the ATen branch imports it; shared code only annotates
+    import torch
 
 
 @dataclass

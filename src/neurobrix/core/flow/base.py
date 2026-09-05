@@ -141,6 +141,24 @@ class FlowHandler(ABC):
 # Flow type registry for factory pattern
 FLOW_REGISTRY: Dict[str, type] = {}
 
+# flow type -> the module of its compiled (ATen) handler. Imported on demand
+# by get_flow_handler; the Triton branch has its mirrors under
+# neurobrix.triton.flow and never loads these (R33).
+COMPILED_FLOW_MODULES: Dict[str, str] = {
+    "iterative_process": "neurobrix.core.flow.iterative_process",
+    "static_graph": "neurobrix.core.flow.static_graph",
+    "forward_pass": "neurobrix.core.flow.forward_pass",
+    "autoregressive_generation": "neurobrix.core.flow.autoregressive",
+    "audio": "neurobrix.core.flow.audio",
+    "encoder_decoder": "neurobrix.core.flow.encoder_decoder",
+    "audio_llm": "neurobrix.core.flow.audio_llm",
+    "vlm": "neurobrix.core.flow.vlm",
+    "dual_ar": "neurobrix.core.flow.dual_ar",
+    "tts_llm": "neurobrix.core.flow.tts_llm",
+    "next_token_diffusion": "neurobrix.core.flow.next_token_diffusion",
+    "rnnt": "neurobrix.core.flow.rnnt",
+}
+
 
 def register_flow(flow_type: str):
     """
@@ -171,8 +189,13 @@ def get_flow_handler(flow_type: str, ctx: FlowContext) -> FlowHandler:
     Raises:
         RuntimeError: If flow_type not registered (ZERO FALLBACK)
     """
+    if flow_type not in FLOW_REGISTRY and flow_type in COMPILED_FLOW_MODULES:
+        # The handler registers itself at import; imported here, on the
+        # compiled branch's request, never at package import (R33).
+        import importlib
+        importlib.import_module(COMPILED_FLOW_MODULES[flow_type])
     if flow_type not in FLOW_REGISTRY:
-        available = list(FLOW_REGISTRY.keys())
+        available = sorted(set(FLOW_REGISTRY) | set(COMPILED_FLOW_MODULES))
         raise RuntimeError(
             f"ZERO FALLBACK: Unknown flow type '{flow_type}'.\n"
             f"Available: {available}"

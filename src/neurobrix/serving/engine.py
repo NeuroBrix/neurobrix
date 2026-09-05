@@ -16,7 +16,6 @@ ZERO HARDCODE: All config from NBX container + Prism hardware profile.
 
 import time
 import json
-import torch
 from neurobrix.core.device_utils import device_empty_cache, device_sync, device_seed, device_memory_stats
 from pathlib import Path
 from typing import Any, Dict, Optional

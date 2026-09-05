@@ -40,10 +40,9 @@ class TokenizerWrapper:
             **kwargs: Additional arguments (prompt, max_length, etc.)
 
         Returns:
-            Dict with 'input_ids' and 'attention_mask' tensors
+            Dict with 'input_ids' and 'attention_mask' as int64 arrays (the
+            variable resolver puts them in the engine's container; R33)
         """
-        import torch
-
         # Get text from various sources
         if text is None:
             text = kwargs.get("prompt", kwargs.get("text", ""))
@@ -57,7 +56,7 @@ class TokenizerWrapper:
             max_length=max_length,
             padding=padding,
             truncation=True,
-            return_tensors="pt"
+            return_tensors=kwargs.get("return_tensors", "np"),
         )
 
         return {

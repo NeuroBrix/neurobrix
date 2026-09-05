@@ -45,6 +45,20 @@ def _find_input_variable(topology: dict) -> str:
     return find_upscale_input_variable(topology)
 
 
+def _drain_device(execution_mode: str) -> None:
+    """Each engine drains its own device around the timed run — the ATen
+    branch through torch, the Triton branch through the allocator's
+    runtime (R33: a --triton process never loads torch)."""
+    if execution_mode in ("compiled", "sequential"):
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+    else:
+        from neurobrix.kernels.nbx_tensor import DeviceAllocator
+        if DeviceAllocator.device_count() > 0:
+            DeviceAllocator.device_synchronize()
+
+
 def _load_and_preprocess_image(image_path: str, cache_path: Path):
     from neurobrix.core.module.vision.input_processor import (
         load_upscale_image,
@@ -54,7 +68,6 @@ def _load_and_preprocess_image(image_path: str, cache_path: Path):
 
 def cmd_upscale(args):
     """Image super-resolution via an upscaler container."""
-    import torch
     from neurobrix.nbx import NBXContainer
     from neurobrix.core.prism import PrismSolver, load_profile, InputConfig
     from neurobrix.core.prism.autodetect import get_or_create_default_profile
@@ -142,12 +155,10 @@ def cmd_upscale(args):
     print(f"\n[4/4] Running upscale ({execution_mode})...")
     inputs = {input_var: pixel_values}
     try:
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
+        _drain_device(execution_mode)
         t0 = time.time()
         outputs = executor.execute(inputs)
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
+        _drain_device(execution_mode)
         wall = time.time() - t0
     except Exception as e:
         print(f"\n[ERROR] Upscale failed: {e}")

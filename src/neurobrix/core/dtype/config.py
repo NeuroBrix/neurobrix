@@ -9,35 +9,38 @@ Consolidates dtype constants previously duplicated across:
 
 ZERO HARDCODE: All dtype-related constants defined here.
 """
+from __future__ import annotations
 
-import torch
-from typing import Dict, Optional
+from typing import Dict, Optional, TYPE_CHECKING
 
+if TYPE_CHECKING:  # R33: torch is the ATen branch's; this table is shared
+    import torch
 
-# ============================================================================
-# Dtype String to Torch Mapping
-# ============================================================================
-
-DTYPE_MAP: Dict[str, torch.dtype] = {
-    "bfloat16": torch.bfloat16,
-    "float16": torch.float16,
-    "float32": torch.float32,
-    "float64": torch.float64,
-    "int8": torch.int8,
-    "int16": torch.int16,
-    "int32": torch.int32,
-    "int64": torch.int64,
-    "uint8": torch.uint8,
-    "bool": torch.bool,
-}
-
-# Reverse mapping: torch.dtype -> string
-DTYPE_TO_STR: Dict[torch.dtype, str] = {v: k for k, v in DTYPE_MAP.items()}
+# The torch views of the dtype table are built on first use, by the ATen
+# branch. A --triton process reads BYTES_MAP and the string helpers only and
+# never imports torch (R33); `DTYPE_MAP` / `DTYPE_TO_STR` stay importable
+# through the module __getattr__ below.
+_DTYPE_NAMES = ("bfloat16", "float16", "float32", "float64",
+                "int8", "int16", "int32", "int64", "uint8", "bool")
+_TORCH_MAPS = None
 
 
-# ============================================================================
-# Bytes Per Element (for memory calculations)
-# ============================================================================
+def _torch_maps():
+    global _TORCH_MAPS
+    if _TORCH_MAPS is None:
+        import torch
+        dtype_map = {name: getattr(torch, name) for name in _DTYPE_NAMES}
+        _TORCH_MAPS = (dtype_map, {v: k for k, v in dtype_map.items()})
+    return _TORCH_MAPS
+
+
+def __getattr__(name):
+    if name == "DTYPE_MAP":
+        return _torch_maps()[0]
+    if name == "DTYPE_TO_STR":
+        return _torch_maps()[1]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 BYTES_MAP: Dict[str, int] = {
     "float64": 8,
@@ -76,7 +79,8 @@ def get_torch_dtype(dtype_str: str) -> torch.dtype:
     Returns:
         torch.dtype (defaults to float32 if unknown)
     """
-    return DTYPE_MAP.get(dtype_str, torch.float32)
+    import torch
+    return _torch_maps()[0].get(dtype_str, torch.float32)
 
 
 def parse_dtype(dtype_str: str, compute_dtype: Optional[torch.dtype] = None) -> torch.dtype:
@@ -98,8 +102,9 @@ def parse_dtype(dtype_str: str, compute_dtype: Optional[torch.dtype] = None) -> 
         Resolved torch.dtype
     """
     # Strip "torch." prefix
+    import torch
     clean = dtype_str[6:] if dtype_str.startswith("torch.") else dtype_str
-    parsed = DTYPE_MAP.get(clean, torch.float32)
+    parsed = _torch_maps()[0].get(clean, torch.float32)
 
     # Prism remap: bf16↔fp16 when hardware wants a different half-precision
     if compute_dtype is not None:
@@ -140,7 +145,7 @@ def dtype_to_str(dtype: torch.dtype) -> str:
     Returns:
         Dtype string (defaults to "float32" if unknown)
     """
-    return DTYPE_TO_STR.get(dtype, "float32")
+    return _torch_maps()[1].get(dtype, "float32")
 
 
 # ============================================================================

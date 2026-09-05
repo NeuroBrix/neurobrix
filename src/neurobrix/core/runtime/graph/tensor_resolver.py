@@ -12,8 +12,13 @@ Responsibilities:
 ZERO HARDCODE: All tensor metadata comes from DAG.
 ZERO FALLBACK: Missing tensors raise explicit errors.
 """
+from __future__ import annotations
 
-import torch
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # R33: the ATen branch imports it; shared code only annotates
+    import torch
+from neurobrix.core.runtime.tensor_compat import is_torch_tensor
 from typing import Dict, List, Any, Optional, TYPE_CHECKING
 
 from neurobrix.core.dtype.config import parse_dtype as _parse_dtype
@@ -65,6 +70,7 @@ class TensorResolver:
         Raises:
             RuntimeError: If tensor cannot be resolved
         """
+        import torch  # the ATen branch's path
         # 1. Check if already in store (op outputs, cached weights/inputs)
         if tensor_id in self._ctx.tensor_store:
             return self._ctx.tensor_store[tensor_id]
@@ -169,6 +175,7 @@ class TensorResolver:
         Returns:
             Normalized torch.Tensor
         """
+        import torch  # the ATen branch's path
         tensor = self.resolve(tensor_id)
 
         if not isinstance(tensor, torch.Tensor):
@@ -313,7 +320,7 @@ class TensorResolver:
         """
         result = []
         for t in tensors:
-            if not isinstance(t, torch.Tensor):
+            if not is_torch_tensor(t):
                 result.append(t)
                 continue
 
@@ -398,6 +405,7 @@ class TensorResolver:
         Returns:
             Resolved argument value
         """
+        import torch  # the ATen branch's path
         if not isinstance(arg_info, dict):
             return arg_info
 

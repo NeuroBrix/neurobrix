@@ -7,8 +7,13 @@ ZERO SEMANTIC: No knowledge of "resolution", "aspect_ratio" - only synthesis met
 Creates missing inputs based on declared synthesis rules in topology.
 Also handles input remapping and shape transformations.
 """
+from __future__ import annotations
 
-import torch
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # R33: the ATen branch imports it; shared code only annotates
+    import torch
+from neurobrix.core.runtime.tensor_compat import is_torch_tensor
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -96,10 +101,18 @@ class InputSynthesizer:
         if not synthesis_rules:
             return inputs
 
+        # The executing engine decides the container: the ATen branch
+        # builds torch tensors exactly as before, the Triton branch builds
+        # numpy arrays that become NBXTensors (R33: no torch on that path).
+        triton = getattr(self._variable_resolver, "mode", "compiled") in ("triton", "triton_sequential")
+
+        def _tensor_like(v):
+            return is_torch_tensor(v) or (hasattr(v, "shape") and hasattr(v, "nbx_dtype"))
+
         # Get batch size from existing inputs
         batch_size = 1
         for val in inputs.values():
-            if isinstance(val, torch.Tensor) and len(val.shape) > 0:
+            if _tensor_like(val) and len(val.shape) > 0:
                 batch_size = val.shape[0]
                 break
 
@@ -108,9 +121,14 @@ class InputSynthesizer:
         device = None
         dtype = None
         for val in inputs.values():
-            if isinstance(val, torch.Tensor):
+            if is_torch_tensor(val):
                 device = val.device
                 dtype = val.dtype
+                break
+            if hasattr(val, "nbx_dtype"):
+                idx = getattr(val, "_device_idx", None)
+                device = f"cuda:{idx}" if idx is not None else None
+                dtype = str(val.nbx_dtype).split(".")[-1]
                 break
 
         # Fallback to plan/config if no tensors in inputs.
@@ -153,7 +171,60 @@ class InputSynthesizer:
         if dtype is None:
             # Get dtype from topology extracted_values or defaults
             dominant_dtype = self._topology.get("extracted_values", {}).get("_global", {}).get("dominant_dtype", "float16")
-            dtype = getattr(torch, dominant_dtype, torch.float16)
+            if triton:
+                dtype = dominant_dtype
+            else:
+                import torch
+                dtype = getattr(torch, dominant_dtype, torch.float16)
+
+        # The two constructions of the rule table below.
+        if triton:
+            import numpy as np
+            from neurobrix.kernels.nbx_tensor import NBXTensor, parse_dtype as _nbx_dtype
+
+            def _np_dtype(name):
+                name = str(name).replace("torch.", "")
+                return np.float32 if name == "bfloat16" else np.dtype(name)
+
+            def _place(arr, dtype_name):
+                t = NBXTensor.from_numpy(np.ascontiguousarray(arr))
+                want = _nbx_dtype(str(dtype_name).replace("torch.", ""))
+                if t.nbx_dtype != want:
+                    t = t.to(want)
+                if device is not None and ":" in str(device):
+                    idx = int(str(device).split(":")[1])
+                    if idx != t._device_idx:
+                        t = t.to_cuda(idx)
+                return t
+
+            def _full2(row, n):
+                return _place(np.tile(np.asarray([row], dtype=_np_dtype(dtype)), (n, 1)), dtype)
+
+            def _filled(shape, value):
+                return _place(np.full(tuple(shape), value, dtype=_np_dtype(dtype)), dtype)
+
+            def _latent_ids(latent_h, latent_w, rule_dtype):
+                ids = np.zeros((latent_h, latent_w, 3), dtype=np.float32)
+                ids[..., 1] = ids[..., 1] + np.arange(latent_h, dtype=np.float32)[:, None]
+                ids[..., 2] = ids[..., 2] + np.arange(latent_w, dtype=np.float32)[None, :]
+                return _place(ids.reshape(-1, 3), rule_dtype or "float32")
+        else:
+            import torch
+
+            def _full2(row, n):
+                return torch.tensor([row], device=device, dtype=dtype).repeat(n, 1)
+
+            def _filled(shape, value):
+                return (torch.zeros if value == 0 else torch.ones)(shape, device=device, dtype=dtype)
+
+            def _latent_ids(latent_h, latent_w, rule_dtype):
+                ids = torch.zeros(latent_h, latent_w, 3)
+                ids[..., 1] = ids[..., 1] + torch.arange(latent_h)[:, None]
+                ids[..., 2] = ids[..., 2] + torch.arange(latent_w)[None, :]
+                tensor = ids.reshape(-1, 3).to(device=device)
+                if rule_dtype:
+                    tensor = tensor.to(getattr(torch, rule_dtype, torch.float32))
+                return tensor
 
         def _set_nested(d: Dict, key_path: str, value: Any) -> None:
             """Set value in nested dict using dot notation path."""
@@ -192,7 +263,7 @@ class InputSynthesizer:
                     )
 
                 # Create [batch, 2] tensor with [[height, width], ...]
-                tensor = torch.tensor([[height, width]], device=device, dtype=dtype).repeat(batch_size, 1)
+                tensor = _full2([height, width], batch_size)
                 _set_nested(inputs, input_name, tensor)
 
             elif method == "compute_ratio":
@@ -207,21 +278,21 @@ class InputSynthesizer:
 
                 ratio = height / width if width > 0 else 1.0
                 # Create [batch, 1] tensor
-                tensor = torch.tensor([[ratio]], device=device, dtype=dtype).repeat(batch_size, 1)
+                tensor = _full2([ratio], batch_size)
                 _set_nested(inputs, input_name, tensor)
 
             elif method == "zeros":
                 # Create zero tensor with specified shape
                 shape = rule.get("shape", [batch_size, 1])
                 resolved_shape = self._resolve_shape(shape, batch_size)
-                tensor = torch.zeros(resolved_shape, device=device, dtype=dtype)
+                tensor = _filled(resolved_shape, 0)
                 _set_nested(inputs, input_name, tensor)
 
             elif method == "ones":
                 # Create ones tensor with specified shape (for attention masks)
                 shape = rule.get("shape", [batch_size, 1])
                 resolved_shape = self._resolve_shape(shape, batch_size)
-                tensor = torch.ones(resolved_shape, device=device, dtype=dtype)
+                tensor = _filled(resolved_shape, 1)
                 _set_nested(inputs, input_name, tensor)
 
             elif method == "latent_image_ids":
@@ -235,13 +306,7 @@ class InputSynthesizer:
                         f"ZERO FALLBACK: latent_image_ids synthesis for '{input_name}' requires "
                         f"'latent_height' and 'latent_width' in rule."
                     )
-                ids = torch.zeros(latent_h, latent_w, 3)
-                ids[..., 1] = ids[..., 1] + torch.arange(latent_h)[:, None]
-                ids[..., 2] = ids[..., 2] + torch.arange(latent_w)[None, :]
-                tensor = ids.reshape(-1, 3).to(device=device)
-                rule_dtype = rule.get("dtype")
-                if rule_dtype:
-                    tensor = tensor.to(getattr(torch, rule_dtype, torch.float32))
+                tensor = _latent_ids(latent_h, latent_w, rule.get("dtype"))
                 _set_nested(inputs, input_name, tensor)
 
             else:
@@ -458,7 +523,7 @@ class InputSynthesizer:
                     skip_inputs.add(inp_name)
 
         for input_name, tensor in inputs.items():
-            if not isinstance(tensor, torch.Tensor):
+            if not is_torch_tensor(tensor):
                 continue
 
             if input_name in skip_inputs:
@@ -513,7 +578,7 @@ class InputSynthesizer:
                     mask_name = input_name.replace("hidden_states", "attention_mask")
                     if mask_name in inputs and mask_name != input_name:
                         mask = inputs[mask_name]
-                        if isinstance(mask, torch.Tensor) and len(mask.shape) >= 2:
+                        if is_torch_tensor(mask) and len(mask.shape) >= 2:
                             if mask.shape[1] > expected_seq:
                                 if complex_human_instruction and "encoder" in mask_name:
                                     # Use same select_index pattern as hidden_states

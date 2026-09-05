@@ -293,6 +293,27 @@ def _container_upscale_factor(pkg):
     return None
 
 
+def final_as_array(final, batch_axis: int):
+    """The engine's final tensor as a float32 array with the batch axis
+    selected — the output boundary's container: a torch tensor (ATen
+    branch) through .cpu(), an NBXTensor (Triton branch) through its own
+    numpy(), an array as is. Never imports torch on the Triton branch (R33)."""
+    import numpy as np
+    from neurobrix.core.runtime.tensor_compat import is_torch_tensor
+    if is_torch_tensor(final):
+        import torch
+        t = torch.select(final, batch_axis, 0).detach().cpu()
+        if t.dtype == torch.bfloat16:
+            t = t.float()
+        return np.ascontiguousarray(t.numpy(), dtype=np.float32)
+    if hasattr(final, "nbx_dtype"):
+        from neurobrix.kernels.nbx_tensor import NBXDtype
+        arr = final.to(NBXDtype.float32).numpy() if final.nbx_dtype != NBXDtype.float32 else final.numpy()
+    else:
+        arr = np.asarray(final)
+    return np.ascontiguousarray(np.take(arr, 0, axis=batch_axis), dtype=np.float32)
+
+
 def save_image(
     outputs: Dict[str, Any],
     output_path: str,
@@ -316,7 +337,6 @@ def save_image(
     Callers pass the orig size they already own; None saves untouched.
     """
     import numpy as np
-    import torch
     from PIL import Image
 
     from neurobrix.core.module.output_processor import OutputProcessor
@@ -337,27 +357,27 @@ def save_image(
     layout = output_cfg.get("layout", "CHW")
 
     processor = OutputProcessor.from_package(pkg)
-    tensor = torch.select(final, batch_axis, 0).cpu().float()
-    if orig_hw is not None and tensor.dim() == 3:
+    tensor = final_as_array(final, batch_axis)
+    if orig_hw is not None and tensor.ndim == 3:
         _scale = _container_upscale_factor(pkg)
         if _scale:
             _ch, _cw = int(orig_hw[0]) * _scale, int(orig_hw[1]) * _scale
             if tensor.shape[-2] >= _ch and tensor.shape[-1] >= _cw:
                 tensor = tensor[..., :_ch, :_cw]
-    tensor = processor.process(tensor, output_range)
-    tensor = tensor.clamp(0, 1)
+    tensor = processor.process_array(tensor, output_range)
+    tensor = np.clip(tensor, 0, 1)
 
     # save_image only fires when we've already picked image as the output
     # modality, so a "mode_dependent" layout means CHW here.
-    if layout in ("CHW", "mode_dependent") and tensor.dim() == 3:
+    if layout in ("CHW", "mode_dependent") and tensor.ndim == 3:
         actual_channel_axis = channel_axis - 1 if batch_axis < channel_axis else channel_axis
         if tensor.shape[actual_channel_axis] in valid_channels:
-            tensor = tensor.permute(1, 2, 0)
+            tensor = tensor.transpose(1, 2, 0)
 
     if bit_depth == 16:
-        img_np = (tensor.numpy() * 65535).astype(np.uint16)
+        img_np = (tensor * np.float32(65535)).astype(np.uint16)
     else:
-        img_np = (tensor.numpy() * 255).astype(np.uint8)
+        img_np = (tensor * np.float32(255)).astype(np.uint8)
 
     if img_np.shape[-1] == 1:
         img_np = img_np.squeeze(-1)
@@ -388,7 +408,6 @@ def save_video(
 ) -> str:
     """Save video tensor as H.264/mp4."""
     import numpy as np
-    import torch
 
     from neurobrix.core.module.output_processor import OutputProcessor
 
@@ -406,18 +425,18 @@ def save_video(
     fps = pkg.defaults.get("fps", output_cfg.get("fps", 24))
 
     processor = OutputProcessor.from_package(pkg)
-    tensor = torch.select(final, batch_axis, 0).cpu().float()
-    tensor = processor.process(tensor, output_range)
-    tensor = tensor.clamp(0, 1)
+    tensor = final_as_array(final, batch_axis)
+    tensor = processor.process_array(tensor, output_range)
+    tensor = np.clip(tensor, 0, 1)
 
     if layout == "CTHW":
-        frames = tensor.permute(1, 2, 3, 0).numpy()
+        frames = tensor.transpose(1, 2, 3, 0)
     elif layout == "TCHW":
-        frames = tensor.permute(0, 2, 3, 1).numpy()
+        frames = tensor.transpose(0, 2, 3, 1)
     else:
-        frames = tensor.permute(1, 2, 3, 0).numpy()
+        frames = tensor.transpose(1, 2, 3, 0)
 
-    frames_uint8 = (frames * 255).astype(np.uint8)
+    frames_uint8 = (frames * np.float32(255)).astype(np.uint8)
     _write_video_h264(output_path, frames_uint8, fps)
     return output_path
 

@@ -7,7 +7,6 @@ All methods pass through without modification.
 
 from typing import Dict, Any
 
-import torch
 
 from ..base import ComponentHandler, ComponentConfig
 from ..registry import register_handler
