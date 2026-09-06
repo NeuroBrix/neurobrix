@@ -157,6 +157,11 @@ def _announce_first_sweep(tuned):
         before = len(cache)
         result = original(*args, **kwargs)
         if len(cache) > before:
+            if key is not None:
+                try:                       # the bench this call just ran: best, second-best, margin
+                    _atc.note_timings(tuned, key, getattr(tuned, "configs_timings", None))
+                except Exception:
+                    pass
             if not _SWEEP_ANNOUNCED[0]:
                 _SWEEP_ANNOUNCED[0] = True
                 print(_SWEEP_NOTICE, file=sys.stderr, end="")
