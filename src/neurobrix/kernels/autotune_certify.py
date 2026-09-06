@@ -320,8 +320,11 @@ def _read_file(path: Path) -> Dict[str, Dict]:
 
 def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[str] = None,
             out: Optional[str] = None, kernels: Optional[List[str]] = None, limit: Optional[int] = None,
-            only_missing: bool = False, seed: int = 20260907, log=print) -> Dict[str, Any]:
+            only_missing: bool = False, seed: int = 20260907, log=None) -> Dict[str, Any]:
     """Certify every census shape for `profile` on this machine; write the files."""
+    if log is None:
+        def log(*a):                      # a run of hours, read while it runs: never buffered
+            print(*a, flush=True)
     active = C.active_profile()
     if active is None:
         raise RuntimeError("no vendor profile is in force on this machine (the launcher resolved none)")

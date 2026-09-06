@@ -7,8 +7,11 @@
 """
 from __future__ import annotations
 
+import functools
 import json
 from pathlib import Path
+
+print = functools.partial(print, flush=True)   # a run of hours is read while it runs
 
 
 def cmd_autotune(args) -> int:
