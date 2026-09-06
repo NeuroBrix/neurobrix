@@ -14,6 +14,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every backend driver must satisfy (`neurobrix.triton.launcher_contract`), with its checker run
   against the CUDA driver on CUDA and the Metal driver on a Mac.
 
+### Fixed
+- A calibrated fp32 island now holds on the Triton engine's self-managed kernels (convolution,
+  matmul): the pinned op runs with fp32 as the active compute dtype, so the wrapper's own dtype
+  policy no longer narrows the island's inputs and writes an fp16 output that overflows. swin2SR-x2
+  on the Triton engine went from a washed render (7.9 dB against the calibrated compiled render) to
+  57.7 dB; both engines are within 52 dB of the vendor's render.
+- The Triton engine's seeded random stream is armed once per request, for every flow, from the
+  request's seed: a text-to-speech request (Kokoro's vocoder phase, the autoregressive samplers of
+  Chatterbox and Orpheus) drew from an unseeded generator and two runs at the same seed differed;
+  they are byte-identical now.
+
 ### Changed
 - The launcher's CUDA driver refuses, before anything reaches the device, an argument list whose
   length is not what the compiled kernel declares and a device address the engine's allocator did

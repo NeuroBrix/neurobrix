@@ -1022,6 +1022,7 @@ class DeviceAllocator:
                 f"Host pinned malloc failed (error {ret}) for {nbytes} bytes")
         p = ptr.value or 0
         DeviceAllocator._host_pinned_ptr_size[p] = nbytes
+        DeviceAllocator._range_add(p, nbytes)      # device-mapped (UVA): a kernel may read it, so holds() knows it
         DeviceAllocator._host_pinned_live_bytes += nbytes
         if DeviceAllocator._host_pinned_live_bytes > DeviceAllocator._host_pinned_peak_bytes:
             DeviceAllocator._host_pinned_peak_bytes = DeviceAllocator._host_pinned_live_bytes
@@ -1037,6 +1038,7 @@ class DeviceAllocator:
                 return
             getattr(rt, fn_name)(ctypes.c_void_p(ptr))
             nbytes = DeviceAllocator._host_pinned_ptr_size.pop(ptr, None)
+            DeviceAllocator._range_del(ptr)
             if nbytes is not None:
                 DeviceAllocator._host_pinned_live_bytes -= nbytes
 
