@@ -578,6 +578,7 @@ def drift_one(model: str, gpu, out: Path, extra: list, timeout: int, bound: floa
            "float_before": (f"{(rep.get('float_before') or {}).get('component')}/{(rep.get('float_before') or {}).get('op_uid')}"
                             if rep.get("float_before") else None),
            "float_before_dev": (rep.get("float_before") or {}).get("rel_dev"),
+           "producer_missing": rep.get("producer_missing"), "site_abs": first.get("abs_dev"), "abs_before": rep.get("abs_before"),
            "A": {"rc": rc, "exec_s": None}, "B": {"rc": rc, "exec_s": None},
            "gate": {"kind": "drift", "pass": rc == 0 and not first}}
     if triton_only:
@@ -698,6 +699,10 @@ def verdict(r: dict) -> str:
             elif oc == "kernel":
                 where = (f"origin KERNEL site {r['site']} ({r.get('site_type')}, {r.get('site_dev', 0):.3f})"
                          + (f"; largest float deviation before it {r.get('float_before')} {r.get('float_before_dev') or 0:.3f}" if r.get("float_before") else ""))
+            elif oc == "scale":
+                where = (f"origin a SCALE crossing at {r['site']} ({r.get('site_type')}): abs deviation {r.get('site_abs') or 0:.3g} vs "
+                         f"{r.get('abs_before') or 0:.3g} before it — no new error here, inherited; largest float deviation before it "
+                         f"{r.get('float_before')} {r.get('float_before_dev') or 0:.3f}")
             elif oc == "policy":
                 where = (f"origin a POLICY site (dtypes differ); first same-dtype site after it "
                          f"{r.get('kernel_site')} ({r.get('kernel_site_type')}, {r.get('kernel_site_dev') or 0:.3f})"
@@ -708,6 +713,8 @@ def verdict(r: dict) -> str:
             else:
                 where = (f"kernel site {r['kernel_site']} ({r.get('kernel_site_type')}, {r.get('kernel_site_dev', 0):.3f}, op #{r.get('kernel_site_index')})"
                          if r.get("kernel_site") else f"no kernel site: policy only ({r.get('policy_sites')} dtype-policy sites)")
+            if r.get("producer_missing"):
+                where += "; its PRODUCER has no record on the engine side (fused or skipped there — read the fusion)"
             return f"DRIFT first at {r['site']} ({r.get('site_type')}, {r.get('site_dev', 0):.3f}, op #{r.get('site_index')}; {r.get('over_bound')} over) — {where}"
         return f"NO DRIFT ({r.get('matched')} ops within {r.get('bound')})"
     if r.get("lever") == "sweep":

@@ -61,6 +61,16 @@ def deviation(a, b) -> Optional[float]:
         return None
 
 
+def abs_deviation(a, b) -> Optional[float]:
+    """max |a-b| over the window, in the window's own units."""
+    if not a or not b or len(a) != len(b):
+        return None
+    try:
+        return max(abs(float(x) - float(y)) for x, y in zip(a, b))
+    except (TypeError, ValueError):
+        return None
+
+
 @dataclass
 class DriftSite:
     component: str
@@ -73,6 +83,7 @@ class DriftSite:
     field: str
     rel_dev: float
     index: int                       # position in the oracle's op order
+    abs_dev: float = 0.0             # max |a-b| over the same window, absolute
     window_a: list = field(default_factory=list)
     window_b: list = field(default_factory=list)
 
@@ -103,6 +114,14 @@ class DriftReport:
     #: The largest float deviation among the matched ops BEFORE the first over-bound op —
     #: what a discrete decision or a carrier actually amplified.
     float_before: Optional[DriftSite] = None
+    #: The largest ABSOLUTE deviation among the float ops before the origin. A "kernel" origin
+    #: whose absolute deviation is not larger than this (within 25 %) added no error of its
+    #: own: the relative bound was crossed because the values SHRANK (a relu, a gate, a
+    #: normalisation) — class "scale", the error is inherited from upstream.
+    abs_before: Optional[float] = None
+    #: The oracle's op just before the origin has no record on the engine side — the engine
+    #: fused it or skipped it, so the origin shows its PRODUCER's deviation (read the fusion).
+    producer_missing: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         def site(s: Optional[DriftSite]):
@@ -111,6 +130,7 @@ class DriftReport:
                 "bound": self.bound, "over_bound": self.over_bound, "policy_sites": self.policy_sites,
                 "first": site(self.first), "first_same_dtype": site(self.first_same_dtype),
                 "origin_class": self.origin_class, "float_before": site(self.float_before),
+                "producer_missing": self.producer_missing, "abs_before": self.abs_before,
                 "top": [site(s) for s in self.top]}
 
 
@@ -139,6 +159,7 @@ def detect(dump_a, dump_b, *, bound: float = 0.02, top: int = 12, fields=FIELDS)
         rows.append(DriftSite(component=key[0], tid=key[1], op_uid=ra.get("op_uid"), op_type=ra.get("op_type"),
                               shape=ra.get("shape"), dtype_a=ra.get("dtype"), dtype_b=rb.get("dtype"),
                               field=f, rel_dev=float(d), index=i,
+                              abs_dev=float(abs_deviation(ra.get(f), rb.get(f)) or 0.0),
                               window_a=list(ra.get(f) or []), window_b=list(rb.get(f) or [])))
     first = next((r for r in rows if r.rel_dev > bound), None)
     over = sum(1 for r in rows if r.rel_dev > bound)
@@ -146,6 +167,8 @@ def detect(dump_a, dump_b, *, bound: float = 0.02, top: int = 12, fields=FIELDS)
             and not _carries_only(r.op_type)]
     origin_class = None
     float_before = None
+    producer_missing = False
+    abs_before = None
     if first is not None:
         if _is_integer(first.dtype_a) or _is_integer(first.dtype_b):
             origin_class = "discrete"
@@ -157,10 +180,15 @@ def detect(dump_a, dump_b, *, bound: float = 0.02, top: int = 12, fields=FIELDS)
             origin_class = "kernel"
         before = [r for r in rows if r.index < first.index and not _is_integer(r.dtype_a) and not _is_integer(r.dtype_b)]
         float_before = max(before, key=lambda r: r.rel_dev) if before else None
+        abs_before = max((r.abs_dev for r in before if r.field == first.field), default=None)
+        if origin_class == "kernel" and abs_before is not None and first.abs_dev <= 1.25 * abs_before:
+            origin_class = "scale"
+        producer_missing = first.index > 0 and order[first.index - 1] not in B
     return DriftReport(ops_a=len(order), matched=len(rows), missing_in_b=missing, bound=bound,
                        first=first, top=sorted(rows, key=lambda r: -r.rel_dev)[:top], over_bound=over,
                        first_same_dtype=(same[0] if same else None), policy_sites=over - len(same),
-                       origin_class=origin_class, float_before=float_before)
+                       origin_class=origin_class, float_before=float_before, abs_before=abs_before,
+                       producer_missing=bool(first is not None and producer_missing))
 
 
 def _is_integer(dtype: Optional[str]) -> bool:
@@ -213,6 +241,12 @@ def describe(report: DriftReport) -> str:
             fb = report.float_before
             lines.append("ORIGIN: a carrier op (view/cast/slice/copy) — its deviation is its input's"
                          + (f"; largest float deviation before it {fb.component}/{fb.op_uid or fb.tid} ({fb.op_type}) rel_dev={fb.rel_dev:.4f}" if fb else ""))
+        if report.origin_class == "scale":
+            lines.append(f"ORIGIN: the values SHRANK here (abs deviation {s.abs_dev:.4g} vs {report.abs_before:.4g} before it) — "
+                         "no new error at this op, the relative bound was crossed by an inherited one; read the largest deviation before it")
+        if report.producer_missing:
+            lines.append("   the oracle's op just before the origin has NO record on the engine side: the engine fused or "
+                         "skipped it, so the origin shows its producer's deviation — read the fusion")
         k = report.first_same_dtype
         if k is None:
             lines.append(f"no KERNEL drift site: every over-bound op ({report.policy_sites}) carries different "
