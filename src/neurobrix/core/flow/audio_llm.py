@@ -161,13 +161,17 @@ class AudioLLMEngine(FlowHandler):
 
         parts = []
         if prefix_ids:
-            prefix_tensor = torch.tensor([prefix_ids], dtype=torch.long, device=device)
+            # The index lives where the table lives: under a host placement of
+            # the language model (granite-speech on a 16 GB card) `embed_weight`
+            # is on the CPU while `device` names the GPU, and torch refuses the
+            # lookup across devices (calibration campaign, 2026-09-05).
+            prefix_tensor = torch.tensor([prefix_ids], dtype=torch.long, device=embed_weight.device)
             with torch.no_grad():
                 prefix_embeds = torch.nn.functional.embedding(prefix_tensor, embed_weight).to(dtype=dtype)
             parts.append(prefix_embeds)
         parts.append(audio_embeds)
         if suffix_ids:
-            suffix_tensor = torch.tensor([suffix_ids], dtype=torch.long, device=device)
+            suffix_tensor = torch.tensor([suffix_ids], dtype=torch.long, device=embed_weight.device)
             with torch.no_grad():
                 suffix_embeds = torch.nn.functional.embedding(suffix_tensor, embed_weight).to(dtype=dtype)
             parts.append(suffix_embeds)

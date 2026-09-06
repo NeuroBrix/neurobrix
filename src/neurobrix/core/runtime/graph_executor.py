@@ -1091,14 +1091,10 @@ class GraphExecutor:
         conservative default. This is the compiled / sequential consumer, with
         per-op islands. While a calibration runs, the component's census is
         bound to this graph so the record can be written at the end."""
-        from neurobrix.core.dtype import calibration as _cal
         from neurobrix.core.runtime.precision_contract import resolve
         dag = getattr(self, "_dag", None)
         cache_path = getattr(self, "_cache_path", None)
-        census = _cal.active_census(self._component_name)
-        if census is not None and dag is not None:
-            census.bind(dag, cache_path)
-        return resolve(cache_path, self._component_name, dag, compute_dtype=compute_dtype)
+        return resolve(cache_path, self._component_name, dag, compute_dtype=compute_dtype)   # binds the census
 
     def _should_enable_amp(self) -> bool:
         """Determine whether AMP should be enabled for this component.
