@@ -25,7 +25,12 @@ import json
 import os
 from typing import Dict, Iterator, Optional, Tuple
 
-_DIR = os.path.join(os.path.expanduser("~"), ".neurobrix", "replay_cache")
+# The machine's replay cache (the producer's accumulation across models, and
+# the correctness screen's exclusions). NEUROBRIX_REPLAY_CACHE relocates it —
+# a gate that needs a truly cold sweep per arm gives every arm its own, else
+# sweep mode seeds the autotuners from here and no arm sweeps (2026-09-06:
+# a screened arm reported "checked 0 key(s)" for exactly this reason).
+_DIR = os.environ.get("NEUROBRIX_REPLAY_CACHE") or os.path.join(os.path.expanduser("~"), ".neurobrix", "replay_cache")
 
 # The sanctioned autotune surface (Phase 1.5 doctrine: mm/bmm/addmm/
 # conv2d only) — explicit list, not a gc walk. A new autotuned kernel
