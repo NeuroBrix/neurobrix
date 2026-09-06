@@ -68,22 +68,37 @@ def flash_attention_forward_kernel(
     offs_n = tl.arange(0, BLOCK_N)
     offs_d = tl.arange(0, BLOCK_HEADDIM)
 
+    # The row leg and the column leg are added SEPARATELY, and that grouping
+    # is load-bearing rather than stylistic.
+    #
+    # `base + (row*stride + col)` is one 2-D index term in a single addptr.
+    # `(base + row*stride) + col` is two addptr levels — a row pointer, then
+    # the column offset — which is the shape the Metal backend's attention
+    # lowering matches when it reads the strides back out of the IR. Given
+    # the single-term form it mis-parses the chain, resolves the row stride
+    # to 1, and refuses the kernel rather than emit wrong addresses (its own
+    # words). Measured 2026-09-06: this regrouping alone is the difference
+    # between a refusal and a lowered attention kernel.
+    #
+    # It is integer index arithmetic and associativity holds exactly, so the
+    # addresses are the same on every backend and no float rounding is
+    # involved.
     q_ptrs = (
-        Q + off_b * stride_qb + off_h * stride_qh + (offs_m[:, None] * stride_qm + offs_d[None, :])
-    )
+        Q + off_b * stride_qb + off_h * stride_qh + offs_m[:, None] * stride_qm
+    ) + offs_d[None, :]
     k_ptrs = (
-        K + off_b * stride_kb + off_h_kv * stride_kh + (offs_n[:, None] * stride_kn + offs_d[None, :])
-    )
+        K + off_b * stride_kb + off_h_kv * stride_kh + offs_n[:, None] * stride_kn
+    ) + offs_d[None, :]
     v_ptrs = (
-        V + off_b * stride_vb + off_h_kv * stride_vh + (offs_n[:, None] * stride_vn + offs_d[None, :])
-    )
+        V + off_b * stride_vb + off_h_kv * stride_vh + offs_n[:, None] * stride_vn
+    ) + offs_d[None, :]
     if BIAS_TYPE == "vector":
         b_ptrs = Bias + off_b * stride_bb + off_h * stride_bh + offs_n
     else:  # BIAS_TYPE == "matrix"
         b_ptrs = (
             Bias + off_b * stride_bb + off_h * stride_bh
-            + (offs_m[:, None] * stride_bm + offs_n[None, :])
-        )
+            + offs_m[:, None] * stride_bm
+        ) + offs_n[None, :]
 
     t_ptrs = TMP + off_hb * seqlen_q_rounded + offs_m
     lse_i = tl.zeros([BLOCK_M], dtype=tl.float32) - float("inf")
@@ -101,6 +116,16 @@ def flash_attention_forward_kernel(
             q = tl.load(q_ptrs, mask=offs_m[:, None] < seqlen_q, other=0.0)
         else:
             q = tl.load(q_ptrs, mask=(offs_m[:, None] < seqlen_q) & (offs_d[None, :] < headdim), other=0.0)
+
+    # Scale Q BEFORE the dot, not its result.
+    #
+    # Mathematically the same product; not the same rounding, and not the
+    # same lowering. The Metal backend refuses an elementwise scale applied
+    # to a `tt.dot` RESULT inside the attention loop — it drops or
+    # mis-applies the fused op, so it declines rather than emit silently
+    # wrong scores — and names this form as the supported one. It is also
+    # what the reference FlashAttention does.
+    q = (q * softmax_scale).to(q.dtype)
 
     # Loop over K, V blocks. Causal masking is applied via the bias
     # tensor (memory-loaded), not via an internal IS_CAUSAL constexpr —
@@ -155,7 +180,7 @@ def flash_attention_forward_kernel(
                 bias = tl.load(b_ptrs + start_n,
                                mask=(offs_m[:, None] < seqlen_q) & ((start_n + offs_n)[None, :] < seqlen_k),
                                other=0.0).to(tl.float32)
-        qk = qk * softmax_scale + bias
+        qk = qk + bias          # Q already carries softmax_scale
         m_ij = tl.maximum(tl.max(qk, 1), lse_i)
         p = tl.exp(qk - m_ij[:, None])
         l_ij = tl.sum(p, 1)

@@ -54,6 +54,7 @@ R34 preserved — nothing here is keyed on a model name.
 
 from __future__ import annotations
 
+import bisect
 import ctypes
 import os
 import threading
@@ -74,6 +75,18 @@ class MetalUnavailableError(RuntimeError):
     Raised rather than returned so that no caller can mistake absence for an
     empty device list and quietly continue on the CPU.
     """
+
+
+def _drop_base(bases: list, address: int) -> None:
+    """Remove one base from the sorted index, in log time.
+
+    A freed base left in the index would let a later interior lookup resolve
+    into memory the allocator no longer owns — the exact opposite of what the
+    ownership rule is for.
+    """
+    index = bisect.bisect_left(bases, address)
+    if index < len(bases) and bases[index] == address:
+        del bases[index]
 
 
 def _deref(arg):
@@ -167,6 +180,10 @@ class MetalRuntime:
         # keeps the allocation alive: dropping it is the free.
         self._buffers: Dict[int, Tuple[object, memoryview, int]] = {}
         self._host_buffers: Dict[int, Tuple[object, memoryview, int]] = {}
+        #: Every live base address, sorted, so an interior pointer resolves
+        #: by bisection instead of a scan. The engine sub-allocates arenas,
+        #: so interior pointers are the common case, not the exception.
+        self._bases: list = []
         # Bytes this allocator is currently holding. Ours, exactly, and it
         # goes DOWN on free — which is the property `currentAllocatedSize()`
         # turned out not to have (see `_budget_bytes`).
@@ -292,6 +309,7 @@ class MetalRuntime:
             return _ERR_ALLOC
         with self._lock:
             self._buffers[address] = (buffer, view, allocated)
+            bisect.insort(self._bases, address)
             self._live_bytes += allocated
         slot.value = address
         return _OK
@@ -305,6 +323,7 @@ class MetalRuntime:
             entry = self._buffers.pop(address, None)
             if entry is not None:
                 self._live_bytes -= entry[2]
+                _drop_base(self._bases, address)
         if entry is None:
             # Freeing a pointer this runtime never handed out is a bug in the
             # caller, and it must not pass silently: on CUDA the same call
@@ -332,6 +351,7 @@ class MetalRuntime:
             return _ERR_ALLOC
         with self._lock:
             self._host_buffers[address] = (buffer, view, allocated)
+            bisect.insort(self._bases, address)
             self._live_bytes += allocated
         slot.value = address
         return _OK
@@ -344,6 +364,7 @@ class MetalRuntime:
             entry = self._host_buffers.pop(address, None)
             if entry is not None:
                 self._live_bytes -= entry[2]
+                _drop_base(self._bases, address)
         if entry is None:
             return _ERR_UNKNOWN_POINTER
         entry[1].release()
@@ -610,16 +631,38 @@ class MetalRuntime:
         observed returning nil under memory pressure. The buffer already
         exists; the registry can simply hand it back.
 
-        Returns `(MTLBuffer, offset)`, the offset always 0 today because each
-        allocation is its own buffer. Returns `(None, 0)` for an address this
-        allocator did not produce — the caller decides, and is not handed
-        something that merely looks right.
+        Returns `(MTLBuffer, offset)`. The offset is not always 0: the engine
+        sub-allocates. `ComponentArena` takes ONE block per component and
+        bump-allocates every weight inside it, so a weight pointer is a base
+        plus an offset, and that is the normal path for every model on every
+        backend — not an Apple special case.
+
+        This looked up the exact address until 2026-09-06, which is the same
+        as answering "no" for every weight tensor in the engine. The first
+        TinyLlama --triton run refused at the embedding kernel: the address
+        was a perfectly good arena interior, and the ownership rule said the
+        allocator had never handed it out.
+
+        Returns `(None, 0)` for an address genuinely outside every live
+        allocation — the caller decides, and is not handed something that
+        merely looks right.
         """
         with self._lock:
             entry = self._buffers.get(address) or self._host_buffers.get(address)
-        if entry is None:
-            return None, 0
-        return entry[0], 0
+            if entry is not None:
+                return entry[0], 0
+            # An interior address: the greatest base at or below it, if the
+            # allocation it names is long enough to contain it.
+            index = bisect.bisect_right(self._bases, address) - 1
+            if index < 0:
+                return None, 0
+            base = self._bases[index]
+            entry = self._buffers.get(base) or self._host_buffers.get(base)
+            if entry is None:                           # pragma: no cover
+                return None, 0
+            if address >= base + entry[2]:
+                return None, 0
+            return entry[0], address - base
 
     # -- diagnostics --------------------------------------------------------
 
@@ -752,6 +795,12 @@ def reset_runtime_for_tests() -> None:
     # `test_cumsum_is_correct[128]` in the full kernels suite.
     from ..triton import metal_driver
     metal_driver.clear_cache()
+
+    # The launcher caches a driver-produced handle per specialisation — a
+    # Metal pipeline here — so it holds the runtime as surely as the driver
+    # does, one layer up.
+    from . import launcher
+    launcher.reset_caches()
 
     for cached in (getattr(nbx_tensor, "_gpu_runtime", None),
                    getattr(nbx_tensor, "_metal_backend_table", None)):

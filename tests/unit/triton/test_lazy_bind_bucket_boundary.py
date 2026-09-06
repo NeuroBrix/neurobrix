@@ -22,7 +22,9 @@ the double "plan frozen" recording plus the byte equality.
 
 TinyLlama keeps it fast enough for the suite (~1.1B, greedy, bucket 256
 like the canonical row). Runs a subprocess per arm (~2-3 min on a free
-V100); skipped without a GPU.
+V100). The backend comes from the engine, not from `nvidia-smi`: a bucket
+boundary is a bucket boundary on Metal too, and the CUDA-only device pin and
+hardware profile are applied only on CUDA.
 """
 from __future__ import annotations
 
@@ -49,28 +51,46 @@ _PROMPT = ("The quick brown fox jumps over the lazy dog. " * 40
            + "\nContinue the story:")
 
 
-def _has_gpu() -> bool:
-    r = subprocess.run(["nvidia-smi", "--query-gpu=count",
-                        "--format=csv,noheader"],
-                       capture_output=True, text=True)
-    return r.returncode == 0 and r.stdout.strip() != ""
+def _backend() -> str | None:
+    """Which GPU backend the ENGINE resolves, or None.
+
+    This used to shell out to `nvidia-smi`, which is not a question about
+    whether the engine has a GPU — it is a question about whether one vendor's
+    tool is installed. On an Apple machine it did not return False, it raised
+    FileNotFoundError, and the test failed rather than adapting.
+
+    The engine already answers this, torch-free, for the allocator
+    (`_detect_gpu_backend`), and that is the answer that decides what this
+    test can run. What it cannot do is skip: a boundary crossing is a
+    boundary crossing on every backend.
+    """
+    try:
+        from neurobrix.kernels.nbx_tensor import _detect_gpu_backend
+        return _detect_gpu_backend()
+    except Exception:
+        return None
 
 
 def _run(arm_env: dict, tag: str, outdir: Path) -> tuple[str, str]:
+    backend = _backend()
     env = dict(os.environ)
     env.update({
-        "CUDA_VISIBLE_DEVICES": env.get("NBX_TEST_GPU", "2"),
         "NBX_TRITON_REPLAY": "1",
         "NBX_REPLAY_KV_DECODE": "1",
         "NBX_REPLAY_GRAPH": "1",
         "NBX_FORCE_RAND_SEED": "1234",
         "NBX_LAZY_BIND_DIAG": "1",
     })
+    if backend == "cuda":
+        # Device selection and the pinned profile are CUDA facts, not the
+        # test's subject. Elsewhere Prism autodetects the hardware, which is
+        # what it is for.
+        env["CUDA_VISIBLE_DEVICES"] = env.get("NBX_TEST_GPU", "2")
     env.update(arm_env)
     out = outdir / f"{tag}.txt"
+    hardware = ["--hardware", "v100-32g"] if backend == "cuda" else []
     r = subprocess.run(
-        ["python3", "-u", "-m", "neurobrix", "run",
-         "--hardware", "v100-32g",
+        ["python3", "-u", "-m", "neurobrix", "run", *hardware,
          "--model", "TinyLlama-1.1B-Chat-v1.0",
          "--prompt", _PROMPT, "--max-tokens", "120",
          "--temperature", "0", "--triton", "--output", str(out)],
@@ -83,8 +103,8 @@ def _run(arm_env: dict, tag: str, outdir: Path) -> tuple[str, str]:
 
 
 def test_lazy_bind_is_byte_exact_across_a_bucket_boundary() -> None:
-    if not _has_gpu():
-        pytest.skip("no GPU")
+    if _backend() is None:
+        pytest.skip("no GPU backend the engine can resolve")
     with tempfile.TemporaryDirectory() as td:
         outdir = Path(td)
         sha_off, _ = _run({"NBX_LAZY_BIND": "0"}, "off", outdir)
@@ -122,7 +142,7 @@ def test_lazy_bind_is_byte_exact_across_a_bucket_boundary() -> None:
 
 
 if __name__ == "__main__":
-    if not _has_gpu():
-        raise SystemExit("no GPU")
+    if _backend() is None:
+        raise SystemExit("no GPU backend the engine can resolve")
     test_lazy_bind_is_byte_exact_across_a_bucket_boundary()
     print("PASS: byte-exact across the boundary; skip->eager->re-record->skip cycle proven")

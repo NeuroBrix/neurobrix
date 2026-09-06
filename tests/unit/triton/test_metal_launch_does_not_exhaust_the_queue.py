@@ -53,7 +53,13 @@ def test_a_refused_launch_returns_its_command_buffer_slot():
     import numpy as np
 
     from neurobrix.kernels.nbx_tensor import NBXTensor
+    from neurobrix.kernels import launcher
     from neurobrix.kernels.wrappers import add
+
+    # The engine installs the launcher from kernels/dispatch.py; a test
+    # that reaches for a wrapper directly must install it too, or it
+    # exercises upstream Triton's launch path instead of the engine's.
+    launcher.install()
     from neurobrix.triton.metal_driver import MetalKernelError, compile_kernel
 
     from ._kernels.touch import touch

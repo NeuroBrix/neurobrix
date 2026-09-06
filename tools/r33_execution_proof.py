@@ -61,19 +61,23 @@ CASES = [
     ("import the launcher contract + Metal driver",
      "from neurobrix.triton import launcher_contract, metal_driver"),
 
-    ("activate the launcher (driver registry -> Metal)",
-     "from neurobrix.kernels import driver_registry, launcher\n"
-     "assert driver_registry.activate() == 'metal'\n"
-     "assert launcher.is_installed()\n"
-     "assert launcher.active_driver() is not None"),
+    ("install the launcher (its registry resolves the driver)",
+     "from neurobrix.kernels import launcher\n"
+     "assert launcher.install() is True\n"
+     "drv = launcher.active_driver()\n"
+     "assert drv is not None and drv.artifact_kind\n"
+     "assert launcher.target().backend"),
 
     ("COLD compile a kernel to MSL (our driver)",
      "from neurobrix.triton.metal_driver import compile_to_msl\n"
      "from neurobrix.kernels.ops.rmsnorm import rms_norm_forward_kernel as k\n"
-     "# rms_norm is wrapped in @triton.heuristics; peeling that to the\n"
-     "# JITFunction is the launcher's job, so use the launcher's own peel.\n"
-     "from neurobrix.kernels.launcher import _unwrap_jit\n"
-     "k = _unwrap_jit(k)\n"
+     "# rms_norm is wrapped in @triton.heuristics. The launcher never\n"
+     "# unwraps — it patches JITFunction.run so Triton's own decorators do\n"
+     "# their work — but compile_to_msl takes the JITFunction directly, so\n"
+     "# this diagnostic peels it here.\n"
+     "from triton.runtime.jit import JITFunction\n"
+     "while not isinstance(k, JITFunction) and hasattr(k, 'fn'):\n"
+     "    k = k.fn\n"
      "signature = {'input_ptr':'*fp32','weight_ptr':'*fp32',\n"
      "  'output_ptr':'*fp32','batch_dim':'i32','feat_dim':'i32',\n"
      "  'input_batch_stride':'i32','input_feat_stride':'i32',\n"
@@ -85,14 +89,15 @@ CASES = [
      "msl, meta = compile_to_msl(k, signature, constexprs)\n"
      "assert 'kernel void' in msl, msl[:200]"),
 
-    ("COLD compile + LAUNCH a real wrapper through OUR launcher",
+    ("COLD compile + LAUNCH a real wrapper through the launcher",
      "# The whole path the engine actually takes: a wrapper from\n"
-     "# wrappers.py, its kernel[grid] intercepted by the launcher, our\n"
-     "# specialization, our driver, our dispatch — and the result checked.\n"
+     "# wrappers.py, its kernel[grid] intercepted by the launcher, the\n"
+     "# launcher's binder and Triton's compiler, our driver, our dispatch —\n"
+     "# and the result checked.\n"
      "import numpy as np\n"
      "from neurobrix.kernels import launcher, wrappers\n"
      "from neurobrix.kernels.nbx_tensor import NBXTensor\n"
-     "assert launcher.active_driver() is not None, 'no driver registered'\n"
+     "assert launcher.install() is True\n"
      "x = np.arange(4096, dtype=np.float32)\n"
      "y = np.ones(4096, dtype=np.float32) * 3.0\n"
      "out = wrappers.add(NBXTensor.from_numpy(x), NBXTensor.from_numpy(y))\n"
