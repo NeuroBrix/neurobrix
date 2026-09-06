@@ -251,9 +251,11 @@ def _load(vendor: str, profile: str, kernel_qual: str, dtype: str, tuner=None) -
     return entries
 
 
-def lookup(kernel_qual: str, tuner, key: tuple) -> Optional[Dict[str, Any]]:
-    """The certified entry for this profile, kernel, dtype and shape, or None."""
-    if not enabled():
+def lookup(kernel_qual: str, tuner, key: tuple, ignore_switch: bool = False) -> Optional[Dict[str, Any]]:
+    """The certified entry for this profile, kernel, dtype and shape, or None.
+    `ignore_switch`: read the directory even when NBX_AUTOTUNE_CERTIFIED=off —
+    the switch stops APPLYING a certification, never REPORTING against one."""
+    if not enabled() and not ignore_switch:
         return None
     ident = active_profile()
     if ident is None:
@@ -317,8 +319,6 @@ def certified_config_for(kernel_name: str, key_fields: tuple) -> Optional[Dict[s
     """For the screen: the certified entry of a kernel (short name) whose key
     starts with these fields on the profile in force, or None. Used to report
     a runtime exclusion that contradicts a certification."""
-    if not enabled():
-        return None
     ident = active_profile()
     if ident is None:
         return None
@@ -366,7 +366,7 @@ def report_contradictions(tuner, dropped) -> List[Dict[str, Any]]:
     The certified setting stays in force for this run; the finding is the
     directory's to resolve (a re-certification, or a defect in one of the two
     measurements) — silently trusting either would be the actual failure."""
-    if not dropped or not enabled():
+    if not dropped:
         return []
     from neurobrix.triton.autotune_cache import key_of, _qual_of
     qual = _qual_of(tuner)
@@ -376,7 +376,7 @@ def report_contradictions(tuner, dropped) -> List[Dict[str, Any]]:
         key = key_of(tuner, [], dict(getattr(tuner, "nargs", None) or {}))
     except Exception:
         return []
-    entry = lookup(qual, tuner, key)
+    entry = lookup(qual, tuner, key, ignore_switch=True)     # the proof's sweep arm is where the two can disagree
     if entry is None:
         return []
     found = []

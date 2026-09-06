@@ -166,3 +166,23 @@ def test_the_engines_own_directory_passes_the_gate():
     for path in C.files():
         doc = json.loads(path.read_text(encoding="utf-8"))
         assert C.validate(doc, path) == [], path
+
+
+def test_a_contradiction_is_reported_even_with_the_apply_switch_off(root, capsys, monkeypatch):
+    """NBX_AUTOTUNE_CERTIFIED=off is the proof's runtime-sweep arm — exactly where
+    the screen and a certification can disagree. The switch stops applying,
+    never reporting."""
+    from neurobrix.triton import autotune_cache as atc
+    _write(root, {C.key_repr(KEY): _entry()})
+    monkeypatch.setenv("NBX_AUTOTUNE_CERTIFIED", "off")
+    monkeypatch.setattr(atc, "_qual_of", lambda tuner: KERNEL)
+    monkeypatch.setattr(atc, "key_of", lambda tuner, args, kwargs: KEY)
+    monkeypatch.setattr(atc, "record_screen_exclusions", lambda entries: len(entries))
+
+    class Ex:
+        kernel = "matmul_kernel"; key = ("x",)
+        config = "BLOCK_M: 64, BLOCK_N: 128, BLOCK_K: 32, GROUP_M: 8, num_warps: 4, num_ctas: 1, num_stages: 2"
+        dtype = "fp32"; deviation = 0.3; tolerance = 1.0e-4
+    assert C.apply(KERNEL, _Tuner(), KEY) is False, "the switch stops applying"
+    assert len(C.report_contradictions(_Tuner(), [Ex()])) == 1, "but never reporting"
+    assert "CONTRADICTION" in capsys.readouterr().out
