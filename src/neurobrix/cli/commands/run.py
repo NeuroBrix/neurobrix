@@ -216,9 +216,6 @@ def cmd_run(args):
         print("       Choose one of: --compiled (default), --sequential, --triton, --triton-sequential")
         return 1
 
-    if getattr(args, 'sweep', False):
-        import os as _os_sweep
-        _os_sweep.environ["NBX_AUTOTUNE"] = "sweep"      # the producer of a sweep artifact (autotune_cache)
     if args.sequential:
         execution_mode = "sequential"
     elif args.triton or getattr(args, 'triton_sequential', False):

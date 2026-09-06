@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- The certified autotune directory, an engine component: `src/neurobrix/config/autotune/<vendor>/<profile>/<kernel>.<dtype>.json`, one file per kernel and per dtype, indexed by the launcher's shape key, each entry carrying the setting retained and its proof (date, engine and backend versions, shape, deviation against the fp64 oracle, the profile's tolerance, the machine) and the settings excluded with their deviation. `neurobrix autotune certify --profile <profile>` fills it for the shapes the zoo met on this machine; `neurobrix autotune check` is its gate (a file without a proof, or whose proof does not re-read, is refused); `neurobrix autotune status` shows what the profile in force is served.
 - `neurobrix drift`: the drift-site detector. The same request runs on the ATen oracle (sequential,
   op by op) and on the Triton engine, each writing its per-op record, and the report names the
   first op in the oracle's order whose values depart beyond a relative bound — separating a kernel
@@ -28,7 +29,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every backend driver must satisfy (`neurobrix.triton.launcher_contract`), with its checker run
   against the CUDA driver on CUDA and the Metal driver on a Mac.
 
+### Removed
+- The per-model kernel sweep artifact (`runtime/autotune/<arch>.json`, `~/.neurobrix/autotune/<model>/`), the refusal of a request without one, and the `--sweep` flag of `run`/`serve`: the certified directory replaces them.
+
 ### Changed
+- At load the launcher applies the certified setting for the profile Prism detected, the kernel, the dtype and the shape — no sweep, no consensus; a shape the directory lacks sweeps at runtime with the consensus screen, says so in clear, and keeps the result in the machine's local replay cache (`NEUROBRIX_REPLAY_CACHE`), never in the engine's directory. A runtime exclusion that contradicts a certification is reported as a finding, never silent.
 - Next-token-diffusion speech models (VibeVoice) run their language model as a KV-cached decoder on
   both engines: one token per step per context instead of re-running the whole growing sequence,
   the classifier-free-guidance negative context kept as a second decode branch of the same
