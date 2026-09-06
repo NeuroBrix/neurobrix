@@ -204,6 +204,22 @@ For more information: https://neurobrix.es
                                        '"prefer conservative" for this hardware profile')
     _add_run_arguments(calibrate_parser)
 
+    drift_parser = subparsers.add_parser(
+        'drift',
+        help='Name the first op where the Triton engine drifts from the ATen oracle on one request',
+        description='Run the same request on the ATen oracle (sequential by default) and on the Triton '
+                    'engine, each writing its per-op record, and name the first op in the oracle\'s '
+                    'order whose values depart beyond the bound — the site to open. Same request '
+                    'arguments as `run`.'
+    )
+    drift_parser.add_argument('--out', default=None, help='report directory (default ~/.neurobrix/drift/<model>)')
+    drift_parser.add_argument('--bound', type=float, default=0.02,
+                              help='relative deviation of a per-op window that names a site (default 0.02)')
+    drift_parser.add_argument('--top', type=int, default=12, help='how many of the largest deviations to list')
+    drift_parser.add_argument('--oracle', default='sequential', choices=['sequential', 'compiled'],
+                              help='the ATen arm (default: sequential, op by op)')
+    _add_run_arguments(drift_parser)
+
 
     # ========================================
     # INFO command
@@ -500,6 +516,9 @@ def main():
     args = parser.parse_args()
 
     try:
+        if args.command == 'drift':
+            from neurobrix.cli.commands.drift import cmd_drift
+            return cmd_drift(args)
         if args.command == 'calibrate':
             from neurobrix.cli.commands.calibrate import cmd_calibrate
             _rc = cmd_calibrate(args)
