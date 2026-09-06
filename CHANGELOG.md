@@ -22,7 +22,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every backend driver must satisfy (`neurobrix.triton.launcher_contract`), with its checker run
   against the CUDA driver on CUDA and the Metal driver on a Mac.
 
+### Changed
+- `neurobrix calibrate` measures on the Triton engine too (`--triton`): the range census observes
+  NBXTensor outputs through the engine's own kernels, so a Triton-only container (an int4 build)
+  gets its calibration record. `--time-arms N` runs the request N times under each arm, keeps the
+  least execution time of each and byte-compares the outputs; a calibrated arm that is identical
+  and not faster marks the record "prefer conservative" for this hardware profile, and the runtime
+  keeps the conservative path there — a record that changes nothing no longer costs.
+
 ### Fixed
+- An audio-LLM request whose language model is placed on the host (granite-speech on a 16 GB card)
+  no longer fails on the prompt embedding lookup: the token indices follow the embedding table's
+  device.
 - A calibrated fp32 island now holds on the Triton engine's self-managed kernels (convolution,
   matmul): the pinned op runs with fp32 as the active compute dtype, so the wrapper's own dtype
   policy no longer narrows the island's inputs and writes an fp16 output that overflows. swin2SR-x2

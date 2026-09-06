@@ -197,8 +197,11 @@ For more information: https://neurobrix.es
                     'later run derives its fp32 islands from. Same request arguments as `run`; '
                     'a family without media inputs takes its stimulus from config/families/<family>.yml.'
     )
-    calibrate_parser.add_argument('--embed', action='store_true',
-                                  help='also write the record into the installed container (components/<name>/profile.json) — the artifact\'s own home, what the build does before publication')
+    calibrate_parser.add_argument('--time-arms', type=int, default=0, metavar='N',
+                                  help='after the census, run the request N times under each arm (conservative, '
+                                       'calibrated), keep the least execution time of each and byte-compare the '
+                                       'outputs; a calibrated arm that is identical and not faster marks the record '
+                                       '"prefer conservative" for this hardware profile')
     _add_run_arguments(calibrate_parser)
 
 

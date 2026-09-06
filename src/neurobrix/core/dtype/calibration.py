@@ -158,6 +158,8 @@ class RangeCensus:
     def __init__(self) -> None:
         self._acc: Dict[str, torch.Tensor] = {}       # largest finite magnitude
         self._nonfinite: Dict[str, torch.Tensor] = {}  # any non-finite value seen
+        self._acc_host: Dict[str, float] = {}         # the Triton engine's census (NBXTensor outputs)
+        self._nonfinite_host: Dict[str, bool] = {}
         self.passes = 0
         self.dag: Optional[Dict[str, Any]] = None
         self.cache_path: Optional[str] = None
@@ -212,7 +214,44 @@ class RangeCensus:
         a.masked_fill_(~torch.isfinite(a), 0.0)
         return a.amax()
 
+    @staticmethod
+    def _is_nbx(x: Any) -> bool:
+        return hasattr(x, "nbx_dtype") and hasattr(x, "data_ptr")
+
+    def observe_nbx(self, op_uid: str, result: Any) -> None:
+        """The census on the Triton engine: an NBXTensor output's largest
+        finite |x| through the engine's own kernels (abs, amax, isfinite,
+        nan_to_num — no torch, R33), one scalar read per floating output.
+        Complex outputs are measured on their real view, like the ATen
+        census. Integer, boolean and empty outputs are not recorded."""
+        if isinstance(result, (tuple, list)):
+            for r in result:
+                self.observe_nbx(op_uid, r)
+            return
+        if not self._is_nbx(result):
+            return
+        from neurobrix.kernels.nbx_tensor import NBXDtype
+        from neurobrix.kernels import wrappers as _w
+        x = result
+        if getattr(x, "_numel", None) == 0 or 0 in list(x.shape):
+            return
+        if getattr(x, "is_complex", lambda: False)():
+            x = x.view_as_real()
+        if x.nbx_dtype not in (NBXDtype.float16, NBXDtype.bfloat16, NBXDtype.float32, NBXDtype.float64):
+            return
+        a = _w.abs_wrapper(x)
+        m = float(_w.amax_wrapper(a).item())
+        nonfinite = not math.isfinite(m)
+        if nonfinite:
+            m = float(_w.amax_wrapper(_w.nan_to_num_wrapper(a, nan=0.0, posinf=0.0, neginf=0.0)).item())
+        prev = self._acc_host.get(op_uid)
+        self._acc_host[op_uid] = m if prev is None else max(prev, m)
+        self._nonfinite_host[op_uid] = self._nonfinite_host.get(op_uid, False) or nonfinite
+
     def observe(self, op_uid: str, result: Any) -> None:
+        if self._is_nbx(result) or (isinstance(result, (tuple, list)) and any(self._is_nbx(r) for r in result)):
+            self.observe_nbx(op_uid, result)
+            return
         m = self._magnitude(result)
         if m is None:
             return
@@ -232,10 +271,15 @@ class RangeCensus:
 
     def finalize(self) -> Dict[str, float]:
         """Largest finite magnitude per op (one host read per op)."""
-        return {uid: float(acc.item()) for uid, acc in self._acc.items()}
+        out = {uid: float(acc.item()) for uid, acc in self._acc.items()}
+        for uid, m in self._acc_host.items():
+            out[uid] = max(out[uid], m) if uid in out else m
+        return out
 
     def non_finite_ops(self) -> list:
-        return sorted(uid for uid, f in self._nonfinite.items() if bool(f.item()))
+        seen = {uid for uid, f in self._nonfinite.items() if bool(f.item())}
+        seen |= {uid for uid, f in self._nonfinite_host.items() if f}
+        return sorted(seen)
 
 
 # Process-wide calibration session: {component_name: RangeCensus}. None when
@@ -281,6 +325,8 @@ class CalibrationRecord:
     engine_version: str = ""
     created_at: str = ""
     non_finite: list = field(default_factory=list)   # ops that produced ±inf / NaN on the reference
+    timing: Dict[str, Any] = field(default_factory=dict)   # per arch: {conservative_s, calibrated_s, identical}
+    prefer: Dict[str, str] = field(default_factory=dict)   # per arch: "conservative" when the record only costs
 
     @classmethod
     def build(cls, model_name: str, component: str, dag: Dict[str, Any],
@@ -307,7 +353,8 @@ class CalibrationRecord:
                 "graph_signature": self.graph_signature, "stimulus": self.stimulus,
                 "passes": self.passes, "reference": self.reference,
                 "engine_version": self.engine_version, "created_at": self.created_at,
-                "non_finite": list(self.non_finite), "max_abs": self.max_abs}
+                "non_finite": list(self.non_finite), "timing": dict(self.timing),
+                "prefer": dict(self.prefer), "max_abs": self.max_abs}
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "CalibrationRecord":
@@ -320,7 +367,8 @@ class CalibrationRecord:
                    reference=str(d.get("reference") or ""),
                    engine_version=str(d.get("engine_version") or ""),
                    created_at=str(d.get("created_at") or ""),
-                   non_finite=list(d.get("non_finite") or []))
+                   non_finite=list(d.get("non_finite") or []),
+                   timing=dict(d.get("timing") or {}), prefer=dict(d.get("prefer") or {}))
 
     def save(self, path: Path) -> None:
         path = Path(path)

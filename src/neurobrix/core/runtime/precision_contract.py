@@ -221,6 +221,13 @@ def resolve(cache_path: Optional[str], component_name: str,
     islands) takes the contract only when the record needs none."""
     # A dtype name or a torch dtype; compared by name so the Triton branch
     # resolves the same contract without torch (R33).
+    # While a calibration runs, the component's census binds to this graph
+    # HERE — the one resolve site every engine goes through (compiled,
+    # sequential, triton, triton_sequential) — so the record can be written
+    # at the end whatever the engine and whatever the compute dtype.
+    census = _cal.active_census(component_name)
+    if census is not None and dag is not None:
+        census.bind(dag, cache_path)
     compute_dtype = str(compute_dtype).replace("torch.", "")
     if compute_dtype != "float16":
         return False, frozenset(), frozenset()
@@ -236,6 +243,21 @@ def resolve(cache_path: Optional[str], component_name: str,
         print(f"[DtypeEngine] {component_name}: no calibration record — conservative "
               f"path (fp32 matmul store); `neurobrix calibrate --model "
               f"{Path(cache_path).name if cache_path else '<model>'}` measures one")
+        return False, frozenset(), frozenset()
+    # A measured preference: the calibrate command timed both arms on this
+    # hardware profile and found the calibrated arm byte-identical and
+    # slower (the record only adds casts on this model) — the conservative
+    # triple is the faster identical one (D-PRECISION-LEVER-NOOP-COST).
+    try:
+        from neurobrix.triton.autotune_cache import _arch_fingerprint as _arch
+        arch = _arch()
+    except Exception:
+        arch = None
+    if arch and record.prefer.get(arch) == "conservative" and forced is not True:
+        t = record.timing.get(arch) or {}
+        print(f"[DtypeEngine] {component_name}: calibration {record.graph_signature} measured on "
+              f"{arch}: the calibrated arm is byte-identical and slower "
+              f"({t.get('calibrated_s')} s vs {t.get('conservative_s')} s) — conservative path kept")
         return False, frozenset(), frozenset()
     policy = get_precision_calibration_policy()
     # Diagnostic (default off): NBX_PRECISION_HEADROOM_BITS=<n> overrides the
