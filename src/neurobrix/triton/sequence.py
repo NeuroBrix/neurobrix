@@ -3776,9 +3776,9 @@ class TritonSequence:
                     # pointers alike — print what each arg actually is so
                     # the failure adjudicates itself (P-WARM-TRITON-VIDEO
                     # class: warm lazy_sequential fed a stale placement).
+                    from neurobrix.kernels.nbx_tensor import device_label
                     _arg_diag = "; ".join(
-                        f"arg{i}={getattr(a, '_device', '?')}"
-                        f":{getattr(a, '_device_idx', '?')}"
+                        f"arg{i}={device_label(a)}"
                         f" ptr={getattr(a, '_data_ptr', 0):#x}"
                         f" shape={tuple(getattr(a, '_shape', ()))}"
                         for i, a in enumerate(args)
