@@ -46,6 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keeps the conservative path there — a record that changes nothing no longer costs.
 
 ### Fixed
+- The ATen oracle (`--sequential`) applies the host-precision rule of the dtype engine: an op the CPU backend refuses in fp16 (the measured set) runs in fp32 on host-placed tensors and hands its result back in the graph's dtype, as the compiled engine already did. A tts decoder placed on the host by a 16 GB plan no longer stops the oracle at its first weight-norm.
 - A device attribute in a model's graph names a kind (cpu, cuda), never a card: the index it
   carries is the machine the model was traced on. The sequential (op-by-op) engine and the tensor
   resolver now place such tensors on the executing card like the other engines do, so a model whose

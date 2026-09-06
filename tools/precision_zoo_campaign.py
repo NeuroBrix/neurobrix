@@ -391,7 +391,49 @@ def launcher_ab(model: str, gpu, out: Path, extra: list, timeout: int) -> dict:
     return res
 
 
-def tree_ab(model: str, gpu, out: Path, extra: list, timeout: int, trees: list) -> dict:
+
+_EXCLUSION_LINE = re.compile(r"\[autotune\].*\b(excluded|exclusion|screen(?:ed)? out|refused config)\b", re.I)
+
+
+def _sweep_store_entries(store: Path, model: str) -> dict:
+    """The model's sweep artifact in one arm's store: {key: config}, or {}."""
+    entries = {}
+    for art in sorted((store / model).glob("*.json")) if (store / model).exists() else []:
+        try:
+            doc = json.loads(art.read_text())
+        except Exception:  # noqa: BLE001
+            continue
+        if str(doc.get("format", "")).startswith("nbx-autotune-sweep/"):
+            entries.update(doc.get("entries") or {})
+    return entries
+
+
+def _compare_sweep_stores(d: Path, model: str, trees: list) -> dict:
+    """Per arm: the number of keys it measured, the configs the screen
+    excluded (its log), and — against the first arm — whether every key
+    chose the same config, with the first key that did not."""
+    first = trees[0][0]
+    base = _sweep_store_entries(d / f"{first}_autotune", model)
+    out = {}
+    for label, _ in trees:
+        ent = _sweep_store_entries(d / f"{label}_autotune", model)
+        log = (d / f"{label}.log").read_text(errors="replace") if (d / f"{label}.log").exists() else ""
+        excluded = [ln.strip() for ln in log.splitlines() if _EXCLUSION_LINE.search(ln)]
+        rec = {"keys": len(ent), "exclusions": len(excluded), "excluded_lines": excluded[:20]}
+        if label != first:
+            missing = sorted(set(base) - set(ent))
+            extra = sorted(set(ent) - set(base))
+            differing = sorted(k for k in set(base) & set(ent) if base[k] != ent[k])
+            rec.update({"identical": not missing and not extra and not differing and bool(base),
+                        "missing_keys": missing[:10], "extra_keys": extra[:10],
+                        "differing_keys": differing[:10],
+                        "first_diff": (differing or missing or extra or [None])[0],
+                        "first_diff_configs": ({"first": base.get(differing[0]), label: ent.get(differing[0])}
+                                               if differing else None)})
+        out[label] = rec
+    return out
+
+def tree_ab(model: str, gpu, out: Path, extra: list, timeout: int, trees: list, sweep_arms: bool = False) -> dict:
     """The tree gate on one model: the same `--triton` request run from two
     or more frozen source trees (label=path/to/src), outputs byte-compared
     against the first tree. This is how a kernel or launcher change made for
@@ -401,7 +443,15 @@ def tree_ab(model: str, gpu, out: Path, extra: list, timeout: int, trees: list) 
     Each arm runs the CLI through the tree's own `neurobrix` package
     (PYTHONPATH=<tree>/src) and records the package path the process saw,
     so a result can never be attributed to a tree that was not the one
-    executed."""
+    executed.
+
+    `sweep_arms`: every arm sweeps its kernels cold into its OWN sweep store
+    (NBX_AUTOTUNE=sweep, NEUROBRIX_AUTOTUNE_STORE=<row>/<label>_autotune), and
+    the stores are compared key by key after the bytes — the proof that a
+    change to the autotuner (a correctness screen before the stopwatch) leaves
+    the CHOICE of every kernel config identical on CUDA, with the sweep's
+    overhead measured (exec seconds per arm, both cold) and every config the
+    screen excluded counted from the arm's log."""
     fam = family_of(model)
     d = out / model
     d.mkdir(parents=True, exist_ok=True)
@@ -418,6 +468,9 @@ def tree_ab(model: str, gpu, out: Path, extra: list, timeout: int, trees: list) 
     entry = "import sys; from neurobrix.cli import main; sys.exit(main())"
     for label, src in trees:
         env = {**base_env, "PYTHONPATH": str(Path(src).resolve())}
+        if sweep_arms:
+            env["NBX_AUTOTUNE"] = "sweep"
+            env["NEUROBRIX_AUTOTUNE_STORE"] = str(d / f"{label}_autotune")
         seen = subprocess.run([PY, "-c", "import neurobrix, sys; sys.stdout.write(neurobrix.__file__)"],
                               env=env, capture_output=True, text=True).stdout.strip()
         outp = d / f"{label}{ext}"
@@ -438,6 +491,8 @@ def tree_ab(model: str, gpu, out: Path, extra: list, timeout: int, trees: list) 
                 comp[label]["diff"] = gate(a, b)       # how far, in the family's own measure
             except Exception as e:  # noqa: BLE001
                 comp[label]["diff"] = {"error": str(e)}
+    if sweep_arms:
+        res["autotune"] = _compare_sweep_stores(d, model, trees)
     ran = all(v["rc"] == 0 and v["sha"] for v in res["arms"].values())
     res["gate"] = {"kind": "bytes", "against": first, "arms": comp,
                    "identical": ran and all(v["identical"] for v in comp.values()), "ran": ran}
@@ -620,7 +675,9 @@ def verdict(r: dict) -> str:
         if r.get("rc"):
             return f"FAILED (drift exited {r['rc']})"
         if r.get("site"):
-            return f"DRIFT at {r['site']} ({r.get('site_type')}, {r.get('site_dev', 0):.3f}, op #{r.get('site_index')}; {r.get('over_bound')} over)"
+            where = (f"kernel site {r['kernel_site']} ({r.get('kernel_site_type')}, {r.get('kernel_site_dev', 0):.3f}, op #{r.get('kernel_site_index')})"
+                     if r.get("kernel_site") else f"no kernel site: policy only ({r.get('policy_sites')} dtype-policy sites)")
+            return f"DRIFT first at {r['site']} ({r.get('site_type')}, {r.get('site_dev', 0):.3f}, op #{r.get('site_index')}; {r.get('over_bound')} over) — {where}"
         return f"NO DRIFT ({r.get('matched')} ops within {r.get('bound')})"
     if r.get("lever") == "sweep":
         if r.get("A", {}).get("rc"):
@@ -631,10 +688,23 @@ def verdict(r: dict) -> str:
         if not g.get("ran"):
             failed = [k for k, v in (r.get("arms") or {}).items() if v.get("rc") != 0 or not v.get("sha")]
             return f"FAILED (arm {', '.join(failed) or '?'} did not run)"
+        at = r.get("autotune") or {}
+        tail = ""
+        if at:
+            first = g.get("against")
+            others = {k: v for k, v in at.items() if k != first}
+            if all(v.get("identical") for v in others.values()) and others:
+                tail = f"; choices identical ({at.get(first, {}).get('keys', 0)} keys)"
+            else:
+                bad = [f"{k} first differs at {v.get('first_diff')}" for k, v in others.items() if not v.get("identical")]
+                tail = "; CHOICES DIFFER (" + "; ".join(bad) + ")"
+            excl = {k: v.get("exclusions", 0) for k, v in at.items() if v.get("exclusions")}
+            if excl:
+                tail += "; SCREEN EXCLUDED " + ", ".join(f"{k}: {n} config(s)" for k, n in excl.items()) + " — a finding to close"
         if g.get("identical"):
-            return "IDENTICAL"
+            return "IDENTICAL" + tail
         diff = [k for k, v in g.get("arms", {}).items() if not v.get("identical")]
-        return "DIFFERENT (" + ", ".join(diff) + ")"
+        return "DIFFERENT (" + ", ".join(diff) + ")" + tail
     if r.get("lever", "").startswith("env:"):
         g = r.get("gate") or {}
         if not g.get("ran"):
@@ -711,14 +781,33 @@ def table(out: Path) -> str:
             for k in (r.get("arms") or {}):
                 if k not in labels:
                     labels.append(k)
+        with_at = any(r.get("autotune") for r in results)
+        at_head = " | autotune keys / choices vs first / screen exclusions (per arm) | sweep overhead (s, arm − first)" if with_at else ""
         head = ("| model | family | weights, config | " + " | ".join(f"{l} exec (s) / sha" for l in labels) +
-                " | gate vs " + (labels[0] if labels else "?") + " | verdict |\n|---|---|---|" + "---|" * len(labels) + "---|---|\n")
+                " | gate vs " + (labels[0] if labels else "?") + at_head + " | verdict |\n|---|---|---|" + "---|" * len(labels)
+                + "---|" + ("---|---|" if with_at else "") + "---|\n")
         for r in results:
             cells = []
             for l in labels:
                 v = (r.get("arms") or {}).get(l) or {}
                 e = v.get("exec_s")
                 cells.append(f"{e if e is None else f'{e:.2f}'} / {v.get('sha') or '—'}")
+            if with_at:
+                at = r.get("autotune") or {}
+                parts = []
+                for l in labels:
+                    a = at.get(l)
+                    if not a:
+                        parts.append(f"{l}: —"); continue
+                    ch = "" if "identical" not in a else (" / identical" if a["identical"] else f" / DIFFER at {a.get('first_diff')}")
+                    parts.append(f"{l}: {a.get('keys', 0)} keys{ch} / {a.get('exclusions', 0)} excluded")
+                cells.append("; ".join(parts))
+                e0 = ((r.get("arms") or {}).get(labels[0]) or {}).get("exec_s")
+                ov = []
+                for l in labels[1:]:
+                    e1 = ((r.get("arms") or {}).get(l) or {}).get("exec_s")
+                    ov.append(f"{l}: {e1 - e0:+.2f}" if e0 is not None and e1 is not None else f"{l}: —")
+                cells.append("; ".join(ov) or "—")
             g = (r.get("gate") or {}).get("arms") or {}
             gs = []
             for l, c in g.items():
@@ -791,6 +880,10 @@ def main():
     r.add_argument("--trees", default=None,
                    help="tree gate: label=path/to/src,label=path/to/src[,...] — the same --triton request from each "
                         "frozen tree, bytes compared against the first (a port's kernel change must be inert on CUDA)")
+    r.add_argument("--sweep-arms", action="store_true",
+                   help="with --trees: every arm sweeps cold into its own store (NBX_AUTOTUNE=sweep) and the chosen "
+                        "config per kernel key is compared across arms, the sweep's overhead measured per arm, and the "
+                        "configs a correctness screen excluded counted from each arm's log")
     r.add_argument("--env-ab", default=None, metavar="KEY=VALUE[,KEY=VALUE]",
                    help="an engine lever behind an environment switch: arm A without, arm B with it, bytes compared")
     r.add_argument("--drift", action="store_true",
@@ -866,7 +959,7 @@ def main():
                 continue
             elif args.trees:
                 trees = [(t.split("=", 1)[0], Path(t.split("=", 1)[1])) for t in args.trees.split(",") if t]
-                res = tree_ab(m, gpu, out, extra, args.timeout, trees)
+                res = tree_ab(m, gpu, out, extra, args.timeout, trees, sweep_arms=args.sweep_arms)
                 print(f"[zoo] {m}: {verdict(res)} " + " ".join(f"{k}={v.get('exec_s')}/{v.get('sha')}" for k, v in res["arms"].items()), flush=True)
                 continue
             else:
