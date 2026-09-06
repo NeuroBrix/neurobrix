@@ -1715,6 +1715,33 @@ def _detect_gpu_backend() -> str:
     raise RuntimeError("No GPU runtime found (tried CUDA, ROCm/HIP and Metal)")
 
 
+def device_label(tensor) -> str:
+    """How a tensor's placement should READ in a message, e.g. "metal:0".
+
+    `NBXTensor._device` is the engine's internal token for "device memory"
+    and its value is the string `"cuda"` on every backend — `is_cuda()` and
+    the allocator paths are written against that token, so it is not a name
+    to change. It is also not a name to PRINT: on an Apple machine a refusal
+    that says `arg0=cuda:0` is telling the reader something false about the
+    hardware, and the first Metal diagnostics did exactly that.
+
+    So the token stays and the label is resolved, once, from the backend the
+    engine actually detected. A tensor on the host still reads "cpu", which
+    is true everywhere.
+    """
+    placement = getattr(tensor, "_device", None)
+    index = getattr(tensor, "_device_idx", "?")
+    if placement is None:
+        return "?"
+    if placement != "cuda":
+        return f"{placement}:{index}"
+    try:
+        return f"{_detect_gpu_backend()}:{index}"
+    except Exception:
+        # No backend resolvable: say the token rather than invent a name.
+        return f"{placement}:{index}"
+
+
 def _active_backend() -> dict:
     """The entry-point name table for the detected backend.
 
