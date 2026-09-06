@@ -90,3 +90,18 @@ def test_a_same_dtype_arithmetic_origin_is_a_kernel_site(tmp_path):
     a.write_text(json.dumps(ra) + "\n"); b.write_text(json.dumps(rb) + "\n")
     rep = drift.detect(str(a), str(b), bound=0.02)
     assert rep.origin_class == "kernel" and rep.first_same_dtype.op_uid == "aten.glu::0" and rep.float_before is None
+
+
+def test_a_relu_that_shrinks_the_window_is_a_scale_crossing_not_a_kernel_site(tmp_path):
+    """canary-qwen, 2026-09-06: relu::1 read 0.093 while the op before it read 0.003 — the same
+    absolute error, over a window whose scale had collapsed (the negatives went to zero)."""
+    a = tmp_path / "a.jsonl"; b = tmp_path / "b.jsonl"
+    ra = [{"component": "p", "tid": "aten.convolution::0::out_0", "op_uid": "aten.convolution::0", "op_type": "aten::convolution", "dtype": "torch.float16", "shape": [4], "head10": [-50.0, 0.30, -40.0, 0.20]},
+          {"component": "p", "tid": "aten.relu::1::out_0", "op_uid": "aten.relu::1", "op_type": "aten::relu", "dtype": "torch.float16", "shape": [4], "head10": [0.0, 0.30, 0.0, 0.20]}]
+    rb = [{**ra[0], "dtype": "fp16", "head10": [-50.0, 0.33, -40.0, 0.20]},
+          {**ra[1], "dtype": "fp16", "head10": [0.0, 0.33, 0.0, 0.20]}]
+    a.write_text("\n".join(json.dumps(r) for r in ra) + "\n"); b.write_text("\n".join(json.dumps(r) for r in rb) + "\n")
+    rep = drift.detect(str(a), str(b), bound=0.02)
+    assert rep.first.op_uid == "aten.relu::1" and rep.origin_class == "scale"
+    assert abs(rep.first.abs_dev - 0.03) < 1e-9 and abs(rep.abs_before - 0.03) < 1e-9
+    assert "SHRANK" in drift.describe(rep)
