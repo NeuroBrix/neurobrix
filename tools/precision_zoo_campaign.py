@@ -397,6 +397,11 @@ _UNSCREENED_LINE = re.compile(r"\[AUTOTUNE_SCREEN\].*\bnot screened\b|\bgo to th
 _SCREEN_SUMMARY = re.compile(r"correctness screen (on|off): checked (\d+) key\(s\), excluded (\d+) config")
 
 
+def _cfg(entry):
+    """The config of a sweep entry without its bench timing (two arms choose the same config with different times)."""
+    return None if entry is None else {k: v for k, v in entry.items() if k != "timing"}
+
+
 def _sweep_store_entries(store: Path, model: str) -> dict:
     """The model's sweep artifact in one arm's store: {key: config}, or {}."""
     entries = {}
@@ -416,9 +421,19 @@ def _compare_sweep_stores(d: Path, model: str, trees: list) -> dict:
     chose the same config, with the first key that did not."""
     first = trees[0][0]
     base = _sweep_store_entries(d / f"{first}_autotune", model)
+    stores = {label: _sweep_store_entries(d / f"{label}_autotune", model) for label, _ in trees}
+    # A key whose bench margin (second-best over best) is under 10 % in ANY arm is a near-tie the
+    # timer can flip on the next run, whatever the arms chose there.
+    near_tie = sorted({k for ent in stores.values() for k, e in ent.items()
+                       if isinstance(e.get("timing"), dict) and e["timing"].get("margin") is not None
+                       and e["timing"]["margin"] < 0.10})
+    # The control: a second arm on the FIRST tree — what timing noise alone does to a choice.
+    control = next((l for l, src in trees[1:] if str(src) == str(trees[0][1])), None)
+    ctrl = stores.get(control, {}) if control else {}
+    noise_keys = sorted(k for k in set(base) & set(ctrl) if _cfg(base[k]) != _cfg(ctrl[k])) if control else []
     out = {}
     for label, _ in trees:
-        ent = _sweep_store_entries(d / f"{label}_autotune", model)
+        ent = stores[label]
         log = (d / f"{label}.log").read_text(errors="replace") if (d / f"{label}.log").exists() else ""
         excluded = [ln.strip() for ln in log.splitlines() if _EXCLUSION_LINE.search(ln)]
         unscreened = [ln.strip() for ln in log.splitlines() if _UNSCREENED_LINE.search(ln)]
@@ -434,12 +449,23 @@ def _compare_sweep_stores(d: Path, model: str, trees: list) -> dict:
         if label != first:
             missing = sorted(set(base) - set(ent))
             extra = sorted(set(ent) - set(base))
-            differing = sorted(k for k in set(base) & set(ent) if base[k] != ent[k])
+            differing = sorted(k for k in set(base) & set(ent) if _cfg(base[k]) != _cfg(ent[k]))
+            # A key where the arm agrees with EITHER the first arm or the control is within the
+            # run-to-run noise of the timer; only a key that differs from both is the arm's own.
+            # ... and a key the control itself disagrees on with the first arm is a demonstrated
+            # near-tie of the timer: a third config there is still noise, not the arm's doing.
+            beyond = sorted(k for k in differing
+                            if k not in near_tie
+                            and not (control and label != control and (_cfg(ctrl.get(k)) == _cfg(ent.get(k)) or k in noise_keys)))
             rec.update({"identical": not missing and not extra and not differing and bool(base),
+                        "within_noise": (not missing and not extra and bool(base) and (label == control or not beyond)),
                         "missing_keys": missing[:10], "extra_keys": extra[:10],
-                        "differing_keys": differing[:10],
+                        "differing_keys": differing[:10], "beyond_noise_keys": beyond[:10],
+                        "noise_keys": noise_keys[:10], "noise_key_count": len(noise_keys),
+                        "near_tie_count": len(near_tie), "margins_recorded": sum(1 for e in ent.values() if isinstance(e.get("timing"), dict)),
                         "first_diff": (differing or missing or extra or [None])[0],
-                        "first_diff_configs": ({"first": base.get(differing[0]), label: ent.get(differing[0])}
+                        "first_diff_configs": ({"first": base.get(differing[0]), label: ent.get(differing[0]),
+                                                **({control: ctrl.get(differing[0])} if control else {})}
                                                if differing else None)})
         out[label] = rec
     return out
@@ -574,6 +600,11 @@ def drift_one(model: str, gpu, out: Path, extra: list, timeout: int, bound: floa
            "kernel_site": (f"{kernel.get('component')}/{kernel.get('op_uid')}" if kernel else None),
            "kernel_site_type": kernel.get("op_type"), "kernel_site_dev": kernel.get("rel_dev"),
            "kernel_site_index": kernel.get("index"),
+           "origin_class": rep.get("origin_class"),
+           "float_before": (f"{(rep.get('float_before') or {}).get('component')}/{(rep.get('float_before') or {}).get('op_uid')}"
+                            if rep.get("float_before") else None),
+           "float_before_dev": (rep.get("float_before") or {}).get("rel_dev"),
+           "producer_missing": rep.get("producer_missing"), "site_abs": first.get("abs_dev"), "abs_before": rep.get("abs_before"),
            "A": {"rc": rc, "exec_s": None}, "B": {"rc": rc, "exec_s": None},
            "gate": {"kind": "drift", "pass": rc == 0 and not first}}
     if triton_only:
@@ -582,7 +613,7 @@ def drift_one(model: str, gpu, out: Path, extra: list, timeout: int, bound: floa
     return res
 
 
-def env_ab(model: str, gpu, out: Path, extra: list, timeout: int, env_b: dict, lever: str) -> dict:
+def env_ab(model: str, gpu, out: Path, extra: list, timeout: int, env_b: dict, lever: str, cold: bool = False, src: Path = None) -> dict:
     """An engine lever behind an environment switch, measured on one model:
     arm A = the request as it is, arm B = the same request with `env_b`
     set (e.g. NBX_OPTIM_ALGEBRAIC=1), outputs byte-compared, execution
@@ -601,15 +632,28 @@ def env_ab(model: str, gpu, out: Path, extra: list, timeout: int, env_b: dict, l
     else:
         base_env["CUDA_VISIBLE_DEVICES"] = str(gpu)
     res = {"model": model, "family": fam, "weight_gb": round(weight_gb(model), 2),
-           "config": "machine" if gpu is None else f"pinned:{gpu}", "request": req, "lever": lever, "env_b": env_b}
+           "config": "machine" if gpu is None else f"pinned:{gpu}", "request": req, "lever": lever, "env_b": env_b,
+           "src": str(src) if src else None, "cold": cold}
     for arm, env in (("A", base_env), ("B", {**base_env, **env_b})):
         outp = d / f"{arm}{ext}"
-        rc, wall = run([NBX, "run", "--model", model] + req + ["--output", str(outp)], env, d / f"{arm}.log", timeout)
+        if cold:                                     # a cold start per arm: its own replay cache, nothing seeded
+            env = {**env, "NEUROBRIX_REPLAY_CACHE": str(d / f"{arm}_replay")}
+        if src is not None:                          # the request runs the given tree's package
+            env = {**env, "PYTHONPATH": str(Path(src).resolve())}
+            cmd = [PY, "-c", "import sys; from neurobrix.cli import main; sys.exit(main())", "run", "--model", model]
+        else:
+            cmd = [NBX, "run", "--model", model]
+        rc, wall = run(cmd + req + ["--output", str(outp)], env, d / f"{arm}.log", timeout)
         log = (d / f"{arm}.log").read_text(errors="replace")
-        m = re.search(r"\[Optim\] algebraic: (\d+) identity ops aliased away", log)
+        cert = re.search(r"certified directory: (\d+) key\(s\) served without a sweep, (\d+) swept at runtime", log)
         res[arm] = {"rc": rc, "wall_s": wall, "exec_s": exec_time(d / f"{arm}.log"), "output": str(outp),
                     "sha": hashlib.sha256(outp.read_bytes()).hexdigest()[:12] if outp.exists() else None,
-                    "ops_removed": sum(int(x) for x in re.findall(r"\[Optim\] algebraic: (\d+) identity ops", log)) or None}
+                    "ops_removed": sum(int(x) for x in re.findall(r"\[Optim\] algebraic: (\d+) identity ops", log)) or None,
+                    "certified_served": int(cert.group(1)) if cert else None,
+                    "swept": int(cert.group(2)) if cert else None,
+                    "announced_missing": len(re.findall(r"\[autotune\] no certified setting for", log)),
+                    "contradictions": len(re.findall(r"\[AUTOTUNE_SCREEN\] CONTRADICTION", log)),
+                    "screen_excluded": len(re.findall(r"\[AUTOTUNE_SCREEN\] .*config excluded", log))}
     a, b = d / f"A{ext}", d / f"B{ext}"
     same = a.exists() and b.exists() and a.read_bytes() == b.read_bytes()
     res["gate"] = {"kind": "bytes", "identical": same, "pass": same,
@@ -687,8 +731,29 @@ def verdict(r: dict) -> str:
         if r.get("rc"):
             return f"FAILED (drift exited {r['rc']})"
         if r.get("site"):
-            where = (f"kernel site {r['kernel_site']} ({r.get('kernel_site_type')}, {r.get('kernel_site_dev', 0):.3f}, op #{r.get('kernel_site_index')})"
-                     if r.get("kernel_site") else f"no kernel site: policy only ({r.get('policy_sites')} dtype-policy sites)")
+            oc = r.get("origin_class")
+            if oc == "discrete":
+                where = (f"origin DISCRETE (an integer tensor flipped; largest float deviation before it "
+                         f"{r.get('float_before')} {r.get('float_before_dev') or 0:.3f})")
+            elif oc == "kernel":
+                where = (f"origin KERNEL site {r['site']} ({r.get('site_type')}, {r.get('site_dev', 0):.3f})"
+                         + (f"; largest float deviation before it {r.get('float_before')} {r.get('float_before_dev') or 0:.3f}" if r.get("float_before") else ""))
+            elif oc == "scale":
+                where = (f"origin a SCALE crossing at {r['site']} ({r.get('site_type')}): abs deviation {r.get('site_abs') or 0:.3g} vs "
+                         f"{r.get('abs_before') or 0:.3g} before it — no new error here, inherited; largest float deviation before it "
+                         f"{r.get('float_before')} {r.get('float_before_dev') or 0:.3f}")
+            elif oc == "policy":
+                where = (f"origin a POLICY site (dtypes differ); first same-dtype site after it "
+                         f"{r.get('kernel_site')} ({r.get('kernel_site_type')}, {r.get('kernel_site_dev') or 0:.3f})"
+                         if r.get("kernel_site") else f"origin a POLICY site (dtypes differ); no same-dtype site ({r.get('policy_sites')} policy sites)")
+            elif oc == "carrier":
+                where = (f"origin a CARRIER (its input's deviation; largest float before it {r.get('float_before')} "
+                         f"{r.get('float_before_dev') or 0:.3f})")
+            else:
+                where = (f"kernel site {r['kernel_site']} ({r.get('kernel_site_type')}, {r.get('kernel_site_dev', 0):.3f}, op #{r.get('kernel_site_index')})"
+                         if r.get("kernel_site") else f"no kernel site: policy only ({r.get('policy_sites')} dtype-policy sites)")
+            if r.get("producer_missing"):
+                where += "; its PRODUCER has no record on the engine side (fused or skipped there — read the fusion)"
             return f"DRIFT first at {r['site']} ({r.get('site_type')}, {r.get('site_dev', 0):.3f}, op #{r.get('site_index')}; {r.get('over_bound')} over) — {where}"
         return f"NO DRIFT ({r.get('matched')} ops within {r.get('bound')})"
     if r.get("lever") == "sweep":
@@ -707,8 +772,14 @@ def verdict(r: dict) -> str:
             others = {k: v for k, v in at.items() if k != first}
             if all(v.get("identical") for v in others.values()) and others:
                 tail = f"; choices identical ({at.get(first, {}).get('keys', 0)} keys)"
+            elif all(v.get("within_noise") for v in others.values()) and others:
+                nk = max((v.get("noise_key_count") or 0) for v in others.values())
+                nt = max((v.get("near_tie_count") or 0) for v in others.values())
+                tail = (f"; choices within the timer's noise ({at.get(first, {}).get('keys', 0)} keys; {nk} moved on the control run"
+                        + (f", {nt} near-ties by bench margin" if nt else "") + ")")
             else:
-                bad = [f"{k} first differs at {v.get('first_diff')}" for k, v in others.items() if not v.get("identical")]
+                bad = [f"{k} differs beyond the noise at {(v.get('beyond_noise_keys') or [v.get('first_diff')])[0]}"
+                       for k, v in others.items() if not v.get("identical") and not v.get("within_noise")]
                 tail = "; CHOICES DIFFER (" + "; ".join(bad) + ")"
             idle = [k for k, v in others.items() if v.get("screen") == "on" and not v.get("screened_keys")]
             if idle:
@@ -726,6 +797,18 @@ def verdict(r: dict) -> str:
             return "FAILED (an arm did not run)"
         n = (r.get("B") or {}).get("ops_removed")
         tag = f", {n} ops removed" if n else ""
+        A, B = r.get("A") or {}, r.get("B") or {}
+        if A.get("certified_served") is not None or B.get("certified_served") is not None:
+            tag += (f"; A certified {A.get('certified_served', 0)} / swept {A.get('swept', 0)}"
+                    f", B certified {B.get('certified_served', 0)} / swept {B.get('swept', 0)}")
+            if A.get("exec_s") and B.get("exec_s"):
+                tag += f"; cold start A {A['exec_s']:.1f} s vs B {B['exec_s']:.1f} s"
+            c = (A.get("contradictions") or 0) + (B.get("contradictions") or 0)
+            if c:
+                tag += f"; {c} CONTRADICTION(S) — a finding"
+            x = (A.get("screen_excluded") or 0) + (B.get("screen_excluded") or 0)
+            if x:
+                tag += f"; the screen excluded {x} config(s) — a finding to close"
         return ("IDENTICAL" if g.get("identical") else "DIFFERENT") + tag
     if r.get("lever") == "launcher":
         if r["A"]["rc"] or r["B"]["rc"]:
@@ -814,7 +897,7 @@ def table(out: Path) -> str:
                     a = at.get(l)
                     if not a:
                         parts.append(f"{l}: —"); continue
-                    ch = "" if "identical" not in a else (" / identical" if a["identical"] else f" / DIFFER at {a.get('first_diff')}")
+                    ch = "" if "identical" not in a else (" / identical" if a["identical"] else (" / within noise" if a.get("within_noise") else f" / DIFFER at {(a.get('beyond_noise_keys') or [a.get('first_diff')])[0]}"))
                     sc = a.get("screen", "absent")
                     sc = f"screen {sc}" + (f" ({a['screened_keys']} checked)" if a.get("screened_keys") is not None else "")
                     parts.append(f"{l}: {a.get('keys', 0)} keys{ch} / {sc} / {a.get('exclusions', 0)} excluded"
@@ -908,6 +991,9 @@ def main():
                         "configs a correctness screen excluded counted from each arm's log")
     r.add_argument("--env-ab", default=None, metavar="KEY=VALUE[,KEY=VALUE]",
                    help="an engine lever behind an environment switch: arm A without, arm B with it, bytes compared")
+    r.add_argument("--cold-arms", action="store_true",
+                   help="with --env-ab: each arm starts cold with its own replay cache (nothing seeded) — the certified "
+                        "directory's proof: A = certified settings loaded, B = NBX_AUTOTUNE_CERTIFIED=off (runtime sweep)")
     r.add_argument("--drift", action="store_true",
                    help="drift-site lever: `neurobrix drift` per model (ATen oracle vs Triton engine, per op); "
                         "the verdict is the first drifting op")
@@ -967,7 +1053,8 @@ def main():
                 print(f"[zoo] {m}: {verdict(res)} exec={res.get('exec_s')} sha={res.get('output_sha')}", flush=True)
             elif args.env_ab:
                 env_b = dict(kv.split("=", 1) for kv in args.env_ab.split(",") if "=" in kv)
-                res = env_ab(m, gpu, out, extra, args.timeout, env_b, "env:" + ",".join(env_b))
+                res = env_ab(m, gpu, out, extra, args.timeout, env_b, "env:" + ",".join(env_b), cold=args.cold_arms,
+                             src=Path(args.src) if args.src else None)
                 print(f"[zoo] {m}: {verdict(res)} A={res['A']['exec_s']} B={res['B']['exec_s']} "
                       f"{('×%.2f' % res['speedup']) if res.get('speedup') else ''}", flush=True)
                 continue
