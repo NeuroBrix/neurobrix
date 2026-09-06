@@ -177,6 +177,49 @@ class TritonNextTokenDiffusionEngine:
                      self.ACOUSTIC_CONN, self.SEMANTIC_CONN):
             self._ensure_weights_loaded(comp)
 
+        import os as _os_ntd
+        gen = (self._generate_reprefill if _os_ntd.environ.get("NBX_NTD_REPREFILL") == "1"
+               else self._generate_kv)
+        emitted_tokens, audio_chunks, n_diffusion, step, _vv_latents, start = gen(
+            prompt_ids, speech_start_id, speech_end_id, speech_diffusion_id, eos_token_id,
+            valid_arr, max_steps, ddpm_steps, cfg_scale, vae_dim, defaults, scaling, bias)
+        _vv_dump_path = _os_ntd.environ.get("NBX_VV_DUMP_LATENTS", "")
+        elapsed = (time.perf_counter() - start) * 1000
+        if _vv_dump_path and _vv_latents:
+            np.save(_vv_dump_path, np.stack(_vv_latents))
+            print(f"   [VV-DIAG] dumped {len(_vv_latents)} first-K latents → {_vv_dump_path}")
+        print(f"   [{self.LM}] {step + 1} steps, {n_diffusion} speech_diffusion tokens in {elapsed:.0f}ms")
+        print(f"   [{self.LM}] emitted histogram: start={emitted_tokens.count(speech_start_id)} "
+              f"diff={emitted_tokens.count(speech_diffusion_id)} end={emitted_tokens.count(speech_end_id)} "
+              f"eos={emitted_tokens.count(eos_token_id)}")
+
+        if not audio_chunks:
+            raise RuntimeError(
+                "ZERO FALLBACK: next_token_diffusion produced no audio "
+                f"(emitted {len(emitted_tokens)} tokens, {n_diffusion} diffusion).")
+
+        waveform = audio_chunks[0] if len(audio_chunks) == 1 else NBXTensor.cat(audio_chunks, -1)  # [1,1,T]
+        sr = float(defaults.get("sample_rate", 24000))
+        print(f"   [Output] waveform {list(waveform.shape)} ({waveform.shape[-1] / sr:.2f}s)")
+        self.ctx.variable_resolver.resolved["global.output_audio"] = waveform
+
+        if not self.ctx.persistent_mode:
+            for comp in (self.LM, self.HEAD, self.ACOUSTIC_TOK, self.SEMANTIC_TOK,
+                         self.ACOUSTIC_CONN, self.SEMANTIC_CONN):
+                self._unload_component_weights(comp)
+            release_flow_memory(self.ctx.primary_device)
+
+        return self.ctx.variable_resolver.resolve_all()
+
+
+    # ─── the two generation paths ───────────────────────────────────────────
+    def _generate_reprefill(self, prompt_ids, speech_start_id, speech_end_id, speech_diffusion_id,
+                            eos_token_id, valid_arr, max_steps, ddpm_steps, cfg_scale, vae_dim,
+                            defaults, scaling, bias):
+        """The reference path (NBX_NTD_REPREFILL=1): the LM re-run on the WHOLE
+        growing context every step through numpy — one autotune shape per
+        length, one prefill per token. Kept as the equivalence reference of
+        the KV path below; never the default."""
         embed_np = self._embed_weight_np(self.LM)
         if embed_np is None:
             raise RuntimeError("ZERO FALLBACK: could not locate tied embed weight in language_model.")
@@ -258,32 +301,110 @@ class TritonNextTokenDiffusionEngine:
             if use_cfg:
                 neg_inputs_embeds_np = np.concatenate([neg_inputs_embeds_np, next_embed_np], axis=1)
 
-        elapsed = (time.perf_counter() - start) * 1000
-        if _vv_dump_path and _vv_latents:
-            np.save(_vv_dump_path, np.stack(_vv_latents))
-            print(f"   [VV-DIAG] dumped {len(_vv_latents)} first-K latents → {_vv_dump_path}")
-        print(f"   [{self.LM}] {step + 1} steps, {n_diffusion} speech_diffusion tokens in {elapsed:.0f}ms")
-        print(f"   [{self.LM}] emitted histogram: start={emitted_tokens.count(speech_start_id)} "
-              f"diff={emitted_tokens.count(speech_diffusion_id)} end={emitted_tokens.count(speech_end_id)} "
-              f"eos={emitted_tokens.count(eos_token_id)}")
+        return emitted_tokens, audio_chunks, n_diffusion, step, _vv_latents, start
 
-        if not audio_chunks:
-            raise RuntimeError(
-                "ZERO FALLBACK: next_token_diffusion produced no audio "
-                f"(emitted {len(emitted_tokens)} tokens, {n_diffusion} diffusion).")
+    def _generate_kv(self, prompt_ids, speech_start_id, speech_end_id, speech_diffusion_id,
+                     eos_token_id, valid_arr, max_steps, ddpm_steps, cfg_scale, vae_dim,
+                     defaults, scaling, bias):
+        """Decoder plan: the LM as a KV-cached decoder (the autoregressive
+        flow's session), one token per step per context, everything on the
+        device. The CFG negative context (the audio-only context that grows
+        beside the prompt context) is a second decode BRANCH of the same
+        interceptor (kv_cache.KVBranch): both contexts ingest the same
+        feedback embedding each step, exactly as the re-prefill path fed
+        both grown sequences. The embedding table never leaves the device:
+        the constrained argmax is a [1,H]x[H,n_valid] matmul on the
+        device over the valid tokens' rows.
 
-        waveform = audio_chunks[0] if len(audio_chunks) == 1 else NBXTensor.cat(audio_chunks, -1)  # [1,1,T]
-        sr = float(defaults.get("sample_rate", 24000))
-        print(f"   [Output] waveform {list(waveform.shape)} ({waveform.shape[-1] / sr:.2f}s)")
-        self.ctx.variable_resolver.resolved["global.output_audio"] = waveform
+        Measured before (VibeVoice-1.5B, --triton, quiet card): 92 full
+        re-prefills = 35 s of a 48 s request, 743 autotune shapes, the
+        table's 900 MB exported to numpy once (7 s)."""
+        from neurobrix.kernels import wrappers as w
+        from neurobrix.triton.flow.autoregressive import TritonAutoregressiveHandler
+        import os as _os_vv
+        _vv_dump_path = _os_vv.environ.get("NBX_VV_DUMP_LATENTS", "")
+        _vv_dump_k = int(_os_vv.environ.get("NBX_VV_DUMP_K", "4"))
+        _vv_latents: list = []
+        ar = TritonAutoregressiveHandler(self.ctx, self._execute_component,
+                                         self._ensure_weights_loaded, self._unload_component_weights)
+        session = ar._create_session({"lm_component": self.LM})
+        executor = self.ctx.executors[self.LM]
+        embed_w = executor.get_embed_tokens()
+        if embed_w is None:
+            raise RuntimeError("ZERO FALLBACK: could not locate tied embed weight in language_model.")
+        DeviceAllocator.set_device(parse_device_idx(self.ctx.primary_device))
+        valid_rows = w.embedding(embed_w, NBXTensor.from_numpy(np.asarray(valid_arr, dtype=np.int64)))  # [n_valid, H]
+        valid_rows_t = valid_rows.to(NBXDtype.float32).transpose(0, 1).contiguous()                     # [H, n_valid]
+        use_cfg = cfg_scale != 1.0
+        pos_branch = session.branch_state()
+        neg_branch = session.new_branch() if use_cfg else None
+        print(f"   [{self.LM}] next-token-diffusion (max_steps={max_steps}, "
+              f"ddpm_steps={ddpm_steps}, cfg={cfg_scale}), KV-cached decoder"
+              f"{' with a negative branch' if use_cfg else ''}...")
+        start = time.perf_counter()
+        emitted_tokens: List[int] = []
+        audio_chunks: List[NBXTensor] = []
+        n_diffusion = 0
+        step = -1
+        ids = lambda xs: NBXTensor.from_numpy(np.asarray([xs], dtype=np.int64))      # [1, len(xs)]
+        neg_last = None
+        if use_cfg:
+            session.use_branch(neg_branch)
+            neg_last = self._last_hidden(session.prefill(ids([speech_start_id]), 1))     # [1,H]
+            session.use_branch(pos_branch)
+        last_hidden = self._last_hidden(session.prefill(ids(prompt_ids), 1))              # [1,H]
+        seq = len(prompt_ids)
+        dummy = ids([0])
+        for step in range(max_steps):
+            logits = w.matmul_wrapper(last_hidden.to(NBXDtype.float32), valid_rows_t)         # [1, n_valid]
+            next_token = int(valid_arr[int(w.argmax_wrapper(logits, dim=-1).item())])
+            emitted_tokens.append(next_token)
+            if step < 8 or step % 16 == 0:
+                _tname = ("eos" if next_token == eos_token_id else
+                          "start" if next_token == speech_start_id else
+                          "end" if next_token == speech_end_id else
+                          "diff" if next_token == speech_diffusion_id else str(next_token))
+                print(f"   [{self.LM}] step {step}: tok={_tname} "
+                      f"(diff_so_far={n_diffusion}, seq={seq})", flush=True)
+            if next_token == eos_token_id:
+                break
+            next_embed = w.embedding(embed_w, ids([next_token]))                              # [1,1,H]
+            if next_token == speech_diffusion_id:
+                n_diffusion += 1
+                pos_cond = last_hidden
+                neg_cond = neg_last if use_cfg else pos_cond
+                speech_latent = self._sample_speech_tokens(
+                    pos_cond, neg_cond, cfg_scale, ddpm_steps, vae_dim, defaults)         # NBXTensor [1,vae]
+                latent_np = _to_numpy(speech_latent)                                          # [1,vae]
+                if _vv_dump_path and n_diffusion <= _vv_dump_k:
+                    _vv_latents.append(latent_np.astype(np.float32).reshape(-1))
+                scaled_np = (latent_np / scaling - bias)[:, np.newaxis, :]                    # [1,1,vae]
+                chunk = self._acoustic_decode(scaled_np)                                      # NBXTensor [1,1,3200]
+                if chunk is None:
+                    raise RuntimeError(f"ZERO FALLBACK: acoustic_tokenizer returned no audio at step {step}.")
+                audio_chunks.append(chunk)
+                acoustic_embed = self._connector(self.ACOUSTIC_CONN, latent_np)               # NBX [1,H]
+                semantic_features_np = _to_numpy(self._semantic_encode(chunk))                # [1,Td,128] or [1,128]
+                if semantic_features_np.ndim == 3:
+                    semantic_features_np = semantic_features_np.mean(axis=1)                  # [1,128]
+                semantic_embed = self._connector(self.SEMANTIC_CONN, semantic_features_np)    # NBX [1,H]
+                summed = w.add(acoustic_embed, semantic_embed)                                # [1,H]
+                next_embed = summed.view((1, 1, summed.shape[-1]))                            # [1,1,H]
+            # Both contexts ingest the same embedding (the re-prefill path grew both sequences with it).
+            last_hidden = self._last_hidden(session.decode_step(dummy, inputs_embeds=next_embed))
+            if use_cfg:
+                session.use_branch(neg_branch)
+                neg_last = self._last_hidden(session.decode_step(dummy, inputs_embeds=next_embed))
+                session.use_branch(pos_branch)
+            seq += 1
+        return emitted_tokens, audio_chunks, n_diffusion, step, _vv_latents, start
 
-        if not self.ctx.persistent_mode:
-            for comp in (self.LM, self.HEAD, self.ACOUSTIC_TOK, self.SEMANTIC_TOK,
-                         self.ACOUSTIC_CONN, self.SEMANTIC_CONN):
-                self._unload_component_weights(comp)
-            release_flow_memory(self.ctx.primary_device)
-
-        return self.ctx.variable_resolver.resolve_all()
+    @staticmethod
+    def _last_hidden(hidden: NBXTensor) -> NBXTensor:
+        """[B,S,H] -> the last position [B,H], contiguous, on the device."""
+        if hidden.ndim == 3:
+            return hidden.select(1, hidden.shape[1] - 1).contiguous()
+        return hidden.contiguous()
 
     # ─── diffusion sampling (NBXTensor + zero-torch scheduler/CFG) ─────────────
     def _sample_speech_tokens(self, pos_cond_np, neg_cond_np, cfg_scale, ddpm_steps, vae_dim, defaults) -> NBXTensor:
@@ -301,7 +422,11 @@ class TritonNextTokenDiffusionEngine:
         })
         sched.set_timesteps(ddpm_steps)
 
-        cond_nbx = NBXTensor.from_numpy(np.concatenate([pos_cond_np, neg_cond_np], axis=0).astype(np.float32))  # [2,H]
+        if isinstance(pos_cond_np, NBXTensor):                               # the KV path: conditions on the device
+            cond_nbx = NBXTensor.cat([pos_cond_np.to(NBXDtype.float32).contiguous(),
+                                      neg_cond_np.to(NBXDtype.float32).contiguous()], 0)  # [2,H]
+        else:
+            cond_nbx = NBXTensor.from_numpy(np.concatenate([pos_cond_np, neg_cond_np], axis=0).astype(np.float32))  # [2,H]
         speech = NBXTensor.from_numpy(self._rng.standard_normal((2, vae_dim)).astype(np.float32))               # [2,vae]
 
         for i, t in enumerate(sched.timesteps):

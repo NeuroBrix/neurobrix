@@ -100,6 +100,24 @@ class StateCacheFactory:
             wrapper = KVCacheAttentionWrapper(config)
             return wrapper
 
-        # Path 2: Legacy fallback
+        # Path 2: no Prism KV plan (a flow that drives an LM outside the
+        # autoregressive plan — VibeVoice's next-token diffusion). A
+        # container that declares no context window is sized from the
+        # request, exactly as the Triton session does (R30:
+        # triton/flow/autoregressive.py — `max_tokens + 128` with the decode
+        # budget of the resolver cascade); the buffers grow on demand
+        # toward that ceiling.
+        if lm_config.get("max_position_embeddings") is None:
+            from neurobrix.core.runtime.decode_bound import decode_bound
+            resolved = getattr(getattr(ctx, "variable_resolver", None), "resolved", {}) or {}
+            mt = resolved.get("global.max_tokens")
+            if mt is None:
+                mt = resolved.get("max_tokens")
+            if mt is None:
+                mt = ctx.pkg.defaults.get("max_tokens", 512)
+            budget = int(decode_bound(int(mt)))
+            lm_config = {**lm_config, "max_position_embeddings": budget + 128}
+            print(f"   [KV cache] no context window declared by the container — sized from the request: "
+                  f"{budget} decode tokens + 128 (grows on demand)", flush=True)
         wrapper = create_kv_wrapper_from_config(lm_config, device, dtype)
         return wrapper
