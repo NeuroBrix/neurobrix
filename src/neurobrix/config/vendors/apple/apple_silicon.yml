@@ -100,9 +100,16 @@ sdpa_thresholds:
     block_m: 32
     block_n: 32
     num_warps: 4
+  # MEASURED 2026-09-06: 32x32, not 32x64. The Metal backend's attention
+  # lowering is validated at head_dim 64 for a 32x32 tile only; a 32x64 tile
+  # has no template and falls to a generic path that cannot lower an
+  # attention kernel at all, so the whole op refuses. Both tiles fit the
+  # 32 KB threadgroup budget — this is not a memory choice, it is the shape
+  # the hardware's compiler actually implements, which is exactly what a
+  # hardware profile is for.
   - head_dim_lt: 128
     block_m: 32
-    block_n: 64
+    block_n: 32
     num_warps: 4
 
 memory:
