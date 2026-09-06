@@ -276,6 +276,7 @@ def arch_smem_budget() -> Optional[int]:
         budget = (cfg.get("memory") or {}).get("max_shared_memory_per_block")
         if not budget:
             continue
+        _remember_profile(declared, wanted, cfg)
         if declared == wanted:
             exact = int(budget)
         elif (declared.split(".")[0] == wanted.split(".")[0]
@@ -312,6 +313,71 @@ def arch_smem_budget() -> Optional[int]:
             # major-family matches are reached before this and are unchanged.
             same_family = int(budget)
     return exact if exact is not None else same_family
+
+
+#: The vendor profile the last `arch_smem_budget()` resolution matched, by
+#: the same exact / same-family / declared-prefix rules. Kept beside that
+#: function rather than re-resolved so the engine cannot end up reading its
+#: shared-memory budget from one profile and its attention tiles from another.
+_ACTIVE_PROFILE: dict = {}
+
+
+def _remember_profile(declared: str, wanted: str, cfg: dict) -> None:
+    """Record the best profile seen so far, exact match winning."""
+    if declared == wanted:
+        _ACTIVE_PROFILE.clear()
+        _ACTIVE_PROFILE.update(cfg)
+        _ACTIVE_PROFILE["_exact"] = True
+    elif not _ACTIVE_PROFILE.get("_exact"):
+        matches = [str(m).strip().lower()
+                   for m in (cfg.get("compute_capability_matches") or [])]
+        same_major = (declared.split(".")[0] == wanted.split(".")[0]
+                      and "." in declared and "." in wanted)
+        if same_major or any(wanted.startswith(m) for m in matches):
+            _ACTIVE_PROFILE.clear()
+            _ACTIVE_PROFILE.update(cfg)
+
+
+def active_vendor_profile() -> dict:
+    """The hardware profile in force, or `{}` when none matched."""
+    if not _ACTIVE_PROFILE:
+        arch_smem_budget()          # resolves and records, cached upstream
+    return dict(_ACTIVE_PROFILE)
+
+
+def sdpa_block_ceiling(seqlen_q: int, head_dim: int):
+    """`(block_m, block_n)` the hardware profile allows here, or `(None, None)`.
+
+    A CEILING, not an instruction. The wrapper's own cascade stays the
+    proposer — it carries measurements the profiles do not, notably that
+    BLOCK_M=64 is the floor of CORRECTNESS on Volta at head_dim<128 while
+    volta.yml declares 128 — and this only clamps what it proposes.
+
+    Why it exists: the cascade decides between a 128-row and a 64-row Q tile
+    on `_NBX_HAS_NATIVE_BF16`, which distinguishes Volta from Ampere and
+    means nothing off CUDA. On an Apple GPU it therefore took the Ampere
+    branch and asked for BLOCK_M=128 — four times what
+    `apple_silicon.yml` declares (32) for this shape, and more than the
+    Metal backend will lower at all. The profile has said 32 since the file
+    was written; nothing read it.
+
+    Clamping rather than replacing is what keeps CUDA byte-identical:
+    min(64, 128) is Volta's measured 64, min(128, 128) is Hopper's 128.
+    Measured 2026-09-06: no NVIDIA tile changes.
+
+    Thresholds are read in file order, first match wins, exactly as the
+    profiles are written (decode rows before prefill rows).
+    """
+    profile = active_vendor_profile()
+    for row in profile.get("sdpa_thresholds") or []:
+        if "seqlen_q_le" in row and seqlen_q > row["seqlen_q_le"]:
+            continue
+        if "head_dim_ge" in row and head_dim < row["head_dim_ge"]:
+            continue
+        if "head_dim_lt" in row and head_dim >= row["head_dim_lt"]:
+            continue
+        return row.get("block_m"), row.get("block_n")
+    return None, None
 
 
 def configs_within_smem_budget(configs, budget: Optional[int],
