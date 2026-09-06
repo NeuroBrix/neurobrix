@@ -515,6 +515,50 @@ def drift_one(model: str, gpu, out: Path, extra: list, timeout: int, bound: floa
     return res
 
 
+def env_ab(model: str, gpu, out: Path, extra: list, timeout: int, env_b: dict, lever: str) -> dict:
+    """An engine lever behind an environment switch, measured on one model:
+    arm A = the request as it is, arm B = the same request with `env_b`
+    set (e.g. NBX_OPTIM_ALGEBRAIC=1), outputs byte-compared, execution
+    times recorded. The engine is chosen by the request args (`--extra
+    --triton` for the Triton engine)."""
+    fam = family_of(model)
+    d = out / model
+    d.mkdir(parents=True, exist_ok=True)
+    req = request_args(model, fam, extra)
+    ext = output_ext(fam, req)
+    base_env = {**os.environ}
+    for k in env_b:
+        base_env.pop(k, None)
+    if gpu is None:
+        base_env.pop("CUDA_VISIBLE_DEVICES", None)
+    else:
+        base_env["CUDA_VISIBLE_DEVICES"] = str(gpu)
+    res = {"model": model, "family": fam, "weight_gb": round(weight_gb(model), 2),
+           "config": "machine" if gpu is None else f"pinned:{gpu}", "request": req, "lever": lever, "env_b": env_b}
+    for arm, env in (("A", base_env), ("B", {**base_env, **env_b})):
+        outp = d / f"{arm}{ext}"
+        rc, wall = run([NBX, "run", "--model", model] + req + ["--output", str(outp)], env, d / f"{arm}.log", timeout)
+        log = (d / f"{arm}.log").read_text(errors="replace")
+        m = re.search(r"\[Optim\] algebraic: (\d+) identity ops aliased away", log)
+        res[arm] = {"rc": rc, "wall_s": wall, "exec_s": exec_time(d / f"{arm}.log"), "output": str(outp),
+                    "sha": hashlib.sha256(outp.read_bytes()).hexdigest()[:12] if outp.exists() else None,
+                    "ops_removed": sum(int(x) for x in re.findall(r"\[Optim\] algebraic: (\d+) identity ops", log)) or None}
+    a, b = d / f"A{ext}", d / f"B{ext}"
+    same = a.exists() and b.exists() and a.read_bytes() == b.read_bytes()
+    res["gate"] = {"kind": "bytes", "identical": same, "pass": same,
+                   "ran": res["A"]["rc"] == 0 and res["B"]["rc"] == 0}
+    if a.exists() and b.exists() and not same:
+        try:
+            res["gate"]["diff"] = gate(a, b)
+        except Exception as e:  # noqa: BLE001
+            res["gate"]["diff"] = {"error": str(e)}
+    res["islands"] = {}
+    x, y = res["A"]["exec_s"], res["B"]["exec_s"]
+    res["speedup"] = (x / y) if x and y else None
+    (d / "result.json").write_text(json.dumps(res, indent=1))
+    return res
+
+
 def r33_probe(model: str, gpu, out: Path, extra: list, timeout: int, src: Path = None) -> dict:
     """The R33 proof on one model: a complete `--triton` request in-process
     under the sys.modules probe; the verdict is whether torch is in
@@ -591,6 +635,13 @@ def verdict(r: dict) -> str:
             return "IDENTICAL"
         diff = [k for k, v in g.get("arms", {}).items() if not v.get("identical")]
         return "DIFFERENT (" + ", ".join(diff) + ")"
+    if r.get("lever", "").startswith("env:"):
+        g = r.get("gate") or {}
+        if not g.get("ran"):
+            return "FAILED (an arm did not run)"
+        n = (r.get("B") or {}).get("ops_removed")
+        tag = f", {n} ops removed" if n else ""
+        return ("IDENTICAL" if g.get("identical") else "DIFFERENT") + tag
     if r.get("lever") == "launcher":
         if r["A"]["rc"] or r["B"]["rc"]:
             return "FAILED (a --triton arm did not run)"
@@ -740,6 +791,8 @@ def main():
     r.add_argument("--trees", default=None,
                    help="tree gate: label=path/to/src,label=path/to/src[,...] — the same --triton request from each "
                         "frozen tree, bytes compared against the first (a port's kernel change must be inert on CUDA)")
+    r.add_argument("--env-ab", default=None, metavar="KEY=VALUE[,KEY=VALUE]",
+                   help="an engine lever behind an environment switch: arm A without, arm B with it, bytes compared")
     r.add_argument("--drift", action="store_true",
                    help="drift-site lever: `neurobrix drift` per model (ATen oracle vs Triton engine, per op); "
                         "the verdict is the first drifting op")
@@ -797,6 +850,12 @@ def main():
             if args.probe:
                 res = r33_probe(m, gpu, out, extra, args.timeout, Path(args.src) if args.src else None)
                 print(f"[zoo] {m}: {verdict(res)} exec={res.get('exec_s')} sha={res.get('output_sha')}", flush=True)
+            elif args.env_ab:
+                env_b = dict(kv.split("=", 1) for kv in args.env_ab.split(",") if "=" in kv)
+                res = env_ab(m, gpu, out, extra, args.timeout, env_b, "env:" + ",".join(env_b))
+                print(f"[zoo] {m}: {verdict(res)} A={res['A']['exec_s']} B={res['B']['exec_s']} "
+                      f"{('×%.2f' % res['speedup']) if res.get('speedup') else ''}", flush=True)
+                continue
             elif args.drift:
                 res = drift_one(m, gpu, out, extra, args.timeout, args.drift_bound)
                 print(f"[zoo] {m}: {verdict(res)}", flush=True)
