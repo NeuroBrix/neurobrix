@@ -140,6 +140,35 @@ memory:
 # SMEM budget safety factor — see volta.yml. Same 0.7 across vendors.
 sdpa_smem_safety: 0.7
 
+# How kernels are COMPILED on this vendor. Not a tuning knob: both lines
+# below decided results or refusals on real kernels, and both were defaults
+# nobody chose until an Apple machine made them visible.
+shader:
+  # Metal Shading Language version. MEASURED 2026-09-06: MTLCompileOptions
+  # defaults to 2.4, and `bfloat` — which `precision.supports_bf16` below
+  # claims this hardware has — does not exist before 3.1. The first
+  # TinyLlama --triton run refused at the embedding kernel with "unknown
+  # type name 'bfloat'". 3.1 is the floor that delivers what the profile
+  # claims; 3.0 does not (measured: 2.4 NO, 3.0 NO, 3.1 OK, 3.2 OK, 4.0 OK).
+  # It pairs with macos_deployment_floor 14.0 below.
+  language_version: "3.1"
+
+  # Float policy. MEASURED 2026-09-05: MTLCompileOptions defaults to FAST
+  # math (mathMode 2), which lets the compiler reassociate float arithmetic
+  # and substitute fast approximations for divide, rsqrt and the
+  # transcendentals. Under it rms_norm fp32 at 2x4096 sat 3 ULP from the
+  # fp64 oracle where the CUDA reference sits at 1, failing the first-light
+  # bar; under "safe" the same kernel is bit-identical to CUDA.
+  #
+  # safe = IEEE semantics, which is what these kernels are written against
+  # on every other backend. relaxed and fast are the other two values Metal
+  # accepts; neither is chosen implicitly here.
+  math_mode: safe
+
+  # The oldest macOS a compiled metallib must load on. Kept next to the
+  # language version because the two move together.
+  macos_deployment_floor: "14.0"
+
 precision:
   supports_fp16: true
   supports_bf16: true    # Apple GPU family 9 (M3+); M1/M2 emulate

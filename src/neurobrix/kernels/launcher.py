@@ -412,6 +412,24 @@ def nbx_binder(kernel, args, kwargs):
 _binders: Dict[int, tuple] = {}     # id(kernel) → (kernel_cache, key_cache, backend)
 
 
+def reset_caches() -> None:
+    """Drop every compiled kernel this launcher is holding.
+
+    A `_Prepared` holds a handle the DRIVER produced — a CUDA module, a Metal
+    pipeline — which is bound to the device and the runtime that produced it.
+    Anything that replaces the runtime underneath must drop these too, or the
+    next launch drives a handle from a runtime that no longer exists and
+    refuses a perfectly good tensor.
+
+    Called by `metal_device.reset_runtime_for_tests`, which is the only thing
+    that replaces a runtime today. The caches and the runtime have one
+    lifetime; clearing a subset is worse than clearing none.
+    """
+    global _TARGET
+    _binders.clear()
+    _TARGET = None
+
+
 def _binder(kernel):
     b = _binders.get(id(kernel))
     if b is None:
