@@ -53,20 +53,29 @@ class TritonCPUNotInstalledError(ImportError):
 
 
 def _is_cpu_only_profile() -> bool:
-    """True when no GPU is visible (forces CPU triton path)."""
-    # `CUDA_VISIBLE_DEVICES=""` is the standard way to hide GPUs.
-    # If the user set a Prism profile name explicitly to a cpu profile
-    # we can also detect it via NBX_HARDWARE_PROFILE, but the env-var
-    # path is the source of truth for "no GPU on this run".
+    """True when the ENGINE resolves no GPU backend on this run.
+
+    `CUDA_VISIBLE_DEVICES=""` still forces CPU: it is the standard way to
+    hide GPUs and it is a deliberate instruction, not a probe.
+
+    Everything else is asked of the engine's own detection, which knows
+    CUDA, ROCm and Metal, rather than of `libcuda.so.1`. Loading that
+    library was the whole test until 2026-09-06, and on an Apple machine it
+    fails for the ordinary reason that there is no NVIDIA driver — so
+    `--triton` refused a real GPU as "CPU-only" and told the user to build
+    triton-cpu. The question this function asks is "has this run a GPU",
+    and one vendor's driver is not that question.
+    """
     visible = os.environ.get("CUDA_VISIBLE_DEVICES")
     if visible == "":
         return True
-    # No NVIDIA driver loaded → also CPU-only.
     try:
-        import ctypes
-        ctypes.CDLL("libcuda.so.1")
+        from neurobrix.kernels.nbx_tensor import _detect_gpu_backend
+        _detect_gpu_backend()
         return False
-    except OSError:
+    except Exception:
+        # No backend resolved at all — genuinely CPU-only. The detection
+        # raises rather than returning a sentinel, which is the answer.
         return True
 
 

@@ -275,47 +275,94 @@ def parse_kernel_signature(msl: str):
 
 # --- libraries: from source (framework) or from a prebuilt metallib ---------
 
-#: Metal's math mode. `MTLCompileOptions` defaults to FAST (mathMode 2,
-#: measured 2026-09-05), which lets the compiler reassociate float arithmetic
-#: and substitute fast approximations for divide, rsqrt and the transcendental
-#: functions. That is a numerical policy, and taking it by default means the
-#: engine's fp32 results on Apple are decided by a flag nobody chose.
-#:
-#: It is not hypothetical: with fast math on, rms_norm fp32 at 2x4096 sat 3
-#: ULP from the fp64 oracle where the CUDA reference sits at 1, and the
-#: milestone bar — no further from the oracle than CUDA — failed at that
-#: shape. Under SAFE the same kernel is BIT-IDENTICAL to CUDA. Safe is IEEE
-#: semantics, which is what these kernels are written against everywhere else.
-#:
-#: 0 = MTLMathModeSafe, 1 = Relaxed, 2 = Fast.
+#: Metal's math modes, by the name the hardware profile uses. Metal accepts
+#: three; none of them is chosen implicitly here.
+METAL_MATH_MODES = {"safe": 0, "relaxed": 1, "fast": 2}
 METAL_MATH_MODE_SAFE = 0
+
+
+def _shader_policy() -> dict:
+    """How this vendor compiles shaders, from the hardware profile.
+
+    Two facts live here — the language version and the float policy — and
+    both were Metal defaults nobody chose until an Apple machine made them
+    visible: fast math cost rms_norm fp32 two ULP against the CUDA reference,
+    and the default language version 2.4 has no `bfloat`, so the first
+    TinyLlama --triton run refused at the embedding kernel while the same
+    profile's `precision.supports_bf16` said the hardware has it.
+
+    Read from `config/vendors/apple/apple_silicon.yml`, zero-fallback: a
+    profile that does not declare the policy is a profile this driver
+    refuses to guess for.
+    """
+    from ..core.config.loader import get_vendor_config
+
+    shader = get_vendor_config("apple", "apple_silicon").get("shader")
+    if not shader:
+        raise MetalKernelError(
+            "the Apple hardware profile declares no `shader` policy: the "
+            "engine will not compile kernels under a language version and a "
+            "float mode nobody chose")
+    for key in ("language_version", "math_mode"):
+        if key not in shader:
+            raise MetalKernelError(
+                f"the Apple hardware profile's `shader` block is missing "
+                f"{key!r}")
+    return shader
+
+
+def _language_version(text: str) -> int:
+    """`"3.1"` -> Metal's packed `(major << 16) | minor`."""
+    try:
+        major, minor = (int(part) for part in str(text).split(".")[:2])
+    except Exception:
+        raise MetalKernelError(
+            f"shader.language_version {text!r} is not a MAJOR.MINOR version")
+    return (major << 16) | minor
 
 
 def compile_options():
     """The `MTLCompileOptions` every kernel of this engine is built with.
 
     A function rather than an inline object so the policy is one thing that
-    can be read and asserted, instead of a line inside a compile call.
+    can be read and asserted, instead of two lines inside a compile call.
+    Every value is the profile's; the defaults are refused rather than
+    inherited, and each setting is read back so a silent no-op is impossible.
     """
     import Metal
 
+    policy = _shader_policy()
     options = Metal.MTLCompileOptions.alloc().init()
-    # `mathMode` is the current spelling, `fastMathEnabled` the deprecated one
-    # kept for older macOS. Setting whichever exists is not a fallback — both
-    # name the same switch — and the check below refuses if neither took.
+
+    version = _language_version(policy["language_version"])
+    options.setLanguageVersion_(version)
+    if int(options.languageVersion()) != version:
+        raise MetalKernelError(
+            f"asked for Metal {policy['language_version']}, the compiler "
+            f"kept {int(options.languageVersion())}")
+
+    name = str(policy["math_mode"]).lower()
+    if name not in METAL_MATH_MODES:
+        raise MetalKernelError(
+            f"shader.math_mode {name!r} is not one of "
+            f"{sorted(METAL_MATH_MODES)}")
+    mode = METAL_MATH_MODES[name]
+    # `mathMode` is the current spelling, `fastMathEnabled` the deprecated
+    # one kept for older macOS. Setting whichever exists is not a fallback —
+    # both name the same switch — and the read-back below refuses if neither
+    # took.
     if hasattr(options, "setMathMode_"):
-        options.setMathMode_(METAL_MATH_MODE_SAFE)
+        options.setMathMode_(mode)
     elif hasattr(options, "setFastMathEnabled_"):
-        options.setFastMathEnabled_(False)
+        options.setFastMathEnabled_(mode == METAL_MATH_MODES["fast"])
     else:
         raise MetalKernelError(
             "MTLCompileOptions exposes neither mathMode nor fastMathEnabled; "
             "the engine will not compile kernels under an unknown float "
             "policy")
-    if hasattr(options, "mathMode") \
-            and options.mathMode() != METAL_MATH_MODE_SAFE:
+    if hasattr(options, "mathMode") and int(options.mathMode()) != mode:
         raise MetalKernelError(
-            f"asked for safe math, got mathMode {options.mathMode()}")
+            f"asked for {name} math, got mathMode {int(options.mathMode())}")
     return options
 
 

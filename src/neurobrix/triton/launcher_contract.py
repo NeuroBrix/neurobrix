@@ -222,10 +222,16 @@ def verify_driver_contract(driver, jit_fn, signature, constexprs,
                            grid, args_builder, expected):
     """Exercise a driver against the contract. Returns a list of failures.
 
-    Written as a plain function rather than a test so that a backend can run
-    it from anywhere — a CI job, a `doctor` subcommand, a notebook on a
-    machine none of us has. `tests/unit/triton/test_launcher_contract.py`
-    calls it for Metal.
+    Written as a plain function rather than a test so a backend can run it
+    from anywhere — a CI job, a `doctor` subcommand, a notebook on a machine
+    none of us has. `tests/unit/triton/test_launcher_contract.py` calls it
+    for Metal.
+
+    It exercises the driver **exactly as `kernels/launcher.py` does**: Triton
+    compiles for the target the driver names, the driver loads the artifact
+    it declared, and the driver launches it with the launcher's own
+    `(kind, value)` parameter list. A checker that used a private path of its
+    own would certify a driver the engine cannot actually drive.
 
     The callables are the caller's, because allocation is the allocator's job
     and this module must not grow one:
@@ -236,6 +242,8 @@ def verify_driver_contract(driver, jit_fn, signature, constexprs,
     * `args_builder(pointers) -> list` — the flat argument list, given the
       pointers it asked for by allocating them.
     """
+    from neurobrix.kernels.launcher import _pack_param
+
     failures = []
 
     def check(condition, message):
@@ -243,89 +251,94 @@ def verify_driver_contract(driver, jit_fn, signature, constexprs,
             failures.append(message)
         return condition
 
-    # -- compile -------------------------------------------------------------
-    kernel = driver.compile(jit_fn, signature, constexprs, num_warps=4)
+    # -- the declared surface ------------------------------------------------
+    check(isinstance(getattr(driver, "artifact_kind", None), str)
+          and driver.artifact_kind,
+          "a driver must declare `artifact_kind` — the key of its artifact "
+          "in CompiledKernel.asm — so a cache cannot hand one backend "
+          "another's binary")
+    check(isinstance(getattr(driver, "wants_scratch_params", None), bool),
+          "a driver must declare `wants_scratch_params`: whether its launch "
+          "ABI carries Triton's two trailing scratch pointers")
 
-    # The specialization markers must reach the compiler, and the compiled
-    # kernel must say which ones it was built with. Checked as a round-trip
-    # rather than by diffing artifacts: whether the markers CHANGE the code
-    # is the kernel's business — a trivial elementwise kernel is genuinely
-    # insensitive to them, while rms_norm is not — so demanding a difference
-    # would fail correct drivers. What the contract can demand is that the
-    # driver neither refuses the argument nor silently discards it.
-    marks = {name: ("D" if kind.startswith("*") else "")
-             for name, kind in signature.items()}
-    try:
-        marked = driver.compile(jit_fn, signature, constexprs, num_warps=4,
-                                specialization=marks)
-        check(dict(getattr(marked, "specialization", None) or {}) == marks,
-              "compile() accepted `specialization` but the compiled kernel "
-              "does not report it back; a driver that discards the markers "
-              "compiles a different kernel from the one the launcher asked "
-              "for and nothing says so")
-    except TypeError as exc:
-        failures.append(f"compile() does not accept `specialization`: {exc}")
+    target = driver.target()
+    check(isinstance(getattr(target, "backend", None), str) and target.backend,
+          f"target() must name a backend, got {target!r}")
+    check(int(getattr(target, "warp_size", 0)) > 0,
+          f"target() must give a positive warp size, got {target!r}")
 
-    check(isinstance(kernel.name, str) and kernel.name,
-          "CompiledKernel.name must be a non-empty string")
-    check(isinstance(kernel.binary, (bytes, bytearray)),
-          f"CompiledKernel.binary must be bytes, got {type(kernel.binary)}")
-    check(kernel.binary_kind in ("cubin", "metallib", "msl", "hsaco"),
-          f"binary_kind {kernel.binary_kind!r} is not a known artifact kind")
-    check(isinstance(kernel.block_size, int) and kernel.block_size > 0,
-          "block_size must be a positive int")
-    check(isinstance(kernel.shared_memory, int) and kernel.shared_memory >= 0,
-          "shared_memory must be a non-negative int")
-    check(dict(kernel.constexprs) == dict(constexprs),
-          "constexprs must round-trip: a cache keyed without them is wrong")
+    # -- compile, load, launch: the launcher's own three steps ---------------
+    import triton
+    from triton.compiler.compiler import ASTSource
 
-    check(all(isinstance(s, ArgSlot) for s in kernel.binding),
-          "every binding entry must be an ArgSlot")
-    pointer_slots = [s for s in kernel.binding if s.is_pointer]
-    check(len(pointer_slots) == sum(1 for v in signature.values()
-                                    if v.startswith("*")),
-          "the binding must expose one pointer slot per pointer in the "
-          "signature")
+    compiled = triton.compile(
+        ASTSource(fn=jit_fn, signature=signature, constexprs=constexprs),
+        target=target, options={"num_warps": 4})
+    metadata = compiled.metadata
 
-    # -- launch --------------------------------------------------------------
+    artifact = compiled.asm.get(driver.artifact_kind)
+    if not check(artifact is not None,
+                 f"the compiler produced {sorted(compiled.asm)} and the "
+                 f"driver takes {driver.artifact_kind!r}: nothing to load"):
+        return failures
+
+    block = driver.block_for(metadata)
+    check(isinstance(block, tuple) and len(block) == 3
+          and all(isinstance(b, int) and b > 0 for b in block),
+          f"block_for() must return a 3-tuple of positive ints, got {block!r}")
+
+    function = driver.load(artifact, metadata.name, metadata.shared)
+    check(function is not None, "load() returned nothing")
+
+    # -- the launch produces the right bytes, at a grid wider than one block -
     pointers = [make_buffer(n) for n in args_builder.buffer_sizes]
     try:
-        kernel.launch(grid, args_builder(pointers))
+        values = args_builder(pointers)
+        ordered = [(name, ty) for name, ty in signature.items()
+                   if ty != "constexpr"]
+        if not check(len(ordered) == len(values),
+                     f"the signature has {len(ordered)} runtime parameters "
+                     f"and args_builder gave {len(values)}"):
+            return failures
+        params = [_pack_param(ty, v) for (_n, ty), v in zip(ordered, values)]
+        if driver.wants_scratch_params:
+            params = params + [("ptr", 0), ("ptr", 0)]
+
+        driver.launch(function, grid, block, metadata.shared, 0, params)
         got = read_buffer(pointers[args_builder.output_index],
                           args_builder.output_bytes)
         check(got == expected,
-              f"launch produced the wrong bytes: {got[:32]!r} != "
-              f"{expected[:32]!r}")
+              "the launch produced the wrong bytes. The grid is deliberately "
+              "wider than one block: a dropped program offset passes a "
+              "single-block launch and fails here.")
 
-        # a wrong-length argument list must be refused, not silently padded
+        # A wrong-length argument list must be refused, not padded.
         try:
-            kernel.launch(grid, args_builder(pointers)[:-1])
-            failures.append("launch accepted an argument list of the wrong "
-                            "length instead of refusing")
+            driver.launch(function, grid, block, metadata.shared, 0,
+                          params[:-1])
+            failures.append("launch() accepted an argument list of the wrong "
+                            "length instead of refusing it")
         except Exception:
             pass
 
-        # an address the allocator never handed out must be refused
-        bad = args_builder(pointers)
-        for i, slot in enumerate(kernel.binding):
-            if slot.is_pointer:
-                bad[i] = 0xDEAD0000
+        # A pointer the allocator never handed out must be refused. This is
+        # the ownership rule: the engine owns device memory, and a launch
+        # that reads an address from anywhere else is undefined behaviour
+        # the driver is in the best position to catch.
+        foreign = list(params)
+        for i, (kind, _v) in enumerate(foreign):
+            if kind == "ptr":
+                foreign[i] = ("ptr", 0x1000)
                 break
         try:
-            kernel.launch(grid, bad)
-            failures.append("launch accepted a foreign pointer instead of "
-                            "refusing")
+            driver.launch(function, grid, block, metadata.shared, 0, foreign)
+            failures.append("launch() accepted a device address the "
+                            "allocator never handed out")
         except Exception:
             pass
     finally:
-        for p in pointers:
-            free_buffer(p)
-
-    # -- streams -------------------------------------------------------------
-    stream = driver.create_stream()
-    check(stream != 0, "create_stream must not return 0, the default stream")
-    driver.synchronize_stream(stream)
-    driver.destroy_stream(stream)
+        for address in pointers:
+            free_buffer(address)
 
     # -- events --------------------------------------------------------------
     ordering = driver.create_event(timing=False)
