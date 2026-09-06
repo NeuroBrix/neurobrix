@@ -344,6 +344,20 @@ class TritonLMSession:
             raise RuntimeError("No embedding weight found for embed lookup.")
         return w.embedding(embed_weight, input_ids)
 
+    # ── decode branches (two contexts on one LM, see kv_cache.KVBranch) ──
+    def branch_state(self):
+        if self.kv_wrapper is None:
+            raise RuntimeError("ZERO FALLBACK: decode branches need the KV cache path (no KV wrapper on this session).")
+        return self.kv_wrapper.branch_state()
+
+    def new_branch(self):
+        if self.kv_wrapper is None:
+            raise RuntimeError("ZERO FALLBACK: decode branches need the KV cache path (no KV wrapper on this session).")
+        return self.kv_wrapper.new_branch()
+
+    def use_branch(self, st) -> None:
+        self.kv_wrapper.use_branch(st)
+
     def set_decode_mode(self):
         """Switch from prefill to decode mode."""
         if self.kv_wrapper is not None:

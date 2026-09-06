@@ -29,6 +29,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   against the CUDA driver on CUDA and the Metal driver on a Mac.
 
 ### Changed
+- Next-token-diffusion speech models (VibeVoice) run their language model as a KV-cached decoder on
+  both engines: one token per step per context instead of re-running the whole growing sequence,
+  the classifier-free-guidance negative context kept as a second decode branch of the same
+  attention cache, the embedding table and the constrained argmax on the device. Tokens are
+  identical to the previous path and the first diffusion latents agree within fp16 rounding
+  (`NBX_NTD_REPREFILL=1` keeps the previous path as the reference). A container that declares no
+  context window gets its cache sized from the request on the compiled engine as on the Triton
+  engine.
+### Changed
 - `neurobrix calibrate` measures on the Triton engine too (`--triton`): the range census observes
   NBXTensor outputs through the engine's own kernels, so a Triton-only container (an int4 build)
   gets its calibration record. `--time-arms N` runs the request N times under each arm, keeps the

@@ -328,10 +328,31 @@ class TritonKVCache:
         (see KVCacheLayer.update_bucketed). Lazy allocation as above."""
         return self._get_layer(layer_idx, k).update_bucketed(k, v, bucket)
 
+    def clone_empty(self) -> "TritonKVCache":
+        """A second, empty cache with this one's geometry — a decode BRANCH
+        (a CFG negative context that grows beside the positive one, VibeVoice's
+        next-token diffusion). Built from the constructor's own parameters."""
+        import inspect
+        params = inspect.signature(type(self).__init__).parameters
+        kw = {n: getattr(self, n) for n in params if n != "self" and hasattr(self, n)}
+        return type(self)(**kw)
+
     def clear(self):
         self._generation_bumped = False
         for layer in self._layers.values():
             layer.clear()
+
+
+class KVBranch:
+    """One decode context's state on an attention interceptor: its cache and
+    the prefill / call / position bookkeeping (see use_branch)."""
+    __slots__ = ("cache", "is_prefill", "call_count", "position_offset")
+
+    def __init__(self, cache, is_prefill: bool, call_count: int, position_offset: int):
+        self.cache = cache
+        self.is_prefill = is_prefill
+        self.call_count = call_count
+        self.position_offset = position_offset
 
 
 class TritonAttentionInterceptor:
@@ -346,6 +367,36 @@ class TritonAttentionInterceptor:
         self._gqa_group_size = 0
         # Absolute decode position for RoPE arange shifting (see intercept_arange).
         self._position_offset = 0
+
+    # ── decode branches ─────────────────────────────────────────────────
+    # The interceptor is registered once per executor; a flow that keeps
+    # two contexts alive on the same LM (VibeVoice: the positive prompt+audio
+    # context and the CFG negative audio-only context) swaps the per-sequence
+    # state — the cache and the prefill/position bookkeeping — between them.
+    # `branch_state()` is the live state; `new_branch()` an empty one with
+    # the same geometry; `use_branch()` makes one live, saving the other.
+    def branch_state(self) -> "KVBranch":
+        self._sync_branch()
+        if getattr(self, "_branch", None) is None:
+            self._branch = KVBranch(self.cache, self._is_prefill, self._call_count, self._position_offset)
+        return self._branch
+
+    def new_branch(self) -> "KVBranch":
+        return KVBranch(self.cache.clone_empty(), True, 0, 0)
+
+    def use_branch(self, st: "KVBranch") -> None:
+        self._sync_branch()
+        self._branch = st
+        self.cache = st.cache
+        self._is_prefill = st.is_prefill
+        self._call_count = st.call_count
+        self._position_offset = st.position_offset
+
+    def _sync_branch(self) -> None:
+        b = getattr(self, "_branch", None)
+        if b is not None:
+            b.cache, b.is_prefill, b.call_count, b.position_offset = (
+                self.cache, self._is_prefill, self._call_count, self._position_offset)
 
     def intercept(self, q, k, v, attn_mask=None, dropout_p=0.0,
                   is_causal=True, scale=None, layer_idx=-1):

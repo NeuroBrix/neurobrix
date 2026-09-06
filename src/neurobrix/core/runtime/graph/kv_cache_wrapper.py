@@ -356,6 +356,20 @@ class DistributedKVCache:
         return {idx: layer.device for idx, layer in self._layers.items()}
 
 
+class KVBranch:
+    """One decode context's state on the attention wrapper (R30 mirror of
+    triton/kv_cache.KVBranch): its cache and the prefill / call / position
+    bookkeeping, swapped by KVCacheAttentionWrapper.use_branch."""
+    __slots__ = ("cache", "is_prefill", "call_count", "position_offset", "decode_actual_seq_len")
+
+    def __init__(self, cache, is_prefill: bool, call_count: int, position_offset: int, decode_actual_seq_len=None):
+        self.cache = cache
+        self.is_prefill = is_prefill
+        self.call_count = call_count
+        self.position_offset = position_offset
+        self.decode_actual_seq_len = decode_actual_seq_len
+
+
 class KVCacheAttentionWrapper:
     """
     Intercepts scaled_dot_product_attention for KV cache injection.
@@ -382,6 +396,7 @@ class KVCacheAttentionWrapper:
             num_heads: Total number of query heads (for GQA un-expand/re-expand).
                        If 0, auto-detected from first Q tensor.
         """
+        self.config = config
         self.cache = DistributedKVCache(config)
         self._is_prefill = True
         self._call_count = 0
@@ -394,6 +409,33 @@ class KVCacheAttentionWrapper:
         # This tracks the ACTUAL number of tokens to cache (not the padded length)
         self._decode_actual_seq_len: Optional[int] = None
 
+
+    # ── decode branches (R30 mirror of triton/kv_cache.KVBranch) ─────────
+    def branch_state(self) -> "KVBranch":
+        self._sync_branch()
+        if getattr(self, "_branch", None) is None:
+            self._branch = KVBranch(self.cache, self._is_prefill, self._call_count, self._position_offset,
+                                    getattr(self, "_decode_actual_seq_len", None))
+        return self._branch
+
+    def new_branch(self) -> "KVBranch":
+        return KVBranch(DistributedKVCache(self.config), True, 0, 0, None)
+
+    def use_branch(self, st: "KVBranch") -> None:
+        self._sync_branch()
+        self._branch = st
+        self.cache = st.cache
+        self._is_prefill = st.is_prefill
+        self._call_count = st.call_count
+        self._position_offset = st.position_offset
+        self._decode_actual_seq_len = st.decode_actual_seq_len
+
+    def _sync_branch(self) -> None:
+        b = getattr(self, "_branch", None)
+        if b is not None:
+            b.cache, b.is_prefill, b.call_count, b.position_offset = (
+                self.cache, self._is_prefill, self._call_count, self._position_offset)
+            b.decode_actual_seq_len = getattr(self, "_decode_actual_seq_len", None)
 
     def intercept_attention(
         self,
@@ -877,10 +919,13 @@ def create_kv_wrapper_from_config(
     hidden_size = lm_config["hidden_size"]
 
     # Optional keys with derivation
-    num_kv_heads = lm_config.get("num_kv_heads", num_heads)  # MHA default
-    head_dim = lm_config.get("head_dim", hidden_size // num_heads)
-    k_head_dim = lm_config.get("k_head_dim", head_dim)
-    v_head_dim_val = lm_config.get("v_head_dim", head_dim)
+    # A key PRESENT with None (the build's extracted values name it but the
+    # trace had no value) means "not declared" like an absent key — the same
+    # `or` derivation the Triton session applies (R30; VibeVoice's LM).
+    num_kv_heads = lm_config.get("num_kv_heads") or num_heads  # MHA default
+    head_dim = lm_config.get("head_dim") or (hidden_size // num_heads)
+    k_head_dim = lm_config.get("k_head_dim") or head_dim
+    v_head_dim_val = lm_config.get("v_head_dim") or head_dim
 
     # LEGACY: max_cache_len from max_position_embeddings.
     # Prism now computes the real budget (see KVCachePlan in solver.py).
