@@ -964,6 +964,13 @@ def screen_configs(tuner, configs, key, meta=None):
                                        worst, tol))
 
     _SCREENED.extend(dropped)
+    # A runtime exclusion that contradicts a CERTIFIED setting is a finding,
+    # reported here and persisted — never a silence.
+    try:
+        from neurobrix.kernels.autotune_certified import report_contradictions
+        report_contradictions(tuner, dropped)
+    except Exception as exc:                        # the report must not turn into a launch failure
+        print(f"[AUTOTUNE_SCREEN] could not check the certified directory: {exc}", flush=True)
     for entry in dropped:
         print(f"[AUTOTUNE_SCREEN] {entry.kernel}: config excluded before "
               f"timing — it disagrees with the {len(clusters[0])}-config "
