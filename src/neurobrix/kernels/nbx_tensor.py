@@ -1678,42 +1678,32 @@ def _detect_gpu_backend() -> str:
     Mac. `kernels/ops/matmul.py` asks that question at module import, which is
     how it reached the engine.
 
-<<<<<<< HEAD
     The Metal probe carries no platform strings. It opens the device and asks
     it, because the property that matters is unified memory (which is what
     makes one address valid for both processors) and that is a device answer,
     not an `arm64` answer. It has no `rt_libs` row to try, which is why it is
     not an entry in `_GPU_BACKENDS`: that dict holds symbol tables over one C
     ABI and `test_device_backend_seam.py` pins it to exactly {cuda, hip}.
-=======
-    The three direct probes come first and none of them imports anything:
-    Metal opens the device, CUDA and ROCm try to load their runtime library.
-    Triton's own question is kept as a LAST RESORT, for a machine none of the
-    three identified — where the alternative is not knowing at all.
-
-    Metal is probed before the two libraries and does not cost CUDA its
-    precedence: the probe requires UNIFIED memory, so an Intel Mac with a
-    discrete card declines it and falls through to `libcudart`.
 
     Whatever answers, `_pin_triton_backend` records it in
-    `TRITON_DEFAULT_BACKEND` so that any later `triton.runtime.driver.active`
-    — ours or a kernel module's — resolves straight to that backend and
+    `TRITON_DEFAULT_BACKEND`, so that the differential arm
+    (`NBX_LAUNCHER=triton`) — the only path that still reaches
+    `triton.runtime.driver.active` — resolves straight to that backend and
     probes nothing else.
->>>>>>> bc323c2 (metal: the launcher contract, R33 as an execution fact, and the SIGBUS cornered)
     """
     forced = os.environ.get("NBX_GPU_BACKEND")
     if forced:
         if forced not in _GPU_BACKENDS and forced != "metal":
             raise RuntimeError(f"NBX_GPU_BACKEND={forced!r} is not a known backend "
                                f"({sorted(_GPU_BACKENDS) + ['metal']})")
-        return forced
+        return _pin_triton_backend(forced)
     # The backend TABLE decides: the first vendor runtime the process can
     # load names the backend — adding a backend is adding a table entry.
     for name, backend in _GPU_BACKENDS.items():
         for lib in backend["rt_libs"]:
             try:
                 ctypes.cdll.LoadLibrary(lib)
-                return name
+                return _pin_triton_backend(name)
             except OSError:
                 continue
     # Apple GPUs. Not a "fallback" in the sense the loop above is: there is
@@ -1721,40 +1711,8 @@ def _detect_gpu_backend() -> str:
     # only when a usable one came back.
     from .metal_device import metal_device_available
     if metal_device_available():
-<<<<<<< HEAD
-        return "metal"
-    raise RuntimeError("No GPU runtime found (tried CUDA, ROCm/HIP and Metal)")
-=======
         return _pin_triton_backend("metal")
-
-    for name in ("libcudart.so", "libcudart.so.12", "libcudart.dylib"):
-        try:
-            ctypes.cdll.LoadLibrary(name)
-            return _pin_triton_backend("cuda")
-        except OSError:
-            continue
-
-    for name in ("libamdhip64.so", "libamdhip64.so.5"):
-        try:
-            ctypes.cdll.LoadLibrary(name)
-            return _pin_triton_backend("hip")
-        except OSError:
-            continue
-
-    # Last resort. This one is NOT torch-free — see the docstring — so it runs
-    # only when the three direct probes have all declined, i.e. when the
-    # alternative is refusing on a machine that may well have a GPU.
-    try:
-        import triton.runtime.driver
-        backend = triton.runtime.driver.active.get_current_target().backend
-        if backend in ("cuda", "hip"):
-            return _pin_triton_backend(backend)
-    except Exception:
-        pass
-
-    raise RuntimeError(
-        "No GPU runtime found (tried Metal, CUDA, ROCm/HIP)")
->>>>>>> bc323c2 (metal: the launcher contract, R33 as an execution fact, and the SIGBUS cornered)
+    raise RuntimeError("No GPU runtime found (tried CUDA, ROCm/HIP and Metal)")
 
 
 def _active_backend() -> dict:
