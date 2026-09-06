@@ -39,7 +39,7 @@ _PROOF_FIELDS = ("date", "engine_version", "backend", "shape", "deviation", "tol
 _LOADED: Dict[Tuple[str, str, str, str], Optional[Dict[str, Dict]]] = {}   # (vendor, profile, kernel, dtype) -> entries
 _REFUSED: Dict[str, str] = {}                                                # file -> reason (said once)
 _ANNOUNCED: set = set()                                                       # (kernel, key) already said missing
-_SERVED: Dict[str, int] = {"certified": 0, "swept": 0}
+_SERVED: Dict[str, int] = {"certified": 0, "swept": 0, "local": 0}     # local = keys seeded from the machine's replay cache
 
 
 # ---------------------------------------------------------------------------
@@ -299,13 +299,18 @@ def announce_missing(kernel_qual: str, tuner, key: tuple) -> None:
 
 
 def served() -> Dict[str, int]:
-    """How many keys this process took from the directory and how many it swept."""
+    """How many keys this process took from the directory, how many it swept, how many came from the local replay cache."""
     return dict(_SERVED)
+
+
+def note_local(n: int) -> None:
+    """Keys the local replay cache seeded into the autotuners (a previous runtime sweep on this machine)."""
+    _SERVED["local"] += int(n or 0)
 
 
 def reset() -> None:
     _LOADED.clear(); _REFUSED.clear(); _ANNOUNCED.clear()
-    _SERVED.update({"certified": 0, "swept": 0})
+    _SERVED.update({"certified": 0, "swept": 0, "local": 0})
 
 
 def certified_config_for(kernel_name: str, key_fields: tuple) -> Optional[Dict[str, Any]]:
