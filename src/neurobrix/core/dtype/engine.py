@@ -216,6 +216,25 @@ CPU_NO_HALF_OPS: FrozenSet[str] = frozenset({
 })
 
 
+def compute_dtype_for_placement(device, model_dtype: "torch.dtype") -> "torch.dtype":
+    """The dtype a component COMPUTES in, decided by its placement.
+
+    A component Prism placed on the host computes in fp32 whatever the model's
+    dtype: x86 has no native fp16 arithmetic (PyTorch emulates it — a 512x512
+    matmul measured 188x slower in fp16 on 2026-09-04), its fp16 coverage is
+    thin, and complex intermediates built from fp16 parts reach ops with no
+    ComplexHalf kernel. One decision at plan time; the engine's compute dtype
+    AND the dtype its weights are loaded in both follow it, so a host-placed
+    component never meets fp16 weights with fp32 activations (the ATen oracle
+    on a 16 GB plan, 2026-09-06). Host-STAGED weights of a component that
+    computes on a GPU (zero3 offload) are not concerned: their executor's
+    device is the card.
+    """
+    if str(device or "").startswith("cpu"):
+        return torch.float32
+    return model_dtype
+
+
 def cpu_fp32_wrapper(func):
     """Run `func` in fp32 when its tensor inputs are on the HOST, untouched
     otherwise — the remedy for `CPU_NO_HALF_OPS`, shared by the compiled
