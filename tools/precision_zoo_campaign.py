@@ -449,6 +449,33 @@ def tree_ab(model: str, gpu, out: Path, extra: list, timeout: int, trees: list) 
     return res
 
 
+def sweep_one(model: str, gpu, out: Path, extra: list, timeout: int) -> dict:
+    """The sweep producer on one model: a `--triton --sweep` request from
+    this tree; the verdict is the model's sweep artifact for this hardware
+    profile (path and measured-shape count), the engine's own output line."""
+    fam = family_of(model)
+    d = out / model
+    d.mkdir(parents=True, exist_ok=True)
+    req = request_args(model, fam, extra) + ["--triton", "--sweep"]
+    ext = output_ext(fam, req)
+    env = {**os.environ}
+    if gpu is None:
+        env.pop("CUDA_VISIBLE_DEVICES", None)
+    else:
+        env["CUDA_VISIBLE_DEVICES"] = str(gpu)
+    outp = d / f"sweep{ext}"
+    rc, wall = run([NBX, "run", "--model", model] + req + ["--output", str(outp)], env, d / "sweep.log", timeout)
+    text = (d / "sweep.log").read_text(errors="replace")
+    m = re.search(r"\[autotune\] \S+: sweep artifact written (\S+) \((\d+) measured shape", text)
+    res = {"model": model, "family": fam, "weight_gb": round(weight_gb(model), 2),
+           "config": "machine" if gpu is None else f"pinned:{gpu}", "request": req, "lever": "sweep",
+           "artifact": m.group(1) if m else None, "shapes": int(m.group(2)) if m else None,
+           "A": {"rc": rc, "exec_s": exec_time(d / "sweep.log"), "wall_s": wall}, "B": {"rc": rc, "exec_s": None},
+           "gate": {"kind": "sweep", "pass": bool(m) and rc == 0}}
+    (d / "result.json").write_text(json.dumps(res, indent=1))
+    return res
+
+
 def r33_probe(model: str, gpu, out: Path, extra: list, timeout: int, src: Path = None) -> dict:
     """The R33 proof on one model: a complete `--triton` request in-process
     under the sys.modules probe; the verdict is whether torch is in
@@ -504,6 +531,10 @@ def verdict(r: dict) -> str:
         if r.get("torch_at_exit") is True:
             return f"TORCH ({r.get('first_import_site') or '?'})"
         return "FAILED (no verdict in the log)"
+    if r.get("lever") == "sweep":
+        if r.get("A", {}).get("rc"):
+            return f"FAILED (the run exited {r['A']['rc']})"
+        return f"SWEPT ({r.get('shapes')} shapes)" if r.get("artifact") else "FAILED (no artifact written)"
     if r.get("lever") == "tree":
         g = r.get("gate") or {}
         if not g.get("ran"):
@@ -641,6 +672,9 @@ def main():
     r.add_argument("--trees", default=None,
                    help="tree gate: label=path/to/src,label=path/to/src[,...] — the same --triton request from each "
                         "frozen tree, bytes compared against the first (a port's kernel change must be inert on CUDA)")
+    r.add_argument("--sweep", action="store_true",
+                   help="sweep producer: a --triton --sweep request per model from this tree; the verdict is the "
+                        "model's sweep artifact for this hardware profile")
     r.add_argument("--launcher-ab", action="store_true",
                    help="the launcher gate instead of the precision lever: --triton with upstream's launcher vs NeuroBrix's, bytes compared")
     t = sub.add_parser("table")
@@ -690,6 +724,10 @@ def main():
             if args.probe:
                 res = r33_probe(m, gpu, out, extra, args.timeout, Path(args.src) if args.src else None)
                 print(f"[zoo] {m}: {verdict(res)} exec={res.get('exec_s')} sha={res.get('output_sha')}", flush=True)
+            elif args.sweep:
+                res = sweep_one(m, gpu, out, extra, args.timeout)
+                print(f"[zoo] {m}: {verdict(res)} exec={res['A'].get('exec_s')} artifact={res.get('artifact')}", flush=True)
+                continue
             elif args.trees:
                 trees = [(t.split("=", 1)[0], Path(t.split("=", 1)[1])) for t in args.trees.split(",") if t]
                 res = tree_ab(m, gpu, out, extra, args.timeout, trees)

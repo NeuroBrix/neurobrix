@@ -379,9 +379,20 @@ class RuntimeExecutor:
         if self.mode in ("triton", "triton_sequential"):
             from neurobrix.kernels import rng_stream
             rng_stream.set_run_seed(inputs.get("global.seed", self.pkg.defaults.get("seed")))
+            # The kernel sweep is never run inside a request: the model's
+            # sweep artifact for this hardware profile (embedded in the
+            # container, or the engine's store) seeds every autotuned kernel;
+            # a model without one is refused here (`--sweep` measures it).
+            from neurobrix.triton import autotune_cache as _atc
+            _atc.activate(str(self.pkg.manifest.get("model_name") or self.pkg.root_path.name), self._nbx_path_str)
         # Get and execute flow handler
         handler = self._create_flow_handler(flow_type, ctx)
-        return handler.execute()
+        try:
+            return handler.execute()
+        finally:
+            if self.mode in ("triton", "triton_sequential"):
+                from neurobrix.triton import autotune_cache as _atc
+                _atc.capture_model()          # sweep mode only: the measurements land in the store
 
     def _prepare_defaults(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
         """Prepare merged defaults from family config, pkg defaults, and user inputs."""
