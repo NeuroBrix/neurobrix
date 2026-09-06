@@ -282,7 +282,23 @@ def _get_tl_dtype(nbx_dtype: NBXDtype):
 # ============================================================================
 
 # Runtime API mapping per backend
+def _metal_probe() -> bool:
+    """True when a Metal device opens (the Metal chantier's `metal_device`,
+    absent from a tree without it — then False at no cost). Requires unified
+    memory, so an Intel Mac with a discrete card declines it and the table
+    walk continues to the runtime libraries."""
+    try:
+        from .metal_device import metal_device_available
+    except ImportError:
+        return False
+    return bool(metal_device_available())
+
+
 _GPU_BACKENDS = {
+    # Probed FIRST (Metal chantier, 2026-09-05): a Metal box has no vendor
+    # runtime library to load; its probe opens the device. The runtime
+    # function table of this entry is the Metal allocator's (the Mac's tree).
+    "metal": {"probe": _metal_probe, "rt_libs": []},
     "cuda": {
         "rt_libs": ["libcudart.so", "libcudart.so.12", "libcudart.so.11.0"],
         "malloc": "cudaMalloc", "free": "cudaFree",
@@ -432,6 +448,8 @@ class DeviceAllocator:
     _cuda_live_bytes: Dict[int, int] = {}            # device_idx -> live
     _cuda_peak_bytes: Dict[int, int] = {}            # device_idx -> peak
     _cuda_ptr_size: Dict[int, int] = {}              # ptr -> nbytes (for free accounting)
+    _alloc_version: int = 0                          # bumped at every registration change (holds())
+    _ranges_cache: tuple = (-1, (), ())              # (version, sorted bases, sizes)
     _cuda_ptr_device: Dict[int, int] = {}            # ptr -> device_idx (REQUIRED for cudaFreeAsync correctness)
     _host_pinned_live_bytes: int = 0
     _host_pinned_peak_bytes: int = 0
@@ -654,6 +672,7 @@ class DeviceAllocator:
                 # Caller stores `sz` (the actual alloc) in _pool_alloc_size
                 # so free() returns the correct size to the pool.
                 DeviceAllocator._pool_alloc_size[ptr] = sz
+                DeviceAllocator._alloc_version += 1
                 st["fit"] += 1
                 slack = sz - nbytes
                 st["slack_total"] += slack
@@ -713,6 +732,7 @@ class DeviceAllocator:
                 getattr(rt, backend["free"])(ctypes.c_void_p(p))
                 DeviceAllocator._pool_alloc_size.pop(p, None)
                 DeviceAllocator._cuda_ptr_size.pop(p, None)
+                DeviceAllocator._alloc_version += 1
                 DeviceAllocator._cuda_ptr_device.pop(p, None)
                 live = DeviceAllocator._cuda_live_bytes.get(dev, 0) - sz
                 DeviceAllocator._cuda_live_bytes[dev] = max(0, live)
@@ -747,6 +767,7 @@ class DeviceAllocator:
                     getattr(rt, backend["free"])(ctypes.c_void_p(p))
                     DeviceAllocator._pool_alloc_size.pop(p, None)
                     DeviceAllocator._cuda_ptr_size.pop(p, None)
+                    DeviceAllocator._alloc_version += 1
                     DeviceAllocator._cuda_ptr_device.pop(p, None)
                     live = DeviceAllocator._cuda_live_bytes.get(d, 0) - sz
                     DeviceAllocator._cuda_live_bytes[d] = max(0, live)
@@ -803,6 +824,7 @@ class DeviceAllocator:
                 # populated _pool_alloc_size with the bigger size.
                 actual = DeviceAllocator._pool_alloc_size.pop(ptr, nbytes)
                 DeviceAllocator._cuda_ptr_size[ptr] = actual
+                DeviceAllocator._alloc_version += 1
                 DeviceAllocator._cuda_ptr_device[ptr] = dev
                 if _MALLOC_TRACE_FILE is not None:
                     _record_malloc_site(ptr, actual, dev)
@@ -893,6 +915,7 @@ class DeviceAllocator:
                 f"driver_total={driver_total/1024/1024:.0f}MB]")
         p = ptr_obj.value or 0
         DeviceAllocator._cuda_ptr_size[p] = nbytes
+        DeviceAllocator._alloc_version += 1
         DeviceAllocator._cuda_ptr_device[p] = dev
         live = DeviceAllocator._cuda_live_bytes.get(dev, 0) + nbytes
         DeviceAllocator._cuda_live_bytes[dev] = live
@@ -970,6 +993,7 @@ class DeviceAllocator:
                   f"dev={alloc_dev} — sticky async error surfaced at "
                   f"this free; the fault is at or before it.", flush=True)
         nbytes = DeviceAllocator._cuda_ptr_size.pop(ptr, None)
+        DeviceAllocator._alloc_version += 1
         if _MALLOC_TRACE_FILE is not None and nbytes is not None:
             _record_free_site(ptr, nbytes)
         if nbytes is not None:
@@ -1278,6 +1302,26 @@ class DeviceAllocator:
         if fn_name is None:
             return
         getattr(rt, fn_name)(ctypes.c_void_p(stream))
+
+    @staticmethod
+    def holds(ptr: int) -> bool:
+        """True when `ptr` lies inside a live device allocation this allocator
+        handed out (a block's base, or a view inside it). The launcher asks
+        before dispatching a kernel on an address: a foreign pointer is
+        refused, never launched (launcher contract, Metal chantier 2026-09-05).
+        O(log n): the live ranges are re-sorted only when a registration
+        changed since the last call."""
+        ptr = int(ptr)
+        if ptr in DeviceAllocator._cuda_ptr_size or ptr in DeviceAllocator._pool_alloc_size:
+            return True
+        version, bases, sizes = DeviceAllocator._ranges_cache
+        if version != DeviceAllocator._alloc_version:
+            ranges = sorted({**DeviceAllocator._pool_alloc_size, **DeviceAllocator._cuda_ptr_size}.items())
+            bases = tuple(b for b, _ in ranges); sizes = tuple(n for _, n in ranges)
+            DeviceAllocator._ranges_cache = (DeviceAllocator._alloc_version, bases, sizes)
+        import bisect
+        i = bisect.bisect_right(bases, ptr) - 1
+        return i >= 0 and bases[i] <= ptr < bases[i] + sizes[i]
 
     @staticmethod
     def device_synchronize(device_idx: Optional[int] = None):
@@ -1622,27 +1666,48 @@ def _set_device(t):
 
 
 @functools.lru_cache(maxsize=1)
+def _pin_triton_backend(name: str) -> str:
+    """Tell Triton which backend is here, then return the name.
+
+    R33, on every backend: asking `triton.runtime.driver.active` anything
+    makes Triton call `is_active()` on EVERY registered backend to find the
+    live one, and upstream's AMD probe runs `import torch` inside its own —
+    a CUDA box with no AMD card pays a torch import the moment any module
+    asks the driver a question. `TRITON_DEFAULT_BACKEND` makes Triton's
+    `_create_driver` select the named backend directly and probe nothing
+    else; we know the answer here without importing anything, so we say so.
+    `setdefault`: an explicit choice by the user or a test outranks ours.
+    (Ported from the Metal chantier, metal-first-light, 2026-09-05.)"""
+    os.environ.setdefault("TRITON_DEFAULT_BACKEND", name)
+    return name
+
+
 def _detect_gpu_backend() -> str:
-    """Detect GPU backend: 'cuda' or 'hip' — from the vendor runtime library
-    the process can load, or `NBX_GPU_BACKEND`. Never through Triton's
-    driver probe: `triton.runtime.driver.active` asks every backend
-    `is_active()`, and those probes import torch (R33, universal since
-    2026-09-05 — this call was the first torch import of the launch path)."""
+    """Detect GPU backend: 'metal', 'cuda' or 'hip' — the backend TABLE decides,
+    walked in order: an entry's probe (Metal opens the device) or the first
+    vendor runtime library the process can load names the backend; or
+    `NBX_GPU_BACKEND`. Never through Triton's driver probe:
+    `triton.runtime.driver.active` asks every backend `is_active()`, and those
+    probes import torch (R33, universal since 2026-09-05 — this call was the
+    first torch import of the launch path). Whatever answers is pinned in
+    `TRITON_DEFAULT_BACKEND` so any later question to Triton's driver resolves
+    straight to it and probes nothing else. Adding a backend is adding a table entry."""
     forced = os.environ.get("NBX_GPU_BACKEND")
     if forced:
         if forced not in _GPU_BACKENDS:
             raise RuntimeError(f"NBX_GPU_BACKEND={forced!r} is not a known backend ({sorted(_GPU_BACKENDS)})")
-        return forced
-    # The backend TABLE decides: the first vendor runtime the process can
-    # load names the backend — adding a backend is adding a table entry.
+        return _pin_triton_backend(forced)
     for name, backend in _GPU_BACKENDS.items():
-        for lib in backend["rt_libs"]:
+        probe = backend.get("probe")
+        if probe is not None and probe():
+            return _pin_triton_backend(name)
+        for lib in backend.get("rt_libs", ()):
             try:
                 ctypes.cdll.LoadLibrary(lib)
-                return name
+                return _pin_triton_backend(name)
             except OSError:
                 continue
-    raise RuntimeError("No GPU runtime found (tried CUDA and ROCm/HIP)")
+    raise RuntimeError("No GPU runtime found (tried Metal, CUDA and ROCm/HIP)")
 
 
 def _active_backend() -> dict:

@@ -338,6 +338,47 @@ def store_path(model_name: str, component: str) -> Path:
     return STORE_ROOT / model_name / f"{component}.json"
 
 
+EMBED_KEY = "precision_calibration"     # the section of components/<name>/profile.json
+
+
+def embedded_record_path(cache_path, component: str) -> Optional[Path]:
+    """The component's profile.json inside the extracted container, or None."""
+    if not cache_path:
+        return None
+    p = Path(cache_path) / "components" / component / "profile.json"
+    return p if p.exists() else None
+
+
+def load_embedded_record(cache_path, component: str) -> Optional[CalibrationRecord]:
+    """The record the ARTIFACT carries (the `precision_calibration` section of
+    the component's profile.json — the same file as its memory profile, a
+    measured property of the artifact written by the build), or None. The
+    owner's decision of 2026-09-06 on D-PRECISION-CONTRACT-DEPLOYMENT-SPLIT:
+    the record travels with the container; the engine store is the local
+    measurement that precedes a rebuild."""
+    p = embedded_record_path(cache_path, component)
+    if p is None:
+        return None
+    with open(p) as fh:
+        profile = json.load(fh)
+    section = (profile or {}).get(EMBED_KEY)
+    if not section:
+        return None
+    return CalibrationRecord.from_dict(section)
+
+
+def embed_record(cache_path, component: str, record: "CalibrationRecord") -> Path:
+    """Write the record into the component's profile.json of the extracted
+    container (the artifact's own home); returns the path written."""
+    p = Path(cache_path) / "components" / component / "profile.json"
+    profile = json.loads(p.read_text()) if p.exists() else {}
+    profile[EMBED_KEY] = record.to_dict()
+    tmp = p.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(profile, indent=1))
+    tmp.replace(p)
+    return p
+
+
 def load_record(model_name: Optional[str], component: str) -> Optional[CalibrationRecord]:
     """The component's record from the engine store; None when there is
     none. A record that EXISTS but cannot be read raises — a silent None

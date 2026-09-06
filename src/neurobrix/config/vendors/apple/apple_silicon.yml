@@ -19,6 +19,12 @@ compute_capability: "apple9"   # M3/M4 family; M1 = apple7, M2 = apple8
 
 # Metal exposes no CUDA-style device string. The compiled (PyTorch) path
 # reaches Apple GPUs through the MPS backend, whose device string is "mps".
+# The Triton Metal target reports the DEVICE NAME ("apple-m4-pro"), not a
+# family, so the budget below is selected by these prefixes (Metal chantier,
+# 2026-09-05). "apple-m" covers the M-series this file claims (M1..M4).
+compute_capability_matches:
+  - "apple-m"
+
 device_prefix: "mps"
 
 # Kernel block sizes — Apple GPUs execute in 32-wide SIMD groups (like a

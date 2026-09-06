@@ -400,6 +400,16 @@ class RuntimeExecutor:
             except FileNotFoundError:
                 pass
         merged_defaults.update(self.pkg.defaults)
+        # The output size is the CONTAINER's when the build declares none: the
+        # traced latent extent of the diffusion backbone times the VAE scale
+        # — Allegro traced at [.., 90, 160] × 8 = 720×1280. A family constant
+        # is the last resort only (video family: 512² rendered colour bands on
+        # every arm of the calibration campaign, 2026-09-05).
+        if "height" not in self.pkg.defaults or "width" not in self.pkg.defaults:
+            derived = self._container_output_size(
+                {name: data for name, data in self.pkg.components.items()})
+            if derived is not None:
+                merged_defaults["height"], merged_defaults["width"] = derived
 
         for key, value in inputs.items():
             default_key = key.replace("global.", "") if key.startswith("global.") else key
@@ -1369,6 +1379,28 @@ class RuntimeExecutor:
 
         logger.debug(f"Dynamic latent dims: {height}x{width} / {vae_scale_factor} = {latent_height}x{latent_width}")
         return merged_defaults
+
+    def _container_output_size(self, comp_configs: Dict[str, Any]) -> Optional[tuple]:
+        """(height, width) in pixels from the container: the last two extents
+        of the diffusion backbone's traced latent input times the VAE scale.
+        None for a graph without a spatial latent (text, audio) or a
+        container whose VAE scale cannot be determined."""
+        flow_type = self.pkg.topology.get("flow", {}).get("type", "")
+        if flow_type != "iterative_process":
+            return None
+        scale = self._get_vae_scale_factor(comp_configs)
+        if not scale:
+            return None
+        components = self.pkg.topology.get("components", {}) or {}
+        for name in ("transformer", "unet", "dit"):
+            shapes = (components.get(name) or {}).get("shapes") or {}
+            for key in ("hidden_states", "sample", "latents", "x", "latent_model_input"):
+                shape = shapes.get(key)
+                if isinstance(shape, (list, tuple)) and len(shape) in (4, 5) and all(isinstance(v, int) for v in shape[-2:]):
+                    h, w = int(shape[-2]), int(shape[-1])
+                    if h > 0 and w > 0:
+                        return h * int(scale), w * int(scale)
+        return None
 
     def _get_vae_scale_factor(self, comp_configs: Dict[str, Any]) -> Optional[int]:
         """Determine VAE spatial compression factor."""

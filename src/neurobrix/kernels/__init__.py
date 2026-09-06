@@ -43,3 +43,13 @@ __all__ = [
     # Metadata ops
     "execute_metadata_op",
 ]
+
+# The NeuroBrix launcher seam is installed HERE, in the package every kernel
+# module imports before it can launch anything — not in dispatch.py, which a
+# weight load (`bf16_to_fp16_kernel`) or a dtype cast (`copy_kernel`) reaches
+# long before the first dispatch. Installed there, those launches went through
+# upstream's launcher and its torch-importing driver probe (whole-zoo probe
+# 2026-09-05: Sana, VibeVoice, Voxtral, canary, chatterbox).
+from .launcher import install as _install_launcher  # noqa: E402
+
+_install_launcher()

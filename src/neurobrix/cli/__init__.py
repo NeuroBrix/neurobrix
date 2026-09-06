@@ -192,6 +192,8 @@ For more information: https://neurobrix.es
                     'later run derives its fp32 islands from. Same request arguments as `run`; '
                     'a family without media inputs takes its stimulus from config/families/<family>.yml.'
     )
+    calibrate_parser.add_argument('--embed', action='store_true',
+                                  help='also write the record into the installed container (components/<name>/profile.json) — the artifact\'s own home, what the build does before publication')
     _add_run_arguments(calibrate_parser)
 
 

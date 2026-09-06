@@ -323,6 +323,14 @@ class TritonSequence:
         self._const_fold_plan: Optional[Dict[str, Any]] = None
         self._const_fold_sig: Optional[tuple] = None
 
+    def set_precision_contract(self, safe: bool, fp32_op_uids=(), narrow_op_uids=()) -> None:
+        """The component's precision contract — the flag AND the per-op
+        islands of the calibration record (the same sets the compiled
+        engine honours; D-PRECISION-CONTRACT-TRITON-PARITY closed 2026-09-06).
+        Set after construction, before compile()."""
+        self.set_activations_fp16_safe(safe)
+        self._dtype_engine.set_precision_contract(safe, fp32_op_uids, narrow_op_uids)
+
     def set_activations_fp16_safe(self, safe: bool) -> None:
         """Set the per-component activations_fp16_safe opt-in flag.
 
@@ -1823,12 +1831,12 @@ class TritonSequence:
             func = self._op_uid_interceptors[op_uid]
             if not getattr(func, 'self_manages_dtype', getattr(getattr(func, '__func__', None), 'self_manages_dtype', False)):
                 bare_name = op_type.split("::")[-1] if "::" in op_type else op_type
-                func = self._dtype_engine.wrap_op(bare_name, func)
+                func = self._dtype_engine.wrap_op(bare_name, func, op_uid=op_uid)
         elif op_type in self._op_interceptors:
             func = self._op_interceptors[op_type]
             if not getattr(func, 'self_manages_dtype', getattr(getattr(func, '__func__', None), 'self_manages_dtype', False)):
                 bare_name = op_type.split("::")[-1] if "::" in op_type else op_type
-                func = self._dtype_engine.wrap_op(bare_name, func)
+                func = self._dtype_engine.wrap_op(bare_name, func, op_uid=op_uid)
         else:
             func = dispatch(op_type)
             if func is None:
@@ -1838,7 +1846,7 @@ class TritonSequence:
             from neurobrix.kernels.classification import canonical_aten
             bare_name = op_type.split("::")[-1] if "::" in op_type else op_type
             bare_name = canonical_aten(bare_name)
-            func = self._dtype_engine.wrap_op(bare_name, func)
+            func = self._dtype_engine.wrap_op(bare_name, func, op_uid=op_uid)
 
         # Compile args → dataclasses
         raw_args = attrs.get("args", [])

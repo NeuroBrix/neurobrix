@@ -8,6 +8,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- The NeuroBrix launcher is installed when the kernel package is imported, so the first kernel a
+  weight load or a tensor conversion launches already goes through it (previously the dispatch
+  module installed it, and a kernel launched before dispatch was imported went through Triton's
+  launcher, which loads torch). The launcher carries a kernel's `debug` flag into its compile
+  options as Triton's own launcher does, so the out-of-range traps of the gather/scatter kernels
+  stay in the binary (gate: `tests/unit/kernels/test_gather_scatter_oob.py`).
+- The launcher's CUDA driver satisfies the vendor-agnostic launcher contract
+  (`neurobrix.triton.launcher_contract`): compile once and launch many times with integer device
+  addresses the allocator verifies it handed out (a foreign address or a wrong-length argument
+  list is refused, not launched), streams and events through the allocator. The same checker gates
+  the Metal driver.
+- The GPU backend detection knows Apple Metal and records the detected backend for Triton
+  (`TRITON_DEFAULT_BACKEND`) so Triton probes no other backend; a hardware profile may declare the
+  target-name prefixes it covers (`compute_capability_matches`), which is how the Apple profile
+  resolves on a Metal target that reports a device name rather than a compute capability.
+- A model's precision calibration record can be embedded in its container
+  (`neurobrix calibrate --embed` writes it beside the component profile) and is read from there
+  before the local calibration store, so a calibrated model ships calibrated.
+- A diffusion request's default height and width come from the container (the traced latent extent
+  of the backbone times the VAE scale) when the model declares none, so a model renders at its
+  native size by default (Allegro 720×1280); the family default of 512 is gone.
+- Text-to-speech inputs are placed in the engine's own container on both engines, and a waveform
+  produced by either engine is post-processed without crossing to the other.
+- Audio outputs are gated spectrally in the precision campaign: a log-mel distance with a length
+  ratio, then a transcript word-error rate when the spectrum moved, replacing a blind SNR that
+  called a phase drift a regression.
 - Kernel launches of the house library go through a NeuroBrix launcher in the dispatch layer
   (`neurobrix.kernels.launcher`): Triton compiles, the engine specialises the arguments itself and
   launches through the CUDA driver with integer pointers and typed scalars — no torch on the launch

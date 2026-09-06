@@ -5,9 +5,15 @@ Used by encoder_decoder, audio_llm, dual_ar, and audio flows.
 
 ZERO SEMANTIC: No model knowledge. All config from topology/defaults.
 """
+from __future__ import annotations
 
-import torch
+from typing import TYPE_CHECKING
+
 from neurobrix.core.device_utils import device_multinomial
+from neurobrix.core.runtime.tensor_compat import is_torch_tensor
+
+if TYPE_CHECKING:  # R33: the ATen branch imports it; the Triton flows share two functions of this module
+    import torch
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -18,6 +24,7 @@ def preprocess_audio_input(
     ctx: FlowContext, audio_config: Dict, stages: List[Dict],
 ) -> None:
     """Load audio file and extract features. Input shape read from graph (DATA-DRIVEN)."""
+    import torch  # the ATen branch's flows are the callers
     input_config = audio_config.get("input", {})
     audio_path = ctx.variable_resolver.resolved.get("global.audio_path")
     if audio_path is None:
@@ -152,15 +159,31 @@ def preprocess_text_input(ctx: FlowContext, input_config: Dict = None) -> None:
 
     # LLM-style tokenization
     add_special = tts_template is None
+    import numpy as np
+    from neurobrix.core.runtime.resolution.variable_resolver import to_engine_container
     try:
-        input_ids = tokenizer.encode(prompt, return_tensors="pt", add_special_tokens=add_special)
-    except TypeError:
         ids = tokenizer.encode(prompt, add_special_tokens=add_special)
-        input_ids = torch.tensor([ids], dtype=torch.long)
-    if isinstance(input_ids, list):
-        input_ids = torch.tensor([input_ids], dtype=torch.long)
-    input_ids = input_ids.to(device)
-    attention_mask = torch.ones_like(input_ids)
+    except TypeError:
+        ids = tokenizer.encode(prompt)
+    if hasattr(ids, "tolist"):
+        ids = ids.tolist()
+    if ids and isinstance(ids[0], list):
+        ids = ids[0]
+
+    # The engine's container, on the primary device: torch on the ATen
+    # branch, NBXTensor on the Triton branch (R33: shared by both flows).
+    def _place(arr):
+        t = to_engine_container(np.ascontiguousarray(arr), ctx.mode)
+        if is_torch_tensor(t):
+            return t.to(device)
+        if isinstance(device, str) and ":" in device:
+            idx = int(device.split(":")[1])
+            if idx != t._device_idx:
+                t = t.to_cuda(idx)
+        return t
+    ids_arr = np.asarray([ids], dtype=np.int64)
+    input_ids = _place(ids_arr)
+    attention_mask = _place(np.ones_like(ids_arr))
 
     ctx.variable_resolver.resolved["global.input_ids"] = input_ids
     ctx.variable_resolver.resolved["input_ids"] = input_ids
@@ -258,12 +281,12 @@ def postprocess_audio_output(ctx: FlowContext) -> None:
         return tuple(getattr(val, "shape", ()) or ())
 
     def _to_torch_wave(val):
-        if isinstance(val, torch.Tensor):
+        # The engine's own waveform stays what it is: a torch tensor on the
+        # ATen branch, an NBXTensor on the Triton branch (the output boundary
+        # reads either — R33: no NBX→torch round trip here any more).
+        if is_torch_tensor(val) or hasattr(val, "nbx_dtype"):
             return val
-        try:
-            return torch.from_numpy(val.numpy())  # NBXTensor → torch (boundary)
-        except Exception:
-            return None
+        return None
 
     waveform = None
     resolved = ctx.variable_resolver.resolved
@@ -392,7 +415,7 @@ def get_component_output(
     """Get a component's primary output tensor."""
     resolved = ctx.variable_resolver.resolved
     for key in [f"{comp_name}.output_0", f"{comp_name}.last_hidden_state", f"{comp_name}.output"]:
-        if key in resolved and isinstance(resolved[key], torch.Tensor):
+        if key in resolved and (is_torch_tensor(resolved[key]) or hasattr(resolved[key], "nbx_dtype")):
             return resolved[key]
     return None
 
@@ -419,6 +442,7 @@ def sample_token(
     top_p: float = 1.0,
 ) -> int:
     """Sample next token from logits with optional repetition penalty and top-p."""
+    import torch  # the ATen branch's flows are the callers
     last_logits = logits[:, -1, :].clone()
 
     if repetition_penalty != 1.0 and generated_ids:
