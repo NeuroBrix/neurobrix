@@ -56,11 +56,16 @@ def target():
     """The compile target of this process: vendor, capability, warp size —
     from the engine's data, never from `triton.runtime.driver.active` (whose
     backend probes import torch). The one source for every module that
-    used to ask Triton's driver (matmul / config spaces, the autotune cache)."""
+    used to ask Triton's driver (matmul / config spaces, the autotune cache).
+
+    The vendor is the DRIVER's answer, not a literal here: on Apple the
+    vendor is `metal`, the arch is a device name string rather than a
+    compute capability, and both come from the hardware profile like
+    everything else. `CudaDriver.target()` returns exactly what this used to
+    return, so the CUDA path is unchanged."""
     global _TARGET
     if _TARGET is None:
-        from triton.backends.compiler import GPUTarget
-        _TARGET = GPUTarget("cuda", _compute_capability(), 32)
+        _TARGET = active_driver().target()
     return _TARGET
 
 
@@ -74,13 +79,41 @@ def arch() -> int:
 # ---------------------------------------------------------------------------
 
 class Driver:
-    """Four calls a backend implements: load a binary, set its shared memory,
-    launch, and (for the target) read the device's capability."""
+    """What a backend implements: load a binary, launch it, and name the
+    compile target it wants.
+
+    Three class attributes carry the facts the launcher used to assume were
+    CUDA's. Each was a CUDA literal in the launch path until the Metal port
+    pressed on it, and each default is the CUDA answer, so a driver that says
+    nothing behaves exactly as before.
+    """
+
+    #: The key of the compiled artifact in `CompiledKernel.asm`. CUDA emits
+    #: "cubin"; Metal emits "msl"; ROCm emits "hsaco".
+    artifact_kind = "cubin"
+
+    #: Triton's ABI (>= 3.6) passes a global-scratch and a profile-scratch
+    #: pointer after the kernel's own arguments. A backend whose launch ABI
+    #: has no such slots says so rather than receiving two stray zeros.
+    wants_scratch_params = True
 
     def load(self, binary: bytes, name: str, shared: int):  # pragma: no cover - interface
         raise NotImplementedError
 
     def launch(self, function, grid, block, shared: int, stream: int, params) -> None:  # pragma: no cover
+        raise NotImplementedError
+
+    def block_for(self, metadata):
+        """Threads per block, from the compiled metadata.
+
+        `num_warps * warp_size` on CUDA. Not universal: triton-msl documents
+        that its C++ path can overwrite `metadata.block_size` with a value
+        meant for a different launch shape, so the Metal driver reads the
+        emitted kernel's own size instead of computing one.
+        """
+        return (32 * int(metadata.num_warps), 1, 1)
+
+    def target(self):  # pragma: no cover - interface
         raise NotImplementedError
 
 
@@ -98,6 +131,12 @@ class CudaDriver(Driver):
         if cls._inst is None:
             cls._inst = cls()
         return cls._inst
+
+    def target(self):
+        """`GPUTarget("cuda", <capability>, 32)` — what `target()` returned
+        as a literal before the driver registry existed."""
+        from triton.backends.compiler import GPUTarget
+        return GPUTarget("cuda", _compute_capability(), 32)
 
     def __init__(self) -> None:
         lib = None
@@ -176,6 +215,55 @@ class CudaDriver(Driver):
                                             ctypes.c_void_p(stream), arr, None), "cuLaunchKernel")
 
 
+# ---------------------------------------------------------------------------
+# Which driver this process launches through — the one place a backend is named
+# ---------------------------------------------------------------------------
+#
+# `launch()` used to end in `CudaDriver.instance()`. The `Driver` base class
+# was already there, so the second backend was anticipated; there was just no
+# way to install one. This is that way, and it is a table rather than a
+# branch: adding ROCm is a row.
+#
+# The backend NAME is not decided here either. It comes from the seam that
+# already resolves it for the allocator, so the engine has one detection
+# rather than two opinions.
+
+_DRIVER: Optional[Driver] = None
+
+#: backend name (as the allocator seam resolves it) -> module exposing
+#: `driver()`. CUDA is absent because it is the built-in default, which is
+#: what keeps the CUDA path byte-identical to before this registry existed.
+_DRIVER_MODULES = {"metal": "neurobrix.triton.metal_driver"}
+
+
+def register_driver(driver: Optional[Driver]) -> None:
+    """Install the driver this process launches through. `None` clears it."""
+    global _DRIVER, _TARGET
+    _DRIVER = driver
+    _TARGET = None          # the target is the driver's answer
+
+
+def active_driver() -> Driver:
+    """The driver in force, resolved once from the detected backend."""
+    global _DRIVER
+    if _DRIVER is None:
+        _DRIVER = _resolve_driver()
+    return _DRIVER
+
+
+def _resolve_driver() -> Driver:
+    from neurobrix.kernels.nbx_tensor import _detect_gpu_backend
+    try:
+        name = _detect_gpu_backend()
+    except Exception:
+        return CudaDriver.instance()
+    path = _DRIVER_MODULES.get(name)
+    if path is None:
+        return CudaDriver.instance()
+    from importlib import import_module
+    return import_module(path).driver()
+
+
 def _unsupported(kind):
     raise RuntimeError(f"NeuroBrix launcher: unsupported scalar kind {kind!r}")
 
@@ -215,12 +303,12 @@ def _pack_param(ty: str, value: Any) -> Tuple[str, Any]:
 class _Prepared:
     __slots__ = ("function", "signature", "shared", "num_warps", "block", "name")
 
-    def __init__(self, function, signature, shared, num_warps, name):
+    def __init__(self, function, signature, shared, num_warps, name, block=None):
         self.function = function
         self.signature = signature
         self.shared = shared
         self.num_warps = num_warps
-        self.block = (32 * num_warps, 1, 1)
+        self.block = block if block is not None else (32 * num_warps, 1, 1)
         self.name = name
 
 
@@ -352,8 +440,17 @@ def prepare(kernel, args, kwargs) -> Tuple[_Prepared, Dict[str, Any]]:
         if getattr(md, "global_scratch_size", 0) or getattr(md, "profile_scratch_size", 0):
             raise RuntimeError(f"NeuroBrix launcher: {kernel.__name__} asks for scratch memory "
                                f"the launcher does not provide yet")
-        function = CudaDriver.instance().load(compiled.asm["cubin"], md.name, md.shared)
-        prep = kernel_cache[key] = _Prepared(function, signature, md.shared, md.num_warps, md.name)
+        drv = active_driver()
+        artifact = compiled.asm.get(drv.artifact_kind)
+        if artifact is None:
+            raise RuntimeError(
+                f"NeuroBrix launcher: {kernel.__name__} compiled to "
+                f"{sorted(compiled.asm)} but {drv.__class__.__name__} takes "
+                f"{drv.artifact_kind!r}")
+        function = drv.load(artifact, md.name, md.shared)
+        prep = kernel_cache[key] = _Prepared(function, signature, md.shared,
+                                             md.num_warps, md.name,
+                                             drv.block_for(md))
     return prep, bound_args
 
 
@@ -370,9 +467,11 @@ def launch(kernel, grid, *args, **kwargs):
         grid = grid(bound_args)
     grid = tuple(int(g) for g in grid) + (1,) * (3 - len(grid))
     params = [_pack_param(ty, bound_args[name]) for name, ty in prep.signature.items() if ty != "constexpr"]
-    params.append(("ptr", 0))    # global scratch (Triton ≥ 3.6 ABI)
-    params.append(("ptr", 0))    # profile scratch
-    CudaDriver.instance().launch(prep.function, grid, prep.block, prep.shared, _stream(), params)
+    drv = active_driver()
+    if drv.wants_scratch_params:
+        params.append(("ptr", 0))    # global scratch (Triton ≥ 3.6 ABI)
+        params.append(("ptr", 0))    # profile scratch
+    drv.launch(prep.function, grid, prep.block, prep.shared, _stream(), params)
 
 
 def _stream() -> int:
