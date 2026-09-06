@@ -337,15 +337,35 @@ class TritonDtypeEngine:
         return func
 
     def _wrap_fp32(self, func: Callable) -> Callable:
-        """Upcast float inputs to fp32."""
+        """Upcast float inputs to fp32, and run the op with fp32 as the
+        active compute dtype.
+
+        The second half is what makes an island hold on a self-managed
+        wrapper. `conv2d_wrapper` (and the other self-managed ops) do not
+        follow their inputs: they narrow the inputs to the narrowest common
+        dtype and write their output in the per-component compute dtype
+        they read from `kernels.wrappers` — so an island that only upcast
+        the inputs was undone inside the wrapper and the fp16 output
+        overflowed exactly where the calibration record said it would
+        (swin2SR-x2 `aten.convolution::13`, fp32 norm 2.6e7: inf, NaN, a
+        black render). Overriding the compute dtype for the duration of the
+        pinned op makes the wrapper's own policy produce fp32, the same
+        thing ATen does for fp32 inputs on the compiled engine. Restored
+        after the call, nested-safe."""
         def fp32_func(*args, **kwargs):
+            from neurobrix.kernels import wrappers as _w
             new_args = tuple(
                 a.to(NBXDtype.float32).contiguous()
                     if _is_float_tensor(a) and _get_nbx_dtype(a) != NBXDtype.float32
                 else (a.contiguous() if hasattr(a, 'contiguous') and hasattr(a, 'is_contiguous') and not a.is_contiguous() else a)
                 for a in args
             )
-            return func(*new_args, **kwargs)
+            prev = _w.get_compute_dtype()
+            _w.set_compute_dtype(NBXDtype.float32)
+            try:
+                return func(*new_args, **kwargs)
+            finally:
+                _w.set_compute_dtype(prev)
         return fp32_func
 
     def _wrap_fp32_internal_compute_dtype_output(self, func: Callable, force_cast_back: bool = False) -> Callable:

@@ -366,6 +366,19 @@ class RuntimeExecutor:
             persistent_mode=self._persistent_mode,
         )
 
+        # The Triton engine's random stream is armed here, once per request,
+        # for EVERY flow: the request's seed (`global.seed`, else the
+        # container's default) drives every draw the graph makes — a
+        # sampler's multinomial, a scheduler's noise, a vocoder's random
+        # phase (`aten.rand` inside Kokoro's decoder was the one that
+        # escaped: only two flows armed the stream themselves, so a tts
+        # request drew from Python's unseeded `random` and two runs at the
+        # same seed differed). R30 mirror of the ATen branch's
+        # `torch.manual_seed` at the CLI. A seedless request keeps the
+        # unseeded fallback, as before.
+        if self.mode in ("triton", "triton_sequential"):
+            from neurobrix.kernels import rng_stream
+            rng_stream.set_run_seed(inputs.get("global.seed", self.pkg.defaults.get("seed")))
         # Get and execute flow handler
         handler = self._create_flow_handler(flow_type, ctx)
         return handler.execute()

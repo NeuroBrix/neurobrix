@@ -293,9 +293,8 @@ def one_model(model: str, gpu, out: Path, extra: list, timeout: int) -> dict:
     fam = family_of(model)
     d = out / model
     d.mkdir(parents=True, exist_ok=True)
-    ext = {"llm": ".txt", "stt": ".txt", "vlm": ".txt", "audio_llm": ".txt", "tts": ".wav",
-           "video": ".mp4", "image": ".png", "upscaler": ".png"}.get(fam, ".txt")
     req = request_args(model, fam, extra)
+    ext = output_ext(fam, req)
     if fam == "multimodal" and "--mode" in req and req[req.index("--mode") + 1] == "image":
         ext = ".png"
     base_env = {**os.environ}
@@ -353,15 +352,24 @@ def one_model(model: str, gpu, out: Path, extra: list, timeout: int) -> dict:
     return res
 
 
+def output_ext(fam: str, req: list) -> str:
+    """The output extension the engine's output dispatch expects for this
+    request: by family, and by the request's `--mode` for a multimodal model
+    (an autoregressive-image request writes a PNG, a text request a TXT)."""
+    if fam == "multimodal" and "--mode" in req:
+        return ".png" if req[req.index("--mode") + 1] == "image" else ".txt"
+    return {"llm": ".txt", "stt": ".txt", "vlm": ".txt", "audio_llm": ".txt", "tts": ".wav",
+            "video": ".mp4", "image": ".png", "upscaler": ".png"}.get(fam, ".txt")
+
+
 def launcher_ab(model: str, gpu, out: Path, extra: list, timeout: int) -> dict:
     """The launcher gate on one model: `--triton` with upstream's launcher
     (NBX_LAUNCHER=triton) vs the NeuroBrix launcher, outputs byte-compared."""
     fam = family_of(model)
     d = out / model
     d.mkdir(parents=True, exist_ok=True)
-    ext = {"llm": ".txt", "stt": ".txt", "vlm": ".txt", "audio_llm": ".txt", "tts": ".wav",
-           "video": ".mp4", "image": ".png", "upscaler": ".png"}.get(fam, ".txt")
     req = request_args(model, fam, extra) + ["--triton"]
+    ext = output_ext(fam, req)
     base_env = {**os.environ}
     if gpu is None:
         base_env.pop("CUDA_VISIBLE_DEVICES", None)
@@ -397,9 +405,8 @@ def tree_ab(model: str, gpu, out: Path, extra: list, timeout: int, trees: list) 
     fam = family_of(model)
     d = out / model
     d.mkdir(parents=True, exist_ok=True)
-    ext = {"llm": ".txt", "stt": ".txt", "vlm": ".txt", "audio_llm": ".txt", "tts": ".wav",
-           "video": ".mp4", "image": ".png", "upscaler": ".png"}.get(fam, ".txt")
     req = request_args(model, fam, extra) + ["--triton"]
+    ext = output_ext(fam, req)
     base_env = {**os.environ}
     if gpu is None:
         base_env.pop("CUDA_VISIBLE_DEVICES", None)
@@ -449,9 +456,8 @@ def r33_probe(model: str, gpu, out: Path, extra: list, timeout: int, src: Path =
     fam = family_of(model)
     d = out / model
     d.mkdir(parents=True, exist_ok=True)
-    ext = {"llm": ".txt", "stt": ".txt", "vlm": ".txt", "audio_llm": ".txt", "tts": ".wav",
-           "video": ".mp4", "image": ".png", "upscaler": ".png"}.get(fam, ".txt")
     req = request_args(model, fam, extra)
+    ext = output_ext(fam, req)
     env = {**os.environ, "PYTHONPATH": str((src or (REPO / "src")).resolve())}
     if gpu is None:
         env.pop("CUDA_VISIBLE_DEVICES", None)
