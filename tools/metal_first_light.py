@@ -89,8 +89,15 @@ def _run_kernel(x_np, w_np, eps=1e-6):
     is the path whose kernels are portable as source. Comparing the torch
     path would measure PyTorch's backend, not ours.
     """
+    from neurobrix.kernels import launcher
     from neurobrix.kernels.nbx_tensor import NBXTensor
     from neurobrix.kernels.wrappers import rms_norm
+
+    # The engine installs the launcher from `kernels/dispatch.py`; a tool that
+    # reaches for a wrapper directly must install it too, or it measures
+    # upstream Triton's launch path instead of the engine's. `install()`
+    # honours NBX_LAUNCHER=triton, which is how the differential arm is run.
+    launcher.install()
 
     x = NBXTensor.from_numpy(np.ascontiguousarray(x_np))
     w = NBXTensor.from_numpy(np.ascontiguousarray(w_np))
