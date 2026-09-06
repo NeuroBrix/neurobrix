@@ -75,6 +75,11 @@ def _add_run_arguments(p):
                                  'Production NeuroBrix Triton mode. Should match or beat '
                                  '--compiled on target shapes (project bet: custom '
                                  'kernels > cuDNN).')
+    p.add_argument('--sweep', action='store_true',
+                   help='Triton engine: allow the kernel sweep for shapes this model has no measured '
+                        'configuration for on this hardware profile, and record the result as the model\'s '
+                        'sweep artifact (~/.neurobrix/autotune/<model>/<arch>.json). Without it a request '
+                        'never sweeps: a missing artifact is refused.')
     p.add_argument('--triton-sequential', action='store_true', dest='triton_sequential',
                             help='Triton-pure eager mode: Triton kernels op-by-op (no '
                                  'fusion, TritonSequentialDispatcher). Equivalent of '

@@ -148,6 +148,8 @@ def seed() -> int:
     NBX_DISABLE_AUTOTUNE's pinned single-config list (one member).
     Non-members and non-literal keys are skipped: that shape simply
     re-tunes, exactly the pre-E2 behavior."""
+    if _ACTIVE is not None and not _ACTIVE["sweep"]:
+        return 0          # a model request in default mode: its own artifact is the only source
     path = _artifact_path()
     if path is None:
         return 0
@@ -156,6 +158,12 @@ def seed() -> int:
             stored = json.load(f)
     except (OSError, ValueError):
         return 0
+    return _seed_entries(stored)
+
+
+def _seed_entries(stored: Dict[str, Dict]) -> int:
+    """Insert `stored` configs into the Autotuner caches under the
+    membership gate documented on `seed()`. Returns the number seeded."""
     seeded = 0
     for qual, at in _autotuners():
         prefix = f"{qual}::"
@@ -179,3 +187,222 @@ def seed() -> int:
                 except Exception:
                     continue
     return seeded
+
+
+# ---------------------------------------------------------------------------
+# The per-model sweep artifact — the sweep happens on our side (owner
+# directive, 2026-09-06). Its result per kernel, per shape and per hardware
+# profile is an artifact delivered with the model (`runtime/autotune/<arch>.json`
+# inside the container, embedded by the build from the engine's store) or by the
+# hub, and loaded by the engine at each Triton request. A missing artifact for
+# this profile is an EXPLICIT refusal, never a silent sweep; the producer runs
+# with `--sweep` (NBX_AUTOTUNE=sweep) and its measurements land in the store
+# (`~/.neurobrix/autotune/<model>/<arch>.json`) the build embeds.
+#
+# A request whose shape the artifact never saw does not sweep either: the
+# config of the nearest measured shape of the same kernel (same key but the
+# leading extent, membership-gated like every seeded config) serves it; a
+# kernel with no measured shape at all is the refusal.
+# ---------------------------------------------------------------------------
+FORMAT = "nbx-autotune-sweep/1"
+_STORE = os.path.join(os.path.expanduser("~"), ".neurobrix", "autotune")
+_ACTIVE: Optional[Dict] = None     # the model request in force: model, arch, source, entries, sweep
+
+
+def sweep_mode() -> bool:
+    return os.environ.get("NBX_AUTOTUNE", "").strip().lower() == "sweep"
+
+
+def store_dir() -> str:
+    return os.environ.get("NEUROBRIX_AUTOTUNE_STORE") or _STORE
+
+
+def store_path(model_name: str, arch: Optional[str] = None) -> Optional[str]:
+    arch = arch or _arch_fingerprint()
+    return None if arch is None else os.path.join(store_dir(), model_name, f"{arch}.json")
+
+
+def embedded_path(container_path: str, arch: Optional[str] = None) -> Optional[str]:
+    arch = arch or _arch_fingerprint()
+    return None if arch is None else os.path.join(str(container_path), "runtime", "autotune", f"{arch}.json")
+
+
+def _read_artifact(path: Optional[str]) -> Optional[Dict[str, Dict]]:
+    if not path or not os.path.exists(path):
+        return None
+    with open(path) as f:
+        doc = json.load(f)
+    if not isinstance(doc, dict) or not str(doc.get("format", "")).startswith("nbx-autotune-sweep/"):
+        raise RuntimeError(f"{path}: not a sweep artifact (format={doc.get('format') if isinstance(doc, dict) else type(doc).__name__!r})")
+    entries = doc.get("entries")
+    if not isinstance(entries, dict):
+        raise RuntimeError(f"{path}: sweep artifact without entries")
+    return entries
+
+
+def load_model_artifact(model_name: str, container_path: Optional[str]) -> Tuple[Optional[Dict[str, Dict]], Optional[str]]:
+    """(entries, source path): the container's embedded artifact first, then
+    the engine's store; (None, None) when neither exists for this arch."""
+    for path in (embedded_path(container_path) if container_path else None, store_path(model_name)):
+        entries = _read_artifact(path)
+        if entries is not None:
+            return entries, path
+    return None, None
+
+
+def refusal(model_name: str, detail: str) -> RuntimeError:
+    arch = _arch_fingerprint()
+    return RuntimeError(
+        f"[autotune] {detail} for hardware profile {arch!r}. The kernel sweep is never run inside a "
+        f"request: measure it once on this profile with `neurobrix run --model {model_name} --triton "
+        f"--sweep ...` (the result lands in {store_path(model_name) or store_dir()} and the build embeds "
+        f"it as runtime/autotune/{arch}.json), or install the model's sweep for this profile from the hub.")
+
+
+def activate(model_name: str, container_path: Optional[str]) -> int:
+    """Arm the policy for one Triton request. Default mode: the model's
+    artifact is the only source of kernel configs, and a model without one
+    is refused HERE, before any kernel runs. Sweep mode: the artifact and the
+    machine cache both seed, everything else is measured and captured by
+    `capture_model()`. Returns the number of configs seeded now."""
+    global _ACTIVE
+    arch = _arch_fingerprint()
+    sweep = sweep_mode()
+    if _ACTIVE is not None and _ACTIVE["model"] == model_name and _ACTIVE["arch"] == arch and _ACTIVE["sweep"] == sweep:
+        return 0
+    entries, source = load_model_artifact(model_name, container_path)
+    if entries is None and not sweep:
+        raise refusal(model_name, "no kernel sweep artifact")
+    _ACTIVE = {"model": model_name, "arch": arch, "source": source, "entries": entries or {}, "sweep": sweep,
+               "container": str(container_path) if container_path else None, "used": set()}
+    seeded = _seed_entries(entries) if entries else 0
+    if sweep:
+        seeded += seed()
+    if source:
+        print(f"[autotune] {model_name}: sweep artifact {source} ({len(entries)} measured shape(s), {seeded} seeded)", flush=True)
+    elif sweep:
+        print(f"[autotune] {model_name}: SWEEP mode — measuring; the result goes to {store_path(model_name)}", flush=True)
+    return seeded
+
+
+def active() -> Optional[Dict]:
+    return _ACTIVE
+
+
+def key_of(at, args, kwargs) -> tuple:
+    """The Autotuner's cache key for a call, as `Autotuner.run` forms it."""
+    _args = {**dict(zip(at.arg_names, args)), **kwargs}
+    key = [_args[k] for k in at.keys if k in _args]
+    for _, arg in _args.items():
+        if hasattr(arg, "dtype"):
+            key.append(str(arg.dtype))
+    return tuple(key)
+
+
+def _qual_of(at) -> Optional[str]:
+    for qual, obj in _autotuners():
+        if obj is at:
+            return qual
+    return None
+
+
+def _shape_distance(a: tuple, b: tuple) -> Optional[int]:
+    """L1 distance over the numeric fields of two autotune keys of the same
+    kernel; None when a non-numeric field (a dtype name, a flag) differs —
+    those select a different kernel variant, never a neighbouring shape."""
+    dist = 0
+    for x, y in zip(a, b):
+        numeric = isinstance(x, int) and not isinstance(x, bool) and isinstance(y, int) and not isinstance(y, bool)
+        if numeric:
+            dist += abs(x - y)
+        elif x != y:
+            return None
+    return dist
+
+
+def _nearest(qual: str, at, key: tuple):
+    """The config of the nearest measured shape of the same kernel: same
+    key length, same non-numeric fields (dtypes, flags), least L1 distance
+    over the extents (M for a matmul; batch, rows and columns for a batched
+    one); membership-gated. None if none."""
+    prefix = f"{qual}::"
+    space = {(tuple(sorted(c.kwargs.items())), c.num_warps, c.num_stages) for c in getattr(at, "configs", [])}
+    best, best_d = None, None
+    for k, d in _ACTIVE["entries"].items():
+        if not k.startswith(prefix):
+            continue
+        try:
+            stored_key = ast.literal_eval(k[len(prefix):])
+        except (ValueError, SyntaxError):
+            continue
+        if not isinstance(stored_key, tuple) or len(stored_key) != len(key):
+            continue
+        dist = _shape_distance(stored_key, key)
+        if dist is None:
+            continue
+        member = (tuple(sorted(dict(d["kwargs"]).items())), d["num_warps"], d["num_stages"])
+        if member not in space:
+            continue
+        if best_d is None or dist < best_d:
+            best, best_d = _config_from_dict(d), dist
+    return best
+
+
+def note_use(at, key: tuple) -> None:
+    """Record that this request resolved `key` on `at` — the sweep artifact
+    holds the shapes the MODEL uses, not everything the machine ever
+    measured (a producer run seeds the whole machine cache so that known
+    shapes are not re-benched; only the used ones are written)."""
+    if _ACTIVE is not None and _ACTIVE["sweep"]:
+        _ACTIVE["used"].add((id(at), key))
+
+
+def resolve_missing(at, key: tuple) -> None:
+    """A key the Autotuner holds no config for is about to be benched.
+    Outside a model request (tools, tests) or in sweep mode: measure. In a
+    request's default mode: the nearest measured shape, else the refusal."""
+    if _ACTIVE is None or _ACTIVE["sweep"]:
+        return
+    qual = _qual_of(at)
+    cfg = _nearest(qual, at, key) if qual else None
+    if cfg is None:
+        raise refusal(_ACTIVE["model"], f"no measured configuration for {qual or getattr(at, 'base_fn', at)} at shape {key!r}")
+    at.cache[key] = cfg
+    print(f"[autotune] {qual}: shape {key!r} not in the sweep artifact — served by the nearest measured shape "
+          f"(no sweep)", flush=True)
+
+
+def capture_model() -> Optional[str]:
+    """Sweep mode, end of a request: write the model's artifact into the
+    store — every config the process resolved for the sanctioned kernels,
+    merged with what the store already held. Returns the path written."""
+    if _ACTIVE is None or not _ACTIVE["sweep"]:
+        return None
+    path = store_path(_ACTIVE["model"], _ACTIVE["arch"])
+    if path is None:
+        return None
+    entries: Dict[str, Dict] = dict(_ACTIVE["entries"])       # what earlier sweeps of this model measured
+    used = _ACTIVE["used"]
+    for qual, at in _autotuners():
+        for key, cfg in getattr(at, "cache", {}).items():
+            if (id(at), key) in used:
+                entries[f"{qual}::{key!r}"] = _config_to_dict(cfg)
+    if not used:
+        print(f"[autotune] {_ACTIVE['model']}: this request resolved no autotuned kernel — nothing to write", flush=True)
+        return None
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    doc = {"format": FORMAT, "model_name": _ACTIVE["model"], "arch": _ACTIVE["arch"],
+           "entries": dict(sorted(entries.items()))}
+    try:
+        from neurobrix import __version__ as _v
+        doc["engine_version"] = _v
+    except Exception:
+        pass
+    import datetime as _dt
+    doc["created_at"] = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+    with open(path, "w") as f:
+        json.dump(doc, f, indent=1)
+    _ACTIVE["entries"] = entries
+    print(f"[autotune] {_ACTIVE['model']}: sweep artifact written {path} ({len(entries)} measured shape(s))", flush=True)
+    capture()            # the machine cache too — the producer's accumulation across models
+    return path

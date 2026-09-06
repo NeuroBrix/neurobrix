@@ -134,6 +134,17 @@ def _announce_first_sweep(tuned):
                 _atc.seed()
             except Exception:              # the artifact is an optimisation, never a failure source
                 pass
+        # The sweep policy (owner directive 2026-09-06): inside a model request
+        # a shape the artifact never measured is served by the nearest measured
+        # shape or refused — the sweep itself only runs under `--sweep`.
+        try:
+            key = _atc.key_of(tuned, args, kwargs)
+        except Exception:
+            key = None
+        if key is not None:
+            if key not in cache:
+                _atc.resolve_missing(tuned, key)
+            _atc.note_use(tuned, key)
         before = len(cache)
         result = original(*args, **kwargs)
         if len(cache) > before:
