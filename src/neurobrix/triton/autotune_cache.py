@@ -35,9 +35,13 @@ _DIR = os.environ.get("NEUROBRIX_REPLAY_CACHE") or os.path.join(os.path.expandus
 # The sanctioned autotune surface (Phase 1.5 doctrine: mm/bmm/addmm/
 # conv2d only) — explicit list, not a gc walk. A new autotuned kernel
 # is added here the day its autotune exception is granted. Supervisor
-# ruling 2026-08-16: NO autotuner lives outside this artifact+gate
-# regime (the one historical candidate outside it, the FlagGems
-# kernels/utils remnant, was dead code and was removed 2026-08-17).
+# ruling 2026-08-16: NO autotuner lives outside this regime (the one
+# historical candidate outside it, the FlagGems kernels/utils remnant,
+# was dead code and was removed 2026-08-17). Since the owner directive of
+# 2026-09-06 the regime is the CERTIFIED DIRECTORY (`kernels/
+# autotune_certified.py`, `config/autotune/<vendor>/<profile>/`): a shape it
+# holds is applied at load; a shape it lacks sweeps at runtime with the
+# consensus screen and lands HERE, the machine's local replay cache.
 _KERNEL_SITES = (
     ("neurobrix.kernels.ops.matmul", "matmul_kernel"),
     ("neurobrix.kernels.ops.matmul", "addmm_kernel"),
