@@ -37,6 +37,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keeps the conservative path there — a record that changes nothing no longer costs.
 
 ### Fixed
+- A device attribute in a model's graph names a kind (cpu, cuda), never a card: the index it
+  carries is the machine the model was traced on. The sequential (op-by-op) engine and the tensor
+  resolver now place such tensors on the executing card like the other engines do, so a model whose
+  trace says `cuda:1` runs pinned to any single card (chatterbox's sequential run failed with
+  "invalid device ordinal").
 - An audio-LLM request whose language model is placed on the host (granite-speech on a 16 GB card)
   no longer fails on the prompt embedding lookup: the token indices follow the embedding table's
   device.
