@@ -569,7 +569,7 @@ def sweep_one(model: str, gpu, out: Path, extra: list, timeout: int) -> dict:
     return res
 
 
-def drift_one(model: str, gpu, out: Path, extra: list, timeout: int, bound: float = 0.02) -> dict:
+def drift_one(model: str, gpu, out: Path, extra: list, timeout: int, bound: float = 0.02, src: Path = None) -> dict:
     """The drift-site lever on one model: `neurobrix drift` (the ATen oracle
     against the Triton engine, per op) on the family stimulus; the verdict is
     the first drifting op, or none."""
@@ -582,7 +582,12 @@ def drift_one(model: str, gpu, out: Path, extra: list, timeout: int, bound: floa
         env.pop("CUDA_VISIBLE_DEVICES", None)
     else:
         env["CUDA_VISIBLE_DEVICES"] = str(gpu)
-    rc, wall = run([NBX, "drift", "--model", model, "--out", str(d), "--bound", str(bound)] + req, env, d / "drift.log", timeout)
+    if src is not None:                                  # the walk runs the given tree's package
+        env = {**env, "PYTHONPATH": str(Path(src).resolve())}
+        cmd = [PY, "-c", "import sys; from neurobrix.cli import main; sys.exit(main())", "drift", "--model", model]
+    else:
+        cmd = [NBX, "drift", "--model", model]
+    rc, wall = run(cmd + ["--out", str(d), "--bound", str(bound)] + req, env, d / "drift.log", timeout)
     oracle_log = (d / "oracle.log").read_text(errors="replace") if (d / "oracle.log").exists() else ""
     triton_only = "UNSUPPORTED PATH" in oracle_log and "encoding" in oracle_log
     rep = {}
@@ -592,6 +597,7 @@ def drift_one(model: str, gpu, out: Path, extra: list, timeout: int, bound: floa
     kernel = rep.get("first_same_dtype") or {}
     res = {"model": model, "family": fam, "weight_gb": round(weight_gb(model), 2),
            "config": "machine" if gpu is None else f"pinned:{gpu}", "request": req, "lever": "drift",
+           "src": str(src) if src else None,
            "rc": rc, "wall_s": wall, "ops": rep.get("ops_a"), "matched": rep.get("matched"),
            "missing": rep.get("missing_in_b"), "over_bound": rep.get("over_bound"), "bound": bound,
            "policy_sites": rep.get("policy_sites"),
@@ -1059,7 +1065,7 @@ def main():
                       f"{('×%.2f' % res['speedup']) if res.get('speedup') else ''}", flush=True)
                 continue
             elif args.drift:
-                res = drift_one(m, gpu, out, extra, args.timeout, args.drift_bound)
+                res = drift_one(m, gpu, out, extra, args.timeout, args.drift_bound, src=Path(args.src) if args.src else None)
                 print(f"[zoo] {m}: {verdict(res)}", flush=True)
                 continue
             elif args.sweep:
