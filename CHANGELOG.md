@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   against the CUDA driver on CUDA and the Metal driver on a Mac.
 
 ### Changed
+- `neurobrix drift` classifies the origin of a drift: a kernel site (same dtype, arithmetic — the kernel to read), a policy site (the two engines' precision policies differ there), a discrete decision (an integer tensor — indices, codes, tokens — that flipped on a float deviation below the bound), or a carrier (a view, cast, slice or copy); it names the largest float deviation before the origin.
 - Next-token-diffusion speech models (VibeVoice) run their language model as a KV-cached decoder on
   both engines: one token per step per context instead of re-running the whole growing sequence,
   the classifier-free-guidance negative context kept as a second decode branch of the same

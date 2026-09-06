@@ -94,6 +94,15 @@ class DriftReport:
     #: reported apart).
     first_same_dtype: Optional[DriftSite] = None
     policy_sites: int = 0
+    #: How the FIRST over-bound op came to deviate: "kernel" (same dtype, arithmetic — read
+    #: that kernel), "policy" (the dtypes differ — the two engines' precision policies),
+    #: "discrete" (an integer tensor — indices, codes, tokens: a decision that flipped on a
+    #: float deviation below the bound, named by `float_before`), "carrier" (a view, cast,
+    #: slice or copy whose deviation is its input's), or None when nothing is over the bound.
+    origin_class: Optional[str] = None
+    #: The largest float deviation among the matched ops BEFORE the first over-bound op —
+    #: what a discrete decision or a carrier actually amplified.
+    float_before: Optional[DriftSite] = None
 
     def to_dict(self) -> Dict[str, Any]:
         def site(s: Optional[DriftSite]):
@@ -101,6 +110,7 @@ class DriftReport:
         return {"ops_a": self.ops_a, "matched": self.matched, "missing_in_b": self.missing_in_b,
                 "bound": self.bound, "over_bound": self.over_bound, "policy_sites": self.policy_sites,
                 "first": site(self.first), "first_same_dtype": site(self.first_same_dtype),
+                "origin_class": self.origin_class, "float_before": site(self.float_before),
                 "top": [site(s) for s in self.top]}
 
 
@@ -134,9 +144,29 @@ def detect(dump_a, dump_b, *, bound: float = 0.02, top: int = 12, fields=FIELDS)
     over = sum(1 for r in rows if r.rel_dev > bound)
     same = [r for r in rows if r.rel_dev > bound and _same_dtype(r.dtype_a, r.dtype_b)
             and not _carries_only(r.op_type)]
+    origin_class = None
+    float_before = None
+    if first is not None:
+        if _is_integer(first.dtype_a) or _is_integer(first.dtype_b):
+            origin_class = "discrete"
+        elif not _same_dtype(first.dtype_a, first.dtype_b):
+            origin_class = "policy"
+        elif _carries_only(first.op_type):
+            origin_class = "carrier"
+        else:
+            origin_class = "kernel"
+        before = [r for r in rows if r.index < first.index and not _is_integer(r.dtype_a) and not _is_integer(r.dtype_b)]
+        float_before = max(before, key=lambda r: r.rel_dev) if before else None
     return DriftReport(ops_a=len(order), matched=len(rows), missing_in_b=missing, bound=bound,
                        first=first, top=sorted(rows, key=lambda r: -r.rel_dev)[:top], over_bound=over,
-                       first_same_dtype=(same[0] if same else None), policy_sites=over - len(same))
+                       first_same_dtype=(same[0] if same else None), policy_sites=over - len(same),
+                       origin_class=origin_class, float_before=float_before)
+
+
+def _is_integer(dtype: Optional[str]) -> bool:
+    """`torch.int64`, `int64`, `int32`, `bool`, `long`: a tensor of indices, codes or tokens."""
+    name = str(dtype or "").replace("torch.", "").lower()
+    return name.startswith(("int", "uint", "bool", "long", "short", "byte", "char"))
 
 
 #: Ops that move or re-view a tensor without arithmetic: a cast, a view, a
@@ -173,6 +203,16 @@ def describe(report: DriftReport) -> str:
                      + ("" if _same_dtype(s.dtype_a, s.dtype_b) else "  [precision policy: the dtypes differ]"))
         lines.append(f"   oracle {s.field}: {[round(v, 5) for v in s.window_a]}")
         lines.append(f"   engine {s.field}: {[round(v, 5) for v in s.window_b]}")
+        if report.origin_class == "discrete":
+            fb = report.float_before
+            lines.append("ORIGIN: a DISCRETE decision (an integer tensor: indices, codes or tokens) — the flip came from a float "
+                         "deviation below the bound"
+                         + (f", largest before it {fb.component}/{fb.op_uid or fb.tid} ({fb.op_type}) rel_dev={fb.rel_dev:.4f} at op #{fb.index}"
+                            if fb else ""))
+        elif report.origin_class == "carrier":
+            fb = report.float_before
+            lines.append("ORIGIN: a carrier op (view/cast/slice/copy) — its deviation is its input's"
+                         + (f"; largest float deviation before it {fb.component}/{fb.op_uid or fb.tid} ({fb.op_type}) rel_dev={fb.rel_dev:.4f}" if fb else ""))
         k = report.first_same_dtype
         if k is None:
             lines.append(f"no KERNEL drift site: every over-bound op ({report.policy_sites}) carries different "

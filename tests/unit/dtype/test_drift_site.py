@@ -62,3 +62,31 @@ def test_a_dtype_disagreement_is_a_policy_site_not_a_kernel_site(tmp_path):
     assert rep.first.op_uid == "aten.mm::0" and rep.policy_sites == 1
     assert rep.first_same_dtype.op_uid == "aten.add::0"
     assert "KERNEL DRIFT SITE model/aten.add::0" in drift.describe(rep)
+
+
+def test_an_integer_origin_is_a_discrete_decision_named_with_the_float_deviation_before_it(tmp_path):
+    """openaudio-s1-mini, 2026-09-06: the first over-bound op was a slice of int64 codes in the
+    quantizer (rel_dev 0.34) while every float op before it stayed under 0.01 — a code that
+    flipped on a sub-bound distance, not a kernel to read. The report says so and names the
+    largest float deviation before the flip."""
+    a = tmp_path / "a.jsonl"; b = tmp_path / "b.jsonl"
+    rows_a = [{"component": "q", "tid": "aten.mm::0::out_0", "op_uid": "aten.mm::0", "op_type": "aten::mm", "dtype": "torch.float16", "shape": [4], "head10": [1.0, 2.0, 3.0, 4.0], "l2_norm": 5.477},
+              {"component": "q", "tid": "aten.argmin::0::out_0", "op_uid": "aten.argmin::0", "op_type": "aten::argmin", "dtype": "torch.int64", "shape": [4], "head10": [3, 1, 2, 0], "l2_norm": 3.74}]
+    rows_b = [{"component": "q", "tid": "aten.mm::0::out_0", "op_uid": "aten.mm::0", "op_type": "aten::mm", "dtype": "fp16", "shape": [4], "head10": [1.005, 2.0, 3.0, 4.0], "l2_norm": 5.478},
+              {"component": "q", "tid": "aten.argmin::0::out_0", "op_uid": "aten.argmin::0", "op_type": "aten::argmin", "dtype": "int64", "shape": [4], "head10": [3, 2, 2, 0], "l2_norm": 4.12}]
+    a.write_text("\n".join(json.dumps(r) for r in rows_a) + "\n"); b.write_text("\n".join(json.dumps(r) for r in rows_b) + "\n")
+    rep = drift.detect(str(a), str(b), bound=0.02)
+    assert rep.first.op_uid == "aten.argmin::0" and rep.origin_class == "discrete"
+    assert rep.float_before is not None and rep.float_before.op_uid == "aten.mm::0" and rep.float_before.rel_dev < 0.02
+    assert "DISCRETE" in drift.describe(rep)
+    d = rep.to_dict()
+    assert d["origin_class"] == "discrete" and d["float_before"]["op_uid"] == "aten.mm::0"
+
+
+def test_a_same_dtype_arithmetic_origin_is_a_kernel_site(tmp_path):
+    a = tmp_path / "a.jsonl"; b = tmp_path / "b.jsonl"
+    ra = {"component": "e", "tid": "aten.glu::0::out_0", "op_uid": "aten.glu::0", "op_type": "aten::glu", "dtype": "torch.float16", "shape": [4], "head10": [1.0, 2.0, 3.0, 4.0], "l2_norm": 5.477}
+    rb = {**ra, "dtype": "fp16", "head10": [1.1, 2.0, 3.0, 4.0], "l2_norm": 5.5}
+    a.write_text(json.dumps(ra) + "\n"); b.write_text(json.dumps(rb) + "\n")
+    rep = drift.detect(str(a), str(b), bound=0.02)
+    assert rep.origin_class == "kernel" and rep.first_same_dtype.op_uid == "aten.glu::0" and rep.float_before is None
