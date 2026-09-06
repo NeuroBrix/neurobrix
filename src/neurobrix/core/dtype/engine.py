@@ -216,6 +216,42 @@ CPU_NO_HALF_OPS: FrozenSet[str] = frozenset({
 })
 
 
+def cpu_fp32_wrapper(func):
+    """Run `func` in fp32 when its tensor inputs are on the HOST, untouched
+    otherwise — the remedy for `CPU_NO_HALF_OPS`, shared by the compiled
+    engine (`DtypeEngine.wrap`) and the ATen oracle (`NativeATenDispatcher`):
+    the hardware contract is one rule with one owner.
+
+    Not a blanket upcast: the same op in the same model runs fp16 happily on
+    CUDA, and forcing fp32 there would cost throughput to work around a
+    limitation that is not present. The decision is per CALL because a Prism
+    plan can place one component on the host and the next on a GPU.
+    """
+    def wrapper(*args, **kwargs):
+        on_host = any(isinstance(a, torch.Tensor) and a.device.type == "cpu"
+                      and a.is_floating_point() and a.dtype != torch.float32
+                      for a in args)
+        if not on_host:
+            return func(*args, **kwargs)
+        cast = [a.float() if isinstance(a, torch.Tensor)
+                and a.is_floating_point() and a.dtype != torch.float32
+                else a for a in args]
+        out = func(*cast, **kwargs)
+        # Hand the result back in the dtype the graph expects, so the op is
+        # invisible to everything downstream.
+        src = next((a.dtype for a in args if isinstance(a, torch.Tensor)
+                    and a.is_floating_point()), None)
+        if src is None or src == torch.float32:
+            return out
+        if isinstance(out, torch.Tensor):
+            return out.to(src)
+        if isinstance(out, (tuple, list)):
+            return type(out)(o.to(src) if isinstance(o, torch.Tensor)
+                             and o.is_floating_point() else o for o in out)
+        return out
+    return wrapper
+
+
 # Ops that MUST run in float32 for numerical stability.
 # Combines AT_FORALL_FP32 + AT_FORALL_FP32_SET_OPT_DTYPE.
 # Output stays in fp32 — downstream FP16 ops bring it back to compute_dtype.
@@ -613,36 +649,9 @@ class DtypeEngine:
         return safe_softmax
 
     def _make_cpu_fp32_wrapper(self, func):
-        """Run in fp32 when the inputs are on the HOST, untouched otherwise.
-
-        Not a blanket upcast: the same op in the same model runs fp16 happily
-        on CUDA, and forcing fp32 there would cost throughput to work around a
-        limitation that is not present. The decision is per CALL because a
-        Prism plan can place one component on the host and the next on a GPU.
-        """
-        def wrapper(*args, **kwargs):
-            on_host = any(isinstance(a, torch.Tensor) and a.device.type == "cpu"
-                          and a.is_floating_point() and a.dtype != torch.float32
-                          for a in args)
-            if not on_host:
-                return func(*args, **kwargs)
-            cast = [a.float() if isinstance(a, torch.Tensor)
-                    and a.is_floating_point() and a.dtype != torch.float32
-                    else a for a in args]
-            out = func(*cast, **kwargs)
-            # Hand the result back in the dtype the graph expects, so the op is
-            # invisible to everything downstream.
-            src = next((a.dtype for a in args if isinstance(a, torch.Tensor)
-                        and a.is_floating_point()), None)
-            if src is None or src == torch.float32:
-                return out
-            if isinstance(out, torch.Tensor):
-                return out.to(src)
-            if isinstance(out, (tuple, list)):
-                return type(out)(o.to(src) if isinstance(o, torch.Tensor)
-                                 and o.is_floating_point() else o for o in out)
-            return out
-        return wrapper
+        """The host-precision remedy (`cpu_fp32_wrapper`), reached from the
+        per-op wrapper chain when the op is in `CPU_NO_HALF_OPS`."""
+        return cpu_fp32_wrapper(func)
 
     def _make_fp32_wrapper(self, func: Callable) -> Callable:
         """

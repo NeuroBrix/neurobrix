@@ -15,6 +15,7 @@ import logging
 from typing import List, Any, Dict, Optional, Callable
 
 from neurobrix.core.dtype.config import parse_dtype
+from neurobrix.core.dtype.engine import CPU_NO_HALF_OPS, cpu_fp32_wrapper
 
 logger = logging.getLogger(__name__)
 
@@ -557,6 +558,14 @@ class NativeATenDispatcher:
             from neurobrix.core.dtype.engine import clamp_creation_fill_args
             inputs, kwargs = clamp_creation_fill_args(
                 base_name, list(inputs), kwargs)
+
+            # Host-placed compute: the CPU backend refuses fp16 for the ops in
+            # the DtypeEngine's measured set. The oracle runs the graph's
+            # recorded dtypes everywhere else, but a component Prism placed on
+            # the host must still execute — the same per-call, per-device
+            # remedy the compiled engine applies (CUDA inputs pass through).
+            if base_name in CPU_NO_HALF_OPS:
+                op_fn = cpu_fp32_wrapper(op_fn)
 
             if kwargs:
                 result = op_fn(*inputs, **kwargs)

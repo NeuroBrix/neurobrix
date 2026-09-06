@@ -103,3 +103,27 @@ def test_the_result_comes_back_in_the_graphs_dtype():
     wrapped = DtypeEngine._make_cpu_fp32_wrapper(engine, lambda x: x * 2)
     out = wrapped(torch.ones(2, 2, dtype=torch.float16))
     assert out.dtype == torch.float16
+
+
+@pytest.mark.parametrize("op_name", sorted(CPU_NO_HALF_OPS))
+def test_the_sequential_oracle_honours_the_set(op_name):
+    """The ATen oracle (`--sequential`) dispatches the graph's ops directly,
+    without the compiled engine's per-op wrappers — so a host-placed component
+    reached the CPU backend in fp16 and the oracle died where the compiled
+    engine had already learned to upcast (Kokoro-82M's decoder under
+    `lazy_sequential` on a 16 GB card, the drift table of 2026-09-06). The
+    hardware contract is one rule with one owner; both engines apply it."""
+    from neurobrix.core.runtime.graph.sequential_dispatcher import NativeATenDispatcher
+
+    d = NativeATenDispatcher(device="cpu")
+    if op_name == "_weight_norm_interface":
+        v = torch.randn(4, 4, dtype=torch.float16)
+        g = torch.randn(4, 1, dtype=torch.float16)
+        out = d.dispatch("aten::_weight_norm_interface", [v, g, 0], {"kwargs": {}})
+        assert out[0].dtype == torch.float16 and out[0].device.type == "cpu"
+    elif op_name == "reflection_pad1d":
+        x = torch.randn(1, 4, 16, dtype=torch.float16)
+        out = d.dispatch("aten::reflection_pad1d", [x, [2, 2]], {"kwargs": {}})
+        assert out.dtype == torch.float16 and out.shape[-1] == 20
+    else:
+        raise AssertionError(f"no oracle probe for '{op_name}'")
