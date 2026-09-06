@@ -40,6 +40,7 @@ from __future__ import annotations
 import ctypes
 import ctypes.util
 import re
+import struct
 import threading
 from typing import Dict, List, Optional, Tuple
 
@@ -403,6 +404,116 @@ class MetalKernel:
     def msl(self) -> str:
         return self._msl
 
+    def launch_params(self, grid, block, params, stream: int = 0) -> None:
+        """The engine launcher's entry: `(kind, value)` pairs in signature
+        order, and the block the driver chose from the compiled metadata.
+
+        `block` is the size the DRIVER read from the compiled metadata, and
+        it is the one dispatched. The emitted MSL was built for exactly one
+        threadgroup size and dispatching it at another is wrong results
+        rather than a performance choice, so there is one source for it —
+        the metadata of the compilation that produced this binary — and this
+        object does not compute a second opinion. (`self.block_size` remains
+        as the fallback for the direct `compile_kernel` callers, which have
+        no launcher above them.)
+
+        Metal's own limits are checked, because they are the ones that turn
+        a bad size into a dispatch failure rather than a wrong answer.
+        """
+        import Metal
+        import objc
+
+        want = int(block[0]) if isinstance(block, (tuple, list)) else int(block)
+        want = want or self.block_size
+        if want <= 0 or want % 32 or want > 1024:
+            raise MetalKernelError(
+                f"{self.name}: a threadgroup of {want} threads is not "
+                f"dispatchable (must be a positive multiple of 32, at most "
+                f"1024)")
+
+        with objc.autorelease_pool():
+            self._dispatch_params(Metal, grid, params, stream, want)
+
+    def _dispatch_params(self, Metal, grid, params, stream: int,
+                         threads: int) -> None:
+        runtime = self._runtime
+        encoder_queue = runtime._resolve_queue(int(stream or 0))
+        if encoder_queue is None:
+            raise MetalKernelError(
+                f"{self.name}: stream handle {stream!r} is not one the "
+                f"allocator handed out")
+        if len(params) != len(self._msl_binding):
+            raise MetalKernelError(
+                f"{self.name} binds {len(self._msl_binding)} arguments, "
+                f"{len(params)} given")
+
+        command_buffer = encoder_queue.commandBuffer()
+        encoder = command_buffer.computeCommandEncoder()
+        try:
+            encoder.setComputePipelineState_(self._pipeline)
+            for (index, pname, mtype, emitted_pointer), (kind, value) in zip(
+                    self._msl_binding, params):
+                if kind == "ptr":
+                    buffer, offset = runtime.buffer_for_pointer(int(value))
+                    if buffer is None:
+                        raise MetalKernelError(
+                            f"{self.name} argument {pname!r} is address "
+                            f"{int(value):#x}, which the Metal allocator did "
+                            f"not hand out. Every device buffer must come "
+                            f"from NBXTensor / DeviceAllocator.")
+                    encoder.setBuffer_offset_atIndex_(buffer, offset, index)
+                elif emitted_pointer:
+                    # A scalar the emitted kernel reads THROUGH a pointer.
+                    buffer, offset = self._scalar_buffer_bits(index, value)
+                    encoder.setBuffer_offset_atIndex_(buffer, offset, index)
+                else:
+                    encoder.setBytes_length_atIndex_(
+                        _pack_bits(kind, value), 4, index)
+
+            groups = tuple(grid) if isinstance(grid, (tuple, list)) else (grid,)
+            groups = (groups + (1, 1))[:3]
+            encoder.dispatchThreadgroups_threadsPerThreadgroup_(
+                Metal.MTLSizeMake(int(groups[0]), int(groups[1]), int(groups[2])),
+                Metal.MTLSizeMake(int(threads), 1, 1))
+            encoder.endEncoding()
+            command_buffer.commit()
+            command_buffer.waitUntilCompleted()
+        except BaseException:
+            # A command buffer holds its queue's in-flight slot until it
+            # COMPLETES; one abandoned mid-encode never does, and after 64 the
+            # queue blocks forever. Close the encoder (Metal aborts the
+            # process on a commit with one open) and commit it empty.
+            try:
+                encoder.endEncoding()
+            except Exception:                           # pragma: no cover
+                pass
+            try:
+                command_buffer.commit()
+            except Exception:                           # pragma: no cover
+                pass
+            raise
+        error = command_buffer.error()
+        if error is not None:
+            raise MetalKernelError(f"{self.name} dispatch failed: {error}")
+
+    def _scalar_buffer_bits(self, index: int, value):
+        """A device buffer holding one already-packed scalar."""
+        from ..kernels.nbx_tensor import DeviceAllocator
+
+        address = self._scalar_buffers.get(index)
+        if address is None:
+            address = DeviceAllocator.malloc_cuda(4)
+            self._scalar_buffers[index] = address
+        payload = struct.pack("<I", int(value) & 0xFFFFFFFF)
+        host = (ctypes.c_char * 4).from_buffer_copy(payload)
+        DeviceAllocator.memcpy(address, ctypes.addressof(host), 4, kind=1)
+        buffer, offset = self._runtime.buffer_for_pointer(address)
+        if buffer is None:                              # pragma: no cover
+            raise MetalKernelError(
+                f"{self.name}: the allocator does not recognise the scalar "
+                f"buffer it just handed out for slot {index}")
+        return buffer, offset
+
     def _scalar_buffer(self, index: int, value, mtype: str):
         """A device buffer holding one scalar the kernel reads by pointer.
 
@@ -543,6 +654,26 @@ class MetalKernel:
             raise MetalKernelError(f"{self.name} dispatch failed: {error}")
 
 
+#: The launcher hands scalars as (kind, integer) with floats already reduced
+#: to their IEEE bit pattern — `bits16` / `bits32` / `bits64` — so nothing
+#: here re-derives a type from a Python value.
+def _pack_bits(kind: str, value) -> bytes:
+    """Four bytes for one scalar slot, from the launcher's kind."""
+    if kind in ("bits16", "bits32", "i8", "i16", "i32", "u8", "u16", "u32",
+                "i1", "u1"):
+        return struct.pack("<I", int(value) & 0xFFFFFFFF)
+    if kind in ("i64", "u64", "bits64"):
+        # Metal kernels emitted from Triton take 32-bit scalar slots; a value
+        # that does not fit is a silent truncation, so it is refused.
+        packed = int(value)
+        if not (-(2 ** 31) <= packed < 2 ** 32):
+            raise MetalKernelError(
+                f"a 64-bit scalar ({packed}) does not fit the 32-bit slot the "
+                f"emitted MSL declares; refusing rather than truncating")
+        return struct.pack("<I", packed & 0xFFFFFFFF)
+    raise MetalKernelError(f"unsupported scalar kind {kind!r}")
+
+
 _INT_TYPES = {"int", "uint", "int32_t", "uint32_t", "short", "ushort", "char"}
 
 
@@ -618,20 +749,88 @@ def clear_cache() -> None:
 # The launcher contract, implemented
 # ---------------------------------------------------------------------------
 
-class MetalDriver:
-    """Metal, behind `launcher_contract.LauncherDriver`.
+class _Metadata:
+    """The two fields `load` needs from a compiled kernel, for the callers
+    that have the artifact but not Triton's metadata object."""
 
-    The first implementation of that contract, and deliberately thin: every
-    method below is either the compile path above or a call the allocator
-    already owns. A CUDA implementation is the same class over
-    `DeviceAllocator`'s cuda entry points, which is the point of writing the
-    contract down rather than letting the launcher learn Metal's habits.
+    __slots__ = ("name", "shared", "block_size", "num_warps")
+
+    def __init__(self, name, shared, block_size=0, num_warps=4):
+        self.name = name
+        self.shared = int(shared or 0)
+        self.block_size = int(block_size or 0)
+        self.num_warps = int(num_warps)
+
+class MetalDriver:
+    """Metal behind the engine's one launcher (`kernels/launcher.py`).
+
+    The launcher compiles — Triton's own compiler, torch-free, with the
+    target this driver names — and this loads the result and launches it.
+    That division is the launcher's, not Metal's: `load`, `launch`,
+    `block_for`, `target`, `artifact_kind` and `wants_scratch_params` are the
+    whole vendor surface, and the CUDA driver in the launcher implements the
+    same six.
+
+    The ordering calls below (streams, events) are the allocator's on every
+    backend and are here only because the contract checker exercises them
+    through a driver handle.
     """
 
     backend = "metal"
 
+    # Not a subclass of `launcher.Driver`: the launcher resolves its driver
+    # from THIS module, so inheriting would be an import cycle, and it
+    # duck-types the six members below anyway. The contract is the six, not
+    # the base class — which is what makes it implementable from anywhere.
+
+    #: Triton's Metal backend emits MSL; there is no cubin to load.
+    artifact_kind = "msl"
+
+    #: Metal's dispatch takes the kernel's own arguments and nothing else.
+    #: The two trailing scratch pointers of Triton's CUDA ABI would be two
+    #: extra buffer bindings the emitted kernel does not declare, and the
+    #: length check in `MetalKernel.launch` would refuse the launch.
+    wants_scratch_params = False
+
+    def target(self):
+        return metal_target()
+
+    def block_for(self, metadata):
+        """The threadgroup size the EMITTED kernel was built for.
+
+        Not `num_warps * 32`. triton-msl records the MSL's own threadgroup
+        size separately precisely because the C++ path can overwrite
+        `metadata.block_size` with a value meant for its host metallib, and
+        launching MSL at that other size is silently wrong results rather
+        than an error.
+        """
+        size = int(getattr(metadata, "block_size", 0)
+                   or getattr(metadata, "num_warps", 4) * 32)
+        return (size, 1, 1)
+
+    def load(self, binary, name: str, shared: int):
+        """Compile the MSL to a pipeline and return the launchable handle."""
+        msl = binary.decode("utf-8") if isinstance(binary, bytes) else binary
+        return kernel_from_msl(msl, _Metadata(name, shared))
+
+    def launch(self, function, grid, block, shared: int, stream: int,
+               params) -> None:
+        """Dispatch a loaded kernel. `params` is the launcher's list of
+        `(kind, value)` pairs, in the compiled signature's order.
+
+        The KIND is what makes this correct rather than lucky. Metal declares
+        some kernels' scalars as `device int* M_buf` and reads them through a
+        pointer, and an `int` 128 is indistinguishable from a device address
+        0x80 at the call site — so the binding is decided from the kind the
+        signature gave (`"ptr"` versus a scalar kind) and the slot the
+        emitter declared, never from the value.
+        """
+        function.launch_params(grid, block, params, stream)
+
     def compile(self, jit_fn, signature, constexprs, num_warps: int = 4,
                 specialization=None, num_stages=None):
+        """The whole path in one call, for tools that have no launcher around
+        them (the compile census, the first-light harness, the R33 proof)."""
         return compile_kernel(jit_fn, signature, constexprs, num_warps,
                               specialization, num_stages)
 
