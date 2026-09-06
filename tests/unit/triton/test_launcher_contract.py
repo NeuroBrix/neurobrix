@@ -37,9 +37,12 @@ def _metal_driver():
 
 
 def _cuda_driver():
-    """The CUDA implementation (`neurobrix.kernels.launcher.driver`), or None
-    where there is no CUDA device. The whole file runs against it with no
-    other change — which is the property the contract is for."""
+    """Placeholder for the CUDA implementation.
+
+    Returns None until it exists. When it does, this returns it and the whole
+    file runs against CUDA with no other change — which is the property the
+    contract is for.
+    """
     try:
         from neurobrix.kernels import nbx_tensor
         if nbx_tensor._detect_gpu_backend() != "cuda":

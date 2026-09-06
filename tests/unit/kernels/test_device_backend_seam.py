@@ -113,9 +113,7 @@ def test_no_other_module_reaches_the_device_runtime_directly():
 def test_declared_backends_have_identical_contracts():
     """A key in `cuda` but not in `hip` is a crash on AMD alone."""
     backends = nbx_tensor._GPU_BACKENDS
-    # metal (Metal chantier, 2026-09-05) is probed by opening the device; its
-    # runtime table is the Metal allocator's and arrives with that tree.
-    assert set(backends) == {"metal", "cuda", "hip"}
+    assert set(backends) == {"cuda", "hip"}
     cuda, hip = set(backends["cuda"]), set(backends["hip"])
     assert cuda == hip, (
         f"backend contracts differ — only in cuda: {sorted(cuda - hip)}; "
@@ -134,11 +132,6 @@ def test_the_contract_covers_what_a_port_must_provide():
         "malloc_host", "free_host",
     }
     for name, table in nbx_tensor._GPU_BACKENDS.items():
-        if not table.get("rt_libs"):
-            # A probe-backed entry (Metal): the device is opened by its probe
-            # and its runtime table comes with its allocator.
-            assert callable(table.get("probe")), f"backend {name!r} declares neither rt_libs nor a probe"
-            continue
         missing = required - set(table)
         assert not missing, f"backend {name!r} does not declare {sorted(missing)}"
 
