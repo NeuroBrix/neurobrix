@@ -45,14 +45,32 @@ class _Driver:
 
 
 def _budget_for(arch):
-    """Resolve the budget as if the driver reported `arch`."""
-    import triton.runtime.driver as driver_module
-    saved = driver_module.__dict__.get("_active")
-    driver_module._active = _Driver(arch)
+    """Resolve the budget as if the engine's target reported `arch`.
+
+    It used to fake `triton.runtime.driver._active`, which is what the engine
+    asked when this test was written. It does not any more: since the
+    launcher converged, the arch comes from `launcher.target()` — the
+    hardware profile, never a driver probe, because the probe imports torch
+    (R33). Faking the driver therefore controlled nothing and every case
+    resolved to whatever the real machine is.
+
+    The cached target and the recorded profile are both cleared, because a
+    stale one of either would leak the previous parameter's answer into this
+    one.
+    """
+    from triton.backends.compiler import GPUTarget
+
+    from neurobrix.kernels import launcher
+    from neurobrix.kernels.ops import _configs
+
+    saved = launcher._TARGET
+    launcher._TARGET = GPUTarget("cuda", arch, 32)
+    _configs._ACTIVE_PROFILE.clear()
     try:
         return arch_smem_budget()
     finally:
-        driver_module._active = saved
+        launcher._TARGET = saved
+        _configs._ACTIVE_PROFILE.clear()
 
 
 # Captured from the resolver BEFORE `compute_capability_matches` existed.
