@@ -101,7 +101,13 @@ def _torch_importers(root: Path = KERNELS) -> dict[str, list[int]]:
 # The triton branch: a pin per file, and the pinned set is EMPTY. Any file
 # listed here would be a file the owner's 2026-09-05 rule forbids outright.
 TRITON_ALLOWED: dict[str, str] = {}
-METAL_FILES = ("metal_backend.py",)
+# The Metal port's own files, each pinned by name so that moving or renaming
+# one is a test failure rather than a silent hole in the gate. `metal_driver`
+# is the compile-and-dispatch path this machine actually runs; `metal_device`
+# lives under kernels/ and is covered by the kernels scan, and is named in
+# METAL_ALLOCATOR_FILES below for the same reason.
+METAL_FILES = ("metal_backend.py", "metal_driver.py", "launcher_contract.py")
+METAL_ALLOCATOR_FILES = ("metal_device.py",)
 
 
 def test_no_torch_import_anywhere_under_triton():
@@ -122,6 +128,22 @@ def test_the_metal_files_exist_and_carry_no_torch(filename):
     path = TRITON / filename
     assert path.exists(), f"{filename} is not where the gate expects it — update METAL_FILES"
     assert filename not in _torch_importers(TRITON)
+
+
+@pytest.mark.parametrize("filename", METAL_ALLOCATOR_FILES)
+def test_the_metal_allocator_files_exist_and_carry_no_torch(filename):
+    """The allocator half of the Metal port, under kernels/.
+
+    Named rather than left to the directory scan for the same reason as
+    METAL_FILES: a rename must fail the gate, not quietly stop covering the
+    file. The Metal allocator is the one place a missing capability would be
+    most tempting to borrow from torch, which is exactly why R33 names it.
+    """
+    path = KERNELS / filename
+    assert path.exists(), (
+        f"{filename} is not where the gate expects it — update "
+        f"METAL_ALLOCATOR_FILES")
+    assert filename not in _torch_importers(KERNELS)
 
 
 def test_the_gate_is_seen_failing_on_an_injected_import(tmp_path):
@@ -147,6 +169,22 @@ def test_the_runtime_probe_is_seen_failing_on_an_injected_import():
         [sys.executable, "-c", "import sys, torch; print('torch' in sys.modules)"],
         capture_output=True, text=True, env={"PATH": "/usr/bin:/bin"}, timeout=120)
     assert out.returncode == 0 and out.stdout.strip() == "True", out.stderr[-300:]
+
+
+def test_the_gate_covers_the_dispatch_layer():
+    """R33 names the dispatch layer explicitly, because that is where the
+    vendor-agnostic launcher that replaced Triton's `kernel[grid]` lives.
+
+    A perimeter that stopped at the files of the day it was written would
+    have let the launcher land outside it on the day it was written, which is
+    exactly the day it mattered.
+    """
+    scanned = {q.resolve() for root in (KERNELS, TRITON) for q in root.rglob("*.py")}
+    for required in (KERNELS / "dispatch.py", KERNELS / "wrappers.py",
+                     KERNELS / "nbx_tensor.py", KERNELS / "launcher.py",
+                     KERNELS / "metal_device.py", TRITON / "metal_driver.py"):
+        assert required.resolve() in scanned, (
+            f"{required.name} is not inside the R33 scan perimeter")
 
 
 def test_no_unlisted_torch_import_under_kernels():

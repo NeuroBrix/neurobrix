@@ -282,23 +282,7 @@ def _get_tl_dtype(nbx_dtype: NBXDtype):
 # ============================================================================
 
 # Runtime API mapping per backend
-def _metal_probe() -> bool:
-    """True when a Metal device opens (the Metal chantier's `metal_device`,
-    absent from a tree without it — then False at no cost). Requires unified
-    memory, so an Intel Mac with a discrete card declines it and the table
-    walk continues to the runtime libraries."""
-    try:
-        from .metal_device import metal_device_available
-    except ImportError:
-        return False
-    return bool(metal_device_available())
-
-
 _GPU_BACKENDS = {
-    # Probed FIRST (Metal chantier, 2026-09-05): a Metal box has no vendor
-    # runtime library to load; its probe opens the device. The runtime
-    # function table of this entry is the Metal allocator's (the Mac's tree).
-    "metal": {"probe": _metal_probe, "rt_libs": []},
     "cuda": {
         "rt_libs": ["libcudart.so", "libcudart.so.12", "libcudart.so.11.0"],
         "malloc": "cudaMalloc", "free": "cudaFree",
@@ -448,8 +432,8 @@ class DeviceAllocator:
     _cuda_live_bytes: Dict[int, int] = {}            # device_idx -> live
     _cuda_peak_bytes: Dict[int, int] = {}            # device_idx -> peak
     _cuda_ptr_size: Dict[int, int] = {}              # ptr -> nbytes (for free accounting)
-    _alloc_version: int = 0                          # bumped at every registration change (holds())
-    _ranges_cache: tuple = (-1, (), ())              # (version, sorted bases, sizes)
+    _range_bases: list = []                          # live allocation bases, sorted (holds())
+    _range_size: dict = {}                           # base -> bytes, mirrors the two size tables
     _cuda_ptr_device: Dict[int, int] = {}            # ptr -> device_idx (REQUIRED for cudaFreeAsync correctness)
     _host_pinned_live_bytes: int = 0
     _host_pinned_peak_bytes: int = 0
@@ -672,7 +656,7 @@ class DeviceAllocator:
                 # Caller stores `sz` (the actual alloc) in _pool_alloc_size
                 # so free() returns the correct size to the pool.
                 DeviceAllocator._pool_alloc_size[ptr] = sz
-                DeviceAllocator._alloc_version += 1
+                DeviceAllocator._range_add(ptr, sz)
                 st["fit"] += 1
                 slack = sz - nbytes
                 st["slack_total"] += slack
@@ -732,7 +716,7 @@ class DeviceAllocator:
                 getattr(rt, backend["free"])(ctypes.c_void_p(p))
                 DeviceAllocator._pool_alloc_size.pop(p, None)
                 DeviceAllocator._cuda_ptr_size.pop(p, None)
-                DeviceAllocator._alloc_version += 1
+                DeviceAllocator._range_del(p)
                 DeviceAllocator._cuda_ptr_device.pop(p, None)
                 live = DeviceAllocator._cuda_live_bytes.get(dev, 0) - sz
                 DeviceAllocator._cuda_live_bytes[dev] = max(0, live)
@@ -767,7 +751,7 @@ class DeviceAllocator:
                     getattr(rt, backend["free"])(ctypes.c_void_p(p))
                     DeviceAllocator._pool_alloc_size.pop(p, None)
                     DeviceAllocator._cuda_ptr_size.pop(p, None)
-                    DeviceAllocator._alloc_version += 1
+                    DeviceAllocator._range_del(p)
                     DeviceAllocator._cuda_ptr_device.pop(p, None)
                     live = DeviceAllocator._cuda_live_bytes.get(d, 0) - sz
                     DeviceAllocator._cuda_live_bytes[d] = max(0, live)
@@ -824,7 +808,7 @@ class DeviceAllocator:
                 # populated _pool_alloc_size with the bigger size.
                 actual = DeviceAllocator._pool_alloc_size.pop(ptr, nbytes)
                 DeviceAllocator._cuda_ptr_size[ptr] = actual
-                DeviceAllocator._alloc_version += 1
+                DeviceAllocator._range_add(ptr, actual)
                 DeviceAllocator._cuda_ptr_device[ptr] = dev
                 if _MALLOC_TRACE_FILE is not None:
                     _record_malloc_site(ptr, actual, dev)
@@ -915,7 +899,7 @@ class DeviceAllocator:
                 f"driver_total={driver_total/1024/1024:.0f}MB]")
         p = ptr_obj.value or 0
         DeviceAllocator._cuda_ptr_size[p] = nbytes
-        DeviceAllocator._alloc_version += 1
+        DeviceAllocator._range_add(p, nbytes)
         DeviceAllocator._cuda_ptr_device[p] = dev
         live = DeviceAllocator._cuda_live_bytes.get(dev, 0) + nbytes
         DeviceAllocator._cuda_live_bytes[dev] = live
@@ -993,7 +977,7 @@ class DeviceAllocator:
                   f"dev={alloc_dev} — sticky async error surfaced at "
                   f"this free; the fault is at or before it.", flush=True)
         nbytes = DeviceAllocator._cuda_ptr_size.pop(ptr, None)
-        DeviceAllocator._alloc_version += 1
+        DeviceAllocator._range_del(ptr)
         if _MALLOC_TRACE_FILE is not None and nbytes is not None:
             _record_free_site(ptr, nbytes)
         if nbytes is not None:
@@ -1312,16 +1296,31 @@ class DeviceAllocator:
         O(log n): the live ranges are re-sorted only when a registration
         changed since the last call."""
         ptr = int(ptr)
-        if ptr in DeviceAllocator._cuda_ptr_size or ptr in DeviceAllocator._pool_alloc_size:
+        size = DeviceAllocator._range_size.get(ptr)
+        if size is not None:
             return True
-        version, bases, sizes = DeviceAllocator._ranges_cache
-        if version != DeviceAllocator._alloc_version:
-            ranges = sorted({**DeviceAllocator._pool_alloc_size, **DeviceAllocator._cuda_ptr_size}.items())
-            bases = tuple(b for b, _ in ranges); sizes = tuple(n for _, n in ranges)
-            DeviceAllocator._ranges_cache = (DeviceAllocator._alloc_version, bases, sizes)
         import bisect
+        bases = DeviceAllocator._range_bases
         i = bisect.bisect_right(bases, ptr) - 1
-        return i >= 0 and bases[i] <= ptr < bases[i] + sizes[i]
+        return i >= 0 and bases[i] <= ptr < bases[i] + DeviceAllocator._range_size[bases[i]]
+
+    @staticmethod
+    def _range_add(base: int, nbytes: int) -> None:
+        """Register a live range for `holds()` — O(log n) insert, kept sorted
+        so a launch pays one bisect and never a re-sort."""
+        if base not in DeviceAllocator._range_size:
+            import bisect
+            bisect.insort(DeviceAllocator._range_bases, base)
+        DeviceAllocator._range_size[base] = int(nbytes)
+
+    @staticmethod
+    def _range_del(base: int) -> None:
+        if DeviceAllocator._range_size.pop(base, None) is not None:
+            import bisect
+            bases = DeviceAllocator._range_bases
+            i = bisect.bisect_left(bases, base)
+            if i < len(bases) and bases[i] == base:
+                bases.pop(i)
 
     @staticmethod
     def device_synchronize(device_idx: Optional[int] = None):
@@ -1645,7 +1644,27 @@ class DeviceAllocator:
         #    backend probes import torch — R33, universal since 2026-09-05).
         if os.environ.get("NBX_LAUNCHER", "nbx").lower() == "triton":
             import triton.runtime.driver
-            triton.runtime.driver.active.set_current_device(device_idx)
+            active = triton.runtime.driver.active
+            # A single-device backend has nothing to set and need not
+            # implement the setter: triton-msl's MetalDriver provides
+            # `get_current_device` and no `set_current_device` (measured
+            # 2026-09-05), and this arm is exactly how the Metal A/B is run.
+            # Falling through would raise AttributeError at the first launch;
+            # assuming it worked would risk launching on a device nobody
+            # selected. So the absence is handled by VERIFYING instead.
+            set_current = getattr(active, "set_current_device", None)
+            if set_current is not None:
+                set_current(device_idx)
+            else:
+                current = active.get_current_device()
+                if current != device_idx:
+                    raise RuntimeError(
+                        f"Triton backend "
+                        f"{active.get_current_target().backend!r} exposes no "
+                        f"set_current_device and reports device {current}, "
+                        f"but device {device_idx} was requested. The kernel "
+                        f"would launch on the wrong device, so this refuses "
+                        f"instead.")
         # Cache only after BOTH calls succeeded (this thread's state).
         _DEVICE_CACHE.idx = device_idx
 
@@ -1665,64 +1684,126 @@ def _set_device(t):
         DeviceAllocator.ensure_triton_device(t._device_idx)
 
 
-@functools.lru_cache(maxsize=1)
 def _pin_triton_backend(name: str) -> str:
     """Tell Triton which backend is here, then return the name.
 
-    R33, on every backend: asking `triton.runtime.driver.active` anything
-    makes Triton call `is_active()` on EVERY registered backend to find the
-    live one, and upstream's AMD probe runs `import torch` inside its own —
-    a CUDA box with no AMD card pays a torch import the moment any module
-    asks the driver a question. `TRITON_DEFAULT_BACKEND` makes Triton's
-    `_create_driver` select the named backend directly and probe nothing
-    else; we know the answer here without importing anything, so we say so.
-    `setdefault`: an explicit choice by the user or a test outranks ours.
-    (Ported from the Metal chantier, metal-first-light, 2026-09-05.)"""
+    R33, and it applies on every backend, not just Apple. Asking
+    `triton.runtime.driver.active` for anything makes Triton call
+    `is_active()` on EVERY registered backend to find the live one, and
+    upstream's AMD probe runs `import torch` inside its own — so a CUDA box
+    with no AMD card pays a torch import the moment any module asks the
+    driver a question. `kernels/ops/matmul.py` asks one at import time, which
+    is how it reached us.
+
+    `TRITON_DEFAULT_BACKEND` makes `_create_driver` select the named backend
+    directly and probe nothing else. We already know the answer here — this
+    function found it without importing anything — so we say so. `setdefault`,
+    because an explicit choice by the user or a test outranks ours.
+    """
     os.environ.setdefault("TRITON_DEFAULT_BACKEND", name)
     return name
 
 
+@functools.lru_cache(maxsize=1)
 def _detect_gpu_backend() -> str:
-    """Detect GPU backend: 'metal', 'cuda' or 'hip' — the backend TABLE decides,
-    walked in order: an entry's probe (Metal opens the device) or the first
-    vendor runtime library the process can load names the backend; or
-    `NBX_GPU_BACKEND`. Never through Triton's driver probe:
-    `triton.runtime.driver.active` asks every backend `is_active()`, and those
-    probes import torch (R33, universal since 2026-09-05 — this call was the
-    first torch import of the launch path). Whatever answers is pinned in
-    `TRITON_DEFAULT_BACKEND` so any later question to Triton's driver resolves
-    straight to it and probes nothing else. Adding a backend is adding a table entry."""
+    """Detect GPU backend: 'cuda', 'hip' or 'metal' — from the vendor runtime
+    the process can load, or `NBX_GPU_BACKEND`. Never through Triton's driver
+    probe: `triton.runtime.driver.active` asks every backend `is_active()`,
+    and those probes import torch (R33, universal since 2026-09-05 — this
+    call was the first torch import of the launch path).
+
+    **Every probe here is torch-free, and the order is R33 rather than
+    taste.** Asking Triton which backend is active — the obvious first
+    question, and what this function used to do — makes Triton call
+    `is_active()` on EVERY registered backend to find the live one, and
+    upstream's AMD probe runs `import torch` inside its own. So merely asking
+    puts torch in the process, on a CUDA box with no AMD card as much as on a
+    Mac. `kernels/ops/matmul.py` asks that question at module import, which is
+    how it reached the engine.
+
+    The Metal probe carries no platform strings. It opens the device and asks
+    it, because the property that matters is unified memory (which is what
+    makes one address valid for both processors) and that is a device answer,
+    not an `arm64` answer. It has no `rt_libs` row to try, which is why it is
+    not an entry in `_GPU_BACKENDS`: that dict holds symbol tables over one C
+    ABI and `test_device_backend_seam.py` pins it to exactly {cuda, hip}.
+
+    Whatever answers, `_pin_triton_backend` records it in
+    `TRITON_DEFAULT_BACKEND`, so that the differential arm
+    (`NBX_LAUNCHER=triton`) — the only path that still reaches
+    `triton.runtime.driver.active` — resolves straight to that backend and
+    probes nothing else.
+    """
     forced = os.environ.get("NBX_GPU_BACKEND")
     if forced:
-        if forced not in _GPU_BACKENDS:
-            raise RuntimeError(f"NBX_GPU_BACKEND={forced!r} is not a known backend ({sorted(_GPU_BACKENDS)})")
+        if forced not in _GPU_BACKENDS and forced != "metal":
+            raise RuntimeError(f"NBX_GPU_BACKEND={forced!r} is not a known backend "
+                               f"({sorted(_GPU_BACKENDS) + ['metal']})")
         return _pin_triton_backend(forced)
+    # The backend TABLE decides: the first vendor runtime the process can
+    # load names the backend — adding a backend is adding a table entry.
     for name, backend in _GPU_BACKENDS.items():
-        probe = backend.get("probe")
-        if probe is not None and probe():
-            return _pin_triton_backend(name)
-        for lib in backend.get("rt_libs", ()):
+        for lib in backend["rt_libs"]:
             try:
                 ctypes.cdll.LoadLibrary(lib)
                 return _pin_triton_backend(name)
             except OSError:
                 continue
-    raise RuntimeError("No GPU runtime found (tried Metal, CUDA and ROCm/HIP)")
+    # Apple GPUs. Not a "fallback" in the sense the loop above is: there is
+    # no library to dlopen, so the probe opens the device itself and answers
+    # only when a usable one came back.
+    from .metal_device import metal_device_available
+    if metal_device_available():
+        return _pin_triton_backend("metal")
+    raise RuntimeError("No GPU runtime found (tried CUDA, ROCm/HIP and Metal)")
 
 
 def _active_backend() -> dict:
-    return _GPU_BACKENDS[_detect_gpu_backend()]
+    """The entry-point name table for the detected backend.
+
+    Metal resolves to a table that is deliberately NOT a row in
+    `_GPU_BACKENDS`. That dict holds symbol tables over one C ABI, and
+    `test_device_backend_seam.py` pins it to exactly `{"cuda", "hip"}`
+    because a key in one row and missing from the other is a crash on that
+    hardware alone. Metal is a different API with a different set of honest
+    entry points, so it gets its own table — the second *implementation*
+    behind this seam that the seam's own docstring describes.
+    """
+    name = _detect_gpu_backend()
+    if name == "metal":
+        return _metal_backend_table()
+    return _GPU_BACKENDS[name]
+
+
+@functools.lru_cache(maxsize=1)
+def _metal_backend_table() -> dict:
+    """The Metal entry-point table, imported ONCE and then cached.
+
+    Cached rather than imported per call because `_active_backend` runs
+    inside `NBXTensor.__del__`, and a finalizer can fire during interpreter
+    shutdown when `sys.meta_path` is already None — an import there raises
+    `ImportError: Python is likely shutting down` and every tensor still
+    alive prints a traceback on the way out. The cuda/hip path never had the
+    problem: `_GPU_BACKENDS` is a module global with no import behind it.
+    One `lru_cache` gives Metal the same property.
+    """
+    from .metal_device import METAL_BACKEND
+    return METAL_BACKEND
 
 
 @functools.lru_cache(maxsize=1)
 def _gpu_runtime():
+    name = _detect_gpu_backend()
+    if name == "metal":
+        from .metal_device import runtime
+        return runtime()          # itself cached; see _metal_backend_table
     backend = _active_backend()
-    for name in backend["rt_libs"]:
+    for lib in backend["rt_libs"]:
         try:
-            return ctypes.cdll.LoadLibrary(name)
+            return ctypes.cdll.LoadLibrary(lib)
         except OSError:
             continue
-    raise RuntimeError(f"GPU runtime not found for {_detect_gpu_backend()}")
+    raise RuntimeError(f"GPU runtime not found for {name}")
 
 
 # ============================================================================

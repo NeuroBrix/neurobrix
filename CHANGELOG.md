@@ -7,7 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Apple Metal backend, first light: the engine's own Metal device and allocator behind the
+  allocator seam, a Metal driver behind the NeuroBrix launcher (the same launcher as CUDA, one
+  component), the Metal target resolved from the Apple hardware profile, and the launcher contract
+  every backend driver must satisfy (`neurobrix.triton.launcher_contract`), with its checker run
+  against the CUDA driver on CUDA and the Metal driver on a Mac.
+
 ### Changed
+- The launcher's CUDA driver refuses, before anything reaches the device, an argument list whose
+  length is not what the compiled kernel declares and a device address the engine's allocator did
+  not hand out — a launch past either fault reads garbage or foreign memory and poisons the CUDA
+  context for the rest of the process.
 - The NeuroBrix launcher is installed when the kernel package is imported, so the first kernel a
   weight load or a tensor conversion launches already goes through it (previously the dispatch
   module installed it, and a kernel launched before dispatch was imported went through Triton's
