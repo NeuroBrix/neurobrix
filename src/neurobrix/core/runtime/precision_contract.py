@@ -179,7 +179,9 @@ def load_calibration(cache_path: Optional[str], component_name: str,
     on this very graph (signature match); None otherwise. A record measured
     on another trace is reported and ignored — never applied."""
     model_name = registry_model_name(cache_path)
-    record = _cal.load_record(model_name, component_name)
+    record = _cal.load_embedded_record(cache_path, component_name)   # the artifact's own (R18: profile.json)
+    if record is None:
+        record = _cal.load_record(model_name, component_name)         # the engine store
     if record is None or dag is None:
         return record
     if record.passes < 1 or not record.max_abs:

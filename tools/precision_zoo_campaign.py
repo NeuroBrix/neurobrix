@@ -27,6 +27,7 @@ import path when it is there, the run's exit code and the output's sha.
 `--src <dir>` puts a frozen worktree's src on the probe's PYTHONPATH.
 """
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -142,6 +143,93 @@ def islands_from_log(log: Path) -> dict:
     return out
 
 
+def _log_mel(x, sr, n_fft=1024, hop=256, n_mels=80):
+    """Log-mel spectrogram (numpy): the perceptual frame of the audio gate."""
+    import numpy as np
+    win = np.hanning(n_fft)
+    frames = [np.abs(np.fft.rfft(x[i:i + n_fft] * win)) ** 2 for i in range(0, max(len(x) - n_fft, 1), hop)]
+    power = np.asarray(frames, dtype=np.float64)          # [T, F]
+    freqs = np.fft.rfftfreq(n_fft, 1.0 / sr)
+    mel = lambda f: 2595.0 * np.log10(1.0 + f / 700.0)
+    edges = np.linspace(mel(0.0), mel(sr / 2.0), n_mels + 2)
+    hz = 700.0 * (10.0 ** (edges / 2595.0) - 1.0)
+    fb = np.zeros((n_mels, len(freqs)))
+    for m in range(n_mels):
+        lo, ce, hi = hz[m], hz[m + 1], hz[m + 2]
+        up = (freqs - lo) / max(ce - lo, 1e-9); dn = (hi - freqs) / max(hi - ce, 1e-9)
+        fb[m] = np.clip(np.minimum(up, dn), 0.0, None)
+    return np.log10(power @ fb.T + 1e-10)
+
+
+def audio_gate(a: Path, b: Path) -> dict:
+    """The audio gate, in two frames a sample SNR cannot see (D-ZOO-AUDIO-GATE,
+    2026-09-05): (1) a LOG-MEL distance — a phase drift of the same speech
+    (Kokoro: SNR 2.4 dB, mel distance 0.017) stays close, a broken render does
+    not; (2) for an autoregressive synthesis whose sampled token path moves, a
+    TRANSCRIPT comparison through the engine's own speech recognizer
+    (whisper-large-v3-turbo, compiled) when the mel frame disagrees: the same
+    words = the same speech. The bar: mel distance <= 0.05 (a one-frame shift
+    of the same signal scores 0.057), else transcript WER <= 0.10."""
+    import numpy as np
+    import soundfile as sf
+    xa, sra = sf.read(str(a)); xb, srb = sf.read(str(b))
+    xa = np.asarray(xa, dtype=np.float64); xb = np.asarray(xb, dtype=np.float64)
+    if xa.ndim > 1: xa = xa.mean(axis=1)
+    if xb.ndim > 1: xb = xb.mean(axis=1)
+    n = min(len(xa), len(xb))
+    noise = float(np.sum((xa[:n] - xb[:n]) ** 2)); sig = float(np.sum(xa[:n] ** 2))
+    snr = float("inf") if noise == 0 else (10 * np.log10(sig / noise) if sig > 0 else float("nan"))
+    out = {"kind": "audio", "identical": noise == 0, "snr_db": snr, "len_a": len(xa), "len_b": len(xb), "sr": sra}
+    if noise == 0:
+        out["pass"] = True
+        return out
+    ma, mb = _log_mel(xa, sra), _log_mel(xb, srb)
+    m = min(len(ma), len(mb))
+    mel_dist = float(np.abs(ma[:m] - mb[:m]).mean()) if m else float("inf")
+    length_ratio = min(len(xa), len(xb)) / max(len(xa), len(xb), 1)
+    out.update({"mel_distance": mel_dist, "length_ratio": length_ratio})
+    if mel_dist <= 0.05 and length_ratio >= 0.9:
+        out["pass"] = True
+        return out
+    # The token path moved: the same words are the gate.
+    try:
+        ta, tb = _transcribe(a), _transcribe(b)
+        wer = _wer(ta, tb)
+        out.update({"transcript_a": ta, "transcript_b": tb, "wer": wer, "pass": wer <= 0.10})
+    except Exception as e:  # noqa: BLE001 — the gate says why it could not judge
+        out.update({"pass": False, "error": f"transcribe: {e}"[:300]})
+    return out
+
+
+def _transcribe(path: Path) -> str:
+    """The engine's own recognizer, compiled path, on a pinned card."""
+    import tempfile
+    out = Path(tempfile.mkdtemp(prefix="nbx_gate_")) / "t.txt"
+    env = {**os.environ}
+    env.pop("NBX_ACTIVATIONS_FP16_SAFE", None)
+    env["CUDA_VISIBLE_DEVICES"] = os.environ.get("NBX_GATE_GPU", "1")   # never the condemned card
+    r = subprocess.run([NBX, "run", "--model", "whisper-large-v3-turbo", "--audio", str(path), "--output", str(out)],
+                       env=env, capture_output=True, text=True, timeout=900)
+    if r.returncode != 0 or not out.exists():
+        raise RuntimeError(f"whisper exit {r.returncode}: {r.stdout[-200:]} {r.stderr[-200:]}")
+    return out.read_text().strip().lower()
+
+
+def _wer(ref: str, hyp: str) -> float:
+    import re as _re
+    r = _re.findall(r"[a-z0-9']+", ref.lower()); h = _re.findall(r"[a-z0-9']+", hyp.lower())
+    if not r:
+        return 0.0 if not h else 1.0
+    d = list(range(len(h) + 1))
+    for i in range(1, len(r) + 1):
+        prev, d[0] = d[0], i
+        for j in range(1, len(h) + 1):
+            cur = d[j]
+            d[j] = min(d[j] + 1, d[j - 1] + 1, prev + (r[i - 1] != h[j - 1]))
+            prev = cur
+    return d[len(h)] / len(r)
+
+
 def gate(a: Path, b: Path) -> dict:
     if not a.exists() or not b.exists():
         return {"kind": "missing", "pass": False}
@@ -193,15 +281,7 @@ def gate(a: Path, b: Path) -> dict:
         d["pass"] = bool(d.get("identical")) or float(d.get("psnr_db", 0)) >= 30.0
         return d
     if ext == ".wav":
-        import numpy as np
-        import soundfile as sf
-        xa, sra = sf.read(str(a)); xb, srb = sf.read(str(b))
-        n = min(len(xa), len(xb))
-        xa, xb = np.asarray(xa[:n], dtype=np.float64), np.asarray(xb[:n], dtype=np.float64)
-        noise = float(np.sum((xa - xb) ** 2)); sig = float(np.sum(xa ** 2))
-        snr = float("inf") if noise == 0 else 10 * np.log10(sig / noise) if sig > 0 else float("nan")
-        return {"kind": "audio", "pass": snr >= 30.0 or noise == 0, "snr_db": snr, "identical": noise == 0,
-                "len_a": len(xa), "len_b": len(xb), "sr": sra}
+        return audio_gate(a, b)
     import hashlib
     ha, hb = hashlib.sha256(a.read_bytes()).hexdigest()[:12], hashlib.sha256(b.read_bytes()).hexdigest()[:12]
     return {"kind": ext.lstrip("."), "identical": ha == hb, "pass": ha == hb, "sha_a": ha, "sha_b": hb}
@@ -303,6 +383,65 @@ def launcher_ab(model: str, gpu, out: Path, extra: list, timeout: int) -> dict:
     return res
 
 
+def tree_ab(model: str, gpu, out: Path, extra: list, timeout: int, trees: list) -> dict:
+    """The tree gate on one model: the same `--triton` request run from two
+    or more frozen source trees (label=path/to/src), outputs byte-compared
+    against the first tree. This is how a kernel or launcher change made for
+    another backend is proven numerically inert on CUDA: byte identity
+    against main on the whole zoo, or a named difference.
+
+    Each arm runs the CLI through the tree's own `neurobrix` package
+    (PYTHONPATH=<tree>/src) and records the package path the process saw,
+    so a result can never be attributed to a tree that was not the one
+    executed."""
+    fam = family_of(model)
+    d = out / model
+    d.mkdir(parents=True, exist_ok=True)
+    ext = {"llm": ".txt", "stt": ".txt", "vlm": ".txt", "audio_llm": ".txt", "tts": ".wav",
+           "video": ".mp4", "image": ".png", "upscaler": ".png"}.get(fam, ".txt")
+    req = request_args(model, fam, extra) + ["--triton"]
+    base_env = {**os.environ}
+    if gpu is None:
+        base_env.pop("CUDA_VISIBLE_DEVICES", None)
+    else:
+        base_env["CUDA_VISIBLE_DEVICES"] = str(gpu)
+    res = {"model": model, "family": fam, "weight_gb": round(weight_gb(model), 2),
+           "config": "machine" if gpu is None else f"pinned:{gpu}", "request": req, "lever": "tree",
+           "trees": {label: str(src) for label, src in trees}, "arms": {}}
+    entry = "import sys; from neurobrix.cli import main; sys.exit(main())"
+    for label, src in trees:
+        env = {**base_env, "PYTHONPATH": str(Path(src).resolve())}
+        seen = subprocess.run([PY, "-c", "import neurobrix, sys; sys.stdout.write(neurobrix.__file__)"],
+                              env=env, capture_output=True, text=True).stdout.strip()
+        outp = d / f"{label}{ext}"
+        rc, wall = run([PY, "-c", entry, "run", "--model", model] + req + ["--output", str(outp)],
+                       env, d / f"{label}.log", timeout)
+        res["arms"][label] = {"rc": rc, "wall_s": wall, "exec_s": exec_time(d / f"{label}.log"),
+                              "output": str(outp), "package_seen": seen,
+                              "sha": hashlib.sha256(outp.read_bytes()).hexdigest()[:12] if outp.exists() else None}
+    first = trees[0][0]
+    a = d / f"{first}{ext}"
+    comp = {}
+    for label, _ in trees[1:]:
+        b = d / f"{label}{ext}"
+        same = a.exists() and b.exists() and a.read_bytes() == b.read_bytes()
+        comp[label] = {"identical": same}
+        if a.exists() and b.exists() and not same:
+            try:
+                comp[label]["diff"] = gate(a, b)       # how far, in the family's own measure
+            except Exception as e:  # noqa: BLE001
+                comp[label]["diff"] = {"error": str(e)}
+    ran = all(v["rc"] == 0 and v["sha"] for v in res["arms"].values())
+    res["gate"] = {"kind": "bytes", "against": first, "arms": comp,
+                   "identical": ran and all(v["identical"] for v in comp.values()), "ran": ran}
+    res["A"] = res["arms"][first]
+    res["B"] = res["arms"][trees[1][0]] if len(trees) > 1 else res["arms"][first]
+    x, y = res["A"]["exec_s"], res["B"]["exec_s"]
+    res["speedup"] = (x / y) if x and y else None
+    (d / "result.json").write_text(json.dumps(res, indent=1))
+    return res
+
+
 def r33_probe(model: str, gpu, out: Path, extra: list, timeout: int, src: Path = None) -> dict:
     """The R33 proof on one model: a complete `--triton` request in-process
     under the sys.modules probe; the verdict is whether torch is in
@@ -359,6 +498,15 @@ def verdict(r: dict) -> str:
         if r.get("torch_at_exit") is True:
             return f"TORCH ({r.get('first_import_site') or '?'})"
         return "FAILED (no verdict in the log)"
+    if r.get("lever") == "tree":
+        g = r.get("gate") or {}
+        if not g.get("ran"):
+            failed = [k for k, v in (r.get("arms") or {}).items() if v.get("rc") != 0 or not v.get("sha")]
+            return f"FAILED (arm {', '.join(failed) or '?'} did not run)"
+        if g.get("identical"):
+            return "IDENTICAL"
+        diff = [k for k, v in g.get("arms", {}).items() if not v.get("identical")]
+        return "DIFFERENT (" + ", ".join(diff) + ")"
     if r.get("lever") == "launcher":
         if r["A"]["rc"] or r["B"]["rc"]:
             return "FAILED (a --triton arm did not run)"
@@ -401,6 +549,40 @@ def table(out: Path) -> str:
                         f"{'NO' if r.get('torch_at_exit') is False else ('YES' if r.get('torch_at_exit') else '?')} | "
                         f"{r.get('first_import_site') or '—'} | {e if e is None else f'{e:.2f}'} | {r.get('output_sha') or '—'} | {verdict(r)} |")
         return head + "\n".join(rows) + "\n"
+    if results and all(r.get("lever") == "tree" for r in results):
+        labels = []
+        for r in results:
+            for k in (r.get("arms") or {}):
+                if k not in labels:
+                    labels.append(k)
+        head = ("| model | family | weights, config | " + " | ".join(f"{l} exec (s) / sha" for l in labels) +
+                " | gate vs " + (labels[0] if labels else "?") + " | verdict |\n|---|---|---|" + "---|" * len(labels) + "---|---|\n")
+        for r in results:
+            cells = []
+            for l in labels:
+                v = (r.get("arms") or {}).get(l) or {}
+                e = v.get("exec_s")
+                cells.append(f"{e if e is None else f'{e:.2f}'} / {v.get('sha') or '—'}")
+            g = (r.get("gate") or {}).get("arms") or {}
+            gs = []
+            for l, c in g.items():
+                if c.get("identical"):
+                    gs.append(f"{l}: identical")
+                else:
+                    dd = c.get("diff") or {}
+                    if dd.get("kind") == "image":
+                        gs.append(f"{l}: {dd.get('psnr_db', 0):.1f} dB")
+                    elif dd.get("kind") == "text":
+                        gs.append(f"{l}: diff @{dd.get('first_diff_at')}")
+                    elif dd.get("kind") == "audio":
+                        gs.append(f"{l}: mel {dd.get('mel_distance', 0):.3f}" + (f", WER {dd['wer']:.2f}" if "wer" in dd else ""))
+                    elif dd.get("kind") == "video":
+                        gs.append(f"{l}: {dd.get('psnr_min_db', 0):.1f} dB min" if "psnr_min_db" in dd else f"{l}: {dd.get('error', '?')}")
+                    else:
+                        gs.append(f"{l}: different")
+            rows.append(f"| {r['model']} | {r['family']} | {r.get('weight_gb', '?')} GB, {r.get('config', '?')} | " +
+                        " | ".join(cells) + f" | {'; '.join(gs) or '—'} | {verdict(r)} |")
+        return head + "\n".join(rows) + "\n"
     for r in results:
         isl = ", ".join(f"{c}:{v.get('islands')}" for c, v in (r.get("islands") or {}).items()) or "—"
         g = r.get("gate") or {}
@@ -409,7 +591,14 @@ def table(out: Path) -> str:
         elif g.get("kind") == "text":
             gs = "identical" if g.get("identical") else f"diff @{g.get('first_diff_at')}"
         elif g.get("kind") == "audio":
-            gs = "identical" if g.get("identical") else f"SNR {g.get('snr_db', 0):.1f} dB"
+            if g.get("identical"):
+                gs = "identical"
+            elif "wer" in g:
+                gs = f"mel {g.get('mel_distance', 0):.3f}, WER {g['wer']:.2f}"
+            elif "mel_distance" in g:
+                gs = f"mel {g['mel_distance']:.3f}"
+            else:
+                gs = f"SNR {g.get('snr_db', 0):.1f} dB"
         elif g.get("kind") == "video":
             gs = ("identical" if g.get("identical") else
                   (f"{g.get('psnr_min_db', 0):.1f} dB min / {g.get('psnr_mean_db', 0):.1f} dB mean, {g.get('frames_b')} frames"
@@ -430,7 +619,8 @@ def main():
     r = sub.add_parser("run")
     r.add_argument("--family")
     r.add_argument("--models")
-    r.add_argument("--gpu", type=int, default=None, help="one pinned card; omit for the whole rig (--machine)")
+    r.add_argument("--gpu", default=None, help="one pinned card, or a comma list of cards (e.g. 2,3) Prism may spread over; "
+                                                "omit for the whole rig (--machine)")
     r.add_argument("--machine", action="store_true", help="whole rig visible, Prism free (models that do not fit one card)")
     r.add_argument("--max-weight-gb", type=float, default=None,
                    help="pinned stage: skip (and list) models whose weights exceed this — they belong to the machine stage")
@@ -442,6 +632,9 @@ def main():
     r.add_argument("--probe", action="store_true",
                    help="the R33 lever: one complete --triton request per model under the sys.modules probe")
     r.add_argument("--src", default=None, help="a frozen worktree's src for the probe's PYTHONPATH (default: this repo)")
+    r.add_argument("--trees", default=None,
+                   help="tree gate: label=path/to/src,label=path/to/src[,...] — the same --triton request from each "
+                        "frozen tree, bytes compared against the first (a port's kernel change must be inert on CUDA)")
     r.add_argument("--launcher-ab", action="store_true",
                    help="the launcher gate instead of the precision lever: --triton with upstream's launcher vs NeuroBrix's, bytes compared")
     t = sub.add_parser("table")
@@ -491,6 +684,11 @@ def main():
             if args.probe:
                 res = r33_probe(m, gpu, out, extra, args.timeout, Path(args.src) if args.src else None)
                 print(f"[zoo] {m}: {verdict(res)} exec={res.get('exec_s')} sha={res.get('output_sha')}", flush=True)
+            elif args.trees:
+                trees = [(t.split("=", 1)[0], Path(t.split("=", 1)[1])) for t in args.trees.split(",") if t]
+                res = tree_ab(m, gpu, out, extra, args.timeout, trees)
+                print(f"[zoo] {m}: {verdict(res)} " + " ".join(f"{k}={v.get('exec_s')}/{v.get('sha')}" for k, v in res["arms"].items()), flush=True)
+                continue
             else:
                 res = (launcher_ab if args.launcher_ab else one_model)(m, gpu, out, extra, args.timeout)
                 print(f"[zoo] {m}: {verdict(res)} A={res['A']['exec_s']} B={res['B']['exec_s']} gate={res['gate']}", flush=True)

@@ -2190,14 +2190,15 @@ class GraphExecutor:
         # only — no per-op island in that dispatcher yet, so the contract is
         # taken only when the record needs none (D-PRECISION-CONTRACT-TRITON-PARITY).
         from neurobrix.core.runtime.precision_contract import resolve as _resolve_contract_seq
-        _seq_fp16_safe = _resolve_contract_seq(
+        _seq_safe, _seq_pins, _seq_narrow = _resolve_contract_seq(
             getattr(self, "_cache_path", None), self._component_name,
             getattr(self, "_dag", None),
             compute_dtype="float16" if str(self.dtype) in ("float16", "torch.float16") else "float32",
-            supports_op_pins=False)[0]
+            supports_op_pins=True)
         dispatcher = TritonSequentialDispatcher(
             device_idx=device_idx, compute_dtype=parse_dtype(self.dtype),
-            activations_fp16_safe=bool(_seq_fp16_safe))
+            activations_fp16_safe=bool(_seq_safe),
+            precision_contract=(bool(_seq_safe), _seq_pins, _seq_narrow))
 
         tensors = self._dag.get("tensors", {})
         ops_meta = self._dag.get("ops", {})
@@ -2526,7 +2527,7 @@ class GraphExecutor:
                         *resolved_args, **resolved_kwargs)
                 else:
                     # Dispatch
-                    result = dispatcher.dispatch(op_type, resolved_args, attrs)
+                    result = dispatcher.dispatch(op_type, resolved_args, attrs, op_uid=op_uid)
             except Exception as _e_seq:
                 # Op-localized error (R30 mirror of the compiled "Failed at op"):
                 # name the op_uid + which positional args were None so a
@@ -2921,16 +2922,17 @@ class GraphExecutor:
             config_constants=self._resolve_config_constants())
 
         # Precision contract of THIS component for the triton engine: the
-        # same resolver as the compiled path, flag only — that engine has no
-        # per-op island yet, so the contract is taken only when the record
-        # needs none (D-PRECISION-CONTRACT-TRITON-PARITY).
+        # same resolver as the compiled path, flag AND per-op islands — the
+        # Triton dtype engine pins the record's fp32 islands and narrows the
+        # narrowable ops exactly as the compiled one (R30;
+        # D-PRECISION-CONTRACT-TRITON-PARITY closed 2026-09-06).
         from neurobrix.core.runtime.precision_contract import resolve as _resolve_contract
-        _fp16_safe = _resolve_contract(
+        _safe, _pins, _narrow = _resolve_contract(
             getattr(self, "_cache_path", None), self._component_name,
             getattr(self, "_dag", None),
             compute_dtype="float16" if str(self.dtype) in ("float16", "torch.float16") else "float32",
-            supports_op_pins=False)[0]
-        self._triton_seq.set_activations_fp16_safe(bool(_fp16_safe))
+            supports_op_pins=True)
+        self._triton_seq.set_precision_contract(bool(_safe), _pins, _narrow)
 
         self._triton_seq.compile()
 

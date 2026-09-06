@@ -8,7 +8,7 @@ individual ops and validating graph correctness.
 Usage: --triton-sequential flag routes here.
 """
 
-from typing import Any, Dict, List
+from typing import Optional, Any, Dict, List
 
 from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, parse_dtype
 from neurobrix.kernels.dispatch import dispatch as kernel_dispatch
@@ -27,7 +27,7 @@ class TritonSequentialDispatcher:
     """
 
     def __init__(self, device_idx: int = 0, compute_dtype: NBXDtype = NBXDtype.float16,
-                 activations_fp16_safe: bool = False):
+                 activations_fp16_safe: bool = False, precision_contract=None):
         self.device_idx = device_idx
         self.compute_dtype = compute_dtype
         self.activations_fp16_safe = activations_fp16_safe
@@ -35,6 +35,10 @@ class TritonSequentialDispatcher:
         from neurobrix.kernels import wrappers as _w
         self._dtype_engine = TritonDtypeEngine(
             compute_dtype, has_native_bf16=_has_bf16())
+        if precision_contract is not None:
+            # (safe, fp32_op_uids, narrow_op_uids) — the same islands the
+            # compiled and Triton-compiled engines honour (R30).
+            self._dtype_engine.set_precision_contract(*precision_contract)
         self._op_cache: Dict[str, Any] = {}
         # Phase 2 — propagate per-component dtype context to wrappers
         # global state, mirroring TritonSequence.run() but without the
@@ -150,8 +154,9 @@ class TritonSequentialDispatcher:
         return resolved
 
     def dispatch(self, op_type: str, inputs: List[Any],
-                 attributes: Dict[str, Any]) -> Any:
-        """Dispatch a single op to Triton kernel."""
+                 attributes: Dict[str, Any], op_uid: Optional[str] = None) -> Any:
+        """Dispatch a single op to Triton kernel (`op_uid` keys the precision
+        contract's per-op islands)."""
         clean = op_type.replace("aten::", "").replace("custom::", "")
         base = clean.split(".")[0]
 
@@ -203,7 +208,7 @@ class TritonSequentialDispatcher:
         func = kernel_dispatch(base)
         if func is None:
             raise RuntimeError(f"[triton-sequential] No kernel for: {op_type}")
-        func = self._dtype_engine.wrap_op(base, func)
+        func = self._dtype_engine.wrap_op(base, func, op_uid=op_uid)
 
         if kwargs:
             return func(*inputs, **kwargs)

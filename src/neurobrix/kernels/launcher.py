@@ -176,6 +176,95 @@ class CudaDriver(Driver):
                                             ctypes.c_void_p(stream), arr, None), "cuLaunchKernel")
 
 
+    # -- the contract surface (`triton/launcher_contract.py`): compile once,
+    # launch many times; streams and events are the allocator's. The same
+    # checker that gates the Metal driver gates this object, unchanged.
+    backend = "cuda"
+
+    def compile(self, jit_fn, signature, constexprs, num_warps: int = 4,
+                specialization=None, num_stages=None):
+        from triton.compiler import ASTSource, compile as triton_compile
+        from neurobrix.triton.launcher_contract import ArgSlot
+        specialization = dict(specialization or {})
+        params = list(jit_fn.params)
+        names = [kp.name for kp in params]
+        unknown = set(signature) - set(names)
+        if unknown:
+            raise ValueError(f"NeuroBrix launcher: signature names {sorted(unknown)} are not parameters of {jit_fn.__name__}")
+        spec = []
+        bound = {}
+        for kp in params:
+            kind = signature.get(kp.name)
+            if kp.is_constexpr or kind == "constexpr":
+                if kp.name not in constexprs:
+                    raise ValueError(f"NeuroBrix launcher: constexpr {kp.name!r} has no value")
+                bound[kp.name] = constexprs[kp.name]
+                spec.append(("constexpr", constexprs[kp.name]))
+                continue
+            if kind is None:
+                raise ValueError(f"NeuroBrix launcher: parameter {kp.name!r} is missing from the signature")
+            bound[kp.name] = 0
+            spec.append((kind, specialization.get(kp.name)))   # None: no marker; "" / "D": Triton's own spellings
+        _, _, backend = _binder(jit_fn)
+        options = {"num_warps": int(num_warps)}
+        if num_stages is not None:
+            options["num_stages"] = int(num_stages)
+        _forward_debug(jit_fn, options)
+        # `_pack_args` builds the compile options from its KWARGS argument (the
+        # `options` one only feeds the cache key), so the same dict goes in both.
+        options, sig, cexprs, attrs = jit_fn._pack_args(backend, options, bound, spec, options)
+        src = ASTSource(jit_fn, sig, cexprs, attrs)
+        compiled = triton_compile(src, target=target(), options=options.__dict__)
+        md = compiled.metadata
+        if getattr(md, "num_ctas", 1) != 1 or getattr(md, "global_scratch_size", 0) or getattr(md, "profile_scratch_size", 0):
+            raise RuntimeError(f"NeuroBrix launcher: {jit_fn.__name__} needs clusters or scratch memory the CUDA client does not provide yet")
+        cubin = compiled.asm["cubin"]
+        function = CudaDriver.instance().load(cubin, md.name, md.shared)
+        binding = []
+        ordered = {}
+        for kp in params:
+            kind = signature.get(kp.name)
+            if kp.is_constexpr or kind == "constexpr":
+                continue
+            ordered[kp.name] = kind
+            binding.append(ArgSlot(index=len(binding), name=kp.name, is_pointer=kind.startswith("*"),
+                                   dtype=kind if not kind.startswith("*") else kind[1:]))
+        return CudaCompiledKernel(md.name, bytes(cubin), 32 * int(md.num_warps), int(md.shared), constexprs,
+                                  specialization, binding, ordered, function)
+
+    @staticmethod
+    def _allocator():
+        from neurobrix.kernels.nbx_tensor import DeviceAllocator
+        return DeviceAllocator
+
+    def create_stream(self) -> int:
+        return self._allocator().create_stream()
+
+    def destroy_stream(self, stream: int) -> None:
+        self._allocator().destroy_stream(stream)
+
+    def synchronize_stream(self, stream: int) -> None:
+        self._allocator().stream_synchronize(stream)
+
+    def create_event(self, timing: bool = False) -> int:
+        return self._allocator().create_event(timing=timing)
+
+    def destroy_event(self, event: int) -> None:
+        self._allocator().destroy_event(event)
+
+    def record_event(self, event: int, stream: int = 0) -> None:
+        self._allocator().record_event(event, stream)
+
+    def synchronize_event(self, event: int) -> None:
+        self._allocator().event_synchronize(event)
+
+    def wait_event(self, stream: int, event: int) -> None:
+        self._allocator().stream_wait_event(stream, event)
+
+    def elapsed_ms(self, start: int, end: int) -> float:
+        return self._allocator().event_elapsed_ms(start, end)
+
+
 def _unsupported(kind):
     raise RuntimeError(f"NeuroBrix launcher: unsupported scalar kind {kind!r}")
 
@@ -332,12 +421,31 @@ def _binder(kernel):
     return b
 
 
+def _forward_debug(kernel, options: Dict[str, Any]) -> None:
+    """Carry the kernel's `debug` flag into the compile options, as Triton's
+    own `JITFunction.run` does (`kwargs.get("debug", self.debug) or
+    knobs.runtime.debug`). `@triton.jit(debug=True)` is what keeps a
+    `tl.device_assert` in the binary — the gather/scatter kernels rely on it
+    to trap an out-of-range index — so a launcher that dropped it would
+    compile the traps out silently."""
+    if "debug" not in options:
+        knob = False
+        try:
+            from triton import knobs
+            knob = bool(knobs.runtime.debug)
+        except Exception:
+            pass
+        options["debug"] = bool(getattr(kernel, "debug", False)) or knob
+
+
 def prepare(kernel, args, kwargs) -> Tuple[_Prepared, Dict[str, Any]]:
     """Specialise (our binder), compile (Triton's compiler with the engine's
     target), load (our driver) — once per specialisation and device."""
     from triton.compiler import ASTSource, compile as triton_compile
     from triton.runtime.jit import compute_cache_key
     kernel_cache, key_cache, backend = _binder(kernel)
+    kwargs = dict(kwargs)
+    _forward_debug(kernel, kwargs)      # into kwargs: `_pack_args` parses the compile options from THEM
     bound_args, specialization, options = nbx_binder(kernel, args, kwargs)
     from neurobrix.kernels.nbx_tensor import DeviceAllocator
     key = (compute_cache_key(key_cache, specialization, options), int(DeviceAllocator.get_device()))
@@ -457,3 +565,56 @@ def _time_ms(fn, n: int) -> float:
     ms = DeviceAllocator.event_elapsed_ms(start, end)
     DeviceAllocator.destroy_event(start); DeviceAllocator.destroy_event(end)
     return ms / n
+
+
+# ---------------------------------------------------------------------------
+# The launcher contract's CUDA client (`neurobrix.triton.launcher_contract`,
+# Metal chantier 2026-09-05): a driver COMPILES a jit function plus an
+# explicit signature / constexprs / specialization markers into a
+# CompiledKernel, and LAUNCHES it with a grid and a flat argument list —
+# integer addresses for pointers (each verified with the allocator), typed
+# scalars otherwise. Streams and events are the allocator's. `CudaDriver`
+# carries this surface; the same checker that gates the Metal driver gates it.
+# ---------------------------------------------------------------------------
+
+class CudaCompiledKernel:
+    """The result of compiling once, launched many times (contract object)."""
+
+    binary_kind = "cubin"
+
+    def __init__(self, name, binary, block_size, shared_memory, constexprs, specialization, binding, signature, function):
+        self.name = name
+        self.binary = binary
+        self.block_size = block_size
+        self.shared_memory = shared_memory
+        self.constexprs = dict(constexprs)
+        self.specialization = dict(specialization)
+        self.binding = tuple(binding)
+        self._signature = signature          # name -> triton type, non-constexpr, in binding order
+        self._function = function
+
+    def launch(self, grid, args, stream: int = 0) -> None:
+        from neurobrix.kernels.nbx_tensor import DeviceAllocator
+        args = list(args)
+        if len(args) != len(self.binding):
+            raise TypeError(f"NeuroBrix launcher: {self.name} takes {len(self.binding)} arguments, {len(args)} given")
+        params = []
+        for slot, value in zip(self.binding, args):
+            if slot.is_pointer:
+                addr = int(value)
+                if addr != 0 and not DeviceAllocator.holds(addr):
+                    raise ValueError(f"NeuroBrix launcher: {self.name} argument {slot.name!r}: address "
+                                     f"{addr:#x} was not handed out by the allocator — refused, not launched")
+                params.append(("ptr", addr))
+            else:
+                params.append(_pack_param(slot.dtype, value))
+        params.append(("ptr", 0))    # global scratch (Triton >= 3.6 ABI)
+        params.append(("ptr", 0))    # profile scratch
+        g = tuple(int(x) for x in grid) + (1,) * (3 - len(grid))
+        CudaDriver.instance().launch(self._function, g, (self.block_size, 1, 1), self.shared_memory, int(stream), params)
+
+
+def driver() -> CudaDriver:
+    """The process-wide CUDA driver — the launcher's backend and the
+    contract's client are one object."""
+    return CudaDriver.instance()

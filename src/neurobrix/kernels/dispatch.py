@@ -10,8 +10,6 @@ Dependencies: wrappers.py, NBXTensor. Used exclusively in --triton mode.
 # of the house library goes through the NeuroBrix launcher (Triton compiles,
 # the dispatch layer launches through a vendor driver of its own).
 # NBX_LAUNCHER=triton keeps upstream's launcher for the differential arm.
-from .launcher import install as _install_launcher
-_install_launcher()
 
 
 from typing import Optional, Callable, Dict

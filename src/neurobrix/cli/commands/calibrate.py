@@ -121,6 +121,11 @@ def cmd_calibrate(args) -> int:
             non_finite=census.non_finite_ops(), graph_signature=census.signature)
         path = cal.store_path(model_name, component)
         record.save(path)
+        if getattr(args, "embed", False):
+            # The artifact's own home (the build embeds it before publication).
+            from neurobrix.nbx.cache import get_cache
+            embedded = cal.embed_record(get_cache().cache_dir / model_name, component, record)
+            print(f"[calibrate] {component}: record embedded in {embedded}")
         top = max(record.max_abs.values()) if record.max_abs else 0.0
         print(f"[calibrate] {component}: {len(record.max_abs)} op(s) over {record.passes} pass(es), "
               f"largest finite magnitude {top:.4g}, {len(record.non_finite)} op(s) with a "

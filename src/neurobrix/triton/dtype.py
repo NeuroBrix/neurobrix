@@ -10,7 +10,7 @@ Rules (from PyTorch AT_FORALL_FP32 / AT_FORALL_LOWER_PRECISION_FP):
   - Promote ops: promote to widest input dtype
 """
 
-from typing import Callable, FrozenSet
+from typing import Callable, FrozenSet, Optional
 
 from neurobrix.kernels.nbx_tensor import NBXDtype, NBXTensor
 
@@ -272,16 +272,38 @@ class TritonDtypeEngine:
             return self.compute_dtype
         return graph_dt
 
-    def wrap_op(self, op_name: str, func: Callable) -> Callable:
+    def set_precision_contract(self, safe: bool, fp32_op_uids=(), narrow_op_uids=()) -> None:
+        """The component's precision contract (core/runtime/precision_contract):
+        `fp32_op_uids` are the calibration record's islands — ops whose finite
+        magnitude exceeds the half-precision bound — computed in fp32 with
+        an fp32 output whatever their class; `narrow_op_uids` are the fp32-
+        class ops the record lets narrow back to the compute dtype. The
+        same sets the compiled DtypeEngine honours (R30; closes
+        D-PRECISION-CONTRACT-TRITON-PARITY, 2026-09-06)."""
+        self._activations_fp16_safe = bool(safe)
+        self._fp32_op_uids = frozenset(fp32_op_uids or ())
+        self._narrow_op_uids = frozenset(narrow_op_uids or ())
+
+    def wrap_op(self, op_name: str, func: Callable, op_uid: Optional[str] = None) -> Callable:
         """Wrap an op function with AMP casting rules.
 
         Args:
             op_name: bare op name (e.g., "mm", "pow", "add")
             func: the raw kernel wrapper function
+            op_uid: the op's uid in the graph — the precision contract's
+                per-op islands are keyed on it
 
         Returns:
             Wrapped function with dtype casting applied
         """
+        # The calibration record's islands come FIRST: a pinned op computes
+        # in fp32 and keeps its fp32 output whatever its AMP class — a
+        # self-managed conv included (its wrapper follows the fp32 inputs).
+        if op_uid is not None and self.compute_dtype in (NBXDtype.float16, NBXDtype.bfloat16):
+            if op_uid in getattr(self, "_fp32_op_uids", ()):
+                return self._wrap_fp32(func)
+            if op_uid in getattr(self, "_narrow_op_uids", ()) and op_name in AMP_FP32_OPS:
+                return self._wrap_fp32_internal_compute_dtype_output(func, force_cast_back=True)
         # Self-managed wrappers are NEVER wrapped — universal hardware
         # (mm/bmm/addmm self-gate on _NBX_HAS_NATIVE_BF16 internally;
         # conv2d/upsample_nearest are dtype-tag-driven). See _SELF_MANAGED_OPS
@@ -326,7 +348,7 @@ class TritonDtypeEngine:
             return func(*new_args, **kwargs)
         return fp32_func
 
-    def _wrap_fp32_internal_compute_dtype_output(self, func: Callable) -> Callable:
+    def _wrap_fp32_internal_compute_dtype_output(self, func: Callable, force_cast_back: bool = False) -> Callable:
         """Phase 1 opt-in cast-back: compute fp32 internally, output back to
         compute_dtype.
 
@@ -356,7 +378,7 @@ class TritonDtypeEngine:
             result = func(*new_args, **kwargs)
             # Cast back ONLY when the per-component opt-in flag is True.
             # Default False = conservative behavior (output stays fp32).
-            if (_w._NBX_ACTIVATIONS_FP16_SAFE
+            if ((force_cast_back or _w._NBX_ACTIVATIONS_FP16_SAFE)
                     and _is_float_tensor(result)
                     and _get_nbx_dtype(result) != compute):
                 result = result.to(compute)
