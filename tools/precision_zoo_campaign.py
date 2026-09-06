@@ -622,6 +622,24 @@ def table(out: Path) -> str:
                         f"{'NO' if r.get('torch_at_exit') is False else ('YES' if r.get('torch_at_exit') else '?')} | "
                         f"{r.get('first_import_site') or '—'} | {e if e is None else f'{e:.2f}'} | {r.get('output_sha') or '—'} | {verdict(r)} |")
         return head + "\n".join(rows) + "\n"
+    if results and all(r.get("lever") == "sweep" for r in results):
+        head = ("| model | family | weights, config | exec (s) | measured shapes | artifact | verdict |\n"
+                "|---|---|---|---|---|---|---|\n")
+        for r in results:
+            e = (r.get("A") or {}).get("exec_s")
+            rows.append(f"| {r['model']} | {r['family']} | {r.get('weight_gb', '?')} GB, {r.get('config', '?')} | "
+                        f"{e if e is None else f'{e:.2f}'} | {r.get('shapes') if r.get('shapes') is not None else '—'} | "
+                        f"{r.get('artifact') or '—'} | {verdict(r)} |")
+        return head + "\n".join(rows) + "\n"
+    if results and all(r.get("lever") == "drift" for r in results):
+        head = ("| model | family | weights, config | oracle ops | matched | missing on Triton | over bound | first site | verdict |\n"
+                "|---|---|---|---|---|---|---|---|---|\n")
+        for r in results:
+            rows.append(f"| {r['model']} | {r['family']} | {r.get('weight_gb', '?')} GB, {r.get('config', '?')} | "
+                        f"{r.get('ops') if r.get('ops') is not None else '—'} | {r.get('matched') if r.get('matched') is not None else '—'} | "
+                        f"{r.get('missing') if r.get('missing') is not None else '—'} | {r.get('over_bound') if r.get('over_bound') is not None else '—'} | "
+                        f"{r.get('site') or '—'} | {verdict(r)} |")
+        return head + "\n".join(rows) + "\n"
     if results and all(r.get("lever") == "tree" for r in results):
         labels = []
         for r in results:
@@ -742,7 +760,8 @@ def main():
     else:
         models = sorted(m.name for m in CACHE.iterdir() if (m / "manifest.json").exists()
                         and family_of(m.name) == args.family)
-    extra = args.extra.split() if args.extra else []
+    import shlex
+    extra = shlex.split(args.extra) if args.extra else []      # quotes honoured: --extra '--prompt "a red fox"'
     if not args.machine and args.gpu is None:
         ap.error("--gpu <n> for the pinned stage, or --machine for the whole rig")
     gpu = None if args.machine else args.gpu
