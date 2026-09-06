@@ -404,5 +404,26 @@ def capture_model() -> Optional[str]:
         json.dump(doc, f, indent=1)
     _ACTIVE["entries"] = entries
     print(f"[autotune] {_ACTIVE['model']}: sweep artifact written {path} ({len(entries)} measured shape(s))", flush=True)
+    _announce_screen(_ACTIVE["model"])
     capture()            # the machine cache too — the producer's accumulation across models
     return path
+
+
+def _announce_screen(model_name: str) -> None:
+    """One line per sweep saying what the autotune correctness screen did —
+    the activation proof of a gate: a clean screen prints nothing of its own,
+    so without this line a sweep with the screen off and a sweep where every
+    config passed would read the same."""
+    try:
+        from neurobrix.kernels import launcher
+        cache = getattr(launcher, "_SCREEN_CACHE", None)
+        screened = getattr(launcher, "screened_out", None)
+    except Exception:
+        return
+    if cache is None or screened is None:
+        return
+    keys = sum(len(v) for v in cache.values())
+    excluded = screened()
+    state = "off" if os.environ.get("NBX_AUTOTUNE_SCREEN", "on").lower() == "off" else "on"
+    print(f"[autotune] {model_name}: correctness screen {state}: checked {keys} key(s), "
+          f"excluded {len(excluded)} config(s)", flush=True)

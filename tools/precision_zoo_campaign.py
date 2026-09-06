@@ -392,7 +392,9 @@ def launcher_ab(model: str, gpu, out: Path, extra: list, timeout: int) -> dict:
 
 
 
-_EXCLUSION_LINE = re.compile(r"\[autotune\].*\b(excluded|exclusion|screen(?:ed)? out|refused config)\b", re.I)
+_EXCLUSION_LINE = re.compile(r"\[AUTOTUNE_SCREEN\].*\bexcluded\b", re.I)          # a config the screen refused
+_UNSCREENED_LINE = re.compile(r"\[AUTOTUNE_SCREEN\].*\bnot screened\b|\bgo to the timer unchecked\b", re.I)
+_SCREEN_SUMMARY = re.compile(r"correctness screen (on|off): checked (\d+) key\(s\), excluded (\d+) config")
 
 
 def _sweep_store_entries(store: Path, model: str) -> dict:
@@ -419,7 +421,16 @@ def _compare_sweep_stores(d: Path, model: str, trees: list) -> dict:
         ent = _sweep_store_entries(d / f"{label}_autotune", model)
         log = (d / f"{label}.log").read_text(errors="replace") if (d / f"{label}.log").exists() else ""
         excluded = [ln.strip() for ln in log.splitlines() if _EXCLUSION_LINE.search(ln)]
-        rec = {"keys": len(ent), "exclusions": len(excluded), "excluded_lines": excluded[:20]}
+        unscreened = [ln.strip() for ln in log.splitlines() if _UNSCREENED_LINE.search(ln)]
+        rec = {"keys": len(ent), "exclusions": len(excluded), "excluded_lines": excluded[:20],
+               "unscreened": len(unscreened), "unscreened_lines": unscreened[:10]}
+        summ = _SCREEN_SUMMARY.findall(log)              # the activation proof: the tree has the screen and it ran
+        if summ:
+            rec["screen"] = summ[-1][0]
+            rec["screened_keys"] = sum(int(m[1]) for m in summ)
+            rec["exclusions"] = max(rec["exclusions"], sum(int(m[2]) for m in summ))
+        else:
+            rec["screen"] = "absent"
         if label != first:
             missing = sorted(set(base) - set(ent))
             extra = sorted(set(ent) - set(base))
@@ -800,7 +811,10 @@ def table(out: Path) -> str:
                     if not a:
                         parts.append(f"{l}: —"); continue
                     ch = "" if "identical" not in a else (" / identical" if a["identical"] else f" / DIFFER at {a.get('first_diff')}")
-                    parts.append(f"{l}: {a.get('keys', 0)} keys{ch} / {a.get('exclusions', 0)} excluded")
+                    sc = a.get("screen", "absent")
+                    sc = f"screen {sc}" + (f" ({a['screened_keys']} checked)" if a.get("screened_keys") is not None else "")
+                    parts.append(f"{l}: {a.get('keys', 0)} keys{ch} / {sc} / {a.get('exclusions', 0)} excluded"
+                                 + (f" / {a['unscreened']} not screened" if a.get("unscreened") else ""))
                 cells.append("; ".join(parts))
                 e0 = ((r.get("arms") or {}).get(labels[0]) or {}).get("exec_s")
                 ov = []
