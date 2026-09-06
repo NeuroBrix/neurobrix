@@ -613,7 +613,7 @@ def drift_one(model: str, gpu, out: Path, extra: list, timeout: int, bound: floa
     return res
 
 
-def env_ab(model: str, gpu, out: Path, extra: list, timeout: int, env_b: dict, lever: str) -> dict:
+def env_ab(model: str, gpu, out: Path, extra: list, timeout: int, env_b: dict, lever: str, cold: bool = False, src: Path = None) -> dict:
     """An engine lever behind an environment switch, measured on one model:
     arm A = the request as it is, arm B = the same request with `env_b`
     set (e.g. NBX_OPTIM_ALGEBRAIC=1), outputs byte-compared, execution
@@ -632,15 +632,28 @@ def env_ab(model: str, gpu, out: Path, extra: list, timeout: int, env_b: dict, l
     else:
         base_env["CUDA_VISIBLE_DEVICES"] = str(gpu)
     res = {"model": model, "family": fam, "weight_gb": round(weight_gb(model), 2),
-           "config": "machine" if gpu is None else f"pinned:{gpu}", "request": req, "lever": lever, "env_b": env_b}
+           "config": "machine" if gpu is None else f"pinned:{gpu}", "request": req, "lever": lever, "env_b": env_b,
+           "src": str(src) if src else None, "cold": cold}
     for arm, env in (("A", base_env), ("B", {**base_env, **env_b})):
         outp = d / f"{arm}{ext}"
-        rc, wall = run([NBX, "run", "--model", model] + req + ["--output", str(outp)], env, d / f"{arm}.log", timeout)
+        if cold:                                     # a cold start per arm: its own replay cache, nothing seeded
+            env = {**env, "NEUROBRIX_REPLAY_CACHE": str(d / f"{arm}_replay")}
+        if src is not None:                          # the request runs the given tree's package
+            env = {**env, "PYTHONPATH": str(Path(src).resolve())}
+            cmd = [PY, "-c", "import sys; from neurobrix.cli import main; sys.exit(main())", "run", "--model", model]
+        else:
+            cmd = [NBX, "run", "--model", model]
+        rc, wall = run(cmd + req + ["--output", str(outp)], env, d / f"{arm}.log", timeout)
         log = (d / f"{arm}.log").read_text(errors="replace")
-        m = re.search(r"\[Optim\] algebraic: (\d+) identity ops aliased away", log)
+        cert = re.search(r"certified directory: (\d+) key\(s\) served without a sweep, (\d+) swept at runtime", log)
         res[arm] = {"rc": rc, "wall_s": wall, "exec_s": exec_time(d / f"{arm}.log"), "output": str(outp),
                     "sha": hashlib.sha256(outp.read_bytes()).hexdigest()[:12] if outp.exists() else None,
-                    "ops_removed": sum(int(x) for x in re.findall(r"\[Optim\] algebraic: (\d+) identity ops", log)) or None}
+                    "ops_removed": sum(int(x) for x in re.findall(r"\[Optim\] algebraic: (\d+) identity ops", log)) or None,
+                    "certified_served": int(cert.group(1)) if cert else None,
+                    "swept": int(cert.group(2)) if cert else None,
+                    "announced_missing": len(re.findall(r"\[autotune\] no certified setting for", log)),
+                    "contradictions": len(re.findall(r"\[AUTOTUNE_SCREEN\] CONTRADICTION", log)),
+                    "screen_excluded": len(re.findall(r"\[AUTOTUNE_SCREEN\] .*config excluded", log))}
     a, b = d / f"A{ext}", d / f"B{ext}"
     same = a.exists() and b.exists() and a.read_bytes() == b.read_bytes()
     res["gate"] = {"kind": "bytes", "identical": same, "pass": same,
@@ -784,6 +797,18 @@ def verdict(r: dict) -> str:
             return "FAILED (an arm did not run)"
         n = (r.get("B") or {}).get("ops_removed")
         tag = f", {n} ops removed" if n else ""
+        A, B = r.get("A") or {}, r.get("B") or {}
+        if A.get("certified_served") is not None or B.get("certified_served") is not None:
+            tag += (f"; A certified {A.get('certified_served', 0)} / swept {A.get('swept', 0)}"
+                    f", B certified {B.get('certified_served', 0)} / swept {B.get('swept', 0)}")
+            if A.get("exec_s") and B.get("exec_s"):
+                tag += f"; cold start A {A['exec_s']:.1f} s vs B {B['exec_s']:.1f} s"
+            c = (A.get("contradictions") or 0) + (B.get("contradictions") or 0)
+            if c:
+                tag += f"; {c} CONTRADICTION(S) — a finding"
+            x = (A.get("screen_excluded") or 0) + (B.get("screen_excluded") or 0)
+            if x:
+                tag += f"; the screen excluded {x} config(s) — a finding to close"
         return ("IDENTICAL" if g.get("identical") else "DIFFERENT") + tag
     if r.get("lever") == "launcher":
         if r["A"]["rc"] or r["B"]["rc"]:
@@ -966,6 +991,9 @@ def main():
                         "configs a correctness screen excluded counted from each arm's log")
     r.add_argument("--env-ab", default=None, metavar="KEY=VALUE[,KEY=VALUE]",
                    help="an engine lever behind an environment switch: arm A without, arm B with it, bytes compared")
+    r.add_argument("--cold-arms", action="store_true",
+                   help="with --env-ab: each arm starts cold with its own replay cache (nothing seeded) — the certified "
+                        "directory's proof: A = certified settings loaded, B = NBX_AUTOTUNE_CERTIFIED=off (runtime sweep)")
     r.add_argument("--drift", action="store_true",
                    help="drift-site lever: `neurobrix drift` per model (ATen oracle vs Triton engine, per op); "
                         "the verdict is the first drifting op")
@@ -1025,7 +1053,8 @@ def main():
                 print(f"[zoo] {m}: {verdict(res)} exec={res.get('exec_s')} sha={res.get('output_sha')}", flush=True)
             elif args.env_ab:
                 env_b = dict(kv.split("=", 1) for kv in args.env_ab.split(",") if "=" in kv)
-                res = env_ab(m, gpu, out, extra, args.timeout, env_b, "env:" + ",".join(env_b))
+                res = env_ab(m, gpu, out, extra, args.timeout, env_b, "env:" + ",".join(env_b), cold=args.cold_arms,
+                             src=Path(args.src) if args.src else None)
                 print(f"[zoo] {m}: {verdict(res)} A={res['A']['exec_s']} B={res['B']['exec_s']} "
                       f"{('×%.2f' % res['speedup']) if res.get('speedup') else ''}", flush=True)
                 continue
