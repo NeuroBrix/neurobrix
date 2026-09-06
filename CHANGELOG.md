@@ -13,8 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   embedded by the build) or the engine's store (`~/.neurobrix/autotune/<model>/<arch>.json`), and
   never measures inside a request: a shape the sweep did not see is served by the nearest measured
   shape of the same kernel; a model without a sweep for this profile, or a kernel it never
-  measured, is refused with the command that measures it. `neurobrix run --triton --sweep` is that
-  command: it allows the sweep and records the shapes the model used. Gate:
+  measured, is refused with the command that measures it. `neurobrix run --triton --sweep` (and
+  `neurobrix serve --sweep`) is that command: it allows the sweep and records the shapes the model used. Gate:
   `tests/unit/triton/test_autotune_sweep_artifact.py`.
 - Apple Metal backend, first light: the engine's own Metal device and allocator behind the
   allocator seam, a Metal driver behind the NeuroBrix launcher (the same launcher as CUDA, one
