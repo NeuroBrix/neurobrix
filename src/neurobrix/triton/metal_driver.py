@@ -472,11 +472,19 @@ class MetalKernel:
 
         want = int(block[0]) if isinstance(block, (tuple, list)) else int(block)
         want = want or self.block_size
-        if want <= 0 or want % 32 or want > 1024:
+        # The bound is the PIPELINE's, not a rule of thumb. Metal has no
+        # multiple-of-the-SIMD-width requirement — a 16-thread threadgroup is
+        # legal, it simply leaves half a SIMD group idle, and several gather
+        # and index kernels legitimately use one. Asserting a multiple of 32
+        # here refused them (measured 2026-09-06: index_select and embedding).
+        # `maxTotalThreadsPerThreadgroup` is per compiled kernel and accounts
+        # for its register and threadgroup-memory use, which a constant 1024
+        # does not.
+        ceiling = int(self._pipeline.maxTotalThreadsPerThreadgroup())
+        if want <= 0 or want > ceiling:
             raise MetalKernelError(
                 f"{self.name}: a threadgroup of {want} threads is not "
-                f"dispatchable (must be a positive multiple of 32, at most "
-                f"1024)")
+                f"dispatchable; this kernel's pipeline allows 1..{ceiling}")
 
         with objc.autorelease_pool():
             self._dispatch_params(Metal, grid, params, stream, want)
