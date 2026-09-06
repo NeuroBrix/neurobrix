@@ -490,18 +490,27 @@ def drift_one(model: str, gpu, out: Path, extra: list, timeout: int, bound: floa
     else:
         env["CUDA_VISIBLE_DEVICES"] = str(gpu)
     rc, wall = run([NBX, "drift", "--model", model, "--out", str(d), "--bound", str(bound)] + req, env, d / "drift.log", timeout)
+    oracle_log = (d / "oracle.log").read_text(errors="replace") if (d / "oracle.log").exists() else ""
+    triton_only = "UNSUPPORTED PATH" in oracle_log and "encoding" in oracle_log
     rep = {}
     if (d / "drift.json").exists():
         rep = json.loads((d / "drift.json").read_text())
     first = rep.get("first") or {}
+    kernel = rep.get("first_same_dtype") or {}
     res = {"model": model, "family": fam, "weight_gb": round(weight_gb(model), 2),
            "config": "machine" if gpu is None else f"pinned:{gpu}", "request": req, "lever": "drift",
            "rc": rc, "wall_s": wall, "ops": rep.get("ops_a"), "matched": rep.get("matched"),
            "missing": rep.get("missing_in_b"), "over_bound": rep.get("over_bound"), "bound": bound,
+           "policy_sites": rep.get("policy_sites"),
            "site": (f"{first.get('component')}/{first.get('op_uid')}" if first else None),
            "site_type": first.get("op_type"), "site_dev": first.get("rel_dev"), "site_index": first.get("index"),
+           "kernel_site": (f"{kernel.get('component')}/{kernel.get('op_uid')}" if kernel else None),
+           "kernel_site_type": kernel.get("op_type"), "kernel_site_dev": kernel.get("rel_dev"),
+           "kernel_site_index": kernel.get("index"),
            "A": {"rc": rc, "exec_s": None}, "B": {"rc": rc, "exec_s": None},
            "gate": {"kind": "drift", "pass": rc == 0 and not first}}
+    if triton_only:
+        res["error"] = "triton-only build"
     (d / "result.json").write_text(json.dumps(res, indent=1))
     return res
 
@@ -562,6 +571,8 @@ def verdict(r: dict) -> str:
             return f"TORCH ({r.get('first_import_site') or '?'})"
         return "FAILED (no verdict in the log)"
     if r.get("lever") == "drift":
+        if r.get("error") == "triton-only build":
+            return "N/A (triton-only build: no ATen oracle for this container)"
         if r.get("rc"):
             return f"FAILED (drift exited {r['rc']})"
         if r.get("site"):
@@ -632,13 +643,16 @@ def table(out: Path) -> str:
                         f"{r.get('artifact') or '—'} | {verdict(r)} |")
         return head + "\n".join(rows) + "\n"
     if results and all(r.get("lever") == "drift" for r in results):
-        head = ("| model | family | weights, config | oracle ops | matched | missing on Triton | over bound | first site | verdict |\n"
-                "|---|---|---|---|---|---|---|---|---|\n")
+        head = ("| model | family | weights, config | oracle ops | matched | missing on Triton | over bound (policy) | first site | first KERNEL site | verdict |\n"
+                "|---|---|---|---|---|---|---|---|---|---|\n")
         for r in results:
+            ks = r.get("kernel_site")
+            kcell = f"{ks} ({r.get('kernel_site_type')}, {r.get('kernel_site_dev', 0):.3f}, op #{r.get('kernel_site_index')})" if ks else ("none" if r.get("site") else "—")
             rows.append(f"| {r['model']} | {r['family']} | {r.get('weight_gb', '?')} GB, {r.get('config', '?')} | "
                         f"{r.get('ops') if r.get('ops') is not None else '—'} | {r.get('matched') if r.get('matched') is not None else '—'} | "
-                        f"{r.get('missing') if r.get('missing') is not None else '—'} | {r.get('over_bound') if r.get('over_bound') is not None else '—'} | "
-                        f"{r.get('site') or '—'} | {verdict(r)} |")
+                        f"{r.get('missing') if r.get('missing') is not None else '—'} | "
+                        f"{r.get('over_bound') if r.get('over_bound') is not None else '—'} ({r.get('policy_sites') if r.get('policy_sites') is not None else '?'}) | "
+                        f"{r.get('site') or '—'} | {kcell} | {verdict(r)} |")
         return head + "\n".join(rows) + "\n"
     if results and all(r.get("lever") == "tree" for r in results):
         labels = []

@@ -86,10 +86,12 @@ class DriftReport:
     first: Optional[DriftSite]
     top: List[DriftSite]
     over_bound: int
-    #: the first over-bound op whose output dtype is the SAME on both sides —
-    #: a kernel drift, not the two engines' precision policies disagreeing
-    #: (the Triton engine keeps fp32 where the ATen oracle rounds to fp16:
-    #: that deviation is the oracle's rounding and is reported apart).
+    #: the first over-bound op whose output dtype is the SAME on both sides
+    #: and that computes (a cast, view, slice or copy only carries its input's
+    #: deviation) — a kernel drift candidate, not the two engines' precision
+    #: policies disagreeing (the Triton engine keeps fp32 where the ATen
+    #: oracle rounds to fp16: that deviation is the oracle's rounding and is
+    #: reported apart).
     first_same_dtype: Optional[DriftSite] = None
     policy_sites: int = 0
 
@@ -130,10 +132,24 @@ def detect(dump_a, dump_b, *, bound: float = 0.02, top: int = 12, fields=FIELDS)
                               window_a=list(ra.get(f) or []), window_b=list(rb.get(f) or [])))
     first = next((r for r in rows if r.rel_dev > bound), None)
     over = sum(1 for r in rows if r.rel_dev > bound)
-    same = [r for r in rows if r.rel_dev > bound and _same_dtype(r.dtype_a, r.dtype_b)]
+    same = [r for r in rows if r.rel_dev > bound and _same_dtype(r.dtype_a, r.dtype_b)
+            and not _carries_only(r.op_type)]
     return DriftReport(ops_a=len(order), matched=len(rows), missing_in_b=missing, bound=bound,
                        first=first, top=sorted(rows, key=lambda r: -r.rel_dev)[:top], over_bound=over,
                        first_same_dtype=(same[0] if same else None), policy_sites=over - len(same))
+
+
+#: Ops that move or re-view a tensor without arithmetic: a cast, a view, a
+#: slice, a copy. Whatever deviation they show is their INPUT's, so they can
+#: never be the kernel site — they are the cascade behind it.
+_CARRIERS = ("_to_copy", "to", "copy", "clone", "contiguous", "view", "_unsafe_view", "reshape", "transpose",
+             "permute", "slice", "select", "unsqueeze", "squeeze", "expand", "narrow", "alias", "detach",
+             "flatten", "unflatten", "t", "split", "chunk", "unbind", "index_select", "gather", "cat", "stack")
+
+
+def _carries_only(op_type: Optional[str]) -> bool:
+    name = str(op_type or "").split("::")[-1].split(".")[-1]
+    return name in _CARRIERS
 
 
 def _same_dtype(a: Optional[str], b: Optional[str]) -> bool:
