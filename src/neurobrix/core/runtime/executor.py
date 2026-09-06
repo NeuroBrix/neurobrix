@@ -391,9 +391,10 @@ class RuntimeExecutor:
             if self.mode in ("triton", "triton_sequential"):
                 from neurobrix.kernels import autotune_certified as _cert
                 _served = _cert.served()
-                if _served.get("certified") or _served.get("swept"):
+                if _served.get("certified") or _served.get("swept") or _served.get("local"):
                     print(f"[autotune] certified directory: {_served['certified']} key(s) served without a sweep, "
-                          f"{_served['swept']} swept at runtime (kept locally)", flush=True)
+                          f"{_served['swept']} swept at runtime (kept locally), {_served.get('local', 0)} from the local "
+                          f"replay cache", flush=True)
 
     def _prepare_defaults(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
         """Prepare merged defaults from family config, pkg defaults, and user inputs."""

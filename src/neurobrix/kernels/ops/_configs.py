@@ -131,8 +131,10 @@ def _announce_first_sweep(tuned):
         if not _SEEDED[0]:
             _SEEDED[0] = True
             try:
-                _atc.seed()
-            except Exception:              # the artifact is an optimisation, never a failure source
+                _n = _atc.seed()
+                from neurobrix.kernels import autotune_certified as _cert0
+                _cert0.note_local(_n)
+            except Exception:              # the replay cache is an optimisation, never a failure source
                 pass
         # The certified directory (owner directive 2026-09-06, the engine
         # component): a shape the directory certifies for the profile in
