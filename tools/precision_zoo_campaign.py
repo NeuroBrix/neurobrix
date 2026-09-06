@@ -482,6 +482,7 @@ def tree_ab(model: str, gpu, out: Path, extra: list, timeout: int, trees: list, 
         if sweep_arms:
             env["NBX_AUTOTUNE"] = "sweep"
             env["NEUROBRIX_AUTOTUNE_STORE"] = str(d / f"{label}_autotune")
+            env["NEUROBRIX_REPLAY_CACHE"] = str(d / f"{label}_replay")     # no seeding from the machine cache: a cold sweep per arm
         seen = subprocess.run([PY, "-c", "import neurobrix, sys; sys.stdout.write(neurobrix.__file__)"],
                               env=env, capture_output=True, text=True).stdout.strip()
         outp = d / f"{label}{ext}"
@@ -709,6 +710,9 @@ def verdict(r: dict) -> str:
             else:
                 bad = [f"{k} first differs at {v.get('first_diff')}" for k, v in others.items() if not v.get("identical")]
                 tail = "; CHOICES DIFFER (" + "; ".join(bad) + ")"
+            idle = [k for k, v in others.items() if v.get("screen") == "on" and not v.get("screened_keys")]
+            if idle:
+                tail += "; NOT PROVEN (screen on but checked 0 keys in " + ", ".join(idle) + ")"
             excl = {k: v.get("exclusions", 0) for k, v in at.items() if v.get("exclusions")}
             if excl:
                 tail += "; SCREEN EXCLUDED " + ", ".join(f"{k}: {n} config(s)" for k, n in excl.items()) + " — a finding to close"
@@ -793,7 +797,7 @@ def table(out: Path) -> str:
                 if k not in labels:
                     labels.append(k)
         with_at = any(r.get("autotune") for r in results)
-        at_head = " | autotune keys / choices vs first / screen exclusions (per arm) | sweep overhead (s, arm − first)" if with_at else ""
+        at_head = " | autotune keys / choices vs first / screen / exclusions (per arm) | sweep overhead (s, arm − control; the first arm pays the kernel compile)" if with_at else ""
         head = ("| model | family | weights, config | " + " | ".join(f"{l} exec (s) / sha" for l in labels) +
                 " | gate vs " + (labels[0] if labels else "?") + at_head + " | verdict |\n|---|---|---|" + "---|" * len(labels)
                 + "---|" + ("---|---|" if with_at else "") + "---|\n")
@@ -816,11 +820,15 @@ def table(out: Path) -> str:
                     parts.append(f"{l}: {a.get('keys', 0)} keys{ch} / {sc} / {a.get('exclusions', 0)} excluded"
                                  + (f" / {a['unscreened']} not screened" if a.get("unscreened") else ""))
                 cells.append("; ".join(parts))
-                e0 = ((r.get("arms") or {}).get(labels[0]) or {}).get("exec_s")
+                trees = r.get("trees") or {}
+                ctrl = next((l for l in labels[1:] if trees.get(l) == trees.get(labels[0])), labels[0])
+                e0 = ((r.get("arms") or {}).get(ctrl) or {}).get("exec_s")
                 ov = []
                 for l in labels[1:]:
+                    if l == ctrl:
+                        continue
                     e1 = ((r.get("arms") or {}).get(l) or {}).get("exec_s")
-                    ov.append(f"{l}: {e1 - e0:+.2f}" if e0 is not None and e1 is not None else f"{l}: —")
+                    ov.append(f"{l} − {ctrl}: {e1 - e0:+.2f}" if e0 is not None and e1 is not None else f"{l}: —")
                 cells.append("; ".join(ov) or "—")
             g = (r.get("gate") or {}).get("arms") or {}
             gs = []
