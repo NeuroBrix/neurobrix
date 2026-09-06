@@ -41,7 +41,13 @@ def test_a_launch_still_works_after_the_runtime_is_reset():
     """Allocate, launch, reset, allocate, launch. Both must compute."""
     from neurobrix.kernels import metal_device
     from neurobrix.kernels.nbx_tensor import NBXTensor
+    from neurobrix.kernels import launcher
     from neurobrix.kernels.wrappers import add
+
+    # The engine installs the launcher from kernels/dispatch.py; a test
+    # that reaches for a wrapper directly must install it too, or it
+    # exercises upstream Triton's launch path instead of the engine's.
+    launcher.install()
 
     def one_round():
         x = NBXTensor.from_numpy(np.arange(512, dtype=np.float32))
@@ -65,7 +71,13 @@ def test_resetting_the_runtime_clears_every_cache_that_holds_it():
 
     # Populate all three.
     x = nbx_tensor.NBXTensor.from_numpy(np.ones(64, dtype=np.float32))
+    from neurobrix.kernels import launcher
     from neurobrix.kernels.wrappers import add
+
+    # The engine installs the launcher from kernels/dispatch.py; a test
+    # that reaches for a wrapper directly must install it too, or it
+    # exercises upstream Triton's launch path instead of the engine's.
+    launcher.install()
     add(x, x)
     assert metal_driver._KERNEL_CACHE, "no compiled kernel to invalidate"
     assert nbx_tensor._gpu_runtime.cache_info().currsize == 1
