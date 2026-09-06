@@ -279,7 +279,7 @@ def activate(model_name: str, container_path: Optional[str]) -> int:
     if entries is None and not sweep:
         raise refusal(model_name, "no kernel sweep artifact")
     _ACTIVE = {"model": model_name, "arch": arch, "source": source, "entries": entries or {}, "sweep": sweep,
-               "container": str(container_path) if container_path else None, "used": set()}
+               "container": str(container_path) if container_path else None, "used": set(), "timings": {}}
     seeded = _seed_entries(entries) if entries else 0
     if sweep:
         seeded += seed()
@@ -362,6 +362,27 @@ def note_use(at, key: tuple) -> None:
         _ACTIVE["used"].add((id(at), key))
 
 
+def note_timings(at, key: tuple, timings) -> None:
+    """Keep the bench of a key this request just measured: the best time, the
+    second-best, and the MARGIN between them. A sweep that records only the
+    winner cannot say whether the winner was clear or a near-tie the timer
+    could flip on the next run — and a gate comparing two sweeps needs
+    exactly that to tell a change of choice from noise."""
+    if _ACTIVE is None or not _ACTIVE["sweep"] or not timings:
+        return
+    try:
+        times = sorted(float(t) for t in timings.values() if t is not None and float(t) == float(t))
+    except (TypeError, ValueError):
+        return
+    if not times:
+        return
+    best = times[0]
+    second = times[1] if len(times) > 1 else None
+    _ACTIVE["timings"][(id(at), key)] = {
+        "best_ms": best, "second_ms": second, "candidates": len(times),
+        "margin": (second / best - 1.0) if (second is not None and best > 0) else None}
+
+
 def resolve_missing(at, key: tuple) -> None:
     """A key the Autotuner holds no config for is about to be benched.
     Outside a model request (tools, tests) or in sweep mode: measure. In a
@@ -388,10 +409,14 @@ def capture_model() -> Optional[str]:
         return None
     entries: Dict[str, Dict] = dict(_ACTIVE["entries"])       # what earlier sweeps of this model measured
     used = _ACTIVE["used"]
+    timings = _ACTIVE.get("timings") or {}
     for qual, at in _autotuners():
         for key, cfg in getattr(at, "cache", {}).items():
             if (id(at), key) in used:
-                entries[f"{qual}::{key!r}"] = _config_to_dict(cfg)
+                rec = _config_to_dict(cfg)
+                if (id(at), key) in timings:
+                    rec["timing"] = timings[(id(at), key)]
+                entries[f"{qual}::{key!r}"] = rec
     if not used:
         print(f"[autotune] {_ACTIVE['model']}: this request resolved no autotuned kernel — nothing to write", flush=True)
         return None
