@@ -14,6 +14,25 @@ import triton
 
 from .nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, _broadcast_shapes, _set_device, dtype_size
 from .nbx_tensor import DeviceOOMError
+from .ops._configs import sdpa_block_ceiling as _sdpa_block_ceiling
+
+# Route this module's kernel[grid] sites through the engine's launcher.
+#
+# `kernels/dispatch.py` already calls install(), and for a full engine run
+# that is enough. It is not enough for anything that reaches a wrapper
+# WITHOUT going through dispatch — a unit test, a tool, a probe — which then
+# silently runs upstream Triton's launch path instead of the engine's, and
+# on a backend whose upstream driver cannot load our artifacts it simply
+# fails. Worse, whether it happened depended on whether some earlier import
+# in the same process had pulled dispatch: nine kernels tests changed state
+# on 2026-09-06 because an unrelated import reordered.
+#
+# install() is idempotent and honours NBX_LAUNCHER=triton, so the
+# differential arm is unaffected. The launch sites live in this module; the
+# routing of those sites belongs with them.
+from .launcher import install as _install_launcher
+
+_install_launcher()
 
 
 def _autotune_headroom_guard(launch):
@@ -8019,6 +8038,30 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
         else:
             BLOCK_M = 128
         BLOCK_N = 64
+
+    # Clamp to what the HARDWARE PROFILE allows for this shape.
+    #
+    # The cascade above proposes; the profile is the ceiling. It stays a
+    # clamp and never an instruction because the cascade carries measurements
+    # the profiles do not — BLOCK_M=64 is the floor of CORRECTNESS on Volta
+    # at head_dim<128, where volta.yml declares 128 — and a ceiling cannot
+    # undo that.
+    #
+    # Why it is needed at all: every branch above decides on
+    # `_NBX_HAS_NATIVE_BF16`, which separates Volta from Ampere and means
+    # nothing off CUDA. On an Apple GPU the cascade therefore took the
+    # Ampere branch and asked for a 128-row Q tile — four times the 32 that
+    # apple_silicon.yml has declared since it was written, over the 32 KB
+    # threadgroup budget in the same file, and past what the Metal backend
+    # will lower at all. The profile had the answer; nothing read it.
+    #
+    # MEASURED 2026-09-06: no NVIDIA tile changes (min(64,128)=64 on Volta,
+    # min(128,128)=128 on Hopper), so the CUDA rows are untouched.
+    _ceil_m, _ceil_n = _sdpa_block_ceiling(seqlen_q, headdim)
+    if _ceil_m:
+        BLOCK_M = min(BLOCK_M, int(_ceil_m))
+    if _ceil_n:
+        BLOCK_N = min(BLOCK_N, int(_ceil_n))
 
     # Output allocation. seqlen_q_rounded must align with actual BLOCK_M.
     o = NBXTensor.empty_like(q)
