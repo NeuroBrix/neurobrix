@@ -15,6 +15,9 @@ import sys
 
 def cmd_serve(args):
     """Start the serving daemon."""
+    if getattr(args, 'sweep', False):
+        import os as _os_sweep
+        _os_sweep.environ["NBX_AUTOTUNE"] = "sweep"      # the producer of a sweep artifact (autotune_cache)
     from neurobrix.serving.client import DaemonClient
     from neurobrix.serving.server import ServingDaemon
 

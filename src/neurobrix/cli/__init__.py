@@ -352,6 +352,10 @@ Examples:
     # "Execution Modes" section for the contract.
     serve_parser.add_argument('--compiled', action='store_true',
                               help='Default mode: PyTorch fused graph + cuDNN/cuBLAS')
+    serve_parser.add_argument('--sweep', action='store_true',
+                              help='Triton engine: allow the kernel sweep for shapes the served model has no measured '
+                                   'configuration for on this hardware profile, and record it as the model\'s sweep '
+                                   'artifact. Without it a request never sweeps: a missing artifact is refused.')
     serve_parser.add_argument('--sequential', action='store_true',
                               help='PyTorch eager op-by-op (no fusion, debug)')
     serve_parser.add_argument('--triton', action='store_true',
