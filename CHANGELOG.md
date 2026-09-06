@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `neurobrix drift`: the drift-site detector. The same request runs on the ATen oracle (sequential,
+  op by op) and on the Triton engine, each writing its per-op record, and the report names the
+  first op in the oracle's order whose values depart beyond a relative bound — separating a kernel
+  drift (same dtype on both sides) from a precision-policy site (the engines' dtypes differ) — with
+  the largest deviations behind it. The site to open, not a verdict on the output.
 - The kernel sweep is an artifact. A Triton request loads the model's measured sweep for the
   hardware profile — per kernel, per shape — from the container (`runtime/autotune/<arch>.json`,
   embedded by the build) or the engine's store (`~/.neurobrix/autotune/<model>/<arch>.json`), and

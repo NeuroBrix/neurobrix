@@ -476,6 +476,36 @@ def sweep_one(model: str, gpu, out: Path, extra: list, timeout: int) -> dict:
     return res
 
 
+def drift_one(model: str, gpu, out: Path, extra: list, timeout: int, bound: float = 0.02) -> dict:
+    """The drift-site lever on one model: `neurobrix drift` (the ATen oracle
+    against the Triton engine, per op) on the family stimulus; the verdict is
+    the first drifting op, or none."""
+    fam = family_of(model)
+    d = out / model
+    d.mkdir(parents=True, exist_ok=True)
+    req = request_args(model, fam, extra)
+    env = {**os.environ}
+    if gpu is None:
+        env.pop("CUDA_VISIBLE_DEVICES", None)
+    else:
+        env["CUDA_VISIBLE_DEVICES"] = str(gpu)
+    rc, wall = run([NBX, "drift", "--model", model, "--out", str(d), "--bound", str(bound)] + req, env, d / "drift.log", timeout)
+    rep = {}
+    if (d / "drift.json").exists():
+        rep = json.loads((d / "drift.json").read_text())
+    first = rep.get("first") or {}
+    res = {"model": model, "family": fam, "weight_gb": round(weight_gb(model), 2),
+           "config": "machine" if gpu is None else f"pinned:{gpu}", "request": req, "lever": "drift",
+           "rc": rc, "wall_s": wall, "ops": rep.get("ops_a"), "matched": rep.get("matched"),
+           "missing": rep.get("missing_in_b"), "over_bound": rep.get("over_bound"), "bound": bound,
+           "site": (f"{first.get('component')}/{first.get('op_uid')}" if first else None),
+           "site_type": first.get("op_type"), "site_dev": first.get("rel_dev"), "site_index": first.get("index"),
+           "A": {"rc": rc, "exec_s": None}, "B": {"rc": rc, "exec_s": None},
+           "gate": {"kind": "drift", "pass": rc == 0 and not first}}
+    (d / "result.json").write_text(json.dumps(res, indent=1))
+    return res
+
+
 def r33_probe(model: str, gpu, out: Path, extra: list, timeout: int, src: Path = None) -> dict:
     """The R33 proof on one model: a complete `--triton` request in-process
     under the sys.modules probe; the verdict is whether torch is in
@@ -531,6 +561,12 @@ def verdict(r: dict) -> str:
         if r.get("torch_at_exit") is True:
             return f"TORCH ({r.get('first_import_site') or '?'})"
         return "FAILED (no verdict in the log)"
+    if r.get("lever") == "drift":
+        if r.get("rc"):
+            return f"FAILED (drift exited {r['rc']})"
+        if r.get("site"):
+            return f"DRIFT at {r['site']} ({r.get('site_type')}, {r.get('site_dev', 0):.3f}, op #{r.get('site_index')}; {r.get('over_bound')} over)"
+        return f"NO DRIFT ({r.get('matched')} ops within {r.get('bound')})"
     if r.get("lever") == "sweep":
         if r.get("A", {}).get("rc"):
             return f"FAILED (the run exited {r['A']['rc']})"
@@ -672,6 +708,10 @@ def main():
     r.add_argument("--trees", default=None,
                    help="tree gate: label=path/to/src,label=path/to/src[,...] — the same --triton request from each "
                         "frozen tree, bytes compared against the first (a port's kernel change must be inert on CUDA)")
+    r.add_argument("--drift", action="store_true",
+                   help="drift-site lever: `neurobrix drift` per model (ATen oracle vs Triton engine, per op); "
+                        "the verdict is the first drifting op")
+    r.add_argument("--drift-bound", type=float, default=0.02)
     r.add_argument("--sweep", action="store_true",
                    help="sweep producer: a --triton --sweep request per model from this tree; the verdict is the "
                         "model's sweep artifact for this hardware profile")
@@ -724,6 +764,10 @@ def main():
             if args.probe:
                 res = r33_probe(m, gpu, out, extra, args.timeout, Path(args.src) if args.src else None)
                 print(f"[zoo] {m}: {verdict(res)} exec={res.get('exec_s')} sha={res.get('output_sha')}", flush=True)
+            elif args.drift:
+                res = drift_one(m, gpu, out, extra, args.timeout, args.drift_bound)
+                print(f"[zoo] {m}: {verdict(res)}", flush=True)
+                continue
             elif args.sweep:
                 res = sweep_one(m, gpu, out, extra, args.timeout)
                 print(f"[zoo] {m}: {verdict(res)} exec={res['A'].get('exec_s')} artifact={res.get('artifact')}", flush=True)
