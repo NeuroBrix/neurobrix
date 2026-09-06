@@ -397,6 +397,11 @@ _UNSCREENED_LINE = re.compile(r"\[AUTOTUNE_SCREEN\].*\bnot screened\b|\bgo to th
 _SCREEN_SUMMARY = re.compile(r"correctness screen (on|off): checked (\d+) key\(s\), excluded (\d+) config")
 
 
+def _cfg(entry):
+    """The config of a sweep entry without its bench timing (two arms choose the same config with different times)."""
+    return None if entry is None else {k: v for k, v in entry.items() if k != "timing"}
+
+
 def _sweep_store_entries(store: Path, model: str) -> dict:
     """The model's sweep artifact in one arm's store: {key: config}, or {}."""
     entries = {}
@@ -416,13 +421,19 @@ def _compare_sweep_stores(d: Path, model: str, trees: list) -> dict:
     chose the same config, with the first key that did not."""
     first = trees[0][0]
     base = _sweep_store_entries(d / f"{first}_autotune", model)
+    stores = {label: _sweep_store_entries(d / f"{label}_autotune", model) for label, _ in trees}
+    # A key whose bench margin (second-best over best) is under 10 % in ANY arm is a near-tie the
+    # timer can flip on the next run, whatever the arms chose there.
+    near_tie = sorted({k for ent in stores.values() for k, e in ent.items()
+                       if isinstance(e.get("timing"), dict) and e["timing"].get("margin") is not None
+                       and e["timing"]["margin"] < 0.10})
     # The control: a second arm on the FIRST tree — what timing noise alone does to a choice.
     control = next((l for l, src in trees[1:] if str(src) == str(trees[0][1])), None)
-    ctrl = _sweep_store_entries(d / f"{control}_autotune", model) if control else {}
-    noise_keys = sorted(k for k in set(base) & set(ctrl) if base[k] != ctrl[k]) if control else []
+    ctrl = stores.get(control, {}) if control else {}
+    noise_keys = sorted(k for k in set(base) & set(ctrl) if _cfg(base[k]) != _cfg(ctrl[k])) if control else []
     out = {}
     for label, _ in trees:
-        ent = _sweep_store_entries(d / f"{label}_autotune", model)
+        ent = stores[label]
         log = (d / f"{label}.log").read_text(errors="replace") if (d / f"{label}.log").exists() else ""
         excluded = [ln.strip() for ln in log.splitlines() if _EXCLUSION_LINE.search(ln)]
         unscreened = [ln.strip() for ln in log.splitlines() if _UNSCREENED_LINE.search(ln)]
@@ -438,18 +449,20 @@ def _compare_sweep_stores(d: Path, model: str, trees: list) -> dict:
         if label != first:
             missing = sorted(set(base) - set(ent))
             extra = sorted(set(ent) - set(base))
-            differing = sorted(k for k in set(base) & set(ent) if base[k] != ent[k])
+            differing = sorted(k for k in set(base) & set(ent) if _cfg(base[k]) != _cfg(ent[k]))
             # A key where the arm agrees with EITHER the first arm or the control is within the
             # run-to-run noise of the timer; only a key that differs from both is the arm's own.
             # ... and a key the control itself disagrees on with the first arm is a demonstrated
             # near-tie of the timer: a third config there is still noise, not the arm's doing.
             beyond = sorted(k for k in differing
-                            if not (control and label != control and (ctrl.get(k) == ent.get(k) or k in noise_keys)))
+                            if k not in near_tie
+                            and not (control and label != control and (_cfg(ctrl.get(k)) == _cfg(ent.get(k)) or k in noise_keys)))
             rec.update({"identical": not missing and not extra and not differing and bool(base),
                         "within_noise": (not missing and not extra and bool(base) and (label == control or not beyond)),
                         "missing_keys": missing[:10], "extra_keys": extra[:10],
                         "differing_keys": differing[:10], "beyond_noise_keys": beyond[:10],
                         "noise_keys": noise_keys[:10], "noise_key_count": len(noise_keys),
+                        "near_tie_count": len(near_tie), "margins_recorded": sum(1 for e in ent.values() if isinstance(e.get("timing"), dict)),
                         "first_diff": (differing or missing or extra or [None])[0],
                         "first_diff_configs": ({"first": base.get(differing[0]), label: ent.get(differing[0]),
                                                 **({control: ctrl.get(differing[0])} if control else {})}
@@ -748,7 +761,9 @@ def verdict(r: dict) -> str:
                 tail = f"; choices identical ({at.get(first, {}).get('keys', 0)} keys)"
             elif all(v.get("within_noise") for v in others.values()) and others:
                 nk = max((v.get("noise_key_count") or 0) for v in others.values())
-                tail = f"; choices within the control's run-to-run noise ({at.get(first, {}).get('keys', 0)} keys, {nk} noisy)"
+                nt = max((v.get("near_tie_count") or 0) for v in others.values())
+                tail = (f"; choices within the timer's noise ({at.get(first, {}).get('keys', 0)} keys; {nk} moved on the control run"
+                        + (f", {nt} near-ties by bench margin" if nt else "") + ")")
             else:
                 bad = [f"{k} differs beyond the noise at {(v.get('beyond_noise_keys') or [v.get('first_diff')])[0]}"
                        for k, v in others.items() if not v.get("identical") and not v.get("within_noise")]

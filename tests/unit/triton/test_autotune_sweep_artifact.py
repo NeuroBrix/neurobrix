@@ -134,3 +134,33 @@ def test_embedded_artifact_wins_over_the_store(rig):
     atc.activate("m", str(container))
     assert (4, 5, 6) in tuner.cache and (1, 2, 3) not in tuner.cache
     assert atc.active()["source"].endswith(os.path.join("runtime", "autotune", "cuda-70.json"))
+
+
+def test_the_bench_margin_of_a_swept_key_is_written_with_its_config(tmp_path, monkeypatch):
+    """A sweep that records only the winner cannot tell a clear choice from a near-tie;
+    the artifact keeps best, second-best and the margin per key it measured."""
+    import triton
+    from neurobrix.triton import autotune_cache as atc
+
+    monkeypatch.setenv("NBX_AUTOTUNE", "sweep")
+    monkeypatch.setenv("NEUROBRIX_AUTOTUNE_STORE", str(tmp_path / "store"))
+    monkeypatch.setattr(atc, "_DIR", str(tmp_path / "replay"))
+    monkeypatch.setattr(atc, "_arch_fingerprint", lambda: "cuda-70")
+    c1 = triton.Config({"BLOCK": 32}, num_warps=2, num_stages=2)
+    c2 = triton.Config({"BLOCK": 64}, num_warps=4, num_stages=3)
+
+    class FakeTuner:
+        cache = {("k",): c1}
+        configs = [c1, c2]
+        configs_timings = {c1: 1.0, c2: 1.3}
+    tuner = FakeTuner()
+    monkeypatch.setattr(atc, "_autotuners", lambda: [("fake.kernel", tuner)])
+    atc.activate("fake-model", None)
+    atc.note_use(tuner, ("k",))
+    atc.note_timings(tuner, ("k",), tuner.configs_timings)
+    path = atc.capture_model()
+    doc = json.loads(open(path).read())
+    entry = doc["entries"]["fake.kernel::('k',)"]
+    assert entry["kwargs"] == {"BLOCK": 32}
+    assert entry["timing"]["best_ms"] == 1.0 and entry["timing"]["second_ms"] == 1.3
+    assert abs(entry["timing"]["margin"] - 0.3) < 1e-9 and entry["timing"]["candidates"] == 2
