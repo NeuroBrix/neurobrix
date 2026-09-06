@@ -127,3 +127,17 @@ def test_the_sequential_oracle_honours_the_set(op_name):
         assert out.dtype == torch.float16 and out.shape[-1] == 20
     else:
         raise AssertionError(f"no oracle probe for '{op_name}'")
+
+
+def test_a_host_placement_decides_the_compute_dtype_and_the_weight_dtype_alike():
+    """The plan-time decision — a host-placed component computes in fp32 —
+    must reach the weights too. On 2026-09-06 the engine computed in fp32
+    while the loader still narrowed the same component's weights to the
+    plan's fp16, and the ATen oracle met fp32 activations with fp16 weights
+    at its first matmul (Kokoro-82M's decoder under lazy_sequential)."""
+    from neurobrix.core.dtype.engine import compute_dtype_for_placement
+
+    assert compute_dtype_for_placement("cpu", torch.float16) is torch.float32
+    assert compute_dtype_for_placement("cuda:0", torch.float16) is torch.float16
+    assert compute_dtype_for_placement("cuda:1", torch.bfloat16) is torch.bfloat16
+    assert compute_dtype_for_placement(None, torch.float16) is torch.float16
