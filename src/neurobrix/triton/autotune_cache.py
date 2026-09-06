@@ -103,6 +103,64 @@ def _config_from_dict(d):
                          maxnreg=d.get("maxnreg"))
 
 
+def _exclusions_path() -> Optional[str]:
+    """Where the correctness screen's exclusions are kept, beside the sweep."""
+    path = _artifact_path()
+    if path is None:
+        return None
+    return path.replace("autotune_configs_", "autotune_exclusions_")
+
+
+def record_screen_exclusions(entries) -> int:
+    """Persist configs the correctness screen refused, so Forge sees them.
+
+    A config excluded for being WRONG and a config that merely lost on speed
+    are indistinguishable in a sweep that records only the winner — and they
+    are not the same fact at all. One is a tuning outcome; the other is a
+    backend defect with a shape attached.
+
+    Keyed by kernel, key and config so repeated runs merge instead of
+    accumulating duplicates. Best-effort: a sweep that cannot be written must
+    never fail a launch, and the exclusions are also printed as they happen.
+    """
+    path = _exclusions_path()
+    if path is None or not entries:
+        return 0
+    try:
+        os.makedirs(_DIR, exist_ok=True)
+        stored: Dict[str, Dict] = {}
+        try:
+            with open(path) as f:
+                stored = json.load(f)
+        except (OSError, ValueError):
+            stored = {}
+        added = 0
+        for entry in entries:
+            entry = dict(entry)
+            ident = f"{entry.get('kernel')}::{entry.get('key')!r}::{entry.get('config')}"
+            if ident not in stored:
+                stored[ident] = entry
+                added += 1
+        if added:
+            with open(path, "w") as f:
+                json.dump(stored, f, indent=1, default=str)
+        return added
+    except OSError:
+        return 0
+
+
+def screen_exclusions() -> Dict[str, Dict]:
+    """Everything the screen has refused on this machine, for Forge."""
+    path = _exclusions_path()
+    if path is None:
+        return {}
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
 def capture() -> int:
     """Merge every selected config into the artifact. Returns the
     number of NEW entries written (0 = artifact already covers this

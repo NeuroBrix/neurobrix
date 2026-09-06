@@ -226,3 +226,34 @@ precision:
 # not conservative.
 pipelining:
   max_num_stages: 2
+
+# Autotune correctness screen. The engine runs every candidate config once and
+# compares its result against a reference config's before timing any of them,
+# because an autotuner that ranks on speed alone selects whichever WRONG
+# kernel is fastest — a kernel that writes half its output does half the
+# stores and wins. Measured on Apple 2026-09-07: fp16 mm [64,32]@[32,64] chose
+# a config that left half the columns zero.
+#
+# These are the tolerances that separate "a different but valid summation
+# order" from "a different answer". Two configs with different block sizes
+# reduce in a different order, so their results differ in the last bits; a
+# config that drops output differs by the scale of the output itself. The
+# gap between those two is several orders of magnitude, and these sit in it.
+#
+# Relative to the reference's own magnitude: max|a - b| / max|b|. Integer
+# and boolean results are compared BIT-IDENTICALLY and ignore this table —
+# there is no valid reordering that changes an integer.
+autotune_screen_rtol:
+  float16: 2.0e-2
+  bfloat16: 4.0e-2
+  float32: 1.0e-4
+  float64: 1.0e-8
+
+# Above this many bytes of buffer, the autotune correctness screen does not
+# run. Screening copies every argument out and back once per candidate, so a
+# very large tensor turns a tuning step into hundreds of megabytes of traffic
+# — and on unified memory that pressure is the machine's, not a card's.
+# MEASURED 2026-09-07: unbounded screening of a 151936-wide softmax perturbed
+# six unrelated tests in the same process. A skipped screen is announced, not
+# silent.
+autotune_screen_max_bytes: 33554432
