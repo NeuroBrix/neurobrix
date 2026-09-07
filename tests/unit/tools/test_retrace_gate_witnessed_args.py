@@ -249,3 +249,38 @@ def test_a_batch_counted_twice_is_corrected_to_once():
     # a change in a non-unit symbol is never this class
     other = _mul(B, 1600, 1600)
     assert not R.equivalent_modulo_unit_factors(once, other)
+
+
+def test_a_vendor_minus_one_restored_and_a_slice_end_to_the_end_are_admitted():
+    tp = _fd(S1, 8, 14)
+    old = {"op_uid": "aten.view::21", "op_type": "aten.view", "input_tensor_ids": ["p::out_0"], "output_tensor_ids": ["aten.view::21::out_0"],
+           "attributes": {"args": [{"type": "tensor", "tensor_id": "p::out_0"}, {"type": "list", "value": [1, tp, 750]}], "kwargs": {}, "shape": [1, tp, 750]}}
+    new = copy.deepcopy(old)
+    for lst in (new["attributes"]["shape"], new["attributes"]["args"][1]["value"]):
+        lst[0], lst[2] = B, -1
+    tensors = {"p::out_0": {"shape": [1, 14, 750], "symbolic_shape": {"dims": [B, tp, 750], "concrete": [1, 14, 750]}},
+               "aten.view::21::out_0": {"shape": [1, 14, 750], "symbolic_shape": {"dims": [B, tp, 750], "concrete": [1, 14, 750]}}}
+    sites = R.witnessed_arg_changes(old, new, tensors)
+    assert sites is not None and {x["kind"] for x in sites} == {"symbolized", "inference-restored"}
+    old_s = {"op_uid": "aten.slice::8", "op_type": "aten.slice", "input_tensor_ids": ["q::out_0"], "output_tensor_ids": ["aten.slice::8::out_0"],
+             "attributes": {"args": [{"type": "tensor", "tensor_id": "q::out_0"}, {"type": "scalar", "value": 2}, {"type": "scalar", "value": 0}, tp], "kwargs": {}, "dim": 2, "start": 0, "end": tp}}
+    new_s = copy.deepcopy(old_s); new_s["attributes"]["args"][3] = {"type": "scalar", "value": R.INT64_MAX}; new_s["attributes"]["end"] = R.INT64_MAX
+    t2 = {"q::out_0": {"shape": [1, 8, 14], "symbolic_shape": {"dims": [1, 8, tp], "concrete": [1, 8, 14]}}, "aten.slice::8::out_0": {"shape": [1, 8, 14], "symbolic_shape": {"dims": [1, 8, tp], "concrete": [1, 8, 14]}}}
+    sites = R.witnessed_arg_changes(old_s, new_s, t2)
+    assert sites is not None and all(x["kind"] == "slice-end-to-the-end" for x in sites)
+
+
+def test_an_expression_of_unit_symbols_only_may_become_the_literal_it_was_worth():
+    B2 = {"type": "symbol", "id": "s2", "trace": 1}
+    fold = _mul(_mul(B, 50, 50), _mul(B2, 33, 33), 1650)
+    old = {"op_uid": "aten.view::2", "op_type": "aten.view", "input_tensor_ids": ["r::out_0"], "output_tensor_ids": ["aten.view::2::out_0"],
+           "attributes": {"args": [{"type": "tensor", "tensor_id": "r::out_0"}, {"type": "list", "value": [fold, 640]}], "kwargs": {}, "shape": [fold, 640]}}
+    new = copy.deepcopy(old); new["attributes"]["shape"][0] = 1650; new["attributes"]["args"][1]["value"][0] = 1650
+    tensors = {"aten.view::2::out_0": {"shape": [1650, 640], "symbolic_shape": {"dims": [1650, 640], "concrete": [1650, 640]}}}
+    sites = R.witnessed_arg_changes(old, new, tensors)
+    assert sites is not None and all(x["kind"] == "unit-only-literalized" for x in sites)
+    # a real symbol turned into its trace value is still refused
+    old2 = copy.deepcopy(old); old2["attributes"]["shape"][0] = _mul(SEQ, 50, 1150); old2["attributes"]["args"][1]["value"][0] = _mul(SEQ, 50, 1150)
+    new2 = copy.deepcopy(new); new2["attributes"]["shape"][0] = 1150; new2["attributes"]["args"][1]["value"][0] = 1150
+    t2 = {"aten.view::2::out_0": {"shape": [1150, 640], "symbolic_shape": {"dims": [1150, 640], "concrete": [1150, 640]}}}
+    assert R.witnessed_arg_changes(old2, new2, t2) is None

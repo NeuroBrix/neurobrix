@@ -158,6 +158,10 @@ def _leaf_diffs(a, b, path=()):
     if isinstance(a, dict) and isinstance(b, dict):
         if _is_dim_node(a) and _is_dim_node(b):           # two dim expressions: one leaf pair
             return [] if a == b else [(path, a, b)]
+        if _is_dim_node(a) and b.get("type") == "scalar" and isinstance(b.get("value"), int):
+            return [(path, a, b["value"])]                # a dim expression that became a recorded scalar
+        if _is_dim_node(b) and a.get("type") == "scalar" and isinstance(a.get("value"), int):
+            return [(path, a["value"], b)]                # a recorded scalar that became a dim expression
         if set(a) != set(b):
             return None
         out = []
@@ -185,6 +189,8 @@ def _leaf_diffs(a, b, path=()):
             return [(path, a, b)]
         if isinstance(a, dict) and a.get("type") == "scalar" and isinstance(a.get("value"), int) and _is_dim_node(b):
             return [(path, a["value"], b)]            # a recorded scalar arg that became a dim expression
+        if isinstance(b, dict) and b.get("type") == "scalar" and isinstance(b.get("value"), int) and _is_dim_node(a):
+            return [(path, a, b["value"])]            # a dim expression that became a recorded scalar arg
         return None
     return [] if a == b else [(path, a, b)]
 
@@ -356,6 +362,20 @@ def witnessed_arg_changes(old_op: dict, new_op: dict, tensors_new: dict):
         if a == INT64_MAX and isinstance(b, dict) and _is_dim_node(b) and json.dumps(b, sort_keys=True) in input_dims:
             sites.append({"op": new_op.get("op_uid"), "path": ".".join(str(k) for k in path), "old": a, "new": b, "kind": "slice-end-symbolized"})
             continue
+        # SLICE END TO THE END: the symmetric spelling — an end that was the dim's own expression
+        # is now "to the end" (INT64_MAX); relative by nature, never wrong.
+        if b == INT64_MAX and isinstance(a, dict) and _is_dim_node(a) and json.dumps(a, sort_keys=True) in input_dims:
+            sites.append({"op": new_op.get("op_uid"), "path": ".".join(str(k) for k in path), "old": a, "new": b, "kind": "slice-end-to-the-end"})
+            continue
+        # INFERENCE RESTORED: an integer the injection had written into a view became the vendor's
+        # -1 again (numel-inferred at runtime; never wrong) — the integer must be the extent.
+        if b == -1 and isinstance(a, int) and not isinstance(a, bool) and path and isinstance(path[-1], int):
+            _parent = new_op["attributes"]
+            for k in path[:-1]:
+                _parent = _parent[k]
+            if any(len(_parent) == len(c) and c[path[-1]] == a for c in witnessed):
+                sites.append({"op": new_op.get("op_uid"), "path": ".".join(str(k) for k in path), "old": a, "new": b, "kind": "inference-restored"})
+                continue
         if not path or not isinstance(path[-1], int):
             return None
         pos = path[-1]
@@ -413,7 +433,18 @@ def witnessed_arg_changes(old_op: dict, new_op: dict, tensors_new: dict):
         if not isinstance(b, int) or isinstance(b, bool):
             return None
         tv = _trace_value(a)
-        if tv is None or tv == b:
+        if tv is None:
+            return None
+        if tv == b:
+            # UNIT-ONLY EXPRESSION LITERALIZED: an expression whose only symbols are of trace 1
+            # is a literal in disguise (parakeet's joint: (batch·50)·(batch·33) for a view of
+            # 1650 rows — the batch folded into two frozen lengths); the literal it was worth
+            # is admitted at the witnessed extent. A symbol that carries variability never is.
+            env0 = symbols_of(a)
+            if isinstance(a, dict) and a.get("type") != "symbol" and env0 and all(tv1 == 1 for tv1 in env0.values()) \
+                    and any(len(parent) == len(c) and c[pos] == b for c in witnessed):
+                sites.append({"op": new_op.get("op_uid"), "path": ".".join(str(k) for k in path), "old": a, "new": b, "kind": "unit-only-literalized"})
+                continue
             return None
         if not any(len(parent) == len(c) and c[pos] == b for c in witnessed):
             return None
@@ -806,7 +837,10 @@ class Model:
             f"batch split restored {sum(r.get('arg_kinds', {}).get('batch-split-restored', 0) for r in gd['components'].values())}, "
             f"batch factor restored {sum(r.get('arg_kinds', {}).get('batch-factor-restored', 0) for r in gd['components'].values())}, "
             f"unit factor corrected {sum(r.get('arg_kinds', {}).get('unit-factor-corrected', 0) for r in gd['components'].values())}, "
-            f"slice end symbolized {sum(r.get('arg_kinds', {}).get('slice-end-symbolized', 0) for r in gd['components'].values())}), "
+            f"slice end symbolized {sum(r.get('arg_kinds', {}).get('slice-end-symbolized', 0) for r in gd['components'].values())}, "
+            f"slice end to the end {sum(r.get('arg_kinds', {}).get('slice-end-to-the-end', 0) for r in gd['components'].values())}, "
+            f"inference restored {sum(r.get('arg_kinds', {}).get('inference-restored', 0) for r in gd['components'].values())}, "
+            f"unit-only literalized {sum(r.get('arg_kinds', {}).get('unit-only-literalized', 0) for r in gd['components'].values())}), "
             f"{gd['pruned_dead_ops']} dead op(s) pruned, "
             f"{gd['beyond_annotation']} beyond, corrupted dims {gd['corrupted_before']} → {gd['corrupted_after']}")
         return verdict.startswith("PASS")
