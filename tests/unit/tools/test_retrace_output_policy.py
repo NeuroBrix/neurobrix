@@ -418,3 +418,18 @@ def test_a_hub_object_that_does_not_run_is_recorded_and_the_new_container_is_jud
     m.state["steps"]["new_outputs"]["runs"]["triton"]["sha"] = "zzz"
     monkeypatch.setattr(C, "gate", lambda a, b: {"kind": "text", "identical": False})
     assert m.step_gate() is False and m.state["steps"]["gate"]["verdict"] == "NEEDS_EXPLANATION"
+
+
+def test_an_arm_the_engine_refuses_on_both_containers_alike_is_not_applicable(model, monkeypatch):
+    m = model
+    fr = "S"; m.state["autotune_freeze"] = {"snapshot": fr}
+    for tag in ("old", "new"):
+        (m.dir / f"{tag}_sequential.log").write_text("x\n[ERROR] Pipeline failed: Only 2D, 3D, 4D, 5D padding with non-constant padding are supported for now\n")
+    runs = lambda sha: {"sequential": {"rc": 1, "sha": None, "output": "s"}, "triton": {"rc": 0, "sha": sha, "output": str(m.dir / "t.mp4")}}  # noqa: E731
+    m.state["steps"]["old_outputs"] = {"ok": True, "policy": R.POLICY, "autotune": fr, "runs": runs("abc")}
+    m.state["steps"]["new_outputs"] = {"ok": True, "policy": R.POLICY, "autotune": fr, "runs": runs("abc")}
+    monkeypatch.setattr(m, "graph_diff", lambda: {"components": {}, "beyond_annotation": 0, "annotation_changes": 1, "arg_witnessed": 0,
+                                                  "pruned_dead_ops": 0, "corrupted_before": 1, "corrupted_after": 0, "topology": [], "topology_additions": []})
+    assert m.step_gate() is True
+    g = m.state["steps"]["gate"]
+    assert g["bytes"]["sequential"].startswith("N/A (the engine refuses both containers alike") and g["bytes"]["triton"] == "IDENTICAL"

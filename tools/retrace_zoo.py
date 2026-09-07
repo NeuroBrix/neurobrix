@@ -66,7 +66,7 @@ PROVENANCE_KEYS = {"device", "memory_info", "timestamp_ns"}
 # Naming, not semantics: the vendor module an op was recorded under (a vendor rename such as
 # `final_layer.norm_final` → `final_layer.final_norm` between two transformers versions moves
 # no op and no tensor — VibeVoice's prediction head, 2026-09-07).
-NAMING_KEYS = {"parent_module"}
+NAMING_KEYS = {"parent_module", "output_name"}   # output_name: absent in the June encoding, a name since
 # Derived bookkeeping: the consumers of a tensor are the ops whose inputs name it. The old
 # containers carried lists computed before the fusion pass (a norm weight "consumed" by the
 # decomposed mul, not the fused rms_norm — Voxtral, VibeVoice, canary 2026-09-07). Never
@@ -349,7 +349,25 @@ def rewrite_symbols(node, remap: dict):
     return node
 
 
-def witnessed_arg_changes(old_op: dict, new_op: dict, tensors_new: dict):
+def _effective_literal(node):
+    """The integer an expression is when every unit-trace symbol is 1 — the frozen extent the old
+    tracer carried under a batch fold (`σ·281250` for canary's mel frames: the June graph had
+    no time-axis symbol at all). None when a symbol of another trace remains."""
+    if isinstance(node, int) and not isinstance(node, bool):
+        return node
+    if not (isinstance(node, dict) and _is_dim_node(node)):
+        return None
+    syms = symbols_of(node)                       # symbol id → trace value
+    if any(t != 1 for t in syms.values()):
+        return None
+    try:
+        v = eval_dim(node, {sid: 1 for sid in syms})
+    except Exception:  # noqa: BLE001
+        return None
+    return v if isinstance(v, int) and not isinstance(v, bool) else None
+
+
+def witnessed_arg_changes(old_op: dict, new_op: dict, tensors_new: dict, tensors_old: dict = None):
     """The differences between two records of one op when each is the closed
     defect at the argument level — two kinds:
     - witnessed: a shape argument (a `size`/`shape` list, or the `args` list it
@@ -436,6 +454,46 @@ def witnessed_arg_changes(old_op: dict, new_op: dict, tensors_new: dict):
         parent = new_op["attributes"]
         for k in path[:-1]:
             parent = parent[k]
+        # A CORRUPTED ARGUMENT: the old value claimed, at trace, an extent that contradicts the
+        # op's own output at that position — the closed defect at the argument level, in the
+        # June encoding's ugliest form (canary's perception: `σ·281250` for an output of 750,
+        # `(σ·(σ·8))·((σ·281250)−1)` for an output of 1). Any replacement right by construction
+        # is admitted as `witnessed`: the witnessed integer, the vendor's -1 (inferred), or the
+        # symbolic dim the op's inputs/outputs carry there with the witnessed extent as trace.
+        ext = {c[pos] for c in witnessed if len(c) == len(parent) and pos < len(c)}
+        ext = next(iter(ext)) if len(ext) == 1 else None
+        old_claim = a if (isinstance(a, int) and not isinstance(a, bool)) else _trace_value(a) if isinstance(a, dict) else None
+        if ext is not None and old_claim is not None and old_claim != ext and old_claim != -1:
+            right = (b == -1 or (isinstance(b, int) and not isinstance(b, bool) and b == ext)
+                     or (isinstance(b, dict) and _trace_value(b) == ext and json.dumps(b, sort_keys=True) in input_dims))
+            if not right:
+                return None
+            sites.append({"op": new_op.get("op_uid"), "path": ".".join(str(k) for k in path), "old": a, "new": b, "kind": "witnessed"})
+            continue
+        # FROZEN ON BOTH SIDES: a factory size the old tracer had seeded with an expression whose
+        # trace is the literal the new tracer writes, while the op's OUTPUT carries that literal on
+        # both sides (canary's, VibeVoice's, Voxtral's language models: 28–30 `ones`/`zeros` at the
+        # trace length, June and now alike — the runtime's promotion carries them). Named and
+        # counted as a finding of that class; neither side was symbolic there.
+        if isinstance(b, int) and not isinstance(b, bool) and isinstance(a, dict) and _is_dim_node(a) and _trace_value(a) == b:
+            old_out = []
+            for tid in old_op.get("output_tensor_ids") or []:
+                dims = (((tensors_old or {}).get(tid) or {}).get("symbolic_shape") or {}).get("dims") or []
+                if dims:
+                    old_out.append(list(dims))
+            if any(len(d) > pos and d[pos] == b for d in out_dims) and any(len(d) > pos and d[pos] == b for d in old_out):
+                sites.append({"op": new_op.get("op_uid"), "path": ".".join(str(k) for k in path), "old": a, "new": b, "kind": "frozen-on-both-sides"})
+                continue
+        # An old expression that is a literal once its unit-trace symbols are 1 (`σ·375`: the
+        # batch folded onto a frozen extent) reads as that literal for the classes below.
+        a_lit = _effective_literal(a) if isinstance(a, dict) else None
+        if a_lit is not None and b == -1:
+            if any(len(parent) == len(c) and c[pos] == a_lit for c in witnessed):
+                sites.append({"op": new_op.get("op_uid"), "path": ".".join(str(k) for k in path), "old": a, "new": b, "kind": "inference-restored"})
+                continue
+            return None
+        if a_lit is not None and isinstance(b, dict) and not equivalent_modulo_unit_factors(a, b):
+            a = a_lit                             # the unit-factor classes below keep their own name when they apply
         if isinstance(b, dict) and isinstance(a, int) and not isinstance(a, bool):
             # SYMBOLIZED: an integer the old tracer could not express, now the very symbolic
             # dim the op's input or output carries (derived by the rule, never matched by value
@@ -1144,7 +1202,7 @@ class Model:
                 a = scrub_provenance(a)
                 b = scrub_provenance(b)
                 if json.dumps(a, sort_keys=True) != json.dumps(b, sort_keys=True):
-                    sites = witnessed_arg_changes(a, b, tn)
+                    sites = witnessed_arg_changes(a, b, tn, to)
                     if sites is None:
                         rec["op_diffs"] += 1; _site(uid, a, b)
                     else:
@@ -1163,8 +1221,8 @@ class Model:
                         rec["tensor_diff_sites"].append({"tensor": tid, "only_in": "old" if b is None else "new"})
                     continue
                 for k in set(a) | set(b):
-                    if k in PROVENANCE_KEYS or k in DERIVED_KEYS:
-                        continue
+                    if k in PROVENANCE_KEYS or k in DERIVED_KEYS or k in NAMING_KEYS:
+                        continue                       # a name (output_name: absent in the June encoding), never a value
                     if a.get(k) != b.get(k):
                         if k in ANNOTATION_KEYS:
                             rec["annotation_changes"] += 1
@@ -1222,6 +1280,14 @@ class Model:
             # against the hub's graphs must be the closed defect alone.
             ns, nt = new.get("sequential") or {}, new.get("triton") or {}
             gd = self.graph_diff()
+            # The object does not run because the engine's Prism plan follows today's registry
+            # layout: a component the old topology had and the new one has not (or the reverse)
+            # is that layout change, named under "topology_layout", not beyond.
+            layout = [t for t in gd.get("topology") or [] if t.get("path", "").startswith("components.")]
+            if layout:
+                gd["topology"] = [t for t in gd["topology"] if not t.get("path", "").startswith("components.")]
+                gd["topology_layout"] = layout
+                gd["beyond_annotation"] -= len(layout)
             agree = ns.get("rc") == 0 and nt.get("rc") == 0 and ns.get("sha") and ns.get("sha") == nt.get("sha")
             cmp = None
             if ns.get("rc") == 0 and nt.get("rc") == 0 and not agree:
@@ -1248,6 +1314,14 @@ class Model:
             o, nn = old.get(arm) or {}, new.get(arm) or {}
             if o.get("n_a") and nn.get("n_a"):
                 bytes_verdict[arm] = "N/A (no ATen oracle for an encoded build)"; continue
+            if o.get("rc") not in (0, None) and nn.get("rc") not in (0, None):
+                # The engine refuses BOTH containers alike on this arm (SANA-Video's sequential
+                # arm, 2026-09-07: the VAE tiler's replicate pad on a 6-D tile, after 1.6 h of
+                # denoising, June and September containers alike): an engine gap on that path,
+                # named as such, not a difference between the graphs; the other arm decides.
+                e_old, e_new = self._first_error(f"old_{arm}.log"), self._first_error(f"new_{arm}.log")
+                if e_old and e_new and e_old.split(":")[-1].strip() == e_new.split(":")[-1].strip():
+                    bytes_verdict[arm] = f"N/A (the engine refuses both containers alike: {e_new[:160]})"; continue
             if o.get("rc") != 0 or nn.get("rc") != 0:
                 bytes_verdict[arm] = f"FAILED (old rc {o.get('rc')}, new rc {nn.get('rc')})"; continue
             same = o.get("sha") and o.get("sha") == nn.get("sha")

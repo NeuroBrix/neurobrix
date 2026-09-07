@@ -189,8 +189,8 @@ def test_a_vendor_minus_one_may_become_the_derived_output_dim():
 
 
 # ── the batch split restored: [1, σ·s, D] → [σ, s, D] ────────────────────────────────
-B = {"type": "symbol", "id": "s0", "trace": 1}; SEQ = {"type": "symbol", "id": "s1", "trace": 7}
-FOLD = {"type": "mul", "left": B, "right": SEQ, "trace": 7}
+B = {"type": "symbol", "id": "s0", "trace": 1}; SEQ = {"type": "symbol", "id": "s1", "trace": 23}   # a symbol's trace IS its concrete at trace
+FOLD = {"type": "mul", "left": B, "right": SEQ, "trace": 23}
 
 
 def test_a_folded_batch_split_back_is_admitted():
@@ -314,3 +314,53 @@ def test_a_symbol_the_old_tracer_named_in_the_inferred_slot_is_the_vendors_minus
     new["attributes"]["args"][1]["value"][1] = 226                       # the symbol turned into its literal: never admitted
     new["attributes"]["shape"][1] = 226
     assert R.witnessed_arg_changes(old, new, tensors) is None
+
+
+def test_an_old_expression_that_is_a_literal_under_a_batch_fold_reads_as_that_literal():
+    """canary's perception: `[σ, σ·8, σ·281250, σ·375]` → `[σ, 8, -1, ((s1−1)//8)+1]` (trace 375)."""
+    su = {"type": "symbol", "id": "s0", "trace": 1}
+    s1 = {"type": "symbol", "id": "s1", "trace": 3000}
+    mul = lambda k: {"type": "mul", "left": su, "right": k, "trace": k}  # noqa: E731
+    expr = {"type": "add", "left": {"type": "floordiv", "left": {"type": "add", "left": s1, "right": -1, "trace": 2999}, "right": 8, "trace": 374}, "right": 1, "trace": 375}
+    old = {"op_uid": "aten.view::21", "op_type": "aten::view", "input_tensor_ids": ["x"], "output_tensor_ids": ["y"],
+           "attributes": {"args": [{"type": "tensor", "tensor_id": "x"}, {"type": "list", "value": [su, mul(8), mul(281250), mul(375)]}], "kwargs": {}}}
+    new = copy.deepcopy(old)
+    new["attributes"]["args"][1]["value"] = [su, 8, -1, expr]
+    tensors = {"x": {"shape": [1, 8, 281250, 375], "symbolic_shape": {"dims": [su, 8, 281250, expr], "concrete": [1, 8, 281250, 375]}},
+               "y": {"shape": [1, 8, 281250, 375], "symbolic_shape": {"dims": [su, 8, 281250, expr], "concrete": [1, 8, 281250, 375]}}}
+    sites = R.witnessed_arg_changes(old, new, tensors)
+    assert sites is not None
+    kinds = sorted(x["kind"] for x in sites)
+    assert kinds == ["inference-restored", "symbolized", "unit-only-literalized"]
+    assert R._effective_literal(mul(375)) == 375 and R._effective_literal(expr) is None and R._effective_literal(7) == 7
+
+
+def test_a_factory_size_frozen_on_both_sides_is_named_as_such():
+    """`ones([σ·s1, σ·s1])` (June) → `ones([23, 23])`, the output annotated [23, 23] on both sides."""
+    su = {"type": "symbol", "id": "s0", "trace": 1}; s1 = {"type": "symbol", "id": "s1", "trace": 23}
+    prod = {"type": "mul", "left": su, "right": s1, "trace": 23}
+    old = {"op_uid": "aten.ones::0", "op_type": "aten::ones", "input_tensor_ids": [], "output_tensor_ids": ["m"],
+           "attributes": {"args": [{"type": "list", "value": [prod, prod]}], "kwargs": {}}}
+    new = copy.deepcopy(old); new["attributes"]["args"][0]["value"] = [23, 23]
+    t_old = {"m": {"shape": [23, 23], "symbolic_shape": {"dims": [23, 23], "concrete": [23, 23]}}}
+    t_new = {"m": {"shape": [23, 23], "symbolic_shape": {"dims": [23, 23], "concrete": [23, 23]}}}
+    sites = R.witnessed_arg_changes(old, new, t_new, t_old)
+    assert sites is not None and [x["kind"] for x in sites] == ["frozen-on-both-sides"] * 2
+    t_old["m"]["symbolic_shape"]["dims"] = [s1, s1]                     # the old output WAS symbolic: a symbol turned literal, refused
+    assert R.witnessed_arg_changes(old, new, t_new, t_old) is None
+
+
+def test_a_corrupted_june_argument_is_admitted_only_for_a_replacement_right_by_construction():
+    """canary's perception view::22: `(σ·(σ·8))·((σ·281250)−1)` (trace 2,249,992) for an output dim of 1 → `σ`;
+    view::21: `σ·281250` for an output dim of 750 → -1. A replacement that is wrong too is refused."""
+    su = {"type": "symbol", "id": "s0", "trace": 1}
+    nonsense = {"type": "mul", "left": {"type": "mul", "left": su, "right": 8, "trace": 8}, "right": {"type": "sub", "left": {"type": "mul", "left": su, "right": 281250, "trace": 281250}, "right": 1, "trace": 281249}, "trace": 2249992}
+    old = {"op_uid": "aten.view::22", "op_type": "aten::view", "input_tensor_ids": ["x"], "output_tensor_ids": ["y"],
+           "attributes": {"args": [{"type": "tensor", "tensor_id": "x"}, {"type": "list", "value": [nonsense, 8, {"type": "mul", "left": su, "right": 281250, "trace": 281250}, 749]}], "kwargs": {}}}
+    new = copy.deepcopy(old); new["attributes"]["args"][1]["value"] = [su, 8, -1, 749]
+    tensors = {"x": {"shape": [1, 8, 375, 749], "symbolic_shape": {"dims": [su, 8, 375, 749], "concrete": [1, 8, 375, 749]}},
+               "y": {"shape": [1, 8, 375, 749], "symbolic_shape": {"dims": [su, 8, 375, 749], "concrete": [1, 8, 375, 749]}}}
+    sites = R.witnessed_arg_changes(old, new, tensors)
+    assert sites is not None and sorted(x["kind"] for x in sites) == ["witnessed", "witnessed"]
+    bad = copy.deepcopy(new); bad["attributes"]["args"][1]["value"][0] = 2                  # a wrong literal replacing a wrong expression
+    assert R.witnessed_arg_changes(old, bad, tensors) is None
