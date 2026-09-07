@@ -56,8 +56,21 @@ HUB_MAP = REPO / "validation_outputs" / "retrace_2026_09_07" / "hub_map.json"
 FAMILIES = REPO / "validation_outputs" / "retrace_2026_09_07" / "families.json"
 ANNOTATION_KEYS = {"symbolic_shape"}       # the only tensor fields the closed defect touches
 # Trace-time provenance, not the artifact's semantics: the card the trace ran on and its memory
-# figures. A retrace on another card must not fail the gate for them (hat-l: 25,632 such fields).
+# figures. A retrace on another card must not fail the gate for them (hat-l: 25,632 such fields,
+# and the `device` an aten._to_copy's kwargs recorded). The runtime places through Prism.
 PROVENANCE_KEYS = {"device", "memory_info"}
+
+
+def scrub_provenance(node):
+    """`node` without its provenance: every `device`/`memory_info` key at any depth, and every
+    {"type": "device", ...} leaf (the device argument an op's kwargs recorded)."""
+    if isinstance(node, dict):
+        if node.get("type") == "device":
+            return {"type": "device"}
+        return {k: scrub_provenance(v) for k, v in node.items() if k not in PROVENANCE_KEYS}
+    if isinstance(node, list):
+        return [scrub_provenance(v) for v in node]
+    return node
 #: The toolchain's registry key when it differs from the installed container's name (the hub's name).
 REGISTRY_ALIAS = {"Sana-1600M-MultiLing": "Sana_1600M_1024px_MultiLing"}
 
@@ -404,8 +417,8 @@ class Model:
                 rec["op_diffs"] = abs(len(ops_o) - len(ops_n))
             else:
                 for a, b in zip(ops_o, ops_n):
-                    a = {k: v for k, v in a.items() if k not in PROVENANCE_KEYS}
-                    b = {k: v for k, v in b.items() if k not in PROVENANCE_KEYS}
+                    a = scrub_provenance(a)
+                    b = scrub_provenance(b)
                     if json.dumps(a, sort_keys=True) != json.dumps(b, sort_keys=True):
                         sites = witnessed_arg_changes(a, b, tn)
                         if sites is None:
