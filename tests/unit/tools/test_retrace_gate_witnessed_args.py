@@ -214,3 +214,8 @@ def test_the_fold_itself_is_refused():
         lst[0], lst[1] = 1, FOLD
     tensors = {"aten.view::2::out_0": {"shape": [1, 7, 1280], "symbolic_shape": {"dims": [1, FOLD, 1280], "concrete": [1, 7, 1280]}}}
     assert R.witnessed_arg_changes(new_is_old, folded, tensors) is None
+
+
+def test_a_vendor_module_rename_is_naming_not_semantics():
+    a = dict(OLD, parent_module="final_layer.norm_final"); b = dict(OLD, parent_module="final_layer.final_norm")
+    assert R.scrub_provenance(a) == R.scrub_provenance(b)
