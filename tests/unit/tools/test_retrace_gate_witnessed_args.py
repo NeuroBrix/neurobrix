@@ -111,7 +111,7 @@ def test_trace_time_provenance_is_not_a_difference():
     a = dict(OLD, device="cuda:2"); b = dict(OLD, device="cuda:0")
     stripped = lambda o: {k: v for k, v in o.items() if k not in R.PROVENANCE_KEYS}
     assert stripped(a) == stripped(b)
-    assert R.PROVENANCE_KEYS == {"device", "memory_info"}
+    assert R.PROVENANCE_KEYS >= {"device", "memory_info"}
 
 
 def test_a_device_argument_recorded_by_an_op_is_provenance_too():

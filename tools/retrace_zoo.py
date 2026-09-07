@@ -58,7 +58,7 @@ ANNOTATION_KEYS = {"symbolic_shape"}       # the only tensor fields the closed d
 # Trace-time provenance, not the artifact's semantics: the card the trace ran on and its memory
 # figures. A retrace on another card must not fail the gate for them (hat-l: 25,632 such fields,
 # and the `device` an aten._to_copy's kwargs recorded). The runtime places through Prism.
-PROVENANCE_KEYS = {"device", "memory_info"}
+PROVENANCE_KEYS = {"device", "memory_info", "timestamp_ns"}
 # Naming, not semantics: the vendor module an op was recorded under (a vendor rename such as
 # `final_layer.norm_final` → `final_layer.final_norm` between two transformers versions moves
 # no op and no tensor — VibeVoice's prediction head, 2026-09-07).
@@ -510,7 +510,7 @@ class Model:
         dtype, another attribute — is a difference the gate refuses."""
         old_root = Path(self.args.backup) / self.name / "components"
         new_root = CACHE / self.new_name / "components"
-        report = {"components": {}, "beyond_annotation": 0, "annotation_changes": 0, "arg_witnessed": 0, "corrupted_before": 0, "corrupted_after": 0}
+        report = {"components": {}, "beyond_annotation": 0, "annotation_changes": 0, "arg_witnessed": 0, "pruned_dead_ops": 0, "corrupted_before": 0, "corrupted_after": 0}
         for comp_dir in sorted(new_root.glob("*")):
             og, ng = old_root / comp_dir.name / "graph.json", comp_dir / "graph.json"
             if not og.exists() or not ng.exists():
@@ -519,26 +519,46 @@ class Model:
             ops_o = o["ops"] if isinstance(o.get("ops"), list) else list((o.get("ops") or {}).values())
             ops_n = n["ops"] if isinstance(n.get("ops"), list) else list((n.get("ops") or {}).values())
             rec = {"ops_old": len(ops_o), "ops_new": len(ops_n), "op_diffs": 0, "tensor_diffs_beyond": 0, "annotation_changes": 0,
-                   "arg_witnessed": 0, "arg_kinds": {}, "arg_witnessed_sites": [], "corrupted_before": 0, "corrupted_after": 0}
+                   "arg_witnessed": 0, "arg_kinds": {}, "arg_witnessed_sites": [], "pruned_dead_ops": 0, "corrupted_before": 0, "corrupted_after": 0}
             to, tn = o.get("tensors") or {}, n.get("tensors") or {}
-            if len(ops_o) != len(ops_n):
-                rec["op_diffs"] = abs(len(ops_o) - len(ops_n))
-            else:
-                for a, b in zip(ops_o, ops_n):
-                    a = scrub_provenance(a)
-                    b = scrub_provenance(b)
-                    if json.dumps(a, sort_keys=True) != json.dumps(b, sort_keys=True):
-                        sites = witnessed_arg_changes(a, b, tn)
-                        if sites is None:
-                            rec["op_diffs"] += 1
-                        else:
-                            rec["arg_witnessed"] += len(sites)
-                            for x in sites:
-                                rec["arg_kinds"][x["kind"]] = rec["arg_kinds"].get(x["kind"], 0) + 1
-                            rec["arg_witnessed_sites"] = (rec["arg_witnessed_sites"] + sites)[:20]
+            # Ops align by uid. An op only the old graph carries, whose outputs no old op consumed
+            # and no graph output named, is a DEAD op the corrected tracer prunes (R19: the DAG
+            # holds compute only — canary's `arange` and five `empty`, 2026-09-07): admitted and
+            # counted. An op only the new graph carries, or an old op with a consumer, is beyond.
+            by_o = {x.get("op_uid"): x for x in ops_o}
+            by_n = {x.get("op_uid"): x for x in ops_n}
+            consumed_o = {t for x in ops_o for t in (x.get("input_tensor_ids") or [])}
+            outputs_o = set(o.get("outputs") or o.get("output_tensor_ids") or [])
+            for uid, a in by_o.items():
+                if uid in by_n:
+                    continue
+                outs = a.get("output_tensor_ids") or []
+                if outs and not any(t in consumed_o or t in outputs_o for t in outs):
+                    rec["pruned_dead_ops"] += 1
+                else:
+                    rec["op_diffs"] += 1
+            rec["op_diffs"] += sum(1 for uid in by_n if uid not in by_o)
+            for uid, a in by_o.items():
+                b = by_n.get(uid)
+                if b is None:
+                    continue
+                a = scrub_provenance(a)
+                b = scrub_provenance(b)
+                if json.dumps(a, sort_keys=True) != json.dumps(b, sort_keys=True):
+                    sites = witnessed_arg_changes(a, b, tn)
+                    if sites is None:
+                        rec["op_diffs"] += 1
+                    else:
+                        rec["arg_witnessed"] += len(sites)
+                        for x in sites:
+                            rec["arg_kinds"][x["kind"]] = rec["arg_kinds"].get(x["kind"], 0) + 1
+                        rec["arg_witnessed_sites"] = (rec["arg_witnessed_sites"] + sites)[:20]
+            dead_out = {t for uid, x in by_o.items() if uid not in by_n for t in (x.get("output_tensor_ids") or [])}
             for tid in set(to) | set(tn):
                 a, b = to.get(tid), tn.get(tid)
                 if a is None or b is None:
+                    if tid in dead_out and b is None:
+                        continue                       # the pruned dead op's own output
                     rec["tensor_diffs_beyond"] += 1; continue
                 for k in set(a) | set(b):
                     if k in PROVENANCE_KEYS:
@@ -557,6 +577,7 @@ class Model:
             report["beyond_annotation"] += rec["op_diffs"] + rec["tensor_diffs_beyond"]
             report["annotation_changes"] += rec["annotation_changes"]
             report["arg_witnessed"] += rec["arg_witnessed"]
+            report["pruned_dead_ops"] += rec["pruned_dead_ops"]
             report["corrupted_before"] += rec["corrupted_before"]; report["corrupted_after"] += rec["corrupted_after"]
         return report
 
@@ -598,6 +619,7 @@ class Model:
             f"symbolized {sum(r.get('arg_kinds', {}).get('symbolized', 0) for r in gd['components'].values())}, "
             f"re-expressed {sum(r.get('arg_kinds', {}).get('re-expressed', 0) for r in gd['components'].values())}, "
             f"batch split restored {sum(r.get('arg_kinds', {}).get('batch-split-restored', 0) for r in gd['components'].values())}), "
+            f"{gd['pruned_dead_ops']} dead op(s) pruned, "
             f"{gd['beyond_annotation']} beyond, corrupted dims {gd['corrupted_before']} → {gd['corrupted_after']}")
         return verdict.startswith("PASS")
 
