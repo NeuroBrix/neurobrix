@@ -1042,6 +1042,16 @@ def table(out: Path) -> str:
     return head + "\n".join(rows) + "\n"
 
 
+
+def lock_holder_alive(text: str) -> bool:
+    """A `.running` lock names its holder (`gpu=N pid=P HH:MM:SS`); the holder is alive when
+    that pid still exists. A lock without a pid is trusted (an older writer)."""
+    import re
+    m = re.search(r"\bpid=(\d+)", text)
+    if not m:
+        return True
+    return Path(f"/proc/{m.group(1)}").exists()
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -1120,7 +1130,11 @@ def main():
             print(f"[zoo] {m}: done, skipped"); continue
         lock = out / m / ".running"
         if lock.exists():
-            print(f"[zoo] {m}: running elsewhere ({lock.read_text().strip()}), skipped"); continue
+            held = lock.read_text().strip()
+            if lock_holder_alive(held):
+                print(f"[zoo] {m}: running elsewhere ({held}), skipped"); continue
+            # the holder is gone (a power loss, a kill): the lock is stale, the model runs again
+            print(f"[zoo] {m}: stale lock of a dead run ({held}), removed", flush=True); lock.unlink()
         wgb = weight_gb(m)
         if args.max_weight_gb is not None and wgb > args.max_weight_gb:
             print(f"[zoo] {m}: {wgb:.1f} GB of weights > {args.max_weight_gb} GB — machine stage", flush=True); continue
