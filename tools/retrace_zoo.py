@@ -498,7 +498,7 @@ class Model:
             ops_o = o["ops"] if isinstance(o.get("ops"), list) else list((o.get("ops") or {}).values())
             ops_n = n["ops"] if isinstance(n.get("ops"), list) else list((n.get("ops") or {}).values())
             rec = {"ops_old": len(ops_o), "ops_new": len(ops_n), "op_diffs": 0, "tensor_diffs_beyond": 0, "annotation_changes": 0,
-                   "arg_witnessed": 0, "arg_witnessed_sites": [], "corrupted_before": 0, "corrupted_after": 0}
+                   "arg_witnessed": 0, "arg_kinds": {}, "arg_witnessed_sites": [], "corrupted_before": 0, "corrupted_after": 0}
             to, tn = o.get("tensors") or {}, n.get("tensors") or {}
             if len(ops_o) != len(ops_n):
                 rec["op_diffs"] = abs(len(ops_o) - len(ops_n))
@@ -512,6 +512,8 @@ class Model:
                             rec["op_diffs"] += 1
                         else:
                             rec["arg_witnessed"] += len(sites)
+                            for x in sites:
+                                rec["arg_kinds"][x["kind"]] = rec["arg_kinds"].get(x["kind"], 0) + 1
                             rec["arg_witnessed_sites"] = (rec["arg_witnessed_sites"] + sites)[:20]
             for tid in set(to) | set(tn):
                 a, b = to.get(tid), tn.get(tid)
@@ -571,9 +573,9 @@ class Model:
         self.mark("gate", verdict.startswith("PASS"), verdict=verdict, bytes=bytes_verdict, graph=gd)
         log(f"{self.name}: gate {verdict} — bytes {bytes_verdict}; graph: {gd['annotation_changes']} annotation change(s), "
             f"{gd['arg_witnessed']} shape argument(s) of the closed defect "
-            f"(witnessed {sum(1 for r in gd['components'].values() for x in r.get('arg_witnessed_sites', []) if x.get('kind') == 'witnessed')}, "
-            f"symbolized {sum(1 for r in gd['components'].values() for x in r.get('arg_witnessed_sites', []) if x.get('kind') == 'symbolized')}, "
-            f"re-expressed {sum(1 for r in gd['components'].values() for x in r.get('arg_witnessed_sites', []) if x.get('kind') == 're-expressed')}), "
+            f"(witnessed {sum(r.get('arg_kinds', {}).get('witnessed', 0) for r in gd['components'].values())}, "
+            f"symbolized {sum(r.get('arg_kinds', {}).get('symbolized', 0) for r in gd['components'].values())}, "
+            f"re-expressed {sum(r.get('arg_kinds', {}).get('re-expressed', 0) for r in gd['components'].values())}), "
             f"{gd['beyond_annotation']} beyond, corrupted dims {gd['corrupted_before']} → {gd['corrupted_after']}")
         return verdict.startswith("PASS")
 
