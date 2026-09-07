@@ -33,6 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every backend driver must satisfy (`neurobrix.triton.launcher_contract`), with its checker run
   against the CUDA driver on CUDA and the Metal driver on a Mac.
 
+### Fixed
+- A tensor of 2 GiB or more reads back to the host (`NBXTensor.numpy()`, the replay's buffer snapshot):
+  the byte copy went through a C-int size and refused with "Negative size passed to PyBytes_FromStringAndSize".
+
 ### Removed
 - The per-model kernel sweep artifact (`runtime/autotune/<arch>.json`, `~/.neurobrix/autotune/<model>/`), the refusal of a request without one, and the `--sweep` flag of `run`/`serve`: the certified directory replaces them.
 

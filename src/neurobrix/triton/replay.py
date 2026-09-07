@@ -600,7 +600,8 @@ def _install_seams() -> None:
                 STATE.break_plan("D2H memcpy during recording")
             elif kind == 1:
                 import ctypes
-                snap = ctypes.string_at(int(src), int(nbytes))
+                # bytes of any size: `ctypes.string_at` takes a C int and refuses 2 GiB
+                snap = bytes((ctypes.c_uint8 * int(nbytes)).from_address(int(src))) if int(nbytes) else b""
                 STATE.note_device()
                 STATE.records.append((_H2D, (int(dst), snap)))
             else:
