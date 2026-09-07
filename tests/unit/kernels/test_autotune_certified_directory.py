@@ -186,3 +186,19 @@ def test_a_contradiction_is_reported_even_with_the_apply_switch_off(root, capsys
     assert C.apply(KERNEL, _Tuner(), KEY) is False, "the switch stops applying"
     assert len(C.report_contradictions(_Tuner(), [Ex()])) == 1, "but never reporting"
     assert "CONTRADICTION" in capsys.readouterr().out
+
+
+def test_a_certified_setting_overrides_what_the_local_cache_seeded(root):
+    """A warm machine: the replay cache seeded the tuner before the lookup; the
+    directory's setting must still win and be counted as certified, not local."""
+    _write(root, {C.key_repr(KEY): _entry()})
+    t = _Tuner()
+    class _Seeded:                              # what the replay cache put there (another config)
+        kwargs = {"BLOCK_M": 32, "BLOCK_N": 32, "BLOCK_K": 32, "GROUP_M": 8}; num_warps = 2; num_stages = 2
+    t.cache[KEY] = _Seeded()
+    t.cache[("other",)] = _Seeded()             # a key the directory does not know stays as seeded
+    C.note_local(2)
+    assert C.override_seeded([(KERNEL, t)]) == 1
+    assert t.cache[KEY].kwargs == {"BLOCK_M": 64, "BLOCK_N": 128, "BLOCK_K": 32, "GROUP_M": 8}
+    assert t.cache[("other",)] is not None and t.cache[("other",)].kwargs["BLOCK_M"] == 32
+    assert C.served() == {"certified": 1, "swept": 0, "local": 1}

@@ -134,6 +134,7 @@ def _announce_first_sweep(tuned):
                 _n = _atc.seed()
                 from neurobrix.kernels import autotune_certified as _cert0
                 _cert0.note_local(_n)
+                _cert0.override_seeded()   # the directory first, even on a warm machine
             except Exception:              # the replay cache is an optimisation, never a failure source
                 pass
         # The certified directory (owner directive 2026-09-06, the engine
