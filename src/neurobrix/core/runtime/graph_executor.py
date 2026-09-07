@@ -1828,12 +1828,32 @@ class GraphExecutor:
         # Parse raw bytes based on dtype
         if dtype_str == "bfloat16":
             raw_u16 = np.frombuffer(tensor_bytes, dtype=np.uint16).reshape(shape)
+            # bf16 is the top 16 bits of an fp32, so widening is a shift and
+            # it is EXACT. Doing it is not optional: numpy has no bfloat16, so
+            # the bits arrive as uint16 and every consumer downstream reads
+            # them as whatever the tensor claims to be.
+            #
+            # Handing the raw uint16 to a float32 engine is what this used to
+            # do for every compute dtype except fp16, and it reads each PAIR of
+            # bf16 values as one float. Measured 2026-09-07 on TinyLlama: the
+            # rotary cos table, whose first row is all 1.0, arrived as
+            # 0x3f803f80 = 1.0019378 — two bf16 ones packed into one fp32 —
+            # with NaNs further in and half the table missing. Every position
+            # was then rotated by the wrong angle and the model answered a
+            # different question. The fp16 path had the conversion; the others
+            # did not, and on this machine the engine computes in fp32.
+            fp32 = np.zeros(raw_u16.shape, dtype=np.float32)
+            fp32.view(np.uint32).flat[:] = raw_u16.flat[:].astype(np.uint32) << 16
             if compute_dtype == NBXDtype.float16:
-                fp32 = np.zeros(raw_u16.shape, dtype=np.float32)
-                fp32.view(np.uint32).flat[:] = raw_u16.flat[:].astype(np.uint32) << 16
                 arr = np.ascontiguousarray(fp32.astype(np.float16))
-            else:
+            elif compute_dtype == NBXDtype.bfloat16:
+                # Staying in bf16: the bits are already right, and the tensor
+                # is TAGGED bf16 below so they are read as bf16 and not as the
+                # uint16 they travel in (triton/constants.py does the same for
+                # the constants it loads).
                 arr = np.ascontiguousarray(raw_u16)
+            else:
+                arr = np.ascontiguousarray(fp32)
         else:
             np_dt = {"float16": np.float16, "float32": np.float32,
                      "float64": np.float64, "int32": np.int32,
@@ -1856,7 +1876,10 @@ class GraphExecutor:
             arr = arr.astype(np.float32)
 
         DeviceAllocator.set_device(device_idx)
-        self._weights[weight_name] = NBXTensor.from_numpy(arr)
+        _const = NBXTensor.from_numpy(arr)
+        if dtype_str == "bfloat16" and compute_dtype == NBXDtype.bfloat16:
+            _const._dtype = NBXDtype.bfloat16
+        self._weights[weight_name] = _const
 
     # =========================================================================
     # Execution: run() and helpers

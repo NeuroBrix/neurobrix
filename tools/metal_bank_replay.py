@@ -68,12 +68,28 @@ def main() -> int:
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--only", default=None,
                         help="comma-separated op substrings")
+    parser.add_argument("--launched", default=None,
+                        help="comma-separated KERNEL names; keeps only the "
+                             "entries whose recorded launch list contains one "
+                             "of them — 'the GEMV family' as the bank itself "
+                             "records it, rather than as a guess from op names")
+    parser.add_argument("--extra-dtypes", default=None,
+                        help="comma-separated dtypes to ALSO run the same "
+                             "seeded inputs in. The bank's oracle belongs to "
+                             "the dtype it was recorded in, so these rows are "
+                             "compared against an fp64 oracle recomputed here "
+                             "and carry no CUDA column — there is no CUDA "
+                             "number for a dtype the Dell did not run.")
     args = parser.parse_args()
 
     from neurobrix.kernels import launcher
     launcher.install()
 
     wanted = [w.strip() for w in args.only.split(",")] if args.only else None
+    launched_filter = ([w.strip() for w in args.launched.split(",")]
+                       if args.launched else None)
+    extra_dtypes = ([np.dtype(d.strip()) for d in args.extra_dtypes.split(",")]
+                    if args.extra_dtypes else [])
     rows = []
     files = sorted(p for p in args.bank.rglob("*.npz"))
     for path in files:
@@ -81,6 +97,9 @@ def main() -> int:
         meta = json.loads(str(payload["meta"]))
         op = meta["op"]
         if wanted and not any(w in op for w in wanted):
+            continue
+        if launched_filter and not any(
+                k in (meta.get("launched") or []) for k in launched_filter):
             continue
         row = {"op": op, "tag": meta["tag"], "file": path.name,
                "launched": meta.get("launched", []),
@@ -91,6 +110,13 @@ def main() -> int:
             row["metal"] = [ulp_distance(g, payload[f"oracle{i}"])
                             for i, g in enumerate(got)]
             row["status"] = "ok"
+            # The same expression evaluated in float32 on the host, against the
+            # same oracle. It is not a second opinion on the kernel — it is the
+            # scale on which to read a ULP gap: where Metal and this agree, the
+            # distance to the oracle is the arithmetic's, not the backend's,
+            # and a CUDA number closer than both is a luckier summation ORDER
+            # rather than a defect on this side.
+            row["host_fp32"] = _host_fp32_stats(op, payload)
         except Exception as exc:
             row["status"] = "refused"
             row["error"] = f"{type(exc).__name__}: {str(exc).splitlines()[0][:220]}"
@@ -100,15 +126,103 @@ def main() -> int:
         mark = "ok " if row["status"] == "ok" else "REF"
         extra = ""
         if row["status"] == "ok" and row["cuda"] and row["metal"]:
+            host = row.get("host_fp32")
             extra = (f"metal_ulp={row['metal'][0]['max_ulp']:<8}"
-                     f"cuda_ulp={row['cuda'][0].get('max_ulp')}")
+                     f"cuda_ulp={row['cuda'][0].get('max_ulp'):<8}"
+                     f"host_fp32_ulp="
+                     f"{host[0]['max_ulp'] if host else '-'}")
         print(f"  {mark} {op:<38} {meta['tag']:<22} {extra}", flush=True)
+
+        for dt in extra_dtypes:
+            rows.append(_run_in_dtype(op, payload, meta, path, dt))
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(rows, indent=1))
     refused = [r for r in rows if r["status"] != "ok"]
     print(f"\n{len(rows)} entries, {len(refused)} refused -> {args.out}")
     return 0
+
+
+def _host_fp32_stats(op: str, payload):
+    """The op in float32 on the host, measured against the bank's oracle.
+    ``None`` when no reference is written for this op."""
+    arrays = [np.ascontiguousarray(payload[k].astype(np.float32))
+              for k in sorted(payload.files) if k.startswith("in")]
+    # In float32 THROUGHOUT — the point of the column is the arithmetic's own
+    # distance to the oracle at this width, so widening anywhere would just
+    # reproduce the oracle and report zero.
+    if op in ("mm", "matmul"):
+        ref = [arrays[0] @ arrays[1]]
+    elif op == "addmm":
+        ref = [(arrays[0] + arrays[1] @ arrays[2]).astype(np.float32)]
+    else:
+        return None
+    out = []
+    for i, r in enumerate(ref):
+        key = f"oracle{i}"
+        if key not in payload.files:
+            return None
+        out.append(ulp_distance(np.asarray(r).astype(np.float32), payload[key]))
+    return out
+
+
+def _fp64_reference(op: str, arrays):
+    """The op, written out in float64, for a dtype the bank did not record.
+
+    Only the shapes the GEMV family takes — a matrix-vector product, with or
+    without a bias — are written here. An op without a reference REFUSES; a
+    number compared against a reference nobody wrote is not a measurement.
+    """
+    if op in ("mm", "matmul"):
+        a, b = arrays[0].astype(np.float64), arrays[1].astype(np.float64)
+        return [a @ b]
+    if op == "addmm":
+        bias = arrays[0].astype(np.float64)
+        a, b = arrays[1].astype(np.float64), arrays[2].astype(np.float64)
+        return [bias + a @ b]
+    raise NotImplementedError(
+        f"no float64 reference written for {op!r}; refusing to compare against "
+        f"a reference that does not exist")
+
+
+def _run_in_dtype(op: str, payload, meta, path, dtype):
+    """Re-run one bank entry's SEEDED INPUTS in another dtype.
+
+    The inputs are the Dell's; the oracle is recomputed here in float64
+    because the bank's belongs to the dtype it was recorded in. There is no
+    CUDA column: the Dell did not run this dtype, and inventing one would be
+    the whole point of the bank thrown away.
+    """
+    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from neurobrix.kernels import wrappers
+
+    row = {"op": op, "tag": meta["tag"], "file": path.name,
+           "dtype": str(dtype), "source": "bank inputs, oracle recomputed here",
+           "launched": meta.get("launched", []), "cuda": None}
+    started = time.time()
+    try:
+        arrays = [np.ascontiguousarray(payload[k].astype(dtype))
+                  for k in sorted(payload.files) if k.startswith("in")]
+        oracle = _fp64_reference(op, arrays)
+        handler = _HANDLERS.get(op)
+        if handler is None:
+            raise NotImplementedError(f"no bank handler for {op!r}")
+        inputs = [NBXTensor.from_numpy(a) for a in arrays]
+        out = handler(wrappers, inputs, dict(meta.get("kwargs") or {}))
+        outs = out if isinstance(out, (tuple, list)) else [out]
+        got = [np.asarray(o.numpy()) for o in outs]
+        row["metal"] = [ulp_distance(g, o) for g, o in zip(got, oracle)]
+        row["status"] = "ok"
+    except Exception as exc:
+        row["status"] = "refused"
+        row["error"] = f"{type(exc).__name__}: {str(exc).splitlines()[0][:220]}"
+    row["wall_s"] = round(time.time() - started, 4)
+    mark = "ok " if row["status"] == "ok" else "REF"
+    extra = (f"metal_ulp={row['metal'][0]['max_ulp']:<8}(no CUDA number)"
+             if row["status"] == "ok" else row.get("error", "")[:90])
+    print(f"  {mark} {op:<38} {meta['tag'] + ' @' + str(dtype):<22} {extra}",
+          flush=True)
+    return row
 
 
 def run_op(op: str, payload, meta):
