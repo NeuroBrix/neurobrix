@@ -59,6 +59,10 @@ ANNOTATION_KEYS = {"symbolic_shape"}       # the only tensor fields the closed d
 # figures. A retrace on another card must not fail the gate for them (hat-l: 25,632 such fields,
 # and the `device` an aten._to_copy's kwargs recorded). The runtime places through Prism.
 PROVENANCE_KEYS = {"device", "memory_info"}
+# Naming, not semantics: the vendor module an op was recorded under (a vendor rename such as
+# `final_layer.norm_final` → `final_layer.final_norm` between two transformers versions moves
+# no op and no tensor — VibeVoice's prediction head, 2026-09-07).
+NAMING_KEYS = {"parent_module"}
 
 
 def scrub_provenance(node):
@@ -67,7 +71,7 @@ def scrub_provenance(node):
     if isinstance(node, dict):
         if node.get("type") == "device":
             return {"type": "device"}
-        return {k: scrub_provenance(v) for k, v in node.items() if k not in PROVENANCE_KEYS}
+        return {k: scrub_provenance(v) for k, v in node.items() if k not in PROVENANCE_KEYS and k not in NAMING_KEYS}
     if isinstance(node, list):
         return [scrub_provenance(v) for v in node]
     return node
