@@ -682,6 +682,81 @@ def drift_one(model: str, gpu, out: Path, extra: list, timeout: int, bound: floa
     return res
 
 
+def _certified_entries(src: Path) -> dict:
+    """Every entry of the tree's certified directory keyed as (kernel name, shape key) — the
+    replay cache names a key `<kernel module path>::<shape key>`; the entry carries the
+    setting, its proof (best_ms, second_ms, deviation, tolerance) and the excluded settings."""
+    root = Path(os.environ.get("NEUROBRIX_AUTOTUNE_CERTIFIED_DIR") or (Path(src) / "neurobrix" / "config" / "autotune"))
+    entries = {}
+    for f in root.glob("*/*/*.json"):
+        try:
+            j = json.loads(f.read_text())
+        except (json.JSONDecodeError, OSError):
+            continue
+        kernel = f.name.split(".")[0]
+        ents = j.get("entries") or j.get("settings") or j
+        if isinstance(ents, dict):
+            for k, v in ents.items():
+                if isinstance(k, str) and k.startswith("(") and isinstance(v, dict):
+                    entries[(kernel, k)] = v
+    return entries
+
+
+def _cfg_of(e: dict) -> tuple:
+    return (json.dumps((e or {}).get("kwargs"), sort_keys=True), (e or {}).get("num_warps"), (e or {}).get("num_stages"))
+
+
+NEAR_TIE_MARGIN = 0.10      # the campaign's convention (the sweep-store comparison): second-best within 10 % of best
+
+
+def _choices_ab(d: Path, src: Path) -> dict:
+    """The two cold arms' replay caches compared key by key, and every differing key the
+    certified directory holds classified by the entry's own proof: NEAR-TIE when the certifier's
+    second-best was within 10 % of its best (the runtime sweep's pick is the timer's noise among
+    settings all within tolerance — CogVideoX-2b, 2026-09-07: six matmul/addmm keys, margins
+    0.001–0.9 %); EXCLUDED-PICKED when the runtime picked a setting the certifier had excluded
+    for its deviation (the unscreened runtime sweep let an out-of-tolerance setting through — a
+    finding); CONTRADICTED when the runtime picked another setting on a key with a clear margin
+    (a finding: the certification or the runtime's timing is wrong on this machine)."""
+    stores = {}
+    for arm in ("A", "B"):
+        ent = {}
+        for f in (d / f"{arm}_replay").glob("*.json"):
+            try:
+                j = json.loads(f.read_text())
+            except (json.JSONDecodeError, OSError):
+                continue
+            if isinstance(j, dict):
+                ent.update(j)
+        stores[arm] = ent
+    if not stores["A"] or not stores["B"]:
+        return {}
+    certified = _certified_entries(src) if src is not None else {}
+    def entry(k):
+        mod, _, shape = k.partition("::")
+        return certified.get((mod.rsplit(".", 1)[-1], shape))
+    keys = sorted(set(stores["A"]) | set(stores["B"]))
+    differ = [k for k in keys if _cfg_of(stores["A"].get(k)) != _cfg_of(stores["B"].get(k))]
+    near_tie, contradicted, excluded_picked, uncertified = [], [], [], []
+    for k in differ:
+        e = entry(k)
+        if not e:
+            uncertified.append(k); continue
+        pr = e.get("proof") or {}
+        picks = {_cfg_of(stores["A"].get(k)), _cfg_of(stores["B"].get(k))} - {_cfg_of(e.get("config"))}
+        if any(_cfg_of(x.get("config")) in picks for x in (e.get("excluded") or [])):
+            excluded_picked.append(k); continue
+        best, second = pr.get("best_ms"), pr.get("second_ms")
+        margin = (second / best - 1.0) if best and second else None
+        (near_tie if margin is not None and margin < NEAR_TIE_MARGIN else contradicted).append(
+            {"key": k, "margin": margin} if margin is not None else k)
+    return {"keys": len(keys), "certified": sum(1 for k in keys if entry(k)), "differ": len(differ),
+            "near_tie": near_tie[:20], "near_tie_count": len(near_tie),
+            "contradicted": contradicted[:20], "contradicted_count": len(contradicted),
+            "excluded_picked": excluded_picked[:20], "excluded_picked_count": len(excluded_picked),
+            "differ_uncertified": uncertified[:20], "differ_uncertified_count": len(uncertified)}
+
+
 def env_ab(model: str, gpu, out: Path, extra: list, timeout: int, env_b: dict, lever: str, cold: bool = False, src: Path = None,
            oracle_on_diff: bool = False, paired: int = 1) -> dict:
     """An engine lever behind an environment switch, measured on one model:
@@ -772,6 +847,9 @@ def env_ab(model: str, gpu, out: Path, extra: list, timeout: int, env_b: dict, l
             outp = Path(res["oracle"]["output"])
             res["oracle"]["A"] = _vs_oracle(outp, a)
             res["oracle"]["B"] = _vs_oracle(outp, b)
+    if cold:
+        # both arms cold with their own replay caches: their kernel choices side by side
+        res["choices"] = _choices_ab(d, src)
     res["islands"] = {}
     x, y = res["A"]["exec_s"], res["B"]["exec_s"]
     res["speedup"] = (x / y) if x and y else None
@@ -940,6 +1018,24 @@ def verdict(r: dict) -> str:
             x = (A.get("screen_excluded") or 0) + (B.get("screen_excluded") or 0)
             if x:
                 tag += f"; the screen excluded {x} config(s) — a finding to close"
+        ch = r.get("choices") or {}
+        if ch:
+            if not ch.get("differ"):
+                tag += f"; every kernel choice alike on {ch['keys']} keys ({ch['certified']} certified)"
+            else:
+                parts = [f"choices differ on {ch['differ']} of {ch['keys']} keys ({ch['certified']} certified)"]
+                if ch.get("excluded_picked_count"):
+                    parts.append(f"EXCLUDED SETTING PICKED AT RUNTIME on {ch['excluded_picked_count']} key(s) — a finding: {ch['excluded_picked'][0]}")
+                if ch.get("contradicted_count"):
+                    c0 = ch["contradicted"][0]
+                    parts.append(f"CERTIFIED CHOICE CONTRADICTED on {ch['contradicted_count']} key(s) — a finding: {c0['key'] if isinstance(c0, dict) else c0}")
+                if ch.get("near_tie_count"):
+                    ms = [x["margin"] for x in ch["near_tie"] if isinstance(x, dict) and x.get("margin") is not None]
+                    parts.append(f"{ch['near_tie_count']} certified near-tie(s) (the certifier's second-best within "
+                                 + (f"{max(ms) * 100:.1f} %" if ms else "10 %") + " of its best; the runtime's pick is the timer's noise)")
+                if ch.get("differ_uncertified_count"):
+                    parts.append(f"{ch['differ_uncertified_count']} uncertified (the runtime sweep's own variance)")
+                tag += "; " + "; ".join(parts)
         if not g.get("identical"):
             dd = g.get("diff") or {}
             m = dd.get("psnr_db", dd.get("snr_db", dd.get("psnr_mean_db")))
