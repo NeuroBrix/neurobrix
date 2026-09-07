@@ -55,6 +55,8 @@ CACHE = Path.home() / ".neurobrix" / "cache"
 HUB_MAP = REPO / "validation_outputs" / "retrace_2026_09_07" / "hub_map.json"
 FAMILIES = REPO / "validation_outputs" / "retrace_2026_09_07" / "families.json"
 ANNOTATION_KEYS = {"symbolic_shape"}       # the only tensor fields the closed defect touches
+#: The toolchain's registry key when it differs from the installed container's name (the hub's name).
+REGISTRY_ALIAS = {"Sana-1600M-MultiLing": "Sana_1600M_1024px_MultiLing"}
 
 
 def log(msg):
@@ -89,6 +91,8 @@ class Model:
         self.family = fams.get(name) or C.family_of(name)
         hub = json.loads(HUB_MAP.read_text()) if HUB_MAP.exists() else {}
         self.hub = hub.get(name)                       # "org/name" or None (a new entry)
+        self.registry_name = REGISTRY_ALIAS.get(name, name)
+        self.new_name = (self.state["steps"].get("install") or {}).get("installed_name") or name
 
     def done(self, step): return (self.state["steps"].get(step) or {}).get("ok") is True
     def mark(self, step, ok, **info):
@@ -109,6 +113,7 @@ class Model:
     # -- the two runs of the locked protocol --------------------------------
     def outputs(self, tag: str) -> dict:
         """The sequential oracle and the family protocol on the Triton engine, outputs hashed."""
+        name = self.name if tag == "old" else self.new_name
         req = C.request_args(self.name, self.family, list(self.args.extra))
         ext = C.output_ext(self.family, req)
         res = {}
@@ -117,7 +122,7 @@ class Model:
             if outp.exists() and (self.dir / f"{tag}_{arm}.log").exists() and sha(outp):
                 res[arm] = {"rc": 0, "sha": sha(outp), "output": str(outp), "cached": True}
                 continue
-            cmd = [PY, "-c", "import sys; from neurobrix.cli import main; sys.exit(main())", "run", "--model", self.name] + req + flag + ["--output", str(outp)]
+            cmd = [PY, "-c", "import sys; from neurobrix.cli import main; sys.exit(main())", "run", "--model", name] + req + flag + ["--output", str(outp)]
             t0 = time.time()
             rc = run(cmd, self.env(), self.dir / f"{tag}_{arm}.log", self.args.timeout)
             logtext = (self.dir / f"{tag}_{arm}.log").read_text(errors="replace")
@@ -139,9 +144,10 @@ class Model:
     def snapshot(self):
         """The model's snapshot: the export first, then the toolchain's own download directory."""
         for root in (Path("/home/mlops/hf_snapshots"), Path.home() / ".cache" / "neurobrix" / "hf_snapshots"):
-            p = root / self.name
-            if p.is_dir() and any(p.iterdir()):
-                return p
+            for nm in (self.registry_name, self.name):
+                p = root / nm
+                if p.is_dir() and any(p.iterdir()):
+                    return p
         return None
 
     def step_trace(self):
@@ -150,7 +156,7 @@ class Model:
         if snap is None:
             self.mark("trace", False, error="no snapshot on the export or in the download directory"); return False
         t0 = time.time()
-        cmd = [PY, str(FORGE), "trace", "--model", self.name, "--family", self.family, "--device", "cuda:0", "--path", str(snap)]
+        cmd = [PY, str(FORGE), "trace", "--model", self.registry_name, "--family", self.family, "--device", "cuda:0", "--path", str(snap)]
         rc = run(cmd, self.env(tree=False), self.dir / "trace.log", self.args.trace_timeout, cwd=str(REPO / "forge"))
         self.mark("trace", rc == 0, rc=rc, seconds=round(time.time() - t0, 1))
         return rc == 0
@@ -163,8 +169,10 @@ class Model:
         t0 = time.time()
         cmd = [PY, str(FORGE), "build", "--snapshot-path", str(snap), "--family", self.family, "--overwrite"]
         rc = run(cmd, self.env(tree=False), self.dir / "build.log", self.args.trace_timeout, cwd=str(REPO / "forge"))
-        nbx = Path(self.args.models_root) / self.name / "model.nbx"
-        found = nbx if nbx.exists() else next(iter(Path(self.args.models_root).glob(f"**/{self.name}*.nbx")), None)
+        nbx = Path(self.args.models_root) / self.registry_name / "model.nbx"
+        found = nbx if nbx.exists() else next(iter(Path(self.args.models_root).glob(f"**/{self.registry_name}*.nbx")), None)
+        if found is None:
+            found = next(iter(Path(self.args.models_root).glob(f"**/{self.name}*.nbx")), None)
         ok = rc == 0 and found is not None
         self.mark("build", ok, rc=rc, nbx=str(found) if found else None, seconds=round(time.time() - t0, 1),
                   gb=round(found.stat().st_size / 2**30, 2) if found else None)
@@ -186,9 +194,16 @@ class Model:
         nbx = (self.state["steps"].get("build") or {}).get("nbx")
         if not nbx or not Path(nbx).exists():
             self.mark("install", False, error="no built .nbx"); return False
+        import zipfile
+        try:
+            with zipfile.ZipFile(nbx) as zf:
+                installed = json.loads(zf.read("manifest.json")).get("model_name") or self.name
+        except Exception:
+            installed = self.name
         rc = run([PY, str(FORGE), "local", nbx, "--overwrite"], self.env(tree=False), self.dir / "install.log", 3600, cwd=str(REPO / "forge"))
-        ok = rc == 0 and (CACHE / self.name / "manifest.json").exists()
-        self.mark("install", ok, rc=rc)
+        ok = rc == 0 and (CACHE / installed / "manifest.json").exists()
+        self.new_name = installed
+        self.mark("install", ok, rc=rc, installed_name=installed)
         return ok
 
     def step_new_outputs(self):
@@ -203,7 +218,7 @@ class Model:
         the symbolic-shape annotation (the closed defect); anything else — an
         op, a shape, a dtype, an attribute — is a difference the gate refuses."""
         old_root = Path(self.args.backup) / self.name / "components"
-        new_root = CACHE / self.name / "components"
+        new_root = CACHE / self.new_name / "components"
         report = {"components": {}, "beyond_annotation": 0, "annotation_changes": 0, "corrupted_before": 0, "corrupted_after": 0}
         for comp_dir in sorted(new_root.glob("*")):
             og, ng = old_root / comp_dir.name / "graph.json", comp_dir / "graph.json"
