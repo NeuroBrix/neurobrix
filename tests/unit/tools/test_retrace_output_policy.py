@@ -398,6 +398,9 @@ def test_a_hub_object_that_does_not_run_is_recorded_and_the_new_container_is_jud
     monkeypatch.setattr(m, "restore_previous", lambda: True)
     monkeypatch.setattr(m, "reinstall_new", lambda: True)
     (m.dir / "old_sequential.log").write_text("x\n[ERROR] Pipeline failed: ZERO FALLBACK: No allocation for component 'perception_encoder'.\n")
+    # a second attempt after the restore: the cache already holds the hub's object (previous_object ok), no restore this time
+    m.state["steps"]["previous_object"] = {"ok": True}
+    _manifest(R.CACHE / m.name, "T1")
     monkeypatch.setattr(m, "outputs", lambda tag: {"sequential": {"rc": 1, "sha": None, "output": str(m.dir / "o.txt")},
                                                     "triton": {"rc": 1, "sha": None, "output": str(m.dir / "t.txt")}})
     assert m.step_old_outputs() is True                                    # the fact is recorded, the chain goes on
