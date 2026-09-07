@@ -284,3 +284,12 @@ def test_an_expression_of_unit_symbols_only_may_become_the_literal_it_was_worth(
     new2 = copy.deepcopy(new); new2["attributes"]["shape"][0] = 1150; new2["attributes"]["args"][1]["value"][0] = 1150
     t2 = {"aten.view::2::out_0": {"shape": [1150, 640], "symbolic_shape": {"dims": [1150, 640], "concrete": [1150, 640]}}}
     assert R.witnessed_arg_changes(old2, new2, t2) is None
+
+
+def test_a_scalar_argument_bound_to_a_symbol_follows_the_namespace_remap():
+    """An `arange` whose end is a symbol carries `symbol_id`, not `id`: renamed with the rest."""
+    op = {"op_uid": "aten.arange::4", "attributes": {"args": [{"type": "symbol", "symbol_id": "s0", "trace_value": 23}],
+                                                     "end": {"type": "symbol", "symbol_id": "s0", "trace_value": 23}}}
+    out = R.rewrite_symbols(op, {"s0": "s1", "s1": "s0"})
+    assert out["attributes"]["end"]["symbol_id"] == "s1" and out["attributes"]["args"][0]["symbol_id"] == "s1"
+    assert R.rewrite_symbols({"type": "symbol", "id": "s0", "trace": 23}, {"s0": "s1"})["id"] == "s1"
