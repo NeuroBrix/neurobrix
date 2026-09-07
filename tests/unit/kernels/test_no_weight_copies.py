@@ -372,3 +372,16 @@ def test_addmm_takes_the_activation_weight_and_bias_as_they_are(M):
     ref = W.addmm(bias.to(NBXDtype.float32), a.to(NBXDtype.float32), w.t().contiguous())
     assert out.nbx_dtype == ref.nbx_dtype
     assert np.array_equal(_d2h(out), _d2h(ref))
+
+
+def test_a_mixed_dtype_contiguous_add_casts_exactly_once():
+    """An fp16 residual added to an fp32 stream (the same shape, both contiguous) takes the flat
+    path after ONE widening cast — the strided preparation hands its aligned operands on instead
+    of the caller casting again (45 extra casts a token on TinyLlama, 2026-09-08)."""
+    rng = np.random.default_rng(10)
+    a = NBXTensor.from_numpy(rng.standard_normal((4, 64)).astype(np.float32))
+    b = NBXTensor.from_numpy(rng.standard_normal((4, 64)).astype(np.float16))
+    with _Launches() as l:
+        out = W.add(a, b)
+    assert l.names == ["copy_kernel", "add_forward_kernel"], l.names
+    assert out.nbx_dtype == NBXDtype.float32

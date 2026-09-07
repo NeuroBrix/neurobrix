@@ -568,12 +568,14 @@ def _prepare_binary(a, b):
 def _prepare_binary_strided(a, b):
     """The two-tensor case read by strides: (a, b, output, n, shape_buf, a_strides_buf,
     b_strides_buf, NDIM) with both operands broadcast to the common shape as VIEWS —
-    no `expand(...).contiguous()` transient — or None when the flat path applies
-    (both contiguous at the same shape: the flat kernel's indexing is cheaper).
-    Dtype and device alignment as `_prepare_binary`; the dtype cast stays a copy
-    (an in-kernel widen moves the compiler's contraction — the RoPE lesson, 2026-09-07)."""
+    no `expand(...).contiguous()` transient. Returns (None, a, b) when the flat path
+    applies (both contiguous at the same shape: the flat kernel's indexing is cheaper),
+    with a and b ALREADY aligned in dtype and device so the caller's `_prepare_binary`
+    casts nothing twice (the first form did: 45 casts a token on TinyLlama, 2026-09-08).
+    The dtype cast stays a copy (an in-kernel widen moves the compiler's contraction —
+    the RoPE lesson, 2026-09-07)."""
     if _is_scalar(a) or _is_scalar(b) or not (hasattr(a, "_dtype") and hasattr(b, "_dtype")):
-        return None
+        return None, a, b
     common_dtype = _wider_dtype(a._dtype, b._dtype)
     if a._dtype != common_dtype:
         a = a.to(common_dtype)
@@ -582,7 +584,7 @@ def _prepare_binary_strided(a, b):
     if hasattr(a, '_device_idx') and hasattr(b, '_device_idx') and a._device_idx != b._device_idx:
         b = _transfer_to_device(b, a._device_idx)
     if a.shape == b.shape and a.is_contiguous() and b.is_contiguous():
-        return None
+        return None, a, b
     out_shape = _broadcast_shapes(a.shape, b.shape) if a.shape != b.shape else tuple(a.shape)
     if tuple(a.shape) != tuple(out_shape):
         a = a.expand(*out_shape)
@@ -590,7 +592,7 @@ def _prepare_binary_strided(a, b):
         b = b.expand(*out_shape)
     ndim = max(len(out_shape), 1)
     if ndim > _NBX_MAX_NDIM:
-        return None
+        return None, a, b
     shape = tuple(out_shape) or (1,)
     a_st = tuple(a._strides) or (0,)
     b_st = tuple(b._strides) or (0,)
@@ -1093,11 +1095,12 @@ def add(a, b, alpha: float = 1.0) :
         return output
 
     strided = _prepare_binary_strided(a, b)
-    if strided is not None:
+    if strided[0] is not None:
         a, b, output, n, shp, a_st, b_st, ndim = strided
         add_strided_nd_kernel[_1d_grid(n)](a, b, output, n, alpha, shp, a_st, b_st,
                                            BLOCK_SIZE=_EW_BLOCK, NDIM=ndim, num_warps=_EW_WARPS)
         return output
+    _, a, b = strided
     a, b, output, n, dev_ctx, scalar = _prepare_binary(a, b)
     if scalar == "dev":
         add_scalar_dev_kernel[_1d_grid(n)](a, b, output, n, float(alpha), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
@@ -1226,11 +1229,12 @@ def mul(a, b) :
     if cr is not None:
         return cr
     strided = _prepare_binary_strided(a, b)
-    if strided is not None:
+    if strided[0] is not None:
         a, b, output, n, shp, a_st, b_st, ndim = strided
         mul_strided_nd_kernel[_1d_grid(n)](a, b, output, n, shp, a_st, b_st,
                                            BLOCK_SIZE=_EW_BLOCK, NDIM=ndim, num_warps=_EW_WARPS)
         return output
+    _, a, b = strided
     a, b, output, n, dev_ctx, scalar = _prepare_binary(a, b)
     if scalar == "dev":
         mul_scalar_dev_kernel[_1d_grid(n)](a, b, output, n, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
