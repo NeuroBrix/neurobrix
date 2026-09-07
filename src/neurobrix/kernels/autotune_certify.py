@@ -43,6 +43,24 @@ ORACLE = "fp64: the op in float64 (numpy), the reference bank's definition"
 ORACLE_MAX_MACS = 2_000_000_000
 BENCH_WARMUP_MS = 10
 BENCH_REP_MS = 40
+# Every candidate config runs once against the oracle, and that run is timed; only the
+# CONTENDERS — the configs within this factor of the fastest run — go to the stopwatch.
+# A register-spilling config on a 1024² convolution runs tens of times slower than the
+# winners and cannot win: on 2026-09-07 the bench of all 18 took 557 s of a 672 s shape.
+BENCH_CONTENDER_FACTOR = 2.0
+
+
+def _contenders(results, factor=None):
+    """(cfg, deviation, run_s) rows whose single run was within `factor` of the fastest;
+    never fewer than two when two exist (the proof records a second-best time)."""
+    factor = BENCH_CONTENDER_FACTOR if factor is None else factor
+    if not results:
+        return []
+    fastest = min(r[2] for r in results)
+    keep = [r for r in results if r[2] <= factor * fastest]
+    if len(keep) < 2 and len(results) >= 2:
+        keep = sorted(results, key=lambda r: r[2])[:2]
+    return keep
 
 
 # ---------------------------------------------------------------------------
@@ -338,15 +356,17 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None)
             # a shape cost ten seconds.
             DeviceAllocator.memset_cuda(out_addr, 0xFF, out_nbytes)
 
-        results: List[Tuple[Any, float]] = []
+        results: List[Tuple[Any, float, float]] = []
         excluded: List[Dict[str, Any]] = []
         unrun: List[Any] = []
         t_runs = time.time()
         for cfg in configs:
             poison()
             try:
+                t_one = time.time()
                 tuner.fn.run(*args, **{**kwargs, **cfg.all_kwargs()})
                 DeviceAllocator.stream_synchronize(0)
+                run_s = time.time() - t_one                # the run every config makes anyway, timed
                 dev = oracle_deviation(out_tensor.numpy(), oracle)
             except Exception as exc:                     # a config the backend refuses: counted, never trusted
                 unrun.append({"config": atc._config_to_dict(cfg), "error": str(exc)[:200]})
@@ -354,7 +374,7 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None)
             if not (dev <= tolerance):
                 excluded.append({"config": atc._config_to_dict(cfg), "deviation": dev, "tolerance": tolerance})
             else:
-                results.append((cfg, dev))
+                results.append((cfg, dev, run_s))
         if not results:
             if not excluded and unrun:
                 raise RuntimeError(f"{qual} at {key!r}: no config could run ({len(unrun)} of {len(configs)}; "
@@ -365,7 +385,8 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None)
         state["t_runs"] = round(time.time() - t_runs, 3)
         timed: List[Tuple[Any, float, float]] = []
         t_bench = time.time()
-        for cfg, dev in results:
+        contenders = _contenders(results)
+        for cfg, dev, _run_s in contenders:
             ms = bench(lambda: tuner.fn.run(*args, **{**kwargs, **cfg.all_kwargs()}))
             timed.append((cfg, dev, float(ms)))
         state["t_bench"] = round(time.time() - t_bench, 3)
@@ -373,7 +394,8 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None)
         best, dev, ms = timed[0]
         state.update({"config": atc._config_to_dict(best), "deviation": dev, "best_ms": ms,
                       "second_ms": timed[1][2] if len(timed) > 1 else None,
-                      "candidates": len(configs), "accepted": len(results), "excluded": excluded, "unrun": unrun,
+                      "candidates": len(configs), "accepted": len(results), "benched": len(contenders),
+                      "excluded": excluded, "unrun": unrun,
                       "timings": [{"config": atc._config_to_dict(c), "deviation": d, "ms": m} for c, d, m in timed]})
         tuner.cache[key] = best
         poison()
@@ -404,7 +426,7 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None)
              "engine_version": _engine_version(), "backend": _backend(), "shape": list(key),
              "deviation": state["deviation"], "tolerance": tolerance, "oracle": state.get("oracle", ORACLE), "machine": _machine(),
              "best_ms": state["best_ms"], "second_ms": state["second_ms"], "candidates": state["candidates"],
-             "accepted": state["accepted"], "could_not_run": len(state["unrun"]),
+             "accepted": state["accepted"], "benched": state["benched"], "could_not_run": len(state["unrun"]),
              "seconds": {"oracle": state.get("t_oracle"), "runs": state.get("t_runs"), "bench": state.get("t_bench")}}
     return {"config": state["config"], "proof": proof, "excluded": state["excluded"],
             "could_not_run": state["unrun"], "timings": state["timings"]}

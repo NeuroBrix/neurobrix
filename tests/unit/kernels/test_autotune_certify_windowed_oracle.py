@@ -64,3 +64,12 @@ def test_a_conv_oracle_fn_is_windowed_only_above_the_cap(monkeypatch):
     monkeypatch.setattr(Z, "ORACLE_MAX_MACS", 100)
     o = Z._conv_oracle_fn(x, w, (1, 1), (1, 1), (1, 1), 1)()
     assert isinstance(o, Z.WindowedOracle) and o.describe.startswith("on ")
+
+
+def test_only_the_contenders_go_to_the_stopwatch():
+    rows = [("a", 1e-6, 0.10), ("b", 1e-6, 0.15), ("c", 1e-6, 0.21), ("d", 1e-6, 3.0), ("e", 1e-6, 12.0)]
+    kept = Z._contenders(rows)
+    assert [r[0] for r in kept] == ["a", "b"]                       # within 2× of the fastest run
+    assert [r[0] for r in Z._contenders(rows, factor=2.5)] == ["a", "b", "c"]
+    assert [r[0] for r in Z._contenders([("x", 0, 1.0), ("y", 0, 9.0)])] == ["x", "y"]   # never fewer than two
+    assert Z._contenders([]) == []
