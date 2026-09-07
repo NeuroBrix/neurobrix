@@ -169,10 +169,14 @@ class Model:
         t0 = time.time()
         cmd = [PY, str(FORGE), "build", "--snapshot-path", str(snap), "--family", self.family, "--overwrite"]
         rc = run(cmd, self.env(tree=False), self.dir / "build.log", self.args.trace_timeout, cwd=str(REPO / "forge"))
-        nbx = Path(self.args.models_root) / self.registry_name / "model.nbx"
-        found = nbx if nbx.exists() else next(iter(Path(self.args.models_root).glob(f"**/{self.registry_name}*.nbx")), None)
-        if found is None:
-            found = next(iter(Path(self.args.models_root).glob(f"**/{self.name}*.nbx")), None)
+        root = Path(self.args.models_root)
+        found = None                                   # the builder writes <models-root>/<family>/<name>/model.nbx
+        for nm in (self.registry_name, self.name):
+            for cand in [root / self.family / nm / "model.nbx", root / nm / "model.nbx"] + sorted(root.glob(f"*/{nm}/*.nbx")):
+                if cand.exists():
+                    found = cand; break
+            if found:
+                break
         ok = rc == 0 and found is not None
         self.mark("build", ok, rc=rc, nbx=str(found) if found else None, seconds=round(time.time() - t0, 1),
                   gb=round(found.stat().st_size / 2**30, 2) if found else None)
