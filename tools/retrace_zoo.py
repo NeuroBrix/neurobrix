@@ -1061,6 +1061,26 @@ class Model:
         self.mark("new_outputs", ok, runs=res, policy=POLICY, autotune=freeze["snapshot"])
         return ok
 
+    @staticmethod
+    def topology_diff(old_path: Path, new_path: Path) -> list:
+        """Every difference between two topologies in what the runtime routes on, as
+        (path, old, new) sites; the components' shapes and extracted values — the
+        annotation the retrace corrects — are left to the graph gate."""
+        if not old_path.exists() and not new_path.exists():
+            return []
+        if not (old_path.exists() and new_path.exists()):
+            return [{"path": "topology.json", "old": "present" if old_path.exists() else "absent",
+                     "new": "present" if new_path.exists() else "absent"}]
+        o, n = json.loads(old_path.read_text()), json.loads(new_path.read_text())
+        sites = []
+        for key in ("flow", "connections", "synthesis"):
+            for pth, a, b in diff_paths(o.get(key), n.get(key), key, limit=12):
+                sites.append({"path": pth, "old": json.dumps(a)[:160], "new": json.dumps(b)[:160]})
+        oc, nc = set((o.get("components") or {}).keys()), set((n.get("components") or {}).keys())
+        for c in sorted(oc ^ nc):
+            sites.append({"path": f"components.{c}", "old": "present" if c in oc else "absent", "new": "present" if c in nc else "absent"})
+        return sites
+
     def graph_diff(self) -> dict:
         """Old vs new graph.json per component: every difference must be the
         closed defect — the symbolic-shape annotation, or a shape argument whose
@@ -1162,6 +1182,13 @@ class Model:
             report["arg_witnessed"] += rec["arg_witnessed"]
             report["pruned_dead_ops"] += rec["pruned_dead_ops"]
             report["corrupted_before"] += rec["corrupted_before"]; report["corrupted_after"] += rec["corrupted_after"]
+        # The topology is part of the container the gate compares: its flow (type, stages, order,
+        # direction, sample rate), its connections, its synthesis rules and its component set.
+        # A retrace changes shape annotations, never the runtime's routing — VibeVoice's retraced
+        # containers said flow type `audio` where the June one said `next_token_diffusion` and
+        # ran through another handler (2026-09-07: 7.5 dB, WER 0; the graph gate saw nothing).
+        report["topology"] = self.topology_diff(old_root.parent / "topology.json", new_root.parent / "topology.json")
+        report["beyond_annotation"] += len(report["topology"])
         return report
 
     def step_gate(self):
@@ -1250,7 +1277,7 @@ class Model:
             f"inference restored {sum(r.get('arg_kinds', {}).get('inference-restored', 0) for r in gd['components'].values())}, "
             f"unit-only literalized {sum(r.get('arg_kinds', {}).get('unit-only-literalized', 0) for r in gd['components'].values())}), "
             f"{gd['pruned_dead_ops']} dead op(s) pruned, "
-            f"{gd['beyond_annotation']} beyond, corrupted dims {gd['corrupted_before']} → {gd['corrupted_after']}")
+            f"{gd['beyond_annotation']} beyond ({len(gd.get('topology') or [])} in the topology), corrupted dims {gd['corrupted_before']} → {gd['corrupted_after']}")
         return verdict.startswith("PASS")
 
     def step_upload(self):
