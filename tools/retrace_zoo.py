@@ -594,26 +594,55 @@ def export_readers(cmdlines=None) -> list:
     return found
 
 
-def hub_store_write_probe(org: str, name: str, token: str, registry: str = REGISTRY):
-    """200 when the store takes a write today; otherwise the store's own answer, by name.
+class _PacedZeros:
+    """A body of `nbytes` zero bytes read at no more than `mbps` MB/s, with a length: the
+    write probe's realistic body (a store that takes five bytes inline can still refuse a
+    real object: on 2026-09-07 every artifact from 100 MB up failed for an hour after 11:22
+    while the five-byte probe passed)."""
+
+    def __init__(self, nbytes: int, mbps: float):
+        self._left = int(nbytes); self._len = int(nbytes); self._rate = float(mbps) * 1e6
+        self._t0 = time.monotonic(); self._sent = 0
+
+    def read(self, size=-1):
+        if self._left <= 0:
+            return b""
+        n = min(1 << 20, self._left if size is None or size < 0 else min(size, self._left))
+        self._left -= n; self._sent += n
+        ahead = self._sent / self._rate - (time.monotonic() - self._t0)
+        if ahead > 0:
+            time.sleep(ahead)
+        return b"\0" * n
+
+    def __len__(self):
+        return self._len
+
+
+PROBE_BYTES = 64 << 20        # the size class the store did take when it took anything at all
+
+
+def hub_store_write_probe(org: str, name: str, token: str, registry: str = REGISTRY, nbytes: int = 5, mbps: float = 10.0):
+    """200 when the store takes a write of `nbytes` today; otherwise the store's own answer, by name.
 
     The cluster health answered 200 with a write quorum of 1 through every refusal of
     2026-09-07 while each PUT came back 503 `SlowDownWrite` (MinIO's `errErasureWriteQuorum`)
     — after the whole artifact had been streamed (192 MB, then 1.6 GB in parts, every ten
-    minutes). Five bytes through the same slot → PUT → drop path say the same thing first."""
+    minutes). A write of the artifact's own size class through the same slot → PUT → drop
+    path says the same thing first; five bytes (inline metadata) are not that class."""
     import re
     import requests
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     try:
         slot = requests.post(f"{registry}/api/admin/upload", headers=headers, timeout=15,
-                             json={"org": org, "name": name, "contentType": "application/octet-stream", "fileSize": 5})
+                             json={"org": org, "name": name, "contentType": "application/octet-stream", "fileSize": int(nbytes)})
         slot.raise_for_status()
         info = slot.json()
         key, url = info["key"], info["uploadUrl"]
     except Exception as exc:  # noqa: BLE001
         return f"no upload slot from the registry: {type(exc).__name__}: {str(exc)[:120]}"
     try:
-        put = requests.put(url, data=b"probe", headers={"Content-Type": "application/octet-stream"}, timeout=60)
+        body = b"probe" if nbytes <= 5 else _PacedZeros(nbytes, mbps)
+        put = requests.put(url, data=body, headers={"Content-Type": "application/octet-stream", "Content-Length": str(len(body))}, timeout=(30, 600))
         answer = 200 if put.status_code < 400 else None
         if answer is None:
             m = re.search(r"<Code>([^<]+)</Code>(?:.*?<Message>([^<]+)</Message>)?", put.text or "", re.S)
@@ -1390,7 +1419,9 @@ class Model:
             return False
         if self.hub:
             org, name = self.hub.split("/", 1)
-            probe = hub_store_write_probe(org, name, os.environ["NEUROBRIX_API_TOKEN"])
+            size = Path(nbx).stat().st_size if nbx and Path(nbx).exists() else 0
+            probe = hub_store_write_probe(org, name, os.environ["NEUROBRIX_API_TOKEN"], nbytes=min(PROBE_BYTES, max(5, size)),
+                                          mbps=self.args.upload_mbps or 10.0)
             if probe != 200:
                 # The store refuses writes: said with the store's own name, before any artifact is streamed.
                 self.mark("upload", False, state="DEFERRED", reason=f"hub object store refuses writes: {probe}; retry when a five-byte write lands", nbx=nbx)
