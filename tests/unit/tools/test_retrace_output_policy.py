@@ -389,3 +389,29 @@ def test_the_upload_loop_trusts_a_recorded_pass_whatever_the_gates_freshness(mod
     assert m.done("gate") is False
     gate = m.state["steps"]["gate"]
     assert gate.get("verdict", "").startswith("PASS") and gate.get("ok") is True   # the loop's own test, as in main()
+
+
+def test_a_hub_object_that_does_not_run_is_recorded_and_the_new_container_is_judged_on_its_own_engines(model, monkeypatch):
+    m = model
+    _manifest(R.CACHE / m.name, "T2"); _manifest(Path(m.args.backup) / m.name, "T1")
+    m.state["steps"]["build"] = {"ok": True, "nbx": "/x/model.nbx"}; m.state["steps"]["install"] = {"ok": True}
+    monkeypatch.setattr(m, "restore_previous", lambda: True)
+    monkeypatch.setattr(m, "reinstall_new", lambda: True)
+    (m.dir / "old_sequential.log").write_text("x\n[ERROR] Pipeline failed: ZERO FALLBACK: No allocation for component 'perception_encoder'.\n")
+    monkeypatch.setattr(m, "outputs", lambda tag: {"sequential": {"rc": 1, "sha": None, "output": str(m.dir / "o.txt")},
+                                                    "triton": {"rc": 1, "sha": None, "output": str(m.dir / "t.txt")}})
+    assert m.step_old_outputs() is True                                    # the fact is recorded, the chain goes on
+    so = m.state["steps"]["old_outputs"]
+    assert so["ok"] and "perception_encoder" in so["unrunnable"]
+    fr = m.state["autotune_freeze"]["snapshot"]
+    m.state["steps"]["new_outputs"] = {"ok": True, "policy": R.POLICY, "autotune": fr,
+                                       "runs": {"sequential": {"rc": 0, "sha": "abc", "output": "s"}, "triton": {"rc": 0, "sha": "abc", "output": "t"}}}
+    monkeypatch.setattr(m, "graph_diff", lambda: {"components": {}, "beyond_annotation": 0, "annotation_changes": 3, "arg_witnessed": 1,
+                                                  "pruned_dead_ops": 0, "corrupted_before": 2, "corrupted_after": 0})
+    assert m.step_gate() is True
+    g = m.state["steps"]["gate"]
+    assert g["verdict"].startswith("PASS (the hub's object does not run") and g["bytes"]["new engines"] == "IDENTICAL"
+    m.state["steps"].pop("gate")
+    m.state["steps"]["new_outputs"]["runs"]["triton"]["sha"] = "zzz"
+    monkeypatch.setattr(C, "gate", lambda a, b: {"kind": "text", "identical": False})
+    assert m.step_gate() is False and m.state["steps"]["gate"]["verdict"] == "NEEDS_EXPLANATION"
