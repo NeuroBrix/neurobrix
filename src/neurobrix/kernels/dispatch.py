@@ -457,7 +457,11 @@ def _meta_sdpa_efficient(*args, **kwargs):
         is_causal = bool(is_causal)
     return w.scaled_dot_product_attention_wrapper(
         q, k, v, attn_mask=attn_mask, dropout_p=dropout_p,
-        is_causal=is_causal, scale=scale)
+        is_causal=is_causal, scale=scale,
+        # The graph's recorded K layout, when the caller bound it onto this
+        # meta-op. Dropping it here would leave the wrapper reading the
+        # layout off a shape that cannot express it at seq_len == head_dim.
+        k_pre_transposed=kwargs.get("k_pre_transposed"))
 
 
 def _meta_weight_norm(v, g, dim=0, **kwargs):
