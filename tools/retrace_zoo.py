@@ -133,19 +133,30 @@ class Model:
         self.mark("old_outputs", ok, runs=res)
         return ok
 
+    def snapshot(self):
+        """The model's snapshot: the export first, then the toolchain's own download directory."""
+        for root in (Path("/home/mlops/hf_snapshots"), Path.home() / ".cache" / "neurobrix" / "hf_snapshots"):
+            p = root / self.name
+            if p.is_dir() and any(p.iterdir()):
+                return p
+        return None
+
     def step_trace(self):
         if self.done("trace"): return True
+        snap = self.snapshot()
+        if snap is None:
+            self.mark("trace", False, error="no snapshot on the export or in the download directory"); return False
         t0 = time.time()
-        cmd = [PY, str(FORGE), "trace", "--model", self.name, "--family", self.family, "--device", "cuda:0"]
+        cmd = [PY, str(FORGE), "trace", "--model", self.name, "--family", self.family, "--device", "cuda:0", "--path", str(snap)]
         rc = run(cmd, self.env(tree=False), self.dir / "trace.log", self.args.trace_timeout, cwd=str(REPO / "forge"))
         self.mark("trace", rc == 0, rc=rc, seconds=round(time.time() - t0, 1))
         return rc == 0
 
     def step_build(self):
         if self.done("build"): return True
-        snap = Path("/home/mlops/hf_snapshots") / self.name
-        if not snap.is_dir():
-            self.mark("build", False, error=f"no snapshot at {snap}"); return False
+        snap = self.snapshot()
+        if snap is None:
+            self.mark("build", False, error="no snapshot on the export or in the download directory"); return False
         t0 = time.time()
         cmd = [PY, str(FORGE), "build", "--snapshot-path", str(snap), "--family", self.family, "--overwrite"]
         rc = run(cmd, self.env(tree=False), self.dir / "build.log", self.args.trace_timeout, cwd=str(REPO / "forge"))
