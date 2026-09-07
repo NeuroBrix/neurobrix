@@ -2125,9 +2125,13 @@ class NBXTensor:
         self._numel = math.prod(shape) if shape else 1
         # C6b: element size cached once — shape/strides/dtype are fixed at
         # construction (every view/reshape builds a NEW NBXTensor; __init__
-        # is the single construction path). The one dtype retag in the tree
-        # (triton/constants.py bf16 constants, uint16-tagged buffer) happens
-        # at _offset == 0, where data_ptr() does not consume _elem_size.
+        # is the single construction path). `_elem_size` and `_nbytes` are
+        # derived from `dtype` HERE and never again, so assigning `_dtype`
+        # after construction leaves a tensor whose declared length belongs
+        # to the old dtype — a buffer overrun when the new dtype is smaller.
+        # There is no such retag left in the tree: the two bf16-bits sites
+        # (triton/constants.py, graph_executor._load_constant_triton) declare
+        # the dtype to from_numpy instead.
         self._elem_size = dtype_size(dtype)
         self._nbytes = self._numel * self._elem_size
         # C6a: contiguity is a pure function of the (immutable) shape and
@@ -2442,14 +2446,45 @@ class NBXTensor:
                               device if device else other._device)
 
     @staticmethod
-    def from_numpy(arr) -> 'NBXTensor':
-        """Load numpy array to GPU. For weight loading from safetensors."""
+    def from_numpy(arr, dtype: 'Optional[NBXDtype]' = None) -> 'NBXTensor':
+        """Load numpy array to GPU. For weight loading from safetensors.
+
+        `dtype` names the NBX dtype the BITS in `arr` already are, for the
+        types numpy cannot express — bf16 travels in a uint16 container. It
+        is authoritative and must agree with the container's element size:
+        the buffer allocated here is `arr.nbytes`, and a tensor whose dtype
+        implies a different element size declares a length its own
+        allocation does not have. That mismatch used to be created by
+        retagging `_dtype` after construction (the tensor kept the
+        `_elem_size` / `_nbytes` of the dtype it was BUILT with): TinyLlama's
+        22 rotary tables, uint16 bf16 bits mistagged float32 by the fallback
+        below, each declared 524288 bytes over a 262144-byte buffer, and
+        every consumer that trusts `_nbytes` then ran off the end into
+        whichever allocation followed it — which is why the answer depended
+        on the sequence length. Measured 2026-09-07 on Apple.
+
+        An unmapped numpy dtype is refused rather than silently called
+        float32: guessing an element size is what produced the above.
+        """
         import numpy as np
         dtype_name = str(arr.dtype)
-        if dtype_name in _NUMPY_DTYPE_MAP:
+        if dtype is not None:
+            nbx_dt = dtype if isinstance(dtype, NBXDtype) else parse_dtype(dtype)
+            if dtype_size(nbx_dt) != arr.dtype.itemsize:
+                raise ValueError(
+                    f"from_numpy: dtype {nbx_dt.name} is "
+                    f"{dtype_size(nbx_dt)} bytes per element but the numpy "
+                    f"container '{dtype_name}' is {arr.dtype.itemsize}; the "
+                    f"buffer is sized from the container, so the two must "
+                    f"agree.")
+        elif dtype_name in _NUMPY_DTYPE_MAP:
             nbx_dt = _NUMPY_DTYPE_MAP[dtype_name]
         else:
-            nbx_dt = NBXDtype.float32
+            raise TypeError(
+                f"from_numpy: numpy dtype '{dtype_name}' has no NBX "
+                f"equivalent. Pass dtype=NBXDtype.<t> to declare what the "
+                f"bits are (bf16 travels as uint16); do not let the element "
+                f"size be guessed.")
         arr_c = np.ascontiguousarray(arr)
         nbytes = arr_c.nbytes
         shape = arr_c.shape
