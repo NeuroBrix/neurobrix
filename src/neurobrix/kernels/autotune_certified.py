@@ -281,6 +281,39 @@ def apply(kernel_qual: str, tuner, key: tuple) -> bool:
     return True
 
 
+def override_seeded(tuners=None) -> int:
+    """The directory first, even on a warm machine: every key the local replay
+    cache seeded into a tuner that the directory certifies takes the certified
+    config instead (no sweep, no screen). Returns how many were overridden —
+    counted as certified, no longer as local. Without this the seed ran before
+    the lookup and a warm machine never applied a certified setting (Flex.1 on
+    2026-09-07: 2,717 entries in the directory, 0 served, 5,547 from the cache)."""
+    if not enabled():
+        return 0
+    if tuners is None:
+        from neurobrix.triton.autotune_cache import _autotuners
+        tuners = list(_autotuners())
+    n = 0
+    for qual, tuner in tuners:
+        cache = getattr(tuner, "cache", None)
+        if not cache:
+            continue
+        for key in list(cache.keys()):
+            if not isinstance(key, tuple):
+                continue
+            try:
+                entry = lookup(qual, tuner, key)
+            except Exception:
+                entry = None
+            if entry is None:
+                continue
+            cache.pop(key, None)
+            if apply(qual, tuner, key):
+                n += 1
+    _SERVED["local"] = max(0, _SERVED["local"] - n)
+    return n
+
+
 def announce_missing(kernel_qual: str, tuner, key: tuple) -> None:
     """Said once per key, in clear: the runtime is about to sweep."""
     ident = (kernel_qual, key)
