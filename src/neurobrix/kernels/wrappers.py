@@ -357,6 +357,37 @@ def get_compute_dtype():
     return _NBX_COMPUTE_DTYPE
 
 
+# A run of a Triton sequence (both engines say so at entry, `begin_run`): the
+# caches that live for one run empty here. `_ROPE_TABLES`: the step's rotary
+# tables widened ONCE per run — the graph hands every layer its own view of one
+# base tensor, and each layer widened it again (2 × the layer count a token).
+# Keyed by the base object's identity, held strongly for the run so the id
+# cannot be reused; a later view of another base is another entry; nothing
+# outlives the run (the arena may reuse the base's slot after its last read,
+# and no consumer reads a view of it after that by construction).
+_RUN_EPOCH = 0
+_ROPE_TABLES: dict = {}
+
+
+def begin_run() -> None:
+    """A Triton sequence's run begins: the per-run caches empty."""
+    global _RUN_EPOCH
+    _RUN_EPOCH += 1
+    _ROPE_TABLES.clear()
+
+
+def _widened_once_per_run(t, target):
+    """`t.to(target)` computed once per run for a base tensor and its view geometry."""
+    base = t._base if getattr(t, "_base", None) is not None else t
+    key = (id(base), t.data_ptr(), tuple(t.shape), tuple(t._strides), t.nbx_dtype)
+    hit = _ROPE_TABLES.get(key)
+    if hit is not None and hit[0] is base:
+        return hit[1]
+    widened = t.to(target)
+    _ROPE_TABLES[key] = (base, widened)
+    return widened
+
+
 def set_activations_fp16_safe(safe: bool) -> None:
     """Set the activations-fp16-safe opt-in flag for the active component."""
     global _NBX_ACTIVATIONS_FP16_SAFE
@@ -2658,7 +2689,8 @@ def rope_fused_wrapper(q_raw, k_raw, cos, sin):
     # cast's conversion; the tables lie in [-1, 1], so the protected fp16 clamp
     # never applied — and the per-layer cast copy this replaces (TinyLlama: 44 a
     # token) is gone. A table NARROWER than Q (fp16 tables, fp32 Q: Sana's Gemma-2
-    # encoder) is widened here, a copy. JUSTIFIED COPY, 2 per layer per forward:
+    # encoder) is widened here, once per run (`_widened_once_per_run`). JUSTIFIED
+    # COPY, 2 per run, no longer 2 per layer:
     # widened on load, the fp32 rotation's fused multiply-add moved with the
     # convert before it (1 ulp on a sixth of the elements, 2026-09-07), and an
     # explicit fma matched the fp32 path but not the fp16 one — the arithmetic
@@ -2666,9 +2698,9 @@ def rope_fused_wrapper(q_raw, k_raw, cos, sin):
     # in place, so a K of another dtype than Q needs a buffer of Q's dtype.
     target_dt = q_raw.dtype
     if _wider_dtype(cos.nbx_dtype, q_raw.nbx_dtype) == q_raw.nbx_dtype and cos.nbx_dtype != q_raw.nbx_dtype:
-        cos = cos.to(target_dt)
+        cos = _widened_once_per_run(cos, target_dt)      # once per run, not once per layer
     if _wider_dtype(sin.nbx_dtype, q_raw.nbx_dtype) == q_raw.nbx_dtype and sin.nbx_dtype != q_raw.nbx_dtype:
-        sin = sin.to(target_dt)
+        sin = _widened_once_per_run(sin, target_dt)
     if k_raw.dtype != target_dt:
         k_raw = k_raw.to(target_dt)
 
