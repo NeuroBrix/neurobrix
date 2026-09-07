@@ -118,10 +118,17 @@ def rope_forward_kernel(
     # --- Apply rotation ---
     if not BACKWARD_PASS:
         # Forward: y = [x1, x2] * [cos, cos] + [-x2, x1] * [sin, sin]
-        new_q_1 = q_tile_1 * cos_row - q_tile_2 * sin_row
-        new_q_2 = q_tile_2 * cos_row + q_tile_1 * sin_row
-        new_k_1 = k_tile_1 * cos_row - k_tile_2 * sin_row
-        new_k_2 = k_tile_2 * cos_row + k_tile_1 * sin_row
+        # The rotation is written with the fused multiply-add the backend
+        # contracted the plain form into (the cos product fused, the sin
+        # product its addend): left to the compiler, the contraction changed
+        # with the shape of the load (a table cast on load put a convert
+        # before the multiply and moved it — 1 ulp on a sixth of Sana's
+        # Gemma-2 rotations, 2026-09-07), and byte identity across dtype
+        # paths needs the arithmetic pinned, not inferred.
+        new_q_1 = tl.fma(q_tile_1, cos_row, -(q_tile_2 * sin_row))
+        new_q_2 = tl.fma(q_tile_2, cos_row, q_tile_1 * sin_row)
+        new_k_1 = tl.fma(k_tile_1, cos_row, -(k_tile_2 * sin_row))
+        new_k_2 = tl.fma(k_tile_2, cos_row, k_tile_1 * sin_row)
     else:
         # Backward (inverse rotation): negate sin
         new_q_1 = q_tile_1 * cos_row + q_tile_2 * sin_row

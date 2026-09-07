@@ -269,15 +269,18 @@ def test_copy_into_a_strided_view_broadcasts_the_source():
     assert np.array_equal(got[:, :3], np.tile([1.0, 2.0, 3.0], (4, 1))) and not got[:, 3:].any()
 
 
-def test_rope_casts_the_tables_in_kernel_to_the_bytes_of_the_cast_copy():
-    """fp32 cos/sin tables with fp16 Q/K: the kernel rounds the tables on load; the bytes are
-    those of the path that cast the tables to fp16 first, and no copy kernel launches."""
+@pytest.mark.parametrize("q_dt,table_dt,S", [(np.float16, np.float32, 1), (np.float32, np.float16, 37)])
+def test_rope_casts_the_tables_in_kernel_to_the_bytes_of_the_cast_copy(q_dt, table_dt, S):
+    """The kernel casts the cos/sin tables to Q's dtype on load — narrowing (fp32 tables, fp16
+    Q: the decode case) or widening (fp16 tables, fp32 Q: Sana's Gemma-2 encoder) — and the
+    bytes are those of the path that cast the tables beforehand; no copy kernel launches. The
+    widening case pins the rotation's fused multiply-add: left to the compiler it moved."""
     rng = np.random.default_rng(6)
-    B, S, Hq, Hk, D = 1, 1, 32, 4, 64
-    q_np = (rng.standard_normal((B, S, Hq, D)) * 0.5).astype(np.float16)
-    k_np = (rng.standard_normal((B, S, Hk, D)) * 0.5).astype(np.float16)
+    B, Hq, Hk, D = 1, 32, 4, 64
+    q_np = (rng.standard_normal((B, S, Hq, D)) * 0.5).astype(q_dt)
+    k_np = (rng.standard_normal((B, S, Hk, D)) * 0.5).astype(q_dt)
     ang = rng.uniform(-np.pi, np.pi, (B, 1, S, D)).astype(np.float32)
-    cos_np, sin_np = np.cos(ang).astype(np.float32), np.sin(ang).astype(np.float32)
+    cos_np, sin_np = np.cos(ang).astype(table_dt), np.sin(ang).astype(table_dt)
 
     def run(cos_t, sin_t):
         q = NBXTensor.from_numpy(q_np).transpose(1, 2)      # (B, Hq, S, D) view, physical B,S,H,D
@@ -286,8 +289,8 @@ def test_rope_casts_the_tables_in_kernel_to_the_bytes_of_the_cast_copy():
             qo, ko = W.rope_fused_wrapper(q, k, cos_t, sin_t)
         return c.copies, _d2h(qo), _d2h(ko)
 
-    copies_ref, q_ref, k_ref = run(NBXTensor.from_numpy(cos_np.astype(np.float16)),
-                                   NBXTensor.from_numpy(sin_np.astype(np.float16)))
+    copies_ref, q_ref, k_ref = run(NBXTensor.from_numpy(cos_np.astype(q_dt)),
+                                   NBXTensor.from_numpy(sin_np.astype(q_dt)))
     copies, q_out, k_out = run(NBXTensor.from_numpy(cos_np), NBXTensor.from_numpy(sin_np))
     assert copies == 0 and copies_ref == 0
     assert np.array_equal(q_out, q_ref) and np.array_equal(k_out, k_ref)
