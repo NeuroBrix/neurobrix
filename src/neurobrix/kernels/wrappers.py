@@ -1398,8 +1398,14 @@ def layer_norm_wrapper(x, normalized_shape, weight=None, bias=None, eps=1e-5,
     return out[0] if isinstance(out, (tuple, list)) else out
 
 
-def rms_norm(x, weight, eps=1e-6, epsilon=None):
-    """RMSNorm wrapper.
+def rms_norm(x, weight, eps=1e-6, epsilon=None, out_dtype=None):
+    """RMSNorm wrapper. `out_dtype`: the dtype the output is stored in (default: x's).
+
+    The kernel widens every input load to fp32 and stores in the output buffer's dtype, so a
+    half input needs no materialised fp32 copy before the call and an fp32 output no cast
+    after it: the dtype engine's fp32-internal wrap asks for the output dtype instead (the
+    copy lever, 2026-09-07 — 48 + 48 copies a token on TinyLlama). The rounding at the store
+    is the one the materialised path applied at its cast back.
 
     When `x.contiguous()` materializes a new tensor (input is a strided
     view such as the NHWC permute pattern in DC-AE VAEs), the rms_norm
@@ -1419,13 +1425,14 @@ def rms_norm(x, weight, eps=1e-6, epsilon=None):
 
     x_contig = x.contiguous()
     x_2d = x_contig.view(batch_dim, feat_dim)
-    if x_contig is not x:
+    out_dt = out_dtype if out_dtype is not None else x_2d.nbx_dtype
+    if x_contig is not x and out_dt == x_2d.nbx_dtype:
         # contiguous() allocated a fresh buffer with no other holder —
         # write rms_norm output directly into it (in-place) instead of
         # paying for a second 8 GiB allocation.
         output_2d = x_2d
     else:
-        output_2d = NBXTensor.empty_like(x_2d)
+        output_2d = NBXTensor.empty(x_2d.shape, dtype=out_dt, device=x_2d.device)
 
     has_weight = weight is not None
 
@@ -1442,6 +1449,9 @@ def rms_norm(x, weight, eps=1e-6, epsilon=None):
         num_warps=4,
     )
     return output_2d.view_as(x)
+
+
+rms_norm._nbx_widens_on_load = True      # the dtype engine's fp32-internal wrap: no pre-cast, `out_dtype` instead
 
 
 # ===========================================================================
