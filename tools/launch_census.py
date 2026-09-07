@@ -75,6 +75,14 @@ def _site(stack) -> tuple[str, bool]:
     return "<outside neurobrix>", from_autotuner
 
 
+def _shapes_by_site(counter) -> dict:
+    """{site: {'(shape) strides=(…) dtype': n}} from the (site, shape, strides, dtype) counter."""
+    out: dict[str, dict] = collections.defaultdict(dict)
+    for (site, shp, strd, dt), n in counter.items():
+        out[site][f"{shp} strides={strd} {dt}"] = n
+    return dict(out)
+
+
 class Census:
     def __init__(self):
         self.counts: collections.Counter = collections.Counter()
@@ -97,27 +105,29 @@ class Census:
 
         def count(name):
             census.counts[name] += 1
-            if "copy" in name and census.stacks_taken[name] < STACKS_PER_KERNEL and census.counts[name] % SAMPLE_EVERY == 1:
-                # the copied tensor's shape, strides and dtype, read from the NBXTensor frame
-                # that issued the copy — the per-site table needs the shapes (the Mac's table
-                # of 2026-09-07 named the weights by theirs)
-                f = sys._getframe(1)
-                while f is not None:
-                    if "kernels/nbx_tensor.py" in f.f_code.co_filename:
-                        t = f.f_locals.get("src") or f.f_locals.get("self")
-                        shp, strd = getattr(t, "_shape", None), getattr(t, "_strides", None)
-                        if shp is not None:
-                            census.shapes[name][(tuple(shp), tuple(strd or ()), str(getattr(t, "_dtype", "")))] += 1
-                        break
-                    f = f.f_back
             # one launch in SAMPLE_EVERY is attributed, so the sites are a sample of the whole
             # run (the first launches are the load's conversions, not the decode loop's copies)
             if census.counts[name] % SAMPLE_EVERY == 1 and census.stacks_taken[name] < STACKS_PER_KERNEL:
                 census.stacks_taken[name] += 1
                 site, auto = _site(traceback.extract_stack()[:-2])
-                census.sites[name][("autotuner:" if auto else "") + site] += 1
+                site = ("autotuner:" if auto else "") + site
+                census.sites[name][site] += 1
                 if auto:
                     census.by_autotuner[name] += 1
+                if "copy" in name:
+                    # the copied tensor's shape, strides and dtype, read from the NBXTensor
+                    # frame that issued the copy, keyed by the SITE — the per-site table needs
+                    # the shapes (the Mac's table of 2026-09-07 named the weights by theirs)
+                    f = sys._getframe(1)
+                    while f is not None:
+                        if "kernels/nbx_tensor.py" in f.f_code.co_filename:
+                            t = f.f_locals.get("src") or f.f_locals.get("self")
+                            shp, strd = getattr(t, "_shape", None), getattr(t, "_strides", None)
+                            if shp is not None:
+                                census.shapes[name][(site, tuple(shp), tuple(strd or ()),
+                                                     str(getattr(t, "_dtype", "")))] += 1
+                            break
+                        f = f.f_back
 
         # Since the R33 third peel (2026-09-05) every house kernel launches through the
         # NeuroBrix launcher, not Triton's `kernel[grid]`: its two entry points are the
@@ -172,6 +182,8 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--model", required=True)
     ap.add_argument("--audio")
+    ap.add_argument("--input-image", help="an upscaler's or an image-to-image request's input")
+    ap.add_argument("--extra", default="", help="further `neurobrix run` arguments as one string, e.g. --extra '--seed 42'")
     ap.add_argument("--prompt", default="Hello")
     ap.add_argument("--engine", default="triton", choices=["triton", "compiled"])
     ap.add_argument("--max-tokens", type=int, default=16)
@@ -193,8 +205,12 @@ def main() -> int:
                 "--max-tokens", str(args.max_tokens)]
     if args.audio:
         sys.argv += ["--audio", args.audio]
+    elif args.input_image:
+        sys.argv += ["--input-image", args.input_image]
     else:
         sys.argv += ["--prompt", args.prompt]
+    import shlex
+    sys.argv += shlex.split(args.extra)
     if args.engine == "triton":
         sys.argv.append("--triton")
 
@@ -246,7 +262,7 @@ def main() -> int:
             "by_kernel": dict(census.counts),
             "aten_by_op": dict(census.torch_ops),
             "sites": {k: dict(v) for k, v in census.sites.items()},
-            "shapes": {k: {f"{shp} strides={strd} {dt}": n for (shp, strd, dt), n in v.items()} for k, v in census.shapes.items()},
+            "shapes": {k: _shapes_by_site(v) for k, v in census.shapes.items()},
         }, indent=2))
         print(f"\nwritten: {out/'launch_census.json'}")
     return rc
