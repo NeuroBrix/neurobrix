@@ -211,6 +211,30 @@ class MetalRuntime:
         # for the timing path is two.
         self._event_pool: list = []
 
+        # Command buffers committed and NOT yet waited on, oldest first.
+        #
+        # A launch used to commit its buffer and block on
+        # `waitUntilCompleted()` before returning, so every kernel cost a full
+        # host round trip. Measured 2026-09-07 on TinyLlama decode: 598 us per
+        # launch across 10,695 launches, 1,337 of them per decode step —
+        # 799 ms of an 857 ms step, 93% of it, spent waiting for a GPU that
+        # had already been given the work.
+        #
+        # Metal executes the buffers of one queue in the order they were
+        # committed, so dropping the wait keeps the ordering that made the
+        # engine correct. What it does NOT keep is the accident that made
+        # every host read of device memory safe: `memcpy` here is a memmove on
+        # shared memory and orders against nothing. So the wait moves to the
+        # places where the host actually looks — `memcpy`, `memset`, `sync`,
+        # `stream_sync` — and to `free`, because a buffer referenced by
+        # pending work must not be released.
+        #
+        # The list is bounded: Metal blocks in `commandBuffer()` once a queue
+        # holds 64 in flight, and blocking there is a stall nobody can see.
+        # `_drain_to` keeps it under the cap read from the hardware profile.
+        self._pending: Dict[int, list] = {}
+        self._pending_cap: Optional[int] = None
+
         # `DeviceAllocator.event_elapsed_ms` sets `.restype` on the entry
         # point before calling it — a ctypes idiom that a bound method
         # rejects. A function object accepts attributes, so this one entry
@@ -335,6 +359,9 @@ class MetalRuntime:
         address = _as_int(ptr)
         if not address:
             return _OK
+        # Releasing memory a committed command buffer still references is a
+        # use-after-free on the GPU's side of the fence.
+        self.flush()
         with self._lock:
             entry = self._buffers.pop(address, None)
             if entry is not None:
@@ -402,6 +429,26 @@ class MetalRuntime:
         dst_addr, src_addr = _as_int(dst), _as_int(src)
         if not dst_addr or not src_addr:
             return _ERR_BAD_ARGUMENT
+        # Device to device is STREAM-ORDERED by contract, not host-ordered:
+        # "for D2D the synchronous cudaMemcpy performs NO host-side
+        # synchronization — the copy is enqueued on the calling device's
+        # legacy stream and the host returns immediately" (the allocator says
+        # so in nbx_tensor.memcpy). Doing it as a host memmove made it
+        # host-ordered, and once the launch path stopped waiting that turned
+        # every one of them into a flush: measured 2026-09-07, 1,086 D2D
+        # copies in an 8-token decode went from 0.007 s to 4.08 s, taking back
+        # most of what dropping the per-launch wait had given. A blit on the
+        # same queue as the kernels is ordered by the GPU and waits for
+        # nothing.
+        if _as_int(kind) == 3:
+            blitted = self._blit(dst_addr, src_addr, nbytes)
+            if blitted is not None:
+                return blitted
+        # Host is involved on one side or the other: a memmove on shared
+        # memory orders against nothing, so the GPU work that produced these
+        # bytes has to have retired before it runs. It always had; it used to
+        # be true by accident because every launch waited.
+        self.flush()
         ctypes.memmove(ctypes.c_void_p(dst_addr),
                        ctypes.c_void_p(src_addr), nbytes)
         return _OK
@@ -413,6 +460,7 @@ class MetalRuntime:
         address = _as_int(ptr)
         if not address:
             return _ERR_BAD_ARGUMENT
+        self.flush()
         ctypes.memset(ctypes.c_void_p(address),
                       _as_int(value) & 0xFF, nbytes)
         return _OK
@@ -452,6 +500,87 @@ class MetalRuntime:
 
     # -- ordering -----------------------------------------------------------
 
+    # -- deferred completion ------------------------------------------------
+
+    def _cap(self) -> int:
+        """How many committed command buffers may be in flight at once.
+
+        Read from the hardware profile (`dispatch.max_command_buffers_in_flight`)
+        so the number is the device's, not this file's. Metal's own ceiling is
+        64 per queue and it BLOCKS in `commandBuffer()` at that point, which is
+        a stall with no name attached; staying under it keeps the backpressure
+        ours and visible.
+        """
+        if self._pending_cap is None:
+            cap = 0
+            try:
+                from neurobrix.kernels.wrappers import _arch_dispatch_param
+                cap = int(_arch_dispatch_param(
+                    "max_command_buffers_in_flight", 0) or 0)
+            except Exception:
+                cap = 0
+            self._pending_cap = cap if cap > 0 else 32
+        return self._pending_cap
+
+    def track_committed(self, queue_handle: int, command_buffer) -> None:
+        """Record a buffer committed without a wait, and keep the queue's
+        in-flight depth under the cap by waiting on the oldest."""
+        with self._lock:
+            pending = self._pending.setdefault(int(queue_handle or 0), [])
+            pending.append(command_buffer)
+            cap = self._cap()
+            while len(pending) > cap:
+                oldest = pending.pop(0)
+                self._await(oldest)
+
+    def _await(self, command_buffer) -> None:
+        command_buffer.waitUntilCompleted()
+        error = command_buffer.error()
+        if error is not None:
+            raise RuntimeError(f"Metal command buffer failed: {error}")
+
+    def _blit(self, dst_addr: int, src_addr: int, nbytes: int):
+        """A device-to-device copy as GPU work on the kernels' own queue.
+
+        Returns `_OK` when it was enqueued, or None when either end is not
+        memory this allocator handed out — in which case the caller falls
+        back to the host copy, because a blit can only address MTLBuffers.
+        """
+        dst = self.buffer_for_pointer(dst_addr)
+        src = self.buffer_for_pointer(src_addr)
+        if dst is None or src is None or dst[0] is None or src[0] is None:
+            return None
+        command_buffer = self._queue.commandBuffer()
+        if command_buffer is None:                      # pragma: no cover
+            return None
+        encoder = command_buffer.blitCommandEncoder()
+        if encoder is None:                             # pragma: no cover
+            command_buffer.commit()
+            return None
+        encoder.copyFromBuffer_sourceOffset_toBuffer_destinationOffset_size_(
+            src[0], src[1], dst[0], dst[1], nbytes)
+        encoder.endEncoding()
+        command_buffer.commit()
+        self.track_committed(0, command_buffer)
+        return _OK
+
+    def flush(self, queue_handle: Optional[int] = None) -> int:
+        """Wait for everything committed on this queue (or all of them).
+
+        This is the seam the launch path traded its per-kernel wait for: the
+        host may read device memory only after it, and every entry point that
+        does — memcpy, memset, sync, stream_sync, free — goes through it.
+        """
+        with self._lock:
+            if queue_handle is None:
+                buffers = [cb for lst in self._pending.values() for cb in lst]
+                self._pending.clear()
+            else:
+                buffers = self._pending.pop(int(queue_handle or 0), [])
+        for command_buffer in buffers:
+            self._await(command_buffer)
+        return _OK
+
     def sync(self) -> int:
         """`cudaDeviceSynchronize()` on the allocator's own queue.
 
@@ -466,6 +595,10 @@ class MetalRuntime:
         or this method must be re-pointed at the backend's, and that is a
         contract for that chantier, not an option.
         """
+        # Everything the launch path committed without waiting, first: the
+        # contract this docstring used to describe as owed to the launch
+        # chantier is now kept here.
+        self.flush()
         command_buffer = self._queue.commandBuffer()
         if command_buffer is None:                      # pragma: no cover
             return _ERR_ALLOC
@@ -507,6 +640,7 @@ class MetalRuntime:
             queue = self._queues.get(key)
         if queue is None:
             return _ERR_UNKNOWN_POINTER
+        self.flush(key)
         command_buffer = queue.commandBuffer()
         if command_buffer is None:                      # pragma: no cover
             return _ERR_ALLOC
