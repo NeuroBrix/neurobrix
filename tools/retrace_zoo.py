@@ -67,8 +67,21 @@ def sha(path: Path):
     return hashlib.sha256(path.read_bytes()).hexdigest()[:12] if path.exists() else None
 
 
+def rotate(logfile: Path) -> None:
+    """A step's log holds one attempt: an earlier attempt's log is kept aside
+    as <name>.<n>.log, so a reader (or a count of the tracer's guard lines)
+    never mixes two passes."""
+    if not logfile.exists() or logfile.stat().st_size == 0:
+        return
+    n = 1
+    while (logfile.with_name(f"{logfile.stem}.{n}{logfile.suffix}")).exists():
+        n += 1
+    logfile.rename(logfile.with_name(f"{logfile.stem}.{n}{logfile.suffix}"))
+
+
 def run(cmd, env, logfile: Path, timeout: int, cwd=None) -> int:
     logfile.parent.mkdir(parents=True, exist_ok=True)
+    rotate(logfile)
     with open(logfile, "a") as fh:
         fh.write("$ " + " ".join(str(c) for c in cmd) + "\n"); fh.flush()
         try:
