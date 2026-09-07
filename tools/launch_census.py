@@ -51,16 +51,27 @@ OURS = "src/neurobrix/"
 # Frames inside these modules mean the launch came from upstream Triton's
 # autotuner benchmarking a config, not from our execution of the model.
 AUTOTUNER = ("triton/runtime/autotuner.py", "triton/testing.py")
-STACKS_PER_KERNEL = 3
+STACKS_PER_KERNEL = 512      # samples per kernel, one launch in SAMPLE_EVERY: the decode loop's sites, not only the first launches
+SAMPLE_EVERY = 8
 
 
 def _site(stack) -> tuple[str, bool]:
     """(deepest NeuroBrix frame, whether an autotuner frame is above it)."""
     from_autotuner = any(a in f.filename for f in stack for a in AUTOTUNER)
+    mechanism = None
     for frame in reversed(stack):
-        if OURS in frame.filename:
-            rel = frame.filename.split("src/neurobrix/")[-1]
-            return f"src/neurobrix/{rel}:{frame.lineno}", from_autotuner
+        if OURS not in frame.filename or "kernels/launcher.py" in frame.filename:
+            continue                          # the launcher's frames are the instrument's path
+        rel = frame.filename.split("src/neurobrix/")[-1]
+        here = f"src/neurobrix/{rel}:{frame.lineno}"
+        if "kernels/nbx_tensor.py" in frame.filename:
+            # the tensor's own method that issued the copy (contiguous, copy_, …): the
+            # MECHANISM; the site the table wants is the consumer that asked for it
+            mechanism = mechanism or here
+            continue
+        return (f"{here}  via {mechanism}" if mechanism else here), from_autotuner
+    if mechanism:
+        return mechanism, from_autotuner
     return "<outside neurobrix>", from_autotuner
 
 
@@ -72,6 +83,7 @@ class Census:
             collections.Counter)
         self.stacks_taken: collections.Counter = collections.Counter()
         self.torch_ops: collections.Counter = collections.Counter()
+        self.shapes: dict[str, collections.Counter] = collections.defaultdict(collections.Counter)
 
     def install(self):
         """Wrap the two launch entry points and the ATen dispatcher.
@@ -81,21 +93,61 @@ class Census:
         right hook: a census that could not see them would attribute the
         autotuner's work to the model.
         """
-        import triton
-        from triton.runtime.jit import JITFunction
-
-        original = JITFunction.run
         census = self
 
-        def counting_run(self, *args, **kwargs):
-            name = getattr(self, "__name__", "<jit>")
+        def count(name):
             census.counts[name] += 1
-            if census.stacks_taken[name] < STACKS_PER_KERNEL:
+            if "copy" in name and census.stacks_taken[name] < STACKS_PER_KERNEL and census.counts[name] % SAMPLE_EVERY == 1:
+                # the copied tensor's shape, strides and dtype, read from the NBXTensor frame
+                # that issued the copy — the per-site table needs the shapes (the Mac's table
+                # of 2026-09-07 named the weights by theirs)
+                f = sys._getframe(1)
+                while f is not None:
+                    if "kernels/nbx_tensor.py" in f.f_code.co_filename:
+                        t = f.f_locals.get("src") or f.f_locals.get("self")
+                        shp, strd = getattr(t, "_shape", None), getattr(t, "_strides", None)
+                        if shp is not None:
+                            census.shapes[name][(tuple(shp), tuple(strd or ()), str(getattr(t, "_dtype", "")))] += 1
+                        break
+                    f = f.f_back
+            # one launch in SAMPLE_EVERY is attributed, so the sites are a sample of the whole
+            # run (the first launches are the load's conversions, not the decode loop's copies)
+            if census.counts[name] % SAMPLE_EVERY == 1 and census.stacks_taken[name] < STACKS_PER_KERNEL:
                 census.stacks_taken[name] += 1
-                site, auto = _site(traceback.extract_stack()[:-1])
+                site, auto = _site(traceback.extract_stack()[:-2])
                 census.sites[name][("autotuner:" if auto else "") + site] += 1
                 if auto:
                     census.by_autotuner[name] += 1
+
+        # Since the R33 third peel (2026-09-05) every house kernel launches through the
+        # NeuroBrix launcher, not Triton's `kernel[grid]`: its two entry points are the
+        # chokepoints — the module-level `launch(kernel, grid, …)` (looked up as a module
+        # global at call time, so the wrap is seen by every caller) and a compiled kernel's
+        # own `.launch(grid, args)`. Older trees still go through JITFunction.run; both are
+        # wrapped, and a launch is counted once (the launcher does not call JITFunction.run).
+        try:
+            from neurobrix.kernels import launcher as L
+            original_launch = L.launch
+
+            def counting_launch(kernel, grid, *args, **kwargs):
+                count(getattr(kernel, "__name__", "<kernel>"))
+                return original_launch(kernel, grid, *args, **kwargs)
+            L.launch = counting_launch
+            if hasattr(L, "CudaCompiledKernel"):
+                original_ck = L.CudaCompiledKernel.launch
+
+                def counting_ck(self, grid, args, stream: int = 0):
+                    count(getattr(self, "name", "<compiled>"))
+                    return original_ck(self, grid, args, stream)
+                L.CudaCompiledKernel.launch = counting_ck
+            self.hooked = "neurobrix launcher"
+        except ImportError:
+            self.hooked = "triton JITFunction.run"
+        from triton.runtime.jit import JITFunction
+        original = JITFunction.run
+
+        def counting_run(self, *args, **kwargs):
+            count(getattr(self, "__name__", "<jit>"))
             return original(self, *args, **kwargs)
 
         JITFunction.run = counting_run
@@ -194,6 +246,7 @@ def main() -> int:
             "by_kernel": dict(census.counts),
             "aten_by_op": dict(census.torch_ops),
             "sites": {k: dict(v) for k, v in census.sites.items()},
+            "shapes": {k: {f"{shp} strides={strd} {dt}": n for (shp, strd, dt), n in v.items()} for k, v in census.shapes.items()},
         }, indent=2))
         print(f"\nwritten: {out/'launch_census.json'}")
     return rc
