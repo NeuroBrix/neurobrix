@@ -23,7 +23,16 @@ makes such interruptions *visible and resumable*:
 
   3. `clear <id>` acknowledges a record once resumed or obsolete.
 
-Commands: run, status, check [--hook], clear <id>|--all-stale.
+  4. The repository gate. A power cut truncates whatever git was writing
+     (2026-09-03 00:12: two loose objects left empty, found four days
+     later); a job resumed on a corrupt repository commits on top of the
+     damage. So the procedure runs `git fsck --full` once per boot — at
+     the session hook, and before any `run` — and `run` REFUSES to
+     launch while the verdict is not clean. `fsck` re-checks by hand
+     after the repair (quarantine the corrupt object files out of
+     .git/objects, fetch both remotes, rebuild what neither has).
+
+Commands: run, status, check [--hook], clear <id>|--all-stale, fsck.
 Stdlib only; records live in <repo>/.flightrec/ (gitignored).
 """
 
@@ -133,10 +142,72 @@ def resume_block(rec: dict, cause: str) -> str:
     return "\n".join(lines)
 
 
+FSCK_FILE = REC_DIR / "fsck.json"
+FSCK_REFUSED = 3
+
+
+def run_git_fsck() -> "tuple[int, str]":
+    """`git fsck --full` on the repository: (exit code, output). Dangling
+    objects are not a defect (every rebase leaves some) and are not listed."""
+    try:
+        proc = subprocess.run(["git", "-C", str(REPO), "fsck", "--full", "--no-dangling"],
+                              capture_output=True, text=True, timeout=3600)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return 1, f"git fsck could not run: {exc}"
+    return proc.returncode, (proc.stdout + proc.stderr).strip()
+
+
+def fsck_verdict(force: bool = False) -> dict:
+    """The repository's verdict for THIS boot: read from the record when one
+    exists for the current boot id (a power cut is a boot boundary, so a clean
+    verdict holds until the next one), else measured now and recorded."""
+    boot = current_boot_id()
+    if not force and FSCK_FILE.exists():
+        try:
+            rec = json.loads(FSCK_FILE.read_text())
+            if rec.get("boot_id") == boot and "clean" in rec:
+                return rec
+        except (json.JSONDecodeError, OSError):
+            pass
+    code, out = run_git_fsck()
+    rec = {"boot_id": boot, "clean": code == 0, "exit_code": code,
+           "checked_iso": time.strftime("%Y-%m-%d %H:%M:%S"), "report": out}
+    REC_DIR.mkdir(exist_ok=True)
+    write_record(FSCK_FILE, rec)
+    return rec
+
+
+def fsck_block(rec: dict) -> str:
+    if rec["clean"]:
+        return (f"[flightrec] repository: git fsck --full clean "
+                f"(checked {rec['checked_iso']}, this boot)")
+    lines = ["=" * 64,
+             "FLIGHT RECORDER — REPOSITORY CORRUPT: RESUME REFUSED",
+             "=" * 64,
+             f"git fsck --full failed (exit {rec['exit_code']}, checked {rec['checked_iso']}):"]
+    lines += ["    " + l for l in rec["report"].splitlines()[:20]]
+    lines += ["Repair before any resume: note what references each bad object (fsck says),",
+              "move the bad files out of .git/objects, `git fetch origin` and `git fetch gitlab`;",
+              "what neither remote brings back is rebuilt from the working tree (blob: git",
+              "hash-object -w, hash checked; tree/commit: recommitted, sha noted in the journal).",
+              "Then `python3 tools/flightrec.py fsck` — `run` launches again once it is clean."]
+    return "\n".join(lines)
+
+
+def cmd_fsck(args) -> int:
+    rec = fsck_verdict(force=True)
+    print(fsck_block(rec))
+    return 0 if rec["clean"] else FSCK_REFUSED
+
+
 def cmd_run(args) -> int:
     if not args.cmd:
         print("[flightrec] run: no command given after --", file=sys.stderr)
         return 2
+    verdict = fsck_verdict()
+    if not verdict["clean"]:
+        print(fsck_block(verdict), file=sys.stderr, flush=True)
+        return FSCK_REFUSED
     REC_DIR.mkdir(exist_ok=True)
     label_slug = re.sub(r"[^a-zA-Z0-9]+", "-", args.label).strip("-")[:60]
     rec_id = time.strftime("%Y%m%d_%H%M%S") + "_" + label_slug
@@ -201,6 +272,13 @@ def cmd_check(args) -> int:
             stale.append((rec, cause))
         elif cause == "RUNNING":
             running.append(rec)
+    # The repository before the records: a cut that killed the jobs may have
+    # truncated git's writes too. Measured once per boot; in hook mode a clean
+    # verdict is said only when there is something else to say.
+    verdict = fsck_verdict()
+    if not verdict["clean"] or stale or not args.hook:
+        print(fsck_block(verdict))
+        print()
     if stale:
         print("=" * 64)
         print("FLIGHT RECORDER — UNCLEAN SHUTDOWN: WORK WAS IN FLIGHT")
@@ -267,12 +345,14 @@ def main() -> int:
     p_clear = sub.add_parser("clear", help="acknowledge a record")
     p_clear.add_argument("id", nargs="?")
     p_clear.add_argument("--all-stale", action="store_true")
+    sub.add_parser("fsck", help="re-check the repository now (git fsck --full); "
+                               "run refuses to launch while it is not clean")
 
     args = ap.parse_args()
     if args.command == "run" and args.cmd and args.cmd[0] == "--":
         args.cmd = args.cmd[1:]
-    return {"run": cmd_run, "status": cmd_status,
-            "check": cmd_check, "clear": cmd_clear}[args.command](args)
+    return {"run": cmd_run, "status": cmd_status, "check": cmd_check,
+            "clear": cmd_clear, "fsck": cmd_fsck}[args.command](args)
 
 
 if __name__ == "__main__":
