@@ -177,3 +177,20 @@ def test_the_fp32_internal_wrap_asks_a_widening_wrapper_for_its_output_dtype(mon
     monkeypatch.setattr(_w, "_NBX_ACTIVATIONS_FP16_SAFE", True)
     eng._wrap_fp32_internal_compute_dtype_output(widening)(x16)
     assert calls[-1][1] == NBXDtype.float16, "cast back on: the compute dtype asked of the store"
+
+
+@pytest.mark.parametrize("dim", [0, 1, 2])
+def test_index_select_along_any_axis_needs_no_layout_copy(dim):
+    """A gather along a middle axis used to move the axis last (a copy), gather, and permute the
+    result back (a copy): the middle-axis kernel writes the output in its final layout. The
+    reference is numpy's take on the same data."""
+    rng = np.random.default_rng(11)
+    data = (rng.standard_normal((5, 7, 6)) * 0.5).astype(np.float16)
+    n = data.shape[dim]
+    idx = np.array([n - 1, 0, n // 2, n // 2, 1], dtype=np.int64)[:n]      # within [0, n)
+    x = NBXTensor.from_numpy(data); index = NBXTensor.from_numpy(idx)
+    with _Count() as c:
+        out = W.index_select_wrapper(x, dim, index)
+    assert c.copies == 0
+    assert list(out.shape) == [data.shape[0] if dim != 0 else len(idx), data.shape[1] if dim != 1 else len(idx), data.shape[2] if dim != 2 else len(idx)]
+    assert np.array_equal(_d2h(out).reshape(out.shape), np.take(data, idx, axis=dim))
