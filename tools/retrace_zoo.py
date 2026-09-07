@@ -418,6 +418,18 @@ def hub_store_health(url: str = HUB_STORE_HEALTH, timeout: float = 10.0, probe_s
     return 200
 
 
+WEIGHT_SUFFIXES = {"safetensors", "bin", "pt", "pth", "gguf", "ckpt", "npz"}
+
+
+def snapshot_weight_gb(snap) -> float:
+    """The weight files of a snapshot, in GB (what a build stages)."""
+    total = 0
+    for f in Path(snap).rglob("*"):
+        if f.is_file() and f.suffix.lstrip(".") in WEIGHT_SUFFIXES:
+            total += f.stat().st_size
+    return total / 1e9
+
+
 class Model:
     def __init__(self, name: str, args):
         self.name = name
@@ -505,6 +517,14 @@ class Model:
         snap = self.snapshot()
         if snap is None:
             self.mark("build", False, error="no snapshot on the export or in the download directory"); return False
+        # The staging disk must hold the container twice (the build's staging and the .nbx) with
+        # headroom; a build that would fill it is deferred by name (the root fs filled at 04:21).
+        need_gb = 2 * snapshot_weight_gb(snap) + 10
+        free_gb = shutil.disk_usage(self.args.models_root).free / 1e9
+        if free_gb < need_gb:
+            self.mark("build", False, state="DEFERRED", reason=f"staging disk: {free_gb:.0f} GB free, {need_gb:.0f} GB needed (twice the snapshot's weights + 10)")
+            log(f"{self.name}: build DEFERRED — staging disk {free_gb:.0f} GB free, {need_gb:.0f} GB needed; uploads must drain first")
+            return False
         t0 = time.time()
         cmd = [PY, str(FORGE), "build", "--snapshot-path", str(snap), "--family", self.family, "--overwrite"]
         rc = run(cmd, self.env(tree=False), self.dir / "build.log", self.args.trace_timeout, cwd=str(REPO / "forge"))
@@ -528,8 +548,14 @@ class Model:
         if dst.exists() and (dst / "manifest.json").exists():
             self.mark("backup", True, path=str(dst), cached=True); return True
         t0 = time.time()
-        shutil.copytree(src, dst, symlinks=True)
-        self.mark("backup", True, path=str(dst), seconds=round(time.time() - t0, 1))
+        # The backup keeps what the gate reads — manifest, topology, defaults, every component's
+        # graph, profile and index — and not the weights: those stay on the hub as the previous
+        # object (the rollback `forge replace` keeps). Fourteen full copies filled 31 GB of the
+        # staging disk on 2026-09-07 for 401 MB of graphs.
+        def _no_weights(_dir, names):
+            return [n for n in names if n.rsplit(".", 1)[-1] in WEIGHT_SUFFIXES]
+        shutil.copytree(src, dst, symlinks=True, ignore=_no_weights)
+        self.mark("backup", True, path=str(dst), seconds=round(time.time() - t0, 1), weights="on the hub (previous object)")
         return True
 
     def step_install(self):
