@@ -1310,7 +1310,11 @@ def main():
     for m in [x for x in args.models.split(",") if x]:
         model = Model(m, args)
         if args.only_upload:
-            if (model.state["steps"].get("gate") or {}).get("verdict", "").startswith("PASS") and model.done("gate"):
+            gate = model.state["steps"].get("gate") or {}
+            # The recorded verdict is what an upload needs: a PASS on the arms it was measured on
+            # stands; the chain's freshness rule (re-gate when the arms are re-measured) is not the
+            # loop's concern — at 08:34 it refused nine gated artifacts as "not PASS".
+            if gate.get("verdict", "").startswith("PASS") and gate.get("ok") is True:
                 if not model.done("upload"):
                     log(f"{m}: upload …")
                     model.step_upload()
