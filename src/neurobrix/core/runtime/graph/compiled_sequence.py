@@ -1876,6 +1876,21 @@ class CompiledSequence:
             # Get function from autonomous op resolver (100% independent from sequential_dispatcher)
             func = self.op_resolver.get_op_func(op_name, attrs, op_uid=op_uid)
 
+        # An attention interceptor is bound by op_type and so never sees the
+        # op's attributes — including the graph's recorded K/V layout. Bind it
+        # here: the shape test the interceptor would otherwise fall back on
+        # cannot decide the square case (seq_len == head_dim), and deciding it
+        # wrongly runs attention with K's axes crossed
+        # (GraphExecutor._mark_sdpa_k_layout).
+        if (op_type in _SDPA_OP_TYPES
+                and (op_uid in self._op_uid_interceptors
+                     or op_type in self._op_interceptors)
+                and "nbx_k_pre_transposed" in (attrs or {})):
+            func = _with_kv_layout(
+                func,
+                bool(attrs["nbx_k_pre_transposed"]),
+                bool(attrs.get("nbx_v_pre_transposed", False)))
+
         # Allocate slots for output tensors not yet assigned
         output_slots = []
         for out_id in output_tensor_ids:
@@ -4348,3 +4363,21 @@ class CompiledSequence:
         """Direct access to arena for advanced use cases."""
         assert self._arena is not None, "compile() must be called before accessing arena"
         return self._arena
+
+
+_SDPA_OP_TYPES = frozenset({
+    "aten::scaled_dot_product_attention",
+    "aten::_scaled_dot_product_efficient_attention",
+    "aten::_scaled_dot_product_flash_attention",
+    "aten::_scaled_dot_product_cudnn_attention",
+    "aten::_scaled_dot_product_attention_math",
+})
+
+
+def _with_kv_layout(func, k_pre_transposed: bool, v_pre_transposed: bool):
+    """Bind the graph's recorded K/V layout onto an attention interceptor."""
+    def attention_with_kv_layout(*args, **kwargs):
+        kwargs.setdefault("k_pre_transposed", k_pre_transposed)
+        kwargs.setdefault("v_pre_transposed", v_pre_transposed)
+        return func(*args, **kwargs)
+    return attention_with_kv_layout
