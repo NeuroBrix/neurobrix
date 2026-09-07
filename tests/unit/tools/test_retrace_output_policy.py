@@ -433,3 +433,30 @@ def test_an_arm_the_engine_refuses_on_both_containers_alike_is_not_applicable(mo
     assert m.step_gate() is True
     g = m.state["steps"]["gate"]
     assert g["bytes"]["sequential"].startswith("N/A (the engine refuses both containers alike") and g["bytes"]["triton"] == "IDENTICAL"
+
+
+def test_the_write_probe_streams_the_artifacts_size_class(monkeypatch):
+    """Five bytes land inline; the probe writes 64 MiB (or the artifact's size when smaller) at the pace."""
+    import requests
+    seen = {}
+
+    class _Slot:
+        def raise_for_status(self): pass
+        def json(self): return {"key": "models/o/n.probe.nbx", "uploadUrl": "http://store/put"}
+
+    class _Ok:
+        status_code = 200; text = ""
+    def put(url, data=None, headers=None, timeout=None):
+        n = 0
+        while True:
+            c = data.read(1 << 20) if hasattr(data, "read") else b""
+            if not c: break
+            n += len(c)
+        seen["n"] = n if hasattr(data, "read") else len(data); seen["len"] = len(data); return _Ok()
+    monkeypatch.setattr(requests, "post", lambda *a, **k: _Slot())
+    monkeypatch.setattr(requests, "put", put)
+    monkeypatch.setattr(requests, "delete", lambda *a, **k: None)
+    assert R.hub_store_write_probe("o", "n", "t", nbytes=3 << 20, mbps=10000.0) == 200
+    assert seen["n"] == 3 << 20 and seen["len"] == 3 << 20
+    assert R.hub_store_write_probe("o", "n", "t") == 200 and seen["len"] == 5
+    assert R.PROBE_BYTES == 64 << 20
