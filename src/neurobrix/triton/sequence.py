@@ -307,6 +307,11 @@ class TritonSequence:
         # interceptors so a per-uid hook (e.g. only aten.convolution::62)
         # overrides any op_type-wide interceptor.
         self._op_uid_interceptors: Dict[str, Callable] = {}
+        # The graph's recorded K layout per attention op, filled at compile
+        # (GraphExecutor._mark_sdpa_k_layout). Declared here rather than
+        # created on first use: the ATen twin of this class carries __slots__,
+        # where a lazily-assigned attribute raises at compile time.
+        self._sdpa_k_layout: Dict[str, bool] = {}
 
         # Weight tensor IDs that need .t() at bind time (from
         # _eliminate_weight_transpose_ops pass).
@@ -389,7 +394,7 @@ class TritonSequence:
         interceptor bound before compile, or one hot-patched in afterwards.
         Every assignment to `op.func` goes through here for that reason.
         """
-        flag = getattr(self, "_sdpa_k_layout", {}).get(op_uid)
+        flag = self._sdpa_k_layout.get(op_uid)
         return func if flag is None else _with_k_layout(func, flag)
 
     # ========================================================================
@@ -1879,8 +1884,6 @@ class TritonSequence:
         # head_dim the two layouts are the same shape and the derivation
         # silently picked the wrong one (GraphExecutor._mark_sdpa_k_layout).
         if op_type in self._SDPA_OP_TYPES and "nbx_k_pre_transposed" in attrs:
-            if not hasattr(self, "_sdpa_k_layout"):
-                self._sdpa_k_layout = {}
             self._sdpa_k_layout[op_uid] = bool(attrs["nbx_k_pre_transposed"])
             func = self._bind_sdpa_layout(op_uid, func)
 

@@ -345,6 +345,7 @@ class CompiledSequence:
         '_config_constants',  # profile.json architectural ints, protected from value-matched shape rewrites
         '_op_interceptors',  # Op interceptors for KV cache (maps op_type -> interceptor)
         '_op_uid_interceptors',  # Fine-grained per-op_uid interceptors for op-level tiling
+        '_sdpa_kv_layout',  # op_uid -> (k_pre_transposed, v_pre_transposed), read from the graph at compile
         '_seq_dependent_constants',  # Constants with trace-time seq_len dim: [(slot, axis, sym_id, trace_val)]
         '_seq_constant_originals',  # Original full-size constants: {slot: tensor} — never narrowed
         '_pretranspose_weights',  # Weight tensor IDs that need .t().contiguous() at bind time
@@ -438,6 +439,13 @@ class CompiledSequence:
         # op instance, e.g. only aten.convolution::62 for Sana 4Kpx fusion).
         # Checked BEFORE op_type interceptors so a per-uid hook wins.
         self._op_uid_interceptors: Dict[str, Callable] = {}
+        # The graph's recorded K/V layout per attention op (filled at compile;
+        # see GraphExecutor._mark_sdpa_k_layout). It is a slot like every
+        # other piece of per-instance state on this class — assigning an
+        # attribute that is not one raises on a __slots__ class, which is
+        # what an earlier version of this did, at compile time, on every
+        # model whose sequence holds an SDPA op.
+        self._sdpa_kv_layout: Dict[str, tuple] = {}
 
         # Weight tensor IDs that need pre-transposition (set by _eliminate_weight_transpose_ops)
         self._pretranspose_weights: set = set()
@@ -539,7 +547,7 @@ class CompiledSequence:
         wrapper carrying it and leave the interceptor with only the shape to
         read, i.e. nothing at all when seq_len == head_dim.
         """
-        pair = getattr(self, "_sdpa_kv_layout", {}).get(op_uid)
+        pair = self._sdpa_kv_layout.get(op_uid)
         return func if pair is None else _with_kv_layout(func, pair[0], pair[1])
 
     def compile(self) -> None:
@@ -1895,8 +1903,6 @@ class CompiledSequence:
         # wrongly runs attention with K's axes crossed
         # (GraphExecutor._mark_sdpa_k_layout).
         if op_type in _SDPA_OP_TYPES and "nbx_k_pre_transposed" in (attrs or {}):
-            if not hasattr(self, "_sdpa_kv_layout"):
-                self._sdpa_kv_layout = {}
             self._sdpa_kv_layout[op_uid] = (
                 bool(attrs["nbx_k_pre_transposed"]),
                 bool(attrs.get("nbx_v_pre_transposed", False)))
