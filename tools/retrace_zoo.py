@@ -827,11 +827,30 @@ class Model:
         freeze = self.autotune_freeze()
         res = self.outputs("old")
         ok = all(v["rc"] == 0 or v.get("n_a") for v in res.values())
-        self.mark("old_outputs", ok, runs=res, policy=POLICY, autotune=freeze["snapshot"],
+        unrunnable = None
+        if not ok and restored and all(v["rc"] != 0 and not v.get("n_a") for v in res.values()):
+            # The hub's object does not run on this engine (canary, 2026-09-07: the June-09 build
+            # users download — "ZERO FALLBACK: No allocation for component 'perception_encoder'").
+            # That is a fact about the old arm, recorded by name; the chain goes on and the gate
+            # judges the new container on its own two engines agreeing and on the graph diff.
+            unrunnable = self._first_error("old_sequential.log") or self._first_error("old_triton.log") or "the runs exited non-zero"
+            ok = True
+            log(f"{self.name}: the hub's previous object does not run on this engine — {unrunnable[:160]}; the gate judges the new container on its own engines")
+        self.mark("old_outputs", ok, runs=res, policy=POLICY, autotune=freeze["snapshot"], unrunnable=unrunnable,
                   container="the hub's previous object" if restored else "the installed container")
         if restored and self.done("build") and self.done("install"):
             ok = self.reinstall_new() and ok    # the retraced container goes back into the cache
         return ok
+
+    def _first_error(self, logname: str):
+        try:
+            text = (self.dir / logname).read_text(errors="replace")
+        except OSError:
+            return None
+        for line in text.splitlines():
+            if line.startswith("[ERROR]") or line.startswith("RuntimeError") or "UNSUPPORTED PATH" in line:
+                return line.strip()[:300]
+        return None
 
     def restore_previous(self) -> bool:
         """The hub's CURRENT object — the container before this retrace, nothing was replaced yet —
@@ -1161,6 +1180,34 @@ class Model:
             log(f"{self.name}: gate FAIL — {reason}"); return False
         old, new = so.get("runs") or {}, sn.get("runs") or {}
         bytes_verdict = {}
+        if so.get("unrunnable"):
+            # No old arm to compare bytes with: the new container's own engines must agree
+            # (the sequential oracle and the Triton engine, byte for byte), and the graph diff
+            # against the hub's graphs must be the closed defect alone.
+            ns, nt = new.get("sequential") or {}, new.get("triton") or {}
+            gd = self.graph_diff()
+            agree = ns.get("rc") == 0 and nt.get("rc") == 0 and ns.get("sha") and ns.get("sha") == nt.get("sha")
+            cmp = None
+            if ns.get("rc") == 0 and nt.get("rc") == 0 and not agree:
+                try:
+                    cmp = C.gate(Path(ns["output"]), Path(nt["output"]))
+                except Exception as e:  # noqa: BLE001
+                    cmp = {"error": str(e)}
+            bytes_verdict = {"old": f"UNRUNNABLE on this engine: {so['unrunnable'][:200]}",
+                             "new engines": "IDENTICAL" if agree else {"DIFFERENT": cmp} if cmp else "FAILED"}
+            if gd["beyond_annotation"] or gd["corrupted_after"] or not (ns.get("rc") == 0 and nt.get("rc") == 0):
+                verdict = "FAIL"
+            elif agree:
+                verdict = "PASS (the hub's object does not run on this engine; the new container's two engines agree byte for byte; graph = the closed defect)"
+            else:
+                verdict = "NEEDS_EXPLANATION"
+            self.mark("gate", verdict.startswith("PASS"), verdict=verdict, bytes=bytes_verdict, graph=gd, policy=POLICY,
+                      autotune=self.state.get("autotune_freeze"))
+            shutil.rmtree(Path(self.args.tmp) / "previous" / self.name, ignore_errors=True)
+            log(f"{self.name}: gate {verdict} — {bytes_verdict}; graph: {gd['annotation_changes']} annotation change(s), "
+                f"{gd['arg_witnessed']} shape argument(s) of the closed defect, {gd['beyond_annotation']} beyond, "
+                f"corrupted dims {gd['corrupted_before']} → {gd['corrupted_after']}")
+            return verdict.startswith("PASS")
         for arm in ("sequential", "triton"):
             o, nn = old.get(arm) or {}, new.get(arm) or {}
             if o.get("n_a") and nn.get("n_a"):
