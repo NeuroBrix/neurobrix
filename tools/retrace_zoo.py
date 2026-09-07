@@ -175,16 +175,38 @@ def witnessed_arg_changes(old_op: dict, new_op: dict, tensors_new: dict):
 HUB_STORE_HEALTH = "http://10.0.0.36:9000/minio/health/cluster"
 
 
-def hub_store_health(url: str = HUB_STORE_HEALTH, timeout: float = 10.0):
-    """The hub object store's cluster health code (200 = read/write quorum), or the error's name."""
-    import urllib.request, urllib.error
+SHARED_STORAGE_EXPORTS = ("/home/mlops/models", str(Path.home() / ".neurobrix" / "cache"), "/home/mlops/hf_snapshots")
+
+
+def hub_store_health(url: str = HUB_STORE_HEALTH, timeout: float = 10.0, probe_seconds: float = 2.0):
+    """200 when the hub object store can take a write; otherwise a reason.
+
+    The store's cluster health answered 200 through every refusal of 2026-09-07:
+    it shares its storage with the NFS exports, and it refused or hung exactly
+    when they stalled. So the storage behind the store is probed too — an
+    export that does not list within `probe_seconds` means the store is under
+    the same pressure, and the upload is deferred by name rather than sent
+    into a 503 or a hang."""
+    import urllib.request, urllib.error, subprocess, time
     try:
         with urllib.request.urlopen(url, timeout=timeout) as r:
-            return r.status
+            code = r.status
     except urllib.error.HTTPError as e:
-        return e.code
+        code = e.code
     except Exception as e:  # noqa: BLE001
         return type(e).__name__
+    if code != 200:
+        return code
+    for d in SHARED_STORAGE_EXPORTS:
+        t = time.time()
+        try:
+            subprocess.run(["ls", d], capture_output=True, timeout=probe_seconds)
+        except subprocess.TimeoutExpired:
+            return f"storage under pressure ({d} took more than {probe_seconds:g} s to list)"
+        took = time.time() - t
+        if took > probe_seconds / 2:
+            return f"storage under pressure ({d} answered in {took:.1f} s)"
+    return 200
 
 
 class Model:
@@ -428,8 +450,8 @@ class Model:
         if health != 200:
             # The hub's object store refuses writes (its cluster health answers other than 200):
             # said by name, the artifact stays ready, the chain moves on; a later pass uploads it.
-            self.mark("upload", False, state="DEFERRED", reason=f"hub object store cluster health {health} (writes refused); retry when it answers 200", nbx=nbx)
-            log(f"{self.name}: upload DEFERRED — the hub object store's cluster health answers {health}; the artifact is gated and ready, a later pass uploads it")
+            self.mark("upload", False, state="DEFERRED", reason=f"hub object store: {health}; retry when it answers 200", nbx=nbx)
+            log(f"{self.name}: upload DEFERRED — hub object store: {health}; the artifact is gated and ready, a later pass uploads it")
             return False
         if self.hub:
             org, name = self.hub.split("/", 1)
