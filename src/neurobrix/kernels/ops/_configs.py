@@ -152,6 +152,10 @@ def _announce_first_sweep(tuned):
             qual = _atc._qual_of(tuned) or getattr(getattr(tuned, "base_fn", None), "__name__", "?")
             try:
                 applied = _cert.apply(qual, tuned, key)
+                if not applied:
+                    # an operand widened on load is keyed by the dtype it is computed in
+                    twin = _cert.computed_key(tuned, key, kwargs)
+                    applied = bool(twin) and _cert.apply(qual, tuned, key, lookup_key=twin)
             except Exception as exc:            # the directory is an optimisation, never a failure source
                 print(f"[autotune] certified lookup failed for {qual}: {exc}", flush=True)
                 applied = False

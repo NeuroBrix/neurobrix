@@ -74,10 +74,12 @@ def rope_forward_kernel(
     # Load cos/sin (only need left half — right half is identical)
     cos_offsets = tl.arange(0, pad_hd // 2)
     cos_mask = cos_offsets < hd // 2
-    # The tables are cast to Q's dtype on load (round-to-nearest, the same
-    # conversion a stored cast makes): the wrapper no longer materialises a
-    # cast copy of the step's cos/sin per layer. Q's dtype is the compute
-    # dtype of the rotation, as it was when the tables were cast beforehand.
+    # A table WIDER than Q is rounded to Q's dtype on load (round-to-nearest,
+    # the conversion a stored cast makes): the wrapper no longer materialises
+    # a cast copy of the step's fp32 cos/sin per layer for an fp16 Q. A table
+    # narrower than Q is widened by the wrapper beforehand (a copy, said in
+    # its line): widened on load, the fp32 rotation's fused multiply-add
+    # moved with the convert before it (Sana's Gemma-2 encoder, 2026-09-07).
     cos_row = tl.load(cos + cos_offsets, mask=cos_mask, other=0).to(q_ptr.dtype.element_ty)
     sin_row = tl.load(sin + cos_offsets, mask=cos_mask, other=0).to(q_ptr.dtype.element_ty)
 
@@ -118,17 +120,14 @@ def rope_forward_kernel(
     # --- Apply rotation ---
     if not BACKWARD_PASS:
         # Forward: y = [x1, x2] * [cos, cos] + [-x2, x1] * [sin, sin]
-        # The rotation is written with the fused multiply-add the backend
-        # contracted the plain form into (the cos product fused, the sin
-        # product its addend): left to the compiler, the contraction changed
-        # with the shape of the load (a table cast on load put a convert
-        # before the multiply and moved it — 1 ulp on a sixth of Sana's
-        # Gemma-2 rotations, 2026-09-07), and byte identity across dtype
-        # paths needs the arithmetic pinned, not inferred.
-        new_q_1 = tl.fma(q_tile_1, cos_row, -(q_tile_2 * sin_row))
-        new_q_2 = tl.fma(q_tile_2, cos_row, q_tile_1 * sin_row)
-        new_k_1 = tl.fma(k_tile_1, cos_row, -(k_tile_2 * sin_row))
-        new_k_2 = tl.fma(k_tile_2, cos_row, k_tile_1 * sin_row)
+        # The plain expression, as the backend contracts it per dtype: written
+        # with an explicit fma it matched the fp32 path but not the fp16 one
+        # (VibeVoice, 2026-09-07) — the contraction is not the same in both,
+        # and the bytes of every certified row depend on it staying as it is.
+        new_q_1 = q_tile_1 * cos_row - q_tile_2 * sin_row
+        new_q_2 = q_tile_2 * cos_row + q_tile_1 * sin_row
+        new_k_1 = k_tile_1 * cos_row - k_tile_2 * sin_row
+        new_k_2 = k_tile_2 * cos_row + k_tile_1 * sin_row
     else:
         # Backward (inverse rotation): negate sin
         new_q_1 = q_tile_1 * cos_row + q_tile_2 * sin_row

@@ -266,10 +266,62 @@ def lookup(kernel_qual: str, tuner, key: tuple, ignore_switch: bool = False) -> 
     return entries.get(key_repr(key))
 
 
-def apply(kernel_qual: str, tuner, key: tuple) -> bool:
+# A promotion flag that widens a pointer's tile on load: the kernel computes
+# that operand in fp32 whatever its memory dtype, so the key that names the
+# COMPUTATION carries fp32 for it — the directory's entries were certified
+# with the operand widened in memory (the copy the promotion replaced), and
+# the same setting applies. PROMOTE_B is NOT here: it was keyed by the memory
+# dtype from the first certification (`fp32,fp16,fp32`), and stays so.
+_KEYED_AS_COMPUTED = {"PROMOTE_A": "a_ptr", "PROMOTE_BIAS": "bias_ptr"}
+
+
+def _promotions_by_policy(tuner, tags: List[str]) -> Dict[str, bool]:
+    """Which operands the wrappers widen on load for a key, read from the dtype
+    tags under the hardware profile's rule — the same rule `mm`/`addmm` apply:
+    on a card without native bf16 a narrow activation computes in fp32, and a
+    narrow bias too whenever the activation computes in fp32. Used where no
+    call is at hand (the local replay cache's keys at load)."""
+    names = [n for n in getattr(tuner, "arg_names", []) if n.endswith("_ptr") or n.endswith("_pointer")]
+    if "PROMOTE_A" not in getattr(tuner, "arg_names", []):
+        return {}
+    try:
+        from neurobrix.kernels.wrappers import _NBX_HAS_NATIVE_BF16 as native_bf16
+    except Exception:
+        return {}
+    def tag(ptr):
+        return str(tags[names.index(ptr)]).lower() if ptr in names and names.index(ptr) < len(tags) else ""
+    a_narrow = tag("a_ptr") in ("fp16", "bf16")
+    promote_a = bool(a_narrow and not native_bf16)
+    a_fp32 = promote_a or tag("a_ptr") == "fp32"
+    promote_bias = bool(a_fp32 and tag("bias_ptr") in ("fp16", "bf16"))
+    return {"PROMOTE_A": promote_a, "PROMOTE_BIAS": promote_bias}
+
+
+def computed_key(tuner, key: tuple, kwargs: Optional[Dict[str, Any]] = None) -> Optional[tuple]:
+    """The key with every pointer a set promotion flag widens on load tagged
+    fp32 — the dtype the kernel computes it in — or None when no tag changes.
+    `kwargs` are the call's; None reads the flags from the profile's rule."""
+    names = [n for n in getattr(tuner, "arg_names", []) if n.endswith("_ptr") or n.endswith("_pointer")]
+    nkeys = len(list(getattr(tuner, "keys", []) or []))
+    head, tags = list(key[:nkeys]), list(key[nkeys:])
+    if kwargs is None:
+        kwargs = _promotions_by_policy(tuner, tags)
+    changed = False
+    for flag, ptr in _KEYED_AS_COMPUTED.items():
+        if kwargs.get(flag) and ptr in names:
+            i = names.index(ptr)
+            if i < len(tags) and str(tags[i]).lower() in ("fp16", "bf16"):
+                tags[i] = "fp32"
+                changed = True
+    return tuple(head + tags) if changed else None
+
+
+def apply(kernel_qual: str, tuner, key: tuple, lookup_key: Optional[tuple] = None) -> bool:
     """Put the certified config in the tuner's cache for `key` — no sweep, no
-    screen. False when the directory has nothing for it."""
-    entry = lookup(kernel_qual, tuner, key)
+    screen. False when the directory has nothing for it. `lookup_key`: the key
+    the directory is read at when it differs from the tuner's (a promoted
+    operand keyed by its computed dtype, `computed_key`)."""
+    entry = lookup(kernel_qual, tuner, lookup_key or key)
     if entry is None:
         return False
     import triton
@@ -303,12 +355,16 @@ def override_seeded(tuners=None) -> int:
                 continue
             try:
                 entry = lookup(qual, tuner, key)
+                twin = None
+                if entry is None:
+                    twin = computed_key(tuner, key)       # a widened-on-load operand, by the profile's rule
+                    entry = lookup(qual, tuner, twin) if twin else None
             except Exception:
                 entry = None
             if entry is None:
                 continue
             cache.pop(key, None)
-            if apply(qual, tuner, key):
+            if apply(qual, tuner, key, lookup_key=twin):
                 n += 1
     _SERVED["local"] = max(0, _SERVED["local"] - n)
     return n

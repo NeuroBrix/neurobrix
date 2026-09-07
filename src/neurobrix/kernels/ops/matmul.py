@@ -8,6 +8,11 @@ adapted for NeuroBrix:
   - @triton.autotune across 18 configs (Phase 1.5, 2026-05): the only
     proven path to ≥70% cuBLAS HMMA on Sana DiT shapes — see CLAUDE.md
     "Autotune policy" section for the doctrinal exception that allows
+# PROMOTE_A (and PROMOTE_BIAS) are NOT part of the key: the directory's certified
+# settings are indexed by the shape and the pre-existing flags, and a promotion of
+# an operand on load changes neither the tiles' legality nor the accumulation
+# order — the same setting applies; keying on it made every matmul of the tree a
+# miss (5,628 entries unserved, a runtime sweep per key, 2026-09-07 lever 2).
     @triton.autotune on mm/bmm/addmm/conv2d.
   - tl.dot 3-arg HMMA-FMA fused form
   - tl.assume integer-analyzer hints
@@ -157,7 +162,7 @@ _MATMUL_AUTOTUNE_CONFIGS = maybe_pin_single(
 
 
 @nbx_autotune(configs=_MATMUL_AUTOTUNE_CONFIGS,
-                 key=['M', 'N', 'K', 'IEEE_PRECISION', 'PROMOTE_B', 'PROMOTE_A'],
+                 key=['M', 'N', 'K', 'IEEE_PRECISION', 'PROMOTE_B'],
                  cache_results=True)
 @triton.jit
 def matmul_kernel(
@@ -196,6 +201,7 @@ def matmul_kernel(
     fp32); the accumulator is fp32 so the final dot product is identical
     to the path that widens the full weight pre-kernel.
 
+# PROMOTE_A / PROMOTE_BIAS are not part of the key — see matmul_kernel above.
     Phase 1.5 (2026-05): @triton.autotune ENABLED. The autotune key
     includes IEEE_PRECISION + PROMOTE_B so each (Volta-fp32 / Volta-fp16-mixed
     / Ampere+ pure fp16) path gets its own selected config.
@@ -268,7 +274,7 @@ def matmul_kernel(
 
 
 @nbx_autotune(configs=_MATMUL_AUTOTUNE_CONFIGS,
-                 key=['M', 'N', 'K', 'IEEE_PRECISION', 'PROMOTE_B', 'PROMOTE_A'],
+                 key=['M', 'N', 'K', 'IEEE_PRECISION', 'PROMOTE_B'],
                  cache_results=True)
 @triton.jit
 def addmm_kernel(
@@ -281,6 +287,7 @@ def addmm_kernel(
     IEEE_PRECISION: tl.constexpr = False,
     PROMOTE_B: tl.constexpr = False,
     PROMOTE_A: tl.constexpr = False,
+    PROMOTE_BIAS: tl.constexpr = False,   # the bias widened to fp32 on load (exact), not cast beforehand
     EPILOGUE: tl.constexpr = 0,
     BLOCK_M: tl.constexpr = 64,
     BLOCK_N: tl.constexpr = 64,
@@ -338,6 +345,8 @@ def addmm_kernel(
     offs_cn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
     bias_mask = offs_cn < N
     bias = tl.load(bias_ptr + offs_cn, mask=bias_mask)
+    if PROMOTE_BIAS:
+        bias = bias.to(tl.float32)
     accumulator = alpha * accumulator + beta * bias[None, :]
 
     offs_cm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
