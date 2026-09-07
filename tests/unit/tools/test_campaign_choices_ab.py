@@ -59,3 +59,23 @@ def test_alike_choices_say_so(tmp_path):
     ch = C._choices_ab(out / "M", src)
     assert ch["differ"] == 0
     assert "every kernel choice alike on 1 keys (1 certified)" in C.verdict({"lever": "env:x", "gate": {"ran": True, "identical": True}, "A": {}, "B": {}, "choices": ch})
+
+
+def test_an_arm_that_served_every_key_certified_is_classified_against_the_directory(tmp_path):
+    """The machine band's arm A serves every key from the directory and leaves no replay
+    record; arm B sweeps. A's pick for a key is the directory's entry, so B's differing
+    choices are classified (orpheus-3b-0.1-ft, 2026-09-07: four baddbmm near-ties, the
+    audio 31.7 dB apart), not silently returned empty."""
+    src, out = tmp_path / "src", tmp_path / "out"
+    _directory(src, {
+        "(1, 1, 1)": {"config": CFG_A, "proof": {"best_ms": 1.000, "second_ms": 1.004}, "excluded": []},   # near-tie
+        "(2, 2, 2)": {"config": CFG_A, "proof": {"best_ms": 1.000, "second_ms": 1.500}, "excluded": []},   # contradicted
+        "(4, 4, 4)": {"config": CFG_A, "proof": {"best_ms": 1.0, "second_ms": 1.9}, "excluded": []},      # alike
+    })
+    (out / "M" / "B_replay").mkdir(parents=True)
+    (out / "M" / "B_replay" / "autotune_configs_cuda-70.json").write_text(json.dumps({
+        K + "(1, 1, 1)": CFG_B, K + "(2, 2, 2)": CFG_B, K + "(4, 4, 4)": CFG_A}))
+    ch = C._choices_ab(out / "M", src)
+    assert ch["keys"] == 3 and ch["certified"] == 3 and ch["differ"] == 2
+    assert ch["near_tie_count"] == 1 and ch["near_tie"][0]["key"] == K + "(1, 1, 1)"
+    assert ch["contradicted_count"] == 1 and ch["contradicted"][0]["key"] == K + "(2, 2, 2)"
