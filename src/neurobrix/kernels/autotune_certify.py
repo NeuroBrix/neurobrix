@@ -91,11 +91,13 @@ def _conv2d_oracle(x, w, stride, padding, dilation, groups):
     return out
 
 
-def synthesize(qual: str, tuner, key: tuple, rng) -> Optional[Tuple[Callable[[], Any], np.ndarray, str]]:
-    """(call, oracle, output_arg_name): a callable that runs the wrapper on
-    inputs of this key's shape and dtypes, the fp64 oracle of the same
-    inputs, and the name of the kernel argument that is the output. None
-    when this kernel has no synthesizer here."""
+def synthesize(qual: str, tuner, key: tuple, rng) -> Optional[Tuple[Callable[[], Any], Callable[[], np.ndarray], str]]:
+    """(call, oracle_fn, output_arg_name): a callable that runs the wrapper on
+    inputs of this key's shape and dtypes, a callable computing the fp64
+    oracle of the same inputs (LAZY: only once the wrapper's key is known to
+    be the census's — an oracle for a mismatched key is minutes wasted), and
+    the name of the kernel argument that is the output. None when this
+    kernel has no synthesizer here."""
     from neurobrix.kernels.nbx_tensor import NBXTensor
     from neurobrix.kernels import wrappers as W
     dts = C.key_dtypes(key)
@@ -106,36 +108,34 @@ def synthesize(qual: str, tuner, key: tuple, rng) -> Optional[Tuple[Callable[[],
         a = _arr(rng, (M, K), dts[0] if dts else "fp16")
         b = _arr(rng, (K, N), dts[1] if len(dts) > 1 else "fp16")
         if short == "matmul_kernel":
-            oracle = a.astype(np.float64) @ b.astype(np.float64)
-            return (lambda: W.mm(to(a), to(b))), oracle, "c_ptr"
+            return (lambda: W.mm(to(a), to(b))), (lambda: a.astype(np.float64) @ b.astype(np.float64)), "c_ptr"
         bias = _arr(rng, (N,), dts[2] if len(dts) > 2 else "fp16")
-        oracle = bias.astype(np.float64)[None, :] + a.astype(np.float64) @ b.astype(np.float64)
-        return (lambda: W.addmm(to(bias), to(a), to(b))), oracle, "c_ptr"
+        return ((lambda: W.addmm(to(bias), to(a), to(b))),
+                (lambda: bias.astype(np.float64)[None, :] + a.astype(np.float64) @ b.astype(np.float64)), "c_ptr")
     if short == "baddbmm_kernel":
         M, N, K = int(key[0]), int(key[1]), int(key[2])
         has_bias = bool(key[5]) if len(key) > 5 and isinstance(key[5], bool) else False
         B = 2
         a = _arr(rng, (B, M, K), dts[0] if dts else "fp16")
         b = _arr(rng, (B, K, N), dts[1] if len(dts) > 1 else "fp16")
-        oracle = a.astype(np.float64) @ b.astype(np.float64)
         if has_bias:
             bias_dt = dts[3] if len(dts) > 3 else (dts[0] if dts else "fp16")
             bias = _arr(rng, (B, M, N), bias_dt)
-            oracle = oracle + bias.astype(np.float64)
-            return (lambda: W.baddbmm_wrapper(to(bias), to(a), to(b))), oracle, "out_ptr"
-        return (lambda: W.bmm(to(a), to(b))), oracle, "out_ptr"
+            return ((lambda: W.baddbmm_wrapper(to(bias), to(a), to(b))),
+                    (lambda: a.astype(np.float64) @ b.astype(np.float64) + bias.astype(np.float64)), "out_ptr")
+        return (lambda: W.bmm(to(a), to(b))), (lambda: a.astype(np.float64) @ b.astype(np.float64)), "out_ptr"
     if short == "conv2d_forward_kernel":
         (n, ci, h, w, co, _oh, _ow, kh, kw, sh, sw, ph, pw, dh, dw, groups) = [int(v) for v in key[:16]]
         x = _arr(rng, (n, ci, h, w), dts[0] if dts else "fp16")
         wt = _arr(rng, (co, ci // max(groups, 1), kh, kw), dts[1] if len(dts) > 1 else "fp16")
-        oracle = _conv2d_oracle(x, wt, (sh, sw), (ph, pw), (dh, dw), groups)
-        return (lambda: W.conv2d_wrapper(to(x), to(wt), None, (sh, sw), (ph, pw), (dh, dw), False, 0, groups)), oracle, "output_pointer"
+        return ((lambda: W.conv2d_wrapper(to(x), to(wt), None, (sh, sw), (ph, pw), (dh, dw), False, 0, groups)),
+                (lambda: _conv2d_oracle(x, wt, (sh, sw), (ph, pw), (dh, dw), groups)), "output_pointer")
     if short == "depthwise_conv2d_kernel":
         (c, h, w, _oh, _ow, kh, kw, sh, sw, ph, pw) = [int(v) for v in key[:11]]
         x = _arr(rng, (1, c, h, w), dts[0] if dts else "fp16")
         wt = _arr(rng, (c, 1, kh, kw), dts[1] if len(dts) > 1 else "fp16")
-        oracle = _conv2d_oracle(x, wt, (sh, sw), (ph, pw), (1, 1), c)
-        return (lambda: W.conv2d_wrapper(to(x), to(wt), None, (sh, sw), (ph, pw), (1, 1), False, 0, c)), oracle, "out_ptr"
+        return ((lambda: W.conv2d_wrapper(to(x), to(wt), None, (sh, sw), (ph, pw), (1, 1), False, 0, c)),
+                (lambda: _conv2d_oracle(x, wt, (sh, sw), (ph, pw), (1, 1), c)), "out_ptr")
     return None
 
 
@@ -213,7 +213,8 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None)
     made = synthesize(qual, tuner, key, rng)
     if made is None:
         raise RuntimeError(f"no synthesizer for {qual}")
-    call, oracle, out_name = made
+    call, oracle_fn, out_name = made
+    oracle_box: Dict[str, Any] = {}
     bench = bench or (lambda fn: L.do_bench(fn, warmup=BENCH_WARMUP_MS, rep=BENCH_REP_MS))
     upstream_prune = getattr(Autotuner.prune_configs, "_nbx_upstream", Autotuner.prune_configs)
     state: Dict[str, Any] = {}
@@ -226,6 +227,9 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None)
         if tuple(seen) != tuple(key):
             raise RuntimeError(f"the wrapper computed key {seen!r} for inputs synthesized from {key!r}: the census "
                                f"and the kernel disagree — nothing certified for this key")
+        oracle = oracle_box.get("v")
+        if oracle is None:                              # the key matched: now the fp64 oracle is worth computing
+            oracle = oracle_box["v"] = oracle_fn()
         configs = list(upstream_prune(tuner, kwargs))
         names = list(tuner.arg_names)
         out_idx = next((i for i, n in enumerate(names) if n == out_name), None)
@@ -384,6 +388,7 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
     summary: Dict[str, Any] = {"vendor": vendor, "profile": profile, "directory": str(root), "kernels": {},
                                "certified": 0, "skipped": 0, "failed": 0, "excluded_configs": 0, "started": time.time()}
     done = 0
+    attempts = 0                                  # `limit` bounds the shapes TRIED, failures included
     for qual, keys in shapes.items():
         tuner = tuners.get(qual)
         if tuner is None:
@@ -392,7 +397,7 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
             continue
         per_dtype: Dict[str, Dict[str, Dict]] = {}
         for key in keys:
-            if limit is not None and done >= limit:
+            if limit is not None and attempts >= limit:
                 break
             dtype = C.output_dtype(tuner, key)
             path = C.file_for(vendor, profile, qual, dtype, root=root)
@@ -400,6 +405,7 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
             ktext = C.key_repr(key)
             if only_missing and ktext in entries:
                 continue
+            attempts += 1
             t0 = time.time()
             try:
                 tol = _tolerance(vendor, profile, dtype)
