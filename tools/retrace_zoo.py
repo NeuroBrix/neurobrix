@@ -621,6 +621,13 @@ class Model:
             cmd = [PY, str(FORGE), "publish", nbx]
         rc = run(cmd, self.env(tree=False), self.dir / "upload.log", 7200, cwd=str(REPO / "forge"))
         self.mark("upload", rc == 0, rc=rc, command=" ".join(cmd[2:]))
+        if rc == 0 and nbx and Path(nbx).exists():
+            # The hub holds it now (checksum verified by the toolchain before the repoint);
+            # the staged copy on the root fs is the space the next build needs (the root fs
+            # filled up on 2026-09-07 with seven staged containers).
+            import shutil
+            shutil.rmtree(Path(nbx).parent, ignore_errors=True)
+            log(f"{self.name}: staged build removed after the upload ({nbx})")
         return rc == 0
 
     def run_all(self):
