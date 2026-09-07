@@ -749,7 +749,8 @@ def _choices_ab(d: Path, src: Path) -> dict:
         best, second = pr.get("best_ms"), pr.get("second_ms")
         margin = (second / best - 1.0) if best and second else None
         (near_tie if margin is not None and margin < NEAR_TIE_MARGIN else contradicted).append(
-            {"key": k, "margin": margin} if margin is not None else k)
+            {"key": k, "margin": margin, "best_ms": best, "delta_ms": (second - best) if best and second else None}
+            if margin is not None else k)
     return {"keys": len(keys), "certified": sum(1 for k in keys if entry(k)), "differ": len(differ),
             "near_tie": near_tie[:20], "near_tie_count": len(near_tie),
             "contradicted": contradicted[:20], "contradicted_count": len(contradicted),
@@ -1028,7 +1029,12 @@ def verdict(r: dict) -> str:
                     parts.append(f"EXCLUDED SETTING PICKED AT RUNTIME on {ch['excluded_picked_count']} key(s) — a finding: {ch['excluded_picked'][0]}")
                 if ch.get("contradicted_count"):
                     c0 = ch["contradicted"][0]
-                    parts.append(f"CERTIFIED CHOICE CONTRADICTED on {ch['contradicted_count']} key(s) — a finding: {c0['key'] if isinstance(c0, dict) else c0}")
+                    scale = ""
+                    if isinstance(c0, dict) and c0.get("best_ms") is not None:
+                        # the scale of the certifier's margin: a 15 % margin on a 21 µs kernel is 3 µs
+                        scale = f" (the certifier's margin {c0['margin'] * 100:.0f} % = {c0['delta_ms'] * 1000:.1f} µs on a {c0['best_ms'] * 1000:.1f} µs kernel)"
+                    parts.append(f"CERTIFIED CHOICE CONTRADICTED on {ch['contradicted_count']} key(s) — a finding: "
+                                 f"{c0['key'] if isinstance(c0, dict) else c0}{scale}")
                 if ch.get("near_tie_count"):
                     ms = [x["margin"] for x in ch["near_tie"] if isinstance(x, dict) and x.get("margin") is not None]
                     parts.append(f"{ch['near_tie_count']} certified near-tie(s) (the certifier's second-best within "
