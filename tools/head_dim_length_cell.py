@@ -386,12 +386,15 @@ def run(args) -> int:
                 # either. The row carries the reason and `run` exits non-zero.
                 control["void_reason"] = (
                     "changing the last token id did not change the generated "
-                    "ids. Either the engine did not run on the ids given, or "
-                    "its answer at this length does not depend on the last "
-                    "token — which is what a K read with its axes crossed "
-                    "looks like from outside. Compare the same row on a tree "
-                    "where the control does move before reading this one as a "
-                    "harness fault.")
+                    "ids, on THIS tree and THIS machine. Two readings fit and "
+                    "this row cannot choose between them: the engine did not "
+                    "run on the ids given, or its answer at this length does "
+                    "not depend on that token. Decide it by comparing a tree "
+                    "or a rig where the same control DOES move — measured "
+                    "2026-09-07, the same before-engine left the answer "
+                    "unmoved on Apple and moved on V100, so an unmoved "
+                    "control is not a signature of the defect, only a reason "
+                    "this row proves nothing.")
 
         oracle = None
         if info["model_type"] in LLAMA_LIKE:
