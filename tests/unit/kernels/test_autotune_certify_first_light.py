@@ -49,6 +49,7 @@ def _recorded_key(tuner, call):
 
 @pytest.fixture
 def root(tmp_path, monkeypatch):
+    Z._bind_hardware_profile()                      # the wrappers' dtype policy, as before a request
     monkeypatch.setenv("NEUROBRIX_AUTOTUNE_CERTIFIED_DIR", str(tmp_path))
     monkeypatch.setenv("NEUROBRIX_REPLAY_CACHE", str(tmp_path / "replay"))
     C.reset()

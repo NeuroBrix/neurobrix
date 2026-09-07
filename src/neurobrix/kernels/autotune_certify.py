@@ -164,6 +164,14 @@ def _machine() -> Dict[str, Any]:
     info: Dict[str, Any] = {"hostname": socket.gethostname(), "platform": platform.platform(),
                             "python": platform.python_version()}
     try:
+        from neurobrix.kernels import wrappers as W
+        hw = W.get_hardware_profile()
+        if hw is not None:
+            info["hardware_profile"] = str(getattr(hw, "id", hw))
+            info["has_native_bf16"] = bool(W.has_native_bf16())
+    except Exception:
+        pass
+    try:
         from neurobrix.kernels.launcher import target
         t = target()
         info["target"] = f"{t.backend}-{t.arch}"
@@ -263,10 +271,23 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None)
         L._restore(buffers, before)
         return tuner.fn.run(*args, **{**kwargs, **best.all_kwargs()})
 
+    # The wrappers decide the kernel's dtypes and flags (PROMOTE_B, IEEE_PRECISION,
+    # a conv's output dtype) from the hardware profile and the component's compute
+    # dtype the engine hands them — reproduce that context, or the wrapper computes
+    # another key than the census's (the first dry run: every matmul key mismatched
+    # because a bare process reads `has_native_bf16` as True).
+    from neurobrix.kernels import wrappers as W
+    from neurobrix.kernels.nbx_tensor import NBXDtype
+    _prev_dt = W.get_compute_dtype()
+    _out_dt = C.output_dtype(tuner, key)
+    _nbx = {"fp16": NBXDtype.float16, "bf16": NBXDtype.bfloat16, "fp32": NBXDtype.float32}.get(_out_dt)
     tuner.run = certifying_run
     try:
+        if _nbx is not None:
+            W.set_compute_dtype(_nbx)
         call()
     finally:
+        W.set_compute_dtype(_prev_dt)
         tuner.run = saved_run
         tuner.nargs = None
     if "config" not in state:
@@ -278,6 +299,23 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None)
              "accepted": state["accepted"], "could_not_run": len(state["unrun"])}
     return {"config": state["config"], "proof": proof, "excluded": state["excluded"],
             "could_not_run": state["unrun"], "timings": state["timings"]}
+
+
+def _bind_hardware_profile() -> str:
+    """Hand Prism's hardware profile to the wrappers exactly as the CLI does
+    before a request (`set_hardware_profile`): the flag `has_native_bf16` and
+    the per-device VRAM the wrappers read for their dtype decisions."""
+    from neurobrix.core.prism import load_profile
+    from neurobrix.core.prism.autodetect import get_or_create_default_profile
+    from neurobrix.kernels import wrappers as W
+    hw_id = get_or_create_default_profile()
+    W.set_hardware_profile(load_profile(hw_id))
+    return str(hw_id)
+
+
+def _has_native_bf16() -> bool:
+    from neurobrix.kernels import wrappers as W
+    return bool(W.has_native_bf16())
 
 
 def _engine_version() -> str:
@@ -334,6 +372,8 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
         raise RuntimeError(f"this machine carries the profile {active[0]}/{active[1]}, not {vendor}/{profile}: a "
                            f"certification is measured on the profile it names")
     root = Path(out) if out else C.directory()
+    hw_id = _bind_hardware_profile()
+    log(f"[certify] hardware profile {hw_id}: has_native_bf16={_has_native_bf16()} — the wrappers' dtype policy in force")
     from neurobrix.triton import autotune_cache as atc
     tuners = {qual: t for qual, t in atc._autotuners()}
     shapes = census(census_path)
