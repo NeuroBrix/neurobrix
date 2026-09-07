@@ -2600,8 +2600,19 @@ class NBXTensor:
         if f._device != 'cpu':
             f = f.to_cpu()
         typestr = _DTYPE_TYPESTR.get(f._dtype, '<f4')
-        raw = ctypes.string_at(f.data_ptr(), f.numel() * dtype_size(f._dtype))
-        return np.frombuffer(raw, dtype=np.dtype(typestr)).reshape(tuple(self._shape)).copy()
+        nbytes = f.numel() * dtype_size(f._dtype)
+        # A view over the host buffer, then one copy. `ctypes.string_at(ptr, n)` hands `n` to
+        # PyBytes_FromStringAndSize as a C int: a tensor of 2 GiB or more read back as
+        # "Negative size passed to PyBytes_FromStringAndSize" (the certifier on 2026-09-07:
+        # seven census shapes whose fp32 output exceeds 2 GiB — a 4K convolution, a
+        # 1,221,120-row matmul, a 16384² baddbmm — "no config could run").
+        if nbytes == 0:
+            return np.empty(tuple(self._shape), dtype=np.dtype(typestr))
+        buf = (ctypes.c_uint8 * nbytes).from_address(f.data_ptr())
+        view = np.ctypeslib.as_array(buf).view(np.dtype(typestr)).reshape(tuple(self._shape))
+        out = view.copy()
+        del view, buf                                   # nothing outlives the host buffer
+        return out
 
     def pin_host(self) -> 'NBXTensor':
         """Promote an unpinned CPU tensor to pinned host memory.
