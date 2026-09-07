@@ -7685,8 +7685,7 @@ def _flash_decode(q, k, v, bias, softmax_scale,
 
 def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
                                           dropout_p=0.0, is_causal=False,
-                                          scale=None, k_pre_transposed=None,
-                                          **kwargs):
+                                          scale=None, **kwargs):
     """aten::scaled_dot_product_attention via Triton Flash Attention.
 
     Args:
@@ -7712,30 +7711,14 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     # (batch, heads, headdim, seq). Our Flash Attention kernel expects K
     # in standard (batch, heads, seq, headdim) format — same as Q and V.
     #
-    # `k_pre_transposed` is the graph's answer, recorded at load by
-    # GraphExecutor._mark_sdpa_k_layout and passed down by the dispatcher.
-    # It exists because the shape test below cannot decide the square case:
-    # when the sequence length equals the head dimension both layouts have
-    # the same shape, and the test then declined to transpose and attention
-    # ran with K's axes crossed. Measured 2026-09-07 on Apple — TinyLlama,
-    # head_dim 64, a 64-token prompt: argmax 29892 at logit 6.41 where the
-    # float64 oracle says 3864 at 22.36, |delta| 23.27 across the vocabulary,
-    # with 63 and 65 tokens exact to 0.02. The correction is inert wherever
-    # the graph is unambiguous, which is every other length.
-    if k.ndim == 4 and q.ndim == 4:
-        if k_pre_transposed is not None:
-            if k_pre_transposed:
-                k = k.transpose(2, 3).contiguous()
-        elif (k.shape[2] == q.shape[3] and k.shape[3] == q.shape[2]
-                and k.shape[2] == q.shape[2]):
-            raise RuntimeError(
-                f"scaled_dot_product_attention: K is square "
-                f"{tuple(k.shape)} with seq_len == head_dim, so its layout "
-                f"cannot be read from its shape, and no k_pre_transposed was "
-                f"passed. Refusing to guess.")
-        elif (k.shape[2] == q.shape[3]      # K's "seq" dim == Q's headdim
-                and k.shape[3] == q.shape[2]):  # K's "dim" dim == Q's seqlen
-            k = k.transpose(2, 3).contiguous()
+    # Detection: K's last two dims are swapped relative to Q.
+    # This is safe for all models because SDPA always has Q.shape == V.shape
+    # and K can only differ in the seq_len dim (GQA) or by transposition.
+    if (k.ndim == 4
+            and k.shape[2] == q.shape[3]    # K's "seq" dim == Q's headdim
+            and k.shape[3] == q.shape[2]    # K's "dim" dim == Q's seqlen
+            and k.shape[2] != q.shape[2]):  # not already matching
+        k = k.transpose(2, 3).contiguous()
 
     # Input shapes — ATen convention: (batch, heads, seq, dim)
     batch = q.shape[0]

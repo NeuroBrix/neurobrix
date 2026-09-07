@@ -113,35 +113,6 @@ def _placeholder_zeros(shape, device, dtype) -> torch.Tensor:
     return t
 
 
-def _k_is_pre_transposed(q, k, attrs, op_name: str) -> bool:
-    """Is this op's K in (batch, heads, head_dim, seq) rather than (b,h,s,d)?
-
-    The graph is the authority: `GraphExecutor._mark_sdpa_k_layout` walks
-    the producer chain of K at load and records the answer on the op. It is
-    consulted here rather than re-derived, because the run-time derivation
-    — K's second-to-last axis equals Q's last — cannot tell the two layouts
-    apart when the sequence length equals the head dimension, and there it
-    used to decline to transpose and hand attention a K with its axes
-    crossed (measured 2026-09-07: TinyLlama, head_dim 64, a 64-token prompt,
-    argmax 29892 at logit 6.41 where the float64 oracle says 3864 at 22.36).
-
-    When the op carries no recorded layout — a graph built before the pass,
-    or one assembled by hand — the shape test still runs, but the ambiguous
-    square case refuses instead of guessing.
-    """
-    if k is None or q is None or getattr(k, "ndim", 0) != 4 or getattr(q, "ndim", 0) != 4:
-        return False
-    recorded = (attrs or {}).get("nbx_k_pre_transposed")
-    if recorded is not None:
-        return bool(recorded)
-    if k.shape[-1] == q.shape[-1] and k.shape[-2] == q.shape[-2] == q.shape[-1]:
-        raise RuntimeError(
-            f"{op_name}: K is square ({tuple(k.shape)}) with seq_len == "
-            f"head_dim, so its layout cannot be read from its shape, and the "
-            f"graph carries no recorded layout for this op. Refusing to guess.")
-    return k.shape[-1] != q.shape[-1] and k.shape[-2] == q.shape[-1]
-
-
 def _safe_is_causal(val: Any) -> bool:
     """Convert is_causal to Python bool. Handles tensor, int, bool, and float args.
 
@@ -594,8 +565,6 @@ class CompiledOpResolver:
         if base_name == "_scaled_dot_product_flash_attention_for_cpu":
             def flash_cpu_attention(q, k, v, dropout_p=0.0, is_causal=False, **kwargs):
                 q, k, v = _align_qkv_dtypes(q, k, v)
-                if _k_is_pre_transposed(q, k, attrs, op_name):
-                    k = k.transpose(-2, -1)
                 scale = kwargs.get("scale", None)
                 attn_mask = _cast_attn_mask(kwargs.get("attn_mask", None), q)
                 output = F.scaled_dot_product_attention(
@@ -615,8 +584,6 @@ class CompiledOpResolver:
             def efficient_attention(q, k, v, attn_bias=None, compute_lse=False,
                                    dropout_p=0.0, is_causal=False, scale=None, *args):
                 q, k, v = _align_qkv_dtypes(q, k, v)
-                if _k_is_pre_transposed(q, k, attrs, op_name):
-                    k = k.transpose(-2, -1)
                 # The memory-efficient kernel takes strided [B, H, S, D]
                 # views as long as the head dim is contiguous — the layout
                 # every `view → transpose` produces. Forcing .contiguous()
@@ -654,13 +621,13 @@ class CompiledOpResolver:
         # Standard SDPA — handles pattern-reassembled ops + native SDPA
         def standard_attention(q, k, v, *args, **kwargs):
             q, k, v = _align_qkv_dtypes(q, k, v)
-            # K may be transposed [B,H,D,S] from pattern reassembly — fix to
-            # [B,H,S,D]. The graph says which it is (GraphExecutor.
-            # _mark_sdpa_k_layout walks the producer chain at load): a shape
-            # test cannot, because at seq_len == head_dim the two layouts are
-            # the same shape, and there the old test silently declined to
-            # transpose and attention answered a different question.
-            if _k_is_pre_transposed(q, k, attrs, op_name):
+            # K may be transposed [B,H,D,S] from pattern reassembly — fix to [B,H,S,D].
+            # Detect via head_dim (last axis), NOT seq (axis -2): cross-attention
+            # legitimately has seq_q != seq_k (Perceiver: 32 latent queries over 150
+            # prompt keys), so a seq-axis comparison wrongly transposes a correct K.
+            # A genuinely transposed [B,H,D,S] K carries head_dim in axis -2 == q[-1].
+            if (k.ndim == 4 and q.ndim == 4
+                    and k.shape[-1] != q.shape[-1] and k.shape[-2] == q.shape[-1]):
                 k = k.transpose(-2, -1)
 
             is_causal = _safe_is_causal(kwargs.pop('is_causal', _attr_is_causal))

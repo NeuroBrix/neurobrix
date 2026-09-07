@@ -1806,14 +1806,6 @@ class TritonSequence:
     # OP COMPILATION
     # ========================================================================
 
-    _SDPA_OP_TYPES = frozenset({
-        "aten::scaled_dot_product_attention",
-        "aten::_scaled_dot_product_efficient_attention",
-        "aten::_scaled_dot_product_flash_attention",
-        "aten::_scaled_dot_product_cudnn_attention",
-        "aten::_scaled_dot_product_attention_math",
-    })
-
     def _compile_op(self, op_uid: str, op_data: dict, tensors: dict,
                     kill_slots: Tuple[int, ...]) -> CompiledOp:
         """Compile a single op with closure resolvers."""
@@ -1855,13 +1847,6 @@ class TritonSequence:
             bare_name = op_type.split("::")[-1] if "::" in op_type else op_type
             bare_name = canonical_aten(bare_name)
             func = self._dtype_engine.wrap_op(bare_name, func, op_uid=op_uid)
-
-        # The graph's recorded K layout for attention ops travels with the
-        # call rather than being re-derived from shapes: at seq_len ==
-        # head_dim the two layouts are the same shape and the derivation
-        # silently picked the wrong one (GraphExecutor._mark_sdpa_k_layout).
-        if op_type in self._SDPA_OP_TYPES and "nbx_k_pre_transposed" in attrs:
-            func = _with_k_layout(func, bool(attrs["nbx_k_pre_transposed"]))
 
         # Compile args → dataclasses
         raw_args = attrs.get("args", [])
@@ -4392,17 +4377,3 @@ class TritonSequence:
     @property
     def num_ops(self) -> int:
         return len(self._ops)
-
-
-def _with_k_layout(func, k_pre_transposed: bool):
-    """Bind the graph's recorded K layout onto an attention callable.
-
-    Keeps whatever the callable already is — an interceptor, a dtype-wrapped
-    kernel — and only adds the one fact the shapes cannot carry.
-    """
-    def attention_with_k_layout(*args, **kwargs):
-        kwargs.setdefault("k_pre_transposed", k_pre_transposed)
-        return func(*args, **kwargs)
-    attention_with_k_layout.self_manages_dtype = getattr(
-        func, "self_manages_dtype", False)
-    return attention_with_k_layout
