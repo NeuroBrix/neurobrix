@@ -53,3 +53,23 @@ def test_a_tensor_only_one_graph_carries_is_named(tmp_path, monkeypatch):
         (root / "components" / "core" / "graph.json").write_text(json.dumps(g))
     core = m.graph_diff()["components"]["core"]
     assert core["tensor_diffs_beyond"] == 1 and core["tensor_diff_sites"] == [{"tensor": "z", "only_in": "new"}]
+
+
+def test_a_topology_whose_routing_changed_is_beyond_the_annotation(tmp_path, monkeypatch):
+    """VibeVoice: flow type `next_token_diffusion` → `audio`, the graph gate silent."""
+    monkeypatch.setattr(C, "family_of", lambda n: "tts")
+    monkeypatch.setattr(R, "CACHE", tmp_path / "cache")
+    args = types.SimpleNamespace(out=str(tmp_path / "out"), backup=str(tmp_path / "backup"), models_root=str(tmp_path / "b"),
+                                 tmp=str(tmp_path / "t"), gpu=None, src=None, extra=[], timeout=1, trace_timeout=1, restore_mbps=1.0, upload_mbps=0.0)
+    m = R.Model("m", args)
+    for root, ftype, comps in ((Path(args.backup) / "m", "next_token_diffusion", ["core"]), (R.CACHE / "m", "audio", ["core", "model"])):
+        (root / "components" / "core").mkdir(parents=True)
+        (root / "components" / "core" / "graph.json").write_text(json.dumps(_graph(1.0)))
+        (root / "topology.json").write_text(json.dumps({"flow": {"type": ftype, "order": ["core"]}, "connections": [{"from": "global.x", "to": "core.x"}],
+                                                        "synthesis": {}, "components": {c: {"type": "neural_component"} for c in comps}}))
+    rep = m.graph_diff()
+    assert rep["components"]["core"]["op_diffs"] == 0
+    paths = [x["path"] for x in rep["topology"]]
+    assert "flow.type" in paths and "components.model" in paths and rep["beyond_annotation"] == 2
+    (R.CACHE / "m" / "topology.json").write_text((Path(args.backup) / "m" / "topology.json").read_text())
+    assert m.graph_diff()["topology"] == []
