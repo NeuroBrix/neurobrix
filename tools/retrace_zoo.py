@@ -79,6 +79,86 @@ def run(cmd, env, logfile: Path, timeout: int, cwd=None) -> int:
             return -9
 
 
+def _trace_value(v):
+    """The trace value a shape argument claims: an integer, or a symbol's trace."""
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, int):
+        return v
+    if isinstance(v, dict) and v.get("type") == "symbol":
+        tv = v.get("trace", v.get("trace_value"))
+        return tv if isinstance(tv, int) and not isinstance(tv, bool) else None
+    return None
+
+
+def _leaf_diffs(a, b, path=()):
+    """Every leaf where two JSON trees of the same structure differ; None when the structure itself differs."""
+    if isinstance(a, dict) and isinstance(b, dict):
+        if set(a) != set(b):
+            return None
+        out = []
+        for k in a:
+            d = _leaf_diffs(a[k], b[k], path + (k,))
+            if d is None:
+                return None
+            out += d
+        return out
+    if isinstance(a, list) and isinstance(b, list):
+        if len(a) != len(b):
+            return None
+        out = []
+        for i, (x, y) in enumerate(zip(a, b)):
+            d = _leaf_diffs(x, y, path + (i,))
+            if d is None:
+                return None
+            out += d
+        return out
+    if isinstance(a, (dict, list)) or isinstance(b, (dict, list)):
+        # a symbol {"type": "symbol", ...} against a bare integer is a leaf pair
+        if (isinstance(a, dict) and a.get("type") == "symbol" and isinstance(b, int)) or \
+           (isinstance(b, dict) and b.get("type") == "symbol" and isinstance(a, int)):
+            return [(path, a, b)]
+        return None
+    return [] if a == b else [(path, a, b)]
+
+
+def witnessed_arg_changes(old_op: dict, new_op: dict, tensors_new: dict):
+    """The differences between two records of one op when each is the closed
+    defect at the argument level: a shape argument (a `size`/`shape` list, or
+    the `args` list it mirrors) whose old value — a symbol, or an integer —
+    claimed a trace value that contradicts the extent the op's own output
+    tensor witnessed at that position, replaced by that witnessed integer.
+    Returns the sites, or None when any difference is of another kind."""
+    if {k for k in set(old_op) | set(new_op) if old_op.get(k) != new_op.get(k)} != {"attributes"}:
+        return None
+    diffs = _leaf_diffs(old_op.get("attributes"), new_op.get("attributes"))
+    if not diffs:
+        return None
+    witnessed = []
+    for tid in new_op.get("output_tensor_ids") or []:
+        m = tensors_new.get(tid) or {}
+        conc = (m.get("symbolic_shape") or {}).get("concrete") or m.get("shape") or []
+        if conc:
+            witnessed.append(list(conc))
+    sites = []
+    for path, a, b in diffs:
+        if not isinstance(b, int) or isinstance(b, bool):
+            return None
+        tv = _trace_value(a)
+        if tv is None or tv == b:
+            return None
+        if not path or not isinstance(path[-1], int):
+            return None
+        pos = path[-1]
+        parent = new_op["attributes"]
+        for k in path[:-1]:
+            parent = parent[k]
+        if not any(len(parent) == len(c) and c[pos] == b for c in witnessed):
+            return None
+        sites.append({"op": new_op.get("op_uid"), "path": ".".join(str(k) for k in path), "old": a, "new": b})
+    return sites
+
+
 class Model:
     def __init__(self, name: str, args):
         self.name = name
@@ -218,12 +298,14 @@ class Model:
         return ok
 
     def graph_diff(self) -> dict:
-        """Old vs new graph.json per component: every difference must live in
-        the symbolic-shape annotation (the closed defect); anything else — an
-        op, a shape, a dtype, an attribute — is a difference the gate refuses."""
+        """Old vs new graph.json per component: every difference must be the
+        closed defect — the symbolic-shape annotation, or a shape argument whose
+        false symbol the corrected tracer replaced by the extent its own output
+        witnessed (`witnessed_arg_changes`); anything else — an op, a shape, a
+        dtype, another attribute — is a difference the gate refuses."""
         old_root = Path(self.args.backup) / self.name / "components"
         new_root = CACHE / self.new_name / "components"
-        report = {"components": {}, "beyond_annotation": 0, "annotation_changes": 0, "corrupted_before": 0, "corrupted_after": 0}
+        report = {"components": {}, "beyond_annotation": 0, "annotation_changes": 0, "arg_witnessed": 0, "corrupted_before": 0, "corrupted_after": 0}
         for comp_dir in sorted(new_root.glob("*")):
             og, ng = old_root / comp_dir.name / "graph.json", comp_dir / "graph.json"
             if not og.exists() or not ng.exists():
@@ -231,14 +313,20 @@ class Model:
             o, n = json.loads(og.read_text()), json.loads(ng.read_text())
             ops_o = o["ops"] if isinstance(o.get("ops"), list) else list((o.get("ops") or {}).values())
             ops_n = n["ops"] if isinstance(n.get("ops"), list) else list((n.get("ops") or {}).values())
-            rec = {"ops_old": len(ops_o), "ops_new": len(ops_n), "op_diffs": 0, "tensor_diffs_beyond": 0, "annotation_changes": 0, "corrupted_before": 0, "corrupted_after": 0}
+            rec = {"ops_old": len(ops_o), "ops_new": len(ops_n), "op_diffs": 0, "tensor_diffs_beyond": 0, "annotation_changes": 0,
+                   "arg_witnessed": 0, "arg_witnessed_sites": [], "corrupted_before": 0, "corrupted_after": 0}
+            to, tn = o.get("tensors") or {}, n.get("tensors") or {}
             if len(ops_o) != len(ops_n):
                 rec["op_diffs"] = abs(len(ops_o) - len(ops_n))
             else:
                 for a, b in zip(ops_o, ops_n):
                     if json.dumps(a, sort_keys=True) != json.dumps(b, sort_keys=True):
-                        rec["op_diffs"] += 1
-            to, tn = o.get("tensors") or {}, n.get("tensors") or {}
+                        sites = witnessed_arg_changes(a, b, tn)
+                        if sites is None:
+                            rec["op_diffs"] += 1
+                        else:
+                            rec["arg_witnessed"] += len(sites)
+                            rec["arg_witnessed_sites"] = (rec["arg_witnessed_sites"] + sites)[:20]
             for tid in set(to) | set(tn):
                 a, b = to.get(tid), tn.get(tid)
                 if a is None or b is None:
@@ -257,6 +345,7 @@ class Model:
             report["components"][comp_dir.name] = rec
             report["beyond_annotation"] += rec["op_diffs"] + rec["tensor_diffs_beyond"]
             report["annotation_changes"] += rec["annotation_changes"]
+            report["arg_witnessed"] += rec["arg_witnessed"]
             report["corrupted_before"] += rec["corrupted_before"]; report["corrupted_after"] += rec["corrupted_after"]
         return report
 
@@ -293,6 +382,7 @@ class Model:
             verdict = "NEEDS_EXPLANATION"        # bytes differ: the difference must be the closed defect and nothing else
         self.mark("gate", verdict.startswith("PASS"), verdict=verdict, bytes=bytes_verdict, graph=gd)
         log(f"{self.name}: gate {verdict} — bytes {bytes_verdict}; graph: {gd['annotation_changes']} annotation change(s), "
+            f"{gd['arg_witnessed']} shape argument(s) to the witnessed extent, "
             f"{gd['beyond_annotation']} beyond, corrupted dims {gd['corrupted_before']} → {gd['corrupted_after']}")
         return verdict.startswith("PASS")
 
@@ -365,7 +455,10 @@ def main():
         else:
             model.run_all()
         summary[m] = {k: (v.get("verdict") or v.get("state") or ("ok" if v.get("ok") else "failed")) for k, v in model.state["steps"].items()}
-        (Path(args.out) / "summary.json").write_text(json.dumps(summary, indent=1))
+        sp = Path(args.out) / "summary.json"
+        merged = json.loads(sp.read_text()) if sp.exists() else {}
+        merged.update(summary)
+        sp.write_text(json.dumps(merged, indent=1))
     print(json.dumps(summary, indent=1))
 
 
