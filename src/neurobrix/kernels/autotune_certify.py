@@ -348,8 +348,12 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None)
             else:
                 results.append((cfg, dev))
         if not results:
+            if not excluded and unrun:
+                raise RuntimeError(f"{qual} at {key!r}: no config could run ({len(unrun)} of {len(configs)}; "
+                                   f"first: {unrun[0]['error']})")
             raise RuntimeError(f"{qual} at {key!r}: every config diverges from the fp64 oracle beyond {tolerance:g} "
-                               f"({len(excluded)} excluded, {len(unrun)} could not run)")
+                               f"({len(excluded)} excluded, {len(unrun)} could not run"
+                               + (f"; first error: {unrun[0]['error']}" if unrun else "") + ")")
         state["t_runs"] = round(time.time() - t_runs, 3)
         timed: List[Tuple[Any, float, float]] = []
         t_bench = time.time()
