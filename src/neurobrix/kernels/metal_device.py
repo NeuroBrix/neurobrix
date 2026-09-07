@@ -775,6 +775,15 @@ def reset_runtime_for_tests() -> None:
         pass                                            # nothing to release
     nbx_tensor._INT64_ARRAY_CACHE.clear()
 
+    # Everything issued so far belongs to the runtime about to be dropped.
+    # The flush above released what was parked; a tensor still ALIVE right
+    # now is freed later, and without this that free would park its dead
+    # address for the next allocation to be served.
+    try:
+        nbx_tensor.DeviceAllocator.new_allocation_epoch()
+    except Exception:                                   # pragma: no cover
+        pass
+
     with _RUNTIME_LOCK:
         _RUNTIME = None
 

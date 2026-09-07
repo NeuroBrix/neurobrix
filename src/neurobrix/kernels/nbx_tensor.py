@@ -433,6 +433,21 @@ class DeviceAllocator:
     _cuda_peak_bytes: Dict[int, int] = {}            # device_idx -> peak
     _cuda_ptr_size: Dict[int, int] = {}              # ptr -> nbytes (for free accounting)
     _cuda_ptr_device: Dict[int, int] = {}            # ptr -> device_idx (REQUIRED for cudaFreeAsync correctness)
+
+    # Which generation of the device runtime issued a pointer.
+    #
+    # A pointer is only meaningful to the runtime that issued it. Normally
+    # there is exactly one for the life of the process and this is a constant
+    # 0 that never costs a thought. When a runtime IS replaced, every address
+    # it issued dies with it — and the free-list must not outlive it, or a
+    # later allocation is served an address the current runtime never issued
+    # and the first launch that touches it refuses a perfectly good tensor.
+    #
+    # Flushing the pool at the swap is not enough: a tensor still ALIVE at
+    # that moment is freed afterwards, and that free parks its dead address
+    # for reuse. The epoch is what the flush cannot see.
+    _alloc_epoch: int = 0
+    _cuda_ptr_epoch: Dict[int, int] = {}             # ptr -> the epoch that issued it
     _host_pinned_live_bytes: int = 0
     _host_pinned_peak_bytes: int = 0
     _host_pinned_ptr_size: Dict[int, int] = {}       # ptr -> nbytes
@@ -765,6 +780,25 @@ class DeviceAllocator:
         return DeviceAllocator._pool_flush()
 
     @staticmethod
+    def new_allocation_epoch() -> int:
+        """Declare that every address issued so far belongs to a runtime that
+        is being replaced. Returns the new epoch.
+
+        Call it AFTER releasing what can still be released (the parked pool)
+        and BEFORE the new runtime exists. From here on, a free of an older
+        pointer is a no-op rather than a park or a driver call.
+
+        The engine proper never calls this: a process has one device runtime
+        for its whole life. It exists because test processes legitimately
+        replace one, and because the alternative — a free-list that outlives
+        the runtime it belongs to — surfaced as an order-dependent numeric
+        failure in an unrelated kernel, which is the worst way for it to be
+        found.
+        """
+        DeviceAllocator._alloc_epoch += 1
+        return DeviceAllocator._alloc_epoch
+
+    @staticmethod
     def malloc_cuda(nbytes: int, dev_idx: Optional[int] = None) -> int:
         """Allocate GPU memory.
 
@@ -804,6 +838,7 @@ class DeviceAllocator:
                 actual = DeviceAllocator._pool_alloc_size.pop(ptr, nbytes)
                 DeviceAllocator._cuda_ptr_size[ptr] = actual
                 DeviceAllocator._cuda_ptr_device[ptr] = dev
+                DeviceAllocator._cuda_ptr_epoch[ptr] = DeviceAllocator._alloc_epoch
                 if _MALLOC_TRACE_FILE is not None:
                     _record_malloc_site(ptr, actual, dev)
                 # No live-byte change: pool blocks stay counted as live
@@ -894,6 +929,7 @@ class DeviceAllocator:
         p = ptr_obj.value or 0
         DeviceAllocator._cuda_ptr_size[p] = nbytes
         DeviceAllocator._cuda_ptr_device[p] = dev
+        DeviceAllocator._cuda_ptr_epoch[p] = DeviceAllocator._alloc_epoch
         live = DeviceAllocator._cuda_live_bytes.get(dev, 0) + nbytes
         DeviceAllocator._cuda_live_bytes[dev] = live
         peak = DeviceAllocator._cuda_peak_bytes.get(dev, 0)
@@ -925,6 +961,25 @@ class DeviceAllocator:
         if not ptr:
             return
         DeviceAllocator._maybe_init_pool()
+
+        # A pointer issued by a runtime that no longer exists.
+        #
+        # Its memory went when that runtime did, so there is nothing to give
+        # back — and both of the things this function otherwise does would be
+        # wrong: parking it hands a dead address to the next allocation, and
+        # freeing it asks the CURRENT runtime to release something it never
+        # issued, which it correctly refuses and loudly. Drop the bookkeeping
+        # and say nothing. Only a process that replaces its runtime ever
+        # reaches this; with one runtime the epoch never moves.
+        _epoch = DeviceAllocator._cuda_ptr_epoch.pop(ptr, DeviceAllocator._alloc_epoch)
+        if _epoch != DeviceAllocator._alloc_epoch:
+            _dev = DeviceAllocator._cuda_ptr_device.pop(ptr, None)
+            _sz = DeviceAllocator._cuda_ptr_size.pop(ptr, None)
+            DeviceAllocator._pool_alloc_size.pop(ptr, None)
+            if _dev is not None and _sz:
+                _live = DeviceAllocator._cuda_live_bytes.get(_dev, 0) - _sz
+                DeviceAllocator._cuda_live_bytes[_dev] = max(0, _live)
+            return
 
         # Phase 2: push to pool, no cudaFree.
         if DeviceAllocator._pool_enabled:
