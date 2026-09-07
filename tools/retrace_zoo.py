@@ -908,12 +908,24 @@ def main():
     ap.add_argument("--timeout", type=int, default=7200)
     ap.add_argument("--trace-timeout", type=int, default=14400)
     ap.add_argument("--stop-at", default=None, help="stop after this step (e.g. gate)")
+    ap.add_argument("--only-upload", action="store_true",
+                    help="run the upload step only, for a container whose gate is PASS; anything else is refused by name "
+                         "(an upload loop must never trace or build — a reset state once made one trace Kokoro beside a pass)")
     args = ap.parse_args()
     import shlex
     args.extra = shlex.split(args.extra)
     summary = {}
     for m in [x for x in args.models.split(",") if x]:
         model = Model(m, args)
+        if args.only_upload:
+            if (model.state["steps"].get("gate") or {}).get("verdict", "").startswith("PASS") and model.done("gate"):
+                if not model.done("upload"):
+                    log(f"{m}: upload …")
+                    model.step_upload()
+            else:
+                log(f"{m}: upload REFUSED — the gate is not PASS in the state (an upload loop never traces or builds)")
+            summary[m] = {k: (v.get("verdict") or v.get("state") or ("ok" if v.get("ok") else "failed")) for k, v in model.state["steps"].items()}
+            continue
         if args.stop_at:
             # run steps up to and including stop_at
             for name, fn in [("old_outputs", model.step_old_outputs), ("trace", model.step_trace), ("build", model.step_build),
