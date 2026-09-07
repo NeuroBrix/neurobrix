@@ -157,7 +157,7 @@ _MATMUL_AUTOTUNE_CONFIGS = maybe_pin_single(
 
 
 @nbx_autotune(configs=_MATMUL_AUTOTUNE_CONFIGS,
-                 key=['M', 'N', 'K', 'IEEE_PRECISION', 'PROMOTE_B'],
+                 key=['M', 'N', 'K', 'IEEE_PRECISION', 'PROMOTE_B', 'PROMOTE_A'],
                  cache_results=True)
 @triton.jit
 def matmul_kernel(
@@ -168,6 +168,7 @@ def matmul_kernel(
     stride_cm, stride_cn,
     IEEE_PRECISION: tl.constexpr = False,
     PROMOTE_B: tl.constexpr = False,
+    PROMOTE_A: tl.constexpr = False,
     EPILOGUE: tl.constexpr = 0,
     BLOCK_M: tl.constexpr = 64,
     BLOCK_N: tl.constexpr = 64,
@@ -224,6 +225,11 @@ def matmul_kernel(
     for k in range(0, tl.cdiv(K, BLOCK_K)):
         a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_K, other=0.0)
         b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_K, other=0.0)
+        if PROMOTE_A:
+            # The activation tile widened in registers — the same numbers the wrapper
+            # produced by materialising `a.to(float32)` before the call (an exact widening),
+            # without that copy per matmul (TinyLlama decode: 143 a token, 2026-09-07).
+            a = a.to(tl.float32)
         if PROMOTE_B:
             b = b.to(a.dtype)
         # 3-arg HMMA-FMA fused form (tutorial pattern).
@@ -262,7 +268,7 @@ def matmul_kernel(
 
 
 @nbx_autotune(configs=_MATMUL_AUTOTUNE_CONFIGS,
-                 key=['M', 'N', 'K', 'IEEE_PRECISION', 'PROMOTE_B'],
+                 key=['M', 'N', 'K', 'IEEE_PRECISION', 'PROMOTE_B', 'PROMOTE_A'],
                  cache_results=True)
 @triton.jit
 def addmm_kernel(
@@ -274,6 +280,7 @@ def addmm_kernel(
     alpha, beta,
     IEEE_PRECISION: tl.constexpr = False,
     PROMOTE_B: tl.constexpr = False,
+    PROMOTE_A: tl.constexpr = False,
     EPILOGUE: tl.constexpr = 0,
     BLOCK_M: tl.constexpr = 64,
     BLOCK_N: tl.constexpr = 64,
@@ -313,6 +320,11 @@ def addmm_kernel(
     for k in range(0, tl.cdiv(K, BLOCK_K)):
         a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_K, other=0.0)
         b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_K, other=0.0)
+        if PROMOTE_A:
+            # The activation tile widened in registers — the same numbers the wrapper
+            # produced by materialising `a.to(float32)` before the call (an exact widening),
+            # without that copy per matmul (TinyLlama decode: 143 a token, 2026-09-07).
+            a = a.to(tl.float32)
         if PROMOTE_B:
             b = b.to(a.dtype)
         if IEEE_PRECISION:

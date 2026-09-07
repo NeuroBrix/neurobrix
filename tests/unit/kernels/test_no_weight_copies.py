@@ -117,3 +117,24 @@ def test_gemv_copies_a_row_strided_matrix_exactly_once():
     assert c.copies == 1, "the one justified copy"
     assert np.array_equal(_d2h(out), _d2h(W.mv_wrapper(mat.contiguous(), vec)))
 
+
+
+def _act16(M, K, seed=5):
+    rng = np.random.default_rng(seed)
+    return NBXTensor.from_numpy((rng.standard_normal((M, K)) * 0.05).astype(np.float16))
+
+
+@pytest.mark.parametrize("M", [1, 4, 16, 64])
+def test_fp16_activation_is_widened_in_registers_not_materialised(M):
+    """On a card without native bf16 the fp16 activation used to be copied to fp32 before every
+    matmul; the kernels widen it on load now — the same numbers, no copy. The reference is the
+    same kernel handed the pre-widened activation (the former path, still reachable)."""
+    Wt, a16 = _weight(96, 128), _act16(M, 128)
+    b = Wt.t()
+    a32 = a16.to(NBXDtype.float32)
+    ref = W.mm(a32, b)                            # promote_a False (fp32 in), promote_b True: the old path
+    with _Count() as c:
+        out = W.mm(a16, b)
+    assert c.copies == 0, "no activation upcast copy, no weight copy"
+    assert out._dtype == ref._dtype == NBXDtype.float32
+    assert np.array_equal(_d2h(out), _d2h(ref))

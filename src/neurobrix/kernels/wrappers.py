@@ -1861,22 +1861,27 @@ def mm(a, b, _epilogue: int = 0) :
     if NBX_FORCE_FP32_ACCUM and b_nbx in (NBXDtype.float16, NBXDtype.bfloat16):
         b = b.to(NBXDtype.float32)
         b_nbx = NBXDtype.float32
-    if not _NBX_HAS_NATIVE_BF16 and a_nbx == NBXDtype.float16:
-        a = a.to(NBXDtype.float32)
-        a_nbx = NBXDtype.float32
+    # The fp16 activation is NOT materialised as fp32 any more: the kernels widen it in
+    # registers — matmul_kernel through PROMOTE_A, the GEMV kernels on every load — the same
+    # numbers the copy produced (an exact widening), without the copy per matmul. The store
+    # dtype is decided by _matmul_out_dtype from the hardware gate, as before (fp32 here).
+    promote_a = (not _NBX_HAS_NATIVE_BF16 and a_nbx == NBXDtype.float16)
+    a_eff = NBXDtype.float32 if promote_a else a_nbx      # the dtype the kernel computes a in
 
     # Dtype alignment. Three situations:
     #   1. Same dtype  → no-op.
     #   2. fp32 act × fp16 weight on pre-Ampere → this is the common case
-    #      after step 2. Keep the weight fp16 in memory; the kernel
+    #      (the activation widened in-kernel). Keep the weight fp16 in memory; the kernel
     #      promotes the b tile to fp32 inline via PROMOTE_B. No heap alloc.
     #   3. Anything else (fp32 × bf16, bf16 × fp16, etc.) → widen to the
     #      common dtype. Rare; typically a downstream force_fp32 bmm feeding
     #      the next matmul.
     promote_b = (not _NBX_HAS_NATIVE_BF16
-                 and a_nbx == NBXDtype.float32
+                 and a_eff == NBXDtype.float32
                  and b_nbx == NBXDtype.float16)
-    if a_nbx != b_nbx and not promote_b:
+    if a_eff != b_nbx and not promote_b:
+        if promote_a:                       # widened for real when the pair needs the widest
+            a = a.to(NBXDtype.float32); a_nbx = NBXDtype.float32; promote_a = False
         _order = (NBXDtype.float32, NBXDtype.bfloat16, NBXDtype.float16)
         widest = next(d for d in _order if d in (a_nbx, b_nbx))
         if a_nbx != widest:
@@ -1932,7 +1937,7 @@ def mm(a, b, _epilogue: int = 0) :
     # integer analysis assumes every stride positive.
     if any(st == 0 for st in b.stride()):
         b = b.contiguous()
-    out_dtype = _matmul_out_dtype(a, M)
+    out_dtype = _matmul_out_dtype(a, M, force_fp32=promote_a)
     c = NBXTensor.empty((M, N), device=f"cuda:{a._device_idx}" if hasattr(a, '_device_idx') else 'cuda',
                         dtype=out_dtype)
     # IEEE mode: force strict fp32 tl.dot on pre-Ampere when we've promoted
@@ -1952,6 +1957,7 @@ def mm(a, b, _epilogue: int = 0) :
         c.stride(0), c.stride(1),
         IEEE_PRECISION=ieee,
         PROMOTE_B=promote_b,
+        PROMOTE_A=promote_a,
         EPILOGUE=_epilogue,
     )
     return c
