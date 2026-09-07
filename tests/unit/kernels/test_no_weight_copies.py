@@ -385,3 +385,30 @@ def test_a_mixed_dtype_contiguous_add_casts_exactly_once():
         out = W.add(a, b)
     assert l.names == ["copy_kernel", "add_forward_kernel"], l.names
     assert out.nbx_dtype == NBXDtype.float32
+
+
+def test_rope_widens_the_step_tables_once_per_run_not_once_per_layer():
+    """Every layer receives its own view of the step's fp16 tables and needs them fp32 (the
+    widening case): the wrapper widens once per run for a base tensor and reuses it for every
+    view; a new run, or another base, widens again."""
+    rng = np.random.default_rng(13)
+    B, S, Hq, Hk, D = 1, 1, 32, 4, 64
+    q_np = rng.standard_normal((B, S, Hq, D)).astype(np.float32); k_np = rng.standard_normal((B, S, Hk, D)).astype(np.float32)
+    ang = rng.uniform(-np.pi, np.pi, (B, 1, S, D)).astype(np.float32)
+    cos_base = NBXTensor.from_numpy(np.cos(ang).astype(np.float16)); sin_base = NBXTensor.from_numpy(np.sin(ang).astype(np.float16))
+    def layer():
+        q = NBXTensor.from_numpy(q_np).transpose(1, 2); k = NBXTensor.from_numpy(k_np).transpose(1, 2)
+        return W.rope_fused_wrapper(q, k, cos_base[:, :, :, :], sin_base[:, :, :, :])      # a fresh view per layer
+    W.begin_run()
+    with _Count() as c:
+        (q1, _), (q2, _), (q3, _) = layer(), layer(), layer()
+    assert c.copies == 2, c.copies                          # cos and sin, once
+    assert np.array_equal(_d2h(q1), _d2h(q2)) and np.array_equal(_d2h(q2), _d2h(q3))
+    W.begin_run()
+    with _Count() as c:
+        layer()
+    assert c.copies == 2
+    other = NBXTensor.from_numpy(np.cos(ang).astype(np.float16))
+    with _Count() as c:
+        W.rope_fused_wrapper(NBXTensor.from_numpy(q_np).transpose(1, 2), NBXTensor.from_numpy(k_np).transpose(1, 2), other, sin_base[:, :, :, :])
+    assert c.copies == 1                                    # another base for cos; sin cached
