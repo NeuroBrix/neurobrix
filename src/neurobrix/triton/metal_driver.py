@@ -462,7 +462,8 @@ class MetalKernel:
     def msl(self) -> str:
         return self._msl
 
-    def launch_params(self, grid, block, params, stream: int = 0) -> None:
+    def launch_params(self, grid, block, params, stream: int = 0,
+                      names=None) -> None:
         """The engine launcher's entry: `(kind, value)` pairs in signature
         order, and the block the driver chose from the compiled metadata.
 
@@ -498,17 +499,17 @@ class MetalKernel:
                 f"dispatchable; this kernel's pipeline allows 1..{ceiling}")
 
         with objc.autorelease_pool():
-            self._dispatch_params(Metal, grid, params, stream, want)
+            self._dispatch_params(Metal, grid, params, stream, want, names)
 
     def _dispatch_params(self, Metal, grid, params, stream: int,
-                         threads: int) -> None:
+                         threads: int, names=None) -> None:
         runtime = self._runtime
         encoder_queue = runtime._resolve_queue(int(stream or 0))
         if encoder_queue is None:
             raise MetalKernelError(
                 f"{self.name}: stream handle {stream!r} is not one the "
                 f"allocator handed out")
-        # Bind by BUFFER INDEX, not by position.
+        # Bind by NAME when the launcher supplies them, else by index.
         #
         # The emitted MSL declares only the arguments the compiled kernel
         # actually uses: the middle end drops ones it proved dead, and a
@@ -531,8 +532,29 @@ class MetalKernel:
         encoder = command_buffer.computeCommandEncoder()
         try:
             encoder.setComputePipelineState_(self._pipeline)
+            by_name = {}
+            if names:
+                by_name = {n: params[i] for i, n in enumerate(names)
+                           if i < len(params)}
             for index, pname, mtype, emitted_pointer in self._msl_binding:
-                kind, value = params[index]
+                # The emitted name is the kernel's own argument name, with the
+                # `_buf` suffix the emitter adds to a scalar it passes through
+                # a pointer. Name is the only mapping that survives a kernel
+                # whose artifact declares fewer arguments than the signature
+                # carries AND one whose buffer indices are the graph's rather
+                # than the signature's — both occur.
+                key = pname[:-len(_SCALAR_BUFFER_SUFFIX)] \
+                    if pname.endswith(_SCALAR_BUFFER_SUFFIX) and pname not in by_name \
+                    else pname
+                if key in by_name:
+                    kind, value = by_name[key]
+                elif index < len(params):
+                    kind, value = params[index]
+                else:
+                    raise MetalKernelError(
+                        f"{self.name}: no argument for {pname!r} "
+                        f"(buffer {index}); the artifact and the signature "
+                        f"disagree and there is no name to match on")
                 if kind == "ptr":
                     buffer, offset = runtime.buffer_for_pointer(int(value))
                     if buffer is None:
@@ -894,7 +916,7 @@ class MetalDriver:
         return kernel_from_msl(msl, _Metadata(name, shared))
 
     def launch(self, function, grid, block, shared: int, stream: int,
-               params) -> None:
+               params, names=None) -> None:
         """Dispatch a loaded kernel. `params` is the launcher's list of
         `(kind, value)` pairs, in the compiled signature's order.
 
@@ -905,7 +927,7 @@ class MetalDriver:
         signature gave (`"ptr"` versus a scalar kind) and the slot the
         emitter declared, never from the value.
         """
-        function.launch_params(grid, block, params, stream)
+        function.launch_params(grid, block, params, stream, names)
 
     def compile(self, jit_fn, signature, constexprs, num_warps: int = 4,
                 specialization=None, num_stages=None):

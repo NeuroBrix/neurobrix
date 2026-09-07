@@ -100,7 +100,8 @@ class Driver:
     def load(self, binary: bytes, name: str, shared: int):  # pragma: no cover - interface
         raise NotImplementedError
 
-    def launch(self, function, grid, block, shared: int, stream: int, params) -> None:  # pragma: no cover
+    def launch(self, function, grid, block, shared: int, stream: int, params,
+               names=None) -> None:  # pragma: no cover
         raise NotImplementedError
 
     def block_for(self, metadata):
@@ -194,7 +195,8 @@ class CudaDriver(Driver):
             self._check(self.lib.cuFuncSetAttribute(function, self.CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, ctypes.c_int(shared)), "cuFuncSetAttribute")
         return function
 
-    def launch(self, function, grid, block, shared: int, stream: int, params) -> None:
+    def launch(self, function, grid, block, shared: int, stream: int, params,
+               names=None) -> None:
         gx, gy, gz = grid
         bx, by, bz = block
         if gx * gy * gz <= 0:
@@ -484,12 +486,20 @@ def launch(kernel, grid, *args, **kwargs):
     if callable(grid):
         grid = grid(bound_args)
     grid = tuple(int(g) for g in grid) + (1,) * (3 - len(grid))
-    params = [_pack_param(ty, bound_args[name]) for name, ty in prep.signature.items() if ty != "constexpr"]
+    runtime = [(name, ty) for name, ty in prep.signature.items()
+               if ty != "constexpr"]
+    params = [_pack_param(ty, bound_args[name]) for name, ty in runtime]
+    # The parameter NAMES, in the same order. A backend whose artifact
+    # declares its arguments by name — and may declare only the ones the
+    # compiled kernel kept — binds by name rather than by position, which is
+    # the only mapping that stays correct when the two lists differ in length.
+    names = [name for name, _ty in runtime]
     drv = active_driver()
     if drv.wants_scratch_params:
         params.append(("ptr", 0))    # global scratch (Triton ≥ 3.6 ABI)
         params.append(("ptr", 0))    # profile scratch
-    drv.launch(prep.function, grid, prep.block, prep.shared, _stream(), params)
+    drv.launch(prep.function, grid, prep.block, prep.shared, _stream(), params,
+               names=names)
 
 
 def _stream() -> int:
