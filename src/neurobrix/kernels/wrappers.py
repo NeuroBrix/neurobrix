@@ -7220,6 +7220,16 @@ def _arch_param(section: str, key: str, default):
         return default
 
 
+def _arch_dispatch_param(key: str, default):
+    """One `dispatch.<key>` value for the executing hardware profile.
+
+    The launch path's own knobs live here — how many command buffers a queue
+    may hold in flight, and anything else about how work reaches the device.
+    They belong to the device, so they are read from its profile rather than
+    written into the driver."""
+    return _arch_param("dispatch", key, default)
+
+
 def _arch_memory_param(key: str, default):
     """One `memory.<key>` value for the executing hardware profile.
     Thin alias of `_arch_param("memory", ...)`, kept because the memory
