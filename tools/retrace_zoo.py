@@ -183,6 +183,8 @@ def _leaf_diffs(a, b, path=()):
         if (_is_dim_node(a) and isinstance(b, int) and not isinstance(b, bool)) or \
            (_is_dim_node(b) and isinstance(a, int) and not isinstance(a, bool)):
             return [(path, a, b)]
+        if isinstance(a, dict) and a.get("type") == "scalar" and isinstance(a.get("value"), int) and _is_dim_node(b):
+            return [(path, a["value"], b)]            # a recorded scalar arg that became a dim expression
         return None
     return [] if a == b else [(path, a, b)]
 
@@ -268,6 +270,39 @@ def equivalent_modulo_unit_factors(a, b) -> bool:
     return True
 
 
+INT64_MAX = 9223372036854775807
+
+
+def symbol_remap(old_ctx: dict, new_ctx: dict) -> dict:
+    """old symbol id → new symbol id, matched by (name, trace value) in registration
+    order — two traces number their symbols independently (canary's perception:
+    s0 = batch in June, s0 = seq_len today)."""
+    def table(ctx):
+        out = {}
+        for sid, sym in ((ctx or {}).get("symbols") or {}).items():
+            key = (sym.get("name"), sym.get("trace_value", sym.get("trace")))
+            out.setdefault(key, []).append(sid)
+        return out
+    o, n = table(old_ctx), table(new_ctx)
+    remap = {}
+    for key, olds in o.items():
+        news = n.get(key) or []
+        for i, sid in enumerate(olds):
+            if i < len(news):
+                remap[sid] = news[i]
+    return remap
+
+
+def rewrite_symbols(node, remap: dict):
+    if isinstance(node, dict):
+        if node.get("type") == "symbol" and node.get("id") in remap:
+            return {**node, "id": remap[node["id"]]}
+        return {k: rewrite_symbols(v, remap) for k, v in node.items()}
+    if isinstance(node, list):
+        return [rewrite_symbols(v, remap) for v in node]
+    return node
+
+
 def witnessed_arg_changes(old_op: dict, new_op: dict, tensors_new: dict):
     """The differences between two records of one op when each is the closed
     defect at the argument level — two kinds:
@@ -315,6 +350,11 @@ def witnessed_arg_changes(old_op: dict, new_op: dict, tensors_new: dict):
                     sites.append({"op": new_op.get("op_uid"), "path": ".".join(str(k) for k in parent_path + (pos,)), "old": [a, a2], "new": [b, b2], "kind": "batch-split-restored"})
     for path, a, b in diffs:
         if path in restored:
+            continue
+        # SLICE END SYMBOLIZED: "to the end" (INT64_MAX) became the extent's own expression —
+        # the same slice, now spelled with the dim it ends at (an input's or the output's dim).
+        if a == INT64_MAX and isinstance(b, dict) and _is_dim_node(b) and json.dumps(b, sort_keys=True) in input_dims:
+            sites.append({"op": new_op.get("op_uid"), "path": ".".join(str(k) for k in path), "old": a, "new": b, "kind": "slice-end-symbolized"})
             continue
         if not path or not isinstance(path[-1], int):
             return None
@@ -421,6 +461,15 @@ def hub_store_health(url: str = HUB_STORE_HEALTH, timeout: float = 10.0, probe_s
 WEIGHT_SUFFIXES = {"safetensors", "bin", "pt", "pth", "gguf", "ckpt", "npz"}
 
 
+def snapshot_has_a_format(p: Path) -> bool:
+    """The layouts the toolchain's format detector accepts: a diffusers pipeline
+    (model_index.json), a transformers model (config.json), a NeMo archive (*.nemo)
+    or a NeMo directory (model_config.yaml + model_weights.ckpt)."""
+    return ((p / "model_index.json").exists() or (p / "config.json").exists()
+            or any(p.glob("*.nemo"))
+            or ((p / "model_config.yaml").exists() and (p / "model_weights.ckpt").exists()))
+
+
 def snapshot_weight_gb(snap) -> float:
     """The weight files of a snapshot, in GB (what a build stages)."""
     total = 0
@@ -475,7 +524,13 @@ class Model:
                 continue
             cmd = [PY, "-c", "import sys; from neurobrix.cli import main; sys.exit(main())", "run", "--model", name] + req + flag + ["--output", str(outp)]
             t0 = time.time()
-            rc = run(cmd, self.env(), self.dir / f"{tag}_{arm}.log", self.args.timeout)
+            # One precision policy on both arms — the conservative path, no calibration islands:
+            # a retraced graph carries a new signature, so the old graph's record is refused on it
+            # while the old arm applied its own (VibeVoice, 2026-09-07: 7.5 dB between the arms
+            # with identical transcripts). The gate isolates the graph; the calibration lever
+            # re-measures the retraced container afterwards.
+            env = self.env(); env["NBX_ACTIVATIONS_FP16_SAFE"] = "0"
+            rc = run(cmd, env, self.dir / f"{tag}_{arm}.log", self.args.timeout)
             logtext = (self.dir / f"{tag}_{arm}.log").read_text(errors="replace")
             unsupported = "UNSUPPORTED PATH" in logtext and "encoding" in logtext
             res[arm] = {"rc": rc, "sha": sha(outp), "output": str(outp), "seconds": round(time.time() - t0, 1),
@@ -504,7 +559,7 @@ class Model:
                 p = root / nm
                 if not (p.is_dir() and any(p.iterdir())):
                     continue
-                if not ((p / "model_index.json").exists() or (p / "config.json").exists()):
+                if not snapshot_has_a_format(p):
                     continue
                 if any(p.rglob("*.incomplete")):
                     continue
@@ -626,6 +681,11 @@ class Model:
             # and no graph output named, is a DEAD op the corrected tracer prunes (R19: the DAG
             # holds compute only — canary's `arange` and five `empty`, 2026-09-07): admitted and
             # counted. An op only the new graph carries, or an old op with a consumer, is beyond.
+            remap = symbol_remap(o.get("symbolic_context"), n.get("symbolic_context"))
+            if remap and any(k != v for k, v in remap.items()):
+                ops_o = [rewrite_symbols(x, remap) for x in ops_o]
+                to = {tid: rewrite_symbols(m, remap) for tid, m in to.items()}
+                rec["symbols_remapped"] = sum(1 for k, v in remap.items() if k != v)
             by_o = {x.get("op_uid"): x for x in ops_o}
             by_n = {x.get("op_uid"): x for x in ops_n}
             consumed_o = {t for x in ops_o for t in (x.get("input_tensor_ids") or [])}
@@ -723,7 +783,8 @@ class Model:
             f"re-expressed {sum(r.get('arg_kinds', {}).get('re-expressed', 0) for r in gd['components'].values())}, "
             f"batch split restored {sum(r.get('arg_kinds', {}).get('batch-split-restored', 0) for r in gd['components'].values())}, "
             f"batch factor restored {sum(r.get('arg_kinds', {}).get('batch-factor-restored', 0) for r in gd['components'].values())}, "
-            f"unit factor corrected {sum(r.get('arg_kinds', {}).get('unit-factor-corrected', 0) for r in gd['components'].values())}), "
+            f"unit factor corrected {sum(r.get('arg_kinds', {}).get('unit-factor-corrected', 0) for r in gd['components'].values())}, "
+            f"slice end symbolized {sum(r.get('arg_kinds', {}).get('slice-end-symbolized', 0) for r in gd['components'].values())}), "
             f"{gd['pruned_dead_ops']} dead op(s) pruned, "
             f"{gd['beyond_annotation']} beyond, corrupted dims {gd['corrupted_before']} → {gd['corrupted_after']}")
         return verdict.startswith("PASS")
