@@ -112,3 +112,15 @@ def test_trace_time_provenance_is_not_a_difference():
     stripped = lambda o: {k: v for k, v in o.items() if k not in R.PROVENANCE_KEYS}
     assert stripped(a) == stripped(b)
     assert R.PROVENANCE_KEYS == {"device", "memory_info"}
+
+
+def test_a_device_argument_recorded_by_an_op_is_provenance_too():
+    a = {"op_uid": "aten._to_copy::0", "attributes": {"args": [], "kwargs": {"dtype": {"type": "dtype", "value": "torch.float32"}, "device": {"type": "device", "value": "cuda:2"}},
+                                                        "dtype": {"type": "dtype", "value": "torch.float32"}, "device": {"type": "device", "value": "cuda:2"}}, "device": "cuda:2"}
+    b = copy.deepcopy(a)
+    for d in (b["attributes"]["kwargs"]["device"], b["attributes"]["device"]):
+        d["value"] = "cuda:0"
+    b["device"] = "cuda:0"
+    assert R.scrub_provenance(a) == R.scrub_provenance(b)
+    c = copy.deepcopy(b); c["attributes"]["kwargs"]["dtype"]["value"] = "torch.float16"
+    assert R.scrub_provenance(a) != R.scrub_provenance(c), "a dtype is semantics"
