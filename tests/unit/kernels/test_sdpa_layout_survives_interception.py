@@ -144,3 +144,71 @@ def test_every_assignment_to_op_func_goes_through_the_helper(module):
         "attention op patched there would lose its recorded K/V layout and "
         "fall back to reading it off a shape that cannot express it at "
         "seq_len == head_dim: " + ", ".join(offenders))
+
+
+def _slots_of(cls_node: ast.ClassDef) -> set | None:
+    """The names a class declares in __slots__, or None when it declares none."""
+    for node in cls_node.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(isinstance(t, ast.Name) and t.id == "__slots__"
+                   for t in node.targets):
+            continue
+        value = node.value
+        if isinstance(value, (ast.Tuple, ast.List, ast.Set)):
+            return {e.value for e in value.elts if isinstance(e, ast.Constant)}
+        return set()
+    return None
+
+
+@pytest.mark.parametrize("module", [TritonSequence, CompiledSequence])
+def test_no_attribute_is_assigned_that_the_class_cannot_hold(module):
+    """A `__slots__` class refuses an attribute that is not one of its slots,
+    and refuses it where the assignment happens — which for an engine is
+    inside compile(), on every model of the hub at once.
+
+    Measured 2026-09-07 on CUDA: a layout map created lazily on
+    CompiledSequence raised AttributeError in `compile()` for every model
+    whose sequence holds an attention op, and the compiled arm of the whole
+    campaign stopped. The class had said so at line 7 of its own file.
+    """
+    path = Path(inspect.getsourcefile(module))
+    tree = ast.parse(path.read_text())
+    offenders = []
+    for cls in [n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)]:
+        slots = _slots_of(cls)
+        if slots is None:                     # no __slots__: anything goes
+            continue
+        for node in ast.walk(cls):
+            targets = []
+            if isinstance(node, ast.Assign):
+                targets = node.targets
+            elif isinstance(node, ast.AnnAssign):
+                targets = [node.target]
+            for target in targets:
+                if (isinstance(target, ast.Attribute)
+                        and isinstance(target.value, ast.Name)
+                        and target.value.id == "self"
+                        and target.attr not in slots):
+                    offenders.append(f"{cls.name}.{target.attr} "
+                                     f"({path.name}:{node.lineno})")
+    assert not offenders, (
+        "these attributes are assigned on a class that declares __slots__ "
+        "and are not among them, so the assignment raises where it runs: "
+        + ", ".join(sorted(set(offenders))))
+
+
+def test_a_real_compiled_sequence_holds_the_layout_map():
+    """The AST check says the slot is declared; this says the object can be
+    built and the map assigned on it. The crash it stands for happened at
+    `compile()`, not at import."""
+    import torch
+    empty = {"ops": {}, "tensors": {}, "execution_order": [],
+             "weight_tensor_ids": [], "input_tensor_ids": [],
+             "output_tensor_ids": []}
+    seq = CompiledSequence(empty, torch.device("cpu"), torch.float32)
+    assert seq._sdpa_kv_layout == {}
+    seq._sdpa_kv_layout["sdpa::0"] = (True, False)
+    probe, seen = _probe()
+    seq._bind_sdpa_layout("sdpa::0", probe)()
+    assert seen == {"k_pre_transposed": True, "v_pre_transposed": False}
