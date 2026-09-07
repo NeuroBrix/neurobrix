@@ -38,5 +38,7 @@ def test_the_tree_gate_proves_a_changed_output_against_the_oracle(tmp_path, monk
     res = C.tree_ab("m", 0, tmp_path / "out", ["--triton"], 10, trees, oracle_on_diff=True)
     assert res["gate"]["identical"] is False
     assert res["oracle"]["corrected_identical"] is True and res["oracle"]["tree"] == "after"
+    assert res["oracle"]["before_diff"]["identical"] is False                 # the output before the fix was not the oracle's
+    assert "before the fix vs the oracle: DIFFERENT" in C.verdict(res)
     assert [c for c in calls if c[2]] == [("oracle", str((tmp_path / "t2" / "src").resolve()), True)]   # the oracle ran from the corrected tree, --sequential
     assert "corrected output IDENTICAL to the sequential oracle" in C.verdict(res)
