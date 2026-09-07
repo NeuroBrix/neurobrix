@@ -711,6 +711,10 @@ class Model:
             fr = (self.state.get("autotune_freeze") or {}).get("snapshot")
             if not fr or st.get("autotune") != fr:
                 return False                   # measured under another kernel-config state: re-run
+        if step == "gate":
+            fr = (self.state.get("autotune_freeze") or {}).get("snapshot")
+            if st.get("policy") != POLICY or not fr or (st.get("autotune") or {}).get("snapshot") != fr:
+                return False                   # a verdict on other arms than the stamped ones: re-gate
         return True
     def mark(self, step, ok, **info):
         self.state["steps"][step] = {"ok": ok, "at": time.strftime("%Y-%m-%dT%H:%M:%S"), **info}
