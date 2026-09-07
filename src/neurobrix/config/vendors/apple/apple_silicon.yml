@@ -276,6 +276,25 @@ precision:
 pipelining:
   max_num_stages: 2
 
+# How work reaches the device.
+#
+# A launch used to commit its command buffer and block on
+# `waitUntilCompleted()` before returning, so every kernel cost a host round
+# trip. Measured 2026-09-07 on TinyLlama decode: 598 us per launch across
+# 10,695 launches, 1,337 of them in a single decode step — 799 ms of an
+# 857 ms step. Metal executes one queue's buffers in commit order, so the
+# wait was never what made the engine correct; it only made every host read
+# of device memory safe by accident. The waits moved to the host accesses
+# themselves and the launch path commits without blocking.
+#
+# `max_command_buffers_in_flight` is what a queue may hold committed and not
+# yet awaited. Metal's own ceiling is 64 per queue and it BLOCKS inside
+# `commandBuffer()` at that point — a stall with nobody's name on it. 32
+# keeps the backpressure ours and visible, at half the ceiling; it is a
+# starting point measured on an M4 Pro, not a hardware constant.
+dispatch:
+  max_command_buffers_in_flight: 32
+
 # Autotune correctness screen. The engine runs every candidate config once and
 # compares its result against a reference config's before timing any of them,
 # because an autotuner that ranks on speed alone selects whichever WRONG

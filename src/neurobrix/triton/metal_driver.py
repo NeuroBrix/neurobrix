@@ -578,8 +578,14 @@ class MetalKernel:
                 Metal.MTLSizeMake(int(groups[0]), int(groups[1]), int(groups[2])),
                 Metal.MTLSizeMake(int(threads), 1, 1))
             encoder.endEncoding()
+            # Committed, not awaited. Metal runs one queue's buffers in commit
+            # order, so the ordering that makes the engine correct is kept;
+            # what the wait used to give — a host that could read device
+            # memory safely afterwards — now comes from the allocator's own
+            # flush at memcpy, memset, sync and free. Measured 2026-09-07:
+            # the wait was 598 us of every launch and 93% of a decode step.
             command_buffer.commit()
-            command_buffer.waitUntilCompleted()
+            runtime.track_committed(int(stream or 0), command_buffer)
         except BaseException:
             # A command buffer holds its queue's in-flight slot until it
             # COMPLETES; one abandoned mid-encode never does, and after 64 the
@@ -594,9 +600,8 @@ class MetalKernel:
             except Exception:                           # pragma: no cover
                 pass
             raise
-        error = command_buffer.error()
-        if error is not None:
-            raise MetalKernelError(f"{self.name} dispatch failed: {error}")
+        # No error to read yet: the buffer has not completed. A failure
+        # surfaces at the flush that waits for it, named there.
 
     def _scalar_buffer_bits(self, index: int, value):
         """A device buffer holding one already-packed scalar."""
@@ -749,11 +754,10 @@ class MetalKernel:
             Metal.MTLSizeMake(int(groups[0]), int(groups[1]), int(groups[2])),
             Metal.MTLSizeMake(int(self.block_size), 1, 1))
         encoder.endEncoding()
+        # Committed, not awaited — see `_dispatch_params`. The error is read
+        # at the flush that waits for this buffer.
         command_buffer.commit()
-        command_buffer.waitUntilCompleted()
-        error = command_buffer.error()
-        if error is not None:
-            raise MetalKernelError(f"{self.name} dispatch failed: {error}")
+        runtime.track_committed(0, command_buffer)
 
 
 #: The launcher hands scalars as (kind, integer) with floats already reduced
