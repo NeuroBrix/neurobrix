@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
-- Triton engine: a pre-transposed weight is read in place by the matmul kernel during prefill instead of being copied once per request (the whole model per prompt); the GEMV wrapper takes a row-contiguous matrix and a strided vector as they are and copies a row-strided matrix exactly once. Outputs byte-identical.
+- Triton engine: a pre-transposed weight is read in place by the matmul kernel during prefill instead of being copied once per request (the whole model per prompt); the GEMV wrapper takes a row-contiguous matrix and a strided vector as they are and copies a row-strided matrix exactly once; on cards without native bf16 the fp16 activation is widened in the matmul and GEMV kernels' registers instead of being copied to fp32 before every matmul. Outputs byte-identical.
 
 ### Added
 - The certified autotune directory, an engine component: `src/neurobrix/config/autotune/<vendor>/<profile>/<kernel>.<dtype>.json`, one file per kernel and per dtype, indexed by the launcher's shape key, each entry carrying the setting retained and its proof (date, engine and backend versions, shape, deviation against the fp64 oracle, the profile's tolerance, the machine) and the settings excluded with their deviation. `neurobrix autotune certify --profile <profile>` fills it for the shapes the zoo met on this machine; `neurobrix autotune check` is its gate (a file without a proof, or whose proof does not re-read, is refused); `neurobrix autotune status` shows what the profile in force is served.
