@@ -463,7 +463,9 @@ class Model:
             verdict = "NEEDS_EXPLANATION"        # bytes differ: the difference must be the closed defect and nothing else
         self.mark("gate", verdict.startswith("PASS"), verdict=verdict, bytes=bytes_verdict, graph=gd)
         log(f"{self.name}: gate {verdict} — bytes {bytes_verdict}; graph: {gd['annotation_changes']} annotation change(s), "
-            f"{gd['arg_witnessed']} shape argument(s) to the witnessed extent, "
+            f"{gd['arg_witnessed']} shape argument(s) of the closed defect "
+            f"(witnessed {sum(1 for r in gd['components'].values() for x in r.get('arg_witnessed_sites', []) if x.get('kind') == 'witnessed')}, "
+            f"symbolized {sum(1 for r in gd['components'].values() for x in r.get('arg_witnessed_sites', []) if x.get('kind') == 'symbolized')}), "
             f"{gd['beyond_annotation']} beyond, corrupted dims {gd['corrupted_before']} → {gd['corrupted_after']}")
         return verdict.startswith("PASS")
 
