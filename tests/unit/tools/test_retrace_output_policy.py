@@ -211,6 +211,7 @@ def test_an_upload_is_deferred_by_the_stores_name_when_the_write_probe_fails(mod
     monkeypatch.setenv("NEUROBRIX_API_TOKEN", "t")
     monkeypatch.setattr(R, "hub_store_health", lambda: 200)
     monkeypatch.setattr(R, "hub_store_write_probe", lambda org, name, token: "503 SlowDownWrite")
+    monkeypatch.setattr(R, "export_readers", lambda cmdlines=None: [])
     monkeypatch.setattr(R, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("nothing must be streamed")))
     assert m.step_upload() is False
     st = m.state["steps"]["upload"]
@@ -225,6 +226,7 @@ def test_an_upload_is_paced_through_the_toolchains_flag(model, monkeypatch):
     monkeypatch.setenv("NEUROBRIX_API_TOKEN", "t")
     monkeypatch.setattr(R, "hub_store_health", lambda: 200)
     monkeypatch.setattr(R, "hub_store_write_probe", lambda org, name, token: 200)
+    monkeypatch.setattr(R, "export_readers", lambda cmdlines=None: [])
     seen = {}
     monkeypatch.setattr(R, "run", lambda cmd, *a, **k: seen.setdefault("cmd", [str(c) for c in cmd]) and 1)
     m.step_upload()
@@ -237,6 +239,7 @@ def _armed_for_upload(m, monkeypatch):
     monkeypatch.setenv("NEUROBRIX_API_TOKEN", "t")
     monkeypatch.setattr(R, "hub_store_health", lambda: 200)
     monkeypatch.setattr(R, "hub_store_write_probe", lambda org, name, token: 200)
+    monkeypatch.setattr(R, "export_readers", lambda cmdlines=None: [])
 
 
 def test_a_new_publication_carries_its_written_entry(model, monkeypatch, tmp_path):
@@ -264,3 +267,21 @@ def test_a_container_with_neither_entry_nor_written_line_is_refused_by_name(mode
     assert m.step_upload() is False
     st = m.state["steps"]["upload"]
     assert st["state"] == "REFUSED" and "no written new-entry line" in st["reason"]
+
+
+def test_the_heavy_readers_of_the_export_are_named():
+    cmds = ["/venv/bin/python /repo/forge/forge.py trace --model CogVideoX-2b --family video --device cuda:0 --path /snap/CogVideoX-2b",
+            "python forge.py build --snapshot-path /hf/Janus-Pro-7B --family vlm --overwrite",
+            "python tools/retrace_zoo.py --models x --gpu 0", "bash upload_loop.sh"]
+    assert R.export_readers(cmds) == ["trace of CogVideoX-2b", "build of Janus-Pro-7B"]
+    assert R.export_readers([]) == []
+
+
+def test_an_upload_waits_for_a_window_with_no_reader(model, monkeypatch):
+    m = model; m.hub = "o/n"
+    _armed_for_upload(m, monkeypatch)
+    monkeypatch.setattr(R, "export_readers", lambda cmdlines=None: ["trace of CogVideoX-2b"])
+    monkeypatch.setattr(R, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("nothing must stream")))
+    assert m.step_upload() is False
+    st = m.state["steps"]["upload"]
+    assert st["state"] == "DEFERRED" and "trace of CogVideoX-2b" in st["reason"]
