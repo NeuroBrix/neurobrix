@@ -294,6 +294,14 @@ pipelining:
 # starting point measured on an M4 Pro, not a hardware constant.
 dispatch:
   max_command_buffers_in_flight: 32
+  # Dispatches one command buffer carries before the stream commits it. A
+  # NeuroBrix stream is one command buffer with one serialised compute
+  # encoder; this bounds how long the host waits for a result and how much
+  # work a single failure takes down with it. It is not a correctness knob —
+  # the encoder's own barriers keep the order at any value. A decode step of
+  # TinyLlama encodes ~1,350 dispatches, so 512 puts it in three buffers
+  # where one per launch put it in 1,505.
+  max_dispatches_per_command_buffer: 512
 
 # Autotune correctness screen. The engine runs every candidate config once and
 # compares its result against a reference config's before timing any of them,

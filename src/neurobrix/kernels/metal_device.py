@@ -235,6 +235,27 @@ class MetalRuntime:
         self._pending: Dict[int, list] = {}
         self._pending_cap: Optional[int] = None
 
+        # The OPEN command buffer of each stream, and the encoder inside it.
+        #
+        # A NeuroBrix stream means ordered work that synchronises when it is
+        # asked to, and on Metal that is one command buffer with one
+        # serialised compute encoder — opened at the first launch, committed
+        # at a synchronisation point, an event, or a host read. It is the
+        # same contract a CUDA stream keeps; this is where it is kept here.
+        #
+        # It was one command buffer per LAUNCH until 2026-09-07, which put
+        # 1,505 of them in a single decode step: 501 ms of the step's 593 ms
+        # was draining them, and Metal's own GPUStartTime/GPUEndTime summed to
+        # 806 ms across those buffers — more than the step itself, because
+        # what that sum measures at this granularity is residency, not work.
+        #
+        # `_open` holds (command_buffer, encoder, kind, dispatches). A request
+        # for a different encoder kind ends the current one and opens the new
+        # one in the SAME buffer, so a blit and the kernels around it keep
+        # their order without a commit between them.
+        self._open: Dict[int, list] = {}
+        self._dispatch_cap: Optional[int] = None
+
         # `DeviceAllocator.event_elapsed_ms` sets `.restype` on the entry
         # point before calling it — a ctypes idiom that a bound method
         # rejects. A function object accepts attributes, so this one entry
@@ -539,6 +560,99 @@ class MetalRuntime:
         if error is not None:
             raise RuntimeError(f"Metal command buffer failed: {error}")
 
+    def _dispatches_per_buffer(self) -> int:
+        """How many dispatches one command buffer may carry before it is
+        committed, from `dispatch.max_dispatches_per_command_buffer` in the
+        hardware profile. It bounds latency and how much work a single
+        failure takes down with it; it is not a correctness knob."""
+        if self._dispatch_cap is None:
+            cap = 0
+            try:
+                from neurobrix.kernels.wrappers import _arch_dispatch_param
+                cap = int(_arch_dispatch_param(
+                    "max_dispatches_per_command_buffer", 0) or 0)
+            except Exception:
+                cap = 0
+            self._dispatch_cap = cap if cap > 0 else 512
+        return self._dispatch_cap
+
+    def encoder_for(self, stream: int, kind: str = "compute"):
+        """The open encoder of this stream, opening one if there is none.
+
+        Returns `(command_buffer, encoder)`. The caller encodes and then calls
+        `note_dispatch`; it must not commit — the stream owns that.
+        """
+        key = int(stream or 0)
+        with self._lock:
+            entry = self._open.get(key)
+            if entry is not None and entry[2] != kind:
+                # Same buffer, different encoder: end the current one and open
+                # the kind asked for, so ordering is kept without a commit.
+                entry[1].endEncoding()
+                entry[1] = self._new_encoder(entry[0], kind)
+                entry[2] = kind
+                return entry[0], entry[1]
+            if entry is not None:
+                return entry[0], entry[1]
+            queue = self._resolve_queue(key)
+            if queue is None:
+                return None, None
+            command_buffer = queue.commandBuffer()
+            if command_buffer is None:                  # pragma: no cover
+                return None, None
+            encoder = self._new_encoder(command_buffer, kind)
+            if encoder is None:                         # pragma: no cover
+                command_buffer.commit()
+                return None, None
+            self._open[key] = [command_buffer, encoder, kind, 0]
+            return command_buffer, encoder
+
+    @staticmethod
+    def _new_encoder(command_buffer, kind: str):
+        if kind == "blit":
+            return command_buffer.blitCommandEncoder()
+        # `computeCommandEncoder()` is MTLDispatchTypeSerial: the dispatches
+        # inside it run in order with the barriers Metal inserts itself,
+        # which is what makes one encoder able to carry a whole graph.
+        return command_buffer.computeCommandEncoder()
+
+    def note_dispatch(self, stream: int) -> None:
+        """One more piece of work encoded on this stream; commit if the
+        buffer has carried enough of them."""
+        key = int(stream or 0)
+        with self._lock:
+            entry = self._open.get(key)
+            if entry is None:
+                return
+            entry[3] += 1
+            if entry[3] < self._dispatches_per_buffer():
+                return
+        self.close_stream(key)
+
+    def close_stream(self, stream: Optional[int] = None) -> None:
+        """End the open encoder and commit the buffer, without waiting."""
+        keys = [int(stream or 0)] if stream is not None else list(self._open)
+        for key in keys:
+            with self._lock:
+                entry = self._open.pop(key, None)
+            if entry is None:
+                continue
+            command_buffer, encoder = entry[0], entry[1]
+            try:
+                encoder.endEncoding()
+            except Exception:                           # pragma: no cover
+                pass
+            command_buffer.commit()
+            self.track_committed(key, command_buffer)
+
+    def abandon_stream(self, stream: int) -> None:
+        """Close the stream's buffer after an encoding failure.
+
+        A command buffer holds its queue's in-flight slot from creation until
+        it COMPLETES; one abandoned mid-encode never completes and the slot is
+        gone for the life of the process."""
+        self.close_stream(int(stream or 0))
+
     def _blit(self, dst_addr: int, src_addr: int, nbytes: int):
         """A device-to-device copy as GPU work on the kernels' own queue.
 
@@ -550,18 +664,14 @@ class MetalRuntime:
         src = self.buffer_for_pointer(src_addr)
         if dst is None or src is None or dst[0] is None or src[0] is None:
             return None
-        command_buffer = self._queue.commandBuffer()
-        if command_buffer is None:                      # pragma: no cover
-            return None
-        encoder = command_buffer.blitCommandEncoder()
+        # Into the stream's own buffer, as a blit encoder between the compute
+        # encoders around it: one command buffer, order kept by Metal.
+        _cb, encoder = self.encoder_for(0, kind="blit")
         if encoder is None:                             # pragma: no cover
-            command_buffer.commit()
             return None
         encoder.copyFromBuffer_sourceOffset_toBuffer_destinationOffset_size_(
             src[0], src[1], dst[0], dst[1], nbytes)
-        encoder.endEncoding()
-        command_buffer.commit()
-        self.track_committed(0, command_buffer)
+        self.note_dispatch(0)
         return _OK
 
     def flush(self, queue_handle: Optional[int] = None) -> int:
@@ -571,6 +681,10 @@ class MetalRuntime:
         host may read device memory only after it, and every entry point that
         does — memcpy, memset, sync, stream_sync, free — goes through it.
         """
+        # Work still being encoded has not been committed, so waiting on the
+        # pending list alone would return before it ran. The stream is closed
+        # first: that is what "synchronise" means for a stream that batches.
+        self.close_stream(None if queue_handle is None else int(queue_handle or 0))
         with self._lock:
             if queue_handle is None:
                 buffers = [cb for lst in self._pending.values() for cb in lst]
