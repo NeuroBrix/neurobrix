@@ -99,6 +99,17 @@ def scrub_provenance(node):
     return node
 #: The toolchain's registry key when it differs from the installed container's name (the hub's name).
 REGISTRY_ALIAS = {"Sana-1600M-MultiLing": "Sana_1600M_1024px_MultiLing"}
+REGISTRY = "https://neurobrix.es"
+
+# The precision policy BOTH arms of the gate run under. A retraced graph carries a new
+# signature, so the calibration record embedded in the container (measured on the old graph)
+# is refused on it and the runtime takes the conservative path — while the old arm, left to the
+# default policy, applies its islands (Kokoro 2026-09-07 05:58: 5.2 dB between the arms with
+# identical transcripts; VibeVoice 04:xx: 7.5 dB). One policy on both arms isolates the graph;
+# the calibration lever re-measures a retraced container afterwards. Outputs carry the policy
+# they were measured under, and the gate compares two arms under the same one, never otherwise.
+POLICY_ENV = {"NBX_ACTIVATIONS_FP16_SAFE": "0"}
+POLICY = "conservative (NBX_ACTIVATIONS_FP16_SAFE=0)"
 
 
 def log(msg):
@@ -455,6 +466,34 @@ def witnessed_arg_changes(old_op: dict, new_op: dict, tensors_new: dict):
 HUB_STORE_HEALTH = "http://10.0.0.36:9000/minio/health/cluster"
 
 
+def stream_under_probe(url: str, dest: Path, mbps: float, logfile: Path, probe_every: float = 2.0, probe_limit: float = 5.0):
+    """`url` streamed into `dest` at no more than `mbps` MB/s; every `probe_every` seconds each
+    shared export must list within `probe_limit` seconds, else the stream stops and the export is
+    named (None). Returns the bytes written. The URL itself is never written anywhere."""
+    import requests
+    from snapshot_refresh import _export_answers
+    chunk = 1 << 20
+    with open(logfile, "a") as fh, requests.get(url, stream=True, timeout=60) as r, open(dest, "wb") as out:
+        r.raise_for_status()
+        fh.write(f"stream → {dest} at ≤ {mbps} MB/s; export probe every {probe_every} s, limit {probe_limit} s\n"); fh.flush()
+        t0 = time.time(); got = 0; last_probe = t0
+        for buf in r.iter_content(chunk):
+            if not buf:
+                continue
+            out.write(buf); got += len(buf)
+            ahead = got / (mbps * 1e6) - (time.time() - t0)
+            if ahead > 0:
+                time.sleep(ahead)
+            if time.time() - last_probe >= probe_every:
+                last_probe = time.time()
+                for d in SHARED_STORAGE_EXPORTS:
+                    if _export_answers(d, probe_limit) is None:
+                        fh.write(f"[probe] {d} did not list within {probe_limit} s after {got / 1e6:.0f} MB — the read stops here, by name\n")
+                        return None
+        fh.write(f"done: {got} bytes in {time.time() - t0:.0f} s\n")
+    return got
+
+
 SHARED_STORAGE_EXPORTS = ("/home/mlops/models", str(Path.home() / ".neurobrix" / "cache"), "/home/mlops/hf_snapshots")
 
 
@@ -543,7 +582,13 @@ class Model:
         self.registry_name = REGISTRY_ALIAS.get(name, name)
         self.new_name = (self.state["steps"].get("install") or {}).get("installed_name") or name
 
-    def done(self, step): return (self.state["steps"].get(step) or {}).get("ok") is True
+    def done(self, step):
+        st = self.state["steps"].get(step) or {}
+        if st.get("ok") is not True:
+            return False
+        if step in ("old_outputs", "new_outputs") and st.get("policy") != POLICY:
+            return False                       # measured under another policy: another arm, re-run
+        return True
     def mark(self, step, ok, **info):
         self.state["steps"][step] = {"ok": ok, "at": time.strftime("%Y-%m-%dT%H:%M:%S"), **info}
         self.state_path.write_text(json.dumps(self.state, indent=1))
@@ -573,12 +618,8 @@ class Model:
                 continue
             cmd = [PY, "-c", "import sys; from neurobrix.cli import main; sys.exit(main())", "run", "--model", name] + req + flag + ["--output", str(outp)]
             t0 = time.time()
-            # One precision policy on both arms — the conservative path, no calibration islands:
-            # a retraced graph carries a new signature, so the old graph's record is refused on it
-            # while the old arm applied its own (VibeVoice, 2026-09-07: 7.5 dB between the arms
-            # with identical transcripts). The gate isolates the graph; the calibration lever
-            # re-measures the retraced container afterwards.
-            env = self.env(); env["NBX_ACTIVATIONS_FP16_SAFE"] = "0"
+            # One precision policy on both arms (POLICY above).
+            env = self.env(); env.update(POLICY_ENV)
             rc = run(cmd, env, self.dir / f"{tag}_{arm}.log", self.args.timeout)
             logtext = (self.dir / f"{tag}_{arm}.log").read_text(errors="replace")
             unsupported = "UNSUPPORTED PATH" in logtext and "encoding" in logtext
@@ -587,13 +628,130 @@ class Model:
         return res
 
     # -- steps --------------------------------------------------------------
+    def set_aside(self, prefix: str, why: str) -> None:
+        """Outputs of another attempt or another policy are kept aside, never mixed with this one's."""
+        stale = [f for f in sorted(self.dir.glob(f"{prefix}*")) if f.is_file()]
+        if not stale:
+            return
+        keep = self.dir / f"superseded_{time.strftime('%H%M%S')}_{prefix.rstrip('_')}"
+        keep.mkdir(exist_ok=True)
+        for f in stale:
+            f.rename(keep / f.name)
+        (keep / "WHY.txt").write_text(why + "\n")
+
+    def cache_holds_backup(self):
+        """True when the cache's container is the one the backup holds (same build), False when
+        another build sits there, None without a backup or a cache. The state cannot answer this:
+        a state reset for a re-trace drops its install step while the cache keeps the build."""
+        cm = CACHE / self.name / "manifest.json"
+        bm = Path(self.args.backup) / self.name / "manifest.json"
+        if not (cm.exists() and bm.exists()):
+            return None
+        return json.loads(cm.read_text()).get("created_at") == json.loads(bm.read_text()).get("created_at")
+
     def step_old_outputs(self):
         if self.done("old_outputs"): return True
-        if not (CACHE / self.name / "manifest.json").exists():
+        st = self.state["steps"].get("old_outputs") or {}
+        if st.get("ok") is True:
+            self.set_aside("old_", f"measured under the policy '{st.get('policy') or 'default'}'; "
+                                   f"the gate runs both arms under '{POLICY}'")
+        restored = False
+        if self.cache_holds_backup() is False:
+            # The cache holds another build (the retraced container, or a pass's): the old arm
+            # runs on the hub's previous object, brought back through the standard install.
+            if not self.restore_previous():
+                return False
+            restored = True
+        elif not (CACHE / self.name / "manifest.json").exists():
             self.mark("old_outputs", False, error="no installed container"); return False
         res = self.outputs("old")
         ok = all(v["rc"] == 0 or v.get("n_a") for v in res.values())
-        self.mark("old_outputs", ok, runs=res)
+        self.mark("old_outputs", ok, runs=res, policy=POLICY,
+                  container="the hub's previous object" if restored else "the installed container")
+        if restored and self.done("build") and self.done("install"):
+            ok = self.reinstall_new() and ok    # the retraced container goes back into the cache
+        return ok
+
+    def restore_previous(self) -> bool:
+        """The hub's CURRENT object — the container before this retrace, nothing was replaced yet —
+        installed back into the cache for the old arm, through the standard install. Read through
+        the admin URL (the public endpoint counts downloads), streamed under the rate cap with the
+        export probe: the store shares its storage with the exports, and a stream beside the
+        batteries' reads stalled them six times on 2026-09-07. The object's identity is checked
+        against the backup (same build) before it is installed."""
+        if not self.hub:
+            self.mark("old_outputs", False, error="no hub entry to restore the previous object from"); return False
+        try:
+            repo_env.require("NEUROBRIX_API_TOKEN")
+        except repo_env.MissingVariable as exc:
+            self.mark("old_outputs", False, state="REFUSED", reason=str(exc))
+            log(f"{self.name}: restore {exc}"); return False
+        health = hub_store_health()
+        if health != 200:
+            self.mark("old_outputs", False, state="DEFERRED", reason=f"hub object store: {health}; the previous object is read when it answers 200")
+            log(f"{self.name}: restore DEFERRED — hub object store: {health}"); return False
+        import zipfile
+        import requests                                # the client the build toolchain publishes with (the edge refuses urllib's agent)
+        org, name = self.hub.split("/", 1)
+        logfile = self.dir / "restore.log"
+        rotate(logfile)
+        t0 = time.time()
+        try:
+            r = requests.get(f"{REGISTRY}/api/models/{org}/{name}", timeout=30)
+            r.raise_for_status()
+            body = r.json(); rec = body.get("model", body)
+            key, size = rec.get("fileUrl"), int(rec.get("fileSize") or 0)
+            with open(logfile, "a") as fh:
+                fh.write(f"previous object of {self.hub}: {key} ({size} bytes, updated {rec.get('updatedAt')})\n")
+            v = requests.get(f"{REGISTRY}/api/admin/upload", params={"key": key}, timeout=30,
+                             headers={"Authorization": f"Bearer {os.environ['NEUROBRIX_API_TOKEN']}"})
+            v.raise_for_status()
+            url = v.json()["url"]                       # a read URL: never written anywhere
+        except Exception as exc:  # noqa: BLE001 — named, never a traceback that ends the chain
+            reason = f"the hub did not give the previous object's read URL: {type(exc).__name__}: {str(exc)[:160]}"
+            self.mark("old_outputs", False, state="DEFERRED", reason=reason)
+            log(f"{self.name}: restore DEFERRED — {reason}"); return False
+        dest = Path(self.args.tmp) / "previous" / self.name / "model.nbx"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            got = stream_under_probe(url, dest, self.args.restore_mbps, logfile)
+        except Exception as exc:  # noqa: BLE001
+            reason = f"the read of the previous object failed: {type(exc).__name__}: {str(exc)[:160]}"
+            self.mark("old_outputs", False, state="DEFERRED", reason=reason)
+            log(f"{self.name}: restore DEFERRED — {reason}"); return False
+        if got is None:
+            self.mark("old_outputs", False, state="DEFERRED", reason="an export stopped answering during the read of the previous object (restore.log names it)")
+            log(f"{self.name}: restore DEFERRED — an export stopped answering during the read; stopped by name"); return False
+        if got != size:
+            self.mark("old_outputs", False, error=f"previous object: {got} bytes read, the hub records {size}")
+            log(f"{self.name}: restore FAILED — {got} bytes read, the hub records {size}"); return False
+        with zipfile.ZipFile(dest) as zf:
+            created = json.loads(zf.read("manifest.json")).get("created_at")
+        backed = json.loads((Path(self.args.backup) / self.name / "manifest.json").read_text()).get("created_at")
+        if created != backed:
+            self.mark("old_outputs", False, error=f"the hub's object is not the container that was backed up (built {created}, backup {backed})")
+            log(f"{self.name}: restore FAILED — the hub's object was built {created}, the backup {backed}"); return False
+        rc = run([PY, str(FORGE), "local", str(dest), "--overwrite"], self.env(tree=False), self.dir / "restore_install.log", 3600, cwd=str(REPO / "forge"))
+        ok = rc == 0 and self.cache_holds_backup() is True
+        self.state["steps"]["previous_object"] = {"ok": ok, "at": time.strftime("%Y-%m-%dT%H:%M:%S"), "key": key, "bytes": got,
+                                                  "built": created, "seconds": round(time.time() - t0, 1), "rc": rc}
+        self.state_path.write_text(json.dumps(self.state, indent=1))
+        if not ok:
+            self.mark("old_outputs", False, error=f"the previous object did not install as the backed-up container (rc {rc})")
+            log(f"{self.name}: restore FAILED — the previous object did not install as the backed-up container (rc {rc})")
+            return False
+        log(f"{self.name}: previous object restored from the hub ({got / 1e6:.0f} MB in {time.time() - t0:.0f} s, built {created}); the old arm runs on it")
+        return True
+
+    def reinstall_new(self) -> bool:
+        """The retraced container back into the cache after the old arm ran on the previous object."""
+        nbx = (self.state["steps"].get("build") or {}).get("nbx")
+        if not nbx or not Path(nbx).exists():
+            self.mark("install", False, error="the retraced .nbx is no longer staged; the chain rebuilds it"); return False
+        rc = run([PY, str(FORGE), "local", nbx, "--overwrite"], self.env(tree=False), self.dir / "install.log", 3600, cwd=str(REPO / "forge"))
+        ok = rc == 0 and (CACHE / self.new_name / "manifest.json").exists() and self.cache_holds_backup() is False
+        self.mark("install", ok, rc=rc, installed_name=self.new_name, reinstalled="after the old arm ran on the hub's previous object")
+        shutil.rmtree(Path(self.args.tmp) / "previous" / self.name, ignore_errors=True)
         return ok
 
     def snapshot(self):
@@ -697,18 +855,13 @@ class Model:
 
     def step_new_outputs(self):
         if self.done("new_outputs"): return True
-        # A previous attempt's outputs describe a previous container: never reused as this one's.
-        # (The old container's outputs are cached across attempts — that container never changes.)
-        stale = sorted(self.dir.glob("new_*"))
-        if stale:
-            keep = self.dir / f"superseded_{time.strftime('%H%M%S')}"
-            keep.mkdir(exist_ok=True)
-            for f in stale:
-                if f.is_file():
-                    f.rename(keep / f.name)
+        # A previous attempt's outputs describe a previous container (or another policy): never reused as this one's.
+        st = self.state["steps"].get("new_outputs") or {}
+        self.set_aside("new_", "a previous attempt's outputs" if st.get("policy") == POLICY else
+                       f"measured under the policy '{st.get('policy') or 'default'}'; the gate runs both arms under '{POLICY}'")
         res = self.outputs("new")
         ok = all(v["rc"] == 0 or v.get("n_a") for v in res.values())
-        self.mark("new_outputs", ok, runs=res)
+        self.mark("new_outputs", ok, runs=res, policy=POLICY)
         return ok
 
     def graph_diff(self) -> dict:
@@ -799,8 +952,14 @@ class Model:
 
     def step_gate(self):
         if self.done("gate"): return True
-        old = (self.state["steps"].get("old_outputs") or {}).get("runs") or {}
-        new = (self.state["steps"].get("new_outputs") or {}).get("runs") or {}
+        so = self.state["steps"].get("old_outputs") or {}
+        sn = self.state["steps"].get("new_outputs") or {}
+        if so.get("policy") != sn.get("policy"):
+            reason = (f"the two arms ran under different precision policies: old '{so.get('policy') or 'default'}', "
+                      f"new '{sn.get('policy') or 'default'}' — a difference between them would not be the graph's")
+            self.mark("gate", False, verdict="FAIL", reason=reason)
+            log(f"{self.name}: gate FAIL — {reason}"); return False
+        old, new = so.get("runs") or {}, sn.get("runs") or {}
         bytes_verdict = {}
         for arm in ("sequential", "triton"):
             o, nn = old.get(arm) or {}, new.get(arm) or {}
@@ -828,8 +987,8 @@ class Model:
             verdict = "PASS (no corrupted dim was present in the old container)"
         else:
             verdict = "NEEDS_EXPLANATION"        # bytes differ: the difference must be the closed defect and nothing else
-        self.mark("gate", verdict.startswith("PASS"), verdict=verdict, bytes=bytes_verdict, graph=gd)
-        log(f"{self.name}: gate {verdict} — bytes {bytes_verdict}; graph: {gd['annotation_changes']} annotation change(s), "
+        self.mark("gate", verdict.startswith("PASS"), verdict=verdict, bytes=bytes_verdict, graph=gd, policy=POLICY)
+        log(f"{self.name}: gate {verdict} — both arms under {POLICY}; bytes {bytes_verdict}; graph: {gd['annotation_changes']} annotation change(s), "
             f"{gd['arg_witnessed']} shape argument(s) of the closed defect "
             f"(witnessed {sum(r.get('arg_kinds', {}).get('witnessed', 0) for r in gd['components'].values())}, "
             f"symbolized {sum(r.get('arg_kinds', {}).get('symbolized', 0) for r in gd['components'].values())}, "
@@ -907,6 +1066,8 @@ def main():
     ap.add_argument("--extra", default="", help="extra request args for the family protocol")
     ap.add_argument("--timeout", type=int, default=7200)
     ap.add_argument("--trace-timeout", type=int, default=14400)
+    ap.add_argument("--restore-mbps", type=float, default=10.0,
+                    help="the rate cap on a read of the hub's previous object (its store shares the exports' storage)")
     ap.add_argument("--stop-at", default=None, help="stop after this step (e.g. gate)")
     ap.add_argument("--only-upload", action="store_true",
                     help="run the upload step only, for a container whose gate is PASS; anything else is refused by name "
