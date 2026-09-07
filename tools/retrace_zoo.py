@@ -468,6 +468,33 @@ def witnessed_arg_changes(old_op: dict, new_op: dict, tensors_new: dict):
 HUB_STORE_HEALTH = "http://10.0.0.36:9000/minio/health/cluster"
 
 
+def export_readers(cmdlines=None) -> list:
+    """The heavy readers of the shared export running on this machine: a trace or a build of
+    the build toolchain streams a whole snapshot from the export, and the store — on the same
+    storage — then fails its write deadline (a paced 64 MB upload came back SlowDownWrite at
+    06:38 on 2026-09-07 while phase B's trace of CogVideoX-2b read its snapshot; the same
+    store had taken 192 MB four minutes earlier). Two heavy campaigns never share the export:
+    an upload waits for a window with no reader."""
+    if cmdlines is None:
+        cmdlines = []
+        me = os.getpid()
+        for d in Path("/proc").iterdir():
+            if not d.name.isdigit() or int(d.name) == me:
+                continue
+            try:
+                cmdlines.append((d / "cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace"))
+            except OSError:
+                continue
+    found = []
+    for c in cmdlines:
+        if "forge.py trace" in c or "forge.py build" in c or "forge.py snap" in c:
+            words = c.split()
+            what = next((w for w in ("trace", "build", "snap") if f"forge.py {w}" in c), "?")
+            model = next((words[i + 1] for i, w in enumerate(words) if w in ("--model", "--name", "--snapshot-path") and i + 1 < len(words)), "?")
+            found.append(f"{what} of {Path(model).name}")
+    return found
+
+
 def hub_store_write_probe(org: str, name: str, token: str, registry: str = REGISTRY):
     """200 when the store takes a write today; otherwise the store's own answer, by name.
 
@@ -1053,6 +1080,11 @@ class Model:
             # An explicit refusal that names the variable and the file — never a state that waits without saying why.
             self.mark("upload", False, state="REFUSED", reason=str(exc), nbx=nbx)
             log(f"{self.name}: upload {exc}")
+            return False
+        readers = export_readers()
+        if readers:
+            self.mark("upload", False, state="DEFERRED", reason=f"the export is read by {', '.join(readers)}; the upload waits for a window with no reader", nbx=nbx)
+            log(f"{self.name}: upload DEFERRED — the export is read by {', '.join(readers)}; the upload waits for a window with no reader")
             return False
         health = hub_store_health()
         if health != 200:
