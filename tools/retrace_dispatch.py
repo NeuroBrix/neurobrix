@@ -24,12 +24,25 @@ PROGRESS = OUT / "snap" / "progress.log"
 ALIAS = {"Sana-1600M-MultiLing": "Sana_1600M_1024px_MultiLing"}
 
 
+SNAP_LOGS = Path(__file__).resolve().parents[1] / "validation_outputs" / "retrace_2026_09_07" / "snap"
+
+
 def has_snapshot(name: str) -> bool:
+    """A snapshot is present only when it is COMPLETE: a directory with files in it is what a
+    stopped download leaves behind (chatterbox 2.2 GB, openaudio 1.6 GB, granite 632 KB on
+    2026-09-07). Complete = no partial file under it, and — for a repository the re-download
+    tool ever touched — the toolchain's completion marker."""
     for root in (Path("/home/mlops/hf_snapshots"), Path.home() / ".cache" / "neurobrix" / "hf_snapshots"):
-        for nm in (ALIAS.get(name, name), name):
-            p = root / nm
-            if p.is_dir() and any(p.iterdir()) and not (p / ".incomplete").exists():
-                return True
+        for cand in (ALIAS.get(name, name), name):
+            p = root / cand
+            if not (p.is_dir() and any(p.iterdir())):
+                continue
+            if any(p.rglob("*.incomplete")):
+                return False
+            touched = (SNAP_LOGS / f"{cand}.log").exists()
+            if touched and not (p / ".snapshot_complete").exists():
+                return False
+            return True
     return False
 
 
