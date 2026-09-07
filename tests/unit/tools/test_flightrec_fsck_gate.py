@@ -116,3 +116,12 @@ def test_wait_blocks_while_the_wrapper_runs_then_follows_the_record(repo, monkey
     _record("in_flight", pid=4242)
     assert F.cmd_wait(types.SimpleNamespace(id="r1", every=0.01)) == 0
     assert len(seen) == 3
+
+
+def test_run_accepts_a_comma_list_of_cards(repo):
+    import flightrec as F2
+    args = F2.main.__globals__["argparse"].ArgumentParser()  # noqa: F841  (the parser is built in main)
+    import subprocess, sys as _sys
+    out = subprocess.run([_sys.executable, str(Path(F2.__file__)), "run", "--label", "t", "--gpu", "2,3", "--", "true"],
+                         capture_output=True, text=True, cwd=repo, env={"PATH": "/usr/bin:/bin", "PYTHONPATH": ""})
+    assert "invalid int value" not in out.stderr

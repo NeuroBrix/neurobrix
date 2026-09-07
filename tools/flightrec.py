@@ -348,7 +348,8 @@ def main() -> int:
     p_run.add_argument("--label", required=True)
     p_run.add_argument("--note", default=None,
                        help="campaign context: what step, what comes next")
-    p_run.add_argument("--gpu", type=int, default=None)
+    p_run.add_argument("--gpu", default=None,
+                       help="the card, or a comma list of cards one placement spreads over (e.g. 2,3)")
     p_run.add_argument("--log", default=None,
                        help="path to the job's own log file, for the "
                             "resume block")
