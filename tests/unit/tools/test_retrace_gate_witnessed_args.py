@@ -186,3 +186,31 @@ def test_a_vendor_minus_one_may_become_the_derived_output_dim():
     new2 = copy.deepcopy(old); new2["attributes"]["shape"][0] = wrong; new2["attributes"]["args"][1]["value"][0] = wrong
     t2 = copy.deepcopy(tensors); t2["aten.view::23::out_0"]["symbolic_shape"]["dims"][0] = wrong
     assert R.witnessed_arg_changes(old, new2, t2) is None
+
+
+# ── the batch split restored: [1, σ·s, D] → [σ, s, D] ────────────────────────────────
+B = {"type": "symbol", "id": "s0", "trace": 1}; SEQ = {"type": "symbol", "id": "s1", "trace": 7}
+FOLD = {"type": "mul", "left": B, "right": SEQ, "trace": 7}
+
+
+def test_a_folded_batch_split_back_is_admitted():
+    old = {"op_uid": "aten.view::2", "op_type": "aten.view", "input_tensor_ids": ["m::out_0"], "output_tensor_ids": ["aten.view::2::out_0"],
+           "attributes": {"args": [{"type": "tensor", "tensor_id": "m::out_0"}, {"type": "list", "value": [1, FOLD, 1280]}], "kwargs": {}, "shape": [1, FOLD, 1280]}}
+    new = copy.deepcopy(old)
+    for lst in (new["attributes"]["shape"], new["attributes"]["args"][1]["value"]):
+        lst[0], lst[1] = B, SEQ
+    tensors = {"m::out_0": {"shape": [7, 1280], "symbolic_shape": {"dims": [FOLD, 1280], "concrete": [7, 1280]}},
+               "aten.view::2::out_0": {"shape": [1, 7, 1280], "symbolic_shape": {"dims": [B, SEQ, 1280], "concrete": [1, 7, 1280]}}}
+    sites = R.witnessed_arg_changes(old, new, tensors)
+    assert sites is not None and len(sites) == 2 and all(x["kind"] == "batch-split-restored" for x in sites)
+
+
+def test_the_fold_itself_is_refused():
+    """The reverse direction — a symbol turned into a literal 1 — is the regression, never admitted."""
+    new_is_old = {"op_uid": "aten.view::2", "op_type": "aten.view", "input_tensor_ids": ["m::out_0"], "output_tensor_ids": ["aten.view::2::out_0"],
+                  "attributes": {"args": [{"type": "tensor", "tensor_id": "m::out_0"}, {"type": "list", "value": [B, SEQ, 1280]}], "kwargs": {}, "shape": [B, SEQ, 1280]}}
+    folded = copy.deepcopy(new_is_old)
+    for lst in (folded["attributes"]["shape"], folded["attributes"]["args"][1]["value"]):
+        lst[0], lst[1] = 1, FOLD
+    tensors = {"aten.view::2::out_0": {"shape": [1, 7, 1280], "symbolic_shape": {"dims": [1, FOLD, 1280], "concrete": [1, 7, 1280]}}}
+    assert R.witnessed_arg_changes(new_is_old, folded, tensors) is None
