@@ -70,6 +70,56 @@ def test_a_caller_that_already_said_so_is_not_overridden():
     assert seen["k_pre_transposed"] is False
 
 
+def test_the_layout_is_only_offered_to_a_callable_that_can_receive_it():
+    """A per-op_uid interceptor is usually a tiling hook with a fixed
+    signature. Offering it a keyword it does not declare would turn a
+    correct layout into a TypeError, so the parameter is offered only when
+    the callable declares it or takes **kwargs."""
+    from neurobrix.core.runtime.graph_executor import GraphExecutor
+    ex = GraphExecutor.__new__(GraphExecutor)
+    attrs = {"nbx_k_pre_transposed": True, "nbx_v_pre_transposed": False}
+    sdpa = "aten::scaled_dot_product_attention"
+
+    def takes_it(q, k, v, k_pre_transposed=None):
+        return None
+
+    def takes_kwargs(q, k, v, **kw):
+        return None
+
+    def takes_neither(q, k, v):
+        return None
+
+    assert ex._sdpa_layout_kwargs(sdpa, attrs, takes_it) == {"k_pre_transposed": True}
+    assert ex._sdpa_layout_kwargs(sdpa, attrs, takes_kwargs) == {
+        "k_pre_transposed": True, "v_pre_transposed": False}
+    assert ex._sdpa_layout_kwargs(sdpa, attrs, takes_neither) == {}
+    assert ex._sdpa_layout_kwargs("aten::mm", attrs, takes_kwargs) == {}
+    assert ex._sdpa_layout_kwargs(sdpa, {}, takes_kwargs) == {}
+
+
+def test_every_interceptor_call_site_offers_the_layout():
+    """The three places an interceptor is CALLED without a compile step to
+    bind onto — the ATen sequential engine's two branches and the
+    triton-sequential loop's — must each pass through the helper."""
+    import inspect as _inspect
+    from neurobrix.core.runtime.graph_executor import GraphExecutor
+    src = Path(_inspect.getsourcefile(GraphExecutor)).read_text()
+    tree = ast.parse(src)
+    offenders = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Subscript)):
+            continue
+        holder = node.func.value
+        if not (isinstance(holder, ast.Attribute)
+                and holder.attr in ("_op_interceptors", "_op_uid_interceptors")):
+            continue
+        offenders.append(node.lineno)
+    assert not offenders, (
+        "an interceptor is called directly at these lines instead of through "
+        "a local bound with _sdpa_layout_kwargs, so an attention op reaching "
+        "it would lose its recorded layout: " + ", ".join(map(str, offenders)))
+
+
 @pytest.mark.parametrize("module", [TritonSequence, CompiledSequence])
 def test_every_assignment_to_op_func_goes_through_the_helper(module):
     """The invariant that keeps this closed as the engines grow."""
