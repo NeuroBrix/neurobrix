@@ -352,14 +352,21 @@ class TritonDtypeEngine:
         pinned op makes the wrapper's own policy produce fp32, the same
         thing ATen does for fp32 inputs on the compiled engine. Restored
         after the call, nested-safe."""
+        widens = bool(getattr(func, "_nbx_widens_on_load", False))
         def fp32_func(*args, **kwargs):
             from neurobrix.kernels import wrappers as _w
-            new_args = tuple(
-                a.to(NBXDtype.float32).contiguous()
-                    if _is_float_tensor(a) and _get_nbx_dtype(a) != NBXDtype.float32
-                else (a.contiguous() if hasattr(a, 'contiguous') and hasattr(a, 'is_contiguous') and not a.is_contiguous() else a)
-                for a in args
-            )
+            if widens:
+                # the island holds through the store dtype asked of a wrapper whose kernel
+                # widens its loads: no materialised fp32 input (the copy lever, 2026-09-07)
+                new_args = args
+                kwargs = {**kwargs, "out_dtype": NBXDtype.float32}
+            else:
+                new_args = tuple(
+                    a.to(NBXDtype.float32).contiguous()
+                        if _is_float_tensor(a) and _get_nbx_dtype(a) != NBXDtype.float32
+                    else (a.contiguous() if hasattr(a, 'contiguous') and hasattr(a, 'is_contiguous') and not a.is_contiguous() else a)
+                    for a in args
+                )
             prev = _w.get_compute_dtype()
             _w.set_compute_dtype(NBXDtype.float32)
             try:
@@ -387,8 +394,17 @@ class TritonDtypeEngine:
         still picks up the new value.
         """
         compute = self.compute_dtype
+        widens = bool(getattr(func, "_nbx_widens_on_load", False))
         def cast_back_func(*args, **kwargs):
             from neurobrix.kernels import wrappers as _w
+            if widens:
+                # The wrapper's kernel widens its loads to fp32 and stores in the dtype asked:
+                # no materialised fp32 input, no cast back — the output is stored once in the
+                # dtype this wrap would have produced (fp32 conservative, compute when the
+                # per-component flag casts back). Byte-identical to the two-copy path.
+                cast_back = force_cast_back or _w._NBX_ACTIVATIONS_FP16_SAFE
+                result = func(*args, out_dtype=(compute if cast_back else NBXDtype.float32), **kwargs)
+                return result
             new_args = tuple(
                 a.to(NBXDtype.float32).contiguous()
                     if _is_float_tensor(a) and _get_nbx_dtype(a) != NBXDtype.float32

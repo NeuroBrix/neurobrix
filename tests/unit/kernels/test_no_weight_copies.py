@@ -138,3 +138,42 @@ def test_fp16_activation_is_widened_in_registers_not_materialised(M):
     assert c.copies == 0, "no activation upcast copy, no weight copy"
     assert out._dtype == ref._dtype == NBXDtype.float32
     assert np.array_equal(_d2h(out), _d2h(ref))
+
+
+def test_rms_norm_widens_on_load_and_stores_the_dtype_asked():
+    """The fp32-internal wrap used to copy a half input to fp32 before rms_norm and copy the
+    fp32 result back; the kernel widens its loads and stores in the dtype asked, so the same
+    numbers come out of one store — no copy either side."""
+    rng = np.random.default_rng(7)
+    x16 = NBXTensor.from_numpy((rng.standard_normal((6, 256)) * 0.5).astype(np.float16))
+    w = NBXTensor.from_numpy((1.0 + rng.standard_normal(256) * 0.1).astype(np.float16))
+    ref32 = W.rms_norm(x16.to(NBXDtype.float32), w)                  # the former path: materialised fp32 input
+    with _Count() as c:
+        out32 = W.rms_norm(x16, w, out_dtype=NBXDtype.float32)
+    assert c.copies == 0 and out32._dtype == NBXDtype.float32
+    assert np.array_equal(_d2h(out32), _d2h(ref32))
+    ref16 = ref32.to(NBXDtype.float16)                                 # the former cast back
+    with _Count() as c:
+        out16 = W.rms_norm(x16, w, out_dtype=NBXDtype.float16)
+    assert c.copies == 0 and out16._dtype == NBXDtype.float16
+    assert np.array_equal(_d2h(out16), _d2h(ref16))
+
+
+def test_the_fp32_internal_wrap_asks_a_widening_wrapper_for_its_output_dtype(monkeypatch):
+    from neurobrix.triton import dtype as D
+    from neurobrix.kernels import wrappers as _w
+    calls = []
+
+    def widening(x, out_dtype=None):
+        calls.append((x, out_dtype)); return x
+    widening._nbx_widens_on_load = True
+    eng = D.TritonDtypeEngine.__new__(D.TritonDtypeEngine)
+    eng.compute_dtype = NBXDtype.float16
+    x16 = NBXTensor.from_numpy(np.ones((2, 8), dtype=np.float16))
+    monkeypatch.setattr(_w, "_NBX_ACTIVATIONS_FP16_SAFE", False)
+    with _Count() as c:
+        eng._wrap_fp32_internal_compute_dtype_output(widening)(x16)
+    assert c.copies == 0 and calls[-1][0] is x16 and calls[-1][1] == NBXDtype.float32, "conservative: fp32 asked, no input copy"
+    monkeypatch.setattr(_w, "_NBX_ACTIVATIONS_FP16_SAFE", True)
+    eng._wrap_fp32_internal_compute_dtype_output(widening)(x16)
+    assert calls[-1][1] == NBXDtype.float16, "cast back on: the compute dtype asked of the store"
