@@ -256,7 +256,24 @@ def witnessed_arg_changes(old_op: dict, new_op: dict, tensors_new: dict):
             if isinstance(d, dict):
                 input_dims.append(json.dumps(d, sort_keys=True))
     sites = []
+    # BATCH SPLIT RESTORED: the old graph folded a unit-trace symbol (the batch) into its
+    # right neighbour — [1, σ·s, …] — and the corrected rule splits it back — [σ, s, …].
+    # Recognized as a PAIR of leaves: old[p] == 1 → new[p] = σ (trace 1), and old[p+1] is
+    # σ × new[p+1] under every assignment. (2026-08-29 → 09-07 tracer regression.)
+    by_parent = {}
     for path, a, b in diffs:
+        by_parent.setdefault(path[:-1], {})[path[-1]] = (a, b)
+    restored = set()
+    for parent_path, slots in by_parent.items():
+        for pos, (a, b) in slots.items():
+            if a == 1 and isinstance(b, dict) and b.get("type") == "symbol" and _trace_value(b) == 1 and (pos + 1) in slots:
+                a2, b2 = slots[pos + 1]
+                if isinstance(a2, dict) and _is_dim_node(a2) and equivalent_dims(a2, {"type": "mul", "left": b, "right": b2, "trace": _trace_value(a2)}):
+                    restored.add(parent_path + (pos,)); restored.add(parent_path + (pos + 1,))
+                    sites.append({"op": new_op.get("op_uid"), "path": ".".join(str(k) for k in parent_path + (pos,)), "old": [a, a2], "new": [b, b2], "kind": "batch-split-restored"})
+    for path, a, b in diffs:
+        if path in restored:
+            continue
         if not path or not isinstance(path[-1], int):
             return None
         pos = path[-1]
@@ -575,7 +592,8 @@ class Model:
             f"{gd['arg_witnessed']} shape argument(s) of the closed defect "
             f"(witnessed {sum(r.get('arg_kinds', {}).get('witnessed', 0) for r in gd['components'].values())}, "
             f"symbolized {sum(r.get('arg_kinds', {}).get('symbolized', 0) for r in gd['components'].values())}, "
-            f"re-expressed {sum(r.get('arg_kinds', {}).get('re-expressed', 0) for r in gd['components'].values())}), "
+            f"re-expressed {sum(r.get('arg_kinds', {}).get('re-expressed', 0) for r in gd['components'].values())}, "
+            f"batch split restored {sum(r.get('arg_kinds', {}).get('batch-split-restored', 0) for r in gd['components'].values())}), "
             f"{gd['beyond_annotation']} beyond, corrupted dims {gd['corrupted_before']} → {gd['corrupted_after']}")
         return verdict.startswith("PASS")
 
