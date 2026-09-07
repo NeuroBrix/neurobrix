@@ -432,7 +432,6 @@ class MetalKernel:
         #: Device buffers holding scalars the MSL reads through a pointer.
         #: One per such slot, allocated on first use and reused: launches are
         #: synchronous here, so the value is consumed before it is rewritten.
-        self._scalar_buffers: dict = {}
         self.constexprs = dict(constexprs or {})
         self.specialization = dict(specialization or {})
         # This driver reloads from MSL source through the framework, so the
@@ -528,8 +527,15 @@ class MetalKernel:
                 f"{self.name} declares buffer({needed}) but only "
                 f"{len(params)} arguments were given")
 
-        command_buffer = encoder_queue.commandBuffer()
-        encoder = command_buffer.computeCommandEncoder()
+        # The stream's open encoder, not one of ours: a NeuroBrix stream is
+        # one command buffer with one serialised compute encoder, opened at
+        # the first launch and committed at a synchronisation point. Creating
+        # a buffer per launch put 1,505 of them in a decode step and 501 ms of
+        # that step into draining them.
+        command_buffer, encoder = runtime.encoder_for(int(stream or 0))
+        if encoder is None:                             # pragma: no cover
+            raise MetalKernelError(
+                f"{self.name}: the stream has no encoder to dispatch into")
         try:
             encoder.setComputePipelineState_(self._pipeline)
             by_name = {}
@@ -565,9 +571,11 @@ class MetalKernel:
                             f"from NBXTensor / DeviceAllocator.")
                     encoder.setBuffer_offset_atIndex_(buffer, offset, index)
                 elif emitted_pointer:
-                    # A scalar the emitted kernel reads THROUGH a pointer.
-                    buffer, offset = self._scalar_buffer_bits(index, value)
-                    encoder.setBuffer_offset_atIndex_(buffer, offset, index)
+                    # A scalar the emitted kernel reads THROUGH a pointer:
+                    # copied into the command buffer, not into a buffer this
+                    # kernel shares with its own other dispatches.
+                    encoder.setBytes_length_atIndex_(
+                        struct.pack("<I", int(value) & 0xFFFFFFFF), 4, index)
                 else:
                     encoder.setBytes_length_atIndex_(
                         _pack_bits(kind, value), 4, index)
@@ -577,76 +585,52 @@ class MetalKernel:
             encoder.dispatchThreadgroups_threadsPerThreadgroup_(
                 Metal.MTLSizeMake(int(groups[0]), int(groups[1]), int(groups[2])),
                 Metal.MTLSizeMake(int(threads), 1, 1))
-            encoder.endEncoding()
-            # Committed, not awaited. Metal runs one queue's buffers in commit
-            # order, so the ordering that makes the engine correct is kept;
-            # what the wait used to give — a host that could read device
-            # memory safely afterwards — now comes from the allocator's own
-            # flush at memcpy, memset, sync and free. Measured 2026-09-07:
-            # the wait was 598 us of every launch and 93% of a decode step.
-            command_buffer.commit()
-            runtime.track_committed(int(stream or 0), command_buffer)
+            # Encoded, not committed: the stream decides when to commit,
+            # and the host waits only where it reads. Metal keeps the order
+            # inside a serial compute encoder with its own barriers.
+            runtime.note_dispatch(int(stream or 0))
         except BaseException:
             # A command buffer holds its queue's in-flight slot until it
             # COMPLETES; one abandoned mid-encode never does, and after 64 the
-            # queue blocks forever. Close the encoder (Metal aborts the
-            # process on a commit with one open) and commit it empty.
+            # queue blocks forever. The stream closes its buffer — ending the
+            # encoder first, because Metal aborts the process on a commit with
+            # one still open.
             try:
-                encoder.endEncoding()
-            except Exception:                           # pragma: no cover
-                pass
-            try:
-                command_buffer.commit()
+                runtime.abandon_stream(int(stream or 0))
             except Exception:                           # pragma: no cover
                 pass
             raise
         # No error to read yet: the buffer has not completed. A failure
         # surfaces at the flush that waits for it, named there.
 
-    def _scalar_buffer_bits(self, index: int, value):
-        """A device buffer holding one already-packed scalar."""
-        from ..kernels.nbx_tensor import DeviceAllocator
+    #: A scalar the emitted kernel reads THROUGH a pointer is bound with
+    #: `setBytes:length:atIndex:`, which copies the value into the command
+    #: buffer and gives the kernel a pointer to that copy. It replaced a
+    #: device buffer cached per (kernel, slot) and written with an H2D
+    #: memcpy, which had two faults, one old and one new:
+    #:
+    #: * the cache made every dispatch of a kernel share four bytes, so once
+    #:   several dispatches were encoded before any of them ran, they all
+    #:   read whichever value was written last. That was correct only while
+    #:   every launch waited for its own kernel — the wait was holding up a
+    #:   correctness property nobody had written down;
+    #: * the write went through `DeviceAllocator.memcpy`, which synchronises
+    #:   the stream, which ENDS the encoder being written to. The next
+    #:   `setBuffer` call then touched an ended encoder and the process died
+    #:   with a segmentation fault (measured 2026-09-07, at the first mm of
+    #:   the first prefill).
+    #:
+    #: The rule it leaves behind: nothing on the encoding path may call into
+    #: the allocator, because the allocator synchronises.
 
-        address = self._scalar_buffers.get(index)
-        if address is None:
-            address = DeviceAllocator.malloc_cuda(4)
-            self._scalar_buffers[index] = address
-        payload = struct.pack("<I", int(value) & 0xFFFFFFFF)
-        host = (ctypes.c_char * 4).from_buffer_copy(payload)
-        DeviceAllocator.memcpy(address, ctypes.addressof(host), 4, kind=1)
-        buffer, offset = self._runtime.buffer_for_pointer(address)
-        if buffer is None:                              # pragma: no cover
-            raise MetalKernelError(
-                f"{self.name}: the allocator does not recognise the scalar "
-                f"buffer it just handed out for slot {index}")
-        return buffer, offset
+    @staticmethod
+    def _scalar_bytes(value, mtype: str) -> bytes:
+        """One scalar the kernel reads by pointer, as bytes for `setBytes`.
 
-    def _scalar_buffer(self, index: int, value, mtype: str):
-        """A device buffer holding one scalar the kernel reads by pointer.
-
-        The address comes from the allocator like every other device buffer —
-        the driver does not get a private allocation path — so
-        `buffer_for_pointer` resolves it and the ownership rule that refuses
-        foreign addresses keeps applying.
+        See the note above `_dispatch_params`'s scalar branch for why
+        this is not a device buffer.
         """
-        from ..kernels.nbx_tensor import DeviceAllocator
-
-        address = self._scalar_buffers.get(index)
-        if address is None:
-            address = DeviceAllocator.malloc_cuda(4)
-            self._scalar_buffers[index] = address
-
-        payload = _pack_scalar(value, mtype)
-        host = (ctypes.c_char * len(payload)).from_buffer_copy(payload)
-        DeviceAllocator.memcpy(address, ctypes.addressof(host), len(payload),
-                               kind=1)
-
-        buffer, offset = self._runtime.buffer_for_pointer(address)
-        if buffer is None:                              # pragma: no cover
-            raise MetalKernelError(
-                f"{self.name}: the allocator does not recognise the scalar "
-                f"buffer it just handed out for {index}")
-        return buffer, offset
+        return _pack_scalar(value, mtype)
 
     def launch(self, grid, args, stream: int = 0) -> None:
         """Dispatch `grid` threadgroups on `stream`.
@@ -681,11 +665,13 @@ class MetalKernel:
             raise MetalKernelError(
                 f"{self.name}: stream handle {stream!r} is not one the "
                 f"allocator handed out")
-        command_buffer = encoder_queue.commandBuffer()
-        encoder = command_buffer.computeCommandEncoder()
+        command_buffer, encoder = runtime.encoder_for(int(stream or 0))
+        if encoder is None:                             # pragma: no cover
+            raise MetalKernelError(
+                f"{self.name}: the stream has no encoder to dispatch into")
         try:
             self._encode_and_run(Metal, command_buffer, encoder, grid, args,
-                                 runtime)
+                                 runtime, int(stream or 0))
         except BaseException:
             # A command buffer counts against the queue's in-flight limit
             # from the moment it is created until it COMPLETES. One that is
@@ -709,17 +695,13 @@ class MetalKernel:
             # The exception is re-raised unchanged: a refusal must stay as
             # loud as it was.
             try:
-                encoder.endEncoding()
-            except Exception:                           # pragma: no cover
-                pass
-            try:
-                command_buffer.commit()
+                runtime.abandon_stream(int(stream or 0))
             except Exception:                           # pragma: no cover
                 pass
             raise
 
     def _encode_and_run(self, Metal, command_buffer, encoder, grid, args,
-                        runtime) -> None:
+                        runtime, stream: int = 0) -> None:
         encoder.setComputePipelineState_(self._pipeline)
 
         if len(args) != len(self._msl_binding):
@@ -742,8 +724,8 @@ class MetalKernel:
                         f"NBXTensor / DeviceAllocator.")
                 encoder.setBuffer_offset_atIndex_(buffer, offset, index)
             elif kind == SCALAR_BY_BUFFER:
-                buffer, offset = self._scalar_buffer(index, value, mtype)
-                encoder.setBuffer_offset_atIndex_(buffer, offset, index)
+                payload = self._scalar_bytes(value, mtype)
+                encoder.setBytes_length_atIndex_(payload, len(payload), index)
             else:
                 encoder.setBytes_length_atIndex_(
                     _pack_scalar(value, mtype), 4, index)
@@ -753,11 +735,9 @@ class MetalKernel:
         encoder.dispatchThreadgroups_threadsPerThreadgroup_(
             Metal.MTLSizeMake(int(groups[0]), int(groups[1]), int(groups[2])),
             Metal.MTLSizeMake(int(self.block_size), 1, 1))
-        encoder.endEncoding()
-        # Committed, not awaited — see `_dispatch_params`. The error is read
-        # at the flush that waits for this buffer.
-        command_buffer.commit()
-        runtime.track_committed(0, command_buffer)
+        # Encoded into the stream — see `_dispatch_params`. The error is read
+        # at the flush that waits for the buffer the stream commits.
+        runtime.note_dispatch(stream)
 
 
 #: The launcher hands scalars as (kind, integer) with floats already reduced
