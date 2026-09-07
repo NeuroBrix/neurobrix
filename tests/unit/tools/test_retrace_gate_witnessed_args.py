@@ -293,3 +293,24 @@ def test_a_scalar_argument_bound_to_a_symbol_follows_the_namespace_remap():
     out = R.rewrite_symbols(op, {"s0": "s1", "s1": "s0"})
     assert out["attributes"]["end"]["symbol_id"] == "s1" and out["attributes"]["args"][0]["symbol_id"] == "s1"
     assert R.rewrite_symbols({"type": "symbol", "id": "s0", "trace": 23}, {"s0": "s1"})["id"] == "s1"
+
+
+def test_a_symbol_the_old_tracer_named_in_the_inferred_slot_is_the_vendors_minus_one_again():
+    """`[b, s1, s0·64, s0·64]` → `[b, -1, 64, 64]`: the op's own output carries s1 at that
+    position, so -1 infers it; the unit-trace products are literals (CogVideoX text encoder)."""
+    s1 = {"type": "symbol", "id": "s1", "trace": 226}
+    su = {"type": "symbol", "id": "s0", "trace": 1}
+    prod = {"type": "mul", "left": su, "right": 64, "trace": 64}
+    old = {"op_uid": "aten.view::2", "op_type": "aten::view", "input_tensor_ids": ["x"], "output_tensor_ids": ["y"],
+           "attributes": {"args": [{"type": "tensor", "tensor_id": "x"}, {"type": "list", "value": [su, s1, prod, prod]}], "kwargs": {}, "shape": [su, s1, prod, prod]}}
+    new = copy.deepcopy(old)
+    new["attributes"]["args"][1]["value"] = [su, -1, 64, 64]; new["attributes"]["shape"] = [su, -1, 64, 64]
+    tensors = {"x": {"shape": [1, 226, 4096], "symbolic_shape": {"dims": [su, s1, 4096], "concrete": [1, 226, 4096]}},
+               "y": {"shape": [1, 226, 64, 64], "symbolic_shape": {"dims": [su, s1, 64, 64], "concrete": [1, 226, 64, 64]}}}
+    sites = R.witnessed_arg_changes(old, new, tensors)
+    assert sites is not None
+    kinds = sorted(x["kind"] for x in sites)
+    assert kinds.count("inference-restored") == 2 and kinds.count("unit-only-literalized") == 4
+    new["attributes"]["args"][1]["value"][1] = 226                       # the symbol turned into its literal: never admitted
+    new["attributes"]["shape"][1] = 226
+    assert R.witnessed_arg_changes(old, new, tensors) is None

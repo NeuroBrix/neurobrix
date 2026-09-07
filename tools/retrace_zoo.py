@@ -378,6 +378,11 @@ def witnessed_arg_changes(old_op: dict, new_op: dict, tensors_new: dict):
         for d in (m.get("symbolic_shape") or {}).get("dims") or []:
             if isinstance(d, dict):
                 input_dims.append(json.dumps(d, sort_keys=True))
+    out_dims = []                                          # the op's own outputs' annotated dims, per output
+    for tid in new_op.get("output_tensor_ids") or []:
+        dims = ((tensors_new.get(tid) or {}).get("symbolic_shape") or {}).get("dims") or []
+        if dims:
+            out_dims.append(list(dims))
     sites = []
     # BATCH SPLIT RESTORED: the old graph folded a unit-trace symbol (the batch) into its
     # right neighbour — [1, σ·s, …] — and the corrected rule splits it back — [σ, s, …].
@@ -414,6 +419,15 @@ def witnessed_arg_changes(old_op: dict, new_op: dict, tensors_new: dict):
             for k in path[:-1]:
                 _parent = _parent[k]
             if any(len(_parent) == len(c) and c[path[-1]] == a for c in witnessed):
+                sites.append({"op": new_op.get("op_uid"), "path": ".".join(str(k) for k in path), "old": a, "new": b, "kind": "inference-restored"})
+                continue
+        # The same with a SYMBOL the old tracer had named in the inferred slot: the new tracer leaves
+        # the vendor's -1 and the op's own output carries that symbol at that position (CogVideoX's
+        # text encoder, 2026-09-07: 96 views `[b, s1, s0·64, s0·64]` → `[b, -1, 64, 64]`).
+        if b == -1 and isinstance(a, dict) and a.get("type") == "symbol" and path and isinstance(path[-1], int):
+            pos = path[-1]
+            if any(len(dims) > pos and isinstance(dims[pos], dict) and dims[pos].get("type") == "symbol"
+                   and dims[pos].get("id") == a.get("id") for dims in out_dims):
                 sites.append({"op": new_op.get("op_uid"), "path": ".".join(str(k) for k in path), "old": a, "new": b, "kind": "inference-restored"})
                 continue
         if not path or not isinstance(path[-1], int):
@@ -693,6 +707,10 @@ class Model:
             return False
         if step in ("old_outputs", "new_outputs") and st.get("policy") != POLICY:
             return False                       # measured under another policy: another arm, re-run
+        if step in ("old_outputs", "new_outputs"):
+            fr = (self.state.get("autotune_freeze") or {}).get("snapshot")
+            if not fr or st.get("autotune") != fr:
+                return False                   # measured under another kernel-config state: re-run
         return True
     def mark(self, step, ok, **info):
         self.state["steps"][step] = {"ok": ok, "at": time.strftime("%Y-%m-%dT%H:%M:%S"), **info}
@@ -710,9 +728,40 @@ class Model:
         return e
 
     # -- the two runs of the locked protocol --------------------------------
+    def autotune_freeze(self) -> dict:
+        """The kernel-config state BOTH arms of this gate run under: a snapshot of the engine's
+        certified directory taken at the gate's first arm, and one replay cache shared by the
+        arms (the first arm sweeps a missing key, the second loads the same choice). Without
+        it the Triton arms compare kernel choices, not graphs: CogVideoX-2b, 2026-09-07 —
+        the old arm served 3,139 certified keys and swept 19, the new arm 4,350 and 0 (the
+        certifier filled the directory between them), 39.7 dB between two videos of one graph."""
+        snap = self.dir / "autotune_directory"
+        st = self.state.get("autotune_freeze")
+        if st and snap.exists():
+            return st
+        src_dir = Path(self.args.src).resolve() / "neurobrix" / "config" / "autotune" if self.args.src else None
+        if snap.exists():
+            shutil.rmtree(snap)
+        n = 0
+        if src_dir and src_dir.exists():
+            shutil.copytree(src_dir, snap)
+            for f in snap.rglob("*.json"):
+                try:
+                    n += len(json.loads(f.read_text()).get("entries") or {})
+                except Exception:  # noqa: BLE001
+                    pass
+        else:
+            snap.mkdir(parents=True, exist_ok=True)          # no directory in this tree: both arms sweep into one cache
+        st = {"snapshot": time.strftime("%Y-%m-%dT%H:%M:%S"), "entries": n, "directory": str(snap), "replay": str(self.dir / "autotune_replay")}
+        self.state["autotune_freeze"] = st
+        self.state_path.write_text(json.dumps(self.state, indent=1))
+        log(f"{self.name}: autotune state frozen for both arms — {n} certified entries at {st['snapshot']}, one replay cache")
+        return st
+
     def outputs(self, tag: str) -> dict:
         """The sequential oracle and the family protocol on the Triton engine, outputs hashed."""
         name = self.name if tag == "old" else self.new_name
+        freeze = self.autotune_freeze()
         req = C.request_args(self.name, self.family, list(self.args.extra))
         ext = C.output_ext(self.family, req)
         res = {}
@@ -725,6 +774,8 @@ class Model:
             t0 = time.time()
             # One precision policy on both arms (POLICY above).
             env = self.env(); env.update(POLICY_ENV)
+            env["NEUROBRIX_AUTOTUNE_CERTIFIED_DIR"] = freeze["directory"]
+            env["NEUROBRIX_REPLAY_CACHE"] = freeze["replay"]
             rc = run(cmd, env, self.dir / f"{tag}_{arm}.log", self.args.timeout)
             logtext = (self.dir / f"{tag}_{arm}.log").read_text(errors="replace")
             unsupported = "UNSUPPORTED PATH" in logtext and "encoding" in logtext
@@ -769,9 +820,10 @@ class Model:
             restored = True
         elif not (CACHE / self.name / "manifest.json").exists():
             self.mark("old_outputs", False, error="no installed container"); return False
+        freeze = self.autotune_freeze()
         res = self.outputs("old")
         ok = all(v["rc"] == 0 or v.get("n_a") for v in res.values())
-        self.mark("old_outputs", ok, runs=res, policy=POLICY,
+        self.mark("old_outputs", ok, runs=res, policy=POLICY, autotune=freeze["snapshot"],
                   container="the hub's previous object" if restored else "the installed container")
         if restored and self.done("build") and self.done("install"):
             ok = self.reinstall_new() and ok    # the retraced container goes back into the cache
@@ -832,14 +884,30 @@ class Model:
             log(f"{self.name}: restore FAILED — {got} bytes read, the hub records {size}"); return False
         with zipfile.ZipFile(dest) as zf:
             created = json.loads(zf.read("manifest.json")).get("created_at")
-        backed = json.loads((Path(self.args.backup) / self.name / "manifest.json").read_text()).get("created_at")
+        bdir = Path(self.args.backup) / self.name
+        backed = json.loads((bdir / "manifest.json").read_text()).get("created_at")
+        superseded = None
         if created != backed:
-            self.mark("old_outputs", False, error=f"the hub's object is not the container that was backed up (built {created}, backup {backed})")
-            log(f"{self.name}: restore FAILED — the hub's object was built {created}, the backup {backed}"); return False
+            # The cache held a build that was never the hub's (canary: a June-02 local build against
+            # the hub's June-09 object). The hub's object is what users run and what a replace
+            # replaces: it is the OLD arm and the graphs the gate compares against; the local
+            # build's backup is kept aside by name, nothing destroyed.
+            aside = bdir.with_name(f"{self.name}.local-build-{(backed or 'unknown').replace(':', '')}")
+            if aside.exists():
+                shutil.rmtree(aside)
+            bdir.rename(aside)
+            superseded = {"local_build": backed, "kept_at": str(aside), "hub_object": created}
+            log(f"{self.name}: the hub's object (built {created}) supersedes the backed-up local build ({backed}), kept at {aside.name}")
         rc = run([PY, str(FORGE), "local", str(dest), "--overwrite"], self.env(tree=False), self.dir / "restore_install.log", 3600, cwd=str(REPO / "forge"))
+        if rc == 0 and superseded:
+            def _no_weights(_dir, names):
+                return [n for n in names if n.rsplit(".", 1)[-1] in WEIGHT_SUFFIXES]
+            shutil.copytree(CACHE / self.name, bdir, symlinks=True, ignore=_no_weights)   # the backup is now the hub's graphs
+            self.mark("backup", True, path=str(bdir), weights="on the hub (previous object)", supersedes=superseded)
         ok = rc == 0 and self.cache_holds_backup() is True
         self.state["steps"]["previous_object"] = {"ok": ok, "at": time.strftime("%Y-%m-%dT%H:%M:%S"), "key": key, "bytes": got,
-                                                  "built": created, "seconds": round(time.time() - t0, 1), "rc": rc}
+                                                  "built": created, "seconds": round(time.time() - t0, 1), "rc": rc,
+                                                  "supersedes": superseded}
         self.state_path.write_text(json.dumps(self.state, indent=1))
         if not ok:
             self.mark("old_outputs", False, error=f"the previous object did not install as the backed-up container (rc {rc})")
@@ -964,9 +1032,10 @@ class Model:
         st = self.state["steps"].get("new_outputs") or {}
         self.set_aside("new_", "a previous attempt's outputs" if st.get("policy") == POLICY else
                        f"measured under the policy '{st.get('policy') or 'default'}'; the gate runs both arms under '{POLICY}'")
+        freeze = self.autotune_freeze()
         res = self.outputs("new")
         ok = all(v["rc"] == 0 or v.get("n_a") for v in res.values())
-        self.mark("new_outputs", ok, runs=res, policy=POLICY)
+        self.mark("new_outputs", ok, runs=res, policy=POLICY, autotune=freeze["snapshot"])
         return ok
 
     def graph_diff(self) -> dict:
@@ -1081,6 +1150,11 @@ class Model:
                       f"new '{sn.get('policy') or 'default'}' — a difference between them would not be the graph's")
             self.mark("gate", False, verdict="FAIL", reason=reason)
             log(f"{self.name}: gate FAIL — {reason}"); return False
+        if so.get("autotune") != sn.get("autotune"):
+            reason = (f"the two arms ran under different kernel-config states: old '{so.get('autotune') or 'unfrozen'}', "
+                      f"new '{sn.get('autotune') or 'unfrozen'}' — a Triton difference between them would be a config choice, not the graph's")
+            self.mark("gate", False, verdict="FAIL", reason=reason)
+            log(f"{self.name}: gate FAIL — {reason}"); return False
         old, new = so.get("runs") or {}, sn.get("runs") or {}
         bytes_verdict = {}
         for arm in ("sequential", "triton"):
@@ -1109,7 +1183,9 @@ class Model:
             verdict = "PASS (no corrupted dim was present in the old container)"
         else:
             verdict = "NEEDS_EXPLANATION"        # bytes differ: the difference must be the closed defect and nothing else
-        self.mark("gate", verdict.startswith("PASS"), verdict=verdict, bytes=bytes_verdict, graph=gd, policy=POLICY)
+        self.mark("gate", verdict.startswith("PASS"), verdict=verdict, bytes=bytes_verdict, graph=gd, policy=POLICY,
+                  autotune=self.state.get("autotune_freeze"))
+        shutil.rmtree(Path(self.args.tmp) / "previous" / self.name, ignore_errors=True)   # the previous object's staging
         log(f"{self.name}: gate {verdict} — both arms under {POLICY}; bytes {bytes_verdict}; graph: {gd['annotation_changes']} annotation change(s), "
             f"{gd['arg_witnessed']} shape argument(s) of the closed defect "
             f"(witnessed {sum(r.get('arg_kinds', {}).get('witnessed', 0) for r in gd['components'].values())}, "

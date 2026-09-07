@@ -307,3 +307,62 @@ def test_a_partial_previous_object_resumes_with_a_range(tmp_path, monkeypatch):
     assert seen["headers"] == {"Range": "bytes=5000-"} and got == 5000 + 10 * 1024
     assert dest.read_bytes()[:5000] == b"a" * 5000 and dest.stat().st_size == got
     assert R.stream_under_probe("http://x", dest, 1000.0, tmp_path / "restore.log", expected=got) == got   # complete: no request
+
+
+def test_both_arms_run_under_one_frozen_autotune_state(model, monkeypatch, tmp_path):
+    """One directory snapshot and one replay cache for the two arms; the stamps agree; a
+    different stamp on one arm is refused by the gate by name."""
+    m = model
+    src = tmp_path / "tree" / "src"; d = src / "neurobrix" / "config" / "autotune" / "nvidia" / "volta"; d.mkdir(parents=True)
+    (d / "matmul_kernel.fp32.json").write_text(json.dumps({"entries": {"k1": {}, "k2": {}}}))
+    m.args.src = str(src)
+    _manifest(R.CACHE / m.name, "T1"); _manifest(Path(m.args.backup) / m.name, "T1")
+    seen = []
+    def fake_run(cmd, env, logfile, timeout, cwd=None):
+        seen.append((env.get("NEUROBRIX_AUTOTUNE_CERTIFIED_DIR"), env.get("NEUROBRIX_REPLAY_CACHE")))
+        Path(str(logfile)).write_text("ok"); Path(str(cmd[cmd.index("--output") + 1])).write_bytes(b"out")
+        return 0
+    monkeypatch.setattr(R, "run", fake_run)
+    monkeypatch.setattr(R, "sha", lambda p: "s")
+    monkeypatch.setattr(C, "request_args", lambda name, fam, extra: [])
+    monkeypatch.setattr(C, "output_ext", lambda fam, req: ".wav")
+    assert m.step_old_outputs() is True
+    fr = m.state["autotune_freeze"]
+    assert fr["entries"] == 2 and Path(fr["directory"]).is_dir() and (Path(fr["directory"]) / "nvidia" / "volta" / "matmul_kernel.fp32.json").exists()
+    assert seen and all(x == (fr["directory"], fr["replay"]) for x in seen)                    # both arms, same env
+    assert m.state["steps"]["old_outputs"]["autotune"] == fr["snapshot"] and m.done("old_outputs")
+    m.state["steps"]["new_outputs"] = {"ok": True, "policy": R.POLICY, "autotune": "another", "runs": {}}
+    assert m.done("new_outputs") is False
+    assert m.step_gate() is False and "different kernel-config states" in m.state["steps"]["gate"]["reason"]
+
+
+def test_the_hubs_object_supersedes_a_backup_of_a_build_that_was_never_the_hubs(model, monkeypatch, tmp_path):
+    import requests, zipfile
+    m = model; m.hub = "o/n"
+    _manifest(R.CACHE / m.name, "LOCAL-06-02"); _manifest(Path(m.args.backup) / m.name, "LOCAL-06-02")
+    (Path(m.args.backup) / m.name / "components" / "core").mkdir(parents=True)
+    monkeypatch.setattr(R, "hub_store_health", lambda: 200)
+    monkeypatch.setattr(R.repo_env, "require", lambda name: None)
+    monkeypatch.setenv("NEUROBRIX_API_TOKEN", "t")
+
+    class _Rec:
+        def raise_for_status(self): pass
+        def json(self): return {"model": {"fileUrl": "models/o/n.nbx", "fileSize": 5, "updatedAt": "x"}}
+    class _Url(_Rec):
+        def json(self): return {"url": "http://read"}
+    monkeypatch.setattr(requests, "get", lambda url, **k: _Url() if "admin" in url else _Rec())
+
+    def stream(url, dest, mbps, logfile, expected=0):
+        with zipfile.ZipFile(dest, "w") as zf:
+            zf.writestr("manifest.json", json.dumps({"created_at": "HUB-06-09"}))
+        return 5
+    monkeypatch.setattr(R, "stream_under_probe", stream)
+    monkeypatch.setattr(R, "run", lambda cmd, env, logfile, timeout, cwd=None: (_manifest(R.CACHE / m.name, "HUB-06-09"), 0)[1])
+    assert m.restore_previous() is True
+    bdir = Path(m.args.backup) / m.name
+    assert json.loads((bdir / "manifest.json").read_text())["created_at"] == "HUB-06-09"          # the backup is the hub's graphs now
+    aside = list(Path(m.args.backup).glob(f"{m.name}.local-build-*"))
+    assert len(aside) == 1 and (aside[0] / "components" / "core").is_dir()                          # the local build kept aside
+    po = m.state["steps"]["previous_object"]
+    assert po["ok"] and po["supersedes"]["local_build"] == "LOCAL-06-02" and po["supersedes"]["hub_object"] == "HUB-06-09"
+    assert m.state["steps"]["backup"]["supersedes"]["hub_object"] == "HUB-06-09"
