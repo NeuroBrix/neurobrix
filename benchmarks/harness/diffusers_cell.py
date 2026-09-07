@@ -57,10 +57,19 @@ def load_pipeline(row: dict):
             pipe.text_encoder = pipe.text_encoder.to(torch.float32)
             if getattr(pipe, "text_encoder_2", None) is not None:
                 pipe.text_encoder_2 = pipe.text_encoder_2.to(torch.float32)
-            pipe.enable_model_cpu_offload()
-            offloaded = True
-            fixes.append("text encoders=fp32 + enable_model_cpu_offload "
-                         "(Flux/V100 doctrine)")
+            if (row.get("diffusers_recipe") or {}).get("sequential_offload"):
+                # The row says the finer vendor weapon: model-level offload
+                # left 31.5 GB resident in the transformer's forward on one
+                # V100-32G (2026-09-07 yardstick, Flex.1 at the row's size).
+                pipe.enable_sequential_cpu_offload()
+                offloaded = True
+                fixes.append("text encoders=fp32 + enable_sequential_cpu_offload "
+                             "(row recipe: over-card single component)")
+            else:
+                pipe.enable_model_cpu_offload()
+                offloaded = True
+                fixes.append("text encoders=fp32 + enable_model_cpu_offload "
+                             "(Flux/V100 doctrine)")
     if row["metric_class"] == "video":
         # Per-row vendor recipe (rows.yml `diffusers_recipe`), replacing
         # the 2026-08-30 generic "vae=fp32 on every video pipeline"
