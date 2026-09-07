@@ -36,6 +36,28 @@ def ulp_distance(got: np.ndarray, oracle: np.ndarray) -> dict:
     """
     dtype = got.dtype
     rounded = oracle.astype(dtype)
+
+    # A boolean or integer result has no ULP: there is no rounding between
+    # representable neighbours to count, and reinterpreting one byte of bool
+    # as a wider float raises rather than lying. They are compared BIT-
+    # IDENTICALLY, which is the same rule the autotune screen already states
+    # for them. Nine of the copy family's bank entries — eq, ne, lt, le, gt,
+    # ge and the three logicals — refused here for exactly this reason, and a
+    # refusal that comes from the measuring tool tells you nothing about the
+    # engine.
+    if dtype.kind in ("b", "i", "u"):
+        same = np.array_equal(got, rounded)
+        differing = int((got != rounded).sum())
+        return {
+            "max_ulp": 0 if same else 1,
+            "mean_ulp": 0.0 if same else float(differing) / max(got.size, 1),
+            "max_abs_err": 0.0 if same else 1.0,
+            "rel_err": 0.0 if same else 1.0,
+            "nonfinite": 0,
+            "identical": same,
+            "comparison": "bit-identical (no ULP for a boolean or integer)",
+            "differing_elements": differing,
+        }
     # The sign-magnitude -> ordered mapping is done in int64 throughout: the
     # bias for fp16 is 0x8000, which does not fit in the int16 the bits are
     # VIEWED as, and constructing it there raises rather than wrapping.
@@ -127,10 +149,17 @@ def main() -> int:
         extra = ""
         if row["status"] == "ok" and row["cuda"] and row["metal"]:
             host = row.get("host_fp32")
-            extra = (f"metal_ulp={row['metal'][0]['max_ulp']:<8}"
-                     f"cuda_ulp={row['cuda'][0].get('max_ulp'):<8}"
+            # The bank records no ULP for a boolean or integer output — there
+            # is none to record — so these are formatted as values, not as
+            # numbers. Formatting a None crashed the run after 14 entries.
+            def _n(v):
+                return "-" if v is None else str(v)
+            extra = (f"metal_ulp={_n(row['metal'][0].get('max_ulp')):<8}"
+                     f"cuda_ulp={_n(row['cuda'][0].get('max_ulp')):<8}"
                      f"host_fp32_ulp="
-                     f"{host[0]['max_ulp'] if host else '-'}")
+                     f"{_n(host[0].get('max_ulp')) if host else '-'}")
+        if mark == "REF":
+            extra = (row.get("error") or "")[:96]
         print(f"  {mark} {op:<38} {meta['tag']:<22} {extra}", flush=True)
 
         for dt in extra_dtypes:
@@ -205,6 +234,7 @@ def _run_in_dtype(op: str, payload, meta, path, dtype):
                   for k in sorted(payload.files) if k.startswith("in")]
         oracle = _fp64_reference(op, arrays)
         handler = _HANDLERS.get(op)
+        kwargs = _with_reduction_axis(op, kwargs, arrays, payload)
         if handler is None:
             raise NotImplementedError(f"no bank handler for {op!r}")
         inputs = [NBXTensor.from_numpy(a) for a in arrays]
@@ -230,9 +260,11 @@ def run_op(op: str, payload, meta):
     from neurobrix.kernels.nbx_tensor import NBXTensor
     from neurobrix.kernels import wrappers
 
-    inputs = [NBXTensor.from_numpy(np.ascontiguousarray(payload[k]))
+    arrays = [np.ascontiguousarray(payload[k])
               for k in sorted(payload.files) if k.startswith("in")]
-    kwargs = dict(meta.get("kwargs") or {})
+    inputs = [NBXTensor.from_numpy(a) for a in arrays]
+    kwargs = _with_reduction_axis(op, dict(meta.get("kwargs") or {}),
+                                  arrays, payload)
 
     handler = _HANDLERS.get(op)
     if handler is None:
@@ -240,6 +272,48 @@ def run_op(op: str, payload, meta):
     out = handler(wrappers, inputs, kwargs)
     outs = out if isinstance(out, (tuple, list)) else [out]
     return [np.asarray(o.numpy()) for o in outs]
+
+
+def _with_reduction_axis(op, kwargs, arrays, payload):
+    """Add the derived reduction axis for the ops whose bank entries omit it."""
+    if op not in ("sum", "mean"):
+        return kwargs
+    derived = _reduction_axis(arrays[0].shape, payload["out0"].shape)
+    if derived is None:
+        raise NotImplementedError(
+            f"the bank records no reduction axis for {op!r} and the shapes "
+            f"{tuple(arrays[0].shape)} -> {tuple(payload['out0'].shape)} do "
+            f"not name one unambiguously; refusing to guess it")
+    out = dict(kwargs)
+    out["_reduce_dim"], out["_reduce_keepdim"] = derived
+    return out
+
+
+def _reduction_axis(in_shape, out_shape):
+    """The axis a reduction was taken over, DERIVED from the recorded shapes.
+
+    The bank does not record it — `kwargs` is empty for these entries and the
+    axis lives only in the tag. Reading it out of the tag would be guessing,
+    and guessing a call's arguments is how `clamp` once scored 2755 ULP
+    against an oracle for a call nobody made. The shapes decide it instead:
+    exactly one axis of the input, removed (or kept as 1), must give the
+    recorded output. When none does, or more than one does, this returns None
+    and the entry is refused with that said.
+
+    Returns (dim, keepdim) or None.
+    """
+    in_shape, out_shape = tuple(in_shape), tuple(out_shape)
+    matches = []
+    for axis in range(len(in_shape)):
+        dropped = in_shape[:axis] + in_shape[axis + 1:]
+        kept = in_shape[:axis] + (1,) + in_shape[axis + 1:]
+        if out_shape == dropped:
+            matches.append((axis, False))
+        elif out_shape == kept:
+            matches.append((axis, True))
+    if len(matches) == 1:
+        return matches[0]
+    return None
 
 
 _HANDLERS = {
@@ -252,6 +326,39 @@ _HANDLERS = {
     "addmm": lambda w, i, k: w.addmm(i[0], i[1], i[2]),
     "bmm": lambda w, i, k: w.bmm(i[0], i[1]),
     "baddbmm": lambda w, i, k: w.baddbmm_wrapper(i[0], i[1], i[2]),
+
+    # The copy family is exercised THROUGH these: a broadcast binary launches
+    # `strided_copy_kernel` to materialise the expanded operand, and the bank
+    # records the launch list that proves it. Without them the copy family had
+    # 29 of its 32 bank entries refused by this tool — a refusal that says
+    # nothing about the engine and hides everything the entries could say.
+    "add": lambda w, i, k: w.add(i[0], i[1]),
+    "sub": lambda w, i, k: w.sub(i[0], i[1]),
+    "mul": lambda w, i, k: w.mul(i[0], i[1]),
+    "div": lambda w, i, k: w.div(i[0], i[1]),
+    "remainder": lambda w, i, k: w.remainder_wrapper(i[0], i[1]),
+    "pow": lambda w, i, k: w.pow_wrapper(i[0], i[1]),
+    "maximum": lambda w, i, k: w.maximum_wrapper(i[0], i[1]),
+    "minimum": lambda w, i, k: w.minimum_wrapper(i[0], i[1]),
+    "eq": lambda w, i, k: w.eq(i[0], i[1]),
+    "ne": lambda w, i, k: w.ne(i[0], i[1]),
+    "lt": lambda w, i, k: w.lt(i[0], i[1]),
+    "le": lambda w, i, k: w.le(i[0], i[1]),
+    "gt": lambda w, i, k: w.gt(i[0], i[1]),
+    "ge": lambda w, i, k: w.ge(i[0], i[1]),
+    "logical_and": lambda w, i, k: w.logical_and_wrapper(i[0], i[1]),
+    "logical_or": lambda w, i, k: w.logical_or_wrapper(i[0], i[1]),
+    "logical_xor": lambda w, i, k: w.logical_xor_wrapper(i[0], i[1]),
+    "index_select": lambda w, i, k: w.index_select_wrapper(
+        i[0], int(k.get("dim", 0)), i[1]),
+    "sum": lambda w, i, k: w.sum_wrapper(i[0], dim=k["_reduce_dim"],
+                                         keepdim=k["_reduce_keepdim"]),
+    "mean": lambda w, i, k: w.mean_wrapper(i[0], dim=k["_reduce_dim"],
+                                           keepdim=k["_reduce_keepdim"]),
+    "convolution": lambda w, i, k: w.conv2d_wrapper(
+        i[0], i[1], i[2] if len(i) > 2 else None,
+        stride=k.get("stride", 1), padding=k.get("padding", 0),
+        dilation=k.get("dilation", 1), groups=int(k.get("groups", 1))),
 }
 
 
