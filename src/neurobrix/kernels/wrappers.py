@@ -3117,11 +3117,29 @@ def index_select_wrapper(x, dim: int, index) :
     inp_shape = list(x.shape)
     index_len = index.numel()
 
-    # dim_compress: move target dim to last
+    # A gather along a middle axis of a contiguous input reads it as (outer, N, inner) and
+    # writes the output in its final layout: no movedim copy, no permute copy (the copy lever,
+    # 2026-09-07). A non-contiguous input is materialised once first — the line that justifies
+    # it: the kernels index a flat buffer.
     if dim != x.ndim - 1:
-        x = x.movedim(dim, -1).contiguous()
-    else:
         x = x.contiguous()
+        N = inp_shape[dim]
+        outer = 1
+        for d_ in inp_shape[:dim]:
+            outer *= d_
+        inner = 1
+        for d_ in inp_shape[dim + 1:]:
+            inner *= d_
+        out_shape = list(inp_shape); out_shape[dim] = index_len
+        out = NBXTensor.empty(out_shape, dtype=x.dtype, device=x.device)
+        total = outer * index_len * inner
+        if total > 0:
+            from .ops.index_select import index_select_mid_kernel
+            BLOCK = 1024
+            _set_device(x)
+            index_select_mid_kernel[(triton.cdiv(total, BLOCK),)](x, out, outer, N, inner, index, index_len, BLOCK=BLOCK)
+        return out
+    x = x.contiguous()
     N = inp_shape[dim]
     M = x.numel() // N
     out_shape = list(x.shape)
@@ -3149,10 +3167,6 @@ def index_select_wrapper(x, dim: int, index) :
             print(f"[INDEX_SELECT_SENTINEL] {_unwritten}/{_o.size} output elements UNWRITTEN "
                   f"(index dtype {index.dtype} len {index_len} min {int(_ix.min())} max {int(_ix.max())} N={N} M={M})", flush=True)
 
-    if dim != x.ndim - 1:
-        order = list(range(out.ndim - 1))
-        order.insert(dim, out.ndim - 1)
-        out = out.permute(order).contiguous()
     return out
 
 
