@@ -102,6 +102,14 @@ def _conv2d_oracle(x, w, stride, padding, dilation, groups, window=None):
     nb, rh, rw = n1 - n0, r1 - r0, c1 - c0
     out = np.zeros((nb, co, rh, rw), dtype=np.float64)
     co_g = co // groups
+    if groups == c == co and ci_g == 1:
+        # depthwise: one broadcast product per tap over every channel — the per-group loop
+        # below is thousands of tiny products (a 448² depthwise shape: 157 s of float64)
+        for i in range(kh):
+            for j in range(kw):
+                patch = xp[:, :, i * dh + r0 * sh:i * dh + r1 * sh:sh, j * dw + c0 * sw:j * dw + c1 * sw:sw]
+                out += patch * w[:, 0, i, j][None, :, None, None]
+        return out
     for g in range(groups):
         xg = xp[:, g * ci_g:(g + 1) * ci_g]
         wg = w[g * co_g:(g + 1) * co_g]                       # [co_g, ci_g, kh, kw]
