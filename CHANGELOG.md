@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `neurobrix autotune certify`: the float64 oracle of a large convolution is computed on three windows
+  of its output — the corners of the first and last batch element and the centre of the middle one —
+  exact on every position of them and named in the entry's proof; a video or 4K shape is certified in
+  seconds where its whole float64 oracle cost days.
 - The certified autotune directory, an engine component: `src/neurobrix/config/autotune/<vendor>/<profile>/<kernel>.<dtype>.json`, one file per kernel and per dtype, indexed by the launcher's shape key, each entry carrying the setting retained and its proof (date, engine and backend versions, shape, deviation against the fp64 oracle, the profile's tolerance, the machine) and the settings excluded with their deviation. `neurobrix autotune certify --profile <profile>` fills it for the shapes the zoo met on this machine; `neurobrix autotune check` is its gate (a file without a proof, or whose proof does not re-read, is refused); `neurobrix autotune status` shows what the profile in force is served.
 - `neurobrix drift`: the drift-site detector. The same request runs on the ATen oracle (sequential,
   op by op) and on the Triton engine, each writing its per-op record, and the report names the
