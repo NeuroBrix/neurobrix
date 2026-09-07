@@ -239,15 +239,27 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None)
         buffers = L._writable_buffers(args)
         if buffers is None:
             raise RuntimeError(f"{qual}: a strided view among the arguments — not certifiable")
-        before = L._snapshot(buffers)
+        from neurobrix.kernels.nbx_tensor import DeviceAllocator
+        out_addr, out_nbytes = int(out_tensor.data_ptr()), int(out_tensor._nbytes)
+
+        def poison():
+            # Every byte of the output is set to 0xFF (NaN for every float
+            # dtype) before a candidate runs, on the device: a config that
+            # writes only part of its output — the class the screen found on
+            # 2026-09-07 — cannot inherit the previous candidate's correct
+            # values. The sanctioned kernels read their inputs and write
+            # their output, so nothing else needs restoring; the screen's
+            # snapshot/restore of every buffer through the host is what made
+            # a shape cost ten seconds.
+            DeviceAllocator.memset_cuda(out_addr, 0xFF, out_nbytes)
+
         results: List[Tuple[Any, float]] = []
         excluded: List[Dict[str, Any]] = []
         unrun: List[Any] = []
         for cfg in configs:
-            L._restore(buffers, before)
+            poison()
             try:
                 tuner.fn.run(*args, **{**kwargs, **cfg.all_kwargs()})
-                from neurobrix.kernels.nbx_tensor import DeviceAllocator
                 DeviceAllocator.stream_synchronize(0)
                 dev = oracle_deviation(out_tensor.numpy(), oracle)
             except Exception as exc:                     # a config the backend refuses: counted, never trusted
@@ -262,7 +274,6 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None)
                                f"({len(excluded)} excluded, {len(unrun)} could not run)")
         timed: List[Tuple[Any, float, float]] = []
         for cfg, dev in results:
-            L._restore(buffers, before)
             ms = bench(lambda: tuner.fn.run(*args, **{**kwargs, **cfg.all_kwargs()}))
             timed.append((cfg, dev, float(ms)))
         timed.sort(key=lambda t: t[2])
@@ -272,7 +283,7 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None)
                       "candidates": len(configs), "accepted": len(results), "excluded": excluded, "unrun": unrun,
                       "timings": [{"config": atc._config_to_dict(c), "deviation": d, "ms": m} for c, d, m in timed]})
         tuner.cache[key] = best
-        L._restore(buffers, before)
+        poison()
         return tuner.fn.run(*args, **{**kwargs, **best.all_kwargs()})
 
     # The wrappers decide the kernel's dtypes and flags (PROMOTE_B, IEEE_PRECISION,
