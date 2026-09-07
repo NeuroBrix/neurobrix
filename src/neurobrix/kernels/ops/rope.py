@@ -74,8 +74,12 @@ def rope_forward_kernel(
     # Load cos/sin (only need left half — right half is identical)
     cos_offsets = tl.arange(0, pad_hd // 2)
     cos_mask = cos_offsets < hd // 2
-    cos_row = tl.load(cos + cos_offsets, mask=cos_mask, other=0)
-    sin_row = tl.load(sin + cos_offsets, mask=cos_mask, other=0)
+    # The tables are cast to Q's dtype on load (round-to-nearest, the same
+    # conversion a stored cast makes): the wrapper no longer materialises a
+    # cast copy of the step's cos/sin per layer. Q's dtype is the compute
+    # dtype of the rotation, as it was when the tables were cast beforehand.
+    cos_row = tl.load(cos + cos_offsets, mask=cos_mask, other=0).to(q_ptr.dtype.element_ty)
+    sin_row = tl.load(sin + cos_offsets, mask=cos_mask, other=0).to(q_ptr.dtype.element_ty)
 
     # --- Q heads: load left half and right half ---
     first_half_q_offsets = (

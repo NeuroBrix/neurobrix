@@ -531,18 +531,18 @@ class TritonAttentionInterceptor:
             if attn_mask.shape[-1] != kv_seq:
                 attn_mask = None
 
-        # Cast Q to cache dtype — Flash Attention works in fp16/bf16, not fp32.
-        # AMP may upcast Q to fp32 but the kernel handles precision internally.
-        if hasattr(q, '_dtype') and hasattr(k_full, '_dtype') and q._dtype != k_full._dtype:
-            q = q.to(k_full._dtype)
-
+        # Q is read in the cache's dtype — Flash Attention works in fp16/bf16,
+        # not fp32; AMP may upcast Q to fp32. The wrapper realises it: the
+        # vector decode kernel rounds Q on load (no cast copy per layer per
+        # token), the other routes cast once where they diverge.
         return scaled_dot_product_attention_wrapper(
             q, k_full, v_full,
             attn_mask=attn_mask,
             dropout_p=dropout_p,
             is_causal=use_causal,
             scale=scale,
-            k_pre_transposed=False)   # normalised at the top of intercept()
+            k_pre_transposed=False,   # normalised at the top of intercept()
+            q_dtype_of_kv=True)
 
     def intercept_efficient(self, q, k, v, attn_bias=None, compute_log_sumexp=False,
                             dropout_p=0.0, is_causal=False, scale=None,

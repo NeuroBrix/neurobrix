@@ -267,3 +267,49 @@ def test_copy_into_a_strided_view_broadcasts_the_source():
     assert l.names == ["strided_copy_nd_kernel"], l.names
     got = _d2h(buf).reshape(4, 8)
     assert np.array_equal(got[:, :3], np.tile([1.0, 2.0, 3.0], (4, 1))) and not got[:, 3:].any()
+
+
+def test_rope_casts_the_tables_in_kernel_to_the_bytes_of_the_cast_copy():
+    """fp32 cos/sin tables with fp16 Q/K: the kernel rounds the tables on load; the bytes are
+    those of the path that cast the tables to fp16 first, and no copy kernel launches."""
+    rng = np.random.default_rng(6)
+    B, S, Hq, Hk, D = 1, 1, 32, 4, 64
+    q_np = (rng.standard_normal((B, S, Hq, D)) * 0.5).astype(np.float16)
+    k_np = (rng.standard_normal((B, S, Hk, D)) * 0.5).astype(np.float16)
+    ang = rng.uniform(-np.pi, np.pi, (B, 1, S, D)).astype(np.float32)
+    cos_np, sin_np = np.cos(ang).astype(np.float32), np.sin(ang).astype(np.float32)
+
+    def run(cos_t, sin_t):
+        q = NBXTensor.from_numpy(q_np).transpose(1, 2)      # (B, Hq, S, D) view, physical B,S,H,D
+        k = NBXTensor.from_numpy(k_np).transpose(1, 2)
+        with _Count() as c:
+            qo, ko = W.rope_fused_wrapper(q, k, cos_t, sin_t)
+        return c.copies, _d2h(qo), _d2h(ko)
+
+    copies_ref, q_ref, k_ref = run(NBXTensor.from_numpy(cos_np.astype(np.float16)),
+                                   NBXTensor.from_numpy(sin_np.astype(np.float16)))
+    copies, q_out, k_out = run(NBXTensor.from_numpy(cos_np), NBXTensor.from_numpy(sin_np))
+    assert copies == 0 and copies_ref == 0
+    assert np.array_equal(q_out, q_ref) and np.array_equal(k_out, k_ref)
+    assert not np.array_equal(q_out, q_np.reshape(-1))     # the rotation happened
+
+
+def test_decode_attention_reads_a_wider_q_in_the_cache_dtype_without_a_copy(monkeypatch):
+    """The KV cache asks for Q in its dtype: on the vector decode route the kernel rounds the
+    fp32 Q on load; the bytes are those of casting Q to fp16 first, with no copy launched."""
+    monkeypatch.setenv("NBX_DECODE_VEC", "1")
+    rng = np.random.default_rng(7)
+    B, H, H_kv, T_k, D = 1, 8, 2, 40, 64
+    q_np = (rng.standard_normal((B, H, 1, D))).astype(np.float32)
+    k_np = (rng.standard_normal((B, H_kv, T_k, D))).astype(np.float16)
+    v_np = (rng.standard_normal((B, H_kv, T_k, D))).astype(np.float16)
+    k, v = NBXTensor.from_numpy(k_np), NBXTensor.from_numpy(v_np)
+    scale = 1.0 / np.sqrt(D)
+    with _Count() as c:
+        out = W.scaled_dot_product_attention_wrapper(NBXTensor.from_numpy(q_np), k, v, scale=scale,
+                                                     k_pre_transposed=False, q_dtype_of_kv=True)
+    assert c.copies == 0
+    assert out.nbx_dtype == NBXDtype.float16
+    ref = W.scaled_dot_product_attention_wrapper(NBXTensor.from_numpy(q_np.astype(np.float16)), k, v,
+                                                 scale=scale, k_pre_transposed=False)
+    assert np.array_equal(_d2h(out), _d2h(ref))

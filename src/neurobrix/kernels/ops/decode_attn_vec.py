@@ -41,6 +41,22 @@ import triton.language as tl
 
 
 @triton.jit
+def _round_q(q, Q_TO: tl.constexpr, Q_SATURATE: tl.constexpr):
+    """Q as the caller asked it read: rounded to Q_TO (the KV cache's
+    dtype) with the stored cast's protected fp16 conversion when
+    Q_SATURATE, then widened to the fp32 the dot runs in — the bytes of a
+    cast copy of Q, without the copy."""
+    if Q_TO is not None:
+        f = q.to(tl.float32)
+        if Q_SATURATE:
+            is_finite = (f == f) & (f != float("inf")) & (f != float("-inf"))
+            clamped = tl.minimum(tl.maximum(f, -65504.0), 65504.0)
+            f = tl.where(is_finite, clamped, f)
+        q = f.to(Q_TO)
+    return q.to(tl.float32)
+
+
+@triton.jit
 def decode_attn_vec_split_kernel(
     q_ptr,          # [B*H_q, D]        one query row per program (fp16)
     k_ptr,          # [B*H_kv, T_k, D]  native cache layout, own strides
@@ -62,6 +78,8 @@ def decode_attn_vec_split_kernel(
     D: tl.constexpr,
     D_V: tl.constexpr,
     HAS_BIAS: tl.constexpr,
+    Q_TO: tl.constexpr = None,        # a dtype: Q is rounded to it on load (the cache's)
+    Q_SATURATE: tl.constexpr = False, # the protected fp16 rounding of that cast
 ):
     pid_q = tl.program_id(0)        # b * H_q + h_q
     pid_s = tl.program_id(1)        # split index
@@ -72,7 +90,8 @@ def decode_attn_vec_split_kernel(
     mask_dv = offs_d < D_V
 
     q = tl.load(q_ptr + pid_q * stride_qh + offs_d,
-                mask=mask_d, other=0.0).to(tl.float32)
+                mask=mask_d, other=0.0)
+    q = _round_q(q, Q_TO, Q_SATURATE)
 
     seg_start = pid_s * seg_len
     seg_end = tl.minimum(seg_start + seg_len, T_k)
@@ -139,6 +158,8 @@ def decode_attn_vec_grouped_kernel(
     D: tl.constexpr,
     D_V: tl.constexpr,
     HAS_BIAS: tl.constexpr,
+    Q_TO: tl.constexpr = None,        # a dtype: Q is rounded to it on load (the cache's)
+    Q_SATURATE: tl.constexpr = False, # the protected fp16 rounding of that cast
 ):
     """One KV HEAD per program (grid = (B*H_kv, split)): the GQA query
     group is processed inside the block, so K/V tiles are loaded ONCE
@@ -167,7 +188,8 @@ def decode_attn_vec_grouped_kernel(
     # the group's GROUPS query rows: [GROUPS, BLOCK_D]
     q = tl.load(q_ptr + (pid_kv * GQA_GROUPS + offs_g)[:, None] * stride_qh
                 + offs_d[None, :],
-                mask=mask_d[None, :], other=0.0).to(tl.float32)
+                mask=mask_d[None, :], other=0.0)
+    q = _round_q(q, Q_TO, Q_SATURATE)
 
     for n0 in range(seg_start, seg_end, BLOCK_N):
         offs_n = n0 + tl.arange(0, BLOCK_N)
