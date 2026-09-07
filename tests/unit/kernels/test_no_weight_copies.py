@@ -194,3 +194,76 @@ def test_index_select_along_any_axis_needs_no_layout_copy(dim):
     assert c.copies == 0
     assert list(out.shape) == [data.shape[0] if dim != 0 else len(idx), data.shape[1] if dim != 1 else len(idx), data.shape[2] if dim != 2 else len(idx)]
     assert np.array_equal(_d2h(out).reshape(out.shape), np.take(data, idx, axis=dim))
+
+
+class _Launches(_Count):
+    """Every kernel launched through the launcher during a block, by name."""
+    def __enter__(self):
+        super().__enter__()
+        me = self
+        me.names = []
+        orig = L.launch
+
+        def naming(kernel, grid, *a, **k):
+            me.names.append(getattr(kernel, "__name__", ""))
+            return orig(kernel, grid, *a, **k)
+        L.launch = naming
+        return self
+
+
+def test_a_size_one_dim_may_carry_any_stride():
+    """PyTorch's contiguity: a transposed single-token head block (1, 32, 64, 1) and an
+    expanded (1, 32, 1, 64) view are dense row-major; they are read in place by an
+    element-wise kernel and re-viewed without a copy."""
+    rng = np.random.default_rng(3)
+    data = (rng.standard_normal((1, 32, 1, 64))).astype(np.float32)
+    x = NBXTensor.from_numpy(data)
+    t = x.transpose(2, 3)                       # (1, 32, 64, 1), strides (2048, 64, 1, 64)
+    assert t.is_contiguous()
+    with _Count() as c:
+        y = W.mul(t, 2.0)
+        v = x.expand(1, 32, 1, 64).view(1, 32, 64)
+    assert c.copies == 0
+    assert np.array_equal(_d2h(y).reshape(1, 32, 64, 1), data.transpose(0, 1, 3, 2) * 2.0)
+    assert list(v.shape) == [1, 32, 64]
+    # a dim that is walked keeps the rule
+    assert not x.transpose(1, 3).is_contiguous()
+
+
+def test_a_strided_write_into_a_strided_slice_casts_in_one_launch():
+    """The KV cache's write: a head-strided fp32 V into an fp16 slice of the buffer. One launch
+    of the nd copy, no contiguous copy of the source, no cast transient, no scatter; the bytes
+    are those of the cast-then-scatter path (numpy's round-to-nearest fp16)."""
+    rng = np.random.default_rng(4)
+    src_np = (rng.standard_normal((1, 4, 8, 1, 64)) * 3).astype(np.float32)
+    v = NBXTensor.from_numpy(src_np)[:, :, 0]                  # (1, 4, 1, 64), heads at stride 512
+    assert not v.is_contiguous()
+    buf = NBXTensor.from_numpy(np.zeros((1, 4, 16, 64), dtype=np.float16))
+    with _Launches() as l:
+        buf[:1, :, 5:6, :] = v
+    assert l.names == ["strided_copy_nd_kernel"], l.names
+    got = _d2h(buf).reshape(1, 4, 16, 64)
+    assert np.array_equal(got[:, :, 5], src_np[:, :, 0, 0].astype(np.float16))
+    assert not got[:, :, :5].any() and not got[:, :, 6:].any()
+
+
+def test_a_cast_of_a_strided_source_is_one_launch():
+    rng = np.random.default_rng(5)
+    data = (rng.standard_normal((6, 5)) * 3).astype(np.float32)
+    x = NBXTensor.from_numpy(data).transpose(0, 1)             # (5, 6) strided
+    with _Launches() as l:
+        y = x.to(NBXDtype.float16)
+    assert l.names == ["strided_copy_nd_kernel"], l.names
+    assert np.array_equal(_d2h(y).reshape(5, 6), data.T.astype(np.float16))
+
+
+def test_copy_into_a_strided_view_broadcasts_the_source():
+    """`buf[:, :3] = row` with a (3,) row: torch's copy_ semantics, the source broadcast by a
+    stride 0 — no read past the source, one launch."""
+    buf = NBXTensor.from_numpy(np.zeros((4, 8), dtype=np.float32))
+    row = NBXTensor.from_numpy(np.array([1.0, 2.0, 3.0], dtype=np.float32))
+    with _Launches() as l:
+        buf[:, :3].copy_(row)
+    assert l.names == ["strided_copy_nd_kernel"], l.names
+    got = _d2h(buf).reshape(4, 8)
+    assert np.array_equal(got[:, :3], np.tile([1.0, 2.0, 3.0], (4, 1))) and not got[:, 3:].any()

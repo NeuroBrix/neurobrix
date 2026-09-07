@@ -1901,6 +1901,52 @@ def _gpu_runtime():
 _INT64_ARRAY_CACHE: dict = {}
 
 
+def _saturating_cast(src_dtype, dst_dtype) -> bool:
+    """The protected float16 downcast (clamp finite values to ±65504) —
+    the triton mirror of the compiled DtypeEngine's conversion contract,
+    decided once here for every cast path (`.to`, `copy_`, `__setitem__`)."""
+    return (dst_dtype == NBXDtype.float16
+            and src_dtype in (NBXDtype.float32, NBXDtype.float64, NBXDtype.bfloat16))
+
+
+def _copy_nd(src: 'NBXTensor', dst: 'NBXTensor'):
+    """Copy `src` into `dst` — any strides on either side, `src` broadcast
+    to `dst`'s shape, the dtype converted on the store — in ONE launch.
+
+    Real dtypes only: a complex source keeps the contiguous-then-cast
+    path (the kernel sees a float pointer, and a complex cast is a pair
+    of floats per element that `copy_kernel` already handles).
+    """
+    import triton
+    from neurobrix.kernels.ops.strided_copy import strided_copy_nd_kernel
+
+    if tuple(src._shape) != tuple(dst._shape):
+        src = src.expand(*dst._shape)
+    ndim = dst.ndim
+    if ndim > _MAX_NDIM:
+        raise RuntimeError(
+            f"NBXTensor._copy_nd: ndim={ndim} exceeds the PyTorch hard limit "
+            f"of {_MAX_NDIM}. Please open an issue with the model name and trace site.")
+    n = dst._numel
+    if n == 0:
+        return
+    if ndim == 0:
+        # a scalar: one element, both offsets 0 — a rank-1 walk of extent 1
+        shape, sst, dst_st = (1,), (0,), (0,)
+        ndim = 1
+    else:
+        shape, sst, dst_st = tuple(dst._shape), tuple(src._strides), tuple(dst._strides)
+    shape_buf = _upload_int64_array(shape, dst._device_idx)
+    src_stride_buf = _upload_int64_array(sst, dst._device_idx)
+    dst_stride_buf = _upload_int64_array(dst_st, dst._device_idx)
+    BLOCK = 1024
+    _set_device(dst)
+    strided_copy_nd_kernel[(triton.cdiv(n, BLOCK),)](
+        src, dst, n, shape_buf, src_stride_buf, dst_stride_buf,
+        BLOCK_SIZE=BLOCK, NDIM=ndim,
+        SATURATE_F16=_saturating_cast(src._dtype, dst._dtype))
+
+
 def _upload_int64_array(values, device_idx: int) -> 'NBXTensor':
     """Upload a small tuple/list of ints to the GPU as a contiguous
     int64 NBXTensor. Used to hand shape and stride vectors to the N-D
@@ -2093,6 +2139,27 @@ def _fill_constant(t: 'NBXTensor', value) -> 'NBXTensor':
 # STRIDE COMPUTATION
 # ============================================================================
 
+def _is_dense_row_major(shape: Tuple[int, ...], strides: Tuple[int, ...]) -> bool:
+    """PyTorch's contiguity: the elements lie row-major without gaps; a
+    dim of extent 1 may carry any stride (it is never walked) and an
+    empty tensor is contiguous. Comparing the strides to the canonical
+    ones instead called a decode-step view such as (1, 32, 64, 1) with
+    strides (2048, 64, 1, 64) — a transposed single-token head block —
+    non-contiguous and copied it before every element-wise kernel, and
+    refused `view` on (1, 32, 1, 64) with strides (0, 64, 0, 1), copying
+    the whole K/V per layer per token (the copy census of 2026-09-07)."""
+    expected = 1
+    for extent, stride in zip(reversed(shape), reversed(strides)):
+        if extent == 0:
+            return True
+        if extent == 1:
+            continue
+        if stride != expected:
+            return False
+        expected *= extent
+    return True
+
+
 def _contiguous_strides(shape: Tuple[int, ...]) -> Tuple[int, ...]:
     if len(shape) == 0:
         return ()
@@ -2182,7 +2249,7 @@ class NBXTensor:
         # C6a: contiguity is a pure function of the (immutable) shape and
         # strides — compute the flag once instead of per is_contiguous()
         # call in the hot loops.
-        self._contig = self._strides == _contiguous_strides(self._shape)
+        self._contig = _is_dense_row_major(self._shape, self._strides)
 
     def __del__(self):
         # Targeted lifecycle trace: NBX_TRACE_DEL_BIG_MB=N (default off)
@@ -3082,8 +3149,9 @@ class NBXTensor:
         """
         dst = self[key]
         if isinstance(value, NBXTensor):
-            # Dtype guard: cast source to destination dtype
-            if value._dtype != dst._dtype:
+            # Dtype guard: a complex source is cast first (the nd copy kernel
+            # is real-only); a real source is converted on the copy's store.
+            if value._dtype != dst._dtype and (value.is_complex() or dst.is_complex()):
                 value = value.to(dst._dtype)
             # Device guard: transfer source to destination device
             if hasattr(value, '_device_idx') and hasattr(dst, '_device_idx') and value._device_idx != dst._device_idx:
@@ -3091,11 +3159,15 @@ class NBXTensor:
                 tmp = NBXTensor.empty(src_contig._shape, src_contig._dtype, f"cuda:{dst._device_idx}")
                 DeviceAllocator.memcpy(tmp.data_ptr(), src_contig.data_ptr(), src_contig._nbytes, kind=3)
                 value = tmp
-            src = value.contiguous()
-            if dst.is_contiguous() and src._nbytes == dst._nbytes:
-                DeviceAllocator.memcpy(dst.data_ptr(), src.data_ptr(), src._nbytes)
+            if (value.is_contiguous() and dst.is_contiguous()
+                    and tuple(value._shape) == tuple(dst._shape)):
+                DeviceAllocator.memcpy(dst.data_ptr(), value.data_ptr(), value._nbytes)
             elif dst._numel > 0:
-                _strided_scatter(src, dst)
+                # One launch reads the source by its strides and writes the
+                # view by its own — no contiguous copy of the source first
+                # (the KV cache's V arrives as a head-strided view: its write
+                # was a strided copy, a cast and a scatter per layer per token).
+                _copy_nd(value, dst)
 
     def unbind(self, dim: int = 0) -> tuple:
         dim = dim % self.ndim
@@ -3140,8 +3212,15 @@ class NBXTensor:
             # s3gen prompt-feat copy: fp16 src 50240 B into fp32 dst 100480 B).
             # Cast to self's dtype first, then contiguous-pack the source so the
             # flat copy of self._nbytes bytes is well-defined.
-            if src.dtype != self.dtype:
+            if src.dtype != self.dtype and (src.is_complex() or self.is_complex()):
                 src = src.to(self.dtype)
+            if not (src.is_contiguous() and self.is_contiguous()
+                    and src.dtype == self.dtype
+                    and tuple(src._shape) == tuple(self._shape)) and not self.is_complex():
+                # Strides on either side, a dtype to convert, or a source to
+                # broadcast: one launch, the source read in place.
+                _copy_nd(src, self)
+                return self
             if not src.is_contiguous():
                 src = src.contiguous()
             if not self.is_contiguous():
@@ -3260,11 +3339,14 @@ class NBXTensor:
         # conversion (clamp finite values to ±65504) — the triton mirror
         # of the compiled DtypeEngine contract; raw tl.store overflows
         # bf16/fp32-range sentinels (finfo.min mask fills) to ±inf.
-        _sat = (target == NBXDtype.float16
-                and self._dtype in (NBXDtype.float32, NBXDtype.float64,
-                                    NBXDtype.bfloat16))
+        _sat = _saturating_cast(self._dtype, target)
         new = NBXTensor.empty(self._shape, target, f"cuda:{self._device_idx}")
         n = self._numel
+        if n > 0 and not self.is_contiguous() and not self.is_complex():
+            # a strided source is read in place and cast on the store —
+            # one launch instead of a contiguous copy and a cast of it
+            _copy_nd(self, new)
+            return new
         if n > 0:
             from neurobrix.kernels.ops.copy_op import copy_kernel
             import triton
