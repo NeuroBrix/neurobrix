@@ -4306,6 +4306,17 @@ class GraphExecutor:
         elif op_type in self._op_interceptors:
             # Resolve kwargs for interceptor
             resolved_kwargs = self._resolver.resolve_kwargs(op_uid, attrs, op_type, op_data)
+            # The graph's recorded K/V layout travels with the call. This
+            # path has no compile step to bind it onto the callable, so it is
+            # added here; without it the KV interceptor had only the shape to
+            # read, and at seq_len == head_dim the shape says nothing.
+            # Measured on CUDA 2026-09-07: every attention of a 64-token
+            # TinyLlama request refused on this arm.
+            if op_type in self._SDPA_OP_TYPES and "nbx_k_pre_transposed" in attrs:
+                resolved_kwargs.setdefault(
+                    "k_pre_transposed", bool(attrs["nbx_k_pre_transposed"]))
+                resolved_kwargs.setdefault(
+                    "v_pre_transposed", bool(attrs.get("nbx_v_pre_transposed", False)))
             result = self._op_interceptors[op_type](*normalized_inputs, **resolved_kwargs)
         elif op_type == "aten::_to_copy":
             # DtypeEngine handles _to_copy with Prism override and complex protection
