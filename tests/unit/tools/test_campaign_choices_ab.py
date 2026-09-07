@@ -48,7 +48,7 @@ def test_choices_are_classified_by_the_entry_proof(tmp_path):
     assert ch["differ_uncertified"] == [K + "(9, 9, 9)"]
     line = C.verdict({"lever": "env:x", "gate": {"ran": True, "identical": False}, "A": {}, "B": {}, "choices": ch})
     assert "EXCLUDED SETTING PICKED AT RUNTIME on 1 key(s)" in line
-    assert "CERTIFIED CHOICE CONTRADICTED on 1 key(s)" in line
+    assert "CERTIFIED CHOICE CONTRADICTED on 1 key(s)" in line and "margin 50 % = 500.0 µs on a 1000.0 µs kernel" in line
     assert "1 certified near-tie(s)" in line and "1 uncertified" in line
 
 
