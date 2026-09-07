@@ -404,7 +404,9 @@ class KVCacheAttentionWrapper:
         dropout_p: float = 0.0,
         is_causal: bool = True,
         scale: Optional[float] = None,
-        layer_idx: int = -1
+        layer_idx: int = -1,
+        k_pre_transposed: Optional[bool] = None,
+        v_pre_transposed: Optional[bool] = None,
     ) -> torch.Tensor:
         """
         Intercept SDPA for KV cache injection.
@@ -426,16 +428,40 @@ class KVCacheAttentionWrapper:
             attention output [batch, heads, seq_q, head_dim]
         """
         # K/V may arrive transposed [B,H,D,S] from pattern-reassembled SDPA;
-        # SDPA and KV cache expect [B,H,S,D]. Detect via head_dim (last axis),
-        # NOT seq (axis -2): seq_q != seq_k is normal (decode: seq_q=1; cross-
-        # attention: distinct lengths), so a seq-axis comparison wrongly transposes
-        # a correctly-shaped tensor. A real [B,H,D,S] carries head_dim in axis -2.
-        if (k.ndim == 4 and q.ndim == 4
-                and k.shape[-1] != q.shape[-1] and k.shape[-2] == q.shape[-1]):
-            k = k.transpose(-2, -1)
-        if (v.ndim == 4 and q.ndim == 4
-                and v.shape[-1] != q.shape[-1] and v.shape[-2] == q.shape[-1]):
-            v = v.transpose(-2, -1)
+        # SDPA and KV cache expect [B,H,S,D].
+        #
+        # The graph is the authority (GraphExecutor._mark_sdpa_k_layout,
+        # bound onto this interceptor by CompiledSequence._compile_op). The
+        # shape test kept below for callers that carry no recorded layout
+        # cannot decide the square case — at seq_len == head_dim both layouts
+        # have the same shape — and deciding it wrongly ran attention with
+        # K's axes crossed (measured 2026-09-07: TinyLlama at a 64-token
+        # prompt, argmax 29892 at 6.41 against the float64 oracle's 3864 at
+        # 22.36). It refuses there rather than guess.
+        if k.ndim == 4 and q.ndim == 4:
+            if k_pre_transposed is not None:
+                if k_pre_transposed:
+                    k = k.transpose(-2, -1)
+            elif (k.shape[-1] == q.shape[-1]
+                    and k.shape[-2] == q.shape[-2] == q.shape[-1]):
+                raise RuntimeError(
+                    f"KV interceptor: K is square {tuple(k.shape)} with "
+                    f"seq_len == head_dim and no layout was recorded for this "
+                    f"op. Refusing to guess.")
+            elif (k.shape[-1] != q.shape[-1] and k.shape[-2] == q.shape[-1]):
+                k = k.transpose(-2, -1)
+        if v.ndim == 4 and q.ndim == 4:
+            if v_pre_transposed is not None:
+                if v_pre_transposed:
+                    v = v.transpose(-2, -1)
+            elif (v.shape[-1] == q.shape[-1]
+                    and v.shape[-2] == q.shape[-2] == q.shape[-1]):
+                raise RuntimeError(
+                    f"KV interceptor: V is square {tuple(v.shape)} with "
+                    f"seq_len == head_dim and no layout was recorded for this "
+                    f"op. Refusing to guess.")
+            elif (v.shape[-1] != q.shape[-1] and v.shape[-2] == q.shape[-1]):
+                v = v.transpose(-2, -1)
 
         # Slice attention mask to match runtime sequence length
         if attn_mask is not None:
@@ -674,7 +700,9 @@ class KVCacheAttentionWrapper:
         dropout_p: float = 0.0,
         is_causal: bool = False,
         *,
-        scale: Optional[float] = None
+        scale: Optional[float] = None,
+        k_pre_transposed: Optional[bool] = None,
+        v_pre_transposed: Optional[bool] = None,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
         """
         Intercept aten::_scaled_dot_product_efficient_attention.
@@ -691,7 +719,9 @@ class KVCacheAttentionWrapper:
             dropout_p=float(dropout_p) if dropout_p is not None else 0.0,
             is_causal=is_causal,
             scale=scale,
-            layer_idx=-1
+            layer_idx=-1,
+            k_pre_transposed=k_pre_transposed,
+            v_pre_transposed=v_pre_transposed,
         )
 
         return (output, None, None, None)
@@ -704,7 +734,9 @@ class KVCacheAttentionWrapper:
         dropout_p: float = 0.0,
         is_causal: bool = False,
         return_debug_mask: bool = False,
-        scale: Optional[float] = None
+        scale: Optional[float] = None,
+        k_pre_transposed: Optional[bool] = None,
+        v_pre_transposed: Optional[bool] = None,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor], int, int, Optional[torch.Tensor]]:
         """
         Intercept aten::_scaled_dot_product_flash_attention.
@@ -721,7 +753,9 @@ class KVCacheAttentionWrapper:
             dropout_p=dropout_p,
             is_causal=is_causal,
             scale=scale,
-            layer_idx=-1
+            layer_idx=-1,
+            k_pre_transposed=k_pre_transposed,
+            v_pre_transposed=v_pre_transposed,
         )
 
         return (output, None, None, None, 0, 0, None)
@@ -736,7 +770,9 @@ class KVCacheAttentionWrapper:
         dropout_p: float = 0.0,
         is_causal: bool = False,
         return_debug_mask: bool = False,
-        scale: Optional[float] = None
+        scale: Optional[float] = None,
+        k_pre_transposed: Optional[bool] = None,
+        v_pre_transposed: Optional[bool] = None,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
         """
         Intercept aten::_scaled_dot_product_cudnn_attention.
@@ -753,7 +789,9 @@ class KVCacheAttentionWrapper:
             dropout_p=dropout_p,
             is_causal=is_causal,
             scale=scale,
-            layer_idx=-1
+            layer_idx=-1,
+            k_pre_transposed=k_pre_transposed,
+            v_pre_transposed=v_pre_transposed,
         )
 
         return (output, None, None)
@@ -766,7 +804,9 @@ class KVCacheAttentionWrapper:
         attn_mask: Optional[torch.Tensor] = None,
         dropout_p: float = 0.0,
         is_causal: bool = False,
-        scale: Optional[float] = None
+        scale: Optional[float] = None,
+        k_pre_transposed: Optional[bool] = None,
+        v_pre_transposed: Optional[bool] = None,
     ) -> torch.Tensor:
         """
         Intercept aten::scaled_dot_product_attention (standard variant).
@@ -783,7 +823,9 @@ class KVCacheAttentionWrapper:
             dropout_p=dropout_p,
             is_causal=is_causal,
             scale=scale,
-            layer_idx=-1
+            layer_idx=-1,
+            k_pre_transposed=k_pre_transposed,
+            v_pre_transposed=v_pre_transposed,
         )
 
     def intercept_flash_attention_for_cpu(
@@ -794,7 +836,9 @@ class KVCacheAttentionWrapper:
         dropout_p: float = 0.0,
         is_causal: bool = True,
         *,
-        scale: Optional[float] = None
+        scale: Optional[float] = None,
+        k_pre_transposed: Optional[bool] = None,
+        v_pre_transposed: Optional[bool] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Intercept aten::_scaled_dot_product_flash_attention_for_cpu.
@@ -815,7 +859,9 @@ class KVCacheAttentionWrapper:
             dropout_p=dropout_p,
             is_causal=is_causal,
             scale=scale,
-            layer_idx=-1
+            layer_idx=-1,
+            k_pre_transposed=k_pre_transposed,
+            v_pre_transposed=v_pre_transposed,
         )
 
         # Create logsumexp output (not used in inference but graph expects it)
