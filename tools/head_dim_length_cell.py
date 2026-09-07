@@ -50,6 +50,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import subprocess
 import sys
 import time
@@ -203,32 +204,69 @@ def ids_for(head_dim: int, vocab: int) -> list:
 # The arms
 # ---------------------------------------------------------------------------
 
+def _family_of(model_dir: Path) -> str:
+    return ((_read_json(model_dir / "manifest.json") or {}).get("family") or "").lower()
+
+
 def run_arm(model: str, ids: list, arm: str, max_tokens: int,
-            outdir: Path, tag: str, src: Path | None, timeout: int) -> dict:
+            outdir: Path, tag: str, src: Path | None, timeout: int,
+            family: str = "") -> dict:
+    """One arm, on the exact ids, with the generated TOKEN IDS as its identity.
+
+    The identity is the sequence of token ids the engine reports through
+    `NBX_DECODE_PROGRESS`, not the rendered output file. Rendered bytes are a
+    text family's answer; a tts or stt decoder renders audio, and its CLI
+    refuses a `.txt` output before it generates anything. The ids are what
+    every decoder produces, they are exact, and they are what the float64
+    oracle can be compared against.
+    """
     out_path = outdir / f"out_{tag}.txt"
+    progress = outdir / f"prog_{tag}.txt"
     out_path.unlink(missing_ok=True)
+    progress.unlink(missing_ok=True)
     env = dict(os.environ)
     env["PYTHONPATH"] = str((src or REPO) / "src")
+    env["NBX_DECODE_PROGRESS"] = str(progress)
     env.setdefault("TOKENIZERS_PARALLELISM", "false")
     cmd = [sys.executable, "-u", "-m", "neurobrix", "run",
            "--model", model,
            "--prompt", "x",                       # unused: ids win (Priority 0)
            "--set", f"global.input_token_ids={json.dumps(ids)}",
            "--max-tokens", str(max_tokens),
-           "--temperature", "0",
-           "--output", str(out_path), f"--{arm}"]
+           "--temperature", "0", f"--{arm}"]
+    # `--output` only where a .txt is the family's own answer. Elsewhere the
+    # CLI refuses the extension before generating, and the ids are the
+    # identity anyway.
+    if family in ("llm", "vlm", "multimodal", ""):
+        cmd += ["--output", str(out_path)]
     started = time.time()
     try:
         proc = subprocess.run(cmd, env=env, capture_output=True, text=True,
                               timeout=timeout, cwd=str(src or REPO))
-        rc, tail = proc.returncode, (proc.stderr or proc.stdout)[-600:]
+        rc, tail = proc.returncode, (proc.stderr or proc.stdout)[-800:]
     except subprocess.TimeoutExpired:
         rc, tail = -9, f"timeout after {timeout}s"
     wall = round(time.time() - started, 3)
+
+    token_ids = []
+    if progress.exists():
+        for line in progress.read_text().splitlines():
+            found = re.search(r"\blast=(\d+)", line)
+            if found:
+                token_ids.append(int(found.group(1)))
     text = out_path.read_text() if out_path.exists() else ""
+    identity = ",".join(str(t) for t in token_ids)
+    # A build the engine declines to execute is a capability gate, not a
+    # failure of this cell: the int4 containers say so in words.
+    gate = rc != 0 and ("does not execute" in tail or "Run this build with" in tail)
     return {"arm": arm, "rc": rc, "wall_s": wall, "chars": len(text),
-            "sha256": hashlib.sha256(text.encode()).hexdigest()[:16],
-            "text": text, "out_file": f"out_{tag}.txt",
+            "token_ids": token_ids,
+            "first_token": token_ids[0] if token_ids else None,
+            "sha256": hashlib.sha256(identity.encode()).hexdigest()[:16] if token_ids
+                      else hashlib.sha256(text.encode()).hexdigest()[:16],
+            "text_sha256": hashlib.sha256(text.encode()).hexdigest()[:16],
+            "not_executable": gate,
+            "out_file": out_path.name if text else "",
             "error_tail": "" if rc == 0 else tail}
 
 
@@ -255,6 +293,13 @@ def run_fp64_oracle(model_dir: Path, ids: list, outdir: Path, tag: str,
             "file": out_json.name}
 
 
+def _first_token_difference(a: list, b: list) -> int | None:
+    for i, (x, y) in enumerate(zip(a, b)):
+        if x != y:
+            return i
+    return None if len(a) == len(b) else min(len(a), len(b))
+
+
 def first_difference(a: str, b: str) -> int | None:
     for i, (x, y) in enumerate(zip(a, b)):
         if x != y:
@@ -267,7 +312,12 @@ def first_difference(a: str, b: str) -> int | None:
 # ---------------------------------------------------------------------------
 
 def run(args) -> int:
-    outdir = Path(args.out)
+    # Absolute: the arms run with cwd set to the tree under test, so a
+    # relative path would be resolved against THAT tree. The engine then
+    # generated its tokens and failed writing them, and the row came back
+    # empty with rc 1 — a harness bug that reads exactly like an engine
+    # refusal. Measured 2026-09-07 on the `before` tree.
+    outdir = Path(args.out).resolve()
     outdir.mkdir(parents=True, exist_ok=True)
     per_model_root = outdir / args.label
     per_model_root.mkdir(parents=True, exist_ok=True)
@@ -291,6 +341,7 @@ def run(args) -> int:
         ids = ids_for(head_dim, info["vocab_size"])
         here = per_model_root / model
         here.mkdir(parents=True, exist_ok=True)
+        family = _family_of(model_dir)
         print(f"[{args.label}] {model}: head_dim {head_dim} "
               f"({info['model_type'] or 'unknown type'})", flush=True)
 
@@ -298,7 +349,7 @@ def run(args) -> int:
         for arm in (args.arm or list(ARMS)):
             tag = f"{model}_{arm}"
             record = run_arm(model, ids, arm, args.max_tokens, here, tag,
-                             args.src_path, args.timeout)
+                             args.src_path, args.timeout, family)
             arms[arm] = record
             print(f"    {arm:20s} rc={record['rc']} sha={record['sha256'][:8]} "
                   f"{record['wall_s']}s", flush=True)
@@ -315,22 +366,32 @@ def run(args) -> int:
             moved = list(ids)
             moved[-1] = ids[0] if ids[-1] != ids[0] else ids[1]
             control = run_arm(model, moved, probe_arm, args.max_tokens, here,
-                              f"{model}_control", args.src_path, args.timeout)
+                              f"{model}_control", args.src_path, args.timeout,
+                              family)
             base = arms.get(probe_arm)
             control["distinguishes"] = bool(
                 base and base["rc"] == 0 == control["rc"]
                 and base["sha256"] != control["sha256"])
+            if base is None or base["rc"] != 0 or control["rc"] != 0:
+                control["distinguishes"] = None
+                verdict_word = "no verdict — the arm it compares against did not run"
+            else:
+                verdict_word = ("ids are used" if control["distinguishes"]
+                                else "IDS IGNORED")
             print(f"    control (one id moved) sha={control['sha256'][:8]} "
-                  f"{'ids are used' if control['distinguishes'] else 'IDS IGNORED'}",
-                  flush=True)
+                  f"{verdict_word}", flush=True)
             if not control["distinguishes"] and base and base["rc"] == 0:
                 # Void, not fatal: one model that does not honour the ids must
                 # not destroy a zoo run, and it must not be reported green
                 # either. The row carries the reason and `run` exits non-zero.
                 control["void_reason"] = (
-                    "changing a token id did not change the output, so "
-                    "`global.input_token_ids` was not what the engine ran on; "
-                    "this row measures a length the run did not have")
+                    "changing the last token id did not change the generated "
+                    "ids. Either the engine did not run on the ids given, or "
+                    "its answer at this length does not depend on the last "
+                    "token — which is what a K read with its axes crossed "
+                    "looks like from outside. Compare the same row on a tree "
+                    "where the control does move before reading this one as a "
+                    "harness fault.")
 
         oracle = None
         if info["model_type"] in LLAMA_LIKE:
@@ -340,16 +401,28 @@ def run(args) -> int:
                       f"top1={oracle['top1']:.4f}", flush=True)
 
         ref = arms.get(ORACLE_ARM)
+        oracle_argmax = (oracle or {}).get("argmax") if (oracle or {}).get("ran") else None
         verdict = {}
         for arm, record in arms.items():
             if record["rc"] != 0:
-                verdict[arm] = "refused"
+                verdict[arm] = ("not executable by this engine (capability gate)"
+                                if record.get("not_executable") else "refused")
             elif ref is None or ref["rc"] != 0:
                 verdict[arm] = "no oracle arm"
             elif record["sha256"] == ref["sha256"]:
                 verdict[arm] = "identical"
             else:
-                verdict[arm] = f"differs at char {first_difference(record['text'], ref['text'])}"
+                verdict[arm] = ("differs from the oracle arm at token "
+                                + str(_first_token_difference(record["token_ids"],
+                                                              ref["token_ids"])))
+            # The float64 answer is a SECOND opinion and it is checked, not
+            # printed: the sequential oracle is another engine, and two
+            # engines can be wrong together — they were, at this length.
+            if oracle_argmax is not None and record["first_token"] is not None:
+                record["matches_fp64"] = (record["first_token"] == oracle_argmax)
+                if not record["matches_fp64"]:
+                    verdict[arm] += (f" · first token {record['first_token']} "
+                                     f"against float64 {oracle_argmax}")
 
         rows.append({"model": model, **info, "ids_len": len(ids),
                      "ids_head": ids[:6], "ids_tail": ids[-3:],
@@ -385,15 +458,23 @@ def run(args) -> int:
 
 
 def _rev(tree: Path) -> str:
+    """The revision, and whether the tree carries changes on top of it.
+
+    A `before` tree is usually that revision with the levers reverted and not
+    committed. Printing the bare hash would name a tree that is not the one
+    measured."""
     try:
-        return subprocess.run(["git", "-C", str(tree), "rev-parse", "--short", "HEAD"],
-                              capture_output=True, text=True).stdout.strip() or "?"
+        rev = subprocess.run(["git", "-C", str(tree), "rev-parse", "--short", "HEAD"],
+                             capture_output=True, text=True).stdout.strip() or "?"
+        dirty = subprocess.run(["git", "-C", str(tree), "status", "--porcelain"],
+                               capture_output=True, text=True).stdout.strip()
+        return rev + (" + uncommitted changes" if dirty else "")
     except Exception:
         return "?"
 
 
 def table(args) -> int:
-    outdir = Path(args.out)
+    outdir = Path(args.out).resolve()
     docs = {}
     for path in sorted(outdir.glob("cell_*.json")):
         docs[path.stem[len("cell_"):]] = json.loads(path.read_text())
@@ -434,7 +515,13 @@ def table(args) -> int:
             elif not orc.get("ran"):
                 oracle_cell = "refused"
             else:
-                oracle_cell = f"argmax {orc['argmax']} @ {orc['top1']:.3f}"
+                agree = [a for a in ARMS
+                         if (row["arms"].get(a) or {}).get("matches_fp64") is True]
+                disagree = [a for a in ARMS
+                            if (row["arms"].get(a) or {}).get("matches_fp64") is False]
+                oracle_cell = (f"argmax {orc['argmax']} @ {orc['top1']:.3f} — "
+                               + (f"{len(agree)} arms agree" if agree else "no arm agrees")
+                               + (f", {len(disagree)} disagree" if disagree else ""))
             void = (row.get("control") or {}).get("void_reason")
             if void:
                 cells = [f"**void** — {void}"] + ["—"] * (len(ARMS) - 1)
@@ -463,12 +550,17 @@ def table(args) -> int:
                     b = twin["arms"].get(arm)
                     if a is None or b is None:
                         continue
-                    same = a["sha256"] == b["sha256"]
+                    if a["rc"] != 0 or b["rc"] != 0:
+                        verdict = ("no comparison — "
+                                   + ("both arms refused" if a["rc"] and b["rc"]
+                                      else f"the {base if a['rc'] else other} arm refused"))
+                    elif a["sha256"] == b["sha256"]:
+                        verdict = "unchanged"
+                    else:
+                        verdict = "**changed — it was wrong at this length**"
                     lines.append(
                         f"| {row['model']} | `--{arm}` | `{a['sha256'][:8]}` | "
-                        f"`{b['sha256'][:8]}` | "
-                        + ("unchanged" if same else "**changed — it was wrong at this length**")
-                        + " |")
+                        f"`{b['sha256'][:8]}` | {verdict} |")
             lines.append("")
 
     md = outdir / "CELL.md"
