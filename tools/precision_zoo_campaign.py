@@ -572,6 +572,15 @@ def tree_ab(model: str, gpu, out: Path, extra: list, timeout: int, trees: list, 
                 res["oracle"]["diff"] = gate(outp, b)          # how far the corrected output is from the oracle, in the family's measure
             except Exception as e:  # noqa: BLE001
                 res["oracle"]["diff"] = {"error": str(e)}
+        a0 = d / f"{trees[0][0]}{ext}"
+        if rc == 0 and outp.exists() and a0.exists():
+            # and how far the output BEFORE the fix was: a fix that moves an output within the
+            # family's measure is a config or tiling difference, a fix that brings a wrong output
+            # onto the oracle is the defect closed — the row must say which (hat-l-x4, 2026-09-07)
+            try:
+                res["oracle"]["before_diff"] = {"identical": a0.read_bytes() == outp.read_bytes(), **gate(outp, a0)}
+            except Exception as e:  # noqa: BLE001
+                res["oracle"]["before_diff"] = {"error": str(e)}
     res["gate"] = {"kind": "bytes", "against": first, "arms": comp,
                    "identical": ran and all(v["identical"] for v in comp.values()), "ran": ran}
     res["A"] = res["arms"][first]
@@ -851,8 +860,13 @@ def verdict(r: dict) -> str:
                 tail += f"; corrected output IDENTICAL to the sequential oracle"
             else:
                 dd = o.get("diff") or {}
+                m = dd.get("psnr_db", dd.get("snr_db", dd.get("psnr_mean_db")))
                 tail += f"; corrected output vs the sequential oracle: {dd.get('kind', '?')} " + \
-                        ("PASS" if dd.get("pass") else "DIFFERENT") + (f" ({dd.get('snr_db', dd.get('psnr_mean_db', ''))})" if dd else "")
+                        ("PASS" if dd.get("pass") else "DIFFERENT") + (f" ({m})" if m is not None else "")
+            bd = o.get("before_diff") or {}
+            if bd:
+                mb = bd.get("psnr_db", bd.get("snr_db", bd.get("psnr_mean_db")))
+                tail += "; before the fix vs the oracle: " + ("IDENTICAL" if bd.get("identical") else (("PASS" if bd.get("pass") else "DIFFERENT") + (f" ({mb})" if mb is not None else "")))
         return "DIFFERENT (" + ", ".join(diff) + ")" + tail
     if r.get("lever", "").startswith("env:"):
         g = r.get("gate") or {}
