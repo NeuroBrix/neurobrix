@@ -72,3 +72,35 @@ def test_a_structural_attribute_difference_is_refused():
 def test_a_mixed_change_is_refused_as_a_whole():
     n = _new(); n["attributes"]["kwargs"] = {"implicit": True}
     assert R.witnessed_arg_changes(OLD, n, TENSORS) is None
+
+
+# ── the symbolized class: an integer the corrected rule now derives from the input ──
+PAD = {"type": "add", "left": {"type": "mul", "left": {"type": "symbol", "id": "s1", "trace": 1}, "right": 76800, "trace": 76800}, "right": 20, "trace": 76820}
+VIEW_OLD = {"op_uid": "aten.view::32", "op_type": "aten.view", "input_tensor_ids": ["aten.reflection_pad1d::0::out_0"], "output_tensor_ids": ["aten.view::32::out_0"],
+            "attributes": {"args": [{"type": "tensor", "tensor_id": "aten.reflection_pad1d::0::out_0"}, {"type": "list", "value": [1, 76820]}], "kwargs": {}, "shape": [1, 76820]}}
+VIEW_TENSORS = {"aten.reflection_pad1d::0::out_0": {"shape": [1, 1, 76820], "symbolic_shape": {"dims": [1, 1, PAD], "concrete": [1, 1, 76820]}},
+                "aten.view::32::out_0": {"shape": [1, 76820], "symbolic_shape": {"dims": [1, PAD], "concrete": [1, 76820]}}}
+
+
+def _view_new(expr=PAD):
+    n = copy.deepcopy(VIEW_OLD)
+    n["attributes"]["shape"][1] = expr
+    n["attributes"]["args"][1]["value"][1] = expr
+    return n
+
+
+def test_an_integer_argument_now_derived_from_the_inputs_dim_is_symbolized():
+    sites = R.witnessed_arg_changes(VIEW_OLD, _view_new(), VIEW_TENSORS)
+    assert sites is not None and len(sites) == 2 and all(s["kind"] == "symbolized" for s in sites)
+
+
+def test_a_symbol_the_inputs_do_not_carry_is_refused():
+    """A value-matched guess (a symbol with the right trace that no input carries) is not derived."""
+    guess = {"type": "symbol", "id": "s9", "trace": 76820}
+    assert R.witnessed_arg_changes(VIEW_OLD, _view_new(guess), VIEW_TENSORS) is None
+
+
+def test_a_symbolization_with_another_trace_is_refused():
+    wrong = copy.deepcopy(PAD); wrong["trace"] = 76800
+    tensors = copy.deepcopy(VIEW_TENSORS); tensors["aten.reflection_pad1d::0::out_0"]["symbolic_shape"]["dims"][2] = wrong
+    assert R.witnessed_arg_changes(VIEW_OLD, _view_new(wrong), tensors) is None

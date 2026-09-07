@@ -127,9 +127,9 @@ def _leaf_diffs(a, b, path=()):
             out += d
         return out
     if isinstance(a, (dict, list)) or isinstance(b, (dict, list)):
-        # a symbol {"type": "symbol", ...} against a bare integer is a leaf pair
-        if (isinstance(a, dict) and a.get("type") == "symbol" and isinstance(b, int)) or \
-           (isinstance(b, dict) and b.get("type") == "symbol" and isinstance(a, int)):
+        # a symbol or expression {"type": ...} against a bare integer is a leaf pair
+        if (isinstance(a, dict) and "type" in a and isinstance(b, int) and not isinstance(b, bool)) or \
+           (isinstance(b, dict) and "type" in b and isinstance(a, int) and not isinstance(a, bool)):
             return [(path, a, b)]
         return None
     return [] if a == b else [(path, a, b)]
@@ -137,10 +137,15 @@ def _leaf_diffs(a, b, path=()):
 
 def witnessed_arg_changes(old_op: dict, new_op: dict, tensors_new: dict):
     """The differences between two records of one op when each is the closed
-    defect at the argument level: a shape argument (a `size`/`shape` list, or
-    the `args` list it mirrors) whose old value — a symbol, or an integer —
-    claimed a trace value that contradicts the extent the op's own output
-    tensor witnessed at that position, replaced by that witnessed integer.
+    defect at the argument level — two kinds:
+    - witnessed: a shape argument (a `size`/`shape` list, or the `args` list it
+      mirrors) whose old value — a symbol, or an integer — claimed a trace value
+      that contradicts the extent the op's own output tensor witnessed at that
+      position, replaced by that witnessed integer;
+    - symbolized: an integer argument the old tracer could not express, now the
+      symbolic dim the op's own input carries at that extent (the corrected
+      rule derived it; a value-matched guess would not be among the inputs'
+      dims), with the old integer as its trace value.
     Returns the sites, or None when any difference is of another kind."""
     if {k for k in set(old_op) | set(new_op) if old_op.get(k) != new_op.get(k)} != {"attributes"}:
         return None
@@ -153,22 +158,39 @@ def witnessed_arg_changes(old_op: dict, new_op: dict, tensors_new: dict):
         conc = (m.get("symbolic_shape") or {}).get("concrete") or m.get("shape") or []
         if conc:
             witnessed.append(list(conc))
+    input_dims = []
+    for tid in new_op.get("input_tensor_ids") or []:
+        m = tensors_new.get(tid) or {}
+        for d in (m.get("symbolic_shape") or {}).get("dims") or []:
+            if isinstance(d, dict):
+                input_dims.append(json.dumps(d, sort_keys=True))
     sites = []
     for path, a, b in diffs:
-        if not isinstance(b, int) or isinstance(b, bool):
-            return None
-        tv = _trace_value(a)
-        if tv is None or tv == b:
-            return None
         if not path or not isinstance(path[-1], int):
             return None
         pos = path[-1]
         parent = new_op["attributes"]
         for k in path[:-1]:
             parent = parent[k]
+        if isinstance(b, dict) and isinstance(a, int) and not isinstance(a, bool):
+            # SYMBOLIZED: an integer the old tracer could not express, now the very symbolic
+            # dim the op's input carries (derived by the rule, never matched by value alone),
+            # with the old integer as its trace value and the witnessed extent at that position.
+            tv = _trace_value(b)
+            if tv != a or json.dumps(b, sort_keys=True) not in input_dims:
+                return None
+            if not any(len(parent) == len(c) and c[pos] == a for c in witnessed):
+                return None
+            sites.append({"op": new_op.get("op_uid"), "path": ".".join(str(k) for k in path), "old": a, "new": b, "kind": "symbolized"})
+            continue
+        if not isinstance(b, int) or isinstance(b, bool):
+            return None
+        tv = _trace_value(a)
+        if tv is None or tv == b:
+            return None
         if not any(len(parent) == len(c) and c[pos] == b for c in witnessed):
             return None
-        sites.append({"op": new_op.get("op_uid"), "path": ".".join(str(k) for k in path), "old": a, "new": b})
+        sites.append({"op": new_op.get("op_uid"), "path": ".".join(str(k) for k in path), "old": a, "new": b, "kind": "witnessed"})
     return sites
 
 
@@ -342,6 +364,15 @@ class Model:
 
     def step_new_outputs(self):
         if self.done("new_outputs"): return True
+        # A previous attempt's outputs describe a previous container: never reused as this one's.
+        # (The old container's outputs are cached across attempts — that container never changes.)
+        stale = sorted(self.dir.glob("new_*"))
+        if stale:
+            keep = self.dir / f"superseded_{time.strftime('%H%M%S')}"
+            keep.mkdir(exist_ok=True)
+            for f in stale:
+                if f.is_file():
+                    f.rename(keep / f.name)
         res = self.outputs("new")
         ok = all(v["rc"] == 0 or v.get("n_a") for v in res.values())
         self.mark("new_outputs", ok, runs=res)
