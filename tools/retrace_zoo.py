@@ -45,6 +45,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "tools"))
 import precision_zoo_campaign as C  # noqa: E402
+import repo_env  # noqa: E402  — the repository's .env, loaded the way the build toolchain loads its own
+
+repo_env.load()
 
 PY = "/home/mlops/ml/venv/bin/python"
 FORGE = REPO / "forge" / "forge.py"
@@ -276,11 +279,13 @@ class Model:
 
     def step_upload(self):
         if self.done("upload"): return True
-        token = os.environ.get("NEUROBRIX_API_TOKEN")
         nbx = (self.state["steps"].get("build") or {}).get("nbx")
-        if not token:
-            self.mark("upload", False, state="READY_FOR_UPLOAD", reason="NEUROBRIX_API_TOKEN absent — the owner's credential", nbx=nbx)
-            log(f"{self.name}: READY_FOR_UPLOAD (no token in the environment)")
+        try:
+            repo_env.require("NEUROBRIX_API_TOKEN")
+        except repo_env.MissingVariable as exc:
+            # An explicit refusal that names the variable and the file — never a state that waits without saying why.
+            self.mark("upload", False, state="REFUSED", reason=str(exc), nbx=nbx)
+            log(f"{self.name}: upload {exc}")
             return False
         if self.hub:
             org, name = self.hub.split("/", 1)
@@ -302,7 +307,7 @@ class Model:
             ok = fn()
             if not ok:
                 st = self.state["steps"].get(name) or {}
-                log(f"{self.name}: {name} → {'READY_FOR_UPLOAD' if st.get('state') == 'READY_FOR_UPLOAD' else 'STOPPED'} ({st.get('verdict') or st.get('error') or st.get('reason') or ('rc ' + str(st.get('rc')))})")
+                log(f"{self.name}: {name} → {st.get('state') or 'STOPPED'} ({st.get('verdict') or st.get('error') or st.get('reason') or ('rc ' + str(st.get('rc')))})")
                 return False
         log(f"{self.name}: complete")
         return True
