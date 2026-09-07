@@ -166,6 +166,27 @@ def _is_dim_node(v) -> bool:
     return isinstance(v, dict) and "type" in v and v.get("type") not in _NOT_DIM_TYPES
 
 
+def diff_paths(a, b, path="", out=None, limit=8):
+    """Where two JSON trees differ, as (path, old, new) leaves — the gate NAMES an op
+    difference it refuses (Kokoro's predictor, 2026-09-07: one op beyond, unnamed)."""
+    if out is None:
+        out = []
+    if len(out) >= limit:
+        return out
+    if isinstance(a, dict) and isinstance(b, dict):
+        for k in sorted(set(a) | set(b)):
+            if k not in a or k not in b:
+                out.append((f"{path}.{k}".lstrip("."), a.get(k, "<absent>"), b.get(k, "<absent>")))
+            else:
+                diff_paths(a[k], b[k], f"{path}.{k}".lstrip("."), out, limit)
+    elif isinstance(a, list) and isinstance(b, list) and len(a) == len(b):
+        for i, (x, y) in enumerate(zip(a, b)):
+            diff_paths(x, y, f"{path}.{i}".lstrip("."), out, limit)
+    elif a != b:
+        out.append((path, a, b))
+    return out
+
+
 def _leaf_diffs(a, b, path=()):
     """Every leaf where two JSON trees of the same structure differ; None when the structure itself differs."""
     if isinstance(a, dict) and isinstance(b, dict):
@@ -948,7 +969,17 @@ class Model:
             ops_o = o["ops"] if isinstance(o.get("ops"), list) else list((o.get("ops") or {}).values())
             ops_n = n["ops"] if isinstance(n.get("ops"), list) else list((n.get("ops") or {}).values())
             rec = {"ops_old": len(ops_o), "ops_new": len(ops_n), "op_diffs": 0, "tensor_diffs_beyond": 0, "annotation_changes": 0,
-                   "arg_witnessed": 0, "arg_kinds": {}, "arg_witnessed_sites": [], "pruned_dead_ops": 0, "corrupted_before": 0, "corrupted_after": 0}
+                   "arg_witnessed": 0, "arg_kinds": {}, "arg_witnessed_sites": [], "op_diff_sites": [], "tensor_diff_sites": [],
+                   "pruned_dead_ops": 0, "corrupted_before": 0, "corrupted_after": 0}
+
+            def _site(uid, a, b, only=None):
+                if len(rec["op_diff_sites"]) >= 5:
+                    return
+                if only:
+                    rec["op_diff_sites"].append({"op": uid, "type": (a or b or {}).get("op_type"), "only_in": only})
+                else:
+                    rec["op_diff_sites"].append({"op": uid, "type": a.get("op_type"),
+                                                 "diffs": [{"path": pth, "old": json.dumps(x)[:160], "new": json.dumps(y)[:160]} for pth, x, y in diff_paths(a, b)]})
             to, tn = o.get("tensors") or {}, n.get("tensors") or {}
             # Ops align by uid. An op only the old graph carries, whose outputs no old op consumed
             # and no graph output named, is a DEAD op the corrected tracer prunes (R19: the DAG
@@ -970,8 +1001,10 @@ class Model:
                 if outs and not any(t in consumed_o or t in outputs_o for t in outs):
                     rec["pruned_dead_ops"] += 1
                 else:
-                    rec["op_diffs"] += 1
-            rec["op_diffs"] += sum(1 for uid in by_n if uid not in by_o)
+                    rec["op_diffs"] += 1; _site(uid, a, None, only="old")
+            for uid in by_n:
+                if uid not in by_o:
+                    rec["op_diffs"] += 1; _site(uid, None, by_n[uid], only="new")
             for uid, a in by_o.items():
                 b = by_n.get(uid)
                 if b is None:
@@ -981,7 +1014,7 @@ class Model:
                 if json.dumps(a, sort_keys=True) != json.dumps(b, sort_keys=True):
                     sites = witnessed_arg_changes(a, b, tn)
                     if sites is None:
-                        rec["op_diffs"] += 1
+                        rec["op_diffs"] += 1; _site(uid, a, b)
                     else:
                         rec["arg_witnessed"] += len(sites)
                         for x in sites:
@@ -993,7 +1026,10 @@ class Model:
                 if a is None or b is None:
                     if tid in dead_out and b is None:
                         continue                       # the pruned dead op's own output
-                    rec["tensor_diffs_beyond"] += 1; continue
+                    rec["tensor_diffs_beyond"] += 1
+                    if len(rec["tensor_diff_sites"]) < 5:
+                        rec["tensor_diff_sites"].append({"tensor": tid, "only_in": "old" if b is None else "new"})
+                    continue
                 for k in set(a) | set(b):
                     if k in PROVENANCE_KEYS or k in DERIVED_KEYS:
                         continue
@@ -1002,6 +1038,8 @@ class Model:
                             rec["annotation_changes"] += 1
                         else:
                             rec["tensor_diffs_beyond"] += 1
+                            if len(rec["tensor_diff_sites"]) < 5:
+                                rec["tensor_diff_sites"].append({"tensor": tid, "key": k, "old": json.dumps(a.get(k))[:160], "new": json.dumps(b.get(k))[:160]})
             for tens, key in ((to, "corrupted_before"), (tn, "corrupted_after")):
                 for m in tens.values():
                     dims = (m.get("symbolic_shape") or {}).get("dims") or []; shp = m.get("shape") or []
