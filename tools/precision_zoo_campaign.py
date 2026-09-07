@@ -670,7 +670,11 @@ def env_ab(model: str, gpu, out: Path, extra: list, timeout: int, env_b: dict, l
         rc, wall = run(cmd + req + ["--output", str(outp)], env, d / f"{arm}.log", timeout)
         log = (d / f"{arm}.log").read_text(errors="replace")
         cert = re.search(r"certified directory: (\d+) key\(s\) served without a sweep, (\d+) swept at runtime", log)
+        # An encoded build (int4) is refused by the compiled engine at its capability gate:
+        # not an arm that failed, a row the lever does not apply to on that engine.
+        unsupported = re.search(r"UNSUPPORTED PATH: (.*?encoding '[^']*'[^.]*)", log)
         res[arm] = {"rc": rc, "wall_s": wall, "exec_s": exec_time(d / f"{arm}.log"), "output": str(outp),
+                    "n_a": unsupported.group(1).strip()[:160] if unsupported else None,
                     "sha": hashlib.sha256(outp.read_bytes()).hexdigest()[:12] if outp.exists() else None,
                     "ops_removed": sum(int(x) for x in re.findall(r"\[Optim\] algebraic: (\d+) identity ops", log)) or None,
                     "certified_served": int(cert.group(1)) if cert else None,
@@ -682,6 +686,9 @@ def env_ab(model: str, gpu, out: Path, extra: list, timeout: int, env_b: dict, l
     same = a.exists() and b.exists() and a.read_bytes() == b.read_bytes()
     res["gate"] = {"kind": "bytes", "identical": same, "pass": same,
                    "ran": res["A"]["rc"] == 0 and res["B"]["rc"] == 0}
+    na = res["A"].get("n_a") or res["B"].get("n_a")
+    if na:
+        res["gate"] = {"kind": "n/a", "reason": na, "pass": None, "ran": False}
     if a.exists() and b.exists() and not same:
         try:
             res["gate"]["diff"] = gate(a, b)
@@ -817,6 +824,8 @@ def verdict(r: dict) -> str:
         return "DIFFERENT (" + ", ".join(diff) + ")" + tail
     if r.get("lever", "").startswith("env:"):
         g = r.get("gate") or {}
+        if g.get("kind") == "n/a":
+            return f"N/A ({g.get('reason')})"
         if not g.get("ran"):
             return "FAILED (an arm did not run)"
         n = (r.get("B") or {}).get("ops_removed")
