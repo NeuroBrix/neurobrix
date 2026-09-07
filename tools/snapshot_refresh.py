@@ -74,7 +74,8 @@ def _download_under_probe(repo: str, args, fh, note) -> int:
     export is under pressure and the writer is what it drains. Returns the
     download's return code, or -1 when the probe stopped it."""
     import signal
-    proc = subprocess.Popen([PY, str(FORGE), "snap", "--name", repo, "--path", args.dest, "--max-workers", str(args.max_workers)],
+    proc = subprocess.Popen([PY, str(FORGE), "snap", "--name", repo, "--path", args.dest, "--max-workers", str(args.max_workers),
+                             "--max-write-mbps", str(args.max_write_mbps)],
                             cwd=str(REPO / "forge"), stdout=fh, stderr=subprocess.STDOUT, env={**os.environ})
     while True:
         try:
@@ -109,6 +110,8 @@ def main():
     ap.add_argument("--probe-seconds", type=float, default=5.0,
                     help="an `ls` of the export slower than this, before a repository or during its download, = the export is under pressure: stop, by name")
     ap.add_argument("--probe-interval", type=float, default=10.0, help="seconds between two probes of the export while a download runs")
+    ap.add_argument("--max-write-mbps", type=float, default=40.0,
+                    help="cap on the rate the downloader writes to the export (MB/s); an unthrottled single stream stalled it beside its readers")
     args = ap.parse_args()
     repo_env.require("HF_TOKEN")                 # refuses by name before the first request
     logdir = Path(args.log); logdir.mkdir(parents=True, exist_ok=True)
@@ -139,7 +142,7 @@ def main():
             note(f"{repo}: NOT STARTED — a previous download of this repository (pid {previous}) is still ending on the export; stopping the chain")
             failed += 1
             break
-        note(f"{repo}: downloading to {args.dest} ({args.max_workers} stream(s))")
+        note(f"{repo}: downloading to {args.dest} ({args.max_workers} stream(s), writes capped at {args.max_write_mbps:g} MB/s)")
         with open(logdir / f"{short}.log", "a") as fh:
             rc = _download_under_probe(repo, args, fh, note)
         if rc == 0:
