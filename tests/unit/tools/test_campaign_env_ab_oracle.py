@@ -51,3 +51,41 @@ def test_identical_arms_run_no_oracle(tmp_path, monkeypatch):
     assert res["gate"]["identical"] is True and "oracle" not in res
     assert [c[0] for c in calls] == ["A", "B"]
     assert C.verdict(res).startswith("IDENTICAL")
+
+
+def test_paired_interleaves_the_arms_and_times_by_the_median(tmp_path, monkeypatch):
+    order, times = [], iter([9.0, 5.0, 6.0, 5.0, 6.5, 5.5])       # a cold first A, then warm
+    def fake_run(cmd, env, log, timeout):
+        outp = Path(cmd[cmd.index("--output") + 1]); order.append(outp.stem)
+        outp.write_bytes(b"same-" + outp.stem.encode()); Path(log).write_text("ok\n"); return 0, 1.0
+    monkeypatch.setattr(C, "run", fake_run)
+    monkeypatch.setattr(C, "exec_time", lambda log: next(times))
+    for name, fn in (("family_of", lambda m: "tts"), ("weight_gb", lambda m: 1.0),
+                     ("request_args", lambda m, fam, extra: ["--prompt", "x"]), ("output_ext", lambda fam, req: ".bin")):
+        monkeypatch.setattr(C, name, fn)
+    res = C.env_ab("M", 0, tmp_path, [], 60, {"NBX_OPTIM_ALGEBRAIC": "1"}, "env:alg", src=tmp_path, paired=3)
+    assert order == ["A", "B", "A", "B", "A", "B"], "interleaved, not A A A B B B"
+    assert res["A"]["exec_s"] == 6.5 and res["B"]["exec_s"] == 5.0, "medians: the cold 9.0 s first arm does not decide"
+    assert res["A"]["repeat_identical"] and res["B"]["repeat_identical"]
+    assert (tmp_path / "M" / "A.rep1.bin").exists() and (tmp_path / "M" / "A.rep2.bin").exists()
+    assert "nondeterministic" not in res["gate"] and "paired ×3, medians" in C.verdict(res)
+
+
+def test_paired_names_a_nondeterministic_arm(tmp_path, monkeypatch):
+    n = {"A": 0}
+    def fake_run(cmd, env, log, timeout):
+        outp = Path(cmd[cmd.index("--output") + 1])
+        if outp.stem == "A":
+            n["A"] += 1; outp.write_bytes(b"A-%d" % n["A"])          # A changes between repeats
+        else:
+            outp.write_bytes(b"B")
+        Path(log).write_text("ok\n"); return 0, 1.0
+    monkeypatch.setattr(C, "run", fake_run)
+    monkeypatch.setattr(C, "exec_time", lambda log: 1.0)
+    for name, fn in (("family_of", lambda m: "tts"), ("weight_gb", lambda m: 1.0),
+                     ("request_args", lambda m, fam, extra: ["--prompt", "x"]), ("output_ext", lambda fam, req: ".bin"),
+                     ("gate", lambda a, b: {"kind": "audio", "snr_db": 1.0, "pass": False})):
+        monkeypatch.setattr(C, name, fn)
+    res = C.env_ab("M", 0, tmp_path, [], 60, {"NBX_OPTIM_ALGEBRAIC": "1"}, "env:alg", src=tmp_path, paired=2)
+    assert res["gate"]["nondeterministic"] == ["A"]
+    assert "NONDETERMINISTIC repeats on arm(s) A" in C.verdict(res)
