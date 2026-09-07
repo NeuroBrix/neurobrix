@@ -1076,10 +1076,12 @@ class Model:
         sites = []
         for key in ("flow", "connections", "synthesis"):
             for pth, a, b in diff_paths(o.get(key), n.get(key), key, limit=12):
-                sites.append({"path": pth, "old": json.dumps(a)[:160], "new": json.dumps(b)[:160]})
+                kind = "added" if a == "<absent>" else "removed" if b == "<absent>" else "changed"
+                sites.append({"path": pth, "old": json.dumps(a)[:160], "new": json.dumps(b)[:160], "kind": kind})
         oc, nc = set((o.get("components") or {}).keys()), set((n.get("components") or {}).keys())
         for c in sorted(oc ^ nc):
-            sites.append({"path": f"components.{c}", "old": "present" if c in oc else "absent", "new": "present" if c in nc else "absent"})
+            sites.append({"path": f"components.{c}", "old": "present" if c in oc else "absent", "new": "present" if c in nc else "absent",
+                          "kind": "added" if c in nc else "removed"})
         return sites
 
     def graph_diff(self) -> dict:
@@ -1188,7 +1190,13 @@ class Model:
         # A retrace changes shape annotations, never the runtime's routing — VibeVoice's retraced
         # containers said flow type `audio` where the June one said `next_token_diffusion` and
         # ran through another handler (2026-09-07: 7.5 dB, WER 0; the graph gate saw nothing).
-        report["topology"] = self.topology_diff(old_root.parent / "topology.json", new_root.parent / "topology.json")
+        # A field the old topology lacked and the new one carries (the registry's written flow
+        # contract now reaches the topology: stages, direction, sample rate, generation) is an
+        # ADDITION: it cannot have changed the run when the bytes are identical, and it is named.
+        # A changed or removed routing field is beyond the annotation.
+        topo = self.topology_diff(old_root.parent / "topology.json", new_root.parent / "topology.json")
+        report["topology"] = [t for t in topo if t.get("kind") != "added"]
+        report["topology_additions"] = [t for t in topo if t.get("kind") == "added"]
         report["beyond_annotation"] += len(report["topology"])
         return report
 
@@ -1256,6 +1264,8 @@ class Model:
         failed = any(str(v).startswith("FAILED") for v in bytes_verdict.values())
         if failed or gd["beyond_annotation"] or gd["corrupted_after"]:
             verdict = "FAIL"
+        elif gd.get("topology_additions") and not identical:
+            verdict = "NEEDS_EXPLANATION"       # bytes differ and the topology gained fields: the additions may be the cause
         elif identical and gd["corrupted_before"] > 0:
             verdict = "PASS"                     # the old was right; the new is byte-identical and carries no corrupted dim
         elif identical:
@@ -1278,7 +1288,8 @@ class Model:
             f"inference restored {sum(r.get('arg_kinds', {}).get('inference-restored', 0) for r in gd['components'].values())}, "
             f"unit-only literalized {sum(r.get('arg_kinds', {}).get('unit-only-literalized', 0) for r in gd['components'].values())}), "
             f"{gd['pruned_dead_ops']} dead op(s) pruned, "
-            f"{gd['beyond_annotation']} beyond ({len(gd.get('topology') or [])} in the topology), corrupted dims {gd['corrupted_before']} → {gd['corrupted_after']}")
+            f"{gd['beyond_annotation']} beyond ({len(gd.get('topology') or [])} in the topology; {len(gd.get('topology_additions') or [])} topology field(s) added), "
+            f"corrupted dims {gd['corrupted_before']} → {gd['corrupted_after']}")
         return verdict.startswith("PASS")
 
     def step_upload(self):
