@@ -2539,24 +2539,6 @@ def swiglu_fused_wrapper(gate, up):
 
 
 
-_ROPE_CAST_CACHE: "collections.OrderedDict" = __import__("collections").OrderedDict()
-_ROPE_CAST_CACHE_SIZE = 8
-
-
-def _rope_cast_once(t, dtype):
-    """`t.to(dtype)` remembered for the same tensor OBJECT (the source is held with its cast,
-    so its identity cannot be recycled while remembered); bounded, least-recent out."""
-    key = (id(t), dtype)
-    hit = _ROPE_CAST_CACHE.get(key)
-    if hit is not None and hit[0] is t:
-        _ROPE_CAST_CACHE.move_to_end(key)
-        return hit[1]
-    cast = t.to(dtype)
-    _ROPE_CAST_CACHE[key] = (t, cast)
-    while len(_ROPE_CAST_CACHE) > _ROPE_CAST_CACHE_SIZE:
-        _ROPE_CAST_CACHE.popitem(last=False)
-    return cast
-
 def rope_fused_wrapper(q_raw, k_raw, cos, sin):
     """Fused RoPE (Liger-style rotate_half) — applies to Q and K in one launch.
 
@@ -2582,16 +2564,17 @@ def rope_fused_wrapper(q_raw, k_raw, cos, sin):
     if sin.ndim == 4 and sin.shape[1] == 1:
         sin = sin.view(sin.shape[0], sin.shape[2], sin.shape[3])
 
-    # Align cos/sin dtype with q/k (kernel computes in cos/sin dtype). The graph produces one
-    # cos and one sin per step and every layer's RoPE consumes the same two tensors: the cast
-    # is remembered per tensor object (TinyLlama, 2026-09-07: 44 casts a token, 22 layers × 2,
-    # for two casts' worth of work) — a small keyed cache holding the source object, so an
-    # arena slot reused by another tensor can never alias a remembered cast.
+    # Align cos/sin dtype with q/k (kernel computes in cos/sin dtype). JUSTIFIED COPY, 2 per
+    # layer per step (TinyLlama: 44 a token on [1, S, D] tables): the graph hands every layer
+    # its own view of the step's fp32 tables, so a cast cache keyed by object never hits and one
+    # keyed by pointer would alias an arena slot reused under it. The copy goes away only when
+    # the kernel casts the table element-wise on load with the copy kernel's exact rounding —
+    # the activation half of the copy lever, a kernel change with its own gate.
     target_dt = q_raw.dtype
     if cos.dtype != target_dt:
-        cos = _rope_cast_once(cos, target_dt)
+        cos = cos.to(target_dt)
     if sin.dtype != target_dt:
-        sin = _rope_cast_once(sin, target_dt)
+        sin = sin.to(target_dt)
     if k_raw.dtype != target_dt:
         k_raw = k_raw.to(target_dt)
 

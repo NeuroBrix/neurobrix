@@ -1,8 +1,7 @@
 """No weight copy after load (the copy lever, 2026-09-07). The matmul wrapper walks a
 pre-transposed weight by its strides instead of materialising it once per prefill; the GEMV
 wrapper takes a row-contiguous matrix and a strided vector as they are, and copies a matrix
-whose rows are strided exactly once, saying why; RoPE casts its cos/sin once per tensor
-object. Every path stays byte-identical to the copying one — the same tile math on the same
+whose rows are strided exactly once, saying why; RoPE's per-layer cast of the step's tables stays, justified in its line. Every path stays byte-identical to the copying one — the same tile math on the same
 numbers — which is what these tests measure, with the launcher counted."""
 from __future__ import annotations
 
@@ -118,15 +117,3 @@ def test_gemv_copies_a_row_strided_matrix_exactly_once():
     assert c.copies == 1, "the one justified copy"
     assert np.array_equal(_d2h(out), _d2h(W.mv_wrapper(mat.contiguous(), vec)))
 
-
-def test_rope_casts_a_tensor_object_once():
-    W._ROPE_CAST_CACHE.clear()
-    cos = NBXTensor.from_numpy(np.linspace(-1, 1, 64, dtype=np.float32).reshape(1, 8, 8))
-    with _Count() as c:
-        a = W._rope_cast_once(cos, NBXDtype.float16)
-        b = W._rope_cast_once(cos, NBXDtype.float16)
-    assert a is b and c.copies == 1
-    other = NBXTensor.from_numpy(np.linspace(-1, 1, 64, dtype=np.float32).reshape(1, 8, 8))
-    with _Count() as c:
-        W._rope_cast_once(other, NBXDtype.float16)
-    assert c.copies == 1, "another object is another cast"
