@@ -63,6 +63,28 @@ PROVENANCE_KEYS = {"device", "memory_info", "timestamp_ns"}
 # `final_layer.norm_final` → `final_layer.final_norm` between two transformers versions moves
 # no op and no tensor — VibeVoice's prediction head, 2026-09-07).
 NAMING_KEYS = {"parent_module"}
+# Derived bookkeeping: the consumers of a tensor are the ops whose inputs name it. The old
+# containers carried lists computed before the fusion pass (a norm weight "consumed" by the
+# decomposed mul, not the fused rms_norm — Voxtral, VibeVoice, canary 2026-09-07). Never
+# compared old-vs-new; the new graph's lists are verified against its own ops instead.
+DERIVED_KEYS = {"consumer_op_uids"}
+
+
+def derived_consumers_consistent(graph: dict) -> int:
+    """How many tensors of `graph` carry a consumer list that disagrees with the ops' inputs."""
+    ops = graph["ops"] if isinstance(graph.get("ops"), list) else list((graph.get("ops") or {}).values())
+    actual = {}
+    for op in ops:
+        for t in op.get("input_tensor_ids") or []:
+            actual.setdefault(t, set()).add(op.get("op_uid"))
+    bad = 0
+    for tid, m in (graph.get("tensors") or {}).items():
+        listed = m.get("consumer_op_uids")
+        if listed is None:
+            continue
+        if set(listed) != actual.get(tid, set()):
+            bad += 1
+    return bad
 
 
 def scrub_provenance(node):
@@ -298,9 +320,24 @@ def witnessed_arg_changes(old_op: dict, new_op: dict, tensors_new: dict):
             sites.append({"op": new_op.get("op_uid"), "path": ".".join(str(k) for k in path), "old": a, "new": b, "kind": "symbolized"})
             continue
         if isinstance(a, dict) and isinstance(b, dict):
+            ta, tb = _trace_value(a), _trace_value(b)
+            # BATCH FACTOR RESTORED: a flatten the old tracer wrote without its batch (E) now
+            # carries it (σ·E, σ of trace 1) and is the output's annotated dim — the symmetric
+            # case of the split restored (Voxtral's language model, 2026-09-07).
+            if (ta is not None and ta == tb and b.get("type") == "mul"
+                    and json.dumps(b, sort_keys=True) in input_dims):
+                for side, other_side in (("left", "right"), ("right", "left")):
+                    sigma = b.get(side)
+                    if isinstance(sigma, dict) and sigma.get("type") == "symbol" and _trace_value(sigma) == 1 \
+                            and equivalent_dims(b.get(other_side), a):
+                        sites.append({"op": new_op.get("op_uid"), "path": ".".join(str(k) for k in path), "old": a, "new": b, "kind": "batch-factor-restored"})
+                        break
+                else:
+                    sigma = None
+                if sigma is not None and sites and sites[-1]["kind"] == "batch-factor-restored" and sites[-1]["path"] == ".".join(str(k) for k in path):
+                    continue
             # RE-EXPRESSED: the same extent spelled by the corrected rules' algebra — equal at
             # the trace assignment and at two others, and the trace is the witnessed extent.
-            ta, tb = _trace_value(a), _trace_value(b)
             if ta is None or ta != tb or not equivalent_dims(a, b):
                 return None
             if not any(len(parent) == len(c) and c[pos] == ta for c in witnessed):
@@ -561,7 +598,7 @@ class Model:
                         continue                       # the pruned dead op's own output
                     rec["tensor_diffs_beyond"] += 1; continue
                 for k in set(a) | set(b):
-                    if k in PROVENANCE_KEYS:
+                    if k in PROVENANCE_KEYS or k in DERIVED_KEYS:
                         continue
                     if a.get(k) != b.get(k):
                         if k in ANNOTATION_KEYS:
@@ -573,6 +610,8 @@ class Model:
                     dims = (m.get("symbolic_shape") or {}).get("dims") or []; shp = m.get("shape") or []
                     if any(isinstance(d, int) and not isinstance(d, bool) and i < len(shp) and isinstance(shp[i], int) and d != shp[i] for i, d in enumerate(dims)):
                         rec[key] += 1
+            rec["derived_inconsistent"] = derived_consumers_consistent(n)
+            rec["tensor_diffs_beyond"] += rec["derived_inconsistent"]
             report["components"][comp_dir.name] = rec
             report["beyond_annotation"] += rec["op_diffs"] + rec["tensor_diffs_beyond"]
             report["annotation_changes"] += rec["annotation_changes"]
@@ -618,7 +657,8 @@ class Model:
             f"(witnessed {sum(r.get('arg_kinds', {}).get('witnessed', 0) for r in gd['components'].values())}, "
             f"symbolized {sum(r.get('arg_kinds', {}).get('symbolized', 0) for r in gd['components'].values())}, "
             f"re-expressed {sum(r.get('arg_kinds', {}).get('re-expressed', 0) for r in gd['components'].values())}, "
-            f"batch split restored {sum(r.get('arg_kinds', {}).get('batch-split-restored', 0) for r in gd['components'].values())}), "
+            f"batch split restored {sum(r.get('arg_kinds', {}).get('batch-split-restored', 0) for r in gd['components'].values())}, "
+            f"batch factor restored {sum(r.get('arg_kinds', {}).get('batch-factor-restored', 0) for r in gd['components'].values())}), "
             f"{gd['pruned_dead_ops']} dead op(s) pruned, "
             f"{gd['beyond_annotation']} beyond, corrupted dims {gd['corrupted_before']} → {gd['corrupted_after']}")
         return verdict.startswith("PASS")

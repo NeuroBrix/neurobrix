@@ -219,3 +219,19 @@ def test_the_fold_itself_is_refused():
 def test_a_vendor_module_rename_is_naming_not_semantics():
     a = dict(OLD, parent_module="final_layer.norm_final"); b = dict(OLD, parent_module="final_layer.final_norm")
     assert R.scrub_provenance(a) == R.scrub_provenance(b)
+
+
+def test_a_flatten_that_regains_its_batch_factor_is_admitted():
+    old = {"op_uid": "aten.view::15", "op_type": "aten.view", "input_tensor_ids": ["h::out_0"], "output_tensor_ids": ["aten.view::15::out_0"],
+           "attributes": {"args": [{"type": "tensor", "tensor_id": "h::out_0"}, {"type": "list", "value": [SEQ, 1536]}], "kwargs": {}, "shape": [SEQ, 1536]}}
+    new = copy.deepcopy(old); new["attributes"]["shape"][0] = FOLD; new["attributes"]["args"][1]["value"][0] = FOLD
+    tensors = {"h::out_0": {"shape": [1, 23, 1536], "symbolic_shape": {"dims": [B, SEQ, 1536], "concrete": [1, 23, 1536]}},
+               "aten.view::15::out_0": {"shape": [23, 1536], "symbolic_shape": {"dims": [FOLD, 1536], "concrete": [23, 1536]}}}
+    sites = R.witnessed_arg_changes(old, new, tensors)
+    assert sites is not None and all(x["kind"] == "batch-factor-restored" for x in sites) and len(sites) == 2
+
+
+def test_consumer_lists_are_verified_against_the_new_graphs_ops():
+    g = {"ops": [{"op_uid": "aten.mul::0", "input_tensor_ids": ["w", "x"], "output_tensor_ids": ["y"]}],
+         "tensors": {"w": {"consumer_op_uids": ["aten.mul::0"]}, "x": {"consumer_op_uids": ["aten.add::9"]}, "y": {}}}
+    assert R.derived_consumers_consistent(g) == 1
