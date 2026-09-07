@@ -267,6 +267,9 @@ from .ops.repeat_interleave import repeat_interleave_tensor_kernel
 # Helper
 # ---------------------------------------------------------------------------
 
+_TL_DTYPE = {NBXDtype.float16: triton.language.float16, NBXDtype.bfloat16: triton.language.bfloat16,
+             NBXDtype.float32: triton.language.float32, NBXDtype.float64: triton.language.float64}
+
 _EW_BLOCK = 1024
 _EW_WARPS = 4
 
@@ -2580,17 +2583,13 @@ def rope_fused_wrapper(q_raw, k_raw, cos, sin):
     if sin.ndim == 4 and sin.shape[1] == 1:
         sin = sin.view(sin.shape[0], sin.shape[2], sin.shape[3])
 
-    # Align cos/sin dtype with q/k (kernel computes in cos/sin dtype). JUSTIFIED COPY, 2 per
-    # layer per step (TinyLlama: 44 a token on [1, S, D] tables): the graph hands every layer
-    # its own view of the step's fp32 tables, so a cast cache keyed by object never hits and one
-    # keyed by pointer would alias an arena slot reused under it. The copy goes away only when
-    # the kernel casts the table element-wise on load with the copy kernel's exact rounding —
-    # the activation half of the copy lever, a kernel change with its own gate.
+    # The kernel computes in Q's dtype and casts the cos/sin tables to it on load
+    # (round-to-nearest, the stored cast's conversion; the tables lie in [-1, 1], so
+    # the protected fp16 clamp never applied). The graph hands every layer its own
+    # view of the step's fp32 tables, so the per-layer cast copy this replaces
+    # (TinyLlama: 44 a token) had no cache to hit. K is rotated in place, so a K of
+    # another dtype than Q needs a buffer of Q's dtype: that cast stays.
     target_dt = q_raw.dtype
-    if cos.dtype != target_dt:
-        cos = cos.to(target_dt)
-    if sin.dtype != target_dt:
-        sin = sin.to(target_dt)
     if k_raw.dtype != target_dt:
         k_raw = k_raw.to(target_dt)
 
@@ -7554,7 +7553,7 @@ def _math_attention_chunked(q, k, v, attn_mask, is_causal, scale,
 
 
 def _try_decode_vec(q, k, v, attn_mask, softmax_scale,
-                    batch, nheads, nheads_k, seqlen_k, headdim):
+                    batch, nheads, nheads_k, seqlen_k, headdim, q_round=None):
     """Route guard for the vector decode kernel: returns the output or
     None when the shape/mask is outside the kernel's contract."""
     if headdim != v.shape[3]:
@@ -7566,11 +7565,11 @@ def _try_decode_vec(q, k, v, attn_mask, softmax_scale,
         else:
             return None
     return _decode_attn_vec(q, k, v, bias, softmax_scale,
-                            batch, nheads, nheads_k, seqlen_k, headdim)
+                            batch, nheads, nheads_k, seqlen_k, headdim, q_round=q_round)
 
 
 def _decode_attn_vec(q, k, v, bias, softmax_scale,
-                     batch, nheads, nheads_k, seqlen_k, headdim):
+                     batch, nheads, nheads_k, seqlen_k, headdim, q_round=None):
     """Vector (SIMT) decode attention launch pair — see
     ops/decode_attn_vec.py for the sourced structure (R16 2026-08-23:
     FasterTransformer mmha / vLLM paged v2 / llama.cpp fattn-vec /
@@ -7598,6 +7597,13 @@ def _decode_attn_vec(q, k, v, bias, softmax_scale,
     warps = int(_os_dv.environ.get("NBX_DV_WARPS", "4"))
 
     q2 = q.reshape(BHq, headdim)   # contiguous -> pure view
+    # `q_round`: the dtype the caller asked Q to be read in (the KV cache's);
+    # the kernel rounds Q to it on load and the output is written in it — the
+    # bytes of a cast copy of Q, without the copy.
+    out_dtype = q_round if q_round is not None else q.nbx_dtype
+    q_to = _TL_DTYPE[q_round] if q_round is not None else None
+    q_saturate = (q_round == NBXDtype.float16
+                  and q.nbx_dtype in (NBXDtype.float32, NBXDtype.float64, NBXDtype.bfloat16))
 
     dev = f"cuda:{q._device_idx}"
     opart = NBXTensor.empty((BHq, split, D_v), dtype=NBXDtype.float32,
@@ -7606,7 +7612,7 @@ def _decode_attn_vec(q, k, v, bias, softmax_scale,
                             device=dev)
     lpart = NBXTensor.empty((BHq, split), dtype=NBXDtype.float32,
                             device=dev)
-    out = NBXTensor.empty((BHq, 1, D_v), dtype=q.nbx_dtype, device=dev)
+    out = NBXTensor.empty((BHq, 1, D_v), dtype=out_dtype, device=dev)
 
     _set_device(q)
     if _os_dv.environ.get("NBX_DV_GROUPED", "0") == "1":
@@ -7626,6 +7632,7 @@ def _decode_attn_vec(q, k, v, bias, softmax_scale,
             GQA_GROUPS=groups, BLOCK_N=BLOCK_N, BLOCK_D=BLOCK_D,
             D=headdim, D_V=D_v,
             HAS_BIAS=bias is not None,
+            Q_TO=q_to, Q_SATURATE=q_saturate,
             num_warps=warps, num_stages=1)
     else:
         decode_attn_vec_split_kernel[(BHq, split)](
@@ -7641,6 +7648,7 @@ def _decode_attn_vec(q, k, v, bias, softmax_scale,
             GQA_GROUPS=groups, BLOCK_N=BLOCK_N, BLOCK_D=BLOCK_D,
             D=headdim, D_V=D_v,
             HAS_BIAS=bias is not None,
+            Q_TO=q_to, Q_SATURATE=q_saturate,
             num_warps=warps, num_stages=1)
     # Fixed-order deterministic combine — the EXISTING flash_decode
     # reduce kernel viewed at GROUPS=1 (partials [BHq, split, 1, D_v]).
@@ -7896,11 +7904,23 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     # in profile-less processes where the budget is 0); unset = the
     # kernel is the DEFAULT Tq=1 refinement INSIDE the math route
     # below; "0" = kill switch everywhere.
+    # The KV cache asks for Q in the cache's dtype (`q_dtype_of_kv`): the vector
+    # decode kernel rounds Q to it on load (the stored cast's protected
+    # conversion, then the same fp32 math), so the per-layer cast copy of Q
+    # (TinyLlama: 22 a token) is gone on the decode route; every other route
+    # casts once, here below, where it diverges from the vec kernel.
+    q_round = None                       # an NBXDtype (`.dtype` is the Triton element type)
+    if kwargs.get("q_dtype_of_kv") and q._dtype != k._dtype:
+        q_round = k._dtype
+
+    def _q_cast(t):
+        return t.to(q_round) if (q_round is not None and t._dtype != q_round) else t
+
     if (seqlen_q == 1 and q._device != "cpu"
             and _os_fd.environ.get("NBX_DECODE_VEC", "") == "1"):
         _dv_out = _try_decode_vec(q, k, v, attn_mask, softmax_scale,
                                   batch, nheads, nheads_k, seqlen_k,
-                                  headdim)
+                                  headdim, q_round=q_round)
         if _dv_out is not None:
             return _dv_out
     if (seqlen_q == 1 and q._device != "cpu"
@@ -7915,7 +7935,7 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
                 _fd_ok = False
         if _fd_ok:
             # This opt-in path keeps its measured behavior: flat layout.
-            return _flash_decode(q, k.contiguous(), v.contiguous(),
+            return _flash_decode(_q_cast(q), k.contiguous(), v.contiguous(),
                                  _fd_bias, softmax_scale,
                                  batch, nheads, nheads_k, seqlen_k, headdim)
 
@@ -7924,8 +7944,9 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     # (Sana diffusion hit fp32 Q vs fp16 K here). If they disagree, cast
     # to fp32. For the common LLM case where all three match, this is a
     # no-op — zero overhead.
-    if not (q.dtype == k.dtype == v.dtype):
+    if not ((k.dtype if q_round is not None else q.dtype) == k.dtype == v.dtype):
         q, k, v = q.to(NBXDtype.float32), k.to(NBXDtype.float32), v.to(NBXDtype.float32)
+        q_round = None
 
     # Deterministic-attention routing (P-TRITON-MOE-DETERMINISM-RESIDUAL,
     # Hocine scope decision = option B: hardware + memory-budget, ZERO
@@ -8070,7 +8091,7 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
                   f"profile={'None' if _pr is None else getattr(_pr,'vendor','?')+'/'+(getattr(_dv[0],'architecture','?') if _dv else '?')} "
                   f"use_math={_use_math}", flush=True)
     if _use_math == "chunked":
-        return _math_attention_chunked(q, k, v, attn_mask, is_causal,
+        return _math_attention_chunked(_q_cast(q), k, v, attn_mask, is_causal,
                                        softmax_scale, _chunk_rows)
     if _use_math:
         # ---- VECTOR (SIMT) DECODE ATTENTION — DEFAULT on the math
@@ -8092,15 +8113,16 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
                 and _os_fd.environ.get("NBX_DECODE_VEC", "") != "0"):
             _dv_out = _try_decode_vec(q, k, v, attn_mask, softmax_scale,
                                       batch, nheads, nheads_k,
-                                      seqlen_k, headdim)
+                                      seqlen_k, headdim, q_round=q_round)
             if _dv_out is not None:
                 return _dv_out
-        return _math_attention(q, k, v, attn_mask=attn_mask,
+        return _math_attention(_q_cast(q), k, v, attn_mask=attn_mask,
                                 is_causal=is_causal, scale=softmax_scale)
 
     # Flash path from here on: flat-indexed kernel — materialise the K/V
     # views that the math path above consumes strided (see the entry
     # comment). Contiguous tensors short-circuit at zero cost.
+    q = _q_cast(q)
     k = k.contiguous()
     v = v.contiguous()
 
