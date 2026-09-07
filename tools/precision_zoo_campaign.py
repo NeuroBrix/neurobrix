@@ -729,21 +729,29 @@ def _choices_ab(d: Path, src: Path) -> dict:
             if isinstance(j, dict):
                 ent.update(j)
         stores[arm] = ent
-    if not stores["A"] or not stores["B"]:
+    if not stores["B"] and not stores["A"]:
         return {}
     certified = _certified_entries(src) if src is not None else {}
     def entry(k):
         mod, _, shape = k.partition("::")
         return certified.get((mod.rsplit(".", 1)[-1], shape))
     keys = sorted(set(stores["A"]) | set(stores["B"]))
-    differ = [k for k in keys if _cfg_of(stores["A"].get(k)) != _cfg_of(stores["B"].get(k))]
+    def pick(arm, k):
+        """The arm's setting for the key: its runtime sweep's when it swept, else the
+        directory's entry — an arm that served the key certified left no replay record
+        (the machine band's arm A served every key: its replay is empty by design)."""
+        chosen = stores[arm].get(k)
+        if chosen is None and (e := entry(k)):
+            return _cfg_of(e.get("config"))
+        return _cfg_of(chosen)
+    differ = [k for k in keys if pick("A", k) != pick("B", k)]
     near_tie, contradicted, excluded_picked, uncertified = [], [], [], []
     for k in differ:
         e = entry(k)
         if not e:
             uncertified.append(k); continue
         pr = e.get("proof") or {}
-        picks = {_cfg_of(stores["A"].get(k)), _cfg_of(stores["B"].get(k))} - {_cfg_of(e.get("config"))}
+        picks = {pick("A", k), pick("B", k)} - {_cfg_of(e.get("config"))}
         if any(_cfg_of(x.get("config")) in picks for x in (e.get("excluded") or [])):
             excluded_picked.append(k); continue
         best, second = pr.get("best_ms"), pr.get("second_ms")
