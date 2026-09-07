@@ -500,7 +500,7 @@ class CompiledSequence:
         patched = 0
         for op in self._ops:
             if op.op_type in interceptors:
-                op.func = interceptors[op.op_type]
+                op.func = self._bind_sdpa_layout(op.op_uid, interceptors[op.op_type])
                 patched += 1
 
     def register_op_uid_interceptor(self, op_uid: str, interceptor: Callable) -> None:
@@ -528,7 +528,19 @@ class CompiledSequence:
             return
         for op in self._ops:
             if op.op_uid in interceptors:
-                op.func = interceptors[op.op_uid]
+                op.func = self._bind_sdpa_layout(op.op_uid, interceptors[op.op_uid])
+
+    def _bind_sdpa_layout(self, op_uid: str, func):
+        """Attach the graph's recorded K/V layout to an attention callable.
+
+        The layout belongs to the OP (GraphExecutor._mark_sdpa_k_layout) and
+        must survive every reassignment of `op.func` — including an
+        interceptor hot-patched in after compile(), which used to replace the
+        wrapper carrying it and leave the interceptor with only the shape to
+        read, i.e. nothing at all when seq_len == head_dim.
+        """
+        pair = getattr(self, "_sdpa_kv_layout", {}).get(op_uid)
+        return func if pair is None else _with_kv_layout(func, pair[0], pair[1])
 
     def compile(self) -> None:
         """
@@ -1882,14 +1894,15 @@ class CompiledSequence:
         # cannot decide the square case (seq_len == head_dim), and deciding it
         # wrongly runs attention with K's axes crossed
         # (GraphExecutor._mark_sdpa_k_layout).
-        if (op_type in _SDPA_OP_TYPES
-                and (op_uid in self._op_uid_interceptors
-                     or op_type in self._op_interceptors)
-                and "nbx_k_pre_transposed" in (attrs or {})):
-            func = _with_kv_layout(
-                func,
+        if op_type in _SDPA_OP_TYPES and "nbx_k_pre_transposed" in (attrs or {}):
+            if not hasattr(self, "_sdpa_kv_layout"):
+                self._sdpa_kv_layout = {}
+            self._sdpa_kv_layout[op_uid] = (
                 bool(attrs["nbx_k_pre_transposed"]),
                 bool(attrs.get("nbx_v_pre_transposed", False)))
+            if (op_uid in self._op_uid_interceptors
+                    or op_type in self._op_interceptors):
+                func = self._bind_sdpa_layout(op_uid, func)
 
         # Allocate slots for output tensors not yet assigned
         output_slots = []

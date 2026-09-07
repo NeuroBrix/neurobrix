@@ -8161,10 +8161,14 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
                                 dtype=t._dtype, device=f"cuda:{t._device_idx}")
             return NBXTensor.cat([t, z], dim=-1).contiguous()
         _dv = v.shape[-1]
+        _kw = {k_: v_ for k_, v_ in kwargs.items() if k_ != "k_pre_transposed"}
         out = scaled_dot_product_attention_wrapper(
             _pad_hd(q), _pad_hd(k), _pad_hd(v), attn_mask=attn_mask,
             dropout_p=dropout_p, is_causal=is_causal,
-            scale=softmax_scale, **kwargs)
+            scale=softmax_scale,
+            # K was normalised above; saying so keeps the inner call from
+            # re-reading a layout off a shape it can no longer interpret.
+            k_pre_transposed=False, **_kw)
         return out.narrow(-1, 0, _dv).contiguous()
 
     # Adaptive BLOCK_M (Phase 1): decode-path seqlen_q is typically 1–4. Using

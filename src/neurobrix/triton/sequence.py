@@ -337,11 +337,17 @@ class TritonSequence:
     def register_op_interceptor(self, op_type: str, interceptor: Callable):
         """Register an interceptor for a specific op type (e.g., SDPA for KV cache)."""
         self._op_interceptors[op_type] = interceptor
-        # Hot-patch already compiled ops if sequence is compiled
+        # Hot-patch already compiled ops if sequence is compiled.
+        # The graph's recorded K layout must survive the patch: an
+        # interceptor installed AFTER compile() replaced the wrapper that
+        # carried it, and the interceptor then had nothing but the shape to
+        # go on — which at seq_len == head_dim says nothing. Measured on
+        # CUDA 2026-09-07: the KV interceptor refused every attention of a
+        # 64-token TinyLlama request because the layout never reached it.
         if self._compiled:
             for op in self._ops:
                 if op.op_type == op_type:
-                    op.func = interceptor
+                    op.func = self._bind_sdpa_layout(op.op_uid, interceptor)
 
     def register_op_uid_interceptor(self, op_uid: str, interceptor: Callable):
         """Register a fine-grained interceptor for one specific op instance.
@@ -355,7 +361,7 @@ class TritonSequence:
         if self._compiled:
             for op in self._ops:
                 if op.op_uid == op_uid:
-                    op.func = interceptor
+                    op.func = self._bind_sdpa_layout(op.op_uid, interceptor)
 
     def update_op_uid_interceptors(self, interceptors: Dict[str, Callable]):
         """Hot-swap per-op_uid interceptors on an already-compiled sequence."""
@@ -364,7 +370,19 @@ class TritonSequence:
             return
         for op in self._ops:
             if op.op_uid in interceptors:
-                op.func = interceptors[op.op_uid]
+                op.func = self._bind_sdpa_layout(op.op_uid, interceptors[op.op_uid])
+
+    def _bind_sdpa_layout(self, op_uid: str, func):
+        """Attach the graph's recorded K layout to an attention callable.
+
+        The layout is a property of the OP, recorded at load by
+        GraphExecutor._mark_sdpa_k_layout, and it has to travel with whatever
+        function ends up executing that op — the compiled kernel, an
+        interceptor bound before compile, or one hot-patched in afterwards.
+        Every assignment to `op.func` goes through here for that reason.
+        """
+        flag = getattr(self, "_sdpa_k_layout", {}).get(op_uid)
+        return func if flag is None else _with_k_layout(func, flag)
 
     # ========================================================================
     # COMPILE
@@ -1853,7 +1871,10 @@ class TritonSequence:
         # head_dim the two layouts are the same shape and the derivation
         # silently picked the wrong one (GraphExecutor._mark_sdpa_k_layout).
         if op_type in self._SDPA_OP_TYPES and "nbx_k_pre_transposed" in attrs:
-            func = _with_k_layout(func, bool(attrs["nbx_k_pre_transposed"]))
+            if not hasattr(self, "_sdpa_k_layout"):
+                self._sdpa_k_layout = {}
+            self._sdpa_k_layout[op_uid] = bool(attrs["nbx_k_pre_transposed"])
+            func = self._bind_sdpa_layout(op_uid, func)
 
         # Compile args → dataclasses
         raw_args = attrs.get("args", [])
