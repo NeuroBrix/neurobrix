@@ -269,12 +269,13 @@ def test_copy_into_a_strided_view_broadcasts_the_source():
     assert np.array_equal(got[:, :3], np.tile([1.0, 2.0, 3.0], (4, 1))) and not got[:, 3:].any()
 
 
-@pytest.mark.parametrize("q_dt,table_dt,S", [(np.float16, np.float32, 1), (np.float32, np.float16, 37)])
-def test_rope_casts_the_tables_in_kernel_to_the_bytes_of_the_cast_copy(q_dt, table_dt, S):
-    """The kernel casts the cos/sin tables to Q's dtype on load — narrowing (fp32 tables, fp16
-    Q: the decode case) or widening (fp16 tables, fp32 Q: Sana's Gemma-2 encoder) — and the
-    bytes are those of the path that cast the tables beforehand; no copy kernel launches. The
-    widening case pins the rotation's fused multiply-add: left to the compiler it moved."""
+@pytest.mark.parametrize("q_dt,table_dt,S,copies", [(np.float16, np.float32, 1, 0), (np.float32, np.float16, 37, 2),
+                                                     (np.float16, np.float16, 37, 0)])
+def test_rope_casts_the_tables_in_kernel_to_the_bytes_of_the_cast_copy(q_dt, table_dt, S, copies):
+    """A table wider than Q (fp32 tables, fp16 Q: the decode case) is rounded on load with no
+    copy; a table narrower than Q (fp16 tables, fp32 Q: Sana's Gemma-2 encoder) keeps its two
+    widening copies (the fp32 rotation's contraction moved when widened on load); tables of Q's
+    dtype pass as they are. Every case: the bytes of the path that cast the tables beforehand."""
     rng = np.random.default_rng(6)
     B, Hq, Hk, D = 1, 32, 4, 64
     q_np = (rng.standard_normal((B, S, Hq, D)) * 0.5).astype(q_dt)
@@ -291,8 +292,8 @@ def test_rope_casts_the_tables_in_kernel_to_the_bytes_of_the_cast_copy(q_dt, tab
 
     copies_ref, q_ref, k_ref = run(NBXTensor.from_numpy(cos_np.astype(q_dt)),
                                    NBXTensor.from_numpy(sin_np.astype(q_dt)))
-    copies, q_out, k_out = run(NBXTensor.from_numpy(cos_np), NBXTensor.from_numpy(sin_np))
-    assert copies == 0 and copies_ref == 0
+    n_copies, q_out, k_out = run(NBXTensor.from_numpy(cos_np), NBXTensor.from_numpy(sin_np))
+    assert n_copies == copies and copies_ref == 0
     assert np.array_equal(q_out, q_ref) and np.array_equal(k_out, k_ref)
     assert not np.array_equal(q_out, q_np.reshape(-1))     # the rotation happened
 
@@ -315,4 +316,59 @@ def test_decode_attention_reads_a_wider_q_in_the_cache_dtype_without_a_copy(monk
     assert out.nbx_dtype == NBXDtype.float16
     ref = W.scaled_dot_product_attention_wrapper(NBXTensor.from_numpy(q_np.astype(np.float16)), k, v,
                                                  scale=scale, k_pre_transposed=False)
+    assert np.array_equal(_d2h(out), _d2h(ref))
+
+
+@pytest.mark.parametrize("op", ["add", "mul"])
+def test_a_broadcast_or_strided_binary_operand_is_read_by_its_strides(op):
+    """A conv bias (C,) over an (N, C, H, W) image, an adaLN vector (B, 1, D) over (B, S, D),
+    and a transposed operand: the strided kernels read them in place — no expand+contiguous
+    transient, no copy launched — with the bytes of the flat kernel on materialised operands."""
+    from neurobrix.kernels.ops.add import add_forward_kernel
+    from neurobrix.kernels.ops.mul import mul_forward_kernel
+    rng = np.random.default_rng(8)
+    fn = W.add if op == "add" else W.mul
+    cases = [
+        ((2, 8, 16, 16), (1, 8, 1, 1)),        # a conv bias over the channels
+        ((2, 64, 48), (2, 1, 48)),             # an adaLN shift over the tokens
+        ((2, 64, 48), "transposed"),           # a transposed right operand
+    ]
+    for a_shape, b_spec in cases:
+        a_np = rng.standard_normal(a_shape).astype(np.float16)
+        if b_spec == "transposed":
+            b_src = rng.standard_normal((2, 48, 64)).astype(np.float16)
+            b = NBXTensor.from_numpy(b_src).transpose(1, 2); b_np = np.transpose(b_src, (0, 2, 1))
+        else:
+            b_np = rng.standard_normal(b_spec).astype(np.float16); b = NBXTensor.from_numpy(b_np)
+        a = NBXTensor.from_numpy(a_np)
+        with _Launches() as l:
+            out = fn(a, b)
+        assert not any("copy" in n for n in l.names), l.names
+        assert l.names == [f"{op}_strided_nd_kernel"], l.names
+        # the reference: the flat kernel on materialised operands (the copying path's bytes)
+        bm = NBXTensor.from_numpy(np.ascontiguousarray(np.broadcast_to(b_np, a_shape)))
+        ref = NBXTensor.from_numpy(np.zeros(a_shape, dtype=np.float16))
+        n = ref.numel()
+        if op == "add":
+            L.launch(add_forward_kernel, (n // 1024 + 1,), a, bm, ref, n, 1.0, BLOCK_SIZE=1024, num_warps=4)
+        else:
+            L.launch(mul_forward_kernel, (n // 1024 + 1,), a, bm, ref, n, BLOCK_SIZE=1024, num_warps=4)
+        assert np.array_equal(_d2h(out), _d2h(ref)), (a_shape, b_spec)
+
+
+@pytest.mark.parametrize("M", [16, 64])
+def test_addmm_takes_the_activation_weight_and_bias_as_they_are(M):
+    """addmm on the card without native bf16: the fp16 activation is widened in registers, the
+    pre-transposed fp16 weight walked by its strides, the fp16 bias widened on load — no copy
+    launched — with the bytes of the path that copied all three beforehand."""
+    N, K = 96, 80
+    a = _act(M, K).to(NBXDtype.float16)                     # an fp16 activation
+    w = _weight(N, K)                                       # (N, K) fp16, the loader's layout
+    rng = np.random.default_rng(9)
+    bias = NBXTensor.from_numpy((rng.standard_normal(N) * 0.1).astype(np.float16))
+    with _Count() as c:
+        out = W.addmm(bias, a, w.t())
+    assert c.copies == 0
+    ref = W.addmm(bias.to(NBXDtype.float32), a.to(NBXDtype.float32), w.t().contiguous())
+    assert out.nbx_dtype == ref.nbx_dtype
     assert np.array_equal(_d2h(out), _d2h(ref))
