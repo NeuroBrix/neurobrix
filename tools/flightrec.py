@@ -32,7 +32,12 @@ makes such interruptions *visible and resumable*:
      after the repair (quarantine the corrupt object files out of
      .git/objects, fetch both remotes, rebuild what neither has).
 
-Commands: run, status, check [--hook], clear <id>|--all-stale, fsck.
+  5. `wait <id>` blocks until a record leaves in_flight and exits 0 only
+     when the job ended `done` — a chain's next step waits on the RECORD,
+     so a resumed job (a new wrapper, a new pid) still fires its waiters,
+     and a killed or failed job never does.
+
+Commands: run, status, check [--hook], clear <id>|--all-stale, fsck, wait <id>.
 Stdlib only; records live in <repo>/.flightrec/ (gitignored).
 """
 
@@ -194,6 +199,21 @@ def fsck_block(rec: dict) -> str:
     return "\n".join(lines)
 
 
+def cmd_wait(args) -> int:
+    """Poll the record every --every seconds until its status leaves in_flight;
+    0 iff done. A record that dies (crash, power loss) ends the wait with 1."""
+    while True:
+        recs = [r for r in load_records() if r.get("id") == args.id]
+        if not recs:
+            print(f"[flightrec] wait: no record {args.id}", file=sys.stderr)
+            return 2
+        cause = classify(recs[0])
+        if cause != "RUNNING":
+            print(f"[flightrec] wait: {args.id} ended {cause}", flush=True)
+            return 0 if cause == "done" else 1
+        time.sleep(args.every)
+
+
 def cmd_fsck(args) -> int:
     rec = fsck_verdict(force=True)
     print(fsck_block(rec))
@@ -347,12 +367,15 @@ def main() -> int:
     p_clear.add_argument("--all-stale", action="store_true")
     sub.add_parser("fsck", help="re-check the repository now (git fsck --full); "
                                "run refuses to launch while it is not clean")
+    p_wait = sub.add_parser("wait", help="block until a record leaves in_flight; exit 0 iff done")
+    p_wait.add_argument("id")
+    p_wait.add_argument("--every", type=float, default=60.0, help="poll period in seconds")
 
     args = ap.parse_args()
     if args.command == "run" and args.cmd and args.cmd[0] == "--":
         args.cmd = args.cmd[1:]
     return {"run": cmd_run, "status": cmd_status, "check": cmd_check,
-            "clear": cmd_clear, "fsck": cmd_fsck}[args.command](args)
+            "clear": cmd_clear, "fsck": cmd_fsck, "wait": cmd_wait}[args.command](args)
 
 
 if __name__ == "__main__":

@@ -86,3 +86,33 @@ def test_hook_prints_the_corruption_first(repo, capsys):
     F.cmd_check(types.SimpleNamespace(hook=True))
     out = capsys.readouterr().out
     assert out.startswith("=" * 64 + "\nFLIGHT RECORDER — REPOSITORY CORRUPT")
+
+
+def _record(status, boot=None, pid=None):
+    F.REC_DIR.mkdir(exist_ok=True)
+    rec = {"id": "r1", "label": "t", "status": status, "boot_id": boot or F.current_boot_id(),
+           "pid": pid or 1}
+    F.write_record(F.REC_DIR / "r1.json", rec)
+
+
+def test_wait_fires_only_on_done(repo, monkeypatch):
+    args = types.SimpleNamespace(id="r1", every=0.01)
+    _record("done"); assert F.cmd_wait(args) == 0
+    _record("failed"); assert F.cmd_wait(args) == 1
+    _record("killed"); assert F.cmd_wait(args) == 1
+    _record("in_flight", boot="another-boot"); assert F.cmd_wait(args) == 1, "a power loss ends the wait, not fires it"
+    _record("in_flight", pid=2 ** 22 - 7); assert F.cmd_wait(args) == 1, "a dead wrapper ends the wait"
+    assert F.cmd_wait(types.SimpleNamespace(id="none", every=0.01)) == 2
+
+
+def test_wait_blocks_while_the_wrapper_runs_then_follows_the_record(repo, monkeypatch):
+    seen = []
+    def fake_alive(pid):
+        seen.append(pid)                     # the wrapper is alive on each poll …
+        if len(seen) == 3:
+            _record("done")                  # … and its record turns done during the third
+        return True
+    monkeypatch.setattr(F, "pid_is_this_wrapper", fake_alive)
+    _record("in_flight", pid=4242)
+    assert F.cmd_wait(types.SimpleNamespace(id="r1", every=0.01)) == 0
+    assert len(seen) == 3
