@@ -555,7 +555,24 @@ def cmd_run(args):
                 print(f"   [WARNING] Invalid --set format: {item} (expected key=value)")
                 continue
             key, value = item.split("=", 1)
-            if value.lower() in ('true', 'false'):
+            stripped = value.strip()
+            if stripped[:1] in ("[", "{"):
+                # A list or an object, as JSON. The one runtime variable that
+                # needs it is `global.input_token_ids`: the serving path sets
+                # it programmatically, and a measurement that must land on an
+                # EXACT context length — the head_dim cell of the protocol —
+                # cannot get there through a text prompt, because the number
+                # of tokens a sentence becomes is the tokenizer's to decide.
+                import json as _json_set
+                try:
+                    value = _json_set.loads(stripped)
+                except ValueError as exc:
+                    raise SystemExit(
+                        f"--set {key}: value starts with {stripped[:1]!r} so it "
+                        f"is read as JSON, and it does not parse ({exc}). "
+                        f"Quote it differently rather than have it silently "
+                        f"become a string.")
+            elif value.lower() in ('true', 'false'):
                 value = value.lower() == 'true'
             elif value.isdigit():
                 value = int(value)
@@ -565,7 +582,9 @@ def cmd_run(args):
                 except ValueError:
                     pass
             inputs[key] = value
-            print(f"   {key} = {value}")
+            shown = value if not isinstance(value, list) else (
+                f"[{len(value)} values: {value[:4]}...]" if len(value) > 8 else value)
+            print(f"   {key} = {shown}")
 
     print(f"   Total inputs: {len(inputs)}")
 
