@@ -248,8 +248,19 @@ def compile_to_msl(jit_fn, signature: dict, constexprs: dict,
 # --- the emitted signature, read from the MSL itself ------------------------
 
 _KERNEL_RE = re.compile(r"kernel\s+void\s+(\w+)\s*\((.*?)\)\s*\{", re.S)
+#: One `[[buffer(n)]]` parameter of an emitted kernel.
+#:
+#: The address-space qualifier may be followed by `const`, and by `volatile`:
+#: `device const float* Q [[buffer(0)]]` is what the FlashAttention templates
+#: emit for their read-only operands. Requiring the bare form silently matched
+#: NOTHING for those kernels, so every pointer went unbound and Q, K and V
+#: read as zeros — attention returning a zero tensor with no error anywhere
+#: (measured 2026-09-07: l = 48, m = 0, acc = 0, which is what an all-zero
+#: input looks like from inside the kernel).
 _PARAM_RE = re.compile(
-    r"(?P<qual>device|constant|threadgroup)\s+(?P<type>[\w:]+)\s*(?P<ref>[*&])\s*"
+    r"(?P<qual>device|constant|threadgroup)\s+"
+    r"(?:(?:const|volatile)\s+)*"
+    r"(?P<type>[\w:]+)\s*(?P<ref>[*&])\s*"
     r"(?P<name>\w+)\s*\[\[buffer\((?P<index>\d+)\)\]\]")
 
 
@@ -497,17 +508,31 @@ class MetalKernel:
             raise MetalKernelError(
                 f"{self.name}: stream handle {stream!r} is not one the "
                 f"allocator handed out")
-        if len(params) != len(self._msl_binding):
+        # Bind by BUFFER INDEX, not by position.
+        #
+        # The emitted MSL declares only the arguments the compiled kernel
+        # actually uses: the middle end drops ones it proved dead, and a
+        # template declares the roles it reads. The launcher, correctly,
+        # passes every non-constexpr parameter of the signature. So the two
+        # counts differ legitimately — measured: a FlashAttention kernel whose
+        # MSL declares 22 buffers while the signature carries 28 — and zipping
+        # them positionally either refuses a good launch or, worse, shifts
+        # every argument after the first gap.
+        #
+        # Each declaration carries its own `[[buffer(i)]]`, and i is the
+        # argument's index in that same signature, so the mapping is exact.
+        needed = max((slot[0] for slot in self._msl_binding), default=-1)
+        if needed >= len(params):
             raise MetalKernelError(
-                f"{self.name} binds {len(self._msl_binding)} arguments, "
-                f"{len(params)} given")
+                f"{self.name} declares buffer({needed}) but only "
+                f"{len(params)} arguments were given")
 
         command_buffer = encoder_queue.commandBuffer()
         encoder = command_buffer.computeCommandEncoder()
         try:
             encoder.setComputePipelineState_(self._pipeline)
-            for (index, pname, mtype, emitted_pointer), (kind, value) in zip(
-                    self._msl_binding, params):
+            for index, pname, mtype, emitted_pointer in self._msl_binding:
+                kind, value = params[index]
                 if kind == "ptr":
                     buffer, offset = runtime.buffer_for_pointer(int(value))
                     if buffer is None:
