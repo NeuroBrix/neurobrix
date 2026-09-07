@@ -461,6 +461,24 @@ def hub_store_health(url: str = HUB_STORE_HEALTH, timeout: float = 10.0, probe_s
 WEIGHT_SUFFIXES = {"safetensors", "bin", "pt", "pth", "gguf", "ckpt", "npz"}
 
 
+def last_download_event(progress: Path, short: str):
+    """The last thing the re-download tool's progress log says about a repository:
+    'DONE', 'STOPPED', 'FAILED', 'NOT STARTED', 'downloading', or None when it never
+    mentioned it."""
+    if not progress.exists():
+        return None
+    last = None
+    for line in progress.read_text(errors="replace").splitlines():
+        if f"/{short}: " not in line:
+            continue
+        rest = line.split(f"/{short}: ", 1)[1]
+        for tag in ("DONE", "STOPPED", "FAILED", "NOT STARTED", "downloading", "present"):
+            if rest.startswith(tag):
+                last = "DONE" if tag == "present" else tag
+                break
+    return last
+
+
 def snapshot_has_a_format(p: Path) -> bool:
     """The layouts the toolchain's format detector accepts: a diffusers pipeline
     (model_index.json), a transformers model (config.json), a NeMo archive (*.nemo)
@@ -563,7 +581,11 @@ class Model:
                     continue
                 if any(p.rglob("*.incomplete")):
                     continue
-                if (snap_logs / f"{nm}.log").exists() and not (p / ".snapshot_complete").exists():
+                # A repository whose LAST event in the re-download tool's progress log is not
+                # DONE (downloading, stopped by the probe, failed, not started) is incomplete
+                # unless the toolchain's marker says otherwise; one with no event there is
+                # judged by its files alone (the chains before the marker existed).
+                if not (p / ".snapshot_complete").exists() and last_download_event(snap_logs / "progress.log", nm) not in (None, "DONE"):
                     continue
                 return p
         return None
