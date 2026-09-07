@@ -493,19 +493,31 @@ class Model:
         return ok
 
     def snapshot(self):
-        """The model's snapshot: the export first, then the toolchain's own download directory."""
+        """The model's COMPLETE snapshot: the export first, then the toolchain's own
+        download directory. A directory with files in it is what a stopped download
+        leaves behind (Sana 4K: 6 GB, no model_index.json, 2026-09-07): complete =
+        the format's index file present, no partial file, and — for a repository the
+        re-download tool touched — the toolchain's completion marker."""
+        snap_logs = Path(self.args.out) / "snap"
         for root in (Path("/home/mlops/hf_snapshots"), Path.home() / ".cache" / "neurobrix" / "hf_snapshots"):
             for nm in (self.registry_name, self.name):
                 p = root / nm
-                if p.is_dir() and any(p.iterdir()):
-                    return p
+                if not (p.is_dir() and any(p.iterdir())):
+                    continue
+                if not ((p / "model_index.json").exists() or (p / "config.json").exists()):
+                    continue
+                if any(p.rglob("*.incomplete")):
+                    continue
+                if (snap_logs / f"{nm}.log").exists() and not (p / ".snapshot_complete").exists():
+                    continue
+                return p
         return None
 
     def step_trace(self):
         if self.done("trace"): return True
         snap = self.snapshot()
         if snap is None:
-            self.mark("trace", False, error="no snapshot on the export or in the download directory"); return False
+            self.mark("trace", False, error="no COMPLETE snapshot on the export or in the download directory (index file, no partial file, the marker when the tool touched it)"); return False
         t0 = time.time()
         cmd = [PY, str(FORGE), "trace", "--model", self.registry_name, "--family", self.family, "--device", "cuda:0", "--path", str(snap)]
         rc = run(cmd, self.env(tree=False), self.dir / "trace.log", self.args.trace_timeout, cwd=str(REPO / "forge"))
