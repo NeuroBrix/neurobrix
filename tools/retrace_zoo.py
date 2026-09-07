@@ -886,6 +886,21 @@ class Model:
             f.rename(keep / f.name)
         (keep / "WHY.txt").write_text(why + "\n")
 
+    def release_staging(self, why: str) -> bool:
+        """A FAIL gate releases the staged build: the cache holds the installed copy and the backup
+        the old one, and the build-step deferral "uploads must drain first" would otherwise wait
+        for an upload a failed gate never queues (2026-09-07 20:16: two dead staged builds, 34 GB,
+        stalled phase B on PixArt-Sigma's build). A NEEDS_EXPLANATION gate keeps its staging — it
+        may pass once explained and then uploads from it."""
+        nbx = (self.state["steps"].get("build") or {}).get("nbx")
+        if not nbx or not Path(nbx).exists():
+            return False
+        Path(nbx).unlink()
+        self.state["steps"]["build"]["staged_removed"] = {"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "why": why}
+        self.state_path.write_text(json.dumps(self.state, indent=1))
+        log(f"{self.name}: staged build released — {why} ({nbx})")
+        return True
+
     def cache_holds_backup(self):
         """True when the cache's container is the one the backup holds (same build), False when
         another build sits there, None without a backup or a cache. The state cannot answer this:
@@ -1378,6 +1393,8 @@ class Model:
         self.mark("gate", verdict.startswith("PASS"), verdict=verdict, bytes=bytes_verdict, graph=gd, policy=POLICY,
                   autotune=self.state.get("autotune_freeze"))
         shutil.rmtree(Path(self.args.tmp) / "previous" / self.name, ignore_errors=True)   # the previous object's staging
+        if verdict == "FAIL":
+            self.release_staging("gate FAIL: the staged build has no upload ahead of it")
         log(f"{self.name}: gate {verdict} — both arms under {POLICY}; bytes {bytes_verdict}; graph: {gd['annotation_changes']} annotation change(s), "
             f"{gd['arg_witnessed']} shape argument(s) of the closed defect "
             f"(witnessed {sum(r.get('arg_kinds', {}).get('witnessed', 0) for r in gd['components'].values())}, "
