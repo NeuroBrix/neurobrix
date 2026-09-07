@@ -11,9 +11,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
 import retrace_zoo as R  # noqa: E402
+import precision_zoo_campaign as C  # noqa: E402
 
 
-def _model(tmp):
+def _model(tmp, monkeypatch):
+    cache = tmp / "cache"; (cache / "m").mkdir(parents=True)
+    (cache / "m" / "manifest.json").write_text(json.dumps({"created_at": "2026-09-07T00:00:00"}))
+    monkeypatch.setattr(R, "CACHE", cache)
+    monkeypatch.setattr(C, "family_of", lambda m: "tts")
     args = types.SimpleNamespace(out=str(tmp / "out"), backup=str(tmp / "backup"), models_root=str(tmp / "builds"),
                                  tmp=str(tmp / "tmp"), gpu=None, src=None, extra=[], timeout=10, trace_timeout=10,
                                  restore_mbps=10.0, upload_mbps=10.0)
@@ -21,8 +26,8 @@ def _model(tmp):
     return R.Model("m", args)
 
 
-def test_fail_releases_the_staged_build_and_says_so(tmp_path):
-    m = _model(tmp_path)
+def test_fail_releases_the_staged_build_and_says_so(tmp_path, monkeypatch):
+    m = _model(tmp_path, monkeypatch)
     nbx = tmp_path / "builds" / "m" / "model.nbx"; nbx.parent.mkdir(parents=True); nbx.write_bytes(b"x" * 10)
     m.mark("build", True, nbx=str(nbx))
     assert m.release_staging("gate FAIL: test") is True
@@ -31,8 +36,8 @@ def test_fail_releases_the_staged_build_and_says_so(tmp_path):
     assert st["staged_removed"]["why"] == "gate FAIL: test" and st["nbx"] == str(nbx)
 
 
-def test_nothing_staged_is_a_no_op(tmp_path):
-    m = _model(tmp_path)
+def test_nothing_staged_is_a_no_op(tmp_path, monkeypatch):
+    m = _model(tmp_path, monkeypatch)
     assert m.release_staging("gate FAIL: test") is False
     m.mark("build", True, nbx=str(tmp_path / "gone.nbx"))
     assert m.release_staging("gate FAIL: test") is False
