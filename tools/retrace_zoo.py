@@ -555,22 +555,33 @@ def hub_store_write_probe(org: str, name: str, token: str, registry: str = REGIS
     return answer
 
 
-def stream_under_probe(url: str, dest: Path, mbps: float, logfile: Path, probe_every: float = 2.0, probe_limit: float = 5.0):
+def stream_under_probe(url: str, dest: Path, mbps: float, logfile: Path, probe_every: float = 2.0, probe_limit: float = 5.0,
+                       expected: int = 0):
     """`url` streamed into `dest` at no more than `mbps` MB/s; every `probe_every` seconds each
     shared export must list within `probe_limit` seconds, else the stream stops and the export is
-    named (None). Returns the bytes written. The URL itself is never written anywhere."""
+    named (None). Returns the bytes `dest` holds. The URL itself is never written anywhere.
+    A partial `dest` shorter than `expected` RESUMES where it stopped (an HTTP range): the store's
+    health flaps within minutes and a 4–9 GB previous object at 10 MB/s never restarts from zero."""
     import requests
     from snapshot_refresh import _export_answers
     chunk = 1 << 20
-    with open(logfile, "a") as fh, requests.get(url, stream=True, timeout=60) as r, open(dest, "wb") as out:
+    have = dest.stat().st_size if dest.exists() else 0
+    if expected and have >= expected:
+        return have
+    if not expected:
+        have = 0
+    headers = {"Range": f"bytes={have}-"} if have else {}
+    with open(logfile, "a") as fh, requests.get(url, stream=True, timeout=60, headers=headers) as r, open(dest, "ab" if have else "wb") as out:
         r.raise_for_status()
-        fh.write(f"stream → {dest} at ≤ {mbps} MB/s; export probe every {probe_every} s, limit {probe_limit} s\n"); fh.flush()
-        t0 = time.time(); got = 0; last_probe = t0
+        if have and r.status_code != 206:
+            out.seek(0); out.truncate(); have = 0   # the store ignored the range: from the start
+        fh.write(f"stream → {dest} at ≤ {mbps} MB/s from byte {have}; export probe every {probe_every} s, limit {probe_limit} s\n"); fh.flush()
+        t0 = time.time(); got = have; last_probe = t0
         for buf in r.iter_content(chunk):
             if not buf:
                 continue
             out.write(buf); got += len(buf)
-            ahead = got / (mbps * 1e6) - (time.time() - t0)
+            ahead = (got - have) / (mbps * 1e6) - (time.time() - t0)
             if ahead > 0:
                 time.sleep(ahead)
             if time.time() - last_probe >= probe_every:
@@ -579,7 +590,7 @@ def stream_under_probe(url: str, dest: Path, mbps: float, logfile: Path, probe_e
                     if not os.path.isdir(d) or _export_answers(d, probe_limit) is None:
                         fh.write(f"[probe] {d} did not list within {probe_limit} s after {got / 1e6:.0f} MB — the read stops here, by name\n")
                         return None
-        fh.write(f"done: {got} bytes in {time.time() - t0:.0f} s\n")
+        fh.write(f"done: {got} bytes ({got - have} this stream) in {time.time() - t0:.0f} s\n")
     return got
 
 
@@ -808,13 +819,13 @@ class Model:
         dest = Path(self.args.tmp) / "previous" / self.name / "model.nbx"
         dest.parent.mkdir(parents=True, exist_ok=True)
         try:
-            got = stream_under_probe(url, dest, self.args.restore_mbps, logfile)
+            got = stream_under_probe(url, dest, self.args.restore_mbps, logfile, expected=size)
         except Exception as exc:  # noqa: BLE001
             reason = f"the read of the previous object failed: {type(exc).__name__}: {str(exc)[:160]}"
             self.mark("old_outputs", False, state="DEFERRED", reason=reason)
             log(f"{self.name}: restore DEFERRED — {reason}"); return False
         if got is None:
-            self.mark("old_outputs", False, state="DEFERRED", reason="an export stopped answering during the read of the previous object (restore.log names it)")
+            self.mark("old_outputs", False, state="DEFERRED", reason="an export stopped answering during the read of the previous object (restore.log names it); the read resumes where it stopped")
             log(f"{self.name}: restore DEFERRED — an export stopped answering during the read; stopped by name"); return False
         if got != size:
             self.mark("old_outputs", False, error=f"previous object: {got} bytes read, the hub records {size}")
