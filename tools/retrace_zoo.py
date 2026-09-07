@@ -159,6 +159,21 @@ def witnessed_arg_changes(old_op: dict, new_op: dict, tensors_new: dict):
     return sites
 
 
+HUB_STORE_HEALTH = "http://10.0.0.36:9000/minio/health/cluster"
+
+
+def hub_store_health(url: str = HUB_STORE_HEALTH, timeout: float = 10.0):
+    """The hub object store's cluster health code (200 = read/write quorum), or the error's name."""
+    import urllib.request, urllib.error
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as r:
+            return r.status
+    except urllib.error.HTTPError as e:
+        return e.code
+    except Exception as e:  # noqa: BLE001
+        return type(e).__name__
+
+
 class Model:
     def __init__(self, name: str, args):
         self.name = name
@@ -396,6 +411,13 @@ class Model:
             self.mark("upload", False, state="REFUSED", reason=str(exc), nbx=nbx)
             log(f"{self.name}: upload {exc}")
             return False
+        health = hub_store_health()
+        if health != 200:
+            # The hub's object store refuses writes (its cluster health answers other than 200):
+            # said by name, the artifact stays ready, the chain moves on; a later pass uploads it.
+            self.mark("upload", False, state="DEFERRED", reason=f"hub object store cluster health {health} (writes refused); retry when it answers 200", nbx=nbx)
+            log(f"{self.name}: upload DEFERRED — the hub object store's cluster health answers {health}; the artifact is gated and ready, a later pass uploads it")
+            return False
         if self.hub:
             org, name = self.hub.split("/", 1)
             cmd = [PY, str(FORGE), "replace", "--org", org, "--name", name, nbx]
@@ -460,7 +482,11 @@ def main():
         merged.update(summary)
         sp.write_text(json.dumps(merged, indent=1))
     print(json.dumps(summary, indent=1))
+    # The exit code tells the truth: a model whose chain stopped (a gate that did not pass, a refused,
+    # deferred or failed upload) makes the run fail, so a marker chained on this command cannot say DONE.
+    incomplete = [m for m, st in summary.items() if not (st.get("upload") == "ok")]
+    return 1 if incomplete else 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
