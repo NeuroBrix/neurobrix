@@ -69,7 +69,11 @@ class KVCacheLayer:
             raise RuntimeError(
                 f"KV cache overflow: {self.current_len}+{new_len} > {self._buffer_len}")
 
-        # Indexed write via __setitem__ (cudaMemcpy)
+        # Indexed write via __setitem__: one launch per buffer, the source read
+        # by its strides and cast to the cache dtype on the store. JUSTIFIED
+        # COPY, 2 per layer per step: the cache write is the copy — the
+        # projection wrote K/V into their own slots (Prism's plan), and the
+        # cache is the persistent home the attention reads across steps.
         self.k_buffer[:self.batch_size, :, self.current_len:end_pos, :] = k
         self.v_buffer[:self.batch_size, :, self.current_len:end_pos, :] = v
 
