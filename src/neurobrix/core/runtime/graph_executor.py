@@ -912,6 +912,9 @@ class GraphExecutor:
         # Fix SDPA double-scaling from PyTorch's decomposition + pattern reassembly
         self._normalize_sdpa_scaling()
 
+        # Record, per SDPA op, whether its K arrives already transposed.
+        self._mark_sdpa_k_layout()
+
         # MoE Fusion Pass: detect and fuse MoE expert subgraphs BEFORE any execution.
         # CRITICAL: This runs for ALL modes (compiled, native, triton).
         # Without fusion, MoE models use hardcoded trace-time routing indices → garbage output.
@@ -1122,6 +1125,157 @@ class GraphExecutor:
         if _os_amp.environ.get("NBX_DISABLE_AMP") == "1":
             return False
         return True
+
+    #: Ops that carry a tensor through without changing which axis is which.
+    _SDPA_LAYOUT_PASSTHROUGH = frozenset({
+        "aten::expand", "aten::clone", "aten::contiguous", "aten::_to_copy",
+        "aten::view", "aten::_unsafe_view", "aten::reshape", "aten::mul",
+        "aten::div", "aten::to", "aten::detach",
+    })
+
+    _SDPA_OP_TYPES = (
+        "aten::scaled_dot_product_attention",
+        "aten::_scaled_dot_product_efficient_attention",
+        "aten::_scaled_dot_product_flash_attention",
+        "aten::_scaled_dot_product_cudnn_attention",
+        "aten::_scaled_dot_product_attention_math",
+    )
+
+    def _mark_sdpa_k_layout(self) -> None:
+        """Record on every SDPA op whether its K input arrives transposed.
+
+        PyTorch's SDPA math decomposition computes `Q @ K.transpose(-2,-1)`,
+        so a traced graph hands the attention op a K in (batch, heads,
+        head_dim, seq) rather than (batch, heads, seq, head_dim). Every
+        engine has to put it back — and until now each one recognised the
+        situation by comparing shapes at run time:
+
+            k.shape[-2] == q.shape[-1] and k.shape[-1] != q.shape[-1]
+
+        That test is undecidable exactly when the sequence length equals the
+        head dimension. TinyLlama's head_dim is 64, so at a prompt of 64
+        tokens the correction silently did not fire, K stayed transposed,
+        and the model answered a different question — measured 2026-09-07 on
+        Apple: the last-position logits went to argmax 29892 at 6.41 against
+        the float64 oracle's 3864 at 22.36, |delta| 23.27 across the vocabulary,
+        while 63 and 65 tokens were exact to 0.02. Both branches carried it,
+        because both were sniffing the same ambiguous shapes.
+
+        The graph knows the answer without guessing: the transpose is IN it.
+        This pass walks K's producer chain and counts the transposes of the
+        last two axes; an odd count means K is pre-transposed. The traced
+        shapes cross-check the walk whenever the trace itself is
+        unambiguous, and a disagreement raises rather than picks a side.
+        """
+        assert self._dag is not None
+        ops = self._dag.get("ops", {})
+        tensors = self._dag.get("tensors", {})
+
+        producer: Dict[str, str] = {}
+        for uid, op in ops.items():
+            for tid in op.get("output_tensor_ids", []):
+                producer[tid] = uid
+
+        def _shape_of(tid: str):
+            shape = (tensors.get(tid) or {}).get("shape")
+            return list(shape) if isinstance(shape, (list, tuple)) else None
+
+        def _swaps_last_two(op: Dict[str, Any], in_tid: str) -> bool:
+            in_shape = _shape_of(in_tid)
+            if not in_shape:
+                return False
+            rank = len(in_shape)
+            dims = []
+            for arg in op.get("attributes", {}).get("args", []):
+                if isinstance(arg, dict) and arg.get("type") == "scalar" \
+                        and isinstance(arg.get("value"), int):
+                    dims.append(arg["value"])
+            if len(dims) != 2:
+                return False
+            norm = {d + rank if d < 0 else d for d in dims}
+            return norm == {rank - 2, rank - 1}
+
+        def _walk(tid: str) -> Optional[bool]:
+            """True/False when the chain is understood, None when it is not."""
+            swaps = 0
+            for _ in range(16):
+                uid = producer.get(tid)
+                if uid is None:
+                    return swaps % 2 == 1          # reached a weight or an input
+                op = ops[uid]
+                op_type = op.get("op_type", "")
+                ins = op.get("input_tensor_ids", [])
+                if op_type == "aten::transpose":
+                    if not ins:
+                        return None
+                    if _swaps_last_two(op, ins[0]):
+                        swaps += 1
+                elif op_type not in self._SDPA_LAYOUT_PASSTHROUGH:
+                    return swaps % 2 == 1          # an op that ends the chain
+                if not ins:
+                    return swaps % 2 == 1
+                tid = ins[0]
+            return None
+
+        for uid, op in ops.items():
+            if op.get("op_type") not in self._SDPA_OP_TYPES:
+                continue
+            ins = op.get("input_tensor_ids", [])
+            if len(ins) < 2:
+                continue
+            walked = _walk(ins[1])
+            q_shape, k_shape = _shape_of(ins[0]), _shape_of(ins[1])
+            witness = None
+            if (q_shape and k_shape and len(q_shape) == 4 and len(k_shape) == 4
+                    and q_shape[-1] != q_shape[-2]):
+                # The trace is unambiguous: a K in (b, h, head_dim, seq) has
+                # Q's head_dim where its own seq belongs.
+                if k_shape[-2] == q_shape[-1] and k_shape[-1] != q_shape[-1]:
+                    witness = True
+                elif k_shape[-1] == q_shape[-1]:
+                    witness = False
+            if walked is None and witness is None:
+                raise RuntimeError(
+                    f"SDPA {uid}: cannot tell whether K is pre-transposed. "
+                    f"The producer chain of {ins[1]!r} is not one this pass "
+                    f"understands and the traced shapes {q_shape} / {k_shape} "
+                    f"do not settle it. Refusing to guess: guessing here is "
+                    f"what silently transposed attention at seq_len == head_dim.")
+            if walked is not None and witness is not None and walked != witness:
+                raise RuntimeError(
+                    f"SDPA {uid}: the graph's transpose chain says K is "
+                    f"{'' if walked else 'not '}pre-transposed while the traced "
+                    f"shapes {q_shape} / {k_shape} say the opposite. One of the "
+                    f"two is wrong and neither may be preferred silently.")
+            op.setdefault("attributes", {})["nbx_k_pre_transposed"] = bool(
+                walked if walked is not None else witness)
+
+            # V travels the same decomposition and the same ambiguity: the
+            # ATen KV wrapper un-transposes it by the identical shape test.
+            # Recorded here so that one need not guess either.
+            if len(ins) >= 3:
+                v_walked = _walk(ins[2])
+                v_shape = _shape_of(ins[2])
+                v_witness = None
+                if (q_shape and v_shape and len(q_shape) == 4 and len(v_shape) == 4
+                        and q_shape[-1] != q_shape[-2]):
+                    if v_shape[-2] == q_shape[-1] and v_shape[-1] != q_shape[-1]:
+                        v_witness = True
+                    elif v_shape[-1] == q_shape[-1]:
+                        v_witness = False
+                if v_walked is None and v_witness is None:
+                    raise RuntimeError(
+                        f"SDPA {uid}: cannot tell whether V is pre-transposed "
+                        f"from {ins[2]!r} or from the traced shapes "
+                        f"{q_shape} / {v_shape}. Refusing to guess.")
+                if (v_walked is not None and v_witness is not None
+                        and v_walked != v_witness):
+                    raise RuntimeError(
+                        f"SDPA {uid}: the graph's transpose chain and the "
+                        f"traced shapes disagree about V's layout "
+                        f"({q_shape} / {v_shape}).")
+                op["attributes"]["nbx_v_pre_transposed"] = bool(
+                    v_walked if v_walked is not None else v_witness)
 
     def _normalize_sdpa_scaling(self) -> None:
         """
@@ -1876,9 +2030,15 @@ class GraphExecutor:
             arr = arr.astype(np.float32)
 
         DeviceAllocator.set_device(device_idx)
-        _const = NBXTensor.from_numpy(arr)
-        if dtype_str == "bfloat16" and compute_dtype == NBXDtype.bfloat16:
-            _const._dtype = NBXDtype.bfloat16
+        # bf16 bits travel in a uint16 container numpy cannot label: the
+        # dtype is DECLARED to from_numpy, never assigned afterwards — a
+        # post-construction retag keeps the element size of the dtype the
+        # tensor was built with, and the tensor then declares twice the
+        # bytes it owns (see NBXTensor.from_numpy).
+        _bits_are = (NBXDtype.bfloat16
+                     if dtype_str == "bfloat16" and compute_dtype == NBXDtype.bfloat16
+                     else None)
+        _const = NBXTensor.from_numpy(arr, dtype=_bits_are)
         self._weights[weight_name] = _const
 
     # =========================================================================
@@ -3295,8 +3455,20 @@ class GraphExecutor:
         # Snapshot the original full-size constants on first call so repeated
         # decode-step invocations re-narrow / re-extend from the SAME basis
         # (mirrors CompiledSequence._seq_constant_originals).
+        #
+        # The AXIS is remembered with the original, and for the same reason.
+        # It used to be rediscovered on every call by scanning the CURRENT
+        # weight for a dim equal to trace_seq_len — but the current weight is
+        # the one the previous call narrowed, so from the second call on no
+        # dim equalled trace_seq_len any more, no axis matched, and the
+        # constant stayed at the LENGTH OF THE PREVIOUS STEP while the graph
+        # asked for this one. First forward right, every one after it stale:
+        # the compiled arm resolves `(slot, axis, sym_id, trace_val)` once at
+        # plan time and never rediscovers it, which is why only this arm
+        # carried the fault.
         if not hasattr(self, "_seq_constant_originals_native"):
             self._seq_constant_originals_native = {}
+            self._seq_constant_axis_native = {}
 
         # Find seq_len symbol and its trace/runtime values
         for sym_id, sym_info in symbols.items():
@@ -3311,34 +3483,39 @@ class GraphExecutor:
             for wname, weight in list(self._weights.items()):
                 if not wname.startswith("constant_T_"):
                     continue
-                for axis, dim in enumerate(weight.shape):
-                    if dim != trace_val:
+                memo = (sym_id, wname)
+                if memo in self._seq_constant_originals_native:
+                    original = self._seq_constant_originals_native[memo]
+                    axis = self._seq_constant_axis_native[memo]
+                else:
+                    # First encounter: the weight IS the original, so its
+                    # shape is the one to read the axis from.
+                    axis = next((a for a, dim in enumerate(weight.shape)
+                                 if dim == trace_val), None)
+                    if axis is None:
                         continue
-                    # Remember the original full-size weight (first
-                    # encounter only) so subsequent calls don't compound.
-                    if wname not in self._seq_constant_originals_native:
-                        self._seq_constant_originals_native[wname] = weight
-                    original = self._seq_constant_originals_native[wname]
+                    original = weight
+                    self._seq_constant_originals_native[memo] = original
+                    self._seq_constant_axis_native[memo] = axis
 
-                    if runtime_val == original.shape[axis]:
-                        # Restore original
-                        self._weights[wname] = original
-                    elif runtime_val < original.shape[axis]:
-                        # Narrow from the original — slice positions 0..N-1
-                        slices = [slice(None)] * original.ndim
-                        slices[axis] = slice(0, runtime_val)
-                        self._weights[wname] = original[tuple(slices)]
-                    else:
-                        # Extend: recompute cos/sin via inv_freq if available
-                        extended = self._recompute_rope_seq_dependent(
-                            original, runtime_val, axis
-                        )
-                        if extended is not None:
-                            self._weights[wname] = extended
-                            # Update snapshot so subsequent calls don't
-                            # try to re-extend from an extended basis.
-                            self._seq_constant_originals_native[wname] = extended
-                    break
+                if runtime_val == original.shape[axis]:
+                    # Restore original
+                    self._weights[wname] = original
+                elif runtime_val < original.shape[axis]:
+                    # Narrow from the original — slice positions 0..N-1
+                    slices = [slice(None)] * original.ndim
+                    slices[axis] = slice(0, runtime_val)
+                    self._weights[wname] = original[tuple(slices)]
+                else:
+                    # Extend: recompute cos/sin via inv_freq if available
+                    extended = self._recompute_rope_seq_dependent(
+                        original, runtime_val, axis
+                    )
+                    if extended is not None:
+                        self._weights[wname] = extended
+                        # Update snapshot so subsequent calls don't
+                        # try to re-extend from an extended basis.
+                        self._seq_constant_originals_native[memo] = extended
 
     def _recompute_rope_seq_dependent(
         self, original: torch.Tensor, seq_len: int, axis: int,

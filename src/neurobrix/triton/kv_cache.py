@@ -399,7 +399,8 @@ class TritonAttentionInterceptor:
                 self.cache, self._is_prefill, self._call_count, self._position_offset)
 
     def intercept(self, q, k, v, attn_mask=None, dropout_p=0.0,
-                  is_causal=True, scale=None, layer_idx=-1):
+                  is_causal=True, scale=None, layer_idx=-1,
+                  k_pre_transposed=None):
         """Intercept SDPA: update KV cache for decode, passthrough for prefill.
 
         Self-managed dtype (Phase 1 opt-in cleanup): Flash Attention works
@@ -415,11 +416,24 @@ class TritonAttentionInterceptor:
             self._call_count += 1
 
         # Fix pre-transposed K from graph math decomposition path.
-        if (k.ndim == 4
-                and k.shape[2] == q.shape[3]
-                and k.shape[3] == q.shape[2]
-                and k.shape[2] != q.shape[2]):
-            k = k.transpose(2, 3).contiguous()
+        #
+        # `k_pre_transposed` is the graph's recorded answer (GraphExecutor.
+        # _mark_sdpa_k_layout); the shape test below is only for callers that
+        # do not carry it, and it refuses the square case rather than guess —
+        # at seq_len == head_dim the two layouts have the same shape, and
+        # guessing there ran attention with K's axes crossed.
+        if k.ndim == 4 and q.ndim == 4:
+            if k_pre_transposed is not None:
+                if k_pre_transposed:
+                    k = k.transpose(2, 3).contiguous()
+            elif (k.shape[2] == q.shape[3] and k.shape[3] == q.shape[2]
+                    and k.shape[2] == q.shape[2]):
+                raise RuntimeError(
+                    f"KV interceptor: K is square {tuple(k.shape)} with "
+                    f"seq_len == head_dim, so its layout cannot be read from "
+                    f"its shape and none was recorded. Refusing to guess.")
+            elif (k.shape[2] == q.shape[3] and k.shape[3] == q.shape[2]):
+                k = k.transpose(2, 3).contiguous()
 
         # PREFILL: Use standard SDPA with is_causal=True (drop explicit mask).
         # Also populate the KV cache so decode steps have context.
@@ -452,7 +466,7 @@ class TritonAttentionInterceptor:
                 v = v.to(q._dtype)
             return scaled_dot_product_attention_wrapper(
                 q, k, v, attn_mask=None, dropout_p=dropout_p,
-                is_causal=True, scale=scale)
+                is_causal=True, scale=scale, k_pre_transposed=False)
 
         # GQA: un-expand K/V if needed
         if self._gqa_group_size == 0:
@@ -527,11 +541,12 @@ class TritonAttentionInterceptor:
             attn_mask=attn_mask,
             dropout_p=dropout_p,
             is_causal=use_causal,
-            scale=scale)
+            scale=scale,
+            k_pre_transposed=False)   # normalised at the top of intercept()
 
     def intercept_efficient(self, q, k, v, attn_bias=None, compute_log_sumexp=False,
                             dropout_p=0.0, is_causal=False, scale=None,
-                            layer_idx=-1, **kwargs):
+                            layer_idx=-1, k_pre_transposed=None, **kwargs):
         """aten::_scaled_dot_product_efficient_attention / _cudnn_attention.
 
         Same KV-cache logic as intercept(), but these ATen variants insert a
@@ -544,14 +559,17 @@ class TritonAttentionInterceptor:
         (core/runtime/graph/kv_cache_wrapper.py:622).
         """
         return self.intercept(q, k, v, attn_mask=attn_bias, dropout_p=dropout_p,
-                              is_causal=is_causal, scale=scale, layer_idx=layer_idx)
+                              is_causal=is_causal, scale=scale, layer_idx=layer_idx,
+                              k_pre_transposed=k_pre_transposed)
 
     def intercept_flash(self, q, k, v, dropout_p=0.0, is_causal=False,
-                        return_debug_mask=False, scale=None, layer_idx=-1, **kwargs):
+                        return_debug_mask=False, scale=None, layer_idx=-1,
+                        k_pre_transposed=None, **kwargs):
         """aten::_scaled_dot_product_flash_attention — is_causal at arg[4], no
         attn_bias, ``scale`` kwarg-only. Remap to intercept()."""
         return self.intercept(q, k, v, attn_mask=None, dropout_p=dropout_p,
-                              is_causal=is_causal, scale=scale, layer_idx=layer_idx)
+                              is_causal=is_causal, scale=scale, layer_idx=layer_idx,
+                              k_pre_transposed=k_pre_transposed)
 
     def reset(self):
         self.cache.clear()
