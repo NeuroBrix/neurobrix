@@ -53,6 +53,10 @@ PY = "/home/mlops/ml/venv/bin/python"
 FORGE = REPO / "forge" / "forge.py"
 CACHE = Path.home() / ".neurobrix" / "cache"
 HUB_MAP = REPO / "validation_outputs" / "retrace_2026_09_07" / "hub_map.json"
+# A container with no hub entry is a NEW publication: its org, name, category, license, tags
+# and description are WRITTEN here (the owner's word of 2026-09-07 00:26 for swin2SR-x2), never
+# deduced by the tool — a model with neither a hub entry nor a written line is refused by name.
+NEW_ENTRIES = REPO / "validation_outputs" / "retrace_2026_09_07" / "new_entries.json"
 FAMILIES = REPO / "validation_outputs" / "retrace_2026_09_07" / "families.json"
 ANNOTATION_KEYS = {"symbolic_shape"}       # the only tensor fields the closed defect touches
 # Trace-time provenance, not the artifact's semantics: the card the trace ran on and its memory
@@ -137,12 +141,10 @@ def run(cmd, env, logfile: Path, timeout: int, cwd=None) -> int:
     rotate(logfile)
     with open(logfile, "a") as fh:
         fh.write("$ " + " ".join(str(c) for c in cmd) + "\n"); fh.flush()
-        try:
-            return subprocess.run([str(c) for c in cmd], env=env, stdout=fh, stderr=subprocess.STDOUT,
-                                  timeout=timeout, cwd=cwd).returncode
-        except subprocess.TimeoutExpired:
+        rc = C.run_group(cmd, env, fh, timeout, cwd=cwd)      # its own process group: a timeout kills the children too
+        if rc == -9:
             fh.write(f"\n[retrace] TIMEOUT after {timeout} s\n")
-            return -9
+        return rc
 
 
 def _trace_value(v):
@@ -1069,12 +1071,24 @@ class Model:
                 return False
             cmd = [PY, str(FORGE), "replace", "--org", org, "--name", name, nbx]
         else:
-            cmd = [PY, str(FORGE), "publish", nbx]
+            new = (json.loads(NEW_ENTRIES.read_text()) if NEW_ENTRIES.exists() else {}).get(self.name)
+            if not new:
+                self.mark("upload", False, state="REFUSED", reason=f"no hub entry and no written new-entry line for {self.name} in {NEW_ENTRIES.name}", nbx=nbx)
+                log(f"{self.name}: upload REFUSED — no hub entry and no written new-entry line in {NEW_ENTRIES.name}")
+                return False
+            cmd = [PY, str(FORGE), "publish", nbx, "--org", new["org"], "--name", new["name"], "--category", new["category"],
+                   "--description", new["description"], "--tags", new["tags"], "--license", new["license"]]
         if self.args.upload_mbps > 0:
             # The store writes each block as it arrives and answered a 548 MB/s burst with
             # SlowDownWrite after the whole artifact had streamed (2026-09-07): paced.
             cmd += ["--max-write-mbps", str(self.args.upload_mbps)]
         rc = run(cmd, self.env(tree=False), self.dir / "upload.log", 7200, cwd=str(REPO / "forge"))
+        if rc == 0 and not self.hub and NEW_ENTRIES.exists():
+            new = json.loads(NEW_ENTRIES.read_text()).get(self.name) or {}
+            if new:
+                hub = json.loads(HUB_MAP.read_text()) if HUB_MAP.exists() else {}
+                hub[self.name] = self.hub = f"{new['org']}/{new['name']}"
+                HUB_MAP.write_text(json.dumps(hub, indent=1, sort_keys=True))
         self.mark("upload", rc == 0, rc=rc, command=" ".join(cmd[2:]))
         if rc == 0 and nbx and Path(nbx).exists():
             # The hub holds it now (checksum verified by the toolchain before the repoint);

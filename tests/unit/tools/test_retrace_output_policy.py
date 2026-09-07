@@ -229,3 +229,38 @@ def test_an_upload_is_paced_through_the_toolchains_flag(model, monkeypatch):
     monkeypatch.setattr(R, "run", lambda cmd, *a, **k: seen.setdefault("cmd", [str(c) for c in cmd]) and 1)
     m.step_upload()
     assert seen["cmd"][-2:] == ["--max-write-mbps", "10.0"] and "replace" in seen["cmd"]
+
+
+def _armed_for_upload(m, monkeypatch):
+    m.state["steps"]["build"] = {"ok": True, "nbx": "/x/model.nbx"}
+    monkeypatch.setattr(R.repo_env, "require", lambda name: None)
+    monkeypatch.setenv("NEUROBRIX_API_TOKEN", "t")
+    monkeypatch.setattr(R, "hub_store_health", lambda: 200)
+    monkeypatch.setattr(R, "hub_store_write_probe", lambda org, name, token: 200)
+
+
+def test_a_new_publication_carries_its_written_entry(model, monkeypatch, tmp_path):
+    m = model; m.hub = None
+    _armed_for_upload(m, monkeypatch)
+    entries = tmp_path / "new_entries.json"
+    entries.write_text(json.dumps({m.name: {"org": "o", "name": "N", "category": "TTS", "license": "apache-2.0",
+                                            "tags": "a,b", "description": "d"}}))
+    monkeypatch.setattr(R, "NEW_ENTRIES", entries)
+    monkeypatch.setattr(R, "HUB_MAP", tmp_path / "hub_map.json")
+    seen = {}
+    monkeypatch.setattr(R, "run", lambda cmd, *a, **k: seen.setdefault("cmd", [str(c) for c in cmd]) and 0)
+    monkeypatch.setattr(R.shutil, "rmtree", lambda *a, **k: None)
+    m.step_upload()
+    c = seen["cmd"]
+    assert "publish" in c and c[c.index("--org") + 1] == "o" and c[c.index("--category") + 1] == "TTS"
+    assert json.loads((tmp_path / "hub_map.json").read_text())[m.name] == "o/N"      # a later pass replaces
+
+
+def test_a_container_with_neither_entry_nor_written_line_is_refused_by_name(model, monkeypatch, tmp_path):
+    m = model; m.hub = None
+    _armed_for_upload(m, monkeypatch)
+    monkeypatch.setattr(R, "NEW_ENTRIES", tmp_path / "none.json")
+    monkeypatch.setattr(R, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("nothing must run")))
+    assert m.step_upload() is False
+    st = m.state["steps"]["upload"]
+    assert st["state"] == "REFUSED" and "no written new-entry line" in st["reason"]
