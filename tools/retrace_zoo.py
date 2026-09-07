@@ -120,9 +120,18 @@ def _trace_value(v):
     return None
 
 
+_NOT_DIM_TYPES = ("tensor", "tensor_tuple", "dtype", "device", "layout", "list", "int_list", "scalar", "bool", "none")
+
+
+def _is_dim_node(v) -> bool:
+    return isinstance(v, dict) and "type" in v and v.get("type") not in _NOT_DIM_TYPES
+
+
 def _leaf_diffs(a, b, path=()):
     """Every leaf where two JSON trees of the same structure differ; None when the structure itself differs."""
     if isinstance(a, dict) and isinstance(b, dict):
+        if _is_dim_node(a) and _is_dim_node(b):           # two dim expressions: one leaf pair
+            return [] if a == b else [(path, a, b)]
         if set(a) != set(b):
             return None
         out = []
@@ -143,12 +152,78 @@ def _leaf_diffs(a, b, path=()):
             out += d
         return out
     if isinstance(a, (dict, list)) or isinstance(b, (dict, list)):
-        # a symbol or expression {"type": ...} against a bare integer is a leaf pair
-        if (isinstance(a, dict) and "type" in a and isinstance(b, int) and not isinstance(b, bool)) or \
-           (isinstance(b, dict) and "type" in b and isinstance(a, int) and not isinstance(a, bool)):
+        # a symbol or expression {"type": ...} against a bare integer, or two dim expressions
+        # spelled differently, are leaf pairs (the classifier judges them)
+        if (_is_dim_node(a) and isinstance(b, int) and not isinstance(b, bool)) or \
+           (_is_dim_node(b) and isinstance(a, int) and not isinstance(a, bool)):
             return [(path, a, b)]
         return None
     return [] if a == b else [(path, a, b)]
+
+
+def eval_dim(node, env):
+    """A dim expression of graph.json evaluated under `env` (symbol id → value); None when the
+    grammar is not understood. Symbols, and add/sub/mul/floordiv/mod/neg/max/min over them."""
+    if isinstance(node, bool):
+        return None
+    if isinstance(node, int):
+        return node
+    if not isinstance(node, dict):
+        return None
+    t = node.get("type")
+    if t == "symbol":
+        return env.get(node.get("id"))
+    if t == "neg":
+        v = eval_dim(node.get("left", node.get("operand")), env)
+        return None if v is None else -v
+    l = eval_dim(node.get("left"), env)
+    r = eval_dim(node.get("right"), env)
+    if l is None or r is None:
+        return None
+    if t == "add":
+        return l + r
+    if t == "sub":
+        return l - r
+    if t == "mul":
+        return l * r
+    if t == "floordiv":
+        return None if r == 0 else l // r
+    if t == "mod":
+        return None if r == 0 else l % r
+    if t == "max":
+        return max(l, r)
+    if t == "min":
+        return min(l, r)
+    return None
+
+
+def symbols_of(node, out=None):
+    out = {} if out is None else out
+    if isinstance(node, dict):
+        if node.get("type") == "symbol" and isinstance(node.get("trace"), int):
+            out[node["id"]] = node["trace"]
+        for v in node.values():
+            symbols_of(v, out)
+    elif isinstance(node, list):
+        for v in node:
+            symbols_of(v, out)
+    return out
+
+
+def equivalent_dims(a, b) -> bool:
+    """Two dim expressions that agree at the trace assignment and at two others (every symbol
+    doubled, then tripled — a multiple of a window stays one): the same extent on the domain
+    the container serves, spelled differently by the corrected rules."""
+    env0 = {}
+    symbols_of(a, env0); symbols_of(b, env0)
+    if not env0:
+        return False
+    for k in (1, 2, 3):
+        env = {sid: tv * k for sid, tv in env0.items()}
+        va, vb = eval_dim(a, env), eval_dim(b, env)
+        if va is None or vb is None or va != vb:
+            return False
+    return True
 
 
 def witnessed_arg_changes(old_op: dict, new_op: dict, tensors_new: dict):
@@ -175,7 +250,7 @@ def witnessed_arg_changes(old_op: dict, new_op: dict, tensors_new: dict):
         if conc:
             witnessed.append(list(conc))
     input_dims = []
-    for tid in new_op.get("input_tensor_ids") or []:
+    for tid in list(new_op.get("input_tensor_ids") or []) + list(new_op.get("output_tensor_ids") or []):
         m = tensors_new.get(tid) or {}
         for d in (m.get("symbolic_shape") or {}).get("dims") or []:
             if isinstance(d, dict):
@@ -190,14 +265,26 @@ def witnessed_arg_changes(old_op: dict, new_op: dict, tensors_new: dict):
             parent = parent[k]
         if isinstance(b, dict) and isinstance(a, int) and not isinstance(a, bool):
             # SYMBOLIZED: an integer the old tracer could not express, now the very symbolic
-            # dim the op's input carries (derived by the rule, never matched by value alone),
-            # with the old integer as its trace value and the witnessed extent at that position.
+            # dim the op's input or output carries (derived by the rule, never matched by value
+            # alone), with the old integer as its trace value and the witnessed extent there.
+            # (a vendor's -1, inferred at runtime, may become the derived expression the
+            # injection could not build before the rules were fixed: same trace, same extent.)
             tv = _trace_value(b)
-            if tv != a or json.dumps(b, sort_keys=True) not in input_dims:
+            if tv is None or (a != -1 and tv != a) or json.dumps(b, sort_keys=True) not in input_dims:
                 return None
-            if not any(len(parent) == len(c) and c[pos] == a for c in witnessed):
+            if not any(len(parent) == len(c) and c[pos] == tv for c in witnessed):
                 return None
             sites.append({"op": new_op.get("op_uid"), "path": ".".join(str(k) for k in path), "old": a, "new": b, "kind": "symbolized"})
+            continue
+        if isinstance(a, dict) and isinstance(b, dict):
+            # RE-EXPRESSED: the same extent spelled by the corrected rules' algebra — equal at
+            # the trace assignment and at two others, and the trace is the witnessed extent.
+            ta, tb = _trace_value(a), _trace_value(b)
+            if ta is None or ta != tb or not equivalent_dims(a, b):
+                return None
+            if not any(len(parent) == len(c) and c[pos] == ta for c in witnessed):
+                return None
+            sites.append({"op": new_op.get("op_uid"), "path": ".".join(str(k) for k in path), "old": a, "new": b, "kind": "re-expressed"})
             continue
         if not isinstance(b, int) or isinstance(b, bool):
             return None
@@ -485,7 +572,8 @@ class Model:
         log(f"{self.name}: gate {verdict} — bytes {bytes_verdict}; graph: {gd['annotation_changes']} annotation change(s), "
             f"{gd['arg_witnessed']} shape argument(s) of the closed defect "
             f"(witnessed {sum(1 for r in gd['components'].values() for x in r.get('arg_witnessed_sites', []) if x.get('kind') == 'witnessed')}, "
-            f"symbolized {sum(1 for r in gd['components'].values() for x in r.get('arg_witnessed_sites', []) if x.get('kind') == 'symbolized')}), "
+            f"symbolized {sum(1 for r in gd['components'].values() for x in r.get('arg_witnessed_sites', []) if x.get('kind') == 'symbolized')}, "
+            f"re-expressed {sum(1 for r in gd['components'].values() for x in r.get('arg_witnessed_sites', []) if x.get('kind') == 're-expressed')}), "
             f"{gd['beyond_annotation']} beyond, corrupted dims {gd['corrupted_before']} → {gd['corrupted_after']}")
         return verdict.startswith("PASS")
 
