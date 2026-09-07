@@ -1141,6 +1141,31 @@ class GraphExecutor:
         "aten::_scaled_dot_product_attention_math",
     )
 
+    def _sdpa_layout_kwargs(self, op_type: str, attrs: dict, func) -> dict:
+        """The recorded K/V layout, for a callable that can receive it.
+
+        Interceptors reached WITHOUT a compile step (the ATen sequential
+        engine, the triton-sequential loop) get the layout here, because
+        there is no `op.func` to bind it onto. A per-op_uid interceptor is
+        usually a tiling hook with a fixed signature, so the parameter is
+        offered only when the callable declares it or takes **kwargs — a
+        layout nobody can receive is not worth a TypeError.
+        """
+        if op_type not in self._SDPA_OP_TYPES or "nbx_k_pre_transposed" not in (attrs or {}):
+            return {}
+        try:
+            import inspect
+            params = inspect.signature(func).parameters
+        except (TypeError, ValueError):                  # pragma: no cover
+            return {}
+        takes_any = any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+        out = {}
+        if takes_any or "k_pre_transposed" in params:
+            out["k_pre_transposed"] = bool(attrs["nbx_k_pre_transposed"])
+        if takes_any or "v_pre_transposed" in params:
+            out["v_pre_transposed"] = bool(attrs.get("nbx_v_pre_transposed", False))
+        return out
+
     def _mark_sdpa_k_layout(self) -> None:
         """Record on every SDPA op whether its K input arrives transposed.
 
@@ -2714,8 +2739,10 @@ class GraphExecutor:
             try:
                 if hasattr(self, '_op_uid_interceptors') and op_uid in self._op_uid_interceptors:
                     resolved_kwargs = dispatcher.resolve_kwargs(attrs)
-                    result = self._op_uid_interceptors[op_uid](
-                        *resolved_args, **resolved_kwargs)
+                    _fn = self._op_uid_interceptors[op_uid]
+                    for _k, _v in self._sdpa_layout_kwargs(op_type, attrs, _fn).items():
+                        resolved_kwargs.setdefault(_k, _v)
+                    result = _fn(*resolved_args, **resolved_kwargs)
                 else:
                     # Dispatch
                     result = dispatcher.dispatch(op_type, resolved_args, attrs, op_uid=op_uid)
@@ -4302,7 +4329,10 @@ class GraphExecutor:
         # parity, P-SANA-4KPX-RUNTIME 2026-05-05 bisection.
         if hasattr(self, '_op_uid_interceptors') and op_uid in self._op_uid_interceptors:
             resolved_kwargs = self._resolver.resolve_kwargs(op_uid, attrs, op_type, op_data)
-            result = self._op_uid_interceptors[op_uid](*normalized_inputs, **resolved_kwargs)
+            _fn = self._op_uid_interceptors[op_uid]
+            for _k, _v in self._sdpa_layout_kwargs(op_type, attrs, _fn).items():
+                resolved_kwargs.setdefault(_k, _v)
+            result = _fn(*normalized_inputs, **resolved_kwargs)
         elif op_type in self._op_interceptors:
             # Resolve kwargs for interceptor
             resolved_kwargs = self._resolver.resolve_kwargs(op_uid, attrs, op_type, op_data)
@@ -4312,12 +4342,10 @@ class GraphExecutor:
             # read, and at seq_len == head_dim the shape says nothing.
             # Measured on CUDA 2026-09-07: every attention of a 64-token
             # TinyLlama request refused on this arm.
-            if op_type in self._SDPA_OP_TYPES and "nbx_k_pre_transposed" in attrs:
-                resolved_kwargs.setdefault(
-                    "k_pre_transposed", bool(attrs["nbx_k_pre_transposed"]))
-                resolved_kwargs.setdefault(
-                    "v_pre_transposed", bool(attrs.get("nbx_v_pre_transposed", False)))
-            result = self._op_interceptors[op_type](*normalized_inputs, **resolved_kwargs)
+            _fn = self._op_interceptors[op_type]
+            for _k, _v in self._sdpa_layout_kwargs(op_type, attrs, _fn).items():
+                resolved_kwargs.setdefault(_k, _v)
+            result = _fn(*normalized_inputs, **resolved_kwargs)
         elif op_type == "aten::_to_copy":
             # DtypeEngine handles _to_copy with Prism override and complex protection
             # Include output_dtypes from op_data (graph captures dtype conversions there)
