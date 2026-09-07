@@ -52,6 +52,7 @@ repo_env.load()
 PY = "/home/mlops/ml/venv/bin/python"
 FORGE = REPO / "forge" / "forge.py"
 CACHE = Path.home() / ".neurobrix" / "cache"
+VENDOR_PY = "/home/mlops/bench_venvs/diffusers/bin/python"       # the vendor pipelines' own venv (torch under tools/, never under src/)
 HUB_MAP = REPO / "validation_outputs" / "retrace_2026_09_07" / "hub_map.json"
 # A container with no hub entry is a NEW publication: its org, name, category, license, tags
 # and description are WRITTEN here (the owner's word of 2026-09-07 00:26 for swin2SR-x2), never
@@ -367,6 +368,36 @@ def _effective_literal(node):
     return v if isinstance(v, int) and not isinstance(v, bool) else None
 
 
+
+
+def _literal_symbolized_within(a, b) -> int:
+    """How many integer leaves of the old dim expression `a` the new expression `b` spells as a dim
+    expression with that integer as its trace, everything else equal (same node types, same
+    symbols); -1 when the two differ in any other way. PixArt-XL-2's transformer, 2026-09-07:
+    `s3 · 4096` → `s3 · (((h−2)//2+1) · ((w−2)//2+1))`, the patch count the old tracer had frozen."""
+    if isinstance(a, int) and not isinstance(a, bool):
+        if isinstance(b, int) and not isinstance(b, bool):
+            return 0 if a == b else -1
+        if isinstance(b, dict) and _is_dim_node(b) and _trace_value(b) == a:
+            return 1
+        return -1
+    if isinstance(a, dict) and isinstance(b, dict):
+        if a.get("type") != b.get("type"):
+            return -1
+        if a.get("type") == "symbol":
+            return 0 if a.get("id") == b.get("id") else -1
+        n = 0
+        for k in ("left", "right"):
+            if (k in a) != (k in b):
+                return -1
+            if k in a:
+                m = _literal_symbolized_within(a[k], b[k])
+                if m < 0:
+                    return -1
+                n += m
+        return n
+    return 0 if a == b else -1
+
 def witnessed_arg_changes(old_op: dict, new_op: dict, tensors_new: dict, tensors_old: dict = None):
     """The differences between two records of one op when each is the closed
     defect at the argument level — two kinds:
@@ -509,6 +540,12 @@ def witnessed_arg_changes(old_op: dict, new_op: dict, tensors_new: dict, tensors
             continue
         if isinstance(a, dict) and isinstance(b, dict):
             ta, tb = _trace_value(a), _trace_value(b)
+            # SYMBOLIZED WITHIN: a literal factor of the old dim is spelled by the new one as a dim
+            # expression with that literal as its trace, the dim's own trace unchanged and the new
+            # dim the one the op's tensors carry — the closed defect at a nested position.
+            if ta is not None and ta == tb and json.dumps(b, sort_keys=True) in input_dims and _literal_symbolized_within(a, b) > 0:
+                sites.append({"op": new_op.get("op_uid"), "path": ".".join(str(k) for k in path), "old": a, "new": b, "kind": "symbolized"})
+                continue
             # BATCH FACTOR RESTORED: a flatten the old tracer wrote without its batch (E) now
             # carries it (σ·E, σ of trace 1) and is the output's annotated dim — the symmetric
             # case of the split restored (Voxtral's language model, 2026-09-07).
@@ -773,6 +810,23 @@ def snapshot_weight_gb(snap) -> float:
     return total / 1e9
 
 
+
+def vendor_verdict(vendor: dict) -> str:
+    """The gate's verdict from a vendor reproduction of the request when the two sequential arms
+    differ: the container that reproduces the vendor is the right one. PixArt-XL-2, 2026-09-07:
+    the old container's T5 graph froze transformers' "mask all ones, skip it" shortcut and never
+    applied the padding mask — 20.6 dB from the vendor's render; the retraced one 41.4 dB."""
+    old, new = vendor.get("old") or {}, vendor.get("new") or {}
+    po, pn = old.get("psnr_db"), new.get("psnr_db")
+    if not new.get("pass"):
+        return f"FAIL (vendor: the new container does not reproduce the vendor's render — {pn} dB; old {po} dB)"
+    if not old.get("pass"):
+        return (f"PASS (corrected: the old container was wrong — new vs vendor {pn} dB, old {po} dB; "
+                f"the graph change is the correction)")
+    if pn is not None and po is not None and pn >= po:
+        return f"PASS (both within the vendor gate, the new arm closer: new {pn} dB, old {po} dB)"
+    return f"NEEDS_EXPLANATION (both within the vendor gate but the old arm closer: old {po} dB, new {pn} dB)"
+
 class Model:
     def __init__(self, name: str, args):
         self.name = name
@@ -885,6 +939,48 @@ class Model:
         for f in stale:
             f.rename(keep / f.name)
         (keep / "WHY.txt").write_text(why + "\n")
+
+    def vendor_reproduction(self, old: dict, new: dict) -> dict:
+        """Render the request with the vendor's own pipeline at the exact prompt, seed, steps and
+        guidance (tools/vendor_image_repro.py under the diffusers venv; reused when a render of
+        the same request sits beside the arms) and measure both sequential arms against it in
+        the family's own measure. Image families only; others return {}."""
+        if self.family != "image":
+            return {}
+        req = C.request_args(self.name, self.family, list(self.args.extra))
+        def _opt(flag, default=None):
+            return req[req.index(flag) + 1] if flag in req and req.index(flag) + 1 < len(req) else default
+        prompt, seed = _opt("--prompt"), int(_opt("--seed", 42))
+        gen = {}
+        try:
+            gen = (json.loads((CACHE / self.name / "topology.json").read_text()).get("flow") or {}).get("generation") or {}
+        except (OSError, json.JSONDecodeError):
+            pass
+        steps, guidance = gen.get("num_inference_steps"), gen.get("guidance_scale")
+        snap = next((root / nm for root in (Path("/home/mlops/hf_snapshots"), Path.home() / ".cache" / "neurobrix" / "hf_snapshots")
+                     for nm in (self.registry_name, self.name) if (root / nm).is_dir()), None)
+        if prompt is None or snap is None:
+            return {"error": "no prompt in the request or no snapshot on this machine"}
+        out = self.dir / f"vendor_seed{seed}.png"; meta = out.with_suffix(".json")
+        want = {"prompt": prompt, "seed": seed, "steps": steps, "guidance": guidance}
+        have = json.loads(meta.read_text()) if meta.exists() else {}
+        if not (out.exists() and all(have.get(k) == v for k, v in want.items() if v is not None)):
+            cmd = [VENDOR_PY, str(REPO / "tools" / "vendor_image_repro.py"), "--snapshot", str(snap), "--prompt", prompt,
+                   "--seed", str(seed), "--out", str(out)]
+            if steps is not None: cmd += ["--steps", str(steps)]
+            if guidance is not None: cmd += ["--guidance", str(guidance)]
+            rc = subprocess.run(cmd, env=self.env(tree=False), stdout=open(self.dir / "vendor.log", "a"), stderr=subprocess.STDOUT).returncode
+            if rc != 0 or not out.exists():
+                return {"error": f"the vendor render exited {rc} (vendor.log)"}
+        res = {"render": str(out), "request": want}
+        for arm, rec in (("old", old.get("sequential") or {}), ("new", new.get("sequential") or {})):
+            try:
+                g = C.gate(out, Path(rec["output"]))
+                res[arm] = {k: g.get(k) for k in ("psnr_db", "ssim", "pass", "identical")}
+            except Exception as e:  # noqa: BLE001
+                res[arm] = {"error": str(e), "pass": False}
+        log(f"{self.name}: vendor reproduction — old {res['old']} / new {res['new']}")
+        return res
 
     def release_staging(self, why: str) -> bool:
         """A FAIL gate releases the staged build: the cache holds the installed copy and the backup
@@ -1380,7 +1476,18 @@ class Model:
         gd = self.graph_diff()
         identical = all(v == "IDENTICAL" or str(v).startswith("N/A") for v in bytes_verdict.values())
         failed = any(str(v).startswith("FAILED") for v in bytes_verdict.values())
-        if failed or gd["beyond_annotation"] or gd["corrupted_after"]:
+        # The two SEQUENTIAL arms differ — the ATen semantics changed between the graphs: the vendor's
+        # own render at the exact request decides which container is right (owner's rule: reproduce
+        # with the vendor pipeline before declaring). A routing field removed or a corrupted dim
+        # left behind still refuses, whatever the vendor says.
+        vendor = {}
+        seq_differ = isinstance(bytes_verdict.get("sequential"), dict) and "DIFFERENT" in bytes_verdict["sequential"]
+        if seq_differ and getattr(self.args, "vendor_on_diff", False) and not failed:
+            vendor = self.vendor_reproduction(old, new)
+        removed = [t for t in gd.get("topology") or [] if t.get("kind") in ("removed", "changed")]
+        if vendor and "error" not in vendor and not gd["corrupted_after"] and not removed:
+            verdict = vendor_verdict(vendor)
+        elif failed or gd["beyond_annotation"] or gd["corrupted_after"]:
             verdict = "FAIL"
         elif gd.get("topology_additions") and not identical:
             verdict = "NEEDS_EXPLANATION"       # bytes differ and the topology gained fields: the additions may be the cause
@@ -1391,7 +1498,7 @@ class Model:
         else:
             verdict = "NEEDS_EXPLANATION"        # bytes differ: the difference must be the closed defect and nothing else
         self.mark("gate", verdict.startswith("PASS"), verdict=verdict, bytes=bytes_verdict, graph=gd, policy=POLICY,
-                  autotune=self.state.get("autotune_freeze"))
+                  autotune=self.state.get("autotune_freeze"), vendor=vendor or None)
         shutil.rmtree(Path(self.args.tmp) / "previous" / self.name, ignore_errors=True)   # the previous object's staging
         if verdict == "FAIL":
             self.release_staging("gate FAIL: the staged build has no upload ahead of it")
@@ -1533,6 +1640,9 @@ def main():
     ap.add_argument("--restore-mbps", type=float, default=10.0,
                     help="the rate cap on a read of the hub's previous object (its store shares the exports' storage)")
     ap.add_argument("--stop-at", default=None, help="stop after this step (e.g. gate)")
+    ap.add_argument("--vendor-on-diff", action="store_true",
+                    help="when the two sequential arms differ (image families): render the request with the vendor's own "
+                         "pipeline at the exact prompt/seed/steps/guidance and let the container that reproduces it pass")
     ap.add_argument("--only-upload", action="store_true",
                     help="run the upload step only, for a container whose gate is PASS; anything else is refused by name "
                          "(an upload loop must never trace or build — a reset state once made one trace Kokoro beside a pass)")
