@@ -683,7 +683,7 @@ def drift_one(model: str, gpu, out: Path, extra: list, timeout: int, bound: floa
 
 
 def env_ab(model: str, gpu, out: Path, extra: list, timeout: int, env_b: dict, lever: str, cold: bool = False, src: Path = None,
-           oracle_on_diff: bool = False) -> dict:
+           oracle_on_diff: bool = False, paired: int = 1) -> dict:
     """An engine lever behind an environment switch, measured on one model:
     arm A = the request as it is, arm B = the same request with `env_b`
     set (e.g. NBX_OPTIM_ALGEBRAIC=1), outputs byte-compared, execution
@@ -703,35 +703,57 @@ def env_ab(model: str, gpu, out: Path, extra: list, timeout: int, env_b: dict, l
         base_env["CUDA_VISIBLE_DEVICES"] = str(gpu)
     res = {"model": model, "family": fam, "weight_gb": round(weight_gb(model), 2),
            "config": "machine" if gpu is None else f"pinned:{gpu}", "request": req, "lever": lever, "env_b": env_b,
-           "src": str(src) if src else None, "cold": cold}
-    for arm, env in (("A", base_env), ("B", {**base_env, **env_b})):
-        outp = d / f"{arm}{ext}"
-        if cold:                                     # a cold start per arm: its own replay cache, nothing seeded
-            env = {**env, "NEUROBRIX_REPLAY_CACHE": str(d / f"{arm}_replay")}
-        if src is not None:                          # the request runs the given tree's package
-            env = {**env, "PYTHONPATH": str(Path(src).resolve())}
-            cmd = [PY, "-c", "import sys; from neurobrix.cli import main; sys.exit(main())", "run", "--model", model]
-        else:
-            cmd = [NBX, "run", "--model", model]
-        rc, wall = run(cmd + req + ["--output", str(outp)], env, d / f"{arm}.log", timeout)
-        log = (d / f"{arm}.log").read_text(errors="replace")
-        cert = re.search(r"certified directory: (\d+) key\(s\) served without a sweep, (\d+) swept at runtime", log)
-        # An encoded build (int4) is refused by the compiled engine at its capability gate:
-        # not an arm that failed, a row the lever does not apply to on that engine.
-        unsupported = re.search(r"UNSUPPORTED PATH: (.*?encoding '[^']*'[^.]*)", log)
-        res[arm] = {"rc": rc, "wall_s": wall, "exec_s": exec_time(d / f"{arm}.log"), "output": str(outp),
-                    "n_a": unsupported.group(1).strip()[:160] if unsupported else None,
-                    "sha": hashlib.sha256(outp.read_bytes()).hexdigest()[:12] if outp.exists() else None,
-                    "ops_removed": sum(int(x) for x in re.findall(r"\[Optim\] algebraic: (\d+) identity ops", log)) or None,
-                    "certified_served": int(cert.group(1)) if cert else None,
-                    "swept": int(cert.group(2)) if cert else None,
-                    "announced_missing": len(re.findall(r"\[autotune\] no certified setting for", log)),
-                    "contradictions": len(re.findall(r"\[AUTOTUNE_SCREEN\] CONTRADICTION", log)),
-                    "screen_excluded": len(re.findall(r"\[AUTOTUNE_SCREEN\] .*config excluded", log))}
+           "src": str(src) if src else None, "cold": cold, "paired": paired}
+    # Paired: the arms interleaved A B A B … `paired` times in the same minutes, the row's time per
+    # arm the MEDIAN of its repeats — the order-tax control of 2026-09-07 showed a lone A-then-B
+    # pair reads a cold first arm or the host's drift as a lever gain (canary ×1.84 → none).
+    # The bytes of every repeat of an arm must agree: a repeat that differs is the model's own
+    # nondeterminism, said in the row, never a lever verdict.
+    reps = {"A": [], "B": []}
+    for rep in range(max(1, paired)):
+        for arm, env in (("A", base_env), ("B", {**base_env, **env_b})):
+            outp = d / f"{arm}{ext}"
+            if cold:                                     # a cold start per arm: its own replay cache, nothing seeded
+                env = {**env, "NEUROBRIX_REPLAY_CACHE": str(d / f"{arm}_replay")}
+            if src is not None:                          # the request runs the given tree's package
+                env = {**env, "PYTHONPATH": str(Path(src).resolve())}
+                cmd = [PY, "-c", "import sys; from neurobrix.cli import main; sys.exit(main())", "run", "--model", model]
+            else:
+                cmd = [NBX, "run", "--model", model]
+            rc, wall = run(cmd + req + ["--output", str(outp)], env, d / f"{arm}.log", timeout)
+            log = (d / f"{arm}.log").read_text(errors="replace")
+            cert = re.search(r"certified directory: (\d+) key\(s\) served without a sweep, (\d+) swept at runtime", log)
+            # An encoded build (int4) is refused by the compiled engine at its capability gate:
+            # not an arm that failed, a row the lever does not apply to on that engine.
+            unsupported = re.search(r"UNSUPPORTED PATH: (.*?encoding '[^']*'[^.]*)", log)
+            res[arm] = {"rc": rc, "wall_s": wall, "exec_s": exec_time(d / f"{arm}.log"), "output": str(outp),
+                        "n_a": unsupported.group(1).strip()[:160] if unsupported else None,
+                        "sha": hashlib.sha256(outp.read_bytes()).hexdigest()[:12] if outp.exists() else None,
+                        "ops_removed": sum(int(x) for x in re.findall(r"\[Optim\] algebraic: (\d+) identity ops", log)) or None,
+                        "certified_served": int(cert.group(1)) if cert else None,
+                        "swept": int(cert.group(2)) if cert else None,
+                        "announced_missing": len(re.findall(r"\[autotune\] no certified setting for", log)),
+                        "contradictions": len(re.findall(r"\[AUTOTUNE_SCREEN\] CONTRADICTION", log)),
+                        "screen_excluded": len(re.findall(r"\[AUTOTUNE_SCREEN\] .*config excluded", log))}
+            if paired > 1:
+                reps[arm].append({"exec_s": res[arm]["exec_s"], "sha": res[arm]["sha"], "rc": rc})
+                if rep < paired - 1 and outp.exists():
+                    (d / f"{arm}.rep{rep + 1}{ext}").write_bytes(outp.read_bytes())
+    if paired > 1:
+        import statistics
+        for arm in ("A", "B"):
+            xs = [r["exec_s"] for r in reps[arm] if r["exec_s"] is not None]
+            res[arm]["reps"] = reps[arm]
+            res[arm]["exec_s"] = statistics.median(xs) if xs else None
+            shas = {r["sha"] for r in reps[arm] if r["sha"]}
+            res[arm]["repeat_identical"] = len(shas) <= 1
+
     a, b = d / f"A{ext}", d / f"B{ext}"
     same = a.exists() and b.exists() and a.read_bytes() == b.read_bytes()
     res["gate"] = {"kind": "bytes", "identical": same, "pass": same,
                    "ran": res["A"]["rc"] == 0 and res["B"]["rc"] == 0}
+    if paired > 1 and not (res["A"].get("repeat_identical", True) and res["B"].get("repeat_identical", True)):
+        res["gate"]["nondeterministic"] = [arm for arm in ("A", "B") if not res[arm].get("repeat_identical", True)]
     na = res["A"].get("n_a") or res["B"].get("n_a")
     if na:
         res["gate"] = {"kind": "n/a", "reason": na, "pass": None, "ran": False}
@@ -902,6 +924,11 @@ def verdict(r: dict) -> str:
         n = (r.get("B") or {}).get("ops_removed")
         tag = f", {n} ops removed" if n else ""
         A, B = r.get("A") or {}, r.get("B") or {}
+        if (r.get("paired") or 1) > 1:
+            tag += f"; paired ×{r['paired']}, medians"
+            nd = g.get("nondeterministic")
+            if nd:
+                tag += f"; NONDETERMINISTIC repeats on arm(s) {', '.join(nd)} — the model's own, not the lever's"
         if A.get("certified_served") is not None or B.get("certified_served") is not None:
             tag += (f"; A certified {A.get('certified_served', 0)} / swept {A.get('swept', 0)}"
                     f", B certified {B.get('certified_served', 0)} / swept {B.get('swept', 0)}")
@@ -1125,6 +1152,9 @@ def main():
                         "configs a correctness screen excluded counted from each arm's log")
     r.add_argument("--env-ab", default=None, metavar="KEY=VALUE[,KEY=VALUE]",
                    help="an engine lever behind an environment switch: arm A without, arm B with it, bytes compared")
+    r.add_argument("--paired", type=int, default=1, metavar="N",
+                   help="with --env-ab: interleave the arms A B A B … N times and time each arm by the median of its "
+                        "repeats (a lone pair reads a cold first arm as a gain); the repeats' bytes must agree")
     r.add_argument("--cold-arms", action="store_true",
                    help="with --env-ab: each arm starts cold with its own replay cache (nothing seeded) — the certified "
                         "directory's proof: A = certified settings loaded, B = NBX_AUTOTUNE_CERTIFIED=off (runtime sweep)")
@@ -1192,7 +1222,8 @@ def main():
             elif args.env_ab:
                 env_b = dict(kv.split("=", 1) for kv in args.env_ab.split(",") if "=" in kv)
                 res = env_ab(m, gpu, out, extra, args.timeout, env_b, "env:" + ",".join(env_b), cold=args.cold_arms,
-                             src=Path(args.src) if args.src else None, oracle_on_diff=args.oracle_on_diff)
+                             src=Path(args.src) if args.src else None, oracle_on_diff=args.oracle_on_diff,
+                             paired=args.paired)
                 print(f"[zoo] {m}: {verdict(res)} A={res['A']['exec_s']} B={res['B']['exec_s']} "
                       f"{('×%.2f' % res['speedup']) if res.get('speedup') else ''}", flush=True)
                 continue
