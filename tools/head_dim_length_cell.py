@@ -78,48 +78,106 @@ def _read_json(path: Path):
         return None
 
 
-def decoder_of(model_dir: Path) -> dict | None:
-    """The model's own answer to "are you a decoder, and how wide is a head".
+def _attention_candidates(model_dir: Path) -> list:
+    """Every component whose profile declares an attention stack over a vocabulary.
 
-    Read from the topology's generation section and the named component's
-    profile — never from the model's name, never from a table here.
+    A component that says how many heads it has, how wide the model is, and
+    how large its vocabulary is, is a decoder stack. Read from the profiles,
+    never from the component's name: `model`, `language_model`,
+    `model.language_model`, `llm`, `thinker.model` and `model.decoder` are
+    all the same thing under different names in this hub.
+    """
+    out = []
+    for path in sorted(model_dir.glob("components/*/profile.json")):
+        profile = _read_json(path) or {}
+        config = profile.get("config") or {}
+
+        def get(*names):
+            for name in names:
+                for src in (profile, config):
+                    if src.get(name) is not None:
+                        return src[name]
+            return None
+
+        heads = get("num_heads", "num_attention_heads")
+        hidden = get("hidden_size")
+        head_dim = get("head_dim")
+        vocab = get("vocab_size")
+        if head_dim is None and heads and hidden and hidden % heads == 0:
+            head_dim = hidden // heads
+        if not (vocab and head_dim):
+            continue
+        out.append({
+            "component": path.parent.parent.name if path.parent.name == "weights" else path.parent.name,
+            "head_dim": int(head_dim),
+            "num_heads": int(heads) if heads else None,
+            "num_kv_heads": get("num_kv_heads"),
+            "hidden_size": hidden,
+            "vocab_size": int(vocab),
+            "num_layers": get("num_layers", "num_hidden_layers"),
+        })
+    return out
+
+
+def decoder_of(model_dir: Path) -> dict | None:
+    """The decoder whose sequence length the generation loop drives, or None
+    with the reason the caller should report.
+
+    Two questions, and they are different. Does the model step a decoder
+    token by token — answered by the presence of a `generation` block in the
+    topology's flow, which is true of autoregressive_generation, audio_llm,
+    tts_llm, vlm, encoder_decoder, dual_ar and next_token_diffusion alike,
+    and false of the diffusion and forward-pass flows. And which component is
+    that decoder — answered by `generation.lm_component` when the topology
+    names one, and otherwise by there being exactly one component that
+    declares an attention stack over a vocabulary.
+
+    An earlier version asked only whether the flow type was literally
+    "autoregressive_generation" and looked only at `lm_component`. It called
+    Voxtral (head_dim 96), VibeVoice (128) and openaudio (128) "not
+    decoders" and skipped them — three real decoders, silently outside the
+    one cell written to catch a defect that lives in every decoder.
     """
     topo = _read_json(model_dir / "topology.json")
     if not topo:
-        return None
+        return {"skip": "no topology.json"}
     flow = topo.get("flow") or {}
-    if flow.get("type") != "autoregressive_generation":
-        return None
-    gen = flow.get("generation") or {}
-    lm = gen.get("lm_component")
-    if not lm:
-        return None
-    profile = _read_json(model_dir / "components" / lm / "profile.json")
-    if not profile:
-        return None
-    config = profile.get("config") or {}
-    heads = profile.get("num_heads") or config.get("num_attention_heads")
-    hidden = config.get("hidden_size") or profile.get("hidden_size")
-    head_dim = profile.get("head_dim") or config.get("head_dim")
-    if not head_dim:
-        if not (heads and hidden):
-            return None
-        if hidden % heads:
-            return None
-        head_dim = hidden // heads
-    vocab = config.get("vocab_size") or profile.get("vocab_size")
-    if not vocab:
-        return None
+    candidates = _attention_candidates(model_dir)
+    if "generation" not in flow:
+        if candidates:
+            return {"skip": f"no generation loop (flow {flow.get('type')!r}); its "
+                            f"attention is reachable only through prompt "
+                            f"tokenization: "
+                            + ", ".join(f"{c['component']} head_dim {c['head_dim']}"
+                                        for c in candidates)}
+        return {"skip": f"no generation loop (flow {flow.get('type')!r})"}
+    if not candidates:
+        return {"skip": "it steps a decoder, but no component profile declares "
+                        "both a head dimension and a vocabulary — this cell "
+                        "cannot compute the length from its config"}
+    named = (flow.get("generation") or {}).get("lm_component")
+    chosen = next((c for c in candidates if c["component"] == named), None)
+    if chosen is None:
+        if len(candidates) > 1:
+            return {"skip": "its topology names no lm_component and "
+                            + str(len(candidates)) + " components declare a "
+                            "decoder stack ("
+                            + ", ".join(c["component"] for c in candidates)
+                            + "); refusing to guess which one the loop steps"}
+        chosen = candidates[0]
+    others = [c for c in candidates if c["component"] != chosen["component"]]
     return {
-        "lm_component": lm,
-        "head_component": gen.get("head_component"),
+        "lm_component": chosen["component"],
+        "head_component": (flow.get("generation") or {}).get("head_component"),
         "model_type": (topo.get("model_type") or "").lower(),
-        "head_dim": int(head_dim),
-        "num_heads": int(heads) if heads else None,
-        "num_kv_heads": profile.get("num_kv_heads"),
-        "hidden_size": hidden,
-        "vocab_size": int(vocab),
-        "num_layers": profile.get("num_layers") or config.get("num_layers"),
+        "flow_type": flow.get("type"),
+        "head_dim": chosen["head_dim"],
+        "num_heads": chosen["num_heads"],
+        "num_kv_heads": chosen["num_kv_heads"],
+        "hidden_size": chosen["hidden_size"],
+        "vocab_size": chosen["vocab_size"],
+        "num_layers": chosen["num_layers"],
+        "other_attention_components": others,
     }
 
 
@@ -223,8 +281,11 @@ def run(args) -> int:
     for model in models:
         model_dir = CACHE / model
         info = decoder_of(model_dir)
-        if info is None:
-            skipped.append({"model": model, "why": "no autoregressive decoder in its topology"})
+        if info is None or "skip" in (info or {}):
+            skipped.append({"model": model,
+                            "why": (info or {}).get("skip", "no topology.json")})
+            print(f"[{args.label}] {model}: skipped — "
+                  f"{(info or {}).get('skip')}", flush=True)
             continue
         head_dim = info["head_dim"]
         ids = ids_for(head_dim, info["vocab_size"])
@@ -263,10 +324,13 @@ def run(args) -> int:
                   f"{'ids are used' if control['distinguishes'] else 'IDS IGNORED'}",
                   flush=True)
             if not control["distinguishes"] and base and base["rc"] == 0:
-                raise RuntimeError(
-                    f"{model}: changing a token id did not change the output, "
-                    f"so `global.input_token_ids` was not what the engine ran "
-                    f"on. Refusing to report a length the run did not have.")
+                # Void, not fatal: one model that does not honour the ids must
+                # not destroy a zoo run, and it must not be reported green
+                # either. The row carries the reason and `run` exits non-zero.
+                control["void_reason"] = (
+                    "changing a token id did not change the output, so "
+                    "`global.input_token_ids` was not what the engine ran on; "
+                    "this row measures a length the run did not have")
 
         oracle = None
         if info["model_type"] in LLAMA_LIKE:
@@ -310,7 +374,14 @@ def run(args) -> int:
     if not doc_path.exists():
         raise RuntimeError(f"refusing to conclude: {doc_path} was not written")
     print(f"\nwritten: {doc_path}")
-    return table(args)
+    rc = table(args)
+    void = [r["model"] for r in rows
+            if (r.get("control") or {}).get("void_reason")]
+    if void:
+        print(f"\nVOID rows (the ids were not what ran): {', '.join(void)}",
+              flush=True)
+        return 2
+    return rc
 
 
 def _rev(tree: Path) -> str:
@@ -364,6 +435,9 @@ def table(args) -> int:
                 oracle_cell = "refused"
             else:
                 oracle_cell = f"argmax {orc['argmax']} @ {orc['top1']:.3f}"
+            void = (row.get("control") or {}).get("void_reason")
+            if void:
+                cells = [f"**void** — {void}"] + ["—"] * (len(ARMS) - 1)
             lines.append(f"| {row['model']} | {row['head_dim']} | "
                          + " | ".join(cells) + f" | {oracle_cell} |")
         if doc["skipped"]:
