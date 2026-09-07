@@ -124,3 +124,65 @@ def test_a_device_argument_recorded_by_an_op_is_provenance_too():
     assert R.scrub_provenance(a) == R.scrub_provenance(b)
     c = copy.deepcopy(b); c["attributes"]["kwargs"]["dtype"]["value"] = "torch.float16"
     assert R.scrub_provenance(a) != R.scrub_provenance(c), "a dtype is semantics"
+
+
+# ── the re-expressed class: the same extent spelled by the corrected rules' algebra ──
+S1 = {"type": "symbol", "id": "s1", "trace": 112}; S2 = {"type": "symbol", "id": "s2", "trace": 80}
+def _fd(x, k, tr): return {"type": "floordiv", "left": x, "right": k, "trace": tr}
+def _mul(x, y, tr): return {"type": "mul", "left": x, "right": y, "trace": tr}
+RAW = _mul(S1, S2, 8960)                                    # H*W
+WIN = _mul(_mul(_fd(S1, 8, 14), _fd(S2, 8, 10), 140), 64, 8960)   # (H//8)*(W//8)*64
+
+
+def test_eval_and_equivalence_of_dim_expressions():
+    env = {"s1": 112, "s2": 80}
+    assert R.eval_dim(RAW, env) == 8960 and R.eval_dim(WIN, env) == 8960
+    assert R.equivalent_dims(RAW, WIN)                       # equal at 112/80, 224/160, 336/240
+    assert R.equivalent_dims(S1, _mul(_fd(S1, 8, 14), 8, 112))   # (H//8)*8 == H on multiples of 8
+    assert not R.equivalent_dims(RAW, _mul(_fd(S1, 8, 14), _fd(S2, 8, 10), 140))   # H*W != windows
+
+
+def test_a_re_expressed_view_argument_is_admitted():
+    old = {"op_uid": "aten.view::21", "op_type": "aten.view", "input_tensor_ids": ["v::out_0"], "output_tensor_ids": ["aten.view::21::out_0"],
+           "attributes": {"args": [{"type": "tensor", "tensor_id": "v::out_0"}, {"type": "list", "value": [RAW, 180]}], "kwargs": {}, "shape": [RAW, 180]}}
+    new = copy.deepcopy(old); new["attributes"]["shape"][0] = WIN; new["attributes"]["args"][1]["value"][0] = WIN
+    tensors = {"v::out_0": {"shape": [140, 64, 180], "symbolic_shape": {"dims": [_mul(_fd(S1, 8, 14), _fd(S2, 8, 10), 140), 64, 180], "concrete": [140, 64, 180]}},
+               "aten.view::21::out_0": {"shape": [8960, 180], "symbolic_shape": {"dims": [WIN, 180], "concrete": [8960, 180]}}}
+    sites = R.witnessed_arg_changes(old, new, tensors)
+    assert sites is not None and len(sites) == 2 and all(x["kind"] == "re-expressed" for x in sites)
+
+
+def test_a_re_expression_that_is_not_equivalent_is_refused():
+    other = _mul(_fd(S1, 8, 14), _fd(S2, 8, 10), 140)        # windows, not tokens: trace 140 ≠ 8960
+    bad = copy.deepcopy(other); bad["trace"] = 8960            # a lie about the trace
+    old = {"op_uid": "aten.view::21", "op_type": "aten.view", "input_tensor_ids": ["v::out_0"], "output_tensor_ids": ["aten.view::21::out_0"],
+           "attributes": {"args": [{"type": "tensor", "tensor_id": "v::out_0"}, {"type": "list", "value": [RAW, 180]}], "kwargs": {}, "shape": [RAW, 180]}}
+    new = copy.deepcopy(old); new["attributes"]["shape"][0] = bad; new["attributes"]["args"][1]["value"][0] = bad
+    tensors = {"aten.view::21::out_0": {"shape": [8960, 180], "symbolic_shape": {"dims": [bad, 180], "concrete": [8960, 180]}}}
+    assert R.witnessed_arg_changes(old, new, tensors) is None
+
+
+def test_an_integer_symbolized_to_the_outputs_dim_is_admitted():
+    win = _mul(_fd(S1, 8, 14), _fd(S2, 8, 10), 140)
+    old = {"op_uid": "aten.view::6", "op_type": "aten.view", "input_tensor_ids": ["m::out_0"], "output_tensor_ids": ["aten.view::6::out_0"],
+           "attributes": {"args": [{"type": "tensor", "tensor_id": "m::out_0"}, {"type": "list", "value": [140, 64, 180]}], "kwargs": {}, "shape": [140, 64, 180]}}
+    new = copy.deepcopy(old); new["attributes"]["shape"][0] = win; new["attributes"]["args"][1]["value"][0] = win
+    tensors = {"m::out_0": {"shape": [8960, 180], "symbolic_shape": {"dims": [RAW, 180], "concrete": [8960, 180]}},
+               "aten.view::6::out_0": {"shape": [140, 64, 180], "symbolic_shape": {"dims": [win, 64, 180], "concrete": [140, 64, 180]}}}
+    sites = R.witnessed_arg_changes(old, new, tensors)
+    assert sites is not None and all(x["kind"] == "symbolized" for x in sites)
+
+
+def test_a_vendor_minus_one_may_become_the_derived_output_dim():
+    win = _mul(_fd(S1, 8, 14), _fd(S2, 8, 10), 140)
+    old = {"op_uid": "aten.view::23", "op_type": "aten.view", "input_tensor_ids": ["w::out_0"], "output_tensor_ids": ["aten.view::23::out_0"],
+           "attributes": {"args": [{"type": "tensor", "tensor_id": "w::out_0"}, {"type": "list", "value": [-1, 8, 8, 180]}], "kwargs": {}, "shape": [-1, 8, 8, 180]}}
+    new = copy.deepcopy(old); new["attributes"]["shape"][0] = win; new["attributes"]["args"][1]["value"][0] = win
+    tensors = {"w::out_0": {"shape": [140, 64, 180], "symbolic_shape": {"dims": [win, 64, 180], "concrete": [140, 64, 180]}},
+               "aten.view::23::out_0": {"shape": [140, 8, 8, 180], "symbolic_shape": {"dims": [win, 8, 8, 180], "concrete": [140, 8, 8, 180]}}}
+    sites = R.witnessed_arg_changes(old, new, tensors)
+    assert sites is not None and all(x["kind"] == "symbolized" for x in sites)
+    wrong = copy.deepcopy(win); wrong["trace"] = 150                    # not the witnessed extent
+    new2 = copy.deepcopy(old); new2["attributes"]["shape"][0] = wrong; new2["attributes"]["args"][1]["value"][0] = wrong
+    t2 = copy.deepcopy(tensors); t2["aten.view::23::out_0"]["symbolic_shape"]["dims"][0] = wrong
+    assert R.witnessed_arg_changes(old, new2, t2) is None
