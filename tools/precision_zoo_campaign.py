@@ -116,15 +116,33 @@ def request_args(model: str, family: str, extra: list) -> list:
     return args + list(extra)
 
 
+def run_group(cmd, env, fh, timeout: int, cwd=None) -> int:
+    """The command in its own process group; a timeout kills the WHOLE group — the
+    command's children too. A `drift` that timed out at 7200 s on 2026-09-07 left its
+    child `run` alive on GPU3 beside the zoo's next model for ten minutes: only the
+    direct child was killed. -9 names a timeout."""
+    import os
+    import signal
+    p = subprocess.Popen([str(c) for c in cmd], env=env, stdout=fh, stderr=subprocess.STDOUT, cwd=cwd,
+                         start_new_session=True)
+    try:
+        return p.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        p.wait()
+        return -9
+
+
 def run(cmd, env, log: Path, timeout: int) -> tuple:
     t0 = time.time()
     with open(log, "w") as fh:
         fh.write("$ " + " ".join(cmd) + "\n")
         fh.flush()
-        try:
-            rc = subprocess.run(cmd, env=env, stdout=fh, stderr=subprocess.STDOUT, timeout=timeout).returncode
-        except subprocess.TimeoutExpired:
-            rc = -9
+        rc = run_group(cmd, env, fh, timeout)
+        if rc == -9:
             fh.write(f"\nTIMEOUT after {timeout}s\n")
     return rc, time.time() - t0
 
