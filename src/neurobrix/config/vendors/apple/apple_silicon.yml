@@ -72,56 +72,6 @@ block_sizes:
   groupnorm_cap: 65536
   reduction: 1024
 
-  # The GEMV row-group tile (kernels/ops/gemv_vec.py), which is the decode
-  # projection and the vocabulary head of every language model here.
-  #
-  # MEASURED 2026-09-07: the kernel reduces a BLOCK_N x BLOCK_K tile along its
-  # rows, and the Metal lowering stages that 2-D reduce one element per
-  # thread, so the tile cannot exceed the 1024-thread threadgroup. The adopted
-  # 8 x 256 is 2048 and refuses — loudly, naming the number. 8 x 128 keeps the
-  # adopted 8-row group and halves the K chunk: correct at 2.28e-07 relative
-  # against an fp64 oracle on TinyLlama's [1, 2048] @ [2048, 32000] head, the
-  # closest of the fitting tiles (4x256 gives 2.90e-07, 2x512 4.90e-07).
-  #
-  # This is a shape the backend implements, not a tuning preference — the same
-  # kind of fact as the 32x32 SDPA tile below.
-  gemv_vec:
-    block_n: 8
-    block_k: 128
-    num_warps: 4
-
-  # Row-wise argmax — greedy sampling reads the argmax of a 32000-wide
-  # vocabulary row every token.
-  #
-  # MEASURED 2026-09-07: argmax is a MULTI-VALUE reduce (a value and its
-  # index travel together), and the Metal lowering has no multipass form for
-  # a tuple — it says so and refuses — so the tile must fit the threadgroup,
-  # which is num_warps * 32. The 4096 cap every architecture used refused
-  # against the default 4 warps (128 threads). 1024 over 32 warps is the
-  # largest that fits; the index it returns is exact at every tile measured
-  # (128/4, 256/8, 512/16, 1024/32 all give the same index on a 32000-wide
-  # row), so this is throughput, not correctness.
-  argmax:
-    tile_n: 1024
-    num_warps: 32
-
-  # The mv / addmv tile (kernels/ops/addmv_op.py and the mv_kernel beside it).
-  #
-  # MEASURED 2026-09-07: this kernel keeps a BLOCK_N x BLOCK_M fp32 accumulator
-  # and reduces it along its rows AFTER the M loop. The Metal lowering stages
-  # that 2-D reduce one element per thread, and here the threadgroup is
-  # num_warps * 32 — so the tile must fit the warps, which is why the warp
-  # count is part of this entry and not beside it. The adopted 64 x 256 is
-  # 16384 against a 128-thread group and refuses.
-  #
-  # 8 x 128 with 32 warps is 1024 elements over 1024 threads: the same row
-  # group and chunk width as gemv_vec above, correct at 7.15e-08 relative
-  # against an fp64 oracle on the bank's M1N64K32 addmm entry.
-  mv:
-    block_n: 8
-    block_m: 128
-    num_warps: 32
-
   # M=1 dequant-GEMV occupancy rule — see nvidia/volta.yml for the rationale
   # (the wrapper halves BLOCK_N until the grid reaches min_programs).
   # 2 waves x 40 GPU cores (M3/M4 Max class); validation_status: analytical.

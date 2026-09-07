@@ -69,10 +69,9 @@ def load_constants_from_graph(tensors: dict, device_idx: int = 0) -> Dict[str, N
         if np_dtype is None:
             # bfloat16: no numpy support, load as uint16 then treat as bfloat16
             arr = np.frombuffer(raw_bytes, dtype=np.uint16).reshape(shape)
-            # Declared, not retagged: assigning _dtype after construction
-            # leaves _elem_size / _nbytes belonging to the dtype the tensor
-            # was built with (see NBXTensor.from_numpy).
-            nbx = NBXTensor.from_numpy(arr, dtype=NBXDtype.bfloat16)
+            nbx = NBXTensor.from_numpy(arr)
+            # Override dtype to bfloat16
+            nbx._dtype = NBXDtype.bfloat16
         else:
             arr = np.frombuffer(raw_bytes, dtype=np_dtype).reshape(shape)
             nbx = NBXTensor.from_numpy(arr)

@@ -194,22 +194,6 @@ class MetalRuntime:
         # handle -> event record, for the event API.
         self._events: Dict[int, dict] = {}
         self._next_event_handle = 1
-        # Retired shared events, kept for reuse.
-        #
-        # `newSharedEvent` is not an unlimited resource: an autotune sweep
-        # times every candidate config of every op with a fresh pair, and a
-        # long run exhausted the device — `newSharedEvent` began returning
-        # nil, which surfaced as "event create failed (error 1)" in the middle
-        # of a matmul. Destroying them was not enough; the objects are
-        # released but a run that never returns to the event loop does not
-        # necessarily reclaim them.
-        #
-        # A shared event is reusable by construction — signalling is a
-        # monotonically increasing value on the same object — so a retired one
-        # goes back on this list with its counter intact and the next create
-        # takes it. The peak count is what a run actually holds at once, which
-        # for the timing path is two.
-        self._event_pool: list = []
 
         # `DeviceAllocator.event_elapsed_ms` sets `.restype` on the entry
         # point before calling it — a ctypes idiom that a bound method
@@ -541,43 +525,25 @@ class MetalRuntime:
         return self._event_create(out_handle, timing=not (_as_int(flags) & 0x02))
 
     def _event_create(self, out_handle, timing: bool) -> int:
-        with self._lock:
-            retired = self._event_pool.pop() if self._event_pool else None
-        if retired is not None:
-            shared, value = retired["shared"], retired["value"]
-        else:
-            shared, value = self._device.newSharedEvent(), 0
+        shared = self._device.newSharedEvent()
         if shared is None:                              # pragma: no cover
             _deref(out_handle).value = 0
             return _ERR_ALLOC
         with self._lock:
             handle = self._next_event_handle
             self._next_event_handle += 1
-            self._events[handle] = {"shared": shared, "value": value,
+            self._events[handle] = {"shared": shared, "value": 0,
                                     "timing": timing, "buffer": None}
         _deref(out_handle).value = handle
         return _OK
-
-    #: How many retired shared events to keep for reuse. A run holds a couple
-    #: at a time; the rest are dropped so a pathological caller cannot turn
-    #: this into a leak of its own.
-    _EVENT_POOL_CAP = 64
 
     def event_destroy(self, handle) -> int:
         key = _as_int(handle)
         if not key:
             return _OK
         with self._lock:
-            entry = self._events.pop(key, None)
-            if entry is None:
-                return _ERR_UNKNOWN_POINTER
-            # The command buffer goes; the shared event and its counter stay,
-            # because the next create can take them as they are.
-            entry["buffer"] = None
-            if len(self._event_pool) < self._EVENT_POOL_CAP:
-                self._event_pool.append({"shared": entry["shared"],
-                                         "value": entry["value"]})
-            return _OK
+            return _OK if self._events.pop(key, None) is not None \
+                else _ERR_UNKNOWN_POINTER
 
     def event_record(self, handle, stream=None) -> int:
         """Signal the event from a command buffer on `stream`'s queue."""
@@ -808,15 +774,6 @@ def reset_runtime_for_tests() -> None:
     except Exception:                                   # pragma: no cover
         pass                                            # nothing to release
     nbx_tensor._INT64_ARRAY_CACHE.clear()
-
-    # Everything issued so far belongs to the runtime about to be dropped.
-    # The flush above released what was parked; a tensor still ALIVE right
-    # now is freed later, and without this that free would park its dead
-    # address for the next allocation to be served.
-    try:
-        nbx_tensor.DeviceAllocator.new_allocation_epoch()
-    except Exception:                                   # pragma: no cover
-        pass
 
     with _RUNTIME_LOCK:
         _RUNTIME = None

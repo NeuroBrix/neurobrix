@@ -435,21 +435,6 @@ class DeviceAllocator:
     _range_bases: list = []                          # live allocation bases, sorted (holds())
     _range_size: dict = {}                           # base -> bytes, mirrors the two size tables
     _cuda_ptr_device: Dict[int, int] = {}            # ptr -> device_idx (REQUIRED for cudaFreeAsync correctness)
-
-    # Which generation of the device runtime issued a pointer.
-    #
-    # A pointer is only meaningful to the runtime that issued it. Normally
-    # there is exactly one for the life of the process and this is a constant
-    # 0 that never costs a thought. When a runtime IS replaced, every address
-    # it issued dies with it — and the free-list must not outlive it, or a
-    # later allocation is served an address the current runtime never issued
-    # and the first launch that touches it refuses a perfectly good tensor.
-    #
-    # Flushing the pool at the swap is not enough: a tensor still ALIVE at
-    # that moment is freed afterwards, and that free parks its dead address
-    # for reuse. The epoch is what the flush cannot see.
-    _alloc_epoch: int = 0
-    _cuda_ptr_epoch: Dict[int, int] = {}             # ptr -> the epoch that issued it
     _host_pinned_live_bytes: int = 0
     _host_pinned_peak_bytes: int = 0
     _host_pinned_ptr_size: Dict[int, int] = {}       # ptr -> nbytes
@@ -785,25 +770,6 @@ class DeviceAllocator:
         return DeviceAllocator._pool_flush()
 
     @staticmethod
-    def new_allocation_epoch() -> int:
-        """Declare that every address issued so far belongs to a runtime that
-        is being replaced. Returns the new epoch.
-
-        Call it AFTER releasing what can still be released (the parked pool)
-        and BEFORE the new runtime exists. From here on, a free of an older
-        pointer is a no-op rather than a park or a driver call.
-
-        The engine proper never calls this: a process has one device runtime
-        for its whole life. It exists because test processes legitimately
-        replace one, and because the alternative — a free-list that outlives
-        the runtime it belongs to — surfaced as an order-dependent numeric
-        failure in an unrelated kernel, which is the worst way for it to be
-        found.
-        """
-        DeviceAllocator._alloc_epoch += 1
-        return DeviceAllocator._alloc_epoch
-
-    @staticmethod
     def malloc_cuda(nbytes: int, dev_idx: Optional[int] = None) -> int:
         """Allocate GPU memory.
 
@@ -844,7 +810,6 @@ class DeviceAllocator:
                 DeviceAllocator._cuda_ptr_size[ptr] = actual
                 DeviceAllocator._range_add(ptr, actual)
                 DeviceAllocator._cuda_ptr_device[ptr] = dev
-                DeviceAllocator._cuda_ptr_epoch[ptr] = DeviceAllocator._alloc_epoch
                 if _MALLOC_TRACE_FILE is not None:
                     _record_malloc_site(ptr, actual, dev)
                 # No live-byte change: pool blocks stay counted as live
@@ -936,7 +901,6 @@ class DeviceAllocator:
         DeviceAllocator._cuda_ptr_size[p] = nbytes
         DeviceAllocator._range_add(p, nbytes)
         DeviceAllocator._cuda_ptr_device[p] = dev
-        DeviceAllocator._cuda_ptr_epoch[p] = DeviceAllocator._alloc_epoch
         live = DeviceAllocator._cuda_live_bytes.get(dev, 0) + nbytes
         DeviceAllocator._cuda_live_bytes[dev] = live
         peak = DeviceAllocator._cuda_peak_bytes.get(dev, 0)
@@ -968,25 +932,6 @@ class DeviceAllocator:
         if not ptr:
             return
         DeviceAllocator._maybe_init_pool()
-
-        # A pointer issued by a runtime that no longer exists.
-        #
-        # Its memory went when that runtime did, so there is nothing to give
-        # back — and both of the things this function otherwise does would be
-        # wrong: parking it hands a dead address to the next allocation, and
-        # freeing it asks the CURRENT runtime to release something it never
-        # issued, which it correctly refuses and loudly. Drop the bookkeeping
-        # and say nothing. Only a process that replaces its runtime ever
-        # reaches this; with one runtime the epoch never moves.
-        _epoch = DeviceAllocator._cuda_ptr_epoch.pop(ptr, DeviceAllocator._alloc_epoch)
-        if _epoch != DeviceAllocator._alloc_epoch:
-            _dev = DeviceAllocator._cuda_ptr_device.pop(ptr, None)
-            _sz = DeviceAllocator._cuda_ptr_size.pop(ptr, None)
-            DeviceAllocator._pool_alloc_size.pop(ptr, None)
-            if _dev is not None and _sz:
-                _live = DeviceAllocator._cuda_live_bytes.get(_dev, 0) - _sz
-                DeviceAllocator._cuda_live_bytes[_dev] = max(0, _live)
-            return
 
         # Phase 2: push to pool, no cudaFree.
         if DeviceAllocator._pool_enabled:
@@ -2170,13 +2115,9 @@ class NBXTensor:
         self._numel = math.prod(shape) if shape else 1
         # C6b: element size cached once — shape/strides/dtype are fixed at
         # construction (every view/reshape builds a NEW NBXTensor; __init__
-        # is the single construction path). `_elem_size` and `_nbytes` are
-        # derived from `dtype` HERE and never again, so assigning `_dtype`
-        # after construction leaves a tensor whose declared length belongs
-        # to the old dtype — a buffer overrun when the new dtype is smaller.
-        # There is no such retag left in the tree: the two bf16-bits sites
-        # (triton/constants.py, graph_executor._load_constant_triton) declare
-        # the dtype to from_numpy instead.
+        # is the single construction path). The one dtype retag in the tree
+        # (triton/constants.py bf16 constants, uint16-tagged buffer) happens
+        # at _offset == 0, where data_ptr() does not consume _elem_size.
         self._elem_size = dtype_size(dtype)
         self._nbytes = self._numel * self._elem_size
         # C6a: contiguity is a pure function of the (immutable) shape and
@@ -2491,45 +2432,14 @@ class NBXTensor:
                               device if device else other._device)
 
     @staticmethod
-    def from_numpy(arr, dtype: 'Optional[NBXDtype]' = None) -> 'NBXTensor':
-        """Load numpy array to GPU. For weight loading from safetensors.
-
-        `dtype` names the NBX dtype the BITS in `arr` already are, for the
-        types numpy cannot express — bf16 travels in a uint16 container. It
-        is authoritative and must agree with the container's element size:
-        the buffer allocated here is `arr.nbytes`, and a tensor whose dtype
-        implies a different element size declares a length its own
-        allocation does not have. That mismatch used to be created by
-        retagging `_dtype` after construction (the tensor kept the
-        `_elem_size` / `_nbytes` of the dtype it was BUILT with): TinyLlama's
-        22 rotary tables, uint16 bf16 bits mistagged float32 by the fallback
-        below, each declared 524288 bytes over a 262144-byte buffer, and
-        every consumer that trusts `_nbytes` then ran off the end into
-        whichever allocation followed it — which is why the answer depended
-        on the sequence length. Measured 2026-09-07 on Apple.
-
-        An unmapped numpy dtype is refused rather than silently called
-        float32: guessing an element size is what produced the above.
-        """
+    def from_numpy(arr) -> 'NBXTensor':
+        """Load numpy array to GPU. For weight loading from safetensors."""
         import numpy as np
         dtype_name = str(arr.dtype)
-        if dtype is not None:
-            nbx_dt = dtype if isinstance(dtype, NBXDtype) else parse_dtype(dtype)
-            if dtype_size(nbx_dt) != arr.dtype.itemsize:
-                raise ValueError(
-                    f"from_numpy: dtype {nbx_dt.name} is "
-                    f"{dtype_size(nbx_dt)} bytes per element but the numpy "
-                    f"container '{dtype_name}' is {arr.dtype.itemsize}; the "
-                    f"buffer is sized from the container, so the two must "
-                    f"agree.")
-        elif dtype_name in _NUMPY_DTYPE_MAP:
+        if dtype_name in _NUMPY_DTYPE_MAP:
             nbx_dt = _NUMPY_DTYPE_MAP[dtype_name]
         else:
-            raise TypeError(
-                f"from_numpy: numpy dtype '{dtype_name}' has no NBX "
-                f"equivalent. Pass dtype=NBXDtype.<t> to declare what the "
-                f"bits are (bf16 travels as uint16); do not let the element "
-                f"size be guessed.")
+            nbx_dt = NBXDtype.float32
         arr_c = np.ascontiguousarray(arr)
         nbytes = arr_c.nbytes
         shape = arr_c.shape

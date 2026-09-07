@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The attention kernel on Metal, in the four regimes that matter.
 
-    python tools/metal_attention_regimes.py --out regimes.json [--dtype float16,float32]
+    python tools/metal_attention_regimes.py --out regimes.json [--bank DIR]
 
 The regimes, and why each is here:
 
@@ -29,43 +29,11 @@ shared bug in the kernel cannot hide inside its own reference.
 from __future__ import annotations
 
 import argparse
-import datetime
 import json
-import os
-import platform
-import shutil
 import time
 from pathlib import Path
 
 import numpy as np
-
-
-# The three caches that decide what a run measures. A regime table produced
-# with any of them warm is a table about the caches, not about the kernels —
-# measured 2026-09-06, identical code giving different suite results — so the
-# tool clears them itself rather than trusting the shell that invoked it, and
-# says so in the file it writes.
-_CACHES = (
-    Path.home() / ".cache" / "triton_msl",
-    Path.home() / ".triton" / "cache",
-)
-
-
-def clear_caches() -> list:
-    """Clear the shader caches and the persisted autotune sweep. Returns what
-    was cleared, for the record written into the output."""
-    cleared = []
-    for path in _CACHES:
-        if path.exists():
-            shutil.rmtree(path, ignore_errors=True)
-        cleared.append(str(path))
-    replay = Path.home() / ".neurobrix" / "replay_cache"
-    for name in ("autotune_configs_", "autotune_exclusions_"):
-        for f in replay.glob(f"{name}*.json"):
-            if name == "autotune_configs_":
-                f.unlink()
-                cleared.append(str(f))
-    return cleared
 
 
 def fp64_attention(q, k, v, bias=None, scale=None):
@@ -139,52 +107,15 @@ REGIMES = [
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", required=True, type=Path)
-    parser.add_argument("--dtype", default="float16,float32",
-                        help="comma-separated; every dtype is measured and "
-                             "written into the same dated file")
+    parser.add_argument("--dtype", default="float16")
     args = parser.parse_args()
-
-    dtypes = [np.dtype(d.strip()) for d in args.dtype.split(",") if d.strip()]
-    cleared = clear_caches()
 
     from neurobrix.kernels import launcher
     launcher.install()
     from neurobrix.kernels.nbx_tensor import NBXTensor
     from neurobrix.kernels import wrappers
-    from neurobrix.kernels.ops._configs import active_vendor_profile
 
-    rows = []
-    for dtype in dtypes:
-        print(f"== {dtype} ==", flush=True)
-        rows.extend(_measure(dtype, NBXTensor, wrappers))
-
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        profile = active_vendor_profile()
-        arch = (profile.get("architecture") if isinstance(profile, dict)
-                else getattr(profile, "architecture", None))
-    except Exception:
-        arch = None
-    document = {
-        "generated": datetime.datetime.now().astimezone().isoformat(
-            timespec="seconds"),
-        "tool": "tools/metal_attention_regimes.py",
-        "machine": f"{platform.system()} {platform.release()} {platform.machine()}",
-        "architecture": arch,
-        "oracle": "float64 softmax(QK^T*scale + bias)V, written out in this "
-                  "tool — NOT the kernel's own arithmetic at higher precision",
-        "caches_cleared_before_the_run": cleared,
-        "dtypes": [str(d) for d in dtypes],
-        "rows": rows,
-    }
-    args.out.write_text(json.dumps(document, indent=1))
-    refused = [r for r in rows if r["status"] != "ok"]
-    print(f"\n{len(rows)} measurements over {len(dtypes)} dtype(s), "
-          f"{len(refused)} refused -> {args.out}")
-    return 1 if refused else 0
-
-
-def _measure(dtype, NBXTensor, wrappers) -> list:
+    dtype = np.dtype(args.dtype)
     rows = []
     for spec in REGIMES:
         rng = np.random.default_rng(1234)
@@ -231,7 +162,11 @@ def _measure(dtype, NBXTensor, wrappers) -> list:
         else:
             print(f"  REF {spec['name']:<20} {row['error'][:110]}", flush=True)
 
-    return rows
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(json.dumps(rows, indent=1))
+    refused = [r for r in rows if r["status"] != "ok"]
+    print(f"\n{len(rows)} regimes, {len(refused)} refused -> {args.out}")
+    return 1 if refused else 0
 
 
 if __name__ == "__main__":
