@@ -1924,7 +1924,14 @@ def mm(a, b, _epilogue: int = 0) :
         return _apply_matmul_epilogue(c, _epilogue)
 
     a = a.contiguous()
-    b = b.contiguous()
+    # The weight is walked by its own strides: matmul_kernel receives (stride_bk, stride_bn)
+    # and loads the B tile through them, so a pre-transposed weight — the (K, N) stride view of
+    # a (N, K) row-major buffer, stride_bk == 1 — is read in place. Materialising it here copied
+    # the whole model once per prefill (TinyLlama: 154 weights, 2.2 GB, per request — the copy
+    # census of 2026-09-07). Only a broadcast (a zero stride) is materialised: the kernel's
+    # integer analysis assumes every stride positive.
+    if any(st == 0 for st in b.stride()):
+        b = b.contiguous()
     out_dtype = _matmul_out_dtype(a, M)
     c = NBXTensor.empty((M, N), device=f"cuda:{a._device_idx}" if hasattr(a, '_device_idx') else 'cuda',
                         dtype=out_dtype)
@@ -2531,6 +2538,25 @@ def swiglu_fused_wrapper(gate, up):
     return output.view(*orig_shape)
 
 
+
+_ROPE_CAST_CACHE: "collections.OrderedDict" = __import__("collections").OrderedDict()
+_ROPE_CAST_CACHE_SIZE = 8
+
+
+def _rope_cast_once(t, dtype):
+    """`t.to(dtype)` remembered for the same tensor OBJECT (the source is held with its cast,
+    so its identity cannot be recycled while remembered); bounded, least-recent out."""
+    key = (id(t), dtype)
+    hit = _ROPE_CAST_CACHE.get(key)
+    if hit is not None and hit[0] is t:
+        _ROPE_CAST_CACHE.move_to_end(key)
+        return hit[1]
+    cast = t.to(dtype)
+    _ROPE_CAST_CACHE[key] = (t, cast)
+    while len(_ROPE_CAST_CACHE) > _ROPE_CAST_CACHE_SIZE:
+        _ROPE_CAST_CACHE.popitem(last=False)
+    return cast
+
 def rope_fused_wrapper(q_raw, k_raw, cos, sin):
     """Fused RoPE (Liger-style rotate_half) — applies to Q and K in one launch.
 
@@ -2556,12 +2582,16 @@ def rope_fused_wrapper(q_raw, k_raw, cos, sin):
     if sin.ndim == 4 and sin.shape[1] == 1:
         sin = sin.view(sin.shape[0], sin.shape[2], sin.shape[3])
 
-    # Align cos/sin dtype with q/k (kernel computes in cos/sin dtype).
+    # Align cos/sin dtype with q/k (kernel computes in cos/sin dtype). The graph produces one
+    # cos and one sin per step and every layer's RoPE consumes the same two tensors: the cast
+    # is remembered per tensor object (TinyLlama, 2026-09-07: 44 casts a token, 22 layers × 2,
+    # for two casts' worth of work) — a small keyed cache holding the source object, so an
+    # arena slot reused by another tensor can never alias a remembered cast.
     target_dt = q_raw.dtype
     if cos.dtype != target_dt:
-        cos = cos.to(target_dt)
+        cos = _rope_cast_once(cos, target_dt)
     if sin.dtype != target_dt:
-        sin = sin.to(target_dt)
+        sin = _rope_cast_once(sin, target_dt)
     if k_raw.dtype != target_dt:
         k_raw = k_raw.to(target_dt)
 
@@ -4375,7 +4405,15 @@ def mv_wrapper(mat, vec) :
     fixed order — no split-K atomics, the GemLite pattern refused).
     """
     import os as _os_mv
-    mat, vec = mat.contiguous(), vec.contiguous()
+    # A wrapper that copies whatever it is given cannot honour a caller that took care not to
+    # give it a copy. The gemv kernels take the matrix's two strides and the vector's one; what
+    # they need is K-contiguous ROWS (stride(1) == 1: the pre-transposed weight layout, where
+    # the loads vectorise) — a matrix whose rows are strided is copied once here and the line
+    # says why; a vector is read through its stride, a broadcast (stride 0) materialised.
+    if mat.stride(1) != 1:
+        mat = mat.contiguous()          # justified: the kernel's rows must be K-contiguous
+    if vec.stride(0) == 0:
+        vec = vec.contiguous()          # justified: a broadcast vector has no stride to walk
     N, M = mat.shape
     out = NBXTensor.empty(N, device=mat.device, dtype=_matmul_out_dtype(mat))
     _set_device(mat)
