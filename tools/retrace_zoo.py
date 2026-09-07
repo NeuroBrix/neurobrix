@@ -98,7 +98,7 @@ def _trace_value(v):
         return None
     if isinstance(v, int):
         return v
-    if isinstance(v, dict) and v.get("type") == "symbol":
+    if isinstance(v, dict) and "type" in v:                   # a symbol or an expression
         tv = v.get("trace", v.get("trace_value"))
         return tv if isinstance(tv, int) and not isinstance(tv, bool) else None
     return None
