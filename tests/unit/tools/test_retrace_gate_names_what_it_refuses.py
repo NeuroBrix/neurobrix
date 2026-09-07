@@ -70,6 +70,13 @@ def test_a_topology_whose_routing_changed_is_beyond_the_annotation(tmp_path, mon
     rep = m.graph_diff()
     assert rep["components"]["core"]["op_diffs"] == 0
     paths = [x["path"] for x in rep["topology"]]
-    assert "flow.type" in paths and "components.model" in paths and rep["beyond_annotation"] == 2
+    assert "flow.type" in paths and rep["beyond_annotation"] == 1                       # the changed type is beyond
+    assert [x["path"] for x in rep["topology_additions"]] == ["components.model"]        # an added component is named, not beyond
     (R.CACHE / "m" / "topology.json").write_text((Path(args.backup) / "m" / "topology.json").read_text())
-    assert m.graph_diff()["topology"] == []
+    assert m.graph_diff()["topology"] == [] and m.graph_diff()["topology_additions"] == []
+    # the registry's flow contract reaching the topology: stages, direction, sample rate, generation ADDED
+    new_t = json.loads((Path(args.backup) / "m" / "topology.json").read_text())
+    new_t["flow"].update({"stages": [{"component": "core"}], "direction": "tts", "sample_rate": 24000, "generation": {"temperature": 0.7}})
+    (R.CACHE / "m" / "topology.json").write_text(json.dumps(new_t))
+    rep = m.graph_diff()
+    assert rep["beyond_annotation"] == 0 and sorted(x["path"] for x in rep["topology_additions"]) == ["flow.direction", "flow.generation", "flow.sample_rate", "flow.stages"]
