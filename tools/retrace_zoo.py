@@ -334,9 +334,15 @@ def symbol_remap(old_ctx: dict, new_ctx: dict) -> dict:
 
 
 def rewrite_symbols(node, remap: dict):
+    """The old graph's symbols renamed into the new graph's namespace — a dim node
+    (`{"type": "symbol", "id": ...}`) and a scalar argument bound to a symbol
+    (`{"type": "symbol", "symbol_id": ...}`, an `arange` end: Kokoro's predictor,
+    2026-09-07, one op refused for a renaming only)."""
     if isinstance(node, dict):
         if node.get("type") == "symbol" and node.get("id") in remap:
             return {**node, "id": remap[node["id"]]}
+        if node.get("type") == "symbol" and node.get("symbol_id") in remap:
+            return {**node, "symbol_id": remap[node["symbol_id"]]}
         return {k: rewrite_symbols(v, remap) for k, v in node.items()}
     if isinstance(node, list):
         return [rewrite_symbols(v, remap) for v in node]
