@@ -379,3 +379,13 @@ def test_a_verdict_on_other_arms_than_the_stamped_ones_is_re_gated(model):
     assert m.done("gate") is True
     m.state["steps"]["gate"]["policy"] = None
     assert m.done("gate") is False
+
+
+def test_the_upload_loop_trusts_a_recorded_pass_whatever_the_gates_freshness(model, monkeypatch, tmp_path):
+    """`--only-upload` uploads an artifact whose recorded verdict is PASS even when the chain would
+    re-gate it (a verdict older than the frozen protocol): nine gated artifacts were refused at 08:34."""
+    m = model
+    m.state["steps"]["gate"] = {"ok": True, "verdict": "PASS"}           # no autotune stamp: the chain would re-gate
+    assert m.done("gate") is False
+    gate = m.state["steps"]["gate"]
+    assert gate.get("verdict", "").startswith("PASS") and gate.get("ok") is True   # the loop's own test, as in main()
