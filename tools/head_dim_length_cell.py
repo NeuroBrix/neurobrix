@@ -242,6 +242,32 @@ def run(args) -> int:
             print(f"    {arm:20s} rc={record['rc']} sha={record['sha256'][:8]} "
                   f"{record['wall_s']}s", flush=True)
 
+        # The premise of the whole cell is that the engine ran on THESE ids at
+        # THIS length. A runtime variable that were silently ignored would
+        # leave the arms measuring the "x" prompt instead, at a length nobody
+        # chose, and every row would look green. So it is proved rather than
+        # assumed: one control run on the fastest arm with a single id
+        # changed. If the output does not move, the ids were not used.
+        control = None
+        if args.control:
+            probe_arm = (args.arm or list(ARMS))[0]
+            moved = list(ids)
+            moved[-1] = ids[0] if ids[-1] != ids[0] else ids[1]
+            control = run_arm(model, moved, probe_arm, args.max_tokens, here,
+                              f"{model}_control", args.src_path, args.timeout)
+            base = arms.get(probe_arm)
+            control["distinguishes"] = bool(
+                base and base["rc"] == 0 == control["rc"]
+                and base["sha256"] != control["sha256"])
+            print(f"    control (one id moved) sha={control['sha256'][:8]} "
+                  f"{'ids are used' if control['distinguishes'] else 'IDS IGNORED'}",
+                  flush=True)
+            if not control["distinguishes"] and base and base["rc"] == 0:
+                raise RuntimeError(
+                    f"{model}: changing a token id did not change the output, "
+                    f"so `global.input_token_ids` was not what the engine ran "
+                    f"on. Refusing to report a length the run did not have.")
+
         oracle = None
         if info["model_type"] in LLAMA_LIKE:
             oracle = run_fp64_oracle(model_dir, ids, here, model, args.src_path)
@@ -263,7 +289,8 @@ def run(args) -> int:
 
         rows.append({"model": model, **info, "ids_len": len(ids),
                      "ids_head": ids[:6], "ids_tail": ids[-3:],
-                     "arms": arms, "verdict": verdict, "fp64_oracle": oracle})
+                     "arms": arms, "verdict": verdict, "fp64_oracle": oracle,
+                     "control": control})
 
     document = {
         "generated": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -390,6 +417,10 @@ def main() -> int:
                    help=f"repeatable; default {', '.join(ARMS)}")
     r.add_argument("--max-tokens", type=int, default=8)
     r.add_argument("--timeout", type=int, default=3600)
+    r.add_argument("--no-control", dest="control", action="store_false",
+                   help="skip the run that proves the ids were the ones used "
+                        "(they are proved by default, and the cell refuses "
+                        "when they were not)")
     r.add_argument("--src", default=None,
                    help="a frozen source tree to measure instead of this one")
     r.set_defaults(func=run)
