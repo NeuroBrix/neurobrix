@@ -106,7 +106,7 @@ def _conv2d_oracle(x, w, stride, padding, dilation, groups, window=None):
     """Direct convolution in float64 (NCHW, OIHW), the reference bank's definition.
     `window` = (n_idx, r0, r1, c0, c1): only the output block [n_idx, :, r0:r1, c0:c1],
     exact on every position of it (its receptive field is what is read)."""
-    x = x.astype(np.float64); w = w.astype(np.float64)
+    w = w.astype(np.float64)
     n, c, h, wd = x.shape
     co, ci_g, kh, kw = w.shape
     sh, sw = stride; ph, pw = padding; dh, dw = dilation
@@ -116,7 +116,17 @@ def _conv2d_oracle(x, w, stride, padding, dilation, groups, window=None):
     else:
         ni, r0, r1, c0, c1 = window
         n0, n1 = ni, ni + 1
-    xp = np.pad(x[n0:n1], ((0, 0), (0, 0), (ph, ph), (pw, pw)))
+    # Only the window's receptive field is converted and padded: in padded coordinates the
+    # rows [r0·sh, (r1−1)·sh + dh·(kh−1)] and the same for columns — never the whole input
+    # (a 1024²×256 input is 2 GB of float64 per window, 109 s of an oracle on 2026-09-07).
+    R0, R1 = r0 * sh, (r1 - 1) * sh + dh * (kh - 1) + 1
+    C0, C1 = c0 * sw, (c1 - 1) * sw + dw * (kw - 1) + 1
+    u0, u1 = max(0, R0 - ph), min(h, R1 - ph)                 # unpadded rows the slab needs
+    v0, v1 = max(0, C0 - pw), min(wd, C1 - pw)
+    slab = x[n0:n1, :, u0:u1, v0:v1].astype(np.float64)
+    top, bottom = max(0, ph - R0), max(0, (R1 - ph) - h)     # padding the slab still needs
+    left, right = max(0, pw - C0), max(0, (C1 - pw) - wd)
+    xp = np.pad(slab, ((0, 0), (0, 0), (top, bottom), (left, right)))
     nb, rh, rw = n1 - n0, r1 - r0, c1 - c0
     out = np.zeros((nb, co, rh, rw), dtype=np.float64)
     co_g = co // groups
@@ -125,7 +135,7 @@ def _conv2d_oracle(x, w, stride, padding, dilation, groups, window=None):
         # below is thousands of tiny products (a 448² depthwise shape: 157 s of float64)
         for i in range(kh):
             for j in range(kw):
-                patch = xp[:, :, i * dh + r0 * sh:i * dh + r1 * sh:sh, j * dw + c0 * sw:j * dw + c1 * sw:sw]
+                patch = xp[:, :, i * dh:i * dh + rh * sh:sh, j * dw:j * dw + rw * sw:sw]
                 out += patch * w[:, 0, i, j][None, :, None, None]
         return out
     for g in range(groups):
@@ -133,7 +143,7 @@ def _conv2d_oracle(x, w, stride, padding, dilation, groups, window=None):
         wg = w[g * co_g:(g + 1) * co_g]                       # [co_g, ci_g, kh, kw]
         for i in range(kh):
             for j in range(kw):
-                patch = xg[:, :, i * dh + r0 * sh:i * dh + r1 * sh:sh, j * dw + c0 * sw:j * dw + c1 * sw:sw]   # [nb, ci_g, rh, rw]
+                patch = xg[:, :, i * dh:i * dh + rh * sh:sh, j * dw:j * dw + rw * sw:sw]   # [nb, ci_g, rh, rw]
                 # one BLAS product per tap: (nb·rh·rw, ci_g) @ (ci_g, co_g)
                 prod = patch.transpose(0, 2, 3, 1).reshape(-1, ci_g) @ wg[:, :, i, j].T
                 out[:, g * co_g:(g + 1) * co_g] += prod.reshape(nb, rh, rw, co_g).transpose(0, 3, 1, 2)
