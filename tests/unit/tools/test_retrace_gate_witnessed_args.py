@@ -235,3 +235,17 @@ def test_consumer_lists_are_verified_against_the_new_graphs_ops():
     g = {"ops": [{"op_uid": "aten.mul::0", "input_tensor_ids": ["w", "x"], "output_tensor_ids": ["y"]}],
          "tensors": {"w": {"consumer_op_uids": ["aten.mul::0"]}, "x": {"consumer_op_uids": ["aten.add::9"]}, "y": {}}}
     assert R.derived_consumers_consistent(g) == 1
+
+
+def test_a_batch_counted_twice_is_corrected_to_once():
+    twice = _mul(B, _mul(B, 1500, 1500), 1500); once = _mul(B, 1500, 1500)
+    assert R.equivalent_modulo_unit_factors(twice, once) and not R.equivalent_dims(twice, once)
+    old = {"op_uid": "aten.view::11", "op_type": "aten.view", "input_tensor_ids": ["e::out_0"], "output_tensor_ids": ["aten.view::11::out_0"],
+           "attributes": {"args": [{"type": "tensor", "tensor_id": "e::out_0"}, {"type": "list", "value": [twice, 1280]}], "kwargs": {}, "shape": [twice, 1280]}}
+    new = copy.deepcopy(old); new["attributes"]["shape"][0] = once; new["attributes"]["args"][1]["value"][0] = once
+    tensors = {"aten.view::11::out_0": {"shape": [1500, 1280], "symbolic_shape": {"dims": [once, 1280], "concrete": [1500, 1280]}}}
+    sites = R.witnessed_arg_changes(old, new, tensors)
+    assert sites is not None and all(x["kind"] == "unit-factor-corrected" for x in sites)
+    # a change in a non-unit symbol is never this class
+    other = _mul(B, 1600, 1600)
+    assert not R.equivalent_modulo_unit_factors(once, other)

@@ -252,6 +252,22 @@ def equivalent_dims(a, b) -> bool:
     return True
 
 
+def equivalent_modulo_unit_factors(a, b) -> bool:
+    """Two dim expressions that agree at every assignment where the unit-trace symbols (a
+    batch traced at 1) stay 1 and the others vary — they differ only by factors of those
+    symbols: the closed regression's signature (a batch folded, dropped or counted twice)."""
+    env0 = {}
+    symbols_of(a, env0); symbols_of(b, env0)
+    if not env0 or not any(tv == 1 for tv in env0.values()):
+        return False
+    for k in (1, 2, 3):
+        env = {sid: (1 if tv == 1 else tv * k) for sid, tv in env0.items()}
+        va, vb = eval_dim(a, env), eval_dim(b, env)
+        if va is None or vb is None or va != vb:
+            return False
+    return True
+
+
 def witnessed_arg_changes(old_op: dict, new_op: dict, tensors_new: dict):
     """The differences between two records of one op when each is the closed
     defect at the argument level — two kinds:
@@ -338,7 +354,17 @@ def witnessed_arg_changes(old_op: dict, new_op: dict, tensors_new: dict):
                     continue
             # RE-EXPRESSED: the same extent spelled by the corrected rules' algebra — equal at
             # the trace assignment and at two others, and the trace is the witnessed extent.
-            if ta is None or ta != tb or not equivalent_dims(a, b):
+            if ta is None or ta != tb:
+                return None
+            if not equivalent_dims(a, b):
+                # UNIT FACTOR CORRECTED: equal wherever the batch stays 1, different only by
+                # factors of a unit-trace symbol — the old counted the batch twice (whisper-
+                # turbo's encoder: s0·(s0·1500) → s0·1500) or not at all; the new is the rule's
+                # derivation and must be the op's annotated dim.
+                if equivalent_modulo_unit_factors(a, b) and json.dumps(b, sort_keys=True) in input_dims \
+                        and any(len(parent) == len(c) and c[pos] == ta for c in witnessed):
+                    sites.append({"op": new_op.get("op_uid"), "path": ".".join(str(k) for k in path), "old": a, "new": b, "kind": "unit-factor-corrected"})
+                    continue
                 return None
             if not any(len(parent) == len(c) and c[pos] == ta for c in witnessed):
                 return None
@@ -658,7 +684,8 @@ class Model:
             f"symbolized {sum(r.get('arg_kinds', {}).get('symbolized', 0) for r in gd['components'].values())}, "
             f"re-expressed {sum(r.get('arg_kinds', {}).get('re-expressed', 0) for r in gd['components'].values())}, "
             f"batch split restored {sum(r.get('arg_kinds', {}).get('batch-split-restored', 0) for r in gd['components'].values())}, "
-            f"batch factor restored {sum(r.get('arg_kinds', {}).get('batch-factor-restored', 0) for r in gd['components'].values())}), "
+            f"batch factor restored {sum(r.get('arg_kinds', {}).get('batch-factor-restored', 0) for r in gd['components'].values())}, "
+            f"unit factor corrected {sum(r.get('arg_kinds', {}).get('unit-factor-corrected', 0) for r in gd['components'].values())}), "
             f"{gd['pruned_dead_ops']} dead op(s) pruned, "
             f"{gd['beyond_annotation']} beyond, corrupted dims {gd['corrupted_before']} → {gd['corrupted_after']}")
         return verdict.startswith("PASS")
