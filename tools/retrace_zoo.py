@@ -98,7 +98,7 @@ class Model:
     # -- environment -------------------------------------------------------
     def env(self, tree: bool = True):
         e = {**os.environ}
-        if self.args.gpu is not None:
+        if self.args.gpu not in (None, ""):
             e["CUDA_VISIBLE_DEVICES"] = str(self.args.gpu)
         if tree and self.args.src:
             e["PYTHONPATH"] = str(Path(self.args.src).resolve())
@@ -316,7 +316,7 @@ class Model:
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--models", required=True)
-    ap.add_argument("--gpu", type=int, default=None)
+    ap.add_argument("--gpu", default=None, help="the card(s) to pin: an ordinal or a comma list (a two-card trace)")
     ap.add_argument("--src", default=None, help="the engine source tree the runs use (PYTHONPATH)")
     ap.add_argument("--out", default=str(REPO / "validation_outputs" / "retrace_2026_09_07"))
     ap.add_argument("--models-root", default="/home/mlops/nbx_builds", help="where forge build writes the .nbx (root fs, not the export)")
