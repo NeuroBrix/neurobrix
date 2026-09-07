@@ -136,7 +136,7 @@ class _Resp:
 def test_a_read_of_the_previous_object_stops_by_name_when_an_export_stalls(tmp_path, monkeypatch):
     import requests
     import snapshot_refresh
-    monkeypatch.setattr(requests, "get", lambda url, stream=False, timeout=None: _Resp())
+    monkeypatch.setattr(requests, "get", lambda url, stream=False, timeout=None, headers=None: _Resp())
     export = tmp_path / "export-a"; export.mkdir()
     monkeypatch.setattr(R, "SHARED_STORAGE_EXPORTS", (str(export),))
     log = tmp_path / "restore.log"
@@ -176,7 +176,7 @@ def test_every_shared_export_the_probe_lists_is_a_directory_here_or_the_probe_sa
     monkeypatch.setattr(urllib.request, "urlopen", lambda url, timeout=None: _OK())
     assert "not mounted" in str(R.hub_store_health())
     import requests
-    monkeypatch.setattr(requests, "get", lambda url, stream=False, timeout=None: _Resp())
+    monkeypatch.setattr(requests, "get", lambda url, stream=False, timeout=None, headers=None: _Resp())
     log = tmp_path / "restore.log"
     assert R.stream_under_probe("http://x", tmp_path / "m.nbx", 1000.0, log, probe_every=0.0) is None
     assert "not-mounted did not list" in log.read_text()
@@ -285,3 +285,25 @@ def test_an_upload_waits_for_a_window_with_no_reader(model, monkeypatch):
     assert m.step_upload() is False
     st = m.state["steps"]["upload"]
     assert st["state"] == "DEFERRED" and "trace of CogVideoX-2b" in st["reason"]
+
+
+def test_a_partial_previous_object_resumes_with_a_range(tmp_path, monkeypatch):
+    import requests
+    seen = {}
+
+    class _Part(_Resp):
+        status_code = 206
+        def __init__(self, chunks): super().__init__(chunks)
+    def get(url, stream=False, timeout=None, headers=None):
+        seen["headers"] = headers or {}
+        return _Part(10)
+    monkeypatch.setattr(requests, "get", get)
+    export = tmp_path / "export-a"; export.mkdir()
+    monkeypatch.setattr(R, "SHARED_STORAGE_EXPORTS", (str(export),))
+    import snapshot_refresh
+    monkeypatch.setattr(snapshot_refresh, "_export_answers", lambda d, limit: 0.01)
+    dest = tmp_path / "m.nbx"; dest.write_bytes(b"a" * 5000)                    # a stopped stream's partial file
+    got = R.stream_under_probe("http://x", dest, 1000.0, tmp_path / "restore.log", probe_every=0.0, expected=5000 + 10 * 1024)
+    assert seen["headers"] == {"Range": "bytes=5000-"} and got == 5000 + 10 * 1024
+    assert dest.read_bytes()[:5000] == b"a" * 5000 and dest.stat().st_size == got
+    assert R.stream_under_probe("http://x", dest, 1000.0, tmp_path / "restore.log", expected=got) == got   # complete: no request
