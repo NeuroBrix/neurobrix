@@ -1474,6 +1474,31 @@ class Model:
         return True
 
 
+
+def summary_line(steps: dict) -> dict:
+    """One model's summary line: per step, the verdict, else the state, else ok/failed."""
+    return {k: (v.get("verdict") or v.get("state") or ("ok" if v.get("ok") else "failed")) for k, v in steps.items()}
+
+
+def write_summary(out: Path) -> dict:
+    """summary.json is a PROJECTION of every <out>/<model>/state.json on disk, rebuilt at every
+    write — never a merge of one instance's memory. Several instances share one campaign
+    directory (a policy pass, phase B, the upload loop): at 13:08 on 2026-09-07 a pass rewrote
+    lines the upload loop had already advanced (upload DEFERRED over an ok of 12:45) and Kokoro
+    lost its upload field, because each instance merged what IT had loaded at its start."""
+    summary = {}
+    for sp in sorted(out.glob("*/state.json")):
+        try:
+            st = json.loads(sp.read_text())
+        except (json.JSONDecodeError, OSError):
+            continue
+        summary[sp.parent.name] = summary_line(st.get("steps") or {})
+    tmp = out / "summary.json.tmp"
+    tmp.write_text(json.dumps(summary, indent=1))
+    tmp.replace(out / "summary.json")
+    return summary
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--models", required=True)
@@ -1511,7 +1536,8 @@ def main():
                     model.step_upload()
             else:
                 log(f"{m}: upload REFUSED — the gate is not PASS in the state (an upload loop never traces or builds)")
-            summary[m] = {k: (v.get("verdict") or v.get("state") or ("ok" if v.get("ok") else "failed")) for k, v in model.state["steps"].items()}
+            summary[m] = summary_line(model.state["steps"])
+            write_summary(Path(args.out))
             continue
         if args.stop_at:
             # run steps up to and including stop_at
@@ -1526,11 +1552,8 @@ def main():
                     break
         else:
             model.run_all()
-        summary[m] = {k: (v.get("verdict") or v.get("state") or ("ok" if v.get("ok") else "failed")) for k, v in model.state["steps"].items()}
-        sp = Path(args.out) / "summary.json"
-        merged = json.loads(sp.read_text()) if sp.exists() else {}
-        merged.update(summary)
-        sp.write_text(json.dumps(merged, indent=1))
+        summary[m] = summary_line(model.state["steps"])
+        write_summary(Path(args.out))
     print(json.dumps(summary, indent=1))
     # The exit code tells the truth: a model whose chain stopped (a gate that did not pass, a refused,
     # deferred or failed upload) makes the run fail, so a marker chained on this command cannot say DONE.
