@@ -55,6 +55,9 @@ CACHE = Path.home() / ".neurobrix" / "cache"
 HUB_MAP = REPO / "validation_outputs" / "retrace_2026_09_07" / "hub_map.json"
 FAMILIES = REPO / "validation_outputs" / "retrace_2026_09_07" / "families.json"
 ANNOTATION_KEYS = {"symbolic_shape"}       # the only tensor fields the closed defect touches
+# Trace-time provenance, not the artifact's semantics: the card the trace ran on and its memory
+# figures. A retrace on another card must not fail the gate for them (hat-l: 25,632 such fields).
+PROVENANCE_KEYS = {"device", "memory_info"}
 #: The toolchain's registry key when it differs from the installed container's name (the hub's name).
 REGISTRY_ALIAS = {"Sana-1600M-MultiLing": "Sana_1600M_1024px_MultiLing"}
 
@@ -401,6 +404,8 @@ class Model:
                 rec["op_diffs"] = abs(len(ops_o) - len(ops_n))
             else:
                 for a, b in zip(ops_o, ops_n):
+                    a = {k: v for k, v in a.items() if k not in PROVENANCE_KEYS}
+                    b = {k: v for k, v in b.items() if k not in PROVENANCE_KEYS}
                     if json.dumps(a, sort_keys=True) != json.dumps(b, sort_keys=True):
                         sites = witnessed_arg_changes(a, b, tn)
                         if sites is None:
@@ -413,6 +418,8 @@ class Model:
                 if a is None or b is None:
                     rec["tensor_diffs_beyond"] += 1; continue
                 for k in set(a) | set(b):
+                    if k in PROVENANCE_KEYS:
+                        continue
                     if a.get(k) != b.get(k):
                         if k in ANNOTATION_KEYS:
                             rec["annotation_changes"] += 1

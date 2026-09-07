@@ -104,3 +104,11 @@ def test_a_symbolization_with_another_trace_is_refused():
     wrong = copy.deepcopy(PAD); wrong["trace"] = 76800
     tensors = copy.deepcopy(VIEW_TENSORS); tensors["aten.reflection_pad1d::0::out_0"]["symbolic_shape"]["dims"][2] = wrong
     assert R.witnessed_arg_changes(VIEW_OLD, _view_new(wrong), tensors) is None
+
+
+def test_trace_time_provenance_is_not_a_difference():
+    """The card a trace ran on (and its memory figures) is provenance, not semantics."""
+    a = dict(OLD, device="cuda:2"); b = dict(OLD, device="cuda:0")
+    stripped = lambda o: {k: v for k, v in o.items() if k not in R.PROVENANCE_KEYS}
+    assert stripped(a) == stripped(b)
+    assert R.PROVENANCE_KEYS == {"device", "memory_info"}
