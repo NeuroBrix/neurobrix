@@ -558,29 +558,19 @@ def tree_ab(model: str, gpu, out: Path, extra: list, timeout: int, trees: list, 
         # output must be the oracle's; a model that does not change proves the fix inert.
         last_label, last_src = trees[-1]
         env = {**base_env, "PYTHONPATH": str(Path(last_src).resolve())}
-        oreq = request_args(model, fam, extra)
-        oreq = [a for a in oreq if a != "--triton"] + ["--sequential"]
-        outp = d / f"oracle{ext}"
-        rc, wall = run([PY, "-c", entry, "run", "--model", model] + oreq + ["--output", str(outp)], env, d / "oracle.log", timeout)
-        b = d / f"{last_label}{ext}"
-        same = rc == 0 and outp.exists() and b.exists() and outp.read_bytes() == b.read_bytes()
-        res["oracle"] = {"rc": rc, "wall_s": wall, "tree": last_label, "output": str(outp),
-                         "sha": hashlib.sha256(outp.read_bytes()).hexdigest()[:12] if outp.exists() else None,
-                         "corrected_identical": same}
-        if rc == 0 and outp.exists() and b.exists() and not same:
-            try:
-                res["oracle"]["diff"] = gate(outp, b)          # how far the corrected output is from the oracle, in the family's measure
-            except Exception as e:  # noqa: BLE001
-                res["oracle"]["diff"] = {"error": str(e)}
-        a0 = d / f"{trees[0][0]}{ext}"
-        if rc == 0 and outp.exists() and a0.exists():
+        res["oracle"] = {**_oracle_run(d, model, fam, extra, ext, env, timeout), "tree": last_label}
+        outp = Path(res["oracle"]["output"])
+        if res["oracle"]["rc"] == 0:
+            after = _vs_oracle(outp, d / f"{last_label}{ext}")
+            res["oracle"]["corrected_identical"] = after["identical"] is True
+            if after["identical"] is False:
+                res["oracle"]["diff"] = {k: v for k, v in after.items() if k != "identical"}   # how far the corrected output is from the oracle
             # and how far the output BEFORE the fix was: a fix that moves an output within the
             # family's measure is a config or tiling difference, a fix that brings a wrong output
             # onto the oracle is the defect closed — the row must say which (hat-l-x4, 2026-09-07)
-            try:
-                res["oracle"]["before_diff"] = {"identical": a0.read_bytes() == outp.read_bytes(), **gate(outp, a0)}
-            except Exception as e:  # noqa: BLE001
-                res["oracle"]["before_diff"] = {"error": str(e)}
+            res["oracle"]["before_diff"] = _vs_oracle(outp, d / f"{trees[0][0]}{ext}")
+        else:
+            res["oracle"]["corrected_identical"] = False
     res["gate"] = {"kind": "bytes", "against": first, "arms": comp,
                    "identical": ran and all(v["identical"] for v in comp.values()), "ran": ran}
     res["A"] = res["arms"][first]
@@ -589,6 +579,30 @@ def tree_ab(model: str, gpu, out: Path, extra: list, timeout: int, trees: list, 
     res["speedup"] = (x / y) if x and y else None
     (d / "result.json").write_text(json.dumps(res, indent=1))
     return res
+
+
+def _oracle_run(d: Path, model: str, fam: str, extra: list, ext: str, env: dict, timeout: int) -> dict:
+    """The sequential oracle (the ATen engine, op by op) on this model's request, from the tree
+    `env` names (PYTHONPATH) — the reference any changed output is measured against."""
+    oreq = request_args(model, fam, extra)
+    oreq = [a for a in oreq if a != "--triton"] + ["--sequential"]
+    outp = d / f"oracle{ext}"
+    rc, wall = run([PY, "-c", "import sys; from neurobrix.cli import main; sys.exit(main())", "run", "--model", model]
+                   + oreq + ["--output", str(outp)], env, d / "oracle.log", timeout)
+    return {"rc": rc, "wall_s": wall, "output": str(outp),
+            "sha": hashlib.sha256(outp.read_bytes()).hexdigest()[:12] if outp.exists() else None}
+
+
+def _vs_oracle(oracle: Path, arm: Path) -> dict:
+    """One arm against the oracle's output: identical, else the family's own measure."""
+    if not (oracle.exists() and arm.exists()):
+        return {"identical": None, "error": "an output is missing"}
+    if oracle.read_bytes() == arm.read_bytes():
+        return {"identical": True}
+    try:
+        return {"identical": False, **gate(oracle, arm)}
+    except Exception as e:  # noqa: BLE001
+        return {"identical": False, "error": str(e)}
 
 
 def sweep_one(model: str, gpu, out: Path, extra: list, timeout: int) -> dict:
@@ -668,7 +682,8 @@ def drift_one(model: str, gpu, out: Path, extra: list, timeout: int, bound: floa
     return res
 
 
-def env_ab(model: str, gpu, out: Path, extra: list, timeout: int, env_b: dict, lever: str, cold: bool = False, src: Path = None) -> dict:
+def env_ab(model: str, gpu, out: Path, extra: list, timeout: int, env_b: dict, lever: str, cold: bool = False, src: Path = None,
+           oracle_on_diff: bool = False) -> dict:
     """An engine lever behind an environment switch, measured on one model:
     arm A = the request as it is, arm B = the same request with `env_b`
     set (e.g. NBX_OPTIM_ALGEBRAIC=1), outputs byte-compared, execution
@@ -725,6 +740,16 @@ def env_ab(model: str, gpu, out: Path, extra: list, timeout: int, env_b: dict, l
             res["gate"]["diff"] = gate(a, b)
         except Exception as e:  # noqa: BLE001
             res["gate"]["diff"] = {"error": str(e)}
+    if oracle_on_diff and res["gate"]["ran"] and not same:
+        # The lever changed this model's bytes: both arms against the sequential oracle from the
+        # same tree, without the lever — which arm the oracle stands on, and how far the other is,
+        # in the family's own measure (VibeVoice under the fusion lever, 2026-09-07: 39 dB apart).
+        env = {**base_env, "PYTHONPATH": str(Path(src).resolve())} if src is not None else base_env
+        res["oracle"] = _oracle_run(d, model, fam, extra, ext, env, timeout)
+        if res["oracle"]["rc"] == 0:
+            outp = Path(res["oracle"]["output"])
+            res["oracle"]["A"] = _vs_oracle(outp, a)
+            res["oracle"]["B"] = _vs_oracle(outp, b)
     res["islands"] = {}
     x, y = res["A"]["exec_s"], res["B"]["exec_s"]
     res["speedup"] = (x / y) if x and y else None
@@ -888,6 +913,22 @@ def verdict(r: dict) -> str:
             x = (A.get("screen_excluded") or 0) + (B.get("screen_excluded") or 0)
             if x:
                 tag += f"; the screen excluded {x} config(s) — a finding to close"
+        if not g.get("identical"):
+            dd = g.get("diff") or {}
+            m = dd.get("psnr_db", dd.get("snr_db", dd.get("psnr_mean_db")))
+            if m is not None:
+                tag += f"; arms {m:.1f} dB apart"
+            o = r.get("oracle")
+            if o:
+                if o.get("rc") != 0:
+                    tag += "; the oracle did not run"
+                else:
+                    def _arm(v):
+                        if v.get("identical"):
+                            return "IDENTICAL"
+                        mm = v.get("psnr_db", v.get("snr_db", v.get("psnr_mean_db")))
+                        return ("PASS" if v.get("pass") else "DIFFERENT") + (f" {mm:.1f} dB" if mm is not None else "")
+                    tag += f"; vs the sequential oracle: A {_arm(o.get('A') or {})}, B {_arm(o.get('B') or {})}"
         return ("IDENTICAL" if g.get("identical") else "DIFFERENT") + tag
     if r.get("lever") == "launcher":
         if r["A"]["rc"] or r["B"]["rc"]:
@@ -1075,8 +1116,9 @@ def main():
                    help="tree gate: label=path/to/src,label=path/to/src[,...] — the same --triton request from each "
                         "frozen tree, bytes compared against the first (a port's kernel change must be inert on CUDA)")
     r.add_argument("--oracle-on-diff", action="store_true",
-                   help="with --trees: when the trees' outputs differ, run the sequential oracle from the last tree and "
-                        "prove the last tree's output against it (a fix that changes a model's output must land on the oracle)")
+                   help="when the arms' outputs differ, run the sequential oracle (no lever) from the tree and measure the "
+                        "arms against it — with --trees the last tree's output must land on the oracle (a fix that changes "
+                        "an output); with --env-ab both arms are measured (which one the oracle stands on, how far the other)")
     r.add_argument("--sweep-arms", action="store_true",
                    help="with --trees: every arm sweeps cold into its own store (NBX_AUTOTUNE=sweep) and the chosen "
                         "config per kernel key is compared across arms, the sweep's overhead measured per arm, and the "
@@ -1150,7 +1192,7 @@ def main():
             elif args.env_ab:
                 env_b = dict(kv.split("=", 1) for kv in args.env_ab.split(",") if "=" in kv)
                 res = env_ab(m, gpu, out, extra, args.timeout, env_b, "env:" + ",".join(env_b), cold=args.cold_arms,
-                             src=Path(args.src) if args.src else None)
+                             src=Path(args.src) if args.src else None, oracle_on_diff=args.oracle_on_diff)
                 print(f"[zoo] {m}: {verdict(res)} A={res['A']['exec_s']} B={res['B']['exec_s']} "
                       f"{('×%.2f' % res['speedup']) if res.get('speedup') else ''}", flush=True)
                 continue
