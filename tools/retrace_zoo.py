@@ -487,14 +487,17 @@ def stream_under_probe(url: str, dest: Path, mbps: float, logfile: Path, probe_e
             if time.time() - last_probe >= probe_every:
                 last_probe = time.time()
                 for d in SHARED_STORAGE_EXPORTS:
-                    if _export_answers(d, probe_limit) is None:
+                    if not os.path.isdir(d) or _export_answers(d, probe_limit) is None:
                         fh.write(f"[probe] {d} did not list within {probe_limit} s after {got / 1e6:.0f} MB — the read stops here, by name\n")
                         return None
         fh.write(f"done: {got} bytes in {time.time() - t0:.0f} s\n")
     return got
 
 
-SHARED_STORAGE_EXPORTS = ("/home/mlops/models", str(Path.home() / ".neurobrix" / "cache"), "/home/mlops/hf_snapshots")
+# The exports whose storage the hub's object store shares, as mounted on this machine. A path
+# the probe cannot see is a probe failure, never a green: `/home/mlops/models` was listed here
+# until 06:30 UTC on 2026-09-07 and does not exist — the models export mounts under the repo.
+SHARED_STORAGE_EXPORTS = (str(REPO / "models"), str(Path.home() / ".neurobrix" / "cache"), "/home/mlops/hf_snapshots")
 
 
 def hub_store_health(url: str = HUB_STORE_HEALTH, timeout: float = 10.0, probe_seconds: float = 2.0):
@@ -517,6 +520,8 @@ def hub_store_health(url: str = HUB_STORE_HEALTH, timeout: float = 10.0, probe_s
     if code != 200:
         return code
     for d in SHARED_STORAGE_EXPORTS:
+        if not os.path.isdir(d):
+            return f"export {d} is not mounted here; the probe cannot see it"
         t = time.time()
         try:
             subprocess.run(["ls", d], capture_output=True, timeout=probe_seconds)

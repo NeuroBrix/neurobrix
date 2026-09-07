@@ -137,11 +137,12 @@ def test_a_read_of_the_previous_object_stops_by_name_when_an_export_stalls(tmp_p
     import requests
     import snapshot_refresh
     monkeypatch.setattr(requests, "get", lambda url, stream=False, timeout=None: _Resp())
-    monkeypatch.setattr(R, "SHARED_STORAGE_EXPORTS", ("/export/a",))
+    export = tmp_path / "export-a"; export.mkdir()
+    monkeypatch.setattr(R, "SHARED_STORAGE_EXPORTS", (str(export),))
     log = tmp_path / "restore.log"
     monkeypatch.setattr(snapshot_refresh, "_export_answers", lambda d, limit: None)
     assert R.stream_under_probe("http://x", tmp_path / "m.nbx", 1000.0, log, probe_every=0.0) is None
-    assert "/export/a did not list" in log.read_text() and "http://x" not in log.read_text()
+    assert "export-a did not list" in log.read_text() and "http://x" not in log.read_text()
     monkeypatch.setattr(snapshot_refresh, "_export_answers", lambda d, limit: 0.01)
     assert R.stream_under_probe("http://x", tmp_path / "m.nbx", 1000.0, log, probe_every=0.0) == 49 * 1024
     assert (tmp_path / "m.nbx").stat().st_size == 49 * 1024
@@ -162,3 +163,20 @@ def test_a_hub_that_refuses_the_read_url_defers_by_name(model, monkeypatch):
     assert m.restore_previous() is False
     st = m.state["steps"]["old_outputs"]
     assert st["state"] == "DEFERRED" and "read URL" in st["reason"] and "403" in st["reason"]
+
+
+def test_every_shared_export_the_probe_lists_is_a_directory_here_or_the_probe_says_so(tmp_path, monkeypatch):
+    """A path the probe cannot see must never read as a quiet export."""
+    monkeypatch.setattr(R, "SHARED_STORAGE_EXPORTS", (str(tmp_path / "not-mounted"),))
+    import urllib.request
+    class _OK:
+        status = 200
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+    monkeypatch.setattr(urllib.request, "urlopen", lambda url, timeout=None: _OK())
+    assert "not mounted" in str(R.hub_store_health())
+    import requests
+    monkeypatch.setattr(requests, "get", lambda url, stream=False, timeout=None: _Resp())
+    log = tmp_path / "restore.log"
+    assert R.stream_under_probe("http://x", tmp_path / "m.nbx", 1000.0, log, probe_every=0.0) is None
+    assert "not-mounted did not list" in log.read_text()
