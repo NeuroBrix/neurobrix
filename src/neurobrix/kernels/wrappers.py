@@ -1672,6 +1672,59 @@ _GEMV_VEC_TILE = {"block_n": 8, "block_k": 256, "num_warps": 4}
 _ARGMAX_TILE = (4096, 4)
 
 
+# The 2-D reduction tile (min / max / prod / std / var / norm / all / any over
+# a dim). The adopted 8 x 1024 with 4 warps; `block_sizes.reduction_2d` in the
+# hardware profile overrides it.
+_REDUCTION_2D_TILE = (8, 1024, 4)
+
+
+def _reduction_2d_tile() -> tuple:
+    """`(BLOCK_M, BLOCK_N, num_warps)` for the row-wise reductions, from
+    `block_sizes.reduction_2d` in config/vendors/<vendor>/<arch>.yml.
+
+    `min` and `max` over a dim return a value AND its index, so their reduce
+    carries a pair. A backend may need the whole tile to fit its threadgroup
+    to aggregate one — the same property that governs `argmax` — and the
+    threadgroup is `num_warps * 32`, which is why the warp count belongs to
+    the tile. Absent key / no profile -> the adopted values.
+    """
+    bm, bn, warps = _REDUCTION_2D_TILE
+    try:
+        from .ops._configs import active_vendor_profile
+        cfg = (active_vendor_profile().get("block_sizes", {}) or {}).get("reduction_2d")
+        if isinstance(cfg, dict):
+            bm = int(cfg.get("block_m") or bm)
+            bn = int(cfg.get("block_n") or bn)
+            warps = int(cfg.get("num_warps") or warps)
+    except Exception:
+        pass
+    return bm, bn, warps
+
+
+# The argmin-over-a-dim tile. Its kernel takes BLOCK_M rows and a BLOCK_N
+# column cap; the adopted 4 x 4096 with 4 warps.
+_ARGMIN_TILE = (4, 4096, 4)
+
+
+def _argmin_tile() -> tuple:
+    """`(BLOCK_M, BLOCK_N cap, num_warps)` from `block_sizes.argmin`.
+
+    Companion to `_argmax_tile`; argmin's kernel carries a row block as well
+    as a column cap, so it has its own entry rather than sharing one.
+    """
+    bm, bn, warps = _ARGMIN_TILE
+    try:
+        from .ops._configs import active_vendor_profile
+        cfg = (active_vendor_profile().get("block_sizes", {}) or {}).get("argmin")
+        if isinstance(cfg, dict):
+            bm = int(cfg.get("block_m") or bm)
+            bn = int(cfg.get("tile_n") or bn)
+            warps = int(cfg.get("num_warps") or warps)
+    except Exception:
+        pass
+    return bm, bn, warps
+
+
 def _argmax_tile() -> tuple:
     """`(TILE_N cap, num_warps)` for the row-wise argmax, from
     `block_sizes.argmax` in config/vendors/<vendor>/<arch>.yml.
@@ -3256,11 +3309,13 @@ def argmin_wrapper(x, dim=None, keepdim=False) :
         if not keepdim:
             out_index = out_index.squeeze(dim)
 
-        BLOCK_N = min(4096, triton.next_power_of_2(N))
-        BLOCK_M = 4
+        _amin_bm, _amin_cap, _amin_warps = _argmin_tile()
+        BLOCK_N = min(_amin_cap, triton.next_power_of_2(N))
+        BLOCK_M = _amin_bm
         grid = (triton.cdiv(M, BLOCK_M), K)
         _set_device(x)
-        argmin_kernel[grid](x, out_index, M, N, K, BLOCK_M, BLOCK_N)
+        argmin_kernel[grid](x, out_index, M, N, K, BLOCK_M, BLOCK_N,
+                            num_warps=_amin_warps)
         return out_index
 
 
@@ -4123,10 +4178,11 @@ def all_wrapper(x, dim=None, keepdim=False) :
         x_perm = x.movedim(dim, -1).contiguous().reshape(M, N)
         out = NBXTensor.empty(M, dtype=NBXDtype.bool_, device=x.device)
         BLOCK_N = min(4096, triton.next_power_of_2(N))
-        grid = (triton.cdiv(M, _RED_BM),)
+        _red_bm, _red_bn, _red_warps = _reduction_2d_tile()
+        grid = (triton.cdiv(M, _red_bm),)
         _set_device(x_perm)
-        all_kernel_dim[grid](x_perm, out, M, N, BLOCK_M=_RED_BM, BLOCK_N=BLOCK_N,
-                             num_warps=4)
+        all_kernel_dim[grid](x_perm, out, M, N, BLOCK_M=_red_bm, BLOCK_N=BLOCK_N,
+                             num_warps=_red_warps)
         shape[dim] = 1
         result = out.view(shape)
         if not keepdim:
@@ -4158,10 +4214,11 @@ def any_wrapper(x, dim=None, keepdim=False) :
         x_perm = x.movedim(dim, -1).contiguous().reshape(M, N)
         out = NBXTensor.empty(M, dtype=NBXDtype.bool_, device=x.device)
         BLOCK_N = min(4096, triton.next_power_of_2(N))
-        grid = (triton.cdiv(M, _RED_BM),)
+        _red_bm, _red_bn, _red_warps = _reduction_2d_tile()
+        grid = (triton.cdiv(M, _red_bm),)
         _set_device(x_perm)
-        any_kernel_dim[grid](x_perm, out, M, N, BLOCK_M=_RED_BM, BLOCK_N=BLOCK_N,
-                             num_warps=4)
+        any_kernel_dim[grid](x_perm, out, M, N, BLOCK_M=_red_bm, BLOCK_N=BLOCK_N,
+                             num_warps=_red_warps)
         shape[dim] = 1
         result = out.view(shape)
         if not keepdim:
@@ -4513,11 +4570,12 @@ def prod_wrapper(x, dim=None, keepdim=False) :
         M = x.numel() // N
         x_perm = x.movedim(dim, -1).contiguous().reshape(M, N)
         out = NBXTensor.empty(M, dtype=x.dtype, device=x.device)
-        grid = (triton.cdiv(M, _RED_BM),)
+        _red_bm, _red_bn, _red_warps = _reduction_2d_tile()
+        grid = (triton.cdiv(M, _red_bm),)
         _set_device(x_perm)
         prod_kernel[grid](x_perm, out, M, N,
-                          BLOCK_M=_RED_BM, BLOCK_N=_RED_BN,
-                          num_warps=4)
+                          BLOCK_M=_red_bm, BLOCK_N=_red_bn,
+                          num_warps=_red_warps)
         shape[dim] = 1
         result = out.view(shape)
         if not keepdim:
@@ -4553,15 +4611,16 @@ def min_wrapper(x, dim=None, keepdim=False):
         x_perm = x.movedim(dim, -1).contiguous().reshape(M, N)
         out = NBXTensor.empty(M, dtype=x.dtype, device=x.device)
         out_index = NBXTensor.empty(M, dtype=NBXDtype.int64, device=x.device)
-        grid = (triton.cdiv(M, _RED_BM),)
+        _red_bm, _red_bn, _red_warps = _reduction_2d_tile()
+        grid = (triton.cdiv(M, _red_bm),)
         _set_device(x_perm)
         # The kernel writes the value AND its index (ATen's min.dim returns
         # both); the wrapper passed four arguments to a five-argument kernel
         # — a latent defect on a path no model of the zoo exercised, found by
         # the kernel reference bank (2026-09-05).
         min_kernel[grid](x_perm, out, out_index, M, N,
-                         BLOCK_M=_RED_BM, BLOCK_N=_RED_BN,
-                         num_warps=4)
+                         BLOCK_M=_red_bm, BLOCK_N=_red_bn,
+                         num_warps=_red_warps)
         shape[dim] = 1
         values = out.view(shape)
         indices = out_index.view(shape)
@@ -4595,15 +4654,16 @@ def max_wrapper(x, dim=None, keepdim=False):
         x_perm = x.movedim(dim, -1).contiguous().reshape(M, N)
         out = NBXTensor.empty(M, dtype=x.dtype, device=x.device)
         out_index = NBXTensor.empty(M, dtype=NBXDtype.int64, device=x.device)
-        grid = (triton.cdiv(M, _RED_BM),)
+        _red_bm, _red_bn, _red_warps = _reduction_2d_tile()
+        grid = (triton.cdiv(M, _red_bm),)
         _set_device(x_perm)
         # The kernel writes the value AND its index (ATen's max.dim returns
         # both); the wrapper passed four arguments to a five-argument kernel
         # — a latent defect on a path no model of the zoo exercised, found by
         # the kernel reference bank (2026-09-05).
         max_kernel[grid](x_perm, out, out_index, M, N,
-                         BLOCK_M=_RED_BM, BLOCK_N=_RED_BN,
-                         num_warps=4)
+                         BLOCK_M=_red_bm, BLOCK_N=_red_bn,
+                         num_warps=_red_warps)
         shape[dim] = 1
         values = out.view(shape)
         indices = out_index.view(shape)

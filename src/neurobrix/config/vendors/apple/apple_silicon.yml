@@ -90,6 +90,28 @@ block_sizes:
     block_k: 128
     num_warps: 4
 
+  # Row-wise reductions over a dim (min / max / prod / all / any) and argmin.
+  #
+  # MEASURED 2026-09-07: `min` and `max` over a dim return a VALUE AND ITS
+  # INDEX, so their reduce carries a pair, and the Metal lowering stages such
+  # a reduce one element per thread — the tile must fit num_warps * 32. The
+  # adopted 8 x 1024 is 8192 against a 128-thread group.
+  #
+  # 8 x 128 with 32 warps is 1024 elements over 1024 threads, and is correct
+  # for max, min and argmin at N = 511, 1024, 1025 and 3077 against numpy in
+  # float64 (the row group is what matters here: at 8 rows the lowering used
+  # to collapse every row onto the first, which is fixed upstream and is why
+  # this entry can carry more than one row at all).
+  reduction_2d:
+    block_m: 8
+    block_n: 128
+    num_warps: 32
+
+  argmin:
+    block_m: 8
+    tile_n: 128
+    num_warps: 32
+
   # Row-wise argmax — greedy sampling reads the argmax of a 32000-wide
   # vocabulary row every token.
   #
