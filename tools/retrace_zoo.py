@@ -466,6 +466,39 @@ def witnessed_arg_changes(old_op: dict, new_op: dict, tensors_new: dict):
 HUB_STORE_HEALTH = "http://10.0.0.36:9000/minio/health/cluster"
 
 
+def hub_store_write_probe(org: str, name: str, token: str, registry: str = REGISTRY):
+    """200 when the store takes a write today; otherwise the store's own answer, by name.
+
+    The cluster health answered 200 with a write quorum of 1 through every refusal of
+    2026-09-07 while each PUT came back 503 `SlowDownWrite` (MinIO's `errErasureWriteQuorum`)
+    — after the whole artifact had been streamed (192 MB, then 1.6 GB in parts, every ten
+    minutes). Five bytes through the same slot → PUT → drop path say the same thing first."""
+    import re
+    import requests
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    try:
+        slot = requests.post(f"{registry}/api/admin/upload", headers=headers, timeout=15,
+                             json={"org": org, "name": name, "contentType": "application/octet-stream", "fileSize": 5})
+        slot.raise_for_status()
+        info = slot.json()
+        key, url = info["key"], info["uploadUrl"]
+    except Exception as exc:  # noqa: BLE001
+        return f"no upload slot from the registry: {type(exc).__name__}: {str(exc)[:120]}"
+    try:
+        put = requests.put(url, data=b"probe", headers={"Content-Type": "application/octet-stream"}, timeout=60)
+        answer = 200 if put.status_code < 400 else None
+        if answer is None:
+            m = re.search(r"<Code>([^<]+)</Code>(?:.*?<Message>([^<]+)</Message>)?", put.text or "", re.S)
+            answer = f"{put.status_code} {m.group(1)}" + (f": {m.group(2)}" if m and m.group(2) else "") if m else f"{put.status_code} on the write probe"
+    except Exception as exc:  # noqa: BLE001
+        answer = f"write probe: {type(exc).__name__}: {str(exc)[:120]}"
+    try:
+        requests.delete(f"{registry}/api/admin/upload", headers=headers, params={"key": key}, timeout=15)
+    except Exception:  # noqa: BLE001
+        pass                                    # the probe object is five bytes under the model's own key prefix
+    return answer
+
+
 def stream_under_probe(url: str, dest: Path, mbps: float, logfile: Path, probe_every: float = 2.0, probe_limit: float = 5.0):
     """`url` streamed into `dest` at no more than `mbps` MB/s; every `probe_every` seconds each
     shared export must list within `probe_limit` seconds, else the stream stops and the export is
@@ -1028,6 +1061,12 @@ class Model:
             return False
         if self.hub:
             org, name = self.hub.split("/", 1)
+            probe = hub_store_write_probe(org, name, os.environ["NEUROBRIX_API_TOKEN"])
+            if probe != 200:
+                # The store refuses writes: said with the store's own name, before any artifact is streamed.
+                self.mark("upload", False, state="DEFERRED", reason=f"hub object store refuses writes: {probe}; retry when a five-byte write lands", nbx=nbx)
+                log(f"{self.name}: upload DEFERRED — the store refuses writes: {probe}; the artifact is gated and ready, a later pass uploads it")
+                return False
             cmd = [PY, str(FORGE), "replace", "--org", org, "--name", name, nbx]
         else:
             cmd = [PY, str(FORGE), "publish", nbx]

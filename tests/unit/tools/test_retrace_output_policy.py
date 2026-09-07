@@ -180,3 +180,38 @@ def test_every_shared_export_the_probe_lists_is_a_directory_here_or_the_probe_sa
     log = tmp_path / "restore.log"
     assert R.stream_under_probe("http://x", tmp_path / "m.nbx", 1000.0, log, probe_every=0.0) is None
     assert "not-mounted did not list" in log.read_text()
+
+
+def test_the_write_probe_names_the_stores_refusal_before_any_artifact_streams(monkeypatch):
+    import requests
+    calls = []
+
+    class _Slot:
+        def raise_for_status(self): pass
+        def json(self): return {"key": "models/o/n.probe.nbx", "uploadUrl": "http://store/put"}
+
+    class _Put:
+        status_code = 503
+        text = "<Error><Code>SlowDownWrite</Code><Message>Resource requested is unwritable, please reduce your request rate</Message></Error>"
+    monkeypatch.setattr(requests, "post", lambda *a, **k: calls.append("slot") or _Slot())
+    monkeypatch.setattr(requests, "put", lambda *a, **k: calls.append("put") or _Put())
+    monkeypatch.setattr(requests, "delete", lambda *a, **k: calls.append(("drop", k.get("params"))) or None)
+    answer = R.hub_store_write_probe("o", "n", "t")
+    assert answer == "503 SlowDownWrite: Resource requested is unwritable, please reduce your request rate"
+    assert calls == ["slot", "put", ("drop", {"key": "models/o/n.probe.nbx"})]
+    _Put.status_code = 200
+    assert R.hub_store_write_probe("o", "n", "t") == 200
+
+
+def test_an_upload_is_deferred_by_the_stores_name_when_the_write_probe_fails(model, monkeypatch):
+    m = model
+    m.hub = "o/n"
+    m.state["steps"]["build"] = {"ok": True, "nbx": "/x/model.nbx"}
+    monkeypatch.setattr(R.repo_env, "require", lambda name: None)
+    monkeypatch.setenv("NEUROBRIX_API_TOKEN", "t")
+    monkeypatch.setattr(R, "hub_store_health", lambda: 200)
+    monkeypatch.setattr(R, "hub_store_write_probe", lambda org, name, token: "503 SlowDownWrite")
+    monkeypatch.setattr(R, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("nothing must be streamed")))
+    assert m.step_upload() is False
+    st = m.state["steps"]["upload"]
+    assert st["state"] == "DEFERRED" and "SlowDownWrite" in st["reason"]
