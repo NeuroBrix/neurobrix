@@ -228,8 +228,10 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None)
             raise RuntimeError(f"the wrapper computed key {seen!r} for inputs synthesized from {key!r}: the census "
                                f"and the kernel disagree — nothing certified for this key")
         oracle = oracle_box.get("v")
+        t_or = time.time()
         if oracle is None:                              # the key matched: now the fp64 oracle is worth computing
             oracle = oracle_box["v"] = oracle_fn()
+        state["t_oracle"] = round(time.time() - t_or, 3)
         configs = list(upstream_prune(tuner, kwargs))
         names = list(tuner.arg_names)
         out_idx = next((i for i, n in enumerate(names) if n == out_name), None)
@@ -256,6 +258,7 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None)
         results: List[Tuple[Any, float]] = []
         excluded: List[Dict[str, Any]] = []
         unrun: List[Any] = []
+        t_runs = time.time()
         for cfg in configs:
             poison()
             try:
@@ -272,10 +275,13 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None)
         if not results:
             raise RuntimeError(f"{qual} at {key!r}: every config diverges from the fp64 oracle beyond {tolerance:g} "
                                f"({len(excluded)} excluded, {len(unrun)} could not run)")
+        state["t_runs"] = round(time.time() - t_runs, 3)
         timed: List[Tuple[Any, float, float]] = []
+        t_bench = time.time()
         for cfg, dev in results:
             ms = bench(lambda: tuner.fn.run(*args, **{**kwargs, **cfg.all_kwargs()}))
             timed.append((cfg, dev, float(ms)))
+        state["t_bench"] = round(time.time() - t_bench, 3)
         timed.sort(key=lambda t: t[2])
         best, dev, ms = timed[0]
         state.update({"config": atc._config_to_dict(best), "deviation": dev, "best_ms": ms,
@@ -311,7 +317,8 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None)
              "engine_version": _engine_version(), "backend": _backend(), "shape": list(key),
              "deviation": state["deviation"], "tolerance": tolerance, "oracle": ORACLE, "machine": _machine(),
              "best_ms": state["best_ms"], "second_ms": state["second_ms"], "candidates": state["candidates"],
-             "accepted": state["accepted"], "could_not_run": len(state["unrun"])}
+             "accepted": state["accepted"], "could_not_run": len(state["unrun"]),
+             "seconds": {"oracle": state.get("t_oracle"), "runs": state.get("t_runs"), "bench": state.get("t_bench")}}
     return {"config": state["config"], "proof": proof, "excluded": state["excluded"],
             "could_not_run": state["unrun"], "timings": state["timings"]}
 
@@ -436,6 +443,7 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
             log(f"[certify] {C.kernel_short(qual)} {dtype} {C.describe_key(tuner, key)}: {entry['config']['kwargs']} "
                 f"warps={entry['config']['num_warps']} stages={entry['config']['num_stages']} — deviation {p['deviation']:.2e} "
                 f"(tol {tol:g}), {p['best_ms']:.4f} ms, {p['accepted']}/{p['candidates']} accepted, "
-                f"{len(entry['excluded'])} excluded, {time.time() - t0:.1f} s")
+                f"{len(entry['excluded'])} excluded, {time.time() - t0:.1f} s "
+                f"(oracle {p['seconds']['oracle']}, runs {p['seconds']['runs']}, bench {p['seconds']['bench']})")
     summary["seconds"] = round(time.time() - summary["started"], 1)
     return summary
