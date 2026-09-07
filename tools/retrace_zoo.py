@@ -828,7 +828,8 @@ class Model:
         res = self.outputs("old")
         ok = all(v["rc"] == 0 or v.get("n_a") for v in res.values())
         unrunnable = None
-        if not ok and restored and all(v["rc"] != 0 and not v.get("n_a") for v in res.values()):
+        on_hub_object = restored or bool((self.state["steps"].get("previous_object") or {}).get("ok"))
+        if not ok and on_hub_object and all(v["rc"] != 0 and not v.get("n_a") for v in res.values()):
             # The hub's object does not run on this engine (canary, 2026-09-07: the June-09 build
             # users download — "ZERO FALLBACK: No allocation for component 'perception_encoder'").
             # That is a fact about the old arm, recorded by name; the chain goes on and the gate
