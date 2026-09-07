@@ -1222,6 +1222,28 @@ def lock_holder_alive(text: str) -> bool:
         return True
     return Path(f"/proc/{m.group(1)}").exists()
 
+
+def held_by_retrace(retrace_out: Path) -> set:
+    """Every model of a retrace campaign whose recorded gate is not a PASS: listed in its
+    models file (phase lists) or holding a state.json without a PASS gate — its cache slot may
+    change under a measurement (a restore of the previous object, an install of the new
+    build), so a lever or a proof must not measure it until it is gated."""
+    held = set()
+    for lst in retrace_out.glob("*_models.txt"):
+        held |= {m.strip() for m in lst.read_text().replace("\n", ",").split(",") if m.strip()}
+    for st in retrace_out.glob("*/state.json"):
+        try:
+            steps = json.loads(st.read_text()).get("steps") or {}
+        except (json.JSONDecodeError, OSError):
+            continue
+        gate = steps.get("gate") or {}
+        if str(gate.get("verdict", "")).startswith("PASS") and gate.get("ok") is True:
+            held.discard(st.parent.name)
+        else:
+            held.add(st.parent.name)
+    return held
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -1238,6 +1260,9 @@ def main():
     r.add_argument("--timeout", type=int, default=7200)
     r.add_argument("--extra", default="", help="extra request args, space separated (e.g. '--num-frames 9')")
     r.add_argument("--skip-done", action="store_true")
+    r.add_argument("--hold-from", default=None, metavar="RETRACE_OUT",
+                   help="skip every model a retrace campaign at this path still holds (listed in its phase files or "
+                        "carrying a state without a PASS gate): its cache slot may change under the measurement")
     r.add_argument("--probe", action="store_true",
                    help="the R33 lever: one complete --triton request per model under the sys.modules probe")
     r.add_argument("--src", default=None, help="a frozen worktree's src for the probe's PYTHONPATH (default: this repo)")
@@ -1299,9 +1324,14 @@ def main():
     if not args.machine and args.gpu is None:
         ap.error("--gpu <n> for the pinned stage, or --machine for the whole rig")
     gpu = None if args.machine else args.gpu
+    held = held_by_retrace(Path(args.hold_from)) if args.hold_from else set()
     for m in models:
         if args.skip_done and (out / m / "result.json").exists():
             print(f"[zoo] {m}: done, skipped"); continue
+        if m in held:
+            # A container still short of its retrace gate: its cache slot moves (a restore, an
+            # install) — CogVideoX-2b's proof row straddled an install at 14:34 on 2026-09-07.
+            print(f"[zoo] {m}: held by the retrace campaign (no PASS gate yet in {args.hold_from}), skipped", flush=True); continue
         lock = out / m / ".running"
         if lock.exists():
             held = lock.read_text().strip()
