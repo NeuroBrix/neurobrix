@@ -1070,6 +1070,10 @@ class Model:
             cmd = [PY, str(FORGE), "replace", "--org", org, "--name", name, nbx]
         else:
             cmd = [PY, str(FORGE), "publish", nbx]
+        if self.args.upload_mbps > 0:
+            # The store writes each block as it arrives and answered a 548 MB/s burst with
+            # SlowDownWrite after the whole artifact had streamed (2026-09-07): paced.
+            cmd += ["--max-write-mbps", str(self.args.upload_mbps)]
         rc = run(cmd, self.env(tree=False), self.dir / "upload.log", 7200, cwd=str(REPO / "forge"))
         self.mark("upload", rc == 0, rc=rc, command=" ".join(cmd[2:]))
         if rc == 0 and nbx and Path(nbx).exists():
@@ -1110,6 +1114,8 @@ def main():
     ap.add_argument("--extra", default="", help="extra request args for the family protocol")
     ap.add_argument("--timeout", type=int, default=7200)
     ap.add_argument("--trace-timeout", type=int, default=14400)
+    ap.add_argument("--upload-mbps", type=float, default=10.0,
+                    help="pace an upload to this many MB/s (0 = unpaced); the store refuses a burst its drive cannot absorb")
     ap.add_argument("--restore-mbps", type=float, default=10.0,
                     help="the rate cap on a read of the hub's previous object (its store shares the exports' storage)")
     ap.add_argument("--stop-at", default=None, help="stop after this step (e.g. gate)")

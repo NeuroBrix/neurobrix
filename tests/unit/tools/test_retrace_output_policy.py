@@ -23,7 +23,7 @@ import precision_zoo_campaign as C  # noqa: E402
 def _args(tmp):
     return types.SimpleNamespace(out=str(tmp / "out"), backup=str(tmp / "backup"), models_root=str(tmp / "builds"),
                                  tmp=str(tmp / "tmp"), gpu=None, src=None, extra=[], timeout=10, trace_timeout=10,
-                                 restore_mbps=10.0)
+                                 restore_mbps=10.0, upload_mbps=10.0)
 
 
 def _manifest(path: Path, created: str):
@@ -215,3 +215,17 @@ def test_an_upload_is_deferred_by_the_stores_name_when_the_write_probe_fails(mod
     assert m.step_upload() is False
     st = m.state["steps"]["upload"]
     assert st["state"] == "DEFERRED" and "SlowDownWrite" in st["reason"]
+
+
+def test_an_upload_is_paced_through_the_toolchains_flag(model, monkeypatch):
+    m = model
+    m.hub = "o/n"
+    m.state["steps"]["build"] = {"ok": True, "nbx": "/x/model.nbx"}
+    monkeypatch.setattr(R.repo_env, "require", lambda name: None)
+    monkeypatch.setenv("NEUROBRIX_API_TOKEN", "t")
+    monkeypatch.setattr(R, "hub_store_health", lambda: 200)
+    monkeypatch.setattr(R, "hub_store_write_probe", lambda org, name, token: 200)
+    seen = {}
+    monkeypatch.setattr(R, "run", lambda cmd, *a, **k: seen.setdefault("cmd", [str(c) for c in cmd]) and 1)
+    m.step_upload()
+    assert seen["cmd"][-2:] == ["--max-write-mbps", "10.0"] and "replace" in seen["cmd"]
