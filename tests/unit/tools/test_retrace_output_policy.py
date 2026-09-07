@@ -210,7 +210,7 @@ def test_an_upload_is_deferred_by_the_stores_name_when_the_write_probe_fails(mod
     monkeypatch.setattr(R.repo_env, "require", lambda name: None)
     monkeypatch.setenv("NEUROBRIX_API_TOKEN", "t")
     monkeypatch.setattr(R, "hub_store_health", lambda: 200)
-    monkeypatch.setattr(R, "hub_store_write_probe", lambda org, name, token: "503 SlowDownWrite")
+    monkeypatch.setattr(R, "hub_store_write_probe", lambda org, name, token, **k: "503 SlowDownWrite")
     monkeypatch.setattr(R, "export_readers", lambda cmdlines=None: [])
     monkeypatch.setattr(R, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("nothing must be streamed")))
     assert m.step_upload() is False
@@ -225,7 +225,7 @@ def test_an_upload_is_paced_through_the_toolchains_flag(model, monkeypatch):
     monkeypatch.setattr(R.repo_env, "require", lambda name: None)
     monkeypatch.setenv("NEUROBRIX_API_TOKEN", "t")
     monkeypatch.setattr(R, "hub_store_health", lambda: 200)
-    monkeypatch.setattr(R, "hub_store_write_probe", lambda org, name, token: 200)
+    monkeypatch.setattr(R, "hub_store_write_probe", lambda org, name, token, **k: 200)
     monkeypatch.setattr(R, "export_readers", lambda cmdlines=None: [])
     seen = {}
     monkeypatch.setattr(R, "run", lambda cmd, *a, **k: seen.setdefault("cmd", [str(c) for c in cmd]) and 1)
@@ -238,7 +238,7 @@ def _armed_for_upload(m, monkeypatch):
     monkeypatch.setattr(R.repo_env, "require", lambda name: None)
     monkeypatch.setenv("NEUROBRIX_API_TOKEN", "t")
     monkeypatch.setattr(R, "hub_store_health", lambda: 200)
-    monkeypatch.setattr(R, "hub_store_write_probe", lambda org, name, token: 200)
+    monkeypatch.setattr(R, "hub_store_write_probe", lambda org, name, token, **k: 200)
     monkeypatch.setattr(R, "export_readers", lambda cmdlines=None: [])
 
 
