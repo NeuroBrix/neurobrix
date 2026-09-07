@@ -366,3 +366,16 @@ def test_the_hubs_object_supersedes_a_backup_of_a_build_that_was_never_the_hubs(
     po = m.state["steps"]["previous_object"]
     assert po["ok"] and po["supersedes"]["local_build"] == "LOCAL-06-02" and po["supersedes"]["hub_object"] == "HUB-06-09"
     assert m.state["steps"]["backup"]["supersedes"]["hub_object"] == "HUB-06-09"
+
+
+def test_a_verdict_on_other_arms_than_the_stamped_ones_is_re_gated(model):
+    """Parakeet 08:32: both arms re-run under the frozen state, the 07:32 PASS still counted as
+    done and the chain moved on without a verdict on the new arms."""
+    m = model
+    m.state["autotune_freeze"] = {"snapshot": "S2"}
+    m.state["steps"]["gate"] = {"ok": True, "verdict": "PASS", "policy": R.POLICY, "autotune": {"snapshot": "S1"}}
+    assert m.done("gate") is False
+    m.state["steps"]["gate"]["autotune"] = {"snapshot": "S2"}
+    assert m.done("gate") is True
+    m.state["steps"]["gate"]["policy"] = None
+    assert m.done("gate") is False
