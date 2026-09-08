@@ -215,6 +215,14 @@ def run_once(args, arm_env: dict, tag: str, outdir: Path) -> dict:
     wall = time.time() - t0
     after = gpu_state(args.gpu)
     rate = rate_from_progress(str(prog), args.warm) if r.returncode == 0 else None
+    if r.returncode != 0:
+        # A rep that failed keeps its reason beside the row: without it a hole in the table says
+        # only "not measured" and the next campaign repeats the run to find out (TinyLlama's
+        # long-context row, 2026-09-08, whose 2,048-token window the prompt overflowed).
+        why = (r.stdout or "") + (r.stderr or "")
+        (outdir / f"why_{tag}.log").write_text(why[-4000:])
+        print(f"  {tag} FAILED rc={r.returncode}: " +
+              next((l for l in reversed(why.splitlines()) if l.strip()), "no output")[:200], flush=True)
     sha = ""
     op = outdir / f"out_{tag}.txt"
     if op.exists():
