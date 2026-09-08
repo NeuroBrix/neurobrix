@@ -205,10 +205,15 @@ def main() -> int:
                 "--max-tokens", str(args.max_tokens)]
     if args.audio:
         sys.argv += ["--audio", args.audio]
-    elif args.input_image:
+    if args.input_image:
         sys.argv += ["--input-image", args.input_image]
-    else:
-        sys.argv += ["--prompt", args.prompt]
+    if args.prompt is not None and (not (args.audio or args.input_image) or "--prompt" not in args.extra):
+        # an audio_llm request carries its audio AND its prompt
+        if args.audio or args.input_image:
+            if args.prompt != ap.get_default("prompt"):
+                sys.argv += ["--prompt", args.prompt]
+        else:
+            sys.argv += ["--prompt", args.prompt]
     import shlex
     sys.argv += shlex.split(args.extra)
     if args.engine == "triton":
