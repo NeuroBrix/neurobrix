@@ -774,15 +774,16 @@ class PrismSolver:
                     )
                     total_allocated = persistent_weights + persistent_max_act + max_transient
                 elif strat_name == "single_gpu":
-                    # Must match _try_single_gpu's budget, which follows the loading_mode the
-                    # plan will carry: eager keeps every weight resident, and only the
-                    # serve-cold fallback makes this rung lazy.
-                    if getattr(self, '_serve_cold_fallback', False):
-                        total_allocated = max(m.total_bytes for m in component_memory.values())
-                    else:
+                    # Hot/cold budget must match _try_single_gpu's decision
+                    serve_mode = getattr(self, '_serve_mode', False)
+                    if serve_mode:
+                        # Hot: all weights resident + peak activations
                         total_weights = sum(m.weight_bytes for m in component_memory.values())
                         max_act = max((m.activation_bytes for m in component_memory.values()), default=0)
                         total_allocated = total_weights + max_act
+                    else:
+                        # Cold: peak of one component at a time
+                        total_allocated = max(m.total_bytes for m in component_memory.values())
                 else:
                     # Allocation-aware GPU residency: a component mapped to
                     # zero3:* keeps its weights on CPU pinned memory — only
@@ -1869,37 +1870,26 @@ class PrismSolver:
     ) -> Optional[Tuple[Dict, List[DeviceState]]]:
         """All components on largest GPU.
 
-        A plan is budgeted under the memory model it will be EXECUTED under, and for this
-        rung that model is the one `loading_mode` carries:
-
-        - `eager` (every request but one): sum(all_weights) + max(activation). SINGLE_GPU
-          is an eager strategy (`structure._EAGER_STRATEGIES`), so the plan carries
-          `loading_mode="eager"` and `SingleGPUStrategy.unload_weights` returns without
-          unloading — every component's weights stay resident for the whole request.
-        - `lazy` (the serve-cold fallback alone, where an eager-capable strategy is forced
-          to `loading_mode="lazy"`): max(weight + activation) over the components, which is
-          then true because the flow handler does unload between them.
-
-        The cold `run` path used to take the second budget while executing under the first:
-        one component at a time was asserted in a comment and never honoured by the
-        executor. A model whose weights SUM past the card while its largest single component
-        fits was accepted here and OOMed later, at whichever allocation came next — never at
-        the decision that caused it. If one-at-a-time residency is what a model needs, that
-        is `single_gpu_lifecycle` or `lazy_sequential`, and the cascade reaches them by
-        itself once this rung stops accepting what it cannot run.
+        Budget depends on serve_mode:
+        - Hot (serve): sum(all_weights) + max(activations) — all weights resident
+        - Cold (run): max(component_weights + component_activations) — one at a time
         """
         if not devices:
             return None
 
         largest = devices[0]
+        serve_mode = getattr(self, '_serve_mode', False)
 
-        if getattr(self, '_serve_cold_fallback', False):
-            total_required = max((m.weight_mb + m.activation_mb for _, m in sorted_comps),
-                                 default=0)
-        else:
+        if serve_mode:
+            # Hot mode: all weights resident + peak activation of any single component
             total_weights_mb = sum(m.weight_mb for _, m in sorted_comps)
             max_activation_mb = max((m.activation_mb for _, m in sorted_comps), default=0)
             total_required = total_weights_mb + max_activation_mb
+        else:
+            # Cold mode: only one component in VRAM at a time
+            peaks = [(n, m.weight_mb + m.activation_mb) for n, m in sorted_comps]
+            _, max_peak = max(peaks, key=lambda x: x[1])
+            total_required = max_peak
 
         needs_kv = getattr(self, '_needs_kv_cache', False)
         overhead_pct = 0.0 if needs_kv else 0.05
