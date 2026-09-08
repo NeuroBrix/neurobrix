@@ -77,14 +77,10 @@ KNOWN_OPEN: dict[str, str] = {
         "same shape as loader.py's sync guard.",
     'neurobrix/core/strategies/base.py::if target_device.startswith("cuda:"):':
         'CUDA-only device transfer helper living under the vendorless layer.',
-    'neurobrix/core/strategies/triton/base.py::if target_device.startswith("cuda:"):':
-        'to_cuda/to_cpu only: the Triton strategy family under core/ is CUDA-only by construction.',
     'neurobrix/core/strategies/triton/base.py::if isinstance(device, str) and device.startswith("cuda"):':
-        'CUDA-only synchronize_device.',
-    'neurobrix/core/strategies/triton/lazy_sequential.py::if device.startswith("cuda"):':
-        'raises ZERO FALLBACK unless a CUDA device resolves, so lazy_sequential cannot run on Apple on the Triton branch at all - and Prism assigns that strategy to models this machine is expected to serve.',
-    'neurobrix/core/strategies/triton/lazy_sequential.py::if ex_device.startswith("cuda"):':
-        'second half of the same guard.',
+        'sets the device index before syncing only when the string starts with "cuda". '
+        'Harmless on Apple, which has one device, but on a multi-GPU AMD box a hip:1 '
+        'component syncs whatever device was current instead of its own.',
 }
 
 

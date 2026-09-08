@@ -18,6 +18,13 @@ from typing import Dict, Any, Optional
 from ..base import ExecutionStrategy
 
 
+# Device-string prefixes that name an accelerator rather than host memory.
+# Prism emits these from DeviceSpec.brand.to_device_prefix(): cuda for NVIDIA,
+# hip for AMD, xpu for Intel, mps for Apple, tt for Tenstorrent. Matching only
+# "cuda" here excluded every one of the others.
+_ACCELERATOR_PREFIXES = frozenset({"cuda", "hip", "xpu", "mps", "tt", "musa", "npu"})
+
+
 class TritonStrategy(ExecutionStrategy):
     """ExecutionStrategy whose tensor transfers + device sync are
     NBXTensor-native (no torch). Subclass for each placement strategy on
@@ -33,12 +40,17 @@ class TritonStrategy(ExecutionStrategy):
         non-NBXTensor (e.g. a python scalar carried in an input dict) is
         returned unchanged. No torch."""
         if hasattr(tensor, "to_cuda") and hasattr(tensor, "_device"):
-            if target_device == "cpu":
+            prefix, _, idx = str(target_device).partition(":")
+            if prefix == "cpu":
                 return tensor.to_cpu()
-            if target_device.startswith("cuda:"):
-                return tensor.to_cuda(int(target_device.split(":", 1)[1]))
-            if target_device == "cuda":
-                return tensor.to_cuda(0)
+            if prefix in _ACCELERATOR_PREFIXES:
+                # `to_cuda` is the GENERIC accelerator move in this layer, not
+                # an NVIDIA one: DeviceAllocator dispatches per backend and an
+                # NBXTensor reports `_device == 'cuda'` on Metal as much as on
+                # CUDA. Matching only the literal "cuda:" left every hip:/mps:
+                # device falling through to `return tensor` — a silent no-op
+                # that looks like a successful transfer.
+                return tensor.to_cuda(int(idx) if idx.isdigit() else 0)
         return tensor
 
     def transfer_dict(
