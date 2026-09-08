@@ -730,6 +730,23 @@ def prepare(kernel, args, kwargs) -> Tuple[_Prepared, Dict[str, Any]]:
 _TRACE = os.environ.get("NBX_LAUNCH_TRACE")     # a file: one line per launch, "<kernel>\t<grid>"
 
 
+# The decode replay (`neurobrix.triton.replay`) records one step's FINAL launches and
+# replays them without the Python band above — the engine's fast decode path, worth 8x
+# on a text row. It used to record by wrapping Triton's `CompiledKernel.run`; nothing on
+# the Triton branch calls that any more (R33, third peel 2026-09-05), so the recorder
+# needs a seam HERE or it records a step with no kernel in it. Armed for the window of
+# one recorded step and cleared after: the hot path pays one global read and a None test.
+_RECORDER = None
+
+
+def set_launch_recorder(fn) -> None:
+    """Record every launch this launcher issues: `fn(prepared, grid, params)`, with the
+    launch as the DRIVER will take it — the resolved kernel, three extents, and the
+    parameters already packed. `None` stops recording."""
+    global _RECORDER
+    _RECORDER = fn
+
+
 def launch(kernel, grid, *args, **kwargs):
     """The one entry point: `launch(kernel, grid, *args, **constexprs_and_options)`."""
     prep, bound_args = prepare(kernel, args, kwargs)
@@ -744,6 +761,8 @@ def launch(kernel, grid, *args, **kwargs):
     if drv.wants_scratch_params:
         params.append(("ptr", 0))    # global scratch (Triton ≥ 3.6 ABI)
         params.append(("ptr", 0))    # profile scratch
+    if _RECORDER is not None:
+        _RECORDER(prep, grid, params)
     drv.launch(prep.function, grid, prep.block, prep.shared, _stream(), params)
 
 
