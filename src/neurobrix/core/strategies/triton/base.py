@@ -50,7 +50,25 @@ class TritonStrategy(ExecutionStrategy):
                 # CUDA. Matching only the literal "cuda:" left every hip:/mps:
                 # device falling through to `return tensor` — a silent no-op
                 # that looks like a successful transfer.
-                return tensor.to_cuda(int(idx) if idx.isdigit() else 0)
+                target = int(idx) if idx.isdigit() else 0
+                src_idx = getattr(tensor, "_device_idx", None)
+                if getattr(tensor, "_device", None) != "cpu" and src_idx is not None \
+                        and int(src_idx) != target:
+                    # A move BETWEEN cards goes through the engine's shared
+                    # cross-device path. The device-to-device memcpy `to_cuda`
+                    # issues is queued on the TARGET card's stream and does not
+                    # wait for the SOURCE card's, so a peer copy issued right
+                    # after a component's kernels reads a buffer they may still
+                    # be writing — wrong values, no error. The shared helper
+                    # waits on the source, enables the peer link, materialises a
+                    # non-dense window and carries the strides; the op-by-op
+                    # paths have used it since the DeepSeek-Coder-V2-Lite and
+                    # Qwen3-Omni faults, and this hand-off went on calling
+                    # `to_cuda` directly.
+                    from neurobrix.triton.device_transfer import (
+                        transfer_tensor as _peer_transfer)
+                    return _peer_transfer(tensor, target)
+                return tensor.to_cuda(target)
         return tensor
 
     def transfer_dict(
