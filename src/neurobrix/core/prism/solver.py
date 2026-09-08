@@ -1886,10 +1886,25 @@ class PrismSolver:
             max_activation_mb = max((m.activation_mb for _, m in sorted_comps), default=0)
             total_required = total_weights_mb + max_activation_mb
         else:
-            # Cold mode: only one component in VRAM at a time
-            peaks = [(n, m.weight_mb + m.activation_mb) for n, m in sorted_comps]
-            _, max_peak = max(peaks, key=lambda x: x[1])
-            total_required = max_peak
+            # Cold mode. The budget has to be the one this strategy is
+            # EXECUTED under, not the most generous one available.
+            # SingleGPUStrategy is eager (AllocationStrategy.SINGLE_GPU is in
+            # _EAGER_STRATEGIES): `execute_component` adds each component to
+            # `self._loaded_components` and never unloads it, so once every
+            # component has run they are all resident. Budgeting the largest
+            # component alone accepted plans that then hold the SUM -- on a
+            # 24 GB device an image pipeline was accepted on a 16663 MB peak
+            # and executes at 28380 MB, an OOM the planner had declared safe.
+            #
+            # Weights are what stay; only one component's ACTIVATION is live
+            # at a time, since components run one after another. So the budget
+            # is sum(weights) + max(activation) -- the same shape as hot mode.
+            # Where the sum fits, nothing changes; where it does not,
+            # single_gpu now declines and the cascade falls through to
+            # lazy_sequential, which budgets a peak AND executes lazily.
+            total_weights_mb = sum(m.weight_mb for _, m in sorted_comps)
+            max_activation_mb = max((m.activation_mb for _, m in sorted_comps), default=0)
+            total_required = total_weights_mb + max_activation_mb
 
         needs_kv = getattr(self, '_needs_kv_cache', False)
         overhead_pct = 0.0 if needs_kv else 0.05

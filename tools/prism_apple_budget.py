@@ -108,6 +108,19 @@ def main() -> int:
             # sum is what has to be resident; for a LAZY one the peak is
             # max(component), so comparing the sum to the device budget would
             # condemn a plan that is correct. Compare the right one.
+            # Each strategy has its OWN residency model and a generic
+            # sum-vs-peak test cannot stand in for all of them:
+            #   single_gpu            eager, everything stays -> sum
+            #   lazy_sequential       one component at a time  -> max
+            #   single_gpu_lifecycle  persistent + one transient at a time,
+            #                         which needs the solver's own
+            #                         persistent/transient split -- NOT the
+            #                         sum, and not the max either.
+            # Judging a strategy this tool does not model would be a made-up
+            # number, so it says so instead.
+            _MODELLED = {"single_gpu": "sum", "lazy_sequential": "max",
+                         "zero3": "max", "cpu_streaming": "max"}
+            rec["residency_modelled"] = plan.strategy in _MODELLED
             per_comp = [v["memory_mb"] for v in rec["placement"].values()] or [0.0]
             on_device = [v["memory_mb"] for v in rec["placement"].values()
                          if not any(d.startswith("cpu") for d in v["devices"])] or [0.0]
@@ -116,7 +129,8 @@ def main() -> int:
             rec["resident_basis"] = ("sum of device-resident components (eager)"
                                      if plan.loading_mode == "eager"
                                      else "largest device-resident component (lazy)")
-            rec["fits_device_budget"] = rec["resident_mb"] <= budget_mb
+            rec["fits_device_budget"] = (rec["resident_mb"] <= budget_mb
+                                         if rec["residency_modelled"] else None)
             rec["sum_all_components_mb"] = round(sum(per_comp), 1)
             # On UNIFIED memory the offload rungs buy nothing: a component
             # placed on "cpu" sits in the same 24 GB the device is using. The
@@ -127,7 +141,8 @@ def main() -> int:
                    if any(d.startswith("cpu") for d in v["devices"])]
             rec["offloaded_to_host_mb"] = round(sum(off), 1)
             rec["unified_resident_mb"] = round(rec["resident_mb"] + sum(off), 1)
-            rec["fits_unified_budget"] = rec["unified_resident_mb"] <= budget_mb
+            rec["fits_unified_budget"] = (rec["unified_resident_mb"] <= budget_mb
+                                          if rec["residency_modelled"] else None)
             # A component whose ACTIVATION dominates can be planned with
             # tiling, which cuts what is actually resident. Without these two
             # fields "resident_mb exceeds the budget" is not a finding, it is
@@ -182,9 +197,9 @@ def main() -> int:
             md.append(f"| {r['model']} | {r['cache_gb']} | {r['family']} | "
                       f"{ic.get('height','?')}x{ic.get('width','?')} ({ic.get('source','?')}) | "
                       f"`{r['strategy']}` | {r['loading_mode']} | {r['resident_mb']} | "
-                      f"{'yes' if r['fits_device_budget'] else '**NO**'} | "
+                      f"{'not modelled' if r.get('fits_device_budget') is None else ('yes' if r['fits_device_budget'] else '**NO**')} | "
                       f"{r['offloaded_to_host_mb']} | "
-                      f"{'yes' if r['fits_unified_budget'] else '**NO**'} |")
+                      f"{'not modelled' if r.get('fits_device_budget') is None else ('yes' if r['fits_unified_budget'] else '**NO**')} |")
     md += ["", "**resident MB** is the sum of device-resident components for an",
            "eager plan and the largest one for a lazy plan — `total_memory_mb`",
            "is a sum whatever the strategy, so comparing IT to the budget would",
