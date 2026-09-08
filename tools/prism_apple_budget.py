@@ -118,19 +118,53 @@ def main() -> int:
             #                         sum, and not the max either.
             # Judging a strategy this tool does not model would be a made-up
             # number, so it says so instead.
-            _MODELLED = {"single_gpu": "sum", "lazy_sequential": "max",
-                         "zero3": "max", "cpu_streaming": "max"}
+            #   single_gpu            eager, everything stays        -> sum
+            #   lazy_sequential       one component at a time        -> max
+            #   single_gpu_lifecycle  persistent stay, one transient
+            #                         at a time -> sum(persistent) + max(transient),
+            #                         which is the budget it is ACCEPTED on and,
+            #                         since the executor now releases transients,
+            #                         also the one it runs under.
+            _MODELLED = {"single_gpu", "lazy_sequential", "zero3",
+                         "cpu_streaming", "single_gpu_lifecycle"}
             rec["residency_modelled"] = plan.strategy in _MODELLED
+            rec["transient_components"] = list(
+                getattr(plan, "transient_components", None) or [])
             per_comp = [v["memory_mb"] for v in rec["placement"].values()] or [0.0]
             on_device = [v["memory_mb"] for v in rec["placement"].values()
                          if not any(d.startswith("cpu") for d in v["devices"])] or [0.0]
-            rec["resident_mb"] = (round(sum(on_device), 1)
-                                  if plan.loading_mode == "eager" else round(max(on_device), 1))
-            rec["resident_basis"] = ("sum of device-resident components (eager)"
-                                     if plan.loading_mode == "eager"
-                                     else "largest device-resident component (lazy)")
+            if plan.strategy == "single_gpu_lifecycle":
+                _tr = set(rec["transient_components"])
+                _pers = [v["memory_mb"] for k, v in rec["placement"].items()
+                         if k not in _tr
+                         and not any(d.startswith("cpu") for d in v["devices"])]
+                _tran = [v["memory_mb"] for k, v in rec["placement"].items()
+                         if k in _tr
+                         and not any(d.startswith("cpu") for d in v["devices"])]
+                rec["resident_mb"] = round(sum(_pers) + (max(_tran) if _tran else 0.0), 1)
+                rec["resident_basis"] = (
+                    f"persistent ({', '.join(sorted(set(rec['placement']) - _tr)) or 'none'}) "
+                    f"+ largest transient ({', '.join(sorted(_tr)) or 'none'})")
+            elif plan.loading_mode == "eager":
+                rec["resident_mb"] = round(sum(on_device), 1)
+                rec["resident_basis"] = "sum of device-resident components (eager)"
+            else:
+                rec["resident_mb"] = round(max(on_device), 1)
+                rec["resident_basis"] = "largest device-resident component (lazy)"
+            # A TILED component is not resident at its full extent -- the
+            # whole point of tiling is that only a tile is live. This tool
+            # reads ComponentAllocation.memory_mb, which is the untiled
+            # figure, so for a tiled component the number below is an UPPER
+            # BOUND and a "NO" is not a finding. Say so rather than let it
+            # read as one.
             rec["fits_device_budget"] = (rec["resident_mb"] <= budget_mb
                                          if rec["residency_modelled"] else None)
+            if rec["fits_device_budget"] is False and rec.get("tiled_components"):
+                rec["fits_device_budget"] = None
+                rec["verdict_withheld"] = (
+                    "over the budget on the UNTILED figure, but "
+                    f"{', '.join(rec['tiled_components'])} is tiled and this "
+                    "tool does not model tiled residency — no verdict")
             rec["sum_all_components_mb"] = round(sum(per_comp), 1)
             # On UNIFIED memory the offload rungs buy nothing: a component
             # placed on "cpu" sits in the same 24 GB the device is using. The
@@ -197,7 +231,7 @@ def main() -> int:
             md.append(f"| {r['model']} | {r['cache_gb']} | {r['family']} | "
                       f"{ic.get('height','?')}x{ic.get('width','?')} ({ic.get('source','?')}) | "
                       f"`{r['strategy']}` | {r['loading_mode']} | {r['resident_mb']} | "
-                      f"{'not modelled' if r.get('fits_device_budget') is None else ('yes' if r['fits_device_budget'] else '**NO**')} | "
+                      f"{('withheld' if r.get('verdict_withheld') else 'not modelled') if r.get('fits_device_budget') is None else ('yes' if r['fits_device_budget'] else '**NO**')} | "
                       f"{r['offloaded_to_host_mb']} | "
                       f"{'not modelled' if r.get('fits_device_budget') is None else ('yes' if r['fits_unified_budget'] else '**NO**')} |")
     md += ["", "**resident MB** is the sum of device-resident components for an",

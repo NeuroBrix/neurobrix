@@ -995,6 +995,8 @@ class RuntimeExecutor:
             topology=self.pkg.topology,
             runtime_package=self.pkg,
             loading_mode=loading_mode,
+            transient_components=frozenset(
+                getattr(self.plan, "transient_components", None) or ()),
             mode=self.mode,
         )
 

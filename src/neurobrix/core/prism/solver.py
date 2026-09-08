@@ -198,6 +198,14 @@ class ExecutionPlan:
     selection_reason: str = ""
     kv_cache_plan: Optional[KVCachePlan] = None
     cpu_ram_mb: int = 0  # CPU RAM budget for offload strategies
+    # Components the lifecycle strategy classified as TRANSIENT (used once per
+    # request) rather than persistent (re-entered every step). Empty for every
+    # other strategy. `single_gpu_lifecycle` is accepted on a budget of
+    # `persistent weights + one transient at a time`, and that budget is only
+    # true if the executor actually releases a transient after it has run --
+    # so the classification has to travel with the plan instead of dying in
+    # the solver, which is where it used to stop.
+    transient_components: List[str] = field(default_factory=list)
     # Op-level tiling — per-component plan emitted when a single op's
     # output+workspace exceeds the assigned GPU's safe VRAM budget. Picked
     # up by RuntimeExecutor to wire op_uid interceptors on the component's
@@ -840,6 +848,9 @@ class PrismSolver:
         # in _place_component) — keep only entries whose final allocation
         # actually landed on a GPU (drop any stale flag from a rejected
         # strategy attempt where the component ended up elsewhere).
+        if chosen_strategy == AllocationStrategy.SINGLE_GPU_LIFECYCLE.value:
+            plan.transient_components = list(getattr(self, "_lifecycle_transient", []) or [])
+
         _ct = getattr(self, "_component_tiling", {}) or {}
         if _ct:
             plan.component_tiling = {
@@ -2012,6 +2023,9 @@ class PrismSolver:
 
         largest = devices[0]
         persistent, transient = self._classify_lifecycle(container)
+        # Kept for the plan: the budget below is only honest if the executor
+        # is told which components it may release.
+        self._lifecycle_transient = sorted(transient)
 
         persistent_mb = sum(
             comp_mem[n].weight_mb + comp_mem[n].activation_mb
