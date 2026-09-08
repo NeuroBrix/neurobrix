@@ -982,7 +982,10 @@ class Model:
             gen = (json.loads((CACHE / self.name / "topology.json").read_text()).get("flow") or {}).get("generation") or {}
         except (OSError, json.JSONDecodeError):
             pass
-        steps, guidance = gen.get("num_inference_steps"), gen.get("guidance_scale")
+        # The request's pin wins over the container's declaration: the arms render the length the
+        # request names (the campaign's bound), and the vendor must render the same one.
+        steps = _opt("--steps", gen.get("num_inference_steps"))
+        guidance = _opt("--guidance", gen.get("guidance_scale"))
         snap = next((root / nm for root in (Path("/home/mlops/hf_snapshots"), Path.home() / ".cache" / "neurobrix" / "hf_snapshots")
                      for nm in (self.registry_name, self.name) if (root / nm).is_dir()), None)
         if prompt is None or snap is None:

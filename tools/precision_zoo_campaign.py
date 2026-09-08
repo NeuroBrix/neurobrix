@@ -63,7 +63,15 @@ _REQUEST_BOUND = {"llm": ["--max-tokens", "64", "--temperature", "0"],
                   "vlm": ["--max-tokens", "64", "--temperature", "0"],
                   "audio_llm": ["--max-tokens", "64"],
                   "multimodal": ["--max-tokens", "64", "--temperature", "0"],
-                  "video": ["--steps", "4"]}
+                  "video": ["--steps", "4"],
+                  # image: the two arms of a retrace gate must render the SAME number of steps.
+                  # A container declares its own in `flow.generation`, and a retrace that ADDS
+                  # that declaration changes the length under the comparison: Flex.1-alpha's old
+                  # container rendered 20 (the runtime's default, nothing declared) against the
+                  # new container's 25, and the gate read 17.2 dB — two different renders, not a
+                  # graph difference (2026-09-08). Pinned here for both arms and for the vendor
+                  # render; 20 is what the image rows already ran.
+                  "image": ["--steps", "20"]}
 
 
 def manifest(model: str) -> dict:

@@ -25,6 +25,14 @@ def test_a_video_request_carries_a_bounded_step_count(monkeypatch):
     assert args[:4] == ["--prompt", "a red apple", "--seed", "42"]      # the stimulus is untouched
 
 
+def test_an_image_request_pins_the_step_count_both_arms_render(monkeypatch):
+    """A container declares its own length in `flow.generation`; a retrace that adds that
+    declaration changed it under the comparison (Flex.1-alpha: an old arm at the runtime's 20
+    against a new one at the declared 25, read as 17.2 dB of graph difference)."""
+    args = _args("image", stimulus=["--prompt", "a red apple", "--seed", "42"], monkeypatch=monkeypatch)
+    assert args[args.index("--steps") + 1] == "20"
+
+
 def test_a_family_that_names_the_flag_itself_keeps_its_own_value(monkeypatch):
     args = _args("video", stimulus=["--prompt", "p", "--steps", "20"], monkeypatch=monkeypatch)
     assert args.count("--steps") == 1 and args[args.index("--steps") + 1] == "20"

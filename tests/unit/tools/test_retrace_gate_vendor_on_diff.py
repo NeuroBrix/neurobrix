@@ -50,3 +50,30 @@ def test_reproduction_reuses_a_render_of_the_same_request(tmp_path, monkeypatch)
     assert calls == [], "the render of the same request is reused"
     assert res["old"]["pass"] is False and res["new"]["pass"] is True
     assert R.vendor_verdict(res).startswith("PASS (corrected")
+
+
+def test_the_vendor_renders_the_length_the_request_pins(tmp_path, monkeypatch):
+    """The arms render the request's step count, so the vendor must render it too — its own
+    reading of the container's declaration would compare two different renders."""
+    cache = tmp_path / "cache"; (cache / "m").mkdir(parents=True)
+    (cache / "m" / "topology.json").write_text(json.dumps({"flow": {"generation": {"num_inference_steps": 25, "guidance_scale": 4.0}}}))
+    monkeypatch.setattr(R, "CACHE", cache)
+    monkeypatch.setattr(C, "family_of", lambda n: "image")
+    monkeypatch.setattr(C, "request_args", lambda n, fam, extra: ["--prompt", "p", "--seed", "42", "--steps", "20"])
+    snap = tmp_path / "hf_snapshots" / "m"; snap.mkdir(parents=True)
+    args = types.SimpleNamespace(out=str(tmp_path / "out"), backup=str(tmp_path / "backup"), models_root=str(tmp_path / "builds"),
+                                 tmp=str(tmp_path / "tmp"), gpu=None, src=None, extra=[], timeout=10, trace_timeout=10,
+                                 restore_mbps=10.0, upload_mbps=10.0, vendor_on_diff=True)
+    (tmp_path / "out" / "m").mkdir(parents=True)
+    m = R.Model("m", args); m.registry_name = "m"
+    calls = []
+    def _run(cmd, **k):
+        calls.append(list(cmd)); (m.dir / "vendor_seed42.png").write_bytes(b"png")
+        return types.SimpleNamespace(returncode=0)
+    monkeypatch.setattr(R.subprocess, "run", _run)
+    monkeypatch.setattr(C, "gate", lambda a, b: {"psnr_db": 40.0, "ssim": 0.99, "pass": True, "identical": False})
+    monkeypatch.setattr(R.Path, "is_dir", lambda self: str(self).endswith("/hf_snapshots/m") or Path.__dict__["is_dir"](self))
+    old = {"sequential": {"output": str(m.dir / "old_sequential.png")}}; new = {"sequential": {"output": str(m.dir / "new_sequential.png")}}
+    m.vendor_reproduction(old, new)
+    assert calls and "--steps" in calls[0]
+    assert calls[0][calls[0].index("--steps") + 1] == "20", "the request's pin, not the topology's 25"
