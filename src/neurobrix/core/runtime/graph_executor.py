@@ -1714,12 +1714,28 @@ class GraphExecutor:
             self._dag,
             narrow if narrow is not None else getattr(self, "_narrow_op_uids", ()),
             islands if islands is not None else getattr(self, "_fp32_op_uids", ()))
+        # The dict may still carry the loader's keys (the reconcile renames them
+        # later, at the one place that always did): a graph name is resolved to
+        # its key by exact match, else by the unique key ending with it — the
+        # values are replaced under the keys as they are, nothing is renamed.
+        keys = list(self._weights.keys())
+        by_suffix: dict = {}
+        for k in keys:
+            parts = k.split(".")
+            for i in range(len(parts)):
+                by_suffix.setdefault(".".join(parts[i:]), []).append(k)
         n = 0
         for name in names:
-            w = self._weights.get(name)
+            key = name if name in self._weights else None
+            if key is None:
+                cands = by_suffix.get(name) or []
+                key = cands[0] if len(cands) == 1 else None
+            if key is None:
+                continue
+            w = self._weights.get(key)
             if isinstance(w, NBXTensor) and w.nbx_dtype in (NBXDtype.float16, NBXDtype.bfloat16) \
                     and getattr(w, "_device", "cuda") == "cuda":
-                self._weights[name] = w.to(NBXDtype.float32)
+                self._weights[key] = w.to(NBXDtype.float32)
                 n += 1
         self._fp32_constants_bound = True
         if n:
@@ -3185,10 +3201,12 @@ class GraphExecutor:
 
         self._triton_seq.compile()
 
-        # Weights already loaded as NBXTensor by load_weights(); their keys
-        # reconciled with the graph's, the constants every consumer computes
-        # in fp32 bound in fp32 once (the contract just resolved says which).
-        self._reconcile_weight_keys()
+        # Weights already loaded as NBXTensor by load_weights(). The constants
+        # every consumer computes in fp32 are bound in fp32 here, under the
+        # dict's keys as they are — reconciling the keys here, earlier than the
+        # one place that always did it, renamed the dict under code that still
+        # reads it by the loader's keys (Real-ESRGAN's output turned to noise,
+        # three rows crashed at their first decode op, 2026-09-08 00:45).
         self._bind_fp32_constants(narrow=_narrow, islands=_pins)
         self._triton_seq.bind_weights(self._weights)
 
