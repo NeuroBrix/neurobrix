@@ -99,6 +99,12 @@ from .base import ExecutionStrategy, StrategyContext
 logger = logging.getLogger(__name__)
 
 
+# Device-string prefixes that name a GPU zero3 can ratchet on. One tuple, used
+# both to RESOLVE the execution device and to decide whether to install on it —
+# they disagreed before, and the disagreement was the bug.
+_ZERO3_GPU_PREFIXES = ("cuda", "hip", "xpu", "mps")
+
+
 class Zero3Strategy(ExecutionStrategy):
     """CPU offload with block-wise GPU ratchet pipelining.
 
@@ -143,7 +149,7 @@ class Zero3Strategy(ExecutionStrategy):
                 device_str = alloc_info[0]
             if device_str.startswith("zero3:"):
                 device_str = device_str.split(":", 1)[1]
-            if device_str and device_str.startswith(("cuda", "hip", "xpu", "mps")):
+            if device_str and device_str.startswith(_ZERO3_GPU_PREFIXES):
                 return device_str
         import torch  # the ATen branch's device probe (the triton subclass overrides this method)
         if torch.cuda.is_available():
@@ -254,7 +260,23 @@ class Zero3Strategy(ExecutionStrategy):
             return
         self._pin_cpu_weights(component_name, executor)
         self._pinned_components.add(component_name)
-        if not self.exec_device.startswith("cuda"):
+        # The ratchet installs on any GPU, using the same accelerator set
+        # `_get_exec_device` above already resolves against. Written as
+        # `startswith("cuda")` this contradicted the resolution twelve lines
+        # up: the class picked `mps:0` correctly and then declined to install
+        # on it, so on Apple and AMD the weights were pinned and NOTHING
+        # managed GPU residency — zero3 was selected by Prism (a 31 GB
+        # component was assigned it on mps:0) and then did nothing at all.
+        #
+        # The ratchet's primitives — create_stream / create_event /
+        # record_event / stream_wait_event / destroy_* — are backend-dispatched
+        # through DeviceAllocator and were verified working on Metal before
+        # this guard was widened. The memory counters it also touches are
+        # diagnostics only (NBX_ZERO3_VRAM_LOG), so their accounting does not
+        # gate the mechanism. A backend where a primitive does NOT work now
+        # raises from that primitive, which is a loud failure where the old
+        # guard gave a silent no-op.
+        if not self.exec_device.startswith(_ZERO3_GPU_PREFIXES):
             return
         self._install(component_name, executor)
 
