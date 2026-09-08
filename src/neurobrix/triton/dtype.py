@@ -200,6 +200,43 @@ _SELF_MANAGED_OPS: FrozenSet[str] = frozenset({
 })
 
 
+def fp32_constant_names(dag: dict, narrow_op_uids=(), fp32_op_uids=()) -> set:
+    """The graph's params and buffers whose every consumer computes in fp32 —
+    an AMP_FP32 op the engine wraps fp32-internal, or an op the precision
+    contract islands: the wrap cast each of them to fp32 at EVERY call
+    (whisper-large-v3-turbo: the fp32 wrap's per-call cast of layer_norm's
+    (1280,) weight and bias, 900 a transcription; the copy census of
+    2026-09-08). A consumer the contract NARROWS still pre-casts its inputs
+    (the narrowing is its output's dtype), so its constants qualify alike.
+    Bound in fp32 once at load, the cast the wrap finds nothing to do, the
+    kernel sees the fp32 pointers every certified row ran it with, and the
+    bytes are those of the per-call cast (the same conversion, once). Returns
+    the names without their `param::` / `buffer::` prefix, as the executor
+    keys its weights. `narrow_op_uids` is accepted for the call sites' symmetry
+    with the contract and does not exclude."""
+    islands = set(fp32_op_uids or ())
+    ops = (dag or {}).get("ops") or {}
+    if isinstance(ops, list):
+        ops = {op.get("op_uid", str(i)): op for i, op in enumerate(ops)}
+    consumers: dict = {}
+    for uid, op in ops.items():
+        for tid in op.get("input_tensor_ids") or []:
+            if tid.startswith("param::") or tid.startswith("buffer::"):
+                name = tid.split("::", 1)[1]
+                consumers.setdefault(name, []).append((uid, op.get("op_type", "")))
+    out = set()
+    for name, uses in consumers.items():
+        ok = True
+        for uid, op_type in uses:
+            short = op_type.split("::")[-1]
+            if not (short in AMP_FP32_OPS or uid in islands):
+                ok = False
+                break
+        if ok:
+            out.add(name)
+    return out
+
+
 class TritonDtypeEngine:
     """AMP-driven dtype engine for triton mode. Zero torch dependency.
 
