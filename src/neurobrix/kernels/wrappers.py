@@ -106,7 +106,7 @@ from .ops.copy import copy_forward_kernel
 # === Binary element-wise ===
 
 from .ops.add import add_forward_kernel, add_scalar_kernel, add_scalar_dev_kernel, add_bias_broadcast_kernel
-from .ops.binary_strided import add_strided_nd_kernel, mul_strided_nd_kernel, sub_strided_nd_kernel, div_strided_nd_kernel
+from .ops.binary_strided import add_strided_nd_kernel, mul_strided_nd_kernel, sub_strided_nd_kernel, div_strided_nd_kernel, add_scalar_strided_nd_kernel, mul_scalar_strided_nd_kernel
 from .ops.mul import mul_forward_kernel, mul_scalar_kernel, mul_scalar_dev_kernel
 from .ops.div import div_forward_kernel, div_scalar_kernel, div_scalar_dev_kernel
 from .ops.sub import sub_forward_kernel, rsub_forward_kernel
@@ -635,6 +635,29 @@ def _prepare_binary_strided(a, b):
             _nbx_upload_int64(b_st, a._device_idx), ndim)
 
 
+def _prepare_scalar_strided(a, b):
+    """The tensor-and-host-scalar case with a strided tensor: (tensor, scalar, output, n,
+    shape_buf, strides_buf, NDIM), the tensor read in place by the strided scalar kernel —
+    or None when the flat path applies (a contiguous tensor, or a device-resident 0-d
+    scalar, whose kernel reads it in-register). A chunk of an adaLN vector, `1 + scale` on a
+    (2, 1, 1152) slice of (2, 6, 1152), used to be copied contiguous per modulation."""
+    if _is_scalar(a) and not _is_scalar(b):
+        a, b = b, a
+    if not (_is_scalar(b) and hasattr(a, "_strides")) or a.is_contiguous():
+        return None
+    if isinstance(b, NBXTensor):          # a device-resident 0-d scalar: the *_scalar_dev kernels' path
+        return None
+    ndim = max(a.ndim, 1)
+    if ndim > _NBX_MAX_NDIM:
+        return None
+    shape = tuple(a.shape) or (1,)
+    st = tuple(a._strides) or (0,)
+    _set_device(a)
+    output = NBXTensor.empty(tuple(a.shape), a._dtype, f"cuda:{a._device_idx}")
+    return (a, _to_scalar(b), output, output.numel(),
+            _nbx_upload_int64(shape, a._device_idx), _nbx_upload_int64(st, a._device_idx), ndim)
+
+
 def _prepare_comparison(a, b):
     """Prepare two tensors for a comparison kernel (output is bool).
 
@@ -1125,6 +1148,12 @@ def add(a, b, alpha: float = 1.0) :
             BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
         return output
 
+    sc = _prepare_scalar_strided(a, b)
+    if sc is not None:
+        x, scalar, output, n, shp, x_st, ndim = sc
+        add_scalar_strided_nd_kernel[_1d_grid(n)](x, output, n, float(scalar) * alpha, shp, x_st,
+                                                  BLOCK_SIZE=_EW_BLOCK, NDIM=ndim, num_warps=_EW_WARPS)
+        return output
     strided = _prepare_binary_strided(a, b)
     if strided[0] is not None:
         a, b, output, n, shp, a_st, b_st, ndim = strided
@@ -1259,6 +1288,12 @@ def mul(a, b) :
     cr = _complex_mul(a, b)
     if cr is not None:
         return cr
+    sc = _prepare_scalar_strided(a, b)
+    if sc is not None:
+        x, scalar, output, n, shp, x_st, ndim = sc
+        mul_scalar_strided_nd_kernel[_1d_grid(n)](x, output, n, float(scalar), shp, x_st,
+                                                  BLOCK_SIZE=_EW_BLOCK, NDIM=ndim, num_warps=_EW_WARPS)
+        return output
     strided = _prepare_binary_strided(a, b)
     if strided[0] is not None:
         a, b, output, n, shp, a_st, b_st, ndim = strided
