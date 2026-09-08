@@ -22,6 +22,7 @@ def rms_norm_forward_kernel(
     scale_by_weight: tl.constexpr,
     BLOCK_SIZE_BATCH: tl.constexpr,
     BLOCK_SIZE_FEAT: tl.constexpr,
+    SATURATE_F16: tl.constexpr = False,   # the protected fp16 store: finite values clamp to ±65504
 ):
     """RMS normalization forward.
 
@@ -51,5 +52,14 @@ def rms_norm_forward_kernel(
         weight = tl.load(weight_ptr + feat_offset, mask=feat_mask)
         output *= weight
 
+    if SATURATE_F16:
+        # The store narrows to fp16: the same protected conversion the dtype
+        # engine's cast copy applied when this kernel stored fp32 and the wrap
+        # cast the result (copy_kernel's expression) — an fp16 stream with
+        # outliers past 65504 (VibeVoice's Qwen2, 2026-09-08) clamps instead
+        # of overflowing to inf.
+        is_finite = (output == output) & (output != float("inf")) & (output != float("-inf"))
+        clamped = tl.minimum(tl.maximum(output, -65504.0), 65504.0)
+        output = tl.where(is_finite, clamped, output)
     tl.store(output_ptr, output,
              mask=batch_mask[:, None] & feat_mask[None, :])

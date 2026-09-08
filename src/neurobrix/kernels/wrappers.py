@@ -14,7 +14,7 @@ import triton
 
 from .nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, _broadcast_shapes, _set_device, dtype_size
 from .nbx_tensor import DeviceOOMError
-from .nbx_tensor import _upload_int64_array as _nbx_upload_int64, _MAX_NDIM as _NBX_MAX_NDIM
+from .nbx_tensor import _upload_int64_array as _nbx_upload_int64, _MAX_NDIM as _NBX_MAX_NDIM, _saturating_cast as _nbx_saturating_cast
 from .ops._configs import sdpa_block_ceiling as _sdpa_block_ceiling
 
 # Route this module's kernel[grid] sites through the engine's launcher.
@@ -106,7 +106,7 @@ from .ops.copy import copy_forward_kernel
 # === Binary element-wise ===
 
 from .ops.add import add_forward_kernel, add_scalar_kernel, add_scalar_dev_kernel, add_bias_broadcast_kernel
-from .ops.binary_strided import add_strided_nd_kernel, mul_strided_nd_kernel
+from .ops.binary_strided import add_strided_nd_kernel, mul_strided_nd_kernel, sub_strided_nd_kernel, div_strided_nd_kernel
 from .ops.mul import mul_forward_kernel, mul_scalar_kernel, mul_scalar_dev_kernel
 from .ops.div import div_forward_kernel, div_scalar_kernel, div_scalar_dev_kernel
 from .ops.sub import sub_forward_kernel, rsub_forward_kernel
@@ -1299,6 +1299,13 @@ def div(a, b, rounding_mode=None) :
         raise RuntimeError(
             f"ZERO FALLBACK: aten::div rounding_mode '{rounding_mode}' "
             "is not a known ATen mode (floor/trunc/None).")
+    strided = _prepare_binary_strided(a, b)
+    if strided[0] is not None:
+        a, b, output, n, shp, a_st, b_st, ndim = strided
+        div_strided_nd_kernel[_1d_grid(n)](a, b, output, n, shp, a_st, b_st,
+                                           BLOCK_SIZE=_EW_BLOCK, NDIM=ndim, num_warps=_EW_WARPS)
+        return output
+    _, a, b = strided
     a, b, output, n, dev_ctx, scalar = _prepare_binary(a, b)
     if scalar == "dev":
         div_scalar_dev_kernel[_1d_grid(n)](a, b, output, n, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
@@ -1312,6 +1319,13 @@ def div(a, b, rounding_mode=None) :
 def sub(a, b, alpha: float = 1.0) :
     if (isinstance(a, NBXTensor) and a.is_complex()) or (isinstance(b, NBXTensor) and b.is_complex()):
         return _complex_addsub(a, b, alpha, is_sub=True)
+    strided = _prepare_binary_strided(a, b)
+    if strided[0] is not None:
+        a, b, output, n, shp, a_st, b_st, ndim = strided
+        sub_strided_nd_kernel[_1d_grid(n)](a, b, output, n, alpha, shp, a_st, b_st,
+                                           BLOCK_SIZE=_EW_BLOCK, NDIM=ndim, num_warps=_EW_WARPS)
+        return output
+    _, a, b = strided
     a, b, output, n, dev_ctx, scalar = _prepare_binary(a, b)
     if scalar == "dev":
         add_scalar_dev_kernel[_1d_grid(n)](a, b, output, n, -float(alpha), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
@@ -1535,6 +1549,7 @@ def rms_norm(x, weight, eps=1e-6, epsilon=None, out_dtype=None):
         output_2d.stride(0), output_2d.stride(1),
         eps,
         scale_by_weight=has_weight,
+        SATURATE_F16=_nbx_saturating_cast(NBXDtype.float32, out_dt),
         num_warps=4,
     )
     return output_2d.view_as(x)
