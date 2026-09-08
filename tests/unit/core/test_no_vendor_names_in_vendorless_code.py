@@ -38,62 +38,53 @@ _COMPLETE_SET = {"cuda", "hip", "xpu", "mps"}
 
 ROOT = Path(__file__).resolve().parents[3] / "src" / "neurobrix" / "core"
 
+# Keys are "<file>::<the line's own text>", never a line number: a waiver
+# keyed on a number silently follows whatever moves into that line, and the
+# first edit elsewhere in the file invalidates every entry below it.
+#
 # A guard that is CORRECT as written, with the reason. An unexplained waiver
 # is how a rule stops meaning anything, so every entry says why.
+# Keys are "<file>::<the line's own text>", never a line number: a waiver
+# keyed on a number silently follows whatever moves into that line, and the
+# first edit elsewhere in the file invalidates every entry below it.
+#
+# A guard that is CORRECT as written, with the reason. An unexplained
+# waiver is how a rule stops meaning anything, so every entry says why.
 ALLOWED: dict[str, str] = {
-    "neurobrix/core/io/weight_loader.py:834":
-        "gates pinned-memory DMA. The very next branch reads `elif device != "
-        "'cpu'` with the comment 'MPS/XPU: direct .to() transfer (no pinned "
-        "DMA - unified memory)', so every backend is handled and the CUDA "
-        "name only picks the transfer mechanism CUDA needs.",
-    "neurobrix/core/io/weight_loader.py:941":
-        "same shape as :834, for the pytorch-format loader.",
-    "neurobrix/core/io/weight_loader.py:700":
-        "batch sync after non-blocking DMA. Only the CUDA/HIP path issues "
-        "non-blocking transfers; the MPS path uses a blocking .to(), so there "
-        "is nothing outstanding to synchronise.",
-    "neurobrix/core/prism/solver.py:3981":
-        "unreachable. The branch is the `else` of a chain over _EAGER_VALUES "
-        "and _LAZY_VALUES, whose union is every AllocationStrategy value, so "
-        "no valid strategy reaches it. Latent, not live.",
+    'neurobrix/core/io/weight_loader.py::is_cuda = device.startswith("cuda") or device.startswith("hip")':
+        "gates pinned-memory DMA. The next branch reads `elif device != 'cpu'` with the comment 'MPS/XPU: direct .to() transfer (no pinned DMA - unified memory)', so every backend is handled and the CUDA name only picks the transfer mechanism CUDA needs. Covers both loaders (identical line).",
+    'neurobrix/core/io/weight_loader.py::if any(d.startswith("cuda") or d.startswith("hip") for d in devices_used):':
+        'batch sync after non-blocking DMA. Only the CUDA/HIP path issues non-blocking transfers; the MPS path uses a blocking .to(), so there is nothing outstanding to synchronise.',
+    'neurobrix/core/prism/solver.py::total_gpu_mb = sum(d.capacity_mb for d in devices if d.device_string.startswith("cuda"))':
+        'unreachable: it is the `else` of a chain over _EAGER_VALUES and _LAZY_VALUES, whose union is every AllocationStrategy value. Latent.',
 }
 
 # A guard that is WRONG on non-CUDA hardware, recorded with what it costs.
 # These do not fail the test -- they are known and tracked -- but a NEW one
-# will, which is the point: the list may shrink, never silently grow.
+# will: the list may shrink, never silently grow.
 KNOWN_OPEN: dict[str, str] = {
-    "neurobrix/core/strategies/zero3.py:257":
-        "`if not self.exec_device.startswith('cuda'): return` - the zero3 "
-        "offload install is a NO-OP on Apple. Prism still selects zero3 (a "
-        "31 GB component was assigned it on mps:0), so the strategy is chosen "
-        "and then does nothing.",
-    "neurobrix/core/runtime/executor.py:1155":
-        "`dev.startswith(('cuda','hip','xpu'))` omits mps, so seen_gpu is "
-        "never true on Apple and the mixed cpu/gpu detection returns False.",
-    "neurobrix/core/prism/solver.py:3270":
-        "collects device strings for cuda:/hip:/xpu: only, so n_devices "
-        "counts 0 on Apple.",
-    "neurobrix/core/io/loader.py:360":
-        "guards torch.cuda.synchronize before timing the transfer. Correct as "
-        "a guard - the call is CUDA-only - but no MPS equivalent is issued, so "
-        "the elapsed time is measured before the transfer has completed.",
-    "neurobrix/core/io/loader.py:378":
-        "same shape as :360.",
-    "neurobrix/core/io/weight_loader.py:422":
-        "same shape as loader.py:360.",
-    "neurobrix/core/strategies/base.py:253":
-        "CUDA-only device transfer helper living under the vendorless layer.",
-    "neurobrix/core/strategies/triton/base.py:38":
-        "to_cuda/to_cpu only - the Triton strategy family under core/ is "
-        "CUDA-only by construction.",
-    "neurobrix/core/strategies/triton/base.py:65":
-        "CUDA-only synchronize_device.",
-    "neurobrix/core/strategies/triton/lazy_sequential.py:67":
-        "raises ZERO FALLBACK unless a CUDA device resolves, so lazy_sequential "
-        "cannot run on Apple at all on the Triton branch - and Prism assigns "
-        "that strategy to models this machine is expected to serve.",
-    "neurobrix/core/strategies/triton/lazy_sequential.py:71":
-        "second half of the same guard.",
+    'neurobrix/core/strategies/zero3.py::if not self.exec_device.startswith("cuda"):':
+        'the zero3 offload install is a NO-OP on Apple. Prism still selects zero3 (a 31 GB component was assigned it on mps:0), so the strategy is chosen and then does nothing.',
+    "neurobrix/core/runtime/executor.py::elif dev.startswith(('cuda', 'hip', 'xpu')):":
+        'omits mps, so seen_gpu is never true on Apple and the mixed cpu/gpu detection returns False.',
+    'neurobrix/core/prism/solver.py::if d.startswith("cuda:") or d.startswith("hip:") or d.startswith("xpu:"):':
+        'collects device strings for cuda:/hip:/xpu: only, so n_devices counts 0 on Apple.',
+    'neurobrix/core/io/loader.py::if device.startswith("cuda"):':
+        'guards torch.cuda.synchronize before timing the transfer. Correct as a guard, but no MPS equivalent is issued, so elapsed is measured before the transfer has completed.',
+    'neurobrix/core/io/loader.py::if device.startswith("cuda") or device.startswith("hip"):':
+        'same shape as the line above.',
+    'neurobrix/core/io/weight_loader.py::if device.startswith("cuda") or device.startswith("hip"):':
+        "same shape as loader.py's sync guard.",
+    'neurobrix/core/strategies/base.py::if target_device.startswith("cuda:"):':
+        'CUDA-only device transfer helper living under the vendorless layer.',
+    'neurobrix/core/strategies/triton/base.py::if target_device.startswith("cuda:"):':
+        'to_cuda/to_cpu only: the Triton strategy family under core/ is CUDA-only by construction.',
+    'neurobrix/core/strategies/triton/base.py::if isinstance(device, str) and device.startswith("cuda"):':
+        'CUDA-only synchronize_device.',
+    'neurobrix/core/strategies/triton/lazy_sequential.py::if device.startswith("cuda"):':
+        'raises ZERO FALLBACK unless a CUDA device resolves, so lazy_sequential cannot run on Apple on the Triton branch at all - and Prism assigns that strategy to models this machine is expected to serve.',
+    'neurobrix/core/strategies/triton/lazy_sequential.py::if ex_device.startswith("cuda"):':
+        'second half of the same guard.',
 }
 
 
@@ -145,11 +136,11 @@ def test_vendorless_layer_does_not_branch_on_one_vendor():
     for path in sorted(ROOT.rglob("*.py")):
         rel = path.relative_to(ROOT.parents[1]).as_posix()
         for lineno, shape, vendor in _findings_in(path):
-            key = f"{rel}:{lineno}"
+            line = path.read_text().splitlines()[lineno - 1].strip()
+            key = f"{rel}::{line}"
             if key in ALLOWED or key in KNOWN_OPEN:
                 continue
-            line = path.read_text().splitlines()[lineno - 1].strip()
-            findings.append(f"{key}  {shape} on {vendor!r}\n      {line}")
+            findings.append(f"{rel}:{lineno}  {shape} on {vendor!r}\n      {line}")
 
     assert not findings, (
         "the vendorless layer branches on a single vendor's device prefix.\n"
@@ -172,7 +163,7 @@ def test_every_waiver_and_known_item_still_points_at_a_real_line():
     for path in sorted(ROOT.rglob("*.py")):
         rel = path.relative_to(ROOT.parents[1]).as_posix()
         for lineno, _shape, _vendor in _findings_in(path):
-            live.add(f"{rel}:{lineno}")
+            live.add(f"{rel}::{path.read_text().splitlines()[lineno - 1].strip()}")
 
     stale = sorted((set(ALLOWED) | set(KNOWN_OPEN)) - live)
     assert not stale, (
