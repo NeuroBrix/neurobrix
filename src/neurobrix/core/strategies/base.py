@@ -48,6 +48,14 @@ class StrategyContext:
     # Note: "persistent" is an alias for "eager" for backward compatibility
     loading_mode: str = "lazy"
 
+    # Components Prism classified as TRANSIENT — used once per request rather
+    # than re-entered every step. Empty for every strategy but the lifecycle
+    # one, whose acceptance budget is `persistent weights + one transient at a
+    # time`. An eager strategy releases these after use and keeps the rest;
+    # without this list "eager" means "release nothing", and the budget the
+    # plan was accepted under is not the budget it runs under.
+    transient_components: frozenset = frozenset()
+
     # Execution mode: "compiled" | "triton" | "triton_sequential". Drives
     # get_strategy()'s pytorch-vs-triton dispatch so the triton branch can
     # run NBXTensor-native strategies (zero torch) while compiled keeps the
