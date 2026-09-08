@@ -140,3 +140,57 @@ def div_strided_nd_kernel(
     x = tl.load(x_ptr + x_off, mask=mask)
     y = tl.load(y_ptr + y_off, mask=mask)
     tl.store(output_ptr + offsets, x / y, mask=mask)
+
+
+@triton.jit
+def add_scalar_strided_nd_kernel(
+    x_ptr, output_ptr,
+    n_elements,
+    scalar,
+    shape_ptr,
+    x_stride_ptr,
+    BLOCK_SIZE: tl.constexpr,
+    NDIM: tl.constexpr,
+):
+    """out = x + scalar, x read by its strides, out contiguous (add_scalar_kernel's expression)."""
+    pid = tl.program_id(0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    remaining = offsets
+    x_off = tl.zeros_like(offsets)
+    for i in tl.static_range(NDIM):
+        dim = NDIM - 1 - i
+        d = tl.load(shape_ptr + dim)
+        xs = tl.load(x_stride_ptr + dim)
+        idx = remaining % d
+        remaining = remaining // d
+        x_off = x_off + idx * xs
+    x = tl.load(x_ptr + x_off, mask=mask)
+    tl.store(output_ptr + offsets, x + scalar, mask=mask)
+
+
+@triton.jit
+def mul_scalar_strided_nd_kernel(
+    x_ptr, output_ptr,
+    n_elements,
+    scalar,
+    shape_ptr,
+    x_stride_ptr,
+    BLOCK_SIZE: tl.constexpr,
+    NDIM: tl.constexpr,
+):
+    """out = x * scalar, x read by its strides, out contiguous (mul_scalar_kernel's expression)."""
+    pid = tl.program_id(0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+    remaining = offsets
+    x_off = tl.zeros_like(offsets)
+    for i in tl.static_range(NDIM):
+        dim = NDIM - 1 - i
+        d = tl.load(shape_ptr + dim)
+        xs = tl.load(x_stride_ptr + dim)
+        idx = remaining % d
+        remaining = remaining // d
+        x_off = x_off + idx * xs
+    x = tl.load(x_ptr + x_off, mask=mask)
+    tl.store(output_ptr + offsets, x * scalar, mask=mask)

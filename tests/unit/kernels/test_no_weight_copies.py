@@ -434,3 +434,27 @@ def test_rms_norm_stores_fp16_through_the_protected_conversion():
     got, exp = _d2h(out), _d2h(ref)
     assert np.isfinite(got).all() and got.max() == 65504.0 and got.min() == -65504.0
     assert np.array_equal(got, exp)
+
+
+@pytest.mark.parametrize("op", ["add", "mul"])
+def test_a_strided_tensor_with_a_host_scalar_is_read_by_its_strides(op):
+    """`1 + scale` on a chunk of the adaLN vector — a (2, 1, 48) slice of (2, 6, 48) — used to be
+    copied contiguous first; the strided scalar kernel reads it in place, with the flat scalar
+    kernel's bytes. A scalar on the left is normalised the same way."""
+    from neurobrix.kernels.ops.add import add_scalar_kernel
+    from neurobrix.kernels.ops.mul import mul_scalar_kernel
+    rng = np.random.default_rng(15)
+    base = rng.standard_normal((2, 6, 48)).astype(np.float16)
+    chunk = NBXTensor.from_numpy(base)[:, 2:3, :]                    # strides (288, 48, 1), not dense
+    assert not chunk.is_contiguous()
+    fn = W.add if op == "add" else W.mul
+    with _Launches() as l:
+        out = fn(1.0, chunk) if op == "add" else fn(chunk, 0.5)
+    assert l.names == [f"{op}_scalar_strided_nd_kernel"], l.names
+    dense = NBXTensor.from_numpy(np.ascontiguousarray(base[:, 2:3, :]))
+    ref = NBXTensor.from_numpy(np.zeros((2, 1, 48), dtype=np.float16)); n = ref.numel()
+    if op == "add":
+        L.launch(add_scalar_kernel, (n // 1024 + 1,), dense, ref, n, 1.0, BLOCK_SIZE=1024, num_warps=4)
+    else:
+        L.launch(mul_scalar_kernel, (n // 1024 + 1,), dense, ref, n, 0.5, BLOCK_SIZE=1024, num_warps=4)
+    assert np.array_equal(_d2h(out), _d2h(ref))
