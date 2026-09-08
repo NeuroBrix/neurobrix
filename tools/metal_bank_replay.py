@@ -241,6 +241,7 @@ def _run_in_dtype(op: str, payload, meta, path, dtype):
     try:
         arrays = [np.ascontiguousarray(payload[k].astype(dtype))
                   for k in sorted(payload.files) if k.startswith("in")]
+        _require_inputs(op, meta, arrays, path)
         oracle = _fp64_reference(op, arrays)
         handler = _resolve_handler(op, wrappers)
         kwargs = _with_reduction_axis(op, kwargs, arrays, payload)
@@ -265,6 +266,32 @@ def _run_in_dtype(op: str, payload, meta, path, dtype):
     return row
 
 
+
+def _require_inputs(op, meta, arrays, path=None):
+    """Refuse an entry that records no inputs, by name and with the reason.
+
+    `cat/cat3` sits in the bank's `_unlaunched/` directory with an empty
+    `launched` list and no `in*` array at all: on CUDA the op produced its
+    output without launching a kernel, so the bank has the result and the
+    fp64 oracle but nothing to call the engine WITH. Replaying it anyway
+    reached the handler with an empty input list and died inside numpy
+    ("operands could not be broadcast together with shapes (0,) (9,5)"), a
+    message that names neither the entry nor the reason and reads like an
+    engine failure. It is not one.
+    """
+    if arrays:
+        return
+    where = ""
+    if path is not None and "_unlaunched" in str(path):
+        where = " (it sits in the bank's `_unlaunched/` directory)"
+    raise NotImplementedError(
+        f"the bank records no inputs for {op!r} tag "
+        f"{meta.get('tag')!r}{where}: it has the CUDA output and the fp64 "
+        f"oracle but nothing to call the engine with, and "
+        f"{len(meta.get('launched') or [])} kernels were launched for it on "
+        f"CUDA. There is no call to replay")
+
+
 def run_op(op: str, payload, meta):
     """Run one bank entry through the engine's own wrappers."""
     from neurobrix.kernels.nbx_tensor import NBXTensor
@@ -272,6 +299,7 @@ def run_op(op: str, payload, meta):
 
     arrays = [np.ascontiguousarray(payload[k])
               for k in sorted(payload.files) if k.startswith("in")]
+    _require_inputs(op, meta, arrays)
     inputs = [NBXTensor.from_numpy(a) for a in arrays]
     kwargs = _with_reduction_axis(op, dict(meta.get("kwargs") or {}),
                                   arrays, payload)
