@@ -63,8 +63,6 @@ ALLOWED: dict[str, str] = {
 # These do not fail the test -- they are known and tracked -- but a NEW one
 # will: the list may shrink, never silently grow.
 KNOWN_OPEN: dict[str, str] = {
-    'neurobrix/core/strategies/zero3.py::if not self.exec_device.startswith("cuda"):':
-        'the zero3 offload install is a NO-OP on Apple. Prism still selects zero3 (a 31 GB component was assigned it on mps:0), so the strategy is chosen and then does nothing.',
     "neurobrix/core/runtime/executor.py::elif dev.startswith(('cuda', 'hip', 'xpu')):":
         'omits mps, so seen_gpu is never true on Apple and the mixed cpu/gpu detection returns False.',
     'neurobrix/core/prism/solver.py::if d.startswith("cuda:") or d.startswith("hip:") or d.startswith("xpu:"):':
