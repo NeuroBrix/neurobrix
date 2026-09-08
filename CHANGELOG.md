@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Prism: a single-GPU plan is budgeted under the memory model it will be executed under. The rung
+  accepted a cold run by counting only the largest component, on the premise that one component is
+  in VRAM at a time; the strategy is eager and never unloads, so a model whose weights sum past the
+  card while its largest component fits was accepted and then ran out of memory later, at whichever
+  allocation came next rather than at the decision that caused it. Such a model now falls through to
+  a strategy that does load one component at a time. On the local zoo of 56 models this moves six
+  model-and-card pairs and no others.
 - The audio_llm flow emits its per-token decode trajectory like the autoregressive and encoder_decoder
   flows do, on both engines. It kept its own decode loop and wrote none, so a run of a listening model
   succeeded and left nothing to measure a decode rate from, and every audio row of a throughput table
