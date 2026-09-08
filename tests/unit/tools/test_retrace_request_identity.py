@@ -104,3 +104,19 @@ def test_an_output_step_of_another_request_is_not_done(model):
     assert m.done("old_outputs") is False
     m.state["steps"]["old_outputs"]["request"] = m.current_request()
     assert m.done("old_outputs") is True
+
+
+def test_a_step_that_fails_the_same_way_again_is_counted(model):
+    """A loop that re-runs a list until every row has a verdict cannot tell an intermittent
+    failure from a standing one, and one standing failure holds the campaign's end marker — and
+    the chains waiting on it. The count is the evidence the loop reads."""
+    m = model
+    m.mark("trace", False, error="CUDA error: an illegal memory access was encountered")
+    assert m.state["steps"]["trace"]["failures"] == 1
+    m.mark("trace", False, error="CUDA error: an illegal memory access was encountered")
+    m.mark("trace", False, error="CUDA error: an illegal memory access was encountered")
+    assert m.state["steps"]["trace"]["failures"] == 3
+    m.mark("trace", False, error="another error")                 # another cause: the count restarts
+    assert m.state["steps"]["trace"]["failures"] == 1
+    m.mark("trace", True)
+    assert "failures" not in m.state["steps"]["trace"]
