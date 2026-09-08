@@ -140,25 +140,17 @@ def test_fp16_activation_is_widened_in_registers_not_materialised(M):
     assert np.array_equal(_d2h(out), _d2h(ref))
 
 
-def test_rms_norm_widens_on_load_and_stores_the_dtype_asked():
-    """The fp32-internal wrap used to copy a half input to fp32 before rms_norm; the kernel
-    widens its loads, so the fp32 store carries the same numbers with no input copy. A store
-    asked in fp16 exists and matches the cast-back bytes on this data, but the engine's wrap
-    no longer asks it: the fp16-output compilation rounds a rare element one ulp apart
-    (VibeVoice, feat 2048, 2026-09-08) — the cast back stays a copy."""
+def test_rms_norm_keeps_the_pre_cast_input_the_certified_rows_ran_with():
+    """The kernel widening an fp16 input on load is another compilation than the fp32 input:
+    at T5's shapes 12–15 % of the elements differ (PixArt-XL-2, 2026-09-08), so rms_norm does
+    not declare `_nbx_widens_on_load` and the dtype engine's wrap pre-casts as it always did.
+    The kernel's fp32 store from an fp32 input is the certified form."""
+    assert not getattr(W.rms_norm, "_nbx_widens_on_load", False)
     rng = np.random.default_rng(7)
     x16 = NBXTensor.from_numpy((rng.standard_normal((6, 256)) * 0.5).astype(np.float16))
     w = NBXTensor.from_numpy((1.0 + rng.standard_normal(256) * 0.1).astype(np.float16))
-    ref32 = W.rms_norm(x16.to(NBXDtype.float32), w)                  # the former path: materialised fp32 input
-    with _Count() as c:
-        out32 = W.rms_norm(x16, w, out_dtype=NBXDtype.float32)
-    assert c.copies == 0 and out32._dtype == NBXDtype.float32
-    assert np.array_equal(_d2h(out32), _d2h(ref32))
-    ref16 = ref32.to(NBXDtype.float16)                                 # the former cast back
-    with _Count() as c:
-        out16 = W.rms_norm(x16, w, out_dtype=NBXDtype.float16)
-    assert c.copies == 0 and out16._dtype == NBXDtype.float16
-    assert np.array_equal(_d2h(out16), _d2h(ref16))
+    ref32 = W.rms_norm(x16.to(NBXDtype.float32), w)
+    assert ref32._dtype == NBXDtype.float32 and np.isfinite(_d2h(ref32)).all()
 
 
 def test_the_fp32_internal_wrap_asks_a_widening_wrapper_for_its_output_dtype(monkeypatch):

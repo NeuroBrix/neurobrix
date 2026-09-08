@@ -1590,7 +1590,12 @@ def rms_norm(x, weight, eps=1e-6, epsilon=None, out_dtype=None):
     return output_2d.view_as(x)
 
 
-rms_norm._nbx_widens_on_load = True      # the dtype engine's fp32-internal wrap: no pre-cast, `out_dtype` instead
+# NOT `_nbx_widens_on_load`: the kernel widening an fp16 INPUT on load is another
+# compilation than the fp32 input the certified rows ran it with — 12–15 % of the
+# elements differ at T5's shapes (PixArt-XL-2, the machine-set gate of 2026-09-08),
+# invisible on TinyLlama whose stream reaches rms_norm in fp32. The dtype engine's
+# wrap pre-casts as it always did; `out_dtype` stays for callers that store fp32.
+rms_norm._nbx_widens_on_load = False
 
 
 # ===========================================================================
