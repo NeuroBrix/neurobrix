@@ -183,6 +183,10 @@ def run_once(args, arm_env: dict, tag: str, outdir: Path) -> dict:
     # triton branch. Mirrors the existing ARM_ENGINE=ollama pattern.
     cmd = ["python3", "-u", "-m", "neurobrix", "run",
            "--hardware", args.hardware, "--model", args.model,
+           # A family that listens takes its audio beside the prompt: the decode rate of an
+           # audio_llm row is a text rate like any other, and the harness could not measure one
+           # (2026-09-08). The file is the caller's; nothing is assumed from the family.
+           *(["--audio", args.audio] if args.audio else []),
            "--prompt", args.prompt, "--max-tokens", str(args.max_tokens),
            "--temperature", args.temperature,
            "--output", str(outdir / f"out_{tag}.txt")]
@@ -381,6 +385,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True)
     ap.add_argument("--prompt")
+    ap.add_argument("--audio", help="a media file the family requires beside the prompt (audio_llm)")
     ap.add_argument("--prompt-file")
     ap.add_argument("--max-tokens", type=int, default=60)
     ap.add_argument("--temperature", default="0")
