@@ -873,7 +873,18 @@ class Model:
                 return False                   # a verdict on other arms than the stamped ones: re-gate
         return True
     def mark(self, step, ok, **info):
-        self.state["steps"][step] = {"ok": ok, "at": time.strftime("%Y-%m-%dT%H:%M:%S"), **info}
+        # A step that fails the SAME way again is counted: a loop that re-runs a list until every
+        # row has a verdict cannot tell an intermittent failure from a standing one, and a single
+        # standing one holds the whole campaign's end marker — and with it the chains that wait on
+        # it (deepseek-moe-16b-chat's trace, an illegal memory access at every attempt, would have
+        # held phase B's marker for sixty attempts on 2026-09-08). The count is evidence, not a
+        # verdict: the loop reads it to call a refusal stable, the summary shows it.
+        prev = self.state["steps"].get(step) or {}
+        entry = {"ok": ok, "at": time.strftime("%Y-%m-%dT%H:%M:%S"), **info}
+        if ok is not True:
+            same = prev.get("ok") is not True and str(prev.get("error")) == str(info.get("error"))
+            entry["failures"] = (prev.get("failures", 0) + 1) if same else 1
+        self.state["steps"][step] = entry
         self.state_path.write_text(json.dumps(self.state, indent=1))
 
     # -- environment -------------------------------------------------------
