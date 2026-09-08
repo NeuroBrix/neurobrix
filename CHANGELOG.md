@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- The audio_llm flow emits its per-token decode trajectory like the autoregressive and encoder_decoder
+  flows do, on both engines. It kept its own decode loop and wrote none, so a run of a listening model
+  succeeded and left nothing to measure a decode rate from, and every audio row of a throughput table
+  came back without one. Observability only, no numerical effect.
 - Triton engine: the decode replay records the launches again, so a text decode runs its step as one
   CUDA graph instead of walking the per-op Python path at every token. The replay recorded a step by
   watching Triton's launcher; since the engine launches through its own, it was recording steps with no
