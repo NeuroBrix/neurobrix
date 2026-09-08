@@ -141,9 +141,11 @@ def test_fp16_activation_is_widened_in_registers_not_materialised(M):
 
 
 def test_rms_norm_widens_on_load_and_stores_the_dtype_asked():
-    """The fp32-internal wrap used to copy a half input to fp32 before rms_norm and copy the
-    fp32 result back; the kernel widens its loads and stores in the dtype asked, so the same
-    numbers come out of one store — no copy either side."""
+    """The fp32-internal wrap used to copy a half input to fp32 before rms_norm; the kernel
+    widens its loads, so the fp32 store carries the same numbers with no input copy. A store
+    asked in fp16 exists and matches the cast-back bytes on this data, but the engine's wrap
+    no longer asks it: the fp16-output compilation rounds a rare element one ulp apart
+    (VibeVoice, feat 2048, 2026-09-08) — the cast back stays a copy."""
     rng = np.random.default_rng(7)
     x16 = NBXTensor.from_numpy((rng.standard_normal((6, 256)) * 0.5).astype(np.float16))
     w = NBXTensor.from_numpy((1.0 + rng.standard_normal(256) * 0.1).astype(np.float16))
@@ -175,8 +177,11 @@ def test_the_fp32_internal_wrap_asks_a_widening_wrapper_for_its_output_dtype(mon
         eng._wrap_fp32_internal_compute_dtype_output(widening)(x16)
     assert c.copies == 0 and calls[-1][0] is x16 and calls[-1][1] == NBXDtype.float32, "conservative: fp32 asked, no input copy"
     monkeypatch.setattr(_w, "_NBX_ACTIVATIONS_FP16_SAFE", True)
-    eng._wrap_fp32_internal_compute_dtype_output(widening)(x16)
-    assert calls[-1][1] == NBXDtype.float16, "cast back on: the compute dtype asked of the store"
+    x32 = NBXTensor.from_numpy(np.ones((2, 8), dtype=np.float32))
+    with _Count() as c:
+        out = eng._wrap_fp32_internal_compute_dtype_output(widening)(x32)
+    assert calls[-1][1] == NBXDtype.float32 and out.nbx_dtype == NBXDtype.float16 and c.copies == 1, \
+        "cast back on: fp32 stored as every certified row ran it, the cast back a copy (VibeVoice, 2026-09-08)"
 
 
 @pytest.mark.parametrize("dim", [0, 1, 2])
@@ -319,15 +324,17 @@ def test_decode_attention_reads_a_wider_q_in_the_cache_dtype_without_a_copy(monk
     assert np.array_equal(_d2h(out), _d2h(ref))
 
 
-@pytest.mark.parametrize("op", ["add", "mul"])
+@pytest.mark.parametrize("op", ["add", "mul", "sub", "div"])
 def test_a_broadcast_or_strided_binary_operand_is_read_by_its_strides(op):
     """A conv bias (C,) over an (N, C, H, W) image, an adaLN vector (B, 1, D) over (B, S, D),
     and a transposed operand: the strided kernels read them in place — no expand+contiguous
     transient, no copy launched — with the bytes of the flat kernel on materialised operands."""
     from neurobrix.kernels.ops.add import add_forward_kernel
     from neurobrix.kernels.ops.mul import mul_forward_kernel
+    from neurobrix.kernels.ops.sub import sub_forward_kernel
+    from neurobrix.kernels.ops.div import div_forward_kernel
     rng = np.random.default_rng(8)
-    fn = W.add if op == "add" else W.mul
+    fn = {"add": W.add, "mul": W.mul, "sub": W.sub, "div": W.div}[op]
     cases = [
         ((2, 8, 16, 16), (1, 8, 1, 1)),        # a conv bias over the channels
         ((2, 64, 48), (2, 1, 48)),             # an adaLN shift over the tokens
@@ -349,10 +356,10 @@ def test_a_broadcast_or_strided_binary_operand_is_read_by_its_strides(op):
         bm = NBXTensor.from_numpy(np.ascontiguousarray(np.broadcast_to(b_np, a_shape)))
         ref = NBXTensor.from_numpy(np.zeros(a_shape, dtype=np.float16))
         n = ref.numel()
-        if op == "add":
-            L.launch(add_forward_kernel, (n // 1024 + 1,), a, bm, ref, n, 1.0, BLOCK_SIZE=1024, num_warps=4)
+        if op in ("add", "sub"):
+            L.launch(add_forward_kernel if op == "add" else sub_forward_kernel, (n // 1024 + 1,), a, bm, ref, n, 1.0, BLOCK_SIZE=1024, num_warps=4)
         else:
-            L.launch(mul_forward_kernel, (n // 1024 + 1,), a, bm, ref, n, BLOCK_SIZE=1024, num_warps=4)
+            L.launch(mul_forward_kernel if op == "mul" else div_forward_kernel, (n // 1024 + 1,), a, bm, ref, n, BLOCK_SIZE=1024, num_warps=4)
         assert np.array_equal(_d2h(out), _d2h(ref)), (a_shape, b_spec)
 
 
@@ -412,3 +419,18 @@ def test_rope_widens_the_step_tables_once_per_run_not_once_per_layer():
     with _Count() as c:
         W.rope_fused_wrapper(NBXTensor.from_numpy(q_np).transpose(1, 2), NBXTensor.from_numpy(k_np).transpose(1, 2), other, sin_base[:, :, :, :])
     assert c.copies == 1                                    # another base for cos; sin cached
+
+
+def test_rms_norm_stores_fp16_through_the_protected_conversion():
+    """An fp16 stream whose normalised, weighted values pass 65504: the old path stored fp32 and the
+    dtype engine's cast copy clamped finite values to ±65504; the kernel storing fp16 itself must
+    clamp the same way, not overflow to inf (VibeVoice's Qwen2, the final gate of 2026-09-08)."""
+    rng = np.random.default_rng(14)
+    x = (rng.standard_normal((4, 64)) * 0.5).astype(np.float16); x[0, 3] = 60000.0
+    w = np.full(64, 1.0, dtype=np.float16); w[3] = 10000.0; w[5] = -10000.0; x[1, 5] = 60000.0
+    xt, wt = NBXTensor.from_numpy(x), NBXTensor.from_numpy(w)
+    out = W.rms_norm(xt, wt, 1e-6, out_dtype=NBXDtype.float16)
+    ref = W.rms_norm(xt.to(NBXDtype.float32), wt.to(NBXDtype.float32), 1e-6).to(NBXDtype.float16)
+    got, exp = _d2h(out), _d2h(ref)
+    assert np.isfinite(got).all() and got.max() == 65504.0 and got.min() == -65504.0
+    assert np.array_equal(got, exp)

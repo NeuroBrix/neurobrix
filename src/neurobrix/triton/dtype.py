@@ -398,12 +398,17 @@ class TritonDtypeEngine:
         def cast_back_func(*args, **kwargs):
             from neurobrix.kernels import wrappers as _w
             if widens:
-                # The wrapper's kernel widens its loads to fp32 and stores in the dtype asked:
-                # no materialised fp32 input, no cast back — the output is stored once in the
-                # dtype this wrap would have produced (fp32 conservative, compute when the
-                # per-component flag casts back). Byte-identical to the two-copy path.
-                cast_back = force_cast_back or _w._NBX_ACTIVATIONS_FP16_SAFE
-                result = func(*args, out_dtype=(compute if cast_back else NBXDtype.float32), **kwargs)
+                # The wrapper's kernel widens its loads to fp32: no materialised fp32 input.
+                # It STORES fp32, as every certified row ran it — asked to store fp16, the
+                # kernel compiled for an fp16 output pointer schedules its reduction
+                # differently and rounds a rare element one ulp apart (VibeVoice, the final
+                # gate of 2026-09-08: 2 of 75,776 at feat 2048) — so the cast back to the
+                # compute dtype stays the copy it was, exact by construction.
+                result = func(*args, out_dtype=NBXDtype.float32, **kwargs)
+                if ((force_cast_back or _w._NBX_ACTIVATIONS_FP16_SAFE)
+                        and _is_float_tensor(result)
+                        and _get_nbx_dtype(result) != compute):
+                    result = result.to(compute)
                 return result
             new_args = tuple(
                 a.to(NBXDtype.float32).contiguous()
