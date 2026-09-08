@@ -88,31 +88,19 @@ ALLOWED: dict[str, tuple[str, str]] = {
         ("prism",
          "unreachable: it is the `else` of a chain over _EAGER_VALUES and "
          "_LAZY_VALUES, whose union is every AllocationStrategy value. Latent."),
+    'neurobrix/core/io/weight_loader.py::if device.startswith("cuda") or device.startswith("hip"):':
+        ("prism",
+         "batch sync after the shard loads. Only the CUDA/HIP path issues "
+         "non-blocking transfers -- _load_with_pinned_dma sends every other "
+         "backend through a blocking `.to(device)` -- so there is nothing "
+         "outstanding to synchronise. Same reason as the :700 sync; it was "
+         "filed as open by mistake and re-adjudicated."),
 }
 
 # A guard that is WRONG on hardware it excludes, recorded with what it costs.
 # These do not fail the test — they are known and tracked — but a NEW one
 # will: the list may shrink, never silently grow.
 KNOWN_OPEN: dict[str, tuple[str, str]] = {
-    'neurobrix/core/io/loader.py::if device.startswith("cuda"):':
-        ("prism",
-         "guards torch.cuda.synchronize before timing the transfer. Correct as "
-         "a guard, but no MPS equivalent is issued, so elapsed is measured "
-         "before the transfer has completed."),
-    'neurobrix/core/io/loader.py::if device.startswith("cuda") or device.startswith("hip"):':
-        ("prism", "same shape as the line above."),
-    'neurobrix/core/io/weight_loader.py::if device.startswith("cuda") or device.startswith("hip"):':
-        ("prism", "same shape as loader.py's sync guard."),
-    'neurobrix/core/strategies/base.py::if target_device.startswith("cuda:"):':
-        ("prism",
-         "CUDA-only device transfer helper living under the vendorless layer."),
-    'neurobrix/core/strategies/triton/base.py::if isinstance(device, str) and device.startswith("cuda"):':
-        ("prism",
-         "sets the device index before syncing only when the string starts with "
-         "\"cuda\". This is NOT only a non-NVIDIA bug: on any multi-GPU box a "
-         "component on index 1 whose prefix is not matched syncs whatever "
-         "device was current instead of its own, so a multi-card NVIDIA run "
-         "hits it the moment the string carries another prefix."),
 }
 
 
@@ -248,5 +236,8 @@ def test_the_open_list_reports_what_it_excludes():
         _p, _l, named = live[key]
         rows.append(f"{key.split('::')[0]}  [{layer}]  names {sorted(named)}"
                     f"  -> excludes {excluded_vendors(layer, named)}")
-    assert rows, "the open list is empty — nothing left to track"
-    print("\n" + "\n".join(rows))
+    # An empty list is the goal, not a failure. What must never happen is a
+    # site sitting in the list while excluding nobody — that is a different
+    # test, and it is what stops the list rotting into fiction.
+    print("\n" + ("\n".join(rows) if rows
+                  else "open list empty — every flagged site adjudicated"))
