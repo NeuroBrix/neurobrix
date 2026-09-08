@@ -909,6 +909,17 @@ class Model:
         freeze = self.autotune_freeze()
         req = C.request_args(self.name, self.family, list(self.args.extra))
         ext = C.output_ext(self.family, req)
+        # The REQUEST is part of an output's identity. An arm measured on another request — or on
+        # one this state never recorded — is set aside and re-run, never compared with this one's:
+        # the campaign's bound on a denoiser's step count changed the video request on 2026-09-08,
+        # and Wan2.1-T2V's sequential arm sat in the directory at the vendor's 100 steps beside a
+        # triton arm that had timed out, so the gate would have read a DIFFERENT that is only the
+        # request. Same discipline as the precision policy above.
+        self.request_key = " ".join(str(a) for a in req)
+        prev = (self.state["steps"].get(f"{tag}_outputs") or {}).get("request")
+        if prev != self.request_key and any(self.dir.glob(f"{tag}_*")):
+            self.set_aside(f"{tag}_", f"measured on {('the request ' + repr(prev)) if prev else 'a request this state did not record'}; "
+                                      f"this attempt runs '{self.request_key}'")
         res = {}
         for arm, flag in (("sequential", ["--sequential"]), ("triton", ["--triton"])):
             outp = self.dir / f"{tag}_{arm}{ext}"
@@ -1036,6 +1047,7 @@ class Model:
             ok = True
             log(f"{self.name}: the hub's previous object does not run on this engine — {unrunnable[:160]}; the gate judges the new container on its own engines")
         self.mark("old_outputs", ok, runs=res, policy=POLICY, autotune=freeze["snapshot"], unrunnable=unrunnable,
+                  request=getattr(self, "request_key", None),
                   container="the hub's previous object" if restored else "the installed container")
         if restored and self.done("build") and self.done("install"):
             ok = self.reinstall_new() and ok    # the retraced container goes back into the cache
@@ -1257,7 +1269,8 @@ class Model:
         freeze = self.autotune_freeze()
         res = self.outputs("new")
         ok = all(v["rc"] == 0 or v.get("n_a") for v in res.values())
-        self.mark("new_outputs", ok, runs=res, policy=POLICY, autotune=freeze["snapshot"])
+        self.mark("new_outputs", ok, runs=res, policy=POLICY, autotune=freeze["snapshot"],
+                  request=getattr(self, "request_key", None))
         return ok
 
     @staticmethod
