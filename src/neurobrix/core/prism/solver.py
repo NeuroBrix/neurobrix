@@ -845,7 +845,7 @@ class PrismSolver:
             plan.component_tiling = {
                 cn: spec for cn, spec in _ct.items()
                 if cn in plan.components
-                and str(plan.components[cn].device).startswith("cuda")
+                and not str(plan.components[cn].device).startswith("cpu")
             }
 
         # Step 7b: Op-level tiling — detect upsample→conv fusion pairs whose
