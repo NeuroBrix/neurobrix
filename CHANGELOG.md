@@ -36,6 +36,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The per-model kernel sweep artifact (`runtime/autotune/<arch>.json`, `~/.neurobrix/autotune/<model>/`), the refusal of a request without one, and the `--sweep` flag of `run`/`serve`: the certified directory replaces them.
 
 ### Changed
+- Triton engine: a repeat kernel launch pays a cache lookup instead of re-deriving what does not
+  change between launches. The compilation is keyed by its specialisation directly, the device comes
+  from the allocator's cache rather than a runtime round trip, the launch call's argument types are
+  declared once, its C argument buffer is built once per kernel and written in place, and a pointer's
+  element type and a kernel's parameter list are each read once. TinyLlama decode on one V100 at a
+  locked clock: 77.0 to 68.5 ms per token, output unchanged.
 - At load the launcher applies the certified setting for the profile Prism detected, the kernel, the dtype and the shape — no sweep, no consensus; a shape the directory lacks sweeps at runtime with the consensus screen, says so in clear, and keeps the result in the machine's local replay cache (`NEUROBRIX_REPLAY_CACHE`), never in the engine's directory. A runtime exclusion that contradicts a certification is reported as a finding, never silent.
 - The kernel sweep artifact records, per measured shape, the bench's best time, second-best time and their margin beside the chosen config, so a later comparison can tell a clear choice from a near-tie the timer may flip on the next run.
 - `neurobrix drift` classifies the origin of a drift: a kernel site (same dtype, arithmetic — the kernel to read), a policy site (the two engines' precision policies differ there), a discrete decision (an integer tensor — indices, codes, tokens — that flipped on a float deviation below the bound), a carrier (a view, cast, slice or copy), or a scale crossing (the values shrank there — a relu, a gate — and an inherited error crossed the relative bound without a new one); it names the largest float deviation before the origin and says when the origin's producer has no record on the engine side (fused there).
