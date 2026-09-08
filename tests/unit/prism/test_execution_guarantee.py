@@ -103,14 +103,17 @@ def test_missing_cpu_telemetry_does_not_cause_a_refusal(solver):
 
 # --- the plan says what it is doing -----------------------------------------
 
-def test_streaming_forces_lazy_loading():
+def test_streaming_forces_lazy_loading(solver):
     """Eager loading would restore the sum(components) requirement this rung
-    exists to avoid, silently undoing it."""
-    import inspect
+    exists to avoid, silently undoing it.
 
-    source = inspect.getsource(PrismSolver)
-    assert 'if strategy == "cpu_streaming":' in source
-    assert source.count('loading_mode = "lazy"') >= 1
+    Asked of the rule rather than of the source text: the decision moved into
+    `planned_loading_mode`, which is now the one place any budget or plan reads it
+    from, and a test that greps the file cannot tell that from a regression.
+    """
+    assert solver.planned_loading_mode("cpu_streaming") == "lazy"
+    solver._serve_cold_fallback = True
+    assert solver.planned_loading_mode("cpu_streaming") == "lazy"
 
 
 def test_the_plan_carries_a_selection_reason():

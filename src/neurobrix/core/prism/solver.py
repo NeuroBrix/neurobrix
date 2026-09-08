@@ -781,18 +781,19 @@ class PrismSolver:
                         (m.total_bytes for name, m in component_memory.items() if name in transient),
                         default=0
                     )
-                    total_allocated = persistent_weights + persistent_max_act + max_transient
+                    if self.planned_loading_mode("single_gpu_lifecycle") == "lazy":
+                        total_allocated = max(m.total_bytes for m in component_memory.values())
+                    else:
+                        total_allocated = persistent_weights + persistent_max_act + max_transient
                 elif strat_name == "single_gpu":
-                    # Hot/cold budget must match _try_single_gpu's decision
-                    serve_mode = getattr(self, '_serve_mode', False)
-                    if serve_mode:
-                        # Hot: all weights resident + peak activations
+                    # The same rule `_try_single_gpu` budgeted against, read from the same
+                    # place: eager keeps every weight, lazy releases between components.
+                    if self.planned_loading_mode("single_gpu") == "lazy":
+                        total_allocated = max(m.total_bytes for m in component_memory.values())
+                    else:
                         total_weights = sum(m.weight_bytes for m in component_memory.values())
                         max_act = max((m.activation_bytes for m in component_memory.values()), default=0)
                         total_allocated = total_weights + max_act
-                    else:
-                        # Cold: peak of one component at a time
-                        total_allocated = max(m.total_bytes for m in component_memory.values())
                 else:
                     # Allocation-aware GPU residency: a component mapped to
                     # zero3:* keeps its weights on CPU pinned memory — only
@@ -1877,46 +1878,61 @@ class PrismSolver:
     # STRATEGIES
     # =========================================================================
 
+    def planned_loading_mode(self, strategy: str) -> str:
+        """The `loading_mode` the plan for `strategy` WILL carry — one answer, one place.
+
+        A rung's budget is a function of this and of nothing else: `eager` keeps every weight
+        resident, so the budget is sum(weights) + max(activation); `lazy` releases between
+        components, so it is the per-component peak. Both single-GPU rungs came to accept plans
+        they could not run by writing a budget against a residency the executor would not use —
+        one said "one component at a time" in a comment while the strategy never unloaded, the
+        other was promised a swap that `unload_weights` skipped. Read, never assumed.
+
+        Returns "" when the mode is decided by total size at plan time; no rung budgets on that.
+        """
+        if getattr(self, "_serve_cold_fallback", False):
+            return "lazy"          # serve degraded to cold: eager-capable, executed lazily
+        if strategy == "cpu_streaming":
+            return "lazy"          # the whole point of that rung
+        if strategy in {s.value for s in AllocationStrategy if s.is_eager}:
+            return "eager"
+        if strategy in {s.value for s in AllocationStrategy if not s.is_eager}:
+            return "lazy"
+        return ""
+
     def _try_single_gpu(
         self, sorted_comps, comp_mem, devices, shard_sizes, profile, container
     ) -> Optional[Tuple[Dict, List[DeviceState]]]:
-        """All components on largest GPU.
+        """All components on largest GPU, budgeted under the loading_mode the plan will carry.
 
-        Budget depends on serve_mode:
-        - Hot (serve): sum(all_weights) + max(activations) — all weights resident
-        - Cold (run): max(component_weights + component_activations) — one at a time
+        `eager` — every request but the serve-cold fallback: sum(all weights) + max(activation).
+        SINGLE_GPU is in `_EAGER_STRATEGIES`, `execute_component` adds each component to
+        `self._loaded_components` and `unload_weights` returns without unloading, so once every
+        component has run they are all resident. Budgeting the largest component alone accepted
+        plans that then hold the sum — on a 24 GB device an image pipeline was accepted on a
+        16663 MB peak and executes at 28380 MB, an OOM the planner had declared safe; on a 16 GB
+        card four PixArt containers were accepted on 9.2 GB and hold 10.4 GB of weights.
+
+        `lazy` — the serve-cold fallback, where an eager-capable rung is forced to
+        `loading_mode="lazy"` and the flow handler does unload between components: the
+        per-component peak, which is then the true one.
+
+        Where the sum fits nothing changes; where it does not, this rung declines and the cascade
+        falls through to one whose budget matches its execution, which is what the cascade is for.
         """
         if not devices:
             return None
 
         largest = devices[0]
-        serve_mode = getattr(self, '_serve_mode', False)
 
-        if serve_mode:
-            # Hot mode: all weights resident + peak activation of any single component
+        if self.planned_loading_mode("single_gpu") != "lazy":
+            # Eager: every weight resident, one component's activation live at a time.
             total_weights_mb = sum(m.weight_mb for _, m in sorted_comps)
             max_activation_mb = max((m.activation_mb for _, m in sorted_comps), default=0)
             total_required = total_weights_mb + max_activation_mb
         else:
-            # Cold mode. The budget has to be the one this strategy is
-            # EXECUTED under, not the most generous one available.
-            # SingleGPUStrategy is eager (AllocationStrategy.SINGLE_GPU is in
-            # _EAGER_STRATEGIES): `execute_component` adds each component to
-            # `self._loaded_components` and never unloads it, so once every
-            # component has run they are all resident. Budgeting the largest
-            # component alone accepted plans that then hold the SUM -- on a
-            # 24 GB device an image pipeline was accepted on a 16663 MB peak
-            # and executes at 28380 MB, an OOM the planner had declared safe.
-            #
-            # Weights are what stay; only one component's ACTIVATION is live
-            # at a time, since components run one after another. So the budget
-            # is sum(weights) + max(activation) -- the same shape as hot mode.
-            # Where the sum fits, nothing changes; where it does not,
-            # single_gpu now declines and the cascade falls through to
-            # lazy_sequential, which budgets a peak AND executes lazily.
-            total_weights_mb = sum(m.weight_mb for _, m in sorted_comps)
-            max_activation_mb = max((m.activation_mb for _, m in sorted_comps), default=0)
-            total_required = total_weights_mb + max_activation_mb
+            total_required = max((m.weight_mb + m.activation_mb for _, m in sorted_comps),
+                                 default=0)
 
         needs_kv = getattr(self, '_needs_kv_cache', False)
         overhead_pct = 0.0 if needs_kv else 0.05
@@ -2028,17 +2044,24 @@ class PrismSolver:
         # is told which components it may release.
         self._lifecycle_transient = sorted(transient)
 
-        persistent_mb = sum(
-            comp_mem[n].weight_mb + comp_mem[n].activation_mb
-            for n in persistent if n in comp_mem
-        )
-        transient_peaks = [
-            comp_mem[n].weight_mb + comp_mem[n].activation_mb
-            for n in transient if n in comp_mem
-        ]
-        max_transient = max(transient_peaks) if transient_peaks else 0
-
-        peak = persistent_mb + max_transient
+        if self.planned_loading_mode("single_gpu_lifecycle") == "lazy":
+            # Forced lazy (the serve-cold fallback): everything is released between
+            # components, so the honest budget is the per-component peak and the
+            # persistent/transient split does not enter it.
+            peak = max((m.weight_mb + m.activation_mb for _, m in sorted_comps), default=0)
+        else:
+            # Eager, PER COMPONENT: a persistent component stays resident, a transient is
+            # released after use — which is what makes this budget true rather than a promise
+            # (`ExecutionPlan.transient_components` carries the split to the strategy).
+            persistent_mb = sum(
+                comp_mem[n].weight_mb + comp_mem[n].activation_mb
+                for n in persistent if n in comp_mem
+            )
+            transient_peaks = [
+                comp_mem[n].weight_mb + comp_mem[n].activation_mb
+                for n in transient if n in comp_mem
+            ]
+            peak = persistent_mb + (max(transient_peaks) if transient_peaks else 0)
 
         # Same driver/library overhead reserve as `_try_single_gpu` and
         # `_place_component` Strategy 1 (PRISM_DEFAULTS["oom_reserve_mb"]).
@@ -4002,25 +4025,12 @@ class PrismSolver:
         #
         # Serve cold fallback: user asked for serve (hot) but VRAM can't hold all
         # weights → force lazy mode. The daemon still works, just not near-zero latency.
-        _EAGER_VALUES = {s.value for s in AllocationStrategy if s.is_eager}
-        _LAZY_VALUES = {s.value for s in AllocationStrategy if not s.is_eager}
-
-        if getattr(self, '_serve_cold_fallback', False):
-            # Serve mode degraded to cold: force lazy even if strategy is eager-capable
-            loading_mode = "lazy"
-        elif strategy in _EAGER_VALUES:
-            loading_mode = "eager"
-        elif strategy in _LAZY_VALUES:
-            loading_mode = "lazy"
-        else:
+        # The same rule the rungs budgeted against — `planned_loading_mode` is the single
+        # place it is written, so a budget and the plan it produces cannot drift apart.
+        loading_mode = self.planned_loading_mode(strategy)
+        if not loading_mode:
             total_gpu_mb = sum(d.capacity_mb for d in devices if d.device_string.startswith("cuda"))
             loading_mode = "eager" if total_mb <= total_gpu_mb * 0.90 else "lazy"
-
-        if strategy == "cpu_streaming":
-            # The whole point of this rung: one component resident at a time.
-            # Eager loading would restore the `sum(components)` requirement it
-            # exists to avoid.
-            loading_mode = "lazy"
 
         # Determine primary dtype
         primary_dtype = "float16"
