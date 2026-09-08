@@ -158,6 +158,13 @@ def check_exclusive() -> None:
 
 
 def rate_from_progress(path: str, warm: int):
+    # A run can succeed and leave no trajectory: the per-token decode progress is emitted by the
+    # autoregressive and encoder_decoder flows, and the audio_llm flow keeps its own decode loop
+    # and writes none (2026-09-08). The harness says so and reports no rate; it does not die on
+    # a missing diagnostic file — the row's other arms and the campaign behind it deserve better.
+    if not os.path.exists(path):
+        print(f"  no decode trajectory at {path} — this flow does not emit one; no rate", flush=True)
+        return None
     ts = []
     for line in open(path):
         m = re.search(r"t=([0-9.]+)", line)
