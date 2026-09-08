@@ -1,6 +1,8 @@
-"""Decoder self-attention plan for encoder-decoder flows — graph-derived.
+"""Decoder self-attention plan — graph-derived, for every flow that decodes.
 
-An encoder-decoder decoder (Whisper-class) carries two attention kinds per
+A decoder is a decoder: what a KV cache may hold is a property of the GRAPH, not
+of the flow that drives it. An encoder-decoder decoder (Whisper-class) carries two
+attention kinds per
 layer: SELF-attention over the generated tokens, whose keys and values grow
 by one token per step and belong in the KV cache, and CROSS-attention over
 the encoder states, whose keys and values are the same at every step and
@@ -52,9 +54,12 @@ def decoder_self_attention_plan(dag: Dict[str, Any],
     arange_uids (the positional arange the cache offsets during decode),
     position_slice_uids (the other positional form: a slice of a parameter
     table by [0 : token-length symbol] — whisper-class decoders traced by
-    older vendors; the cache offsets its window during decode). A decoder
-    with neither cannot be offset one token at a time: the caller refuses
-    the cache and keeps the recompute path (D-STT-KV-WHISPER-LARGE).
+    older vendors; the cache offsets its window during decode),
+    uses_absolute_position (the third form: the caller supplies the positions as
+    a graph input, so there is nothing to offset — a decoder-only LM usually has
+    this one). A decoder with NONE of the three cannot be advanced one token at a
+    time: the caller refuses the cache and keeps the recompute path
+    (D-STT-KV-WHISPER-LARGE).
     """
     ops = dag.get("ops") or {}
     inputs = list(dag.get("input_tensor_ids") or [])
@@ -84,10 +89,19 @@ def decoder_self_attention_plan(dag: Dict[str, Any],
         raise RuntimeError("ZERO FALLBACK: decoder self-attention has no traced q shape")
     arange_uids = [uid for uid, op in ops.items() if op.get("op_type") == "aten::arange"]
     position_slice_uids = _positional_table_slices(dag, {t for t in inputs if t != encoder_input})
+    # The third positional mechanism, and the one a decoder-only graph usually has: the CALLER
+    # supplies the positions as a graph input, so the cache has nothing to offset — the loop
+    # feeds the position the token actually sits at. The engine's existing rule decides it (the
+    # graph declares it; absent that, an input named position_ids), and the autoregressive flow
+    # already reads the same field to decide whether an internal arange may be shifted.
+    uses_absolute_position = bool(dag.get(
+        "uses_absolute_position",
+        any(str(t).split("::")[-1] == "position_ids" for t in inputs)))
     return {
         "num_layers": len(self_uids), "num_heads": num_heads, "head_dim": head_dim,
         "self_attn_uids": self_uids, "cross_attn_uids": cross_uids,
         "arange_uids": arange_uids, "position_slice_uids": position_slice_uids,
+        "uses_absolute_position": uses_absolute_position,
     }
 
 
