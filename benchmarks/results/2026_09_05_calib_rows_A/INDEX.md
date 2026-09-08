@@ -1,0 +1,36 @@
+# Calibration rows A — 2026-09-05
+
+The per-cell JSONs beside this file are the measurement; this index is generated from them
+(`row` × `column`, the status, the median wall per request, the cold start, the peak VRAM and
+how many distinct output hashes the repetitions produced). The run logs of these cells are not
+tracked — no log is tracked anywhere under `benchmarks/results/`.
+
+| row | ? | diffusers | neurobrix_pytorch | ollama | vendor_transformers | vllm |
+|---|---|---|---|---|---|---|
+| env_manifest.json | None, n=0, wall Nones | — | — | — | — | — |
+| image_diffusion_flex1 | — | — | ok, n=5, wall 131.85s, cold 4.0s, 29805 MiB, 1 distinct output(s) | — | — | — |
+| image_diffusion_pixart_xl | — | — | ok, n=5, wall 27.49s, cold 4.0s, 15189 MiB, 1 distinct output(s) | — | — | — |
+| llm_dense_tinyllama | — | — | ok, n=5, wall 6.54s, cold 7.0s, 2859 MiB | — | — | — |
+| omni_ming_t2i | — | — | ok, n=5, wall 30.31s, cold 34.0s, 12999 MiB, 1 distinct output(s) | — | dnr, n=0, wall Nones | — |
+| omni_minicpmo_voice | — | — | ok, n=5, wall 3.84s, cold 10.0s, 17701 MiB, 5 distinct output(s) | — | — | — |
+| omni_qwen3omni | — | — | ok, n=5, wall 345.13s, cold 14.0s, 10481 MiB, 2 distinct output(s) | — | dnr, n=0, wall Nones | — |
+| stt_whisper_turbo | — | — | ok, n=5, wall 0.64s, cold 3.1s, 2411 MiB | — | — | — |
+| upscale_hat_l_x4 | — | — | ok, n=5, wall 6.6s, cold 4.0s, 10891 MiB, 1 distinct output(s) | — | — | — |
+| upscale_realesrgan_x4 | — | — | ok, n=5, wall 0.92s, cold 3.1s, 3265 MiB, 1 distinct output(s) | — | — | — |
+| upscale_swin2sr_realworld_x4 | — | — | ok, n=5, wall 1.96s, cold 3.0s, 4103 MiB, 1 distinct output(s) | — | — | — |
+| upscale_swin2sr_x4 | — | — | ok, n=5, wall 2.16s, cold 3.0s, 3349 MiB, 1 distinct output(s) | — | — | — |
+| upscale_swinir_x2 | — | — | ok, n=5, wall 1.52s, cold 3.0s, 2461 MiB, 1 distinct output(s) | — | — | — |
+| upscale_swinir_x4 | — | — | ok, n=5, wall 1.92s, cold 3.0s, 3731 MiB, 1 distinct output(s) | — | — | — |
+| video_allegro_t2v | — | — | ok, n=5, wall 33.9s, cold 5.0s, 13427 MiB, 1 distinct output(s) | — | — | — |
+| video_allegro_ti2v | — | dnr, n=0, wall Nones | ok, n=5, wall 55.29s, cold 6.0s, 9951 MiB, 1 distinct output(s) | — | — | — |
+| video_cog2b_t2v | — | — | ok, n=5, wall 43.08s, cold 6.1s, 9999 MiB, 1 distinct output(s) | — | — | — |
+| video_cog5b_i2v | — | — | ok, n=5, wall 111.89s, cold 10.0s, 13025 MiB, 1 distinct output(s) | — | — | — |
+| video_mochi_t2v | — | — | ok, n=5, wall 115.45s, cold 5.0s, 32441 MiB, 1 distinct output(s) | — | — | — |
+| video_opensora_t2v | — | dnr, n=0, wall Nones | ok, n=5, wall 145.96s, cold 8.0s, 27095 MiB, 1 distinct output(s) | — | — | — |
+| video_sana_video | — | dnr, n=0, wall Nones | ok, n=5, wall 13.33s, cold 6.0s, 8759 MiB, 1 distinct output(s) | — | — | — |
+| video_wan13b_t2v | — | — | ok, n=5, wall 103.06s, cold 5.0s, 11885 MiB, 1 distinct output(s) | — | — | — |
+| video_wan14b_i2v | — | — | error, n=0, wall Nones, 12321 MiB | — | — | — |
+| video_wan22_a14b_i2v | — | — | error, n=0, wall Nones, 11943 MiB | — | — | — |
+| video_wan_vace | — | — | error, n=0, wall Nones, 11755 MiB | — | — | — |
+| vlm_glm41v | — | — | ok, n=5, wall 31.53s, cold 5.0s, 21123 MiB | dnr, n=0, wall Nones | — | dnr, n=0, wall Nones |
+| vlm_qwen3vl | — | — | ok, n=5, wall 445.42s, cold 5.0s, 7019 MiB | — | — | dnr, n=0, wall Nones |
