@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any, Tuple, TYPE_CHECKING
 
 from neurobrix.core.prism.structure import AllocationStrategy, DeviceSpec, PrismProfile
+from neurobrix.core.prism.structure import names_accelerator
 from neurobrix.core.prism.profiler import ActivationProfiler, InputConfig
 from neurobrix.core.prism.memory_estimator import compute_dtype_factor, get_dtype_bytes_per_element
 from neurobrix.core.config import get_prism_defaults, get_dtype_bytes
@@ -3296,7 +3297,12 @@ class PrismSolver:
                     break
             for d in dev_str.split(","):
                 d = d.strip()
-                if d.startswith("cuda:") or d.startswith("hip:") or d.startswith("xpu:"):
+                # Was cuda:/hip:/xpu: — omitting mps:, so n_devices counted
+                # 0 on Apple. LATENT rather than live: the penalty below is
+                # gated on `n_devices > 1`, which is false either way on a
+                # single-device machine. Corrected so it stays true of a
+                # multi-device backend that is not one of those three.
+                if names_accelerator(d):
                     device_strings.add(d)
 
         n_devices = len(device_strings)
