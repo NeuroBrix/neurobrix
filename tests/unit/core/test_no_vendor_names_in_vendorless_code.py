@@ -94,14 +94,6 @@ ALLOWED: dict[str, tuple[str, str]] = {
 # These do not fail the test — they are known and tracked — but a NEW one
 # will: the list may shrink, never silently grow.
 KNOWN_OPEN: dict[str, tuple[str, str]] = {
-    "neurobrix/core/runtime/executor.py::elif dev.startswith(('cuda', 'hip', 'xpu')):":
-        ("prism",
-         "omits mps, so seen_gpu is never true on Apple and the mixed cpu/gpu "
-         "detection returns False."),
-    'neurobrix/core/prism/solver.py::if d.startswith("cuda:") or d.startswith("hip:") or d.startswith("xpu:"):':
-        ("prism",
-         "collects device strings for cuda:/hip:/xpu: only, so n_devices "
-         "counts 0 on Apple."),
     'neurobrix/core/io/loader.py::if device.startswith("cuda"):':
         ("prism",
          "guards torch.cuda.synchronize before timing the transfer. Correct as "
