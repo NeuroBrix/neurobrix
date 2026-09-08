@@ -138,6 +138,11 @@ def main() -> int:
                     help="truncate the ids to this many tokens (0 = all)")
     ap.add_argument("--out", required=True)
     ap.add_argument("--top", type=int, default=5)
+    ap.add_argument("--logits-npy", default=None,
+                    help="also write the FULL final-position logit vector "
+                         "(float64) here, so an engine's logits can be "
+                         "measured against it rather than against a top-k "
+                         "window")
     args = ap.parse_args()
 
     root = Path(args.model)
@@ -171,6 +176,13 @@ def main() -> int:
         "margin_top1_top2": float(logits[order[0]] - logits[order[1]]),
         "residual_l2": trace,
     }
+    if args.logits_npy:
+        _lp = Path(args.logits_npy)
+        _lp.parent.mkdir(parents=True, exist_ok=True)
+        np.save(_lp, np.asarray(logits, dtype=np.float64))
+        document["logits_npy"] = str(_lp)
+        document["logits_len"] = int(np.asarray(logits).size)
+
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(document, indent=1))
