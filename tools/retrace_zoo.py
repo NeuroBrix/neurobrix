@@ -842,10 +842,25 @@ class Model:
         self.registry_name = REGISTRY_ALIAS.get(name, name)
         self.new_name = (self.state["steps"].get("install") or {}).get("installed_name") or name
 
+    def current_request(self):
+        """The request this attempt runs, memoised. An output and a verdict belong to it: the
+        campaign's bound on a length the vendor leaves open (a denoiser's step count, 2026-09-08)
+        changes it, and arms measured on another one are another measurement."""
+        if getattr(self, "_request_key", None) is None:
+            try:
+                self._request_key = " ".join(str(a) for a in C.request_args(self.name, self.family, list(self.args.extra)))
+            except Exception:                  # a container the cache does not hold yet: no check
+                self._request_key = ""
+        return self._request_key
+
     def done(self, step):
         st = self.state["steps"].get(step) or {}
         if st.get("ok") is not True:
             return False
+        if step in ("old_outputs", "new_outputs", "gate"):
+            want = self.current_request()
+            if want and st.get("request") not in (None, want):
+                return False                   # measured on another request: re-run, re-gate
         if step in ("old_outputs", "new_outputs") and st.get("policy") != POLICY:
             return False                       # measured under another policy: another arm, re-run
         if step in ("old_outputs", "new_outputs"):
@@ -915,7 +930,7 @@ class Model:
         # and Wan2.1-T2V's sequential arm sat in the directory at the vendor's 100 steps beside a
         # triton arm that had timed out, so the gate would have read a DIFFERENT that is only the
         # request. Same discipline as the precision policy above.
-        self.request_key = " ".join(str(a) for a in req)
+        self.request_key = self.current_request() or " ".join(str(a) for a in req)
         prev = (self.state["steps"].get(f"{tag}_outputs") or {}).get("request")
         if prev != self.request_key and any(self.dir.glob(f"{tag}_*")):
             self.set_aside(f"{tag}_", f"measured on {('the request ' + repr(prev)) if prev else 'a request this state did not record'}; "
@@ -1457,7 +1472,7 @@ class Model:
             else:
                 verdict = "NEEDS_EXPLANATION"
             self.mark("gate", verdict.startswith("PASS"), verdict=verdict, bytes=bytes_verdict, graph=gd, policy=POLICY,
-                      autotune=self.state.get("autotune_freeze"))
+                      autotune=self.state.get("autotune_freeze"), request=self.current_request())
             shutil.rmtree(Path(self.args.tmp) / "previous" / self.name, ignore_errors=True)
             log(f"{self.name}: gate {verdict} — {bytes_verdict}; graph: {gd['annotation_changes']} annotation change(s), "
                 f"{gd['arg_witnessed']} shape argument(s) of the closed defect, {gd['beyond_annotation']} beyond, "
@@ -1511,7 +1526,7 @@ class Model:
         else:
             verdict = "NEEDS_EXPLANATION"        # bytes differ: the difference must be the closed defect and nothing else
         self.mark("gate", verdict.startswith("PASS"), verdict=verdict, bytes=bytes_verdict, graph=gd, policy=POLICY,
-                  autotune=self.state.get("autotune_freeze"), vendor=vendor or None)
+                  autotune=self.state.get("autotune_freeze"), vendor=vendor or None, request=self.current_request())
         shutil.rmtree(Path(self.args.tmp) / "previous" / self.name, ignore_errors=True)   # the previous object's staging
         if verdict == "FAIL":
             self.release_staging("gate FAIL: the staged build has no upload ahead of it")

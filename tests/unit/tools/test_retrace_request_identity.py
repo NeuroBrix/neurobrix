@@ -79,3 +79,28 @@ def test_a_row_with_no_output_at_all_is_not_disturbed(model):
     m.state["steps"]["old_outputs"] = {"ok": False, "request": "another"}
     m.outputs("old")
     assert not list(m.dir.glob("superseded_*"))
+
+
+def test_a_verdict_belongs_to_its_request_too(model):
+    """A gate recorded on the vendor's unbounded request is not this attempt's verdict: the row
+    re-gates on the bounded one. A state that never recorded a request is tolerated — its arms
+    are set aside by `outputs` when they run — so the 14 rows already passed are not re-rendered."""
+    m = model
+    m.state["autotune_freeze"] = {"snapshot": "T"}
+    stamp = {"ok": True, "policy": R.POLICY, "autotune": {"snapshot": "T"}}
+    m.state["steps"]["gate"] = {**stamp, "verdict": "PASS", "request": "--prompt a red apple --seed 42"}
+    assert m.done("gate") is False
+    m.state["steps"]["gate"]["request"] = m.current_request()
+    assert m.done("gate") is True
+    del m.state["steps"]["gate"]["request"]
+    assert m.done("gate") is True                                    # unrecorded: tolerated
+
+
+def test_an_output_step_of_another_request_is_not_done(model):
+    m = model
+    m.state["autotune_freeze"] = {"snapshot": "T"}
+    m.state["steps"]["old_outputs"] = {"ok": True, "policy": R.POLICY, "autotune": "T",
+                                       "request": "--prompt a red apple --seed 42"}
+    assert m.done("old_outputs") is False
+    m.state["steps"]["old_outputs"]["request"] = m.current_request()
+    assert m.done("old_outputs") is True
