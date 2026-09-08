@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Triton engine, multi-GPU: a component hand-off between cards waits for the card that produced the
+  data before copying it, moves it through the engine's shared cross-device path (peer link, strides,
+  non-contiguous views), refuses a device name it does not recognise instead of returning the tensor
+  untouched, and leaves the current card where it found it. A device-to-device copy is queued on the
+  destination card and does not wait for the source, so a copy issued right after a component's
+  kernels could read values they were still writing; and a wait on one card used to leave that card
+  selected, so the next wait that named none waited on it too.
 - Prism: a single-GPU plan is budgeted under the memory model it will be executed under. The rung
   accepted a cold run by counting only the largest component, on the premise that one component is
   in VRAM at a time; the strategy is eager and never unloads, so a model whose weights sum past the
