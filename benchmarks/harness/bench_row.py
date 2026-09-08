@@ -188,7 +188,11 @@ def run_once(args, arm_env: dict, tag: str, outdir: Path) -> dict:
            # (2026-09-08). The file is the caller's; nothing is assumed from the family.
            *(["--audio", args.audio] if args.audio else []),
            "--prompt", args.prompt, "--max-tokens", str(args.max_tokens),
-           "--temperature", args.temperature,
+           # An empty --temperature omits the flag: a family whose sampling contract is the
+           # model's own refuses an explicit one (an audio_llm's top_k becomes an "explicit"
+           # parameter and the path stops), which is why the campaign's bound for that family
+           # names the token budget alone.
+           *(["--temperature", args.temperature] if args.temperature else []),
            "--output", str(outdir / f"out_{tag}.txt")]
     if arm_env.get("ARM_ENGINE") != "compiled":
         cmd.insert(-2, "--triton")
@@ -388,7 +392,7 @@ def main() -> int:
     ap.add_argument("--audio", help="a media file the family requires beside the prompt (audio_llm)")
     ap.add_argument("--prompt-file")
     ap.add_argument("--max-tokens", type=int, default=60)
-    ap.add_argument("--temperature", default="0")
+    ap.add_argument("--temperature", default="0", help="empty omits the flag (a family whose sampling contract is the model's own)")
     ap.add_argument("--gpu", default="2")
     ap.add_argument("--hardware", default="v100-32g")
     ap.add_argument("--reps", type=int, default=5)
