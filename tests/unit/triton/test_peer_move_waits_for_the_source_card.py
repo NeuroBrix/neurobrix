@@ -1,63 +1,85 @@
-"""A move BETWEEN cards waits for the card that produced the data.
+"""One cross-card copy path, and it always waits for the card that produced the data.
 
-`NBXTensor.to_cuda` issues a device-to-device memcpy after selecting the TARGET card, so the
-copy is queued on the target's legacy stream — which is not ordered against the SOURCE card's.
-A peer copy issued right after a component's kernels therefore reads a buffer those kernels may
-still be writing: wrong values, no error, nothing in a log.
+A device-to-device memcpy is issued after selecting the DESTINATION, so it is queued on the
+destination's legacy stream — which is not ordered against the SOURCE's. A peer copy issued
+right after a component's kernels therefore reads a buffer those kernels may still be writing:
+wrong values, no error, nothing in a log. The wait used to live in one caller
+(`triton.device_transfer.transfer_tensor`) while another (`NBXTensor.to_cuda`, which the
+strategies' component hand-off called) had none.
 
-The engine already had the answer: `triton.device_transfer.transfer_tensor` waits on the source,
-enables the peer link, materialises a non-dense window and carries the strides. The op-by-op
-paths have used it since the DeepSeek-Coder-V2-Lite and Qwen3-Omni faults; the strategies'
-component hand-off went on calling `to_cuda` directly.
+It now lives in the primitive, which is the only place the copy is written, so no caller can
+reach a copy that skips it. What this pins is the ORDER of the allocator calls.
 """
 from __future__ import annotations
 
-from neurobrix.core.strategies.triton.base import TritonStrategy
+import pytest
+
+from neurobrix.kernels.nbx_tensor import DeviceAllocator, NBXTensor
 
 
-class _Fake:
-    def __init__(self, device="cuda", idx=0):
-        self._device = device
-        self._device_idx = idx
-        self.to_cuda_called_with = None
+class _View:
+    """An NBXTensor as `to_cuda` reads one — dense, empty, on card 0."""
 
-    def to_cpu(self):
-        return self
+    _device = "cuda"
+    _device_idx = 0
+    _shape = (4,)
+    _strides = (1,)
+    _numel = 4
+    _nbytes = 0                      # so the copy itself is skipped; the ORDER is the subject
+    _dtype = "float16"
 
-    def to_cuda(self, idx=0):
-        self.to_cuda_called_with = idx
-        return self
+    is_dense_window = NBXTensor.is_dense_window
 
-
-def test_a_cross_card_move_goes_through_the_shared_helper(monkeypatch):
-    seen = {}
-    import neurobrix.triton.device_transfer as dt
-    monkeypatch.setattr(dt, "transfer_tensor",
-                        lambda t, idx: seen.setdefault("peer", idx) or t)
-    t = _Fake(idx=0)
-    TritonStrategy.transfer_tensor(None, t, "cuda:2")
-    assert seen.get("peer") == 2, "a peer move did not take the path that waits for the source"
-    assert t.to_cuda_called_with is None, "it took `to_cuda`, which does not wait"
+    def data_ptr(self):
+        return 0x1000
 
 
-def test_a_same_card_move_and_a_host_move_stay_on_the_plain_path(monkeypatch):
-    import neurobrix.triton.device_transfer as dt
-    monkeypatch.setattr(dt, "transfer_tensor",
-                        lambda t, idx: (_ for _ in ()).throw(AssertionError("not a peer move")))
-    same = _Fake(idx=1)
-    TritonStrategy.transfer_tensor(None, same, "cuda:1")
-    assert same.to_cuda_called_with == 1
+@pytest.fixture
+def trace(monkeypatch):
+    calls = []
+    monkeypatch.setattr(DeviceAllocator, "get_device", staticmethod(lambda: 3))
+    monkeypatch.setattr(DeviceAllocator, "set_device",
+                        staticmethod(lambda i: calls.append(("set", i))))
+    monkeypatch.setattr(DeviceAllocator, "sync_device",
+                        staticmethod(lambda: calls.append(("sync",))))
+    monkeypatch.setattr(DeviceAllocator, "ensure_peer_access",
+                        staticmethod(lambda s, d: calls.append(("peer", s, d))))
+    monkeypatch.setattr(DeviceAllocator, "malloc_cuda",
+                        staticmethod(lambda n, dev=None: calls.append(("malloc", n)) or 0))
+    monkeypatch.setattr(NBXTensor, "__init__",
+                        lambda self, *a, **k: setattr(self, "_owns_data", False))
+    return calls
 
-    from_host = _Fake(device="cpu", idx=0)
-    TritonStrategy.transfer_tensor(None, from_host, "cuda:3")
-    assert from_host.to_cuda_called_with == 3, "a host-to-card move is not a peer copy"
+
+def test_a_card_to_card_copy_waits_on_the_source_and_puts_the_card_back(trace):
+    NBXTensor.to_cuda(_View(), 2)
+    assert ("peer", 0, 2) in trace, "the direct card-to-card link was not enabled"
+    sync_at = trace.index(("sync",))
+    assert trace[sync_at - 1] == ("set", 0), "the wait was not on the SOURCE card"
+    assert trace[sync_at + 1] == ("set", 3), "the card that was current was not put back"
+    malloc_at = next(i for i, c in enumerate(trace) if c[0] == "malloc")
+    assert sync_at < malloc_at, "the destination was allocated before the source was waited on"
+    assert trace[malloc_at - 1] == ("set", 2)
 
 
-def test_every_accelerator_prefix_still_reaches_a_card(monkeypatch):
-    """The Mac's rule, unchanged: hip, xpu, mps and the rest are GPUs Prism can name."""
-    import neurobrix.triton.device_transfer as dt
-    monkeypatch.setattr(dt, "transfer_tensor", lambda t, idx: t)
-    for name, want in (("hip:1", 1), ("mps:0", 0), ("xpu:2", 2), ("cuda", 0)):
-        t = _Fake(device="cpu")
-        TritonStrategy.transfer_tensor(None, t, name)
-        assert t.to_cuda_called_with == want, f"{name} did not reach a card"
+def test_a_host_to_card_copy_waits_on_nothing(trace):
+    host = _View()
+    host._device = "cpu"
+    NBXTensor.to_cuda(host, 1)
+    assert not any(c[0] == "sync" for c in trace), "a host copy has no source card to wait on"
+    assert not any(c[0] == "peer" for c in trace)
+
+
+def test_a_tensor_already_on_the_card_is_returned_as_is(trace):
+    v = _View()
+    assert NBXTensor.to_cuda(v, 0) is v
+    assert trace == []
+
+
+def test_the_dense_window_rule_is_the_primitive_s_own():
+    """A view whose strided span exceeds its numel cannot be moved by a flat memcpy with its
+    strides carried over; the primitive decides that, not each caller."""
+    v = _View()
+    assert v.is_dense_window()
+    v._shape, v._strides, v._numel = (2, 2), (16, 1), 4      # interior narrow: span 18 > 4
+    assert not v.is_dense_window()

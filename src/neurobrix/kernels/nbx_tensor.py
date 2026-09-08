@@ -2626,17 +2626,54 @@ class NBXTensor:
                              base=arr,  # keep numpy alive
                              pinned=False)
 
-    def to_cuda(self, device_idx: int = 0) -> 'NBXTensor':
-        """Copy this tensor to a CUDA device. Returns a new GPU NBXTensor.
+    def is_dense_window(self) -> bool:
+        """True iff the view's strided address span equals its logical numel — i.e. the flat
+        `[data_ptr, data_ptr + nbytes)` window holds ALL of its elements and addresses nothing
+        outside it. Only such a view may be moved by a flat memcpy with its strides carried over.
 
-        Handles CPU→GPU (kind=1 H2D) and GPU→GPU (kind=3 D2D). If the
-        tensor is already on the requested CUDA device, returns self.
-        Expand views (stride == 0 on a broadcast axis) are materialised
-        first so the memcpy does not over-read the backing storage.
+        Dense: contiguous tensors, full-tensor permute/transpose views (a pre-transposed weight's
+        `.t()`), dim-0 narrows. NOT dense: interior narrows (offset window, span > numel), step>1
+        de-interleave slices, broadcast/expand views (stride-0 axes, span < numel).
+        """
+        if self._numel == 0:
+            return True
+        span = 1 + sum((d - 1) * st for d, st in zip(self._shape, self._strides) if d > 0)
+        return span == self._numel
+
+    def to_cuda(self, device_idx: int = 0) -> 'NBXTensor':
+        """Copy this tensor to a GPU. Returns a new GPU NBXTensor.
+
+        THE cross-device copy of this engine: CPU→GPU (kind=1) and GPU→GPU (kind=3), and the
+        only place either is written. A card-to-card copy carries three obligations, and a
+        caller that has to remember them is a caller that will one day forget:
+
+        * the view is materialised unless its address span equals its numel — a flat
+          memcpy(nbytes) over an interior narrow or a de-interleave slice re-attaches strides
+          that address far past the new allocation (proven at the DeepSeek-Coder-V2-Lite
+          pipeline_parallel boundary: 2/3 of reads out of bounds, an async fault surfacing
+          launches later);
+        * the SOURCE card is waited on. The memcpy is issued after selecting the DESTINATION,
+          so it is queued on the destination's legacy stream, which is not ordered against the
+          source's: a peer copy issued right after a component's kernels reads a buffer they may
+          still be writing. Wrong values, no error (Qwen3-Omni, and the component hand-off that
+          called this method directly until 2026-09-08);
+        * the direct card-to-card link is enabled, or the driver stages every peer copy through
+          host memory whatever the topology reports (measured 8.7x on a 34 MB hand-off).
+
+        If the tensor is already on the requested device, returns self.
         """
         if self._device == 'cuda' and self._device_idx == device_idx:
             return self
-        src = self.contiguous() if self.is_expanded() else self
+        src = self if self.is_dense_window() else self.contiguous()
+        if src._device != 'cpu' and src._device_idx != device_idx:
+            DeviceAllocator.ensure_peer_access(src._device_idx, device_idx)
+            previous = DeviceAllocator.get_device()
+            if previous != src._device_idx:
+                DeviceAllocator.set_device(src._device_idx)
+                DeviceAllocator.sync_device()
+                DeviceAllocator.set_device(previous)
+            else:
+                DeviceAllocator.sync_device()
         DeviceAllocator.set_device(device_idx)
         ptr = DeviceAllocator.malloc_cuda(src._nbytes)
         if src._nbytes > 0:

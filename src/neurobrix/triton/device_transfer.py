@@ -101,72 +101,22 @@ def needs_move(t: NBXTensor, target_dev: int) -> bool:
 
 
 def transfer_tensor(tensor: NBXTensor, target_dev: int) -> NBXTensor:
-    """Copy an NBXTensor to cuda:target_dev, preserving shape/strides/dtype.
+    """Copy an NBXTensor to cuda:target_dev — one call into the primitive.
 
-    kind=1 (H2D) for a CPU source (zero3), kind=3 (D2D) for a cross-GPU move.
+    Every obligation of a card-to-card copy now lives in `NBXTensor.to_cuda`, which is the only
+    place the copy is written: materialise a view whose address span exceeds its numel, wait on
+    the SOURCE card before reading it, enable the direct card-to-card link. This function keeps
+    its name and its callers — `_run_multi_device`, the triton_sequential per-op block, the MoE
+    dispatch, the flows' device hand-offs and the strategies' component boundary all reach the
+    same path, and none of them can reach a copy that skips a step.
 
-    Stride handling — dense-window rule (P-TRITON-MLA root fix): the flat
-    ``memcpy(tensor._nbytes)`` from ``data_ptr()`` is only meaningful when
-    the view's strided address span EQUALS its logical numel
-    (`is_dense_window`). For such views (contiguous tensors, the zero3
-    pre-transposed weight ``.t()``, dim-0 narrows) the strides are carried
-    over unchanged — the historical contract, preserved byte-for-byte.
-    Every OTHER view — interior narrow/slice (span > numel, offset
-    window), step>1 de-interleave slices, broadcast/expand (stride-0,
-    span < numel) — is materialised via ``.contiguous()`` on the SOURCE
-    device first. The old code only materialised the expand case; an
-    interior/strided view was flat-copied and its original strides
-    re-attached over an nbytes-sized allocation — the strides address a
-    window FAR LARGER than the allocation, so the first downstream kernel
-    reading the view walks past the end of the new buffer — async illegal
-    memory access (error 700) surfacing a few launches later. Proven at
-    the DeepSeek-Coder-V2-Lite pipeline_parallel boundary (block.13 MLA
-    rope q/k de-interleave: a [1,16,23,64] narrow-of-transpose view,
-    strides addressing a 70528-element span over a 23552-element
-    allocation → 2/3 of reads OOB → strided_copy fault surfacing at
-    aten.cat::91, BOTH triton modes — this helper is shared by
-    _run_multi_device and the triton_sequential per-op transfer block).
+    The history that produced those obligations, kept because it is why they exist. The
+    dense-window rule came from the DeepSeek-Coder-V2-Lite pipeline_parallel boundary (block.13
+    MLA rope q/k de-interleave: a [1,16,23,64] narrow-of-transpose view whose strides address a
+    70528-element span over a 23552-element allocation, 2/3 of reads out of bounds, surfacing as
+    an async fault at aten.cat::91). The source wait came from the Qwen3-Omni audio triton leg
+    (deterministic error-700 poison at step-2 entry on a block-scatter placement, gone under
+    CUDA_LAUNCH_BLOCKING, allocator ledger clean, flow tail quiesced — only the transfer region
+    remained). The peer link came from a measured 8.7x on a 34 MB stage boundary, 48 ms to 5.5.
     """
-    if not is_dense_window(tensor):
-        tensor = tensor.contiguous()
-    src_device = getattr(tensor, "_device", "cuda")
-    kind = 1 if src_device == "cpu" else 3
-    if kind == 3:
-        # D2D read barrier: the memcpy runs on the TARGET device's
-        # legacy stream, which does NOT wait for the SOURCE device's
-        # triton (non-default) stream — reading a tensor a kernel is
-        # still writing violates the "never read a weight still being
-        # copied" contract the zero3 H2D path enforces with events.
-        # Sync the source device before the peer copy (this is the
-        # declared slow path; an event-based overlap is the perf-layer
-        # upgrade). Proven on the Qwen3-Omni audio triton leg:
-        # deterministic error-700 poison at step-2 entry on the
-        # block-scatter placement, gone under CUDA_LAUNCH_BLOCKING,
-        # allocator ledger clean, flow tail fully quiesced — only the
-        # run-entry transfer region remained.
-        _src_idx = getattr(tensor, "_device_idx", None)
-        if _src_idx is not None:
-            # Let the copy use the direct card-to-card link. Without this the
-            # driver stages every peer copy through HOST memory — it never
-            # touches NVLink/xGMI whatever the topology reports. Memoised, so
-            # this is one dict lookup per hand-off after the first.
-            # Measured 2026-09-03: 8.7x on a 34 MB stage boundary
-            # (48 ms -> 5.5 ms), 2.4x at 4 KB.
-            DeviceAllocator.ensure_peer_access(_src_idx, target_dev)
-            _prev = DeviceAllocator.get_device()
-            if _prev != _src_idx:
-                DeviceAllocator.set_device(_src_idx)
-                DeviceAllocator.sync_device()
-                DeviceAllocator.set_device(_prev)
-            else:
-                DeviceAllocator.sync_device()
-    DeviceAllocator.set_device(target_dev)
-    if tensor._nbytes > 0:
-        dst_raw_ptr = DeviceAllocator.malloc_cuda(tensor._nbytes)
-        DeviceAllocator.memcpy(dst_raw_ptr, tensor.data_ptr(),
-                               tensor._nbytes, kind=kind)
-    else:
-        dst_raw_ptr = 0
-    return NBXTensor(
-        dst_raw_ptr, tensor._shape, tensor._strides, tensor._dtype,
-        "cuda", owns_data=True, device_idx=target_dev, offset=0)
+    return tensor.to_cuda(target_dev)
