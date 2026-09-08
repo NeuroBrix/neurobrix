@@ -20,6 +20,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import torch
 
+from neurobrix.core.prism.structure import names_accelerator
+
 try:
     from safetensors.torch import load_file as safetensors_load_file  # type: ignore[attr-defined]
     HAS_SAFETENSORS = True
@@ -268,6 +270,26 @@ def create_device_loader(
 # Smart Loader with Pinned Memory (for high-performance scenarios)
 # ============================================================================
 
+def _synchronize_device(device: str) -> None:
+    """Synchronise `device`, whichever backend it names.
+
+    `torch.cuda.synchronize` is not a generic barrier — it is one backend's.
+    A caller that needs a transfer to have landed needs the sync for the
+    device it targeted, so the dispatch happens here once instead of at every
+    call site as a cuda-only guard.
+    """
+    if not names_accelerator(device):
+        return
+    prefix = str(device).split(":", 1)[0]
+    if prefix in ("cuda", "hip"):
+        # ROCm's torch presents as torch.cuda.
+        torch.cuda.synchronize(torch.device(device))
+    elif prefix == "mps" and hasattr(torch, "mps"):
+        torch.mps.synchronize()
+    elif prefix == "xpu" and hasattr(torch, "xpu"):
+        torch.xpu.synchronize()
+
+
 class SmartLoader:
     """
     High-performance file loader with parallel I/O and pinned memory.
@@ -356,9 +378,17 @@ class SmartLoader:
 
         result = self.pinned_manager.to_device(tensors, device, non_blocking)
 
-        # Sync to measure actual transfer time
-        if device.startswith("cuda"):
-            torch.cuda.synchronize(torch.device(device))
+        # Synchronise the device the tensors actually went to, whichever it
+        # is. This is NOT only about the timing below — `to_device` issues
+        # `.to(device, non_blocking=True)` and the caller in memory.py frees
+        # the pinned SOURCE buffers immediately afterwards (`del
+        # self._cache[...]`). On CUDA this sync is what makes that safe.
+        # Guarded on `startswith("cuda")` no sync was issued for an mps: or
+        # xpu: device, so whether the source may be freed rested on whether
+        # that backend honours non_blocking asynchronously — which is not
+        # something to leave to chance for a use-after-free. Syncing costs
+        # nothing on a backend that copied synchronously anyway.
+        _synchronize_device(device)
 
         elapsed = time.time() - start_time
 
@@ -375,10 +405,16 @@ class SmartLoader:
         pinned = self.load_shards_parallel(shard_paths, to_pinned=True, dtype=dtype)
 
         # Step 2: DMA transfer to GPU
-        if device.startswith("cuda") or device.startswith("hip"):
+        # The comment on the else branch used to read "CPU device, no transfer
+        # needed", which was true only because the condition named cuda and
+        # hip: an mps: or xpu: device fell into it and the pinned HOST tensors
+        # were returned as if they were resident. (Unreferenced today outside
+        # this file's own docstring, so latent rather than live — corrected
+        # so it cannot become live by being called.)
+        if names_accelerator(device):
             return self.transfer_to_device(pinned, device, non_blocking=True)
         else:
-            return pinned  # CPU device, no transfer needed
+            return pinned  # host device, nothing to transfer
 
     def _convert_dtype(
         self,

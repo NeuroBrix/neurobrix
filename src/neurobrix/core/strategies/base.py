@@ -103,6 +103,9 @@ class StrategyContext:
         return len(self.get_all_devices()) > 1
 
 
+_ACCELERATOR_PREFIXES = frozenset({"cuda", "hip", "xpu", "mps", "tt"})
+
+
 class ExecutionStrategy(ABC):
     """
     Abstract base class for execution strategies.
@@ -257,15 +260,26 @@ class ExecutionStrategy(ABC):
         # kernels.nbx_tensor from a core/strategies path that may run
         # before triton kernels are loaded.
         if hasattr(tensor, 'to_cuda') and hasattr(tensor, '_device'):
-            # Triton path — zero torch. Parse "cuda:N" → int device_idx.
-            if target_device.startswith("cuda:"):
-                dev_idx = int(target_device.split(":", 1)[1])
-            elif target_device == "cuda":
-                dev_idx = 0
-            else:
+            # Triton path — zero torch. Parse "<prefix>:N" → int device_idx.
+            # `to_cuda` is the GENERIC accelerator move in this layer, not an
+            # NVIDIA one. Matching only "cuda:" sent every hip:/mps:/xpu:
+            # target into the else branch below and moved the tensor to the
+            # HOST — asked for a GPU, it delivered CPU, silently and in the
+            # wrong direction.
+            prefix, _, _idx = str(target_device).partition(":")
+            if prefix in _ACCELERATOR_PREFIXES:
+                dev_idx = int(_idx) if _idx.isdigit() else 0
+            elif prefix == "cpu":
                 # CPU target — use NBXTensor.to_cpu for zero3-style
                 # evictions (if ever called from strategy code).
                 return tensor.to_cpu()
+            else:
+                # An unrecognised device is not a CPU request. Falling back to
+                # to_cpu() here is what made the bug above silent.
+                raise ValueError(
+                    f"transfer_tensor: {target_device!r} names neither the host "
+                    f"nor a known accelerator "
+                    f"({', '.join(sorted(_ACCELERATOR_PREFIXES))})")
             return tensor.to_cuda(dev_idx)
 
         if is_torch_tensor(tensor):
