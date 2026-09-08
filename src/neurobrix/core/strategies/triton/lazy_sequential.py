@@ -11,7 +11,22 @@ import logging
 from typing import Dict, Optional, Any, Set
 
 from ..base import StrategyContext
-from .base import TritonStrategy
+from .base import TritonStrategy, _ACCELERATOR_PREFIXES
+
+
+def _names_accelerator(device: str) -> bool:
+    """True when this device string names a GPU with an index.
+
+    The rule this encodes is the docstring of `_execution_device`: the plan
+    device rules when it names a GPU, and a CPU-staged component's plan device
+    is a weight-STAGING location. Written as `startswith("cuda")` it excluded
+    every non-NVIDIA accelerator -- Prism emits `hip:0` for AMD and `mps:0`
+    for Apple -- so on those machines the plan device was rejected, the
+    executor's device (which keeps the plan's prefix) was rejected too, and
+    the strategy raised ZERO FALLBACK on hardware that has a GPU.
+    """
+    prefix, _, idx = str(device).partition(":")
+    return prefix in _ACCELERATOR_PREFIXES and idx.isdigit()
 
 logger = logging.getLogger(__name__)
 
@@ -64,14 +79,14 @@ class LazySequentialStrategy(TritonStrategy):
         'cpu' handed the Wan VAE a host tensor at aten.convolution::0
         (P-WARM-TRITON-VIDEO, 2026-08-15)."""
         device = str(self._get_component_device(component_name))
-        if device.startswith("cuda"):
+        if _names_accelerator(device):
             return device
         ex = self.context.component_executors.get(component_name)
         ex_device = str(getattr(ex, "device", ""))
-        if ex_device.startswith("cuda"):
+        if _names_accelerator(ex_device):
             return ex_device
         raise RuntimeError(
-            f"ZERO FALLBACK: '{component_name}' resolved no CUDA execution "
+            f"ZERO FALLBACK: '{component_name}' resolved no GPU execution "
             f"device (plan device {device!r} carries no GPU index and "
             f"executor.device={ex_device!r}) — NBX kernels are GPU-only; "
             f"the weight loader must resolve the GPU before inputs can "
