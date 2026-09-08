@@ -50,12 +50,20 @@ _MEDIA = {
     "vlm": ["--input-image", str(ASSETS / "apple_448.png"), "--prompt", "Describe this image in one sentence."],
     "upscaler": ["--input-image", str(ASSETS / "apple_448.png")],
 }
+# The campaign's bound on a request whose length the vendor's default leaves open: a decode
+# loop's token budget, a denoiser's step count. The comparison is between two arms on the SAME
+# request — the vendor's aesthetic default buys nothing and can make a row ungateable: Allegro's
+# 100 steps at 3.5 min each are 5.8 h for ONE arm, 23 h for the four a retrace gate needs, and
+# the row timed out at 7200 s twice (2026-09-07/08). Four steps exercise the same graph, every op
+# of the loop, in a gateable hour. A family stimulus value wins over the bound (loop below), so a
+# family whose YAML names the flag keeps its own.
 # audio_llm: the model's own sampling contract (an explicit --temperature turns
 # the vendor's top_k into an "explicit" parameter the path refuses).
-_TEXT_BOUND = {"llm": ["--max-tokens", "64", "--temperature", "0"],
-               "vlm": ["--max-tokens", "64", "--temperature", "0"],
-               "audio_llm": ["--max-tokens", "64"],
-               "multimodal": ["--max-tokens", "64", "--temperature", "0"]}
+_REQUEST_BOUND = {"llm": ["--max-tokens", "64", "--temperature", "0"],
+                  "vlm": ["--max-tokens", "64", "--temperature", "0"],
+                  "audio_llm": ["--max-tokens", "64"],
+                  "multimodal": ["--max-tokens", "64", "--temperature", "0"],
+                  "video": ["--steps", "4"]}
 
 
 def manifest(model: str) -> dict:
@@ -102,7 +110,7 @@ def request_args(model: str, family: str, extra: list) -> list:
     args = family_stimulus(family) + list(_MEDIA.get(family, []))
     if "--input-image" not in args and family in ("video", "image") and _declares_image_input(model):
         args += ["--input-image", str(ASSETS / "apple_448.png")]
-    bound = list(_TEXT_BOUND.get(family, []))
+    bound = list(_REQUEST_BOUND.get(family, []))
     for i in range(0, len(bound), 2):           # a family stimulus value wins over the campaign bound
         if bound[i] not in args:
             args += bound[i:i + 2]
