@@ -37,6 +37,31 @@ class DeviceBrand(Enum):
         }
         return mapping[self]
 
+    @classmethod
+    def device_prefixes(cls) -> frozenset:
+        """Every prefix a Prism device string can start with.
+
+        Derived from the brand mapping itself, so a new brand cannot be added
+        without every guard built on this set learning about it — which is
+        exactly how the cuda-only guards came to exclude AMD and Apple.
+        """
+        return frozenset(b.to_device_prefix() for b in cls)
+
+
+def names_accelerator(device: str) -> bool:
+    """True when this Prism device string names a GPU rather than host memory.
+
+    The vendorless replacement for `startswith("cuda")`. A guard written that
+    way silently takes the no-GPU branch on every other brand -- AMD is `hip:N`
+    here, Apple `mps:N`, Intel `xpu:N` -- with no error anywhere.
+
+    A bare prefix with no index is NOT an accelerator: that is what a
+    CPU-staged component's plan device looks like, and telling the two apart
+    is the whole job of the guards this replaces.
+    """
+    prefix, _, idx = str(device or "").partition(":")
+    return prefix in DeviceBrand.device_prefixes() and idx.isdigit()
+
 
 class InterconnectTech(Enum):
     """Physical interconnect technology."""

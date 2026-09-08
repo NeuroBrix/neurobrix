@@ -37,6 +37,9 @@ from neurobrix.core.runtime.tensor_compat import is_tensor as _is_tensor, is_tor
 
 
 
+from neurobrix.core.prism.structure import names_accelerator as _names_accelerator
+
+
 class RuntimeExecutor:
     """
     NeuroBrix Runtime Executor - Orchestrator Only
@@ -1154,7 +1157,13 @@ class RuntimeExecutor:
                 dev = getattr(alloc, 'device', '')
                 if dev == 'cpu' or dev.startswith('cpu'):
                     seen_cpu = True
-                elif dev.startswith(('cuda', 'hip', 'xpu')):
+                elif _names_accelerator(dev):
+                    # Was ('cuda', 'hip', 'xpu') — omitting mps, so on Apple
+                    # seen_gpu never became true and a plan mixing cpu and GPU
+                    # components was not detected as hybrid. The explicit
+                    # transfers this gates were then skipped, which is the
+                    # silent kind of wrong: a host-resident producer output
+                    # crossing a graph-executor boundary with no `.to()`.
                     seen_gpu = True
             if seen_cpu and seen_gpu:
                 return True
