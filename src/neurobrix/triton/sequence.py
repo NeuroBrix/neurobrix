@@ -3016,7 +3016,7 @@ class TritonSequence:
                 return
 
     @staticmethod
-    def nbx_tid_stats(tensor) -> dict:
+    def nbx_tid_stats(tensor, tid: str = "op") -> dict:
         """Stats for one NBXTensor output for the NBX_DUMP_TIDS diagnostic:
         {shape, dtype, is_complex, head10, l2_norm, batch_norms}.
 
@@ -3098,6 +3098,38 @@ class TritonSequence:
             _batch_norms = [
                 (sum(v * v for v in vals[bi * _per:(bi + 1) * _per])) ** 0.5
                 for bi in range(_shp[0])]
+        # NBX_DUMP_LASTROW=<dir>: write the FULL last-position row, not just
+        # its first ten values. `last_pos10` is a window, and a window cannot
+        # measure the distance between a logit vector and an fp64 oracle's —
+        # which is what re-baselining a byte gate on an accuracy change
+        # requires. Gated, off by default, and written from `vals`, which is
+        # already on the host for the L2 norm above, so it costs one file
+        # write and no extra device traffic. Use with NBX_DUMP_TIDS_FILTER to
+        # select the op.
+        import os as _os_lr
+        _lastrow_dir = _os_lr.environ.get("NBX_DUMP_LASTROW")
+        if _lastrow_dir and len(_sshp) >= 2:
+            try:
+                import numpy as _np_lr
+                if len(_sshp) >= 3:
+                    _r = 1
+                    for _d in _sshp[2:]:
+                        _r *= _d
+                    _o = (_sshp[1] - 1) * _r
+                else:
+                    _r = _sshp[1]
+                    _o = (_sshp[0] - 1) * _r
+                _os_lr.makedirs(_lastrow_dir, exist_ok=True)
+                _np_lr.save(
+                    _os_lr.path.join(
+                        _lastrow_dir,
+                        "".join(c if c.isalnum() or c in "._-" else "_"
+                                for c in str(tid))
+                        + ".npy"),
+                    _np_lr.asarray(vals[_o:_o + _r], dtype=_np_lr.float32))
+            except Exception:
+                pass  # a diagnostic must never break the run
+
         return {
             "shape": _shp,
             "dtype": str(tensor.dtype),
@@ -3149,7 +3181,9 @@ class TritonSequence:
                     "tid": tid,
                     "op_uid": op.op_uid,
                     "op_type": op.op_type,
-                    **self.nbx_tid_stats(tensor),
+                    **self.nbx_tid_stats(
+                        tensor,
+                        f"{self.dag.get('component_name', '?')}__{tid}"),
                 }
                 self._dump_records.append(new_record)
                 # JSONL append-mode write — O(1) IO per call vs the
