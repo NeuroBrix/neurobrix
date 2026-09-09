@@ -28,6 +28,56 @@
 #
 # A cell whose vendor stack is not installed reports NOT-RUN with the reason.
 # NOT-RUN is a finding, never a pass.
+#
+# GATE HIERARCHY FOR A DIFFUSION FAMILY (written here, not left to judgement)
+# --------------------------------------------------------------------------
+# PRIMARY — `latent_pinned`. Our engine renders and dumps its initial noise
+#   (`NBX_DUMP_INIT_LATENT=<dir>`, the seam in
+#   `core/runtime/resolution/variable_resolver.py`, both modes); the vendor
+#   restarts from that exact array through its `latents=` argument, at the same
+#   scheduler and the same step count. PSNR is then a REAL bound, and it sees the
+#   defect class the MoE alert put in the light: a frozen dimension, a wrong
+#   slice, numeric drift.
+#
+#   Without pinning there is no bound at all. The same integer seed feeds two
+#   different RNG implementations — ours `tl.randn` through `kernels/rng_stream`,
+#   the vendor's `torch.Generator` — so the two arms render two VALID SAMPLES of
+#   the same distribution. Measured 2026-09-09: 15.15 dB between two correct,
+#   eyeballed apples. A cell that reports that as a divergence cries wolf.
+#
+# FALLBACK — `semantic`. An image-similarity bound between two independent
+#   samples, used ONLY where the injection seam does not exist. It is a WEAKER
+#   gate and is never presented as equivalent to the primary one: it sees a
+#   structurally wrong output (a frozen dimension that garbles the picture) and
+#   is BLIND to numeric drift that still renders a plausible image. Every cell
+#   that falls back states that blindness in `gate.blind_to_versus_primary`.
+#
+# Which of the two applies is READ FROM THE PIPELINE, per cell, and recorded in
+# `gate.read_from`. The reading for this rig, diffusers 0.35.2, taken by
+# inspecting each `__call__` signature on 2026-09-09:
+#
+#     PixArtAlphaPipeline  latents= YES      SanaPipeline       latents= YES
+#     PixArtSigmaPipeline  latents= YES      CogVideoXPipeline  latents= YES
+#     WanPipeline          latents= YES      AllegroPipeline    latents= YES
+#     FluxPipeline         latents= YES
+#
+# Every diffusers pipeline on this rig accepts an injected latent, so no
+# diffusion family here falls back for want of a seam. A family falls back only
+# when its vendor is not a diffusers pipeline — a reference implementation with
+# no latent argument — and its cell says exactly that.
+#
+# A NON-DIFFUSION cell declares `kind: deterministic_output`: greedy text and
+# transcription have no stochastic draw to pin, so the output is compared
+# directly.
+#
+# WHAT PINNING DOES NOT PROVE — and where that is answered instead
+# ----------------------------------------------------------------
+# A pinned latent is OUR noise handed to THEM, so the stream that produced it is
+# never itself under test; pin everywhere and our generator is proved by nothing.
+# It is therefore proved SEPARATELY and ONCE, statistically rather than pixel to
+# pixel, and recorded as an engine fact rather than a row of this table:
+# `docs/architecture/noise-stream-contract.md` (21/21 statistics within a 4-sigma
+# bound, 2026-09-09).
 
 defaults:
   seed: 42
@@ -45,6 +95,12 @@ cells:
     request:
       prompts_from: moe_real_path_check   # the 10/12/16/22/23/24/43/68 ladder
       temperature: 0
+    gate:
+      kind: deterministic_output
+      read_from: "greedy decode, temperature 0 — no stochastic draw exists to pin"
+      why: >
+        Text at temperature 0 is a deterministic function of the prompt, so the
+        two arms are directly comparable without any shared random state.
     compare:
       metric: text_coherence_and_length_independence
       bound: "coherent at every rendered length, and no length singled out"
@@ -66,6 +122,12 @@ cells:
     request:
       prompt: "Write a Python function that reverses a string."
       temperature: 0
+    gate:
+      kind: deterministic_output
+      read_from: "greedy decode, temperature 0 — no stochastic draw exists to pin"
+      why: >
+        Both arms are fp16 and greedy, so an agreeing prefix is a statement about
+        the computation and not about a sampler's luck.
     compare:
       metric: text_common_prefix_words
       bound: 8
@@ -88,9 +150,28 @@ cells:
       guidance: 4.5
       height: 1024
       width: 1024
+    gate:
+      kind: latent_pinned                       # PRIMARY — the seam exists
+      read_from: >
+        diffusers 0.35.2, PixArtAlphaPipeline.__call__ accepts
+        latents=Optional[torch.Tensor] (signature inspected 2026-09-09).
+      how: >
+        Our arm runs FIRST with NBX_DUMP_INIT_LATENT=<dir> and writes the raw
+        N(0,1) draw; the vendor is handed that .npy through --latents. Each side
+        applies the scheduler's init_noise_sigma exactly once — ours in
+        core/flow/iterative_process.py, the pipeline in its own prepare_latents —
+        so the array must be the UNSCALED draw.
+      why: >
+        Unpinned, the same seed 42 feeds two different RNG implementations and the
+        arms render two valid samples: measured 15.15 dB on 2026-09-09 between two
+        apples both eyeballed correct. Pinned, PSNR is a real bound.
     compare:
       metric: psnr_db          # tools/image_fidelity.py
-      bound: 20.0
+      # 30 dB is this repository's established bound for "same computation,
+      # different implementation" (tools/precision_zoo_campaign.py gates image and
+      # video at 30.0). It replaces the 20.0 written for the unpinned comparison,
+      # which no correct engine could ever have met.
+      bound: 30.0
     blind_to: >
       A denoiser or VAE graph defect present in both our arms — a shape gate is
       blind to values, and our own oracle shares the graph.
@@ -107,9 +188,28 @@ cells:
     request:
       prompt: "a red apple rolling slowly across a wooden table"
       steps: 4
+    gate:
+      kind: latent_pinned                       # PRIMARY — the seam exists
+      read_from: >
+        diffusers 0.35.2, WanPipeline.__call__ accepts
+        latents=Optional[torch.Tensor] (signature inspected 2026-09-09). The
+        video family therefore does NOT fall back to the semantic net: the seam
+        exists here as it does for image.
+      how: >
+        As for image — ours dumps, the vendor restarts from it — with the latent
+        carrying the temporal axis, so a frozen frame count shows as a structural
+        break rather than as a different sample.
+      why: >
+        Same reason as image, and the temporal axis makes it stronger: an
+        independent sample differs everywhere, which would mask exactly the
+        frame-count and conv3d defects this cell exists to catch.
+      driver_status: >
+        NOT YET WIRED — no vendor_video_repro.py and no psnr_db_first_frame
+        implementation. The cell reports NOT-RUN until both land; NOT-RUN is a
+        finding, never a pass.
     compare:
       metric: psnr_db_first_frame
-      bound: 18.0
+      bound: 30.0
     blind_to: >
       A temporal-axis defect (a frozen frame count, a conv3d decomposition that
       drops frames) that our own oracle reproduces from the same graph.
@@ -124,6 +224,15 @@ cells:
       precision: "float32"
     request:
       input_image: test_upscale_input.png
+    gate:
+      kind: deterministic_output
+      read_from: >
+        Real-ESRGAN is a feed-forward super-resolution network — its vendor
+        forward draws no noise, so there is no latent to pin and nothing to
+        fall back from.
+      why: >
+        The output is a deterministic function of the input image; PSNR against
+        the vendor is already a real bound without any shared random state.
     compare:
       metric: psnr_db
       bound: 30.0
@@ -136,12 +245,23 @@ cells:
     family: stt
     model: whisper-large-v3-turbo
     vendor:
-      kind: transformers
-      ref: "openai/whisper-large-v3-turbo"
+      # Read from the rig, not assumed: the fwhisper venv carries
+      # faster_whisper 1.2.1 and no transformers, and the snapshot on disk is the
+      # CTranslate2 conversion. Declaring `transformers` here named a stack that
+      # does not exist and the cell reported NOT-RUN for a reason that was ours.
+      kind: faster_whisper
+      ref: "/home/mlops/hf_snapshots/models--mobiuslabsgmbh--faster-whisper-large-v3-turbo"
       venv: /home/mlops/venvs/fwhisper
-      precision: "float16"
+      precision: "float16 (CTranslate2), same precision as ours"
     request:
       audio: test_speech_ref.wav
+      decode: "greedy — beam 1, temperature 0, on both arms"
+    gate:
+      kind: deterministic_output
+      read_from: "greedy decode — transformers generate() without sampling draws nothing"
+      why: >
+        A transcription at temperature 0 is deterministic, so WER against the
+        vendor measures the computation directly.
     compare:
       metric: wer
       bound: 0.05
@@ -158,6 +278,11 @@ cells:
       precision: "float16"
     request:
       audio: test_speech_ref.wav
+    gate:
+      kind: deterministic_output
+      read_from: "greedy decode — no stochastic draw in the audio projector or the decode"
+      why: >
+        Text out of audio at temperature 0 is deterministic on both sides.
     compare:
       metric: text_common_prefix_words
       bound: 6
@@ -174,6 +299,15 @@ cells:
       precision: "float32"
     request:
       prompt: "The quick brown fox jumps over the lazy dog."
+    gate:
+      kind: deterministic_output
+      read_from: >
+        Kokoro's vendor pipeline is a deterministic duration predictor plus
+        vocoder — it draws no noise. A SAMPLED tts (VibeVoice, chatterbox,
+        openaudio) added to this table would need its seed pinned on both arms
+        and would say so here.
+      why: >
+        With no draw on either side the waveforms are directly comparable.
     compare:
       metric: audio_correlation
       bound: 0.95
@@ -191,6 +325,12 @@ cells:
     request:
       prompt: "Describe this image in one sentence."
       input_image: test_upscale_input.png
+    gate:
+      kind: deterministic_output
+      read_from: "greedy decode — the vision tower is feed-forward, the decode draws nothing"
+      why: >
+        Deterministic on both sides, so an agreeing prefix is a statement about
+        the vision tower and the merge, not about a sampler.
     compare:
       metric: text_common_prefix_words
       bound: 5
@@ -208,6 +348,14 @@ cells:
     request:
       prompt: "Describe this image in one sentence."
       input_image: test_upscale_input.png
+    gate:
+      kind: deterministic_output
+      read_from: >
+        This cell's request is a DESCRIBE (text out), which is greedy and draws
+        nothing. Janus-Pro's image-generation mode is autoregressive and sampled;
+        a cell exercising it would need its own gate and is not this one.
+      why: >
+        Deterministic for the request as declared.
     compare:
       metric: text_common_prefix_words
       bound: 5
