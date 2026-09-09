@@ -437,6 +437,7 @@ def save_video(
         frames = tensor.transpose(1, 2, 3, 0)
 
     frames_uint8 = (frames * np.float32(255)).astype(np.uint8)
+    _dump_decoded_frames(frames_uint8, output_path)
     _write_video_h264(output_path, frames_uint8, fps)
     return output_path
 
@@ -576,6 +577,44 @@ def _extract_token_count(outputs: Dict[str, Any]) -> int:
     if isinstance(tokens, list):
         return len(tokens)
     return int(tokens.shape[-1])
+
+
+def _dump_decoded_frames(frames_uint8, output_path: str) -> None:
+    """Write the decoded frames to `NBX_DUMP_DECODED_FRAMES=<dir>`, if armed.
+
+    The last gap between "our compute" and "our output path". A video family's
+    frames reach the vendor-correctness cell only through an H.264 file, so a
+    disagreement measured on frame 0 could in principle be the writer rather
+    than the decode. The encode was already exonerated by argument — both clips
+    are h264 at the same size and fps, ours at `-crf 18 -preset medium` against
+    the vendor clip's imageio default, and ours is the LARGER file — but an
+    argument is not a measurement. This makes the frames themselves available,
+    lossless, so the comparison can be taken before any codec touches them.
+
+    Diagnostic, default off. It writes what the engine already computed and
+    changes nothing about the run.
+    """
+    import os
+    d = os.environ.get("NBX_DUMP_DECODED_FRAMES")
+    if not d:
+        return
+    import numpy as np
+    os.makedirs(d, exist_ok=True)
+    stem = os.path.splitext(os.path.basename(output_path))[0]
+    npy = os.path.join(d, f"{stem}.frames.npy")
+    np.save(npy, np.ascontiguousarray(frames_uint8))
+    written = [npy]
+    try:                                        # PNG is file I/O at the boundary (R34)
+        from PIL import Image
+        for i, fr in enumerate(frames_uint8):
+            png = os.path.join(d, f"{stem}.frame{i:03d}.png")
+            Image.fromarray(fr).save(png)
+            written.append(png)
+    except Exception as exc:
+        print(f"[decoded-frames] PNGs not written ({exc}); the .npy holds them all",
+              flush=True)
+    print(f"[decoded-frames] {frames_uint8.shape} {frames_uint8.dtype} -> {d} "
+          f"({len(written)} file(s))", flush=True)
 
 
 def _write_video_h264(output_path: str, frames_uint8, fps: float) -> None:
