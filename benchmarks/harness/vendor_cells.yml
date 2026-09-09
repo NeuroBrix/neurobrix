@@ -1,0 +1,213 @@
+# Vendor-correctness cell — the permanent justness column of the locked protocol.
+#
+# WHY THIS EXISTS
+# ---------------
+# Every byte gate in this repository compares NeuroBrix to NeuroBrix. The
+# sequential oracle replays the SAME graph the runtime executes, so a defect OF
+# THE GRAPH ITSELF is invisible to all of them: both arms are wrong in the same
+# way and the gate says IDENTICAL. The MoE frozen-routing alert (2026-09-09) is
+# the worked example — a trace can burn the trace batch's per-expert token
+# counts into slice bounds, and no byte gate we own could ever see it.
+#
+# This cell is the only gate that can. It compares our output to the ORIGINAL
+# model executed by its own vendor stack, never to ourselves. It is permanent:
+# at least one model per family, run on the zoo, verdict recorded.
+#
+# CONTRACT
+# --------
+#  * `vendor.kind` names the stack that runs the original: ollama, diffusers,
+#    transformers, or a family-specific reference implementation.
+#  * `vendor.precision` is stated explicitly. Where the vendor makes a
+#    LOWER-QUALITY choice to go faster (a Q4 quantization, an fp16 that drifts),
+#    the cell says so and the table compares at equal quality — quality before
+#    speed, per the mandate.
+#  * `compare.bound` is written BEFORE the measurement. A bound decided after
+#    seeing the number is not a gate.
+#  * `blind_to` names, in one sentence, what this cell can see that a byte gate
+#    cannot. A cell that cannot answer that question does not belong here.
+#
+# A cell whose vendor stack is not installed reports NOT-RUN with the reason.
+# NOT-RUN is a finding, never a pass.
+
+defaults:
+  seed: 42
+  max_tokens: 48
+
+cells:
+  # ── llm ────────────────────────────────────────────────────────────────────
+  - id: llm-moe-deepseek-v2-lite
+    family: llm
+    model: DeepSeek-Coder-V2-Lite-Instruct
+    vendor:
+      kind: ollama
+      ref: "deepseek-coder-v2:16b"
+      precision: "Q4_0 (vendor's own quantization — LOWER quality than our fp16)"
+    request:
+      prompts_from: moe_real_path_check   # the 10/12/16/22/23/24/43/68 ladder
+      temperature: 0
+    compare:
+      metric: text_coherence_and_length_independence
+      bound: "coherent at every rendered length, and no length singled out"
+    blind_to: >
+      A MoE whose per-expert slice bounds were frozen at trace would route with
+      the trace's expert histogram: coherent at the trace length only. Our byte
+      gates replay that same graph and cannot see it.
+
+  - id: llm-dense-tinyllama
+    family: llm
+    model: TinyLlama-1.1B-Chat-v1.0
+    vendor:
+      kind: ollama
+      ref: "tinyllama-f16:latest"
+      precision: "fp16 — same precision as ours, so token agreement is meaningful"
+    request:
+      prompt: "Write a Python function that reverses a string."
+      temperature: 0
+    compare:
+      metric: text_common_prefix_words
+      bound: 8
+    blind_to: >
+      A dense-LLM graph defect (a frozen dim, a wrong RoPE table slice) that both
+      our arms replay identically.
+
+  # ── image ──────────────────────────────────────────────────────────────────
+  - id: image-pixart-xl
+    family: image
+    model: PixArt-XL-2-1024-MS
+    vendor:
+      kind: diffusers
+      ref: "/home/mlops/hf_snapshots/PixArt-XL-2-1024-MS"
+      venv: /home/mlops/bench_venvs/diffusers
+      precision: "float16"
+    request:
+      prompt: "a red apple on a wooden table"
+      steps: 20
+      guidance: 4.5
+      height: 1024
+      width: 1024
+    compare:
+      metric: psnr_db          # tools/image_fidelity.py
+      bound: 20.0
+    blind_to: >
+      A denoiser or VAE graph defect present in both our arms — a shape gate is
+      blind to values, and our own oracle shares the graph.
+
+  # ── video ──────────────────────────────────────────────────────────────────
+  - id: video-wan-t2v
+    family: video
+    model: Wan2.1-T2V-1.3B-Diffusers
+    vendor:
+      kind: diffusers
+      ref: "/home/mlops/hf_snapshots/Wan2.1-T2V-1.3B-Diffusers"
+      venv: /home/mlops/bench_venvs/diffusers_video
+      precision: "float16"
+    request:
+      prompt: "a red apple rolling slowly across a wooden table"
+      steps: 4
+    compare:
+      metric: psnr_db_first_frame
+      bound: 18.0
+    blind_to: >
+      A temporal-axis defect (a frozen frame count, a conv3d decomposition that
+      drops frames) that our own oracle reproduces from the same graph.
+
+  # ── upscaler ───────────────────────────────────────────────────────────────
+  - id: upscaler-real-esrgan-x4
+    family: upscaler
+    model: real-esrgan-x4
+    vendor:
+      kind: reference_impl
+      ref: "Real-ESRGAN (vendor weights + vendor forward)"
+      precision: "float32"
+    request:
+      input_image: validation_outputs/assets/test_upscale_input.png
+    compare:
+      metric: psnr_db
+      bound: 30.0
+    blind_to: >
+      The value defect a shape gate cannot see — the upscaler publish rule that
+      already cost us a silent regression.
+
+  # ── stt ────────────────────────────────────────────────────────────────────
+  - id: stt-whisper-turbo
+    family: stt
+    model: whisper-large-v3-turbo
+    vendor:
+      kind: transformers
+      ref: "openai/whisper-large-v3-turbo"
+      venv: /home/mlops/venvs/fwhisper
+      precision: "float16"
+    request:
+      audio: validation_outputs/assets/test_speech_ref.wav
+    compare:
+      metric: wer
+      bound: 0.05
+    blind_to: >
+      An encoder-decoder cross-attention defect both our arms share.
+
+  # ── audio_llm ──────────────────────────────────────────────────────────────
+  - id: audio-llm-voxtral
+    family: audio_llm
+    model: Voxtral-Mini-3B-2507
+    vendor:
+      kind: transformers
+      ref: "mistralai/Voxtral-Mini-3B-2507"
+      precision: "float16"
+    request:
+      audio: validation_outputs/assets/test_speech_ref.wav
+    compare:
+      metric: text_common_prefix_words
+      bound: 6
+    blind_to: >
+      An audio-projector or KV-plan defect that our oracle replays identically.
+
+  # ── tts ────────────────────────────────────────────────────────────────────
+  - id: tts-kokoro
+    family: tts
+    model: Kokoro-82M
+    vendor:
+      kind: reference_impl
+      ref: "hexgrad/Kokoro-82M (vendor pipeline)"
+      precision: "float32"
+    request:
+      prompt: "The quick brown fox jumps over the lazy dog."
+    compare:
+      metric: audio_correlation
+      bound: 0.95
+    blind_to: >
+      A vocoder or duration-predictor defect shared by both our arms.
+
+  # ── vlm ────────────────────────────────────────────────────────────────────
+  - id: vlm-glm-4v
+    family: vlm
+    model: GLM-4.1V-9B-Thinking
+    vendor:
+      kind: transformers
+      ref: "THUDM/GLM-4.1V-9B-Thinking"
+      precision: "float16"
+    request:
+      prompt: "Describe this image in one sentence."
+      input_image: validation_outputs/assets/test_upscale_input.png
+    compare:
+      metric: text_common_prefix_words
+      bound: 5
+    blind_to: >
+      A vision-tower or merge-token defect our oracle shares.
+
+  # ── multimodal ─────────────────────────────────────────────────────────────
+  - id: multimodal-janus-pro
+    family: multimodal
+    model: Janus-Pro-7B
+    vendor:
+      kind: transformers
+      ref: "deepseek-ai/Janus-Pro-7B"
+      precision: "float16"
+    request:
+      prompt: "Describe this image in one sentence."
+      input_image: validation_outputs/assets/test_upscale_input.png
+    compare:
+      metric: text_common_prefix_words
+      bound: 5
+    blind_to: >
+      A modality-routing defect (the wrong projector on the wrong stream) that
+      both our arms reproduce from the same graph.
