@@ -115,3 +115,77 @@ def test_an_empty_graph_is_a_partition_with_nothing_in_it():
     assert part.fits
     assert part.segments == []
     assert part.peak_resident_bytes == 0
+
+
+# ---------------------------------------------------------------------------
+# The segments, as executable graphs
+# ---------------------------------------------------------------------------
+
+from neurobrix.core.prism.layer_partition import build_segment_graph
+
+
+def test_segments_reassemble_the_component_exactly():
+    """Every op once, in order, across the segment graphs."""
+    g = _chain(9, weight_mb=10)
+    g["output_tensor_ids"] = ["x9"]
+    part = LayerPartitioner(g).partition(35 * 1024 * 1024)
+    assert part.fits
+
+    seen = []
+    for seg in part.segments:
+        sub = build_segment_graph(g, seg)
+        seen.extend(sub["execution_order"])
+    assert seen == g["execution_order"], "the segments must tile the order exactly"
+
+
+def test_a_segment_carries_only_the_weights_its_ops_read():
+    g = _chain(9, weight_mb=10)
+    part = LayerPartitioner(g).partition(35 * 1024 * 1024)
+    for seg in part.segments:
+        sub = build_segment_graph(g, seg)
+        params = {tid for tid, t in sub["tensors"].items() if t.get("is_parameter")}
+        names = {sub["tensors"][tid].get("weight_name") for tid in params}
+        assert names == seg.weight_names, (
+            "the graph a segment executes and the weights it was budgeted "
+            "for must be the same set")
+
+
+def test_the_seam_is_declared_not_assumed():
+    """A segment's inputs are what earlier ops produced and it reads."""
+    g = _chain(6, weight_mb=10)
+    g["output_tensor_ids"] = ["x6"]
+    part = LayerPartitioner(g).partition(25 * 1024 * 1024)
+    assert len(part.segments) > 1, "need at least one seam to test one"
+
+    subs = [build_segment_graph(g, s) for s in part.segments]
+    # the first segment reads the component's own input
+    assert "x0" in subs[0]["input_tensor_ids"]
+
+    # Every segment reads only what EARLIER segments published, or what the
+    # component itself was given. Restricting it to the IMMEDIATELY previous
+    # segment is too strict and measurably wrong: on DeepSeek's real graph
+    # the second segment reads `input::position_ids`, a declared component
+    # input with no producer, which no segment publishes because nothing
+    # computes it. A tensor may also skip a segment entirely.
+    component_inputs = set(g.get("input_tensor_ids") or []) | {"x0"}
+    published = set(component_inputs)
+    for sub in subs:
+        unmet = set(sub["input_tensor_ids"]) - published
+        assert not unmet, (
+            f"segment {sub['segment_index']} reads {sorted(unmet)}, which "
+            f"neither an earlier segment publishes nor the component "
+            f"receives")
+        published |= set(sub["output_tensor_ids"])
+
+    # the last publishes the component's output
+    assert "x6" in subs[-1]["output_tensor_ids"]
+
+
+def test_a_single_segment_component_is_the_component():
+    g = _chain(3, weight_mb=1)
+    g["output_tensor_ids"] = ["x3"]
+    part = LayerPartitioner(g).partition(64 * 1024 * 1024)
+    assert len(part.segments) == 1
+    sub = build_segment_graph(g, part.segments[0])
+    assert sub["execution_order"] == g["execution_order"]
+    assert sub["output_tensor_ids"] == ["x3"]
