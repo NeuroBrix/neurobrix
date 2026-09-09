@@ -702,6 +702,14 @@ class PrismSolver:
             # CPU-only profile: skip the entire GPU cascade and jump
             # straight to cpu_execution.
             strategies = [
+                # ("layer_streaming", self._try_layer_streaming) belongs
+                # HERE — below every rung that keeps a component whole, above
+                # the host ones. It is deliberately not listed yet: the
+                # planner and the segment builder are landed and tested, and
+                # LayerStreamingStrategy is not. A rung Prism can CHOOSE and
+                # then cannot execute is worse than a rung it does not offer,
+                # which is exactly what test_solver_registry_parity says when
+                # this line is uncommented without the strategy.
                 ("cpu_execution", self._try_cpu_execution),
                 ("cpu_streaming", self._try_cpu_streaming),
             ]
@@ -714,6 +722,14 @@ class PrismSolver:
                 ("single_gpu_lifecycle", self._try_single_gpu_lifecycle),
                 ("lazy_sequential", self._try_lazy_sequential),
                 ("zero3", self._try_zero3),
+                # ("layer_streaming", self._try_layer_streaming) belongs
+                # HERE — below every rung that keeps a component whole, above
+                # the host ones. It is deliberately not listed yet: the
+                # planner and the segment builder are landed and tested, and
+                # LayerStreamingStrategy is not. A rung Prism can CHOOSE and
+                # then cannot execute is worse than a rung it does not offer,
+                # which is exactly what test_solver_registry_parity says when
+                # this line is uncommented without the strategy.
                 ("cpu_execution", self._try_cpu_execution),
                 ("cpu_streaming", self._try_cpu_streaming),
             ]
@@ -728,6 +744,14 @@ class PrismSolver:
                 ("component_placement_lazy", self._try_component_placement_lazy),
                 ("lazy_sequential", self._try_lazy_sequential),
                 ("zero3", self._try_zero3),
+                # ("layer_streaming", self._try_layer_streaming) belongs
+                # HERE — below every rung that keeps a component whole, above
+                # the host ones. It is deliberately not listed yet: the
+                # planner and the segment builder are landed and tested, and
+                # LayerStreamingStrategy is not. A rung Prism can CHOOSE and
+                # then cannot execute is worse than a rung it does not offer,
+                # which is exactly what test_solver_registry_parity says when
+                # this line is uncommented without the strategy.
                 ("cpu_execution", self._try_cpu_execution),
                 ("cpu_streaming", self._try_cpu_streaming),
             ]
@@ -906,7 +930,17 @@ class PrismSolver:
                     for _comp_name, _m in component_memory.items():
                         _alloc = strat_allocs.get(_comp_name)
                         _dev = _alloc[0] if isinstance(_alloc, tuple) else _alloc
-                        if (isinstance(_dev, str) and _dev.startswith("zero3:")
+                        if isinstance(_dev, str) and _dev.startswith("layer_stream:"):
+                            # It holds ONE segment at a time. The number the
+                            # partitioner announced is the number the
+                            # executor holds, which is the whole point of
+                            # this rung existing.
+                            _part = getattr(self, "_layer_stream_partitions", {}).get(_comp_name)
+                            if _part is None:
+                                total_allocated += _m.total_bytes
+                            else:
+                                total_allocated += _part.peak_resident_bytes
+                        elif (isinstance(_dev, str) and _dev.startswith("zero3:")
                                 and not _device_is_unified(_dev, profile)):
                             total_allocated += _m.activation_bytes + _m.overhead_bytes
                         else:
@@ -3406,6 +3440,11 @@ class PrismSolver:
             # disk. Scored below everything so it is only ever chosen when
             # nothing else fits — but it is ALWAYS there, so Prism guarantees
             # execution instead of refusing (P-PRISM-NEVER-REFUSE).
+            # Below every strategy that keeps a component whole, above the
+            # host ones. That ordering IS the inertia: on a card where
+            # single_gpu or zero3 is viable, this loses by 950 or 50 points
+            # and is never chosen. It is not gated on a vendor or a size.
+            "layer_streaming": 50,
             "cpu_streaming": 5,
         }
         score = float(BASE_SCORES.get(strategy_name, 500))
@@ -3653,6 +3692,114 @@ class PrismSolver:
         # for "no GPU used". We preserve that signal.
         fresh = self._fresh_devices(devices)
         return allocations, fresh
+
+    def _try_layer_streaming(
+        self, sorted_comps, comp_mem, devices, shard_sizes, profile, container
+    ) -> Optional[Tuple[Dict, List[DeviceState]]]:
+        """Stream a component at LAYER granularity, on the accelerator.
+
+        The rung below every rung that keeps a component whole. `lazy_sequential`
+        drops the requirement from sum(components) to max(component);
+        `cpu_streaming` does the same on the host. Neither helps a model that is
+        ONE component larger than the budget, and that is not a corner case:
+        DeepSeek-Coder-V2-Lite is a single `model` component of 17777 MB of
+        live weights.
+
+        Here the component itself comes apart. `LayerPartitioner` cuts it where
+        its DATAFLOW comes apart — activations produced before a point and read
+        after it — and each segment holds only the weights its own ops read.
+        The requirement drops from max(component) to max(segment) + activations.
+
+        INERT BY CONSTRUCTION on a machine that does not need it. This rung is
+        scored below every strategy that keeps components whole, so whenever
+        one of those is viable it wins and this is never chosen. It is not
+        gated on a vendor, a device count or a memory size — it simply loses.
+
+        Viable when every component either fits whole, or partitions into
+        segments that fit. When one does not, this returns None and the
+        cascade's refusal stands, with the partitioner's own arithmetic
+        available to say why.
+        """
+        from neurobrix.core.prism.layer_partition import LayerPartitioner
+
+        if not devices:
+            return None
+        target = devices[0]
+        budget_bytes = int(target.spec.memory_mb) * 1024 * 1024
+        if budget_bytes <= 0:
+            return None
+
+        graphs = {}
+        try:
+            for comp in (container.get_neural_components() or []):
+                g = getattr(comp, "graph", None)
+                if isinstance(g, dict):
+                    graphs[comp.name] = g
+        except Exception:
+            return None
+        if not graphs:
+            return None
+
+        sizes_by_comp = self._weight_sizes_by_component(container)
+
+        allocations: Dict[str, Tuple[str, Dict[str, str]]] = {}
+        partitions = {}
+        for comp_name, mem in sorted_comps:
+            dev_str = target.spec.get_device_string()
+            if mem.total_bytes <= budget_bytes:
+                allocations[comp_name] = (dev_str, {})
+                continue
+            graph = graphs.get(comp_name)
+            if graph is None:
+                return None            # cannot cut what we cannot read
+            part = LayerPartitioner(
+                graph, sizes_by_comp.get(comp_name)).partition(budget_bytes)
+            if not part.fits or len(part.segments) < 2:
+                # Either genuinely impossible, or one segment — in which case
+                # a rung above this one already serves it and this must not
+                # take the plan.
+                return None
+            partitions[comp_name] = part
+            allocations[comp_name] = (f"layer_stream:{dev_str}", {})
+
+        if not partitions:
+            return None                # nothing needed cutting: not our plan
+
+        # What each streamed component actually holds, recorded so the
+        # accounting sees the same number the executor will.
+        self._layer_stream_partitions = partitions
+        return allocations, devices
+
+    def _weight_sizes_by_component(self, container) -> Dict[str, Dict[str, int]]:
+        """Per-component {weight_name: stored bytes} from the weights index.
+
+        The index records what is STORED, which is what a load costs. Missing
+        or unreadable means the partitioner sizes from the graph's own
+        shape/dtype instead, which it already knows how to do.
+        """
+        out: Dict[str, Dict[str, int]] = {}
+        base = getattr(container, "cache_path", None)
+        if base is None:
+            return out
+        import json as _json
+        from pathlib import Path as _P
+        comp_dir = _P(base) / "components"
+        if not comp_dir.is_dir():
+            return out
+        for entry in comp_dir.iterdir():
+            index = entry / "weights_index.json"
+            if not index.is_file():
+                continue
+            try:
+                data = _json.loads(index.read_text())
+            except Exception:
+                continue
+            tensors = data.get("tensors")
+            if isinstance(tensors, dict):
+                out[entry.name] = {
+                    k: int(v.get("size_bytes", 0))
+                    for k, v in tensors.items() if isinstance(v, dict)}
+        return out
 
     def _try_cpu_streaming(
         self, sorted_comps, comp_mem, devices, shard_sizes, profile, container

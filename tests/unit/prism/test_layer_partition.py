@@ -189,3 +189,39 @@ def test_a_single_segment_component_is_the_component():
     sub = build_segment_graph(g, part.segments[0])
     assert sub["execution_order"] == g["execution_order"]
     assert sub["output_tensor_ids"] == ["x3"]
+
+
+# ---------------------------------------------------------------------------
+# The rung: what it would choose, and why it loses when it should
+# ---------------------------------------------------------------------------
+
+def test_the_rung_scores_below_every_whole_component_strategy():
+    """Inertia, stated where it is enforced.
+
+    `layer_streaming` is never gated on a vendor, a device count or a memory
+    size. It simply scores below every strategy that keeps a component whole,
+    so on a machine where one of those is viable it loses and is never
+    chosen. This pins that ordering: if someone raises its score above zero3
+    or single_gpu, a big card starts streaming per layer for no reason.
+    """
+    import re
+    from pathlib import Path
+
+    src = Path("src/neurobrix/core/prism/solver.py").read_text()
+    scores = dict(re.findall(r'"([a-z0-9_]+)":\s*(\d+)(?:\.\d+)?,', src))
+    assert "layer_streaming" in scores, "the rung must carry a score"
+    layer = int(scores["layer_streaming"])
+
+    for whole in ("single_gpu", "zero3", "lazy_sequential"):
+        if whole in scores:
+            assert layer < int(scores[whole]), (
+                f"layer_streaming ({layer}) must score below {whole} "
+                f"({scores[whole]}): a machine that can hold a component "
+                f"whole must never stream it")
+
+    for host in ("cpu_execution", "cpu_streaming"):
+        if host in scores:
+            assert layer > int(scores[host]), (
+                f"layer_streaming ({layer}) must score above {host} "
+                f"({scores[host]}): streaming on the accelerator beats "
+                f"moving the whole model to the host")
