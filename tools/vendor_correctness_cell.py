@@ -242,6 +242,7 @@ def vendor_diffusers_video(cell: Dict[str, Any], defaults: Dict[str, Any],
     if not os.path.isdir(v["ref"]):
         return {"output": None, "error": f"vendor snapshot absent: {v['ref']}"}
     png = os.path.join(out_dir, f"{cell['id']}_vendor.png")
+    clip = os.path.join(out_dir, f"{cell['id']}_vendor.mp4")
     cmd = [py, os.path.join(REPO, "tools", "vendor_video_repro.py"),
            "--snapshot", v["ref"], "--prompt", req["prompt"],
            "--seed", str(defaults.get("seed", 42)),
@@ -249,12 +250,20 @@ def vendor_diffusers_video(cell: Dict[str, Any], defaults: Dict[str, Any],
            "--frames", str(req.get("frames", 17)),
            "--height", str(req.get("height", 480)),
            "--width", str(req.get("width", 832)),
-           "--out", png]
+           "--out", png, "--clip-out", clip]
     if latents:
         cmd += ["--latents", latents]
     p = subprocess.run(cmd, capture_output=True, text=True, timeout=7200)
     if p.returncode != 0 or not os.path.isfile(png):
         return {"output": None, "error": f"diffusers_video run failed: {p.stderr[-500:]}"}
+    # Frame 0 out of the vendor's CLIP, by the same path ours takes. Comparing a
+    # frame that crossed an mp4 encode against one taken straight from the array
+    # charges the engine for the codec: measured 36.6 dB on the vendor frame
+    # round-tripped alone, against a 30 dB bound.
+    if os.path.isfile(clip):
+        err = _first_frame(clip, png)
+        if err:
+            return {"output": None, "error": f"vendor clip unreadable: {err}"}
     return {"output": png, "error": None}
 
 

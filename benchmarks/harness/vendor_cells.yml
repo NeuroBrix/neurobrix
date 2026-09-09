@@ -190,7 +190,12 @@ cells:
       precision: "float16 transformer, float32 VAE — the model card keeps the VAE in fp32"
     request:
       prompt: "a red apple rolling slowly across a wooden table"
-      steps: 4
+      # 4 steps was chosen for speed and produced an UNCONVERGED render on BOTH
+      # arms — the vendor's own first frame was an orange smear, not the clip the
+      # prompt asks for. A reference that is mush cannot be a reference, and in
+      # that regime tiny numeric differences amplify without bound. The bound
+      # stays 30 dB; it is the request that was wrong, not the bound.
+      steps: 20
       # 4k+1 because Wan's VAE compresses the temporal axis by 4; a count that
       # is not of that form is resampled by the pipeline and the two arms would
       # no longer render the same clip.
