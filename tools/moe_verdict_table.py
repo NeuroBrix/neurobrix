@@ -28,6 +28,19 @@ def engine_text(raw: str) -> str:
     for marker in ("Generated text:", "=== OUTPUT ===", "Output:"):
         if marker in raw:
             return raw.split(marker)[-1].strip()
+    # A transcription is framed differently: the decoder line reads
+    # "Generated 55 tokens in 1053ms" (so the rule above does not fire, it wants
+    # a newline right after "tokens"), the "[Output] Transcription:" line is
+    # TRUNCATED with an ellipsis, and the full text is printed last, after the
+    # timing line. Without this the extractor returned the whole CLI banner and
+    # the stt cell scored WER 6.1 on 298 "hypothesis" words against 42 — a
+    # divergence that was entirely the harness's. Same lesson as the LLM framing
+    # before it: a cell that cries wolf is worth less than no cell.
+    m = re.search(r"\[Timing\][^\n]*\n", raw)
+    if m:
+        tail = raw[m.end():].strip()
+        if tail:
+            return tail
     return raw.strip()
 
 
