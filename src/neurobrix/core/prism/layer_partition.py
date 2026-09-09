@@ -314,9 +314,26 @@ def build_segment_graph(graph: Dict[str, Any], segment: Segment,
 
     keep = set(produced_here)
     for op_uid in inside:
-        for tid in (ops.get(op_uid) or {}).get("input_tensor_ids") or []:
+        op = ops.get(op_uid) or {}
+        for tid in op.get("input_tensor_ids") or []:
             if (tensors.get(tid) or {}).get("is_parameter"):
                 keep.add(tid)
+        # A tensor may be referenced ONLY from an op's attributes — a
+        # constant an op reads without listing it as an input. Keeping just
+        # what `input_tensor_ids` names dropped those, and the segment then
+        # lowered differently from the same ops in the whole graph: measured
+        # on TinyLlama, `aten.scaled_dot_product_attention::0` refused inside
+        # a segment while lowering cleanly outside one.
+        attrs = op.get("attributes")
+        if isinstance(attrs, dict):
+            for arg in (attrs.get("args") or []):
+                if isinstance(arg, dict) and arg.get("tensor_id"):
+                    keep.add(arg["tensor_id"])
+            kw = attrs.get("kwargs")
+            if isinstance(kw, dict):
+                for arg in kw.values():
+                    if isinstance(arg, dict) and arg.get("tensor_id"):
+                        keep.add(arg["tensor_id"])
 
     # A seam tensor has to be BINDABLE. The executor finds its inputs by the
     # `input::` prefix and strips seven characters to get the name it looks up
