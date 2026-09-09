@@ -45,6 +45,10 @@ def main() -> int:
     ap.add_argument("--latents", default=None,
                     help="path to a .npy initial latent (ours) the vendor must start from")
     ap.add_argument("--out", required=True, help="PNG of the FIRST frame")
+    ap.add_argument("--frames-dir", default=None,
+                    help="write every frame as a lossless PNG, straight from the "
+                         "pipeline's array. This is the arm a decode differential "
+                         "compares against: no codec on either side.")
     ap.add_argument("--clip-out", default=None,
                     help="also write the clip as mp4. The cell then extracts frame 0 from "
                          "BOTH arms' mp4 by the same path: our engine writes a clip, so a "
@@ -82,6 +86,13 @@ def main() -> int:
     if first.dtype != np.uint8:
         first = (np.clip(first, 0.0, 1.0) * 255.0).round().astype(np.uint8)
     Image.fromarray(first).save(a.out)
+    if a.frames_dir:
+        import os
+        os.makedirs(a.frames_dir, exist_ok=True)
+        for i, f in enumerate(frames):
+            fr = f if f.dtype == np.uint8 else (np.clip(f, 0.0, 1.0) * 255).round().astype(np.uint8)
+            Image.fromarray(fr).save(os.path.join(a.frames_dir, f"frame{i:03d}.png"))
+        print(f"[vendor] {len(frames)} lossless frame(s) -> {a.frames_dir}")
     if a.clip_out:
         import imageio.v2 as iio
         w = iio.get_writer(a.clip_out, fps=16)
