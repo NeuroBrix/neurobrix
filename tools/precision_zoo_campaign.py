@@ -37,48 +37,12 @@ import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 NBX = "/home/mlops/ml/venv/bin/neurobrix"
 
 
-def visible_card(gpu) -> str:
-    """The physical card `gpu` names, resolved through a pin we inherited.
+from rig_devices import visible_card, gate_card   # the one brick, not a third copy
 
-    `CUDA_VISIBLE_DEVICES` makes device indices RELATIVE: under an outer pin of
-    "2", index 0 IS card 2. Writing the index straight back — which every launch
-    site here did — silently discards the pin and sends the work to a card the
-    caller never chose. The rig scheduler declares a card per job, so the two
-    composed into a lie: on 2026-09-09 a 30 GB row declared on a 32 GB card ran
-    on a 16 GB one against 17.3 GB of weights, and the arm was recorded FAILED
-    for a reason that was the harness's, not the engine's.
-
-    A index that does not exist inside the pin is refused, never guessed.
-    """
-    inherited = (os.environ.get("CUDA_VISIBLE_DEVICES") or "").strip()
-    if not inherited:
-        return str(gpu)
-    cards = [c.strip() for c in inherited.split(",") if c.strip()]
-    try:
-        return cards[int(gpu)]
-    except (ValueError, IndexError):
-        raise SystemExit(
-            f"--gpu {gpu} names no card inside the pin CUDA_VISIBLE_DEVICES={inherited!r}, "
-            f"which exposes {len(cards)}: {cards}. A device this campaign cannot resolve is "
-            f"never guessed at."
-        )
-
-
-def gate_card() -> str:
-    """The card the reference gate runs on.
-
-    `NBX_GATE_GPU` defaults to a physical card of this rig ("never the condemned
-    card"). Under an inherited pin the caller has already chosen the cards, so
-    there is nothing left for that default to choose between: take the first one
-    we were given rather than reach outside the pin.
-    """
-    inherited = (os.environ.get("CUDA_VISIBLE_DEVICES") or "").strip()
-    if inherited:
-        return inherited.split(",")[0].strip()
-    return os.environ.get("NBX_GATE_GPU", "1")
 
 PY = "/home/mlops/ml/venv/bin/python"
 CACHE = Path(os.path.expanduser("~")) / ".neurobrix" / "cache"
