@@ -109,3 +109,28 @@ def test_an_unknown_sub_strategy_is_not_an_error():
 def test_a_component_with_no_allocation_answers_false():
     rt = _Runtime(_Strategy(False), _Plan({}))
     assert rt._component_manages_own_residency("absent") is False
+
+
+def test_the_table_and_the_classes_agree():
+    """The declaration table and the classes must not drift.
+
+    The runtime reads a TABLE rather than resolving a class, because
+    resolving one imports the ATen strategy module and a `--triton` run must
+    never load that branch (R33). Measured 2026-09-09: reading the attribute
+    off the resolved class broke every triton run with "Torch not compiled
+    with CUDA enabled".
+
+    So the table is what the runtime reads and the classes are what the
+    strategies declare, and this test is the only thing keeping them equal.
+    It imports the classes deliberately — a test may, a triton run may not.
+    """
+    from neurobrix.core.strategies import (
+        _MANAGES_WEIGHT_RESIDENCY, _strategy_class, STRATEGY_REGISTRY)
+
+    for name in STRATEGY_REGISTRY:
+        cls = STRATEGY_REGISTRY[name]
+        declared = bool(getattr(cls, "manages_weight_residency", False))
+        tabled = name in _MANAGES_WEIGHT_RESIDENCY
+        assert declared == tabled, (
+            f"{name!r}: the class says manages_weight_residency={declared}, "
+            f"the table says {tabled}. Change both, or neither.")

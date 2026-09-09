@@ -247,6 +247,9 @@ class LayerStreamingStrategy(ExecutionStrategy):
                 import os as _os
                 if _os.environ.get("NBX_LAYER_DIAG") == "1":
                     print(f"   [LAYERDIAG] seg{sub.get('segment_index')} "
+                          f"type={type(out).__name__} repr={repr(out)[:160]}",
+                          flush=True)
+                    print(f"   [LAYERDIAG] seg{sub.get('segment_index')} "
                           f"déclare {len(sub.get('output_tensor_ids') or [])} sorties, "
                           f"rend {len(out)} clés; "
                           f"rendues={sorted(out)[:4]}; "

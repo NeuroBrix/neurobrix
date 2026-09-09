@@ -411,7 +411,11 @@ def build_segment_graph(graph: Dict[str, Any], segment: Segment,
         t = out["tensors"].get(tid)
         if t is not None and t.get("output_name"):
             t = dict(t)
-            t["output_name"] = None
+            # REMOVE the key, do not set it to None. A reader using
+            # `.get("output_name", tid)` gets its default only when the key is
+            # absent; a present-but-null name returned None and collapsed
+            # every seam output onto one key.
+            t.pop("output_name", None)
             t["seam_intermediate"] = True
             out["tensors"][tid] = t
     out["output_tensor_ids"] = sorted(seg_outputs)

@@ -2359,7 +2359,20 @@ class GraphExecutor:
         outputs = {}
         for tid, tensor in raw_outputs.items():
             info = tensors_meta.get(tid, {})
-            name = info.get("output_name", tid)
+            # `.get(key, default)` returns the default only when the KEY IS
+            # ABSENT. A tensor carrying `"output_name": null` — which an
+            # export may legitimately write for an intermediate — returned
+            # None, and every such tensor then collapsed onto the single key
+            # None: four outputs in, one out, silently, with the last writer
+            # winning.
+            #
+            # Measured 2026-09-09 building segment graphs: a segment declared
+            # four seam outputs and its run returned
+            # `{None: NBXTensor(shape=(1, 21, 2048))}`.
+            #
+            # A null name is an ABSENT name. `or` says that; `get`'s default
+            # does not.
+            name = info.get("output_name") or tid
             outputs[name] = tensor
 
         elapsed = (_time.perf_counter() - start) * 1000
