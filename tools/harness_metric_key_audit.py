@@ -139,8 +139,15 @@ def audit(harnesses: list, bricks: dict) -> list:
         for fn in function_nodes(tree):
             src = ast.dump(fn)
             # which bricks does this function invoke, by file name?
+            # A function is only tied to a brick it actually INVOKES. Naming it
+            # in a `help=` string is not an invocation, and treating it as one
+            # made this audit attribute a consumer's reads of the CONTAINER's
+            # graph.json to an unrelated brick — the auditor crying wolf again,
+            # this time on its own author's new tool.
+            invokes = ("subprocess" in src) or ("check_output" in src)
             used = [b for b in bricks
-                    if Path(b).resolve() != Path(h).resolve()
+                    if invokes
+                    and Path(b).resolve() != Path(h).resolve()
                     and (Path(b).name in src or Path(b).stem in src)]
             if not used:
                 continue

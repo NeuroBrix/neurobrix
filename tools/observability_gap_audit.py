@@ -44,6 +44,20 @@ tensors, `aten._scaled_dot_product_efficient_attention` declares 4, and
 fine and the two that are blind separate themselves, from data.
 
 A gap on a single-output op is `BLIND` and fails the gate.
+
+DECIDABLE, WITH `--planned`
+---------------------------
+Without it the reference is `graph.json`'s TRACED `execution_order`, and runtime
+passes change what actually runs — so a gap is either a blinded site or an op a
+pass legitimately removed, and the sibling heuristic above only narrows that, it
+does not decide it. The counts printed in that mode are an UPPER BOUND and say
+so.
+
+`NBX_DUMP_PLANNED_OPS=<file>` makes the engine write the op list AFTER the
+passes. Given that file through `--planned`, the question becomes exact:
+
+    planned AND no record            -> BLIND, a site something replaced
+    in the traced order, not planned -> REMOVED BY A PASS, reported, not a fault
 """
 from __future__ import annotations
 
@@ -92,9 +106,25 @@ def component_graphs(nbx: str) -> dict:
     return out
 
 
-def audit(nbx: str, dump: str) -> list:
+def load_planned(path: str) -> dict:
+    """op_uids the engine actually compiled, per component, after the passes."""
+    per = {}
+    for line in Path(path).read_text(errors="replace").splitlines():
+        try:
+            r = json.loads(line)
+        except Exception:
+            continue
+        c, u = r.get("component"), r.get("op_uid")
+        if c is None or u is None:
+            continue
+        per.setdefault(c, set()).add(u)
+    return per
+
+
+def audit(nbx: str, dump: str, planned_path: str = "") -> list:
     graphs = component_graphs(nbx)
     recorded = load_records(dump)
+    planned = load_planned(planned_path) if planned_path else None
     rows = []
     for comp, g in sorted(graphs.items()):
         ops = g.get("ops", {})
@@ -113,7 +143,8 @@ def audit(nbx: str, dump: str) -> list:
         # discriminator, and it is read from the run, not from a list someone
         # has to maintain.
         types_seen = {ops.get(u, {}).get("op_type") for u in seen}
-        blind, skipped, systematic = [], 0, {}
+        plan = planned.get(comp) if planned is not None else None
+        blind, skipped, systematic, removed = [], 0, {}, 0
         for uid in order:
             o = ops.get(uid, {})
             n_out = len(o.get("output_tensor_ids", []) or o.get("output_shapes", []))
@@ -122,8 +153,15 @@ def audit(nbx: str, dump: str) -> list:
                 continue
             if uid in seen:
                 continue
+            if plan is not None and uid not in plan:
+                # a pass removed it before execution — it never ran, so its
+                # silence is honest and this is not a blinded site
+                removed += 1
+                continue
             t = o.get("op_type")
-            if t not in types_seen:
+            if plan is None and t not in types_seen:
+                # no planned list: the sibling heuristic is all we have, and it
+                # narrows rather than decides
                 systematic[t] = systematic.get(t, 0) + 1
                 continue
             blind.append({"op_uid": uid, "op_type": t,
@@ -133,7 +171,10 @@ def audit(nbx: str, dump: str) -> list:
                               1 for u in seen if ops.get(u, {}).get("op_type") == t)})
         rows.append({"component": comp,
                      "verdict": "BLIND" if blind else "OBSERVED",
+                     "decidable": plan is not None,
                      "ops_in_order": len(order), "records": len(seen),
+                     "planned": len(plan) if plan is not None else None,
+                     "removed_by_a_pass": removed if plan is not None else None,
                      "expected_skips": skipped,
                      "systematic_classes": systematic, "blind": blind})
     return rows
@@ -145,10 +186,14 @@ def main() -> int:
     ap.add_argument("--container", required=True, help="path to model.nbx")
     ap.add_argument("--dump", required=True, help="NBX_DUMP_TIDS jsonl of a run")
     ap.add_argument("--label", default="", help="what this run was")
+    ap.add_argument("--planned", default="",
+                    help="NBX_DUMP_PLANNED_OPS jsonl — the op list AFTER the "
+                         "passes. With it a gap is decidable; without it the "
+                         "counts are an upper bound.")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
 
-    rows = audit(a.container, a.dump)
+    rows = audit(a.container, a.dump, a.planned)
     blind_total = 0
     for r in rows:
         mark = {"OBSERVED": "✓", "NOT-EXERCISED": "–"}.get(r["verdict"], "✗")
@@ -156,6 +201,9 @@ def main() -> int:
               f"{r['records']:5d} record(s) / {r['ops_in_order']:5d} op(s)"
               + (f", {r.get('expected_skips',0)} legitimately skipped"
                  if r["verdict"] != "NOT-EXERCISED" else ""))
+        if r.get("removed_by_a_pass"):
+            print(f"      pass   {r['removed_by_a_pass']} op(s) in the traced order "
+                  f"were removed before execution — honest silence, not a blind site")
         for t, n in sorted((r.get("systematic_classes") or {}).items()):
             print(f"      class  {t}: {n} op(s), and this type records NOWHERE in "
                   f"this component — handled outside the recorder, not a blinded site")
@@ -165,8 +213,12 @@ def main() -> int:
             print(f"            shape {b['output_shape']}  module {b['parent_module']}")
             print(f"            {b['siblings_recorded']} sibling(s) of this type DID "
                   f"record here — this site was replaced, not excluded")
-    print(f"\n{blind_total} site(s) BLIND: a single-tensor op with no record while its "
-          f"own siblings recorded — a place we believe we are looking and are not")
+    decidable = all(r.get("decidable") for r in rows if r["verdict"] != "NOT-EXERCISED")
+    how = ("against the runtime's PLANNED op list — decidable"
+           if decidable else
+           "against the container's TRACED order — an UPPER BOUND, since a pass "
+           "may have removed some of these honestly (pass --planned to decide)")
+    print(f"\n{blind_total} site(s) BLIND, {how}")
     if a.out:
         Path(a.out).parent.mkdir(parents=True, exist_ok=True)
         Path(a.out).write_text(json.dumps(

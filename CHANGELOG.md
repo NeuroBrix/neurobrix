@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- The ops a request will actually run can be written out. `NBX_DUMP_PLANNED_OPS=<file>` writes
+  each component's op list AFTER the pre-execution passes, which is the only order an
+  instrumentation audit can honestly compare against — the container's `execution_order` is the
+  traced one, and a pass may legitimately remove ops from it. Diagnostic, default off.
 - The final latent of a diffusion request can be written out, in either mode.
   `NBX_DUMP_FINAL_LATENT=<dir>` writes the post-denoise latent at the `pre_vae` boundary — the
   point where it is known and named — so a request can be compared to its vendor's at the stage
