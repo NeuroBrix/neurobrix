@@ -38,6 +38,48 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 NBX = "/home/mlops/ml/venv/bin/neurobrix"
+
+
+def visible_card(gpu) -> str:
+    """The physical card `gpu` names, resolved through a pin we inherited.
+
+    `CUDA_VISIBLE_DEVICES` makes device indices RELATIVE: under an outer pin of
+    "2", index 0 IS card 2. Writing the index straight back — which every launch
+    site here did — silently discards the pin and sends the work to a card the
+    caller never chose. The rig scheduler declares a card per job, so the two
+    composed into a lie: on 2026-09-09 a 30 GB row declared on a 32 GB card ran
+    on a 16 GB one against 17.3 GB of weights, and the arm was recorded FAILED
+    for a reason that was the harness's, not the engine's.
+
+    A index that does not exist inside the pin is refused, never guessed.
+    """
+    inherited = (os.environ.get("CUDA_VISIBLE_DEVICES") or "").strip()
+    if not inherited:
+        return str(gpu)
+    cards = [c.strip() for c in inherited.split(",") if c.strip()]
+    try:
+        return cards[int(gpu)]
+    except (ValueError, IndexError):
+        raise SystemExit(
+            f"--gpu {gpu} names no card inside the pin CUDA_VISIBLE_DEVICES={inherited!r}, "
+            f"which exposes {len(cards)}: {cards}. A device this campaign cannot resolve is "
+            f"never guessed at."
+        )
+
+
+def gate_card() -> str:
+    """The card the reference gate runs on.
+
+    `NBX_GATE_GPU` defaults to a physical card of this rig ("never the condemned
+    card"). Under an inherited pin the caller has already chosen the cards, so
+    there is nothing left for that default to choose between: take the first one
+    we were given rather than reach outside the pin.
+    """
+    inherited = (os.environ.get("CUDA_VISIBLE_DEVICES") or "").strip()
+    if inherited:
+        return inherited.split(",")[0].strip()
+    return os.environ.get("NBX_GATE_GPU", "1")
+
 PY = "/home/mlops/ml/venv/bin/python"
 CACHE = Path(os.path.expanduser("~")) / ".neurobrix" / "cache"
 ASSETS = REPO / "benchmarks" / "assets"
@@ -241,7 +283,7 @@ def _transcribe(path: Path) -> str:
     out = Path(tempfile.mkdtemp(prefix="nbx_gate_")) / "t.txt"
     env = {**os.environ}
     env.pop("NBX_ACTIVATIONS_FP16_SAFE", None)
-    env["CUDA_VISIBLE_DEVICES"] = os.environ.get("NBX_GATE_GPU", "1")   # never the condemned card
+    env["CUDA_VISIBLE_DEVICES"] = gate_card()   # never the condemned card, and never outside a pin
     r = subprocess.run([NBX, "run", "--model", "whisper-large-v3-turbo", "--audio", str(path), "--output", str(out)],
                        env=env, capture_output=True, text=True, timeout=900)
     if r.returncode != 0 or not out.exists():
@@ -335,7 +377,7 @@ def one_model(model: str, gpu, out: Path, extra: list, timeout: int) -> dict:
     if gpu is None:
         base_env.pop("CUDA_VISIBLE_DEVICES", None)
     else:
-        base_env["CUDA_VISIBLE_DEVICES"] = str(gpu)
+        base_env["CUDA_VISIBLE_DEVICES"] = visible_card(gpu)
     res = {"model": model, "family": fam, "model_name": manifest(model).get("model_name"), "request": req,
            "weight_gb": round(weight_gb(model), 2), "config": "machine" if gpu is None else f"pinned:{gpu}"}
     rc, wall = run([NBX, "calibrate", "--model", model] + req, base_env, d / "calibrate.log", timeout)
@@ -408,7 +450,7 @@ def launcher_ab(model: str, gpu, out: Path, extra: list, timeout: int) -> dict:
     if gpu is None:
         base_env.pop("CUDA_VISIBLE_DEVICES", None)
     else:
-        base_env["CUDA_VISIBLE_DEVICES"] = str(gpu)
+        base_env["CUDA_VISIBLE_DEVICES"] = visible_card(gpu)
     res = {"model": model, "family": fam, "weight_gb": round(weight_gb(model), 2),
            "config": "machine" if gpu is None else f"pinned:{gpu}", "request": req, "lever": "launcher"}
     for arm, env in (("A", {**base_env, "NBX_LAUNCHER": "triton"}), ("B", {**base_env, "NBX_LAUNCHER": "nbx"})):
@@ -533,7 +575,7 @@ def tree_ab(model: str, gpu, out: Path, extra: list, timeout: int, trees: list, 
     if gpu is None:
         base_env.pop("CUDA_VISIBLE_DEVICES", None)
     else:
-        base_env["CUDA_VISIBLE_DEVICES"] = str(gpu)
+        base_env["CUDA_VISIBLE_DEVICES"] = visible_card(gpu)
     res = {"model": model, "family": fam, "weight_gb": round(weight_gb(model), 2),
            "config": "machine" if gpu is None else f"pinned:{gpu}", "request": req, "lever": "tree",
            "trees": {label: str(src) for label, src in trees}, "arms": {}}
@@ -634,7 +676,7 @@ def sweep_one(model: str, gpu, out: Path, extra: list, timeout: int) -> dict:
     if gpu is None:
         env.pop("CUDA_VISIBLE_DEVICES", None)
     else:
-        env["CUDA_VISIBLE_DEVICES"] = str(gpu)
+        env["CUDA_VISIBLE_DEVICES"] = visible_card(gpu)
     outp = d / f"sweep{ext}"
     rc, wall = run([NBX, "run", "--model", model] + req + ["--output", str(outp)], env, d / "sweep.log", timeout)
     text = (d / "sweep.log").read_text(errors="replace")
@@ -660,7 +702,7 @@ def drift_one(model: str, gpu, out: Path, extra: list, timeout: int, bound: floa
     if gpu is None:
         env.pop("CUDA_VISIBLE_DEVICES", None)
     else:
-        env["CUDA_VISIBLE_DEVICES"] = str(gpu)
+        env["CUDA_VISIBLE_DEVICES"] = visible_card(gpu)
     if src is not None:                                  # the walk runs the given tree's package
         env = {**env, "PYTHONPATH": str(Path(src).resolve())}
         cmd = [PY, "-c", "import sys; from neurobrix.cli import main; sys.exit(main())", "drift", "--model", model]
@@ -800,7 +842,7 @@ def env_ab(model: str, gpu, out: Path, extra: list, timeout: int, env_b: dict, l
     if gpu is None:
         base_env.pop("CUDA_VISIBLE_DEVICES", None)
     else:
-        base_env["CUDA_VISIBLE_DEVICES"] = str(gpu)
+        base_env["CUDA_VISIBLE_DEVICES"] = visible_card(gpu)
     res = {"model": model, "family": fam, "weight_gb": round(weight_gb(model), 2),
            "config": "machine" if gpu is None else f"pinned:{gpu}", "request": req, "lever": lever, "env_b": env_b,
            "src": str(src) if src else None, "cold": cold, "paired": paired}
@@ -895,7 +937,7 @@ def r33_probe(model: str, gpu, out: Path, extra: list, timeout: int, src: Path =
     if gpu is None:
         env.pop("CUDA_VISIBLE_DEVICES", None)
     else:
-        env["CUDA_VISIBLE_DEVICES"] = str(gpu)
+        env["CUDA_VISIBLE_DEVICES"] = visible_card(gpu)
     outp = d / f"probe{ext}"
     log = d / "probe.log"
     probe = str((src.parent if src else REPO) / "tools" / "r33_sys_modules_probe.py")
