@@ -21,6 +21,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import os
 import re
@@ -59,12 +60,43 @@ def m_psnr_db(ours: str, theirs: str, bound: Any) -> Tuple[Any, bool]:
     if p.returncode != 0:
         return {"error": p.stderr[-400:]}, False
     d = json.loads(p.stdout)
-    return d, float(d.get("psnr", 0.0)) >= float(bound)
+    # The key is `psnr_db` — `psnr` was never emitted, so this read fell back to
+    # 0.0 on every render and the cell could not report AGREES whatever the two
+    # images were. A metric that cannot pass is not a gate, it is an alarm.
+    if "psnr_db" not in d:
+        return {"error": f"image_fidelity emitted no psnr_db: keys={sorted(d)}"}, False
+    return d, float(d["psnr_db"]) >= float(bound)
+
+
+def _wer_words(t: str) -> List[str]:
+    """Words for WER: case and punctuation carry no transcription error."""
+    return [w for w in re.sub(r"[^\w\s']", " ", str(t).lower()).split() if w]
+
+
+def m_wer(ours: str, theirs: str, bound: Any) -> Tuple[Any, bool]:
+    """Word error rate of our transcript against the vendor's, Levenshtein on words."""
+    r, h = _wer_words(theirs), _wer_words(ours)
+    if not r:
+        return {"error": "vendor transcript empty"}, False
+    # Classic DP; the reference is the vendor's transcript, as the cell's whole
+    # point is that the vendor is the truth and we are the thing measured.
+    prev = list(range(len(h) + 1))
+    for i in range(1, len(r) + 1):
+        cur = [i] + [0] * len(h)
+        for j in range(1, len(h) + 1):
+            cur[j] = min(prev[j] + 1, cur[j - 1] + 1,
+                         prev[j - 1] + (r[i - 1] != h[j - 1]))
+        prev = cur
+    wer = prev[len(h)] / len(r)
+    return ({"wer": round(wer, 5), "ref_words": len(r), "hyp_words": len(h),
+             "edits": prev[len(h)], "ours": ours[:200], "theirs": theirs[:200]},
+            wer <= float(bound))
 
 
 METRICS = {
     "text_common_prefix_words": m_text_common_prefix_words,
     "psnr_db": m_psnr_db,
+    "wer": m_wer,
 }
 
 
@@ -93,8 +125,36 @@ def vendor_ollama(cell: Dict[str, Any], defaults: Dict[str, Any],
         return {"output": None, "error": f"ollama unreachable or model absent: {e!r}"}
 
 
+def vendor_available(cell: Dict[str, Any]) -> str:
+    """Why this cell's vendor stack cannot run, or "" if it can.
+
+    Checked BEFORE our arm, because a `latent_pinned` cell must run ours first
+    (it produces the latent the vendor starts from) and loading a model for a
+    vendor that was never installed would be waste, not evidence.
+    """
+    kind = cell["vendor"]["kind"]
+    if kind == "ollama":
+        return ""
+    if kind == "faster_whisper":
+        venv = cell["vendor"].get("venv", "")
+        if not os.path.isfile(os.path.join(venv, "bin", "python")):
+            return f"vendor venv absent: {venv}"
+        if not os.path.isdir(cell["vendor"]["ref"]):
+            return f"vendor snapshot absent: {cell['vendor']['ref']}"
+        return ""
+    if kind == "diffusers":
+        venv = cell["vendor"].get("venv", "")
+        if not os.path.isfile(os.path.join(venv, "bin", "python")):
+            return f"vendor venv absent: {venv}"
+        if not os.path.isdir(cell["vendor"]["ref"]):
+            return f"vendor snapshot absent: {cell['vendor']['ref']}"
+        return ""
+    return (f"no runner wired for vendor.kind={kind!r} "
+            f"({cell['vendor'].get('ref')}) — declared, not yet runnable")
+
+
 def vendor_diffusers(cell: Dict[str, Any], defaults: Dict[str, Any],
-                     out_dir: str) -> Dict[str, Any]:
+                     out_dir: str, latents: str = "") -> Dict[str, Any]:
     v, req = cell["vendor"], cell.get("request", {})
     venv = v.get("venv", "")
     py = os.path.join(venv, "bin", "python")
@@ -111,10 +171,52 @@ def vendor_diffusers(cell: Dict[str, Any], defaults: Dict[str, Any],
            "--height", str(req.get("height", 1024)),
            "--width", str(req.get("width", 1024)),
            "--out", png]
+    if latents:
+        # The PRIMARY gate: the vendor denoises OUR initial noise, so PSNR
+        # compares two computations instead of two valid samples.
+        cmd += ["--latents", latents]
     p = subprocess.run(cmd, capture_output=True, text=True, timeout=7200)
     if p.returncode != 0 or not os.path.isfile(png):
         return {"output": None, "error": f"diffusers run failed: {p.stderr[-500:]}"}
     return {"output": png, "error": None}
+
+
+FWHISPER_DRIVER = r"""
+import glob, json, os, sys
+from faster_whisper import WhisperModel
+root, audio, beam = sys.argv[1], sys.argv[2], int(sys.argv[3])
+snaps = glob.glob(os.path.join(root, "snapshots", "*"))
+model = WhisperModel(snaps[0] if snaps else root, device="cuda", compute_type="float16")
+segs, info = model.transcribe(audio, beam_size=beam, temperature=0)
+print(json.dumps({"text": "".join(s.text for s in segs).strip(),
+                  "language": info.language}))
+"""
+
+
+def vendor_faster_whisper(cell: Dict[str, Any], defaults: Dict[str, Any],
+                          *_a, **_k) -> Dict[str, Any]:
+    """The vendor transcript, from the model's own CTranslate2 runtime.
+
+    Greedy (beam 1, temperature 0) on both sides so the comparison is of the
+    computation, not of a decoder's search.
+    """
+    v, req = cell["vendor"], cell.get("request", {})
+    py = os.path.join(v.get("venv", ""), "bin", "python")
+    if not os.path.isfile(py):
+        return {"output": None, "error": f"vendor venv absent: {v.get('venv')}"}
+    if not os.path.isdir(v["ref"]):
+        return {"output": None, "error": f"vendor snapshot absent: {v['ref']}"}
+    audio = req.get("audio", "")
+    if not os.path.isfile(audio):
+        return {"output": None, "error": f"cell audio absent: {audio}"}
+    p = subprocess.run([py, "-c", FWHISPER_DRIVER, v["ref"], audio, "1"],
+                       capture_output=True, text=True, timeout=1800)
+    if p.returncode != 0:
+        return {"output": None, "error": f"faster-whisper failed: {p.stderr[-400:]}"}
+    try:
+        return {"output": json.loads(p.stdout.strip().splitlines()[-1])["text"], "error": None}
+    except Exception as exc:
+        return {"output": None, "error": f"unreadable vendor output ({exc}): {p.stdout[-200:]}"}
 
 
 def vendor_unavailable(cell: Dict[str, Any], *_args, **_kwargs) -> Dict[str, Any]:
@@ -126,15 +228,23 @@ def vendor_unavailable(cell: Dict[str, Any], *_args, **_kwargs) -> Dict[str, Any
 # ── our side ────────────────────────────────────────────────────────────────
 
 def run_ours(cell: Dict[str, Any], defaults: Dict[str, Any], mode: str,
-             src: str, out_dir: str, timeout: int) -> Dict[str, Any]:
+             src: str, out_dir: str, timeout: int,
+             latent_dir: str = "") -> Dict[str, Any]:
     req = cell.get("request", {})
     env = dict(os.environ)
     env["PYTHONPATH"] = src + os.pathsep + env.get("PYTHONPATH", "")
+    if latent_dir:
+        # Our arm runs first and writes the raw N(0,1) draw the vendor will be
+        # handed. The seam lives at the one place both modes synthesize a
+        # `randn` variable, so this works in compiled and in triton (R30).
+        env["NBX_DUMP_INIT_LATENT"] = latent_dir
     cmd = [sys.executable, "-c",
            "import sys; from neurobrix.cli import main; sys.exit(main())",
            "run", "--model", cell["model"], "--seed", str(defaults.get("seed", 42))]
     if "prompt" in req:
         cmd += ["--prompt", req["prompt"]]
+    if req.get("audio"):
+        cmd += ["--audio", req["audio"]]
     if req.get("temperature") is not None:
         cmd += ["--temperature", str(req["temperature"])]
     if req.get("max_tokens") or defaults.get("max_tokens"):
@@ -143,6 +253,18 @@ def run_ours(cell: Dict[str, Any], defaults: Dict[str, Any], mode: str,
     png = os.path.join(out_dir, f"{cell['id']}_ours.png")
     if is_image:
         cmd += ["--output", png]
+        # The request's render config belongs to BOTH arms. Ours used to take
+        # the model's defaults while the vendor rendered the declared step
+        # count, so the two were never comparing the same computation — the
+        # same defect the retrace gate closed for its image row.
+        if req.get("steps") is not None:
+            cmd += ["--steps", str(req["steps"])]
+        if req.get("guidance") is not None:
+            cmd += ["--cfg", str(req["guidance"])]
+        if req.get("height") is not None:
+            cmd += ["--height", str(req["height"])]
+        if req.get("width") is not None:
+            cmd += ["--width", str(req["width"])]
     if mode == "triton":
         cmd.append("--triton")
     try:
@@ -211,11 +333,58 @@ def main() -> int:
                   flush=True)
             continue
 
+        # The vendor stack is checked BEFORE either arm runs: a `latent_pinned`
+        # cell must run OURS first (it produces the latent the vendor starts
+        # from), and loading a model for an absent vendor is waste, not evidence.
+        unavailable = vendor_available(cell)
+        if unavailable:
+            row.update(verdict="NOT-RUN", reason=unavailable,
+                       seconds=round(time.time() - t0, 1))
+            results.append(row)
+            print(f"[cell] {cell['id']:32s} NOT-RUN  ({unavailable[:90]})", flush=True)
+            continue
+
+        gate = cell.get("gate", {})
+        gate_kind = gate.get("kind", "deterministic_output")
+        row["gate"] = gate_kind
+        pinned = gate_kind == "latent_pinned"
+        latent_dir = os.path.join(args.out, f"{cell['id']}_latent") if pinned else ""
+
+        ours = run_ours(cell, defaults, args.mode, args.src, args.out, args.timeout,
+                        latent_dir=latent_dir)
+        if ours["error"]:
+            row.update(verdict="NOT-RUN", reason=ours["error"],
+                       seconds=round(time.time() - t0, 1))
+            results.append(row)
+            print(f"[cell] {cell['id']:32s} NOT-RUN  ({ours['error'][:90]})", flush=True)
+            continue
+
+        latents = ""
+        if pinned:
+            dumped = sorted(glob.glob(os.path.join(latent_dir, "*.npy")))
+            if not dumped:
+                # The primary gate cannot be run without the latent, and the
+                # weaker one is not its equivalent: say so rather than silently
+                # comparing two independent samples and calling it a divergence.
+                row.update(verdict="NOT-RUN", seconds=round(time.time() - t0, 1),
+                           reason="the primary gate is latent_pinned and our arm "
+                                  "dumped no latent (NBX_DUMP_INIT_LATENT wrote "
+                                  f"nothing to {latent_dir}); comparing independent "
+                                  "samples would not be this gate")
+                results.append(row)
+                print(f"[cell] {cell['id']:32s} NOT-RUN  (no latent dumped — primary "
+                      f"gate not runnable)", flush=True)
+                continue
+            latents = dumped[0]
+            row["latent"] = latents
+
         kind = cell["vendor"]["kind"]
         if kind == "ollama":
             ven = vendor_ollama(cell, defaults, args.ollama_host)
+        elif kind == "faster_whisper":
+            ven = vendor_faster_whisper(cell, defaults)
         elif kind == "diffusers":
-            ven = vendor_diffusers(cell, defaults, args.out)
+            ven = vendor_diffusers(cell, defaults, args.out, latents=latents)
         else:
             ven = vendor_unavailable(cell)
         if ven["error"]:
@@ -223,14 +392,6 @@ def main() -> int:
                        seconds=round(time.time() - t0, 1))
             results.append(row)
             print(f"[cell] {cell['id']:32s} NOT-RUN  ({ven['error'][:90]})", flush=True)
-            continue
-
-        ours = run_ours(cell, defaults, args.mode, args.src, args.out, args.timeout)
-        if ours["error"]:
-            row.update(verdict="NOT-RUN", reason=ours["error"],
-                       seconds=round(time.time() - t0, 1))
-            results.append(row)
-            print(f"[cell] {cell['id']:32s} NOT-RUN  ({ours['error'][:90]})", flush=True)
             continue
 
         value, passed = METRICS[metric](ours["output"], ven["output"],
