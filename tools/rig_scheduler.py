@@ -187,6 +187,16 @@ def cmd_run(args) -> int:
             say(f"TIMED  {head_timed.name} on card {head_timed.card}, machine exclusive")
             continue
 
+        # The floor a timed job takes is held for its whole LIFE, not just the instant it
+        # takes it. The branch above yields what was already running; without this line the
+        # very next poll starts a fresh untimed job beside the measurement, because the
+        # exclusivity test above is skipped once a timed job is running. That is the exact
+        # falsification this scheduler exists to prevent, and it is cheap to hold: the cards
+        # idle for the minutes a timed row takes, and every number it reports is a number.
+        if any(j.family == "timed" for j in running):
+            time.sleep(POLL_S)
+            continue
+
         busy = {j.card for j in running if j.card is not None}
         heavy_running = sum(1 for j in running if j.heavy)
         for j in list(pending):
