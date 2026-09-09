@@ -307,6 +307,13 @@ class ExecutionPlan:
     # so the classification has to travel with the plan instead of dying in
     # the solver, which is where it used to stop.
     transient_components: List[str] = field(default_factory=list)
+    # component -> [[first_op_uid, last_op_uid], ...], the segments the
+    # LAYER-STREAMING rung was budgeted against. Carried rather than
+    # recomputed: the executor's dag may have been transformed since Prism
+    # read it (MoE fusion rewrites which tensors an op reads), and a segment
+    # boundary recomputed on a different graph is not the boundary the budget
+    # was accepted under.
+    layer_stream_plan: Dict[str, List[List[str]]] = field(default_factory=dict)
     # Op-level tiling — per-component plan emitted when a single op's
     # output+workspace exceeds the assigned GPU's safe VRAM budget. Picked
     # up by RuntimeExecutor to wire op_uid interceptors on the component's
@@ -702,14 +709,31 @@ class PrismSolver:
             # CPU-only profile: skip the entire GPU cascade and jump
             # straight to cpu_execution.
             strategies = [
-                # ("layer_streaming", self._try_layer_streaming) belongs
-                # HERE — below every rung that keeps a component whole, above
-                # the host ones. It is deliberately not listed yet: the
-                # planner and the segment builder are landed and tested, and
-                # LayerStreamingStrategy is not. A rung Prism can CHOOSE and
-                # then cannot execute is worse than a rung it does not offer,
-                # which is exactly what test_solver_registry_parity says when
-                # this line is uncommented without the strategy.
+                # ("layer_streaming", self._try_layer_streaming) belongs HERE
+                # — below every rung that keeps a component whole, above the
+                # host ones, winning by score (50) and never by a gate.
+                #
+                # Held out for a MEASURED reason, not a missing piece of mine.
+                # Everything on this side is done: the rung selects (4
+                # segments at a 1000 MB profile, 2 at 1600, none at 18186),
+                # the plan carries the boundaries, the budget it announces is
+                # the peak it holds, and the segments are executable graphs
+                # with bindable seams.
+                #
+                # What is missing is on the ENGINE side. For an autoregressive
+                # model the flow handler calls `executor.run` directly and
+                # bypasses `strategy.execute_component` — executor.py says so
+                # itself ("Flow handlers that bypass strategy.execute_component
+                # (autoregressive LLM prefill)"). Verified: with the rung
+                # selected for TinyLlama, LayerStreamingStrategy.
+                # execute_component was never entered and the whole component
+                # was loaded. zero3 solves this with `install_for_executor`,
+                # which _ensure_weights_loaded calls — behind
+                # `_is_zero3_component`, "zero3-specific by design".
+                #
+                # Offering the rung before that hook admits it would announce
+                # one budget and execute another, which is the defect this
+                # whole milestone exists to remove.
                 ("cpu_execution", self._try_cpu_execution),
                 ("cpu_streaming", self._try_cpu_streaming),
             ]
@@ -722,14 +746,31 @@ class PrismSolver:
                 ("single_gpu_lifecycle", self._try_single_gpu_lifecycle),
                 ("lazy_sequential", self._try_lazy_sequential),
                 ("zero3", self._try_zero3),
-                # ("layer_streaming", self._try_layer_streaming) belongs
-                # HERE — below every rung that keeps a component whole, above
-                # the host ones. It is deliberately not listed yet: the
-                # planner and the segment builder are landed and tested, and
-                # LayerStreamingStrategy is not. A rung Prism can CHOOSE and
-                # then cannot execute is worse than a rung it does not offer,
-                # which is exactly what test_solver_registry_parity says when
-                # this line is uncommented without the strategy.
+                # ("layer_streaming", self._try_layer_streaming) belongs HERE
+                # — below every rung that keeps a component whole, above the
+                # host ones, winning by score (50) and never by a gate.
+                #
+                # Held out for a MEASURED reason, not a missing piece of mine.
+                # Everything on this side is done: the rung selects (4
+                # segments at a 1000 MB profile, 2 at 1600, none at 18186),
+                # the plan carries the boundaries, the budget it announces is
+                # the peak it holds, and the segments are executable graphs
+                # with bindable seams.
+                #
+                # What is missing is on the ENGINE side. For an autoregressive
+                # model the flow handler calls `executor.run` directly and
+                # bypasses `strategy.execute_component` — executor.py says so
+                # itself ("Flow handlers that bypass strategy.execute_component
+                # (autoregressive LLM prefill)"). Verified: with the rung
+                # selected for TinyLlama, LayerStreamingStrategy.
+                # execute_component was never entered and the whole component
+                # was loaded. zero3 solves this with `install_for_executor`,
+                # which _ensure_weights_loaded calls — behind
+                # `_is_zero3_component`, "zero3-specific by design".
+                #
+                # Offering the rung before that hook admits it would announce
+                # one budget and execute another, which is the defect this
+                # whole milestone exists to remove.
                 ("cpu_execution", self._try_cpu_execution),
                 ("cpu_streaming", self._try_cpu_streaming),
             ]
@@ -744,14 +785,31 @@ class PrismSolver:
                 ("component_placement_lazy", self._try_component_placement_lazy),
                 ("lazy_sequential", self._try_lazy_sequential),
                 ("zero3", self._try_zero3),
-                # ("layer_streaming", self._try_layer_streaming) belongs
-                # HERE — below every rung that keeps a component whole, above
-                # the host ones. It is deliberately not listed yet: the
-                # planner and the segment builder are landed and tested, and
-                # LayerStreamingStrategy is not. A rung Prism can CHOOSE and
-                # then cannot execute is worse than a rung it does not offer,
-                # which is exactly what test_solver_registry_parity says when
-                # this line is uncommented without the strategy.
+                # ("layer_streaming", self._try_layer_streaming) belongs HERE
+                # — below every rung that keeps a component whole, above the
+                # host ones, winning by score (50) and never by a gate.
+                #
+                # Held out for a MEASURED reason, not a missing piece of mine.
+                # Everything on this side is done: the rung selects (4
+                # segments at a 1000 MB profile, 2 at 1600, none at 18186),
+                # the plan carries the boundaries, the budget it announces is
+                # the peak it holds, and the segments are executable graphs
+                # with bindable seams.
+                #
+                # What is missing is on the ENGINE side. For an autoregressive
+                # model the flow handler calls `executor.run` directly and
+                # bypasses `strategy.execute_component` — executor.py says so
+                # itself ("Flow handlers that bypass strategy.execute_component
+                # (autoregressive LLM prefill)"). Verified: with the rung
+                # selected for TinyLlama, LayerStreamingStrategy.
+                # execute_component was never entered and the whole component
+                # was loaded. zero3 solves this with `install_for_executor`,
+                # which _ensure_weights_loaded calls — behind
+                # `_is_zero3_component`, "zero3-specific by design".
+                #
+                # Offering the rung before that hook admits it would announce
+                # one budget and execute another, which is the defect this
+                # whole milestone exists to remove.
                 ("cpu_execution", self._try_cpu_execution),
                 ("cpu_streaming", self._try_cpu_streaming),
             ]
@@ -887,8 +945,26 @@ class PrismSolver:
                     total_capacity = sum(int(d.capacity_mb * 1024 * 1024) for d in strat_devices)
 
                 if strat_name == "zero3":
-                    total_allocated = sum(m.activation_bytes + m.overhead_bytes
-                                         for m in component_memory.values())
+                    # Weights leave the device only where the host is a
+                    # DIFFERENT pool. On a unified device "offload to pinned
+                    # host memory" moves the bytes to the same memory they
+                    # already occupy — Metal's malloc_host hands back a shared
+                    # buffer and charges it to the same working set — so the
+                    # weights stay counted.
+                    #
+                    # This branch short-circuits the per-component loop below,
+                    # which is where the same rule was first written and where
+                    # it was therefore never reached for zero3. Measured:
+                    # TinyLlama at a 1000 MB budget was accepted for zero3
+                    # with 262.8 MB counted of 2385.7 MB resident.
+                    _unified = any(
+                        d.spec.has_unified_memory for d in strat_devices)
+                    if _unified:
+                        total_allocated = sum(m.total_bytes
+                                              for m in component_memory.values())
+                    else:
+                        total_allocated = sum(m.activation_bytes + m.overhead_bytes
+                                              for m in component_memory.values())
                 elif strat_name == "single_gpu_lifecycle":
                     persistent, transient = self._classify_lifecycle(container)
                     # Persistent: all weights resident + peak activation
@@ -930,16 +1006,13 @@ class PrismSolver:
                     for _comp_name, _m in component_memory.items():
                         _alloc = strat_allocs.get(_comp_name)
                         _dev = _alloc[0] if isinstance(_alloc, tuple) else _alloc
-                        if isinstance(_dev, str) and _dev.startswith("layer_stream:"):
+                        _part = (getattr(self, "_layer_stream_partitions", {}) or {}).get(_comp_name) \
+                            if strat_name == "layer_streaming" else None
+                        if _part is not None:
                             # It holds ONE segment at a time. The number the
-                            # partitioner announced is the number the
-                            # executor holds, which is the whole point of
-                            # this rung existing.
-                            _part = getattr(self, "_layer_stream_partitions", {}).get(_comp_name)
-                            if _part is None:
-                                total_allocated += _m.total_bytes
-                            else:
-                                total_allocated += _part.peak_resident_bytes
+                            # partitioner announced is the number the executor
+                            # holds, which is the whole point of this rung.
+                            total_allocated += _part.peak_resident_bytes
                         elif (isinstance(_dev, str) and _dev.startswith("zero3:")
                                 and not _device_is_unified(_dev, profile)):
                             total_allocated += _m.activation_bytes + _m.overhead_bytes
@@ -991,6 +1064,21 @@ class PrismSolver:
         # strategy attempt where the component ended up elsewhere).
         if chosen_strategy == AllocationStrategy.SINGLE_GPU_LIFECYCLE.value:
             plan.transient_components = list(getattr(self, "_lifecycle_transient", []) or [])
+
+        if chosen_strategy == "layer_streaming":
+            # Only when this rung WON. `_layer_stream_partitions` is left
+            # behind by every attempt, including rejected ones, and carrying a
+            # rejected attempt's boundaries into another strategy's plan would
+            # hand the executor segments nothing agreed to.
+            _parts = getattr(self, "_layer_stream_partitions", None) or {}
+            plan.layer_stream_plan = {
+                name: [[seg.first_op, seg.last_op] for seg in part.segments]
+                for name, part in _parts.items()}
+            if not plan.layer_stream_plan:
+                raise RuntimeError(
+                    "layer_streaming was chosen and carries no segments: the "
+                    "plan and the rung disagree, which the executor cannot "
+                    "resolve. Refusing rather than running an unplanned cut.")
 
         _ct = getattr(self, "_component_tiling", {}) or {}
         if _ct:
@@ -3725,7 +3813,11 @@ class PrismSolver:
         if not devices:
             return None
         target = devices[0]
-        budget_bytes = int(target.spec.memory_mb) * 1024 * 1024
+        # The device's CAPACITY, which is what the other rungs are measured
+        # against and what the memory check will compare this plan to. Using
+        # the nominal memory_mb would announce a budget 5% larger than the one
+        # the plan is then judged by.
+        budget_bytes = int(float(getattr(target, "capacity_mb", 0)) * 1024 * 1024)
         if budget_bytes <= 0:
             return None
 
@@ -3744,23 +3836,44 @@ class PrismSolver:
 
         allocations: Dict[str, Tuple[str, Dict[str, str]]] = {}
         partitions = {}
+        dev_str = target.spec.get_device_string()
+
+        # A streamed component does not get the whole device: every component
+        # that stays WHOLE is resident beside it. Partitioning against the
+        # full budget announced a peak that could not be held — measured,
+        # TinyLlama at 1000 MB: a 992.5 MB segment plus a 264.1 MB lm_head
+        # against 950 MB of capacity. Same defect as sizing segments without
+        # reserving the activations, one level up.
+        streamed = {name for name, mem in sorted_comps
+                    if mem.total_bytes > budget_bytes}
+        resident_beside = sum(mem.total_bytes for name, mem in sorted_comps
+                              if name not in streamed)
+        segment_budget = budget_bytes - resident_beside
+        if segment_budget <= 0:
+            return None
+
         for comp_name, mem in sorted_comps:
-            dev_str = target.spec.get_device_string()
-            if mem.total_bytes <= budget_bytes:
+            if comp_name not in streamed:
                 allocations[comp_name] = (dev_str, {})
                 continue
             graph = graphs.get(comp_name)
             if graph is None:
                 return None            # cannot cut what we cannot read
             part = LayerPartitioner(
-                graph, sizes_by_comp.get(comp_name)).partition(budget_bytes)
+                graph, sizes_by_comp.get(comp_name)).partition(segment_budget)
             if not part.fits or len(part.segments) < 2:
                 # Either genuinely impossible, or one segment — in which case
                 # a rung above this one already serves it and this must not
                 # take the plan.
                 return None
             partitions[comp_name] = part
-            allocations[comp_name] = (f"layer_stream:{dev_str}", {})
+            # The device string stays a plain device. A `layer_stream:` prefix
+            # was tried and is wrong: several places parse an allocation by
+            # splitting on ":" and taking the index, so a three-part string
+            # reached `int('mps')`. What marks a component as streamed is the
+            # PLAN carrying segments for it, which is the same fact and needs
+            # no parser anywhere to learn a new shape.
+            allocations[comp_name] = (dev_str, {})
 
         if not partitions:
             return None                # nothing needed cutting: not our plan

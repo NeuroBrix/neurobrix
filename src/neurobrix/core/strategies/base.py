@@ -56,6 +56,12 @@ class StrategyContext:
     # plan was accepted under is not the budget it runs under.
     transient_components: frozenset = frozenset()
 
+    # component -> [[first_op_uid, last_op_uid], ...] for a component Prism
+    # decided to stream at layer granularity. Empty for every other plan.
+    # These are the segments the budget was ACCEPTED under, so the strategy
+    # executes them rather than deriving its own and hoping they match.
+    layer_segments: Dict[str, Any] = field(default_factory=dict)
+
     # Execution mode: "compiled" | "triton" | "triton_sequential". Drives
     # get_strategy()'s pytorch-vs-triton dispatch so the triton branch can
     # run NBXTensor-native strategies (zero torch) while compiled keeps the

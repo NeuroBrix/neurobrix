@@ -158,8 +158,15 @@ def test_the_seam_is_declared_not_assumed():
     assert len(part.segments) > 1, "need at least one seam to test one"
 
     subs = [build_segment_graph(g, s) for s in part.segments]
-    # the first segment reads the component's own input
-    assert "x0" in subs[0]["input_tensor_ids"]
+    # A seam tensor is aliased so the executor can bind it: the id carries
+    # `input::` and the NAME the caller passes is the original tensor id.
+    assert "input::x0" in subs[0]["input_tensor_ids"]
+    assert "x0" in subs[0]["segment_input_names"]
+    for sub in subs:
+        assert all(t.startswith("input::") for t in sub["input_tensor_ids"]), (
+            "every declared input must be bindable by the executor, which "
+            "finds them by that prefix and by nothing else")
+        assert sub["segment_input_names"] == [t[7:] for t in sub["input_tensor_ids"]]
 
     # Every segment reads only what EARLIER segments published, or what the
     # component itself was given. Restricting it to the IMMEDIATELY previous
@@ -170,7 +177,8 @@ def test_the_seam_is_declared_not_assumed():
     component_inputs = set(g.get("input_tensor_ids") or []) | {"x0"}
     published = set(component_inputs)
     for sub in subs:
-        unmet = set(sub["input_tensor_ids"]) - published
+        # compare in the caller's vocabulary: the names, not the aliases
+        unmet = set(sub["segment_input_names"]) - published
         assert not unmet, (
             f"segment {sub['segment_index']} reads {sorted(unmet)}, which "
             f"neither an earlier segment publishes nor the component "
@@ -225,3 +233,49 @@ def test_the_rung_scores_below_every_whole_component_strategy():
                 f"layer_streaming ({layer}) must score above {host} "
                 f"({scores[host]}): streaming on the accelerator beats "
                 f"moving the whole model to the host")
+
+
+def test_the_alias_does_not_damage_the_graph_it_was_cut_from():
+    """A partition must leave its source intact.
+
+    Ops are shared dicts between the full graph and a segment, so rewriting
+    an op's inputs in place would corrupt the component for every later
+    segment and for anyone else holding the graph.
+    """
+    g = _chain(6, weight_mb=10)
+    before = {oid: list(op["input_tensor_ids"]) for oid, op in g["ops"].items()}
+    part = LayerPartitioner(g).partition(25 * 1024 * 1024)
+    for seg in part.segments:
+        build_segment_graph(g, seg)
+    after = {oid: list(op["input_tensor_ids"]) for oid, op in g["ops"].items()}
+    assert before == after, "building a segment rewrote the source graph"
+
+
+def test_a_consuming_op_reads_the_alias_not_the_original():
+    """The rewrite has to reach the ops, or the binding is decorative."""
+    g = _chain(6, weight_mb=10)
+    part = LayerPartitioner(g).partition(25 * 1024 * 1024)
+    subs = [build_segment_graph(g, s) for s in part.segments]
+    later = subs[1]
+    aliased = {t[7:]: t for t in later["input_tensor_ids"]}
+    first_op = later["ops"][later["execution_order"][0]]
+    for tid in first_op["input_tensor_ids"]:
+        assert tid not in aliased, (
+            f"op still reads {tid!r}, which nothing will bind; it should read "
+            f"{aliased.get(tid)!r}")
+
+
+def test_the_alias_carries_the_shape_and_dtype_of_what_it_replaces():
+    g = _chain(6, weight_mb=10, act_mb=3)
+    part = LayerPartitioner(g).partition(25 * 1024 * 1024)
+    subs = [build_segment_graph(g, s) for s in part.segments]
+    for sub in subs:
+        for tid in sub["input_tensor_ids"]:
+            alias = sub["tensors"][tid]
+            src_id = alias["seam_alias_of"] if "seam_alias_of" in alias else None
+            if src_id is None:
+                continue
+            assert alias["shape"] == g["tensors"][src_id]["shape"]
+            assert alias["dtype"] == g["tensors"][src_id]["dtype"]
+            assert alias["is_input"] is True
+            assert alias["producer_op_uid"] is None
