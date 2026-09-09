@@ -949,3 +949,65 @@ def create_kv_wrapper_from_config(
     )
 
     return KVCacheAttentionWrapper(config, num_heads=num_heads)
+
+
+def install_self_attention_kv(executor, *, max_tokens: int, label: str):
+    """Register the decoder's KV cache on `executor`, or return None with the reason.
+
+    The compiled half of `triton.decode_kv.install_self_attention_kv` (R30): the same graph
+    analysis, the same three positional mechanisms, the same refusal. It exists because the
+    encoder_decoder flow had this code and the audio_llm flow had none — so a listening model
+    re-ran its whole context at every token.
+    """
+    import os
+    import sys
+
+    if os.environ.get("NBX_KV_RECOMPUTE") == "1":
+        return None
+    dag = getattr(executor, "_dag", None) if executor is not None else None
+    if not dag:
+        return None
+    from neurobrix.core.flow.decoder_kv import decoder_self_attention_plan
+    plan = decoder_self_attention_plan(dag)
+    if plan is None:
+        return None
+    if not (plan["arange_uids"] or plan.get("position_slice_uids")
+            or plan.get("uses_absolute_position")):
+        print(f"[{label}] KV cache REFUSED: the decoder graph carries no positional arange, no "
+              f"positional-table slice and no position input the step could place a token with — "
+              f"recompute path (D-STT-KV-WHISPER-LARGE)", file=sys.stderr, flush=True)
+        return None
+
+    wrapper = getattr(executor, "_decoder_kv_wrapper", None)
+    if wrapper is None:
+        dtype = getattr(executor, "dtype", None) or "float16"
+        config = KVCacheConfig(
+            num_layers=plan["num_layers"], num_kv_heads=plan["num_heads"],
+            k_head_dim=plan["head_dim"], v_head_dim=plan["head_dim"],
+            max_cache_len=int(max_tokens), dtype=str(dtype))
+        wrapper = KVCacheAttentionWrapper(config, num_heads=plan["num_heads"])
+        by_type = wrapper.get_interceptors()
+        per_uid = {}
+        for uid in plan["self_attn_uids"]:
+            fn = by_type.get(dag["ops"][uid]["op_type"])
+            if fn is None:
+                raise RuntimeError(
+                    f"ZERO FALLBACK: no KV interceptor for {dag['ops'][uid]['op_type']}")
+            per_uid[uid] = fn
+        # Offset an internal arange only when the caller does not supply the position: a model
+        # driven by a position_ids input would otherwise have every token placed twice.
+        if not plan.get("uses_absolute_position"):
+            for uid in plan["arange_uids"]:
+                per_uid[uid] = wrapper.intercept_arange
+            for uid in plan.get("position_slice_uids") or []:
+                per_uid[uid] = wrapper.intercept_position_slice
+        executor.register_op_uid_interceptors(per_uid)
+        executor._decoder_kv_wrapper = wrapper
+        placed = ("the caller's position input" if plan.get("uses_absolute_position")
+                  else f"{len(plan['arange_uids'])} arange(s) offset by the cache")
+        print(f"   [{label}] KV cache: {plan['num_layers']} self-attention layers cached, "
+              f"{len(plan['cross_attn_uids'])} cross-attentions native, "
+              f"heads={plan['num_heads']} d={plan['head_dim']} max={max_tokens}, "
+              f"positions from {placed}")
+    wrapper.reset_for_new_sequence()
+    return wrapper

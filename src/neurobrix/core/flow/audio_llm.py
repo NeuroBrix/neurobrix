@@ -14,6 +14,7 @@ import time
 import torch
 from typing import Any, Callable, Dict, List, Optional
 
+from neurobrix import decode_progress
 from .base import FlowHandler, FlowContext, register_flow
 from neurobrix.core.memory.manager import release_flow_memory
 
@@ -178,12 +179,25 @@ class AudioLLMEngine(FlowHandler):
         start = time.perf_counter()
         generated_ids: list = []
 
-        for step in range(max_tokens):
-            seq_len = context_embeds.shape[1]
-            position_ids = torch.arange(seq_len, dtype=torch.long, device=device).unsqueeze(0)
+        # The KV cache, the same one every decoding flow gets. Without it this loop re-runs the
+        # language model over the WHOLE context at every token — quadratic in the generated
+        # length, and the reason these rows decode at one token a second. `None` keeps the
+        # recompute path below, unchanged and byte-identical.
+        from neurobrix.core.runtime.graph.kv_cache_wrapper import install_self_attention_kv
+        prefix_len = int(context_embeds.shape[1])
+        kv = install_self_attention_kv(self.ctx.executors.get(lm_name),
+                                       max_tokens=prefix_len + int(max_tokens) + 1,
+                                       label=lm_name)
+        step_embeds = context_embeds       # the prefill feeds the whole prefix
+        next_pos = 0                       # the position the next fed token sits at
 
-            self.ctx.variable_resolver.resolved["global.inputs_embeds"] = context_embeds
-            self.ctx.variable_resolver.resolved["inputs_embeds"] = context_embeds
+        for step in range(max_tokens):
+            seq_len = step_embeds.shape[1]
+            position_ids = torch.arange(next_pos, next_pos + seq_len,
+                                        dtype=torch.long, device=device).unsqueeze(0)
+
+            self.ctx.variable_resolver.resolved["global.inputs_embeds"] = step_embeds
+            self.ctx.variable_resolver.resolved["inputs_embeds"] = step_embeds
             self.ctx.variable_resolver.resolved["global.position_ids"] = position_ids
             self.ctx.variable_resolver.resolved["position_ids"] = position_ids
 
@@ -201,15 +215,23 @@ class AudioLLMEngine(FlowHandler):
                 repetition_penalty=repetition_penalty,
             )
             generated_ids.append(next_token)
+            decode_progress.record(step, len(generated_ids), next_token,
+                                   next_token == eos_token_id or step + 1 >= max_tokens)
 
             if next_token == eos_token_id:
                 break
 
-            # Append new token embedding to context
             token_tensor = torch.tensor([[next_token]], dtype=torch.long, device=device)
             with torch.no_grad():
                 token_embed = torch.nn.functional.embedding(token_tensor, embed_weight).to(dtype=dtype)
-            context_embeds = torch.cat([context_embeds, token_embed], dim=1)
+            if kv is None:
+                context_embeds = torch.cat([context_embeds, token_embed], dim=1)
+                step_embeds = context_embeds
+            else:
+                # The cache holds everything already fed; the step feeds the new token alone, at
+                # the position right after what the last step covered.
+                next_pos += seq_len
+                step_embeds = token_embed
 
         elapsed = (time.perf_counter() - start) * 1000
         print(f"   [{lm_name}] Generated {len(generated_ids)} tokens in {elapsed:.0f}ms")

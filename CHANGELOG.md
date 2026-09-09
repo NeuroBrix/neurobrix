@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- A listening model no longer re-runs its whole context at every generated token. The audio_llm
+  flow kept its own decode loop and had no KV cache, so the language model was re-executed over
+  the entire prefix plus everything generated so far, at every step — a cost that grows with the
+  square of the answer's length. It now uses the same cache every other decoding flow uses, which
+  is chosen from the graph's own dataflow, and the loop feeds one token per step after the first.
+  Both engines. Outputs unchanged.
+- The audio_llm flow emits its per-token decode trajectory like the other flows, so a decode rate
+  can be measured on a listening model at all.
+
 ### Changed
 - Kernel launches of the house library go through a NeuroBrix launcher in the dispatch layer
   (`neurobrix.kernels.launcher`): Triton compiles, the engine specialises the arguments itself and

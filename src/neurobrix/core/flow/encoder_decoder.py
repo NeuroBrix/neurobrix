@@ -173,56 +173,15 @@ class EncoderDecoderEngine(FlowHandler):
         return self.ctx.variable_resolver.resolve_all()
 
     def _decoder_kv_wrapper(self, dec_name: str, max_tokens: int):
-        """Build and register the decoder's KV cache for one window, or None
-        (recompute oracle requested, or a graph without self-attention)."""
-        import os as _os
-        if _os.environ.get("NBX_KV_RECOMPUTE") == "1":
-            return None
-        executor = self.ctx.executors.get(dec_name)
-        dag = getattr(executor, "_dag", None) if executor is not None else None
-        if not dag:
-            return None
-        from neurobrix.core.flow.decoder_kv import decoder_self_attention_plan
-        plan = decoder_self_attention_plan(dag)
-        if plan is None:
-            return None
-        if not plan["arange_uids"] and not plan.get("position_slice_uids"):
-            # One token per step needs a positional mechanism the cache can
-            # offset; a graph with neither would decode every token at
-            # position 0. Loud, and the recompute path (correct) instead.
-            import sys as _sys
-            print(f"[{dec_name}] KV cache REFUSED: the decoder graph carries no positional "
-                  f"arange and no positional-table slice the cache could offset — "
-                  f"recompute path (D-STT-KV-WHISPER-LARGE)", file=_sys.stderr, flush=True)
-            return None
-        from neurobrix.core.runtime.graph.kv_cache_wrapper import (
-            KVCacheAttentionWrapper, KVCacheConfig)
-        wrapper = getattr(executor, "_decoder_kv_wrapper", None)
-        if wrapper is None:
-            dtype = getattr(executor, "dtype", None) or "float16"
-            config = KVCacheConfig(
-                num_layers=plan["num_layers"], num_kv_heads=plan["num_heads"],
-                k_head_dim=plan["head_dim"], v_head_dim=plan["head_dim"],
-                max_cache_len=int(max_tokens), dtype=str(dtype))
-            wrapper = KVCacheAttentionWrapper(config, num_heads=plan["num_heads"])
-            by_type = wrapper.get_interceptors()
-            per_uid = {}
-            for uid in plan["self_attn_uids"]:
-                fn = by_type.get(dag["ops"][uid]["op_type"])
-                if fn is None:
-                    raise RuntimeError(f"ZERO FALLBACK: no KV interceptor for {dag['ops'][uid]['op_type']}")
-                per_uid[uid] = fn
-            for uid in plan["arange_uids"]:
-                per_uid[uid] = wrapper.intercept_arange
-            for uid in plan.get("position_slice_uids") or []:
-                per_uid[uid] = wrapper.intercept_position_slice
-            executor.register_op_uid_interceptors(per_uid)
-            executor._decoder_kv_wrapper = wrapper
-            print(f"   [{dec_name}] KV cache: {plan['num_layers']} self-attention layers cached, "
-                  f"{len(plan['cross_attn_uids'])} cross-attentions native, "
-                  f"heads={plan['num_heads']} d={plan['head_dim']} max={max_tokens}")
-        wrapper.reset_for_new_sequence()
-        return wrapper
+        """The decoder's KV cache for one window, or None (recompute oracle requested, no
+        self-attention, or no positional mechanism the step could use).
+
+        The installer is shared: what a KV cache may hold is a property of the graph, and the
+        audio_llm flow needs the same answer for its own decoder.
+        """
+        from neurobrix.core.runtime.graph.kv_cache_wrapper import install_self_attention_kv
+        return install_self_attention_kv(self.ctx.executors.get(dec_name),
+                                         max_tokens=max_tokens, label=dec_name)
 
     def _decode_one_window(self, decoder_stage, dec_name, defaults,
                            _all_ids, _all_texts, seek_ctx=None, ts_ids=None,

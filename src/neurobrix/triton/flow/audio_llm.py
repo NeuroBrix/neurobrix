@@ -22,6 +22,7 @@ import time
 import numpy as np
 from typing import Any, Callable, Dict, List, Optional
 
+from neurobrix import decode_progress
 from neurobrix.kernels.nbx_tensor import DeviceAllocator, NBXTensor, NBXDtype
 from neurobrix.triton.memory_pool import release_flow_memory
 from neurobrix.kernels import wrappers as w
@@ -233,14 +234,26 @@ class TritonAudioLLMEngine:
         start = time.perf_counter()
         generated_ids: List[int] = []
 
+        # The KV cache, the same one every decoding flow gets (`triton.decode_kv`). Without it
+        # this loop re-runs the language model over the WHOLE context at every token, which is
+        # quadratic in the generated length and is why these rows decode at one token a second.
+        # `None` keeps the recompute path below, unchanged and byte-identical.
+        from neurobrix.triton.decode_kv import install_self_attention_kv
+        prefix_len = int(context_embeds.shape[1])
+        kv = install_self_attention_kv(self.ctx.executors.get(lm_name),
+                                       max_tokens=prefix_len + int(max_tokens) + 1,
+                                       label=lm_name)
+        step_embeds = context_embeds       # the prefill feeds the whole prefix
+        next_pos = 0                       # the position the next fed token sits at
+
         for _step in range(max_tokens):
-            seq_len = context_embeds.shape[1]
+            seq_len = int(step_embeds.shape[1])
             position_ids = NBXTensor.from_numpy(
-                np.arange(seq_len, dtype=np.int64).reshape(1, -1))
+                np.arange(next_pos, next_pos + seq_len, dtype=np.int64).reshape(1, -1))
 
             res = self.ctx.variable_resolver.resolved
-            res["global.inputs_embeds"] = context_embeds
-            res["inputs_embeds"] = context_embeds
+            res["global.inputs_embeds"] = step_embeds
+            res["inputs_embeds"] = step_embeds
             res["global.position_ids"] = position_ids
             res["position_ids"] = position_ids
 
@@ -258,13 +271,22 @@ class TritonAudioLLMEngine:
                 repetition_penalty=repetition_penalty,
             )
             generated_ids.append(next_token)
+            decode_progress.record(_step, len(generated_ids), next_token,
+                                   next_token == eos_token_id or _step + 1 >= max_tokens)
             if next_token == eos_token_id:
                 break
 
             token_embed = self._embed_ids(
                 [next_token], embed_weight, dtype)
-            context_embeds = NBXTensor.cat(
-                [context_embeds, token_embed], dim=1)
+            if kv is None:
+                context_embeds = NBXTensor.cat(
+                    [context_embeds, token_embed], dim=1)
+                step_embeds = context_embeds
+            else:
+                # The cache holds everything already fed; the step feeds the new token alone,
+                # at the position right after what the last step covered.
+                next_pos += seq_len
+                step_embeds = token_embed
 
         print(f"   [{lm_name}] Generated {len(generated_ids)} tokens "
               f"in {(time.perf_counter() - start) * 1000:.0f}ms")

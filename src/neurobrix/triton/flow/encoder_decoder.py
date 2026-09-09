@@ -169,52 +169,15 @@ class TritonEncoderDecoderEngine:
         return self.ctx.variable_resolver.resolve_all()
 
     def _decoder_kv_interceptor(self, dec_name: str, max_tokens: int):
-        """Build and register the decoder's NBXTensor KV cache for one window,
-        or None (recompute oracle requested, or no self-attention)."""
-        if os.environ.get("NBX_KV_RECOMPUTE") == "1":
-            return None
-        executor = self.ctx.executors.get(dec_name)
-        dag = getattr(executor, "_dag", None) if executor is not None else None
-        if not dag:
-            return None
-        from neurobrix.core.flow.decoder_kv import decoder_self_attention_plan
-        plan = decoder_self_attention_plan(dag)
-        if plan is None:
-            return None
-        if not plan["arange_uids"] and not plan.get("position_slice_uids"):
-            # One token per step needs a positional mechanism the cache can
-            # offset; a graph with neither would decode every token at
-            # position 0. Loud, and the recompute path (correct) instead.
-            import sys as _sys
-            print(f"[{dec_name}] KV cache REFUSED: the decoder graph carries no positional "
-                  f"arange and no positional-table slice the cache could offset — "
-                  f"recompute path (D-STT-KV-WHISPER-LARGE)", file=_sys.stderr, flush=True)
-            return None
-        from neurobrix.triton.kv_cache import TritonKVCache, TritonAttentionInterceptor
-        interceptor = getattr(executor, "_decoder_kv_interceptor", None)
-        if interceptor is None:
-            dtype = parse_dtype(str(getattr(executor, "dtype", None) or "float16"))
-            cache = TritonKVCache(num_layers=plan["num_layers"], num_kv_heads=plan["num_heads"],
-                                  k_head_dim=plan["head_dim"], v_head_dim=plan["head_dim"],
-                                  max_cache_len=int(max_tokens), dtype=dtype)
-            interceptor = TritonAttentionInterceptor(cache=cache, num_heads=plan["num_heads"])
-            variant = {
-                "aten::_scaled_dot_product_efficient_attention": interceptor.intercept_efficient,
-                "aten::_scaled_dot_product_cudnn_attention": interceptor.intercept_efficient,
-                "aten::_scaled_dot_product_flash_attention": interceptor.intercept_flash,
-            }
-            per_uid = {uid: variant.get(dag["ops"][uid]["op_type"], interceptor.intercept)
-                       for uid in plan["self_attn_uids"]}
-            for uid in plan["arange_uids"]:
-                per_uid[uid] = interceptor.intercept_arange
-            for uid in plan.get("position_slice_uids") or []:
-                per_uid[uid] = interceptor.intercept_position_slice
-            executor.register_op_uid_interceptors(per_uid)
-            executor._decoder_kv_interceptor = interceptor
-            print(f"   [{dec_name}] KV cache (triton): {plan['num_layers']} self-attention layers cached, "
-                  f"{len(plan['cross_attn_uids'])} cross-attentions native")
-        interceptor.reset()
-        return interceptor
+        """The decoder's NBXTensor KV cache for one window, or None (recompute oracle
+        requested, no self-attention, or no positional mechanism the step could use).
+
+        The installer is shared: what a KV cache may hold is a property of the graph, and the
+        audio_llm flow needs the same answer for its own decoder (`triton.decode_kv`).
+        """
+        from neurobrix.triton.decode_kv import install_self_attention_kv
+        return install_self_attention_kv(self.ctx.executors.get(dec_name),
+                                         max_tokens=max_tokens, label=dec_name)
 
     def _decode_one_window(self, decoder_stage, dec_name, defaults,
                            _all_ids, _all_texts, seek_ctx=None, ts_ids=None,

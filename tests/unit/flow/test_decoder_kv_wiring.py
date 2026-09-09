@@ -7,7 +7,7 @@ import pytest
 import torch
 
 from neurobrix.core.flow import encoder_decoder as ED
-from tests.unit.flow.test_decoder_kv_plan import _dag
+from conftest import _dag
 
 
 class _Executor:
@@ -52,7 +52,7 @@ def test_recompute_oracle_switch_disables_the_cache(monkeypatch):
 
 
 def test_a_positional_table_slice_is_registered_like_the_arange(monkeypatch):
-    from tests.unit.flow.test_decoder_kv_plan import _dag_with_positional_table_slice
+    from conftest import _dag_with_positional_table_slice
     monkeypatch.delenv("NBX_KV_RECOMPUTE", raising=False)
     ex = _Executor()
     ex._dag = _dag_with_positional_table_slice()
