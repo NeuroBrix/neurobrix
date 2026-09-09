@@ -59,7 +59,8 @@ DIAG_RE = re.compile(r"\[MOE_DIAG\]\s+(\S+)\s+shape=(\[[^\]]*\])")
 
 
 def run_engine(model: str, prompt: str, mode: str, max_tokens: int,
-               seed: int, diag: bool, src: str, timeout: int) -> Dict[str, Any]:
+               seed: int, diag: bool, src: str, timeout: int,
+               diag_log: Optional[str] = None) -> Dict[str, Any]:
     env = dict(os.environ)
     env["PYTHONPATH"] = src + os.pathsep + env.get("PYTHONPATH", "")
     if diag:
@@ -86,8 +87,16 @@ def run_engine(model: str, prompt: str, mode: str, max_tokens: int,
     shapes: Dict[str, str] = {}
     for label, shape in DIAG_RE.findall(err):
         shapes.setdefault(label, shape)
+    # The per-layer dumps ARE the measurement; a 4 KB tail keeps the last two
+    # layers and drops the other twenty-four. Keep the whole stream on disk when
+    # the diag is on, and let the row carry only the tail plus its path.
+    if diag and diag_log:
+        with open(diag_log, "w") as f:
+            f.write(err)
     return {"returncode": rc, "seconds": round(time.time() - t0, 1),
-            "stdout": out, "stderr_tail": err[-4000:], "routing_shapes": shapes}
+            "stdout": out, "stderr_tail": err[-4000:], "routing_shapes": shapes,
+            "diag_log": diag_log if (diag and diag_log) else None,
+            "moe_dispatches": len(DIAG_RE.findall(err)) // 8 if diag else None}
 
 
 def run_ollama(tag: str, prompt: str, max_tokens: int, seed: int,
@@ -150,12 +159,16 @@ def main() -> int:
             continue
         print(f"[moe] len={length} mode={args.mode} diag={args.diag} …", flush=True)
         eng = run_engine(args.model, prompt, args.mode, args.max_tokens,
-                         args.seed, args.diag, args.src, args.timeout)
+                         args.seed, args.diag, args.src, args.timeout,
+                         diag_log=os.path.join(args.out,
+                                               f"diag_len{length}_{args.mode}.log"))
         row = {"rendered_len": length, "prompt": prompt,
                "engine_mode": args.mode,
                "engine_rc": eng["returncode"], "engine_seconds": eng["seconds"],
                "engine_text": extract_generation(eng["stdout"]),
                "routing_shapes": eng["routing_shapes"],
+               "moe_dispatches": eng["moe_dispatches"],
+               "diag_log": eng["diag_log"],
                "engine_stderr_tail": eng["stderr_tail"]}
         if not args.skip_vendor:
             ven = run_ollama(args.ollama_tag, prompt, args.max_tokens,
