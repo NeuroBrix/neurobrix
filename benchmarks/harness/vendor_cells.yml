@@ -48,6 +48,9 @@ cells:
     compare:
       metric: text_coherence_and_length_independence
       bound: "coherent at every rendered length, and no length singled out"
+    # This cell needs eight model loads at eight sequence lengths, so it is
+    # driven by its own tool rather than by the generic one-shot path.
+    driven_by: "tools/moe_real_path_check.py --model DeepSeek-Coder-V2-Lite-Instruct"
     blind_to: >
       A MoE whose per-expert slice bounds were frozen at trace would route with
       the trace's expert histogram: coherent at the trace length only. Our byte
@@ -120,7 +123,7 @@ cells:
       ref: "Real-ESRGAN (vendor weights + vendor forward)"
       precision: "float32"
     request:
-      input_image: validation_outputs/assets/test_upscale_input.png
+      input_image: test_upscale_input.png
     compare:
       metric: psnr_db
       bound: 30.0
@@ -138,7 +141,7 @@ cells:
       venv: /home/mlops/venvs/fwhisper
       precision: "float16"
     request:
-      audio: validation_outputs/assets/test_speech_ref.wav
+      audio: test_speech_ref.wav
     compare:
       metric: wer
       bound: 0.05
@@ -154,7 +157,7 @@ cells:
       ref: "mistralai/Voxtral-Mini-3B-2507"
       precision: "float16"
     request:
-      audio: validation_outputs/assets/test_speech_ref.wav
+      audio: test_speech_ref.wav
     compare:
       metric: text_common_prefix_words
       bound: 6
@@ -187,7 +190,7 @@ cells:
       precision: "float16"
     request:
       prompt: "Describe this image in one sentence."
-      input_image: validation_outputs/assets/test_upscale_input.png
+      input_image: test_upscale_input.png
     compare:
       metric: text_common_prefix_words
       bound: 5
@@ -204,7 +207,7 @@ cells:
       precision: "float16"
     request:
       prompt: "Describe this image in one sentence."
-      input_image: validation_outputs/assets/test_upscale_input.png
+      input_image: test_upscale_input.png
     compare:
       metric: text_common_prefix_words
       bound: 5
