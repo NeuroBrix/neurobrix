@@ -127,6 +127,22 @@ class ExecutionStrategy(ABC):
     - Input/output binding (that's variable resolver's job)
     """
 
+    #: Does this strategy decide FOR ITSELF where its weights live at each
+    #: moment — pinning them, streaming them, releasing them — rather than
+    #: letting the runtime load a component once and leave it resident?
+    #:
+    #: The runtime asks this to know whether a component must be driven
+    #: through `execute_component` and offered `install_for_executor`. It
+    #: used to ask "is this zero3", which is a NAME, and a name cannot be
+    #: extended: the second strategy to manage its own residency had no way
+    #: to say so. This is the same shape of question as the vendor prefixes
+    #: this engine stopped hard-coding — ask the thing, not its label.
+    #:
+    #: False by default: a strategy that does not say it manages residency
+    #: is loaded and left resident, which is what every strategy but zero3
+    #: did before this existed.
+    manages_weight_residency: bool = False
+
     def __init__(self, context: StrategyContext, strategy_name: str):
         """
         Initialize strategy with context.
