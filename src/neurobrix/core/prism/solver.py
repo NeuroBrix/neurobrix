@@ -37,6 +37,70 @@ if TYPE_CHECKING:
 # DATACLASSES
 # =============================================================================
 
+def _consumed_weight_bytes(comp, dtype_mult: float):
+    """Bytes of the weights this component's graph actually reads, or None.
+
+    Two sources, both already in hand at plan time: the graph names which
+    parameters ops consume, and `weights_index.json` gives each one's size.
+    Neither is re-read from disk here -- the container carries them.
+
+    None means the question could not be answered from what is present, and
+    the caller then sizes by the file, which over-estimates. Under-estimating
+    would plan a model into a budget it does not fit, so the asymmetry is
+    deliberate.
+    """
+    graph = getattr(comp, "graph", None)
+    index = getattr(comp, "weights_index", None) or getattr(comp, "weight_index", None)
+    if not isinstance(graph, dict):
+        return None
+    tensors = graph.get("tensors")
+    ops = graph.get("ops")
+    order = graph.get("execution_order")
+    if not isinstance(tensors, dict) or not isinstance(ops, dict) or not order:
+        return None
+
+    total = 0
+    seen = set()
+    sizes = None
+    if isinstance(index, dict):
+        sizes = index.get("tensors") if isinstance(index.get("tensors"), dict) else None
+
+    for op_uid in order:
+        op = ops.get(op_uid) or {}
+        for tid in (op.get("input_tensor_ids") or []):
+            t = tensors.get(tid)
+            if t is None or not t.get("is_parameter"):
+                continue
+            name = t.get("weight_name") or tid
+            if name in seen:
+                continue
+            seen.add(name)
+            if sizes is not None and name in sizes:
+                total += int(sizes[name].get("size_bytes", 0))
+            else:
+                # No index entry: compute from the graph's own shape/dtype.
+                n = 1
+                shape = t.get("shape") or []
+                for d in shape:
+                    if not isinstance(d, int) or d < 0:
+                        return None          # symbolic: cannot size honestly
+                    n *= d
+                width = _DTYPE_WIDTH.get(str(t.get("dtype", "")).lower())
+                if width is None:
+                    return None
+                total += n * width
+    if not seen:
+        return None
+    return int(total * dtype_mult)
+
+
+_DTYPE_WIDTH = {
+    "float64": 8, "float32": 4, "bfloat16": 2, "float16": 2,
+    "int64": 8, "int32": 4, "int16": 2, "int8": 1, "uint8": 1, "bool": 1,
+    "float8_e4m3fn": 1, "float8_e5m2": 1,
+}
+
+
 def _device_is_unified(device_string: str, profile) -> bool:
     """Does this allocation target share ONE memory pool with the host?
 
@@ -1560,8 +1624,25 @@ class PrismSolver:
                 comp.name, target_dtype_str)
             dtype_mult = compute_dtype_factor(source_dtype, comp_dtype_str)
 
-            # Weight memory
-            weight_bytes = sum(int(s * dtype_mult) for s in shard_sizes.get(comp.name, {}).values())
+            # Weight memory. Sized by what the ENGINE LOADS, which is the
+            # weights this graph consumes — not by the bytes on disk.
+            #
+            # `get_shard_sizes()` reports file sizes, and a shard holds every
+            # parameter the export wrote, including any no op reads. The
+            # engine skips those (GraphExecutor.consumed_weight_names): on
+            # DeepSeek-Coder-V2-Lite that is 11781 MB of 30638, MoE experts
+            # the trace never routed to. Sizing by the file made Prism plan
+            # against 30638 MB while execution needed 18857 — the announced
+            # budget and the executed one differing by 62%, in the direction
+            # that REFUSES a model which fits.
+            #
+            # Falls back to the file bytes when the graph cannot answer,
+            # which over-estimates rather than under-estimates: the safe
+            # direction, and it is the previous behaviour exactly.
+            weight_bytes = _consumed_weight_bytes(comp, dtype_mult)
+            if weight_bytes is None:
+                weight_bytes = sum(int(s * dtype_mult)
+                                   for s in shard_sizes.get(comp.name, {}).values())
 
             # Activation memory
             activation_bytes = 0
