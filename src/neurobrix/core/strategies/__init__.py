@@ -45,6 +45,23 @@ _STRATEGY_CLASSES = {
 }
 
 
+#: Which strategies decide for themselves where their weights live.
+#:
+#: This is a DECLARATION, read without importing anything. Resolving the
+#: class to read `manages_weight_residency` off it imports the ATen strategy
+#: module — which a `--triton` run must never do (R33), and which this file's
+#: own header says three lines up. Measured 2026-09-09: doing exactly that
+#: broke every triton run with "Torch not compiled with CUDA enabled".
+#:
+#: The classes still declare the attribute, and
+#: `test_the_table_and_the_classes_agree` fails if the two ever drift, so
+#: this table cannot silently fall out of step with the strategies it names.
+_MANAGES_WEIGHT_RESIDENCY = frozenset({
+    "zero3",            # weights on pinned host memory, streamed for compute
+    "layer_streaming",  # one segment of one component resident at a time
+})
+
+
 def strategy_manages_weight_residency(strategy_name: str) -> bool:
     """Does the named strategy decide for itself where its weights live?
 
@@ -57,17 +74,7 @@ def strategy_manages_weight_residency(strategy_name: str) -> bool:
     every component, including ones whose allocation carries no sub-strategy
     at all, and an unknown name there means "nothing special", not an error.
     """
-    try:
-        cls = STRATEGY_REGISTRY.get(strategy_name)
-    except Exception:                                   # pragma: no cover
-        return False
-    if cls is None:
-        return False
-    # The registry is a LAZY mapping: `.get` resolves the name and hands back
-    # the class itself, not its name. Resolving it a second time raised
-    # KeyError on the class object — caught by the test written for this,
-    # before the change reached anything.
-    return bool(getattr(cls, "manages_weight_residency", False))
+    return strategy_name in _MANAGES_WEIGHT_RESIDENCY
 
 
 def _strategy_class(class_name: str):
