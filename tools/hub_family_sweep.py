@@ -315,6 +315,11 @@ def main() -> int:
         dest = CACHE / name
         pre_existing = dest.exists()
         rec["pre_existing_locally"] = pre_existing
+        # Whether THIS RUN put the bytes there, which is the only sound basis
+        # for removing them again. `not pre_existing` was standing in for it
+        # and got the resume case backwards: a re-staged model is one this run
+        # copied, and it was being kept.
+        staged_here = not pre_existing
         try:
             src_id = dir_identity(src)
             rec["source"] = src_id
@@ -381,6 +386,7 @@ def main() -> int:
                     shutil.rmtree(dest, ignore_errors=True)
                     t0 = time.time()
                     shutil.copytree(src, dest)
+                    staged_here = True          # this run's bytes now
                     rec["stage_wall_s"] = round(time.time() - t0, 1)
                     rec["staged"] = dir_identity(dest)
                     rec["identity_matches_source"] = (
@@ -422,8 +428,18 @@ def main() -> int:
             rec["error"] = f"{type(e).__name__}: {e}"
             print(f"  {name}: ERROR {rec['error'][:120]}")
         finally:
-            if not pre_existing and dest.exists():
+            # Streaming: what this run pulled down, this run removes. A copy
+            # that was already here and matched the source is left alone —
+            # it is not ours to delete — and that is recorded rather than
+            # left to be inferred from the disk numbers.
+            rec["staged_by_this_run"] = staged_here
+            if staged_here and dest.exists():
                 shutil.rmtree(dest, ignore_errors=True)
+                rec["removed_after_run"] = True
+            elif dest.exists():
+                rec["removed_after_run"] = False
+                rec["kept_because"] = ("it was already here and matched the "
+                                       "source; this run did not create it")
             rec["disk_free_gb_after"] = disk_free_gb()
             doc["models"].append(rec)
             (args.out / "records.json").write_text(json.dumps(doc, indent=2))

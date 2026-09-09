@@ -206,6 +206,14 @@ _EAGER_STRATEGIES = frozenset({
 # DEVICE SPECIFICATION
 # =============================================================================
 
+
+# Architectures whose GPU shares ONE memory pool with the host. Extended by
+# adding an architecture string, never by testing a vendor: an AMD APU is
+# unified and a discrete Radeon is not, so brand cannot answer this.
+_ARCHITECTURE_IS_UNIFIED = {
+    "apple_silicon": True,
+}
+
 @dataclass
 class DeviceSpec:
     """
@@ -220,6 +228,28 @@ class DeviceSpec:
     supports_dtypes: List[str]  # ["float32", "float16", "bfloat16"]
     architecture: str = "unknown"  # volta, ampere, hopper, rdna3, etc.
     brand: DeviceBrand = DeviceBrand.NVIDIA
+    # None = the profile did not say; fall back to the architecture mapping.
+    unified_memory: Optional[bool] = None
+
+    @property
+    def has_unified_memory(self) -> bool:
+        """Does this device share one memory pool with the host?
+
+        It decides whether offloading weights to the host FREES anything.
+        On a discrete card, host RAM and device memory are disjoint, so
+        zero3's whole premise holds. On a unified device they are the same
+        bytes, and "offload" moves nothing.
+
+        The profile's own `unified_memory` wins when it says anything. When
+        it is silent — every profile written before the field existed, this
+        machine's included — the architecture decides, because unified
+        memory is a property OF the architecture and is already recorded in
+        every profile. Guessing from the brand would be wrong in both
+        directions: a discrete Radeon is not unified and an APU is.
+        """
+        if self.unified_memory is not None:
+            return bool(self.unified_memory)
+        return _ARCHITECTURE_IS_UNIFIED.get(str(self.architecture).lower(), False)
 
     def get_device_string(self) -> str:
         """

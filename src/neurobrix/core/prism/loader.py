@@ -241,6 +241,9 @@ def load_profile(hardware_id: str) -> PrismProfile:
             supports_dtypes=d_data.get("supports_dtypes", ["float32"]),
             architecture=d_data.get("architecture", "unknown"),
             brand=_parse_brand(d_data.get("brand", "nvidia")),
+            # None when the profile is silent, so DeviceSpec falls back to
+            # the architecture mapping rather than assuming "discrete".
+            unified_memory=d_data.get("unified_memory"),
         ))
 
     # Parse Interconnect Topology
