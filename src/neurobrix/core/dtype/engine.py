@@ -563,11 +563,18 @@ class DtypeEngine:
             # fp16-only: guard the squaring pattern x*x (RMSNorm/LayerNorm
             # variance: mean(x*x)) against fp16 overflow. On bf16 the exponent
             # range equals fp32's, so no guard is installed. See
-            # _make_square_safe_mul.
-            if op_name == "mul" and self.compute_dtype == torch.float16:
-                # Never narrowed under the contract: the guard's fp32 output
-                # is the protection (x*x > 65504 stored fp16 = inf).
-                return self._make_square_safe_mul(func)
+            # _make_mul_safe.
+            if op_name == "mul":
+                # fp16: the squaring guard, as before — never narrowed under
+                # the contract, because the guard's fp32 output IS the
+                # protection (x*x > 65504 stored fp16 = inf).
+                #
+                # bf16: no squaring guard is needed (bf16's exponent range
+                # equals fp32's), but the SAME wrapper carries the
+                # complex-scalar guard below, which bf16 does need. On fp16
+                # hardware the complex branch never fires — fp16 x complex
+                # promotes to complex32, which torch implements.
+                return self._make_mul_safe(func)
 
         return func
 
@@ -671,7 +678,7 @@ class DtypeEngine:
             return func(*new_args, **kwargs)
         return fp32_func
 
-    def _make_square_safe_mul(self, func: Callable) -> Callable:
+    def _make_mul_safe(self, func: Callable) -> Callable:
         """
         fp16-ONLY overflow guard for the squaring pattern ``x * x``.
 
@@ -688,14 +695,43 @@ class DtypeEngine:
         compute_dtype. Output stays fp32; the downstream mean/rsqrt are already
         AMP_FP32 and the next FP16 op casts back to compute_dtype.
 
-        Installed only on fp16 hardware (compile_op gates this): bf16's exponent
-        range equals fp32's, so ``x * x`` never overflows there.
+        The square branch fires only on fp16: bf16's exponent range equals
+        fp32's, so ``x * x`` never overflows there.
+
+        SECOND GUARD — a COMPLEX SCALAR operand on a bf16 tensor.
+
+        ``bfloat16 * 1j`` promotes to ``bcomplex32``
+        (``c10::complex<c10::BFloat16>``), and torch implements no kernels for
+        it at all:
+
+            torch.zeros(4, dtype=torch.bfloat16) * 1j
+            -> NotImplementedError: "mul_cpu" not implemented for 'BComplex32'
+
+        while ``float32 * 1j`` gives ``complex64`` and works. Measured on the
+        real call, 2026-09-09: Kokoro-82M dies at ``aten.mul::218`` with
+        ``Undefined type BComplex32``, and the failure context shows the
+        operands are a ``(1, 11, 15361)`` bfloat16 tensor and the Python
+        literal ``1j``. Nothing in the graph is a complex TENSOR — the complex
+        is a scalar constant, which is why the op-name rules that force fp32
+        for ``polar`` and ``view_as_complex`` never saw it.
+
+        The promotion is torch's, not a backend's, so this fails identically
+        on every device. Upcasting the tensor to fp32 makes the result
+        complex64, which is the type the rest of the graph expects anyway.
         """
-        def square_safe_mul(a, b, *args, **kwargs):
+        def mul_safe(a, b, *args, **kwargs):
             if a is b and isinstance(a, torch.Tensor) and a.dtype == torch.float16:
                 return func(a.float(), b.float(), *args, **kwargs)
+            # A complex scalar beside a bf16 tensor: promote the tensor, not
+            # the scalar. Narrow enough that nothing else changes shape or
+            # dtype, and it only fires where the call would otherwise raise.
+            if isinstance(a, complex) or isinstance(b, complex):
+                if isinstance(a, torch.Tensor) and a.dtype == torch.bfloat16:
+                    a = a.float()
+                if isinstance(b, torch.Tensor) and b.dtype == torch.bfloat16:
+                    b = b.float()
             return func(a, b, *args, **kwargs)
-        return square_safe_mul
+        return mul_safe
 
     def _make_lower_precision_wrapper(self, func: Callable) -> Callable:
         """
@@ -978,7 +1014,7 @@ class DtypeEngine:
                 ]
 
         # fp16 squaring guard — runtime mirror of compile_op's
-        # _make_square_safe_mul. A hand-rolled RMSNorm/LayerNorm variance
+        # _make_mul_safe. A hand-rolled RMSNorm/LayerNorm variance
         # mean(x*x) traces as aten::mul with both operands bound to the SAME
         # tensor; squaring overflows fp16 (max 65504) for |x|>256 → inf → the
         # norm collapses to ~0 and the component emits silence/garbage (openaudio
