@@ -256,6 +256,26 @@ class MetalRuntime:
         self._open: Dict[int, list] = {}
         self._dispatch_cap: Optional[int] = None
 
+        # An encoder that is FREED while still open aborts the whole process:
+        #   -[_MTLCommandEncoder dealloc]:134: failed assertion
+        #   'Command encoder released without endEncoding'
+        # The encode paths already close their stream when encoding raises.
+        # What none of them covers is an error that escapes ALL the way out —
+        # a compile-time refusal, most of all — leaving a stream open with a
+        # live encoder for the interpreter to free at teardown.
+        #
+        # Measured 2026-09-09 on the whole `stt` family: after a `tt.dot`
+        # refusal the three models did not fall back, they ABORTED (rc=-6),
+        # and the assertion is what the log showed instead of the refusal that
+        # caused it. A loud, recoverable decline became a crash, and it took
+        # the family with it.
+        #
+        # So the encoders are ended at interpreter shutdown too. Ending is all
+        # that is needed — the buffers are not committed, because at exit
+        # there is nothing left to read their results.
+        import atexit as _atexit
+        _atexit.register(self._end_open_encoders)
+
         # `DeviceAllocator.event_elapsed_ms` sets `.restype` on the entry
         # point before calling it — a ctypes idiom that a bound method
         # rejects. A function object accepts attributes, so this one entry
@@ -628,6 +648,28 @@ class MetalRuntime:
             if entry[3] < self._dispatches_per_buffer():
                 return
         self.close_stream(key)
+
+    def _end_open_encoders(self) -> None:
+        """End every open encoder, without committing. Teardown only.
+
+        `close_stream` ends AND commits AND tracks, which is right during a
+        run and wrong at exit: a commit at teardown queues work whose results
+        nobody will read, and tracking it adds a buffer nothing will await.
+        Here only the assertion is being avoided, so only `endEncoding` is
+        called. Never raises: this runs while the interpreter is going down,
+        and an exception there replaces one confusing abort with another.
+        """
+        try:
+            with self._lock:
+                entries = list(self._open.values())
+                self._open.clear()
+        except Exception:                               # pragma: no cover
+            return
+        for entry in entries:
+            try:
+                entry[1].endEncoding()
+            except Exception:                           # pragma: no cover
+                pass
 
     def close_stream(self, stream: Optional[int] = None) -> None:
         """End the open encoder and commit the buffer, without waiting."""
