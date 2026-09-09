@@ -94,6 +94,12 @@ def test_apple_with_backend_and_compiler_passes(monkeypatch):
     monkeypatch.setattr(metal_backend, "metal_shader_compiler_available",
                         lambda: True)
     metal_backend.ensure_triton_metal_or_raise()   # must not raise
+    # The gate is LIVE: take away the shader compiler — the premise this file was written around
+    # — and the same call refuses. Silence with all three stubbed is readiness; silence with one
+    # missing would be the gate reporting ready on a machine where nothing runs.
+    monkeypatch.setattr(metal_backend, "metal_shader_compiler_available", lambda: False)
+    with pytest.raises(metal_backend.TritonMetalShaderCompilerMissingError):
+        metal_backend.ensure_triton_metal_or_raise()
 
 
 # --- the offline shader compiler -------------------------------------------

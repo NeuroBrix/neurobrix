@@ -2438,6 +2438,20 @@ class NBXTensor:
         elif hasattr(device, 'index') and device.index is not None:
             dev_idx = device.index
 
+        # A NEGATIVE extent is never a tensor anyone asked for: it is a shape that was
+        # COMPUTED and went below zero, and `math.prod` turns it into a negative byte count that
+        # reaches the allocator and comes back as "GPU malloc failed", which reads as an
+        # out-of-memory and sends the reader to the wrong place entirely. Measured on
+        # Wan2.1-VACE-1.3B (2026-09-09): a conv3d whose input carried zero frames computed a
+        # temporal output of -2 and asked for -4,860,000 bytes. Zero stays legitimate — an empty
+        # tensor is a real thing — and only the impossible is refused, at the boundary, so every
+        # extent formula in the engine is covered by one guard rather than twelve.
+        if any(d < 0 for d in shape):
+            raise ValueError(
+                f"NBXTensor.empty: a computed shape has a negative extent {tuple(shape)} — this "
+                f"is a shape computation that went below zero, not a memory shortage. The caller "
+                f"that produced it is the defect; refusing here rather than asking the allocator "
+                f"for a negative number of bytes.")
         numel = math.prod(shape) if shape else 1
         nbytes = numel * dtype_size(nbx_dt)
         if nbytes == 0:

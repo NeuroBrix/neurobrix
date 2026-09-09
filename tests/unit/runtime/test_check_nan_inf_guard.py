@@ -49,6 +49,10 @@ def _check(op_uid, op_type, out, exec_type=OpExecution.TRITON):
 
 def test_clean_output_passes():
     _check("aten.add::1", "aten::add", torch.randn(4, 4))
+    # The guard is LIVE: the same call on a value it must reject raises, so the silence
+    # above is an exemption and not a guard that has been deleted.
+    with pytest.raises(RuntimeError, match="NaN"):
+        _check("aten.add::1", "aten::add", torch.full((4, 4), float("nan")))
 
 
 def test_nan_raises():
@@ -74,6 +78,10 @@ def test_neg_inf_does_not_raise_per_op():
     # plain compute ops; neither may raise.
     _check("aten.log::1", "aten::log", out)
     _check("aten.add::1", "aten::add", out)
+    # The guard is LIVE: the same call on a value it must reject raises, so the silence
+    # above is an exemption and not a guard that has been deleted.
+    with pytest.raises(RuntimeError, match="NaN"):
+        _check("aten.log::1", "aten::log", torch.full((4,), float("nan")))
 
 
 def test_mask_neg_inf_is_legitimate():
@@ -81,6 +89,10 @@ def test_mask_neg_inf_is_legitimate():
     mask = torch.full((4, 4), float("-inf"))
     for op_type in ("aten::full", "aten::masked_fill", "aten::where", "aten::add"):
         _check("op::1", op_type, mask)
+    # The guard is LIVE: the same call on a value it must reject raises, so the silence
+    # above is an exemption and not a guard that has been deleted.
+    with pytest.raises(RuntimeError, match="Pos-Inf"):
+        _check("op::1", "aten::masked_fill", torch.full((4, 4), float("inf")))
 
 
 def test_pos_inf_raises_even_for_mask_ops():
@@ -101,6 +113,10 @@ def test_metadata_exec_type_exempt():
     out = torch.full((4,), float("nan"))
     _check("aten.view::1", "aten::view", out,
            exec_type=OpExecution.METADATA)
+    # The exemption is the EXEC TYPE, not the guard being absent: the same NaN through the same
+    # op raises the moment it is not declared metadata.
+    with pytest.raises(RuntimeError, match="NaN"):
+        _check("aten.view::1", "aten::view", out)
 
 
 def test_message_names_op():

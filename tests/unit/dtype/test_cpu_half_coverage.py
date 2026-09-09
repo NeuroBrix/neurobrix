@@ -64,7 +64,11 @@ def test_every_entry_still_lacks_a_cpu_half_kernel(op_name):
 def test_every_entry_works_in_fp32_on_cpu(op_name):
     """The remedy has to be the remedy: if fp32 also fails, upcasting is not
     the fix and the entry is misfiled."""
-    _probe(op_name, "cpu", torch.float32)
+    out = _probe(op_name, "cpu", torch.float32)
+    # And it produced something finite in the dtype asked for: an op that returned None, or NaN,
+    # would otherwise read as a working remedy.
+    t = out[0] if isinstance(out, tuple) else out
+    assert t is not None and t.dtype == torch.float32 and torch.isfinite(t).all()
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a GPU")
@@ -73,7 +77,9 @@ def test_the_same_op_is_fine_in_fp16_on_cuda(op_name):
     """This is why the wrapper decides per CALL and per DEVICE rather than
     upcasting everywhere: on CUDA the op is fine, and forcing fp32 there would
     cost throughput to work around a limitation that is not present."""
-    _probe(op_name, "cuda", torch.float16)
+    out = _probe(op_name, "cuda", torch.float16)
+    t = out[0] if isinstance(out, tuple) else out
+    assert t is not None and t.dtype == torch.float16 and torch.isfinite(t).all()
 
 
 def test_the_wrapper_leaves_cuda_tensors_alone():

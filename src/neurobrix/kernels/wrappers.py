@@ -3533,6 +3533,16 @@ def _conv3d_via_conv2d(x, weight, bias, stride, padding, dilation, groups):
         x = constant_pad_nd_wrapper(x, [0, 0, 0, 0, pt, pt], 0.0)
     Tp = x.shape[2]
     T_out = (Tp - dt * (kt - 1) - 1) // st + 1
+    if T_out <= 0:
+        # Convolving a temporal kernel over fewer frames than it spans has no output. The
+        # allocator would see the negative extent and answer "malloc failed", which reads as an
+        # out-of-memory; the cause is upstream, so it is named here. Measured on
+        # Wan2.1-VACE-1.3B: an input of (1, 3, 0, 450, 450) — zero frames — against a kernel of
+        # 3 with no temporal padding gives -2.
+        raise RuntimeError(
+            f"conv3d: {T} frame(s) in, temporal kernel {kt} (dilation {dt}, padding {pt}, "
+            f"stride {st}) leaves {T_out} frame(s) out — there is nothing to convolve. The "
+            f"input's temporal extent is the defect, not this convolution.")
     out = None
     _ef = _NBX_CONV3D_EAGER_FREE_BYTES  # #37 size-gated eager-free threshold
     for kti in range(kt):

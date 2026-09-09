@@ -100,6 +100,9 @@ def test_a_zero_step_loop_is_not_a_division_by_zero():
     p = _p(total=0)
     p.step(0)
     p.done()
+    # And it reports NOTHING rather than a percentage of nothing — measured, so the test fails
+    # both if it divides by zero and if it starts emitting a meaningless line.
+    assert p.stream.getvalue() == ""
 
 
 def test_a_closed_stream_is_not_fatal():
@@ -109,6 +112,8 @@ def test_a_closed_stream_is_not_fatal():
     p.stream.close()
     p.step(0)
     p.done()
+    # The run survived the closed pipe, and the progress did not quietly reopen or buffer it.
+    assert p.stream.closed
 
 
 def test_it_writes_to_stderr_by_default():

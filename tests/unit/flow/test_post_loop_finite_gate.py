@@ -10,6 +10,10 @@ from neurobrix.core.flow.iterative_process import _gate_component_outputs_finite
 def test_finite_output_passes():
     resolved = {"vae.output_0": torch.randn(1, 3, 8, 8), "transformer.output_0": torch.tensor([float("nan")])}
     _gate_component_outputs_finite(resolved, "vae")   # only the named component is inspected
+    # The gate is LIVE: name the component that carries the NaN and it refuses, so the silence
+    # above is the scoping and not an absent check.
+    with pytest.raises(RuntimeError, match="non-finite output of post-loop component"):
+        _gate_component_outputs_finite(resolved, "transformer")
 
 
 def test_non_finite_output_is_refused():

@@ -241,3 +241,13 @@ def test_the_open_list_reports_what_it_excludes():
     # test, and it is what stops the list rotting into fiction.
     print("\n" + ("\n".join(rows) if rows
                   else "open list empty — every flagged site adjudicated"))
+    # A reporter that asserts nothing is not a test: it would print an empty list just as
+    # happily if `_live_sites()` returned nothing at all. What it can honestly assert is its own
+    # coherence — every row it printed names a site the walk actually found, and every entry it
+    # kept excludes somebody, which is the invariant its comment above names.
+    assert len(rows) == sum(1 for k in KNOWN_OPEN if k in live)
+    for key, (layer, _r) in KNOWN_OPEN.items():
+        if key in live:
+            _p, _l, named = live[key]
+            assert excluded_vendors(layer, named), (
+                f"{key} sits in the open list while excluding nobody — the list is rotting")

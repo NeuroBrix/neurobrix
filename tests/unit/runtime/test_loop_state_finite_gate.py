@@ -39,6 +39,10 @@ from neurobrix.kernels.nbx_tensor import NBXDtype, NBXTensor
 
 def test_compiled_finite_state_passes():
     _gate_compiled(torch.randn(2, 4, 8, 8), 0, 999.0, "model.transformer")
+    # The guard is LIVE: the same call on a value it must reject raises, so the silence
+    # above is an exemption and not a guard that has been deleted.
+    with pytest.raises(RuntimeError):
+        _gate_compiled(torch.full((2, 4, 8, 8), float("nan")), 0, 999.0, "model.transformer")
 
 
 @pytest.mark.parametrize("poison", [float("nan"), float("inf"), float("-inf")],
@@ -59,6 +63,9 @@ def test_compiled_gate_skips_non_float_and_non_tensor():
     _gate_compiled(torch.ones(4, dtype=torch.int64), 0, 0.0, "c")
     _gate_compiled(None, 0, 0.0, "c")
     _gate_compiled("not a tensor", 0, 0.0, "c")
+    # What is skipped is the TYPE, not the check: a float tensor of the same shape still raises.
+    with pytest.raises(RuntimeError):
+        _gate_compiled(torch.full((4,), float("nan")), 0, 0.0, "c")
 
 
 def test_compiled_gate_counts_offenders_in_message():
@@ -99,6 +106,11 @@ def test_triton_finite_state_passes(monkeypatch):
     monkeypatch.setattr(w, "isfinite_wrapper", lambda x: x)
     monkeypatch.setattr(w, "all_wrapper", lambda x: _ScalarBool(True))
     _gate_triton(_nbx_stub(NBXDtype.float32), 0, 999.0, "model.transformer")
+    # The gate is LIVE: say the state is not finite and the same call refuses, so the silence
+    # above is a finite state and not a gate that has been deleted.
+    monkeypatch.setattr(w, "all_wrapper", lambda x: _ScalarBool(False))
+    with pytest.raises(RuntimeError):
+        _gate_triton(_nbx_stub(NBXDtype.float32), 0, 999.0, "model.transformer")
 
 
 def test_triton_nonfinite_state_raises_with_context(monkeypatch):
