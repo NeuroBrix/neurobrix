@@ -65,16 +65,22 @@ def main() -> int:
             "identical": ours == (theirs or "").strip(),
             "common_prefix_words": common_prefix(ours, theirs or ""),
             "our_words": len(words(ours)),
+            # Word-level agreement over OUR generation. A Q4 vendor and an fp16
+            # engine legitimately differ in casing and spacing; what matters is
+            # whether the words are the same ones, in the same order.
+            "agree_ratio": (round(common_prefix(ours, theirs or "")
+                                  / max(1, len(words(ours))), 3)),
         })
     rows.sort(key=lambda r: r["len"])
 
-    print(f"{'len':>4} {'rc':>3} {'ident':>6} {'prefix':>7} {'words':>6}  text (ours)")
-    print("-" * 108)
+    print(f"{'len':>4} {'rc':>3} {'exact':>6} {'prefix':>7} {'words':>6} "
+          f"{'agree':>6}  text (ours)")
+    print("-" * 112)
     for r in rows:
         mark = " <= TRACE LENGTH" if r["len"] == args.trace_len else ""
         print(f"{r['len']:>4} {r['rc']:>3} {str(r['identical']):>6} "
-              f"{r['common_prefix_words']:>7} {r['our_words']:>6}  "
-              f"{r['ours'][:64]!r}{mark}")
+              f"{r['common_prefix_words']:>7} {r['our_words']:>6} "
+              f"{r['agree_ratio']:>6}  {r['ours'][:56]!r}{mark}")
 
     ok = [r for r in rows if r["rc"] == 0]
     ident = [r for r in ok if r["identical"]]
@@ -82,7 +88,10 @@ def main() -> int:
     off_trace = [r for r in ok if r["len"] != args.trace_len]
     print()
     print(f"rows run            : {len(ok)}/{len(rows)}")
-    print(f"identical to vendor : {len(ident)}/{len(ok)}")
+    print(f"exact match         : {len(ident)}/{len(ok)} "
+          f"(a Q4 vendor vs our fp16 — casing counts as a miss here)")
+    full = [r for r in ok if r["agree_ratio"] == 1.0]
+    print(f"every word agrees   : {len(full)}/{len(ok)}")
     if off_trace:
         mean_off = sum(r['common_prefix_words'] for r in off_trace) / len(off_trace)
         print(f"mean vendor prefix  : off-trace {mean_off:.1f} words"
