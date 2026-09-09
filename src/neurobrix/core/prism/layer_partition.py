@@ -312,40 +312,99 @@ def build_segment_graph(graph: Dict[str, Any], segment: Segment,
     seg_outputs = [tid for tid in produced_here
                    if tid in read_later or tid in component_outputs]
 
-    keep = set(seg_inputs) | produced_here
+    keep = set(produced_here)
     for op_uid in inside:
         for tid in (ops.get(op_uid) or {}).get("input_tensor_ids") or []:
             if (tensors.get(tid) or {}).get("is_parameter"):
                 keep.add(tid)
 
+    # A seam tensor has to be BINDABLE. The executor finds its inputs by the
+    # `input::` prefix and strips seven characters to get the name it looks up
+    # in the caller's dict, so `aten.add::42::out_0` — which is what a seam
+    # tensor is called — can never be handed in. Each one is therefore aliased
+    # to `input::<tid>`: the prefix makes the executor see it, and stripping
+    # the prefix gives back the tid, so the caller passes {tid: value} and
+    # nothing has to invent or remember a second name.
+    #
+    # A tensor the component itself was given already carries the prefix and
+    # is left exactly as it is.
+    alias_of: Dict[str, str] = {}
+    for tid in seg_inputs:
+        if tid.startswith("input::"):
+            keep.add(tid)
+            continue
+        alias = "input::" + tid
+        src = tensors.get(tid) or {}
+        alias_of[tid] = alias
+        keep.add(alias)
+
+    seg_tensors: Dict[str, Any] = {
+        tid: tensors[tid] for tid in keep if tid in tensors}
+    for tid, alias in alias_of.items():
+        src = tensors.get(tid) or {}
+        seg_tensors[alias] = {
+            "tensor_id": alias,
+            "shape": src.get("shape"),
+            "dtype": src.get("dtype"),
+            "device": src.get("device"),
+            "producer_op_uid": None,
+            "output_index": None,
+            "consumer_op_uids": list(src.get("consumer_op_uids") or []),
+            "is_parameter": False,
+            "is_input": True,
+            "weight_name": None,
+            "input_name": tid,
+            "output_name": None,
+            "seam_alias_of": tid,
+        }
+
+    # Ops are shared with the full graph, so the rewrite copies rather than
+    # mutating: a partition must not damage the graph it was cut from.
+    seg_ops: Dict[str, Any] = {}
+    for op_uid in inside:
+        op = ops.get(op_uid)
+        if op is None:
+            continue
+        if not alias_of:
+            seg_ops[op_uid] = op
+            continue
+        new_op = dict(op)
+        new_op["input_tensor_ids"] = [alias_of.get(t, t)
+                                      for t in (op.get("input_tensor_ids") or [])]
+        attrs = op.get("attributes")
+        if isinstance(attrs, dict) and attrs.get("args"):
+            new_args = []
+            for arg in attrs["args"]:
+                if (isinstance(arg, dict)
+                        and arg.get("tensor_id") in alias_of):
+                    arg = dict(arg)
+                    arg["tensor_id"] = alias_of[arg["tensor_id"]]
+                new_args.append(arg)
+            new_attrs = dict(attrs)
+            new_attrs["args"] = new_args
+            new_op["attributes"] = new_attrs
+        seg_ops[op_uid] = new_op
+
     out = {k: v for k, v in graph.items()
            if k not in ("tensors", "ops", "execution_order",
                         "input_tensor_ids", "output_tensor_ids")}
-    out["tensors"] = {tid: tensors[tid] for tid in keep if tid in tensors}
-    out["ops"] = {op_uid: ops[op_uid] for op_uid in inside if op_uid in ops}
+    out["tensors"] = seg_tensors
+    out["ops"] = seg_ops
     out["execution_order"] = inside
-    out["input_tensor_ids"] = seg_inputs
+    # What the executor will bind, in its own vocabulary.
+    out["input_tensor_ids"] = [alias_of.get(t, t) for t in seg_inputs]
+    # What the caller must hand in, keyed as the executor will look it up.
+    out["segment_input_names"] = [t[7:] for t in out["input_tensor_ids"]]
     out["output_tensor_ids"] = sorted(seg_outputs)
     out["segment_index"] = segment.index
     return out
 
 
-# WHAT REMAINS, so it is in the code and not in someone's head.
-#
-# A segment built above is a valid graph, but it cannot yet be FED. The
-# executor binds its inputs by the `input::` prefix — `_graph_input_tids`
-# selects exactly those, and `run` strips seven characters to get the name it
-# looks up in the caller's dict. A seam tensor is called something like
-# `aten.add::42::out_0`: no prefix, no name, so nothing can hand it in.
-#
-# The remedy is here, not in the engine: `build_segment_graph` must alias each
-# incoming seam tensor to an `input::`-prefixed id, rewrite the consuming ops'
-# `input_tensor_ids` to the alias, and publish the producing segment's outputs
-# under the matching names. Then a segment runs through
-# `ExecutorFactory.create(component, allocation, nbx_path, sub_graph, mode)`
-# like any component, and `GraphExecutor.consumed_weight_names` — which reads
-# the executor's OWN dag — already returns exactly that segment's weights,
-# so the subset load needs nothing further.
-#
-# Until that aliasing lands, `_try_layer_streaming` stays out of the cascade.
+# The seam is bindable: each incoming tensor is aliased to `input::<tid>`, so
+# `GraphExecutor._graph_input_tids` sees it and `run` strips the prefix back to
+# the tid the caller passes. `segment_input_names` on the returned graph is
+# exactly the key set the caller must provide, and outputs come back keyed by
+# tensor id (graph_executor.py: `output_name if output_name else tid`), so a
+# segment's outputs feed the next segment's inputs with no renaming at all.
+
 

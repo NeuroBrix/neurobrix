@@ -1000,6 +1000,8 @@ class RuntimeExecutor:
             loading_mode=loading_mode,
             transient_components=frozenset(
                 getattr(self.plan, "transient_components", None) or ()),
+            layer_segments=dict(
+                getattr(self.plan, "layer_stream_plan", None) or {}),
             mode=self.mode,
         )
 

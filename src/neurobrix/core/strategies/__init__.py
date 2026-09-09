@@ -39,6 +39,7 @@ _STRATEGY_CLASSES = {
     "BlockScatterStrategy": ".block_scatter",
     "WeightShardingStrategy": ".weight_sharding",
     "LazySequentialStrategy": ".lazy_sequential",
+    "LayerStreamingStrategy": ".layer_streaming",
     "Zero3Strategy": ".zero3",
     "CPUExecutionStrategy": ".cpu_execution",
 }
@@ -121,6 +122,19 @@ STRATEGY_REGISTRY = _LazyRegistry({
     # it was selected. Caught by the CPU-only battery cell added in the same
     # session, on the full-zoo gate.
     "cpu_streaming": "CPUExecutionStrategy",
+
+    # === Layer streaming ===
+    # `"layer_streaming": "LayerStreamingStrategy"` belongs here, and the
+    # class exists in `.layer_streaming`. It is NOT registered, for the same
+    # measured reason the solver holds its cascade entry: for an
+    # autoregressive model the flow handler calls `executor.run` directly and
+    # never enters `strategy.execute_component`, so the rung would announce a
+    # per-segment budget and load the whole component.
+    #
+    # This registry's own test is symmetric — no entry the solver can never
+    # choose, and no choice with no entry — so the two stay in step. Register
+    # this and add the cascade entry together, once
+    # `_ensure_weights_loaded`'s install hook admits more than zero3.
 })
 
 
@@ -164,6 +178,7 @@ __all__ = [
     "BlockScatterStrategy",
     "WeightShardingStrategy",
     "LazySequentialStrategy",
+    "LayerStreamingStrategy",
     "Zero3Strategy",
     "CPUExecutionStrategy",
     "get_strategy",
