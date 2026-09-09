@@ -3744,7 +3744,16 @@ class CompiledSequence:
                                if self._shape_resolver is not None else None)
                         try:
                             _ra = op.args_resolver(arena)
-                            _ras = [(tuple(a.shape) if hasattr(a, "shape") else a)
+                            # Shape AND dtype. A shape-only context cannot
+                            # diagnose a dispatch failure, which is what
+                            # "Undefined type <T>" is: torch has no kernel for
+                            # that op at that scalar type, and the type is the
+                            # whole question. Measured 2026-09-09 on
+                            # Kokoro-82M, `aten.mul::218` -> "Undefined type
+                            # BComplex32", where the shapes said nothing.
+                            _ras = [((tuple(a.shape), str(a.dtype))
+                                     if hasattr(a, "shape") and hasattr(a, "dtype")
+                                     else (tuple(a.shape) if hasattr(a, "shape") else a))
                                     for a in _ra]
                         except Exception as _e_ra:
                             _ras = f"<resolver raised {_e_ra}>"
