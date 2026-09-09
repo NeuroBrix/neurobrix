@@ -45,6 +45,31 @@ _STRATEGY_CLASSES = {
 }
 
 
+def strategy_manages_weight_residency(strategy_name: str) -> bool:
+    """Does the named strategy decide for itself where its weights live?
+
+    The runtime needs this for a component whose sub-strategy is named in the
+    plan rather than being the plan's own strategy — `lazy_sequential` mapping
+    one component to `zero3`, for instance. The NAME is used as a key into the
+    registry, never as a test: what is read is the class's own declaration.
+
+    Unknown names answer False rather than raising: the runtime asks this of
+    every component, including ones whose allocation carries no sub-strategy
+    at all, and an unknown name there means "nothing special", not an error.
+    """
+    try:
+        cls = STRATEGY_REGISTRY.get(strategy_name)
+    except Exception:                                   # pragma: no cover
+        return False
+    if cls is None:
+        return False
+    # The registry is a LAZY mapping: `.get` resolves the name and hands back
+    # the class itself, not its name. Resolving it a second time raised
+    # KeyError on the class object — caught by the test written for this,
+    # before the change reached anything.
+    return bool(getattr(cls, "manages_weight_residency", False))
+
+
 def _strategy_class(class_name: str):
     return getattr(importlib.import_module(_STRATEGY_CLASSES[class_name], __name__), class_name)
 
@@ -123,18 +148,16 @@ STRATEGY_REGISTRY = _LazyRegistry({
     # session, on the full-zoo gate.
     "cpu_streaming": "CPUExecutionStrategy",
 
-    # === Layer streaming ===
-    # `"layer_streaming": "LayerStreamingStrategy"` belongs here, and the
-    # class exists in `.layer_streaming`. It is NOT registered, for the same
-    # measured reason the solver holds its cascade entry: for an
-    # autoregressive model the flow handler calls `executor.run` directly and
-    # never enters `strategy.execute_component`, so the rung would announce a
-    # per-segment budget and load the whole component.
+    # === Layer streaming (below every rung that keeps a component whole) ===
+    # One segment of ONE component resident at a time. Reached only when
+    # nothing above it is viable — it wins by scoring 50, never by a test on a
+    # vendor, a device count or a memory size.
     #
-    # This registry's own test is symmetric — no entry the solver can never
-    # choose, and no choice with no entry — so the two stay in step. Register
-    # this and add the cascade entry together, once
-    # `_ensure_weights_loaded`'s install hook admits more than zero3.
+    # It declares `manages_weight_residency`, which is how the runtime now
+    # knows to drive it through `execute_component` and to offer it
+    # `install_for_executor`. That question used to be "is this zero3", a
+    # name, which is why this entry waited.
+    "layer_streaming": "LayerStreamingStrategy",
 })
 
 
@@ -169,6 +192,7 @@ def get_strategy(strategy_name: str, context: StrategyContext) -> ExecutionStrat
 
 
 __all__ = [
+    "strategy_manages_weight_residency",
     "ExecutionStrategy",
     "StrategyContext",
     "SingleGPUStrategy",

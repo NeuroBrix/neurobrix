@@ -115,6 +115,11 @@ class Zero3Strategy(ExecutionStrategy):
     after the block's last op finishes.
     """
 
+    #: zero3 keeps weights on pinned host memory and streams them to the
+    #: device for compute. It has always managed its own residency; this
+    #: declares what the runtime previously inferred from its name.
+    manages_weight_residency = True
+
     def __init__(self, context: StrategyContext, strategy_name: str = "zero3"):
         super().__init__(context, strategy_name)
         self.exec_device = self._get_exec_device()

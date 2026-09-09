@@ -395,6 +395,25 @@ def build_segment_graph(graph: Dict[str, Any], segment: Segment,
     out["input_tensor_ids"] = [alias_of.get(t, t) for t in seg_inputs]
     # What the caller must hand in, keyed as the executor will look it up.
     out["segment_input_names"] = [t[7:] for t in out["input_tensor_ids"]]
+    # A seam tensor is an INTERMEDIATE, and must not look like one of the
+    # component's own outputs. The executor narrows `output_tensor_ids` to the
+    # entries whose `output_name` is a PRIMARY output name, keeping all of
+    # them only when none matches — so a single seam tensor that inherited a
+    # primary name from the component's metadata silently discarded every
+    # other seam tensor. Measured: segment 0 declared 4 outputs and its `run`
+    # returned 1, and the next segment then had no inputs.
+    #
+    # The component's REAL outputs keep their name — in the last segment that
+    # is what the caller reads.
+    for tid in seg_outputs:
+        if tid in component_outputs:
+            continue
+        t = out["tensors"].get(tid)
+        if t is not None and t.get("output_name"):
+            t = dict(t)
+            t["output_name"] = None
+            t["seam_intermediate"] = True
+            out["tensors"][tid] = t
     out["output_tensor_ids"] = sorted(seg_outputs)
     out["segment_index"] = segment.index
     return out

@@ -1079,7 +1079,7 @@ class RuntimeExecutor:
             if self._is_tp_component(comp_name):
                 assert self.strategy is not None, "strategy must be initialized for TP components"
                 output = self.strategy.execute_component(comp_name, phase, comp_inputs)
-            elif self._is_zero3_component(comp_name) and self.strategy is not None:
+            elif self._component_manages_own_residency(comp_name) and self.strategy is not None:
                 # Zero3 components: delegate to strategy for pinned memory + GPU transfer
                 output = self.strategy.execute_component(comp_name, phase, comp_inputs)
             elif self._is_hybrid_strategy() and self.strategy is not None:
@@ -1117,16 +1117,40 @@ class RuntimeExecutor:
 
         return False
 
-    def _is_zero3_component(self, comp_name: str) -> bool:
-        """Check if component has zero3 strategy (plan-level or per-component)."""
-        # Plan-level zero3
-        if self._strategy_name == "zero3":
+    def _component_manages_own_residency(self, comp_name: str) -> bool:
+        """Does the strategy responsible for this component manage where its
+        own weights live?
+
+        This used to be `_is_zero3_component`, and it asked a NAME. A name
+        cannot be extended: the second strategy to manage its own residency —
+        layer streaming, which holds one segment at a time — had no way to say
+        so, and the runtime would have loaded its whole component while the
+        plan promised one segment. That is the same shape of defect as a
+        vendor prefix hard-coded into a device test.
+
+        So the question is put to the strategy. Plan-level: the live strategy
+        object declares it. Per-component: the allocation names a
+        sub-strategy — `lazy_sequential` mapping one component to `zero3` —
+        and the name is a KEY into the registry, never a test; what is read is
+        that class's own declaration.
+
+        Byte-identical for zero3, which is the whole point of the change being
+        safe: `Zero3Strategy.manages_weight_residency` is True and nothing
+        else declared it before layer streaming did, so every component that
+        answered True before answers True now, and no other answers change.
+        """
+        strategy = getattr(self, "strategy", None)
+        if strategy is not None and getattr(
+                strategy, "manages_weight_residency", False):
             return True
-        # Per-component zero3 (within lazy_sequential)
         if hasattr(self.plan, 'components'):
             alloc = self.plan.components.get(comp_name)
             if alloc:
-                return getattr(alloc, 'strategy', '') == 'zero3'
+                sub = getattr(alloc, 'strategy', '') or ''
+                if sub:
+                    from neurobrix.core.strategies import (
+                        strategy_manages_weight_residency)
+                    return strategy_manages_weight_residency(sub)
         return False
 
     def _is_hybrid_strategy(self) -> bool:
@@ -1218,7 +1242,7 @@ class RuntimeExecutor:
         # LLM prefill) still funnel through here for weight loading, so
         # this is the natural install point. Other strategies ignore —
         # the method is zero3-specific by design.
-        if self._is_zero3_component(comp_name) and self.strategy is not None:
+        if self._component_manages_own_residency(comp_name) and self.strategy is not None:
             install_fn = getattr(self.strategy, 'install_for_executor', None)
             if install_fn is not None:
                 install_fn(comp_name, executor)

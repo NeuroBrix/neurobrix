@@ -709,31 +709,9 @@ class PrismSolver:
             # CPU-only profile: skip the entire GPU cascade and jump
             # straight to cpu_execution.
             strategies = [
-                # ("layer_streaming", self._try_layer_streaming) belongs HERE
-                # — below every rung that keeps a component whole, above the
-                # host ones, winning by score (50) and never by a gate.
-                #
-                # Held out for a MEASURED reason, not a missing piece of mine.
-                # Everything on this side is done: the rung selects (4
-                # segments at a 1000 MB profile, 2 at 1600, none at 18186),
-                # the plan carries the boundaries, the budget it announces is
-                # the peak it holds, and the segments are executable graphs
-                # with bindable seams.
-                #
-                # What is missing is on the ENGINE side. For an autoregressive
-                # model the flow handler calls `executor.run` directly and
-                # bypasses `strategy.execute_component` — executor.py says so
-                # itself ("Flow handlers that bypass strategy.execute_component
-                # (autoregressive LLM prefill)"). Verified: with the rung
-                # selected for TinyLlama, LayerStreamingStrategy.
-                # execute_component was never entered and the whole component
-                # was loaded. zero3 solves this with `install_for_executor`,
-                # which _ensure_weights_loaded calls — behind
-                # `_is_zero3_component`, "zero3-specific by design".
-                #
-                # Offering the rung before that hook admits it would announce
-                # one budget and execute another, which is the defect this
-                # whole milestone exists to remove.
+                # Below every rung that keeps a component whole, above the
+                # host ones. It wins by score (50), never by a gate.
+                ("layer_streaming", self._try_layer_streaming),
                 ("cpu_execution", self._try_cpu_execution),
                 ("cpu_streaming", self._try_cpu_streaming),
             ]
@@ -746,31 +724,9 @@ class PrismSolver:
                 ("single_gpu_lifecycle", self._try_single_gpu_lifecycle),
                 ("lazy_sequential", self._try_lazy_sequential),
                 ("zero3", self._try_zero3),
-                # ("layer_streaming", self._try_layer_streaming) belongs HERE
-                # — below every rung that keeps a component whole, above the
-                # host ones, winning by score (50) and never by a gate.
-                #
-                # Held out for a MEASURED reason, not a missing piece of mine.
-                # Everything on this side is done: the rung selects (4
-                # segments at a 1000 MB profile, 2 at 1600, none at 18186),
-                # the plan carries the boundaries, the budget it announces is
-                # the peak it holds, and the segments are executable graphs
-                # with bindable seams.
-                #
-                # What is missing is on the ENGINE side. For an autoregressive
-                # model the flow handler calls `executor.run` directly and
-                # bypasses `strategy.execute_component` — executor.py says so
-                # itself ("Flow handlers that bypass strategy.execute_component
-                # (autoregressive LLM prefill)"). Verified: with the rung
-                # selected for TinyLlama, LayerStreamingStrategy.
-                # execute_component was never entered and the whole component
-                # was loaded. zero3 solves this with `install_for_executor`,
-                # which _ensure_weights_loaded calls — behind
-                # `_is_zero3_component`, "zero3-specific by design".
-                #
-                # Offering the rung before that hook admits it would announce
-                # one budget and execute another, which is the defect this
-                # whole milestone exists to remove.
+                # Below every rung that keeps a component whole, above the
+                # host ones. It wins by score (50), never by a gate.
+                ("layer_streaming", self._try_layer_streaming),
                 ("cpu_execution", self._try_cpu_execution),
                 ("cpu_streaming", self._try_cpu_streaming),
             ]
@@ -785,31 +741,9 @@ class PrismSolver:
                 ("component_placement_lazy", self._try_component_placement_lazy),
                 ("lazy_sequential", self._try_lazy_sequential),
                 ("zero3", self._try_zero3),
-                # ("layer_streaming", self._try_layer_streaming) belongs HERE
-                # — below every rung that keeps a component whole, above the
-                # host ones, winning by score (50) and never by a gate.
-                #
-                # Held out for a MEASURED reason, not a missing piece of mine.
-                # Everything on this side is done: the rung selects (4
-                # segments at a 1000 MB profile, 2 at 1600, none at 18186),
-                # the plan carries the boundaries, the budget it announces is
-                # the peak it holds, and the segments are executable graphs
-                # with bindable seams.
-                #
-                # What is missing is on the ENGINE side. For an autoregressive
-                # model the flow handler calls `executor.run` directly and
-                # bypasses `strategy.execute_component` — executor.py says so
-                # itself ("Flow handlers that bypass strategy.execute_component
-                # (autoregressive LLM prefill)"). Verified: with the rung
-                # selected for TinyLlama, LayerStreamingStrategy.
-                # execute_component was never entered and the whole component
-                # was loaded. zero3 solves this with `install_for_executor`,
-                # which _ensure_weights_loaded calls — behind
-                # `_is_zero3_component`, "zero3-specific by design".
-                #
-                # Offering the rung before that hook admits it would announce
-                # one budget and execute another, which is the defect this
-                # whole milestone exists to remove.
+                # Below every rung that keeps a component whole, above the
+                # host ones. It wins by score (50), never by a gate.
+                ("layer_streaming", self._try_layer_streaming),
                 ("cpu_execution", self._try_cpu_execution),
                 ("cpu_streaming", self._try_cpu_streaming),
             ]

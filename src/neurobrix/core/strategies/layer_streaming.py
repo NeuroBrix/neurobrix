@@ -27,9 +27,15 @@ from neurobrix.core.strategies.base import ExecutionStrategy
 class LayerStreamingStrategy(ExecutionStrategy):
     """One segment resident at a time, inside a single component."""
 
+    #: One segment's weights resident at a time, loaded and released around
+    #: each segment. That is managing its own residency, and it is why this
+    #: strategy needs the same runtime hook zero3 uses.
+    manages_weight_residency = True
+
     def __init__(self, context, strategy_name: str):
         super().__init__(context, strategy_name)
         self._segment_executors: Dict[str, List[Any]] = {}
+        self._installed: set = set()
 
     # -- segment executors -------------------------------------------------
 
@@ -38,6 +44,24 @@ class LayerStreamingStrategy(ExecutionStrategy):
         if not raw:
             return None
         return [list(pair) for pair in raw]
+
+    def _nbx_path(self):
+        """Where the artefact lives, read from the runtime package.
+
+        The package exposes it as `root_path`; `nbx_path` is accepted first
+        because `base.py` reads that name. Note that base.py's `load_weights`
+        treats a missing path as "nothing to do" and silently skips the load —
+        this one raises, because a segment with no weights is not a lighter
+        segment, it is a wrong answer.
+        """
+        pkg = getattr(self.context, "runtime_package", None)
+        for attr in ("nbx_path", "root_path", "cache_path", "path"):
+            v = getattr(pkg, attr, None)
+            if v:
+                return str(v)
+        raise RuntimeError(
+            "layer_streaming: the runtime package names no artefact path "
+            f"(tried nbx_path, root_path, cache_path, path on {type(pkg).__name__})")
 
     def _build_segment_executors(self, component_name: str) -> List[Any]:
         """One executor per segment, each carrying that segment's graph.
@@ -50,8 +74,6 @@ class LayerStreamingStrategy(ExecutionStrategy):
         """
         from neurobrix.core.prism.layer_partition import (
             LayerPartitioner, build_segment_graph, Segment)
-        from neurobrix.core.runtime.factory import ExecutorFactory
-
         base = self.context.component_executors.get(component_name)
         if base is None:
             raise RuntimeError(
@@ -82,23 +104,34 @@ class LayerStreamingStrategy(ExecutionStrategy):
                 f"graph was transformed after Prism read it; re-plan rather "
                 f"than execute boundaries that no longer mean what they meant.")
 
-        nbx_path = getattr(self.context.runtime_package, "nbx_path", None)
-        if nbx_path is None:
-            raise RuntimeError("layer_streaming: no nbx_path on the package")
-        allocation = self.context.allocations.get(component_name)
+        nbx_path = self._nbx_path()
 
+        # A segment executor is the COMPONENT's executor with a different
+        # graph. Built from the base executor's own resolved configuration
+        # rather than through the factory, which wants a ComponentAllocation
+        # the strategy context does not carry — and because copying the
+        # resolved values is the only way to guarantee a segment runs under
+        # exactly the contract its component runs under: same family, same
+        # vendor and arch, same device, same dtype, same mode.
         executors = []
         for index, (first_op, last_op) in enumerate(bounds):
             seg = Segment(index=index, first_op=first_op, last_op=last_op,
                           op_count=order_index[last_op] - order_index[first_op] + 1)
             sub = build_segment_graph(dag, seg, order_index)
-            executors.append(ExecutorFactory.create(
-                component=component_name,
-                allocation=allocation,
-                nbx_path=nbx_path,
-                dag=sub,
-                mode=getattr(self.context, "mode", "compiled"),
-            ))
+            seg_exec = type(base)(
+                family=getattr(base, "family", None),
+                vendor=getattr(base, "vendor", None),
+                arch=getattr(base, "arch", None),
+                device=getattr(base, "device", None),
+                dtype=getattr(base, "dtype", None),
+                mode=getattr(base, "mode", "compiled"),
+            )
+            cache_path = getattr(base, "_cache_path", None)
+            if cache_path is not None:
+                seg_exec._cache_path = cache_path
+            seg_exec.load_graph_from_dict(sub)
+            seg_exec._component_name = component_name
+            executors.append(seg_exec)
         return executors
 
     # -- the strategy API --------------------------------------------------
@@ -141,7 +174,7 @@ class LayerStreamingStrategy(ExecutionStrategy):
 
         values: Dict[str, Any] = dict(inputs or {})
         last: Dict[str, Any] = {}
-        nbx_path = getattr(self.context.runtime_package, "nbx_path", None)
+        nbx_path = self._nbx_path()
 
         for executor in executors:
             sub = executor._dag
@@ -167,6 +200,65 @@ class LayerStreamingStrategy(ExecutionStrategy):
             last = out
 
         return last
+
+    def install_for_executor(self, component_name: str, executor) -> None:
+        """Make this component's own executor run segment by segment.
+
+        Called by `RuntimeExecutor._ensure_weights_loaded` for any strategy
+        that declares `manages_weight_residency`. It exists because an
+        autoregressive flow never enters `execute_component` at all — the
+        flow handler calls `executor.run` directly, and `executor.py` says so
+        itself. zero3 uses this same hook for the same reason.
+
+        So the segmenting is installed ON the executor: `run` is replaced by
+        one that walks the segments, holding one segment's weights at a time.
+        Idempotent, and a component with no segments in the plan is left
+        exactly as it was.
+        """
+        if not self._segments_for(component_name):
+            return
+        if component_name in self._installed:
+            return
+        self._installed.add(component_name)
+
+        segments = self._build_segment_executors(component_name)
+        nbx_path = self._nbx_path()
+
+        def segmented_run(inputs=None, *args, **kwargs):
+            values = dict(inputs or {})
+            last = {}
+            for seg_exec in segments:
+                sub = seg_exec._dag
+                needed = sub.get("segment_input_names") or []
+                missing = [n for n in needed if n not in values]
+                if missing:
+                    raise RuntimeError(
+                        f"layer_streaming: segment {sub.get('segment_index')} "
+                        f"of '{component_name}' needs {missing[:3]} and "
+                        f"nothing before it produced them")
+                seg_exec.load_weights(nbx_path, component_name)
+                try:
+                    out = seg_exec.run({n: values[n] for n in needed},
+                                       *args, **kwargs) or {}
+                finally:
+                    # Released before the next segment loads. This is the
+                    # residency the plan was budgeted against.
+                    seg_exec.unload_weights()
+                import os as _os
+                if _os.environ.get("NBX_LAYER_DIAG") == "1":
+                    print(f"   [LAYERDIAG] seg{sub.get('segment_index')} "
+                          f"déclare {len(sub.get('output_tensor_ids') or [])} sorties, "
+                          f"rend {len(out)} clés; "
+                          f"rendues={sorted(out)[:4]}; "
+                          f"ctx_out={sorted(getattr(getattr(seg_exec,'_ctx',None),'output_tensor_ids',[]) or [])[:4]}",
+                          flush=True)
+                values.update(out)
+                last = out
+            return last
+
+        executor.run = segmented_run
+        print(f"   [layer_streaming] '{component_name}': {len(segments)} "
+              f"segments, one resident at a time", flush=True)
 
     def prepare_inputs(self, component_name: str,
                        inputs: Dict[str, Any]) -> Dict[str, Any]:
