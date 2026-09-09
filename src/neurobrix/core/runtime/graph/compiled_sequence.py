@@ -3564,6 +3564,35 @@ class CompiledSequence:
         state["seen"].add(_key)
         try:
             if not isinstance(tensor, torch.Tensor):
+                # THE RULE: a brick that replaces a call site preserves that
+                # site's observability. Anything standing in for an op — a
+                # fusion proxy, an interceptor's sentinel — reports what the op
+                # would have reported, and the recorder takes it. Without this
+                # the type guard below silently drops a REPLACED site exactly
+                # as it drops a legitimately tuple-returning one, and the two
+                # are indistinguishable from the outside.
+                summary = getattr(tensor, "nbx_observable_summary", None)
+                if callable(summary):
+                    try:
+                        rec = dict(summary())
+                    except Exception as _exc:
+                        # A swallowed failure here would leave the site silent
+                        # again, which is the exact defect this branch exists to
+                        # end. Say it, then leave the record absent honestly.
+                        print(f"[observability] {op.op_uid}: the replacement could "
+                              f"not report itself ({type(_exc).__name__}: {_exc})",
+                              flush=True)
+                        return
+                    rec.update({"component": self.dag.get("component_name", "?"),
+                                "tid": tid, "op_uid": op.op_uid,
+                                "op_type": op.op_type})
+                    state["records"].append(rec)
+                    # The append above is in-memory only; the JSONL write is
+                    # what any reader consumes. Recording into a list nothing
+                    # flushes is the same silence in a smaller room.
+                    with open(dump_path, "a") as f:
+                        _json_d.dump({"engine": "compiled", "record": rec}, f)
+                        f.write("\n")
                 return
             # Complex tensors: read via the real view ([...,2] re/im) so head
             # casting to float succeeds and the l2 covers BOTH components. Mirrors

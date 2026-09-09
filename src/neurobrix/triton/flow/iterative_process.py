@@ -145,6 +145,30 @@ def _to_nbx(tensor, device_idx: int = 0) -> NBXTensor:
     return tensor
 
 
+
+def _dump_final_latent(tensor, to_numpy):
+    """Write the final post-denoise latent to `NBX_DUMP_FINAL_LATENT=<dir>`, if armed.
+
+    R30 mirror of the compiled flow's seam, at the same `pre_vae` boundary. Pure
+    numpy out of NBXTensor — no torch (R33).
+    """
+    import os
+    d = os.environ.get("NBX_DUMP_FINAL_LATENT")
+    if not d or tensor is None:
+        return
+    import numpy as np
+    try:
+        arr = to_numpy()
+    except Exception as exc:
+        print(f"[final-latent] not dumped ({exc})", flush=True)
+        return
+    os.makedirs(d, exist_ok=True)
+    path = os.path.join(d, "final_latent.npy")
+    np.save(path, np.ascontiguousarray(arr))
+    print(f"[final-latent] {tuple(arr.shape)} {arr.dtype} l2={float(np.linalg.norm(arr)):.4f}"
+          f" -> {path}", flush=True)
+
+
 class TritonIterativeProcessHandler:
     """
     Flow handler for iterative diffusion process — triton mode.
@@ -1074,6 +1098,7 @@ class TritonIterativeProcessHandler:
                 # Image: 4D [B, C, H, W], Video: 5D [B, C, T, H, W]
                 expected = 5 if current_state.dim() == 5 else 4
                 ndim = current_state.dim()
+                _dump_final_latent(current_state, current_state.numpy)
                 if ndim != expected:
                     raise RuntimeError(
                         f"ZERO FALLBACK: Latent tensor has {ndim}D shape {list(current_state.shape)}, "
