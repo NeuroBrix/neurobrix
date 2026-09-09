@@ -328,3 +328,24 @@ def build_segment_graph(graph: Dict[str, Any], segment: Segment,
     out["output_tensor_ids"] = sorted(seg_outputs)
     out["segment_index"] = segment.index
     return out
+
+
+# WHAT REMAINS, so it is in the code and not in someone's head.
+#
+# A segment built above is a valid graph, but it cannot yet be FED. The
+# executor binds its inputs by the `input::` prefix — `_graph_input_tids`
+# selects exactly those, and `run` strips seven characters to get the name it
+# looks up in the caller's dict. A seam tensor is called something like
+# `aten.add::42::out_0`: no prefix, no name, so nothing can hand it in.
+#
+# The remedy is here, not in the engine: `build_segment_graph` must alias each
+# incoming seam tensor to an `input::`-prefixed id, rewrite the consuming ops'
+# `input_tensor_ids` to the alias, and publish the producing segment's outputs
+# under the matching names. Then a segment runs through
+# `ExecutorFactory.create(component, allocation, nbx_path, sub_graph, mode)`
+# like any component, and `GraphExecutor.consumed_weight_names` — which reads
+# the executor's OWN dag — already returns exactly that segment's weights,
+# so the subset load needs nothing further.
+#
+# Until that aliasing lands, `_try_layer_streaming` stays out of the cascade.
+
