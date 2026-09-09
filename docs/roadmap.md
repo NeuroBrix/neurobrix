@@ -1,6 +1,6 @@
 # NeuroBrix Roadmap
 
-**Official roadmap — 2026-07-27. Replaces every earlier version.**
+**Official roadmap — 2026-09-09. Replaces every earlier version.**
 
 NeuroBrix is a universal deep-learning inference engine: one runtime,
 any model, any hardware, zero model-specific code. The goal of this
@@ -14,7 +14,7 @@ execution modes (PyTorch sequential, PyTorch compiled, Triton
 sequential, Triton compiled), automatic multi-GPU placement, a
 tool-calling agent loop on the serving daemon.
 
-Four phases, in order.
+Five phases, in order.
 
 ---
 
@@ -40,13 +40,21 @@ execution**, since no AMD GPU is available to the project yet. The code
 arrives ready to light the day the hardware does. No support claim
 before first light.
 
-## Phase 3 — Metal: Triton on Apple GPUs
+## Phase 3 — Metal: Triton on Apple GPUs — IN PROGRESS
 
 A primary goal. The Triton execution mode must run on Apple Metal
 GPUs — even if that means building our own Triton-to-Metal path. This
 is a large chantier, undertaken with open eyes: it begins with a
 sourced state-of-the-art review (Triton upstream, existing Metal
 efforts, MLIR backends) and an honest scoping before any line of code.
+
+**Where it stands.** First light has passed on the public branch
+`metal-first-light`: a complete language model executed end to end on an
+Apple GPU, with the engine's own Metal allocator, a vendor-agnostic
+launcher behind the same contract the CUDA driver satisfies, and no torch
+dependency anywhere in the Triton path. Integration into `main` is under
+way, one proven piece at a time, each with its own gate on both kinds of
+hardware. Nothing here is claimed as shipped until it is on `main`.
 
 ## Phase 4 — Optimization: benchmarks first, then the kill
 
@@ -98,3 +106,17 @@ regression battery gates the infrastructure. We have the detailed
 graph, our own kernels, and the models' anatomy — every ingredient
 needed to be the best, and it will be proven at the benchmark, not in
 prose.
+
+---
+
+## Phase 5 — A graphical interface
+
+The engine is driven from a terminal today, and that is a floor on who can
+use it. The last phase puts a graphical interface over it: running a model,
+seeing what is installed and what the hub carries, following a run while it
+happens.
+
+One rule decides its architecture. The CLI and the serving daemon stay the
+engine's only entry points; the interface drives them and never opens a
+second path into the runtime. A window that reached into the engine directly
+would be a second surface to keep correct, and the two would drift.

@@ -626,24 +626,30 @@ The runtime compiles the entire execution graph at load time into a **CompiledSe
 - [x] **TilingEngine** — universal spatial tiling for large inputs
 - [x] **NBX Hub** — model registry at neurobrix.es
 
-### Next — the official roadmap ([docs/roadmap.md](docs/roadmap.md), 2026-07-27)
+### Next — the official roadmap ([docs/roadmap.md](docs/roadmap.md), 2026-09-09)
 
-Four phases, in order:
+Five phases, in order:
 
 - [ ] **v0.5 — the complete omni family**: generative outputs (speech
       out, image out), 2–3 fully validated generative omni models
 - [ ] **AMD** — ready-to-light ROCm/CDNA code paths (gated, documented;
       lit the day the hardware is available)
-- [~] **Metal** — Triton execution on Apple GPUs, even if it takes
-      building our own Triton-to-Metal path. **In progress, proven on the
-      public branch `metal-first-light`**: first light passed — a complete
-      language model executed end to end on an Apple GPU, a Metal allocator
-      and a vendor-agnostic launcher written, and no torch dependency in the
-      Triton path. Not merged into `main`
+- [ ] **Metal — IN PROGRESS** — Triton execution on Apple GPUs, even if it
+      takes building our own Triton-to-Metal path. First light has passed on
+      the public branch `metal-first-light`: a complete language model
+      executed end to end on an Apple GPU, the engine's own Metal allocator,
+      a vendor-agnostic launcher behind the same contract the CUDA driver
+      satisfies, and no torch dependency in the Triton path. Integration into
+      `main` is under way, one proven piece at a time. Not shipped until it
+      is on `main`
 - [ ] **Optimization** — reproducible benchmarks against established
       runtimes first; then graph algebra, data-driven kernel fusion,
       execution replay, the megakernel horizon, speculative decoding —
       each behind its own truth gate
+- [ ] **A graphical interface** — running a model, seeing what is installed
+      and what the hub carries, and following a run, without a terminal. It
+      drives the CLI and the serving daemon; it never opens a second path
+      into the runtime
 
 ---
 
@@ -735,4 +741,4 @@ See [LICENSE](./LICENSE) for the full text.
 
 ---
 
-Developed by **Hocine Benkelaya** · Managed by [**WizWorks OÜ**](https://wizworks.io/), a property of [**NEURAL NETWORK HOLDING LTD**](https://neuralnetworkholding.com/).
+Developed by [**Hocine Benkelaya**](https://www.linkedin.com/in/hocine-benkelaya/) · Managed by [**WizWorks OÜ**](https://wizworks.io/), a property of [**NEURAL NETWORK HOLDING LTD**](https://neuralnetworkholding.com/).
