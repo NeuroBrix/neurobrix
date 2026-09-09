@@ -352,6 +352,48 @@ def main() -> int:
                 rec["staged"] = dir_identity(dest)
                 rec["identity_matches_source"] = (
                     rec["staged"]["listing_sha256"] == src_id["listing_sha256"])
+                if not rec["identity_matches_source"]:
+                    # A pre-existing copy that does not match the source is
+                    # what an INTERRUPTED run leaves behind, and it is the
+                    # normal case here: the mount reads at ~6 MB/s, a 30 GB
+                    # artefact takes two hours, and any stop lands mid-copy.
+                    #
+                    # This branch used to compute the flag, record it, and
+                    # then run the arms anyway — a verdict on a truncated
+                    # model, with the field that says so sitting right beside
+                    # it. The fresh-staging path refuses on the same
+                    # condition; this one did not.
+                    #
+                    # Re-stage once, because self-healing is what makes the
+                    # streaming design survive an interruption. If the fresh
+                    # copy also disagrees the source itself is suspect, and
+                    # that refuses rather than being retried forever.
+                    rec["restaged_after_mismatch"] = {
+                        "local_files": rec["staged"]["files"],
+                        "source_files": src_id["files"],
+                        "local_gb": rec["staged"]["gb"],
+                        "source_gb": src_id["gb"],
+                    }
+                    print(f"  {name}: local copy is {rec['staged']['gb']} GB / "
+                          f"{rec['staged']['files']} files against the source's "
+                          f"{src_id['gb']} GB / {src_id['files']} — re-staging",
+                          flush=True)
+                    shutil.rmtree(dest, ignore_errors=True)
+                    t0 = time.time()
+                    shutil.copytree(src, dest)
+                    rec["stage_wall_s"] = round(time.time() - t0, 1)
+                    rec["staged"] = dir_identity(dest)
+                    rec["identity_matches_source"] = (
+                        rec["staged"]["listing_sha256"] == src_id["listing_sha256"]
+                        and rec["staged"]["metadata_sha256"] == src_id["metadata_sha256"])
+                    if not rec["identity_matches_source"]:
+                        rec["status"] = "stage_mismatch"
+                        doc["models"].append(rec)
+                        shutil.rmtree(dest, ignore_errors=True)
+                        (args.out / "records.json").write_text(json.dumps(doc, indent=2))
+                        print(f"  {name}: STAGE MISMATCH after a fresh copy — "
+                              f"not measured, the source is suspect")
+                        continue
 
             rec.update(read_model_facts(dest))
             rec["disk_free_gb_staged"] = disk_free_gb()
