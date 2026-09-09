@@ -33,6 +33,9 @@ from typing import Any, Dict, List, Tuple
 
 import yaml
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from harness_contract import require_key   # noqa: E402  (path set just above)
+
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -53,19 +56,21 @@ def m_text_common_prefix_words(ours: str, theirs: str, bound: Any) -> Tuple[Any,
     return n, n >= float(bound)
 
 
+IMAGE_FIDELITY = os.path.join(REPO, "tools", "image_fidelity.py")
+
+
 def m_psnr_db(ours: str, theirs: str, bound: Any) -> Tuple[Any, bool]:
     """Delegates to tools/image_fidelity.py — the metric brick, not a copy."""
-    p = subprocess.run([sys.executable, os.path.join(REPO, "tools", "image_fidelity.py"),
-                        theirs, ours, "--json"], capture_output=True, text=True)
+    p = subprocess.run([sys.executable, IMAGE_FIDELITY, theirs, ours, "--json"],
+                       capture_output=True, text=True)
     if p.returncode != 0:
         return {"error": p.stderr[-400:]}, False
     d = json.loads(p.stdout)
-    # The key is `psnr_db` — `psnr` was never emitted, so this read fell back to
-    # 0.0 on every render and the cell could not report AGREES whatever the two
-    # images were. A metric that cannot pass is not a gate, it is an alarm.
-    if "psnr_db" not in d:
-        return {"error": f"image_fidelity emitted no psnr_db: keys={sorted(d)}"}, False
-    return d, float(d["psnr_db"]) >= float(bound)
+    # `psnr` was never emitted, so reading it fell back to 0.0 on every render
+    # and the cell could not report AGREES whatever the two images were. The
+    # contract makes that loud instead of silent: a metric reading an absent key
+    # has no verdict to give.
+    return d, float(require_key(d, "psnr_db", produced_by=IMAGE_FIDELITY)) >= float(bound)
 
 
 def _wer_words(t: str) -> List[str]:

@@ -39,13 +39,28 @@ def visible_card(gpu) -> str:
         return str(gpu)
     cards = [c.strip() for c in inherited.split(",") if c.strip()]
     try:
-        return cards[int(gpu)]
-    except (ValueError, IndexError):
-        raise SystemExit(
-            f"--gpu {gpu} names no card inside the pin CUDA_VISIBLE_DEVICES="
-            f"{inherited!r}, which exposes {len(cards)}: {cards}. A device that "
-            f"cannot be resolved is never guessed at."
-        )
+        idx = int(gpu)
+    except (TypeError, ValueError):
+        raise SystemExit(f"--gpu {gpu!r} is not an index")
+    if 0 <= idx < len(cards):
+        # POSITIONAL wins whenever it is possible: that is what the variable
+        # means, and a rule that sometimes reads an index as a card id would be
+        # ambiguous under a pin like "3,0".
+        return cards[idx]
+    if str(gpu) in cards:
+        # The positional reading is impossible and the value names one of the
+        # pinned cards verbatim — a command written for an unpinned launch
+        # (`--gpu 3`) now running pinned to that same card. Unambiguous, so it
+        # resolves rather than refusing, and says which reading it took.
+        print(f"[rig] --gpu {gpu} read as the physical card it names: it is not a "
+              f"position inside the pin {inherited!r}, and the pin contains it",
+              flush=True)
+        return str(gpu)
+    raise SystemExit(
+        f"--gpu {gpu} names no card inside the pin CUDA_VISIBLE_DEVICES="
+        f"{inherited!r}, which exposes {len(cards)}: {cards}, and is not one of "
+        f"them. A device that cannot be resolved is never guessed at."
+    )
 
 
 def gate_card(default_env: str = "NBX_GATE_GPU", default: str = "1") -> str:
