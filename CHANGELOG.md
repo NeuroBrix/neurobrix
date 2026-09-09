@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- The decoded frames of a video request can be written out before they are encoded.
+  `NBX_DUMP_DECODED_FRAMES=<dir>` writes the frames the engine computed, as a lossless `.npy`
+  and one PNG each, immediately before the H.264 writer. A video output reaches any comparison
+  only through a compressed file, so a disagreement measured on a frame cannot otherwise be
+  separated from the codec that carried it. Diagnostic, default off; it writes what the engine
+  already computed and changes nothing about the run.
 - The initial noise of a diffusion request can be written out and read back in, in either mode.
   `NBX_DUMP_INIT_LATENT=<dir>` writes each synthesized `randn` variable as one `.npy`; its mirror
   `NBX_FIXED_LATENT=<file.npy>` reads one back, and now does so in the compiled engine as well as
