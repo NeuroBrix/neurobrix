@@ -155,12 +155,14 @@ def run_ours(cell: Dict[str, Any], defaults: Dict[str, Any], mode: str,
     if is_image:
         return ({"output": png, "error": None} if os.path.isfile(png)
                 else {"output": None, "error": "our engine wrote no image"})
-    text = p.stdout
-    for marker in ("Generated text:", "Output:", "=== OUTPUT ==="):
-        if marker in text:
-            text = text.split(marker)[-1]
-            break
-    return {"output": text.strip(), "error": None}
+    # One extractor for the CLI's framing, shared with the verdict table. The
+    # copy that lived here knew "Generated text:" but not the form the CLI
+    # actually prints ("Generated <n> tokens"), so a correct TinyLlama
+    # generation came back as the whole banner and the cell reported DIVERGES
+    # on a harness bug. A cell that cries wolf is worth less than no cell.
+    sys.path.insert(0, os.path.join(REPO, "tools"))
+    from moe_verdict_table import engine_text
+    return {"output": engine_text(p.stdout), "error": None}
 
 
 def main() -> int:
