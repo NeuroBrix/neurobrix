@@ -262,3 +262,69 @@ class LayerPartitioner:
         return Partition(segments=segments, total_weight_bytes=total,
                          peak_resident_bytes=peak_resident,
                          peak_live_bytes=peak_live)
+
+
+def build_segment_graph(graph: Dict[str, Any], segment: Segment,
+                        order_index: Optional[Dict[str, int]] = None) -> Dict[str, Any]:
+    """One segment as a standalone, executable graph.
+
+    The point of returning a GRAPH rather than an op range is that the whole
+    engine already knows how to run a graph. A segment executed this way goes
+    through the same executor, the same binding, the same dispatch as any
+    component — the only difference is that it holds one segment's weights.
+
+    Its inputs are the tensors produced BEFORE it and read INSIDE it; its
+    outputs are the tensors produced inside it and read AFTER it, plus any of
+    the component's own outputs it produces. Those two sets are exactly what
+    must cross the seam, and they are computed here rather than assumed.
+    """
+    tensors: Dict[str, Any] = graph.get("tensors") or {}
+    ops: Dict[str, Any] = graph.get("ops") or {}
+    order: List[str] = list(graph.get("execution_order") or [])
+    if order_index is None:
+        order_index = {op_uid: i for i, op_uid in enumerate(order)}
+
+    first = order_index[segment.first_op]
+    last = order_index[segment.last_op]
+    inside = order[first:last + 1]
+    inside_set = set(inside)
+
+    produced_here: Set[str] = set()
+    for op_uid in inside:
+        produced_here.update((ops.get(op_uid) or {}).get("output_tensor_ids") or [])
+
+    # Inputs: read here, not produced here, not a parameter.
+    seg_inputs: List[str] = []
+    for op_uid in inside:
+        for tid in (ops.get(op_uid) or {}).get("input_tensor_ids") or []:
+            t = tensors.get(tid)
+            if tid in produced_here or tid in seg_inputs:
+                continue
+            if t is not None and t.get("is_parameter"):
+                continue
+            seg_inputs.append(tid)
+
+    # Outputs: produced here and read later, or an output of the component.
+    component_outputs = set(graph.get("output_tensor_ids") or [])
+    read_later: Set[str] = set()
+    for op_uid in order[last + 1:]:
+        read_later.update((ops.get(op_uid) or {}).get("input_tensor_ids") or [])
+    seg_outputs = [tid for tid in produced_here
+                   if tid in read_later or tid in component_outputs]
+
+    keep = set(seg_inputs) | produced_here
+    for op_uid in inside:
+        for tid in (ops.get(op_uid) or {}).get("input_tensor_ids") or []:
+            if (tensors.get(tid) or {}).get("is_parameter"):
+                keep.add(tid)
+
+    out = {k: v for k, v in graph.items()
+           if k not in ("tensors", "ops", "execution_order",
+                        "input_tensor_ids", "output_tensor_ids")}
+    out["tensors"] = {tid: tensors[tid] for tid in keep if tid in tensors}
+    out["ops"] = {op_uid: ops[op_uid] for op_uid in inside if op_uid in ops}
+    out["execution_order"] = inside
+    out["input_tensor_ids"] = seg_inputs
+    out["output_tensor_ids"] = sorted(seg_outputs)
+    out["segment_index"] = segment.index
+    return out
