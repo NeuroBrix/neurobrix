@@ -44,6 +44,55 @@ class FusionUpsampleProxy:
 
     __slots__ = ("pre_input", "scales_h", "scales_w", "output_shape", "dtype", "device")
 
+    # ── observability ──────────────────────────────────────────────────────
+    # THE RULE: a brick that replaces a call site preserves the observability
+    # of that site. This proxy stands in for an upsample op, and the per-op
+    # recorder drops anything that is not a tensor — so two of the three
+    # spatial upsamples of the Wan VAE produced no record at all, and every
+    # cross-engine walk was blind exactly there. The proxy therefore produces
+    # the record itself.
+    #
+    # It costs nothing and it is EXACT, because a nearest upsample only
+    # replicates: every input value appears scales_h x scales_w times, so
+    #     l2(up(x)) == sqrt(sh*sw) * l2(x)
+    # and the first row of the result is the first row of the input with each
+    # element repeated sw times. No tensor is materialized — which is the
+    # whole reason this proxy exists.
+
+    def nbx_observable_summary(self) -> dict:
+        """What the replaced upsample would have reported, without materializing it."""
+        import math
+        x = self.pre_input
+        sh = max(1, int(round(float(self.scales_h))))
+        sw = max(1, int(round(float(self.scales_w))))
+        # `self.dtype` is a __slots__ field the interceptor does not always set,
+        # and `getattr(x, "dtype", self.dtype)` would evaluate it EAGERLY as the
+        # default — raising AttributeError before the getattr ever runs.
+        dt = getattr(x, "dtype", None)
+        if dt is None:
+            dt = getattr(self, "dtype", None)
+        out = {"shape": list(self.output_shape), "dtype": str(dt),
+               "synthetic": True, "replaced_by": "fused_upsample_conv2d"}
+        try:
+            flat = x.reshape(-1)
+            head_src = flat[:10]
+            head_src = (head_src.tolist() if hasattr(head_src, "tolist")
+                        else list(head_src))
+            head = [float(v) for v in head_src for _ in range(sw)][:10]
+            out["head10"] = head
+            try:                                   # torch
+                import torch
+                l2 = float(torch.linalg.vector_norm(
+                    x.detach().reshape(-1), dtype=torch.float32).item())
+            except Exception:                      # NBXTensor -> numpy, no torch (R33)
+                import numpy as _np
+                l2 = float(_np.linalg.norm(
+                    _np.asarray(x.numpy(), dtype=_np.float64).ravel()))
+            out["l2_norm"] = l2 * math.sqrt(sh * sw)
+        except Exception as exc:                   # a summary must never break a run
+            out["error"] = f"{type(exc).__name__}: {exc}"
+        return out
+
     def __init__(self, pre_input, scales_h, scales_w, output_shape):
         self.pre_input = pre_input
         self.scales_h = float(scales_h)

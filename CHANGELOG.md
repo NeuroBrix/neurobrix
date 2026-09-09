@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- The final latent of a diffusion request can be written out, in either mode.
+  `NBX_DUMP_FINAL_LATENT=<dir>` writes the post-denoise latent at the `pre_vae` boundary — the
+  point where it is known and named — so a request can be compared to its vendor's at the stage
+  BEFORE the decoder, rather than inferred through the decoder's own normalisation. Diagnostic,
+  default off.
+- A brick that replaces a call site now reports what it replaced. An interceptor's stand-in
+  object may expose `nbx_observable_summary()`, and the per-op recorder takes it instead of
+  dropping the value for not being a tensor. `FusionUpsampleProxy` implements it exactly and for
+  free — a nearest upsample only replicates, so its norm and leading values follow from its input
+  without materialising anything.
 - The decoded frames of a video request can be written out before they are encoded.
   `NBX_DUMP_DECODED_FRAMES=<dir>` writes the frames the engine computed, as a lossless `.npy`
   and one PNG each, immediately before the H.264 writer. A video output reaches any comparison
