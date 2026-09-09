@@ -181,13 +181,22 @@ cells:
     family: video
     model: Wan2.1-T2V-1.3B-Diffusers
     vendor:
-      kind: diffusers
+      # Its own venv and its own pipeline class, so it is its own kind: the
+      # video venv carries diffusers 0.38.0 and WanPipeline, the image one
+      # 0.35.2 and AutoPipelineForText2Image.
+      kind: diffusers_video
       ref: "/home/mlops/hf_snapshots/Wan2.1-T2V-1.3B-Diffusers"
       venv: /home/mlops/bench_venvs/diffusers_video
-      precision: "float16"
+      precision: "float16 transformer, float32 VAE — the model card keeps the VAE in fp32"
     request:
       prompt: "a red apple rolling slowly across a wooden table"
       steps: 4
+      # 4k+1 because Wan's VAE compresses the temporal axis by 4; a count that
+      # is not of that form is resampled by the pipeline and the two arms would
+      # no longer render the same clip.
+      frames: 17
+      height: 480
+      width: 832
     gate:
       kind: latent_pinned                       # PRIMARY — the seam exists
       read_from: >

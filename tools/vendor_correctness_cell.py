@@ -93,9 +93,22 @@ def m_wer(ours: str, theirs: str, bound: Any) -> Tuple[Any, bool]:
             wer <= float(bound))
 
 
+def m_psnr_db_first_frame(ours: str, theirs: str, bound: Any) -> Tuple[Any, bool]:
+    """First frame of each render, compared with the same brick as a still.
+
+    The first frame is where a temporal defect shows up cleanly: a frozen frame
+    count or a dropped frame changes what frame 0 IS, while the still-image
+    metric stays interpretable. Both arms hand over a PNG of frame 0, so this
+    delegates to the same image_fidelity brick rather than owning a second copy
+    of PSNR.
+    """
+    return m_psnr_db(ours, theirs, bound)
+
+
 METRICS = {
     "text_common_prefix_words": m_text_common_prefix_words,
     "psnr_db": m_psnr_db,
+    "psnr_db_first_frame": m_psnr_db_first_frame,
     "wer": m_wer,
 }
 
@@ -142,7 +155,7 @@ def vendor_available(cell: Dict[str, Any]) -> str:
         if not os.path.isdir(cell["vendor"]["ref"]):
             return f"vendor snapshot absent: {cell['vendor']['ref']}"
         return ""
-    if kind == "diffusers":
+    if kind in ("diffusers", "diffusers_video"):
         venv = cell["vendor"].get("venv", "")
         if not os.path.isfile(os.path.join(venv, "bin", "python")):
             return f"vendor venv absent: {venv}"
@@ -219,10 +232,59 @@ def vendor_faster_whisper(cell: Dict[str, Any], defaults: Dict[str, Any],
         return {"output": None, "error": f"unreadable vendor output ({exc}): {p.stdout[-200:]}"}
 
 
+def vendor_diffusers_video(cell: Dict[str, Any], defaults: Dict[str, Any],
+                           out_dir: str, latents: str = "") -> Dict[str, Any]:
+    """The vendor's first frame, from its own diffusers video pipeline."""
+    v, req = cell["vendor"], cell.get("request", {})
+    py = os.path.join(v.get("venv", ""), "bin", "python")
+    if not os.path.isfile(py):
+        return {"output": None, "error": f"vendor venv absent: {v.get('venv')}"}
+    if not os.path.isdir(v["ref"]):
+        return {"output": None, "error": f"vendor snapshot absent: {v['ref']}"}
+    png = os.path.join(out_dir, f"{cell['id']}_vendor.png")
+    cmd = [py, os.path.join(REPO, "tools", "vendor_video_repro.py"),
+           "--snapshot", v["ref"], "--prompt", req["prompt"],
+           "--seed", str(defaults.get("seed", 42)),
+           "--steps", str(req.get("steps", 4)),
+           "--frames", str(req.get("frames", 17)),
+           "--height", str(req.get("height", 480)),
+           "--width", str(req.get("width", 832)),
+           "--out", png]
+    if latents:
+        cmd += ["--latents", latents]
+    p = subprocess.run(cmd, capture_output=True, text=True, timeout=7200)
+    if p.returncode != 0 or not os.path.isfile(png):
+        return {"output": None, "error": f"diffusers_video run failed: {p.stderr[-500:]}"}
+    return {"output": png, "error": None}
+
+
 def vendor_unavailable(cell: Dict[str, Any], *_args, **_kwargs) -> Dict[str, Any]:
     return {"output": None,
             "error": f"no runner wired for vendor.kind={cell['vendor']['kind']!r} "
                      f"({cell['vendor'].get('ref')}) — declared, not yet runnable"}
+
+
+def _first_frame(clip: str, png: str) -> str:
+    """Frame 0 of a rendered clip, written as a PNG. Returns "" or the reason.
+
+    Media file-I/O at the harness boundary, which is I/O and not compute (R34).
+    """
+    try:
+        import imageio.v3 as iio
+        frame = iio.imread(clip, index=0, plugin="pyav")
+    except Exception:
+        try:
+            import imageio.v2 as iio2
+            with iio2.get_reader(clip) as rd:
+                frame = rd.get_data(0)
+        except Exception as exc:
+            return f"could not read frame 0 of {os.path.basename(clip)}: {exc}"
+    try:
+        from PIL import Image
+        Image.fromarray(frame).save(png)
+    except Exception as exc:
+        return f"could not write frame 0: {exc}"
+    return ""
 
 
 # ── our side ────────────────────────────────────────────────────────────────
@@ -247,16 +309,30 @@ def run_ours(cell: Dict[str, Any], defaults: Dict[str, Any], mode: str,
         cmd += ["--audio", req["audio"]]
     if req.get("temperature") is not None:
         cmd += ["--temperature", str(req["temperature"])]
-    if req.get("max_tokens") or defaults.get("max_tokens"):
+    if not (cell["compare"]["metric"].startswith("psnr")) and (
+            req.get("max_tokens") or defaults.get("max_tokens")):
+        # A render has no token budget; passing the text default to a diffusion
+        # request puts a flag in the command that means nothing there.
         cmd += ["--max-tokens", str(req.get("max_tokens", defaults["max_tokens"]))]
     is_image = cell["compare"]["metric"].startswith("psnr")
+    is_video = cell["compare"]["metric"] == "psnr_db_first_frame"
     png = os.path.join(out_dir, f"{cell['id']}_ours.png")
-    if is_image:
+    # A video family writes a clip, not a still: handing it a .png output made
+    # our arm fail rc=1 and the cell called it NOT-RUN for a reason that was the
+    # harness's. It renders the clip, and frame 0 is extracted for the metric.
+    clip = os.path.join(out_dir, f"{cell['id']}_ours.mp4")
+    if is_video:
+        cmd += ["--output", clip]
+    elif is_image:
         cmd += ["--output", png]
-        # The request's render config belongs to BOTH arms. Ours used to take
-        # the model's defaults while the vendor rendered the declared step
-        # count, so the two were never comparing the same computation — the
-        # same defect the retrace gate closed for its image row.
+    if is_image or is_video:
+        # The request's render config belongs to BOTH arms, whichever kind of
+        # render it is. Ours used to take the model's defaults while the vendor
+        # rendered the declared step count — the same defect the retrace gate
+        # closed for its image row. Guarding this on `is_image` alone put the
+        # video cell straight back into it: Wan rendered its default 81 frames
+        # against a 17-frame vendor arm, which is not slow, it is a different
+        # request.
         if req.get("steps") is not None:
             cmd += ["--steps", str(req["steps"])]
         if req.get("guidance") is not None:
@@ -265,6 +341,8 @@ def run_ours(cell: Dict[str, Any], defaults: Dict[str, Any], mode: str,
             cmd += ["--height", str(req["height"])]
         if req.get("width") is not None:
             cmd += ["--width", str(req["width"])]
+        if is_video and req.get("frames") is not None:
+            cmd += ["--num-frames", str(req["frames"])]
     if mode == "triton":
         cmd.append("--triton")
     try:
@@ -274,6 +352,12 @@ def run_ours(cell: Dict[str, Any], defaults: Dict[str, Any], mode: str,
     if p.returncode != 0:
         return {"output": None, "error": f"our engine failed rc={p.returncode}: "
                                          f"{p.stderr[-500:]}"}
+    if is_video:
+        if not os.path.isfile(clip):
+            return {"output": None, "error": "our engine wrote no clip"}
+        err = _first_frame(clip, png)
+        return ({"output": png, "error": None} if not err
+                else {"output": None, "error": err})
     if is_image:
         return ({"output": png, "error": None} if os.path.isfile(png)
                 else {"output": None, "error": "our engine wrote no image"})
@@ -385,6 +469,8 @@ def main() -> int:
             ven = vendor_faster_whisper(cell, defaults)
         elif kind == "diffusers":
             ven = vendor_diffusers(cell, defaults, args.out, latents=latents)
+        elif kind == "diffusers_video":
+            ven = vendor_diffusers_video(cell, defaults, args.out, latents=latents)
         else:
             ven = vendor_unavailable(cell)
         if ven["error"]:
