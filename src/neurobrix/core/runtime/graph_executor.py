@@ -1512,6 +1512,57 @@ class GraphExecutor:
     # Weight Loading
     # =========================================================================
 
+    def consumed_weight_names(self) -> Optional[set]:
+        """The weight names some op in THIS graph actually reads.
+
+        A parameter that no op consumes cannot be read during execution — the
+        engine replays `execution_order` and nothing else — so loading it is
+        pure cost. Measured 2026-09-09 on DeepSeek-Coder-V2-Lite: 2169 of
+        5371 parameters have no consumer, **11781 MB of 30638**, 38% of the
+        component. They are MoE experts the trace never routed to; the graph
+        holds a `mm` per expert it did route to, and none for the rest.
+
+        Computed from the FINAL dag, after any fusion pass, so a transform
+        that rewrites which tensors an op reads is reflected rather than
+        second-guessed.
+
+        Returns None when the graph cannot answer — no dag, no tensors, or no
+        parameter carries a `weight_name`. None means "load everything",
+        which is what every caller did before this existed. That direction is
+        the safe one: loading a weight that is never read costs memory, while
+        skipping one that is read fails loudly at the first op that wants it.
+        """
+        import os as _os
+        if _os.environ.get("NBX_LOAD_ALL_WEIGHTS") == "1":
+            # Diagnostic escape: load every weight in the shards, as before
+            # this existed. Its purpose is to make the change PROVABLE — run
+            # the same prompt both ways and compare the bytes — not to give
+            # anyone a way to avoid the question.
+            return None
+        dag = getattr(self, "_dag", None)
+        if not isinstance(dag, dict):
+            return None
+        tensors = dag.get("tensors")
+        ops = dag.get("ops")
+        order = dag.get("execution_order")
+        if not isinstance(tensors, dict) or not isinstance(ops, dict) or not order:
+            return None
+
+        consumed = set()
+        for op_uid in order:
+            op = ops.get(op_uid) or {}
+            for tid in (op.get("input_tensor_ids") or []):
+                t = tensors.get(tid)
+                if t is not None and t.get("is_parameter"):
+                    name = t.get("weight_name")
+                    if name:
+                        consumed.add(name)
+        if not consumed:
+            # A component with no parameters at all, or a graph that names
+            # none of them: not a licence to skip everything.
+            return None
+        return consumed
+
     def load_weights(
         self,
         nbx_path: str,
@@ -1627,9 +1678,16 @@ class GraphExecutor:
         # VRAM footprint (measured: TinyLlama peak 4.74 → 2.54 GB on V100)
         # and is also faster end-to-end (TinyLlama 9.94 s → 5.04 s),
         # because the bind-time upcast cost itself was never cheap.
+        # Load only what this graph reads. See consumed_weight_names: a
+        # parameter no op consumes cannot be reached by execution, and on an
+        # MoE build the untraced experts are a third of the component.
+        _only = self.consumed_weight_names()
         self._weights = load_component_weights(
             nbx_path, component, device_idx, compute_dtype,
-            shard_map=shard_map)
+            shard_map=shard_map, only=_only)
+        if _only is not None:
+            print(f"   [Triton] '{component}': loading {len(_only)} weights "
+                  f"the graph consumes", flush=True)
 
         # Weight-storage encoding: fold qweight/scales/qmins triplets
         # into QuantizedTensor handles under the graph keys (compute

@@ -1194,12 +1194,22 @@ def _parse_system_profiler() -> List[Dict[str, Any]]:
         name = gpu.get("sppci_model", gpu.get("_name", "Unknown GPU"))
         vendor_str = gpu.get("spdisplays_vendor", "").lower()
 
+        # Set only where the hardware actually has the property; a device
+        # that does not share memory with the host says nothing rather than
+        # saying False, so a profile never asserts what was not detected.
+        host_mem_mb = None
+        unified = None
+
         # Determine brand
         if "apple" in vendor_str or "apple" in name.lower():
             brand = "apple"
             arch = "apple_silicon"
-            # Apple Silicon: unified memory — get from sysctl
+            # Apple Silicon: unified memory. `mem_mb` is what the GPU may
+            # HOLD (the device's working set), not what the machine has —
+            # they differ by 26% here and Prism budgets against the former.
             mem_mb = _detect_apple_memory_mb()
+            host_mem_mb = _detect_apple_host_memory_mb()
+            unified = True
             dtypes = ["float32", "float16"]
             if _apple_supports_bf16(name):
                 dtypes.append("bfloat16")
@@ -1232,7 +1242,7 @@ def _parse_system_profiler() -> List[Dict[str, Any]]:
             if "float16" not in dtypes:
                 dtypes.append("float16")
 
-        devices.append({
+        _dev = {
             "index": idx,
             "brand": brand,
             "model": name,
@@ -1241,7 +1251,14 @@ def _parse_system_profiler() -> List[Dict[str, Any]]:
             "supports_dtypes": dtypes,
             "architecture": arch,
             "pcie_version": pcie_ver,
-        })
+        }
+        if unified is not None:
+            _dev["unified_memory"] = unified
+        if host_mem_mb is not None:
+            # What the MACHINE has. `memory_mb` is what the GPU may hold.
+            # Recorded so the gap is visible instead of being rediscovered.
+            _dev["host_memory_mb"] = host_mem_mb
+        devices.append(_dev)
         idx += 1
 
     return devices
@@ -2192,12 +2209,43 @@ def _detect_apple_chip() -> str:
            _sysctl_str("hw.model") or "Apple Silicon"
 
 
-def _detect_apple_memory_mb() -> int:
-    """Detect Apple Silicon unified memory (shared CPU+GPU)."""
+def _detect_apple_host_memory_mb() -> int:
+    """Total physical RAM. On unified memory the CPU and GPU share it, but
+    the GPU may not have all of it — see `_detect_apple_memory_mb`."""
     memsize = _sysctl_int("hw.memsize")
     if memsize:
         return memsize // (1024 * 1024)
     return 8192
+
+
+def _detect_apple_memory_mb() -> int:
+    """How much memory the GPU may actually hold, not how much the machine has.
+
+    `hw.memsize` was reported here, so a 24 GB machine advertised a 24576 MB
+    device. The allocator enforces something else entirely: the device's own
+    `recommendedMaxWorkingSetSize`, which on this M4 Pro is **18186 MB** —
+    26% less. Prism therefore accepted plans the allocator then refused, and
+    "the budget it announces is the budget it executes" was false before any
+    strategy had a chance to be right.
+
+    Measured 2026-09-09: recommendedMaxWorkingSetSize = 19069665280 bytes
+    against hw.memsize = 25769803776.
+
+    The device is asked, never guessed. When the GPU API is not reachable the
+    machine is not going to run on it either, so total RAM is the honest
+    answer for what is then a host-only profile, and it is returned rather
+    than a made-up fraction of it.
+    """
+    try:
+        import Metal                                    # vendor layer: allowed here
+        device = Metal.MTLCreateSystemDefaultDevice()
+        if device is not None:
+            budget = int(device.recommendedMaxWorkingSetSize())
+            if budget > 0:
+                return budget // (1024 * 1024)
+    except Exception:
+        pass
+    return _detect_apple_host_memory_mb()
 
 
 def _parse_mac_vram(vram_str: str) -> int:
