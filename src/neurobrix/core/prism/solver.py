@@ -37,7 +37,43 @@ if TYPE_CHECKING:
 # DATACLASSES
 # =============================================================================
 
+def _device_is_unified(device_string: str, profile) -> bool:
+    """Does this allocation target share ONE memory pool with the host?
+
+    Decides whether a `zero3:` offload frees device memory. On a discrete
+    card host RAM and device memory are disjoint and zero3's premise holds:
+    the weights leave the device. On a unified device they are the same
+    bytes, "offload" moves nothing, and counting only activations tells the
+    solver a plan fits when it does not.
+
+    Measured 2026-09-09, DeepSeek-Coder-V2-Lite-Instruct on a 24576 MB
+    unified device: Prism scored `lazy_sequential` "the only viable
+    strategy" with its `model` component on zero3 at 31259.5 MB — 27% over
+    the budget it had just read. The run then planned 32104 MB; the eager
+    arm was SIGKILLed by the OS and the Triton arm's allocator refused at
+    the budget, reporting a 5.5 MB pinned allocation failure that was really
+    a full working set.
+
+    Vendor-agnostic by construction: it asks the DEVICE whether its memory
+    is unified, so an APU on `hip:0` and an integrated `xpu:0` are answered
+    by the same code with no line added.
+    """
+    if not isinstance(device_string, str) or profile is None:
+        return False
+    # "zero3:mps:0" -> "mps:0" -> index 0
+    tail = device_string.split(":", 1)[1] if device_string.startswith("zero3:") else device_string
+    try:
+        index = int(tail.rsplit(":", 1)[1])
+    except (IndexError, ValueError):
+        return False
+    for dev in getattr(profile, "devices", None) or []:
+        if dev.index == index:
+            return dev.has_unified_memory
+    return False
+
+
 @dataclass
+
 class ComponentAllocation:
     """Allocation plan for a single component."""
     name: str
@@ -806,9 +842,15 @@ class PrismSolver:
                     for _comp_name, _m in component_memory.items():
                         _alloc = strat_allocs.get(_comp_name)
                         _dev = _alloc[0] if isinstance(_alloc, tuple) else _alloc
-                        if isinstance(_dev, str) and _dev.startswith("zero3:"):
+                        if (isinstance(_dev, str) and _dev.startswith("zero3:")
+                                and not _device_is_unified(_dev, profile)):
                             total_allocated += _m.activation_bytes + _m.overhead_bytes
                         else:
+                            # Weights count. On a UNIFIED device this is the
+                            # zero3 branch too: "offload to host pinned
+                            # memory" moves the bytes to the same pool they
+                            # already occupy, so it frees nothing and the
+                            # budget must still see them.
                             total_allocated += _m.total_bytes
 
                 # Remove KV cache double-count (already in LM activation_bytes)
