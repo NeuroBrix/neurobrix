@@ -196,10 +196,17 @@ def main() -> int:
         }
         t0 = time.time()
         if metric not in METRICS:
-            row.update(verdict="NOT-RUN",
-                       reason=f"metric {metric!r} has no implementation in this harness")
+            # A cell can declare its own driver when the generic one-shot path
+            # cannot express it (the MoE ladder needs eight loads at eight
+            # lengths). Naming the command is the honest report; silently
+            # counting it green would be the dishonest one.
+            driver = cell.get("driven_by")
+            row.update(verdict="DELEGATED" if driver else "NOT-RUN",
+                       reason=(f"driven by its own tool: {driver}" if driver else
+                               f"metric {metric!r} has no implementation in this harness"))
             results.append(row)
-            print(f"[cell] {cell['id']:32s} NOT-RUN  ({row['reason']})", flush=True)
+            print(f"[cell] {cell['id']:32s} {row['verdict']:9s} ({row['reason']})",
+                  flush=True)
             continue
 
         kind = cell["vendor"]["kind"]
@@ -239,8 +246,9 @@ def main() -> int:
     agree = sum(1 for r in results if r["verdict"] == "AGREES")
     diverge = sum(1 for r in results if r["verdict"] == "DIVERGES")
     notrun = sum(1 for r in results if r["verdict"] == "NOT-RUN")
-    print(f"\n{agree} agree · {diverge} diverge · {notrun} not-run "
-          f"(not-run is a finding, never a pass)")
+    deleg = sum(1 for r in results if r["verdict"] == "DELEGATED")
+    print(f"\n{agree} agree · {diverge} diverge · {notrun} not-run · "
+          f"{deleg} delegated (not-run is a finding, never a pass)")
     print(f"written: {path}")
     return 1 if diverge else 0
 

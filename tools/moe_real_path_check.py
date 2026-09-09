@@ -97,7 +97,10 @@ def run_ollama(tag: str, prompt: str, max_tokens: int, seed: int,
         "model": tag,
         "messages": [{"role": "user", "content": prompt}],
         "stream": False,
-        "options": {"temperature": 0, "seed": seed, "num_predict": max_tokens},
+        # num_gpu 0: the vendor arm runs on CPU so it can never contend with a
+        # timed campaign on the rig — a correctness cell must not cost a timing.
+        "options": {"temperature": 0, "seed": seed, "num_predict": max_tokens,
+                    "num_gpu": 0},
     }).encode()
     req = urllib.request.Request(f"{host}/api/chat", data=body,
                                  headers={"Content-Type": "application/json"})
