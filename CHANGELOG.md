@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- The initial noise of a diffusion request can be written out and read back in, in either mode.
+  `NBX_DUMP_INIT_LATENT=<dir>` writes each synthesized `randn` variable as one `.npy`; its mirror
+  `NBX_FIXED_LATENT=<file.npy>` reads one back, and now does so in the compiled engine as well as
+  the Triton one, so a single file drives both. Together they let a request be compared to the same
+  request run by the model's own vendor pipeline on the SAME starting noise — without which the two
+  sides draw from different generators for the same seed and render two valid samples that no
+  fidelity bound can separate. Diagnostic, default off; it never changes what a run computes.
 - `neurobrix drift`: the drift-site detector. The same request runs on the ATen oracle (sequential,
   op by op) and on the Triton engine, each writing its per-op record, and the report names the
   first op in the oracle's order whose values depart beyond a relative bound — separating a kernel
