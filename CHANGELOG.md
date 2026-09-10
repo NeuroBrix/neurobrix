@@ -80,6 +80,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keeps the conservative path there — a record that changes nothing no longer costs.
 
 ### Fixed
+- A video model whose container states its frame count and temporal compression, but not a
+  pixel height and width, now runs. The two latent extents are derived independently — the
+  temporal one needs neither the spatial dimensions nor the decoder's spatial factor — but
+  they shared one exit, so a model missing the spatial inputs silently lost the temporal
+  derivation too and failed later in the denoise loop, on a value its own container held.
 - An image-to-video request pads its conditioning clip to the frame count the model's
   container declares, instead of leaving it at a single frame whenever the frame count was
   not typed on the command line. One model refused the one-frame clip outright (its decoder
