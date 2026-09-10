@@ -16,6 +16,8 @@ from .nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, _broadcast_shapes,
 from .nbx_tensor import DeviceOOMError
 from .nbx_tensor import _upload_int64_array as _nbx_upload_int64, _MAX_NDIM as _NBX_MAX_NDIM, _saturating_cast as _nbx_saturating_cast
 from .ops._configs import sdpa_block_ceiling as _sdpa_block_ceiling
+from .ops._configs import largest_tile_within_smem as _largest_tile_within_smem
+from . import launcher as _nbx_launcher
 
 # Route this module's kernel[grid] sites through the engine's launcher.
 #
@@ -8495,6 +8497,83 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
 
     # Ensure CUDA runtime is on the correct device before kernel launch
     _set_device(q)
+
+    # The tile is offered only if the DEVICE says it can hold it.
+    #
+    # Everything above proposes on `_NBX_HAS_NATIVE_BF16`, which separates Volta
+    # from Ampere and says nothing else — so sm_86 takes the branch written for
+    # sm_80 and asks a 128-row Q tile of a card declaring 99 KB where sm_80
+    # declares 163. That is what stopped every language model on an A40: 164 352
+    # bytes requested against 101 376 available, the same number in both Triton
+    # modes and unmoved by sequence length. The clamp above could not catch it
+    # either: `sdpa_thresholds` exists only in the seven profiles we ship, so for
+    # any card whose profile we do not ship it returns (None, None) and clamps
+    # nothing.
+    #
+    # The cost is READ FROM THE COMPILER, never estimated: `prepare()` returns
+    # the shared memory Triton computed for this exact specialisation. An
+    # analytic formula is a guess — one written while diagnosing this said
+    # 112 KB for a Volta tile that runs in 96, and pruning on that would have
+    # deleted a configuration that works. One compile per candidate, which the
+    # autotuner already pays, and a dict lookup on every launch after.
+    _smem_budget = _nbx_launcher.max_shared_memory_per_block()
+    if _smem_budget is not None:
+        _probe_args = (
+            q, k, v, bias, o, lse, tmp, softmax_scale,
+            q.stride(0), q.stride(1), q.stride(2),
+            k.stride(0), k.stride(1), k.stride(2),
+            v.stride(0), v.stride(1), v.stride(2),
+            bias.stride(0), bias.stride(1), bias.stride(-2),
+            o.stride(0), o.stride(1), o.stride(2),
+            nheads, seqlen_q, seqlen_k, seqlen_q_rounded, headdim,
+            seqlen_q // 32, seqlen_k // 32,
+        )
+        _probe_kw = dict(BIAS_TYPE=bias_type, BLOCK_HEADDIM=BLOCK_HEADDIM,
+                         GQA_GROUPS=gqa_groups, **_flash_launch_meta)
+
+        # `prepare` binds a JITFunction; the kernel is wrapped in
+        # @triton.heuristics, whose only job is to add constexprs. Unwrap to
+        # the function and apply those heuristics exactly as Heuristics.run
+        # does, so the probe compiles the SAME specialisation the launch will.
+        _inner, _heur = flash_attention_forward_kernel, {}
+        while hasattr(_inner, "values") and hasattr(_inner, "fn"):
+            _heur.update(_inner.values)
+            _inner = _inner.fn
+
+        def _tile_cost(_t):
+            _kw = dict(_probe_kw, BLOCK_M=_t[0], BLOCK_N=_t[1])
+            if _heur:
+                _named = dict(zip(_inner.arg_names, _probe_args))
+                for _v, _h in _heur.items():
+                    _kw[_v] = _h({**_named, **_kw})
+            _prep, _ = _nbx_launcher.prepare(_inner, _probe_args, _kw)
+            return int(_prep.shared)
+
+        _cands, _m = [(BLOCK_M, BLOCK_N)], BLOCK_M
+        while _m > 16:
+            _m //= 2
+            _cands.append((_m, BLOCK_N))
+        try:
+            _sel = _largest_tile_within_smem(_cands, _tile_cost, _smem_budget)
+        except Exception as _e:
+            # A probe that cannot run changes nothing — but it SAYS SO. A guard
+            # that degrades in silence is the defect this whole change is about.
+            print(f"[flash] shared-memory probe unavailable ({type(_e).__name__}: "
+                  f"{_e}); the tile is not checked against the device", flush=True)
+            _sel = (BLOCK_M, BLOCK_N)
+        if _sel != (BLOCK_M, BLOCK_N):
+            print(f"[flash] tile {(BLOCK_M, BLOCK_N)} needs "
+                  f"{_tile_cost((BLOCK_M, BLOCK_N))} bytes of shared memory and this "
+                  f"device declares {_smem_budget} — using {_sel}", flush=True)
+            BLOCK_M, BLOCK_N = _sel
+            # Everything downstream that was derived from the proposed tile.
+            seqlen_q_rounded = math.ceil(seqlen_q / BLOCK_M) * BLOCK_M
+            _dev = f"cuda:{q._device_idx}" if hasattr(q, "_device_idx") else "cuda"
+            lse = NBXTensor.empty((batch, nheads, seqlen_q_rounded),
+                                  dtype=NBXDtype.float32, device=_dev)
+            tmp = NBXTensor.empty((batch, nheads, seqlen_q_rounded),
+                                  dtype=NBXDtype.float32, device=_dev)
+            grid = (triton.cdiv(seqlen_q, BLOCK_M), batch * nheads)
 
     flash_attention_forward_kernel[grid](
         q, k, v, bias,

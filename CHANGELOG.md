@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Language models start on consumer and professional Ampere cards, and on any card whose
+  profile the engine does not ship. The attention kernel's tile was chosen from a flag that
+  only tells Volta from Ampere, so a card declaring 99 KB of shared memory per block was
+  given the tile sized for one declaring 163 and refused every launch. The tile is now
+  offered only if the card itself says it can hold it, and the size it needs is read from
+  the compiler rather than estimated.
 - Prism: a single-GPU plan is budgeted under the memory model it will be executed under. The rung
   accepted a cold run by counting only the largest component, on the premise that one component is
   in VRAM at a time; the strategy is eager and never unloads, so a model whose weights sum past the
