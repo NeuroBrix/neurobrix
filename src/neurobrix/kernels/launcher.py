@@ -1036,6 +1036,78 @@ def configs_agreeing_with_oracle(results, oracle, dtype_name):
     return kept
 
 
+#: A callable `(tuner, key, buffers) -> list[bytes] | None` returning the
+#: CORRECT contents of the screened buffers, or None where none can be had.
+#: Default None: the screen keeps the consensus it has always kept, and this
+#: whole path costs one `is None`.
+#:
+#: `configs_agreeing_with_oracle` is the primitive and it takes ONE buffer; a
+#: screened result is a SNAPSHOT, a list of buffers with a dtype each. The
+#: primitive was correct and tested from the day it was written and still could
+#: not be called from here, because nothing carried a snapshot to it. That
+#: adapter is `_oracle_keeps` below, and its absence is why the overrule sat
+#: unwired: a helper whose every test passes can still have no seam.
+_SCREEN_ORACLE = None
+
+
+def set_screen_oracle(provider) -> None:
+    """Install (or clear, with None) the oracle provider for the screen."""
+    global _SCREEN_ORACLE
+    _SCREEN_ORACLE = provider
+
+
+def _oracle_keeps(results, oracle, buffers):
+    """The candidates that agree with the oracle on EVERY screened buffer."""
+    kept = []
+    for entry in results:
+        agrees = True
+        for (_a, _n, dtype_name), produced, reference in zip(buffers, entry[1], oracle):
+            if not configs_agreeing_with_oracle([(entry[0], produced)],
+                                                reference, dtype_name):
+                agrees = False
+                break
+        if agrees:
+            kept.append(entry)
+    return kept
+
+
+def _make_agree(buffers):
+    """The screen's agreement predicate for one set of screened buffers."""
+    def agree(one, other):
+        worst, tol, name = 0.0, 0.0, "?"
+        for (_a, _n, dtype_name), x, y in zip(buffers, one, other):
+            if x == y:
+                continue
+            deviation, tolerance = _deviation(x, y, dtype_name)
+            if deviation > worst:
+                worst, tol, name = deviation, tolerance, dtype_name
+        return worst <= tol, worst, tol, name
+    return agree
+
+
+def _cluster(results, agree):
+    """Candidates grouped by mutual agreement, first-fit against each group."""
+    clusters: List[list] = []
+    for entry in results:
+        for cluster in clusters:
+            ok, _w, _t, _d = agree(entry[1], cluster[0][1])
+            if ok:
+                cluster.append(entry)
+                break
+        else:
+            clusters.append([entry])
+    return clusters
+
+
+def _largest_agreement(results, buffers):
+    """What the VOTE would have seated — asked only to say whether it was
+    about to be wrong. Never used to decide anything once an oracle exists."""
+    clusters = _cluster(results, _make_agree(buffers))
+    if not clusters:
+        return []
+    return max(clusters, key=len)
+
+
 def screen_configs(tuner, configs, key, meta=None):
     """Run every candidate once and keep the ones that agree with each other.
 
@@ -1118,26 +1190,49 @@ def screen_configs(tuner, configs, key, meta=None):
     if len(results) < 2:
         return configs
 
-    # -- cluster by agreement ----------------------------------------------
-    def agree(one, other):
-        worst, tol, name = 0.0, 0.0, "?"
-        for (_a, _n, dtype_name), x, y in zip(buffers, one, other):
-            if x == y:
-                continue
-            deviation, tolerance = _deviation(x, y, dtype_name)
-            if deviation > worst:
-                worst, tol, name = deviation, tolerance, dtype_name
-        return worst <= tol, worst, tol, name
+    # -- an oracle, where one exists, OVERRULES the vote --------------------
+    #
+    # This is the whole point of the 2026-09-10 finding. Consensus has two
+    # failure modes it cannot see: a majority wrong in the same way, and a
+    # unanimous space that is wrong. Both are silent, and both are widest
+    # exactly where we have never looked — outside `nvidia/volta`, where the
+    # configuration space itself differs by target.
+    oracle = None
+    if _SCREEN_ORACLE is not None:
+        try:
+            oracle = _SCREEN_ORACLE(tuner, key, buffers)
+        except Exception as exc:      # an oracle that fails is not a launch failure
+            print(f"[AUTOTUNE_ORACLE] {kernel_name}: the oracle provider raised "
+                  f"({type(exc).__name__}: {exc}); falling back to the consensus "
+                  f"at key {key}", flush=True)
+    if oracle is not None:
+        kept = _oracle_keeps(results, oracle, buffers)
+        refused = [c for c, _ in results if c not in [k for k, _ in kept]]
+        if not kept:
+            raise RuntimeError(
+                f"NeuroBrix autotune screen: {kernel_name} at key {key} — the "
+                f"fp64 oracle contradicts EVERY candidate ({len(results)} of "
+                f"{len(results)}). A consensus would have returned the whole "
+                f"space and said nothing. Refusing to seat any of them.")
+        if len(kept) < len(results):
+            print(f"[AUTOTUNE_ORACLE] {kernel_name}: the oracle refused "
+                  f"{len(refused)} of {len(results)} configs at key {key}; "
+                  f"{len(kept)} kept. The vote is NOT consulted for this key.",
+                  flush=True)
+            # Was the vote about to seat one of them? That is the finding.
+            majority = _largest_agreement(results, buffers)
+            wrong_majority = [c for c, _ in majority if c in refused]
+            if wrong_majority:
+                print(f"[AUTOTUNE_ORACLE] FINDING — {kernel_name} at key {key}: "
+                      f"{len(wrong_majority)} config(s) the CONSENSUS would have "
+                      f"seated are contradicted by the oracle. The majority was "
+                      f"wrong in the same way. This is the failure mode the "
+                      f"screen cannot see on its own.", flush=True)
+        return [c for c, _ in kept] + unrun
 
-    clusters: List[list] = []
-    for entry in results:
-        for cluster in clusters:
-            ok, _w, _t, _d = agree(entry[1], cluster[0][1])
-            if ok:
-                cluster.append(entry)
-                break
-        else:
-            clusters.append([entry])
+    # -- cluster by agreement ----------------------------------------------
+    agree = _make_agree(buffers)
+    clusters = _cluster(results, agree)
 
     if len(clusters) == 1:
         return [c for c, _ in results] + unrun

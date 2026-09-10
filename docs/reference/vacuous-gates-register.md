@@ -150,6 +150,14 @@ own numbered entry below and strike it from this group.
 * **how it surfaced** an IR harness written for a different purpose.
 * **closed by** `ad1916d` — `tl.where(cond.to(tl.int1), …)` emits exactly the cast the compiler already performed, TTIR identical to the pre-edit kernel, and the form is pinned by a test that says why two forms silence the warning and only one is free.
 
+### 17 — an overrule with every test green and no seam
+
+* **date** 2026-09-10 · **machine** Dell · **site** `src/neurobrix/kernels/launcher.py`, `configs_agreeing_with_oracle` shipped in `137d78c`
+* **what it could not say** that the consensus screen had seated a wrong kernel — which is the entire reason it was written, and the subject of `docs/reference/what-certified-means.md`. The predicate takes ONE buffer; a screened result is a SNAPSHOT, a list of buffers with a dtype each. Nothing carried a snapshot to it, so it could not be called from its only caller. Six tests, all passing, all against the primitive.
+* **how it surfaced** trying to wire it: the first call from the screen's data raised `TypeError: a bytes-like object is required, not 'list'`.
+* **closed by** the snapshot adapter `_oracle_keeps` plus the provider hook `set_screen_oracle`, with a test that drives `screen_configs` itself rather than the predicate, and pins both failure modes the vote cannot see — a majority wrong in the same way, and a unanimous wrong space — plus the control that with no provider the default path is bit-for-bit the behaviour shipped since 2026-09-07.
+* **the distinction worth keeping** the predicate was not defective. It was correct, tested, and unreachable. **A helper whose every test passes can still have no seam**, and the class this register catalogues includes the instrument that exists but is not connected — not only the one that speaks falsely.
+
 ---
 
 ## The Mac's entries
@@ -165,7 +173,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-Sixteen entries, of which five are placeholders and eleven carry a site. Two
+Seventeen entries, of which five are placeholders and twelve carry a site. Two
 machines, two weeks of concentrated looking. Every one of them produced silence
 or a green rather than an error, and **not one was found by a test** — they were
 found by users, by contradictions between two numbers, by reading generated
