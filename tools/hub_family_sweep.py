@@ -134,6 +134,31 @@ def family_output_ext(family: str) -> str | None:
     return f".{fmt}"
 
 
+def declared_choices(model: str) -> list:
+    """Choices this harness must make explicitly, because the artefact leaves
+    them open and the engine refuses to make them for us.
+
+    Kokoro ships 54 voicepacks and declares no default `voice` in
+    runtime/defaults.json. The stage used to pick one by a literal
+    (`af_heart`) on every run, silently. The engine now refuses an
+    undeclared voice, which is right — so the choice moves here, where it is
+    visible, deterministic and written into the results.
+    """
+    voices = CACHE / model / "modules" / "voices"
+    if not voices.is_dir():
+        return []
+    available = sorted(p.stem for p in voices.glob("*.pt"))
+    if not available:
+        return []
+    declared = {}
+    defaults = CACHE / model / "runtime" / "defaults.json"
+    if defaults.exists():
+        declared = json.loads(defaults.read_text())
+    if declared.get("voice"):
+        return []          # the artefact declares it; nothing for us to choose
+    return ["--speaker", available[0]]
+
+
 def family_inputs(family: str, prompt: str) -> list:
     """The argv fragment this family requires, read from its own YAML."""
     import yaml
@@ -167,6 +192,7 @@ def run_arm(model: str, arm: str, family: str, prompt: str, max_tokens: int,
     out = outdir / f"out_{model}_{arm}{ext}" if ext else None
     cmd = ([sys.executable, "-u", "-m", "neurobrix", "run", "--model", model]
            + family_inputs(family, prompt)
+           + declared_choices(model)
            + ["--max-tokens", str(max_tokens), "--temperature", "0"]
            + (["--output", str(out)] if out else [])
            + [f"--{arm}"])
@@ -413,8 +439,9 @@ def main() -> int:
             rec["runs"] = [run_arm(name, a, rec.get("family") or args.family,
                                    args.prompt, max_tokens, args.out, args.timeout)
                            for a in arms]
-            rec["invocation"] = " ".join(family_inputs(rec.get("family") or args.family,
-                                                       args.prompt))
+            rec["invocation"] = " ".join(
+                family_inputs(rec.get("family") or args.family, args.prompt)
+                + declared_choices(name))
             shas = {r["arm"]: r["output_sha256"] for r in rec["runs"]}
             ok = [r["arm"] for r in rec["runs"] if r["rc"] == 0]
             rec["arms_ok"] = ok
