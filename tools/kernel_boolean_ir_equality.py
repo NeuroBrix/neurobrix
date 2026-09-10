@@ -35,21 +35,42 @@ NO SILENT SKIP. A kernel whose signature does not compile is a FAILURE, not an
 omission: the run asserts it compiled exactly the expected number of kernels.
 That rule is the reason this file exists rather than a shell loop.
 
-DEVICE: the target is passed explicitly, so no device of that kind need be
-present — the same mechanism reported 98,304 bytes of shared memory for sm_70
-and 164,352 for sm_86 on a rig that holds only V100s. Whether the compiler
-nevertheless initialises a CUDA context is checked, not assumed: run with
---census to print the rig's compute processes before and after.
+DEVICE — A DOOR, NOT A CENSUS
+
+The target is passed explicitly, so no device of that kind need be present: the
+same mechanism reported 98,304 bytes of shared memory for sm_70 and 164,352 for
+sm_86 on a rig that holds only V100s. But "it did not touch the rig" is a claim
+about one run, and this tool is meant to run beside a timed campaign.
+
+So it does not measure that it took nothing. It REFUSES TO RUN unless the
+environment has already made that impossible: `CUDA_VISIBLE_DEVICES` must be set
+and empty. With no device visible, no context can be created on a real card and
+no byte of its memory can be taken, whatever the stack underneath decides to do.
+
+    A census says "not this time". A door says "never".
+
+That is the general rule, and it is doctrine now, not a preference here: when
+you are unsure whether a thing can do harm, put it in a state where it cannot,
+rather than measuring that it did not. See `docs/reference/proving-by-doors.md`.
+
+If the compilation succeeds behind that door, we have proved more than we asked
+for. If it fails, the answer is just as clear — it needs a context, and it waits
+for the campaign to close.
+
+The nvidia-smi census stays available and costs nothing; it confirms the door,
+it does not replace it.
 
 Usage:
-    python tools/kernel_boolean_ir_equality.py                # cells A and B
-    python tools/kernel_boolean_ir_equality.py --census       # + nvidia-smi census
-    python tools/kernel_boolean_ir_equality.py --target 86    # another target
+    CUDA_VISIBLE_DEVICES= python tools/kernel_boolean_ir_equality.py
+    CUDA_VISIBLE_DEVICES= python tools/kernel_boolean_ir_equality.py --census
+    CUDA_VISIBLE_DEVICES= python tools/kernel_boolean_ir_equality.py --target 86
 """
 from __future__ import annotations
 
 import argparse
 import importlib.util
+import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -185,13 +206,44 @@ def _load(source: str, name: str, tmp: Path):
     return module
 
 
+_LOC_DEF = re.compile(r"^#loc\d* = loc\(.*\)$")
+_LOC_USE = re.compile(r"\s+loc\((?:#loc\d*|unknown)\)")
+
+
+def _structure(ttir: str) -> str:
+    """The IR with every debug-location reference removed.
+
+    THE FIRST VERSION OF THIS FILE COMPARED THE RAW TTIR AND WAS VACUOUS. The
+    two variants are written to different temporary files, so every `#loc`
+    carries a different path and all fourteen kernels reported DIFFERS —
+    including kernels whose bodies are provably identical. Worse, cell B was
+    green for that same wrong reason: it would have announced "the gate bites"
+    even if the precedence trap compiled to the same instructions.
+
+    Line and column cannot be kept either: `mask = (a < N) & m` and
+    `mask = a < N & m` put their operators at different columns, so a
+    comparison that keeps them differs on the punctuation rather than on the
+    computation, and cell B passes for the wrong reason a second time.
+
+    What "semantically neutral" means is that the OPERATIONS are the same. So
+    the comparison is the `tt.*` body with all locations stripped, and cell B
+    is the proof that this still sees a real structural change.
+    """
+    kept = []
+    for line in ttir.splitlines():
+        if _LOC_DEF.match(line.strip()):
+            continue
+        kept.append(_LOC_USE.sub("", line).rstrip())
+    return "\n".join(kept)
+
+
 def _ttir(module, kernel: str, signature: dict, constexprs: dict, target) -> str:
     import triton
     from triton.compiler import ASTSource
 
     fn = getattr(module, kernel)
     src = ASTSource(fn=fn, signature=signature, constexprs=constexprs)
-    return triton.compile(src, target=target).asm["ttir"]
+    return _structure(triton.compile(src, target=target).asm["ttir"])
 
 
 def _census(label: str) -> None:
@@ -206,7 +258,27 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--target", type=int, default=70, help="compute capability, e.g. 70 or 86")
     ap.add_argument("--census", action="store_true", help="print the rig's compute processes around the run")
+    ap.add_argument("--allow-devices", action="store_true",
+                    help="open the door: run with the rig's cards visible. Only for a "
+                         "machine with nothing in flight, and never to get past the refusal.")
     args = ap.parse_args()
+
+    # -- the door ----------------------------------------------------------
+    visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if not args.allow_devices and visible != "":
+        print(
+            "REFUSED: this tool compiles, it does not run, and it is meant to be safe\n"
+            "beside a timed campaign. Make that structural rather than hoped for:\n\n"
+            "    CUDA_VISIBLE_DEVICES= python tools/kernel_boolean_ir_equality.py\n\n"
+            f"CUDA_VISIBLE_DEVICES is currently {visible!r}. With no device visible no\n"
+            "context can be created on a real card and no byte of its memory can be\n"
+            "taken, whatever the stack underneath does. A census would only say 'not\n"
+            "this time'; this says 'never'.\n\n"
+            "--allow-devices opens it deliberately, for a machine with nothing in flight.",
+            file=sys.stderr)
+        return 2
+    if args.allow_devices:
+        print("  !! running with the rig's cards VISIBLE (--allow-devices)")
 
     from triton.backends.compiler import GPUTarget
     target = GPUTarget("cuda", args.target, 32)
@@ -256,6 +328,11 @@ def main() -> int:
                     print(f"  A  {filename}::{kernel:<26} identical TTIR   ({', '.join(sites)})")
 
         # ---- cell B: the instrument must be seen catching the trap -------
+        # NOTE: Triton caches compiled artefacts on disk by source hash, so a
+        # warning-based check would fire only on the first run of a given
+        # source and read as silence afterwards. The IR comparison is immune —
+        # a cached artefact carries the same TTIR the codegen produced — which
+        # is a second reason to test structure rather than diagnostics.
         botched = (OPS / "weight_norm.py").read_text().replace(
             "mask = (col_offset < N) & row_mask",
             "mask = col_offset < N & row_mask",
