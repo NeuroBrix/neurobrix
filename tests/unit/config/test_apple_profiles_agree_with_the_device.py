@@ -150,6 +150,69 @@ def test_no_declared_tile_exceeds_the_threadgroup_this_device_reports():
                     f"threadgroup")
 
 
+#: The three tiles the engine reads from the profile, and for each one WHICH
+#: extent is the one being reduced. The kernels stage that reduce one element
+#: per thread, so it is that extent — not the tile's area — that cannot exceed
+#: the threadgroup. Named per tile because it differs per kernel: argmax scans
+#: a row, mv reduces along BLOCK_M, gemv_vec along BLOCK_K.
+_REDUCED_EXTENT = {
+    "argmax": "tile_n",
+    "mv": "block_m",
+    "gemv_vec": "block_k",
+}
+
+
+@pytest.mark.skipif(_device() is None, reason="not an Apple device")
+@pytest.mark.parametrize("tile_name", sorted(_REDUCED_EXTENT))
+def test_every_profile_declares_the_tiles_the_engine_reads(tile_name):
+    """A silent profile is not a neutral profile for these three.
+
+    Absent, each key falls back to the module default — 4096/4 warps for
+    argmax, 256/4 for mv, 8x256/4 for gemv_vec — which asks 4096, 256 and 2048
+    elements of 128 threads. On a backend that stages the reduce one element
+    per thread that is a REFUSAL, not a slow path. So the profile that says
+    nothing is the profile that makes these kernels refuse, and the omission
+    has to be a red test rather than a quiet inheritance.
+    """
+    for name, doc in _profiles().items():
+        tile = (doc.get("block_sizes") or {}).get(tile_name)
+        assert isinstance(tile, dict), (
+            f"{name}: block_sizes.{tile_name} is absent, so this profile "
+            f"inherits the module default, which does not fit an Apple "
+            f"threadgroup")
+        assert tile.get("num_warps"), f"{name}: block_sizes.{tile_name} has no num_warps"
+        extent = _REDUCED_EXTENT[tile_name]
+        assert tile.get(extent), f"{name}: block_sizes.{tile_name} has no {extent}"
+
+
+@pytest.mark.skipif(_device() is None, reason="not an Apple device")
+@pytest.mark.parametrize("tile_name", sorted(_REDUCED_EXTENT))
+def test_the_reduced_extent_fits_the_threads_that_reduce_it(tile_name):
+    """The relation the tile keys exist to express, confronted with the device.
+
+    `num_warps * 32 <= ceiling` is checked elsewhere and is not this: a tile
+    may respect the threadgroup ceiling and still ask more elements of it than
+    it has threads. That is exactly the shape of the refusals in the register
+    ("a 2048-element tile needs 2048 threads and a threadgroup holds at most
+    1024"), so it is asserted from the device's own number.
+    """
+    ceiling = int(_device().maxThreadsPerThreadgroup().width)
+    extent_key = _REDUCED_EXTENT[tile_name]
+    for name, doc in _profiles().items():
+        tile = (doc.get("block_sizes") or {}).get(tile_name)
+        if not isinstance(tile, dict):
+            continue                       # the absence is the test above
+        threads = int(tile["num_warps"]) * 32
+        extent = int(tile[extent_key])
+        assert threads <= ceiling, (
+            f"{name}: block_sizes.{tile_name} asks {threads} threads against "
+            f"the {ceiling} this device reports")
+        assert extent <= threads, (
+            f"{name}: block_sizes.{tile_name}.{extent_key} is {extent} but "
+            f"only {threads} threads reduce it — one element per thread is "
+            f"what the kernel does, so this tile cannot be served")
+
+
 @pytest.mark.skipif(_device() is None, reason="not an Apple device")
 def test_this_device_has_a_profile_or_the_fallback_is_deliberate():
     """Detection is exact-variant-first with a family fallback, announced.
