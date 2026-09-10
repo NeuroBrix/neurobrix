@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- An imported model has the same file permissions whoever imported it. Unpacking a container
+  took the permissions of the shell that ran the import, so the same archive could land
+  readable by everyone or by its owner alone depending on the machine and the moment. The
+  extracted tree is now given one fixed mode.
 - Language models start on consumer and professional Ampere cards, and on any card whose
   profile the engine does not ship. The attention kernel's tile was chosen from a flag that
   only tells Volta from Ampere, so a card declaring 99 KB of shared memory per block was
