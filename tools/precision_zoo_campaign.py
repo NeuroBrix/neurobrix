@@ -558,6 +558,24 @@ def tree_ab(model: str, gpu, out: Path, extra: list, timeout: int, trees: list, 
         res["arms"][label] = {"rc": rc, "wall_s": wall, "exec_s": exec_time(d / f"{label}.log"),
                               "output": str(outp), "package_seen": seen,
                               "sha": hashlib.sha256(outp.read_bytes()).hexdigest()[:12] if outp.exists() else None}
+        if rc != 0 or not outp.exists():
+            # The byte gate below needs EVERY arm (`ran` is an `all(...)`), so a
+            # verdict is already impossible and every remaining arm buys no
+            # information. Allegro cost 16 h of a quiet rig to learn this twice:
+            # its A arm timed out at step 1 of 4 (7.8 h/step, ~31 h projected),
+            # and the identical B arm was allowed to spend another 8 h reaching
+            # the same wall. Say why, and give the rig back.
+            skipped = [lab for lab, _ in trees[trees.index((label, src)) + 1:]]
+            if skipped:
+                res["arms_skipped"] = skipped
+                res["skip_reason"] = (
+                    f"arm {label} produced no output (rc={rc}"
+                    + (", timed out" if rc == -9 else "")
+                    + f"); the byte gate needs every arm, so {', '.join(skipped)} "
+                      f"could not change the verdict")
+                print(f"[zoo] {model}: arm {label} produced no output — skipping "
+                      f"{', '.join(skipped)}, the verdict cannot change", flush=True)
+            break
     first = trees[0][0]
     a = d / f"{first}{ext}"
     comp = {}
