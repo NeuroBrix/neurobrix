@@ -994,6 +994,48 @@ def _deviation(a: bytes, b: bytes, dtype_name: str):
     return float(np.abs(x[finite] - y[finite]).max() / scale), float(rtol)
 
 
+def configs_agreeing_with_oracle(results, oracle, dtype_name):
+    """The configurations an oracle does not contradict, or None if there is none.
+
+    `screen_configs` decides by CONSENSUS among the candidates, which was the
+    right answer to the 2026-09-07 incident: anchoring on a nominated reference
+    inverts the moment that reference is the broken one. But consensus is a
+    VOTE, and a vote has two failure modes it cannot see —
+
+      * the majority cluster is wrong in the same way, so the minority that is
+        right gets excluded;
+      * every candidate agrees and all are wrong, in which case the screen
+        returns the whole space and says nothing.
+
+    Neither is hypothetical on hardware nobody has looked at. The certified
+    directory covers `nvidia/volta` and nothing else, so on any other card the
+    runtime sweeps and this screen is the only thing between the user and a
+    wrong kernel — over a space that DIFFERS by target: the same flash tile
+    needs 98 304 bytes on sm_70 and 164 352 on sm_86.
+
+    So when an oracle exists, it overrules the vote. When it does not, this
+    returns None rather than pretending: the caller keeps the consensus it had
+    and knows that is what it has. Refusing on an oracle nobody computed would
+    be the same silence in the other direction.
+
+    `results` are `(config, output_bytes)` pairs; the comparison and its
+    tolerance are the profile's own, the very ones the screen already applies
+    between candidates.
+    """
+    if oracle is None:
+        return None
+    kept = []
+    for entry in results:
+        config, produced = entry[0], entry[1]
+        if produced == oracle:
+            kept.append(entry)
+            continue
+        deviation, tolerance = _deviation(produced, oracle, dtype_name)
+        if deviation <= tolerance:
+            kept.append(entry)
+    return kept
+
+
 def screen_configs(tuner, configs, key, meta=None):
     """Run every candidate once and keep the ones that agree with each other.
 
