@@ -58,6 +58,40 @@ def check_worktree_intact(path: Path) -> list[str]:
             f"Restore with: git -C {path} checkout -- ."]
 
 
+# Directory prefixes the operating system may clear without asking. macOS
+# cleans /private/tmp by ACCESS time on a periodic schedule, and /var/folders
+# is the per-user temporary tree with the same contract.
+_EPHEMERAL_PREFIXES = ("/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp",
+                       "/var/folders", "/private/var/folders")
+
+
+def check_package_is_durable(module: str) -> list[str]:
+    """Where the measured object actually LIVES, read from the import itself.
+
+    Not from the install metadata and not from a configured path: from
+    `module.__file__` after import, because that is the file the measurement
+    executes. A package on a volatile path is not a slower measurement, it is
+    a measurement whose object cannot be guaranteed — the same object may not
+    be there on the next run, and was not necessarily whole on the last one.
+    """
+    import importlib, os
+    try:
+        m = importlib.import_module(module)
+    except Exception:
+        return []          # the import check above already reported this
+    path = os.path.realpath(getattr(m, "__file__", "") or "")
+    if not path:
+        return [f"{module} imports but names no file; its location cannot be "
+                f"established."]
+    if path.startswith(_EPHEMERAL_PREFIXES):
+        return [f"{module} is imported from {path}, which is on a path the "
+                f"system clears ({', '.join(_EPHEMERAL_PREFIXES)}). Every "
+                f"number measured against it is a number whose object may "
+                f"already have changed. Move the checkout somewhere durable "
+                f"and reinstall the venv from there."]
+    return []
+
+
 def check_object_store(path: Path) -> list[str]:
     """A checkout whose history is unreadable is eroding, not merely dirty.
 
@@ -115,6 +149,7 @@ def main() -> int:
     problems: list[str] = []
     warnings: list[str] = []
     problems += check_importable("triton_msl")
+    problems += check_package_is_durable("triton_msl")
     for target in _editable_targets("triton_msl"):
         # the clone root is the parent of the package directory
         clone = target.parent
