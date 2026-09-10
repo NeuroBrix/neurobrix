@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- An import that cannot fit on the disk refuses before it starts, saying how much it needs
+  and how much there is. The peak is about twice the model — the archive is unpacked before
+  it is deleted — and asking not to keep the archive does not lower it.
+- Nineteen kernels combined two masks with Python's `and` or `or`, which does not combine
+  them and which the kernel compiler will refuse outright in a future version. They now use
+  the bitwise operators, and a value crossing into a conditional is compared explicitly
+  rather than borrowed as a truth value.
+- Every command the engine ships is now named on a reference page, and a test keeps that
+  page and the command line from drifting apart.
 - An imported model has the same file permissions whoever imported it. Unpacking a container
   took the permissions of the shell that ran the import, so the same archive could land
   readable by everyone or by its owner alone depending on the machine and the moment. The

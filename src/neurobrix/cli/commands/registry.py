@@ -15,6 +15,57 @@ from neurobrix.cli.utils import (
 )
 
 
+# Headroom kept free after an import, so a disk is never handed back at 100 %.
+IMPORT_DISK_MARGIN = 2 * 1024 ** 3
+
+
+def _nearest_existing(path):
+    """The closest existing ancestor — `disk_usage` needs a path that exists,
+    and the store or cache may not have been created yet."""
+    p = Path(path)
+    while not p.exists() and p != p.parent:
+        p = p.parent
+    return str(p)
+
+
+def import_peak_bytes(archive_bytes: int, keep: bool = True) -> int:
+    """Bytes the disk must hold at the WORST moment of an import.
+
+    The archive is written to the store, then extracted to the cache, and only
+    deleted afterwards. So the peak is store + cache — about twice the archive —
+    and `--no-keep` does not lower it: that flag frees space AFTER the
+    extraction, not during it. Reporting the archive's size as the requirement
+    would understate the moment that actually fails by half.
+    """
+    return int(archive_bytes) * 2
+
+
+def disk_refusal(needed_bytes, free_bytes):
+    """Why this import must not start, or None if it may.
+
+    A user lost a 30.6 GB import at 98 % on a full disk: nothing had checked.
+    The check goes BEFORE, and it declares BOTH numbers — what it needs and what
+    there is — because a refusal that names only one of them cannot be acted on.
+
+    An unknown size refuses nothing: the hub does not always publish one, and
+    blocking on a number nobody has would stop imports that would have worked.
+    Same rule as every other guard here.
+
+    This is a check, NOT a resume. An import that dies at 98 % for another
+    reason still loses everything; that is D-IMPORT-RESUMABLE-DOWNLOAD and it is
+    a separate piece of work.
+    """
+    if not needed_bytes:
+        return None
+    needed, free = int(needed_bytes), int(free_bytes)
+    if free >= needed + IMPORT_DISK_MARGIN:
+        return None
+    return (f"this import needs about {format_size(needed)} at its peak "
+            f"(the archive is extracted before it is deleted, so the store and "
+            f"the cache hold it at once) plus a {format_size(IMPORT_DISK_MARGIN)} "
+            f"margin, and the disk has {format_size(free)} free")
+
+
 # The mode an extracted container carries, whoever imported it.
 CONTAINER_FILE_MODE = 0o644
 CONTAINER_DIR_MODE = 0o755
@@ -119,6 +170,23 @@ def cmd_import(args):
     if file_size > 0:
         print(f"   Size: {format_size(file_size)}")
     print(f"   License: {license_name}")
+
+    # Before a byte is fetched. A 30.6 GB import died at 98 % on a full disk
+    # because nothing looked first; the peak is store + cache, about twice the
+    # archive, and --no-keep does not lower it. Both numbers are declared.
+    if file_size > 0:
+        import shutil as _shutil
+        _need = import_peak_bytes(file_size, keep=not getattr(args, "no_keep", False))
+        _free = min(
+            _shutil.disk_usage(_p).free
+            for _p in {_nearest_existing(STORE_DIR), _nearest_existing(CACHE_DIR)})
+        _refusal = disk_refusal(_need, _free)
+        if _refusal:
+            print(f"\nERROR: not enough disk for this import — {_refusal}.")
+            print("       Free space, or import to a device that has it.")
+            sys.exit(1)
+        print(f"   Disk: {format_size(_need)} needed at peak, "
+              f"{format_size(_free)} free")
 
     # License acceptance — hub is the source of truth
     if is_gated and not _is_license_accepted(org, name):
