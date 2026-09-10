@@ -47,6 +47,7 @@ import os
 import re
 import shlex
 import signal
+import threading
 import subprocess
 import sys
 import time
@@ -252,7 +253,35 @@ def cmd_run(args) -> int:
 
     # Forward SIGTERM/SIGINT to the child so a deliberate kill of the
     # wrapper stops the job AND gets recorded as "killed", not "DIED".
-    child = subprocess.Popen(args.cmd)
+    #
+    # And WRITE the flight to --log. That flag used to record a path and
+    # nothing else: the child inherited the wrapper's stdout, so a campaign's
+    # whole narration went to whatever terminal launched it. On 2026-09-10 six
+    # hours of it went to an ssh session that then died, while `rest.log` — the
+    # path this very flag named — kept its last line from the day before. A
+    # flight recorder that does not record the flight is silence, and silence
+    # is indistinguishable from a quiet flight. Teed, not swallowed: a live
+    # operator still sees it.
+    tee = None
+    if args.log:
+        Path(args.log).parent.mkdir(parents=True, exist_ok=True)
+        child = subprocess.Popen(args.cmd, stdout=subprocess.PIPE,
+                                 stderr=subprocess.STDOUT, bufsize=1,
+                                 text=True, errors="replace")
+
+        def _tee(stream, dest):
+            with open(dest, "a", buffering=1, errors="replace") as fh:
+                fh.write(f"\n# ==== flightrec {rec_id} — {record['started_iso']} ====\n")
+                for line in stream:
+                    sys.stdout.write(line)
+                    sys.stdout.flush()
+                    fh.write(line)
+
+        tee = threading.Thread(target=_tee, args=(child.stdout, args.log),
+                               daemon=True)
+        tee.start()
+    else:
+        child = subprocess.Popen(args.cmd)
     killed = []
 
     def forward(signum, _frame):
@@ -262,6 +291,8 @@ def cmd_run(args) -> int:
     signal.signal(signal.SIGTERM, forward)
     signal.signal(signal.SIGINT, forward)
     code = child.wait()
+    if tee is not None:
+        tee.join(timeout=10)          # let the last lines land before the verdict
     record["status"] = ("killed" if killed
                         else "done" if code == 0 else "failed")
     record["exit_code"] = code
