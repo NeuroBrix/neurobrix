@@ -52,6 +52,34 @@ def _compute_capability() -> int:
     return CudaDriver.instance().compute_capability()
 
 
+_SMEM_LIMIT: Optional[int] = None
+
+
+def max_shared_memory_per_block() -> Optional[int]:
+    """The executing device's shared-memory ceiling per block, or None.
+
+    The hard limit comes from the device and never from a table of names —
+    sm_86 declares 99 KB where sm_80 declares 163, and a table keyed on the
+    capability MAJOR gives the first the second's answer. That is what stopped
+    every language model on an A40: the flash tile was sized for sm_80 and
+    asked 164 352 bytes of a card that holds 101 376.
+
+    None when the driver cannot be asked (no CUDA, a backend without the
+    query). The caller must then leave its proposal alone rather than invent a
+    budget — pruning on a guessed number deletes configurations that work.
+
+    Cached for the life of the process: a driver query in a hot path is an
+    anti-pattern this engine has already paid for once.
+    """
+    global _SMEM_LIMIT
+    if _SMEM_LIMIT is None:
+        try:
+            _SMEM_LIMIT = int(active_driver().max_shared_memory_per_block())
+        except Exception:
+            return None
+    return _SMEM_LIMIT
+
+
 def target():
     """The compile target of this process: vendor, capability, warp size —
     from the engine's data, never from `triton.runtime.driver.active` (whose
@@ -169,6 +197,13 @@ class Driver:
     def target(self):  # pragma: no cover - interface
         raise NotImplementedError
 
+    def max_shared_memory_per_block(self):  # pragma: no cover - interface
+        """The device's per-block shared-memory ceiling, in bytes.
+
+        A backend that cannot ask raises, and the module-level helper turns
+        that into None — which every caller reads as "do not prune"."""
+        raise NotImplementedError
+
 
 class CudaDriver(Driver):
     """libcuda through ctypes. The context is the primary context of the
@@ -178,6 +213,10 @@ class CudaDriver(Driver):
     CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES = 8
     CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR = 75
     CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR = 76
+    # The OPT-IN maximum, not the 48 KB default: a kernel that asks for more
+    # than 48 KB must opt in per function, and this is the ceiling on that ask.
+    # It is the number an over-large tile is refused against.
+    CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN = 97
 
     @classmethod
     def instance(cls) -> "CudaDriver":
@@ -240,6 +279,25 @@ class CudaDriver(Driver):
         self._check(self.lib.cuDeviceGetAttribute(ctypes.byref(major), self.CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, dev), "cuDeviceGetAttribute")
         self._check(self.lib.cuDeviceGetAttribute(ctypes.byref(minor), self.CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, dev), "cuDeviceGetAttribute")
         return major.value * 10 + minor.value
+
+    def max_shared_memory_per_block(self) -> int:
+        """The device's opt-in shared-memory ceiling per block, in bytes.
+
+        Asked of the DRIVER, not of a table of names. A table is right until
+        the next card ships; a driver query is right forever. The vendor YAMLs
+        keep their role — good defaults and the name in a certificate path —
+        but a hard limit is never one of their answers.
+
+        Read once per process and cached by the caller, never per launch.
+        """
+        from neurobrix.kernels.nbx_tensor import DeviceAllocator
+        dev = ctypes.c_int(int(DeviceAllocator.get_device()))
+        out = ctypes.c_int()
+        self._check(self.lib.cuDeviceGetAttribute(
+            ctypes.byref(out),
+            self.CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN, dev),
+            "cuDeviceGetAttribute")
+        return int(out.value)
 
     def load(self, binary: bytes, name: str, shared: int):
         self._ensure_context()
