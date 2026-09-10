@@ -120,8 +120,17 @@ def _relative_error(B, H, T, D, causal=True, seed=0):
     kn = rng.standard_normal((B, H, T, D)).astype(np.float16)
     vn = rng.standard_normal((B, H, T, D)).astype(np.float16)
     q, k, v = (NBXTensor.from_numpy(x) for x in (qn, kn, vn))
+    # K is built above as (B, H, T, D) — the standard layout, not
+    # pre-transposed. Saying so is required, not optional: when T == D the
+    # wrapper cannot read the layout from the shape and refuses rather than
+    # guess (the refusal added 2026-09-07, after a 64-token TinyLlama prompt
+    # with head_dim 64 ran with K's axes crossed and answered a different
+    # question). Four parametrisations here are square — 64/64, 128/128,
+    # 256/256 — and were failing on that refusal, which is the refusal doing
+    # its work: this call did not carry the one fact only the caller knows.
     got = _d2h(W.scaled_dot_product_attention_wrapper(
-        q, k, v, is_causal=causal)).reshape(B, H, T, D)
+        q, k, v, is_causal=causal,
+        k_pre_transposed=False)).reshape(B, H, T, D)
     ref = _attention_float64(qn, kn, vn, causal)
     return float(np.abs(got - ref).max() / max(np.abs(ref).max(), 1e-9))
 
