@@ -24,6 +24,7 @@ from typing import Dict, List, Optional, Any, Tuple, TYPE_CHECKING
 
 from neurobrix.core.prism.structure import AllocationStrategy, DeviceSpec, PrismProfile
 from neurobrix.core.prism.structure import names_accelerator
+from neurobrix.core.host_memory import MemoryState, memory_state
 from neurobrix.core.prism.profiler import ActivationProfiler, InputConfig
 from neurobrix.core.prism.memory_estimator import compute_dtype_factor, get_dtype_bytes_per_element
 from neurobrix.core.config import get_prism_defaults, get_dtype_bytes
@@ -238,6 +239,13 @@ class DeviceState:
     used_mb: float = 0.0
     components: List[str] = field(default_factory=list)
     spec: Optional[DeviceSpec] = None
+    #: What the DEVICE recommends, before the machine's real availability is
+    #: taken into account. Kept beside `capacity_mb` rather than replacing it,
+    #: because a refusal that names only one of the two teaches nothing.
+    recommended_mb: float = 0.0
+    #: The machine as it was when this plan was made. None where the plan was
+    #: built without reading it (a discrete card, or an unreadable platform).
+    host_memory: Optional["MemoryState"] = None
 
     @property
     def free_mb(self) -> float:
@@ -977,8 +985,8 @@ class PrismSolver:
 
         if allocations is None:
             raise RuntimeError(
-                "ZERO FALLBACK: No strategy can fit model + KV cache on available hardware.\n"
-                "Consider using a GPU with more VRAM or a multi-GPU setup."
+                "ZERO FALLBACK: No strategy can fit model + KV cache on "
+                "available hardware.\n" + self._memory_verdict(devices)
             )
 
         devices = chosen_devices
@@ -2027,15 +2035,53 @@ class PrismSolver:
     # =========================================================================
 
     def _prepare_devices(self, profile: PrismProfile) -> List[DeviceState]:
-        """Prepare GPUs sorted by capacity DESC."""
-        devices = [
-            DeviceState(
+        """Prepare GPUs sorted by capacity DESC.
+
+        `dev.memory_mb` is what the hardware RECOMMENDS, and on a unified
+        device that is not a measure of what is AVAILABLE: this M4 Pro reports
+        18 186 MB and does not lower it by one byte while another process
+        holds a third of the machine. A plan sized against the recommendation
+        is accepted and then killed by the system mid-execution — measured
+        2026-09-10, an artefact of 12 298 MB accepted at `single_gpu` and
+        killed at step 3 of 20 with 10 099 MB actually free, when its largest
+        component (6 120 MB) would have fitted a lower rung comfortably.
+
+        So the machine is measured HERE, at the one place capacity is born,
+        and the cascade descends on the true number by itself — that is the
+        whole repair. The refusal that fires when no rung fits is the last
+        resort, not the mechanism.
+
+        Only where device memory comes out of host RAM: on a discrete card the
+        two pools are disjoint and host pressure constrains nothing.
+        `has_unified_memory` is the profile's own answer, already written.
+        """
+        host = memory_state()
+        devices = []
+        for dev in profile.devices:
+            recommended = dev.memory_mb * self.safety_margin
+            capacity = recommended
+            if dev.has_unified_memory and host.measured:
+                capacity = min(recommended, host.available_mb * self.safety_margin)
+                if capacity < recommended:
+                    logging.getLogger(__name__).warning(
+                        "%s: unified memory — planning against %.0f MB actually "
+                        "free, not the %.0f MB this device recommends (%s)",
+                        dev.get_device_string(), capacity, recommended,
+                        host.describe())
+            elif dev.has_unified_memory and not host.measured:
+                logging.getLogger(__name__).warning(
+                    "%s: unified memory, but the machine's real availability "
+                    "could not be measured (%s) — planning against the "
+                    "device's recommendation alone, which is what gets a "
+                    "render killed mid-execution when the machine is busy",
+                    dev.get_device_string(), host.source)
+            devices.append(DeviceState(
                 device_string=dev.get_device_string(),
-                capacity_mb=dev.memory_mb * self.safety_margin,
+                capacity_mb=capacity,
                 spec=dev,
-            )
-            for dev in profile.devices
-        ]
+                recommended_mb=recommended,
+                host_memory=host,
+            ))
         devices.sort(key=lambda d: (-d.capacity_mb, d.device_string))
         return devices
 
@@ -2048,6 +2094,8 @@ class PrismSolver:
                 used_mb=0.0,
                 components=[],
                 spec=d.spec,
+                recommended_mb=d.recommended_mb,
+                host_memory=d.host_memory,
             )
             for d in devices
         ]
@@ -4360,6 +4408,27 @@ class PrismSolver:
     # =========================================================================
     # UTILITIES
     # =========================================================================
+
+    def _memory_verdict(self, devices: List[DeviceState]) -> str:
+        """The three numbers a refusal must name: what the device recommends,
+        what the machine has free, what the plan asked for.
+
+        A refusal that names none of them teaches nothing — and being killed
+        at step 3 of 20 in silence is worse than any of them.
+        """
+        lines = []
+        for d in devices:
+            if d.recommended_mb and d.capacity_mb < d.recommended_mb:
+                lines.append(
+                    f"  {d.device_string}: {d.recommended_mb:.0f} MB recommended "
+                    f"by the device, {d.capacity_mb:.0f} MB actually usable "
+                    f"right now")
+            else:
+                lines.append(f"  {d.device_string}: {d.capacity_mb:.0f} MB")
+            host = d.host_memory
+            if host is not None:
+                lines.append(f"    {host.describe()}")
+        return "\n".join(lines) if lines else "  no device was prepared"
 
     def _empty_plan(self, profile: PrismProfile) -> ExecutionPlan:
         return ExecutionPlan({}, "float32", 0.0, "empty", {}, "lazy")
