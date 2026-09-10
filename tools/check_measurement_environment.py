@@ -92,6 +92,49 @@ def check_package_is_durable(module: str) -> list[str]:
     return []
 
 
+def check_profile_matches_hardware() -> tuple[list[str], list[str]]:
+    """A tightened budget changes which STRATEGY runs, so it changes what is
+    measured — silently, because these profiles are gitignored and `git
+    status` never mentions them.
+
+    Measured 2026-09-10: a probe left `memory_mb` at 1000 after being killed
+    by memory pressure. Every run afterwards chose `layer_streaming` instead
+    of `single_gpu`, including four cold runs on which a conclusion was
+    written and a whole campaign that was supposed to measure the ordinary
+    path. Nothing in the environment said so.
+
+    Tightening is a legitimate technique — it is how the layer rung is
+    exercised. So this does not forbid it: it requires that it be DECLARED,
+    with NBX_PROFILE_TIGHTENED=1, and then says so on every run.
+    """
+    import glob, os, re
+    problems: list[str] = []
+    notes: list[str] = []
+    try:
+        import Metal
+        dev = Metal.MTLCreateSystemDefaultDevice()
+        hw_mb = int(dev.recommendedMaxWorkingSetSize()) // (1024 * 1024)
+    except Exception:
+        return [], []          # not an Apple device: nothing to compare against
+    declared = os.environ.get("NBX_PROFILE_TIGHTENED") == "1"
+    for f in glob.glob("src/neurobrix/config/hardware/default-*.yml"):
+        m = re.search(r"^\s*memory_mb:\s*(\d+)", Path(f).read_text(), re.M)
+        if not m:
+            continue
+        prof_mb = int(m.group(1))
+        if prof_mb == hw_mb:
+            continue
+        line = (f"{f}: memory_mb is {prof_mb} where the device reports "
+                f"{hw_mb}. A budget below the device's changes which Prism "
+                f"strategy runs, so it changes what is measured.")
+        if declared:
+            notes.append(line + " (declared: NBX_PROFILE_TIGHTENED=1)")
+        else:
+            problems.append(line + " Set NBX_PROFILE_TIGHTENED=1 if this is "
+                                   "deliberate, or restore the detected value.")
+    return problems, notes
+
+
 def check_object_store(path: Path) -> list[str]:
     """A checkout whose history is unreadable is eroding, not merely dirty.
 
@@ -150,6 +193,9 @@ def main() -> int:
     warnings: list[str] = []
     problems += check_importable("triton_msl")
     problems += check_package_is_durable("triton_msl")
+    _prof_problems, _prof_notes = check_profile_matches_hardware()
+    problems += _prof_problems
+    warnings += _prof_notes
     for target in _editable_targets("triton_msl"):
         # the clone root is the parent of the package directory
         clone = target.parent
