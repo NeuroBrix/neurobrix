@@ -1596,6 +1596,7 @@ class GraphExecutor:
 
         # Weights changed — force rebind on next _execute_compiled_graph
         self._weights_bound = False
+        self._fp32_constants_bound = False
 
         # Reload graph-embedded constants (RoPE cos/sin, inv_freq, etc.)
         # These are NOT in safetensors — they exist only in graph.json as base64 data.
@@ -1759,6 +1760,52 @@ class GraphExecutor:
         # Computable buffers + handler prep now live in load_weights() so
         # both native and triton paths run them. See shared post-dispatch
         # block above.
+
+    def _bind_fp32_constants(self, narrow=None, islands=None) -> None:
+        """A constant whose every consumer computes in fp32 (an AMP_FP32 op the
+        engine wraps fp32-internal, or a contract island; none narrowed) is bound
+        in fp32 ONCE here, after the keys are reconciled — the fp32 wrap then
+        finds nothing to cast at every call (layer_norm's weight and bias on
+        whisper-large-v3-turbo: 900 casts a transcription, 2026-09-08), the
+        kernel sees the fp32 pointers every certified row ran it with, and the
+        bytes are the per-call cast's (the same conversion, once). Triton engine
+        only: the compiled engine's DtypeEngine keeps its own contract."""
+        if self.mode not in ("triton", "triton_sequential") or not self._weights or not self._dag:
+            return
+        if getattr(self, "_fp32_constants_bound", False):
+            return
+        from neurobrix.triton.dtype import fp32_constant_names
+        from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype
+        names = fp32_constant_names(
+            self._dag,
+            narrow if narrow is not None else getattr(self, "_narrow_op_uids", ()),
+            islands if islands is not None else getattr(self, "_fp32_op_uids", ()))
+        # The dict may still carry the loader's keys (the reconcile renames them
+        # later, at the one place that always did): a graph name is resolved to
+        # its key by exact match, else by the unique key ending with it — the
+        # values are replaced under the keys as they are, nothing is renamed.
+        keys = list(self._weights.keys())
+        by_suffix: dict = {}
+        for k in keys:
+            parts = k.split(".")
+            for i in range(len(parts)):
+                by_suffix.setdefault(".".join(parts[i:]), []).append(k)
+        n = 0
+        for name in names:
+            key = name if name in self._weights else None
+            if key is None:
+                cands = by_suffix.get(name) or []
+                key = cands[0] if len(cands) == 1 else None
+            if key is None:
+                continue
+            w = self._weights.get(key)
+            if isinstance(w, NBXTensor) and w.nbx_dtype in (NBXDtype.float16, NBXDtype.bfloat16) \
+                    and getattr(w, "_device", "cuda") == "cuda":
+                self._weights[key] = w.to(NBXDtype.float32)
+                n += 1
+        self._fp32_constants_bound = True
+        if n:
+            print(f"   [Triton] {n} constant(s) bound in fp32 once: their consumers compute in fp32", flush=True)
 
     def _reconcile_weight_keys(self) -> None:
         """Reconcile weight dict keys with graph param names.
@@ -3234,7 +3281,13 @@ class GraphExecutor:
 
         self._triton_seq.compile()
 
-        # Weights already loaded as NBXTensor by load_weights()
+        # Weights already loaded as NBXTensor by load_weights(). The constants
+        # every consumer computes in fp32 are bound in fp32 here, under the
+        # dict's keys as they are — reconciling the keys here, earlier than the
+        # one place that always did it, renamed the dict under code that still
+        # reads it by the loader's keys (Real-ESRGAN's output turned to noise,
+        # three rows crashed at their first decode op, 2026-09-08 00:45).
+        self._bind_fp32_constants(narrow=_narrow, islands=_pins)
         self._triton_seq.bind_weights(self._weights)
 
         # Apply pending interceptors (registered before compilation)
@@ -3972,6 +4025,7 @@ class GraphExecutor:
 
         # Reconcile weight key names with graph param names.
         self._reconcile_weight_keys()
+        self._bind_fp32_constants()
 
         # Bind weights to arena slots (uses tensor IDs from DAG).
         # _reconcile_weight_keys remapped most names; a robust trailing-suffix
@@ -5117,6 +5171,7 @@ class GraphExecutor:
         MemoryManager.unload_weights(self._weights)
         self._weights_loaded = False
         self._weights_bound = False
+        self._fp32_constants_bound = False
 
     def cleanup(self) -> None:
         """

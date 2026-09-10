@@ -72,3 +72,31 @@ def index_select_kernel(
     final_mask = out_mask & index_valid_mask[None, :]
     selected = tl.load(inp + inp_off, mask=final_mask, other=0.0)
     tl.store(out + out_off, selected, mask=final_mask)
+
+
+@triton.jit(debug=True)
+def index_select_mid_kernel(
+    inp, out, outer, N, inner, index, index_len,
+    BLOCK: tl.constexpr,
+):
+    """Gather along a MIDDLE axis of a contiguous input read as (outer, N, inner): the output
+    (outer, index_len, inner) is written in its final layout, so the wrapper needs neither the
+    movedim copy before the gather nor the permute copy after it (the copy lever, 2026-09-07:
+    88 strided copies a decode token on TinyLlama for 44 gathers). Same values as the
+    last-axis kernel — a gather moves bytes, it computes nothing. The same out-of-range trap."""
+    pid = tl.program_id(axis=0)
+    e = pid * BLOCK + tl.arange(0, BLOCK)
+    total = outer * index_len * inner
+    mask = e < total
+    per_outer = index_len * inner
+    o = e // per_outer
+    rem = e - o * per_outer
+    i = rem // inner
+    r = rem - i * inner
+    idx = tl.load(index + i, mask=mask, other=0)
+    idx = tl.where(idx < 0, idx + N, idx)
+    valid = (idx >= 0) & (idx < N)
+    tl.device_assert(valid | (~mask), "index_select: index out of range")
+    src = o * (N * inner) + idx * inner + r
+    v = tl.load(inp + src, mask=mask & valid, other=0.0)
+    tl.store(out + e, v, mask=mask & valid)

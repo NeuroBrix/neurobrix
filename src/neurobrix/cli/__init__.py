@@ -233,6 +233,29 @@ For more information: https://neurobrix.es
 
 
     # ========================================
+    # COVERAGE command
+    # ========================================
+    coverage_parser = subparsers.add_parser(
+        'coverage',
+        help='Which installed containers actually reach a symbol',
+        description='Census the installed containers for an ATen op or a metadata field. '
+                    'A test that exercises nothing is green, and this answers, before a '
+                    'cell is written, whether a model run can reach the code it claims to '
+                    'validate. It reads graphs, so it answers questions about the graph — '
+                    'never about a runtime decision such as which attention branch was '
+                    'taken, which is chosen while running and is not a node in any graph.'
+    )
+    coverage_parser.add_argument('symbol', nargs='?', default=None,
+                                 metavar='OP',
+                                 help='an ATen op, with or without the `aten::` prefix')
+    coverage_parser.add_argument('--rarest', type=int, default=0, metavar='N',
+                                 help='list the N ops the fewest containers carry')
+    coverage_parser.add_argument('--unreached', action='store_true',
+                                 help='ops the engine classifies that NO container carries')
+    coverage_parser.add_argument('--field', default=None, metavar='KEY',
+                                 help='a container metadata key, and the values declared for it')
+
+    # ========================================
     # INFO command
     # ========================================
     info_parser = subparsers.add_parser(
@@ -558,6 +581,10 @@ def main():
         elif args.command == 'hub':
             from neurobrix.cli.commands.registry import cmd_hub
             cmd_hub(args)
+        elif args.command == 'coverage':
+            from neurobrix.cli.commands.coverage import cmd_coverage
+            return cmd_coverage(args)
+
         elif args.command == 'info':
             from neurobrix.cli.commands.info import cmd_info
             cmd_info(args)

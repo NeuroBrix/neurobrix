@@ -91,6 +91,13 @@ output_*.jpeg
 ._*
 .DS_Store
 tests/*
+# The tests package marker itself. Without it a FRESH checkout cannot collect
+# the suite at all: any test importing through the `tests.` package path (e.g.
+# tests/unit/flow/test_decoder_kv_wiring.py) raises
+# "ModuleNotFoundError: No module named 'tests.unit'". The working repo hid this
+# because the file was present-but-untracked; a worktree created from a commit
+# to run a control suite has no such luck (2026-09-10).
+!tests/__init__.py
 # Regression harness — tracked explicitly. Everything else under tests/
 # (scratch, __pycache__, etc.) stays ignored via the `tests/*` rule above,
 # which matches only immediate children of tests/.

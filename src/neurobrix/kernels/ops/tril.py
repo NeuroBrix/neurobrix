@@ -29,7 +29,7 @@ def tril_kernel(
     for n_offset in range(0, N, N_BLOCK_SIZE):
         cols = n_offset + tl.arange(0, N_BLOCK_SIZE)[None, :]
         n_mask = cols < N
-        mask = m_mask and n_mask
+        mask = m_mask & n_mask
 
         x = tl.load(X + cols, mask, other=0.0)
         y = tl.where(row + diagonal >= cols, x, 0.0)
@@ -56,7 +56,7 @@ def tril_batch_kernel(
 
     cols = mn_id * MN_BLOCK_SIZE + tl.arange(0, MN_BLOCK_SIZE)[None, :]
     mn_mask = cols < MN
-    mask = batch_mask and mn_mask
+    mask = batch_mask & mn_mask
     x = tl.load(X + cols, mask, other=0.0)
     m = cols // N
     n = cols % N

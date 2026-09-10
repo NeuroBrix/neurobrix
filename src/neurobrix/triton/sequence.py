@@ -2949,6 +2949,7 @@ class TritonSequence:
         _prev_safe = _w.get_activations_fp16_safe()
         _w.set_compute_dtype(self._compute_dtype)
         _w.set_activations_fp16_safe(self._activations_fp16_safe)
+        _w.begin_run()                      # the per-run caches empty (the step's rotary tables widened once)
         try:
             # Phase 4a frozen-plan replay (opt-in NBX_TRITON_REPLAY=1):
             # 1st run per bucket = warmup (autotune fires), 2nd =
