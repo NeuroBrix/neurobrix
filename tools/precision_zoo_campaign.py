@@ -427,6 +427,16 @@ def launcher_ab(model: str, gpu, out: Path, extra: list, timeout: int) -> dict:
     res["islands"] = {}
     x, y = res["A"]["exec_s"], res["B"]["exec_s"]
     res["speedup"] = (x / y) if x and y else None
+
+    # Last word on the ratio: a lever arm that exercised nothing has not
+    # measured, so the cell carries NO ratio rather than a ratio of one
+    # (vacuous_lever_reason). Inert where the lever has no such telemetry.
+    _vacuous = vacuous_lever_reason(res)
+    if _vacuous:
+        res["lever_vacuous"] = _vacuous
+        res["speedup"] = None
+        print(f"[zoo] {model}: LEVER NOT MEASURED — {_vacuous}", flush=True)
+
     (d / "result.json").write_text(json.dumps(res, indent=1))
     return res
 
@@ -617,6 +627,16 @@ def tree_ab(model: str, gpu, out: Path, extra: list, timeout: int, trees: list, 
     res["B"] = res["arms"][trees[1][0]] if len(trees) > 1 else res["arms"][first]
     x, y = res["A"]["exec_s"], res["B"]["exec_s"]
     res["speedup"] = (x / y) if x and y else None
+
+    # Last word on the ratio: a lever arm that exercised nothing has not
+    # measured, so the cell carries NO ratio rather than a ratio of one
+    # (vacuous_lever_reason). Inert where the lever has no such telemetry.
+    _vacuous = vacuous_lever_reason(res)
+    if _vacuous:
+        res["lever_vacuous"] = _vacuous
+        res["speedup"] = None
+        print(f"[zoo] {model}: LEVER NOT MEASURED — {_vacuous}", flush=True)
+
     (d / "result.json").write_text(json.dumps(res, indent=1))
     return res
 
@@ -761,13 +781,20 @@ def _choices_ab(d: Path, src: Path) -> dict:
     stores = {}
     for arm in ("A", "B"):
         ent = {}
-        for f in (d / f"{arm}_replay").glob("*.json"):
-            try:
-                j = json.loads(f.read_text())
-            except (json.JSONDecodeError, OSError):
-                continue
-            if isinstance(j, dict):
-                ent.update(j)
+        # The arm's replay directories: `<arm>_replay` at --paired 1, and
+        # `<arm>_replay_r<rep>` once every repetition gets its own (which it
+        # must, else repetition 2 replays what repetition 1 swept). Every
+        # repetition of a cold arm sweeps the same keys, so the union is the
+        # arm's choices; a key present in several repetitions keeps the last
+        # read, which is the same setting.
+        for dirname in sorted(d.glob(f"{arm}_replay*")):
+            for f in dirname.glob("*.json"):
+                try:
+                    j = json.loads(f.read_text())
+                except (json.JSONDecodeError, OSError):
+                    continue
+                if isinstance(j, dict):
+                    ent.update(j)
         stores[arm] = ent
     if not stores["B"] and not stores["A"]:
         return {}
@@ -837,25 +864,51 @@ def env_ab(model: str, gpu, out: Path, extra: list, timeout: int, env_b: dict, l
     for rep in range(max(1, paired)):
         for arm, env in (("A", base_env), ("B", {**base_env, **env_b})):
             outp = d / f"{arm}{ext}"
-            if cold:                                     # a cold start per arm: its own replay cache, nothing seeded
-                env = {**env, "NEUROBRIX_REPLAY_CACHE": str(d / f"{arm}_replay")}
+            if cold:
+                # A cold start per ARM **and per REPETITION**. The path used to
+                # carry only {arm}: repetition 1 swept and wrote here, and every
+                # later repetition of the same arm read its own leftovers back
+                # instead of sweeping. On 2026-09-10 that turned
+                # deepseek-moe-16b-chat into `speedup 1.0288` — its control arm
+                # took all eight keys `from the local replay cache` it had
+                # written itself one repetition earlier, while repetition 1, the
+                # only one that measured, read 67,01 s against 95,94 s.
+                #
+                # This never touches the machine's own cache
+                # (~/.neurobrix/replay_cache): the arm is given a directory of
+                # its own, so nothing is set aside and nothing is destroyed.
+                env = {**env, "NEUROBRIX_REPLAY_CACHE": str(d / f"{arm}_replay_r{rep}")}
             if src is not None:                          # the request runs the given tree's package
                 env = {**env, "PYTHONPATH": str(Path(src).resolve())}
                 cmd = [PY, "-c", "import sys; from neurobrix.cli import main; sys.exit(main())", "run", "--model", model]
             else:
                 cmd = [NBX, "run", "--model", model]
-            rc, wall = run(cmd + req + ["--output", str(outp)], env, d / f"{arm}.log", timeout)
-            log = (d / f"{arm}.log").read_text(errors="replace")
-            cert = re.search(r"certified directory: (\d+) key\(s\) served without a sweep, (\d+) swept at runtime", log)
+            # One log per REPETITION. It used to be one per arm, opened "w"
+            # each time, so only the LAST repetition survived on disk — and the
+            # repetition that actually measured left no trace. That is what made
+            # the 2026-09-10 contamination read as a cache problem: B.log said
+            # "8 from the local replay cache" because repetition 3 was speaking,
+            # while repetition 1 had swept its eight and was already overwritten.
+            logp = d / (f"{arm}.log" if paired <= 1 else f"{arm}.r{rep}.log")
+            rc, wall = run(cmd + req + ["--output", str(outp)], env, logp, timeout)
+            log = logp.read_text(errors="replace")
+            cert = re.search(r"certified directory: (\d+) key\(s\) served without a sweep, "
+                             r"(\d+) swept at runtime \(kept locally\), "
+                             r"(\d+) from the local replay cache", log)
             # An encoded build (int4) is refused by the compiled engine at its capability gate:
             # not an arm that failed, a row the lever does not apply to on that engine.
             unsupported = re.search(r"UNSUPPORTED PATH: (.*?encoding '[^']*'[^.]*)", log)
-            res[arm] = {"rc": rc, "wall_s": wall, "exec_s": exec_time(d / f"{arm}.log"), "output": str(outp),
+            res[arm] = {"rc": rc, "wall_s": wall, "exec_s": exec_time(logp), "output": str(outp),
+                        "log": logp.name,
                         "n_a": unsupported.group(1).strip()[:160] if unsupported else None,
                         "sha": hashlib.sha256(outp.read_bytes()).hexdigest()[:12] if outp.exists() else None,
                         "ops_removed": sum(int(x) for x in re.findall(r"\[Optim\] algebraic: (\d+) identity ops", log)) or None,
                         "certified_served": int(cert.group(1)) if cert else None,
                         "swept": int(cert.group(2)) if cert else None,
+                        # The number that named the 2026-09-10 contamination: an
+                        # arm that "swept 0" may simply have read back what an
+                        # earlier repetition of ITSELF wrote.
+                        "from_replay": int(cert.group(3)) if cert else None,
                         "announced_missing": len(re.findall(r"\[autotune\] no certified setting for", log)),
                         "contradictions": len(re.findall(r"\[AUTOTUNE_SCREEN\] CONTRADICTION", log)),
                         "screen_excluded": len(re.findall(r"\[AUTOTUNE_SCREEN\] .*config excluded", log))}
@@ -902,6 +955,16 @@ def env_ab(model: str, gpu, out: Path, extra: list, timeout: int, env_b: dict, l
     res["islands"] = {}
     x, y = res["A"]["exec_s"], res["B"]["exec_s"]
     res["speedup"] = (x / y) if x and y else None
+
+    # Last word on the ratio: a lever arm that exercised nothing has not
+    # measured, so the cell carries NO ratio rather than a ratio of one
+    # (vacuous_lever_reason). Inert where the lever has no such telemetry.
+    _vacuous = vacuous_lever_reason(res)
+    if _vacuous:
+        res["lever_vacuous"] = _vacuous
+        res["speedup"] = None
+        print(f"[zoo] {model}: LEVER NOT MEASURED — {_vacuous}", flush=True)
+
     (d / "result.json").write_text(json.dumps(res, indent=1))
     return res
 
@@ -1274,6 +1337,58 @@ def lock_holder_alive(text: str) -> bool:
 ARM_LABELS = ("A", "B")
 
 
+def vacuous_lever_reason(record: dict):
+    """Why this cell measured nothing, or None if it measured.
+
+    A lever cell exists to make one arm pay a cost the other does not. When the
+    paying arm reports it served nothing from the certified directory AND swept
+    nothing at runtime, it paid nothing: the row's ratio is one because both
+    arms did the same work, not because the lever is worth one.
+
+    `deepseek-moe-16b-chat` on 2026-09-10 is the live shape — `speedup 1.0288`,
+    A 34,34 s against B 33,38 s, and a control arm that took all eight of its
+    keys `from the local replay cache` its OWN first repetition had written.
+    Its first repetition, the only one that measured, read 67,01 against 95,94.
+
+    Same class as a gate that never passed and a runner that counted segments
+    instead of cells: a measurement must prove it took place. A ratio of one
+    from an arm that did no work is worse than a missing row, because a missing
+    row is visibly missing.
+
+    Judged only on the arms' own telemetry. A cell that declares no lever is
+    none of this guard's business, and an arm that never reached the autotune
+    recap (a crash, an unsupported path) is a failure the byte gate already
+    reports, not a vacuous measurement.
+    """
+    if not record.get("lever"):
+        return None
+    arms = {a: (record.get(a) or {}) for a in ARM_LABELS}
+    told = [a for a, v in arms.items()
+            if v.get("certified_served") is not None or v.get("swept") is not None]
+    if not told:
+        return None                      # no telemetry at all: not this guard's call
+    # The lever arm is the one that carries env_b — B by construction of the
+    # arm loop. A is the reference and is SUPPOSED to be served without
+    # sweeping; only B's silence is a defect.
+    lever_arm = ARM_LABELS[1]
+    if lever_arm not in told:
+        return None
+    v = arms[lever_arm]
+    if (v.get("certified_served") or 0) or (v.get("swept") or 0):
+        return None
+    detail = ", ".join(
+        f"{a}: served {arms[a].get('certified_served') or 0}, "
+        f"swept {arms[a].get('swept') or 0}, "
+        f"{arms[a].get('from_replay') or 0} from the replay cache"
+        for a in told)
+    return (f"arm {lever_arm} exercised nothing of the lever {record['lever']} — {detail}. "
+            f"The ratio this cell would report is one because both arms did "
+            f"the same work, not because the lever is worth one"
+            + (f" (paired={record['paired']}: a repetition after the first "
+               f"replays what the first swept unless every repetition gets its "
+               f"own cache)" if (record.get("paired") or 1) > 1 else ""))
+
+
 def cell_cost_estimate(model_out: Path, timeout: int):
     """(seconds, basis) this cell is expected to cost, or None if unmeasured.
 
@@ -1435,8 +1550,16 @@ def main():
                    help="with --env-ab: interleave the arms A B A B … N times and time each arm by the median of its "
                         "repeats (a lone pair reads a cold first arm as a gain); the repeats' bytes must agree")
     r.add_argument("--cold-arms", action="store_true",
-                   help="with --env-ab: each arm starts cold with its own replay cache (nothing seeded) — the certified "
-                        "directory's proof: A = certified settings loaded, B = NBX_AUTOTUNE_CERTIFIED=off (runtime sweep)")
+                   help="every arm of every repetition starts cold on THREE things, "
+                        "each named: (1) the model's weights and the host page "
+                        "cache; (2) the engine's replay cache — the arm runs "
+                        "with NEUROBRIX_REPLAY_CACHE pointed at a directory of "
+                        "its own, so it sweeps instead of reading back, and the "
+                        "machine's own cache at ~/.neurobrix/replay_cache is "
+                        "never moved, seeded or destroyed; (3) the same holds "
+                        "PER REPETITION under --paired, so repetition 2 does not "
+                        "replay what repetition 1 swept. Without it, a control "
+                        "arm can report a gain of one having done no work.")
     r.add_argument("--drift", action="store_true",
                    help="drift-site lever: `neurobrix drift` per model (ATen oracle vs Triton engine, per op); "
                         "the verdict is the first drifting op")
