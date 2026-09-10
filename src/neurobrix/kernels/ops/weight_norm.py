@@ -40,7 +40,7 @@ def weight_norm_kernel_first(
     v_sq = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
     for base in range(0, N, BLOCK_N):
         col_offset = base + tx
-        mask = col_offset < N and row_mask
+        mask = (col_offset < N) & row_mask
         v_val = tl.load(v_ptr + row_offset * N + col_offset, mask=mask).to(tl.float32)
         v_sq += v_val * v_val
 
@@ -51,7 +51,7 @@ def weight_norm_kernel_first(
     # Pass 2: output = g * v / ||v||
     for base in range(0, N, BLOCK_N):
         col_offset = base + tx
-        mask = col_offset < N and row_mask
+        mask = (col_offset < N) & row_mask
         v_val = tl.load(v_ptr + row_offset * N + col_offset, mask=mask).to(tl.float32)
         out = (v_val / norm_val[:, None]) * g_val
         tl.store(output_ptr + row_offset * N + col_offset, out, mask=mask)
@@ -87,7 +87,7 @@ def weight_norm_kernel_last(
     v_sq = tl.zeros([BLOCK_N, BLOCK_M], dtype=tl.float32)
     for base in range(0, M, BLOCK_M):
         row_offset = base + ty
-        mask = row_offset < M and col_mask
+        mask = (row_offset < M) & col_mask
         v_val = tl.load(v_ptr + row_offset * N + col_offset, mask=mask).to(tl.float32)
         v_sq += v_val * v_val
 
@@ -98,7 +98,7 @@ def weight_norm_kernel_last(
     # Pass 2: output = g * v / ||v||
     for base in range(0, M, BLOCK_M):
         row_offset = base + ty
-        mask = row_offset < M and col_mask
+        mask = (row_offset < M) & col_mask
         v_val = tl.load(v_ptr + row_offset * N + col_offset, mask=mask).to(tl.float32)
         out = (v_val / norm_val[:, None]) * g_val
         tl.store(output_ptr + row_offset * N + col_offset, out, mask=mask)

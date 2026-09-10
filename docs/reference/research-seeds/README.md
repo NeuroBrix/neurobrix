@@ -34,14 +34,17 @@ and gives, per batch size, `BLOCK_SIZE_M/N/K`, `GROUP_SIZE_M`, `num_warps` and
 ### What they are worth
 
 **They carry no proof.** No entry was validated against an oracle, none carries
-a tolerance, and none states the conditions it was measured under. Upstream has
-repeatedly had to repair shipped MoE configurations that crashed models — the
-`illegal memory access` class recurs across `vllm-project/vllm` issues through
-2025 (for instance #26720, #29361, #26558, and the MoE-Marlin alignment defect
-#47769). I looked for one specific September-2025 pull request said to document a
-shipped configuration crashing a model and needing a re-tune, and **I did not
-find that exact PR**; what I did find is the class of incident, repeatedly, which
-carries the same lesson: a shipped configuration is not a validated one.
+a tolerance, and none states the conditions it was measured under.
+
+Upstream says so itself. `vllm-project/vllm#25858`, opened **29 September 2025**,
+records that the shipped file
+`E=16,N=7168,device_name=NVIDIA_H100_80GB_HBM3,dtype=int8_w8a16.json` **crashed
+Jamba** and had to be re-tuned. A configuration that ships is not a configuration
+that was validated, and the file that proves it is one of these files.
+
+Nor is it an isolated accident: the `illegal memory access` class recurs across
+that tracker through 2025 — #26720, #29361, #26558, and the MoE-Marlin alignment
+defect #47769.
 
 **They are tuned for vLLM's kernel, not ours.** The knobs share names because
 both are Triton. What happens between the knobs does not.
