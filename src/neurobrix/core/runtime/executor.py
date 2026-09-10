@@ -1216,14 +1216,24 @@ class RuntimeExecutor:
         """Lazily load weights for a component if not already loaded."""
         executor = self.executors.get(comp_name)
         if executor is None:
-            return
+            raise RuntimeError(
+                f"ZERO FALLBACK: asked to load weights for component "
+                f"'{comp_name}', which has no executor. Known components: "
+                f"{sorted(self.executors)}. Returning here used to let the "
+                f"run continue without the component it just asked for.")
 
         if getattr(executor, '_weights_loaded', False):
             return
 
         params = getattr(executor, '_weight_loading_params', None)
         if params is None:
-            return
+            raise RuntimeError(
+                f"ZERO FALLBACK: '{comp_name}' has no weights loaded and its "
+                f"executor ({type(executor).__name__}) carries no loading "
+                f"params. Every executor built by RuntimeFactory gets them "
+                f"(factory.py); one that has none was built off that path and "
+                f"nobody will load its weights. Running it would compute with "
+                f"whatever is in memory.")
 
         nbx_path = params["nbx_path"]
         component = params["component"]

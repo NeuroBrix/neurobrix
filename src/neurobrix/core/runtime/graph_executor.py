@@ -1617,6 +1617,14 @@ class GraphExecutor:
                     self._runtime_width,
                 )
 
+        # The loader owns the fact that it loaded. Before, `_weights_loaded`
+        # was set by whichever caller happened to remember (factory.py:439,
+        # executor.py:1237) — a truth only this method knows, maintained from
+        # outside it. A caller that forgot left the flag False on a fully
+        # loaded executor, and the next `_ensure_weights_loaded` would load
+        # the whole component a second time.
+        self._weights_loaded = True
+
     def _load_weights_native(self, nbx_path, component, shard_map):
         """Load weights as torch.Tensor (native mode)."""
         # Capability gate (unsupported-path doctrine): encoded-weight
