@@ -307,6 +307,11 @@ class TritonSequence:
         # interceptors so a per-uid hook (e.g. only aten.convolution::62)
         # overrides any op_type-wide interceptor.
         self._op_uid_interceptors: Dict[str, Callable] = {}
+        # The graph's recorded K layout per attention op, filled at compile
+        # (GraphExecutor._mark_sdpa_k_layout). Declared here rather than
+        # created on first use: the ATen twin of this class carries __slots__,
+        # where a lazily-assigned attribute raises at compile time.
+        self._sdpa_k_layout: Dict[str, bool] = {}
 
         # Weight tensor IDs that need .t() at bind time (from
         # _eliminate_weight_transpose_ops pass).
@@ -345,11 +350,17 @@ class TritonSequence:
     def register_op_interceptor(self, op_type: str, interceptor: Callable):
         """Register an interceptor for a specific op type (e.g., SDPA for KV cache)."""
         self._op_interceptors[op_type] = interceptor
-        # Hot-patch already compiled ops if sequence is compiled
+        # Hot-patch already compiled ops if sequence is compiled.
+        # The graph's recorded K layout must survive the patch: an
+        # interceptor installed AFTER compile() replaced the wrapper that
+        # carried it, and the interceptor then had nothing but the shape to
+        # go on — which at seq_len == head_dim says nothing. Measured on
+        # CUDA 2026-09-07: the KV interceptor refused every attention of a
+        # 64-token TinyLlama request because the layout never reached it.
         if self._compiled:
             for op in self._ops:
                 if op.op_type == op_type:
-                    op.func = interceptor
+                    op.func = self._bind_sdpa_layout(op.op_uid, interceptor)
 
     def register_op_uid_interceptor(self, op_uid: str, interceptor: Callable):
         """Register a fine-grained interceptor for one specific op instance.
@@ -363,7 +374,7 @@ class TritonSequence:
         if self._compiled:
             for op in self._ops:
                 if op.op_uid == op_uid:
-                    op.func = interceptor
+                    op.func = self._bind_sdpa_layout(op.op_uid, interceptor)
 
     def update_op_uid_interceptors(self, interceptors: Dict[str, Callable]):
         """Hot-swap per-op_uid interceptors on an already-compiled sequence."""
@@ -372,7 +383,19 @@ class TritonSequence:
             return
         for op in self._ops:
             if op.op_uid in interceptors:
-                op.func = interceptors[op.op_uid]
+                op.func = self._bind_sdpa_layout(op.op_uid, interceptors[op.op_uid])
+
+    def _bind_sdpa_layout(self, op_uid: str, func):
+        """Attach the graph's recorded K layout to an attention callable.
+
+        The layout is a property of the OP, recorded at load by
+        GraphExecutor._mark_sdpa_k_layout, and it has to travel with whatever
+        function ends up executing that op — the compiled kernel, an
+        interceptor bound before compile, or one hot-patched in afterwards.
+        Every assignment to `op.func` goes through here for that reason.
+        """
+        flag = self._sdpa_k_layout.get(op_uid)
+        return func if flag is None else _with_k_layout(func, flag)
 
     # ========================================================================
     # COMPILE
@@ -1806,6 +1829,14 @@ class TritonSequence:
     # OP COMPILATION
     # ========================================================================
 
+    _SDPA_OP_TYPES = frozenset({
+        "aten::scaled_dot_product_attention",
+        "aten::_scaled_dot_product_efficient_attention",
+        "aten::_scaled_dot_product_flash_attention",
+        "aten::_scaled_dot_product_cudnn_attention",
+        "aten::_scaled_dot_product_attention_math",
+    })
+
     def _compile_op(self, op_uid: str, op_data: dict, tensors: dict,
                     kill_slots: Tuple[int, ...]) -> CompiledOp:
         """Compile a single op with closure resolvers."""
@@ -1850,6 +1881,14 @@ class TritonSequence:
             bare_name = canonical_aten(bare_name)
             func = self._dtype_engine.wrap_op(bare_name, func, op_uid=op_uid,
                                               op_record=op_data)
+
+        # The graph's recorded K layout for attention ops travels with the
+        # call rather than being re-derived from shapes: at seq_len ==
+        # head_dim the two layouts are the same shape and the derivation
+        # silently picked the wrong one (GraphExecutor._mark_sdpa_k_layout).
+        if op_type in self._SDPA_OP_TYPES and "nbx_k_pre_transposed" in attrs:
+            self._sdpa_k_layout[op_uid] = bool(attrs["nbx_k_pre_transposed"])
+            func = self._bind_sdpa_layout(op_uid, func)
 
         # Compile args → dataclasses
         raw_args = attrs.get("args", [])
@@ -3779,9 +3818,9 @@ class TritonSequence:
                     # pointers alike — print what each arg actually is so
                     # the failure adjudicates itself (P-WARM-TRITON-VIDEO
                     # class: warm lazy_sequential fed a stale placement).
+                    from neurobrix.kernels.nbx_tensor import device_label
                     _arg_diag = "; ".join(
-                        f"arg{i}={getattr(a, '_device', '?')}"
-                        f":{getattr(a, '_device_idx', '?')}"
+                        f"arg{i}={device_label(a)}"
                         f" ptr={getattr(a, '_data_ptr', 0):#x}"
                         f" shape={tuple(getattr(a, '_shape', ()))}"
                         for i, a in enumerate(args)
@@ -4380,3 +4419,17 @@ class TritonSequence:
     @property
     def num_ops(self) -> int:
         return len(self._ops)
+
+
+def _with_k_layout(func, k_pre_transposed: bool):
+    """Bind the graph's recorded K layout onto an attention callable.
+
+    Keeps whatever the callable already is — an interceptor, a dtype-wrapped
+    kernel — and only adds the one fact the shapes cannot carry.
+    """
+    def attention_with_k_layout(*args, **kwargs):
+        kwargs.setdefault("k_pre_transposed", k_pre_transposed)
+        return func(*args, **kwargs)
+    attention_with_k_layout.self_manages_dtype = getattr(
+        func, "self_manages_dtype", False)
+    return attention_with_k_layout

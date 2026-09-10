@@ -131,20 +131,32 @@ def _announce_first_sweep(tuned):
         if not _SEEDED[0]:
             _SEEDED[0] = True
             try:
-                _atc.seed()
-            except Exception:              # the artifact is an optimisation, never a failure source
+                _n = _atc.seed()
+                from neurobrix.kernels import autotune_certified as _cert0
+                _cert0.note_local(_n)
+                _cert0.override_seeded()   # the directory first, even on a warm machine
+            except Exception:              # the replay cache is an optimisation, never a failure source
                 pass
-        # The sweep policy (owner directive 2026-09-06): inside a model request
-        # a shape the artifact never measured is served by the nearest measured
-        # shape or refused — the sweep itself only runs under `--sweep`.
+        # The certified directory (owner directive 2026-09-06, the engine
+        # component): a shape the directory certifies for the profile in
+        # force, this kernel and its dtype is applied here — no sweep, no
+        # screen. A shape it does not know sweeps at runtime with the
+        # consensus screen, is said in clear, and lands in the local replay
+        # cache, never in the directory.
         try:
             key = _atc.key_of(tuned, args, kwargs)
         except Exception:
             key = None
-        if key is not None:
-            if key not in cache:
-                _atc.resolve_missing(tuned, key)
-            _atc.note_use(tuned, key)
+        if key is not None and key not in cache:
+            from neurobrix.kernels import autotune_certified as _cert
+            qual = _atc._qual_of(tuned) or getattr(getattr(tuned, "base_fn", None), "__name__", "?")
+            try:
+                applied = _cert.apply(qual, tuned, key)
+            except Exception as exc:            # the directory is an optimisation, never a failure source
+                print(f"[autotune] certified lookup failed for {qual}: {exc}", flush=True)
+                applied = False
+            if not applied:
+                _cert.announce_missing(qual, tuned, key)
         before = len(cache)
         result = original(*args, **kwargs)
         if len(cache) > before:
@@ -292,6 +304,7 @@ def arch_smem_budget() -> Optional[int]:
         budget = (cfg.get("memory") or {}).get("max_shared_memory_per_block")
         if not budget:
             continue
+        _remember_profile(declared, wanted, cfg, path)
         if declared == wanted:
             exact = int(budget)
         elif (declared.split(".")[0] == wanted.split(".")[0]
@@ -328,6 +341,77 @@ def arch_smem_budget() -> Optional[int]:
             # major-family matches are reached before this and are unchanged.
             same_family = int(budget)
     return exact if exact is not None else same_family
+
+
+#: The vendor profile the last `arch_smem_budget()` resolution matched, by
+#: the same exact / same-family / declared-prefix rules. Kept beside that
+#: function rather than re-resolved so the engine cannot end up reading its
+#: shared-memory budget from one profile and its attention tiles from another.
+_ACTIVE_PROFILE: dict = {}
+
+
+def _remember_profile(declared: str, wanted: str, cfg: dict, path=None) -> None:
+    """Record the best profile seen so far, exact match winning. The profile's
+    NAME is its file's — `<vendor>/<profile>.yml` — kept as `_vendor` and
+    `_profile`, the only names the certified autotune directory is allowed to
+    use (nothing there names a backend)."""
+    names = {"_vendor": path.parent.name, "_profile": path.stem} if path is not None else {}
+    if declared == wanted:
+        _ACTIVE_PROFILE.clear()
+        _ACTIVE_PROFILE.update(cfg)
+        _ACTIVE_PROFILE.update(names)
+        _ACTIVE_PROFILE["_exact"] = True
+    elif not _ACTIVE_PROFILE.get("_exact"):
+        matches = [str(m).strip().lower()
+                   for m in (cfg.get("compute_capability_matches") or [])]
+        same_major = (declared.split(".")[0] == wanted.split(".")[0]
+                      and "." in declared and "." in wanted)
+        if same_major or any(wanted.startswith(m) for m in matches):
+            _ACTIVE_PROFILE.clear()
+            _ACTIVE_PROFILE.update(cfg)
+            _ACTIVE_PROFILE.update(names)
+
+
+def active_vendor_profile() -> dict:
+    """The hardware profile in force, or `{}` when none matched."""
+    if not _ACTIVE_PROFILE:
+        arch_smem_budget()          # resolves and records, cached upstream
+    return dict(_ACTIVE_PROFILE)
+
+
+def sdpa_block_ceiling(seqlen_q: int, head_dim: int):
+    """`(block_m, block_n)` the hardware profile allows here, or `(None, None)`.
+
+    A CEILING, not an instruction. The wrapper's own cascade stays the
+    proposer — it carries measurements the profiles do not, notably that
+    BLOCK_M=64 is the floor of CORRECTNESS on Volta at head_dim<128 while
+    volta.yml declares 128 — and this only clamps what it proposes.
+
+    Why it exists: the cascade decides between a 128-row and a 64-row Q tile
+    on `_NBX_HAS_NATIVE_BF16`, which distinguishes Volta from Ampere and
+    means nothing off CUDA. On an Apple GPU it therefore took the Ampere
+    branch and asked for BLOCK_M=128 — four times what
+    `apple_silicon.yml` declares (32) for this shape, and more than the
+    Metal backend will lower at all. The profile has said 32 since the file
+    was written; nothing read it.
+
+    Clamping rather than replacing is what keeps CUDA byte-identical:
+    min(64, 128) is Volta's measured 64, min(128, 128) is Hopper's 128.
+    Measured 2026-09-06: no NVIDIA tile changes.
+
+    Thresholds are read in file order, first match wins, exactly as the
+    profiles are written (decode rows before prefill rows).
+    """
+    profile = active_vendor_profile()
+    for row in profile.get("sdpa_thresholds") or []:
+        if "seqlen_q_le" in row and seqlen_q > row["seqlen_q_le"]:
+            continue
+        if "head_dim_ge" in row and head_dim < row["head_dim_ge"]:
+            continue
+        if "head_dim_lt" in row and head_dim >= row["head_dim_lt"]:
+            continue
+        return row.get("block_m"), row.get("block_n")
+    return None, None
 
 
 def configs_within_smem_budget(configs, budget: Optional[int],

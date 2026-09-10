@@ -14,6 +14,25 @@ import triton
 
 from .nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, _broadcast_shapes, _set_device, dtype_size
 from .nbx_tensor import DeviceOOMError
+from .ops._configs import sdpa_block_ceiling as _sdpa_block_ceiling
+
+# Route this module's kernel[grid] sites through the engine's launcher.
+#
+# `kernels/dispatch.py` already calls install(), and for a full engine run
+# that is enough. It is not enough for anything that reaches a wrapper
+# WITHOUT going through dispatch — a unit test, a tool, a probe — which then
+# silently runs upstream Triton's launch path instead of the engine's, and
+# on a backend whose upstream driver cannot load our artifacts it simply
+# fails. Worse, whether it happened depended on whether some earlier import
+# in the same process had pulled dispatch: nine kernels tests changed state
+# on 2026-09-06 because an unrelated import reordered.
+#
+# install() is idempotent and honours NBX_LAUNCHER=triton, so the
+# differential arm is unaffected. The launch sites live in this module; the
+# routing of those sites belongs with them.
+from .launcher import install as _install_launcher
+
+_install_launcher()
 
 
 def _autotune_headroom_guard(launch):
@@ -364,6 +383,9 @@ _MM_BM, _MM_BN, _MM_BK = 64, 64, 32      # matmul / addmm / baddbmm
 _MM_GROUP = 8                              # matmul GROUP_M
 _RED_BM, _RED_BN = 8, 1024                 # reduction kernels (prod, min, max, std, var, norm, all, any)
 _MV_BN, _MV_BM = 64, 256                  # mv / addmv  (BLOCK_N rows, BLOCK_M reduction tile)
+                                          # the default; `block_sizes.mv` in the
+                                          # hardware profile overrides it — see
+                                          # _mv_tile()
 _TRIU_MBS, _TRIU_NBS = 64, 512            # triu / tril 2D
 _TRIU_BATCH_BS, _TRIU_MN_BS = 32, 1024    # triu / tril batch
 _CONV_BHW, _CONV_OUTF, _CONV_INF = 64, 64, 32  # conv2d
@@ -1636,6 +1658,93 @@ def _dequant_gemv_block_n(N: int) -> int:
         while bn > 1 and -(-N // bn) < target:
             bn //= 2
     return bn
+
+
+# The adopted GEMV tile (2026-08-24, pinned protocol): BLOCK_N=8 rows per
+# program, BLOCK_K=256 per chunk, 4 warps. Every profile that does not say
+# otherwise gets exactly this, so no measured configuration moves.
+_GEMV_VEC_TILE = {"block_n": 8, "block_k": 256, "num_warps": 4}
+
+
+# The argmax row tile: a power-of-two cap on the vocabulary row a single
+# program scans, and the warp count that scans it. 4096 with Triton's default
+# 4 warps is what every architecture used before this became readable.
+_ARGMAX_TILE = (4096, 4)
+
+
+def _argmax_tile() -> tuple:
+    """`(TILE_N cap, num_warps)` for the row-wise argmax, from
+    `block_sizes.argmax` in config/vendors/<vendor>/<arch>.yml.
+
+    argmax is a MULTI-VALUE reduce — it carries a value and its index — and a
+    backend may need the whole tile to fit its threadgroup to aggregate the
+    pair. That is a property of the hardware and its compiler, so it is
+    written where such properties are written. Absent key / no profile -> the
+    values every architecture used before, so nothing measured moves.
+    """
+    cap, warps = _ARGMAX_TILE
+    try:
+        from .ops._configs import active_vendor_profile
+        cfg = (active_vendor_profile().get("block_sizes", {}) or {}).get("argmax")
+        if isinstance(cfg, dict):
+            cap = int(cfg.get("tile_n") or cap)
+            warps = int(cfg.get("num_warps") or warps)
+    except Exception:
+        pass
+    return cap, warps
+
+
+def _mv_tile() -> tuple:
+    """`(BLOCK_N, BLOCK_M, num_warps)` for the mv / addmv kernels, from
+    `block_sizes.mv` in config/vendors/<vendor>/<arch>.yml.
+
+    Companion to `_gemv_vec_tile`, and the same reasoning: the kernel keeps a
+    BLOCK_N x BLOCK_M accumulator and reduces it along its rows, so a backend
+    that stages that reduce one element per thread cannot take a tile wider
+    than the threadgroup — and here the threadgroup is `num_warps * 32`, which
+    is why the warp count belongs to the tile rather than beside it. Absent
+    key / no profile -> the module defaults, so no measured architecture
+    moves.
+    """
+    bn, bm, warps = _MV_BN, _MV_BM, 4
+    try:
+        from .ops._configs import active_vendor_profile
+        cfg = (active_vendor_profile().get("block_sizes", {}) or {}).get("mv")
+        if isinstance(cfg, dict):
+            bn = int(cfg.get("block_n") or bn)
+            bm = int(cfg.get("block_m") or bm)
+            warps = int(cfg.get("num_warps") or warps)
+    except Exception:
+        pass
+    return bn, bm, warps
+
+
+def _gemv_vec_tile() -> dict:
+    """The GEMV row-group tile for the executing hardware, from
+    `block_sizes.gemv_vec` in config/vendors/<vendor>/<arch>.yml.
+
+    It was three integers written in this function with environment
+    overrides, which is a hardware parameter living in code — and the day a
+    backend could not run the adopted one there was nowhere to say so. The
+    kernel reduces a BLOCK_N x BLOCK_K tile along its rows, and a backend that
+    stages that reduce one element per thread cannot take a tile wider than
+    its threadgroup; that is a property of the hardware and its compiler, and
+    this is where such properties are written.
+
+    Absent key / no profile / loader failure -> the adopted values, so every
+    architecture that has not been measured keeps the kernel it had.
+    """
+    tile = dict(_GEMV_VEC_TILE)
+    try:
+        from .ops._configs import active_vendor_profile
+        cfg = (active_vendor_profile().get("block_sizes", {}) or {}).get("gemv_vec")
+        if isinstance(cfg, dict):
+            for key in tile:
+                if cfg.get(key):
+                    tile[key] = int(cfg[key])
+    except Exception:
+        pass
+    return tile
 
 
 def _mm_quantized(a, qt, _epilogue: int = 0):
@@ -3101,10 +3210,13 @@ def argmax_wrapper(x, dim=None, keepdim=False) :
         if not keepdim:
             out_index = out_index.squeeze(dim)
 
-        TILE_N = min(triton.next_power_of_2(N), 4096)
+        cap, warps = _argmax_tile()
+        TILE_N = min(triton.next_power_of_2(N), cap)
         grid = (M, 1, 1)
         _set_device(x)
-        argmax_kernel_inner[grid](x, out_index, M, N, TILE_N=TILE_N, ONE_TILE_PER_CTA=(TILE_N >= N))
+        argmax_kernel_inner[grid](x, out_index, M, N, TILE_N=TILE_N,
+                                  ONE_TILE_PER_CTA=(TILE_N >= N),
+                                  num_warps=warps)
         return out_index
 
 
@@ -4269,9 +4381,10 @@ def mv_wrapper(mat, vec) :
     _set_device(mat)
     if _os_mv.environ.get("NBX_MV_VEC", "1") != "0":
         from .ops.gemv_vec import gemv_vec_kernel
-        BN = int(_os_mv.environ.get("NBX_MVV_BN", "8"))
-        BK = int(_os_mv.environ.get("NBX_MVV_BK", "256"))
-        W = int(_os_mv.environ.get("NBX_MVV_WARPS", "4"))
+        tile = _gemv_vec_tile()
+        BN = int(_os_mv.environ.get("NBX_MVV_BN", tile["block_n"]))
+        BK = int(_os_mv.environ.get("NBX_MVV_BK", tile["block_k"]))
+        W = int(_os_mv.environ.get("NBX_MVV_WARPS", tile["num_warps"]))
         gemv_vec_kernel[(triton.cdiv(N, BN),)](
             mat, vec, out,
             N, M,
@@ -4282,15 +4395,16 @@ def mv_wrapper(mat, vec) :
             num_warps=W, num_stages=1,
         )
         return out
-    grid = (triton.cdiv(N, _MV_BN),)
+    _mv_bn, _mv_bm, _mv_warps = _mv_tile()
+    grid = (triton.cdiv(N, _mv_bn),)
     mv_kernel[grid](
         mat, vec, out,
         N, M,
         mat.stride(0), mat.stride(1),
         vec.stride(0),
         out.stride(0),
-        BLOCK_M=_MV_BM, BLOCK_N=_MV_BN,
-        num_warps=4,
+        BLOCK_M=_mv_bm, BLOCK_N=_mv_bn,
+        num_warps=_mv_warps,
     )
     return out
 
@@ -4575,7 +4689,8 @@ def addmv_wrapper(
     input = input.contiguous()
     N, M = mat.shape
     out = NBXTensor.empty(N, device=mat.device, dtype=_matmul_out_dtype(mat))
-    grid = (triton.cdiv(N, _MV_BN),)
+    _mv_bn, _mv_bm, _mv_warps = _mv_tile()
+    grid = (triton.cdiv(N, _mv_bn),)
     _set_device(mat)
     addmv_kernel[grid](
         mat, vec, input, out,
@@ -4585,8 +4700,8 @@ def addmv_wrapper(
         vec.stride(0),
         input.stride(0),
         out.stride(0),
-        BLOCK_M=_MV_BM, BLOCK_N=_MV_BN,
-        num_warps=4,
+        BLOCK_M=_mv_bm, BLOCK_N=_mv_bn,
+        num_warps=_mv_warps,
     )
     return out
 
@@ -7570,7 +7685,8 @@ def _flash_decode(q, k, v, bias, softmax_scale,
 
 def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
                                           dropout_p=0.0, is_causal=False,
-                                          scale=None, **kwargs):
+                                          scale=None, k_pre_transposed=None,
+                                          **kwargs):
     """aten::scaled_dot_product_attention via Triton Flash Attention.
 
     Args:
@@ -7596,14 +7712,30 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     # (batch, heads, headdim, seq). Our Flash Attention kernel expects K
     # in standard (batch, heads, seq, headdim) format — same as Q and V.
     #
-    # Detection: K's last two dims are swapped relative to Q.
-    # This is safe for all models because SDPA always has Q.shape == V.shape
-    # and K can only differ in the seq_len dim (GQA) or by transposition.
-    if (k.ndim == 4
-            and k.shape[2] == q.shape[3]    # K's "seq" dim == Q's headdim
-            and k.shape[3] == q.shape[2]    # K's "dim" dim == Q's seqlen
-            and k.shape[2] != q.shape[2]):  # not already matching
-        k = k.transpose(2, 3).contiguous()
+    # `k_pre_transposed` is the graph's answer, recorded at load by
+    # GraphExecutor._mark_sdpa_k_layout and passed down by the dispatcher.
+    # It exists because the shape test below cannot decide the square case:
+    # when the sequence length equals the head dimension both layouts have
+    # the same shape, and the test then declined to transpose and attention
+    # ran with K's axes crossed. Measured 2026-09-07 on Apple — TinyLlama,
+    # head_dim 64, a 64-token prompt: argmax 29892 at logit 6.41 where the
+    # float64 oracle says 3864 at 22.36, |delta| 23.27 across the vocabulary,
+    # with 63 and 65 tokens exact to 0.02. The correction is inert wherever
+    # the graph is unambiguous, which is every other length.
+    if k.ndim == 4 and q.ndim == 4:
+        if k_pre_transposed is not None:
+            if k_pre_transposed:
+                k = k.transpose(2, 3).contiguous()
+        elif (k.shape[2] == q.shape[3] and k.shape[3] == q.shape[2]
+                and k.shape[2] == q.shape[2]):
+            raise RuntimeError(
+                f"scaled_dot_product_attention: K is square "
+                f"{tuple(k.shape)} with seq_len == head_dim, so its layout "
+                f"cannot be read from its shape, and no k_pre_transposed was "
+                f"passed. Refusing to guess.")
+        elif (k.shape[2] == q.shape[3]      # K's "seq" dim == Q's headdim
+                and k.shape[3] == q.shape[2]):  # K's "dim" dim == Q's seqlen
+            k = k.transpose(2, 3).contiguous()
 
     # Input shapes — ATen convention: (batch, heads, seq, dim)
     batch = q.shape[0]
@@ -7969,10 +8101,14 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
                                 dtype=t._dtype, device=f"cuda:{t._device_idx}")
             return NBXTensor.cat([t, z], dim=-1).contiguous()
         _dv = v.shape[-1]
+        _kw = {k_: v_ for k_, v_ in kwargs.items() if k_ != "k_pre_transposed"}
         out = scaled_dot_product_attention_wrapper(
             _pad_hd(q), _pad_hd(k), _pad_hd(v), attn_mask=attn_mask,
             dropout_p=dropout_p, is_causal=is_causal,
-            scale=softmax_scale, **kwargs)
+            scale=softmax_scale,
+            # K was normalised above; saying so keeps the inner call from
+            # re-reading a layout off a shape it can no longer interpret.
+            k_pre_transposed=False, **_kw)
         return out.narrow(-1, 0, _dv).contiguous()
 
     # Adaptive BLOCK_M (Phase 1): decode-path seqlen_q is typically 1–4. Using
@@ -8019,6 +8155,30 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
         else:
             BLOCK_M = 128
         BLOCK_N = 64
+
+    # Clamp to what the HARDWARE PROFILE allows for this shape.
+    #
+    # The cascade above proposes; the profile is the ceiling. It stays a
+    # clamp and never an instruction because the cascade carries measurements
+    # the profiles do not — BLOCK_M=64 is the floor of CORRECTNESS on Volta
+    # at head_dim<128, where volta.yml declares 128 — and a ceiling cannot
+    # undo that.
+    #
+    # Why it is needed at all: every branch above decides on
+    # `_NBX_HAS_NATIVE_BF16`, which separates Volta from Ampere and means
+    # nothing off CUDA. On an Apple GPU the cascade therefore took the
+    # Ampere branch and asked for a 128-row Q tile — four times the 32 that
+    # apple_silicon.yml has declared since it was written, over the 32 KB
+    # threadgroup budget in the same file, and past what the Metal backend
+    # will lower at all. The profile had the answer; nothing read it.
+    #
+    # MEASURED 2026-09-06: no NVIDIA tile changes (min(64,128)=64 on Volta,
+    # min(128,128)=128 on Hopper), so the CUDA rows are untouched.
+    _ceil_m, _ceil_n = _sdpa_block_ceiling(seqlen_q, headdim)
+    if _ceil_m:
+        BLOCK_M = min(BLOCK_M, int(_ceil_m))
+    if _ceil_n:
+        BLOCK_N = min(BLOCK_N, int(_ceil_n))
 
     # Output allocation. seqlen_q_rounded must align with actual BLOCK_M.
     o = NBXTensor.empty_like(q)

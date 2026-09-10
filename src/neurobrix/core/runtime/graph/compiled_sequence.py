@@ -345,6 +345,7 @@ class CompiledSequence:
         '_config_constants',  # profile.json architectural ints, protected from value-matched shape rewrites
         '_op_interceptors',  # Op interceptors for KV cache (maps op_type -> interceptor)
         '_op_uid_interceptors',  # Fine-grained per-op_uid interceptors for op-level tiling
+        '_sdpa_kv_layout',  # op_uid -> (k_pre_transposed, v_pre_transposed), read from the graph at compile
         '_seq_dependent_constants',  # Constants with trace-time seq_len dim: [(slot, axis, sym_id, trace_val)]
         '_seq_constant_originals',  # Original full-size constants: {slot: tensor} — never narrowed
         '_pretranspose_weights',  # Weight tensor IDs that need .t().contiguous() at bind time
@@ -438,6 +439,13 @@ class CompiledSequence:
         # op instance, e.g. only aten.convolution::62 for Sana 4Kpx fusion).
         # Checked BEFORE op_type interceptors so a per-uid hook wins.
         self._op_uid_interceptors: Dict[str, Callable] = {}
+        # The graph's recorded K/V layout per attention op (filled at compile;
+        # see GraphExecutor._mark_sdpa_k_layout). It is a slot like every
+        # other piece of per-instance state on this class — assigning an
+        # attribute that is not one raises on a __slots__ class, which is
+        # what an earlier version of this did, at compile time, on every
+        # model whose sequence holds an SDPA op.
+        self._sdpa_kv_layout: Dict[str, tuple] = {}
 
         # Weight tensor IDs that need pre-transposition (set by _eliminate_weight_transpose_ops)
         self._pretranspose_weights: set = set()
@@ -500,7 +508,7 @@ class CompiledSequence:
         patched = 0
         for op in self._ops:
             if op.op_type in interceptors:
-                op.func = interceptors[op.op_type]
+                op.func = self._bind_sdpa_layout(op.op_uid, interceptors[op.op_type])
                 patched += 1
 
     def register_op_uid_interceptor(self, op_uid: str, interceptor: Callable) -> None:
@@ -528,7 +536,19 @@ class CompiledSequence:
             return
         for op in self._ops:
             if op.op_uid in interceptors:
-                op.func = interceptors[op.op_uid]
+                op.func = self._bind_sdpa_layout(op.op_uid, interceptors[op.op_uid])
+
+    def _bind_sdpa_layout(self, op_uid: str, func):
+        """Attach the graph's recorded K/V layout to an attention callable.
+
+        The layout belongs to the OP (GraphExecutor._mark_sdpa_k_layout) and
+        must survive every reassignment of `op.func` — including an
+        interceptor hot-patched in after compile(), which used to replace the
+        wrapper carrying it and leave the interceptor with only the shape to
+        read, i.e. nothing at all when seq_len == head_dim.
+        """
+        pair = self._sdpa_kv_layout.get(op_uid)
+        return func if pair is None else _with_kv_layout(func, pair[0], pair[1])
 
     def compile(self) -> None:
         """
@@ -1876,6 +1896,20 @@ class CompiledSequence:
         else:
             # Get function from autonomous op resolver (100% independent from sequential_dispatcher)
             func = self.op_resolver.get_op_func(op_name, attrs, op_uid=op_uid)
+
+        # An attention interceptor is bound by op_type and so never sees the
+        # op's attributes — including the graph's recorded K/V layout. Bind it
+        # here: the shape test the interceptor would otherwise fall back on
+        # cannot decide the square case (seq_len == head_dim), and deciding it
+        # wrongly runs attention with K's axes crossed
+        # (GraphExecutor._mark_sdpa_k_layout).
+        if op_type in _SDPA_OP_TYPES and "nbx_k_pre_transposed" in (attrs or {}):
+            self._sdpa_kv_layout[op_uid] = (
+                bool(attrs["nbx_k_pre_transposed"]),
+                bool(attrs.get("nbx_v_pre_transposed", False)))
+            if (op_uid in self._op_uid_interceptors
+                    or op_type in self._op_interceptors):
+                func = self._bind_sdpa_layout(op_uid, func)
 
         # Allocate slots for output tensors not yet assigned
         output_slots = []
@@ -4414,3 +4448,21 @@ class CompiledSequence:
         """Direct access to arena for advanced use cases."""
         assert self._arena is not None, "compile() must be called before accessing arena"
         return self._arena
+
+
+_SDPA_OP_TYPES = frozenset({
+    "aten::scaled_dot_product_attention",
+    "aten::_scaled_dot_product_efficient_attention",
+    "aten::_scaled_dot_product_flash_attention",
+    "aten::_scaled_dot_product_cudnn_attention",
+    "aten::_scaled_dot_product_attention_math",
+})
+
+
+def _with_kv_layout(func, k_pre_transposed: bool, v_pre_transposed: bool):
+    """Bind the graph's recorded K/V layout onto an attention interceptor."""
+    def attention_with_kv_layout(*args, **kwargs):
+        kwargs.setdefault("k_pre_transposed", k_pre_transposed)
+        kwargs.setdefault("v_pre_transposed", v_pre_transposed)
+        return func(*args, **kwargs)
+    return attention_with_kv_layout

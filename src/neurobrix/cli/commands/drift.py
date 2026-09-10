@@ -49,7 +49,7 @@ def cmd_drift(args) -> int:
     if not Path(nbx[0]).exists() or nbx[0].endswith("__main__.py"):
         nbx = [sys.executable, "-c", "import sys; from neurobrix.cli import main; sys.exit(main())"]
     arms = (("oracle", [f"--{args.oracle}"], out / "oracle.jsonl"),
-            ("engine", ["--triton"] + (["--sweep"] if getattr(args, "sweep", False) else []), out / "engine.jsonl"))
+            ("engine", ["--triton"], out / "engine.jsonl"))
     print("=" * 70)
     print(f"NeuroBrix Drift — {args.model}: the ATen oracle ({args.oracle}) against the Triton engine, per op")
     print(f"   request: {' '.join(request)}")

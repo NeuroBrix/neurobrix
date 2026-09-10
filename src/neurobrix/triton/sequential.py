@@ -240,6 +240,11 @@ class TritonSequentialDispatcher:
 
         kw = self.resolve_kwargs(attributes)
 
+        # The graph's own answer to "is K already transposed", recorded by
+        # GraphExecutor._mark_sdpa_k_layout. Passed down rather than
+        # re-derived: at seq_len == head_dim the shapes cannot say.
+        k_pre_transposed = attributes.get("nbx_k_pre_transposed")
+
         def _pos_or_kw(idx, key, default):
             if len(inputs) > idx and inputs[idx] is not None:
                 return inputs[idx]
@@ -251,7 +256,8 @@ class TritonSequentialDispatcher:
             is_causal = bool(_pos_or_kw(4, "is_causal", False))
             scale = kw.get("scale", None)
             output = w.scaled_dot_product_attention_wrapper(
-                q, k, v, dropout_p=dropout_p, is_causal=is_causal, scale=scale)
+                q, k, v, dropout_p=dropout_p, is_causal=is_causal, scale=scale,
+                k_pre_transposed=k_pre_transposed)
             lse = NBXTensor.zeros((q.shape[0], q.shape[1], q.shape[2]),
                                   dtype=NBXDtype.float32,
                                   device=f"cuda:{self.device_idx}")
@@ -271,7 +277,7 @@ class TritonSequentialDispatcher:
                 q, k, v, attn_mask=attn_mask,
                 dropout_p=float(dropout_p) if not isinstance(dropout_p, float) else dropout_p,
                 is_causal=bool(is_causal) if not isinstance(is_causal, bool) else is_causal,
-                scale=scale)
+                scale=scale, k_pre_transposed=k_pre_transposed)
             lse = NBXTensor.zeros((q.shape[0], q.shape[1], q.shape[2]),
                                   dtype=NBXDtype.float32,
                                   device=f"cuda:{self.device_idx}")
@@ -289,7 +295,7 @@ class TritonSequentialDispatcher:
             q, k, v, attn_mask=attn_mask,
             dropout_p=float(dropout_p) if not isinstance(dropout_p, float) else dropout_p,
             is_causal=bool(is_causal) if not isinstance(is_causal, bool) else is_causal,
-            scale=scale)
+            scale=scale, k_pre_transposed=k_pre_transposed)
 
     def _fix_index_dtypes(self, base: str, inputs: List[Any]) -> List[Any]:
         """Cast floating-point index args to int64."""
