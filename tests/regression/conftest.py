@@ -423,3 +423,53 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if "slow" in item.keywords:
             item.add_marker(skip_slow)
+
+
+# ---------------------------------------------------------------------------
+# The harness cleans up after itself
+# ---------------------------------------------------------------------------
+#
+# `_run_out_path` and `_upscale_out_path` write cell outputs to
+# /tmp/regression_*, deliberately, so a run never leaves `output_<model>.<ext>`
+# in the repo root. They unlink BEFORE each run and not after, so every cell
+# that ran left its file behind — 2026-09-10 ended with a stray
+# `regression_run_Kokoro-82M_native.wav` that had to be removed by hand. A
+# campaign that does not clean is not finished.
+#
+# Only what THIS session created is removed: anything already there when it
+# started is somebody else's and is left alone.
+#
+# The one exception is a failure. A cell that failed is worth instructing, and
+# instructing it means looking at what it produced — a black PNG, a truncated
+# wav. Deleting the artefact of a red cell would be tidying away the evidence,
+# so on any failure the files stay and the session says where.
+
+_FAILED_CELLS: list = []
+
+
+@pytest.hookimpl(tryfirst=True, hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    report = (yield).get_result()
+    if report.when == "call" and report.failed:
+        _FAILED_CELLS.append(report.nodeid)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _harness_cleans_its_outputs():
+    scratch = Path("/tmp")
+    before = set(scratch.glob("regression_*"))
+    yield
+    made = sorted(set(scratch.glob("regression_*")) - before)
+    if not made:
+        return
+    if _FAILED_CELLS:
+        print(f"\n[harness] {len(made)} output(s) kept for the "
+              f"{len(_FAILED_CELLS)} failed cell(s), under {scratch}:")
+        for path in made:
+            print(f"  {path}")
+        return
+    for path in made:
+        try:
+            path.unlink()
+        except OSError:
+            pass
