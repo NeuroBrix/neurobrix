@@ -23,4 +23,9 @@ def where_forward_kernel(
     # deprecation warning and will raise on it in a future version — one of the
     # two scheduled breakages a user's A40 report surfaced, four warnings per
     # run. Comparing here is exact for any integer width and costs nothing.
+    #
+    # It changes no result today, and the honest reason is worth keeping: the
+    # cast tl.where performs internally on a non-boolean condition is
+    # `not_equal(x, 0)` (semantic.py, the is_bool() branch of cast) — literally
+    # this comparison. So this is a forward-compatibility edit, not a fix.
     tl.store(output_ptr + offset, tl.where(cond != 0, x, y), mask=mask)
