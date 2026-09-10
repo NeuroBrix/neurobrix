@@ -32,8 +32,35 @@ import numpy as np
 from neurobrix.kernels import autotune_certified as C
 
 ORACLE = "fp64: the op in float64 (numpy), the reference bank's definition"
+# The whole oracle of a convolution is computed when it costs at most this many multiply-adds;
+# above it, the oracle is computed on WINDOWS of the output — exact float64 on every position
+# of the windows, the corners and the centre of the plane, on the first, middle and last batch
+# element — and the deviation is measured there. A kernel config's arithmetic is the same at
+# every output position (one tile shape, one accumulation order), and a tiling or boundary
+# fault reaches a corner: the census's video and 4K shapes (49 frames of 1024², 512 channels)
+# would otherwise cost days of float64 each on this machine (2026-09-07: three 896² shapes an
+# hour). The proof names the windows.
+ORACLE_MAX_MACS = 2_000_000_000
 BENCH_WARMUP_MS = 10
 BENCH_REP_MS = 40
+# Every candidate config runs once against the oracle, and that run is timed; only the
+# CONTENDERS — the configs within this factor of the fastest run — go to the stopwatch.
+# A register-spilling config on a 1024² convolution runs tens of times slower than the
+# winners and cannot win: on 2026-09-07 the bench of all 18 took 557 s of a 672 s shape.
+BENCH_CONTENDER_FACTOR = 2.0
+
+
+def _contenders(results, factor=None):
+    """(cfg, deviation, run_s) rows whose single run was within `factor` of the fastest;
+    never fewer than two when two exist (the proof records a second-best time)."""
+    factor = BENCH_CONTENDER_FACTOR if factor is None else factor
+    if not results:
+        return []
+    fastest = min(r[2] for r in results)
+    keep = [r for r in results if r[2] <= factor * fastest]
+    if len(keep) < 2 and len(results) >= 2:
+        keep = sorted(results, key=lambda r: r[2])[:2]
+    return keep
 
 
 # ---------------------------------------------------------------------------
@@ -70,25 +97,105 @@ def _arr(rng, shape, dtype_name, scale=0.1):
     return a.astype(_NP.get(dtype_name, np.float32))
 
 
-def _conv2d_oracle(x, w, stride, padding, dilation, groups):
-    """Direct convolution in float64 (NCHW, OIHW), the reference bank's definition."""
-    x = x.astype(np.float64); w = w.astype(np.float64)
+def _conv_out_hw(h, wd, kh, kw, stride, padding, dilation):
+    sh, sw = stride; ph, pw = padding; dh, dw = dilation
+    return (h + 2 * ph - dh * (kh - 1) - 1) // sh + 1, (wd + 2 * pw - dw * (kw - 1) - 1) // sw + 1
+
+
+def _conv2d_oracle(x, w, stride, padding, dilation, groups, window=None):
+    """Direct convolution in float64 (NCHW, OIHW), the reference bank's definition.
+    `window` = (n_idx, r0, r1, c0, c1): only the output block [n_idx, :, r0:r1, c0:c1],
+    exact on every position of it (its receptive field is what is read)."""
+    w = w.astype(np.float64)
     n, c, h, wd = x.shape
     co, ci_g, kh, kw = w.shape
     sh, sw = stride; ph, pw = padding; dh, dw = dilation
-    xp = np.pad(x, ((0, 0), (0, 0), (ph, ph), (pw, pw)))
-    oh = (h + 2 * ph - dh * (kh - 1) - 1) // sh + 1
-    ow = (wd + 2 * pw - dw * (kw - 1) - 1) // sw + 1
-    out = np.zeros((n, co, oh, ow), dtype=np.float64)
+    oh, ow = _conv_out_hw(h, wd, kh, kw, stride, padding, dilation)
+    if window is None:
+        n0, n1, r0, r1, c0, c1 = 0, n, 0, oh, 0, ow
+    else:
+        ni, r0, r1, c0, c1 = window
+        n0, n1 = ni, ni + 1
+    # Only the window's receptive field is converted and padded: in padded coordinates the
+    # rows [r0·sh, (r1−1)·sh + dh·(kh−1)] and the same for columns — never the whole input
+    # (a 1024²×256 input is 2 GB of float64 per window, 109 s of an oracle on 2026-09-07).
+    R0, R1 = r0 * sh, (r1 - 1) * sh + dh * (kh - 1) + 1
+    C0, C1 = c0 * sw, (c1 - 1) * sw + dw * (kw - 1) + 1
+    u0, u1 = max(0, R0 - ph), min(h, R1 - ph)                 # unpadded rows the slab needs
+    v0, v1 = max(0, C0 - pw), min(wd, C1 - pw)
+    slab = x[n0:n1, :, u0:u1, v0:v1].astype(np.float64)
+    top, bottom = max(0, ph - R0), max(0, (R1 - ph) - h)     # padding the slab still needs
+    left, right = max(0, pw - C0), max(0, (C1 - pw) - wd)
+    xp = np.pad(slab, ((0, 0), (0, 0), (top, bottom), (left, right)))
+    nb, rh, rw = n1 - n0, r1 - r0, c1 - c0
+    out = np.zeros((nb, co, rh, rw), dtype=np.float64)
     co_g = co // groups
+    if groups == c == co and ci_g == 1:
+        # depthwise: one broadcast product per tap over every channel — the per-group loop
+        # below is thousands of tiny products (a 448² depthwise shape: 157 s of float64)
+        for i in range(kh):
+            for j in range(kw):
+                patch = xp[:, :, i * dh:i * dh + rh * sh:sh, j * dw:j * dw + rw * sw:sw]
+                out += patch * w[:, 0, i, j][None, :, None, None]
+        return out
     for g in range(groups):
         xg = xp[:, g * ci_g:(g + 1) * ci_g]
         wg = w[g * co_g:(g + 1) * co_g]                       # [co_g, ci_g, kh, kw]
         for i in range(kh):
             for j in range(kw):
-                patch = xg[:, :, i * dh:i * dh + sh * oh:sh, j * dw:j * dw + sw * ow:sw]   # [n, ci_g, oh, ow]
-                out[:, g * co_g:(g + 1) * co_g] += np.einsum("ncxy,oc->noxy", patch, wg[:, :, i, j])
+                patch = xg[:, :, i * dh:i * dh + rh * sh:sh, j * dw:j * dw + rw * sw:sw]   # [nb, ci_g, rh, rw]
+                # one BLAS product per tap: (nb·rh·rw, ci_g) @ (ci_g, co_g)
+                prod = patch.transpose(0, 2, 3, 1).reshape(-1, ci_g) @ wg[:, :, i, j].T
+                out[:, g * co_g:(g + 1) * co_g] += prod.reshape(nb, rh, rw, co_g).transpose(0, 3, 1, 2)
     return out
+
+
+def _conv_windows(n, oh, ow, ci_g, co, kh, kw, cap=None):
+    """None when the whole oracle fits the cap; else the windows of the output the oracle is
+    computed on — the top-left corner of the first batch element, the centre of the middle
+    one, the bottom-right corner of the last — each of at most cap/3 multiply-adds."""
+    cap = ORACLE_MAX_MACS if cap is None else cap
+    per_position = ci_g * co * kh * kw
+    if n * oh * ow * per_position <= cap:
+        return None
+    budget = max(1, int(cap / 3 // per_position))
+    side = max(1, int(budget ** 0.5))
+    rh, rw = min(oh, side), min(ow, side)
+    if rh * rw > budget:
+        rw = max(1, budget // rh)
+    wins = [(0, 0, rh, 0, rw),
+            (n // 2, (oh - rh) // 2, (oh - rh) // 2 + rh, (ow - rw) // 2, (ow - rw) // 2 + rw),
+            (n - 1, oh - rh, oh, ow - rw, ow)]
+    seen, out = set(), []
+    for w in wins:
+        if w not in seen:
+            seen.add(w); out.append(w)
+    return out
+
+
+class WindowedOracle:
+    """The float64 oracle on windows of a convolution's output; the deviation of a kernel's
+    result is measured on those windows only, and the proof names them."""
+
+    def __init__(self, blocks, oh, ow, n):
+        self.blocks = blocks                              # [(window, float64 array [1, co, rh, rw])]
+        self.describe = (f"on {len(blocks)} window(s) of the output (" +
+                         "; ".join(f"batch {w[0]} rows {w[1]}-{w[2]} cols {w[3]}-{w[4]}" for w, _ in blocks) +
+                         f") of {n}x{oh}x{ow}")
+
+    def slices(self, out):
+        for (ni, r0, r1, c0, c1), ref in self.blocks:
+            yield out[ni:ni + 1, :, r0:r1, c0:c1], ref
+
+
+def _conv_oracle_fn(x, wt, stride, padding, dilation, groups):
+    n, ci, h, wd = x.shape
+    co, ci_g, kh, kw = wt.shape
+    oh, ow = _conv_out_hw(h, wd, kh, kw, stride, padding, dilation)
+    wins = _conv_windows(n, oh, ow, ci_g, co, kh, kw)
+    if wins is None:
+        return lambda: _conv2d_oracle(x, wt, stride, padding, dilation, groups)
+    return lambda: WindowedOracle([(w, _conv2d_oracle(x, wt, stride, padding, dilation, groups, window=w)) for w in wins], oh, ow, n)
 
 
 def synthesize(qual: str, tuner, key: tuple, rng) -> Optional[Tuple[Callable[[], Any], Callable[[], np.ndarray], str]]:
@@ -129,19 +236,22 @@ def synthesize(qual: str, tuner, key: tuple, rng) -> Optional[Tuple[Callable[[],
         x = _arr(rng, (n, ci, h, w), dts[0] if dts else "fp16")
         wt = _arr(rng, (co, ci // max(groups, 1), kh, kw), dts[1] if len(dts) > 1 else "fp16")
         return ((lambda: W.conv2d_wrapper(to(x), to(wt), None, (sh, sw), (ph, pw), (dh, dw), False, 0, groups)),
-                (lambda: _conv2d_oracle(x, wt, (sh, sw), (ph, pw), (dh, dw), groups)), "output_pointer")
+                _conv_oracle_fn(x, wt, (sh, sw), (ph, pw), (dh, dw), groups), "output_pointer")
     if short == "depthwise_conv2d_kernel":
         (c, h, w, _oh, _ow, kh, kw, sh, sw, ph, pw) = [int(v) for v in key[:11]]
         x = _arr(rng, (1, c, h, w), dts[0] if dts else "fp16")
         wt = _arr(rng, (c, 1, kh, kw), dts[1] if len(dts) > 1 else "fp16")
         return ((lambda: W.conv2d_wrapper(to(x), to(wt), None, (sh, sw), (ph, pw), (1, 1), False, 0, c)),
-                (lambda: _conv2d_oracle(x, wt, (sh, sw), (ph, pw), (1, 1), c)), "out_ptr")
+                _conv_oracle_fn(x, wt, (sh, sw), (ph, pw), (1, 1), c), "out_ptr")
     return None
 
 
-def oracle_deviation(out: np.ndarray, oracle: np.ndarray) -> float:
+def oracle_deviation(out: np.ndarray, oracle) -> float:
     """max |out - oracle| relative to the oracle's own magnitude; inf when one
-    side is not finite where the other is."""
+    side is not finite where the other is. A windowed oracle is measured on
+    its windows, the largest deviation among them."""
+    if isinstance(oracle, WindowedOracle):
+        return max(oracle_deviation(piece, ref) for piece, ref in oracle.slices(np.asarray(out)))
     x = np.asarray(out, dtype=np.float64).reshape(-1)
     y = np.asarray(oracle, dtype=np.float64).reshape(-1)
     if x.shape != y.shape:
@@ -232,6 +342,7 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None)
         if oracle is None:                              # the key matched: now the fp64 oracle is worth computing
             oracle = oracle_box["v"] = oracle_fn()
         state["t_oracle"] = round(time.time() - t_or, 3)
+        state["oracle"] = ORACLE + (" " + oracle.describe if isinstance(oracle, WindowedOracle) else "")
         configs = list(upstream_prune(tuner, kwargs))
         names = list(tuner.arg_names)
         out_idx = next((i for i, n in enumerate(names) if n == out_name), None)
@@ -255,15 +366,17 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None)
             # a shape cost ten seconds.
             DeviceAllocator.memset_cuda(out_addr, 0xFF, out_nbytes)
 
-        results: List[Tuple[Any, float]] = []
+        results: List[Tuple[Any, float, float]] = []
         excluded: List[Dict[str, Any]] = []
         unrun: List[Any] = []
         t_runs = time.time()
         for cfg in configs:
             poison()
             try:
+                t_one = time.time()
                 tuner.fn.run(*args, **{**kwargs, **cfg.all_kwargs()})
                 DeviceAllocator.stream_synchronize(0)
+                run_s = time.time() - t_one                # the run every config makes anyway, timed
                 dev = oracle_deviation(out_tensor.numpy(), oracle)
             except Exception as exc:                     # a config the backend refuses: counted, never trusted
                 unrun.append({"config": atc._config_to_dict(cfg), "error": str(exc)[:200]})
@@ -271,14 +384,19 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None)
             if not (dev <= tolerance):
                 excluded.append({"config": atc._config_to_dict(cfg), "deviation": dev, "tolerance": tolerance})
             else:
-                results.append((cfg, dev))
+                results.append((cfg, dev, run_s))
         if not results:
+            if not excluded and unrun:
+                raise RuntimeError(f"{qual} at {key!r}: no config could run ({len(unrun)} of {len(configs)}; "
+                                   f"first: {unrun[0]['error']})")
             raise RuntimeError(f"{qual} at {key!r}: every config diverges from the fp64 oracle beyond {tolerance:g} "
-                               f"({len(excluded)} excluded, {len(unrun)} could not run)")
+                               f"({len(excluded)} excluded, {len(unrun)} could not run"
+                               + (f"; first error: {unrun[0]['error']}" if unrun else "") + ")")
         state["t_runs"] = round(time.time() - t_runs, 3)
         timed: List[Tuple[Any, float, float]] = []
         t_bench = time.time()
-        for cfg, dev in results:
+        contenders = _contenders(results)
+        for cfg, dev, _run_s in contenders:
             ms = bench(lambda: tuner.fn.run(*args, **{**kwargs, **cfg.all_kwargs()}))
             timed.append((cfg, dev, float(ms)))
         state["t_bench"] = round(time.time() - t_bench, 3)
@@ -286,7 +404,8 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None)
         best, dev, ms = timed[0]
         state.update({"config": atc._config_to_dict(best), "deviation": dev, "best_ms": ms,
                       "second_ms": timed[1][2] if len(timed) > 1 else None,
-                      "candidates": len(configs), "accepted": len(results), "excluded": excluded, "unrun": unrun,
+                      "candidates": len(configs), "accepted": len(results), "benched": len(contenders),
+                      "excluded": excluded, "unrun": unrun,
                       "timings": [{"config": atc._config_to_dict(c), "deviation": d, "ms": m} for c, d, m in timed]})
         tuner.cache[key] = best
         poison()
@@ -315,9 +434,9 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None)
         raise RuntimeError(f"{qual} at {key!r}: the wrapper never reached the autotuner")
     proof = {"date": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
              "engine_version": _engine_version(), "backend": _backend(), "shape": list(key),
-             "deviation": state["deviation"], "tolerance": tolerance, "oracle": ORACLE, "machine": _machine(),
+             "deviation": state["deviation"], "tolerance": tolerance, "oracle": state.get("oracle", ORACLE), "machine": _machine(),
              "best_ms": state["best_ms"], "second_ms": state["second_ms"], "candidates": state["candidates"],
-             "accepted": state["accepted"], "could_not_run": len(state["unrun"]),
+             "accepted": state["accepted"], "benched": state["benched"], "could_not_run": len(state["unrun"]),
              "seconds": {"oracle": state.get("t_oracle"), "runs": state.get("t_runs"), "bench": state.get("t_bench")}}
     return {"config": state["config"], "proof": proof, "excluded": state["excluded"],
             "could_not_run": state["unrun"], "timings": state["timings"]}
