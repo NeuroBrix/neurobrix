@@ -75,6 +75,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keeps the conservative path there — a record that changes nothing no longer costs.
 
 ### Fixed
+- A symbolic dimension is no longer bound below the extent the container declares for it.
+  Every graph carries a minimum per symbolic dim, and the check that was meant to enforce
+  it read the value from the wrong place — so it compared against zero and had never
+  refused anything. A batch, sequence length, height, width or frame count of zero now
+  stops the request where it is bound, naming the symbol, the input it came from and the
+  minimum it broke. Left unchecked such a dim does not fail where it is created: it
+  becomes a negative allocation dozens of operations later and reports itself as an
+  out-of-memory condition on a card with 31 GB free.
 - An op the container types as producing a complex number never receives a half-precision
   input, in every engine. The rule reads the op's traced OUTPUT dtype rather than its name:
   a hand-written pair of names cannot cover a complex construction, a short-time Fourier
