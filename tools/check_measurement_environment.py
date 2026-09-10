@@ -16,6 +16,7 @@ produces a wrong one.
 from __future__ import annotations
 
 import importlib.util
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -135,6 +136,41 @@ def check_profile_matches_hardware() -> tuple[list[str], list[str]]:
     return problems, notes
 
 
+def check_worktrees_are_durable() -> list[str]:
+    """No git worktree may live on a path the system clears.
+
+    Three did — `converge-mac`, `before-levers`, `mfl-before` — under
+    /private/tmp beside a 1.6 GB scratchpad. Their commits were reachable
+    from remotes, so no history was at risk, but the measurement TREES would
+    have vanished at the next sweep and the work would have restarted. The
+    same cleaner had already eaten 245 tracked files and loose git objects
+    from an external clone.
+    """
+    out = subprocess.run(["git", "worktree", "list", "--porcelain"],
+                         capture_output=True, text=True)
+    bad = []
+    for line in out.stdout.splitlines():
+        if line.startswith("worktree "):
+            path = line.split(" ", 1)[1].strip()
+            if os.path.realpath(path).startswith(_EPHEMERAL_PREFIXES):
+                bad.append(path)
+    if not bad:
+        return []
+    return [f"{len(bad)} git worktree(s) on a path the system clears: "
+            f"{', '.join(bad)}. Remove them with `git worktree remove` — never "
+            f"rm — and create them under a durable root."]
+
+
+def check_output_dirs_are_durable(paths) -> list[str]:
+    """A campaign's output directory is not scratch: it is the measurement."""
+    bad = [p for p in paths
+           if os.path.realpath(p).startswith(_EPHEMERAL_PREFIXES)]
+    if not bad:
+        return []
+    return [f"output directory on a path the system clears: {', '.join(bad)}. "
+            f"A campaign writes where its results survive it."]
+
+
 def check_object_store(path: Path) -> list[str]:
     """A checkout whose history is unreadable is eroding, not merely dirty.
 
@@ -193,6 +229,8 @@ def main() -> int:
     warnings: list[str] = []
     problems += check_importable("triton_msl")
     problems += check_package_is_durable("triton_msl")
+    problems += check_worktrees_are_durable()
+    problems += check_output_dirs_are_durable(sys.argv[1:])
     _prof_problems, _prof_notes = check_profile_matches_hardware()
     problems += _prof_problems
     warnings += _prof_notes
@@ -212,7 +250,7 @@ def main() -> int:
             print(f"  * {p}")
         return 1
     print("environment sound for measuring: working tree complete, "
-          "triton_msl imports"
+          "triton_msl imports, no worktree or output dir on a cleared path"
           + (f" ({len(warnings)} warning(s) above)" if warnings else ""))
     return 0
 
