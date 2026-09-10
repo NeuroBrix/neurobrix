@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Prism: a single-GPU plan is budgeted under the memory model it will be executed under. The rung
+  accepted a cold run by counting only the largest component, on the premise that one component is
+  in VRAM at a time; the strategy is eager and never unloads, so a model whose weights sum past the
+  card while its largest component fits was accepted and then ran out of memory later, at whichever
+  allocation came next rather than at the decision that caused it. Such a model now falls through to
+  a strategy that does load one component at a time. On the local zoo of 56 models this moves six
+  model-and-card pairs and no others.
+- The audio_llm flow emits its per-token decode trajectory like the autoregressive and encoder_decoder
+  flows do, on both engines. It kept its own decode loop and wrote none, so a run of a listening model
+  succeeded and left nothing to measure a decode rate from, and every audio row of a throughput table
+  came back without one. Observability only, no numerical effect.
+- Triton engine: the decode replay records the launches again, so a text decode runs its step as one
+  CUDA graph instead of walking the per-op Python path at every token. The replay recorded a step by
+  watching Triton's launcher; since the engine launches through its own, it was recording steps with no
+  kernel in them, and the plan that follows was rejected by its own verify gate at every token — correct
+  throughout, and about ten times slower. TinyLlama decode on one V100 at a locked clock: 13.7 to 132.4
+  tokens per second, n=5, output unchanged.
+- Triton engine: a pre-transposed weight is read in place by the matmul kernel during prefill instead of being copied once per request (the whole model per prompt); the GEMV wrapper takes a row-contiguous matrix and a strided vector as they are and copies a row-strided matrix exactly once; on cards without native bf16 the fp16 activation is widened in the matmul and GEMV kernels' registers instead of being copied to fp32 before every matmul; RMSNorm keeps its fp32 input copy, store and cast back as they were (a widening on load changed the reduction's rounding at some shapes); `index_select` along a middle axis gathers in place instead of moving the axis last, copying, and copying back; a tensor whose only irregular strides sit on dims of extent 1 is contiguous (PyTorch's rule), so a single-token transposed head block is read in place and re-viewed without a copy; a write into a strided view, a cast of a strided source and a broadcast copy are one kernel launch each, the source read by its strides and converted on the store, instead of a contiguous copy, a cast of it and a scatter; the rotary kernel rounds a wider cos/sin table to the activation dtype on load, and a narrower one is widened once per run instead of once per layer (the rotation's fused multiply-add pinned in the kernel, no longer left to the compiler's contraction), and the decode attention kernel rounds a wider Q to the KV cache's dtype on load instead of a cast copy per layer; `addmm` follows `mm` (the activation widened in registers, the pre-transposed weight walked by its strides, the bias widened on load) instead of copying all three per linear; element-wise `add`, `sub`, `mul` and `div` read a broadcast or strided operand by its strides instead of materialising it (a strided tensor with a scalar too); the certified autotune directory serves an operand widened on load at the key of the dtype it is computed in, so no shape it holds sweeps at runtime. a constant whose every consumer computes in fp32 (a norm's weight and bias) is bound in fp32 once at load instead of being cast at every call. Outputs byte-identical.
+
 ### Added
 - The certified autotune directory, an engine component: `src/neurobrix/config/autotune/<vendor>/<profile>/<kernel>.<dtype>.json`, one file per kernel and per dtype, indexed by the launcher's shape key, each entry carrying the setting retained and its proof (date, engine and backend versions, shape, deviation against the fp64 oracle, the profile's tolerance, the machine) and the settings excluded with their deviation. `neurobrix autotune certify --profile <profile>` fills it for the shapes the zoo met on this machine; `neurobrix autotune check` is its gate (a file without a proof, or whose proof does not re-read, is refused); `neurobrix autotune status` shows what the profile in force is served.
 - The ops a request will actually run can be written out. `NBX_DUMP_PLANNED_OPS=<file>` writes
@@ -60,6 +80,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The per-model kernel sweep artifact (`runtime/autotune/<arch>.json`, `~/.neurobrix/autotune/<model>/`), the refusal of a request without one, and the `--sweep` flag of `run`/`serve`: the certified directory replaces them.
 
 ### Changed
+- Triton engine: a repeat kernel launch pays a cache lookup instead of re-deriving what does not
+  change between launches. The compilation is keyed by its specialisation directly, the device comes
+  from the allocator's cache rather than a runtime round trip, the launch call's argument types are
+  declared once, its C argument buffer is built once per kernel and written in place, and a pointer's
+  element type and a kernel's parameter list are each read once. TinyLlama decode on one V100 at a
+  locked clock: 77.0 to 68.5 ms per token, output unchanged.
 - At load the launcher applies the certified setting for the profile Prism detected, the kernel, the dtype and the shape — no sweep, no consensus; a shape the directory lacks sweeps at runtime with the consensus screen, says so in clear, and keeps the result in the machine's local replay cache (`NEUROBRIX_REPLAY_CACHE`), never in the engine's directory. A runtime exclusion that contradicts a certification is reported as a finding, never silent.
 - The kernel sweep artifact records, per measured shape, the bench's best time, second-best time and their margin beside the chosen config, so a later comparison can tell a clear choice from a near-tie the timer may flip on the next run.
 - `neurobrix drift` classifies the origin of a drift: a kernel site (same dtype, arithmetic — the kernel to read), a policy site (the two engines' precision policies differ there), a discrete decision (an integer tensor — indices, codes, tokens — that flipped on a float deviation below the bound), a carrier (a view, cast, slice or copy), or a scale crossing (the values shrank there — a relu, a gate — and an inherited error crossed the relative bound without a new one); it names the largest float deviation before the origin and says when the origin's producer has no record on the engine side (fused there).

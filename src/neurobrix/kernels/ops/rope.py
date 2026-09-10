@@ -74,8 +74,14 @@ def rope_forward_kernel(
     # Load cos/sin (only need left half — right half is identical)
     cos_offsets = tl.arange(0, pad_hd // 2)
     cos_mask = cos_offsets < hd // 2
-    cos_row = tl.load(cos + cos_offsets, mask=cos_mask, other=0)
-    sin_row = tl.load(sin + cos_offsets, mask=cos_mask, other=0)
+    # A table WIDER than Q is rounded to Q's dtype on load (round-to-nearest,
+    # the conversion a stored cast makes): the wrapper no longer materialises
+    # a cast copy of the step's fp32 cos/sin per layer for an fp16 Q. A table
+    # narrower than Q is widened by the wrapper beforehand (a copy, said in
+    # its line): widened on load, the fp32 rotation's fused multiply-add
+    # moved with the convert before it (Sana's Gemma-2 encoder, 2026-09-07).
+    cos_row = tl.load(cos + cos_offsets, mask=cos_mask, other=0).to(q_ptr.dtype.element_ty)
+    sin_row = tl.load(sin + cos_offsets, mask=cos_mask, other=0).to(q_ptr.dtype.element_ty)
 
     # --- Q heads: load left half and right half ---
     first_half_q_offsets = (
@@ -114,6 +120,10 @@ def rope_forward_kernel(
     # --- Apply rotation ---
     if not BACKWARD_PASS:
         # Forward: y = [x1, x2] * [cos, cos] + [-x2, x1] * [sin, sin]
+        # The plain expression, as the backend contracts it per dtype: written
+        # with an explicit fma it matched the fp32 path but not the fp16 one
+        # (VibeVoice, 2026-09-07) — the contraction is not the same in both,
+        # and the bytes of every certified row depend on it staying as it is.
         new_q_1 = q_tile_1 * cos_row - q_tile_2 * sin_row
         new_q_2 = q_tile_2 * cos_row + q_tile_1 * sin_row
         new_k_1 = k_tile_1 * cos_row - k_tile_2 * sin_row

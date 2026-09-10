@@ -14,6 +14,7 @@ import time
 import torch
 from typing import Any, Callable, Dict, List, Optional
 
+from neurobrix import decode_progress
 from .base import FlowHandler, FlowContext, register_flow
 from neurobrix.core.memory.manager import release_flow_memory
 
@@ -205,6 +206,8 @@ class AudioLLMEngine(FlowHandler):
                 repetition_penalty=repetition_penalty,
             )
             generated_ids.append(next_token)
+            decode_progress.record(step, len(generated_ids), next_token,
+                                   next_token == eos_token_id or step + 1 >= max_tokens)
 
             if next_token == eos_token_id:
                 break
