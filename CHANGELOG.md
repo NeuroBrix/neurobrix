@@ -75,6 +75,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keeps the conservative path there — a record that changes nothing no longer costs.
 
 ### Fixed
+- An image-to-video request pads its conditioning clip to the frame count the model's
+  container declares, instead of leaving it at a single frame whenever the frame count was
+  not typed on the command line. One model refused the one-frame clip outright (its decoder
+  compresses time by four and the extent has to be a multiple of it); the others accepted it
+  and conditioned a whole clip on one frame without a word.
 - A symbolic dimension is no longer bound below the extent the container declares for it.
   Every graph carries a minimum per symbolic dim, and the check that was meant to enforce
   it read the value from the wrong place — so it compared against zero and had never
