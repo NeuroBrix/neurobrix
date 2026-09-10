@@ -382,7 +382,13 @@ def cmd_run(args):
     vae_scale = cached_defaults.get("vae_scale_factor", 8)
     # Video (5D) runtime dims — None/absent for image/LLM models, where the
     # profiler's video symbol overrides stay inert.
-    num_frames = getattr(args, 'num_frames', None) or cached_defaults.get("num_frames")
+    # Same three-level cascade as height/width above — the comment there
+    # ("Mirror the executor's fallback chain: args -> defaults.json -> family
+    # config") applies to every runtime dim, and this one had only two levels.
+    # Inert on today's zoo: all 11 video containers carry a runtime num_frames.
+    num_frames = (getattr(args, 'num_frames', None)
+                  or cached_defaults.get("num_frames")
+                  or _fam_defaults.get("num_frames"))
     temporal_compression = cached_defaults.get("temporal_compression_ratio", 4)
 
     input_config = InputConfig(
@@ -461,7 +467,16 @@ def cmd_run(args):
         inputs.update(prepare_image_inputs(
             pkg.topology, getattr(args, "model", None), args.input_image,
             cache_path, height=args.height, width=args.width,
-            num_frames=int(getattr(args, "num_frames", 0) or 0)))
+            # The frame count cmd_run already resolved, NOT a second read of
+            # the raw argument: without `--frames` that re-derivation was 0, so
+            # `pad_to_num_frames` was 0 and the still image stayed a ONE-frame
+            # clip for every model declaring `pad_image_to_num_frames` —
+            # whatever its container declared (Allegro-TI2V 88, the Wan I2V
+            # pair 81, VACE 81). Allegro-TI2V's VAE compresses time by 4 and
+            # refused the extent-1 clip outright; the others simply conditioned
+            # on one frame. height/width stay on the raw argument on purpose:
+            # absent, the processor keeps the source image's own size.
+            num_frames=int(num_frames or 0)))
         # Upscaler metadata key, not a runtime input (the dedicated
         # `nbx upscale` path owns the exact-size crop on this side).
         inputs.pop("_upscale_orig_hw", None)
