@@ -168,5 +168,13 @@ def test_this_device_has_a_profile_or_the_fallback_is_deliberate():
         pytest.skip(f"no per-variant file for {variant} yet; the family "
                     f"profile serves it, which is the declared fallback")
     doc = _profiles()[exact]
-    assert (doc.get("device_prefix") or "").lower().replace(" ", "-") in variant, (
-        f"{exact} exists but its device_prefix does not match {variant!r}")
+    # `compute_capability`, not `device_prefix`: the latter is the TORCH
+    # device string ("mps") and names no chip. The selector in
+    # ops/_configs.py calls a profile exact when its compute_capability
+    # equals the reported target, and that is what makes a per-variant file
+    # win over the family one.
+    assert (doc.get("compute_capability") or "").strip().lower() == variant, (
+        f"{exact} exists but declares compute_capability "
+        f"{doc.get('compute_capability')!r}; the backend reports {variant!r}, "
+        f"so this file would never be the exact match and the family profile "
+        f"would serve this machine instead")

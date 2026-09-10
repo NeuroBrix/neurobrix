@@ -1,0 +1,352 @@
+# Apple M5 Pro — one file, one reported variant.
+#
+# The backend names the variant from the device: `Apple M5 Pro` is
+# reported as `apple-m5-pro`. A profile whose compute_capability equals
+# that string is an EXACT match and wins over the family profile;
+# that is the whole mechanism, and it lives in
+# kernels/ops/_configs.py::_remember_profile.
+#
+# NOTHING below was measured on Apple M5 Pro: this project has no such
+# machine. Every value is INHERITED from the family profile
+# `apple_silicon.yml` as it stood on 2026-09-10, which itself carries
+# values measured on Apple M4 Pro.
+#
+# That is a statement about provenance, not about correctness: the
+# hard limits (1024 threads per threadgroup, 32 KB of threadgroup
+# memory) are architectural and hold across the M-series. What an
+# inherited value cannot claim is that a TILE CHOICE is the right
+# one here — an Ultra has eight times the base chip's GPU and is
+# served worst by an average.
+#
+# Complete and standalone by design: no pointer, no runtime
+# inheritance. Editing this file cannot move a number in another
+# variant's. The duplication is paid for by
+# tests/unit/config/test_apple_profiles_agree_with_the_device.py,
+# which reads every Apple profile and confronts the architectural
+# limits against what the device reports — a copy left behind is a
+# red test, never a false picture.
+
+architecture: apple_silicon
+# provenance: mesuré 2026-09-10 — le backend construit cette chaîne
+# depuis le nom du device (`driver.py`), vérifié sur Apple M4 Pro.
+compute_capability: "apple-m5-pro"
+# gpu_family: not stated. This project does not know which
+# Apple GPU family M5 reports, and will not guess one.
+
+# What the Triton target actually reports, which is NOT the family above.
+# MEASURED 2026-09-05 on an M4 Pro: the Metal backend builds its arch string
+# from the Metal DEVICE NAME, lowercased and hyphenated
+# (`triton_msl/backend/driver.py::_detect_metal_arch`), so it says
+# "apple-m4-pro" where this file says "apple9". Matching on the family alone,
+# the smem budget below resolved to NOTHING on a real Mac and the 32 KB
+# filter silently did not apply — all 17 Volta tiles were offered, including
+# the 72 KB one that cannot run here.
+#
+# These are prefixes, matched against the reported target. "apple-m" covers
+# the whole M-series, which is exactly the scope this file claims in its
+# header (M1..M4, GPU family 7/8/9). A chip outside it matches nothing and
+# gets no filtering, which is the same zero-fallback answer as before.
+compute_capability_matches:
+  # This file claims ONE variant. The family profile keeps the
+  # broad "apple-m" prefix and serves anything unknown.
+  - "apple-m5-pro"
+
+# Metal exposes no CUDA-style device string. The compiled (PyTorch) path
+# reaches Apple GPUs through the MPS backend, whose device string is "mps".
+device_prefix: "mps"
+
+# Kernel block sizes — Apple GPUs execute in 32-wide SIMD groups (like a
+# warp) with a 1024-thread threadgroup ceiling, so the NVIDIA-shaped
+# defaults transfer in structure. Tile sizes are deliberately conservative
+# for the 32 KB threadgroup-memory budget, which is a QUARTER of Volta's
+# 96 KB — the tightest constraint on this platform.
+block_sizes:
+  default: 1024
+
+  # GEMM — Apple's simdgroup_matrix units are the equivalent of tensor
+  # cores. Kept small until the 32 KB budget is measured rather than assumed.
+  gemm:
+    block_m: 32
+    block_n: 32
+    block_k: 32
+    num_warps: 4
+    num_stages: 2
+
+  bmm:
+    block_m: 32
+    block_n: 32
+    block_k: 32
+    num_warps: 4
+
+  conv2d:
+    block_h: 16
+    block_w: 16
+    num_warps: 4
+
+  resize: 256
+  softmax_cap: 8192
+  layernorm_tile: 1024
+  groupnorm_cap: 65536
+  reduction: 1024
+
+  # The GEMV row-group tile (kernels/ops/gemv_vec.py), which is the decode
+  # projection and the vocabulary head of every language model here.
+  #
+  # MEASURED 2026-09-07: the kernel reduces a BLOCK_N x BLOCK_K tile along its
+  # rows, and the Metal lowering stages that 2-D reduce one element per
+  # thread, so the tile cannot exceed the 1024-thread threadgroup. The adopted
+  # 8 x 256 is 2048 and refuses — loudly, naming the number. 8 x 128 keeps the
+  # adopted 8-row group and halves the K chunk: correct at 2.28e-07 relative
+  # against an fp64 oracle on TinyLlama's [1, 2048] @ [2048, 32000] head, the
+  # closest of the fitting tiles (4x256 gives 2.90e-07, 2x512 4.90e-07).
+  #
+  # This is a shape the backend implements, not a tuning preference — the same
+  # kind of fact as the 32x32 SDPA tile below.
+  gemv_vec:
+    block_n: 8
+    block_k: 128
+    num_warps: 4
+
+  # Row-wise reductions over a dim (min / max / prod / all / any) and argmin.
+  #
+  # MEASURED 2026-09-07: `min` and `max` over a dim return a VALUE AND ITS
+  # INDEX, so their reduce carries a pair, and the Metal lowering stages such
+  # a reduce one element per thread — the tile must fit num_warps * 32. The
+  # adopted 8 x 1024 is 8192 against a 128-thread group.
+  #
+  # 8 x 128 with 32 warps is 1024 elements over 1024 threads, and is correct
+  # for max, min and argmin at N = 511, 1024, 1025 and 3077 against numpy in
+  # float64 (the row group is what matters here: at 8 rows the lowering used
+  # to collapse every row onto the first, which is fixed upstream and is why
+  # this entry can carry more than one row at all).
+  reduction_2d:
+    block_m: 8
+    block_n: 128
+    num_warps: 32
+
+  argmin:
+    block_m: 8
+    tile_n: 128
+    num_warps: 32
+
+  # Row-wise argmax — greedy sampling reads the argmax of a 32000-wide
+  # vocabulary row every token.
+  #
+  # MEASURED 2026-09-07: argmax is a MULTI-VALUE reduce (a value and its
+  # index travel together), and the Metal lowering has no multipass form for
+  # a tuple — it says so and refuses — so the tile must fit the threadgroup,
+  # which is num_warps * 32. The 4096 cap every architecture used refused
+  # against the default 4 warps (128 threads). 1024 over 32 warps is the
+  # largest that fits; the index it returns is exact at every tile measured
+  # (128/4, 256/8, 512/16, 1024/32 all give the same index on a 32000-wide
+  # row), so this is throughput, not correctness.
+  argmax:
+    tile_n: 1024
+    num_warps: 32
+
+  # The mv / addmv tile (kernels/ops/addmv_op.py and the mv_kernel beside it).
+  #
+  # MEASURED 2026-09-07: this kernel keeps a BLOCK_N x BLOCK_M fp32 accumulator
+  # and reduces it along its rows AFTER the M loop. The Metal lowering stages
+  # that 2-D reduce one element per thread, and here the threadgroup is
+  # num_warps * 32 — so the tile must fit the warps, which is why the warp
+  # count is part of this entry and not beside it. The adopted 64 x 256 is
+  # 16384 against a 128-thread group and refuses.
+  #
+  # 8 x 128 with 32 warps is 1024 elements over 1024 threads: the same row
+  # group and chunk width as gemv_vec above, correct at 7.15e-08 relative
+  # against an fp64 oracle on the bank's M1N64K32 addmm entry.
+  mv:
+    block_n: 8
+    block_m: 128
+    num_warps: 32
+
+  # M=1 dequant-GEMV occupancy rule — see nvidia/volta.yml for the rationale
+  # (the wrapper halves BLOCK_N until the grid reaches min_programs).
+  # 2 waves x 40 GPU cores (M3/M4 Max class); validation_status: analytical.
+  # Key absent or 0 -> no adaptation.
+  dequant_gemv:
+    min_programs: 80
+
+# SDPA block-size thresholds. Schema documented in volta.yml. Decode first.
+# Every tile here is sized for 32 KB of threadgroup memory, so they are
+# smaller than the Volta equivalents at the same head_dim.
+sdpa_thresholds:
+  - seqlen_q_le: 16
+    head_dim_ge: 256
+    block_m: 16
+    block_n: 16
+    num_warps: 4
+  - seqlen_q_le: 16
+    block_m: 16
+    block_n: 32
+    num_warps: 4
+  - head_dim_ge: 256
+    block_m: 16
+    block_n: 16
+    num_warps: 4
+  - head_dim_ge: 128
+    block_m: 32
+    block_n: 32
+    num_warps: 4
+  # MEASURED 2026-09-06: 32x32, not 32x64. The Metal backend's attention
+  # lowering is validated at head_dim 64 for a 32x32 tile only; a 32x64 tile
+  # has no template and falls to a generic path that cannot lower an
+  # attention kernel at all, so the whole op refuses. Both tiles fit the
+  # 32 KB threadgroup budget — this is not a memory choice, it is the shape
+  # the hardware's compiler actually implements, which is exactly what a
+  # hardware profile is for.
+  - head_dim_lt: 128
+    block_m: 32
+    block_n: 32
+    num_warps: 4
+
+memory:
+  # 32 KB of threadgroup memory per threadgroup (Apple GPU family 7+).
+  # The single most binding difference from every NVIDIA profile here.
+  # MEASURED 2026-09-05 on an M4 Pro: `MTLDevice.maxThreadgroupMemoryLength()`
+  # returns exactly 32768, so the documented figure holds on real hardware.
+  max_shared_memory_per_block: 32768
+  max_registers_per_block: 32768
+  # Apple GPUs schedule in 32-wide SIMD groups. Named `warp_size` because one
+  # hardware concept has ONE key across every profile — AMD's 64-wide
+  # wavefronts are declared under the same name.
+  warp_size: 32
+
+  # SDPA deterministic-routing budget. 0 = NOT APPLICABLE: the
+  # non-determinism this routes around is a Volta-SIMT MMA issue and does
+  # not transfer to Apple's simdgroup path. Left 0 until shown otherwise on
+  # real hardware.
+  sdpa_math_max_scores_bytes: 0
+  sdpa_math_min_chunk_rows: 128
+
+  # Allocator pool: fraction of device memory the free-list may keep parked.
+  # Apple Silicon is UNIFIED memory — the "device" budget is system RAM
+  # shared with everything else on the machine, so parking is far less
+  # polite here than on a discrete card. Halved accordingly.
+  alloc_pool_parked_cap_fraction: 0.25
+
+  # Triton deferred-free queue policy. Unified memory means a free returns
+  # pages to the whole system, so the cliff is lower than on a discrete GPU.
+  deferred_drain_cliff_bytes: 1000000000
+  deferred_drain_floor_bytes: 268435456
+  deferred_drain_pressure_reserve_bytes: 4294967296
+  deferred_drain_freecheck_interval: 8
+
+# SMEM budget safety factor — see volta.yml. Same 0.7 across vendors.
+sdpa_smem_safety: 0.7
+
+# How kernels are COMPILED on this vendor. Not a tuning knob: both lines
+# below decided results or refusals on real kernels, and both were defaults
+# nobody chose until an Apple machine made them visible.
+shader:
+  # Metal Shading Language version. MEASURED 2026-09-06: MTLCompileOptions
+  # defaults to 2.4, and `bfloat` — which `precision.supports_bf16` below
+  # claims this hardware has — does not exist before 3.1. The first
+  # TinyLlama --triton run refused at the embedding kernel with "unknown
+  # type name 'bfloat'". 3.1 is the floor that delivers what the profile
+  # claims; 3.0 does not (measured: 2.4 NO, 3.0 NO, 3.1 OK, 3.2 OK, 4.0 OK).
+  # It pairs with macos_deployment_floor 14.0 below.
+  language_version: "3.1"
+
+  # Float policy. MEASURED 2026-09-05: MTLCompileOptions defaults to FAST
+  # math (mathMode 2), which lets the compiler reassociate float arithmetic
+  # and substitute fast approximations for divide, rsqrt and the
+  # transcendentals. Under it rms_norm fp32 at 2x4096 sat 3 ULP from the
+  # fp64 oracle where the CUDA reference sits at 1, failing the first-light
+  # bar; under "safe" the same kernel is bit-identical to CUDA.
+  #
+  # safe = IEEE semantics, which is what these kernels are written against
+  # on every other backend. relaxed and fast are the other two values Metal
+  # accepts; neither is chosen implicitly here.
+  math_mode: safe
+
+  # The oldest macOS a compiled metallib must load on. Kept next to the
+  # language version because the two move together.
+  macos_deployment_floor: "14.0"
+
+precision:
+  supports_fp16: true
+  supports_bf16: true    # Apple GPU family 9 (M3+); M1/M2 emulate
+  supports_tf32: false   # NVIDIA-only format
+  supports_fp8: false    # no hardware FP8 on Apple GPUs
+  # Metal GPUs have NO double precision at all. The hardware fact stands;
+  # the consequence written here did not.
+  #
+  # MEASURED 2026-09-05: the three device-scalar kernels in
+  # kernels/ops/{add,mul,div}.py that widen through f64 do NOT fail to lower
+  # and are NOT refused. The f64 survives Triton's middle end intact and the
+  # Metal backend's MSL emitter silently narrows it to `float`. For these
+  # three that is exact — the product of two f32 values is representable in
+  # f64, checked over 20,000,000 random pairs plus subnormals, every one
+  # bit-identical — so no host-sync route is needed. What to expect from any
+  # FUTURE f64 expression is silent narrowing, not a loud refusal.
+  supports_fp64: false
+
+# Software-pipelining budget — see nvidia/volta.yml for the schema.
+#
+# validation_status: conservative_pending_first_light. cp.async is a PTX
+# instruction with no Apple equivalent, and the Metal backend stages through
+# threadgroup memory by a different mechanism. Neither Volta's measured
+# fault nor Ampere's clearance transfers, so the budget stays at 2 until an
+# Apple GPU measures it: clamping can only cost throughput.
+pipelining:
+  max_num_stages: 2
+
+# How work reaches the device.
+#
+# A launch used to commit its command buffer and block on
+# `waitUntilCompleted()` before returning, so every kernel cost a host round
+# trip. Measured 2026-09-07 on TinyLlama decode: 598 us per launch across
+# 10,695 launches, 1,337 of them in a single decode step — 799 ms of an
+# 857 ms step. Metal executes one queue's buffers in commit order, so the
+# wait was never what made the engine correct; it only made every host read
+# of device memory safe by accident. The waits moved to the host accesses
+# themselves and the launch path commits without blocking.
+#
+# `max_command_buffers_in_flight` is what a queue may hold committed and not
+# yet awaited. Metal's own ceiling is 64 per queue and it BLOCKS inside
+# `commandBuffer()` at that point — a stall with nobody's name on it. 32
+# keeps the backpressure ours and visible, at half the ceiling; it is a
+# starting point measured on an M4 Pro, not a hardware constant.
+dispatch:
+  max_command_buffers_in_flight: 32
+  # Dispatches one command buffer carries before the stream commits it. A
+  # NeuroBrix stream is one command buffer with one serialised compute
+  # encoder; this bounds how long the host waits for a result and how much
+  # work a single failure takes down with it. It is not a correctness knob —
+  # the encoder's own barriers keep the order at any value. A decode step of
+  # TinyLlama encodes ~1,350 dispatches, so 512 puts it in three buffers
+  # where one per launch put it in 1,505.
+  max_dispatches_per_command_buffer: 512
+
+# Autotune correctness screen. The engine runs every candidate config once and
+# compares its result against a reference config's before timing any of them,
+# because an autotuner that ranks on speed alone selects whichever WRONG
+# kernel is fastest — a kernel that writes half its output does half the
+# stores and wins. Measured on Apple 2026-09-07: fp16 mm [64,32]@[32,64] chose
+# a config that left half the columns zero.
+#
+# These are the tolerances that separate "a different but valid summation
+# order" from "a different answer". Two configs with different block sizes
+# reduce in a different order, so their results differ in the last bits; a
+# config that drops output differs by the scale of the output itself. The
+# gap between those two is several orders of magnitude, and these sit in it.
+#
+# Relative to the reference's own magnitude: max|a - b| / max|b|. Integer
+# and boolean results are compared BIT-IDENTICALLY and ignore this table —
+# there is no valid reordering that changes an integer.
+autotune_screen_rtol:
+  float16: 2.0e-2
+  bfloat16: 4.0e-2
+  float32: 1.0e-4
+  float64: 1.0e-8
+
+# Above this many bytes of buffer, the autotune correctness screen does not
+# run. Screening copies every argument out and back once per candidate, so a
+# very large tensor turns a tuning step into hundreds of megabytes of traffic
+# — and on unified memory that pressure is the machine's, not a card's.
+# MEASURED 2026-09-07: unbounded screening of a 151936-wide softmax perturbed
+# six unrelated tests in the same process. A skipped screen is announced, not
+# silent.
+autotune_screen_max_bytes: 33554432

@@ -340,7 +340,36 @@ def arch_smem_budget() -> Optional[int]:
             # which is every NVIDIA and AMD profile — their exact and
             # major-family matches are reached before this and are unchanged.
             same_family = int(budget)
+    if exact is None and same_family is not None:
+        _announce_family_fallback(wanted)
     return exact if exact is not None else same_family
+
+
+#: (target, profile) pairs already announced, so the notice is said once per
+#: process and not once per kernel compile.
+_FALLBACK_ANNOUNCED: set = set()
+
+
+def _announce_family_fallback(wanted: str) -> None:
+    """Say, out loud and once, that this chip has no profile of its own.
+
+    An unknown chip must RUN — correctly if not optimally — because refusing
+    would contradict a cascade that never refuses. But running on a family
+    profile is a different fact from running on the chip's own, and the
+    difference shows up as performance nobody can explain later. It is said
+    here rather than left to be inferred from a number.
+    """
+    import sys
+
+    profile = _ACTIVE_PROFILE.get("_profile")
+    key = (wanted, profile)
+    if profile is None or key in _FALLBACK_ANNOUNCED:
+        return
+    _FALLBACK_ANNOUNCED.add(key)
+    print(f"[PROFILE] {wanted!r} has no profile of its own; falling back to "
+          f"{profile!r}, which declares a prefix that covers it. The engine "
+          f"will run correctly, not optimally — a per-variant profile is what "
+          f"makes it optimal.", file=sys.stderr, flush=True)
 
 
 #: The vendor profile the last `arch_smem_budget()` resolution matched, by
