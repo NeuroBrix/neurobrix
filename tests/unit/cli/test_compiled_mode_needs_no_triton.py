@@ -33,9 +33,20 @@ class _NoTriton(importlib.abc.MetaPathFinder):
 
 @pytest.fixture
 def without_triton():
-    saved = {k: v for k, v in sys.modules.items()
-             if k == "triton" or k.startswith("triton.")}
-    for k in saved:
+    """Block the module, and put the module table back exactly as it was.
+
+    The first version restored only `triton.*`. The `neurobrix.*` modules that
+    these tests delete and re-import were left in sys.modules in the state
+    they took WHILE Triton was blocked — and a later test in the same session
+    then read that state: `test_ampere_profile_does_not_clamp` saw its budget
+    clamped to 2 stages instead of 5. Measured 2026-09-10; the test passed
+    alone and failed in the battery, which is the signature.
+
+    A test that reaches into sys.modules owes the session the table it found.
+    """
+    saved = dict(sys.modules)
+    for k in [k for k in sys.modules
+              if k == "triton" or k.startswith("triton.")]:
         del sys.modules[k]
     finder = _NoTriton()
     sys.meta_path.insert(0, finder)
@@ -43,6 +54,9 @@ def without_triton():
         yield
     finally:
         sys.meta_path.remove(finder)
+        # Drop anything imported during the block, then restore what was here.
+        for k in [k for k in sys.modules if k not in saved]:
+            del sys.modules[k]
         sys.modules.update(saved)
 
 
