@@ -216,6 +216,39 @@ class ExecutionStrategy(ABC):
         """
         pass
 
+    # Attribute names under which a runtime package may carry its artefact
+    # path. Measured 2026-09-09: the executor's package carries `root_path`,
+    # NBXContainer carries `cache_path`, and `nbx_path` — the ONLY name five
+    # strategies used to read — exists on neither.
+    _ARTIFACT_PATH_ATTRS = ('nbx_path', 'root_path', 'cache_path', 'path')
+
+    def resolve_artifact_path(self, component_name: str) -> str:
+        """Artefact path for `component_name`, or raise saying why not.
+
+        This is the single place a strategy asks where the weights live.
+        It never returns None: a strategy that cannot find the artefact
+        cannot load the weights, and a component with no weights is not a
+        lighter component, it is a wrong answer.
+        """
+        package = getattr(self.context, 'runtime_package', None)
+        if package is None:
+            raise RuntimeError(
+                f"ZERO FALLBACK: '{component_name}' needs its weights loaded "
+                f"but the strategy context ({type(self.context).__name__}) "
+                f"carries no runtime package to load them from. Loading "
+                f"nothing is not a way to continue.")
+
+        for attr in self._ARTIFACT_PATH_ATTRS:
+            value = getattr(package, attr, None)
+            if value:
+                return str(value)
+
+        raise RuntimeError(
+            f"ZERO FALLBACK: '{component_name}' needs its weights loaded but "
+            f"the runtime package ({type(package).__name__}) names no artefact "
+            f"path — tried {', '.join(self._ARTIFACT_PATH_ATTRS)}. It carries "
+            f"{sorted(a for a in dir(package) if 'path' in a.lower())}.")
+
     def load_weights(self, component_name: str) -> None:
         """Load weights for component (lazy loading)."""
         executor = self.context.component_executors.get(component_name)
@@ -224,17 +257,34 @@ class ExecutionStrategy(ABC):
                 f"ZERO FALLBACK: No executor for component '{component_name}'"
             )
 
-        # Check if weights already loaded (by checking if _weights dict is populated)
+        # Already loaded — the runtime usually gets there first
+        # (`_ensure_weights_loaded`), and re-loading would be waste, not a
+        # correction. This is the ONLY case where doing nothing is right.
         weights_loaded = hasattr(executor, '_weights') and bool(executor._weights)
-        if not weights_loaded:
-            device = self.context.get_device(component_name)
-            # GraphExecutor.load_weights requires nbx_path and component parameters
-            # These should be available from context.runtime_package
-            if hasattr(self.context, 'runtime_package') and self.context.runtime_package:
-                nbx_path = getattr(self.context.runtime_package, 'nbx_path', None)
-                if nbx_path:
-                    executor.load_weights(nbx_path, component_name)
-                    self.context._active_component = component_name
+        if weights_loaded:
+            return
+
+        # THREE SILENT SKIPS USED TO LIVE HERE, nested:
+        #
+        #     if hasattr(self.context, 'runtime_package') and ...:
+        #         nbx_path = getattr(..., 'nbx_path', None)
+        #         if nbx_path:
+        #             executor.load_weights(...)
+        #
+        # and the middle one read a name that exists on NOTHING. Measured
+        # 2026-09-09: the executor's package carries `root_path`, the
+        # container carries `cache_path`, and `nbx_path` is absent from both.
+        # So this method loaded nothing, ever, and said nothing about it —
+        # six strategies call it.
+        #
+        # It happened to be harmless only because the runtime loads the
+        # weights first, which is luck, not design: the one situation this
+        # method exists for — weights NOT loaded — was also the one it
+        # silently declined to handle.
+        nbx_path = self.resolve_artifact_path(component_name)
+
+        executor.load_weights(nbx_path, component_name)
+        self.context._active_component = component_name
 
     def unload_weights(self, component_name: str) -> None:
         """Unload weights for component (memory cleanup)."""
