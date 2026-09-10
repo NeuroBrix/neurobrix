@@ -1367,6 +1367,24 @@ class RuntimeExecutor:
         if flow_type == "autoregressive_generation":
             return merged_defaults
 
+        # The TEMPORAL latent extent first: it needs neither height, nor width,
+        # nor a VAE scale factor, so it must not sit behind their guards. It did,
+        # and Open-Sora-v2 paid for it — the container declares num_frames 51 and
+        # temporal_compression_ratio 4 (everything this needs) but no height, no
+        # width and no vae_scale_factor (it carries spatial_compression_ratio
+        # instead). The method returned at the height check, latent_frames was
+        # never derived, and the Triton denoise loop died resolving
+        # global.latents on "Key 'latent_frames' not found in
+        # runtime/defaults.json" — while the container held the answer, 13.
+        num_frames = merged_defaults.get("num_frames")
+        temporal_cr = merged_defaults.get("temporal_compression_ratio")
+        if num_frames is not None and temporal_cr is not None:
+            num_frames = int(num_frames)
+            temporal_cr = int(temporal_cr)
+            latent_frames = (num_frames - 1) // temporal_cr + 1
+            merged_defaults["latent_frames"] = latent_frames
+            logger.debug(f"Video latent frames: ({num_frames}-1)//{temporal_cr}+1 = {latent_frames}")
+
         height = merged_defaults.get("height")
         width = merged_defaults.get("width")
 
@@ -1392,16 +1410,6 @@ class RuntimeExecutor:
 
         merged_defaults["latent_height"] = latent_height
         merged_defaults["latent_width"] = latent_width
-
-        # Video models: compute latent_frames from num_frames and temporal_compression_ratio
-        num_frames = merged_defaults.get("num_frames")
-        temporal_cr = merged_defaults.get("temporal_compression_ratio")
-        if num_frames is not None and temporal_cr is not None:
-            num_frames = int(num_frames)
-            temporal_cr = int(temporal_cr)
-            latent_frames = (num_frames - 1) // temporal_cr + 1
-            merged_defaults["latent_frames"] = latent_frames
-            logger.debug(f"Video latent frames: ({num_frames}-1)//{temporal_cr}+1 = {latent_frames}")
 
         logger.debug(f"Dynamic latent dims: {height}x{width} / {vae_scale_factor} = {latent_height}x{latent_width}")
         return merged_defaults
