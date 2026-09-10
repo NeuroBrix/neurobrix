@@ -1327,11 +1327,27 @@ def table(out: Path) -> str:
 def lock_holder_alive(text: str) -> bool:
     """A `.running` lock names its holder (`gpu=N pid=P HH:MM:SS`); the holder is alive when
     that pid still exists. A lock without a pid is trusted (an older writer)."""
+    import os
     import re
     m = re.search(r"\bpid=(\d+)", text)
     if not m:
         return True
-    return Path(f"/proc/{m.group(1)}").exists()
+    pid = int(m.group(1))
+    # `os.kill(pid, 0)` rather than `/proc/<pid>`: there is no /proc on macOS,
+    # so the path test judged EVERY holder dead there and a live campaign's
+    # lock was free for the taking — two campaigns on one GPU, which is the
+    # one thing the lock exists to prevent. Signal 0 checks existence without
+    # delivering anything, on both systems.
+    #
+    # PermissionError means the process exists and belongs to someone else:
+    # alive, and still not ours to take.
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
 ARM_LABELS = ("A", "B")
