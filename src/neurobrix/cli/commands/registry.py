@@ -15,6 +15,48 @@ from neurobrix.cli.utils import (
 )
 
 
+# The mode an extracted container carries, whoever imported it.
+CONTAINER_FILE_MODE = 0o644
+CONTAINER_DIR_MODE = 0o755
+
+
+def extract_container(store_path, cache_path):
+    """Extract a `.nbx` and give the result a mode that does not depend on the
+    importer's environment.
+
+    `zipfile.extractall` does NOT apply the permission bits stored in the
+    archive: every file takes the umask of whatever process ran the import.
+    Measured on this machine — two models imported in May carried their whole
+    content owner-only (manifest, profile, weights index, topology, twelve
+    files) while a third imported in August was world-readable. Same engine,
+    same archives, different shell. In an engine that sells determinism, the
+    state on disk of an artefact must not depend on who unpacked it.
+
+    The member path check that was already here is kept and runs FIRST: a member
+    resolving outside the cache directory is refused before anything is written.
+    """
+    import zipfile
+
+    cache_path = Path(cache_path)
+    root = os.path.realpath(str(cache_path))
+    with zipfile.ZipFile(store_path, "r") as zf:
+        for member in zf.namelist():
+            resolved = os.path.realpath(os.path.join(str(cache_path), member))
+            if not resolved.startswith(root + os.sep) and resolved != root:
+                raise ValueError(
+                    f"Security: path traversal detected in archive member: {member}")
+        cache_path.mkdir(parents=True, exist_ok=True)
+        zf.extractall(str(cache_path))
+
+    # umask applies at creation, so the mode is set afterwards — on the tree as
+    # it now stands, directories included.
+    for dirpath, dirnames, filenames in os.walk(str(cache_path)):
+        os.chmod(dirpath, CONTAINER_DIR_MODE)
+        for name in filenames:
+            os.chmod(os.path.join(dirpath, name), CONTAINER_FILE_MODE)
+    os.chmod(str(cache_path), CONTAINER_DIR_MODE)
+
+
 def cmd_import(args):
     """Download model from NeuroBrix registry and extract to local cache."""
     import requests
@@ -221,13 +263,7 @@ def cmd_import(args):
 
     import zipfile
     if zipfile.is_zipfile(store_path):
-        cache_path.mkdir(parents=True, exist_ok=True)
-        with zipfile.ZipFile(store_path, 'r') as zf:
-            for member in zf.namelist():
-                member_resolved = os.path.realpath(os.path.join(cache_path, member))
-                if not member_resolved.startswith(os.path.realpath(str(cache_path)) + os.sep) and member_resolved != os.path.realpath(str(cache_path)):
-                    raise ValueError(f"Security: path traversal detected in archive member: {member}")
-            zf.extractall(cache_path)
+        extract_container(store_path, cache_path)
         print(f"   Extracted: {cache_path}")
     else:
         print(f"ERROR: Downloaded file is not a valid .nbx (ZIP) archive.")
