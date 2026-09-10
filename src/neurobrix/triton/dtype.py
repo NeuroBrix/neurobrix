@@ -237,6 +237,43 @@ _SELF_MANAGED_OPS: FrozenSet[str] = frozenset({
 })
 
 
+def fp32_constant_names(dag: dict, narrow_op_uids=(), fp32_op_uids=()) -> set:
+    """The graph's params and buffers whose every consumer computes in fp32 —
+    an AMP_FP32 op the engine wraps fp32-internal, or an op the precision
+    contract islands: the wrap cast each of them to fp32 at EVERY call
+    (whisper-large-v3-turbo: the fp32 wrap's per-call cast of layer_norm's
+    (1280,) weight and bias, 900 a transcription; the copy census of
+    2026-09-08). A consumer the contract NARROWS still pre-casts its inputs
+    (the narrowing is its output's dtype), so its constants qualify alike.
+    Bound in fp32 once at load, the cast the wrap finds nothing to do, the
+    kernel sees the fp32 pointers every certified row ran it with, and the
+    bytes are those of the per-call cast (the same conversion, once). Returns
+    the names without their `param::` / `buffer::` prefix, as the executor
+    keys its weights. `narrow_op_uids` is accepted for the call sites' symmetry
+    with the contract and does not exclude."""
+    islands = set(fp32_op_uids or ())
+    ops = (dag or {}).get("ops") or {}
+    if isinstance(ops, list):
+        ops = {op.get("op_uid", str(i)): op for i, op in enumerate(ops)}
+    consumers: dict = {}
+    for uid, op in ops.items():
+        for tid in op.get("input_tensor_ids") or []:
+            if tid.startswith("param::") or tid.startswith("buffer::"):
+                name = tid.split("::", 1)[1]
+                consumers.setdefault(name, []).append((uid, op.get("op_type", "")))
+    out = set()
+    for name, uses in consumers.items():
+        ok = True
+        for uid, op_type in uses:
+            short = op_type.split("::")[-1]
+            if not (short in AMP_FP32_OPS or uid in islands):
+                ok = False
+                break
+        if ok:
+            out.add(name)
+    return out
+
+
 class TritonDtypeEngine:
     """AMP-driven dtype engine for triton mode. Zero torch dependency.
 
@@ -434,14 +471,21 @@ class TritonDtypeEngine:
         pinned op makes the wrapper's own policy produce fp32, the same
         thing ATen does for fp32 inputs on the compiled engine. Restored
         after the call, nested-safe."""
+        widens = bool(getattr(func, "_nbx_widens_on_load", False))
         def fp32_func(*args, **kwargs):
             from neurobrix.kernels import wrappers as _w
-            new_args = tuple(
-                a.to(NBXDtype.float32).contiguous()
-                    if _is_float_tensor(a) and _get_nbx_dtype(a) != NBXDtype.float32
-                else (a.contiguous() if hasattr(a, 'contiguous') and hasattr(a, 'is_contiguous') and not a.is_contiguous() else a)
-                for a in args
-            )
+            if widens:
+                # the island holds through the store dtype asked of a wrapper whose kernel
+                # widens its loads: no materialised fp32 input (the copy lever, 2026-09-07)
+                new_args = args
+                kwargs = {**kwargs, "out_dtype": NBXDtype.float32}
+            else:
+                new_args = tuple(
+                    a.to(NBXDtype.float32).contiguous()
+                        if _is_float_tensor(a) and _get_nbx_dtype(a) != NBXDtype.float32
+                    else (a.contiguous() if hasattr(a, 'contiguous') and hasattr(a, 'is_contiguous') and not a.is_contiguous() else a)
+                    for a in args
+                )
             prev = _w.get_compute_dtype()
             _w.set_compute_dtype(NBXDtype.float32)
             try:
@@ -469,8 +513,22 @@ class TritonDtypeEngine:
         still picks up the new value.
         """
         compute = self.compute_dtype
+        widens = bool(getattr(func, "_nbx_widens_on_load", False))
         def cast_back_func(*args, **kwargs):
             from neurobrix.kernels import wrappers as _w
+            if widens:
+                # The wrapper's kernel widens its loads to fp32: no materialised fp32 input.
+                # It STORES fp32, as every certified row ran it — asked to store fp16, the
+                # kernel compiled for an fp16 output pointer schedules its reduction
+                # differently and rounds a rare element one ulp apart (VibeVoice, the final
+                # gate of 2026-09-08: 2 of 75,776 at feat 2048) — so the cast back to the
+                # compute dtype stays the copy it was, exact by construction.
+                result = func(*args, out_dtype=NBXDtype.float32, **kwargs)
+                if ((force_cast_back or _w._NBX_ACTIVATIONS_FP16_SAFE)
+                        and _is_float_tensor(result)
+                        and _get_nbx_dtype(result) != compute):
+                    result = result.to(compute)
+                return result
             new_args = tuple(
                 a.to(NBXDtype.float32).contiguous()
                     if _is_float_tensor(a) and _get_nbx_dtype(a) != NBXDtype.float32

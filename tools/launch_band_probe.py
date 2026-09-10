@@ -17,7 +17,9 @@ to it.
 This measures the two paths on the SAME kernel, same grid, same arguments:
 
   JIT path     kernel[grid](args)      what the collective probe measured
-  direct path  compiled.run(...)       what replay issues
+  direct path  what the replay re-issues for that same launch — the engine's
+               own driver behind the NeuroBrix launcher, or Triton's C launcher
+               on the differential arm (NBX_LAUNCHER=triton)
 
     python3 tools/launch_band_probe.py [--iters 20000]
 """
@@ -62,16 +64,39 @@ def _bump(out_ptr, p0, p1, p2, p3, n, N_SRC: tl.constexpr, BLOCK: tl.constexpr):
     tl.store(out_ptr + offs, acc.to(tl.float16), mask=mask)
 
 
-def _capture_launch(fn):
-    """Capture the CompiledKernel and its final launch tuple.
+def _capture_issue(fn):
+    """Capture what the replay ISSUES for one launch, as a callable to time.
 
-    Intercepted at `CompiledKernel.run`, which is exactly where replay records
-    — so what is timed below is what replay actually issues, not an
-    approximation of it.
+    The engine has two launchers, and the replay records at a different seam in
+    each: with the NeuroBrix launcher (the default since the R33 third peel) it
+    records at `launcher.set_launch_recorder` and re-issues through the engine's
+    own driver; on the differential arm (`NBX_LAUNCHER=triton`) it records at
+    `CompiledKernel.run` and re-issues there. This probe intercepted only the
+    second one, so on the default engine it captured nothing at all and could
+    measure nothing — the same blindness that cost the decode its replay for
+    three days (2026-09-08).
     """
-    from triton.compiler.compiler import CompiledKernel
+    from neurobrix.kernels import launcher as L
 
     grabbed = {}
+    if L.install():                     # False only on the differential arm
+        def _rec(prep, grid, params):
+            grabbed.setdefault("k", (prep, tuple(grid), list(params)))
+        L.set_launch_recorder(_rec)
+        try:
+            fn()
+        finally:
+            L.set_launch_recorder(None)
+        if "k" not in grabbed:
+            return None, None
+        prep, grid, params = grabbed["k"]
+        drv = L.active_driver()
+        return (lambda: drv.launch(prep.function, grid, prep.block, prep.shared,
+                                   0, params),
+                "engine driver (replayed)")
+
+    from triton.compiler.compiler import CompiledKernel
+
     original = CompiledKernel.run
 
     def _prop(self):
@@ -90,7 +115,15 @@ def _capture_launch(fn):
         fn()
     finally:
         CompiledKernel.run = original
-    return grabbed.get("k")
+    if "k" not in grabbed:
+        return None, None
+    ck, g0, g1, g2, stream, function, packed_metadata, vals = grabbed["k"]
+    raw = type(ck).__dict__["run"].__get__(ck) if isinstance(
+        type(ck).__dict__.get("run"), property) else ck.run
+    flat = tuple(int(v.data_ptr()) if hasattr(v, "data_ptr") else v for v in vals)
+    return (lambda: raw(g0, g1, g2, stream, function, packed_metadata,
+                        None, None, None, *flat),
+            "Triton C launcher (replayed)")
 
 
 def main() -> int:
@@ -115,13 +148,10 @@ def main() -> int:
     call()                                     # warm: compile + autotune
     DeviceAllocator.sync_device()
 
-    grabbed = _capture_launch(call)
-    if grabbed is None:
+    issue, path = _capture_issue(call)
+    if issue is None:
         print("could not intercept a launch", file=sys.stderr)
         return 2
-    ck, g0, g1, g2, stream, function, packed_metadata, vals = grabbed
-    raw = type(ck).__dict__["run"].__get__(ck) if isinstance(
-        type(ck).__dict__.get("run"), property) else ck.run
 
     for _ in range(200):
         call()
@@ -132,13 +162,12 @@ def main() -> int:
     DeviceAllocator.sync_device()
     jit_us = (time.perf_counter() - t0) * 1e6 / args.iters
 
-    flat = tuple(int(v.data_ptr()) if hasattr(v, "data_ptr") else v for v in vals)
     for _ in range(200):
-        raw(g0, g1, g2, stream, function, packed_metadata, None, None, None, *flat)
+        issue()
     DeviceAllocator.sync_device()
     t0 = time.perf_counter()
     for _ in range(args.iters):
-        raw(g0, g1, g2, stream, function, packed_metadata, None, None, None, *flat)
+        issue()
     DeviceAllocator.sync_device()
     direct_us = (time.perf_counter() - t0) * 1e6 / args.iters
 
@@ -146,7 +175,7 @@ def main() -> int:
     print("LAUNCH BAND — what plan replay removes")
     print("=" * 74)
     print(f"  JIT dispatch   (issued)  : {jit_us:8.2f} us/launch")
-    print(f"  direct C call  (replayed): {direct_us:8.2f} us/launch")
+    print(f"  {path:24s}: {direct_us:8.2f} us/launch")
     print(f"  removed                  : {jit_us - direct_us:8.2f} us"
           f"   ({jit_us / max(direct_us, 1e-9):.1f}x)")
     print()

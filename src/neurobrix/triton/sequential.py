@@ -52,6 +52,7 @@ class TritonSequentialDispatcher:
         # triton_sequential mode (mirror of compiled mode flag init).
         _w.set_compute_dtype(compute_dtype)
         _w.set_activations_fp16_safe(activations_fp16_safe)
+        _w.begin_run()                      # the per-run caches empty (the step's rotary tables widened once)
 
     def bind_inputs(self, input_map, graph_tensors):
         """Cast component-entry runtime inputs through the dtype engine.

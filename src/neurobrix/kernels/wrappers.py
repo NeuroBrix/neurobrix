@@ -14,6 +14,7 @@ import triton
 
 from .nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, _broadcast_shapes, _set_device, dtype_size
 from .nbx_tensor import DeviceOOMError
+from .nbx_tensor import _upload_int64_array as _nbx_upload_int64, _MAX_NDIM as _NBX_MAX_NDIM, _saturating_cast as _nbx_saturating_cast
 from .ops._configs import sdpa_block_ceiling as _sdpa_block_ceiling
 
 # Route this module's kernel[grid] sites through the engine's launcher.
@@ -105,6 +106,7 @@ from .ops.copy import copy_forward_kernel
 # === Binary element-wise ===
 
 from .ops.add import add_forward_kernel, add_scalar_kernel, add_scalar_dev_kernel, add_bias_broadcast_kernel
+from .ops.binary_strided import add_strided_nd_kernel, mul_strided_nd_kernel, sub_strided_nd_kernel, div_strided_nd_kernel, add_scalar_strided_nd_kernel, mul_scalar_strided_nd_kernel
 from .ops.mul import mul_forward_kernel, mul_scalar_kernel, mul_scalar_dev_kernel
 from .ops.div import div_forward_kernel, div_scalar_kernel, div_scalar_dev_kernel
 from .ops.sub import sub_forward_kernel, rsub_forward_kernel
@@ -267,6 +269,9 @@ from .ops.repeat_interleave import repeat_interleave_tensor_kernel
 # Helper
 # ---------------------------------------------------------------------------
 
+_TL_DTYPE = {NBXDtype.float16: triton.language.float16, NBXDtype.bfloat16: triton.language.bfloat16,
+             NBXDtype.float32: triton.language.float32, NBXDtype.float64: triton.language.float64}
+
 _EW_BLOCK = 1024
 _EW_WARPS = 4
 
@@ -350,6 +355,37 @@ def set_compute_dtype(dt) -> None:
 def get_compute_dtype():
     """Return the active per-component compute dtype, or None if not set."""
     return _NBX_COMPUTE_DTYPE
+
+
+# A run of a Triton sequence (both engines say so at entry, `begin_run`): the
+# caches that live for one run empty here. `_ROPE_TABLES`: the step's rotary
+# tables widened ONCE per run — the graph hands every layer its own view of one
+# base tensor, and each layer widened it again (2 × the layer count a token).
+# Keyed by the base object's identity, held strongly for the run so the id
+# cannot be reused; a later view of another base is another entry; nothing
+# outlives the run (the arena may reuse the base's slot after its last read,
+# and no consumer reads a view of it after that by construction).
+_RUN_EPOCH = 0
+_ROPE_TABLES: dict = {}
+
+
+def begin_run() -> None:
+    """A Triton sequence's run begins: the per-run caches empty."""
+    global _RUN_EPOCH
+    _RUN_EPOCH += 1
+    _ROPE_TABLES.clear()
+
+
+def _widened_once_per_run(t, target):
+    """`t.to(target)` computed once per run for a base tensor and its view geometry."""
+    base = t._base if getattr(t, "_base", None) is not None else t
+    key = (id(base), t.data_ptr(), tuple(t.shape), tuple(t._strides), t.nbx_dtype)
+    hit = _ROPE_TABLES.get(key)
+    if hit is not None and hit[0] is base:
+        return hit[1]
+    widened = t.to(target)
+    _ROPE_TABLES[key] = (base, widened)
+    return widened
 
 
 def set_activations_fp16_safe(safe: bool) -> None:
@@ -558,6 +594,68 @@ def _prepare_binary(a, b):
     _set_device(a)
     output = NBXTensor.empty_like(a)
     return a, b, output, a.numel(), None, False
+
+
+def _prepare_binary_strided(a, b):
+    """The two-tensor case read by strides: (a, b, output, n, shape_buf, a_strides_buf,
+    b_strides_buf, NDIM) with both operands broadcast to the common shape as VIEWS —
+    no `expand(...).contiguous()` transient. Returns (None, a, b) when the flat path
+    applies (both contiguous at the same shape: the flat kernel's indexing is cheaper),
+    with a and b ALREADY aligned in dtype and device so the caller's `_prepare_binary`
+    casts nothing twice (the first form did: 45 casts a token on TinyLlama, 2026-09-08).
+    The dtype cast stays a copy (an in-kernel widen moves the compiler's contraction —
+    the RoPE lesson, 2026-09-07)."""
+    if _is_scalar(a) or _is_scalar(b) or not (hasattr(a, "_dtype") and hasattr(b, "_dtype")):
+        return None, a, b
+    common_dtype = _wider_dtype(a._dtype, b._dtype)
+    if a._dtype != common_dtype:
+        a = a.to(common_dtype)
+    if b._dtype != common_dtype:
+        b = b.to(common_dtype)
+    if hasattr(a, '_device_idx') and hasattr(b, '_device_idx') and a._device_idx != b._device_idx:
+        b = _transfer_to_device(b, a._device_idx)
+    if a.shape == b.shape and a.is_contiguous() and b.is_contiguous():
+        return None, a, b
+    out_shape = _broadcast_shapes(a.shape, b.shape) if a.shape != b.shape else tuple(a.shape)
+    if tuple(a.shape) != tuple(out_shape):
+        a = a.expand(*out_shape)
+    if tuple(b.shape) != tuple(out_shape):
+        b = b.expand(*out_shape)
+    ndim = max(len(out_shape), 1)
+    if ndim > _NBX_MAX_NDIM:
+        return None, a, b
+    shape = tuple(out_shape) or (1,)
+    a_st = tuple(a._strides) or (0,)
+    b_st = tuple(b._strides) or (0,)
+    _set_device(a)
+    output = NBXTensor.empty(tuple(out_shape), a._dtype, f"cuda:{a._device_idx}")
+    n = output.numel()
+    return (a, b, output, n,
+            _nbx_upload_int64(shape, a._device_idx), _nbx_upload_int64(a_st, a._device_idx),
+            _nbx_upload_int64(b_st, a._device_idx), ndim)
+
+
+def _prepare_scalar_strided(a, b):
+    """The tensor-and-host-scalar case with a strided tensor: (tensor, scalar, output, n,
+    shape_buf, strides_buf, NDIM), the tensor read in place by the strided scalar kernel —
+    or None when the flat path applies (a contiguous tensor, or a device-resident 0-d
+    scalar, whose kernel reads it in-register). A chunk of an adaLN vector, `1 + scale` on a
+    (2, 1, 1152) slice of (2, 6, 1152), used to be copied contiguous per modulation."""
+    if _is_scalar(a) and not _is_scalar(b):
+        a, b = b, a
+    if not (_is_scalar(b) and hasattr(a, "_strides")) or a.is_contiguous():
+        return None
+    if isinstance(b, NBXTensor):          # a device-resident 0-d scalar: the *_scalar_dev kernels' path
+        return None
+    ndim = max(a.ndim, 1)
+    if ndim > _NBX_MAX_NDIM:
+        return None
+    shape = tuple(a.shape) or (1,)
+    st = tuple(a._strides) or (0,)
+    _set_device(a)
+    output = NBXTensor.empty(tuple(a.shape), a._dtype, f"cuda:{a._device_idx}")
+    return (a, _to_scalar(b), output, output.numel(),
+            _nbx_upload_int64(shape, a._device_idx), _nbx_upload_int64(st, a._device_idx), ndim)
 
 
 def _prepare_comparison(a, b):
@@ -1050,6 +1148,19 @@ def add(a, b, alpha: float = 1.0) :
             BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
         return output
 
+    sc = _prepare_scalar_strided(a, b)
+    if sc is not None:
+        x, scalar, output, n, shp, x_st, ndim = sc
+        add_scalar_strided_nd_kernel[_1d_grid(n)](x, output, n, float(scalar) * alpha, shp, x_st,
+                                                  BLOCK_SIZE=_EW_BLOCK, NDIM=ndim, num_warps=_EW_WARPS)
+        return output
+    strided = _prepare_binary_strided(a, b)
+    if strided[0] is not None:
+        a, b, output, n, shp, a_st, b_st, ndim = strided
+        add_strided_nd_kernel[_1d_grid(n)](a, b, output, n, alpha, shp, a_st, b_st,
+                                           BLOCK_SIZE=_EW_BLOCK, NDIM=ndim, num_warps=_EW_WARPS)
+        return output
+    _, a, b = strided
     a, b, output, n, dev_ctx, scalar = _prepare_binary(a, b)
     if scalar == "dev":
         add_scalar_dev_kernel[_1d_grid(n)](a, b, output, n, float(alpha), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
@@ -1177,6 +1288,19 @@ def mul(a, b) :
     cr = _complex_mul(a, b)
     if cr is not None:
         return cr
+    sc = _prepare_scalar_strided(a, b)
+    if sc is not None:
+        x, scalar, output, n, shp, x_st, ndim = sc
+        mul_scalar_strided_nd_kernel[_1d_grid(n)](x, output, n, float(scalar), shp, x_st,
+                                                  BLOCK_SIZE=_EW_BLOCK, NDIM=ndim, num_warps=_EW_WARPS)
+        return output
+    strided = _prepare_binary_strided(a, b)
+    if strided[0] is not None:
+        a, b, output, n, shp, a_st, b_st, ndim = strided
+        mul_strided_nd_kernel[_1d_grid(n)](a, b, output, n, shp, a_st, b_st,
+                                           BLOCK_SIZE=_EW_BLOCK, NDIM=ndim, num_warps=_EW_WARPS)
+        return output
+    _, a, b = strided
     a, b, output, n, dev_ctx, scalar = _prepare_binary(a, b)
     if scalar == "dev":
         mul_scalar_dev_kernel[_1d_grid(n)](a, b, output, n, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
@@ -1210,6 +1334,13 @@ def div(a, b, rounding_mode=None) :
         raise RuntimeError(
             f"ZERO FALLBACK: aten::div rounding_mode '{rounding_mode}' "
             "is not a known ATen mode (floor/trunc/None).")
+    strided = _prepare_binary_strided(a, b)
+    if strided[0] is not None:
+        a, b, output, n, shp, a_st, b_st, ndim = strided
+        div_strided_nd_kernel[_1d_grid(n)](a, b, output, n, shp, a_st, b_st,
+                                           BLOCK_SIZE=_EW_BLOCK, NDIM=ndim, num_warps=_EW_WARPS)
+        return output
+    _, a, b = strided
     a, b, output, n, dev_ctx, scalar = _prepare_binary(a, b)
     if scalar == "dev":
         div_scalar_dev_kernel[_1d_grid(n)](a, b, output, n, BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
@@ -1223,6 +1354,13 @@ def div(a, b, rounding_mode=None) :
 def sub(a, b, alpha: float = 1.0) :
     if (isinstance(a, NBXTensor) and a.is_complex()) or (isinstance(b, NBXTensor) and b.is_complex()):
         return _complex_addsub(a, b, alpha, is_sub=True)
+    strided = _prepare_binary_strided(a, b)
+    if strided[0] is not None:
+        a, b, output, n, shp, a_st, b_st, ndim = strided
+        sub_strided_nd_kernel[_1d_grid(n)](a, b, output, n, alpha, shp, a_st, b_st,
+                                           BLOCK_SIZE=_EW_BLOCK, NDIM=ndim, num_warps=_EW_WARPS)
+        return output
+    _, a, b = strided
     a, b, output, n, dev_ctx, scalar = _prepare_binary(a, b)
     if scalar == "dev":
         add_scalar_dev_kernel[_1d_grid(n)](a, b, output, n, -float(alpha), BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS)
@@ -1398,8 +1536,14 @@ def layer_norm_wrapper(x, normalized_shape, weight=None, bias=None, eps=1e-5,
     return out[0] if isinstance(out, (tuple, list)) else out
 
 
-def rms_norm(x, weight, eps=1e-6, epsilon=None):
-    """RMSNorm wrapper.
+def rms_norm(x, weight, eps=1e-6, epsilon=None, out_dtype=None):
+    """RMSNorm wrapper. `out_dtype`: the dtype the output is stored in (default: x's).
+
+    The kernel widens every input load to fp32 and stores in the output buffer's dtype, so a
+    half input needs no materialised fp32 copy before the call and an fp32 output no cast
+    after it: the dtype engine's fp32-internal wrap asks for the output dtype instead (the
+    copy lever, 2026-09-07 — 48 + 48 copies a token on TinyLlama). The rounding at the store
+    is the one the materialised path applied at its cast back.
 
     When `x.contiguous()` materializes a new tensor (input is a strided
     view such as the NHWC permute pattern in DC-AE VAEs), the rms_norm
@@ -1419,13 +1563,14 @@ def rms_norm(x, weight, eps=1e-6, epsilon=None):
 
     x_contig = x.contiguous()
     x_2d = x_contig.view(batch_dim, feat_dim)
-    if x_contig is not x:
+    out_dt = out_dtype if out_dtype is not None else x_2d.nbx_dtype
+    if x_contig is not x and out_dt == x_2d.nbx_dtype:
         # contiguous() allocated a fresh buffer with no other holder —
         # write rms_norm output directly into it (in-place) instead of
         # paying for a second 8 GiB allocation.
         output_2d = x_2d
     else:
-        output_2d = NBXTensor.empty_like(x_2d)
+        output_2d = NBXTensor.empty(x_2d.shape, dtype=out_dt, device=x_2d.device)
 
     has_weight = weight is not None
 
@@ -1439,9 +1584,18 @@ def rms_norm(x, weight, eps=1e-6, epsilon=None):
         output_2d.stride(0), output_2d.stride(1),
         eps,
         scale_by_weight=has_weight,
+        SATURATE_F16=_nbx_saturating_cast(NBXDtype.float32, out_dt),
         num_warps=4,
     )
     return output_2d.view_as(x)
+
+
+# NOT `_nbx_widens_on_load`: the kernel widening an fp16 INPUT on load is another
+# compilation than the fp32 input the certified rows ran it with — 12–15 % of the
+# elements differ at T5's shapes (PixArt-XL-2, the machine-set gate of 2026-09-08),
+# invisible on TinyLlama whose stream reaches rms_norm in fp32. The dtype engine's
+# wrap pre-casts as it always did; `out_dtype` stays for callers that store fp32.
+rms_norm._nbx_widens_on_load = False
 
 
 # ===========================================================================
@@ -1861,22 +2015,27 @@ def mm(a, b, _epilogue: int = 0) :
     if NBX_FORCE_FP32_ACCUM and b_nbx in (NBXDtype.float16, NBXDtype.bfloat16):
         b = b.to(NBXDtype.float32)
         b_nbx = NBXDtype.float32
-    if not _NBX_HAS_NATIVE_BF16 and a_nbx == NBXDtype.float16:
-        a = a.to(NBXDtype.float32)
-        a_nbx = NBXDtype.float32
+    # The fp16 activation is NOT materialised as fp32 any more: the kernels widen it in
+    # registers — matmul_kernel through PROMOTE_A, the GEMV kernels on every load — the same
+    # numbers the copy produced (an exact widening), without the copy per matmul. The store
+    # dtype is decided by _matmul_out_dtype from the hardware gate, as before (fp32 here).
+    promote_a = (not _NBX_HAS_NATIVE_BF16 and a_nbx == NBXDtype.float16)
+    a_eff = NBXDtype.float32 if promote_a else a_nbx      # the dtype the kernel computes a in
 
     # Dtype alignment. Three situations:
     #   1. Same dtype  → no-op.
     #   2. fp32 act × fp16 weight on pre-Ampere → this is the common case
-    #      after step 2. Keep the weight fp16 in memory; the kernel
+    #      (the activation widened in-kernel). Keep the weight fp16 in memory; the kernel
     #      promotes the b tile to fp32 inline via PROMOTE_B. No heap alloc.
     #   3. Anything else (fp32 × bf16, bf16 × fp16, etc.) → widen to the
     #      common dtype. Rare; typically a downstream force_fp32 bmm feeding
     #      the next matmul.
     promote_b = (not _NBX_HAS_NATIVE_BF16
-                 and a_nbx == NBXDtype.float32
+                 and a_eff == NBXDtype.float32
                  and b_nbx == NBXDtype.float16)
-    if a_nbx != b_nbx and not promote_b:
+    if a_eff != b_nbx and not promote_b:
+        if promote_a:                       # widened for real when the pair needs the widest
+            a = a.to(NBXDtype.float32); a_nbx = NBXDtype.float32; promote_a = False
         _order = (NBXDtype.float32, NBXDtype.bfloat16, NBXDtype.float16)
         widest = next(d for d in _order if d in (a_nbx, b_nbx))
         if a_nbx != widest:
@@ -1924,8 +2083,15 @@ def mm(a, b, _epilogue: int = 0) :
         return _apply_matmul_epilogue(c, _epilogue)
 
     a = a.contiguous()
-    b = b.contiguous()
-    out_dtype = _matmul_out_dtype(a, M)
+    # The weight is walked by its own strides: matmul_kernel receives (stride_bk, stride_bn)
+    # and loads the B tile through them, so a pre-transposed weight — the (K, N) stride view of
+    # a (N, K) row-major buffer, stride_bk == 1 — is read in place. Materialising it here copied
+    # the whole model once per prefill (TinyLlama: 154 weights, 2.2 GB, per request — the copy
+    # census of 2026-09-07). Only a broadcast (a zero stride) is materialised: the kernel's
+    # integer analysis assumes every stride positive.
+    if any(st == 0 for st in b.stride()):
+        b = b.contiguous()
+    out_dtype = _matmul_out_dtype(a, M, force_fp32=promote_a)
     c = NBXTensor.empty((M, N), device=f"cuda:{a._device_idx}" if hasattr(a, '_device_idx') else 'cuda',
                         dtype=out_dtype)
     # IEEE mode: force strict fp32 tl.dot on pre-Ampere when we've promoted
@@ -1945,6 +2111,7 @@ def mm(a, b, _epilogue: int = 0) :
         c.stride(0), c.stride(1),
         IEEE_PRECISION=ieee,
         PROMOTE_B=promote_b,
+        PROMOTE_A=promote_a,
         EPILOGUE=_epilogue,
     )
     return c
@@ -2220,28 +2387,38 @@ def addmm(bias, a, b,
     if NBX_FORCE_FP32_ACCUM and b_nbx in (NBXDtype.float16, NBXDtype.bfloat16):
         b = b.to(NBXDtype.float32)
         b_nbx = NBXDtype.float32
-    if not _NBX_HAS_NATIVE_BF16 and a_nbx == NBXDtype.float16:
-        a = a.to(NBXDtype.float32)
-        a_nbx = NBXDtype.float32
+    # The fp16 activation is widened in the kernel's registers (PROMOTE_A, as mm), not
+    # materialised as fp32 per call: PixArt's DiT took a copy of every (8192, 1152)
+    # activation, a copy of every transposed weight and a cast of every bias per linear
+    # (the copy census of 2026-09-07).
+    promote_a = (not _NBX_HAS_NATIVE_BF16 and a_nbx == NBXDtype.float16)
+    a_eff = NBXDtype.float32 if promote_a else a_nbx      # the dtype the kernel computes a in
 
     # Dtype alignment (see mm() for rationale). Same two branches:
     # promote_b keeps fp16 weight fp16 + kernel casts tile inline;
     # otherwise fall back to full widening.
     promote_b = (not _NBX_HAS_NATIVE_BF16
-                 and a_nbx == NBXDtype.float32
+                 and a_eff == NBXDtype.float32
                  and b_nbx == NBXDtype.float16)
-    if a_nbx != b_nbx and not promote_b:
+    if a_eff != b_nbx and not promote_b:
+        if promote_a:                       # widened for real when the pair needs the widest
+            a = a.to(NBXDtype.float32); a_nbx = NBXDtype.float32; promote_a = False
         _order = (NBXDtype.float32, NBXDtype.bfloat16, NBXDtype.float16)
         widest = next(d for d in _order if d in (a_nbx, b_nbx))
         if a_nbx != widest:
             a = a.to(widest)
         if b_nbx != widest:
             b = b.to(widest)
-    # Bias tracks the accumulator dtype — it is added inside the kernel
-    # after tl.dot, so bias must match the activation dtype, not the
-    # (possibly-fp16) weight.
-    if bias.nbx_dtype != a.nbx_dtype:
-        bias = bias.to(a.nbx_dtype)
+        a_eff = a.nbx_dtype
+    # Bias tracks the accumulator dtype — it is added inside the kernel after
+    # tl.dot. A bias narrower than an fp32 accumulator is widened on load
+    # (PROMOTE_BIAS, exact); a bias that would have to be NARROWED to the
+    # activation dtype keeps its cast copy (a rounding the kernel's epilogue
+    # would otherwise apply in another order).
+    promote_bias = (bias.nbx_dtype != a_eff and a_eff == NBXDtype.float32
+                    and bias.nbx_dtype in (NBXDtype.float16, NBXDtype.bfloat16))
+    if bias.nbx_dtype != a_eff and not promote_bias:
+        bias = bias.to(a_eff)
 
     # N-D activation: addmm is strictly 2-D. Flatten the leading dims of `a`
     # ([..., M, K] @ [K, N]), addmm in 2-D, restore the leading shape. Mirror
@@ -2279,9 +2456,12 @@ def addmm(bias, a, b,
         return _apply_matmul_epilogue(c, _epilogue)
 
     a = a.contiguous()
-    b = b.contiguous()
+    # A pre-transposed weight is walked by its strides (as mm); only a broadcast
+    # (stride 0) operand is materialised, the kernel's tile loads need a real address.
+    if any(st == 0 for st in b.stride()):
+        b = b.contiguous()
     bias = bias.contiguous()
-    out_dtype = _matmul_out_dtype(a, M)
+    out_dtype = _matmul_out_dtype(a, M, force_fp32=promote_a)
     c = NBXTensor.empty((M, N), device=a.device, dtype=out_dtype)
     ieee = (not _NBX_HAS_NATIVE_BF16) and (out_dtype == NBXDtype.float32)
     grid = lambda META: (triton.cdiv(M, META['BLOCK_M']) * triton.cdiv(N, META['BLOCK_N']),)
@@ -2294,6 +2474,8 @@ def addmm(bias, a, b,
         alpha, beta,
         IEEE_PRECISION=ieee,
         PROMOTE_B=promote_b,
+        PROMOTE_A=promote_a,
+        PROMOTE_BIAS=promote_bias,
         EPILOGUE=_epilogue,
     )
     return c
@@ -2531,6 +2713,7 @@ def swiglu_fused_wrapper(gate, up):
     return output.view(*orig_shape)
 
 
+
 def rope_fused_wrapper(q_raw, k_raw, cos, sin):
     """Fused RoPE (Liger-style rotate_half) — applies to Q and K in one launch.
 
@@ -2556,12 +2739,23 @@ def rope_fused_wrapper(q_raw, k_raw, cos, sin):
     if sin.ndim == 4 and sin.shape[1] == 1:
         sin = sin.view(sin.shape[0], sin.shape[2], sin.shape[3])
 
-    # Align cos/sin dtype with q/k (kernel computes in cos/sin dtype).
+    # The kernel computes in Q's dtype. A table WIDER than Q (fp32 tables, fp16 Q:
+    # the decode case) is rounded to it on load — round-to-nearest, the stored
+    # cast's conversion; the tables lie in [-1, 1], so the protected fp16 clamp
+    # never applied — and the per-layer cast copy this replaces (TinyLlama: 44 a
+    # token) is gone. A table NARROWER than Q (fp16 tables, fp32 Q: Sana's Gemma-2
+    # encoder) is widened here, once per run (`_widened_once_per_run`). JUSTIFIED
+    # COPY, 2 per run, no longer 2 per layer:
+    # widened on load, the fp32 rotation's fused multiply-add moved with the
+    # convert before it (1 ulp on a sixth of the elements, 2026-09-07), and an
+    # explicit fma matched the fp32 path but not the fp16 one — the arithmetic
+    # stays the plain expression, and the values arrive as they did. K is rotated
+    # in place, so a K of another dtype than Q needs a buffer of Q's dtype.
     target_dt = q_raw.dtype
-    if cos.dtype != target_dt:
-        cos = cos.to(target_dt)
-    if sin.dtype != target_dt:
-        sin = sin.to(target_dt)
+    if _wider_dtype(cos.nbx_dtype, q_raw.nbx_dtype) == q_raw.nbx_dtype and cos.nbx_dtype != q_raw.nbx_dtype:
+        cos = _widened_once_per_run(cos, target_dt)      # once per run, not once per layer
+    if _wider_dtype(sin.nbx_dtype, q_raw.nbx_dtype) == q_raw.nbx_dtype and sin.nbx_dtype != q_raw.nbx_dtype:
+        sin = _widened_once_per_run(sin, target_dt)
     if k_raw.dtype != target_dt:
         k_raw = k_raw.to(target_dt)
 
@@ -3088,11 +3282,29 @@ def index_select_wrapper(x, dim: int, index) :
     inp_shape = list(x.shape)
     index_len = index.numel()
 
-    # dim_compress: move target dim to last
+    # A gather along a middle axis of a contiguous input reads it as (outer, N, inner) and
+    # writes the output in its final layout: no movedim copy, no permute copy (the copy lever,
+    # 2026-09-07). A non-contiguous input is materialised once first — the line that justifies
+    # it: the kernels index a flat buffer.
     if dim != x.ndim - 1:
-        x = x.movedim(dim, -1).contiguous()
-    else:
         x = x.contiguous()
+        N = inp_shape[dim]
+        outer = 1
+        for d_ in inp_shape[:dim]:
+            outer *= d_
+        inner = 1
+        for d_ in inp_shape[dim + 1:]:
+            inner *= d_
+        out_shape = list(inp_shape); out_shape[dim] = index_len
+        out = NBXTensor.empty(out_shape, dtype=x.dtype, device=x.device)
+        total = outer * index_len * inner
+        if total > 0:
+            from .ops.index_select import index_select_mid_kernel
+            BLOCK = 1024
+            _set_device(x)
+            index_select_mid_kernel[(triton.cdiv(total, BLOCK),)](x, out, outer, N, inner, index, index_len, BLOCK=BLOCK)
+        return out
+    x = x.contiguous()
     N = inp_shape[dim]
     M = x.numel() // N
     out_shape = list(x.shape)
@@ -3120,10 +3332,6 @@ def index_select_wrapper(x, dim: int, index) :
             print(f"[INDEX_SELECT_SENTINEL] {_unwritten}/{_o.size} output elements UNWRITTEN "
                   f"(index dtype {index.dtype} len {index_len} min {int(_ix.min())} max {int(_ix.max())} N={N} M={M})", flush=True)
 
-    if dim != x.ndim - 1:
-        order = list(range(out.ndim - 1))
-        order.insert(dim, out.ndim - 1)
-        out = out.permute(order).contiguous()
     return out
 
 
@@ -4375,7 +4583,15 @@ def mv_wrapper(mat, vec) :
     fixed order — no split-K atomics, the GemLite pattern refused).
     """
     import os as _os_mv
-    mat, vec = mat.contiguous(), vec.contiguous()
+    # A wrapper that copies whatever it is given cannot honour a caller that took care not to
+    # give it a copy. The gemv kernels take the matrix's two strides and the vector's one; what
+    # they need is K-contiguous ROWS (stride(1) == 1: the pre-transposed weight layout, where
+    # the loads vectorise) — a matrix whose rows are strided is copied once here and the line
+    # says why; a vector is read through its stride, a broadcast (stride 0) materialised.
+    if mat.stride(1) != 1:
+        mat = mat.contiguous()          # justified: the kernel's rows must be K-contiguous
+    if vec.stride(0) == 0:
+        vec = vec.contiguous()          # justified: a broadcast vector has no stride to walk
     N, M = mat.shape
     out = NBXTensor.empty(N, device=mat.device, dtype=_matmul_out_dtype(mat))
     _set_device(mat)
@@ -7503,7 +7719,7 @@ def _math_attention_chunked(q, k, v, attn_mask, is_causal, scale,
 
 
 def _try_decode_vec(q, k, v, attn_mask, softmax_scale,
-                    batch, nheads, nheads_k, seqlen_k, headdim):
+                    batch, nheads, nheads_k, seqlen_k, headdim, q_round=None):
     """Route guard for the vector decode kernel: returns the output or
     None when the shape/mask is outside the kernel's contract."""
     if headdim != v.shape[3]:
@@ -7515,11 +7731,11 @@ def _try_decode_vec(q, k, v, attn_mask, softmax_scale,
         else:
             return None
     return _decode_attn_vec(q, k, v, bias, softmax_scale,
-                            batch, nheads, nheads_k, seqlen_k, headdim)
+                            batch, nheads, nheads_k, seqlen_k, headdim, q_round=q_round)
 
 
 def _decode_attn_vec(q, k, v, bias, softmax_scale,
-                     batch, nheads, nheads_k, seqlen_k, headdim):
+                     batch, nheads, nheads_k, seqlen_k, headdim, q_round=None):
     """Vector (SIMT) decode attention launch pair — see
     ops/decode_attn_vec.py for the sourced structure (R16 2026-08-23:
     FasterTransformer mmha / vLLM paged v2 / llama.cpp fattn-vec /
@@ -7547,6 +7763,13 @@ def _decode_attn_vec(q, k, v, bias, softmax_scale,
     warps = int(_os_dv.environ.get("NBX_DV_WARPS", "4"))
 
     q2 = q.reshape(BHq, headdim)   # contiguous -> pure view
+    # `q_round`: the dtype the caller asked Q to be read in (the KV cache's);
+    # the kernel rounds Q to it on load and the output is written in it — the
+    # bytes of a cast copy of Q, without the copy.
+    out_dtype = q_round if q_round is not None else q.nbx_dtype
+    q_to = _TL_DTYPE[q_round] if q_round is not None else None
+    q_saturate = (q_round == NBXDtype.float16
+                  and q.nbx_dtype in (NBXDtype.float32, NBXDtype.float64, NBXDtype.bfloat16))
 
     dev = f"cuda:{q._device_idx}"
     opart = NBXTensor.empty((BHq, split, D_v), dtype=NBXDtype.float32,
@@ -7555,7 +7778,7 @@ def _decode_attn_vec(q, k, v, bias, softmax_scale,
                             device=dev)
     lpart = NBXTensor.empty((BHq, split), dtype=NBXDtype.float32,
                             device=dev)
-    out = NBXTensor.empty((BHq, 1, D_v), dtype=q.nbx_dtype, device=dev)
+    out = NBXTensor.empty((BHq, 1, D_v), dtype=out_dtype, device=dev)
 
     _set_device(q)
     if _os_dv.environ.get("NBX_DV_GROUPED", "0") == "1":
@@ -7575,6 +7798,7 @@ def _decode_attn_vec(q, k, v, bias, softmax_scale,
             GQA_GROUPS=groups, BLOCK_N=BLOCK_N, BLOCK_D=BLOCK_D,
             D=headdim, D_V=D_v,
             HAS_BIAS=bias is not None,
+            Q_TO=q_to, Q_SATURATE=q_saturate,
             num_warps=warps, num_stages=1)
     else:
         decode_attn_vec_split_kernel[(BHq, split)](
@@ -7590,6 +7814,7 @@ def _decode_attn_vec(q, k, v, bias, softmax_scale,
             GQA_GROUPS=groups, BLOCK_N=BLOCK_N, BLOCK_D=BLOCK_D,
             D=headdim, D_V=D_v,
             HAS_BIAS=bias is not None,
+            Q_TO=q_to, Q_SATURATE=q_saturate,
             num_warps=warps, num_stages=1)
     # Fixed-order deterministic combine — the EXISTING flash_decode
     # reduce kernel viewed at GROUPS=1 (partials [BHq, split, 1, D_v]).
@@ -7845,11 +8070,23 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     # in profile-less processes where the budget is 0); unset = the
     # kernel is the DEFAULT Tq=1 refinement INSIDE the math route
     # below; "0" = kill switch everywhere.
+    # The KV cache asks for Q in the cache's dtype (`q_dtype_of_kv`): the vector
+    # decode kernel rounds Q to it on load (the stored cast's protected
+    # conversion, then the same fp32 math), so the per-layer cast copy of Q
+    # (TinyLlama: 22 a token) is gone on the decode route; every other route
+    # casts once, here below, where it diverges from the vec kernel.
+    q_round = None                       # an NBXDtype (`.dtype` is the Triton element type)
+    if kwargs.get("q_dtype_of_kv") and q._dtype != k._dtype:
+        q_round = k._dtype
+
+    def _q_cast(t):
+        return t.to(q_round) if (q_round is not None and t._dtype != q_round) else t
+
     if (seqlen_q == 1 and q._device != "cpu"
             and _os_fd.environ.get("NBX_DECODE_VEC", "") == "1"):
         _dv_out = _try_decode_vec(q, k, v, attn_mask, softmax_scale,
                                   batch, nheads, nheads_k, seqlen_k,
-                                  headdim)
+                                  headdim, q_round=q_round)
         if _dv_out is not None:
             return _dv_out
     if (seqlen_q == 1 and q._device != "cpu"
@@ -7864,7 +8101,7 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
                 _fd_ok = False
         if _fd_ok:
             # This opt-in path keeps its measured behavior: flat layout.
-            return _flash_decode(q, k.contiguous(), v.contiguous(),
+            return _flash_decode(_q_cast(q), k.contiguous(), v.contiguous(),
                                  _fd_bias, softmax_scale,
                                  batch, nheads, nheads_k, seqlen_k, headdim)
 
@@ -7873,8 +8110,9 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     # (Sana diffusion hit fp32 Q vs fp16 K here). If they disagree, cast
     # to fp32. For the common LLM case where all three match, this is a
     # no-op — zero overhead.
-    if not (q.dtype == k.dtype == v.dtype):
+    if not ((k.dtype if q_round is not None else q.dtype) == k.dtype == v.dtype):
         q, k, v = q.to(NBXDtype.float32), k.to(NBXDtype.float32), v.to(NBXDtype.float32)
+        q_round = None
 
     # Deterministic-attention routing (P-TRITON-MOE-DETERMINISM-RESIDUAL,
     # Hocine scope decision = option B: hardware + memory-budget, ZERO
@@ -8019,7 +8257,7 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
                   f"profile={'None' if _pr is None else getattr(_pr,'vendor','?')+'/'+(getattr(_dv[0],'architecture','?') if _dv else '?')} "
                   f"use_math={_use_math}", flush=True)
     if _use_math == "chunked":
-        return _math_attention_chunked(q, k, v, attn_mask, is_causal,
+        return _math_attention_chunked(_q_cast(q), k, v, attn_mask, is_causal,
                                        softmax_scale, _chunk_rows)
     if _use_math:
         # ---- VECTOR (SIMT) DECODE ATTENTION — DEFAULT on the math
@@ -8041,15 +8279,16 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
                 and _os_fd.environ.get("NBX_DECODE_VEC", "") != "0"):
             _dv_out = _try_decode_vec(q, k, v, attn_mask, softmax_scale,
                                       batch, nheads, nheads_k,
-                                      seqlen_k, headdim)
+                                      seqlen_k, headdim, q_round=q_round)
             if _dv_out is not None:
                 return _dv_out
-        return _math_attention(q, k, v, attn_mask=attn_mask,
+        return _math_attention(_q_cast(q), k, v, attn_mask=attn_mask,
                                 is_causal=is_causal, scale=softmax_scale)
 
     # Flash path from here on: flat-indexed kernel — materialise the K/V
     # views that the math path above consumes strided (see the entry
     # comment). Contiguous tensors short-circuit at zero cost.
+    q = _q_cast(q)
     k = k.contiguous()
     v = v.contiguous()
 

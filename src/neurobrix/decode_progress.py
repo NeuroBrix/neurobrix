@@ -22,7 +22,9 @@ Doctrine notes:
     a getattr + None-check, zero hot-path cost when unused.
 """
 
+import os
 import threading
+import time
 from typing import Callable, Optional
 
 # Listener signature: fn(step_idx, n_generated, token_id, is_done) -> None
@@ -46,3 +48,26 @@ def emit(step_idx: int, n_generated: int, token_id: int, is_done: bool) -> None:
     fn: Optional[TokenListener] = getattr(_local, "listener", None)
     if fn is not None:
         fn(step_idx, n_generated, token_id, is_done)
+
+
+def record(step_idx: int, n_generated: int, token_id: int, is_done: bool) -> None:
+    """One per-token decode event on BOTH channels: the buffer-immune
+    `NBX_DECODE_PROGRESS` file (src/neurobrix/CLAUDE.md section 8) and the
+    in-process listener above.
+
+    A flow that keeps its own decode loop calls this instead of writing the line
+    itself, so every flow's trajectory has one shape and one site. The
+    autoregressive and encoder_decoder flows emit their trajectory; the audio_llm
+    flow kept its own loop and emitted none, so a decode rate could not be measured
+    on any audio row at all (2026-09-08) — the harness saw a run that succeeded and
+    left no trajectory, and reported no rate.
+
+    Observability only: no numerical effect, default-off for the file, and a getattr
+    plus a None test when nobody listens.
+    """
+    path = os.environ.get("NBX_DECODE_PROGRESS")
+    if path:
+        with open(path, "a") as pf:
+            pf.write(f"t={time.time():.3f} step={step_idx} "
+                     f"n={n_generated} last={token_id} done={is_done}\n")
+    emit(step_idx, n_generated, token_id, is_done)

@@ -202,3 +202,41 @@ def test_a_certified_setting_overrides_what_the_local_cache_seeded(root):
     assert t.cache[KEY].kwargs == {"BLOCK_M": 64, "BLOCK_N": 128, "BLOCK_K": 32, "GROUP_M": 8}
     assert t.cache[("other",)] is not None and t.cache[("other",)].kwargs["BLOCK_M"] == 32
     assert C.served() == {"certified": 1, "swept": 0, "local": 1}
+
+
+def test_an_operand_widened_on_load_is_keyed_by_the_dtype_it_is_computed_in(root):
+    """The directory certified the matmul with the activation widened IN MEMORY
+    (`fp32,fp16,fp32`). Since the activation is widened in the kernel's registers
+    (PROMOTE_A), its memory dtype reads fp16 in the tuner's key; the computation is the
+    same and so is the setting: the entry is served at the fp32-tagged key and cached
+    at the tuner's own. Without the flag (a card computing fp16 × fp16) nothing is
+    borrowed: that is another computation."""
+    _write(root, {C.key_repr(KEY): _entry()})
+    t = _Tuner()
+    memory_key = (1500, 1280, 1280, True, True, "fp16", "fp16", "fp32")
+    assert C.apply(KERNEL, t, memory_key) is False
+    twin = C.computed_key(t, memory_key, {"PROMOTE_A": True})
+    assert twin == KEY
+    assert C.apply(KERNEL, t, memory_key, lookup_key=twin) is True
+    assert memory_key in t.cache and t.cache[memory_key].kwargs["BLOCK_N"] == 128
+    assert C.computed_key(t, memory_key, {"PROMOTE_A": False}) is None
+    assert C.computed_key(t, memory_key, {}) is None
+
+
+def test_the_replay_cache_key_of_a_widened_operand_is_overridden_by_its_certified_twin(root, monkeypatch):
+    """At load the local replay cache seeds the memory-dtype key of a matmul whose activation
+    is widened on load; with no call at hand the flags are read from the profile's rule (no
+    native bf16 → the narrow activation computes in fp32) and the certified twin overrides it."""
+    from neurobrix.kernels import wrappers as W
+    monkeypatch.setattr(W, "_NBX_HAS_NATIVE_BF16", False)
+    _write(root, {C.key_repr(KEY): _entry()})
+    t = _Tuner(); t.arg_names = t.arg_names + ["PROMOTE_A"]
+    memory_key = (1500, 1280, 1280, True, True, "fp16", "fp16", "fp32")
+    import triton
+    t.cache[memory_key] = triton.Config({"BLOCK_M": 32, "BLOCK_N": 32, "BLOCK_K": 32, "GROUP_M": 8}, num_warps=2, num_stages=2)
+    assert C.override_seeded([(KERNEL, t)]) == 1
+    assert t.cache[memory_key].kwargs["BLOCK_N"] == 128
+    monkeypatch.setattr(W, "_NBX_HAS_NATIVE_BF16", True)       # fp16 × fp16 computes in fp16: another computation
+    t2 = _Tuner(); t2.arg_names = t.arg_names
+    t2.cache[memory_key] = triton.Config({"BLOCK_M": 32, "BLOCK_N": 32, "BLOCK_K": 32, "GROUP_M": 8}, num_warps=2, num_stages=2)
+    assert C.override_seeded([(KERNEL, t2)]) == 0
