@@ -572,6 +572,10 @@ generation.
   stated reason is returned by the download API.
 
 ### Fixed
+- An audio-LLM request's own token budget is honoured instead of the container's default.
+  A long recording needs several thousand tokens and the default capped the transcript,
+  truncating it without a word. Both engines now read the request first and the container
+  after, the same order the text generator already used.
 
 - **Serve time-to-first-token no longer pays a per-request graph reload.**
   Every generation request re-read and re-parsed the model's graph
@@ -596,6 +600,13 @@ generation.
   bound (index-put also accepts negative indices, as PyTorch does) and
   the next device sync raises with the kernel line and the message
   `index out of range`.
+- **Long recordings are transcribed in full by the audio language models
+  of the Voxtral class, on both engines.** The audio-to-text flow used to
+  keep only the first 30 seconds of a recording (the encoder's window).
+  It now runs every 30-second window through the encoder and feeds the
+  language model all of them at once, the way the model's own processor
+  does, so a 10-minute recording yields the whole transcript. Recordings
+  that fit one window take exactly the path they took before.
 - **`--triton` gathers now honour negative indices like PyTorch.** The
   index-select kernel treated a negative index as invalid and left the
   corresponding output element unwritten, so it held whatever the
