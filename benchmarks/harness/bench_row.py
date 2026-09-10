@@ -61,6 +61,9 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
+from rig_devices import visible_card          # noqa: E402  (path set just above)
+
 BASE_ENV = {
     "NBX_TRITON_REPLAY": "1",
     "NBX_REPLAY_KV_DECODE": "1",
@@ -158,6 +161,13 @@ def check_exclusive() -> None:
 
 
 def rate_from_progress(path: str, warm: int):
+    # A run can succeed and leave no trajectory: the per-token decode progress is emitted by the
+    # autoregressive and encoder_decoder flows, and the audio_llm flow keeps its own decode loop
+    # and writes none (2026-09-08). The harness says so and reports no rate; it does not die on
+    # a missing diagnostic file — the row's other arms and the campaign behind it deserve better.
+    if not os.path.exists(path):
+        print(f"  no decode trajectory at {path} — this flow does not emit one; no rate", flush=True)
+        return None
     ts = []
     for line in open(path):
         m = re.search(r"t=([0-9.]+)", line)
@@ -176,22 +186,30 @@ def run_once(args, arm_env: dict, tag: str, outdir: Path) -> dict:
     env = dict(os.environ)
     env.update(BASE_ENV)
     env.update(arm_env)
-    env["CUDA_VISIBLE_DEVICES"] = args.gpu
+    env["CUDA_VISIBLE_DEVICES"] = _phys_gpu(args)
     env["NBX_DECODE_PROGRESS"] = str(prog)
     # Engine selector (hub-benchmark S1): ARM_ENGINE=compiled runs the
     # PyTorch/compiled branch (no --triton flag); default stays the
     # triton branch. Mirrors the existing ARM_ENGINE=ollama pattern.
     cmd = ["python3", "-u", "-m", "neurobrix", "run",
            "--hardware", args.hardware, "--model", args.model,
+           # A family that listens takes its audio beside the prompt: the decode rate of an
+           # audio_llm row is a text rate like any other, and the harness could not measure one
+           # (2026-09-08). The file is the caller's; nothing is assumed from the family.
+           *(["--audio", args.audio] if args.audio else []),
            "--prompt", args.prompt, "--max-tokens", str(args.max_tokens),
-           "--temperature", args.temperature,
+           # An empty --temperature omits the flag: a family whose sampling contract is the
+           # model's own refuses an explicit one (an audio_llm's top_k becomes an "explicit"
+           # parameter and the path stops), which is why the campaign's bound for that family
+           # names the token budget alone.
+           *(["--temperature", args.temperature] if args.temperature else []),
            "--output", str(outdir / f"out_{tag}.txt")]
     if arm_env.get("ARM_ENGINE") != "compiled":
         cmd.insert(-2, "--triton")
-    before = gpu_state(args.gpu)
+    before = gpu_state(_phys_gpu(args))
     t0 = time.time()
     if args.lock_clock:
-        with ClockWatch(args.gpu, args.lock_clock) as watch:
+        with ClockWatch(_phys_gpu(args), args.lock_clock) as watch:
             r = subprocess.run(
                 cmd, env=env, capture_output=True, text=True, timeout=2400)
         if watch.violations:
@@ -205,8 +223,16 @@ def run_once(args, arm_env: dict, tag: str, outdir: Path) -> dict:
         r = subprocess.run(
             cmd, env=env, capture_output=True, text=True, timeout=2400)
     wall = time.time() - t0
-    after = gpu_state(args.gpu)
+    after = gpu_state(_phys_gpu(args))
     rate = rate_from_progress(str(prog), args.warm) if r.returncode == 0 else None
+    if r.returncode != 0:
+        # A rep that failed keeps its reason beside the row: without it a hole in the table says
+        # only "not measured" and the next campaign repeats the run to find out (TinyLlama's
+        # long-context row, 2026-09-08, whose 2,048-token window the prompt overflowed).
+        why = (r.stdout or "") + (r.stderr or "")
+        (outdir / f"why_{tag}.log").write_text(why[-4000:])
+        print(f"  {tag} FAILED rc={r.returncode}: " +
+              next((l for l in reversed(why.splitlines()) if l.strip()), "no output")[:200], flush=True)
     sha = ""
     op = outdir / f"out_{tag}.txt"
     if op.exists():
@@ -262,10 +288,10 @@ def run_once_ollama(args, arm_env: dict, tag: str, outdir: Path) -> dict:
         "options": {"temperature": float(args.temperature),
                     "num_predict": args.max_tokens, "seed": 1234},
     }).encode()
-    before = gpu_state(args.gpu)
+    before = gpu_state(_phys_gpu(args))
     t0 = time.time()
     if args.lock_clock:
-        with ClockWatch(args.gpu, args.lock_clock) as watch:
+        with ClockWatch(_phys_gpu(args), args.lock_clock) as watch:
             with urllib.request.urlopen(
                     urllib.request.Request(
                         url, data=body,
@@ -285,7 +311,7 @@ def run_once_ollama(args, arm_env: dict, tag: str, outdir: Path) -> dict:
                 timeout=2400) as resp:
             r = _json.loads(resp.read())
     wall = time.time() - t0
-    after = gpu_state(args.gpu)
+    after = gpu_state(_phys_gpu(args))
     text = r.get("response", "")
     (outdir / f"out_{tag}.txt").write_text(text)
     import hashlib
@@ -301,7 +327,7 @@ def run_once_ollama(args, arm_env: dict, tag: str, outdir: Path) -> dict:
                "prompt_eval_duration_ns": r.get("prompt_eval_duration"),
                "load_duration_ns": r.get("load_duration"),
                "total_duration_ns": r.get("total_duration")}}
-    _wait_gpu_free(args.gpu)
+    _wait_gpu_free(_phys_gpu(args))
     return rec
 
 
@@ -342,9 +368,9 @@ print("VLLM_RESULT " + json.dumps({
     prompt_file.write_text(args.prompt)
     env = dict(os.environ)
     env.update(arm_env)
-    env["CUDA_VISIBLE_DEVICES"] = args.gpu
+    env["CUDA_VISIBLE_DEVICES"] = _phys_gpu(args)
     env.setdefault("VLLM_ATTENTION_BACKEND", "XFORMERS")
-    before = gpu_state(args.gpu)
+    before = gpu_state(_phys_gpu(args))
     t0 = time.time()
 
     def _run():
@@ -354,7 +380,7 @@ print("VLLM_RESULT " + json.dumps({
             env=env, capture_output=True, text=True, timeout=2400)
 
     if args.lock_clock:
-        with ClockWatch(args.gpu, args.lock_clock) as watch:
+        with ClockWatch(_phys_gpu(args), args.lock_clock) as watch:
             r = _run()
         if watch.violations:
             raise SystemExit(
@@ -363,7 +389,7 @@ print("VLLM_RESULT " + json.dumps({
     else:
         r = _run()
     wall = time.time() - t0
-    after = gpu_state(args.gpu)
+    after = gpu_state(_phys_gpu(args))
     rate, sha, vres = None, "", {}
     for line in (r.stdout or "").splitlines():
         if line.startswith("VLLM_RESULT "):
@@ -377,13 +403,28 @@ print("VLLM_RESULT " + json.dumps({
             "gpu_before": before, "gpu_after": after}
 
 
+
+def _phys_gpu(args) -> str:
+    """The real card this row runs on, resolved through any pin we inherited.
+
+    Cached on the namespace so the child's env, `gpu_state`, `ClockWatch` and
+    `_wait_gpu_free` all speak about the SAME card. nvidia-smi takes real
+    indices whatever the pin, so a row that resolved its child but not its
+    watcher would lock the clock of a card it is not computing on.
+    """
+    if getattr(args, "_phys", None) is None:
+        args._phys = visible_card(args.gpu)
+    return args._phys
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True)
     ap.add_argument("--prompt")
+    ap.add_argument("--audio", help="a media file the family requires beside the prompt (audio_llm)")
     ap.add_argument("--prompt-file")
     ap.add_argument("--max-tokens", type=int, default=60)
-    ap.add_argument("--temperature", default="0")
+    ap.add_argument("--temperature", default="0", help="empty omits the flag (a family whose sampling contract is the model's own)")
     ap.add_argument("--gpu", default="2")
     ap.add_argument("--hardware", default="v100-32g")
     ap.add_argument("--reps", type=int, default=5)
@@ -414,8 +455,8 @@ def main() -> int:
     # report fields only (thermal clause revoked 2026-09-02; never a
     # scheduling constraint).
     campaign_start_utc = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime())
-    start_state = gpu_state(args.gpu)
-    print(f"  campaign start {campaign_start_utc}  GPU {args.gpu} "
+    start_state = gpu_state(_phys_gpu(args))
+    print(f"  campaign start {campaign_start_utc}  GPU {_phys_gpu(args)} "
           f"T={start_state.get('temp_c', '?')}C "
           f"clk={start_state.get('sm_clock', '?')} "
           f"persistence={start_state.get('persistence', '?')}", flush=True)
@@ -430,8 +471,8 @@ def main() -> int:
         arms.append((name, env))
 
     if args.lock_clock:
-        lock_clocks(args.gpu, args.lock_clock)
-        print(f"  clocks LOCKED at {args.lock_clock} MHz (GPU {args.gpu})",
+        lock_clocks(_phys_gpu(args), args.lock_clock)
+        print(f"  clocks LOCKED at {args.lock_clock} MHz (GPU {_phys_gpu(args)})",
               flush=True)
     results = {name: [] for name, _ in arms}
     try:
@@ -450,8 +491,8 @@ def main() -> int:
                       f"T={res['gpu_after'].get('temp_c', '?')}C", flush=True)
     finally:
         if args.lock_clock:
-            unlock_clocks(args.gpu)
-            print(f"  clocks unlocked (GPU {args.gpu})", flush=True)
+            unlock_clocks(_phys_gpu(args))
+            print(f"  clocks unlocked (GPU {_phys_gpu(args)})", flush=True)
 
     report = {"model": args.model, "max_tokens": args.max_tokens,
               "prompt_sha": __import__("hashlib").sha256(
@@ -463,7 +504,7 @@ def main() -> int:
                   "end_utc": time.strftime("%Y-%m-%d %H:%M UTC",
                                            time.gmtime()),
                   "gpu_start": start_state,
-                  "gpu_end": gpu_state(args.gpu)},
+                  "gpu_end": gpu_state(_phys_gpu(args))},
               "arms": {}}
     print(f"\ncampaign {campaign_start_utc} -> "
           f"{report['campaign']['end_utc']}  "

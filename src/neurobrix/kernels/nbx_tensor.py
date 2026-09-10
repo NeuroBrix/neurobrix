@@ -502,6 +502,8 @@ class DeviceAllocator:
     _cuda_live_bytes: Dict[int, int] = {}            # device_idx -> live
     _cuda_peak_bytes: Dict[int, int] = {}            # device_idx -> peak
     _cuda_ptr_size: Dict[int, int] = {}              # ptr -> nbytes (for free accounting)
+    _range_bases: list = []                          # live allocation bases, sorted (holds())
+    _range_size: dict = {}                           # base -> bytes, mirrors the two size tables
     _cuda_ptr_device: Dict[int, int] = {}            # ptr -> device_idx (REQUIRED for cudaFreeAsync correctness)
 
     # Which generation of the device runtime issued a pointer.
@@ -739,6 +741,7 @@ class DeviceAllocator:
                 # Caller stores `sz` (the actual alloc) in _pool_alloc_size
                 # so free() returns the correct size to the pool.
                 DeviceAllocator._pool_alloc_size[ptr] = sz
+                DeviceAllocator._range_add(ptr, sz)
                 st["fit"] += 1
                 slack = sz - nbytes
                 st["slack_total"] += slack
@@ -798,6 +801,7 @@ class DeviceAllocator:
                 getattr(rt, backend["free"])(ctypes.c_void_p(p))
                 DeviceAllocator._pool_alloc_size.pop(p, None)
                 DeviceAllocator._cuda_ptr_size.pop(p, None)
+                DeviceAllocator._range_del(p)
                 DeviceAllocator._cuda_ptr_device.pop(p, None)
                 live = DeviceAllocator._cuda_live_bytes.get(dev, 0) - sz
                 DeviceAllocator._cuda_live_bytes[dev] = max(0, live)
@@ -832,6 +836,7 @@ class DeviceAllocator:
                     getattr(rt, backend["free"])(ctypes.c_void_p(p))
                     DeviceAllocator._pool_alloc_size.pop(p, None)
                     DeviceAllocator._cuda_ptr_size.pop(p, None)
+                    DeviceAllocator._range_del(p)
                     DeviceAllocator._cuda_ptr_device.pop(p, None)
                     live = DeviceAllocator._cuda_live_bytes.get(d, 0) - sz
                     DeviceAllocator._cuda_live_bytes[d] = max(0, live)
@@ -907,6 +912,7 @@ class DeviceAllocator:
                 # populated _pool_alloc_size with the bigger size.
                 actual = DeviceAllocator._pool_alloc_size.pop(ptr, nbytes)
                 DeviceAllocator._cuda_ptr_size[ptr] = actual
+                DeviceAllocator._range_add(ptr, actual)
                 DeviceAllocator._cuda_ptr_device[ptr] = dev
                 DeviceAllocator._cuda_ptr_epoch[ptr] = DeviceAllocator._alloc_epoch
                 if _MALLOC_TRACE_FILE is not None:
@@ -998,6 +1004,7 @@ class DeviceAllocator:
                 f"driver_total={driver_total/1024/1024:.0f}MB]")
         p = ptr_obj.value or 0
         DeviceAllocator._cuda_ptr_size[p] = nbytes
+        DeviceAllocator._range_add(p, nbytes)
         DeviceAllocator._cuda_ptr_device[p] = dev
         DeviceAllocator._cuda_ptr_epoch[p] = DeviceAllocator._alloc_epoch
         live = DeviceAllocator._cuda_live_bytes.get(dev, 0) + nbytes
@@ -1095,6 +1102,7 @@ class DeviceAllocator:
                   f"dev={alloc_dev} — sticky async error surfaced at "
                   f"this free; the fault is at or before it.", flush=True)
         nbytes = DeviceAllocator._cuda_ptr_size.pop(ptr, None)
+        DeviceAllocator._range_del(ptr)
         if _MALLOC_TRACE_FILE is not None and nbytes is not None:
             _record_free_site(ptr, nbytes)
         if nbytes is not None:
@@ -1139,6 +1147,7 @@ class DeviceAllocator:
                 f"Host pinned malloc failed (error {ret}) for {nbytes} bytes")
         p = ptr.value or 0
         DeviceAllocator._host_pinned_ptr_size[p] = nbytes
+        DeviceAllocator._range_add(p, nbytes)      # device-mapped (UVA): a kernel may read it, so holds() knows it
         DeviceAllocator._host_pinned_live_bytes += nbytes
         if DeviceAllocator._host_pinned_live_bytes > DeviceAllocator._host_pinned_peak_bytes:
             DeviceAllocator._host_pinned_peak_bytes = DeviceAllocator._host_pinned_live_bytes
@@ -1154,6 +1163,7 @@ class DeviceAllocator:
                 return
             getattr(rt, fn_name)(ctypes.c_void_p(ptr))
             nbytes = DeviceAllocator._host_pinned_ptr_size.pop(ptr, None)
+            DeviceAllocator._range_del(ptr)
             if nbytes is not None:
                 DeviceAllocator._host_pinned_live_bytes -= nbytes
 
@@ -1403,6 +1413,41 @@ class DeviceAllocator:
         if fn_name is None:
             return
         getattr(rt, fn_name)(ctypes.c_void_p(stream))
+
+    @staticmethod
+    def holds(ptr: int) -> bool:
+        """True when `ptr` lies inside a live device allocation this allocator
+        handed out (a block's base, or a view inside it). The launcher asks
+        before dispatching a kernel on an address: a foreign pointer is
+        refused, never launched (launcher contract, Metal chantier 2026-09-05).
+        O(log n): the live ranges are re-sorted only when a registration
+        changed since the last call."""
+        ptr = int(ptr)
+        size = DeviceAllocator._range_size.get(ptr)
+        if size is not None:
+            return True
+        import bisect
+        bases = DeviceAllocator._range_bases
+        i = bisect.bisect_right(bases, ptr) - 1
+        return i >= 0 and bases[i] <= ptr < bases[i] + DeviceAllocator._range_size[bases[i]]
+
+    @staticmethod
+    def _range_add(base: int, nbytes: int) -> None:
+        """Register a live range for `holds()` — O(log n) insert, kept sorted
+        so a launch pays one bisect and never a re-sort."""
+        if base not in DeviceAllocator._range_size:
+            import bisect
+            bisect.insort(DeviceAllocator._range_bases, base)
+        DeviceAllocator._range_size[base] = int(nbytes)
+
+    @staticmethod
+    def _range_del(base: int) -> None:
+        if DeviceAllocator._range_size.pop(base, None) is not None:
+            import bisect
+            bases = DeviceAllocator._range_bases
+            i = bisect.bisect_left(bases, base)
+            if i < len(bases) and bases[i] == base:
+                bases.pop(i)
 
     @staticmethod
     def device_synchronize(device_idx: Optional[int] = None):

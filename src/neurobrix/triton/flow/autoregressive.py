@@ -117,10 +117,7 @@ class TritonAutoregressiveHandler:
         # --seed had NO effect on triton AR sampling (text or image):
         # triton vs triton_sequential produced different tokens at the
         # same seed. Seedless runs keep the unseeded fallback.
-        from neurobrix.kernels import rng_stream
-        _ov = self.ctx.variable_resolver.resolved
-        rng_stream.set_run_seed(
-            _ov.get("global.seed", self.ctx.pkg.defaults.get("seed")))
+        # The run's random stream is armed by RuntimeExecutor.execute() for every flow.
 
         # Serve TTFT reconciliation instrument (NBX_PHASE_TRACE=1): one
         # stamp per phase boundary; the prefill stamp waits for the GPU.

@@ -328,6 +328,14 @@ class TritonSequence:
         self._const_fold_plan: Optional[Dict[str, Any]] = None
         self._const_fold_sig: Optional[tuple] = None
 
+    def set_precision_contract(self, safe: bool, fp32_op_uids=(), narrow_op_uids=()) -> None:
+        """The component's precision contract — the flag AND the per-op
+        islands of the calibration record (the same sets the compiled
+        engine honours; D-PRECISION-CONTRACT-TRITON-PARITY closed 2026-09-06).
+        Set after construction, before compile()."""
+        self.set_activations_fp16_safe(safe)
+        self._dtype_engine.set_precision_contract(safe, fp32_op_uids, narrow_op_uids)
+
     def set_activations_fp16_safe(self, safe: bool) -> None:
         """Set the per-component activations_fp16_safe opt-in flag.
 
@@ -1854,12 +1862,14 @@ class TritonSequence:
             func = self._op_uid_interceptors[op_uid]
             if not getattr(func, 'self_manages_dtype', getattr(getattr(func, '__func__', None), 'self_manages_dtype', False)):
                 bare_name = op_type.split("::")[-1] if "::" in op_type else op_type
-                func = self._dtype_engine.wrap_op(bare_name, func)
+                func = self._dtype_engine.wrap_op(bare_name, func, op_uid=op_uid,
+                                                  op_record=op_data)
         elif op_type in self._op_interceptors:
             func = self._op_interceptors[op_type]
             if not getattr(func, 'self_manages_dtype', getattr(getattr(func, '__func__', None), 'self_manages_dtype', False)):
                 bare_name = op_type.split("::")[-1] if "::" in op_type else op_type
-                func = self._dtype_engine.wrap_op(bare_name, func)
+                func = self._dtype_engine.wrap_op(bare_name, func, op_uid=op_uid,
+                                                  op_record=op_data)
         else:
             func = dispatch(op_type)
             if func is None:
@@ -1869,7 +1879,16 @@ class TritonSequence:
             from neurobrix.kernels.classification import canonical_aten
             bare_name = op_type.split("::")[-1] if "::" in op_type else op_type
             bare_name = canonical_aten(bare_name)
-            func = self._dtype_engine.wrap_op(bare_name, func)
+            func = self._dtype_engine.wrap_op(bare_name, func, op_uid=op_uid,
+                                              op_record=op_data)
+
+        # The graph's recorded K layout for attention ops travels with the
+        # call rather than being re-derived from shapes: at seq_len ==
+        # head_dim the two layouts are the same shape and the derivation
+        # silently picked the wrong one (GraphExecutor._mark_sdpa_k_layout).
+        if op_type in self._SDPA_OP_TYPES and "nbx_k_pre_transposed" in attrs:
+            self._sdpa_k_layout[op_uid] = bool(attrs["nbx_k_pre_transposed"])
+            func = self._bind_sdpa_layout(op_uid, func)
 
         # The graph's recorded K layout for attention ops travels with the
         # call rather than being re-derived from shapes: at seq_len ==
@@ -2957,6 +2976,12 @@ class TritonSequence:
                 self._run_multi_device(skip_kills, pre_op_callback)
             else:
                 self._run_single_device(skip_kills, pre_op_callback)
+            # Precision calibration: one pass of this component is complete
+            # (the Triton engine's census — the ATen loop counts its own).
+            from neurobrix.core.dtype import calibration as _cal_pass
+            _census_pass = _cal_pass.active_census(self.dag.get("component_name"))
+            if _census_pass is not None:
+                _census_pass.pass_done()
         finally:
             _w.set_compute_dtype(_prev_dt)
             _w.set_activations_fp16_safe(_prev_safe)
@@ -3339,6 +3364,8 @@ class TritonSequence:
         _wm_path = os.environ.get("NBX_LIVE_WATERMARK_TRACE", "")
         _trace_nan_on = os.environ.get("NBX_TRITON_TRACE_NAN") == "1"
         _fp_path = os.environ.get("NBX_OP_FINGERPRINT", "")
+        from neurobrix.core.dtype import calibration as _cal_census
+        _census = _cal_census.active_census(self.dag.get("component_name"))
         _dump_tids_env = os.environ.get("NBX_DUMP_TIDS")
         if _dump_tids_env:
             self._dump_pass = getattr(self, "_dump_pass", -1) + 1   # NBX_DUMP_TIDS_PASS counter
@@ -3918,6 +3945,9 @@ class TritonSequence:
                 self._maybe_dump_tid(op, _dump_tids_env)
             if _dump_raw_on and op.output_slots:
                 self._maybe_dump_raw(op)
+            if _census is not None and op.output_slots:
+                for _slot in op.output_slots:      # the precision census on the Triton engine
+                    _census.observe(op.op_uid, self._arena[_slot] if self._arena else None)
             # =============================================================
 
             # === Targeted tid lifecycle trace (P-SANA-4KPX-RUNTIME) ===
@@ -4131,6 +4161,8 @@ class TritonSequence:
         # of the per-op hot loop — read ONCE per run (same gate
         # semantics; env changes mid-run no longer apply).
         _dtids = os.environ.get("NBX_DUMP_TIDS")
+        from neurobrix.core.dtype import calibration as _cal_census
+        _census = _cal_census.active_census(self.dag.get("component_name"))
         if _dtids:
             self._dump_pass = getattr(self, "_dump_pass", -1) + 1   # NBX_DUMP_TIDS_PASS counter
         _fp_path_md = os.environ.get("NBX_OP_FINGERPRINT", "")
@@ -4236,6 +4268,9 @@ class TritonSequence:
             # Gate hoisted to run start (C1).
             if _dtids and op.output_slots:
                 self._maybe_dump_tid(op, _dtids)
+            if _census is not None and op.output_slots:
+                for _slot in op.output_slots:
+                    _census.observe(op.op_uid, self._arena[_slot] if self._arena else None)
             # ===========================================
 
             # === NBX_OP_FINGERPRINT (multi-device branch) ===

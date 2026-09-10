@@ -206,6 +206,58 @@ class NextTokenDiffusionEngine(FlowHandler):
                      self.ACOUSTIC_CONN, self.SEMANTIC_CONN):
             self._ensure_weights_loaded(comp)
 
+        import os as _os_ntd
+        gen = (self._generate_reprefill if _os_ntd.environ.get("NBX_NTD_REPREFILL") == "1"
+               else self._generate_kv)
+        emitted_tokens, audio_chunks, n_diffusion, step, _vv_latents, start = gen(
+            prompt_ids, speech_start_id, speech_end_id, speech_diffusion_id, eos_token_id,
+            valid_token_ids, max_steps, ddpm_steps, cfg_scale, vae_dim, defaults, scaling, bias,
+            dtype, device, diffusion_gen)
+        _vv_dump_path = _os_ntd.environ.get("NBX_VV_DUMP_LATENTS", "")
+        elapsed = (time.perf_counter() - start) * 1000
+        if _vv_dump_path and _vv_latents:
+            _np_vv.save(_vv_dump_path, _np_vv.stack(_vv_latents))
+            print(f"   [VV-DIAG] dumped {len(_vv_latents)} first-K latents → {_vv_dump_path}")
+        print(f"   [{self.LM}] {step + 1} steps, {n_diffusion} speech_diffusion tokens "
+              f"in {elapsed:.0f}ms")
+        print(f"   [{self.LM}] first 10 emitted token ids: {emitted_tokens[:10]}")
+        print(f"   [{self.LM}] emitted token id histogram: "
+              f"start={emitted_tokens.count(speech_start_id)} "
+              f"diff={emitted_tokens.count(speech_diffusion_id)} "
+              f"end={emitted_tokens.count(speech_end_id)} "
+              f"eos={emitted_tokens.count(eos_token_id)}")
+
+        if not audio_chunks:
+            raise RuntimeError(
+                "ZERO FALLBACK: next_token_diffusion produced no audio "
+                f"(emitted {len(emitted_tokens)} tokens, {n_diffusion} diffusion). "
+                "The LM did not emit speech_diffusion tokens — check prompt format / embed weight."
+            )
+
+        # ── Final audio = concatenation of per-step 3200-sample chunks (24 kHz) ──
+        waveform = torch.cat(audio_chunks, dim=-1)                           # [1, 1, T_total]
+        print(f"   [Output] waveform {list(waveform.shape)} "
+              f"({waveform.shape[-1] / float(defaults.get('sample_rate', 24000)):.2f}s)")
+        self.ctx.variable_resolver.resolved["global.output_audio"] = waveform
+
+        if not self.ctx.persistent_mode:
+            for comp in (self.LM, self.HEAD, self.ACOUSTIC_TOK, self.SEMANTIC_TOK,
+                         self.ACOUSTIC_CONN, self.SEMANTIC_CONN):
+                self._unload_component_weights(comp)
+            release_flow_memory(device)
+
+        return self.ctx.variable_resolver.resolve_all()
+
+    # ─── Diffusion sampling (mirror of vendor sample_speech_tokens) ────────────
+
+
+    # ─── the two generation paths (R30 mirror of triton/flow/next_token_diffusion.py) ───
+    def _generate_reprefill(self, prompt_ids, speech_start_id, speech_end_id, speech_diffusion_id,
+                            eos_token_id, valid_token_ids, max_steps, ddpm_steps, cfg_scale, vae_dim,
+                            defaults, scaling, bias, dtype, device, diffusion_gen):
+        """The reference path (NBX_NTD_REPREFILL=1): the LM re-run on the WHOLE
+        growing context every step. Kept as the equivalence reference of the
+        KV path below; never the default."""
         embed_weight = self._embed_weight(self.LM)
         if embed_weight is None:
             raise RuntimeError("ZERO FALLBACK: could not locate tied embed weight in language_model.")
@@ -361,41 +413,103 @@ class NextTokenDiffusionEngine(FlowHandler):
             if use_cfg:
                 neg_inputs_embeds = torch.cat([neg_inputs_embeds, next_embed], dim=1)
 
-        elapsed = (time.perf_counter() - start) * 1000
-        if _vv_dump_path and _vv_latents:
-            _np_vv.save(_vv_dump_path, _np_vv.stack(_vv_latents))
-            print(f"   [VV-DIAG] dumped {len(_vv_latents)} first-K latents → {_vv_dump_path}")
-        print(f"   [{self.LM}] {step + 1} steps, {n_diffusion} speech_diffusion tokens "
-              f"in {elapsed:.0f}ms")
-        print(f"   [{self.LM}] first 10 emitted token ids: {emitted_tokens[:10]}")
-        print(f"   [{self.LM}] emitted token id histogram: "
-              f"start={emitted_tokens.count(speech_start_id)} "
-              f"diff={emitted_tokens.count(speech_diffusion_id)} "
-              f"end={emitted_tokens.count(speech_end_id)} "
-              f"eos={emitted_tokens.count(eos_token_id)}")
+        return emitted_tokens, audio_chunks, n_diffusion, step, _vv_latents, start
 
-        if not audio_chunks:
-            raise RuntimeError(
-                "ZERO FALLBACK: next_token_diffusion produced no audio "
-                f"(emitted {len(emitted_tokens)} tokens, {n_diffusion} diffusion). "
-                "The LM did not emit speech_diffusion tokens — check prompt format / embed weight."
-            )
+    def _generate_kv(self, prompt_ids, speech_start_id, speech_end_id, speech_diffusion_id,
+                     eos_token_id, valid_token_ids, max_steps, ddpm_steps, cfg_scale, vae_dim,
+                     defaults, scaling, bias, dtype, device, diffusion_gen):
+        """Decoder plan: the LM as a KV-cached decoder (the autoregressive
+        flow's session), one token per step per context; the CFG negative
+        context is a second decode branch of the same attention wrapper
+        (kv_cache_wrapper.KVBranch). Both contexts ingest the same feedback
+        embedding each step, as the re-prefill path grew both sequences."""
+        import os as _os_vv
+        from neurobrix.core.flow.autoregressive import AutoregressiveHandler
+        _vv_dump_path = _os_vv.environ.get("NBX_VV_DUMP_LATENTS", "")
+        _vv_dump_k = int(_os_vv.environ.get("NBX_VV_DUMP_K", "4"))
+        _vv_latents: list = []
+        ar = AutoregressiveHandler(self.ctx, self._execute_component, self._ensure_weights_loaded,
+                                   self._unload_component_weights)
+        session = ar._create_session({"lm_component": self.LM})
+        executor = self.ctx.executors[self.LM]
+        embed_weight = executor.get_embed_tokens()
+        if embed_weight is None:
+            raise RuntimeError("ZERO FALLBACK: could not locate tied embed weight in language_model.")
+        embed_weight = embed_weight.to(device)
+        valid_t = torch.tensor(valid_token_ids, dtype=torch.long, device=device)
+        with torch.no_grad():
+            valid_rows_t = embed_weight[valid_t].float().T.contiguous()                        # [H, n_valid]
+        use_cfg = cfg_scale != 1.0
+        pos_branch = session.branch_state()
+        neg_branch = session.new_branch() if use_cfg else None
+        print(f"   [{self.LM}] next-token-diffusion (max_steps={max_steps}, "
+              f"ddpm_steps={ddpm_steps}, cfg={cfg_scale}), KV-cached decoder"
+              f"{' with a negative branch' if use_cfg else ''}...")
+        start = time.perf_counter()
+        emitted_tokens: List[int] = []
+        audio_chunks: List[torch.Tensor] = []
+        n_diffusion = 0
+        step = -1
 
-        # ── Final audio = concatenation of per-step 3200-sample chunks (24 kHz) ──
-        waveform = torch.cat(audio_chunks, dim=-1)                           # [1, 1, T_total]
-        print(f"   [Output] waveform {list(waveform.shape)} "
-              f"({waveform.shape[-1] / float(defaults.get('sample_rate', 24000)):.2f}s)")
-        self.ctx.variable_resolver.resolved["global.output_audio"] = waveform
+        def ids(xs):
+            return torch.tensor([xs], dtype=torch.long, device=device)
 
-        if not self.ctx.persistent_mode:
-            for comp in (self.LM, self.HEAD, self.ACOUSTIC_TOK, self.SEMANTIC_TOK,
-                         self.ACOUSTIC_CONN, self.SEMANTIC_CONN):
-                self._unload_component_weights(comp)
-            release_flow_memory(device)
+        def last(h):
+            h = h[:, -1, :] if h.dim() == 3 else h
+            return h.contiguous()
 
-        return self.ctx.variable_resolver.resolve_all()
-
-    # ─── Diffusion sampling (mirror of vendor sample_speech_tokens) ────────────
+        neg_last = None
+        with torch.no_grad():
+            if use_cfg:
+                session.use_branch(neg_branch)
+                neg_last = last(session.prefill(ids([speech_start_id]), 1))                 # [1,H]
+                session.use_branch(pos_branch)
+            last_hidden = last(session.prefill(ids(prompt_ids), 1))                          # [1,H]
+        seq = len(prompt_ids)
+        dummy = ids([0])
+        for step in range(max_steps):
+            with torch.no_grad():
+                logits = torch.matmul(last_hidden.float(), valid_rows_t)                    # [1, n_valid]
+                next_token = int(valid_token_ids[int(torch.argmax(logits, dim=-1).item())])
+            emitted_tokens.append(next_token)
+            if step < 8 or step % 16 == 0:
+                _tname = ("eos" if next_token == eos_token_id else
+                          "start" if next_token == speech_start_id else
+                          "end" if next_token == speech_end_id else
+                          "diff" if next_token == speech_diffusion_id else str(next_token))
+                print(f"   [{self.LM}] step {step}: tok={_tname} "
+                      f"(diff_so_far={n_diffusion}, seq={seq})", flush=True)
+            if next_token == eos_token_id:
+                break
+            with torch.no_grad():
+                next_embed = torch.nn.functional.embedding(ids([next_token]), embed_weight).to(dtype=dtype)  # [1,1,H]
+            if next_token == speech_diffusion_id:
+                n_diffusion += 1
+                pos_cond = last_hidden
+                neg_cond = neg_last if use_cfg else pos_cond
+                speech_latent = self._sample_speech_tokens(
+                    pos_cond, neg_cond, cfg_scale, ddpm_steps, vae_dim, dtype, device, gen=diffusion_gen)  # [1,vae]
+                if _vv_dump_path and n_diffusion <= _vv_dump_k:
+                    _vv_latents.append(speech_latent.detach().float().cpu().numpy().reshape(-1))
+                scaled = (speech_latent / scaling - bias).unsqueeze(0)                          # [1,1,vae]
+                chunk = self._acoustic_decode(scaled, dtype, device)                             # [1,1,3200]
+                if chunk is None:
+                    raise RuntimeError(f"ZERO FALLBACK: acoustic_tokenizer returned no audio at step {step}.")
+                audio_chunks.append(chunk)
+                acoustic_embed = self._connector(self.ACOUSTIC_CONN, speech_latent, dtype, device)  # [1,H]
+                semantic_features = self._semantic_encode(chunk, dtype, device)                  # [1,Td,128]
+                if semantic_features.dim() == 3:
+                    semantic_features = semantic_features.mean(dim=1)                            # [1,128]
+                semantic_embed = self._connector(self.SEMANTIC_CONN, semantic_features, dtype, device)  # [1,H]
+                next_embed = (acoustic_embed + semantic_embed).to(dtype=dtype).unsqueeze(1)      # [1,1,H]
+            with torch.no_grad():
+                last_hidden = last(session.decode_step(dummy, inputs_embeds=next_embed))
+                if use_cfg:
+                    session.use_branch(neg_branch)
+                    neg_last = last(session.decode_step(dummy, inputs_embeds=next_embed))
+                    session.use_branch(pos_branch)
+            seq += 1
+        return emitted_tokens, audio_chunks, n_diffusion, step, _vv_latents, start
 
     def _sample_speech_tokens(
         self, condition, neg_condition, cfg_scale, ddpm_steps, vae_dim, dtype, device, gen=None

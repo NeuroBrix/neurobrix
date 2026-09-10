@@ -215,6 +215,157 @@ CPU_NO_HALF_OPS: FrozenSet[str] = frozenset({
     "reflection_pad1d",
 })
 
+# The set above is a CANDIDATE list, not a verdict. Which of its entries a given
+# torch actually lacks is a property of THAT torch, and the answer changes under
+# the engine: the Apple work reports both kernels landing in a newer build, while
+# every torch on this rig (2.5.1+cu121, measured 2026-09-10) still raises for
+# both. A hardcoded list is therefore right on one machine and wrong on another —
+# the constant-in-code defect, in a place where being wrong costs either a crash
+# (entry missing) or fp32 on an op that works (entry stale).
+#
+# So the set shrinks the same way the comments above say it grew: BY MEASUREMENT.
+# Each candidate carries a probe that exercises it once per process, on tiny CPU
+# tensors, the first time the op is actually met. Nothing is guessed, nothing is
+# assumed to persist across a torch upgrade, and an entry that a newer torch
+# supports simply stops costing anything.
+_CPU_HALF_PROBES: Dict[str, Callable[[], Any]] = {
+    "_weight_norm_interface": lambda: torch._weight_norm_interface(
+        torch.randn(4, 3, 8, dtype=torch.float16),
+        torch.randn(4, 1, 1, dtype=torch.float16), 0),
+    "reflection_pad1d": lambda: torch.nn.functional.pad(
+        torch.randn(2, 4, 8, dtype=torch.float16), (2, 2), mode="reflect"),
+}
+_CPU_HALF_MEASURED: Dict[str, bool] = {}
+
+
+def cpu_lacks_half_kernel(op_name: str) -> bool:
+    """Does THIS torch lack a CPU half kernel for `op_name`?
+
+    Measured once per process and cached. A candidate with no probe keeps the
+    conservative answer (the wrapper is applied), because an unmeasured claim
+    must not silently remove a protection.
+    """
+    if op_name not in CPU_NO_HALF_OPS:
+        return False
+    if op_name in _CPU_HALF_MEASURED:
+        return _CPU_HALF_MEASURED[op_name]
+    probe = _CPU_HALF_PROBES.get(op_name)
+    if probe is None:
+        _CPU_HALF_MEASURED[op_name] = True
+        return True
+    try:
+        probe()
+        lacks = False
+        print(f"[dtype] {op_name}: this torch ({torch.__version__}) HAS a CPU half "
+              f"kernel — the fp32 wrapper is not applied", flush=True)
+    except (RuntimeError, NotImplementedError):
+        lacks = True
+    except Exception:
+        lacks = True            # an unexpected failure keeps the protection
+    _CPU_HALF_MEASURED[op_name] = lacks
+    return lacks
+
+
+def compute_dtype_for_placement(device, model_dtype: "torch.dtype") -> "torch.dtype":
+    """The dtype a component COMPUTES in, decided by its placement.
+
+    A component Prism placed on the host computes in fp32 whatever the model's
+    dtype: x86 has no native fp16 arithmetic (PyTorch emulates it — a 512x512
+    matmul measured 188x slower in fp16 on 2026-09-04), its fp16 coverage is
+    thin, and complex intermediates built from fp16 parts reach ops with no
+    ComplexHalf kernel. One decision at plan time; the engine's compute dtype
+    AND the dtype its weights are loaded in both follow it, so a host-placed
+    component never meets fp16 weights with fp32 activations (the ATen oracle
+    on a 16 GB plan, 2026-09-06). Host-STAGED weights of a component that
+    computes on a GPU (zero3 offload) are not concerned: their executor's
+    device is the card.
+    """
+    if str(device or "").startswith("cpu"):
+        return torch.float32
+    return model_dtype
+
+
+def cpu_fp32_wrapper(func):
+    """Run `func` in fp32 when its tensor inputs are on the HOST, untouched
+    otherwise — the remedy for `CPU_NO_HALF_OPS`, shared by the compiled
+    engine (`DtypeEngine.wrap`) and the ATen oracle (`NativeATenDispatcher`):
+    the hardware contract is one rule with one owner.
+
+    Not a blanket upcast: the same op in the same model runs fp16 happily on
+    CUDA, and forcing fp32 there would cost throughput to work around a
+    limitation that is not present. The decision is per CALL because a Prism
+    plan can place one component on the host and the next on a GPU.
+    """
+    def wrapper(*args, **kwargs):
+        on_host = any(isinstance(a, torch.Tensor) and a.device.type == "cpu"
+                      and a.is_floating_point() and a.dtype != torch.float32
+                      for a in args)
+        if not on_host:
+            return func(*args, **kwargs)
+        cast = [a.float() if isinstance(a, torch.Tensor)
+                and a.is_floating_point() and a.dtype != torch.float32
+                else a for a in args]
+        out = func(*cast, **kwargs)
+        # Hand the result back in the dtype the graph expects, so the op is
+        # invisible to everything downstream.
+        src = next((a.dtype for a in args if isinstance(a, torch.Tensor)
+                    and a.is_floating_point()), None)
+        if src is None or src == torch.float32:
+            return out
+        if isinstance(out, torch.Tensor):
+            return out.to(src)
+        if isinstance(out, (tuple, list)):
+            return type(out)(o.to(src) if isinstance(o, torch.Tensor)
+                             and o.is_floating_point() else o for o in out)
+        return out
+    return wrapper
+
+
+# Dtype names the container may use for a complex output. Compared by NAME so
+# the same predicate serves the Triton branch, where dtype crosses the boundary
+# as a string and no torch.dtype exists (R33).
+_COMPLEX_DTYPE_NAMES: FrozenSet[str] = frozenset({
+    "complex32", "complex64", "complex128", "chalf", "cfloat", "cdouble",
+})
+
+
+def traced_output_is_complex(op_meta: Optional[Dict[str, Any]]) -> bool:
+    """True when the CONTAINER says this op produces a complex tensor.
+
+    The signal is the traced OUTPUT dtype — never the op's name, never its
+    inputs. Both alternatives are provably blind:
+
+    * By NAME: AMP_FP32_OPS carries a hand-written `{polar, view_as_complex}`
+      pair. The cached zoo (5 components, 490 complex-touching ops, surveyed
+      2026-09-10) also produces complex from `aten::complex` (MiniCPM-o hift,
+      chatterbox s3gen), `aten::stft`, `aten::_fft_r2c` and a plain
+      `aten::mul` — and a generic `mul` can produce one in any model ever
+      traced. A name list cannot be completed.
+    * By INPUTS: Kokoro's decoder traces `aten::mul` with
+      `input_dtypes=['float32']` and `output_dtypes=['complex64']` — the
+      other operand is the Python scalar `1j`, which no inspection of the
+      arguments can see.
+
+    Why it matters (measured, torch 2.5.1+cu121): `fp16 * 1j` and
+    `torch.complex(fp16, fp16)` yield **complex32**, and `exp`, `angle` and
+    `_fft_c2r` have no ComplexHalf kernel — they raise. A half input at a
+    complex-producing op therefore turns a traced complex64 into a crash two
+    ops later.
+
+    `op_meta` is whichever dict the caller holds that carries the op's traced
+    dtypes: the merged attributes the compiled sequence builds, or the op's
+    graph record itself. Only `output_dtypes` is read, and it must be at the
+    TOP level of that dict — `op_data["attributes"]` does not carry it, and
+    handing that in reads as "not complex", losing the floor in silence.
+    """
+    if not isinstance(op_meta, dict):
+        return False
+    # Last dotted segment, not a `torch.` strip: the container writes plain
+    # strings, but a caller holding a torch.dtype or an NBXDtype reads the same
+    # way, so the two branches' copies cannot disagree on representation.
+    return any(str(d).rsplit(".", 1)[-1] in _COMPLEX_DTYPE_NAMES
+               for d in (op_meta.get("output_dtypes") or ()))
+
 
 # Ops that MUST run in float32 for numerical stability.
 # Combines AT_FORALL_FP32 + AT_FORALL_FP32_SET_OPT_DTYPE.
@@ -245,6 +396,16 @@ AMP_FP32_OPS: FrozenSet[str] = frozenset({
     # Complex number ops — EXTENSION (not in PyTorch autocast).
     # Require fp32 because complex32/fp16 doesn't exist on CUDA.
     # Used in RoPE implementations (DeepSeek-V2, etc.)
+    #
+    # These two are the FALLBACK, not the rule. The primary protection is
+    # `traced_output_is_complex`, which reads the container's own
+    # output_dtypes and therefore also covers `aten::complex`, `aten::stft`,
+    # `aten::_fft_r2c` and a plain `aten::mul` — all observed producing
+    # complex in the cached zoo. These names stay for a graph that carries no
+    # output_dtypes at all; do NOT try to complete the list, a generic `mul`
+    # can produce a complex in any model ever traced. Note the two rules also
+    # differ deliberately: this set LEVELS every non-fp32 float to fp32, the
+    # complex rule is a FLOOR that preserves float64.
     "polar", "view_as_complex",
     # Other
     "renorm", "logsumexp",
@@ -470,6 +631,18 @@ class DtypeEngine:
 
         assert func is not None, f"ZERO FALLBACK: func cannot be None for op {op_name}"
 
+        # A complex-producing op never receives a half input — decided from
+        # the container's own output_dtypes (traced_output_is_complex). FIRST,
+        # above every other rule: complex32 is not a precision trade-off, it
+        # is a crash at the next `exp`/`angle`/`_fft_c2r`, which have no
+        # ComplexHalf kernel. It wins over the AMP class (`view_as_complex`
+        # sits in AMP_FP32_OPS, whose leveller downcasts Wan's float64 RoPE),
+        # over the AMP gate, and over the vendor fp32 pin — a pin is a
+        # precision choice among REAL dtypes and cannot validly retype a
+        # traced complex128 contract to complex64.
+        if traced_output_is_complex(attrs):
+            return self._make_complex_output_wrapper(func)
+
         # Creation-fill guard: independent of the amp_enabled gate — the
         # Prism dtype remap (bf16→fp16 kwarg) happens regardless of AMP,
         # so the scalar clamp must too. See AMP_CREATION_FILL_OPS.
@@ -494,7 +667,7 @@ class DtypeEngine:
         # CUDA accepts, so the wrapper is chosen on the DEVICE the tensors
         # arrive on, not only on the compute dtype. Checked before the AMP
         # rules because it applies whatever those rules say about the op.
-        if op_name in CPU_NO_HALF_OPS:
+        if cpu_lacks_half_kernel(op_name):
             return self._make_cpu_fp32_wrapper(func)
 
         # AMP rules only apply when compute_dtype is half-precision
@@ -620,36 +793,39 @@ class DtypeEngine:
         return safe_softmax
 
     def _make_cpu_fp32_wrapper(self, func):
-        """Run in fp32 when the inputs are on the HOST, untouched otherwise.
+        """The host-precision remedy (`cpu_fp32_wrapper`), reached from the
+        per-op wrapper chain when the op is in `CPU_NO_HALF_OPS`."""
+        return cpu_fp32_wrapper(func)
 
-        Not a blanket upcast: the same op in the same model runs fp16 happily
-        on CUDA, and forcing fp32 there would cost throughput to work around a
-        limitation that is not present. The decision is per CALL because a
-        Prism plan can place one component on the host and the next on a GPU.
+    def _make_complex_output_wrapper(self, func: Callable) -> Callable:
+        """An op the container types as complex-producing never sees a half
+        input — a FLOOR, not a leveller.
+
+        `_make_fp32_wrapper` levels every non-fp32 float to fp32, which would
+        downcast the float64 that Wan2.1's RoPE feeds to `view_as_complex`
+        (240 float64 ops, 148 complex128 outputs in the 1.3B transformer) and
+        silently retype its complex128 contract to complex64. This wrapper
+        raises fp16/bf16 to fp32 and leaves fp32, fp64 and complex operands
+        exactly as the trace has them, so the op emits the width the
+        container recorded.
+
+        It DOES keep `_make_fp32_wrapper`'s contiguity normalisation, which
+        `polar` and `view_as_complex` relied on before this rule short-
+        circuited them out of AMP_FP32_OPS: `torch.view_as_complex` requires
+        a last dimension of stride 1 and even strides, so an upstream
+        channels-last conv would make it raise. Contiguous tensors return
+        themselves at no cost (see the CLAUDE.md contiguous-guard pattern).
         """
-        def wrapper(*args, **kwargs):
-            on_host = any(isinstance(a, torch.Tensor) and a.device.type == "cpu"
-                          and a.is_floating_point() and a.dtype != torch.float32
-                          for a in args)
-            if not on_host:
-                return func(*args, **kwargs)
-            cast = [a.float() if isinstance(a, torch.Tensor)
-                    and a.is_floating_point() and a.dtype != torch.float32
-                    else a for a in args]
-            out = func(*cast, **kwargs)
-            # Hand the result back in the dtype the graph expects, so the op is
-            # invisible to everything downstream.
-            src = next((a.dtype for a in args if isinstance(a, torch.Tensor)
-                        and a.is_floating_point()), None)
-            if src is None or src == torch.float32:
-                return out
-            if isinstance(out, torch.Tensor):
-                return out.to(src)
-            if isinstance(out, (tuple, list)):
-                return type(out)(o.to(src) if isinstance(o, torch.Tensor)
-                                 and o.is_floating_point() else o for o in out)
-            return out
-        return wrapper
+        def complex_out_func(*args, **kwargs):
+            new_args = tuple(
+                a.float().contiguous() if isinstance(a, torch.Tensor)
+                and a.dtype in (torch.float16, torch.bfloat16)
+                else (a.contiguous() if isinstance(a, torch.Tensor)
+                      and not a.is_contiguous() else a)
+                for a in args
+            )
+            return func(*new_args, **kwargs)
+        return complex_out_func
 
     def _make_fp32_wrapper(self, func: Callable) -> Callable:
         """
@@ -895,7 +1071,8 @@ class DtypeEngine:
     # ========================================================================
 
     def amp_cast_inputs(self, op_type: str, args: list,
-                        op_uid: Optional[str] = None) -> list:
+                        op_uid: Optional[str] = None,
+                        op_record: Optional[Dict[str, Any]] = None) -> list:
         """
         Apply AMP input casting for a single op call at runtime.
 
@@ -905,6 +1082,19 @@ class DtypeEngine:
         Returns new args list with AMP casting applied. Does NOT wrap the
         function — just transforms inputs.
         """
+        # Runtime mirror of compile_op's first rule — see there. `op_record` is
+        # the op's graph entry (`op_data`), whose output_dtypes sit at the TOP
+        # level, not inside its "attributes" — hence the name, distinct from
+        # compile_op's `attrs`, which is the merged dict its caller builds.
+        # Without it this path would let --sequential build a complex32 the
+        # compiled oracle never builds (R30).
+        if traced_output_is_complex(op_record):
+            return [
+                a.float() if isinstance(a, torch.Tensor)
+                and a.dtype in (torch.float16, torch.bfloat16) else a
+                for a in args
+            ]
+
         if self.compute_dtype not in (torch.float16, torch.bfloat16):
             return args
 

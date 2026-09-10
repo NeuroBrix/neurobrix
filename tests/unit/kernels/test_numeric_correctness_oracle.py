@@ -120,17 +120,15 @@ def _relative_error(B, H, T, D, causal=True, seed=0):
     kn = rng.standard_normal((B, H, T, D)).astype(np.float16)
     vn = rng.standard_normal((B, H, T, D)).astype(np.float16)
     q, k, v = (NBXTensor.from_numpy(x) for x in (qn, kn, vn))
-    # K is built above as (B, H, T, D) — the standard layout, not
-    # pre-transposed. Saying so is required, not optional: when T == D the
-    # wrapper cannot read the layout from the shape and refuses rather than
-    # guess (the refusal added 2026-09-07, after a 64-token TinyLlama prompt
-    # with head_dim 64 ran with K's axes crossed and answered a different
-    # question). Four parametrisations here are square — 64/64, 128/128,
-    # 256/256 — and were failing on that refusal, which is the refusal doing
-    # its work: this call did not carry the one fact only the caller knows.
+    # This helper BUILT kn as (B, H, T, D), so K is in standard layout and
+    # the caller is the one who knows it. The wrapper refuses to infer the
+    # layout when T == D, because both layouts have the same shape there and
+    # guessing wrong crosses K's axes silently (measured on Apple 2026-09-07:
+    # TinyLlama head_dim 64 at a 64-token prompt, argmax 29892 at logit 6.41
+    # where the float64 oracle says 3864 at 22.36). Declaring it is the fix;
+    # the parameter is inert at every non-square shape.
     got = _d2h(W.scaled_dot_product_attention_wrapper(
-        q, k, v, is_causal=causal,
-        k_pre_transposed=False)).reshape(B, H, T, D)
+        q, k, v, is_causal=causal, k_pre_transposed=False)).reshape(B, H, T, D)
     ref = _attention_float64(qn, kn, vn, causal)
     return float(np.abs(got - ref).max() / max(np.abs(ref).max(), 1e-9))
 

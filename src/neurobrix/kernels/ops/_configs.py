@@ -131,12 +131,40 @@ def _announce_first_sweep(tuned):
         if not _SEEDED[0]:
             _SEEDED[0] = True
             try:
-                _atc.seed()
-            except Exception:              # the artifact is an optimisation, never a failure source
+                _n = _atc.seed()
+                from neurobrix.kernels import autotune_certified as _cert0
+                _cert0.note_local(_n)
+                _cert0.override_seeded()   # the directory first, even on a warm machine
+            except Exception:              # the replay cache is an optimisation, never a failure source
                 pass
+        # The certified directory (owner directive 2026-09-06, the engine
+        # component): a shape the directory certifies for the profile in
+        # force, this kernel and its dtype is applied here — no sweep, no
+        # screen. A shape it does not know sweeps at runtime with the
+        # consensus screen, is said in clear, and lands in the local replay
+        # cache, never in the directory.
+        try:
+            key = _atc.key_of(tuned, args, kwargs)
+        except Exception:
+            key = None
+        if key is not None and key not in cache:
+            from neurobrix.kernels import autotune_certified as _cert
+            qual = _atc._qual_of(tuned) or getattr(getattr(tuned, "base_fn", None), "__name__", "?")
+            try:
+                applied = _cert.apply(qual, tuned, key)
+            except Exception as exc:            # the directory is an optimisation, never a failure source
+                print(f"[autotune] certified lookup failed for {qual}: {exc}", flush=True)
+                applied = False
+            if not applied:
+                _cert.announce_missing(qual, tuned, key)
         before = len(cache)
         result = original(*args, **kwargs)
         if len(cache) > before:
+            if key is not None:
+                try:                       # the bench this call just ran: best, second-best, margin
+                    _atc.note_timings(tuned, key, getattr(tuned, "configs_timings", None))
+                except Exception:
+                    pass
             if not _SWEEP_ANNOUNCED[0]:
                 _SWEEP_ANNOUNCED[0] = True
                 print(_SWEEP_NOTICE, file=sys.stderr, end="")
@@ -276,7 +304,7 @@ def arch_smem_budget() -> Optional[int]:
         budget = (cfg.get("memory") or {}).get("max_shared_memory_per_block")
         if not budget:
             continue
-        _remember_profile(declared, wanted, cfg)
+        _remember_profile(declared, wanted, cfg, path)
         if declared == wanted:
             exact = int(budget)
         elif (declared.split(".")[0] == wanted.split(".")[0]
@@ -322,11 +350,16 @@ def arch_smem_budget() -> Optional[int]:
 _ACTIVE_PROFILE: dict = {}
 
 
-def _remember_profile(declared: str, wanted: str, cfg: dict) -> None:
-    """Record the best profile seen so far, exact match winning."""
+def _remember_profile(declared: str, wanted: str, cfg: dict, path=None) -> None:
+    """Record the best profile seen so far, exact match winning. The profile's
+    NAME is its file's — `<vendor>/<profile>.yml` — kept as `_vendor` and
+    `_profile`, the only names the certified autotune directory is allowed to
+    use (nothing there names a backend)."""
+    names = {"_vendor": path.parent.name, "_profile": path.stem} if path is not None else {}
     if declared == wanted:
         _ACTIVE_PROFILE.clear()
         _ACTIVE_PROFILE.update(cfg)
+        _ACTIVE_PROFILE.update(names)
         _ACTIVE_PROFILE["_exact"] = True
     elif not _ACTIVE_PROFILE.get("_exact"):
         matches = [str(m).strip().lower()
@@ -336,6 +369,7 @@ def _remember_profile(declared: str, wanted: str, cfg: dict) -> None:
         if same_major or any(wanted.startswith(m) for m in matches):
             _ACTIVE_PROFILE.clear()
             _ACTIVE_PROFILE.update(cfg)
+            _ACTIVE_PROFILE.update(names)
 
 
 def active_vendor_profile() -> dict:

@@ -709,9 +709,14 @@ rows:
     seed: 42
     height: 1024
     width: 1024
-    # diffusers arm: fp16 transformer + fp32 text encoders +
-    # enable_model_cpu_offload (Flux/V100 doctrine, S3 R16 synthesis —
-    # 26.3 GB fp16 not resident with activations on one 32 GB card).
+    # diffusers arm: fp16 transformer + fp32 text encoders + the vendor's
+    # sequential (layer-level) cpu offload: model-level offload left
+    # 31.5 GB resident in the transformer's forward on one V100-32G
+    # (2026-09-07 yardstick, OOM at 1024²) — the finer weapon the video
+    # rows already use for an over-card single component; slow by
+    # construction, the honest V100 reference.
+    diffusers_recipe:
+      sequential_offload: true
     # Snapshot on the NAS (hf_snapshots/Flex.1-alpha, all-in-one file
     # excluded). R29 standing instruction: triton-vs-compiled
     # sharpness compared explicitly on the measured renders — the

@@ -92,7 +92,14 @@ def test_no_metal_means_a_raise_not_a_cpu_backend(monkeypatch):
     With CUDA, ROCm and Metal all unavailable, detection must RAISE. A silent
     CPU path here would be the engine computing on the wrong device under a
     device's name — the failure mode Zero Fallback exists to forbid."""
+    import ctypes
+
+    def _no_runtime(name):
+        raise OSError(f"{name}: unavailable for this test")
+
     monkeypatch.setattr(metal_device, "metal_device_available", lambda: False)
+    monkeypatch.setattr(ctypes.cdll, "LoadLibrary", _no_runtime)   # CUDA and ROCm absent too
+    monkeypatch.delenv("NBX_GPU_BACKEND", raising=False)
     nbx_tensor._detect_gpu_backend.cache_clear()
     try:
         with pytest.raises(RuntimeError, match="No GPU runtime found"):

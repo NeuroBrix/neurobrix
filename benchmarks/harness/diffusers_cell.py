@@ -57,10 +57,19 @@ def load_pipeline(row: dict):
             pipe.text_encoder = pipe.text_encoder.to(torch.float32)
             if getattr(pipe, "text_encoder_2", None) is not None:
                 pipe.text_encoder_2 = pipe.text_encoder_2.to(torch.float32)
-            pipe.enable_model_cpu_offload()
-            offloaded = True
-            fixes.append("text encoders=fp32 + enable_model_cpu_offload "
-                         "(Flux/V100 doctrine)")
+            if (row.get("diffusers_recipe") or {}).get("sequential_offload"):
+                # The row says the finer vendor weapon: model-level offload
+                # left 31.5 GB resident in the transformer's forward on one
+                # V100-32G (2026-09-07 yardstick, Flex.1 at the row's size).
+                pipe.enable_sequential_cpu_offload()
+                offloaded = True
+                fixes.append("text encoders=fp32 + enable_sequential_cpu_offload "
+                             "(row recipe: over-card single component)")
+            else:
+                pipe.enable_model_cpu_offload()
+                offloaded = True
+                fixes.append("text encoders=fp32 + enable_model_cpu_offload "
+                             "(Flux/V100 doctrine)")
     if row["metric_class"] == "video":
         # Per-row vendor recipe (rows.yml `diffusers_recipe`), replacing
         # the 2026-08-30 generic "vae=fp32 on every video pipeline"
@@ -103,6 +112,22 @@ def load_pipeline(row: dict):
                          "weights exceed one-card residency)")
     if not offloaded:
         pipe = pipe.to("cuda")
+    if row["metric_class"] == "image" and "flux" in type(pipe).__name__.lower():
+        # fp32 text encoders + fp16 denoiser: the pipeline builds its prompt
+        # embeds — and from them the latents — in the encoders' dtype
+        # (pipeline_flux.py: dtype = self.text_encoder.dtype), so the
+        # denoiser's first Linear met fp32 against fp16 (2026-09-07 yardstick,
+        # sequential offload). The embeds are cast to the denoiser's dtype at
+        # the seam; the encoders keep their fp32 arithmetic.
+        _encode = pipe.encode_prompt
+        _denoiser_dtype = pipe.transformer.dtype
+
+        def _encode_to_denoiser_dtype(*a, **k):
+            outs = _encode(*a, **k)
+            return tuple(o.to(_denoiser_dtype) if hasattr(o, "is_floating_point") and o.is_floating_point() else o
+                         for o in outs)
+        pipe.encode_prompt = _encode_to_denoiser_dtype
+        fixes.append("prompt embeds cast to the denoiser dtype at the seam (fp32 encoders, fp16 denoiser)")
 
     # Fairness-arm cache weapon (drift-discipline clause 6): when the
     # campaign sets BENCH_DIFFUSERS_FBC=<threshold>, enable diffusers'

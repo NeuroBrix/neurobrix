@@ -10,7 +10,7 @@ Rules (from PyTorch AT_FORALL_FP32 / AT_FORALL_LOWER_PRECISION_FP):
   - Promote ops: promote to widest input dtype
 """
 
-from typing import Callable, FrozenSet
+from typing import Callable, FrozenSet, Optional
 
 from neurobrix.kernels.nbx_tensor import NBXDtype, NBXTensor
 
@@ -36,6 +36,10 @@ AMP_FP32_OPS: FrozenSet[str] = frozenset({
     "frobenius_norm", "nuclear_norm", "cosine_similarity",
     "poisson_nll_loss", "cosine_embedding_loss", "nll_loss",
     "mse_loss", "smooth_l1_loss", "huber_loss",
+    # FALLBACK only — the primary protection is `traced_output_is_complex`
+    # (container output_dtypes). See the note in core/dtype/engine.py: do not
+    # try to complete this pair, and note this set LEVELS to fp32 while the
+    # complex rule is a FLOOR that preserves float64.
     "polar", "view_as_complex",
     "renorm", "logsumexp",
     # Phase 1 — Removed nearest variants from AMP_FP32_OPS (mirror PyTorch
@@ -92,6 +96,39 @@ AMP_PROMOTE_OPS: FrozenSet[str] = frozenset({
 })
 
 _FLOATING = frozenset({NBXDtype.float16, NBXDtype.bfloat16, NBXDtype.float32, NBXDtype.float64})
+
+
+# Mirror of core/dtype/engine.py's predicate. Duplicated, not imported: that
+# module imports torch, and the Triton branch loads no torch at import or at
+# execution (R33). The two-modes doctrine keeps these paths parallel by
+# construction — AMP_FP32_OPS / AMP_FP16_OPS above are duplicated for the same
+# reason. Dtype crosses this boundary as a STRING, which is all the predicate
+# reads, so the two copies cannot drift on representation.
+_COMPLEX_DTYPE_NAMES = frozenset({
+    "complex32", "complex64", "complex128", "chalf", "cfloat", "cdouble",
+})
+
+
+def traced_output_is_complex(op_meta) -> bool:
+    """True when the CONTAINER types this op's output as complex.
+
+    See core/dtype/engine.traced_output_is_complex for the full rationale: the
+    op's NAME cannot answer this (a plain `aten::mul` produces Kokoro's
+    complex64) and neither can its INPUTS (the other operand is the Python
+    scalar `1j`, absent from input_dtypes). NBXDtype carries complex64 and
+    complex128 — Wan2.1's RoPE freqs are complex128 — so the Triton branch
+    needs the same floor as the ATen branch.
+
+    `op_meta` carries the op's traced dtypes — the op's graph record here.
+    Only `output_dtypes` is read, at that dict's TOP level.
+    """
+    if not isinstance(op_meta, dict):
+        return False
+    # Last dotted segment — see the core copy: it makes the two branches read
+    # a plain string, a torch.dtype and an NBXDtype identically, so the
+    # duplication cannot drift on representation.
+    return any(str(d).rsplit(".", 1)[-1] in _COMPLEX_DTYPE_NAMES
+               for d in (op_meta.get("output_dtypes") or ()))
 
 
 def _is_float_tensor(a) -> bool:
@@ -272,16 +309,51 @@ class TritonDtypeEngine:
             return self.compute_dtype
         return graph_dt
 
-    def wrap_op(self, op_name: str, func: Callable) -> Callable:
+    def set_precision_contract(self, safe: bool, fp32_op_uids=(), narrow_op_uids=()) -> None:
+        """The component's precision contract (core/runtime/precision_contract):
+        `fp32_op_uids` are the calibration record's islands — ops whose finite
+        magnitude exceeds the half-precision bound — computed in fp32 with
+        an fp32 output whatever their class; `narrow_op_uids` are the fp32-
+        class ops the record lets narrow back to the compute dtype. The
+        same sets the compiled DtypeEngine honours (R30; closes
+        D-PRECISION-CONTRACT-TRITON-PARITY, 2026-09-06)."""
+        self._activations_fp16_safe = bool(safe)
+        self._fp32_op_uids = frozenset(fp32_op_uids or ())
+        self._narrow_op_uids = frozenset(narrow_op_uids or ())
+
+    def wrap_op(self, op_name: str, func: Callable, op_uid: Optional[str] = None,
+                op_record: Optional[dict] = None) -> Callable:
         """Wrap an op function with AMP casting rules.
 
         Args:
             op_name: bare op name (e.g., "mm", "pow", "add")
             func: the raw kernel wrapper function
+            op_uid: the op's uid in the graph — the precision contract's
+                per-op islands are keyed on it
+            op_record: the op's graph entry (`op_data`). Only one key is read,
+                `output_dtypes`, and it sits at the record's TOP level — NOT
+                inside `op_data["attributes"]`. Handing the attributes dict
+                instead reads as "not complex" and loses the floor silently,
+                which is why the parameter is not called `attrs`.
 
         Returns:
             Wrapped function with dtype casting applied
         """
+        # A complex-producing op never receives a half input — mirror of the
+        # ATen branch's first rule, ahead of the islands for the same reason:
+        # an island is a precision choice among REAL dtypes and cannot retype
+        # a traced complex128 to complex64 by levelling its float64 input.
+        if traced_output_is_complex(op_record):
+            return self._wrap_complex_output(func)
+
+        # The calibration record's islands come FIRST: a pinned op computes
+        # in fp32 and keeps its fp32 output whatever its AMP class — a
+        # self-managed conv included (its wrapper follows the fp32 inputs).
+        if op_uid is not None and self.compute_dtype in (NBXDtype.float16, NBXDtype.bfloat16):
+            if op_uid in getattr(self, "_fp32_op_uids", ()):
+                return self._wrap_fp32(func)
+            if op_uid in getattr(self, "_narrow_op_uids", ()) and op_name in AMP_FP32_OPS:
+                return self._wrap_fp32_internal_compute_dtype_output(func, force_cast_back=True)
         # Self-managed wrappers are NEVER wrapped — universal hardware
         # (mm/bmm/addmm self-gate on _NBX_HAS_NATIVE_BF16 internally;
         # conv2d/upsample_nearest are dtype-tag-driven). See _SELF_MANAGED_OPS
@@ -314,19 +386,71 @@ class TritonDtypeEngine:
 
         return func
 
+    def _wrap_complex_output(self, func: Callable) -> Callable:
+        """Raise fp16/bf16 operands to fp32 and leave every other dtype alone.
+
+        A FLOOR, not a leveller: `_wrap_fp32` casts every non-fp32 float to
+        fp32, which would downcast the float64 that Wan2.1's RoPE feeds to
+        `view_as_complex` and retype its complex128 output to complex64. Its
+        contiguity normalisation IS kept (contiguous-guard pattern).
+
+        This rule concerns TENSOR OPERANDS. It does not contradict the
+        deliberate narrowing of complex128/float64 CONSTANTS at attribute
+        resolution (`sequence.py`, `sequential.py`): a constant is materialised
+        by this branch, and NBX complex64 is a pair of fp32, while an operand's
+        width is whatever the producing op handed over.
+
+        Defensive rather than load-bearing today: NBXTensor has no complex32
+        representation at all (complex64 = fp32 pairs), and `complex_wrapper`
+        / `fft_r2c_wrapper` / `NBXTensor.view_as_complex` already force fp32.
+        It is here so the rule is the same rule in all four modes (R30).
+        """
+        def complex_out_func(*args, **kwargs):
+            new_args = tuple(
+                a.to(NBXDtype.float32).contiguous()
+                if _is_float_tensor(a) and _get_nbx_dtype(a) in (
+                    NBXDtype.float16, NBXDtype.bfloat16)
+                else (a.contiguous()
+                      if hasattr(a, "contiguous") and hasattr(a, "is_contiguous")
+                      and not a.is_contiguous() else a)
+                for a in args
+            )
+            return func(*new_args, **kwargs)
+        return complex_out_func
+
     def _wrap_fp32(self, func: Callable) -> Callable:
-        """Upcast float inputs to fp32."""
+        """Upcast float inputs to fp32, and run the op with fp32 as the
+        active compute dtype.
+
+        The second half is what makes an island hold on a self-managed
+        wrapper. `conv2d_wrapper` (and the other self-managed ops) do not
+        follow their inputs: they narrow the inputs to the narrowest common
+        dtype and write their output in the per-component compute dtype
+        they read from `kernels.wrappers` — so an island that only upcast
+        the inputs was undone inside the wrapper and the fp16 output
+        overflowed exactly where the calibration record said it would
+        (swin2SR-x2 `aten.convolution::13`, fp32 norm 2.6e7: inf, NaN, a
+        black render). Overriding the compute dtype for the duration of the
+        pinned op makes the wrapper's own policy produce fp32, the same
+        thing ATen does for fp32 inputs on the compiled engine. Restored
+        after the call, nested-safe."""
         def fp32_func(*args, **kwargs):
+            from neurobrix.kernels import wrappers as _w
             new_args = tuple(
                 a.to(NBXDtype.float32).contiguous()
                     if _is_float_tensor(a) and _get_nbx_dtype(a) != NBXDtype.float32
                 else (a.contiguous() if hasattr(a, 'contiguous') and hasattr(a, 'is_contiguous') and not a.is_contiguous() else a)
                 for a in args
             )
-            return func(*new_args, **kwargs)
+            prev = _w.get_compute_dtype()
+            _w.set_compute_dtype(NBXDtype.float32)
+            try:
+                return func(*new_args, **kwargs)
+            finally:
+                _w.set_compute_dtype(prev)
         return fp32_func
 
-    def _wrap_fp32_internal_compute_dtype_output(self, func: Callable) -> Callable:
+    def _wrap_fp32_internal_compute_dtype_output(self, func: Callable, force_cast_back: bool = False) -> Callable:
         """Phase 1 opt-in cast-back: compute fp32 internally, output back to
         compute_dtype.
 
@@ -356,7 +480,7 @@ class TritonDtypeEngine:
             result = func(*new_args, **kwargs)
             # Cast back ONLY when the per-component opt-in flag is True.
             # Default False = conservative behavior (output stays fp32).
-            if (_w._NBX_ACTIVATIONS_FP16_SAFE
+            if ((force_cast_back or _w._NBX_ACTIVATIONS_FP16_SAFE)
                     and _is_float_tensor(result)
                     and _get_nbx_dtype(result) != compute):
                 result = result.to(compute)

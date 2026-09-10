@@ -23,6 +23,41 @@ def to_engine_container(value: Any, mode: str) -> Any:
     return torch.from_numpy(np.ascontiguousarray(value))
 
 
+
+def _dump_init_latent(name, tensor_to_numpy):
+    """Write a synthesized `randn` variable to `NBX_DUMP_INIT_LATENT=<dir>`, if armed.
+
+    The vendor-correctness cell's PRIMARY gate for a diffusion family needs both
+    arms to denoise the SAME starting noise — otherwise two independent RNG
+    streams give two valid samples and PSNR can never be a bound. Ours renders
+    and dumps here; the vendor pipeline is handed the file through its
+    `latents=` argument.
+
+    The array is written BEFORE the scheduler's `init_noise_sigma` scaling,
+    because diffusers applies that itself to a latent it is given: each arm
+    scales exactly once. `NBX_FIXED_LATENT` is the mirror of this seam, reading
+    a latent back in.
+
+    Diagnostic, default off, one `.npy` per variable name. It never touches the
+    NBX container (R18) and never changes what the run computes.
+    """
+    import os
+    d = os.environ.get("NBX_DUMP_INIT_LATENT")
+    if not d:
+        return
+    import numpy as np
+    try:
+        arr = tensor_to_numpy()
+    except Exception as exc:                      # a dump must never break a run
+        print(f"[init-latent] {name}: not dumped ({exc})", flush=True)
+        return
+    os.makedirs(d, exist_ok=True)
+    safe = "".join(c if (c.isalnum() or c in "._-") else "_" for c in str(name))
+    path = os.path.join(d, f"{safe}.npy")
+    np.save(path, np.ascontiguousarray(arr))
+    print(f"[init-latent] {name} {tuple(arr.shape)} {arr.dtype} -> {path}", flush=True)
+
+
 class VariableResolver:
     """
     NeuroBrix Variable Resolver v0.1
@@ -112,7 +147,9 @@ class VariableResolver:
                 arr = np.load(fixed)
                 if tuple(arr.shape) == tuple(shape):
                     return NBXTensor.from_numpy(np.ascontiguousarray(arr)).to(dt)
-            return W.randn_wrapper(list(shape), dtype=dt, device=dev)
+            _t = W.randn_wrapper(list(shape), dtype=dt, device=dev)
+            _dump_init_latent(name, _t.numpy)
+            return _t
         if init_type == "uniform":
             return W.rand_wrapper(list(shape), dtype=dt, device=dev)
         if init_type == "full":
@@ -334,7 +371,15 @@ class VariableResolver:
                 import os as _os_fl
                 _fl = _os_fl.environ.get("NBX_FIXED_LATENT")
                 if _fl and _os_fl.path.exists(_fl):
-                    _ft = torch.load(_fl, map_location=self.device, weights_only=True)
+                    # `.npy` so ONE file drives both engines: the triton branch
+                    # reads numpy (it may not import torch, R33), so a torch-only
+                    # format here would make this seam mode-asymmetric (R30).
+                    if _fl.endswith(".npy"):
+                        import numpy as _np_fl
+                        _ft = torch.from_numpy(
+                            _np_fl.ascontiguousarray(_np_fl.load(_fl))).to(self.device)
+                    else:
+                        _ft = torch.load(_fl, map_location=self.device, weights_only=True)
                     if tuple(_ft.shape) == tuple(shape_tuple):
                         return _ft.to(dtype=dtype, device=self.device)
                 # Gaussian noise from the run-scoped sampling stream (vendor
@@ -342,8 +387,14 @@ class VariableResolver:
                 # stochastic scheduler draw, in consumption order).
                 generator = self.sampling_generator()
                 if generator is not None:
-                    return torch.randn(shape_tuple, dtype=dtype, device=self.device, generator=generator)
-                return torch.randn(shape_tuple, dtype=dtype, device=self.device)
+                    _t = torch.randn(shape_tuple, dtype=dtype, device=self.device,
+                                     generator=generator)
+                else:
+                    _t = torch.randn(shape_tuple, dtype=dtype, device=self.device)
+                _dump_init_latent(
+                    name, lambda: _t.detach().to(
+                        torch.float32 if _t.dtype == torch.bfloat16 else _t.dtype).cpu().numpy())
+                return _t
 
             elif init_type == "uniform":
                 # Uniform [0, 1) from the run-scoped sampling stream

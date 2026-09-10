@@ -43,7 +43,14 @@ def _cuda_driver():
     file runs against CUDA with no other change — which is the property the
     contract is for.
     """
-    return None
+    try:
+        from neurobrix.kernels import nbx_tensor
+        if nbx_tensor._detect_gpu_backend() != "cuda":
+            return None
+        from neurobrix.kernels.launcher import driver
+        return driver()
+    except Exception:
+        return None
 
 
 _DRIVERS = {"metal": _metal_driver, "cuda": _cuda_driver}
