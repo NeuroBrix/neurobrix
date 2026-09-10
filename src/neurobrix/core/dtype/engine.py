@@ -215,6 +215,56 @@ CPU_NO_HALF_OPS: FrozenSet[str] = frozenset({
     "reflection_pad1d",
 })
 
+# The set above is a CANDIDATE list, not a verdict. Which of its entries a given
+# torch actually lacks is a property of THAT torch, and the answer changes under
+# the engine: the Apple work reports both kernels landing in a newer build, while
+# every torch on this rig (2.5.1+cu121, measured 2026-09-10) still raises for
+# both. A hardcoded list is therefore right on one machine and wrong on another —
+# the constant-in-code defect, in a place where being wrong costs either a crash
+# (entry missing) or fp32 on an op that works (entry stale).
+#
+# So the set shrinks the same way the comments above say it grew: BY MEASUREMENT.
+# Each candidate carries a probe that exercises it once per process, on tiny CPU
+# tensors, the first time the op is actually met. Nothing is guessed, nothing is
+# assumed to persist across a torch upgrade, and an entry that a newer torch
+# supports simply stops costing anything.
+_CPU_HALF_PROBES: Dict[str, Callable[[], Any]] = {
+    "_weight_norm_interface": lambda: torch._weight_norm_interface(
+        torch.randn(4, 3, 8, dtype=torch.float16),
+        torch.randn(4, 1, 1, dtype=torch.float16), 0),
+    "reflection_pad1d": lambda: torch.nn.functional.pad(
+        torch.randn(2, 4, 8, dtype=torch.float16), (2, 2), mode="reflect"),
+}
+_CPU_HALF_MEASURED: Dict[str, bool] = {}
+
+
+def cpu_lacks_half_kernel(op_name: str) -> bool:
+    """Does THIS torch lack a CPU half kernel for `op_name`?
+
+    Measured once per process and cached. A candidate with no probe keeps the
+    conservative answer (the wrapper is applied), because an unmeasured claim
+    must not silently remove a protection.
+    """
+    if op_name not in CPU_NO_HALF_OPS:
+        return False
+    if op_name in _CPU_HALF_MEASURED:
+        return _CPU_HALF_MEASURED[op_name]
+    probe = _CPU_HALF_PROBES.get(op_name)
+    if probe is None:
+        _CPU_HALF_MEASURED[op_name] = True
+        return True
+    try:
+        probe()
+        lacks = False
+        print(f"[dtype] {op_name}: this torch ({torch.__version__}) HAS a CPU half "
+              f"kernel — the fp32 wrapper is not applied", flush=True)
+    except (RuntimeError, NotImplementedError):
+        lacks = True
+    except Exception:
+        lacks = True            # an unexpected failure keeps the protection
+    _CPU_HALF_MEASURED[op_name] = lacks
+    return lacks
+
 
 def compute_dtype_for_placement(device, model_dtype: "torch.dtype") -> "torch.dtype":
     """The dtype a component COMPUTES in, decided by its placement.
@@ -549,7 +599,7 @@ class DtypeEngine:
         # CUDA accepts, so the wrapper is chosen on the DEVICE the tensors
         # arrive on, not only on the compute dtype. Checked before the AMP
         # rules because it applies whatever those rules say about the op.
-        if op_name in CPU_NO_HALF_OPS:
+        if cpu_lacks_half_kernel(op_name):
             return self._make_cpu_fp32_wrapper(func)
 
         # AMP rules only apply when compute_dtype is half-precision
