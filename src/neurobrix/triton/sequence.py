@@ -1831,12 +1831,14 @@ class TritonSequence:
             func = self._op_uid_interceptors[op_uid]
             if not getattr(func, 'self_manages_dtype', getattr(getattr(func, '__func__', None), 'self_manages_dtype', False)):
                 bare_name = op_type.split("::")[-1] if "::" in op_type else op_type
-                func = self._dtype_engine.wrap_op(bare_name, func, op_uid=op_uid)
+                func = self._dtype_engine.wrap_op(bare_name, func, op_uid=op_uid,
+                                                  op_record=op_data)
         elif op_type in self._op_interceptors:
             func = self._op_interceptors[op_type]
             if not getattr(func, 'self_manages_dtype', getattr(getattr(func, '__func__', None), 'self_manages_dtype', False)):
                 bare_name = op_type.split("::")[-1] if "::" in op_type else op_type
-                func = self._dtype_engine.wrap_op(bare_name, func, op_uid=op_uid)
+                func = self._dtype_engine.wrap_op(bare_name, func, op_uid=op_uid,
+                                                  op_record=op_data)
         else:
             func = dispatch(op_type)
             if func is None:
@@ -1846,7 +1848,8 @@ class TritonSequence:
             from neurobrix.kernels.classification import canonical_aten
             bare_name = op_type.split("::")[-1] if "::" in op_type else op_type
             bare_name = canonical_aten(bare_name)
-            func = self._dtype_engine.wrap_op(bare_name, func, op_uid=op_uid)
+            func = self._dtype_engine.wrap_op(bare_name, func, op_uid=op_uid,
+                                              op_record=op_data)
 
         # Compile args → dataclasses
         raw_args = attrs.get("args", [])

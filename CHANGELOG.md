@@ -75,6 +75,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keeps the conservative path there — a record that changes nothing no longer costs.
 
 ### Fixed
+- An op the container types as producing a complex number never receives a half-precision
+  input, in every engine. The rule reads the op's traced OUTPUT dtype rather than its name:
+  a hand-written pair of names cannot cover a complex construction, a short-time Fourier
+  transform, a real-to-complex FFT, or the plain multiplication by `1j` that a vocoder's
+  phase reconstruction traces — where nothing in the op's inputs says the result is complex.
+  A half input at any of them yields a half-precision complex, which the exponential, the
+  angle and the inverse FFT that follow have no kernel for and refuse. Double-precision
+  operands are left exactly as traced, so a rotary embedding that traces in double keeps
+  its width instead of being levelled to single.
 - A component placed on the host by the plan computes in fp32 AND holds its weights, inputs and constants in fp32: one decision read by the dtype engine, the weight loader, the resolver and the compiled sequence alike. Both ATen engines now render a tts model whose decoder a 16 GB plan puts on the host (its weights arrived fp16 against fp32 activations and its complex intermediates reached ops with no half kernel on CPU).
 - Prism's activation profiler refuses a symbolic dim written as a bare integer that contradicts the trace's witnessed extent, as it already refused a contradicting expression: 98 component graphs of the zoo carry another tensor's extent in an output slot, and one of them sized an 82M model's decoder at 19 GB, sending it to the host on every 16 GB card (now 196 MB, single card).
 - The ATen oracle (`--sequential`) applies the host-precision rule of the dtype engine: an op the CPU backend refuses in fp16 (the measured set) runs in fp32 on host-placed tensors and hands its result back in the graph's dtype, as the compiled engine already did. A tts decoder placed on the host by a 16 GB plan no longer stops the oracle at its first weight-norm.

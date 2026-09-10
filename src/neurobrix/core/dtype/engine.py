@@ -321,6 +321,52 @@ def cpu_fp32_wrapper(func):
     return wrapper
 
 
+# Dtype names the container may use for a complex output. Compared by NAME so
+# the same predicate serves the Triton branch, where dtype crosses the boundary
+# as a string and no torch.dtype exists (R33).
+_COMPLEX_DTYPE_NAMES: FrozenSet[str] = frozenset({
+    "complex32", "complex64", "complex128", "chalf", "cfloat", "cdouble",
+})
+
+
+def traced_output_is_complex(op_meta: Optional[Dict[str, Any]]) -> bool:
+    """True when the CONTAINER says this op produces a complex tensor.
+
+    The signal is the traced OUTPUT dtype — never the op's name, never its
+    inputs. Both alternatives are provably blind:
+
+    * By NAME: AMP_FP32_OPS carries a hand-written `{polar, view_as_complex}`
+      pair. The cached zoo (5 components, 490 complex-touching ops, surveyed
+      2026-09-10) also produces complex from `aten::complex` (MiniCPM-o hift,
+      chatterbox s3gen), `aten::stft`, `aten::_fft_r2c` and a plain
+      `aten::mul` — and a generic `mul` can produce one in any model ever
+      traced. A name list cannot be completed.
+    * By INPUTS: Kokoro's decoder traces `aten::mul` with
+      `input_dtypes=['float32']` and `output_dtypes=['complex64']` — the
+      other operand is the Python scalar `1j`, which no inspection of the
+      arguments can see.
+
+    Why it matters (measured, torch 2.5.1+cu121): `fp16 * 1j` and
+    `torch.complex(fp16, fp16)` yield **complex32**, and `exp`, `angle` and
+    `_fft_c2r` have no ComplexHalf kernel — they raise. A half input at a
+    complex-producing op therefore turns a traced complex64 into a crash two
+    ops later.
+
+    `op_meta` is whichever dict the caller holds that carries the op's traced
+    dtypes: the merged attributes the compiled sequence builds, or the op's
+    graph record itself. Only `output_dtypes` is read, and it must be at the
+    TOP level of that dict — `op_data["attributes"]` does not carry it, and
+    handing that in reads as "not complex", losing the floor in silence.
+    """
+    if not isinstance(op_meta, dict):
+        return False
+    # Last dotted segment, not a `torch.` strip: the container writes plain
+    # strings, but a caller holding a torch.dtype or an NBXDtype reads the same
+    # way, so the two branches' copies cannot disagree on representation.
+    return any(str(d).rsplit(".", 1)[-1] in _COMPLEX_DTYPE_NAMES
+               for d in (op_meta.get("output_dtypes") or ()))
+
+
 # Ops that MUST run in float32 for numerical stability.
 # Combines AT_FORALL_FP32 + AT_FORALL_FP32_SET_OPT_DTYPE.
 # Output stays in fp32 — downstream FP16 ops bring it back to compute_dtype.
@@ -350,6 +396,16 @@ AMP_FP32_OPS: FrozenSet[str] = frozenset({
     # Complex number ops — EXTENSION (not in PyTorch autocast).
     # Require fp32 because complex32/fp16 doesn't exist on CUDA.
     # Used in RoPE implementations (DeepSeek-V2, etc.)
+    #
+    # These two are the FALLBACK, not the rule. The primary protection is
+    # `traced_output_is_complex`, which reads the container's own
+    # output_dtypes and therefore also covers `aten::complex`, `aten::stft`,
+    # `aten::_fft_r2c` and a plain `aten::mul` — all observed producing
+    # complex in the cached zoo. These names stay for a graph that carries no
+    # output_dtypes at all; do NOT try to complete the list, a generic `mul`
+    # can produce a complex in any model ever traced. Note the two rules also
+    # differ deliberately: this set LEVELS every non-fp32 float to fp32, the
+    # complex rule is a FLOOR that preserves float64.
     "polar", "view_as_complex",
     # Other
     "renorm", "logsumexp",
@@ -575,6 +631,18 @@ class DtypeEngine:
 
         assert func is not None, f"ZERO FALLBACK: func cannot be None for op {op_name}"
 
+        # A complex-producing op never receives a half input — decided from
+        # the container's own output_dtypes (traced_output_is_complex). FIRST,
+        # above every other rule: complex32 is not a precision trade-off, it
+        # is a crash at the next `exp`/`angle`/`_fft_c2r`, which have no
+        # ComplexHalf kernel. It wins over the AMP class (`view_as_complex`
+        # sits in AMP_FP32_OPS, whose leveller downcasts Wan's float64 RoPE),
+        # over the AMP gate, and over the vendor fp32 pin — a pin is a
+        # precision choice among REAL dtypes and cannot validly retype a
+        # traced complex128 contract to complex64.
+        if traced_output_is_complex(attrs):
+            return self._make_complex_output_wrapper(func)
+
         # Creation-fill guard: independent of the amp_enabled gate — the
         # Prism dtype remap (bf16→fp16 kwarg) happens regardless of AMP,
         # so the scalar clamp must too. See AMP_CREATION_FILL_OPS.
@@ -721,6 +789,36 @@ class DtypeEngine:
         """The host-precision remedy (`cpu_fp32_wrapper`), reached from the
         per-op wrapper chain when the op is in `CPU_NO_HALF_OPS`."""
         return cpu_fp32_wrapper(func)
+
+    def _make_complex_output_wrapper(self, func: Callable) -> Callable:
+        """An op the container types as complex-producing never sees a half
+        input — a FLOOR, not a leveller.
+
+        `_make_fp32_wrapper` levels every non-fp32 float to fp32, which would
+        downcast the float64 that Wan2.1's RoPE feeds to `view_as_complex`
+        (240 float64 ops, 148 complex128 outputs in the 1.3B transformer) and
+        silently retype its complex128 contract to complex64. This wrapper
+        raises fp16/bf16 to fp32 and leaves fp32, fp64 and complex operands
+        exactly as the trace has them, so the op emits the width the
+        container recorded.
+
+        It DOES keep `_make_fp32_wrapper`'s contiguity normalisation, which
+        `polar` and `view_as_complex` relied on before this rule short-
+        circuited them out of AMP_FP32_OPS: `torch.view_as_complex` requires
+        a last dimension of stride 1 and even strides, so an upstream
+        channels-last conv would make it raise. Contiguous tensors return
+        themselves at no cost (see the CLAUDE.md contiguous-guard pattern).
+        """
+        def complex_out_func(*args, **kwargs):
+            new_args = tuple(
+                a.float().contiguous() if isinstance(a, torch.Tensor)
+                and a.dtype in (torch.float16, torch.bfloat16)
+                else (a.contiguous() if isinstance(a, torch.Tensor)
+                      and not a.is_contiguous() else a)
+                for a in args
+            )
+            return func(*new_args, **kwargs)
+        return complex_out_func
 
     def _make_fp32_wrapper(self, func: Callable) -> Callable:
         """
@@ -937,7 +1035,8 @@ class DtypeEngine:
     # ========================================================================
 
     def amp_cast_inputs(self, op_type: str, args: list,
-                        op_uid: Optional[str] = None) -> list:
+                        op_uid: Optional[str] = None,
+                        op_record: Optional[Dict[str, Any]] = None) -> list:
         """
         Apply AMP input casting for a single op call at runtime.
 
@@ -947,6 +1046,19 @@ class DtypeEngine:
         Returns new args list with AMP casting applied. Does NOT wrap the
         function — just transforms inputs.
         """
+        # Runtime mirror of compile_op's first rule — see there. `op_record` is
+        # the op's graph entry (`op_data`), whose output_dtypes sit at the TOP
+        # level, not inside its "attributes" — hence the name, distinct from
+        # compile_op's `attrs`, which is the merged dict its caller builds.
+        # Without it this path would let --sequential build a complex32 the
+        # compiled oracle never builds (R30).
+        if traced_output_is_complex(op_record):
+            return [
+                a.float() if isinstance(a, torch.Tensor)
+                and a.dtype in (torch.float16, torch.bfloat16) else a
+                for a in args
+            ]
+
         if self.compute_dtype not in (torch.float16, torch.bfloat16):
             return args
 

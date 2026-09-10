@@ -2535,7 +2535,8 @@ class GraphExecutor:
                         *resolved_args, **resolved_kwargs)
                 else:
                     # Dispatch
-                    result = dispatcher.dispatch(op_type, resolved_args, attrs, op_uid=op_uid)
+                    result = dispatcher.dispatch(op_type, resolved_args, attrs, op_uid=op_uid,
+                                                 op_record=op_data)
             except Exception as _e_seq:
                 # Op-localized error (R30 mirror of the compiled "Failed at op"):
                 # name the op_uid + which positional args were None so a
@@ -4089,7 +4090,7 @@ class GraphExecutor:
 
         # AMP: Cast inputs per DtypeEngine rules (fp32 for pow/rsqrt/softmax, etc.)
         normalized_inputs = self._dtype_engine.amp_cast_inputs(op_type, normalized_inputs,
-                                                               op_uid=op_uid)
+                                                               op_uid=op_uid, op_record=op_data)
 
         # Check for op interceptors. Priority order matches CompiledSequence
         # and TritonSequence: op_uid (fine-grained, op-level tiling Prism)
