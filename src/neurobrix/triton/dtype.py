@@ -36,6 +36,10 @@ AMP_FP32_OPS: FrozenSet[str] = frozenset({
     "frobenius_norm", "nuclear_norm", "cosine_similarity",
     "poisson_nll_loss", "cosine_embedding_loss", "nll_loss",
     "mse_loss", "smooth_l1_loss", "huber_loss",
+    # FALLBACK only — the primary protection is `traced_output_is_complex`
+    # (container output_dtypes). See the note in core/dtype/engine.py: do not
+    # try to complete this pair, and note this set LEVELS to fp32 while the
+    # complex rule is a FLOOR that preserves float64.
     "polar", "view_as_complex",
     "renorm", "logsumexp",
     # Phase 1 — Removed nearest variants from AMP_FP32_OPS (mirror PyTorch
@@ -92,6 +96,39 @@ AMP_PROMOTE_OPS: FrozenSet[str] = frozenset({
 })
 
 _FLOATING = frozenset({NBXDtype.float16, NBXDtype.bfloat16, NBXDtype.float32, NBXDtype.float64})
+
+
+# Mirror of core/dtype/engine.py's predicate. Duplicated, not imported: that
+# module imports torch, and the Triton branch loads no torch at import or at
+# execution (R33). The two-modes doctrine keeps these paths parallel by
+# construction — AMP_FP32_OPS / AMP_FP16_OPS above are duplicated for the same
+# reason. Dtype crosses this boundary as a STRING, which is all the predicate
+# reads, so the two copies cannot drift on representation.
+_COMPLEX_DTYPE_NAMES = frozenset({
+    "complex32", "complex64", "complex128", "chalf", "cfloat", "cdouble",
+})
+
+
+def traced_output_is_complex(op_meta) -> bool:
+    """True when the CONTAINER types this op's output as complex.
+
+    See core/dtype/engine.traced_output_is_complex for the full rationale: the
+    op's NAME cannot answer this (a plain `aten::mul` produces Kokoro's
+    complex64) and neither can its INPUTS (the other operand is the Python
+    scalar `1j`, absent from input_dtypes). NBXDtype carries complex64 and
+    complex128 — Wan2.1's RoPE freqs are complex128 — so the Triton branch
+    needs the same floor as the ATen branch.
+
+    `op_meta` carries the op's traced dtypes — the op's graph record here.
+    Only `output_dtypes` is read, at that dict's TOP level.
+    """
+    if not isinstance(op_meta, dict):
+        return False
+    # Last dotted segment — see the core copy: it makes the two branches read
+    # a plain string, a torch.dtype and an NBXDtype identically, so the
+    # duplication cannot drift on representation.
+    return any(str(d).rsplit(".", 1)[-1] in _COMPLEX_DTYPE_NAMES
+               for d in (op_meta.get("output_dtypes") or ()))
 
 
 def _is_float_tensor(a) -> bool:
@@ -284,7 +321,8 @@ class TritonDtypeEngine:
         self._fp32_op_uids = frozenset(fp32_op_uids or ())
         self._narrow_op_uids = frozenset(narrow_op_uids or ())
 
-    def wrap_op(self, op_name: str, func: Callable, op_uid: Optional[str] = None) -> Callable:
+    def wrap_op(self, op_name: str, func: Callable, op_uid: Optional[str] = None,
+                op_record: Optional[dict] = None) -> Callable:
         """Wrap an op function with AMP casting rules.
 
         Args:
@@ -292,10 +330,22 @@ class TritonDtypeEngine:
             func: the raw kernel wrapper function
             op_uid: the op's uid in the graph — the precision contract's
                 per-op islands are keyed on it
+            op_record: the op's graph entry (`op_data`). Only one key is read,
+                `output_dtypes`, and it sits at the record's TOP level — NOT
+                inside `op_data["attributes"]`. Handing the attributes dict
+                instead reads as "not complex" and loses the floor silently,
+                which is why the parameter is not called `attrs`.
 
         Returns:
             Wrapped function with dtype casting applied
         """
+        # A complex-producing op never receives a half input — mirror of the
+        # ATen branch's first rule, ahead of the islands for the same reason:
+        # an island is a precision choice among REAL dtypes and cannot retype
+        # a traced complex128 to complex64 by levelling its float64 input.
+        if traced_output_is_complex(op_record):
+            return self._wrap_complex_output(func)
+
         # The calibration record's islands come FIRST: a pinned op computes
         # in fp32 and keeps its fp32 output whatever its AMP class — a
         # self-managed conv included (its wrapper follows the fp32 inputs).
@@ -335,6 +385,38 @@ class TritonDtypeEngine:
             return self._wrap_promote(func)
 
         return func
+
+    def _wrap_complex_output(self, func: Callable) -> Callable:
+        """Raise fp16/bf16 operands to fp32 and leave every other dtype alone.
+
+        A FLOOR, not a leveller: `_wrap_fp32` casts every non-fp32 float to
+        fp32, which would downcast the float64 that Wan2.1's RoPE feeds to
+        `view_as_complex` and retype its complex128 output to complex64. Its
+        contiguity normalisation IS kept (contiguous-guard pattern).
+
+        This rule concerns TENSOR OPERANDS. It does not contradict the
+        deliberate narrowing of complex128/float64 CONSTANTS at attribute
+        resolution (`sequence.py`, `sequential.py`): a constant is materialised
+        by this branch, and NBX complex64 is a pair of fp32, while an operand's
+        width is whatever the producing op handed over.
+
+        Defensive rather than load-bearing today: NBXTensor has no complex32
+        representation at all (complex64 = fp32 pairs), and `complex_wrapper`
+        / `fft_r2c_wrapper` / `NBXTensor.view_as_complex` already force fp32.
+        It is here so the rule is the same rule in all four modes (R30).
+        """
+        def complex_out_func(*args, **kwargs):
+            new_args = tuple(
+                a.to(NBXDtype.float32).contiguous()
+                if _is_float_tensor(a) and _get_nbx_dtype(a) in (
+                    NBXDtype.float16, NBXDtype.bfloat16)
+                else (a.contiguous()
+                      if hasattr(a, "contiguous") and hasattr(a, "is_contiguous")
+                      and not a.is_contiguous() else a)
+                for a in args
+            )
+            return func(*new_args, **kwargs)
+        return complex_out_func
 
     def _wrap_fp32(self, func: Callable) -> Callable:
         """Upcast float inputs to fp32, and run the op with fp32 as the

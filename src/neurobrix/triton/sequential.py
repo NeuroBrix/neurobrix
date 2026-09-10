@@ -154,9 +154,11 @@ class TritonSequentialDispatcher:
         return resolved
 
     def dispatch(self, op_type: str, inputs: List[Any],
-                 attributes: Dict[str, Any], op_uid: Optional[str] = None) -> Any:
+                 attributes: Dict[str, Any], op_uid: Optional[str] = None,
+                 op_record: Optional[Dict[str, Any]] = None) -> Any:
         """Dispatch a single op to Triton kernel (`op_uid` keys the precision
-        contract's per-op islands)."""
+        contract's per-op islands; `op_record` is the op's graph entry, read
+        for the traced `output_dtypes` — see TritonDtypeEngine.wrap_op)."""
         clean = op_type.replace("aten::", "").replace("custom::", "")
         base = clean.split(".")[0]
 
@@ -173,7 +175,8 @@ class TritonSequentialDispatcher:
         # path's kwargs forwarding below.
         if op_type == "custom::rms_norm":
             kwargs = self.resolve_kwargs(attributes)
-            func = self._dtype_engine.wrap_op("rms_norm", w.rms_norm)
+            func = self._dtype_engine.wrap_op("rms_norm", w.rms_norm,
+                                              op_record=op_record)
             if kwargs:
                 return func(*inputs, **kwargs)
             return func(*inputs)
@@ -208,7 +211,8 @@ class TritonSequentialDispatcher:
         func = kernel_dispatch(base)
         if func is None:
             raise RuntimeError(f"[triton-sequential] No kernel for: {op_type}")
-        func = self._dtype_engine.wrap_op(base, func, op_uid=op_uid)
+        func = self._dtype_engine.wrap_op(base, func, op_uid=op_uid,
+                                          op_record=op_record)
 
         if kwargs:
             return func(*inputs, **kwargs)
