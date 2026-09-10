@@ -186,7 +186,17 @@ class TritonAudioLLMEngine:
         dtype = self._compute_dtype()
 
         from neurobrix.core.runtime.decode_bound import decode_bound  # NBX_DECODE_BOUND harness
-        max_tokens = decode_bound(defaults.get("max_tokens"))
+        # The request's own budget first (global.max_tokens from the CLI /
+        # serve request), the container default after — the mirror of the
+        # autoregressive generator's resolver cascade (R30). A 600 s
+        # recording needs ~2,000 tokens; the default 448 truncated the
+        # long-form transcript (2026-09-03 gate).
+        _mt = self.ctx.variable_resolver.resolved.get("global.max_tokens")
+        if _mt is None:
+            _mt = self.ctx.variable_resolver.resolved.get("max_tokens")
+        if _mt is None:
+            _mt = defaults.get("max_tokens")
+        max_tokens = decode_bound(_mt)
         if max_tokens is None:
             raise RuntimeError(
                 "ZERO FALLBACK: max_tokens missing from defaults.json.")

@@ -42,6 +42,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stated reason is returned by the download API.
 
 ### Fixed
+- An audio-LLM request's own token budget is honoured instead of the container's default.
+  A long recording needs several thousand tokens and the default capped the transcript,
+  truncating it without a word. Both engines now read the request first and the container
+  after, the same order the text generator already used.
 
 - **Long recordings are transcribed in full by the audio language models
   of the Voxtral class, on both engines.** The audio-to-text flow used to
