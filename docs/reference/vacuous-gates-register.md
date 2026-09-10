@@ -1,6 +1,10 @@
 # Register of vacuous gates — instrumentation that lies by construction
 
-**One instance per entry. A count, not an impression.**
+**A class whose failure mode is silence is invisible to the suite that contains
+it. So this register is not bookkeeping — it is the only instrument the class
+admits.**
+
+One instance per entry. A count, not an impression.
 
 This class is the most productive shared finding of this project, and until now
 it had no home: two machines were counting it independently, each reaching "the
