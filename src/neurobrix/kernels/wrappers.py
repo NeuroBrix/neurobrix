@@ -14,6 +14,7 @@ import triton
 
 from .nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, _broadcast_shapes, _set_device, dtype_size
 from .nbx_tensor import DeviceOOMError
+from .nbx_tensor import device_fault_buffer, device_fault_code_cached
 from .ops._configs import sdpa_block_ceiling as _sdpa_block_ceiling
 
 # Route this module's kernel[grid] sites through the engine's launcher.
@@ -142,7 +143,7 @@ from .ops.dtype_convert import bf16_to_fp16_kernel
 
 # === Embedding ===
 
-from .ops.embedding import embedding_kernel
+from .ops.embedding import embedding_kernel, EMBEDDING_OOB
 
 # === Reductions ===
 
@@ -161,7 +162,7 @@ from .ops.softplus import softplus_forward_kernel
 from .ops.dropout import dropout_inference_kernel
 from .ops.upsample_nearest2d import upsample_nearest2d_kernel
 from .ops.groupnorm import group_norm_forward_kernel
-from .ops.index_select import index_select_kernel
+from .ops.index_select import index_select_kernel, INDEX_SELECT_OOB
 from .ops.triu import triu_kernel, triu_batch_kernel
 from .ops.tril import tril_kernel, tril_batch_kernel
 from .ops.argmax import argmax_kernel_1, argmax_kernel_2, argmax_kernel_inner
@@ -220,7 +221,7 @@ from .ops.nllloss import nll_loss_forward_kernel
 from .ops.std import std_map_kernel, std_reduce_kernel, std_dim_kernel
 from .ops.var import var_kernel_1, var_kernel_2, var_welford_kernel
 from .ops.index_add import index_add_gather_kernel
-from .ops.index_put_op import index_put_kernel
+from .ops.index_put_op import index_put_kernel, INDEX_PUT_OOB
 from .ops.sort_op import radix_sort_histogram_kernel, radix_sort_sweep_kernel
 
 # === Phase 5: RoPE, spatial, RNG, remaining ===
@@ -2717,7 +2718,11 @@ def embedding(weight, indices, padding_idx=-1, **kwargs) :
     output = NBXTensor.empty((*indices.shape, N), dtype=weight.nbx_dtype if hasattr(weight, 'nbx_dtype') else weight.dtype, device=dev)
     _set_device(weight)
     # weight.shape[0] = the id bound the kernel traps on (OOB parity with torch).
-    embedding_kernel[M,](output, indices, weight, weight.shape[0], N, BLOCK_SIZE)
+    embedding_kernel[M,](
+        output, indices, weight, weight.shape[0],
+        device_fault_buffer(weight._device_idx),
+        device_fault_code_cached(EMBEDDING_OOB),
+        N, BLOCK_SIZE)
     return output
 
 
@@ -3163,7 +3168,11 @@ def index_select_wrapper(x, dim: int, index) :
     BLOCK_N = min(64, triton.next_power_of_2(index_len))
     grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(index_len, BLOCK_N))
     _set_device(x)
-    index_select_kernel[grid](x, out, M, N, index, index_len, BLOCK_M, BLOCK_N)
+    index_select_kernel[grid](
+        x, out, M, N, index, index_len,
+        device_fault_buffer(x._device_idx),
+        device_fault_code_cached(INDEX_SELECT_OOB),
+        BLOCK_M, BLOCK_N)
     if _sentinel:
         import numpy as _np
         _o = out.numpy()
@@ -5450,6 +5459,8 @@ def index_put_wrapper(x, indices, values, accumulate: bool = False):
     index_put_kernel[_1d_grid(N)](
         out, idx, vbuf,
         T, N, out.shape[0],  # R: the row bound the kernel traps on (OOB parity with torch)
+        device_fault_buffer(out._device_idx),
+        FAULT_CODE=device_fault_code_cached(INDEX_PUT_OOB),
         VAL_SCALAR=val_scalar,
         ACCUMULATE=bool(accumulate),
         BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS,
