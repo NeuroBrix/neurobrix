@@ -44,16 +44,21 @@ One engine. One CLI. One container format. Import a model, run it. The runtime d
 
 | Capability | Ollama | llama.cpp | vLLM | ComfyUI | **NeuroBrix** |
 |:-----------|:------:|:---------:|:----:|:-------:|:-------------:|
-| LLMs | Yes | Yes | Yes | -- | **Yes** |
+| LLMs | Yes | Yes | Yes | Yes | **Yes** |
+| Vision-language understanding | Yes | Yes | Yes | Yes | **Yes** |
+| Speech in (STT / audio understanding) | -- | Yes | Yes | -- | **Yes** |
+| Speech out (TTS) | -- | -- | -- | Audio generation | **Yes** |
 | Image generation | -- | -- | -- | Yes | **Yes** |
-| Video generation | -- | -- | -- | -- | **Yes** |
-| Audio (STT + TTS) | -- | -- | -- | -- | **Yes** |
-| Multimodal (understand + generate) | -- | -- | -- | -- | **Yes** |
-| Mixture-of-Experts | -- | -- | Yes | -- | **Yes** |
-| Multi-GPU auto-allocation | -- | -- | Yes | -- | **Yes** |
-| Cross-platform (Linux, Windows, macOS) | Yes | Yes | -- | -- | **Yes** |
-| Universal model format | -- | GGUF (LLM only) | -- | -- | **NBX (any model)** |
+| Video generation | -- | -- | -- | Yes | **Yes** |
+| Mixture-of-Experts | Yes | Yes | Yes | -- | **Yes** |
+| Multi-GPU | Yes (layer split) | Yes (layer / tensor split) | Yes (tensor / pipeline parallel) | -- | **Yes** |
+| Placement chosen by a solver rather than a flag | -- | -- | -- | -- | **Yes (Prism, 10 strategies)** |
+| Linux, Windows and macOS | Yes | Yes | Linux (WSL on Windows) | Yes | **Yes** |
+| Universal model format | -- | GGUF (text and multimodal LLM) | -- | -- | **NBX (any model)** |
 | No model-specific code | -- | -- | -- | -- | **Yes** |
+
+Capabilities only — no speed claim is made here, in either direction. Each competitor cell was
+re-read against that project's own documentation in September 2026.
 
 Other tools solve one piece of the puzzle. NeuroBrix solves the whole puzzle.
 
@@ -91,7 +96,7 @@ pip install neurobrix
 |----------|-------------|-------|
 | **Linux** | CUDA, Triton kernels | Full support, recommended for production |
 | **Windows** | CUDA | Fully supported. Triton not available on Windows |
-| **macOS** | Apple Silicon (MPS) | M-series GPUs via PyTorch MPS. Triton not available on macOS |
+| **macOS** | Apple Silicon (MPS); Triton on Apple GPUs in progress | M-series GPUs via PyTorch MPS. Triton execution on Apple GPUs is proven on the public branch `metal-first-light` — first light passed, a complete language model run end to end, with a Metal allocator and a vendor-agnostic launcher and no torch dependency in the Triton path. Not on `main` yet |
 
 **Requirements:** Python 3.10+ / PyTorch 2.1+. NVIDIA GPU (CUDA) recommended for production; Apple Silicon (MPS) and CPU-only execution are also supported.
 
@@ -139,7 +144,7 @@ NeuroBrix runs **9 model families** through one uniform CLI — image, video, LL
 ### Image Generation
 
 ```bash
-neurobrix run --model Sana_1600M_4Kpx_BF16 \
+neurobrix run --model Sana-1600M-4Kpx-BF16 \
     --prompt "A sunset over mountains" \
     --steps 20 --cfg 5.0 --seed 42 \
     --height 1024 --width 1024 \
@@ -159,13 +164,13 @@ neurobrix run --model Sana_1600M_4Kpx_BF16 \
 
 ```bash
 # Single-shot
-neurobrix run --model deepseek-moe-16b-chat \
+neurobrix run --model DeepSeek-MoE-16B-Chat \
     --prompt "Explain quantum computing in simple terms" \
     --temperature 0.7 --max-tokens 512 \
     --output response.txt
 
 # Interactive chat (requires serve mode)
-neurobrix serve --model deepseek-moe-16b-chat
+neurobrix serve --model DeepSeek-MoE-16B-Chat
 neurobrix chat --temperature 0.7
 neurobrix stop
 ```
@@ -193,26 +198,26 @@ neurobrix run --model <vlm-model> \
     --prompt "What animal is in this image?"
 
 # Multimodal — image generation head
-neurobrix run --model Janus-Pro-7B \
+neurobrix run --model janus-pro-7b \
     --mode image --prompt "a red cat sitting on a couch"
 
 # Multimodal — text understanding head
-neurobrix run --model Janus-Pro-7B \
+neurobrix run --model janus-pro-7b \
     --mode text --input-image cat.jpg --prompt "describe this image"
 
 # Omni understanding — image, audio, or video inputs
-neurobrix run --model Ming-Lite-Omni-1.5 \
+neurobrix run --model ming-lite-omni-1.5 \
     --mode text --input-image photo.png --prompt "What fruit is shown?"
-neurobrix run --model Qwen3-Omni-30B-A3B-Instruct \
+neurobrix run --model qwen3-omni-30b-a3b-instruct \
     --mode text --audio clip.wav --prompt "What is said in this audio?"
-neurobrix run --model Qwen3-VL-30B-A3B-Thinking \
+neurobrix run --model qwen3-vl-30b-a3b-thinking \
     --mode text --input-video clip.mp4 --prompt "What happens in this video?"
 ```
 
 ### Audio — Speech-to-Text (STT)
 
 ```bash
-neurobrix run --model whisper-large --audio recording.wav
+neurobrix run --model Whisper-Large-V2 --audio recording.wav
 ```
 
 | Flag | Description | Default |
@@ -241,7 +246,7 @@ neurobrix run --model Kokoro-82M \
 Audio-conditioned LLMs take **both** an audio file and a text instruction — they answer questions or transcribe-on-demand, not blind transcription.
 
 ```bash
-neurobrix run --model Voxtral-Mini-3B-2507 \
+neurobrix run --model Voxtral-Mini-3B \
     --audio meeting.wav \
     --prompt "Transcribe this audio." \
     --output transcript.txt
@@ -260,14 +265,14 @@ neurobrix run --model Voxtral-Mini-3B-2507 \
 Upscalers take an input image and emit a higher-resolution one (the scale factor is per-model). Use the dedicated `upscale` command, which also exposes `--mode` directly:
 
 ```bash
-neurobrix upscale --model hat-l-x4 \
+neurobrix upscale --model HAT-L-x4 \
     --input photo.png --output photo_4x.png \
     --mode compiled
 ```
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--model` | Upscaler model name (e.g. `hat-l-x4`, `real-esrgan-x4`, `swinir-classical-x4`) | Required |
+| `--model` | Upscaler model name (e.g. `HAT-L-x4`, `Real-ESRGAN-x4`, `SwinIR-Classical-x4`) | Required |
 | `--input` | Input image path (PNG/JPEG) | Required |
 | `--output` | Output image path (PNG) | Required |
 | `--mode` | Execution mode: `compiled` / `sequential` / `triton` / `triton-sequential` | `compiled` |
@@ -280,7 +285,7 @@ The video family covers **text-to-video and image-to-video** (11 models — Wan 
 
 ```bash
 # Text-to-video
-neurobrix run --model SANA-Video_2B_720p \
+neurobrix run --model SANA-Video-2B-720p \
     --prompt "A cat playing piano" \
     --steps 30 --cfg 5.0 --seed 42 \
     --num-frames 81 \
@@ -334,10 +339,10 @@ If you pass no mode flag, NeuroBrix runs `--compiled`.
 
 ```bash
 # Same model, four ways:
-neurobrix run --model Sana_1600M_1024px_MultiLing --prompt "a red fox" --output fox.png                      # compiled (default)
-neurobrix run --model Sana_1600M_1024px_MultiLing --prompt "a red fox" --sequential        --output fox.png  # PyTorch op-by-op
-neurobrix run --model Sana_1600M_1024px_MultiLing --prompt "a red fox" --triton            --output fox.png  # Triton compiled
-neurobrix run --model Sana_1600M_1024px_MultiLing --prompt "a red fox" --triton-sequential --output fox.png  # Triton op-by-op
+neurobrix run --model Sana-1600M-MultiLing --prompt "a red fox" --output fox.png                      # compiled (default)
+neurobrix run --model Sana-1600M-MultiLing --prompt "a red fox" --sequential        --output fox.png  # PyTorch op-by-op
+neurobrix run --model Sana-1600M-MultiLing --prompt "a red fox" --triton            --output fox.png  # Triton compiled
+neurobrix run --model Sana-1600M-MultiLing --prompt "a red fox" --triton-sequential --output fox.png  # Triton op-by-op
 ```
 
 > Every supported model is validated in all four execution modes, and the modes are cross-checked for numerical agreement — they produce the same output (modulo floating-point numerics). Sampling is deterministically seeded: the same `--seed` reproduces the same output on the same hardware. The four mode flags are also available on `neurobrix serve`; `neurobrix upscale` selects the same modes via `--mode <compiled|sequential|triton|triton-sequential>`.
@@ -370,7 +375,7 @@ neurobrix hub --search sana
 neurobrix import THUDM/CogVideoX-2b
 
 # Import and delete the .nbx archive to save disk space
-neurobrix import pixart/sigma-xl-1024 --no-keep
+neurobrix import PixArt/PixArt-Sigma-XL-1024 --no-keep
 
 # Force re-import (overwrites existing)
 neurobrix import Vendor/Model_Name --force
@@ -421,95 +426,98 @@ NeuroBrix is a **runtime engine** — it executes models but does **not train or
 
 There are two levels of support:
 
-- **Published on the hub** — pre-built `.nbx` containers, downloadable with `neurobrix import` (42 models across 10 categories).
+- **Published on the hub** — pre-built `.nbx` containers, downloadable with `neurobrix import` (47 models across 10 categories).
 - **Validated by the engine** — models validated in all four execution modes; hub packages are being published progressively.
 
 ### Published on the Hub
 
 #### Image Generation
 
-| Model | Author | License | Size |
-|-------|--------|---------|-----:|
-| PixArt-Sigma-XL-1024 | PixArt | OpenRAIL++ | 20.3 GB |
-| PixArt-XL-1024 | PixArt | OpenRAIL++ | 20.4 GB |
-| Sana-1600M-MultiLing | NVIDIA | NVIDIA Open Model License | 12.1 GB |
-| Sana-1600M-4Kpx-BF16 | NVIDIA | NVIDIA Open Model License | 12.1 GB |
-| Flex.1-alpha | Ostris | Apache 2.0 | 24.5 GB |
+| Model (`neurobrix import`) | Author | License | Size |
+|---|---|---|---:|
+| `ostris/Flex.1-alpha` | ostris | Apache 2.0 | 26.3 GB |
+| `PixArt/PixArt-Sigma-XL-1024` | PixArt | OpenRAIL++ | 21.8 GB |
+| `PixArt/PixArt-XL-1024` | PixArt | OpenRAIL++ | 21.9 GB |
+| `NVlabs/Sana-1600M-4Kpx-BF16` | NVlabs | NVIDIA Open Model License | 13.0 GB |
+| `NVlabs/Sana-1600M-MultiLing` | NVlabs | NVIDIA Open Model License | 13.0 GB |
 
 #### Video Generation
 
-| Model | Author | License | Type |
-|-------|--------|---------|------|
-| Wan-AI/Wan2.1-T2V-1.3B | Alibaba | Apache 2.0 | text-to-video |
-| Wan-AI/Wan2.1-VACE-1.3B | Alibaba | Apache 2.0 | video creation & editing |
-| Wan-AI/Wan2.1-I2V-14B-480P | Alibaba | Apache 2.0 | image-to-video |
-| Wan-AI/Wan2.2-I2V-A14B | Alibaba | Apache 2.0 | image-to-video, 28B dual-denoiser |
-| THUDM/CogVideoX-2b | Zhipu AI | Apache 2.0 | text-to-video |
-| THUDM/CogVideoX-5b-I2V | Zhipu AI | CogVideoX License | image-to-video |
-| genmo/Mochi-1-preview | Genmo | Apache 2.0 | text-to-video |
-| hpcai-tech/Open-Sora-v2 | HPC-AI Tech | Apache 2.0 | text-to-video |
-| rhymes-ai/Allegro | Rhymes AI | Apache 2.0 | text-to-video, native 720×1280, 88 frames |
-| rhymes-ai/Allegro-TI2V | Rhymes AI | Apache 2.0 | image-to-video |
-| Efficient-Large-Model/SANA-Video-2B-720p | NVIDIA | NVIDIA Open Model License | text-to-video, 720p |
+| Model (`neurobrix import`) | Author | License | Size | Type |
+|---|---|---|---:|---|
+| `rhymes-ai/Allegro` | rhymes-ai | Apache 2.0 | 25.3 GB | text-to-video |
+| `rhymes-ai/Allegro-TI2V` | rhymes-ai | Apache 2.0 | 26.1 GB | image-to-video |
+| `THUDM/CogVideoX-2b` | THUDM | Apache 2.0 | 14.2 GB | text-to-video |
+| `THUDM/CogVideoX-5b-I2V` | THUDM | CogVideoX License | 23.1 GB | image-to-video |
+| `genmo/Mochi-1-preview` | genmo | Apache 2.0 | 41.0 GB | text-to-video |
+| `hpcai-tech/Open-Sora-v2` | hpcai-tech | Apache 2.0 | 45.6 GB | text-to-video |
+| `Efficient-Large-Model/SANA-Video-2B-720p` | Efficient-Large-Model | NVIDIA Open Model License | 18.4 GB | text-to-video |
+| `Wan-AI/Wan2.1-I2V-14B-480P` | Wan-AI | Apache 2.0 | 90.7 GB | image-to-video |
+| `Wan-AI/Wan2.1-T2V-1.3B` | Wan-AI | Apache 2.0 | 29.0 GB | text-to-video |
+| `Wan-AI/Wan2.1-VACE-1.3B` | Wan-AI | Apache 2.0 | 19.6 GB | text-to-video |
+| `Wan-AI/Wan2.2-I2V-A14B` | Wan-AI | Apache 2.0 | 126.8 GB | image-to-video |
 
 #### Audio (Speech-to-Text, Speech Understanding, Text-to-Speech)
 
-| Model | Author | License | Size | Type |
-|-------|--------|---------|-----:|------|
-| Whisper-Large-V3 | OpenAI | MIT | 5.8 GB | STT |
-| Whisper-V3-Turbo | OpenAI | MIT | 1.5 GB | STT |
-| Parakeet-TDT-1.1B | NVIDIA | CC-BY-4.0 | 4.1 GB | STT |
-| Voxtral-Mini-3B | Mistral AI | Apache 2.0 | 8.7 GB | audio_llm |
-| Canary-Qwen-2.5B | NVIDIA | CC-BY-4.0 | 4.8 GB | audio_llm |
-| Granite-Speech-3.3-8B | IBM | Apache 2.0 | 16.1 GB | audio_llm |
-| Orpheus-3B | Canopy Labs | Apache 2.0 | 14.2 GB | TTS |
-| Kokoro-82M | Hexgrad | Apache 2.0 | 385 MB | TTS |
-| VibeVoice-1.5B | Microsoft | MIT | 5.1 GB | TTS |
-| OpenAudio-S1-Mini | Fish Audio | CC-BY-NC-SA-4.0 | 4.0 GB | TTS |
-| Chatterbox | Resemble AI | MIT | 2.1 GB | TTS |
+| Model (`neurobrix import`) | Author | License | Size | Type |
+|---|---|---|---:|---|
+| `nvidia/Canary-Qwen-2.5B` | nvidia | CC-BY-4.0 | 5.1 GB | speech understanding |
+| `ibm-granite/Granite-Speech-3.3-8B` | ibm-granite | Apache 2.0 | 17.3 GB | speech understanding |
+| `mistralai/Voxtral-Mini-3B` | mistralai | Apache 2.0 | 9.4 GB | speech understanding |
+| `nvidia/Parakeet-TDT-1.1B` | nvidia | CC-BY-4.0 | 4.4 GB | speech-to-text |
+| `openai/Whisper-Large-V2` | openai | MIT | 6.2 GB | speech-to-text |
+| `openai/Whisper-V3-Turbo` | openai | MIT | 1.6 GB | speech-to-text |
+| `resemble-ai/Chatterbox` | resemble-ai | MIT | 2.2 GB | text-to-speech |
+| `hexgrad/Kokoro-82M` | hexgrad | Apache 2.0 | 384 MB | text-to-speech |
+| `fishaudio/OpenAudio-S1-Mini` | fishaudio | CC-BY-NC-SA-4.0 | 4.3 GB | text-to-speech |
+| `canopylabs/Orpheus-3B` | canopylabs | Apache 2.0 | 15.2 GB | text-to-speech |
+| `microsoft/VibeVoice-1.5B` | microsoft | MIT | 5.4 GB | text-to-speech |
 
 #### Image Upscalers (Super-Resolution)
 
-| Model | Author | License | Scale |
-|-------|--------|---------|------:|
-| HAT-L-x4 | XPixelGroup | Apache 2.0 | 4x |
-| Real-ESRGAN-x4 | Xintao Wang et al. | BSD-3-Clause | 4x |
-| SwinIR-Classical-x4 | Jingyun Liang et al. | Apache 2.0 | 4x |
-| Swin2SR-Classical-x4 | Marcos V. Conde et al. | Apache 2.0 | 4x |
+| Model (`neurobrix import`) | Author | License | Size | Scale |
+|---|---|---|---:|---|
+| `XPixelGroup/HAT-L-x4` | XPixelGroup | Apache 2.0 | 192 MB | x4 |
+| `XPixelGroup/HAT-S-x4` | XPixelGroup | Apache 2.0 | 55 MB | x4 |
+| `xinntao/Real-ESRGAN-x4` | xinntao | BSD-3-Clause | 71 MB | x4 |
+| `caidas/Swin2SR-Classical-x2` | caidas | Apache 2.0 | 64 MB | x2 |
+| `caidas/Swin2SR-Classical-x4` | caidas | Apache 2.0 | 64 MB | x4 |
+| `caidas/Swin2SR-RealWorld-x4` | caidas | Apache 2.0 | 64 MB | x4 |
+| `JingyunLiang/SwinIR-Classical-x2` | JingyunLiang | Apache 2.0 | 104 MB | x2 |
+| `JingyunLiang/SwinIR-Classical-x4` | JingyunLiang | Apache 2.0 | 97 MB | x4 |
 
 #### Large Language Models
 
-| Model | Author | License | Size |
-|-------|--------|---------|-----:|
-| DeepSeek-MoE-16B-Chat | DeepSeek | DeepSeek License | 30.6 GB |
-| Qwen3-30B-A3B-Thinking | Alibaba / Qwen | Apache 2.0 | 57.1 GB |
-| TinyLlama-1.1B-Chat | TinyLlama | Apache 2.0 | 2.1 GB |
+| Model (`neurobrix import`) | Author | License | Size |
+|---|---|---|---:|
+| `deepseek-ai/DeepSeek-MoE-16B-Chat` | deepseek-ai | DeepSeek License | 32.8 GB |
+| `Qwen/Qwen3-30B-A3B-Thinking` | Qwen | Apache 2.0 | 61.4 GB |
+| `TinyLlama/TinyLlama-1.1B-Chat` | TinyLlama | Apache 2.0 | 2.2 GB |
 
 #### Code Generation
 
-| Model | Author | License | Size |
-|-------|--------|---------|-----:|
-| Qwen3-Coder-30B-A3B-Instruct | Alibaba / Qwen | Apache 2.0 | 57.1 GB |
-| DeepSeek-Coder-V2-Lite-Instruct | DeepSeek | DeepSeek License | 30.7 GB |
+| Model (`neurobrix import`) | Author | License | Size |
+|---|---|---|---:|
+| `deepseek-ai/deepseek-coder-v2-lite-instruct` | deepseek-ai | DeepSeek License | 33.0 GB |
+| `Qwen/Qwen3-Coder-30B-A3B-Instruct` | Qwen | Apache 2.0 | 61.3 GB |
+| `Qwen/Qwen3-Coder-30B-A3B-Instruct-int4g128-ffnonly` | Qwen | Apache 2.0 | 18.5 GB |
 
-#### Vision-Language & Multimodal (Omni Understanding + Generation)
+#### Vision-Language & Multimodal
 
-| Model | Author | License | Size | Type |
-|-------|--------|---------|-----:|------|
-| Janus-Pro-7B | DeepSeek | MIT | 13.8 GB | text understanding + image generation |
-| GLM-4.1V-9B-Thinking | Zhipu AI | MIT | 19.2 GB | vision-language understanding |
-| Qwen3-Omni-30B-A3B-Instruct | Alibaba / Qwen | Apache 2.0 | 59.2 GB | omni understanding: text, image, audio, video |
-| Qwen3-VL-30B-A3B-Thinking | Alibaba / Qwen | Apache 2.0 | 57.9 GB | vision-language MoE: text, image, video |
-| MiniCPM-o-4.5 | OpenBMB | Apache 2.0 | 18.2 GB | omni understanding: text, image, audio |
-| Ming-Lite-Omni-1.5 | inclusionAI | MIT | 35.2 GB | omni understanding: text, image, audio, video |
+| Model (`neurobrix import`) | Author | License | Size | Type |
+|---|---|---|---:|---|
+| `deepseek-ai/janus-pro-7b` | deepseek-ai | MIT | 14.9 GB | omni understanding |
+| `inclusionai/ming-lite-omni-1.5` | inclusionai | MIT | 57.0 GB | omni understanding |
+| `openbmb/minicpm-o-4_5` | openbmb | Apache 2.0 | 21.1 GB | omni understanding |
+| `qwen/qwen3-omni-30b-a3b-instruct` | qwen | Apache 2.0 | 70.8 GB | omni understanding |
+| `qwen/qwen3-vl-30b-a3b-thinking` | qwen | Apache 2.0 | 62.2 GB | omni understanding |
+| `zai-org/GLM-4.1V-9B-Thinking` | zai-org | MIT | 20.6 GB | vision-language understanding |
 
-### Validated by the Engine (hub publication in progress)
+### Validated by the Engine
 
-These models are fully supported by the runtime — validated in all four execution modes with cross-checked numerical agreement — and their pre-built `.nbx` packages are being rolled out to the hub.
-
-| Model | Author | Type |
-|-------|--------|------|
-| DeepSeek-V2-Lite-Instruct | DeepSeek | LLM (multi-head latent attention) |
+The engine validates more models than the hub currently carries — validation is four execution
+modes with cross-checked numerical agreement, publication is a separate step. The tables above are
+the published set, read from the hub at the time of writing; the hub itself is the live list.
 
 > **Non-commercial:** OpenAudio S1 Mini uses CC-BY-NC-SA-4.0 — non-commercial use only. Check each model's license on the [NeuroBrix Hub](https://neurobrix.es/models) before commercial deployment.
 
@@ -574,7 +582,14 @@ You describe your hardware. NeuroBrix figures out the rest. Hardware is auto-det
 
 Large models are distributed automatically — the 14B+ video models (including the 28B dual-denoiser Wan2.2-I2V-A14B) run via multi-GPU component placement with no manual device mapping.
 
-**GPU support:** NVIDIA, AMD, Intel, Apple Silicon, plus Tenstorrent, Moore Threads, Biren, Iluvatar, Hygon DCU, Cambricon detection.
+**GPU support**, in three levels that are not the same claim:
+
+- **Executes today** — NVIDIA GPUs (CUDA, and the Triton branch); Apple Silicon through PyTorch MPS
+  on the compiled branch; CPU-only.
+- **Written, not lit** — AMD ROCm/CDNA code paths (gated and documented, lit the day the hardware is
+  here); Triton on Apple GPUs, proven on the public branch `metal-first-light`, not on `main`.
+- **Recognised by hardware detection** — Prism identifies the device and plans against it, and no
+  execution path is claimed: Intel, Tenstorrent, Moore Threads, Biren, Iluvatar, Hygon DCU, Cambricon.
 
 ---
 
@@ -594,7 +609,7 @@ The runtime compiles the entire execution graph at load time into a **CompiledSe
 ### Done
 
 - [x] **CompiledSequence** — zero-overhead graph execution engine
-- [x] **Prism solver** — automatic multi-GPU hardware allocation (7 strategies)
+- [x] **Prism solver** — automatic multi-GPU hardware allocation (10 allocation strategies)
 - [x] **Image family** — 6 models (PixArt, Sana, Flex, Janus)
 - [x] **LLM family** — MoE (DeepSeek), dense (TinyLlama, Qwen3)
 - [x] **Audio family** — 11 models across STT, audio_llm, and TTS (5 flow handlers)
@@ -611,20 +626,30 @@ The runtime compiles the entire execution graph at load time into a **CompiledSe
 - [x] **TilingEngine** — universal spatial tiling for large inputs
 - [x] **NBX Hub** — model registry at neurobrix.es
 
-### Next — the official roadmap ([docs/roadmap.md](docs/roadmap.md), 2026-07-27)
+### Next — the official roadmap ([docs/roadmap.md](docs/roadmap.md), 2026-09-09)
 
-Four phases, in order:
+Five phases, in order:
 
 - [ ] **v0.5 — the complete omni family**: generative outputs (speech
       out, image out), 2–3 fully validated generative omni models
 - [ ] **AMD** — ready-to-light ROCm/CDNA code paths (gated, documented;
       lit the day the hardware is available)
-- [ ] **Metal** — Triton execution on Apple GPUs, even if it takes
-      building our own Triton-to-Metal path
+- [ ] **Metal — IN PROGRESS** — Triton execution on Apple GPUs, even if it
+      takes building our own Triton-to-Metal path. First light has passed on
+      the public branch `metal-first-light`: a complete language model
+      executed end to end on an Apple GPU, the engine's own Metal allocator,
+      a vendor-agnostic launcher behind the same contract the CUDA driver
+      satisfies, and no torch dependency in the Triton path. Integration into
+      `main` is under way, one proven piece at a time. Not shipped until it
+      is on `main`
 - [ ] **Optimization** — reproducible benchmarks against established
       runtimes first; then graph algebra, data-driven kernel fusion,
       execution replay, the megakernel horizon, speculative decoding —
       each behind its own truth gate
+- [ ] **A graphical interface** — running a model, seeing what is installed
+      and what the hub carries, and following a run, without a terminal. It
+      drives the CLI and the serving daemon; it never opens a second path
+      into the runtime
 
 ---
 
@@ -658,11 +683,14 @@ neurobrix upscale --model <name> --input <img> --output <img> [--mode compiled|s
 #   video      --prompt [--num-frames --fps]
 
 # Model management
-neurobrix hub [--category IMAGE|LLM|AUDIO|VIDEO]
+neurobrix hub [--category CATEGORY] [--search TERM]   # IMAGE LLM CODE VIDEO STT TTS AUDIO_LLM MULTIMODAL VLM UPSCALER
 neurobrix import <org/name> [--no-keep] [--force]
 neurobrix list [--store]
 neurobrix remove <name> [--store|--all]
 neurobrix clean [--store|--cache|--all] [-y]
+
+# Precision calibration — measures the model's fp32 islands (DtypeEngine record)
+neurobrix calibrate --model <name> --prompt <text> [--compiled | --triton] [--set KEY=VALUE]
 
 # Inspection
 neurobrix info [--models] [--hardware] [--system]
@@ -707,8 +735,10 @@ The NeuroBrix Hub hosts pre-built `.nbx` packages for convenience. These package
 
 Copyright 2025-2026 Hocine Benkelaya
 
-NeuroBrix is managed by [**WizWorks OÜ**](https://wizworks.io), a property of [**Neural Networks Holding LTD**](https://neuralnetworkholding.com).
-
 The Apache 2.0 license covers the NeuroBrix engine, CLI, runtime, and NBX format tooling. **It does not cover the model weights** executed by the engine — those are governed by their respective licenses as listed in the [Supported Models](#supported-models) section.
 
 See [LICENSE](./LICENSE) for the full text.
+
+---
+
+Developed by [**Hocine Benkelaya**](https://www.linkedin.com/in/hocine-benkelaya/) · Managed by [**WizWorks OÜ**](https://wizworks.io/), a property of [**NEURAL NETWORK HOLDING LTD**](https://neuralnetworkholding.com/).
