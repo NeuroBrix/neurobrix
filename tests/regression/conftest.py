@@ -21,6 +21,41 @@ from typing import Dict, List, Tuple
 import pytest
 
 
+def speaker_the_artefact_requires(model: str) -> str:
+    """The voice to ask for, or "" where the artefact needs none.
+
+    Same shape as the harness's `vlm` case, and the same verdict: the engine
+    is right and the harness was calling it wrong. An artefact that ships many
+    voicepacks and declares no `voice` in `runtime/defaults.json` is refused —
+    "ZERO FALLBACK: this artefact ships 54 voices and declares none as its
+    default" — because picking one by a literal used to happen on every run
+    without a word, and asking for one voice and getting another is a wrong
+    answer.
+
+    READ FROM THE ARTEFACT, not written here: the first in sorted order, which
+    is the same enumeration the engine does. A name in this file would be a
+    second literal doing exactly what the refusal exists to forbid, and it
+    would rot the day a voicepack is renamed.
+
+    Lives in conftest because two harnesses need it — the CLI cells and the
+    warm-serve rows — and a second copy is a second thing to keep true.
+    """
+    if not model:
+        return ""
+    voices = CACHE_ROOT / model / "modules" / "voices"
+    if not voices.is_dir():
+        return ""
+    try:
+        declared = json.loads(
+            (CACHE_ROOT / model / "runtime" / "defaults.json").read_text()).get("voice")
+    except (OSError, ValueError):
+        declared = None
+    if declared:
+        return ""
+    available = sorted(p.stem for p in voices.glob("*.pt"))
+    return available[0] if available else ""
+
+
 CACHE_ROOT = Path(os.path.expanduser("~/.neurobrix/cache"))
 
 
