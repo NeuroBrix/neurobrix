@@ -233,17 +233,87 @@ def nbx_dtype_to_torch(d: NBXDtype):
     return _MAP[d]
 
 
+# How each detected backend is named to TORCH. The engine's internal token
+# for device memory is the string "cuda" on every backend (see
+# `device_label`), and that token is deliberate — but it is not a name to
+# hand to torch, which resolves it against the build it was compiled with.
+# Torch's ROCm build also answers to "cuda"; only Apple differs.
+_TORCH_DEVICE_BY_BACKEND = {"cuda": "cuda", "hip": "cuda", "metal": "mps"}
+
+# Whether a torch tensor's `data_ptr()` is a pointer OUR allocator may write
+# into. On CUDA and ROCm both allocators sit on the same driver heap, so a
+# device-to-device copy straight into the torch tensor is valid and is what
+# this bridge has always done. On Metal, torch owns its own MTLBuffers and
+# ours are not those: writing there is not slow, it is a SIGSEGV (measured
+# 2026-09-10, rc=139 at the first `nbx_to_torch` on this machine).
+#
+# This is a capability, not a vendor test — adding a backend is adding a row.
+_TORCH_SHARES_DEVICE_HEAP = {"cuda": True, "hip": True, "metal": False}
+
+
+def torch_device_str(device_idx: int) -> str:
+    """The torch device string for the backend this process actually detected.
+
+    Was `f"cuda:{idx}"`, written at the one place where the internal token
+    crosses into torch. On Apple that asked torch for a CUDA device and got
+    `AssertionError: Torch not compiled with CUDA enabled` — which is why
+    every oracle test in tests/unit/kernels (161 of them, 13 files) failed
+    here without ever comparing a number.
+    """
+    backend = _detect_gpu_backend()
+    name = _TORCH_DEVICE_BY_BACKEND.get(backend)
+    if name is None:
+        raise RuntimeError(
+            f"ZERO FALLBACK: backend {backend!r} has no torch device name in "
+            f"_TORCH_DEVICE_BY_BACKEND ({sorted(_TORCH_DEVICE_BY_BACKEND)}). "
+            f"Adding a backend is adding a row, not guessing a name.")
+    return f"{name}:{device_idx}"
+
+
 def nbx_to_torch(tensor: 'NBXTensor'):
     """Convert NBXTensor to torch.Tensor via D2D copy.
 
     Used at the boundary between triton execution and torch-based pipeline.
     """
     import torch
-    t = torch.empty(tensor.shape, dtype=nbx_dtype_to_torch(tensor._dtype),
-                    device=f"cuda:{tensor._device_idx}")
-    if tensor._nbytes > 0:
-        DeviceAllocator.memcpy(t.data_ptr(), tensor.data_ptr(), tensor._nbytes)
-    return t
+    backend = _detect_gpu_backend()
+    device = torch_device_str(tensor._device_idx)
+    shares_heap = _TORCH_SHARES_DEVICE_HEAP.get(backend)
+    if shares_heap is None:
+        raise RuntimeError(
+            f"ZERO FALLBACK: backend {backend!r} does not say whether torch "
+            f"shares its device heap "
+            f"({sorted(_TORCH_SHARES_DEVICE_HEAP)}). Copying into a foreign "
+            f"allocator's pointer on a guess is how this crashed.")
+
+    if shares_heap:
+        t = torch.empty(tensor.shape, dtype=nbx_dtype_to_torch(tensor._dtype),
+                        device=device)
+        if tensor._nbytes > 0:
+            DeviceAllocator.memcpy(t.data_ptr(), tensor.data_ptr(),
+                                   tensor._nbytes)
+        return t
+
+    # Separate heaps: the values travel through the host. On unified memory
+    # that is a RAM copy, not a bus transfer.
+    #
+    # Through RAW BYTES, not through `.numpy()`: numpy has no bfloat16, so
+    # `_DTYPE_TYPESTR` maps it to '<V2' (opaque 2-byte void) and a bf16
+    # tensor would arrive as something torch cannot take — on the dtype most
+    # of the hub runs in. `torch.frombuffer` knows bfloat16, so the bytes
+    # are typed once, correctly, by the same table that named the device.
+    import ctypes
+    torch_dtype = nbx_dtype_to_torch(tensor._dtype)
+    if tensor._nbytes == 0:
+        return torch.empty(tuple(tensor.shape), dtype=torch_dtype,
+                           device=device)
+    host = tensor.contiguous()
+    if host._device != 'cpu':
+        host = host.to_cpu()
+    raw = bytearray(ctypes.string_at(host.data_ptr(),
+                                     host.numel() * dtype_size(host._dtype)))
+    flat = torch.frombuffer(raw, dtype=torch_dtype)
+    return flat.reshape(tuple(tensor.shape)).to(device=device)
 
 
 # ============================================================================
