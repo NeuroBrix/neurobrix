@@ -1271,6 +1271,75 @@ def lock_holder_alive(text: str) -> bool:
     return Path(f"/proc/{m.group(1)}").exists()
 
 
+ARM_LABELS = ("A", "B")
+
+
+def cell_cost_estimate(model_out: Path, timeout: int):
+    """(seconds, basis) this cell is expected to cost, or None if unmeasured.
+
+    Read from the cell's own previous record — the only honest source. A model
+    nobody has run has no estimate and must NOT be refused: the guard's job is
+    to stop a KNOWN cost, never to guess an unknown one.
+
+    An arm with `rc < 0` was killed (SIGKILL at the timeout, or SIGTERM), so its
+    wall is a LOWER bound, not a measurement: the cell costs at least the
+    timeout for every arm it still has to run. `Allegro` on 2026-09-10 is the
+    live shape — A killed at 28 800 s, B killed at 24 958 s, ~31 h per arm
+    projected from its own log against an 8 h timeout.
+    """
+    p = Path(model_out) / "result.json"
+    if not p.exists():
+        return None
+    try:
+        record = json.loads(p.read_text())
+    except (OSError, ValueError):
+        return None
+    walls, killed = [], []
+    for label in ARM_LABELS:
+        arm = record.get(label)
+        if not isinstance(arm, dict):
+            continue
+        w = arm.get("wall_s")
+        if w is None:
+            continue
+        walls.append(float(w))
+        try:
+            if int(arm.get("rc", 0)) < 0:
+                killed.append(label)
+        except (TypeError, ValueError):
+            pass
+    if not walls:
+        return None
+    if killed:
+        est = float(timeout) * max(len(walls), len(ARM_LABELS))
+        return est, (f"arm(s) {', '.join(killed)} were killed at the wall "
+                     f"({max(walls):.0f} s, timeout {timeout} s) — the cost is a "
+                     f"lower bound, at least {est:.0f} s for the arms")
+    est = sum(walls)
+    return est, (f"{len(walls)} measured arm(s), "
+                 f"{', '.join(f'{w:.0f} s' for w in walls)} — {est:.0f} s")
+
+
+def budget_refusal(model_out: Path, budget_s, timeout: int):
+    """The reason to refuse this cell at the door, or None to let it in.
+
+    Opt-in: a campaign that declares no budget keeps the previous behaviour
+    exactly. A cell whose KNOWN cost exceeds the whole campaign's budget can
+    never fit inside it, whatever the order of the models, so it is refused
+    before its first arm starts — loudly, with its number.
+    """
+    if budget_s is None:
+        return None
+    got = cell_cost_estimate(model_out, timeout)
+    if got is None:
+        return None
+    est, basis = got
+    if est <= float(budget_s):
+        return None
+    return (f"estimated {est:.0f} s against a campaign budget of "
+            f"{float(budget_s):.0f} s — {basis}")
+
+
 def has_verdict(model_out: Path) -> bool:
     """True when `<model_out>/result.json` records a gate that actually RAN.
 
@@ -1338,6 +1407,11 @@ def main():
     r.add_argument("--timeout", type=int, default=7200)
     r.add_argument("--extra", default="", help="extra request args, space separated (e.g. '--num-frames 9')")
     r.add_argument("--skip-done", action="store_true")
+    r.add_argument("--budget", type=float, default=None, metavar="SECONDS",
+                   help="the campaign's card budget. A cell whose KNOWN cost "
+                        "(from its own previous record) exceeds it is refused "
+                        "at the door, before its first arm starts. Opt-in: "
+                        "without it nothing is refused.")
     r.add_argument("--hold-from", default=None, metavar="RETRACE_OUT",
                    help="skip every model a retrace campaign at this path still holds (listed in its phase files or "
                         "carrying a state without a PASS gate): its cache slot may change under the measurement")
@@ -1412,6 +1486,19 @@ def main():
                 # measure again — see has_verdict.
                 print(f"[zoo] {m}: a record with no verdict (the arms did not run) — measured again",
                       flush=True)
+        # The guard at the door. There is already one INSIDE the cell (an arm
+        # that produces no output ends the container); this is the one that
+        # never lets the first arm start. Allegro cost ~15 h of a quiet rig on
+        # 2026-09-10 for a verdict already known impossible and already
+        # written — the next flight excluded it by hand, so the lesson was
+        # learnt after the spend rather than before it.
+        _refusal = budget_refusal(out / m, args.budget, args.timeout)
+        if _refusal:
+            print(f"[zoo] {m}: REFUSED at the door — {_refusal}", flush=True)
+            (out / m).mkdir(parents=True, exist_ok=True)
+            (out / m / "refused_budget.txt").write_text(
+                f"{time.strftime('%Y-%m-%d %H:%M:%S')} refused before any arm ran\n{_refusal}\n")
+            continue
         if m in held:
             # A container still short of its retrace gate: its cache slot moves (a restore, an
             # install) — CogVideoX-2b's proof row straddled an install at 14:34 on 2026-09-07.
