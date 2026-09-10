@@ -14,6 +14,7 @@ import time
 import torch
 from typing import Any, Callable, Dict, List, Optional
 
+from neurobrix import decode_progress
 from .base import FlowHandler, FlowContext, register_flow
 from neurobrix.core.memory.manager import release_flow_memory
 
@@ -75,26 +76,56 @@ class AudioLLMEngine(FlowHandler):
         preprocess_audio_input(self.ctx, audio_config, stages)
 
         # ── Step 2: Forward stages (encoder, projector) ──
-        for stage in forward_stages:
-            comp_name = stage["component"]
-            if comp_name not in self.ctx.executors:
-                print(f"   [{comp_name}] Skipped (not in executors)")
-                continue
+        # Long-form (D-AUDIOLLM-LONGFORM): `preprocess_audio_input` leaves
+        # the recording's fixed 30 s windows on ctx._audio_windows; each
+        # window runs the unchanged single-window stages in turn, and the
+        # last stage's outputs are concatenated along the sequence axis —
+        # the vendor contract (windows stacked through the encoder, one
+        # prompt with every window's embeddings). One window = the classic
+        # path, byte for byte.
+        _windows = getattr(self.ctx, "_audio_windows", None) or [None]
+        _audio_variable = audio_config.get("input", {}).get(
+            "variable", "global.input_features")
+        _window_outputs = []
+        for _wi, _win in enumerate(_windows):
+            if _win is not None:
+                for _k in (_audio_variable, _audio_variable.split(".")[-1]):
+                    self.ctx.variable_resolver.resolved[_k] = _win
+                if len(_windows) > 1:
+                    print(f"   [Audio] window {_wi + 1}/{len(_windows)}")
+            for stage in forward_stages:
+                comp_name = stage["component"]
+                if comp_name not in self.ctx.executors:
+                    print(f"   [{comp_name}] Skipped (not in executors)")
+                    continue
 
-            print(f"   [{comp_name}] Running forward pass...")
-            start = time.perf_counter()
-            self._ensure_weights_loaded(comp_name)
-            self._execute_component(comp_name, "forward", None)
-            elapsed = (time.perf_counter() - start) * 1000
-            print(f"   [{comp_name}] Done in {elapsed:.0f}ms")
+                print(f"   [{comp_name}] Running forward pass...")
+                start = time.perf_counter()
+                self._ensure_weights_loaded(comp_name)
+                self._execute_component(comp_name, "forward", None)
+                elapsed = (time.perf_counter() - start) * 1000
+                print(f"   [{comp_name}] Done in {elapsed:.0f}ms")
 
-            # Store output for downstream
-            self._store_output(comp_name)
-            self._reshape_output_for_connections(comp_name)
+                # Store output for downstream
+                self._store_output(comp_name)
+                self._reshape_output_for_connections(comp_name)
 
-            if not self.ctx.persistent_mode:
-                self._unload_component_weights(comp_name)
-                release_flow_memory(self.ctx.primary_device)
+                if not self.ctx.persistent_mode and _wi == len(_windows) - 1:
+                    self._unload_component_weights(comp_name)
+                    release_flow_memory(self.ctx.primary_device)
+            if len(_windows) > 1:
+                _out = self._get_last_forward_output(forward_stages)
+                if _out is None:
+                    raise RuntimeError(
+                        "ZERO FALLBACK: long-form audio_llm window produced no "
+                        "projector output.")
+                _window_outputs.append(_out)
+        if _window_outputs:
+            _cat = torch.cat(_window_outputs, dim=1)
+            _last = forward_stages[-1]["component"]
+            self.ctx.variable_resolver.resolved[f"{_last}.output_0"] = _cat
+            print(f"   [Audio] {len(_window_outputs)} windows → audio embeddings "
+                  f"{tuple(_cat.shape)}")
 
         # ── Step 3: Autoregressive LLM decode with audio embeddings ──
         lm_name = ar_stage["component"]
@@ -103,7 +134,17 @@ class AudioLLMEngine(FlowHandler):
         device = self.ctx.primary_device
 
         from neurobrix.core.runtime.decode_bound import decode_bound  # NBX_DECODE_BOUND harness
-        max_tokens = decode_bound(defaults.get("max_tokens"))
+        # The request's own budget first (global.max_tokens from the CLI /
+        # serve request), the container default after — the mirror of the
+        # autoregressive generator's resolver cascade (R30). A 600 s
+        # recording needs ~2,000 tokens; the default 448 truncated the
+        # long-form transcript (2026-09-03 gate).
+        _mt = self.ctx.variable_resolver.resolved.get("global.max_tokens")
+        if _mt is None:
+            _mt = self.ctx.variable_resolver.resolved.get("max_tokens")
+        if _mt is None:
+            _mt = defaults.get("max_tokens")
+        max_tokens = decode_bound(_mt)
         if max_tokens is None:
             raise RuntimeError("ZERO FALLBACK: max_tokens missing from defaults.json.")
         temperature = defaults.get("temperature")
@@ -205,6 +246,8 @@ class AudioLLMEngine(FlowHandler):
                 repetition_penalty=repetition_penalty,
             )
             generated_ids.append(next_token)
+            decode_progress.record(step, len(generated_ids), next_token,
+                                   next_token == eos_token_id or step + 1 >= max_tokens)
 
             if next_token == eos_token_id:
                 break

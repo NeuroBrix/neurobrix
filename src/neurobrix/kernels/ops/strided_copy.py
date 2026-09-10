@@ -13,6 +13,15 @@ Two operations:
                              `NBXTensor.__setitem__` (KV cache indexed
                              writes into a narrow view).
 
+* `strided_copy_nd_kernel`  — read from a strided source, write to a
+                             strided destination, converting the dtype on
+                             the store with `copy_kernel`'s exact protected
+                             fp16 rounding. One launch where `__setitem__`,
+                             `copy_` and `.to()` used to take a contiguous
+                             copy of the source, a cast of that copy and a
+                             scatter of the cast (three launches and two
+                             transients per KV-cache write, 2026-09-07).
+
 Both kernels are parameterised by `NDIM: tl.constexpr`. Triton
 specialises and caches one compiled kernel per distinct ndim
 encountered at runtime: the per-dimension index decomposition loop is
@@ -123,4 +132,50 @@ def strided_scatter_kernel(
         dst_offsets = dst_offsets + idx * s
 
     vals = tl.load(src_ptr + offsets, mask=mask)
+    tl.store(dst_ptr + dst_offsets, vals, mask=mask)
+
+
+@triton.jit
+def strided_copy_nd_kernel(
+    src_ptr, dst_ptr,
+    n_elements,
+    shape_ptr,        # GPU pointer → NDIM int64 extents (shared by src and dst)
+    src_stride_ptr,   # GPU pointer → NDIM int64 source strides (0 on a broadcast dim)
+    dst_stride_ptr,   # GPU pointer → NDIM int64 destination strides
+    BLOCK_SIZE: tl.constexpr,
+    NDIM: tl.constexpr,
+    SATURATE_F16: tl.constexpr = False,
+):
+    """Copy strided src → strided dst, casting on the store.
+
+    The flat element index is decomposed once into the multi-index and
+    each side's offset accumulates its own strides, so any pair of
+    layouts of the same extents copies in one pass — a broadcast source
+    (stride 0) included. SATURATE_F16 is the protected float16 downcast
+    of `copy_kernel`, the same expression, so a cast through this kernel
+    is bit-identical to a cast through `copy_kernel` after `contiguous()`.
+    """
+    pid = tl.program_id(0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+
+    remaining = offsets
+    src_offsets = tl.zeros_like(offsets)
+    dst_offsets = tl.zeros_like(offsets)
+    for i in tl.static_range(NDIM):
+        dim = NDIM - 1 - i
+        d = tl.load(shape_ptr + dim)
+        ss = tl.load(src_stride_ptr + dim)
+        ds = tl.load(dst_stride_ptr + dim)
+        idx = remaining % d
+        remaining = remaining // d
+        src_offsets = src_offsets + idx * ss
+        dst_offsets = dst_offsets + idx * ds
+
+    vals = tl.load(src_ptr + src_offsets, mask=mask)
+    if SATURATE_F16:
+        f = vals.to(tl.float32)
+        is_finite = (f == f) & (f != float("inf")) & (f != float("-inf"))
+        clamped = tl.minimum(tl.maximum(f, -65504.0), 65504.0)
+        vals = tl.where(is_finite, clamped, f)
     tl.store(dst_ptr + dst_offsets, vals, mask=mask)

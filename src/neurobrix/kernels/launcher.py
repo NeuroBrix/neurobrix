@@ -52,6 +52,34 @@ def _compute_capability() -> int:
     return CudaDriver.instance().compute_capability()
 
 
+_SMEM_LIMIT: Optional[int] = None
+
+
+def max_shared_memory_per_block() -> Optional[int]:
+    """The executing device's shared-memory ceiling per block, or None.
+
+    The hard limit comes from the device and never from a table of names —
+    sm_86 declares 99 KB where sm_80 declares 163, and a table keyed on the
+    capability MAJOR gives the first the second's answer. That is what stopped
+    every language model on an A40: the flash tile was sized for sm_80 and
+    asked 164 352 bytes of a card that holds 101 376.
+
+    None when the driver cannot be asked (no CUDA, a backend without the
+    query). The caller must then leave its proposal alone rather than invent a
+    budget — pruning on a guessed number deletes configurations that work.
+
+    Cached for the life of the process: a driver query in a hot path is an
+    anti-pattern this engine has already paid for once.
+    """
+    global _SMEM_LIMIT
+    if _SMEM_LIMIT is None:
+        try:
+            _SMEM_LIMIT = int(active_driver().max_shared_memory_per_block())
+        except Exception:
+            return None
+    return _SMEM_LIMIT
+
+
 def target():
     """The compile target of this process: vendor, capability, warp size —
     from the engine's data, never from `triton.runtime.driver.active` (whose
@@ -183,6 +211,13 @@ class Driver:
     def target(self):  # pragma: no cover - interface
         raise NotImplementedError
 
+    def max_shared_memory_per_block(self):  # pragma: no cover - interface
+        """The device's per-block shared-memory ceiling, in bytes.
+
+        A backend that cannot ask raises, and the module-level helper turns
+        that into None — which every caller reads as "do not prune"."""
+        raise NotImplementedError
+
 
 class CudaDriver(Driver):
     """libcuda through ctypes. The context is the primary context of the
@@ -192,6 +227,10 @@ class CudaDriver(Driver):
     CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES = 8
     CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR = 75
     CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR = 76
+    # The OPT-IN maximum, not the 48 KB default: a kernel that asks for more
+    # than 48 KB must opt in per function, and this is the ceiling on that ask.
+    # It is the number an over-large tile is refused against.
+    CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN = 97
 
     @classmethod
     def instance(cls) -> "CudaDriver":
@@ -217,8 +256,18 @@ class CudaDriver(Driver):
             raise RuntimeError("NeuroBrix launcher: libcuda not found")
         self.lib = lib
         self._check(lib.cuInit(0), "cuInit")
+        # ctypes infers the type of every argument at every call unless the signature is
+        # declared. The launch is called six hundred times per decoded token, so its signature
+        # is declared once here and the call passes plain integers (2026-09-08).
+        lib.cuLaunchKernel.restype = ctypes.c_int
+        lib.cuLaunchKernel.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_uint, ctypes.c_uint,
+                                       ctypes.c_uint, ctypes.c_uint, ctypes.c_uint, ctypes.c_uint,
+                                       ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p]
         self._modules: Dict[Tuple[int, bytes], ctypes.c_void_p] = {}
         self._param_counts: Dict[int, Optional[int]] = {}     # function handle -> parameters the cubin declares
+        # (function handle, argument kinds) -> the C cells and the pointer array reused at every
+        # launch of that function: the buffer is written in place, never rebuilt (2026-09-08).
+        self._arg_buffers: Dict[Tuple[int, tuple], tuple] = {}
 
     def _check(self, ret: int, what: str) -> None:
         if ret != 0:
@@ -244,6 +293,25 @@ class CudaDriver(Driver):
         self._check(self.lib.cuDeviceGetAttribute(ctypes.byref(major), self.CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, dev), "cuDeviceGetAttribute")
         self._check(self.lib.cuDeviceGetAttribute(ctypes.byref(minor), self.CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, dev), "cuDeviceGetAttribute")
         return major.value * 10 + minor.value
+
+    def max_shared_memory_per_block(self) -> int:
+        """The device's opt-in shared-memory ceiling per block, in bytes.
+
+        Asked of the DRIVER, not of a table of names. A table is right until
+        the next card ships; a driver query is right forever. The vendor YAMLs
+        keep their role — good defaults and the name in a certificate path —
+        but a hard limit is never one of their answers.
+
+        Read once per process and cached by the caller, never per launch.
+        """
+        from neurobrix.kernels.nbx_tensor import DeviceAllocator
+        dev = ctypes.c_int(int(DeviceAllocator.get_device()))
+        out = ctypes.c_int()
+        self._check(self.lib.cuDeviceGetAttribute(
+            ctypes.byref(out),
+            self.CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN, dev),
+            "cuDeviceGetAttribute")
+        return int(out.value)
 
     def load(self, binary: bytes, name: str, shared: int):
         self._ensure_context()
@@ -285,20 +353,25 @@ class CudaDriver(Driver):
         bx, by, bz = (tuple(int(b) for b in block) + (1, 1, 1))[:3]
         if gx * gy * gz <= 0:
             return
-        storage = [ctypes.c_uint64(v) if kind in ("ptr", "u64", "bits64") else
-                   ctypes.c_int64(v) if kind == "i64" else
-                   ctypes.c_uint32(v) if kind in ("u32", "bits32") else
-                   ctypes.c_int32(v) if kind == "i32" else
-                   ctypes.c_uint16(v) if kind in ("u16", "bits16") else
-                   ctypes.c_int16(v) if kind == "i16" else
-                   ctypes.c_uint8(v) if kind == "u8" else
-                   ctypes.c_int8(v) if kind == "i8" else
-                   ctypes.c_double(v) if kind == "f64" else
-                   _unsupported(kind)
-                   for kind, v in params]
-        arr = (ctypes.c_void_p * len(storage))(*[ctypes.addressof(s) for s in storage])
-        self._check(self.lib.cuLaunchKernel(function, gx, gy, gz, bx, by, bz, ctypes.c_uint(shared),
-                                            ctypes.c_void_p(stream), arr, None), "cuLaunchKernel")
+        # The argument buffer is built ONCE per (function, argument kinds) and written in place
+        # afterwards: a decode step launches six hundred kernels, and allocating one ctypes object
+        # per parameter plus a pointer array per launch was a fifth of the launcher's cost
+        # (2026-09-08). The buffer belongs to this driver and this function, and every launch of
+        # that function overwrites it before the call — a launch is synchronous from Python's side
+        # (the values are read by cuLaunchKernel before it returns), so one buffer is enough.
+        kinds = tuple(k for k, _ in params)
+        cache_key = (int(function.value), kinds)
+        slot = self._arg_buffers.get(cache_key)
+        if slot is None:
+            storage = [_ctypes_slot(kind) for kind in kinds]
+            arr = (ctypes.c_void_p * len(storage))(*[ctypes.addressof(c) for c in storage])
+            slot = self._arg_buffers[cache_key] = (storage, arr)
+        storage, arr = slot
+        for cell, (_kind, v) in zip(storage, params):
+            cell.value = v
+        rc = self.lib.cuLaunchKernel(function, gx, gy, gz, bx, by, bz, shared, stream, arr, None)
+        if rc != 0:
+            self._check(rc, "cuLaunchKernel")
 
 
     # -- the contract surface (`triton/launcher_contract.py`): compile once,
@@ -450,6 +523,22 @@ _INT_KINDS = {"i1": "i8", "i8": "i8", "i16": "i16", "i32": "i32", "i64": "i64",
               "u1": "u8", "u8": "u8", "u16": "u16", "u32": "u32", "u64": "u64"}
 
 
+_CTYPES_SLOT = {"ptr": ctypes.c_uint64, "u64": ctypes.c_uint64, "bits64": ctypes.c_uint64,
+                "i64": ctypes.c_int64, "u32": ctypes.c_uint32, "bits32": ctypes.c_uint32,
+                "i32": ctypes.c_int32, "u16": ctypes.c_uint16, "bits16": ctypes.c_uint16,
+                "i16": ctypes.c_int16, "u8": ctypes.c_uint8, "i8": ctypes.c_int8,
+                "f64": ctypes.c_double}
+
+
+def _ctypes_slot(kind: str):
+    """The C cell one launch parameter of this kind lives in — the same widths the packing
+    produced when it built a fresh object per launch."""
+    cell = _CTYPES_SLOT.get(kind)
+    if cell is None:
+        _unsupported(kind)
+    return cell()
+
+
 def _pack_param(ty: str, value: Any) -> Tuple[str, Any]:
     """One launch parameter as (kind, integer-or-float) — a pointer as its
     address, a float scalar as the bit pattern of its storage type (what
@@ -503,6 +592,9 @@ _INT32_MIN, _INT32_MAX = -(2 ** 31), 2 ** 31
 _INT64_MIN, _INT64_MAX = -(2 ** 63), 2 ** 63
 
 
+_PTR_TY: Dict[Any, str] = {}      # a tensor dtype -> the pointee spelling Triton's binder gives it
+
+
 def specialize_arg(arg, specialize: bool = True, align: bool = True):
     """(type, attr) of one runtime argument, exactly as Triton's binder:
     a pointer is `*<dtype>` with 'D' when 16-byte aligned; an int is i32 /
@@ -513,8 +605,13 @@ def specialize_arg(arg, specialize: bool = True, align: bool = True):
         return ("constexpr", None)
     if hasattr(arg, "data_ptr") and hasattr(arg, "dtype"):
         dt = arg.dtype
-        name = getattr(dt, "name", None) or str(dt).split(".")[-1]
-        ty = "*" + _POINTEE.get(str(name), str(name))
+        # The pointee's spelling is a property of the dtype, not of the call: computing it per
+        # launch cost six string operations per pointer argument, and a decode step launches six
+        # hundred kernels of fifteen to twenty arguments each (2026-09-08).
+        ty = _PTR_TY.get(dt)
+        if ty is None:
+            name = getattr(dt, "name", None) or str(dt).split(".")[-1]
+            ty = _PTR_TY[dt] = "*" + _POINTEE.get(str(name), str(name))
         if not specialize:
             return (ty, None)
         return (ty, "D" if (align and int(arg.data_ptr()) % 16 == 0) else "")
@@ -545,6 +642,22 @@ def specialize_arg(arg, specialize: bool = True, align: bool = True):
     raise TypeError(f"NeuroBrix launcher: cannot specialise an argument of type {type(arg).__name__}")
 
 
+def _param_table(kernel):
+    """The kernel's parameter list as plain tuples, read once: a launch reads five attributes per
+    parameter, and there are fifteen to twenty of them on the kernels a decode step calls."""
+    table = _PARAM_TABLES.get(id(kernel))
+    if table is None:
+        table = _PARAM_TABLES[id(kernel)] = tuple(
+            (kp.name, kp.is_constexpr, kp.has_default, kp.default,
+             not kp.do_not_specialize, not kp.do_not_specialize_on_alignment,
+             getattr(kp, "annotation_type", None))
+            for kp in kernel.params)
+    return table
+
+
+_PARAM_TABLES: Dict[int, tuple] = {}
+
+
 def nbx_binder(kernel, args, kwargs):
     """(bound_args, specialization, options) — the same triple Triton's
     generated binder returns, from the kernel's parameter list."""
@@ -552,23 +665,21 @@ def nbx_binder(kernel, args, kwargs):
     spec = []
     positional = list(args)
     options = dict(kwargs)
-    for i, kp in enumerate(kernel.params):
-        name = kp.name
+    for i, (name, is_constexpr, has_default, default, specialize_p, align_p, ann) in enumerate(_param_table(kernel)):
         if i < len(positional):
             value = positional[i]
         elif name in options:
             value = options.pop(name)
-        elif kp.has_default:
-            value = kp.default
+        elif has_default:
+            value = default
         else:
             raise TypeError(f"NeuroBrix launcher: {kernel.__name__}() missing argument {name!r}")
         bound[name] = value
-        if kp.is_constexpr:
+        if is_constexpr:
             spec.append(("constexpr", value))
             continue
-        specialize = not kp.do_not_specialize
-        align = not kp.do_not_specialize_on_alignment
-        ann = getattr(kp, "annotation_type", None)
+        specialize = specialize_p
+        align = align_p
         if ann:
             if isinstance(ann, str) and (ann == "u1" or ann[:2] in ("fp", "bf")):
                 specialize = False
@@ -578,7 +689,7 @@ def nbx_binder(kernel, args, kwargs):
                 spec.append((ann, None))
             continue
         spec.append(specialize_arg(value, specialize, align))
-    if len(positional) > len(kernel.params):
+    if len(positional) > len(_param_table(kernel)):
         raise TypeError(f"NeuroBrix launcher: {kernel.__name__}() takes {len(kernel.params)} arguments, {len(positional)} given")
     return bound, spec, options
 
@@ -601,6 +712,8 @@ def reset_caches() -> None:
     """
     global _TARGET
     _binders.clear()
+    _PARAM_TABLES.clear()
+    _PTR_TY.clear()
     _TARGET = None
 
 
@@ -620,27 +733,48 @@ def _forward_debug(kernel, options: Dict[str, Any]) -> None:
     to trap an out-of-range index — so a launcher that dropped it would
     compile the traps out silently."""
     if "debug" not in options:
-        knob = False
-        try:
-            from triton import knobs
-            knob = bool(knobs.runtime.debug)
-        except Exception:
-            pass
-        options["debug"] = bool(getattr(kernel, "debug", False)) or knob
+        global _DEBUG_KNOB
+        if _DEBUG_KNOB is None:
+            _DEBUG_KNOB = False
+            try:
+                from triton import knobs
+                _DEBUG_KNOB = bool(knobs.runtime.debug)
+            except Exception:
+                pass
+        options["debug"] = bool(getattr(kernel, "debug", False)) or _DEBUG_KNOB
+
+
+_DEBUG_KNOB = None      # the process's Triton debug knob, read once (a launch may not import)
 
 
 def prepare(kernel, args, kwargs) -> Tuple[_Prepared, Dict[str, Any]]:
     """Specialise (our binder), compile (Triton's compiler with the engine's
-    target), load (our driver) — once per specialisation and device."""
+    target), load (our driver) — once per specialisation and device.
+
+    A decode step launches six hundred kernels and every one of them comes back
+    here: what a repeat launch pays must be a dict lookup, nothing more. The
+    specialisation IS the identity of the compilation, so it keys the cache
+    directly; Triton's `compute_cache_key` (which builds and hashes a string)
+    runs on a miss only, where a compile is about to happen anyway. The device
+    comes from the allocator's own cache — `get_device` asks the runtime, and a
+    runtime round trip per launch is what a launcher must not do (2026-09-08:
+    the launcher held ten times the decode rate of the engine).
+    """
     from triton.compiler import ASTSource, compile as triton_compile
     from triton.runtime.jit import compute_cache_key
     kernel_cache, key_cache, backend = _binder(kernel)
     kwargs = dict(kwargs)
     _forward_debug(kernel, kwargs)      # into kwargs: `_pack_args` parses the compile options from THEM
     bound_args, specialization, options = nbx_binder(kernel, args, kwargs)
-    from neurobrix.kernels.nbx_tensor import DeviceAllocator
-    key = (compute_cache_key(key_cache, specialization, options), int(DeviceAllocator.get_device()))
-    prep = kernel_cache.get(key)
+    from neurobrix.kernels.nbx_tensor import DeviceAllocator, _cached_device_idx
+    dev = _cached_device_idx()
+    if dev is None:
+        dev = int(DeviceAllocator.get_device())
+    fast_key = (tuple(specialization), tuple(options.items()) if options else (), dev)
+    prep = kernel_cache.get(fast_key)
+    if prep is None:
+        key = (compute_cache_key(key_cache, specialization, options), dev)
+        prep = kernel_cache.get(key)
     if prep is None:
         options, signature, constexprs, attrs = kernel._pack_args(backend, kwargs, bound_args, specialization, options)
         src = ASTSource(kernel, signature, constexprs, attrs)
@@ -659,13 +793,31 @@ def prepare(kernel, args, kwargs) -> Tuple[_Prepared, Dict[str, Any]]:
                 f"{sorted(compiled.asm)} but {drv.__class__.__name__} takes "
                 f"{drv.artifact_kind!r}")
         function = drv.load(artifact, md.name, md.shared)
-        prep = kernel_cache[key] = _Prepared(function, signature, md.shared,
-                                             md.num_warps, md.name,
-                                             drv.block_for(md))
+        prep = _Prepared(function, signature, md.shared, md.num_warps, md.name,
+                         drv.block_for(md))
+        kernel_cache[key] = prep
+    kernel_cache[fast_key] = prep
     return prep, bound_args
 
 
 _TRACE = os.environ.get("NBX_LAUNCH_TRACE")     # a file: one line per launch, "<kernel>\t<grid>"
+
+
+# The decode replay (`neurobrix.triton.replay`) records one step's FINAL launches and
+# replays them without the Python band above — the engine's fast decode path, worth 8x
+# on a text row. It used to record by wrapping Triton's `CompiledKernel.run`; nothing on
+# the Triton branch calls that any more (R33, third peel 2026-09-05), so the recorder
+# needs a seam HERE or it records a step with no kernel in it. Armed for the window of
+# one recorded step and cleared after: the hot path pays one global read and a None test.
+_RECORDER = None
+
+
+def set_launch_recorder(fn) -> None:
+    """Record every launch this launcher issues: `fn(prepared, grid, params)`, with the
+    launch as the DRIVER will take it — the resolved kernel, three extents, and the
+    parameters already packed. `None` stops recording."""
+    global _RECORDER
+    _RECORDER = fn
 
 
 def launch(kernel, grid, *args, **kwargs):
@@ -689,6 +841,8 @@ def launch(kernel, grid, *args, **kwargs):
     if drv.wants_scratch_params:
         params.append(("ptr", 0))    # global scratch (Triton ≥ 3.6 ABI)
         params.append(("ptr", 0))    # profile scratch
+    if _RECORDER is not None:
+        _RECORDER(prep, grid, params)
     drv.launch(prep.function, grid, prep.block, prep.shared, _stream(), params,
                names=names)
 
@@ -861,6 +1015,48 @@ def _deviation(a: bytes, b: bytes, dtype_name: str):
     if scale == 0.0:
         return (0.0 if np.array_equal(x, y) else float("inf")), float(rtol)
     return float(np.abs(x[finite] - y[finite]).max() / scale), float(rtol)
+
+
+def configs_agreeing_with_oracle(results, oracle, dtype_name):
+    """The configurations an oracle does not contradict, or None if there is none.
+
+    `screen_configs` decides by CONSENSUS among the candidates, which was the
+    right answer to the 2026-09-07 incident: anchoring on a nominated reference
+    inverts the moment that reference is the broken one. But consensus is a
+    VOTE, and a vote has two failure modes it cannot see —
+
+      * the majority cluster is wrong in the same way, so the minority that is
+        right gets excluded;
+      * every candidate agrees and all are wrong, in which case the screen
+        returns the whole space and says nothing.
+
+    Neither is hypothetical on hardware nobody has looked at. The certified
+    directory covers `nvidia/volta` and nothing else, so on any other card the
+    runtime sweeps and this screen is the only thing between the user and a
+    wrong kernel — over a space that DIFFERS by target: the same flash tile
+    needs 98 304 bytes on sm_70 and 164 352 on sm_86.
+
+    So when an oracle exists, it overrules the vote. When it does not, this
+    returns None rather than pretending: the caller keeps the consensus it had
+    and knows that is what it has. Refusing on an oracle nobody computed would
+    be the same silence in the other direction.
+
+    `results` are `(config, output_bytes)` pairs; the comparison and its
+    tolerance are the profile's own, the very ones the screen already applies
+    between candidates.
+    """
+    if oracle is None:
+        return None
+    kept = []
+    for entry in results:
+        config, produced = entry[0], entry[1]
+        if produced == oracle:
+            kept.append(entry)
+            continue
+        deviation, tolerance = _deviation(produced, oracle, dtype_name)
+        if deviation <= tolerance:
+            kept.append(entry)
+    return kept
 
 
 def screen_configs(tuner, configs, key, meta=None):

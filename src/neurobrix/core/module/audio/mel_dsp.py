@@ -329,6 +329,52 @@ def whisper_seek_context(audio_path: str, model_path: Path,
             "mel_full": np.ascontiguousarray(mel_full[:, :content])}
 
 
+def fixed_window_mels(audio_path: str, model_path: Path,
+                      input_shape: "Optional[Tuple[int, ...]]" = None) -> "Optional[np.ndarray]":
+    """Long-form audio for the whisper-encoder audio LLMs (Voxtral class)
+    by FIXED windows — the vendor's own contract (`VoxtralProcessor.
+    _retrieve_input_features` / mistral_common `AudioEncoder`): the
+    waveform is zero-padded to the next multiple of one window
+    (chunk_length × sampling_rate samples), the log-mel is computed over
+    the WHOLE padded audio (one dynamic-range floor for the recording),
+    and the frames are split into consecutive windows of `frames` each.
+    Every window then goes through the unchanged single-window encoder +
+    projector, and the embeddings are concatenated in order before the
+    prompt (one BEGIN_AUDIO for the whole recording — mistral_common
+    `_encode_audio_tokens`). Returns [n_windows, n_mels, frames], or None
+    when the audio fits one window (the classic path, nothing computed
+    twice). D-AUDIOLLM-LONGFORM, 2026-09-03."""
+    cp = model_path / "preprocessor_config.json"
+    if not cp.exists():
+        raise RuntimeError(
+            "ZERO FALLBACK: long-form audio_llm needs the embedded "
+            f"preprocessor_config.json (sampling rate, hop, window) — missing at {cp}.")
+    cfg = json.load(open(cp))
+    sr = cfg.get("sampling_rate", cfg.get("sample_rate"))
+    hop, n_fft, chunk_s = cfg.get("hop_length"), cfg.get("n_fft"), cfg.get("chunk_length")
+    if None in (sr, hop, n_fft, chunk_s):
+        raise RuntimeError(
+            "ZERO FALLBACK: preprocessor_config.json must carry sampling_rate, "
+            f"hop_length, n_fft and chunk_length for long-form (got {cfg}).")
+    n_mels_override = None
+    if input_shape and len(input_shape) >= 3 and input_shape[1] in (40, 64, 80, 128):
+        n_mels_override = input_shape[1]
+    n_mels = cfg.get("n_mels") or n_mels_override or cfg.get("feature_size")
+    if not n_mels:
+        raise RuntimeError("ZERO FALLBACK: preprocessor_config.json carries no n_mels/feature_size.")
+    nsamp = int(chunk_s) * int(sr)
+    audio = _load_audio(audio_path, sr)
+    if len(audio) <= nsamp:
+        return None
+    n_win = -(-len(audio) // nsamp)               # ceil: next multiple of one window
+    padded = np.pad(audio, (0, n_win * nsamp - len(audio)))
+    mel_full = _whisper_logmel(padded, int(sr), int(n_fft), int(hop), int(n_mels))
+    frames = nsamp // int(hop)
+    mel_full = mel_full[:, :n_win * frames]
+    return np.ascontiguousarray(
+        mel_full.reshape(int(n_mels), n_win, frames).transpose(1, 0, 2))
+
+
 def whisper_window_mel(seek_ctx: dict, seek: int) -> np.ndarray:
     """Mel window starting at sample `seek`: a slice of the whole-audio
     log-mel at the seek frame (`seek` is a whole number of hops by

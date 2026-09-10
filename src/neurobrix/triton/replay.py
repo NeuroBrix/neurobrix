@@ -496,6 +496,71 @@ _ORIG_FREE = DeviceAllocator.free_cuda
 _ACTIVE_SLABS: List["SlabAllocator"] = []
 
 
+# --- The NeuroBrix launcher's launches, recorded in the same shape ----------
+#
+# `_install_seams` records a step by wrapping Triton's `CompiledKernel.run`. On the
+# Triton branch nothing calls that any more: the NeuroBrix launcher goes from its own
+# binder straight to the driver (R33, third peel 2026-09-05). A step recorded through
+# that seam alone holds the copies and NO kernel; the frozen plan then computes
+# nothing and the verify gate rejects it — which is exactly what it did, costing the
+# decode its CUDA-graph path without ever being wrong (measured 2026-09-08 on
+# TinyLlama at a locked clock: 71.9 ms/token against 7.1 under Triton's launcher).
+#
+# So the launch is recorded in exactly the shape `_KERNEL` already carries, behind a
+# small object that speaks `CompiledKernel`'s calling convention and dispatches to the
+# engine's own driver. Every consumer — the direct replay, the graph capture, the
+# tuple census, the error naming — therefore works unchanged, on either launcher.
+
+
+class _NBXLaunch:
+    """One prepared kernel, called the way `CompiledKernel.run` is called."""
+
+    __slots__ = ("prep", "kinds", "name", "function", "packed_metadata")
+
+    def __init__(self, prep, kinds):
+        self.prep = prep
+        self.kinds = kinds
+        self.name = prep.name
+        self.function = prep.function
+        self.packed_metadata = None
+
+    def run(self, g0, g1, g2, stream, function, packed_metadata,
+            launch_md, enter_hook, exit_hook, *vals):
+        # The stream is the CALLER's: the graph capture hands its own capture stream
+        # because the recorded one may be the uncapturable legacy stream.
+        from neurobrix.kernels.launcher import active_driver
+        active_driver().launch(self.prep.function, (g0, g1, g2), self.prep.block,
+                               self.prep.shared, stream,
+                               list(zip(self.kinds, vals)))
+
+
+_NBX_ADAPTERS: Dict[int, "_NBXLaunch"] = {}
+
+
+def _nbx_record(prep, grid, params) -> None:
+    """The launcher's recorder seam (`launcher.set_launch_recorder`), armed for the
+    same window the Triton property covers."""
+    flat = tuple(v for _kind, v in params)
+    if STATE.census_current is not None and not STATE.recording:
+        STATE.census_current.append((prep.name, grid[0], grid[1], grid[2], flat))
+        return
+    if not STATE.recording:
+        return
+    adapter = _NBX_ADAPTERS.get(id(prep))
+    if adapter is None or len(adapter.kinds) != len(params):
+        adapter = _NBX_ADAPTERS[id(prep)] = _NBXLaunch(
+            prep, tuple(k for k, _v in params))
+    STATE.note_device()
+    # The recorded stream is never read back (the replay and the capture each supply
+    # their own), and this launcher's is the legacy one: it is stored as 0 for shape.
+    STATE.records.append((_KERNEL, (adapter, grid[0], grid[1], grid[2], 0, flat)))
+
+
+def _arm_launch_recorder(on: bool) -> None:
+    from neurobrix.kernels import launcher as _lnch
+    _lnch.set_launch_recorder(_nbx_record if on else None)
+
+
 def _install_seams() -> None:
     global _INSTALLED
     if _INSTALLED:
@@ -600,7 +665,8 @@ def _install_seams() -> None:
                 STATE.break_plan("D2H memcpy during recording")
             elif kind == 1:
                 import ctypes
-                snap = ctypes.string_at(int(src), int(nbytes))
+                # bytes of any size: `ctypes.string_at` takes a C int and refuses 2 GiB
+                snap = bytes((ctypes.c_uint8 * int(nbytes)).from_address(int(src))) if int(nbytes) else b""
                 STATE.note_device()
                 STATE.records.append((_H2D, (int(dst), snap)))
             else:
@@ -1008,6 +1074,7 @@ def _census_tick(seq) -> None:
         _census_report(STATE.census_owner)
     STATE.census_current = []
     STATE.census_owner = seq
+    _arm_launch_recorder(True)
     return
 
 
@@ -1268,6 +1335,7 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
         return False
 
     STATE.recording = True
+    _arm_launch_recorder(True)
     STATE.records = []
     STATE.broken = None
     STATE.slab = slab
@@ -1278,6 +1346,7 @@ def maybe_run(seq, skip_kills: bool, pre_op_callback) -> bool:
         failed = e
     finally:
         STATE.recording = False
+        _arm_launch_recorder(False)
         STATE.slab = None
         records = STATE.records
         STATE.records = []

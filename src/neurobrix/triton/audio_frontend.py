@@ -302,11 +302,25 @@ def preprocess_audio_input_np(ctx, audio_config: Dict, stages: List[Dict]) -> No
             _seek["build"] = _build
             ctx._stt_seek = _seek
             feats = _fit(whisper_window_mel(_seek, 0))
+    # Audio-LLM long-form (D-AUDIOLLM-LONGFORM) — R33 mirror of the compiled
+    # `preprocess_audio_input`: the recording's fixed 30 s windows (numpy)
+    # go on ctx._audio_windows as NBXTensors; window 0 is the classic input.
+    ctx._audio_windows = None
+    if (feats is None and preprocessing == "mel_spectrogram"
+            and _flow_type == "audio_llm"
+            and _os_sw.environ.get("NBX_DISABLE_STT_CHUNKING") != "1"):
+        from neurobrix.core.module.audio.mel_dsp import fixed_window_mels
+        _wins = fixed_window_mels(str(audio_path), Path(find_model_config_path(ctx)), input_shape)
+        if _wins is not None:
+            _set_device_for(ctx)
+            ctx._audio_windows = [NBXTensor.from_numpy(_fit(w[None])) for w in _wins]
+            feats = _fit(_wins[0][None])
     if feats is None:
         feats = _fit(extract_features_np(preprocessing, str(audio_path),
                                          Path(find_model_config_path(ctx)), input_shape))
     print(f"   [Audio·np] Features: {tuple(feats.shape)} ({preprocessing})"
-          + (" (long-form: timestamp seek)" if ctx._stt_seek else ""))
+          + (" (long-form: timestamp seek)" if ctx._stt_seek else "")
+          + (f" (long-form: {len(ctx._audio_windows)} fixed windows)" if getattr(ctx, "_audio_windows", None) else ""))
 
     # Place the feature tensor on the encoder's device (NBXTensor.from_numpy uses
     # the CURRENT DeviceAllocator device — without this it lands on cuda:0 while a

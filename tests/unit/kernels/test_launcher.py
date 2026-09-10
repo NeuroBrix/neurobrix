@@ -150,3 +150,42 @@ def test_do_bench_returns_quantiles_in_milliseconds():
     r, i = _nbx(np.ones(n, dtype=np.float32)), _nbx(np.ones(n, dtype=np.float32))
     q = do_bench(lambda: scale_kernel[(4,)](r, i, n, 1.0, BLOCK_SIZE=1024), warmup=2, rep=5, quantiles=(0.5, 0.2, 0.8))
     assert len(q) == 3 and all(0 < x < 50 for x in q), q
+
+
+def test_a_recorder_sees_every_launch_and_its_record_replays():
+    """The decode replay (`neurobrix.triton.replay`) records one step's final launches
+    through this seam and replays them without the Python band above. Nothing on the
+    Triton branch calls Triton's `CompiledKernel.run` any more, so a launch that skipped
+    the seam would be recorded as a step with no kernel in it: the frozen plan then
+    computes nothing, its verify gate rejects it, and the decode loses its CUDA-graph
+    path without anything being wrong (measured 2026-09-08 on TinyLlama at a locked
+    clock: 71.9 ms per token against 7.1)."""
+    from neurobrix.kernels.launcher import active_driver, launch, set_launch_recorder
+    from neurobrix.kernels.ops.fft_op import scale_kernel
+    rng = np.random.default_rng(11)
+    n = 2048
+    r0 = rng.standard_normal(n).astype(np.float32)
+    i0 = rng.standard_normal(n).astype(np.float32)
+    a_r, a_i = _nbx(r0), _nbx(i0)
+    grid = ((n + 1023) // 1024,)
+    seen = []
+    set_launch_recorder(lambda prep, g, params: seen.append((prep, g, list(params))))
+    try:
+        launch(scale_kernel, grid, a_r, a_i, n, 0.5, BLOCK_SIZE=1024)
+    finally:
+        set_launch_recorder(None)
+
+    assert len(seen) == 1, "the recorder saw no launch"
+    prep, rec_grid, params = seen[0]
+    assert len(rec_grid) == 3 and rec_grid[1] == 1 and rec_grid[2] == 1
+    assert any(kind == "ptr" for kind, _v in params), "no pointer in the record"
+    once = _host(a_r, np.float32).copy()
+
+    # The record alone launches the same kernel again, through the driver the replay
+    # uses: the halving applies a second time.
+    active_driver().launch(prep.function, rec_grid, prep.block, prep.shared, 0, params)
+    assert np.array_equal(_host(a_r, np.float32), once * 0.5)
+
+    seen.clear()
+    launch(scale_kernel, grid, a_r, a_i, n, 0.5, BLOCK_SIZE=1024)
+    assert seen == [], "the recorder still fires after it was cleared"
