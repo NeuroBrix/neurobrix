@@ -103,11 +103,18 @@ def test_the_scalar_constexpr_tests_are_left_alone():
         "probably been applied to `if` tests it does not govern")
 
 
-def test_the_where_condition_is_compared_not_borrowed():
+def test_the_where_condition_is_cast_not_borrowed():
     """`aten::where`'s condition crosses the NBX boundary in a uint8 container,
     so the loaded value is an integer. Triton warns on a non-boolean condition
-    today and will raise later."""
+    today and will raise later.
+
+    The form is pinned because two forms silence the warning and only one is
+    free. `.to(tl.int1)` emits exactly the cast `tl.where` performed internally
+    — TTIR identical to the pre-edit kernel. `cond != 0` promotes the literal to
+    i32 and buys an `arith.extsi` on every element, on the kernel 39 of the 56
+    local containers reach. Both are correct; one is not neutral."""
     src = (OPS / "where.py").read_text()
-    assert "tl.where(cond != 0" in src, (
-        "where.py hands tl.where the loaded condition directly; a bool arrives "
-        "in a uint8 container, so compare it explicitly")
+    assert "tl.where(cond.to(tl.int1)" in src, (
+        "where.py must cast the loaded condition with `.to(tl.int1)`. Handing "
+        "tl.where a uint8 warns today and raises later; comparing it against a "
+        "bare `0` widens every element to i32 first.")
