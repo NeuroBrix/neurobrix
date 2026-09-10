@@ -113,15 +113,15 @@ class PipelineParallelStrategy(ExecutionStrategy):
 
         shard_map = self.get_shard_map(component_name)
 
-        nbx_path = None
-        if hasattr(self.context, 'runtime_package') and self.context.runtime_package:
-            nbx_path = getattr(self.context.runtime_package, 'nbx_path', None)
+        # Was: read `nbx_path` off the package, and if absent skip the
+        # load without a word. That name exists on no package this
+        # engine builds, so the load never happened and never said so.
+        nbx_path = self.resolve_artifact_path(component_name)
 
-        if nbx_path:
-            if shard_map:
-                executor.load_weights(nbx_path, component_name, shard_map)
-            else:
-                executor.load_weights(nbx_path, component_name)
+        if shard_map:
+            executor.load_weights(nbx_path, component_name, shard_map)
+        else:
+            executor.load_weights(nbx_path, component_name)
 
     def prepare_inputs(self, component_name: str, inputs: Dict[str, Any]) -> Dict[str, Any]:
         """Prepare inputs — transfer to first device in the PP chain."""

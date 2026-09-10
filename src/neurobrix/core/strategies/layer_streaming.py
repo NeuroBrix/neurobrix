@@ -45,23 +45,10 @@ class LayerStreamingStrategy(ExecutionStrategy):
             return None
         return [list(pair) for pair in raw]
 
-    def _nbx_path(self):
-        """Where the artefact lives, read from the runtime package.
+    def _nbx_path(self, component_name: str) -> str:
+        """Delegates to the strategy brick — one resolver for every strategy."""
+        return self.resolve_artifact_path(component_name)
 
-        The package exposes it as `root_path`; `nbx_path` is accepted first
-        because `base.py` reads that name. Note that base.py's `load_weights`
-        treats a missing path as "nothing to do" and silently skips the load —
-        this one raises, because a segment with no weights is not a lighter
-        segment, it is a wrong answer.
-        """
-        pkg = getattr(self.context, "runtime_package", None)
-        for attr in ("nbx_path", "root_path", "cache_path", "path"):
-            v = getattr(pkg, attr, None)
-            if v:
-                return str(v)
-        raise RuntimeError(
-            "layer_streaming: the runtime package names no artefact path "
-            f"(tried nbx_path, root_path, cache_path, path on {type(pkg).__name__})")
 
     def _build_segment_executors(self, component_name: str) -> List[Any]:
         """One executor per segment, each carrying that segment's graph.
@@ -104,7 +91,7 @@ class LayerStreamingStrategy(ExecutionStrategy):
                 f"graph was transformed after Prism read it; re-plan rather "
                 f"than execute boundaries that no longer mean what they meant.")
 
-        nbx_path = self._nbx_path()
+        nbx_path = self._nbx_path(component_name)
 
         # A segment executor is the COMPONENT's executor with a different
         # graph. Built from the base executor's own resolved configuration
@@ -174,7 +161,7 @@ class LayerStreamingStrategy(ExecutionStrategy):
 
         values: Dict[str, Any] = dict(inputs or {})
         last: Dict[str, Any] = {}
-        nbx_path = self._nbx_path()
+        nbx_path = self._nbx_path(component_name)
 
         for executor in executors:
             sub = executor._dag
@@ -222,7 +209,7 @@ class LayerStreamingStrategy(ExecutionStrategy):
         self._installed.add(component_name)
 
         segments = self._build_segment_executors(component_name)
-        nbx_path = self._nbx_path()
+        nbx_path = self._nbx_path(component_name)
 
         def segmented_run(inputs=None, *args, **kwargs):
             values = dict(inputs or {})
