@@ -137,9 +137,21 @@ def _campaign_cells(campaigns: Path) -> dict:
         bm = statistics.median(rb) if rb else b.get("exec_s")
         keys = b.get("swept")
         gain = (bm / am) if (am and bm and keys) else None
+        ch = d.get("choices") or {}
+        # The lists in `choices` are SAMPLES, capped at twenty; the `*_count`
+        # fields carry the truth. Reading `len(list)` reported 20 near-ties
+        # where the run had found 139 — a cell that lies, in the document whose
+        # rule is that no cell lies. Count fields win, always.
         out[d.get("model", result.parent.name)] = {
-            "keys": keys,
+            "keys": ch.get("keys", keys),
             "served": a.get("certified_served"),
+            "certified": ch.get("certified"),
+            "differ": ch.get("differ"),
+            "near_tie": ch.get("near_tie_count"),
+            "choice_contradicted_n": ch.get("contradicted_count"),
+            "choice_contradicted": ch.get("contradicted"),   # the sample, for the findings list
+            "excluded_picked": ch.get("excluded_picked_count"),
+            "differ_uncertified": ch.get("differ_uncertified_count"),
             "gain": gain,
             "excluded": b.get("screen_excluded"),
             "contradictions": b.get("contradictions"),
@@ -210,21 +222,88 @@ def main() -> int:
                   f"The other {len(ranked) - len(measured)} carry `not measured` in every "
                   f"column that would otherwise be a guess.", ""]
 
-    lines += ["| # | model | family | GB | keys demanded | served certified | gain | screened out | known cost |",
-              "|---|---|---|---|---|---|---|---|---|"]
+    lines += ["| # | model | family | GB | keys | certified | differ | near-tie | CONTRADICTED | screened out | gain | known cost |",
+              "|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for i, r in enumerate(ranked, 1):
         c = r["cell"]
         if c:
             keys = str(c["keys"]) if c["keys"] is not None else "?"
             served = str(c["served"]) if c["served"] is not None else "?"
             gain = f"x{c['gain']:.2f}" if c["gain"] else "no ratio — the lever moved nothing"
+            certified = str(c["certified"]) if c["certified"] is not None else "?"
+            differ = str(c["differ"]) if c["differ"] is not None else "?"
+            near = str(c["near_tie"]) if c["near_tie"] is not None else "?"
+            n_contra = c["choice_contradicted_n"]
+            contra = (f"**{n_contra}**" if n_contra else ("0" if n_contra == 0 else "?"))
             out = (f"{c['excluded']}" if c["excluded"] is not None else "?")
             cost = f"{c['cost_s']:.0f} s (measured, {c['campaign']})"
         else:
-            keys = served = gain = out = "not measured"
+            keys = served = certified = differ = near = contra = out = gain = "not measured"
             cost = "not measured"
         lines.append(f"| {i} | `{r['hub']}` | {r['family']} | {r['gb']:.1f} | {keys} | "
-                     f"{served} | {gain} | {out} | {cost} |")
+                     f"{certified} | {differ} | {near} | {contra} | {out} | {gain} | {cost} |")
+
+    lines += ["", "## The columns that are data, not a score", "",
+              "**certified** — how many of the keys this model demands the "
+              "directory already holds. **differ** — on how many of them the "
+              "runtime's own sweep picked a different setting from the certified "
+              "one. A large `differ` is not alarming by itself, which is what "
+              "the next two columns separate.", "",
+              "**near-tie** — the difference sits inside the certifier's own "
+              "margin: its second-best was within a few percent of its best, so "
+              "the runtime's pick is the timer's noise and not a disagreement. "
+              "**CONTRADICTED** — the runtime chose differently on a key with a "
+              "CLEAR margin. That is a finding every time, one of the two things "
+              "the certified-directory doctrine says must never be a silence.", "",
+              "**screened out** — configurations the consensus screen excluded "
+              "before timing, each with its kernel, key and deviation in the "
+              "run's log. An exclusion is DATA: it says how contested a target's "
+              "configuration space is.", ""]
+    findings = [r for r in measured if (r["cell"] or {}).get("choice_contradicted_n")]
+    if findings:
+        lines += ["### Live findings", ""]
+        for r in findings:
+            sample = r["cell"]["choice_contradicted"] or []
+            n = r["cell"]["choice_contradicted_n"] or 0
+            if n > len(sample):
+                lines.append(f"* `{r['hub']}` — {n} contradicted key(s); the "
+                             f"{len(sample)} below are the record's sample, not "
+                             f"the whole list.")
+            for f in sample:
+                lines.append(f"* `{r['hub']}` — `{f.get('key')}`: the certifier's "
+                             f"margin {f.get('margin', 0) * 100:.0f} % "
+                             f"({f.get('delta_ms', 0) * 1000:.1f} us on a "
+                             f"{f.get('best_ms', 0) * 1000:.1f} us kernel).")
+        lines.append("")
+    else:
+        lines += ["No contradicted certified choice in the measured rows.", ""]
+
+    # The decomposition must close: every key where the runtime differed is
+    # either a near-tie, a contradiction, an excluded setting picked, or a key
+    # the directory does not certify. A row that does not add up means one of
+    # the counts is measuring something other than what its name says.
+    broken = []
+    for r in measured:
+        c = r["cell"]
+        parts = [c.get("near_tie"), c.get("choice_contradicted_n"),
+                 c.get("excluded_picked"), c.get("differ_uncertified")]
+        if c.get("differ") is not None and all(x is not None for x in parts):
+            if sum(parts) != c["differ"]:
+                broken.append((r["hub"], c["differ"], parts))
+    if broken:
+        lines += ["", "### The decomposition does not close", "",
+                  "`differ` should be exactly `near-tie + CONTRADICTED + "
+                  "excluded-picked + uncertified`. Where it is not, one of the "
+                  "counts is measuring something other than its name:", ""]
+        for hub, differ, parts in broken:
+            lines.append(f"* `{hub}` — differ {differ}, parts {parts} summing "
+                         f"to {sum(parts)}")
+        lines.append("")
+    else:
+        lines += ["", "Every measured row's decomposition closes: `differ` = "
+                  "`near-tie + CONTRADICTED + excluded-picked + uncertified`. "
+                  "That is checked, not assumed — it is the arithmetic that "
+                  "says the four counts are counting different things.", ""]
 
     lines += ["", "## What the measured rows say, and what they do not", ""]
     if measured:
