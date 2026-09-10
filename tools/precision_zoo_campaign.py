@@ -1337,6 +1337,52 @@ def lock_holder_alive(text: str) -> bool:
 ARM_LABELS = ("A", "B")
 
 
+# The ignored pointers a measurement depends on. They are gitignored BY DESIGN,
+# so a fresh checkout has none of them, and a worktree without them measures a
+# different engine from the one anybody meant: Prism's registry flags read False
+# there. Two GPU hours went to exactly that on 2026-09-05 — PixArt VAE fp32 vs
+# fp16 — and the answer was blamed on the change rather than on the tree.
+FROZEN_POINTERS = (".nbx_registry", "forge")
+
+
+def frozen_src_refusal(src, repo_root):
+    """Why this `--src` may not be measured, or None if it may.
+
+    A campaign measures whatever `--src` points at. WITHOUT it, the engine is
+    installed editable and the campaign measures the LIVE repository — whatever
+    that happens to be at each moment. On 2026-09-10 three branch merges landed
+    six minutes into a campaign's second cell, and every later cell would have
+    measured a different tree from the first. The rule that forbids it was
+    written the same afternoon, in docs/reference/workshop-layout.md, and a
+    written rule was not enough.
+
+    So it is a precondition, checked before a second of card is spent, and it
+    refuses three things: no `--src`; a `--src` inside the live repository; a
+    `--src` whose worktree does not carry the ignored pointers.
+    """
+    if src is None:
+        return ("no --src: the engine is installed editable, so a campaign "
+                "without --src measures the LIVE repository and every edit made "
+                "while it flies changes the tree under it. Point --src at a "
+                "frozen worktree (nbx/worktrees/<name>/src)")
+    src = Path(src).resolve()
+    root = Path(repo_root).resolve()
+    if src == root or root in src.parents:
+        return (f"--src {src} is inside the live repository {root}: that is the "
+                f"tree being edited, under another name. Create a frozen "
+                f"worktree and point --src at its src/")
+    if not src.is_dir():
+        return f"--src {src} does not exist"
+    worktree = src.parent
+    missing = [p for p in FROZEN_POINTERS if not (worktree / p).exists()]
+    if missing:
+        return (f"--src {src} is a worktree without {', '.join(missing)}: these "
+                f"are gitignored by design, so a fresh checkout has none of them "
+                f"and the registry's flags read False there. Copy or link them "
+                f"beside src/ before measuring")
+    return None
+
+
 def vacuous_lever_reason(record: dict):
     """Why this cell measured nothing, or None if it measured.
 
@@ -1599,6 +1645,13 @@ def main():
     if not args.machine and args.gpu is None:
         ap.error("--gpu <n> for the pinned stage, or --machine for the whole rig")
     gpu = None if args.machine else args.gpu
+    # The door. A campaign measures whatever --src points at, and without it the
+    # editable install means it measures the LIVE repository. Refused here,
+    # before a second of card is spent — see frozen_src_refusal.
+    _frozen = frozen_src_refusal(args.src, Path(__file__).resolve().parent.parent)
+    if _frozen:
+        ap.error(f"this campaign would not measure a frozen tree — {_frozen}")
+
     held = held_by_retrace(Path(args.hold_from)) if args.hold_from else set()
     for m in models:
         if args.skip_done:
