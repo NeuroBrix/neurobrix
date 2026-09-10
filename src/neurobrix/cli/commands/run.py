@@ -594,8 +594,18 @@ def cmd_run(args):
     print(f"   Engine: {execution_mode.upper()}")
     # Data-driven hardware capability surface for Triton kernel wrappers.
     # Set once per process from the resolved PrismProfile.
-    from neurobrix.kernels.wrappers import set_hardware_profile
-    set_hardware_profile(hw_profile)
+    #
+    # GATED ON THE MODE, because the surface it configures belongs to the
+    # Triton wrappers and the ATen path never touches them. Importing that
+    # module pulls the kernel op modules, which carry real @triton.jit
+    # decorators and cannot exist without a Triton wheel — and macOS has
+    # none. Measured 2026-09-10 by blocking the module: a compiled run died
+    # with `No module named 'triton'` AFTER Prism had chosen `single_gpu`
+    # and the engine had printed `Engine: COMPILED`, so a fresh Mac could
+    # not start the engine in ANY mode.
+    if execution_mode != "compiled":
+        from neurobrix.kernels.wrappers import set_hardware_profile
+        set_hardware_profile(hw_profile)
     executor = RuntimeExecutor(pkg, execution_plan, mode=execution_mode)
 
     def _drain_device():
