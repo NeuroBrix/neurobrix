@@ -1,0 +1,234 @@
+<title>Volta Certification Ledger</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;500;700&display=swap">
+<style>
+:root{
+  --paper:#F2F4F1; --surface:#FBFCFA; --ink:#171C19; --muted:#6B7570;
+  --rule:#D5DBD4; --rule-soft:#E4E9E3; --accent:#1F6B5C; --accent-soft:#E1EDE9;
+  --finding:#9A5410; --finding-soft:#F6E9DA;
+  --sans:'Archivo',system-ui,-apple-system,'Segoe UI',sans-serif;
+  --serif:'Source Serif 4',Georgia,'Times New Roman',serif;
+  --mono:'JetBrains Mono',ui-monospace,'SFMono-Regular',Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --paper:#121614; --surface:#191E1B; --ink:#E4E9E4; --muted:#8D9791;
+  --rule:#283029; --rule-soft:#1F2622; --accent:#4FB39C; --accent-soft:#17302B;
+  --finding:#E09A4A; --finding-soft:#332514;
+}}
+:root[data-theme="dark"]{
+  --paper:#121614; --surface:#191E1B; --ink:#E4E9E4; --muted:#8D9791;
+  --rule:#283029; --rule-soft:#1F2622; --accent:#4FB39C; --accent-soft:#17302B;
+  --finding:#E09A4A; --finding-soft:#332514;
+}
+*{box-sizing:border-box}
+body{background:var(--paper);color:var(--ink);font-family:var(--serif);
+  font-size:16.5px;line-height:1.62;margin:0;padding-block:clamp(28px,5vw,64px);
+  padding-left:max(16px,calc(50vw - 620px));padding-right:max(16px,calc(50vw - 620px));
+  -webkit-font-smoothing:antialiased}
+.prose{max-width:66ch}
+h1,h2,h3{font-family:var(--sans);text-wrap:balance;margin:0}
+h1{font-size:clamp(28px,4.2vw,40px);font-weight:700;letter-spacing:-.022em;line-height:1.1}
+h2{font-size:clamp(19px,2.4vw,23px);font-weight:600;letter-spacing:-.012em;margin-top:56px}
+h3{font-size:15px;font-weight:600;letter-spacing:.02em;margin-top:32px}
+p{margin:14px 0}
+code{font-family:var(--mono);font-size:.845em;font-variant-ligatures:none}
+b,strong{font-weight:600}
+.eyebrow{font-family:var(--mono);font-size:11.5px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--muted);margin:0 0 14px}
+.dateline{font-family:var(--mono);font-size:12px;color:var(--muted);margin-top:10px}
+
+/* the scope note is the page's first claim, so it gets the only accent rail */
+.scope{border-left:3px solid var(--accent);background:var(--accent-soft);
+  padding:18px 22px;margin:30px 0 0;max-width:70ch;border-radius:0 4px 4px 0}
+.scope p{margin:0}
+.scope p + p{margin-top:11px}
+.scope strong{font-family:var(--sans);font-weight:600}
+
+.meta{display:flex;flex-wrap:wrap;gap:34px;margin-top:38px;
+  padding:20px 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule)}
+.meta div{display:flex;flex-direction:column;gap:3px}
+.meta .k{font-family:var(--mono);font-size:11px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--muted)}
+.meta .v{font-family:var(--sans);font-size:26px;font-weight:600;
+  font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+
+ul.files{list-style:none;padding:0;margin:16px 0;max-width:60ch;
+  border-top:1px solid var(--rule-soft)}
+ul.files li{display:flex;justify-content:space-between;gap:16px;
+  padding:7px 0;border-bottom:1px solid var(--rule-soft);align-items:baseline}
+ul.files span{font-family:var(--mono);font-size:13px;font-variant-numeric:tabular-nums;
+  color:var(--muted)}
+
+.legend{display:flex;flex-wrap:wrap;gap:8px 18px;margin:20px 0 14px;
+  font-family:var(--mono);font-size:11.5px;color:var(--muted)}
+.legend b{color:var(--ink);font-weight:500}
+.legend .sw{display:inline-block;width:9px;height:9px;border-radius:2px;
+  margin-right:6px;vertical-align:baseline}
+.sw-m{background:var(--accent)} .sw-f{background:var(--finding)}
+.sw-n{background:var(--rule);border:1px solid var(--muted)}
+
+.tablewrap{overflow-x:auto;margin:8px 0 0;border-top:1px solid var(--rule);
+  border-bottom:1px solid var(--rule)}
+table{border-collapse:collapse;width:100%;min-width:980px;
+  font-family:var(--mono);font-size:12.5px;font-variant-numeric:tabular-nums}
+thead th{position:sticky;top:0;background:var(--paper);text-align:right;
+  font-family:var(--sans);font-size:10.5px;font-weight:600;letter-spacing:.07em;
+  text-transform:uppercase;color:var(--muted);padding:11px 9px;
+  border-bottom:1px solid var(--rule);white-space:nowrap}
+thead th.l{text-align:left}
+tbody td{padding:7px 9px;border-bottom:1px solid var(--rule-soft);
+  text-align:right;white-space:nowrap}
+tbody td.model{text-align:left;white-space:normal;min-width:250px}
+tbody td.model code{font-size:12px}
+tbody tr:last-child td{border-bottom:0}
+.idx{color:var(--muted);width:34px}
+.quiet{color:var(--muted)}
+.gain{font-weight:700;color:var(--accent)}
+.fnd{color:var(--finding);font-weight:700}
+.nm{color:var(--muted);opacity:.55;cursor:help}
+.fam{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+/* the five rows that carry a proof are the only ones that carry weight */
+tr.measured{background:var(--surface)}
+tr.measured td:first-child{box-shadow:inset 2px 0 0 var(--accent)}
+tr.measured .model code{color:var(--ink);font-weight:500}
+
+ol.findings{list-style:none;counter-reset:f;padding:0;margin:18px 0;display:grid;
+  gap:10px;grid-template-columns:repeat(auto-fill,minmax(310px,1fr))}
+ol.findings li{border:1px solid var(--rule);border-left:3px solid var(--finding);
+  background:var(--surface);padding:13px 15px;border-radius:0 4px 4px 0}
+.f-head{display:flex;justify-content:space-between;gap:12px;align-items:baseline;
+  margin-bottom:7px}
+.f-model{font-size:11.5px;color:var(--muted);word-break:break-all}
+.f-margin{font-family:var(--sans);font-size:12px;font-weight:700;color:var(--finding);
+  white-space:nowrap}
+.f-key{display:block;font-size:12px;font-weight:700;line-height:1.45}
+.f-tuple{display:block;font-weight:400;font-size:10.5px;color:var(--muted);
+  word-break:break-all;margin-top:2px}
+.f-scale{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:7px}
+
+ul.pop{list-style:none;padding:0;margin:14px 0;max-width:62ch;
+  border-top:1px solid var(--rule-soft)}
+ul.pop li{display:flex;gap:14px;align-items:baseline;padding:7px 0;
+  border-bottom:1px solid var(--rule-soft);flex-wrap:wrap}
+ul.pop code{flex:1 1 210px;font-size:12px}
+.pop-k{font-family:var(--mono);font-size:11.5px;color:var(--muted);
+  font-variant-numeric:tabular-nums}
+.pop-g{font-family:var(--sans);font-weight:700;color:var(--accent);
+  font-variant-numeric:tabular-nums;min-width:56px;text-align:right}
+
+.foot{margin-top:56px;padding-top:20px;border-top:1px solid var(--rule);
+  font-family:var(--mono);font-size:11.5px;color:var(--muted);max-width:70ch}
+@media (max-width:620px){
+  body{font-size:15.5px}
+  .meta{gap:22px}
+  .meta .v{font-size:21px}
+}
+</style>
+
+<p class="eyebrow">NeuroBrix · autotune · nvidia / volta</p>
+<h1>Volta Certification Ledger</h1>
+<p class="dateline">47 hub models against the certified directory · 2026-09-10 · sm_70, clocks locked 1290 MHz</p>
+
+<div class="scope">
+  <p><strong>Everything here concerns <code>nvidia/volta</code> and nothing else.</strong>
+  Everywhere else the runtime sweeps at load and the guarantee is the consensus screen,
+  where <em>screened</em> means the candidates agreed with each other — never that anything
+  was proved against an oracle.</p>
+  <p>A cell that has not been measured says so. No cell carries a number whose basis is not
+  named beside it.</p>
+</div>
+
+<div class="meta">
+  <div><span class="k">certified entries</span><span class="v">{{TOTAL}}</span></div>
+  <div><span class="k">kernel · dtype files</span><span class="v">{{NFILES}}</span></div>
+  <div><span class="k">models measured</span><span class="v">{{NMEAS}} / {{NROWS}}</span></div>
+  <div><span class="k">contradicted keys</span><span class="v">{{NFIND}}</span></div>
+</div>
+
+<div class="prose">
+  <h2>What the directory holds</h2>
+  <p>One file per kernel and per dtype of the buffer the kernel writes, indexed by the
+  launcher's shape key. Every entry carries its own proof: the date, the engine and backend
+  versions, the shape, the deviation measured against the fp64 oracle, the profile's
+  tolerance, and the machine.</p>
+</div>
+<ul class="files">{{FILES}}</ul>
+
+<h2>The catalogue</h2>
+<div class="prose">
+  <p>Ordered by <b>known cost</b> ascending — the position is a queue position, not a rank.
+  Five models have a recorded cost and lead; the rest are ordered by weight, a declared crude
+  proxy whose only job is to try cheap things first. What protects a night's budget is not
+  that ordering but the guard: a cell whose known cost exceeds what remains is refused at the
+  door, and a cell with no known cost is never refused on a guess.</p>
+</div>
+<div class="legend">
+  <span><span class="sw sw-m"></span><b>measured</b> — carries a proof</span>
+  <span><span class="sw sw-n"></span><b>—</b> not measured, deliberately empty</span>
+  <span><span class="sw sw-f"></span><b>contradicted</b> — a finding, every time</span>
+</div>
+<div class="tablewrap">
+<table>
+  <thead><tr>
+    <th class="l">#</th><th class="l">model</th><th class="l">family</th><th>GB</th>
+    <th>keys</th><th>certified</th><th>differ</th><th>near-tie</th>
+    <th>contradicted</th><th>screened out</th><th>gain</th><th>known cost</th>
+  </tr></thead>
+  <tbody>{{ROWS}}</tbody>
+</table>
+</div>
+
+<h2>The columns that are data, not a score</h2>
+<div class="prose">
+  <p><b>certified</b> — how many of the keys this model demands the directory already holds.
+  <b>differ</b> — on how many of them the runtime's own sweep picked a different setting from
+  the certified one. A large <code>differ</code> is not alarming by itself, which is what the
+  next two columns separate.</p>
+  <p><b>near-tie</b> — the difference sits inside the certifier's own margin: its second-best
+  was within a few percent of its best, so the runtime's pick is the timer's noise and not a
+  disagreement. <b>contradicted</b> — the runtime chose differently on a key with a clear
+  margin. That is a finding every time, one of the two things the certified-directory doctrine
+  says must never be a silence.</p>
+  <p><b>screened out</b> — configurations the consensus screen excluded before timing, each
+  with its kernel, key and deviation in the run's log. An exclusion is data: it says how
+  contested a target's configuration space is.</p>
+  <p>The decomposition is checked, not assumed: <code>differ</code> must equal
+  <code>near-tie + contradicted + excluded-picked + uncertified</code>. It closes on every
+  measured row.</p>
+</div>
+
+<h3>Live findings — {{NFIND}} contradicted certified choices</h3>
+<div class="prose"><p>Every one of them on the same kernel, in fp32, at adjacent shape keys.
+That is a family, not ten accidents.</p></div>
+<ol class="findings">{{FINDINGS}}</ol>
+
+<h2>What the measured rows say, and what they do not</h2>
+<div class="prose">
+  <p>Median gain <b>×2.39</b> over five cells. That number is inseparable from its population,
+  which is exactly these models and no others:</p>
+</div>
+<ul class="pop">{{POP}}</ul>
+<div class="prose">
+  <p><b>It may not be compared with a median over a different population.</b> An earlier
+  campaign reported ×13.9 over a set that included <code>chatterbox</code> (674 keys) and
+  <code>openaudio</code> (693); this one does not carry them. Saying “the median fell” against
+  that number would describe which models were run, in the grammar of a statement about the
+  engine.</p>
+  <p>The law these rows show is the <b>key count</b>, not the model size: 54 GB at 203 keys
+  gains ×11.69 while 61 GB at 8 keys gains ×1.54. The table is ordered by cost — read the keys
+  column for the explanation of any gain.</p>
+
+  <h2>Why the unmeasured rows have no estimate</h2>
+  <p>A static count of distinct autotuned-op shapes, read from each container's
+  <code>graph.json</code>, was tried as a predictor of the key count and <b>does not work</b>:
+  two containers with 54 static shapes each measured 8 and 137 keys, and the ratio of measured
+  to static ranges from 0.15 to 2.54 across the five known cells. It is not a weak predictor;
+  it is not a predictor. Rather than fill the column with it, the column stays empty.</p>
+</div>
+
+<p class="foot">Generated from the campaign records by
+<code>tools/certified_catalogue_report.py</code>. Campaigns their own author marked
+<code>INVALIDATED.md</code> are not read, and the exclusion is printed rather than silent.
+Counts come from the records' <code>*_count</code> fields, never from the samples beside them,
+which are capped at twenty.</p>
