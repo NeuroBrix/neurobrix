@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import re
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -64,6 +66,117 @@ def check_worktree_intact(path: Path) -> list[str]:
 # is the per-user temporary tree with the same contract.
 _EPHEMERAL_PREFIXES = ("/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp",
                        "/var/folders", "/private/var/folders")
+
+
+#: `mount` names the filesystem type differently per platform, and the first
+#: version of this parser matched neither: macOS ends the line with `(nfs)`
+#: and it looked for `" nfs "`, so it found nothing and the guard passed in
+#: silence — a detector that finds nothing is worse than no detector, which is
+#: why this is a named function with a test rather than a line inside one.
+_NFS_LINE = re.compile(
+    r"^(?P<host>\d{1,3}(?:\.\d{1,3}){3}):\S*\s+on\s+\S+.*?"
+    r"(?:\((?:[^)]*,)?nfs[,)]|type\s+nfs\b)", re.IGNORECASE)
+
+
+def parse_nfs_servers(mount_output: str) -> list[str]:
+    """The NFS servers named in `mount` output, in order, without repeats."""
+    out: list[str] = []
+    for line in mount_output.splitlines():
+        m = _NFS_LINE.match(line.strip())
+        if m and m.group("host") not in out:
+            out.append(m.group("host"))
+    return out
+
+
+def _nfs_servers_and_local_addresses() -> tuple[list[str], list[str]]:
+    """(servers this machine has mounted, addresses its interfaces hold).
+
+    The expected network is not written here. It is READ from the mount table:
+    whatever NFS servers this machine has actually mounted are the network it
+    belongs to, so the day the lab moves, this moves with it and nobody has to
+    remember to edit a constant.
+    """
+    servers: list[str] = []
+    mounts = subprocess.run(["mount"], capture_output=True, text=True)
+    servers.extend(parse_nfs_servers(mounts.stdout))
+
+    local: list[str] = []
+    ifc = subprocess.run(["ifconfig"], capture_output=True, text=True)
+    for line in ifc.stdout.splitlines():
+        m = re.search(r"^\s+inet (\d{1,3}(?:\.\d{1,3}){3})", line)
+        if m and not m.group(1).startswith("127."):
+            local.append(m.group(1))
+    return servers, local
+
+
+def check_on_the_measurement_network() -> list[str]:
+    """A campaign that starts off the lab network reads nothing and refuses.
+
+    This cost a whole model on 2026-09-10: the machine had joined
+    192.168.1.0/24 instead of the lab's 10.0.0.0/24, so traffic to the file
+    server went to the internet gateway and a 12 GB stage died at 2 GB. It was
+    not an export failure and not NFS — it was the machine on the wrong
+    network, and it was found AFTER the copy, from its corpse. A machine that
+    joins the wrong network once will join it again, so this is a check rather
+    than a habit.
+
+    The test is SUBNET MEMBERSHIP, not reachability, and that choice was
+    forced by measurement. The first version connected to each server's nfsd
+    with a 2 s timeout; run while a 12 GB stage was saturating the link, every
+    connect timed out and the guard refused a machine that was demonstrably on
+    the right network — the ports were open and the mounts readable seconds
+    later. A guard that refuses because a copy is in flight is worse than no
+    guard. Subnet membership answers the question that was actually asked and
+    cannot be perturbed by load; reachability is kept as a warning, where a
+    transient costs nothing.
+
+    Nothing about the lab is written here: the expected network is READ from
+    the mount table, so the day it moves, this moves with it.
+    """
+    servers, local = _nfs_servers_and_local_addresses()
+    if not servers:
+        return []                       # nothing mounted: nothing to be off
+
+    def net24(addr: str) -> str:
+        return addr.rsplit(".", 1)[0]
+
+    local_nets = {net24(a) for a in local}
+    off = [h for h in servers if net24(h) not in local_nets]
+    if not off:
+        return []
+    return [f"not on the measurement network: this machine holds "
+            f"{', '.join(local) or 'no routable address'}, and none of them is "
+            f"on the network of the server(s) it has mounted "
+            f"({', '.join(f'{h} (expected {net24(h)}.0/24)' for h in off)}). "
+            f"A campaign that starts here reads nothing — check which network "
+            f"the machine joined before blaming the exports."]
+
+
+def warn_servers_answer() -> list[str]:
+    """The mounted servers answer on nfsd. A WARNING, never a refusal: a
+    server can be busy or briefly unreachable while the machine is perfectly
+    on the right network, and that is the transient the subnet check above
+    exists to not confuse with a real one."""
+    servers, _ = _nfs_servers_and_local_addresses()
+    silent = []
+    for host in servers:
+        for _ in range(2):              # one retry: a saturated link is not an outage
+            sock = socket.socket()
+            sock.settimeout(6.0)
+            try:
+                sock.connect((host, 2049))      # nfsd
+                break
+            except OSError:
+                continue
+            finally:
+                sock.close()
+        else:
+            silent.append(host)
+    if not silent:
+        return []
+    return [f"mounted server(s) not answering on nfsd right now: "
+            f"{', '.join(silent)} — the machine is on their network, so this "
+            f"is a busy or absent server rather than a wrong subnet"]
 
 
 def check_package_is_durable(module: str) -> list[str]:
@@ -229,11 +342,13 @@ def main() -> int:
     warnings: list[str] = []
     problems += check_importable("triton_msl")
     problems += check_package_is_durable("triton_msl")
+    problems += check_on_the_measurement_network()
     problems += check_worktrees_are_durable()
     problems += check_output_dirs_are_durable(sys.argv[1:])
     _prof_problems, _prof_notes = check_profile_matches_hardware()
     problems += _prof_problems
     warnings += _prof_notes
+    warnings += warn_servers_answer()
     for target in _editable_targets("triton_msl"):
         # the clone root is the parent of the package directory
         clone = target.parent
@@ -250,7 +365,8 @@ def main() -> int:
             print(f"  * {p}")
         return 1
     print("environment sound for measuring: working tree complete, "
-          "triton_msl imports, no worktree or output dir on a cleared path"
+          "triton_msl imports, on the measurement network, no worktree "
+          "or output dir on a cleared path"
           + (f" ({len(warnings)} warning(s) above)" if warnings else ""))
     return 0
 

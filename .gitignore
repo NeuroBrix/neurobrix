@@ -100,6 +100,13 @@ tests/*
 !tests/regression/test_all_models.py
 !tests/regression/test_serve_warm.py
 
+# The failure register is TRACKED, and named here rather than force-added for
+# the reason the comment below gives. It is the set of failing node ids, so
+# that "no new failures" after a battery is a diff the machine produces and
+# not a sentence its author writes — unverifiable by the reader and by the
+# author alike. See tools/failure_register.py.
+!tests/failure_register.txt
+
 # The unit/integration SUITES are tracked too. The broad `test_*.py`
 # rule far above is meant for stray scratch scripts at the repo root,
 # not for the test tree — but it caught every new test under tests/,
