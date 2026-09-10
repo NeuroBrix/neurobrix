@@ -319,14 +319,35 @@ def test_a_stale_record_is_refused_loudly_and_never_applied(tmp_path, monkeypatc
     assert "REFUSED RECORD" in err and "neurobrix calibrate --model ModelX" in err
 
 
-def test_calibrate_refuses_the_triton_engines_upfront(monkeypatch):
+def test_calibrate_runs_the_census_on_the_engine_asked_for(monkeypatch, tmp_path):
+    """Since 2026-09-06 the census runs on the Triton engine too (a
+    Triton-only container has no compiled reference): `--triton` is not
+    refused — the reference run is dispatched with that flag, and the
+    record it writes names the engine in its reference."""
     import types
     from neurobrix.cli.commands import calibrate as C
+    from neurobrix.core.dtype import calibration as cal
     monkeypatch.setattr(C, "_identity_of", lambda m: ("image", m))
+    monkeypatch.setattr(C, "_apply_family_stimulus", lambda a, f: {})
     from neurobrix.serving import client as SC
     monkeypatch.setattr(SC.DaemonClient, "is_running", staticmethod(lambda: False))
-    args = types.SimpleNamespace(model="M", triton=True, triton_sequential=False, output=None, mode=None)
-    assert C.cmd_calibrate(args) == 2
+    monkeypatch.setattr(cal, "STORE_ROOT", tmp_path)
+    seen = {}
+
+    def fake_run(args):
+        seen["triton"] = args.triton
+        census = cal.active_census("model")
+        census.bind({"ops": {}}, None)
+        census.observe("aten.mm::0", None)
+        return 0
+    import neurobrix.cli.commands.run as R
+    monkeypatch.setattr(R, "cmd_run", fake_run)
+    args = types.SimpleNamespace(model="M", triton=True, triton_sequential=False,
+                                 output=str(tmp_path / "out.png"), mode=None, time_arms=0)
+    assert C.cmd_calibrate(args) == 0
+    assert seen["triton"] is True
+    rec = cal.CalibrationRecord.load(tmp_path / "M" / "model.json")
+    assert rec.reference == "conservative:triton"
 
 
 def test_the_contract_can_be_set_after_the_engine_exists():

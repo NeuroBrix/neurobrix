@@ -192,7 +192,44 @@ For more information: https://neurobrix.es
                     'later run derives its fp32 islands from. Same request arguments as `run`; '
                     'a family without media inputs takes its stimulus from config/families/<family>.yml.'
     )
+    calibrate_parser.add_argument('--time-arms', type=int, default=0, metavar='N',
+                                  help='after the census, run the request N times under each arm (conservative, '
+                                       'calibrated), keep the least execution time of each and byte-compare the '
+                                       'outputs; a calibrated arm that is identical and not faster marks the record '
+                                       '"prefer conservative" for this hardware profile')
     _add_run_arguments(calibrate_parser)
+
+    autotune_parser = subparsers.add_parser(
+        'autotune',
+        help='The certified autotune directory: certify a profile, check the directory, show the status')
+    autotune_sub = autotune_parser.add_subparsers(dest='action')
+    certify_p = autotune_sub.add_parser('certify', help='run every candidate config on every shape the zoo met, against the fp64 oracle; write the files with their proofs')
+    certify_p.add_argument('--profile', required=True, help='the vendor profile this machine carries (its file stem, e.g. volta)')
+    certify_p.add_argument('--vendor', default=None, help='the vendor directory (default: the one in force)')
+    certify_p.add_argument('--census', default=None, help='a census file of shapes (default: the machine replay cache)')
+    certify_p.add_argument('--out', default=None, help='write here instead of the engine directory (a contributor draft)')
+    certify_p.add_argument('--kernels', default=None, help='only these kernels (short or qualified names, comma-separated)')
+    certify_p.add_argument('--limit', type=int, default=None, help='stop after this many shapes')
+    certify_p.add_argument('--only-missing', action='store_true', help='skip shapes the directory already certifies')
+    check_p = autotune_sub.add_parser('check', help='the directory gate, file by file')
+    check_p.add_argument('--dir', default=None)
+    autotune_sub.add_parser('status', help='the profile in force and what the directory holds for it')
+
+    drift_parser = subparsers.add_parser(
+        'drift',
+        help='Name the first op where the Triton engine drifts from the ATen oracle on one request',
+        description='Run the same request on the ATen oracle (sequential by default) and on the Triton '
+                    'engine, each writing its per-op record, and name the first op in the oracle\'s '
+                    'order whose values depart beyond the bound — the site to open. Same request '
+                    'arguments as `run`.'
+    )
+    drift_parser.add_argument('--out', default=None, help='report directory (default ~/.neurobrix/drift/<model>)')
+    drift_parser.add_argument('--bound', type=float, default=0.02,
+                              help='relative deviation of a per-op window that names a site (default 0.02)')
+    drift_parser.add_argument('--top', type=int, default=12, help='how many of the largest deviations to list')
+    drift_parser.add_argument('--oracle', default='sequential', choices=['sequential', 'compiled'],
+                              help='the ATen arm (default: sequential, op by op)')
+    _add_run_arguments(drift_parser)
 
 
     # ========================================
@@ -486,6 +523,12 @@ def main():
     args = parser.parse_args()
 
     try:
+        if args.command == 'autotune':
+            from neurobrix.cli.commands.autotune import cmd_autotune
+            return cmd_autotune(args)
+        if args.command == 'drift':
+            from neurobrix.cli.commands.drift import cmd_drift
+            return cmd_drift(args)
         if args.command == 'calibrate':
             from neurobrix.cli.commands.calibrate import cmd_calibrate
             _rc = cmd_calibrate(args)

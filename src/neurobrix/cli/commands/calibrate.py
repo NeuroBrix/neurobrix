@@ -75,10 +75,11 @@ def cmd_calibrate(args) -> int:
         print("ERROR: a serving daemon is running — the census must run in this process. "
               "Stop it first (neurobrix stop).")
         return 2
-    if getattr(args, "triton", False) or getattr(args, "triton_sequential", False):
-        print("ERROR: the census runs on the compiled reference path (the numerical oracle); "
-              "the record it writes serves every engine. Drop --triton / --triton-sequential.")
-        return 2
+    # The census runs on the compiled reference path (the numerical oracle)
+    # by default; `--triton` runs it on the Triton engine's conservative
+    # path — the census a Triton-only build (an int4 container) can have.
+    engine = ("triton_sequential" if getattr(args, "triton_sequential", False)
+              else "triton" if getattr(args, "triton", False) else "compiled")
     family, model_name = _identity_of(args.model)
     stimulus = _apply_family_stimulus(args, family)
     policy = get_precision_calibration_policy()
@@ -94,7 +95,7 @@ def cmd_calibrate(args) -> int:
         args.output = resolve_output_path(args.output, args.model, family, getattr(args, "mode", None))
 
     print("=" * 70)
-    print(f"NeuroBrix Calibrate — precision census on the {policy['reference']} path")
+    print(f"NeuroBrix Calibrate — precision census on the {policy['reference']} path, {engine} engine")
     print(f"   stimulus: {stimulus}")
     print("=" * 70)
     session = cal.begin_calibration()
@@ -117,7 +118,8 @@ def cmd_calibrate(args) -> int:
             continue
         record = cal.CalibrationRecord.build(
             model_name, component, census.dag, census.finalize(),
-            stimulus=stimulus, passes=census.passes, reference=str(policy["reference"]),
+            stimulus=stimulus, passes=census.passes,
+            reference=str(policy["reference"]) + ("" if engine == "compiled" else f":{engine}"),
             non_finite=census.non_finite_ops(), graph_signature=census.signature)
         path = cal.store_path(model_name, component)
         record.save(path)
@@ -128,5 +130,72 @@ def cmd_calibrate(args) -> int:
         written.append(path)
     if not written:
         print("[calibrate] no component was measured — nothing written")
-        return 1
+        return 0
+    reps = int(getattr(args, "time_arms", 0) or 0)
+    if reps:
+        _time_arms(args, model_name, family, written, reps)
     return 0
+
+
+def _time_arms(args, model_name: str, family: str, record_paths: list, reps: int) -> None:
+    """`--time-arms N`: the same request under both arms, N times each, the
+    least execution time of each kept; the outputs byte-compared. When the
+    calibrated arm is byte-identical and not faster, the record says so for
+    this hardware profile (`prefer[arch] = "conservative"`) and the resolver
+    keeps the conservative path there: a record that changes nothing must
+    not cost (D-PRECISION-LEVER-NOOP-COST — real-esrgan x4/x8, parakeet).
+    A calibrated arm whose output differs is never demoted here: that is a
+    precision question, judged by the family gate, not a timing one."""
+    import contextlib
+    import io
+    import re
+    from pathlib import Path
+    from neurobrix.core.dtype import calibration as cal
+    from neurobrix.core.runtime.precision_contract import FLAG_ENV
+    from neurobrix.cli.commands.run import cmd_run
+    try:
+        from neurobrix.triton.autotune_cache import _arch_fingerprint
+        arch = _arch_fingerprint()
+    except Exception:
+        arch = None
+    if not arch:
+        print("[calibrate] --time-arms: no hardware profile fingerprint — arms not timed")
+        return
+    base_out = Path(args.output)
+    results = {}
+    for arm, flag in (("conservative", "0"), ("calibrated", "1")):
+        os.environ[FLAG_ENV] = flag
+        best, out_path = None, base_out.with_name(f"{base_out.stem}.{arm}{base_out.suffix}")
+        for _ in range(reps):
+            args.output = str(out_path)
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                try:
+                    rc = cmd_run(args)
+                except SystemExit as e:
+                    rc = int(e.code or 0)
+            text = buf.getvalue()
+            m = re.findall(r"\[Timing\] Total execution: ([0-9.]+)s", text)
+            if rc or not m:
+                print(f"[calibrate] --time-arms: the {arm} arm failed ({rc}) — arms not timed")
+                os.environ.pop(FLAG_ENV, None)
+                return
+            t = float(m[-1])
+            best = t if best is None else min(best, t)
+        results[arm] = {"exec_s": best, "output": out_path}
+        print(f"[calibrate] {arm} arm: {best:.3f} s (least of {reps}) → {out_path}")
+    os.environ.pop(FLAG_ENV, None)
+    a, b = results["conservative"]["output"], results["calibrated"]["output"]
+    identical = a.exists() and b.exists() and a.read_bytes() == b.read_bytes()
+    cons, calb = results["conservative"]["exec_s"], results["calibrated"]["exec_s"]
+    prefer = "conservative" if identical and calb >= cons else "calibrated"
+    print(f"[calibrate] arms on {arch}: outputs {'identical' if identical else 'DIFFERENT'}, "
+          f"conservative {cons:.3f} s, calibrated {calb:.3f} s → prefer {prefer}")
+    for path in record_paths:
+        record = cal.CalibrationRecord.load(path)
+        record.timing[arch] = {"conservative_s": cons, "calibrated_s": calb, "identical": identical, "reps": reps}
+        if prefer == "conservative":
+            record.prefer[arch] = "conservative"
+        else:
+            record.prefer.pop(arch, None)
+        record.save(path)

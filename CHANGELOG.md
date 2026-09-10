@@ -7,7 +7,158 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- The certified autotune directory, an engine component: `src/neurobrix/config/autotune/<vendor>/<profile>/<kernel>.<dtype>.json`, one file per kernel and per dtype, indexed by the launcher's shape key, each entry carrying the setting retained and its proof (date, engine and backend versions, shape, deviation against the fp64 oracle, the profile's tolerance, the machine) and the settings excluded with their deviation. `neurobrix autotune certify --profile <profile>` fills it for the shapes the zoo met on this machine; `neurobrix autotune check` is its gate (a file without a proof, or whose proof does not re-read, is refused); `neurobrix autotune status` shows what the profile in force is served.
+- The ops a request will actually run can be written out. `NBX_DUMP_PLANNED_OPS=<file>` writes
+  each component's op list AFTER the pre-execution passes, which is the only order an
+  instrumentation audit can honestly compare against — the container's `execution_order` is the
+  traced one, and a pass may legitimately remove ops from it. Diagnostic, default off.
+- The final latent of a diffusion request can be written out, in either mode.
+  `NBX_DUMP_FINAL_LATENT=<dir>` writes the post-denoise latent at the `pre_vae` boundary — the
+  point where it is known and named — so a request can be compared to its vendor's at the stage
+  BEFORE the decoder, rather than inferred through the decoder's own normalisation. Diagnostic,
+  default off.
+- A brick that replaces a call site now reports what it replaced. An interceptor's stand-in
+  object may expose `nbx_observable_summary()`, and the per-op recorder takes it instead of
+  dropping the value for not being a tensor. `FusionUpsampleProxy` implements it exactly and for
+  free — a nearest upsample only replicates, so its norm and leading values follow from its input
+  without materialising anything.
+- The decoded frames of a video request can be written out before they are encoded.
+  `NBX_DUMP_DECODED_FRAMES=<dir>` writes the frames the engine computed, as a lossless `.npy`
+  and one PNG each, immediately before the H.264 writer. A video output reaches any comparison
+  only through a compressed file, so a disagreement measured on a frame cannot otherwise be
+  separated from the codec that carried it. Diagnostic, default off; it writes what the engine
+  already computed and changes nothing about the run.
+- The initial noise of a diffusion request can be written out and read back in, in either mode.
+  `NBX_DUMP_INIT_LATENT=<dir>` writes each synthesized `randn` variable as one `.npy`; its mirror
+  `NBX_FIXED_LATENT=<file.npy>` reads one back, and now does so in the compiled engine as well as
+  the Triton one, so a single file drives both. Together they let a request be compared to the same
+  request run by the model's own vendor pipeline on the SAME starting noise — without which the two
+  sides draw from different generators for the same seed and render two valid samples that no
+  fidelity bound can separate. Diagnostic, default off; it never changes what a run computes.
+- `neurobrix drift`: the drift-site detector. The same request runs on the ATen oracle (sequential,
+  op by op) and on the Triton engine, each writing its per-op record, and the report names the
+  first op in the oracle's order whose values depart beyond a relative bound — separating a kernel
+  drift (same dtype on both sides, a computing op) from a precision-policy site (the engines' dtypes
+  differ) and from the casts, views and copies that only carry their input's deviation — with the
+  largest deviations behind it. The site to open, not a verdict on the output.
+- The kernel sweep is an artifact. A Triton request loads the model's measured sweep for the
+  hardware profile — per kernel, per shape — from the container (`runtime/autotune/<arch>.json`,
+  embedded by the build) or the engine's store (`~/.neurobrix/autotune/<model>/<arch>.json`), and
+  never measures inside a request: a shape the sweep did not see is served by the nearest measured
+  shape of the same kernel; a model without a sweep for this profile, or a kernel it never
+  measured, is refused with the command that measures it. `neurobrix run --triton --sweep` (and
+  `neurobrix serve --sweep`) is that command: it allows the sweep and records the shapes the model used. Gate:
+  `tests/unit/triton/test_autotune_sweep_artifact.py`.
+- Apple Metal backend, first light: the engine's own Metal device and allocator behind the
+  allocator seam, a Metal driver behind the NeuroBrix launcher (the same launcher as CUDA, one
+  component), the Metal target resolved from the Apple hardware profile, and the launcher contract
+  every backend driver must satisfy (`neurobrix.triton.launcher_contract`), with its checker run
+  against the CUDA driver on CUDA and the Metal driver on a Mac.
+
+### Removed
+- The per-model kernel sweep artifact (`runtime/autotune/<arch>.json`, `~/.neurobrix/autotune/<model>/`), the refusal of a request without one, and the `--sweep` flag of `run`/`serve`: the certified directory replaces them.
+
 ### Changed
+- At load the launcher applies the certified setting for the profile Prism detected, the kernel, the dtype and the shape — no sweep, no consensus; a shape the directory lacks sweeps at runtime with the consensus screen, says so in clear, and keeps the result in the machine's local replay cache (`NEUROBRIX_REPLAY_CACHE`), never in the engine's directory. A runtime exclusion that contradicts a certification is reported as a finding, never silent.
+- The kernel sweep artifact records, per measured shape, the bench's best time, second-best time and their margin beside the chosen config, so a later comparison can tell a clear choice from a near-tie the timer may flip on the next run.
+- `neurobrix drift` classifies the origin of a drift: a kernel site (same dtype, arithmetic — the kernel to read), a policy site (the two engines' precision policies differ there), a discrete decision (an integer tensor — indices, codes, tokens — that flipped on a float deviation below the bound), a carrier (a view, cast, slice or copy), or a scale crossing (the values shrank there — a relu, a gate — and an inherited error crossed the relative bound without a new one); it names the largest float deviation before the origin and says when the origin's producer has no record on the engine side (fused there).
+- Next-token-diffusion speech models (VibeVoice) run their language model as a KV-cached decoder on
+  both engines: one token per step per context instead of re-running the whole growing sequence,
+  the classifier-free-guidance negative context kept as a second decode branch of the same
+  attention cache, the embedding table and the constrained argmax on the device. Tokens are
+  identical to the previous path and the first diffusion latents agree within fp16 rounding
+  (`NBX_NTD_REPREFILL=1` keeps the previous path as the reference). A container that declares no
+  context window gets its cache sized from the request on the compiled engine as on the Triton
+  engine.
+### Changed
+- `neurobrix calibrate` measures on the Triton engine too (`--triton`): the range census observes
+  NBXTensor outputs through the engine's own kernels, so a Triton-only container (an int4 build)
+  gets its calibration record. `--time-arms N` runs the request N times under each arm, keeps the
+  least execution time of each and byte-compares the outputs; a calibrated arm that is identical
+  and not faster marks the record "prefer conservative" for this hardware profile, and the runtime
+  keeps the conservative path there — a record that changes nothing no longer costs.
+
+### Fixed
+- A video model whose container states its frame count and temporal compression, but not a
+  pixel height and width, now runs. The two latent extents are derived independently — the
+  temporal one needs neither the spatial dimensions nor the decoder's spatial factor — but
+  they shared one exit, so a model missing the spatial inputs silently lost the temporal
+  derivation too and failed later in the denoise loop, on a value its own container held.
+- An image-to-video request pads its conditioning clip to the frame count the model's
+  container declares, instead of leaving it at a single frame whenever the frame count was
+  not typed on the command line. One model refused the one-frame clip outright (its decoder
+  compresses time by four and the extent has to be a multiple of it); the others accepted it
+  and conditioned a whole clip on one frame without a word.
+- A symbolic dimension is no longer bound below the extent the container declares for it.
+  Every graph carries a minimum per symbolic dim, and the check that was meant to enforce
+  it read the value from the wrong place — so it compared against zero and had never
+  refused anything. A batch, sequence length, height, width or frame count of zero now
+  stops the request where it is bound, naming the symbol, the input it came from and the
+  minimum it broke. Left unchecked such a dim does not fail where it is created: it
+  becomes a negative allocation dozens of operations later and reports itself as an
+  out-of-memory condition on a card with 31 GB free.
+- An op the container types as producing a complex number never receives a half-precision
+  input, in every engine. The rule reads the op's traced OUTPUT dtype rather than its name:
+  a hand-written pair of names cannot cover a complex construction, a short-time Fourier
+  transform, a real-to-complex FFT, or the plain multiplication by `1j` that a vocoder's
+  phase reconstruction traces — where nothing in the op's inputs says the result is complex.
+  A half input at any of them yields a half-precision complex, which the exponential, the
+  angle and the inverse FFT that follow have no kernel for and refuse. Double-precision
+  operands are left exactly as traced, so a rotary embedding that traces in double keeps
+  its width instead of being levelled to single.
+- A component placed on the host by the plan computes in fp32 AND holds its weights, inputs and constants in fp32: one decision read by the dtype engine, the weight loader, the resolver and the compiled sequence alike. Both ATen engines now render a tts model whose decoder a 16 GB plan puts on the host (its weights arrived fp16 against fp32 activations and its complex intermediates reached ops with no half kernel on CPU).
+- Prism's activation profiler refuses a symbolic dim written as a bare integer that contradicts the trace's witnessed extent, as it already refused a contradicting expression: 98 component graphs of the zoo carry another tensor's extent in an output slot, and one of them sized an 82M model's decoder at 19 GB, sending it to the host on every 16 GB card (now 196 MB, single card).
+- The ATen oracle (`--sequential`) applies the host-precision rule of the dtype engine: an op the CPU backend refuses in fp16 (the measured set) runs in fp32 on host-placed tensors and hands its result back in the graph's dtype, as the compiled engine already did. A tts decoder placed on the host by a 16 GB plan no longer stops the oracle at its first weight-norm.
+- A device attribute in a model's graph names a kind (cpu, cuda), never a card: the index it
+  carries is the machine the model was traced on. The sequential (op-by-op) engine and the tensor
+  resolver now place such tensors on the executing card like the other engines do, so a model whose
+  trace says `cuda:1` runs pinned to any single card (chatterbox's sequential run failed with
+  "invalid device ordinal").
+- An audio-LLM request whose language model is placed on the host (granite-speech on a 16 GB card)
+  no longer fails on the prompt embedding lookup: the token indices follow the embedding table's
+  device.
+- A calibrated fp32 island now holds on the Triton engine's self-managed kernels (convolution,
+  matmul): the pinned op runs with fp32 as the active compute dtype, so the wrapper's own dtype
+  policy no longer narrows the island's inputs and writes an fp16 output that overflows. swin2SR-x2
+  on the Triton engine went from a washed render (7.9 dB against the calibrated compiled render) to
+  57.7 dB; both engines are within 52 dB of the vendor's render.
+- The Triton engine's seeded random stream is armed once per request, for every flow, from the
+  request's seed: a text-to-speech request (Kokoro's vocoder phase, the autoregressive samplers of
+  Chatterbox and Orpheus) drew from an unseeded generator and two runs at the same seed differed;
+  they are byte-identical now.
+
+### Changed
+- The launcher's CUDA driver refuses, before anything reaches the device, an argument list whose
+  length is not what the compiled kernel declares and a device address the engine's allocator did
+  not hand out — a launch past either fault reads garbage or foreign memory and poisons the CUDA
+  context for the rest of the process.
+- The NeuroBrix launcher is installed when the kernel package is imported, so the first kernel a
+  weight load or a tensor conversion launches already goes through it (previously the dispatch
+  module installed it, and a kernel launched before dispatch was imported went through Triton's
+  launcher, which loads torch). The launcher carries a kernel's `debug` flag into its compile
+  options as Triton's own launcher does, so the out-of-range traps of the gather/scatter kernels
+  stay in the binary (gate: `tests/unit/kernels/test_gather_scatter_oob.py`).
+- The launcher's CUDA driver satisfies the vendor-agnostic launcher contract
+  (`neurobrix.triton.launcher_contract`): compile once and launch many times with integer device
+  addresses the allocator verifies it handed out (a foreign address or a wrong-length argument
+  list is refused, not launched), streams and events through the allocator. The same checker gates
+  the Metal driver.
+- The GPU backend detection knows Apple Metal and records the detected backend for Triton
+  (`TRITON_DEFAULT_BACKEND`) so Triton probes no other backend; a hardware profile may declare the
+  target-name prefixes it covers (`compute_capability_matches`), which is how the Apple profile
+  resolves on a Metal target that reports a device name rather than a compute capability.
+- A model's precision calibration record can be embedded in its container
+  (`neurobrix calibrate --embed` writes it beside the component profile) and is read from there
+  before the local calibration store, so a calibrated model ships calibrated.
+- A diffusion request's default height and width come from the container (the traced latent extent
+  of the backbone times the VAE scale) when the model declares none, so a model renders at its
+  native size by default (Allegro 720×1280); the family default of 512 is gone.
+- Text-to-speech inputs are placed in the engine's own container on both engines, and a waveform
+  produced by either engine is post-processed without crossing to the other.
+- Audio outputs are gated spectrally in the precision campaign: a log-mel distance with a length
+  ratio, then a transcript word-error rate when the spectrum moved, replacing a blind SNR that
+  called a phase drift a regression.
 - Kernel launches of the house library go through a NeuroBrix launcher in the dispatch layer
   (`neurobrix.kernels.launcher`): Triton compiles, the engine specialises the arguments itself and
   launches through the CUDA driver with integer pointers and typed scalars — no torch on the launch

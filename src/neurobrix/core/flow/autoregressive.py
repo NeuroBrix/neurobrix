@@ -312,6 +312,20 @@ class GraphLMSession:
         if not is_persistent:
             release_flow_memory(device)
 
+    # ── decode branches (two contexts on one LM, see kv_cache_wrapper.KVBranch) ──
+    def branch_state(self):
+        if self.kv_wrapper is None:
+            raise RuntimeError("ZERO FALLBACK: decode branches need the KV cache path (no KV wrapper on this session).")
+        return self.kv_wrapper.branch_state()
+
+    def new_branch(self):
+        if self.kv_wrapper is None:
+            raise RuntimeError("ZERO FALLBACK: decode branches need the KV cache path (no KV wrapper on this session).")
+        return self.kv_wrapper.new_branch()
+
+    def use_branch(self, st) -> None:
+        self.kv_wrapper.use_branch(st)
+
     def _embed_from_ids(self, input_ids: torch.Tensor) -> torch.Tensor:
         """Embed token IDs via executor's embed_tokens weight."""
         embed_weight = self.executor.get_embed_tokens()

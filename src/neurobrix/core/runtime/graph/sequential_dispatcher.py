@@ -1,9 +1,21 @@
 import torch
+
+
+def placement_device(value) -> "torch.device":
+    """The device a graph attribute stands for, on THIS process's card:
+    `cuda:<any>` is the current CUDA device, `cpu` is the cpu; a
+    `torch.device` is treated by its type. The index in the graph is never
+    used — it is the tracer's, and placement belongs to Prism."""
+    kind = value.type if isinstance(value, torch.device) else str(value or "cpu").split(":")[0]
+    if kind == "cuda":
+        return torch.device("cuda", torch.cuda.current_device())
+    return torch.device(kind)
 import torch.nn.functional as F
 import logging
 from typing import List, Any, Dict, Optional, Callable
 
 from neurobrix.core.dtype.config import parse_dtype
+from neurobrix.core.dtype.engine import cpu_fp32_wrapper, cpu_lacks_half_kernel
 
 logger = logging.getLogger(__name__)
 
@@ -73,13 +85,19 @@ class NativeATenDispatcher:
             return value
 
         elif attr_type == "device":
-            # Use runtime device from Prism (overrides hardcoded graph device)
+            # A device attribute in the graph names a KIND (cpu / cuda), never
+            # a card: the index it carries is the tracer's GPU, and placement
+            # is Prism's. Prism's device when the dispatcher was given one;
+            # otherwise the kind on the current card — exactly what the
+            # compiled (`ScalarArg(self.device)`) and Triton
+            # (`cuda:{device_idx}`) paths do. Taking the trace's index
+            # literally refused chatterbox's sequential oracle under a pinned
+            # card (`cuda:1` in its trace, one card visible: "invalid device
+            # ordinal", 2026-09-06; 48 of the zoo's containers carry such an
+            # index).
             if self._runtime_device:
                 return torch.device(self._runtime_device)
-            # Fallback to graph value
-            if isinstance(value, str):
-                return torch.device(value)
-            return value
+            return placement_device(value)
 
         elif attr_type == "layout":
             # Resolve layout (usually strided)
@@ -540,6 +558,14 @@ class NativeATenDispatcher:
             from neurobrix.core.dtype.engine import clamp_creation_fill_args
             inputs, kwargs = clamp_creation_fill_args(
                 base_name, list(inputs), kwargs)
+
+            # Host-placed compute: the CPU backend refuses fp16 for the ops in
+            # the DtypeEngine's measured set. The oracle runs the graph's
+            # recorded dtypes everywhere else, but a component Prism placed on
+            # the host must still execute — the same per-call, per-device
+            # remedy the compiled engine applies (CUDA inputs pass through).
+            if cpu_lacks_half_kernel(base_name):
+                op_fn = cpu_fp32_wrapper(op_fn)
 
             if kwargs:
                 result = op_fn(*inputs, **kwargs)

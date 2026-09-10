@@ -263,17 +263,35 @@ class SymbolicShapeResolver:
         Raises:
             ShapeResolutionError: If value violates constraints
         """
-        # Validate constraints
-        min_val = symbol_info.get("min", 0)
-        max_val = symbol_info.get("max", float('inf'))
+        # Validate constraints. The tracer NESTS them:
+        #   "s1": {"name": "time", "source": "...", "constraints": {"min": 1}}
+        # Reading them at the top level (as this did) finds nothing, defaults
+        # min to 0, and the check then rejects only a negative — so it had
+        # never refused a value in the whole zoo (673 symbols across 182
+        # cached components, every one carrying min 1). Wan2.1-VACE bound
+        # `time` to 0 from a still image, nothing objected, and sixty ops
+        # later the VAE encoder asked the allocator for -4,860,000 bytes at
+        # aten.convolution::60 — recorded as an OOM. The top-level read stays
+        # as a fallback for a caller holding a flat spec.
+        constraints = symbol_info.get("constraints") or {}
+        min_val = constraints.get("min", symbol_info.get("min", 0))
+        max_val = constraints.get("max", symbol_info.get("max", float('inf')))
+        name = symbol_info.get("name", "?")
+        source = symbol_info.get("source", "?")
 
         if value < min_val:
             raise ShapeResolutionError(
-                f"Symbol {symbol_id}={value} violates min constraint ({min_val})"
+                f"Symbol {symbol_id} ({name}) = {value}, below the minimum "
+                f"extent the container declares ({min_val}); it binds from "
+                f"{source}. A dim at or below zero is not a memory condition — "
+                f"left unchecked it becomes a negative allocation further down "
+                f"the graph, far from the input that caused it."
             )
         if value > max_val:
             raise ShapeResolutionError(
-                f"Symbol {symbol_id}={value} violates max constraint ({max_val})"
+                f"Symbol {symbol_id} ({name}) = {value}, above the maximum "
+                f"extent the container declares ({max_val}); it binds from "
+                f"{source}."
             )
 
         self._runtime_values[symbol_id] = value

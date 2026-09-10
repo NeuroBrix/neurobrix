@@ -653,7 +653,10 @@ class TensorResolver:
             return _parse_dtype(dtype_str, compute_dtype=self._ctx.dtype)
 
         elif arg_type == "device":
-            return torch.device(arg_info.get("value", "cpu"))
+            # The kind on the component's device, never the trace's index
+            # (see sequential_dispatcher.placement_device).
+            kind = str(arg_info.get("value", "cpu")).split(":")[0]
+            return torch.device(self._ctx.device) if kind == "cuda" else torch.device(kind)
 
         elif arg_type == "slice":
             return slice(arg_info.get("start"), arg_info.get("stop"), arg_info.get("step"))

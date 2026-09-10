@@ -23,7 +23,21 @@ makes such interruptions *visible and resumable*:
 
   3. `clear <id>` acknowledges a record once resumed or obsolete.
 
-Commands: run, status, check [--hook], clear <id>|--all-stale.
+  4. The repository gate. A power cut truncates whatever git was writing
+     (2026-09-03 00:12: two loose objects left empty, found four days
+     later); a job resumed on a corrupt repository commits on top of the
+     damage. So the procedure runs `git fsck --full` once per boot — at
+     the session hook, and before any `run` — and `run` REFUSES to
+     launch while the verdict is not clean. `fsck` re-checks by hand
+     after the repair (quarantine the corrupt object files out of
+     .git/objects, fetch both remotes, rebuild what neither has).
+
+  5. `wait <id>` blocks until a record leaves in_flight and exits 0 only
+     when the job ended `done` — a chain's next step waits on the RECORD,
+     so a resumed job (a new wrapper, a new pid) still fires its waiters,
+     and a killed or failed job never does.
+
+Commands: run, status, check [--hook], clear <id>|--all-stale, fsck, wait <id>.
 Stdlib only; records live in <repo>/.flightrec/ (gitignored).
 """
 
@@ -33,6 +47,7 @@ import os
 import re
 import shlex
 import signal
+import threading
 import subprocess
 import sys
 import time
@@ -133,10 +148,87 @@ def resume_block(rec: dict, cause: str) -> str:
     return "\n".join(lines)
 
 
+FSCK_FILE = REC_DIR / "fsck.json"
+FSCK_REFUSED = 3
+
+
+def run_git_fsck() -> "tuple[int, str]":
+    """`git fsck --full` on the repository: (exit code, output). Dangling
+    objects are not a defect (every rebase leaves some) and are not listed."""
+    try:
+        proc = subprocess.run(["git", "-C", str(REPO), "fsck", "--full", "--no-dangling"],
+                              capture_output=True, text=True, timeout=3600)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return 1, f"git fsck could not run: {exc}"
+    return proc.returncode, (proc.stdout + proc.stderr).strip()
+
+
+def fsck_verdict(force: bool = False) -> dict:
+    """The repository's verdict for THIS boot: read from the record when one
+    exists for the current boot id (a power cut is a boot boundary, so a clean
+    verdict holds until the next one), else measured now and recorded."""
+    boot = current_boot_id()
+    if not force and FSCK_FILE.exists():
+        try:
+            rec = json.loads(FSCK_FILE.read_text())
+            if rec.get("boot_id") == boot and "clean" in rec:
+                return rec
+        except (json.JSONDecodeError, OSError):
+            pass
+    code, out = run_git_fsck()
+    rec = {"boot_id": boot, "clean": code == 0, "exit_code": code,
+           "checked_iso": time.strftime("%Y-%m-%d %H:%M:%S"), "report": out}
+    REC_DIR.mkdir(exist_ok=True)
+    write_record(FSCK_FILE, rec)
+    return rec
+
+
+def fsck_block(rec: dict) -> str:
+    if rec["clean"]:
+        return (f"[flightrec] repository: git fsck --full clean "
+                f"(checked {rec['checked_iso']}, this boot)")
+    lines = ["=" * 64,
+             "FLIGHT RECORDER — REPOSITORY CORRUPT: RESUME REFUSED",
+             "=" * 64,
+             f"git fsck --full failed (exit {rec['exit_code']}, checked {rec['checked_iso']}):"]
+    lines += ["    " + l for l in rec["report"].splitlines()[:20]]
+    lines += ["Repair before any resume: note what references each bad object (fsck says),",
+              "move the bad files out of .git/objects, `git fetch origin` and `git fetch gitlab`;",
+              "what neither remote brings back is rebuilt from the working tree (blob: git",
+              "hash-object -w, hash checked; tree/commit: recommitted, sha noted in the journal).",
+              "Then `python3 tools/flightrec.py fsck` — `run` launches again once it is clean."]
+    return "\n".join(lines)
+
+
+def cmd_wait(args) -> int:
+    """Poll the record every --every seconds until its status leaves in_flight;
+    0 iff done. A record that dies (crash, power loss) ends the wait with 1."""
+    while True:
+        recs = [r for r in load_records() if r.get("id") == args.id]
+        if not recs:
+            print(f"[flightrec] wait: no record {args.id}", file=sys.stderr)
+            return 2
+        cause = classify(recs[0])
+        if cause != "RUNNING":
+            print(f"[flightrec] wait: {args.id} ended {cause}", flush=True)
+            return 0 if cause == "done" else 1
+        time.sleep(args.every)
+
+
+def cmd_fsck(args) -> int:
+    rec = fsck_verdict(force=True)
+    print(fsck_block(rec))
+    return 0 if rec["clean"] else FSCK_REFUSED
+
+
 def cmd_run(args) -> int:
     if not args.cmd:
         print("[flightrec] run: no command given after --", file=sys.stderr)
         return 2
+    verdict = fsck_verdict()
+    if not verdict["clean"]:
+        print(fsck_block(verdict), file=sys.stderr, flush=True)
+        return FSCK_REFUSED
     REC_DIR.mkdir(exist_ok=True)
     label_slug = re.sub(r"[^a-zA-Z0-9]+", "-", args.label).strip("-")[:60]
     rec_id = time.strftime("%Y%m%d_%H%M%S") + "_" + label_slug
@@ -161,7 +253,35 @@ def cmd_run(args) -> int:
 
     # Forward SIGTERM/SIGINT to the child so a deliberate kill of the
     # wrapper stops the job AND gets recorded as "killed", not "DIED".
-    child = subprocess.Popen(args.cmd)
+    #
+    # And WRITE the flight to --log. That flag used to record a path and
+    # nothing else: the child inherited the wrapper's stdout, so a campaign's
+    # whole narration went to whatever terminal launched it. On 2026-09-10 six
+    # hours of it went to an ssh session that then died, while `rest.log` — the
+    # path this very flag named — kept its last line from the day before. A
+    # flight recorder that does not record the flight is silence, and silence
+    # is indistinguishable from a quiet flight. Teed, not swallowed: a live
+    # operator still sees it.
+    tee = None
+    if args.log:
+        Path(args.log).parent.mkdir(parents=True, exist_ok=True)
+        child = subprocess.Popen(args.cmd, stdout=subprocess.PIPE,
+                                 stderr=subprocess.STDOUT, bufsize=1,
+                                 text=True, errors="replace")
+
+        def _tee(stream, dest):
+            with open(dest, "a", buffering=1, errors="replace") as fh:
+                fh.write(f"\n# ==== flightrec {rec_id} — {record['started_iso']} ====\n")
+                for line in stream:
+                    sys.stdout.write(line)
+                    sys.stdout.flush()
+                    fh.write(line)
+
+        tee = threading.Thread(target=_tee, args=(child.stdout, args.log),
+                               daemon=True)
+        tee.start()
+    else:
+        child = subprocess.Popen(args.cmd)
     killed = []
 
     def forward(signum, _frame):
@@ -171,6 +291,8 @@ def cmd_run(args) -> int:
     signal.signal(signal.SIGTERM, forward)
     signal.signal(signal.SIGINT, forward)
     code = child.wait()
+    if tee is not None:
+        tee.join(timeout=10)          # let the last lines land before the verdict
     record["status"] = ("killed" if killed
                         else "done" if code == 0 else "failed")
     record["exit_code"] = code
@@ -201,6 +323,13 @@ def cmd_check(args) -> int:
             stale.append((rec, cause))
         elif cause == "RUNNING":
             running.append(rec)
+    # The repository before the records: a cut that killed the jobs may have
+    # truncated git's writes too. Measured once per boot; in hook mode a clean
+    # verdict is said only when there is something else to say.
+    verdict = fsck_verdict()
+    if not verdict["clean"] or stale or not args.hook:
+        print(fsck_block(verdict))
+        print()
     if stale:
         print("=" * 64)
         print("FLIGHT RECORDER — UNCLEAN SHUTDOWN: WORK WAS IN FLIGHT")
@@ -250,7 +379,8 @@ def main() -> int:
     p_run.add_argument("--label", required=True)
     p_run.add_argument("--note", default=None,
                        help="campaign context: what step, what comes next")
-    p_run.add_argument("--gpu", type=int, default=None)
+    p_run.add_argument("--gpu", default=None,
+                       help="the card, or a comma list of cards one placement spreads over (e.g. 2,3)")
     p_run.add_argument("--log", default=None,
                        help="path to the job's own log file, for the "
                             "resume block")
@@ -267,12 +397,17 @@ def main() -> int:
     p_clear = sub.add_parser("clear", help="acknowledge a record")
     p_clear.add_argument("id", nargs="?")
     p_clear.add_argument("--all-stale", action="store_true")
+    sub.add_parser("fsck", help="re-check the repository now (git fsck --full); "
+                               "run refuses to launch while it is not clean")
+    p_wait = sub.add_parser("wait", help="block until a record leaves in_flight; exit 0 iff done")
+    p_wait.add_argument("id")
+    p_wait.add_argument("--every", type=float, default=60.0, help="poll period in seconds")
 
     args = ap.parse_args()
     if args.command == "run" and args.cmd and args.cmd[0] == "--":
         args.cmd = args.cmd[1:]
-    return {"run": cmd_run, "status": cmd_status,
-            "check": cmd_check, "clear": cmd_clear}[args.command](args)
+    return {"run": cmd_run, "status": cmd_status, "check": cmd_check,
+            "clear": cmd_clear, "fsck": cmd_fsck, "wait": cmd_wait}[args.command](args)
 
 
 if __name__ == "__main__":

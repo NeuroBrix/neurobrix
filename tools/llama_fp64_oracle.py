@@ -146,22 +146,40 @@ def main() -> int:
     args = ap.parse_args()
 
     root = Path(args.model)
-    profile = json.loads((root / "components/model/profile.json").read_text())
+    # The components are named by the model's own topology, not by this file:
+    # a llama-like is not obliged to call its decoder "model".
+    topo_path = root / "topology.json"
+    lm_name, head_name = "model", "lm_head"
+    if topo_path.exists():
+        gen = (json.loads(topo_path.read_text()).get("flow") or {}).get("generation") or {}
+        lm_name = gen.get("lm_component") or lm_name
+        head_name = gen.get("head_component") or head_name
+    profile = json.loads((root / "components" / lm_name / "profile.json").read_text())
+    conf = profile.get("config", {})
+    def _need(*names):
+        for n in names:
+            for src in (profile, conf):
+                if src.get(n) is not None:
+                    return src[n]
+        raise RuntimeError(
+            f"{root.name}: none of {names} is in the decoder's profile. This "
+            f"oracle reproduces one architecture exactly and will not guess a "
+            f"missing hyper-parameter.")
     cfg = {
-        "hidden_size": profile["config"]["hidden_size"],
-        "num_layers": profile["config"]["num_layers"],
-        "num_heads": profile["num_heads"],
-        "num_kv_heads": profile["num_kv_heads"],
-        "rope_theta": profile["rope_theta"],
-        "rms_norm_eps": profile["rms_norm_eps"],
+        "hidden_size": _need("hidden_size"),
+        "num_layers": _need("num_layers", "num_hidden_layers"),
+        "num_heads": _need("num_heads", "num_attention_heads"),
+        "num_kv_heads": _need("num_kv_heads", "num_key_value_heads"),
+        "rope_theta": _need("rope_theta"),
+        "rms_norm_eps": _need("rms_norm_eps"),
     }
 
     ids = np.load(args.ids).astype(np.int64).ravel()
     if args.length:
         ids = ids[:args.length]
 
-    model = Shard(root / "components/model/weights/shard_000.safetensors")
-    head = Shard(root / "components/lm_head/weights/shard_000.safetensors")
+    model = Shard(root / "components" / lm_name / "weights/shard_000.safetensors")
+    head = Shard(root / "components" / head_name / "weights/shard_000.safetensors")
     trace: list = []
     logits = forward(model, head, ids, cfg, trace)
 

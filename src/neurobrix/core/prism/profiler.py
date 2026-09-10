@@ -704,6 +704,17 @@ class ActivationProfiler:
                         if not (isinstance(tv, int) and tv == cv):
                             resolved.append(cv)
                             continue
+                    elif isinstance(d, int) and not isinstance(d, bool) and d != cv:
+                        # A bare integer cannot vary with any symbol, so one
+                        # that differs from the witnessed trace dim is a
+                        # corrupted annotation (2026-09-06: 98 component
+                        # graphs of the zoo carry another tensor's extent
+                        # in an output slot — Kokoro's decoder conv put its
+                        # input length, 15361, in the batch slot and was
+                        # sized at 19.2 GB, sending an 82M model to the host
+                        # on every 16 GB card). The trace value is the truth.
+                        resolved.append(cv)
+                        continue
                     v = None
                     try:
                         v = self._eval_dim_expr(d, symbol_map)

@@ -369,9 +369,35 @@ class RuntimeExecutor:
             persistent_mode=self._persistent_mode,
         )
 
+        # The Triton engine's random stream is armed here, once per request,
+        # for EVERY flow: the request's seed (`global.seed`, else the
+        # container's default) drives every draw the graph makes — a
+        # sampler's multinomial, a scheduler's noise, a vocoder's random
+        # phase (`aten.rand` inside Kokoro's decoder was the one that
+        # escaped: only two flows armed the stream themselves, so a tts
+        # request drew from Python's unseeded `random` and two runs at the
+        # same seed differed). R30 mirror of the ATen branch's
+        # `torch.manual_seed` at the CLI. A seedless request keeps the
+        # unseeded fallback, as before.
+        if self.mode in ("triton", "triton_sequential"):
+            from neurobrix.kernels import rng_stream
+            rng_stream.set_run_seed(inputs.get("global.seed", self.pkg.defaults.get("seed")))
+            # The kernel sweep is never run inside a request: the model's
+            # certified autotune directory (an engine component) serves every
+            # shape it holds for the profile in force; a shape it lacks sweeps
+            # at runtime, announced, and lands in the local replay cache.
         # Get and execute flow handler
         handler = self._create_flow_handler(flow_type, ctx)
-        return handler.execute()
+        try:
+            return handler.execute()
+        finally:
+            if self.mode in ("triton", "triton_sequential"):
+                from neurobrix.kernels import autotune_certified as _cert
+                _served = _cert.served()
+                if _served.get("certified") or _served.get("swept") or _served.get("local"):
+                    print(f"[autotune] certified directory: {_served['certified']} key(s) served without a sweep, "
+                          f"{_served['swept']} swept at runtime (kept locally), {_served.get('local', 0)} from the local "
+                          f"replay cache", flush=True)
 
     def _prepare_defaults(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
         """Prepare merged defaults from family config, pkg defaults, and user inputs."""
@@ -403,6 +429,16 @@ class RuntimeExecutor:
             except FileNotFoundError:
                 pass
         merged_defaults.update(self.pkg.defaults)
+        # The output size is the CONTAINER's when the build declares none: the
+        # traced latent extent of the diffusion backbone times the VAE scale
+        # — Allegro traced at [.., 90, 160] × 8 = 720×1280. A family constant
+        # is the last resort only (video family: 512² rendered colour bands on
+        # every arm of the calibration campaign, 2026-09-05).
+        if "height" not in self.pkg.defaults or "width" not in self.pkg.defaults:
+            derived = self._container_output_size(
+                {name: data for name, data in self.pkg.components.items()})
+            if derived is not None:
+                merged_defaults["height"], merged_defaults["width"] = derived
 
         for key, value in inputs.items():
             default_key = key.replace("global.", "") if key.startswith("global.") else key
@@ -1378,6 +1414,24 @@ class RuntimeExecutor:
         if flow_type == "autoregressive_generation":
             return merged_defaults
 
+        # The TEMPORAL latent extent first: it needs neither height, nor width,
+        # nor a VAE scale factor, so it must not sit behind their guards. It did,
+        # and Open-Sora-v2 paid for it — the container declares num_frames 51 and
+        # temporal_compression_ratio 4 (everything this needs) but no height, no
+        # width and no vae_scale_factor (it carries spatial_compression_ratio
+        # instead). The method returned at the height check, latent_frames was
+        # never derived, and the Triton denoise loop died resolving
+        # global.latents on "Key 'latent_frames' not found in
+        # runtime/defaults.json" — while the container held the answer, 13.
+        num_frames = merged_defaults.get("num_frames")
+        temporal_cr = merged_defaults.get("temporal_compression_ratio")
+        if num_frames is not None and temporal_cr is not None:
+            num_frames = int(num_frames)
+            temporal_cr = int(temporal_cr)
+            latent_frames = (num_frames - 1) // temporal_cr + 1
+            merged_defaults["latent_frames"] = latent_frames
+            logger.debug(f"Video latent frames: ({num_frames}-1)//{temporal_cr}+1 = {latent_frames}")
+
         height = merged_defaults.get("height")
         width = merged_defaults.get("width")
 
@@ -1404,18 +1458,30 @@ class RuntimeExecutor:
         merged_defaults["latent_height"] = latent_height
         merged_defaults["latent_width"] = latent_width
 
-        # Video models: compute latent_frames from num_frames and temporal_compression_ratio
-        num_frames = merged_defaults.get("num_frames")
-        temporal_cr = merged_defaults.get("temporal_compression_ratio")
-        if num_frames is not None and temporal_cr is not None:
-            num_frames = int(num_frames)
-            temporal_cr = int(temporal_cr)
-            latent_frames = (num_frames - 1) // temporal_cr + 1
-            merged_defaults["latent_frames"] = latent_frames
-            logger.debug(f"Video latent frames: ({num_frames}-1)//{temporal_cr}+1 = {latent_frames}")
-
         logger.debug(f"Dynamic latent dims: {height}x{width} / {vae_scale_factor} = {latent_height}x{latent_width}")
         return merged_defaults
+
+    def _container_output_size(self, comp_configs: Dict[str, Any]) -> Optional[tuple]:
+        """(height, width) in pixels from the container: the last two extents
+        of the diffusion backbone's traced latent input times the VAE scale.
+        None for a graph without a spatial latent (text, audio) or a
+        container whose VAE scale cannot be determined."""
+        flow_type = self.pkg.topology.get("flow", {}).get("type", "")
+        if flow_type != "iterative_process":
+            return None
+        scale = self._get_vae_scale_factor(comp_configs)
+        if not scale:
+            return None
+        components = self.pkg.topology.get("components", {}) or {}
+        for name in ("transformer", "unet", "dit"):
+            shapes = (components.get(name) or {}).get("shapes") or {}
+            for key in ("hidden_states", "sample", "latents", "x", "latent_model_input"):
+                shape = shapes.get(key)
+                if isinstance(shape, (list, tuple)) and len(shape) in (4, 5) and all(isinstance(v, int) for v in shape[-2:]):
+                    h, w = int(shape[-2]), int(shape[-1])
+                    if h > 0 and w > 0:
+                        return h * int(scale), w * int(scale)
+        return None
 
     def _get_vae_scale_factor(self, comp_configs: Dict[str, Any]) -> Optional[int]:
         """Determine VAE spatial compression factor."""

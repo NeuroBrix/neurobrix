@@ -632,6 +632,7 @@ class CompiledSequence:
         self._arena = TensorArena(total_slots, self._num_weights, self._num_inputs)
 
         self._compiled = True
+        self._dump_planned_ops()
 
     def _eliminate_detach_ops(
         self,
@@ -3558,6 +3559,42 @@ class CompiledSequence:
             if census is not None:
                 census.pass_done()
 
+
+    def _dump_planned_ops(self) -> None:
+        """Write the ops this sequence will ACTUALLY run to `NBX_DUMP_PLANNED_OPS`.
+
+        The observability gate needs to tell two things apart, and the container
+        cannot: an op a pre-execution pass legitimately removed, and a site
+        something replaced without preserving its observability. Both look the
+        same when the only reference is `graph.json`'s traced `execution_order`
+        — and this repository already knows that graph.json is not the executed
+        order — so the 233 gaps found across PixArt and Kokoro are today an
+        upper bound containing an unknown number of honest removals.
+
+        This is the missing reference: the op list AFTER the passes have run. A
+        gap against THIS list is a blinded site and nothing else.
+
+        Diagnostic, default off, appended as JSONL so several components and
+        several sequences merge naturally into one file.
+        """
+        import os
+        dump = os.environ.get("NBX_DUMP_PLANNED_OPS")
+        if not dump:
+            return
+        try:
+            import json as _json_p
+            comp = self.dag.get("component_name", "?")
+            with open(dump, "a") as f:
+                for op in self._ops:
+                    _json_p.dump({"component": comp,
+                                  "op_uid": getattr(op, "op_uid", None),
+                                  "op_type": getattr(op, "op_type", None)}, f)
+                    f.write("\n")
+        except Exception as exc:                # a diagnostic never breaks a run
+            print(f"[planned-ops] not dumped ({type(exc).__name__}: {exc})",
+                  flush=True)
+
+
     def _maybe_dump_tid_native(self, op, out_slot: int, tensor) -> None:
         """TEMP diagnostic: mirror of TritonSequence._maybe_dump_tid.
         Gated by NBX_DUMP_TIDS=/path and NBX_DUMP_TIDS_FILTER=sub1,sub2.
@@ -3598,6 +3635,35 @@ class CompiledSequence:
         state["seen"].add(_key)
         try:
             if not isinstance(tensor, torch.Tensor):
+                # THE RULE: a brick that replaces a call site preserves that
+                # site's observability. Anything standing in for an op — a
+                # fusion proxy, an interceptor's sentinel — reports what the op
+                # would have reported, and the recorder takes it. Without this
+                # the type guard below silently drops a REPLACED site exactly
+                # as it drops a legitimately tuple-returning one, and the two
+                # are indistinguishable from the outside.
+                summary = getattr(tensor, "nbx_observable_summary", None)
+                if callable(summary):
+                    try:
+                        rec = dict(summary())
+                    except Exception as _exc:
+                        # A swallowed failure here would leave the site silent
+                        # again, which is the exact defect this branch exists to
+                        # end. Say it, then leave the record absent honestly.
+                        print(f"[observability] {op.op_uid}: the replacement could "
+                              f"not report itself ({type(_exc).__name__}: {_exc})",
+                              flush=True)
+                        return
+                    rec.update({"component": self.dag.get("component_name", "?"),
+                                "tid": tid, "op_uid": op.op_uid,
+                                "op_type": op.op_type})
+                    state["records"].append(rec)
+                    # The append above is in-memory only; the JSONL write is
+                    # what any reader consumes. Recording into a list nothing
+                    # flushes is the same silence in a smaller room.
+                    with open(dump_path, "a") as f:
+                        _json_d.dump({"engine": "compiled", "record": rec}, f)
+                        f.write("\n")
                 return
             # Complex tensors: read via the real view ([...,2] re/im) so head
             # casting to float succeeds and the l2 covers BOTH components. Mirrors

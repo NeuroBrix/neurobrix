@@ -461,7 +461,7 @@ class GraphExecutor:
                 if isinstance(t, np.ndarray):
                     if not triton:
                         import torch
-                        return torch.from_numpy(t).to(dtype=get_torch_dtype(self.dtype), device=self.device)
+                        return torch.from_numpy(t).to(dtype=self._placement_torch_dtype(), device=self.device)
                     from neurobrix.kernels.nbx_tensor import (
                         NBXTensor, DeviceAllocator, parse_dtype as _nbx_dtype)
                     dev_idx = (int(self.device.split(':')[1])
@@ -750,7 +750,7 @@ class GraphExecutor:
         import torch
         import torch.nn.functional as F
         if not is_torch_tensor(traced_embed):  # the traced array, placed as before
-            traced_embed = torch.from_numpy(traced_embed).to(dtype=get_torch_dtype(self.dtype), device=self.device)
+            traced_embed = torch.from_numpy(traced_embed).to(dtype=self._placement_torch_dtype(), device=self.device)
         pos_2d = traced_embed.squeeze(0).transpose(0, 1).reshape(1, embed_dim, traced_grid_h, traced_grid_w)
 
         # Bilinear interpolation
@@ -763,7 +763,7 @@ class GraphExecutor:
 
         # Reshape back to [1, seq, dim]
         scaled_embed = pos_2d_scaled.reshape(embed_dim, runtime_seq).transpose(0, 1).unsqueeze(0)
-        scaled_embed = scaled_embed.to(dtype=get_torch_dtype(self.dtype))
+        scaled_embed = scaled_embed.to(dtype=self._placement_torch_dtype())
 
         return scaled_embed
 
@@ -874,7 +874,7 @@ class GraphExecutor:
             import torch
             self._graph_dtype = _cfg_parse_dtype(graph_dtype_str) if graph_dtype_str else None
             amp_enabled = self._should_enable_amp()
-            compute_dtype = get_torch_dtype(self.dtype)
+            compute_dtype = self._placement_torch_dtype()
             # A component PLACED ON THE HOST computes in fp32, whatever the
             # model's dtype. Half precision on CPU is not an optimisation
             # there — x86 has no native fp16 arithmetic, so PyTorch emulates
@@ -893,8 +893,6 @@ class GraphExecutor:
             # op covered at once instead of a list that grows by one failure at
             # a time. Reached by lazy_sequential / cpu_execution / cpu_streaming
             # and by zero3 offload.
-            if str(getattr(self, "device", "") or "").startswith("cpu"):
-                compute_dtype = torch.float32
             # The engine is built here, BEFORE the constants load (they are
             # converted through it) and before the graph-rewriting passes;
             # its precision contract is set AFTER those passes, on the graph
@@ -1094,14 +1092,20 @@ class GraphExecutor:
         conservative default. This is the compiled / sequential consumer, with
         per-op islands. While a calibration runs, the component's census is
         bound to this graph so the record can be written at the end."""
-        from neurobrix.core.dtype import calibration as _cal
         from neurobrix.core.runtime.precision_contract import resolve
         dag = getattr(self, "_dag", None)
         cache_path = getattr(self, "_cache_path", None)
-        census = _cal.active_census(self._component_name)
-        if census is not None and dag is not None:
-            census.bind(dag, cache_path)
-        return resolve(cache_path, self._component_name, dag, compute_dtype=compute_dtype)
+        return resolve(cache_path, self._component_name, dag, compute_dtype=compute_dtype)   # binds the census
+
+    def _placement_torch_dtype(self):
+        """The dtype this component computes in and holds its data in, on the
+        ATen branch: the plan's dtype on a card, fp32 on a host placement —
+        one decision (`compute_dtype_for_placement`) read by the dtype engine,
+        the weight loader, the resolver's leaf alignment, the input and
+        constant conversions, and the compiled sequence alike, so a
+        host-placed component never meets operands of two dtypes."""
+        from neurobrix.core.dtype.engine import compute_dtype_for_placement
+        return compute_dtype_for_placement(getattr(self, "device", ""), get_torch_dtype(self.dtype))
 
     def _should_enable_amp(self) -> bool:
         """Determine whether AMP should be enabled for this component.
@@ -1430,7 +1434,7 @@ class GraphExecutor:
         self._compiled_seq = CompiledSequence(
             dag=self._dag,
             device=torch.device(self.device),
-            dtype=get_torch_dtype(self.dtype),
+            dtype=self._placement_torch_dtype(),
             amp_enabled=self._dtype_engine.amp_enabled,
             use_triton=(self.mode == "triton"),
             config_constants=self._resolve_config_constants(),
@@ -1645,7 +1649,11 @@ class GraphExecutor:
                     f"next to this variant. (Chantier: compiled-mode "
                     f"encoded-weight execution.)")
         from neurobrix.core.io import WeightLoader
-        torch_dtype = get_torch_dtype(self.dtype)
+        from neurobrix.core.dtype.engine import compute_dtype_for_placement
+        # The weights arrive in the dtype the component COMPUTES in — fp32 on
+        # a host placement, the plan's dtype on a card — so the engine's
+        # compute dtype and its operands never disagree (see the function).
+        torch_dtype = self._placement_torch_dtype()
         with WeightLoader(nbx_path) as loader:
             if shard_map:
                 self._weights = loader.load_component_with_shard_map(
@@ -1974,7 +1982,7 @@ class GraphExecutor:
         buffer = io.BytesIO(base64.b64decode(b64_data))
         tensor = torch.load(buffer, map_location='cpu', weights_only=True)
         tensor = tensor.to(self.device)
-        if tensor.is_floating_point() and tensor.dtype != get_torch_dtype(self.dtype):
+        if tensor.is_floating_point() and tensor.dtype != self._placement_torch_dtype():
             tensor = self._dtype_engine.convert_constant(tensor)
         self._weights[weight_name] = tensor
 
@@ -2477,14 +2485,15 @@ class GraphExecutor:
         # only — no per-op island in that dispatcher yet, so the contract is
         # taken only when the record needs none (D-PRECISION-CONTRACT-TRITON-PARITY).
         from neurobrix.core.runtime.precision_contract import resolve as _resolve_contract_seq
-        _seq_fp16_safe = _resolve_contract_seq(
+        _seq_safe, _seq_pins, _seq_narrow = _resolve_contract_seq(
             getattr(self, "_cache_path", None), self._component_name,
             getattr(self, "_dag", None),
             compute_dtype="float16" if str(self.dtype) in ("float16", "torch.float16") else "float32",
-            supports_op_pins=False)[0]
+            supports_op_pins=True)
         dispatcher = TritonSequentialDispatcher(
             device_idx=device_idx, compute_dtype=parse_dtype(self.dtype),
-            activations_fp16_safe=bool(_seq_fp16_safe))
+            activations_fp16_safe=bool(_seq_safe),
+            precision_contract=(bool(_seq_safe), _seq_pins, _seq_narrow))
 
         tensors = self._dag.get("tensors", {})
         ops_meta = self._dag.get("ops", {})
@@ -2815,7 +2824,8 @@ class GraphExecutor:
                     result = _fn(*resolved_args, **resolved_kwargs)
                 else:
                     # Dispatch
-                    result = dispatcher.dispatch(op_type, resolved_args, attrs)
+                    result = dispatcher.dispatch(op_type, resolved_args, attrs, op_uid=op_uid,
+                                                 op_record=op_data)
             except Exception as _e_seq:
                 # Op-localized error (R30 mirror of the compiled "Failed at op"):
                 # name the op_uid + which positional args were None so a
@@ -3210,16 +3220,17 @@ class GraphExecutor:
             config_constants=self._resolve_config_constants())
 
         # Precision contract of THIS component for the triton engine: the
-        # same resolver as the compiled path, flag only — that engine has no
-        # per-op island yet, so the contract is taken only when the record
-        # needs none (D-PRECISION-CONTRACT-TRITON-PARITY).
+        # same resolver as the compiled path, flag AND per-op islands — the
+        # Triton dtype engine pins the record's fp32 islands and narrows the
+        # narrowable ops exactly as the compiled one (R30;
+        # D-PRECISION-CONTRACT-TRITON-PARITY closed 2026-09-06).
         from neurobrix.core.runtime.precision_contract import resolve as _resolve_contract
-        _fp16_safe = _resolve_contract(
+        _safe, _pins, _narrow = _resolve_contract(
             getattr(self, "_cache_path", None), self._component_name,
             getattr(self, "_dag", None),
             compute_dtype="float16" if str(self.dtype) in ("float16", "torch.float16") else "float32",
-            supports_op_pins=False)[0]
-        self._triton_seq.set_activations_fp16_safe(bool(_fp16_safe))
+            supports_op_pins=True)
+        self._triton_seq.set_precision_contract(bool(_safe), _pins, _narrow)
 
         self._triton_seq.compile()
 
@@ -3257,7 +3268,7 @@ class GraphExecutor:
         ctx = ExecutionContext(
             dag=self._dag,
             device=self.device,
-            dtype=get_torch_dtype(self.dtype),
+            dtype=self._placement_torch_dtype(),
             weights=self._weights,
             shape_resolver=self._shape_resolver,
             symbolic_shapes_enabled=self._symbolic_shapes_enabled,
@@ -4035,7 +4046,7 @@ class GraphExecutor:
             # Apply Prism dtype + device conversion (same logic as sequential mode)
             if is_torch_tensor(value):
                 # For floating-point tensors, convert to Prism dtype
-                torch_dtype = get_torch_dtype(self.dtype)
+                torch_dtype = self._placement_torch_dtype()
                 if value.dtype.is_floating_point and value.dtype != torch_dtype:
                     value = value.to(torch_dtype)
                 # Move input to executor's device (critical for FGP/multi-device)
@@ -4340,7 +4351,7 @@ class GraphExecutor:
         from neurobrix.core.runtime.graph.sequential_dispatcher import NativeATenDispatcher
 
         if self._sequential_dispatcher is None:
-            self._sequential_dispatcher = NativeATenDispatcher(device=self.device, compute_dtype=get_torch_dtype(self.dtype))
+            self._sequential_dispatcher = NativeATenDispatcher(device=self.device, compute_dtype=self._placement_torch_dtype())
 
         # FUSED MoE OP: Execute via custom handler (bypasses TensorResolver)
         # Must be checked BEFORE resolve_args — fused op's args list contains 192+
@@ -4385,7 +4396,7 @@ class GraphExecutor:
 
         # AMP: Cast inputs per DtypeEngine rules (fp32 for pow/rsqrt/softmax, etc.)
         normalized_inputs = self._dtype_engine.amp_cast_inputs(op_type, normalized_inputs,
-                                                               op_uid=op_uid)
+                                                               op_uid=op_uid, op_record=op_data)
 
         # Check for op interceptors. Priority order matches CompiledSequence
         # and TritonSequence: op_uid (fine-grained, op-level tiling Prism)

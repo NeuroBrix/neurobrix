@@ -25,14 +25,23 @@ import json
 import os
 from typing import Dict, Iterator, Optional, Tuple
 
-_DIR = os.path.join(os.path.expanduser("~"), ".neurobrix", "replay_cache")
+# The machine's replay cache (the producer's accumulation across models, and
+# the correctness screen's exclusions). NEUROBRIX_REPLAY_CACHE relocates it —
+# a gate that needs a truly cold sweep per arm gives every arm its own, else
+# sweep mode seeds the autotuners from here and no arm sweeps (2026-09-06:
+# a screened arm reported "checked 0 key(s)" for exactly this reason).
+_DIR = os.environ.get("NEUROBRIX_REPLAY_CACHE") or os.path.join(os.path.expanduser("~"), ".neurobrix", "replay_cache")
 
 # The sanctioned autotune surface (Phase 1.5 doctrine: mm/bmm/addmm/
 # conv2d only) — explicit list, not a gc walk. A new autotuned kernel
 # is added here the day its autotune exception is granted. Supervisor
-# ruling 2026-08-16: NO autotuner lives outside this artifact+gate
-# regime (the one historical candidate outside it, the FlagGems
-# kernels/utils remnant, was dead code and was removed 2026-08-17).
+# ruling 2026-08-16: NO autotuner lives outside this regime (the one
+# historical candidate outside it, the FlagGems kernels/utils remnant,
+# was dead code and was removed 2026-08-17). Since the owner directive of
+# 2026-09-06 the regime is the CERTIFIED DIRECTORY (`kernels/
+# autotune_certified.py`, `config/autotune/<vendor>/<profile>/`): a shape it
+# holds is applied at load; a shape it lacks sweeps at runtime with the
+# consensus screen and lands HERE, the machine's local replay cache.
 _KERNEL_SITES = (
     ("neurobrix.kernels.ops.matmul", "matmul_kernel"),
     ("neurobrix.kernels.ops.matmul", "addmm_kernel"),
@@ -171,7 +180,10 @@ def capture() -> int:
     entries: Dict[str, Dict] = {}
     for qual, at in _autotuners():
         for key, cfg in getattr(at, "cache", {}).items():
-            entries[f"{qual}::{key!r}"] = _config_to_dict(cfg)
+            rec = _config_to_dict(cfg)
+            if (id(at), key) in _TIMINGS:
+                rec["timing"] = _TIMINGS[(id(at), key)]
+            entries[f"{qual}::{key!r}"] = rec
     if not entries:
         return 0
     try:
@@ -214,6 +226,12 @@ def seed() -> int:
             stored = json.load(f)
     except (OSError, ValueError):
         return 0
+    return _seed_entries(stored)
+
+
+def _seed_entries(stored: Dict[str, Dict]) -> int:
+    """Insert `stored` configs into the Autotuner caches under the
+    membership gate documented on `seed()`. Returns the number seeded."""
     seeded = 0
     for qual, at in _autotuners():
         prefix = f"{qual}::"
@@ -237,3 +255,48 @@ def seed() -> int:
                 except Exception:
                     continue
     return seeded
+
+
+# ---------------------------------------------------------------------------
+# The Autotuner's key, and the bench margin of a key this process measured
+# ---------------------------------------------------------------------------
+def key_of(at, args, kwargs) -> tuple:
+    """The Autotuner's cache key for a call, as `Autotuner.run` forms it."""
+    _args = {**dict(zip(at.arg_names, args)), **kwargs}
+    key = [_args[k] for k in at.keys if k in _args]
+    for _, arg in _args.items():
+        if hasattr(arg, "dtype"):
+            key.append(str(arg.dtype))
+    return tuple(key)
+
+
+def _qual_of(at) -> Optional[str]:
+    for qual, obj in _autotuners():
+        if obj is at:
+            return qual
+    return None
+
+
+_TIMINGS: Dict[Tuple[int, tuple], Dict] = {}     # (id(tuner), key) -> best/second/margin of a bench this process ran
+
+
+def note_timings(at, key: tuple, timings) -> None:
+    """Keep the bench of a key this process just measured: the best time, the
+    second-best, and the MARGIN between them. A cache that records only the
+    winner cannot say whether the winner was clear or a near-tie the timer
+    could flip on the next run — a gate comparing two sweeps needs exactly
+    that to tell a change of choice from noise. Written beside the config by
+    `capture()`."""
+    if not timings:
+        return
+    try:
+        times = sorted(float(t) for t in timings.values() if t is not None and float(t) == float(t))
+    except (TypeError, ValueError):
+        return
+    if not times:
+        return
+    best = times[0]
+    second = times[1] if len(times) > 1 else None
+    _TIMINGS[(id(at), key)] = {
+        "best_ms": best, "second_ms": second, "candidates": len(times),
+        "margin": (second / best - 1.0) if (second is not None and best > 0) else None}

@@ -15,6 +15,37 @@ class SymbolResolver:
         self._symbols = symbolic_context.get("symbols", {})
         self._bindings: Dict[str, int] = {}
 
+    def _bind(self, sym_id: str, value: int) -> None:
+        """Record one symbol's runtime extent, refusing what the container
+        declares impossible.
+
+        Mirror of the ATen binder's `_bind_symbol` (core/runtime/shape_resolver.py):
+        the tracer nests the contract as
+        `{"name": "time", "source": "...", "constraints": {"min": 1}}`, and
+        every one of the zoo's 673 symbols carries a min of 1 — so this
+        refuses a batch, seq_len, height, width or time of zero or below.
+
+        It is the single write site on purpose. A dim at or below zero is not
+        a memory condition, but left unchecked that is how it surfaces: a
+        negative allocation dozens of ops downstream, naming a convolution
+        instead of the input that caused it.
+        """
+        info = self._symbols.get(sym_id) or {}
+        constraints = info.get("constraints") or {}
+        lo = constraints.get("min", info.get("min"))
+        hi = constraints.get("max", info.get("max"))
+        if lo is not None and value < lo:
+            raise RuntimeError(
+                f"Symbol {sym_id} ({info.get('name', '?')}) = {value}, below "
+                f"the minimum extent the container declares ({lo}); it binds "
+                f"from {info.get('source', '?')}.")
+        if hi is not None and value > hi:
+            raise RuntimeError(
+                f"Symbol {sym_id} ({info.get('name', '?')}) = {value}, above "
+                f"the maximum extent the container declares ({hi}); it binds "
+                f"from {info.get('source', '?')}.")
+        self._bindings[sym_id] = value
+
     def bind_from_inputs(self, inputs: dict, input_tensor_ids: list,
                          tensors_meta: dict):
         """Bind symbols from actual input tensor shapes.
@@ -53,14 +84,14 @@ class SymbolResolver:
                             f"Symbol {sym_id}: val index {idx} out of range "
                             f"for input '{tensor_id}' with {flat.shape[0]} "
                             f"elements")
-                    self._bindings[sym_id] = int(flat[idx]) // fdiv
+                    self._bind(sym_id, int(flat[idx]) // fdiv)
                 elif tensor is not None and hasattr(tensor, "__len__"):
                     if idx >= len(tensor) or idx < -len(tensor):
                         raise RuntimeError(
                             f"Symbol {sym_id}: val index {idx} out of range "
                             f"for input '{tensor_id}' with {len(tensor)} "
                             f"elements")
-                    self._bindings[sym_id] = int(tensor[idx]) // fdiv
+                    self._bind(sym_id, int(tensor[idx]) // fdiv)
                 else:
                     import logging
                     logging.getLogger(__name__).warning(
@@ -76,12 +107,12 @@ class SymbolResolver:
                 tensor = inputs.get(tensor_id)
                 if tensor is not None and hasattr(tensor, 'shape'):
                     val = tensor.shape[dim]
-                    self._bindings[sym_id] = val
+                    self._bind(sym_id, val)
                 else:
                     # Try trace_value as fallback
                     tv = sym_info.get("trace_value")
                     if tv is not None:
-                        self._bindings[sym_id] = tv
+                        self._bind(sym_id, tv)
                 continue
 
             # Dict format: {"tensor_id": "...", "dim": 0}
@@ -91,7 +122,7 @@ class SymbolResolver:
                 if tensor_id and dim is not None:
                     tensor = inputs.get(tensor_id)
                     if tensor is not None and hasattr(tensor, 'shape'):
-                        self._bindings[sym_id] = tensor.shape[dim]
+                        self._bind(sym_id, tensor.shape[dim])
 
     def resolve(self, val) -> int:
         """Resolve a value that may be symbolic.
