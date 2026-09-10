@@ -1271,6 +1271,36 @@ def lock_holder_alive(text: str) -> bool:
     return Path(f"/proc/{m.group(1)}").exists()
 
 
+def has_verdict(model_out: Path) -> bool:
+    """True when `<model_out>/result.json` records a gate that actually RAN.
+
+    `--skip-done` asks "is this model MEASURED?", and only a gate that ran
+    answers it. A crashed arm pair still writes result.json — `gate.ran` False,
+    both arms `rc=1` — and reading the file's mere existence as done makes a
+    fixable failure permanent: every later container prints "done, skipped" and
+    the model is never measured again. Three models of the certified-directory
+    proof sat that way on 2026-09-10 (a negative-size malloc, an OOM, and a
+    tiling contract that failed in six seconds), each hiding a distinct defect.
+
+    A DIFFERENT verdict IS a measurement and does count — the question is
+    whether the arms were compared, not whether they agreed. A model that is
+    genuinely impossible belongs to the queue's `impossible_when` predicate,
+    with its reason written, not to a crash promoted to a result.
+
+    Present-but-broken returns False rather than raising: here the fallback is
+    to MEASURE AGAIN, which is self-correcting and can never silently skip —
+    unlike a manifest read, where a silent default would decide flags.
+    """
+    p = Path(model_out) / "result.json"
+    if not p.exists():
+        return False
+    try:
+        record = json.loads(p.read_text())
+    except (OSError, ValueError):
+        return False
+    return bool((record.get("gate") or {}).get("ran"))
+
+
 def held_by_retrace(retrace_out: Path) -> set:
     """Every model of a retrace campaign whose recorded gate is not a PASS: listed in its
     models file (phase lists) or holding a state.json without a PASS gate — its cache slot may
@@ -1374,8 +1404,14 @@ def main():
     gpu = None if args.machine else args.gpu
     held = held_by_retrace(Path(args.hold_from)) if args.hold_from else set()
     for m in models:
-        if args.skip_done and (out / m / "result.json").exists():
-            print(f"[zoo] {m}: done, skipped"); continue
+        if args.skip_done:
+            if has_verdict(out / m):
+                print(f"[zoo] {m}: done, skipped"); continue
+            if (out / m / "result.json").exists():
+                # A record without a gate that ran: the arms crashed. Say so and
+                # measure again — see has_verdict.
+                print(f"[zoo] {m}: a record with no verdict (the arms did not run) — measured again",
+                      flush=True)
         if m in held:
             # A container still short of its retrace gate: its cache slot moves (a restore, an
             # install) — CogVideoX-2b's proof row straddled an install at 14:34 on 2026-09-07.
