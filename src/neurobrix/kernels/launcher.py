@@ -24,7 +24,7 @@ from __future__ import annotations
 import ctypes
 import os
 import struct
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 # ---------------------------------------------------------------------------
 # The target: from the engine's hardware profile, never from a driver probe
@@ -676,6 +676,327 @@ def _stream() -> int:
     return 0
 
 
+
+# ---------------------------------------------------------------------------
+# The autotune correctness screen: every candidate is checked before any is timed
+# ---------------------------------------------------------------------------
+#
+# An autotuner ranks configs by speed. That is safe only while every config
+# computes the same thing, and on a backend where one does not, speed is
+# exactly the wrong tiebreak: a kernel that writes half its output does half
+# the stores, so it is genuinely faster, so it wins. Measured 2026-09-07 on
+# Apple — fp16 mm [64,32]@[32,64] selected a config that left 32 of 64
+# columns zero, deterministically, with no error raised anywhere.
+#
+# Nothing here names a backend, and the tolerance is read from the hardware
+# profile rather than written down: what separates "a different summation
+# order" from "a different answer" is a property of the device's arithmetic,
+# and the profile is where the engine keeps those.
+#
+# A config that diverges is excluded from the timing and recorded with its
+# shape and its deviation. It is never dropped silently, because a config
+# quietly missing from a sweep looks like a config that lost on speed.
+
+class ScreenedOut(NamedTuple):
+    """One config the screen refused, and why."""
+    kernel: str
+    key: tuple
+    config: str
+    dtype: str
+    deviation: float
+    tolerance: float
+
+
+_SCREENED: List[ScreenedOut] = []
+_SCREEN_CACHE: Dict[int, set] = {}      # id(tuner) -> keys already screened
+
+
+def screened_out() -> List[ScreenedOut]:
+    """Every config the correctness screen excluded, in order."""
+    return list(_SCREENED)
+
+
+def clear_screened() -> None:
+    _SCREENED.clear()
+    _SCREEN_CACHE.clear()
+
+
+def _screen_rtol(dtype_name: str):
+    """The tolerance for one dtype, from the hardware profile. None = exact."""
+    from neurobrix.kernels.ops._configs import active_vendor_profile
+
+    table = active_vendor_profile().get("autotune_screen_rtol")
+    if table is None:
+        raise RuntimeError(
+            "the hardware profile declares no `autotune_screen_rtol`: the "
+            "autotune correctness screen will not invent a tolerance, and "
+            "without one it cannot tell a reordered sum from a wrong answer")
+    return table.get(dtype_name)
+
+
+def _writable_buffers(values):
+    """Every device buffer among these arguments, with its byte length.
+
+    Returns None when any of them is a NON-CONTIGUOUS view, and the caller
+    then skips screening rather than guessing.
+
+    The snapshot and restore below copy a CONTIGUOUS span from `data_ptr()`.
+    For a strided view that span is not the tensor: it covers the gaps
+    between the view's elements, which belong to other tensors in the same
+    allocation. Restoring it writes stale bytes over live data somewhere
+    else entirely — which is exactly what happened, and it showed up as eight
+    unrelated tests failing in the full suite while passing alone.
+    """
+    out = []
+    for value in values:
+        if not (hasattr(value, "data_ptr") and hasattr(value, "_nbytes")):
+            continue
+        contiguous = getattr(value, "is_contiguous", None)
+        if callable(contiguous) and not contiguous():
+            return None
+        out.append((int(value.data_ptr()), int(value._nbytes),
+                    getattr(getattr(value, "dtype", None), "name", "?")))
+    return out
+
+
+def _snapshot(buffers):
+    import ctypes
+
+    from neurobrix.kernels.nbx_tensor import DeviceAllocator
+
+    shots = []
+    for address, nbytes, _name in buffers:
+        host = (ctypes.c_char * nbytes)()
+        DeviceAllocator.memcpy(ctypes.addressof(host), address, nbytes, kind=2)
+        shots.append(bytes(host))
+    return shots
+
+
+def _restore(buffers, shots):
+    import ctypes
+
+    from neurobrix.kernels.nbx_tensor import DeviceAllocator
+
+    for (address, nbytes, _name), blob in zip(buffers, shots):
+        host = (ctypes.c_char * nbytes).from_buffer_copy(blob)
+        DeviceAllocator.memcpy(address, ctypes.addressof(host), nbytes, kind=1)
+
+
+#: The engine spells a dtype "fp16"; the hardware profiles and numpy spell it
+#: "float16". One table, so the screen cannot silently fail to find a
+#: tolerance and fall back to comparing floats bit-for-bit — which it did on
+#: first run, excluding seven correct configs.
+_DTYPE_CANON = {
+    "fp16": "float16", "float16": "float16", "half": "float16",
+    "bf16": "bfloat16", "bfloat16": "bfloat16",
+    "fp32": "float32", "float32": "float32", "f32": "float32",
+    "fp64": "float64", "float64": "float64", "f64": "float64",
+    "i8": "int8", "int8": "int8", "i16": "int16", "int16": "int16",
+    "i32": "int32", "int32": "int32", "i64": "int64", "int64": "int64",
+    "u8": "uint8", "uint8": "uint8", "i1": "bool_", "bool": "bool_",
+    "bool_": "bool_",
+}
+
+
+def _as_float64(blob: bytes, canon: str):
+    """One buffer's contents as float64, whatever the engine calls its type.
+
+    bfloat16 is not a numpy dtype: it is read as its 16 bits and widened by
+    placing them in the high half of a float32, which is exactly what the
+    format is.
+    """
+    import numpy as np
+
+    if canon == "bfloat16":
+        bits = np.frombuffer(blob, dtype=np.uint16).astype(np.uint32) << 16
+        return bits.view(np.float32).astype(np.float64)
+    return np.frombuffer(blob, dtype=np.dtype(canon)).astype(np.float64)
+
+
+def _deviation(a: bytes, b: bytes, dtype_name: str):
+    """(deviation, tolerance) between two results of the same buffer.
+
+    Integers and booleans are compared bit-identically: no valid reordering
+    changes an integer. Floats are compared relative to the reference's own
+    magnitude, against the profile's tolerance.
+    """
+    import numpy as np
+
+    canon = _DTYPE_CANON.get(str(dtype_name).lower())
+    if canon is None:
+        # An unknown spelling is not licence to guess a tolerance.
+        return (0.0 if a == b else float("inf")), 0.0
+    rtol = _screen_rtol(canon)
+    if rtol is None:
+        return (0.0 if a == b else float("inf")), 0.0
+    x = _as_float64(a, canon)
+    y = _as_float64(b, canon)
+    finite = np.isfinite(x) & np.isfinite(y)
+    if not np.array_equal(np.isfinite(x), np.isfinite(y)):
+        return float("inf"), float(rtol)      # one produced NaN/Inf, one did not
+    scale = float(np.abs(y[finite]).max()) if finite.any() else 0.0
+    if scale == 0.0:
+        return (0.0 if np.array_equal(x, y) else float("inf")), float(rtol)
+    return float(np.abs(x[finite] - y[finite]).max() / scale), float(rtol)
+
+
+def screen_configs(tuner, configs, key, meta=None):
+    """Run every candidate once and keep the ones that agree with each other.
+
+    Agreement is decided by CONSENSUS, not against a nominated reference.
+    Anchoring on one config inverts the moment that config is the broken one:
+    measured 2026-09-07, `matmul_kernel`'s first config was one of the three
+    that wrote half the output, so screening against it excluded the seven
+    correct ones. There is no way to know in advance which config is right —
+    that is the whole problem — so the screen asks which answer the configs
+    agree on, and treats the rest as the outliers they are.
+
+    A kernel writes into buffers the caller owns, so the screen snapshots
+    them first and restores that snapshot before each run; otherwise an
+    accumulating kernel would be compared against its own previous output.
+
+    Returns the configs in the consensus. Raises when there is no consensus —
+    when the candidates split evenly — because then nothing here can tell
+    which half is right, and choosing on speed would be choosing at random.
+    """
+    if len(configs) < 2:
+        return configs
+
+    seen = _SCREEN_CACHE.setdefault(id(tuner), set())
+    if key in seen:
+        return configs
+    seen.add(key)
+
+    named = dict(tuner.nargs or {})
+    if not named:
+        return configs
+    args = [named[name] for name in tuner.arg_names if name in named]
+    buffers = _writable_buffers(args)
+    if buffers is None:
+        print(f"[AUTOTUNE_SCREEN] "
+              f"{getattr(tuner.base_fn, '__name__', tuner)}: a strided view "
+              f"among the arguments; not screened at key {key}", flush=True)
+        return configs
+    if not buffers:
+        return configs
+
+    from neurobrix.kernels.ops._configs import active_vendor_profile
+
+    budget = active_vendor_profile().get("autotune_screen_max_bytes")
+    if budget is None:
+        raise RuntimeError(
+            "the hardware profile declares no `autotune_screen_max_bytes`: "
+            "the screen will not decide for itself how much memory traffic a "
+            "tuning step may cost")
+    total = sum(nbytes for _a, nbytes, _d in buffers)
+    if total > int(budget):
+        print(f"[AUTOTUNE_SCREEN] "
+              f"{getattr(tuner.base_fn, '__name__', tuner)}: arguments total "
+              f"{total} bytes, over the profile's screening budget "
+              f"{int(budget)}; not screened at key {key}", flush=True)
+        return configs
+
+    before = _snapshot(buffers)
+    meta = dict(meta or {})
+    kernel_name = getattr(tuner.base_fn, "__name__", str(tuner))
+
+    # -- run each candidate once, from the same starting state --------------
+    results, unrun = [], []
+    for config in configs:
+        try:
+            _restore(buffers, before)
+            tuner.fn.run(*args, **{**meta, **config.all_kwargs()})
+            results.append((config, _snapshot(buffers)))
+        except Exception:
+            # A config the backend refuses is not a screen failure — the
+            # autotuner already handles one that will not compile. Counted,
+            # never swallowed: a screen that silently keeps what it could not
+            # run is a screen that checked nothing.
+            unrun.append(config)
+    _restore(buffers, before)
+
+    if unrun:
+        print(f"[AUTOTUNE_SCREEN] {kernel_name}: {len(unrun)} of "
+              f"{len(configs)} configs could not be run for screening at key "
+              f"{key}; they go to the timer unchecked", flush=True)
+    if len(results) < 2:
+        return configs
+
+    # -- cluster by agreement ----------------------------------------------
+    def agree(one, other):
+        worst, tol, name = 0.0, 0.0, "?"
+        for (_a, _n, dtype_name), x, y in zip(buffers, one, other):
+            if x == y:
+                continue
+            deviation, tolerance = _deviation(x, y, dtype_name)
+            if deviation > worst:
+                worst, tol, name = deviation, tolerance, dtype_name
+        return worst <= tol, worst, tol, name
+
+    clusters: List[list] = []
+    for entry in results:
+        for cluster in clusters:
+            ok, _w, _t, _d = agree(entry[1], cluster[0][1])
+            if ok:
+                cluster.append(entry)
+                break
+        else:
+            clusters.append([entry])
+
+    if len(clusters) == 1:
+        return [c for c, _ in results] + unrun
+
+    clusters.sort(key=len, reverse=True)
+    if len(clusters[0]) == len(clusters[1]):
+        raise RuntimeError(
+            f"NeuroBrix autotune screen: {kernel_name} at key {key} splits "
+            f"into {len(clusters)} groups of configs that disagree with each "
+            f"other, with no majority ("
+            + ", ".join(str(len(c)) for c in clusters)
+            + "). Refusing to choose one on speed.")
+
+    winners = {id(c) for c, _ in clusters[0]}
+    dropped = []
+    for cluster in clusters[1:]:
+        for config, result in cluster:
+            _ok, worst, tol, name = agree(result, clusters[0][0][1])
+            dropped.append(ScreenedOut(kernel_name, key, str(config), name,
+                                       worst, tol))
+
+    _SCREENED.extend(dropped)
+    # A runtime exclusion that contradicts a CERTIFIED setting is a finding,
+    # reported here and persisted — never a silence.
+    try:
+        from neurobrix.kernels.autotune_certified import report_contradictions
+        report_contradictions(tuner, dropped)
+    except Exception as exc:                        # the report must not turn into a launch failure
+        print(f"[AUTOTUNE_SCREEN] could not check the certified directory: {exc}", flush=True)
+    for entry in dropped:
+        print(f"[AUTOTUNE_SCREEN] {entry.kernel}: config excluded before "
+              f"timing — it disagrees with the {len(clusters[0])}-config "
+              f"consensus by {entry.deviation:.3e} ({entry.dtype}, tolerance "
+              f"{entry.tolerance:.1e}) at key {entry.key}: {entry.config}",
+              flush=True)
+    _record_screen_exclusions(dropped)
+
+    return [c for c, _ in clusters[0]] + unrun
+
+
+def _record_screen_exclusions(dropped) -> None:
+    """Hand the exclusions to the persisted sweep, so Forge sees them."""
+    try:
+        from neurobrix.triton import autotune_cache
+    except Exception:                                   # pragma: no cover
+        return
+    record = getattr(autotune_cache, "record_screen_exclusions", None)
+    if record is None:
+        return
+    try:
+        record([e._asdict() for e in dropped])
+    except Exception as exc:                            # pragma: no cover
+        print(f"[AUTOTUNE_SCREEN] could not persist exclusions: {exc}",
+              flush=True)
+
 # ---------------------------------------------------------------------------
 # The seam: route every `kernel[grid](...)` of the process through `launch`
 # ---------------------------------------------------------------------------
@@ -706,6 +1027,30 @@ def install(force: Optional[bool] = None) -> bool:
 
     JITFunction.__getitem__ = __getitem__
     JITFunction.run = run
+
+    # The correctness screen, at the seam the autotuner itself uses to narrow
+    # its candidates: `prune_configs` is called once per key, immediately
+    # before anything is timed, and by then `self.nargs` holds the real
+    # arguments. Wrapping it means the screen sees exactly the configs that
+    # were about to be benchmarked, on exactly the tensors they would run on.
+    from triton.runtime.autotuner import Autotuner
+
+    if not getattr(Autotuner.prune_configs, "_nbx_screened", False):
+        _upstream_prune = Autotuner.prune_configs
+
+        def prune_configs(self, kwargs, *rest):
+            configs = _upstream_prune(self, kwargs, *rest)
+            if os.environ.get("NBX_AUTOTUNE_SCREEN", "on").lower() == "off":
+                return configs
+            key = tuple(sorted(
+                (k, str(v)) for k, v in (kwargs or {}).items()
+                if isinstance(v, (int, float, bool, str))))
+            return screen_configs(self, list(configs), key, kwargs)
+
+        prune_configs._nbx_screened = True
+        prune_configs._nbx_upstream = _upstream_prune
+        Autotuner.prune_configs = prune_configs
+
     _installed = True
     return True
 

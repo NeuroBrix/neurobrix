@@ -75,11 +75,6 @@ def _add_run_arguments(p):
                                  'Production NeuroBrix Triton mode. Should match or beat '
                                  '--compiled on target shapes (project bet: custom '
                                  'kernels > cuDNN).')
-    p.add_argument('--sweep', action='store_true',
-                   help='Triton engine: allow the kernel sweep for shapes this model has no measured '
-                        'configuration for on this hardware profile, and record the result as the model\'s '
-                        'sweep artifact (~/.neurobrix/autotune/<model>/<arch>.json). Without it a request '
-                        'never sweeps: a missing artifact is refused.')
     p.add_argument('--triton-sequential', action='store_true', dest='triton_sequential',
                             help='Triton-pure eager mode: Triton kernels op-by-op (no '
                                  'fusion, TritonSequentialDispatcher). Equivalent of '
@@ -203,6 +198,22 @@ For more information: https://neurobrix.es
                                        'outputs; a calibrated arm that is identical and not faster marks the record '
                                        '"prefer conservative" for this hardware profile')
     _add_run_arguments(calibrate_parser)
+
+    autotune_parser = subparsers.add_parser(
+        'autotune',
+        help='The certified autotune directory: certify a profile, check the directory, show the status')
+    autotune_sub = autotune_parser.add_subparsers(dest='action')
+    certify_p = autotune_sub.add_parser('certify', help='run every candidate config on every shape the zoo met, against the fp64 oracle; write the files with their proofs')
+    certify_p.add_argument('--profile', required=True, help='the vendor profile this machine carries (its file stem, e.g. volta)')
+    certify_p.add_argument('--vendor', default=None, help='the vendor directory (default: the one in force)')
+    certify_p.add_argument('--census', default=None, help='a census file of shapes (default: the machine replay cache)')
+    certify_p.add_argument('--out', default=None, help='write here instead of the engine directory (a contributor draft)')
+    certify_p.add_argument('--kernels', default=None, help='only these kernels (short or qualified names, comma-separated)')
+    certify_p.add_argument('--limit', type=int, default=None, help='stop after this many shapes')
+    certify_p.add_argument('--only-missing', action='store_true', help='skip shapes the directory already certifies')
+    check_p = autotune_sub.add_parser('check', help='the directory gate, file by file')
+    check_p.add_argument('--dir', default=None)
+    autotune_sub.add_parser('status', help='the profile in force and what the directory holds for it')
 
     drift_parser = subparsers.add_parser(
         'drift',
@@ -371,10 +382,6 @@ Examples:
     # "Execution Modes" section for the contract.
     serve_parser.add_argument('--compiled', action='store_true',
                               help='Default mode: PyTorch fused graph + cuDNN/cuBLAS')
-    serve_parser.add_argument('--sweep', action='store_true',
-                              help='Triton engine: allow the kernel sweep for shapes the served model has no measured '
-                                   'configuration for on this hardware profile, and record it as the model\'s sweep '
-                                   'artifact. Without it a request never sweeps: a missing artifact is refused.')
     serve_parser.add_argument('--sequential', action='store_true',
                               help='PyTorch eager op-by-op (no fusion, debug)')
     serve_parser.add_argument('--triton', action='store_true',
@@ -516,6 +523,9 @@ def main():
     args = parser.parse_args()
 
     try:
+        if args.command == 'autotune':
+            from neurobrix.cli.commands.autotune import cmd_autotune
+            return cmd_autotune(args)
         if args.command == 'drift':
             from neurobrix.cli.commands.drift import cmd_drift
             return cmd_drift(args)

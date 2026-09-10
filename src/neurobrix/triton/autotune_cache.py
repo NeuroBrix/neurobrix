@@ -35,9 +35,13 @@ _DIR = os.environ.get("NEUROBRIX_REPLAY_CACHE") or os.path.join(os.path.expandus
 # The sanctioned autotune surface (Phase 1.5 doctrine: mm/bmm/addmm/
 # conv2d only) — explicit list, not a gc walk. A new autotuned kernel
 # is added here the day its autotune exception is granted. Supervisor
-# ruling 2026-08-16: NO autotuner lives outside this artifact+gate
-# regime (the one historical candidate outside it, the FlagGems
-# kernels/utils remnant, was dead code and was removed 2026-08-17).
+# ruling 2026-08-16: NO autotuner lives outside this regime (the one
+# historical candidate outside it, the FlagGems kernels/utils remnant,
+# was dead code and was removed 2026-08-17). Since the owner directive of
+# 2026-09-06 the regime is the CERTIFIED DIRECTORY (`kernels/
+# autotune_certified.py`, `config/autotune/<vendor>/<profile>/`): a shape it
+# holds is applied at load; a shape it lacks sweeps at runtime with the
+# consensus screen and lands HERE, the machine's local replay cache.
 _KERNEL_SITES = (
     ("neurobrix.kernels.ops.matmul", "matmul_kernel"),
     ("neurobrix.kernels.ops.matmul", "addmm_kernel"),
@@ -108,6 +112,64 @@ def _config_from_dict(d):
                          maxnreg=d.get("maxnreg"))
 
 
+def _exclusions_path() -> Optional[str]:
+    """Where the correctness screen's exclusions are kept, beside the sweep."""
+    path = _artifact_path()
+    if path is None:
+        return None
+    return path.replace("autotune_configs_", "autotune_exclusions_")
+
+
+def record_screen_exclusions(entries) -> int:
+    """Persist configs the correctness screen refused, so Forge sees them.
+
+    A config excluded for being WRONG and a config that merely lost on speed
+    are indistinguishable in a sweep that records only the winner — and they
+    are not the same fact at all. One is a tuning outcome; the other is a
+    backend defect with a shape attached.
+
+    Keyed by kernel, key and config so repeated runs merge instead of
+    accumulating duplicates. Best-effort: a sweep that cannot be written must
+    never fail a launch, and the exclusions are also printed as they happen.
+    """
+    path = _exclusions_path()
+    if path is None or not entries:
+        return 0
+    try:
+        os.makedirs(_DIR, exist_ok=True)
+        stored: Dict[str, Dict] = {}
+        try:
+            with open(path) as f:
+                stored = json.load(f)
+        except (OSError, ValueError):
+            stored = {}
+        added = 0
+        for entry in entries:
+            entry = dict(entry)
+            ident = f"{entry.get('kernel')}::{entry.get('key')!r}::{entry.get('config')}"
+            if ident not in stored:
+                stored[ident] = entry
+                added += 1
+        if added:
+            with open(path, "w") as f:
+                json.dump(stored, f, indent=1, default=str)
+        return added
+    except OSError:
+        return 0
+
+
+def screen_exclusions() -> Dict[str, Dict]:
+    """Everything the screen has refused on this machine, for Forge."""
+    path = _exclusions_path()
+    if path is None:
+        return {}
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
 def capture() -> int:
     """Merge every selected config into the artifact. Returns the
     number of NEW entries written (0 = artifact already covers this
@@ -118,7 +180,10 @@ def capture() -> int:
     entries: Dict[str, Dict] = {}
     for qual, at in _autotuners():
         for key, cfg in getattr(at, "cache", {}).items():
-            entries[f"{qual}::{key!r}"] = _config_to_dict(cfg)
+            rec = _config_to_dict(cfg)
+            if (id(at), key) in _TIMINGS:
+                rec["timing"] = _TIMINGS[(id(at), key)]
+            entries[f"{qual}::{key!r}"] = rec
     if not entries:
         return 0
     try:
@@ -153,8 +218,6 @@ def seed() -> int:
     NBX_DISABLE_AUTOTUNE's pinned single-config list (one member).
     Non-members and non-literal keys are skipped: that shape simply
     re-tunes, exactly the pre-E2 behavior."""
-    if _ACTIVE is not None and not _ACTIVE["sweep"]:
-        return 0          # a model request in default mode: its own artifact is the only source
     path = _artifact_path()
     if path is None:
         return 0
@@ -195,105 +258,8 @@ def _seed_entries(stored: Dict[str, Dict]) -> int:
 
 
 # ---------------------------------------------------------------------------
-# The per-model sweep artifact — the sweep happens on our side (owner
-# directive, 2026-09-06). Its result per kernel, per shape and per hardware
-# profile is an artifact delivered with the model (`runtime/autotune/<arch>.json`
-# inside the container, embedded by the build from the engine's store) or by the
-# hub, and loaded by the engine at each Triton request. A missing artifact for
-# this profile is an EXPLICIT refusal, never a silent sweep; the producer runs
-# with `--sweep` (NBX_AUTOTUNE=sweep) and its measurements land in the store
-# (`~/.neurobrix/autotune/<model>/<arch>.json`) the build embeds.
-#
-# A request whose shape the artifact never saw does not sweep either: the
-# config of the nearest measured shape of the same kernel (same key but the
-# leading extent, membership-gated like every seeded config) serves it; a
-# kernel with no measured shape at all is the refusal.
+# The Autotuner's key, and the bench margin of a key this process measured
 # ---------------------------------------------------------------------------
-FORMAT = "nbx-autotune-sweep/1"
-_STORE = os.path.join(os.path.expanduser("~"), ".neurobrix", "autotune")
-_ACTIVE: Optional[Dict] = None     # the model request in force: model, arch, source, entries, sweep
-
-
-def sweep_mode() -> bool:
-    return os.environ.get("NBX_AUTOTUNE", "").strip().lower() == "sweep"
-
-
-def store_dir() -> str:
-    return os.environ.get("NEUROBRIX_AUTOTUNE_STORE") or _STORE
-
-
-def store_path(model_name: str, arch: Optional[str] = None) -> Optional[str]:
-    arch = arch or _arch_fingerprint()
-    return None if arch is None else os.path.join(store_dir(), model_name, f"{arch}.json")
-
-
-def embedded_path(container_path: str, arch: Optional[str] = None) -> Optional[str]:
-    arch = arch or _arch_fingerprint()
-    return None if arch is None else os.path.join(str(container_path), "runtime", "autotune", f"{arch}.json")
-
-
-def _read_artifact(path: Optional[str]) -> Optional[Dict[str, Dict]]:
-    if not path or not os.path.exists(path):
-        return None
-    with open(path) as f:
-        doc = json.load(f)
-    if not isinstance(doc, dict) or not str(doc.get("format", "")).startswith("nbx-autotune-sweep/"):
-        raise RuntimeError(f"{path}: not a sweep artifact (format={doc.get('format') if isinstance(doc, dict) else type(doc).__name__!r})")
-    entries = doc.get("entries")
-    if not isinstance(entries, dict):
-        raise RuntimeError(f"{path}: sweep artifact without entries")
-    return entries
-
-
-def load_model_artifact(model_name: str, container_path: Optional[str]) -> Tuple[Optional[Dict[str, Dict]], Optional[str]]:
-    """(entries, source path): the container's embedded artifact first, then
-    the engine's store; (None, None) when neither exists for this arch."""
-    for path in (embedded_path(container_path) if container_path else None, store_path(model_name)):
-        entries = _read_artifact(path)
-        if entries is not None:
-            return entries, path
-    return None, None
-
-
-def refusal(model_name: str, detail: str) -> RuntimeError:
-    arch = _arch_fingerprint()
-    return RuntimeError(
-        f"[autotune] {detail} for hardware profile {arch!r}. The kernel sweep is never run inside a "
-        f"request: measure it once on this profile with `neurobrix run --model {model_name} --triton "
-        f"--sweep ...` (the result lands in {store_path(model_name) or store_dir()} and the build embeds "
-        f"it as runtime/autotune/{arch}.json), or install the model's sweep for this profile from the hub.")
-
-
-def activate(model_name: str, container_path: Optional[str]) -> int:
-    """Arm the policy for one Triton request. Default mode: the model's
-    artifact is the only source of kernel configs, and a model without one
-    is refused HERE, before any kernel runs. Sweep mode: the artifact and the
-    machine cache both seed, everything else is measured and captured by
-    `capture_model()`. Returns the number of configs seeded now."""
-    global _ACTIVE
-    arch = _arch_fingerprint()
-    sweep = sweep_mode()
-    if _ACTIVE is not None and _ACTIVE["model"] == model_name and _ACTIVE["arch"] == arch and _ACTIVE["sweep"] == sweep:
-        return 0
-    entries, source = load_model_artifact(model_name, container_path)
-    if entries is None and not sweep:
-        raise refusal(model_name, "no kernel sweep artifact")
-    _ACTIVE = {"model": model_name, "arch": arch, "source": source, "entries": entries or {}, "sweep": sweep,
-               "container": str(container_path) if container_path else None, "used": set(), "timings": {}}
-    seeded = _seed_entries(entries) if entries else 0
-    if sweep:
-        seeded += seed()
-    if source:
-        print(f"[autotune] {model_name}: sweep artifact {source} ({len(entries)} measured shape(s), {seeded} seeded)", flush=True)
-    elif sweep:
-        print(f"[autotune] {model_name}: SWEEP mode — measuring; the result goes to {store_path(model_name)}", flush=True)
-    return seeded
-
-
-def active() -> Optional[Dict]:
-    return _ACTIVE
-
-
 def key_of(at, args, kwargs) -> tuple:
     """The Autotuner's cache key for a call, as `Autotuner.run` forms it."""
     _args = {**dict(zip(at.arg_names, args)), **kwargs}
@@ -311,64 +277,17 @@ def _qual_of(at) -> Optional[str]:
     return None
 
 
-def _shape_distance(a: tuple, b: tuple) -> Optional[int]:
-    """L1 distance over the numeric fields of two autotune keys of the same
-    kernel; None when a non-numeric field (a dtype name, a flag) differs —
-    those select a different kernel variant, never a neighbouring shape."""
-    dist = 0
-    for x, y in zip(a, b):
-        numeric = isinstance(x, int) and not isinstance(x, bool) and isinstance(y, int) and not isinstance(y, bool)
-        if numeric:
-            dist += abs(x - y)
-        elif x != y:
-            return None
-    return dist
-
-
-def _nearest(qual: str, at, key: tuple):
-    """The config of the nearest measured shape of the same kernel: same
-    key length, same non-numeric fields (dtypes, flags), least L1 distance
-    over the extents (M for a matmul; batch, rows and columns for a batched
-    one); membership-gated. None if none."""
-    prefix = f"{qual}::"
-    space = {(tuple(sorted(c.kwargs.items())), c.num_warps, c.num_stages) for c in getattr(at, "configs", [])}
-    best, best_d = None, None
-    for k, d in _ACTIVE["entries"].items():
-        if not k.startswith(prefix):
-            continue
-        try:
-            stored_key = ast.literal_eval(k[len(prefix):])
-        except (ValueError, SyntaxError):
-            continue
-        if not isinstance(stored_key, tuple) or len(stored_key) != len(key):
-            continue
-        dist = _shape_distance(stored_key, key)
-        if dist is None:
-            continue
-        member = (tuple(sorted(dict(d["kwargs"]).items())), d["num_warps"], d["num_stages"])
-        if member not in space:
-            continue
-        if best_d is None or dist < best_d:
-            best, best_d = _config_from_dict(d), dist
-    return best
-
-
-def note_use(at, key: tuple) -> None:
-    """Record that this request resolved `key` on `at` — the sweep artifact
-    holds the shapes the MODEL uses, not everything the machine ever
-    measured (a producer run seeds the whole machine cache so that known
-    shapes are not re-benched; only the used ones are written)."""
-    if _ACTIVE is not None and _ACTIVE["sweep"]:
-        _ACTIVE["used"].add((id(at), key))
+_TIMINGS: Dict[Tuple[int, tuple], Dict] = {}     # (id(tuner), key) -> best/second/margin of a bench this process ran
 
 
 def note_timings(at, key: tuple, timings) -> None:
-    """Keep the bench of a key this request just measured: the best time, the
-    second-best, and the MARGIN between them. A sweep that records only the
+    """Keep the bench of a key this process just measured: the best time, the
+    second-best, and the MARGIN between them. A cache that records only the
     winner cannot say whether the winner was clear or a near-tie the timer
-    could flip on the next run — and a gate comparing two sweeps needs
-    exactly that to tell a change of choice from noise."""
-    if _ACTIVE is None or not _ACTIVE["sweep"] or not timings:
+    could flip on the next run — a gate comparing two sweeps needs exactly
+    that to tell a change of choice from noise. Written beside the config by
+    `capture()`."""
+    if not timings:
         return
     try:
         times = sorted(float(t) for t in timings.values() if t is not None and float(t) == float(t))
@@ -378,82 +297,6 @@ def note_timings(at, key: tuple, timings) -> None:
         return
     best = times[0]
     second = times[1] if len(times) > 1 else None
-    _ACTIVE["timings"][(id(at), key)] = {
+    _TIMINGS[(id(at), key)] = {
         "best_ms": best, "second_ms": second, "candidates": len(times),
         "margin": (second / best - 1.0) if (second is not None and best > 0) else None}
-
-
-def resolve_missing(at, key: tuple) -> None:
-    """A key the Autotuner holds no config for is about to be benched.
-    Outside a model request (tools, tests) or in sweep mode: measure. In a
-    request's default mode: the nearest measured shape, else the refusal."""
-    if _ACTIVE is None or _ACTIVE["sweep"]:
-        return
-    qual = _qual_of(at)
-    cfg = _nearest(qual, at, key) if qual else None
-    if cfg is None:
-        raise refusal(_ACTIVE["model"], f"no measured configuration for {qual or getattr(at, 'base_fn', at)} at shape {key!r}")
-    at.cache[key] = cfg
-    print(f"[autotune] {qual}: shape {key!r} not in the sweep artifact — served by the nearest measured shape "
-          f"(no sweep)", flush=True)
-
-
-def capture_model() -> Optional[str]:
-    """Sweep mode, end of a request: write the model's artifact into the
-    store — every config the process resolved for the sanctioned kernels,
-    merged with what the store already held. Returns the path written."""
-    if _ACTIVE is None or not _ACTIVE["sweep"]:
-        return None
-    path = store_path(_ACTIVE["model"], _ACTIVE["arch"])
-    if path is None:
-        return None
-    entries: Dict[str, Dict] = dict(_ACTIVE["entries"])       # what earlier sweeps of this model measured
-    used = _ACTIVE["used"]
-    timings = _ACTIVE.get("timings") or {}
-    for qual, at in _autotuners():
-        for key, cfg in getattr(at, "cache", {}).items():
-            if (id(at), key) in used:
-                rec = _config_to_dict(cfg)
-                if (id(at), key) in timings:
-                    rec["timing"] = timings[(id(at), key)]
-                entries[f"{qual}::{key!r}"] = rec
-    if not used:
-        print(f"[autotune] {_ACTIVE['model']}: this request resolved no autotuned kernel — nothing to write", flush=True)
-        return None
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    doc = {"format": FORMAT, "model_name": _ACTIVE["model"], "arch": _ACTIVE["arch"],
-           "entries": dict(sorted(entries.items()))}
-    try:
-        from neurobrix import __version__ as _v
-        doc["engine_version"] = _v
-    except Exception:
-        pass
-    import datetime as _dt
-    doc["created_at"] = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
-    with open(path, "w") as f:
-        json.dump(doc, f, indent=1)
-    _ACTIVE["entries"] = entries
-    print(f"[autotune] {_ACTIVE['model']}: sweep artifact written {path} ({len(entries)} measured shape(s))", flush=True)
-    _announce_screen(_ACTIVE["model"])
-    capture()            # the machine cache too — the producer's accumulation across models
-    return path
-
-
-def _announce_screen(model_name: str) -> None:
-    """One line per sweep saying what the autotune correctness screen did —
-    the activation proof of a gate: a clean screen prints nothing of its own,
-    so without this line a sweep with the screen off and a sweep where every
-    config passed would read the same."""
-    try:
-        from neurobrix.kernels import launcher
-        cache = getattr(launcher, "_SCREEN_CACHE", None)
-        screened = getattr(launcher, "screened_out", None)
-    except Exception:
-        return
-    if cache is None or screened is None:
-        return
-    keys = sum(len(v) for v in cache.values())
-    excluded = screened()
-    state = "off" if os.environ.get("NBX_AUTOTUNE_SCREEN", "on").lower() == "off" else "on"
-    print(f"[autotune] {model_name}: correctness screen {state}: checked {keys} key(s), "
-          f"excluded {len(excluded)} config(s)", flush=True)

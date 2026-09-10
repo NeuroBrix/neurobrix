@@ -380,19 +380,21 @@ class RuntimeExecutor:
             from neurobrix.kernels import rng_stream
             rng_stream.set_run_seed(inputs.get("global.seed", self.pkg.defaults.get("seed")))
             # The kernel sweep is never run inside a request: the model's
-            # sweep artifact for this hardware profile (embedded in the
-            # container, or the engine's store) seeds every autotuned kernel;
-            # a model without one is refused here (`--sweep` measures it).
-            from neurobrix.triton import autotune_cache as _atc
-            _atc.activate(str(self.pkg.manifest.get("model_name") or self.pkg.root_path.name), self._nbx_path_str)
+            # certified autotune directory (an engine component) serves every
+            # shape it holds for the profile in force; a shape it lacks sweeps
+            # at runtime, announced, and lands in the local replay cache.
         # Get and execute flow handler
         handler = self._create_flow_handler(flow_type, ctx)
         try:
             return handler.execute()
         finally:
             if self.mode in ("triton", "triton_sequential"):
-                from neurobrix.triton import autotune_cache as _atc
-                _atc.capture_model()          # sweep mode only: the measurements land in the store
+                from neurobrix.kernels import autotune_certified as _cert
+                _served = _cert.served()
+                if _served.get("certified") or _served.get("swept") or _served.get("local"):
+                    print(f"[autotune] certified directory: {_served['certified']} key(s) served without a sweep, "
+                          f"{_served['swept']} swept at runtime (kept locally), {_served.get('local', 0)} from the local "
+                          f"replay cache", flush=True)
 
     def _prepare_defaults(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
         """Prepare merged defaults from family config, pkg defaults, and user inputs."""

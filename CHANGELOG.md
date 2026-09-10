@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- The certified autotune directory, an engine component: `src/neurobrix/config/autotune/<vendor>/<profile>/<kernel>.<dtype>.json`, one file per kernel and per dtype, indexed by the launcher's shape key, each entry carrying the setting retained and its proof (date, engine and backend versions, shape, deviation against the fp64 oracle, the profile's tolerance, the machine) and the settings excluded with their deviation. `neurobrix autotune certify --profile <profile>` fills it for the shapes the zoo met on this machine; `neurobrix autotune check` is its gate (a file without a proof, or whose proof does not re-read, is refused); `neurobrix autotune status` shows what the profile in force is served.
 - The ops a request will actually run can be written out. `NBX_DUMP_PLANNED_OPS=<file>` writes
   each component's op list AFTER the pre-execution passes, which is the only order an
   instrumentation audit can honestly compare against — the container's `execution_order` is the
@@ -55,7 +56,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every backend driver must satisfy (`neurobrix.triton.launcher_contract`), with its checker run
   against the CUDA driver on CUDA and the Metal driver on a Mac.
 
+### Removed
+- The per-model kernel sweep artifact (`runtime/autotune/<arch>.json`, `~/.neurobrix/autotune/<model>/`), the refusal of a request without one, and the `--sweep` flag of `run`/`serve`: the certified directory replaces them.
+
 ### Changed
+- At load the launcher applies the certified setting for the profile Prism detected, the kernel, the dtype and the shape — no sweep, no consensus; a shape the directory lacks sweeps at runtime with the consensus screen, says so in clear, and keeps the result in the machine's local replay cache (`NEUROBRIX_REPLAY_CACHE`), never in the engine's directory. A runtime exclusion that contradicts a certification is reported as a finding, never silent.
 - The kernel sweep artifact records, per measured shape, the bench's best time, second-best time and their margin beside the chosen config, so a later comparison can tell a clear choice from a near-tie the timer may flip on the next run.
 - `neurobrix drift` classifies the origin of a drift: a kernel site (same dtype, arithmetic — the kernel to read), a policy site (the two engines' precision policies differ there), a discrete decision (an integer tensor — indices, codes, tokens — that flipped on a float deviation below the bound), a carrier (a view, cast, slice or copy), or a scale crossing (the values shrank there — a relu, a gate — and an inherited error crossed the relative bound without a new one); it names the largest float deviation before the origin and says when the origin's producer has no record on the engine side (fused there).
 - Next-token-diffusion speech models (VibeVoice) run their language model as a KV-cached decoder on

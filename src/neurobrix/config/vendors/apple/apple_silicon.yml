@@ -72,6 +72,56 @@ block_sizes:
   groupnorm_cap: 65536
   reduction: 1024
 
+  # The GEMV row-group tile (kernels/ops/gemv_vec.py), which is the decode
+  # projection and the vocabulary head of every language model here.
+  #
+  # MEASURED 2026-09-07: the kernel reduces a BLOCK_N x BLOCK_K tile along its
+  # rows, and the Metal lowering stages that 2-D reduce one element per
+  # thread, so the tile cannot exceed the 1024-thread threadgroup. The adopted
+  # 8 x 256 is 2048 and refuses — loudly, naming the number. 8 x 128 keeps the
+  # adopted 8-row group and halves the K chunk: correct at 2.28e-07 relative
+  # against an fp64 oracle on TinyLlama's [1, 2048] @ [2048, 32000] head, the
+  # closest of the fitting tiles (4x256 gives 2.90e-07, 2x512 4.90e-07).
+  #
+  # This is a shape the backend implements, not a tuning preference — the same
+  # kind of fact as the 32x32 SDPA tile below.
+  gemv_vec:
+    block_n: 8
+    block_k: 128
+    num_warps: 4
+
+  # Row-wise argmax — greedy sampling reads the argmax of a 32000-wide
+  # vocabulary row every token.
+  #
+  # MEASURED 2026-09-07: argmax is a MULTI-VALUE reduce (a value and its
+  # index travel together), and the Metal lowering has no multipass form for
+  # a tuple — it says so and refuses — so the tile must fit the threadgroup,
+  # which is num_warps * 32. The 4096 cap every architecture used refused
+  # against the default 4 warps (128 threads). 1024 over 32 warps is the
+  # largest that fits; the index it returns is exact at every tile measured
+  # (128/4, 256/8, 512/16, 1024/32 all give the same index on a 32000-wide
+  # row), so this is throughput, not correctness.
+  argmax:
+    tile_n: 1024
+    num_warps: 32
+
+  # The mv / addmv tile (kernels/ops/addmv_op.py and the mv_kernel beside it).
+  #
+  # MEASURED 2026-09-07: this kernel keeps a BLOCK_N x BLOCK_M fp32 accumulator
+  # and reduces it along its rows AFTER the M loop. The Metal lowering stages
+  # that 2-D reduce one element per thread, and here the threadgroup is
+  # num_warps * 32 — so the tile must fit the warps, which is why the warp
+  # count is part of this entry and not beside it. The adopted 64 x 256 is
+  # 16384 against a 128-thread group and refuses.
+  #
+  # 8 x 128 with 32 warps is 1024 elements over 1024 threads: the same row
+  # group and chunk width as gemv_vec above, correct at 7.15e-08 relative
+  # against an fp64 oracle on the bank's M1N64K32 addmm entry.
+  mv:
+    block_n: 8
+    block_m: 128
+    num_warps: 32
+
   # M=1 dequant-GEMV occupancy rule — see nvidia/volta.yml for the rationale
   # (the wrapper halves BLOCK_N until the grid reaches min_programs).
   # 2 waves x 40 GPU cores (M3/M4 Max class); validation_status: analytical.
@@ -100,9 +150,16 @@ sdpa_thresholds:
     block_m: 32
     block_n: 32
     num_warps: 4
+  # MEASURED 2026-09-06: 32x32, not 32x64. The Metal backend's attention
+  # lowering is validated at head_dim 64 for a 32x32 tile only; a 32x64 tile
+  # has no template and falls to a generic path that cannot lower an
+  # attention kernel at all, so the whole op refuses. Both tiles fit the
+  # 32 KB threadgroup budget — this is not a memory choice, it is the shape
+  # the hardware's compiler actually implements, which is exactly what a
+  # hardware profile is for.
   - head_dim_lt: 128
     block_m: 32
-    block_n: 64
+    block_n: 32
     num_warps: 4
 
 memory:
@@ -196,3 +253,34 @@ precision:
 # Apple GPU measures it: clamping can only cost throughput.
 pipelining:
   max_num_stages: 2
+
+# Autotune correctness screen. The engine runs every candidate config once and
+# compares its result against a reference config's before timing any of them,
+# because an autotuner that ranks on speed alone selects whichever WRONG
+# kernel is fastest — a kernel that writes half its output does half the
+# stores and wins. Measured on Apple 2026-09-07: fp16 mm [64,32]@[32,64] chose
+# a config that left half the columns zero.
+#
+# These are the tolerances that separate "a different but valid summation
+# order" from "a different answer". Two configs with different block sizes
+# reduce in a different order, so their results differ in the last bits; a
+# config that drops output differs by the scale of the output itself. The
+# gap between those two is several orders of magnitude, and these sit in it.
+#
+# Relative to the reference's own magnitude: max|a - b| / max|b|. Integer
+# and boolean results are compared BIT-IDENTICALLY and ignore this table —
+# there is no valid reordering that changes an integer.
+autotune_screen_rtol:
+  float16: 2.0e-2
+  bfloat16: 4.0e-2
+  float32: 1.0e-4
+  float64: 1.0e-8
+
+# Above this many bytes of buffer, the autotune correctness screen does not
+# run. Screening copies every argument out and back once per candidate, so a
+# very large tensor turns a tuning step into hundreds of megabytes of traffic
+# — and on unified memory that pressure is the machine's, not a card's.
+# MEASURED 2026-09-07: unbounded screening of a 151936-wide softmax perturbed
+# six unrelated tests in the same process. A skipped screen is announced, not
+# silent.
+autotune_screen_max_bytes: 33554432

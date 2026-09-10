@@ -31,6 +31,7 @@ from __future__ import annotations
 import hashlib
 import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -89,8 +90,13 @@ def _run(arm_env: dict, tag: str, outdir: Path) -> tuple[str, str]:
     env.update(arm_env)
     out = outdir / f"{tag}.txt"
     hardware = ["--hardware", "v100-32g"] if backend == "cuda" else []
+    # THIS interpreter, not whichever `python3` the PATH offers. The arms are
+    # a comparison against each other and against the parent process's engine;
+    # a different interpreter is a different install, and here it was one
+    # without the Metal Triton backend, so both arms refused before running
+    # anything the test is about.
     r = subprocess.run(
-        ["python3", "-u", "-m", "neurobrix", "run", *hardware,
+        [sys.executable, "-u", "-m", "neurobrix", "run", *hardware,
          "--model", "TinyLlama-1.1B-Chat-v1.0",
          "--prompt", _PROMPT, "--max-tokens", "120",
          "--temperature", "0", "--triton", "--output", str(out)],

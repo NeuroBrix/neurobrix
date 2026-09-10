@@ -224,10 +224,10 @@ def flash_attention_forward_kernel(
     tl.store(lse_ptrs, lse_i)
 
     offs_d = tl.arange(0, BLOCK_HEADDIM)
+    # Row leg and column leg added separately — see the note on q_ptrs.
     out_ptrs = (
-        Out + off_b * stride_ob + off_h * stride_oh
-        + (offs_m[:, None] * stride_om + offs_d[None, :])
-    )
+        Out + off_b * stride_ob + off_h * stride_oh + offs_m[:, None] * stride_om
+    ) + offs_d[None, :]
     if EVEN_M:
         if EVEN_HEADDIM:
             tl.store(out_ptrs, acc_o)
