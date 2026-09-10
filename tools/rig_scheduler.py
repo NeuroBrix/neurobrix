@@ -27,7 +27,13 @@ more than the work thrown away — it is stopped and put back at the head of its
 The queue is a list of jobs:
 
     {"name": "audio kv byte gate", "family": "untimed", "weight_gb": 10,
-     "cmd": ["bash", "validation_outputs/.../gate.sh"], "done_when": "path/to/report.json"}
+     "cmd": ["bash", "validation_outputs/.../gate.sh"], "done_when": "path/to/report.json",
+     "impossible_when": "path/to/a_fact_that_makes_the_verdict_unreachable"}
+
+`done_when` says the verdict is already KNOWN, `impossible_when` that it is
+already IMPOSSIBLE. A job consults both before spending any of its time: the
+certified campaign once spent 8 h on a second arm whose gate — `all(arms)` — was
+already False, and the lesson is not about byte gates.
 
 `family` is mandatory and has no default: a job that does not say whether its output is a time is
 a job whose scheduling nobody has thought about.
@@ -77,6 +83,10 @@ class Job:
     weight_gb: float = 0.0
     heavy: bool = True
     done_when: Optional[str] = None
+    # a path whose existence means this job's verdict can no longer
+    # change — the precondition of its own gate, consulted before
+    # any of its time is spent
+    impossible_when: Optional[str] = None
     gpus: Optional[List[int]] = None
     proc: Optional[subprocess.Popen] = field(default=None, repr=False)
     card: Optional[int] = None
@@ -101,7 +111,9 @@ def _load(queue_path: Path) -> List[Job]:
                         cmd=shlex.split(cmd) if isinstance(cmd, str) else list(cmd),
                         weight_gb=float(raw.get("weight_gb", 0)),
                         heavy=bool(raw.get("heavy", True)),
-                        done_when=raw.get("done_when"), gpus=raw.get("gpus")))
+                        done_when=raw.get("done_when"),
+                        impossible_when=raw.get("impossible_when"),
+                        gpus=raw.get("gpus")))
     return jobs
 
 
@@ -146,8 +158,36 @@ def cmd_run(args) -> int:
                 say(f"done   {j.name} (rc={j.proc.returncode}, "
                     f"{(time.time() - j.started) / 60:.0f} min, card {j.card})")
 
-        pending = [j for j in pending
-                   if not (j.done_when and Path(j.done_when).exists())]
+        # THE PRECONDITION RULE. Every job consults the precondition of its own
+        # VERDICT before it starts, and a job whose verdict is already known or
+        # already impossible does not start — with its reason written.
+        #
+        # It was learned on the byte gate: the certified campaign spent 8 h on a
+        # second arm that could not change anything, because `ran = all(arms)`
+        # was already False. A per-unit budget with no notion of an already
+        # undecidable unit spends its full allocation twice to learn one thing;
+        # what was missing was not the budget but the consultation of the gate's
+        # precondition before spending. That is not a property of byte gates, so
+        # it does not live on one.
+        #
+        #   done_when exists      -> the verdict is already KNOWN
+        #   impossible_when exists-> the verdict is already IMPOSSIBLE
+        #
+        # Both are paths, because a path is a fact on disk that survives a power
+        # cut, and this rack has no UPS.
+        still = []
+        for j in pending:
+            if j.done_when and Path(j.done_when).exists():
+                say(f"skip   {j.name} -> its verdict is already known "
+                    f"({j.done_when})")
+                continue
+            imp = getattr(j, "impossible_when", None)
+            if imp and Path(imp).exists():
+                say(f"skip   {j.name} -> its verdict is already IMPOSSIBLE "
+                    f"({imp}); running it buys no information")
+                continue
+            still.append(j)
+        pending = still
 
         head_timed = next((j for j in pending if j.family == "timed"), None)
         # A timed job takes the floor only when it could actually USE it. While a job this

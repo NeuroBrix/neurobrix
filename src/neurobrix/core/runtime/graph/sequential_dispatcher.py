@@ -15,7 +15,7 @@ import logging
 from typing import List, Any, Dict, Optional, Callable
 
 from neurobrix.core.dtype.config import parse_dtype
-from neurobrix.core.dtype.engine import CPU_NO_HALF_OPS, cpu_fp32_wrapper
+from neurobrix.core.dtype.engine import cpu_fp32_wrapper, cpu_lacks_half_kernel
 
 logger = logging.getLogger(__name__)
 
@@ -564,7 +564,7 @@ class NativeATenDispatcher:
             # recorded dtypes everywhere else, but a component Prism placed on
             # the host must still execute — the same per-call, per-device
             # remedy the compiled engine applies (CUDA inputs pass through).
-            if base_name in CPU_NO_HALF_OPS:
+            if cpu_lacks_half_kernel(base_name):
                 op_fn = cpu_fp32_wrapper(op_fn)
 
             if kwargs:
