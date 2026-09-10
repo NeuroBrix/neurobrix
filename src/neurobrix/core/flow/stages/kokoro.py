@@ -314,6 +314,33 @@ def preprocess_phonemizer_input(engine, prompt: str, phoneme_vocab: Dict) -> Non
 # Internal helpers
 # ─────────────────────────────────────────────────────────────
 
+def _requested_voice(engine, available) -> str:
+    """Which voice this run asked for.
+
+    The voice is a run parameter, like the prompt. It is read, in order, from
+    the run's own request (`--speaker`, bound as `global.speaker` by
+    cli/commands/run.py) and then from the artefact's runtime defaults. It is
+    NOT chosen here: `defaults.get("voice", "af_heart")` picked one of the 54
+    voicepacks this artefact ships by a literal in the code, on every run,
+    without a word — and if that one was missing it silently substituted
+    another. Asking for one voice and getting another is a wrong answer.
+    """
+    resolved = getattr(engine.ctx.variable_resolver, "resolved", {}) or {}
+    for key in ("global.speaker", "speaker", "global.voice", "voice"):
+        value = resolved.get(key)
+        if value:
+            return str(value)
+
+    declared = engine.ctx.pkg.defaults.get("voice")
+    if declared:
+        return str(declared)
+
+    raise RuntimeError(
+        f"ZERO FALLBACK: this artefact ships {len(available)} voices and "
+        f"declares none as its default (`voice` is absent from "
+        f"runtime/defaults.json, where `phoneme_lang` is present). Choose one "
+        f"with --speaker: {', '.join(available)}.")
+
 def _load_voicepack(engine, phoneme_count: int, device) -> None:
     """Load voice pack and split into predictor/decoder styles.
 
@@ -326,17 +353,21 @@ def _load_voicepack(engine, phoneme_count: int, device) -> None:
     voices_dir = nbx_path / "modules" / "voices"
 
     if not voices_dir.exists():
-        return
+        raise RuntimeError(
+            f"ZERO FALLBACK: this model's flow binds a voice style, but "
+            f"'{voices_dir}' does not exist. Returning here used to let the "
+            f"decoder and predictor run with no style bound at all.")
 
-    voice_name = engine.ctx.pkg.defaults.get("voice", "af_heart")
+    available = sorted(p.stem for p in voices_dir.glob("*.pt"))
+    voice_name = _requested_voice(engine, available)
     voice_path = voices_dir / f"{voice_name}.pt"
 
     if not voice_path.exists():
-        voice_files = sorted(voices_dir.glob("*.pt"))
-        if not voice_files:
-            return
-        voice_path = voice_files[0]
-        voice_name = voice_path.stem
+        raise RuntimeError(
+            f"ZERO FALLBACK: voice '{voice_name}' was requested but "
+            f"{voice_path.name} is not in {voices_dir}. Available "
+            f"({len(available)}): {', '.join(available)}. Substituting "
+            f"another voice would answer a different question.")
 
     voicepack = torch.load(voice_path, map_location=device, weights_only=True)
 
