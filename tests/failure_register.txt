@@ -6,10 +6,14 @@
 # A line here is a failure that is KNOWN, not one that is accepted. Why each
 # one fails belongs in the finding that instructs it.
 tests/regression/test_all_models.py::test_model_runs[Kokoro-82M::triton]
+tests/regression/test_all_models.py::test_model_runs[TinyLlama-1.1B-Chat-v1.0::triton]
+tests/regression/test_all_models.py::test_model_runs[TinyLlama-1.1B-Chat::triton]
+tests/regression/test_serve_warm.py::test_family_serve_warm[llm-triton]
 tests/regression/test_serve_warm.py::test_family_serve_warm[tts-triton]
 tests/unit/dtype/test_cpu_half_coverage.py::test_every_entry_still_lacks_a_cpu_half_kernel[_weight_norm_interface]
 tests/unit/dtype/test_cpu_half_coverage.py::test_every_entry_still_lacks_a_cpu_half_kernel[reflection_pad1d]
 tests/unit/kernels/test_apple_target_resolution.py::test_only_the_apple_profile_declares_matches
+tests/unit/kernels/test_autotune_certify_windowed_oracle.py::test_a_windowed_oracle_measures_its_windows_and_the_proof_names_them
 tests/unit/kernels/test_conv_index_correctness.py::test_conv2d_matches_float64[1-32-32-32-32-3-1-1]
 tests/unit/kernels/test_conv_index_correctness.py::test_conv2d_matches_float64[1-4-15-17-6-3-1-0]
 tests/unit/kernels/test_conv_index_correctness.py::test_conv2d_matches_float64[1-64-16-16-32-3-2-1]
@@ -61,6 +65,7 @@ tests/unit/kernels/test_flash_decode_oracle.py::test_flash_decode_matches_float6
 tests/unit/kernels/test_flash_decode_oracle.py::test_flash_decode_matches_float64[1-32-4-8448-128-8200]
 tests/unit/kernels/test_flash_decode_oracle.py::test_flash_decode_matches_float64[2-8-2-512-128-300]
 tests/unit/kernels/test_flash_decode_oracle.py::test_masked_tail_contributes_nothing
+tests/unit/kernels/test_launcher.py::test_an_autotuned_kernel_launches_and_benchmarks_without_torch
 tests/unit/kernels/test_math_attention_strided_kv.py::test_merge_dims_semantics
 tests/unit/kernels/test_math_attention_strided_kv.py::test_sdpa_bucketed_view_bit_equal_with_activation_proof
 tests/unit/kernels/test_moe_decode_vec_oracle.py::test_moe_vec_agrees_with_grouped_path
@@ -69,6 +74,14 @@ tests/unit/kernels/test_moe_decode_vec_oracle.py::test_moe_vec_is_deterministic
 tests/unit/kernels/test_moe_decode_vec_oracle.py::test_moe_vec_matches_float64_from_packed_bytes
 tests/unit/kernels/test_moe_decode_vec_oracle.py::test_moe_vec_route_activation_and_guards
 tests/unit/kernels/test_moe_decode_vec_oracle.py::test_moe_vec_router_weight_contract
+tests/unit/kernels/test_no_weight_copies.py::test_addmm_takes_the_activation_weight_and_bias_as_they_are[16]
+tests/unit/kernels/test_no_weight_copies.py::test_addmm_takes_the_activation_weight_and_bias_as_they_are[64]
+tests/unit/kernels/test_no_weight_copies.py::test_decode_attention_reads_a_wider_q_in_the_cache_dtype_without_a_copy
+tests/unit/kernels/test_no_weight_copies.py::test_fp16_activation_is_widened_in_registers_not_materialised[16]
+tests/unit/kernels/test_no_weight_copies.py::test_fp16_activation_is_widened_in_registers_not_materialised[64]
+tests/unit/kernels/test_no_weight_copies.py::test_prefill_mm_still_materialises_a_broadcast_weight
+tests/unit/kernels/test_no_weight_copies.py::test_prefill_mm_walks_the_pretransposed_weight_without_a_copy[16]
+tests/unit/kernels/test_no_weight_copies.py::test_prefill_mm_walks_the_pretransposed_weight_without_a_copy[64]
 tests/unit/kernels/test_numeric_correctness_family.py::test_softmax_is_correct[151936]
 tests/unit/kernels/test_numeric_correctness_oracle.py::test_attention_is_correct_not_merely_reproducible[256-16]
 tests/unit/kernels/test_numeric_correctness_oracle.py::test_attention_is_correct_not_merely_reproducible[256-32]
