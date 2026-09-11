@@ -115,6 +115,28 @@ performed internally, so the IR is identical to the pre-edit kernel — and that
 sentence is now **pinned by a test**, with the reason: two forms silence the
 deprecation and only one is free.
 
+### The temporal form: a number written before the measurement
+
+Three instances in one day, on two machines:
+
+* a comment asserting `costs nothing` on a kernel nobody had profiled;
+* a commit message reporting `245 passed` — written before the suite ran, which
+  returned 241;
+* a report on the other machine announcing a push that had not happened.
+
+Same defect, and the tell is always the same: the sentence was composed while
+the thing it describes was still in the future.
+
+**The house rule.** A number in a commit message, a report or a verdict is
+written **after** the measurement, never before. A sentence composed before the
+run carries, in itself, the mark that it is unverified — `expected`, `to be
+confirmed`, or simply not written yet. There is no version of "it will
+obviously be 245" that is not a guess wearing a fact's clothes.
+
+It is not a personal lapse and must not be filed as one. It is a house rule,
+because the pressure that produces it — writing the summary while the work is
+fresh, then running the check — is structural and recurs on every machine.
+
 **The rule.** A statement of cost, neutrality or equivalence in a comment,
 docstring or commit message is either:
 

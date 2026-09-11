@@ -104,3 +104,63 @@ def test_a_lever_that_measured_nothing_gets_no_ratio(tmp_path):
     }))
     out = _run(c).stdout
     assert "no ratio" in out and "no measurement" in out
+
+
+def _cell_t(campaign, model, keys, base, sweep):
+    """A cell with an explicit base time and sweep cost, so the regime logic can
+    be driven by the quantity that actually governs it."""
+    d = campaign / "proof" / model
+    d.mkdir(parents=True)
+    (d / "result.json").write_text(json.dumps({
+        "model": model, "family": "llm", "weight_gb": 1.0,
+        "A": {"rc": 0, "exec_s": base, "certified_served": keys,
+              "reps": [{"exec_s": base, "rc": 0}]},
+        "B": {"rc": 0, "exec_s": base + sweep, "swept": keys,
+              "screen_excluded": 0, "contradictions": 0,
+              "reps": [{"exec_s": base + sweep, "rc": 0}]},
+        "gate": {"identical": True, "ran": True},
+    }))
+
+
+def test_a_broken_distribution_refuses_its_median_and_names_both_regimes(tmp_path):
+    """Four cells under x2.4, four above x11.6, nothing between. A median reads
+    x7 and describes no model on the list — a lie by summary statistic."""
+    c = tmp_path / "camp"
+    for i, (keys, base, sweep) in enumerate([
+            (8, 100.0, 54.0), (8, 100.0, 57.0), (33, 544.0, 402.0), (9, 33.0, 46.0),
+            (203, 100.0, 1070.0), (585, 221.0, 2912.0), (219, 90.0, 1196.0),
+            (137, 86.0, 1346.0)]):
+        _cell_t(c, f"m{i}", keys, base, sweep)
+    out = _run(c).stdout
+    assert "NO MEDIAN IS PUBLISHED" in out
+    assert "AMORTISED" in out and "DOMINATED" in out
+    assert "x7.0" in out, ("the refused median must be SHOWN, so a reader sees "
+                           "what was declined and why")
+    assert "there isn't one" in out
+
+
+def test_a_continuous_distribution_still_takes_a_median(tmp_path):
+    """The control. A rule that always refuses is not a measurement of anything."""
+    c = tmp_path / "camp"
+    for i, sweep in enumerate([50.0, 70.0, 95.0, 130.0, 170.0]):
+        _cell_t(c, f"m{i}", 10 + i, 100.0, sweep)
+    out = _run(c).stdout
+    assert "Median gain:" in out and "NO MEDIAN" not in out
+
+
+def test_the_law_column_is_the_sweep_to_base_ratio(tmp_path):
+    """Keys are a proxy and it breaks: 585 keys gains less than 137 keys. The
+    table must carry base time and sweep cost, not the key count alone."""
+    c = tmp_path / "camp"
+    _cell_t(c, "many_keys_slow_base", 585, 221.0, 2912.0)   # x14.18
+    _cell_t(c, "few_keys_fast_base", 137, 86.0, 1346.0)     # x16.64
+    out = _run(c, "--markdown").stdout
+    assert "sweep/base" in out and "base s" in out, (
+        "the table must carry the two columns the law is written in")
+    many = next(l for l in out.splitlines()
+                if l.startswith("|") and "many_keys_slow_base" in l)
+    few = next(l for l in out.splitlines()
+               if l.startswith("|") and "few_keys_fast_base" in l)
+    assert "x14." in many and "x16." in few, (
+        "the cell with MORE keys gains LESS — if this ever reverses, the key "
+        "count became the law again and this test should be the one to say so")

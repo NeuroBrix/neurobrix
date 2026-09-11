@@ -1,31 +1,44 @@
 #!/usr/bin/env python3
 """The certified-directory campaign's table, ordered by the law that governs it.
 
-WHAT THE TABLE IS ORDERED BY, AND WHY IT MATTERS
+THE LAW, CORRECTED ONCE THE NINTH CELL LANDED
 
-The gain from the certified directory is a function of **how many shape keys the
-model demands**, not of how big the model is. Measured on the five cells closed
-by 2026-09-10:
+The first version of this file said the gain follows the KEY COUNT. The data
+refuted it: `Qwen3-VL` demands **585** keys and gains x14.18 while
+`DeepSeek-Coder-V2-Lite` demands **137** and gains x16.64. Keys are a proxy and
+it breaks exactly there.
 
-    DeepSeek-Coder-V2-Lite  137 keys  x16.64
-    Ming-Lite-Omni-1.5      203 keys  x11.69
-    deepseek-moe-16b-chat     9 keys  x2.39
-    Qwen3-30B-A3B-Thinking    8 keys  x1.57
-    Qwen3-Coder-30B           8 keys  x1.54
+The law is the ratio between what the SWEEP costs and what the model costs to
+run at all:
 
-A 54 GB multimodal and a 16 GB MoE sit at opposite ends of that list, and the
-thing that separates them is the key count. A table sorted by name lets a reader
-invent a law about model size; a table sorted by keys shows the one that is
-there. So this tool sorts by keys and refuses `--sort name`.
+    gain = 1 + sweep_cost / base_time        (sweep_cost = B_med - A_med)
 
-THE MEDIAN, AND THE COMPARISON THAT IS NOT ALLOWED
+A slow model amortises its own sweep. `CogVideoX-2b` sweeps 33 keys for 402 s
+against a 544 s base and gains x1.74; `DeepSeek-Coder-V2-Lite` sweeps 137 keys
+for 1,346 s against an 86 s base and gains x16.64. Same engine, opposite ends,
+and the key count alone predicts neither.
 
-A median is published **with the population it covers, named model by model**,
-or it is not published. The reason is concrete: an earlier campaign reported
-x13.9 over a population that included `chatterbox` (674 keys) and `openaudio`
-(693) — two of the highest key counts in the catalogue — which this campaign
-does not carry. Writing "the median fell" against that number would be exactly
-as false as the x13.9 was.
+So the table carries BOTH columns — keys and base time — and the ratio between
+them, because that ratio is the explanation and the keys alone are not.
+
+NO MEDIAN OVER A BROKEN DISTRIBUTION
+
+This campaign's gains are **bimodal**: four cells under x2.4, four above x11.6,
+and nothing between. A median would read x7 and would describe no model that
+exists — a lie by summary statistic, which is exactly what a document built on
+"no cell lies" cannot publish.
+
+So the tool measures the break rather than assuming one: it takes the largest
+multiplicative gap between consecutive sorted gains and compares it to the
+second largest. Where the biggest gap dwarfs every other (here 4.9x against a
+next-largest of 1.37x), there are two regimes, the median is REFUSED, and both
+regimes are reported with their boundary. If someone wants one number, the
+answer is that there isn't one, and that is a result.
+
+A median that IS published comes with the population it covers, named model by
+model. An earlier campaign reported x13.9 over a population including
+`chatterbox` (674 keys) and `openaudio` (693) which this one does not carry;
+"the median fell" against that number would be as false as the x13.9 was.
 
 So `--compare <other campaign>` REFUSES unless the two populations are
 identical, and names the difference. That is a door, not a warning: a
@@ -86,6 +99,25 @@ def _row(cell: dict) -> dict:
     if am and bm and (keys or served):
         ratio = bm / am
 
+    gate = cell.get("gate") or {}
+    nondet = gate.get("nondeterministic") or []
+    diff = gate.get("diff") or {}
+    # A model that differs from ITSELF across repetitions cannot be adjudicated
+    # by a byte gate, and printing DIFFER for it reads as "the directory changed
+    # the output" — which is false and is the kind of cell this project does not
+    # ship. CogVideoX-2b, 2026-09-11: three repetitions, three shas, in BOTH
+    # arms, and the video comparison agrees at 43.6 dB mean PSNR.
+    if len(nondet) >= 2:
+        bytes_verdict = "nondet both"
+    elif not gate.get("ran"):
+        bytes_verdict = "did not run"
+    elif gate.get("identical"):
+        bytes_verdict = "same"
+    elif diff.get("pass"):
+        bytes_verdict = f"{diff.get('psnr_mean_db', 0):.0f} dB"
+    else:
+        bytes_verdict = "DIFFER"
+
     return {
         "model": cell.get("model", "?"),
         "family": cell.get("family", "?"),
@@ -94,8 +126,11 @@ def _row(cell: dict) -> dict:
         "served": served,
         "a_med": am,
         "b_med": bm,
+        "sweep": (bm - am) if (am and bm) else None,
+        "sweep_ratio": ((bm - am) / am) if (am and bm) else None,
         "ratio": ratio,
-        "identical": (cell.get("gate") or {}).get("identical"),
+        "bytes": bytes_verdict,
+        "identical": gate.get("identical"),
         "excluded": b.get("screen_excluded"),
         "contradictions": b.get("contradictions"),
         "rc": (a.get("rc"), b.get("rc")),
@@ -103,26 +138,27 @@ def _row(cell: dict) -> dict:
 
 
 def _fmt(rows: list[dict], markdown: bool) -> str:
-    head = ["model", "family", "GB", "keys", "A med s", "B med s", "gain",
-            "bytes", "screen-out", "contra"]
+    head = ["model", "family", "GB", "keys", "base s", "sweep s", "sweep/base",
+            "gain", "bytes", "screen-out", "contra"]
     lines = []
     if markdown:
         lines.append("| " + " | ".join(head) + " |")
         lines.append("|" + "|".join("---" for _ in head) + "|")
     else:
         lines.append(f"{'model':<34} {'family':<12} {'GB':>6} {'keys':>5} "
-                     f"{'A med':>9} {'B med':>9} {'gain':>7} {'bytes':>7} "
-                     f"{'scr-out':>8} {'contra':>7}")
+                     f"{'base s':>9} {'sweep s':>9} {'swp/base':>9} {'gain':>7} "
+                     f"{'bytes':>12} {'scr-out':>8} {'contra':>7}")
     for r in rows:
         cells = [
             r["model"],
             r["family"],
             f"{r['gb']:.1f}" if r["gb"] else "?",
             str(r["keys"]) if r["keys"] is not None else "?",
-            f"{r['a_med']:.2f}" if r["a_med"] else "?",
-            f"{r['b_med']:.2f}" if r["b_med"] else "?",
+            f"{r['a_med']:.1f}" if r["a_med"] else "?",
+            f"{r['sweep']:.1f}" if r["sweep"] else "?",
+            f"{r['sweep_ratio']:.2f}" if r["sweep_ratio"] else "?",
             f"x{r['ratio']:.2f}" if r["ratio"] else "no ratio",
-            {True: "same", False: "DIFFER", None: "?"}[r["identical"]],
+            r["bytes"],
             str(r["excluded"]) if r["excluded"] is not None else "?",
             str(r["contradictions"]) if r["contradictions"] is not None else "?",
         ]
@@ -130,9 +166,45 @@ def _fmt(rows: list[dict], markdown: bool) -> str:
             lines.append("| " + " | ".join(cells) + " |")
         else:
             lines.append(f"{cells[0]:<34} {cells[1]:<12} {cells[2]:>6} {cells[3]:>5} "
-                         f"{cells[4]:>9} {cells[5]:>9} {cells[6]:>7} {cells[7]:>7} "
-                         f"{cells[8]:>8} {cells[9]:>7}")
+                         f"{cells[4]:>9} {cells[5]:>9} {cells[6]:>9} {cells[7]:>7} "
+                         f"{cells[8]:>12} {cells[9]:>8} {cells[10]:>7}")
     return "\n".join(lines)
+
+
+def _gaps(sorted_ratios):
+    return [(b / a, i) for i, (a, b) in
+            enumerate(zip(sorted_ratios, sorted_ratios[1:]))]
+
+
+def _second_gap(ratios):
+    g = sorted((r for r, _ in _gaps(sorted(ratios))), reverse=True)
+    return g[1] if len(g) > 1 else 1.0
+
+
+def _regimes(rows):
+    """(low, high, break) when the distribution BREAKS, else (None, None, None).
+
+    Measured, not assumed: the largest multiplicative gap between consecutive
+    sorted gains against the second largest. A distribution whose biggest step
+    is barely larger than its others is continuous and takes a median; one whose
+    biggest step dwarfs every other has two regimes, and a median describes
+    neither. The factor is 2.5 because that sits comfortably above every
+    within-regime step this campaign produced (largest 1.37x) and below the
+    break it found (4.9x) — and it is printed with every verdict so a reader can
+    disagree with it on the evidence rather than on trust.
+    """
+    scored = [r for r in rows if r["ratio"]]
+    if len(scored) < 4:
+        return None, None, None
+    scored.sort(key=lambda r: r["ratio"])
+    gaps = _gaps([r["ratio"] for r in scored])
+    if not gaps:
+        return None, None, None
+    biggest, at = max(gaps)
+    others = sorted((g for g, i in gaps if i != at), reverse=True)
+    if not others or biggest < 2.5 * others[0]:
+        return None, None, None
+    return scored[:at + 1], scored[at + 1:], biggest
 
 
 def _population(rows: list[dict]) -> list[str]:
@@ -169,18 +241,48 @@ def main() -> int:
     no_ratio = [r["model"] for r in rows if not r["ratio"]]
 
     if ratios:
-        print(f"Median gain: x{statistics.median(ratios):.2f} "
-              f"over {len(ratios)} cells — and that number means nothing "
-              f"detached from this population:")
-        for name in population:
-            keys = next(r["keys"] for r in rows if r["model"] == name)
-            print(f"    {name} ({keys} keys)")
+        low, high, break_ratio = _regimes(rows)
+        if low is not None:
+            print(f"NO MEDIAN IS PUBLISHED. The distribution has a BREAK: the gap "
+                  f"between the two regimes is {break_ratio:.1f}x, against a "
+                  f"largest gap of {_second_gap(ratios):.2f}x anywhere else. A "
+                  f"median would read x{statistics.median(ratios):.2f} and would "
+                  f"describe no model on this list.\n")
+            for label, group in (("AMORTISED — the sweep is small beside the run",
+                                  low),
+                                 ("DOMINATED — the sweep dwarfs the run", high)):
+                print(f"  {label}")
+                for r in sorted(group, key=lambda x: x["ratio"]):
+                    print(f"    x{r['ratio']:<6.2f} {r['model']:<34} "
+                          f"{r['keys']:>4} keys, base {r['a_med']:>7.1f} s, "
+                          f"sweep/base {r['sweep_ratio']:.2f}")
+                print()
+            print("  The boundary is not a gain threshold, it is the sweep-to-base "
+                  "ratio: every AMORTISED cell sits under 1.4, every DOMINATED "
+                  "cell over 10. Nothing measured lands between.")
+            print("  If one number is wanted, there isn't one — and that is the "
+                  "result, not a gap in it.")
+        else:
+            print(f"Median gain: x{statistics.median(ratios):.2f} "
+                  f"over {len(ratios)} cells — and that number means nothing "
+                  f"detached from this population:")
+            for name in population:
+                keys = next(r["keys"] for r in rows if r["model"] == name)
+                print(f"    {name} ({keys} keys)")
     if no_ratio:
-        print(f"\nNo ratio, deliberately, for {len(no_ratio)}: "
-              + ", ".join(no_ratio))
-        print("    An arm that served nothing and swept nothing did not measure "
-              "the lever. 1.0 would read as 'no gain'; the truth is 'no "
-              "measurement'.")
+        print(f"\nNo ratio, deliberately, for {len(no_ratio)}:")
+        for r in rows:
+            if r["ratio"]:
+                continue
+            if r["bytes"] == "did not run":
+                why = (f"both arms exited non-zero — the cell FAILED, it did not "
+                       f"measure a small gain")
+            else:
+                why = ("the lever moved nothing: an arm that served nothing and "
+                       "swept nothing measured no lever at all")
+            print(f"    {r['model']:<34} {why}")
+        print("    1.0 would read as 'no gain' in either case; the truth is 'no "
+              "measurement', and the two reasons are not the same debt.")
 
     if args.compare:
         other = _cells(args.compare)
