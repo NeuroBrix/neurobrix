@@ -70,6 +70,42 @@ reproduced; that hardware is not here. What is established is the structural
 gap — the screen consults no oracle — and that the gap is widest exactly where
 that report comes from. Anyone writing about it says both halves or neither.
 
+## The two numbers that prove it, measured on the same day
+
+This was doctrine before it was evidence. On 2026-09-11 it became evidence, and
+the two halves came from two machines at once.
+
+**On `nvidia/volta`, the oracle refused nothing.** A certification pass ran every
+candidate on every uncertified shape against the fp64 oracle: **535 shapes, 17
+candidates each, 0 configurations excluded.** The consensus vote and the oracle
+never once disagreed. On the one target this project has certified, the screen
+was right every time.
+
+**On Metal, the oracle refused four shapes out of four.** The same instrument,
+the same tolerance, on `addmm` — every one of them wrong, and wrong by a factor
+of about **one billion**, from a defect upstream of the kernel.
+
+    nvidia/volta    0 of 535 shapes refused by the oracle
+    metal           4 of 4 shapes refused by the oracle
+
+Put side by side, those two lines are the whole argument of this page, and they
+say exactly what it says: **the gap is widest where nobody has looked.** Volta is
+the target with a certified directory, and there the vote had nothing to catch.
+Metal is a target being brought up, and there the vote would have seated an
+answer wrong by nine orders of magnitude — silently, because a vote consults no
+oracle and unanimity passes everything.
+
+**Nobody can argue the oracle is a luxury after this.** It cost 56 minutes on
+Volta and found nothing; on Metal it was the only thing standing between a
+bring-up and a number that is not merely imprecise but meaningless. An
+instrument that finds nothing on a healthy target and everything on a sick one
+is not overhead. It is the definition of a working instrument.
+
+And it settles which of the two results is the surprising one. Zero exclusions
+on Volta is not a non-event to be mentioned in passing — it is the control that
+makes the Metal four legible. Without it, four refusals could be the oracle
+being too strict; with it, they are four real defects.
+
 ## Consequences that follow immediately
 
 * A benchmark on non-Volta hardware may not be described as running "validated"
