@@ -79,7 +79,16 @@ that report comes from. Anyone writing about it says both halves or neither.
 * Extending the certified directory to a new target is not an optimisation
   task. It is the act that turns a consensus into a proof, and it is the only
   one that does.
-* `configs_agreeing_with_oracle` (in `kernels/launcher.py`) is the overrule: an
-  oracle, where one exists, outranks the vote. Wiring it into the live screen
-  needs an oracle run and therefore a card; until then the gap stands and this
-  page describes the engine as it is.
+* **The overrule is now wired** (2026-09-10). `screen_configs` asks an installed
+  oracle provider (`set_screen_oracle`) before it clusters; where one answers,
+  the vote is not consulted for that key, a candidate the oracle contradicts is
+  never seated, and a space the oracle contradicts ENTIRELY raises rather than
+  returning silently. When the vote was about to seat a config the oracle
+  refuses, that is printed as a FINDING — a majority wrong in the same way is
+  the evidence that a target needs looking at, and correcting it quietly would
+  destroy the only trace of it.
+* **No provider is installed by default**, so the shipped behaviour is unchanged
+  and the hot path pays one `is None`. Producing an oracle costs an fp64
+  reference per key, which costs a card; the certification runner is its first
+  client. Until a provider is installed on a target, that target still runs on
+  a consensus, and this page still describes it as it is.

@@ -1,0 +1,240 @@
+#!/usr/bin/env python3
+"""Certify the hub catalogue for one profile — plan first, run second.
+
+THE TWO PHASES, AND WHY THE EXPENSIVE ONE IS NOT THE ONE YOU EXPECT
+
+Certification needs a CENSUS of the shapes a model actually meets, and the
+census comes from the machine's replay cache. So:
+
+  phase MEET     one run per model with the certified directory OFF, so the
+                 launcher sweeps and records every shape key it met. ONE run,
+                 not a paired A/B with repetitions — this pass is not measuring
+                 a gain, it is collecting shapes.
+  phase CERTIFY  `neurobrix autotune certify --profile <p> --only-missing` runs
+                 every candidate on every shape of the census against the fp64
+                 oracle and writes the entries WITH their proofs.
+  phase GATE     `neurobrix autotune check` — a file without a proof, or whose
+                 proof does not re-read, is refused.
+  phase REPORT   regenerate the catalogue document.
+
+THE BUDGET GUARD, AND WHAT IT MAY NOT DO
+
+A cell whose KNOWN cost exceeds what remains is refused at the door with that
+cost named. A cell with NO known cost is never refused on a guess — the guard's
+job is to stop a known cost, not to invent one. That rule is why
+`Allegro` is refused (a recorded ~31 h per arm) and why an unrun 84 GB video
+model is not.
+
+WHAT IS NOT A FAILURE
+
+A config the screen excludes is DATA. It is counted, named with its kernel, its
+shape key and its deviation, and it appears in the report. An exclusion that
+contradicts a certified entry is a finding and is reported as one — never a
+silence.
+
+MATCHING IS EXPLICIT
+
+Hub slug to local container is case-insensitive exact, plus the alias table
+below. No fuzzy rule: a prefix match in the first version of the report tool
+attributed one model's measurement to a variant that had never been run. Where
+two local containers could answer to one hub slug, the entry is AMBIGUOUS and is
+reported as needing a decision — never resolved by picking one.
+
+Usage:
+    python tools/certify_the_catalogue.py --plan            # writes nothing, runs nothing
+    python tools/certify_the_catalogue.py --profile volta --budget 28800
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO / "tools"))
+CACHE = Path(os.environ.get("NEUROBRIX_CACHE", Path.home() / ".neurobrix" / "cache"))
+
+#: hub slug (lowercased) -> local container directory. ONLY where the two names
+#: genuinely differ. Each line is a decision someone made by reading both names,
+#: not a rule a machine inferred.
+ALIASES = {
+    "qwen3-30b-a3b-thinking": "Qwen3-30B-A3B-Thinking-2507",
+    "sana-1600m-4kpx-bf16": "Sana_1600M_4Kpx_BF16",
+    "wan2.1-t2v-1.3b": "Wan2.1-T2V-1.3B-Diffusers",
+    "wan2.1-vace-1.3b": "Wan2.1-VACE-1.3B-diffusers",
+    "wan2.1-i2v-14b-480p": "Wan2.1-I2V-14B-480P-Diffusers",
+    "wan2.2-i2v-a14b": "Wan2.2-I2V-A14B-Diffusers",
+    "sana-video-2b-720p": "SANA-Video_2B_720p_diffusers",
+    "swin2sr-classical-x4": "swin2SR-classical-sr-x4-64",
+    "swin2sr-classical-x2": "swin2SR-classical-sr-x2-64",
+    "swin2sr-realworld-x4": "swin2SR-realworld-sr-x4-64-bsrgan-psnr",
+    "whisper-v3-turbo": "whisper-large-v3-turbo",
+    "voxtral-mini-3b": "Voxtral-Mini-3B-2507",
+    # Resolved by a size bijection, not by the name: the hub lists exactly two
+    # whisper builds, 5.8 GB and 1.5 GB, and this machine holds exactly two,
+    # 5.8 GB (`whisper-large`) and 1.6 GB (`whisper-large-v3-turbo`). The
+    # mapping is forced. The manifest itself does not carry the version, which
+    # is a gap worth closing at the source rather than re-deducing here.
+    "whisper-large-v2": "whisper-large",
+}
+
+#: Two local containers could answer to these hub slugs and NOBODY HAS DECIDED
+#: which. Resolving one by picking the likelier name would put a measurement of
+#: one artefact under the name of another — the defect this file is written
+#: against. They are reported as ambiguous until a person says which.
+AMBIGUOUS = {
+    # Both builds come from the SAME HF repo (`canopylabs/orpheus-3b-0.1-ft`)
+    # and both are 15 GB on disk; they differ by whether the SNAC decoder is
+    # embedded in the container — the R34 question, a product decision rather
+    # than a lookup. Which one the hub publishes as `Orpheus-3B` is not
+    # readable from here, and picking the likelier name would file a
+    # measurement of one artefact under the name of another.
+    "orpheus-3b": ["orpheus-3b-0.1-ft", "orpheus-3b-0.1-ft-snac"],
+}
+
+
+def _hub_rows(snapshot: Path) -> list[dict]:
+    rows, started = [], False
+    for line in snapshot.read_text().splitlines():
+        if line.startswith("---"):
+            started = True
+            continue
+        if not started or not line.strip() or line.startswith(("Total:", "Install:", "Installed locally:")):
+            continue
+        m = re.match(r"^(\S+)\s+(\S+)\s+([\d.]+\s*[GM]B)\s+(.*?)\s+(\d+)\s*(installed)?\s*$", line)
+        if not m:
+            continue
+        size = m.group(3).replace(" ", "")
+        rows.append({
+            "hub": m.group(1),
+            "slug": m.group(1).split("/")[-1],
+            "family": m.group(2).lower(),
+            "gb": float(size[:-2]) / (1024 if size.endswith("MB") else 1),
+        })
+    return rows
+
+
+def _local(slug: str) -> tuple[str | None, str]:
+    """(container directory, why) — never a guess."""
+    low = slug.lower()
+    if low in AMBIGUOUS:
+        return None, "AMBIGUOUS: " + " or ".join(AMBIGUOUS[low][:2])
+    if low in ALIASES:
+        d = CACHE / ALIASES[low]
+        return (ALIASES[low], "alias") if d.is_dir() else (None, f"alias {ALIASES[low]} absent")
+    for p in CACHE.iterdir():
+        if p.is_dir() and p.name.lower() == low:
+            return p.name, "exact"
+    return None, "not installed"
+
+
+def _known_costs(campaigns: Path) -> dict:
+    """Recorded cost per model, from campaigns nobody voided."""
+    from precision_zoo_campaign import cell_cost_estimate  # reuse the brick
+    void = {d.name for d in campaigns.glob("*/")
+            if any((d / m).exists() for m in ("INVALIDATED.md", "PERTURBATION_NOTE.md"))}
+    out = {}
+    for result in campaigns.glob("*/proof/*/result.json"):
+        if result.parent.parent.parent.name in void:
+            continue
+        est = cell_cost_estimate(result.parent, timeout=28800)
+        if est:
+            model = result.parent.name
+            if model not in out or est[0] > out[model][0]:
+                out[model] = est
+    return out
+
+
+def _plan(args) -> list[dict]:
+    rows = _hub_rows(args.snapshot)
+    costs = _known_costs(args.campaigns)
+    for r in rows:
+        container, why = _local(r["slug"])
+        r["container"], r["why"] = container, why
+        est = costs.get(container or "", None)
+        r["known_s"], r["basis"] = (est[0], est[1]) if est else (None, None)
+    rows.sort(key=lambda r: (r["container"] is None,          # runnable first
+                             r["known_s"] is None,            # known cost first
+                             r["known_s"] or 0,
+                             r["gb"]))
+    return rows
+
+
+def _rig_busy() -> int:
+    smi = shutil.which("nvidia-smi")
+    if smi is None:
+        return -1
+    out = subprocess.run([smi, "--query-compute-apps=pid", "--format=csv,noheader"],
+                         capture_output=True, text=True)
+    return len([l for l in out.stdout.splitlines() if l.strip()])
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--snapshot", type=Path,
+                    default=REPO / "validation_outputs" / "certified_catalogue_2026_09_10" / "hub_snapshot.txt")
+    ap.add_argument("--campaigns", type=Path, default=Path("/home/mlops/nbx/campaigns"))
+    ap.add_argument("--plan", action="store_true", help="print the order and stop; runs nothing")
+    ap.add_argument("--profile", default="volta")
+    ap.add_argument("--budget", type=int, default=28800, help="seconds of rig time available")
+    ap.add_argument("--out", type=Path, default=None)
+    args = ap.parse_args()
+
+    rows = _plan(args)
+    runnable = [r for r in rows if r["container"]]
+    absent = [r for r in rows if not r["container"]]
+
+    print(f"{len(rows)} hub models · {len(runnable)} present locally · "
+          f"{len(absent)} not runnable tonight")
+    print(f"{'#':>3} {'model':<52} {'fam':<11} {'GB':>6} {'known cost':>22}  local")
+    budget_left, refused = args.budget, []
+    for i, r in enumerate(rows, 1):
+        if r["known_s"]:
+            cost = f"{r['known_s']:.0f} s (recorded)"
+        else:
+            cost = "not measured"
+        note = r["container"] or r["why"]
+        if r["container"] and r["known_s"] and r["known_s"] > budget_left:
+            refused.append((r, budget_left))
+            note += "  ← REFUSED AT THE DOOR"
+        elif r["container"] and r["known_s"]:
+            budget_left -= r["known_s"]
+        print(f"{i:>3} {r['hub']:<52} {r['family']:<11} {r['gb']:>6.1f} {cost:>22}  {note}")
+
+    print(f"\nBudget: {args.budget} s in, {budget_left:.0f} s left after the cells "
+          f"whose cost is known.")
+    print("Cells with no known cost consume from that remainder without being "
+          "refused in advance: the guard stops a KNOWN cost, it never invents one.")
+    if absent:
+        gb = sum(r["gb"] for r in absent)
+        free = shutil.disk_usage("/").free / 1e9
+        print(f"\n{len(absent)} not present locally — {gb:.1f} GB to fetch against "
+              f"{free:.1f} GB free on /. They are NOT part of tonight's pass, and "
+              f"the report says `not measured` for them rather than a projection:")
+        for r in absent:
+            print(f"    {r['gb']:>7.2f} GB  {r['hub']:<52} {r['why']}")
+
+    if args.plan:
+        print("\n--plan: nothing was run.")
+        return 0
+
+    busy = _rig_busy()
+    if busy != 0:
+        print(f"\nREFUSED: {busy} compute process(es) hold the rig "
+              f"({'nvidia-smi absent' if busy < 0 else 'a measurement is in flight'}).",
+              file=sys.stderr)
+        return 1
+    print("\nThe MEET phase is not implemented as an unattended runner yet: it "
+          "takes the cards, and the cards are the owner's. Run --plan, read the "
+          "order, then drive the phases explicitly.", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

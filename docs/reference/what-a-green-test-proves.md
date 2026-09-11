@@ -1,12 +1,13 @@
 # What a green test proves — the two spaces a test can be empty in
 
 A test that exercises nothing is green. It is the most expensive class of defect
-this project has met, it has arrived five times, and it always wears the same
-disguise: a verdict everyone reads as *"correct"* which really says *"never
+this project has met — **sixteen recorded instances across two machines**, all
+of them in `docs/reference/vacuous-gates-register.md` — and it always wears the
+same disguise: a verdict everyone reads as *"correct"* which really says *"never
 ran"*.
 
-A test can be empty in two independent spaces, and passing in one does not save
-you in the other.
+A test can be empty in three independent spaces, and passing in one does not
+save you in the others.
 
 ---
 
@@ -89,7 +90,100 @@ with no stated reason is a shape nobody chose.
 
 ---
 
-## The one question that covers both
+## Third space: the PROSE nothing checks
+
+The first two spaces are about a test that runs. This one is about a claim that
+never had a test at all — and it is the easiest to write, because writing it
+feels like documenting rather than asserting.
+
+A comment that states a **cost**, a **neutrality** or an **equivalence** is an
+assertion exactly like an `assert` is, and it is read as one. The difference is
+that nothing re-checks it when the code, the compiler or the hardware moves.
+
+The instance, 2026-09-10. A kernel edit shipped with this comment:
+
+> *"Comparing here is exact for any integer width and costs nothing."*
+
+Nobody had checked it. `cond != 0` promotes the Python literal to i32, so the
+comparison gains an `arith.extsi` i8→i32 on **every element** — on `aten::where`,
+the kernel 39 of the 56 installed containers reach. The boolean result was
+identical; the claim of cost was false. It was found by an IR harness written for
+a different purpose, not by anything guarding that sentence.
+
+The correct form (`cond.to(tl.int1)`) emits exactly the cast the compiler already
+performed internally, so the IR is identical to the pre-edit kernel — and that
+sentence is now **pinned by a test**, with the reason: two forms silence the
+deprecation and only one is free.
+
+### The temporal form: a number written before the measurement
+
+Three instances in one day, on two machines:
+
+* a comment asserting `costs nothing` on a kernel nobody had profiled;
+* a commit message reporting `245 passed` — written before the suite ran, which
+  returned 241;
+* a report on the other machine announcing a push that had not happened.
+
+Same defect, and the tell is always the same: the sentence was composed while
+the thing it describes was still in the future.
+
+**The house rule.** A number in a commit message, a report or a verdict is
+written **after** the measurement, never before. A sentence composed before the
+run carries, in itself, the mark that it is unverified — `expected`, `to be
+confirmed`, or simply not written yet. There is no version of "it will
+obviously be 245" that is not a guess wearing a fact's clothes.
+
+It is not a personal lapse and must not be filed as one. It is a house rule,
+because the pressure that produces it — writing the summary while the work is
+fresh, then running the check — is structural and recurs on every machine.
+
+**The rule.** A statement of cost, neutrality or equivalence in a comment,
+docstring or commit message is either:
+
+* **pinned by a test** that fails when it stops being true — an IR comparison for
+  "emits the same instructions", a measurement with its dispersion for "costs
+  nothing", a byte gate for "changes no output"; or
+* **marked as unverified**, in the sentence itself, naming what would verify it.
+
+There is no third option, and "it is obviously true" is the first option's
+failure mode. `costs nothing`, `this is a no-op`, `same instructions`, `no
+measurable overhead`, `equivalent to X`, `changes no result` — every one of these
+is a measurement someone has skipped, written in the tone of a fact.
+
+This is the same defect as the first two spaces, seen from a third angle: code
+the test cannot reach, a shape that makes the branches equivalent, and prose that
+no test controls. All three produce a green — or, here, a confident sentence —
+where nothing was checked.
+
+---
+
+## A trap that makes the wrong instrument look green
+
+Third reason to test **structure** rather than **diagnostics**, and the nastiest
+of the three because it manifests as a pass.
+
+Compilers cache by source hash. Triton writes compiled artefacts to disk keyed on
+the source, so a check that watches for a **warning** fires only on the first
+compilation of a given source and reads as **silence** on every run afterwards —
+on the same machine, in CI, in a loop. A gate built on "no deprecation warning
+was emitted" is therefore green the second time whether or not the defect is
+present, and it becomes greener the more it is run.
+
+This happened during the very session that produced this page: a variant compiled
+with `warnings.filterwarnings("error")` raised nothing, not because it was clean
+but because the artefact came from cache and code generation never ran.
+
+An IR comparison is immune — a cached artefact carries the IR that code
+generation produced — which is why the instrument compares what the compiler
+BUILT, never what it SAID. The general form:
+
+> Test the artefact, not the commentary about the artefact. Logs, warnings and
+> diagnostics are produced by a path that may be skipped; the artefact is what
+> the machine will actually run.
+
+---
+
+## The one question that covers all three
 
 Before believing a green, answer this and write the answer down:
 
@@ -97,8 +191,10 @@ Before believing a green, answer this and write the answer down:
 
 If the honest answer is "pass" — because no container reaches the code, because
 the shape makes every branch identical, because the assertion reads a key the
-producer never writes — then the test is not weak. It is empty, and its green is
-worse than no test, because it is read as an answer.
+producer never writes, because the artefact came from a cache and the check
+watched a warning, or because there is no test at all and only a sentence saying
+it is fine — then the test is not weak. It is empty, and its green is worse than
+no test, because it is read as an answer.
 
 The operational version of the question is the injection: break the thing
 deliberately and watch the gate go red. **A gate is worth something only once it

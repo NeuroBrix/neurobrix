@@ -45,6 +45,46 @@ its memory can be taken, whatever the stack decides to do. The harness now
 It compiled fourteen kernels behind that door. The question is closed for every
 future run, not for that one.
 
+## The corollary: a door does not only make safe, it makes RUNNABLE NOW
+
+This is the half that was missing when the page was first written, and it is the
+half that pays.
+
+A census forces you to wait. It can only be taken while the thing runs, so if the
+machine is busy — a campaign in flight, a locked-clock bench, a customer's
+cluster — the honest thing to do with a census is to postpone. The instrument
+then ships **unexecuted**, and an unexecuted instrument proves nothing, however
+well written it is.
+
+This repository has the living example. The `budget-unified` gate exists,
+reads well, and its own report says of itself, under *"What the gate owes"*,
+that it is **armed and has never run**. The numbers attributed to it — 42/42,
++5 %/+18 % — were never measured. A gate that has not run is a claim. It is entered in
+`docs/reference/vacuous-gates-register.md` for the same reason every other
+member of that class is: its failure mode is a green.
+
+The IR harness was one afternoon from the same fate. Behind the census it would
+have waited for the campaign to close, would have been reported as "written, not
+launched", and would have been believed on its prose. Behind the door it ran
+immediately — and running it is what found its two defects:
+
+* it compared the raw IR, whose debug records carry the temporary file path, so
+  every kernel read DIFFERS and, worse, **its own control cell was green for
+  that same wrong reason**;
+* and once that was fixed, it found a real one: `cond != 0` promotes the literal
+  to i32 and buys a sign-extension on every element, on the kernel 39 of 56
+  containers reach.
+
+Neither would have been found by reading. Both were found in the first minute of
+running, and the door is the only reason there was a first minute.
+
+So the rule has two halves, and the second is not a bonus:
+
+> **A door removes a risk AND removes a wait.** An instrument that cannot be run
+> until some other work finishes is an instrument that will be reported before
+> it is exercised. Ask of every "I will run this later": is there a state in
+> which it could run *now* without being able to do harm?
+
 ## Doors this repository already has, recognised late as the same thing
 
 Each of these was written as a local fix. They are one rule:
