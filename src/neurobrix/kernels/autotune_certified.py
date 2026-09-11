@@ -32,9 +32,33 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
-FORMAT = "nbx-autotune-certified/1"
+FORMAT = "nbx-autotune-certified/2"
+
+#: Formats this reader accepts. `/2` added the `built` field, which says the
+#: kernel actually COMPILED on the device during its certifying run. A `/1`
+#: file pre-dates that field and is READ, not refused: the 5628 shapes the
+#: other machine certified before it existed are proven work, and discarding
+#: them over a field that did not exist when they were written would be
+#: destroying a measurement to tidy a schema. What `/1` cannot say is said
+#: instead — `built_unknown_formats` names them to the caller.
+_FORMATS = ("nbx-autotune-certified/1", "nbx-autotune-certified/2")
+
+#: Which proof fields each format requires.
+_REQUIRED = {
+    "nbx-autotune-certified/1": ("date", "engine_version", "backend", "shape",
+                                 "deviation", "tolerance", "machine", "oracle"),
+    "nbx-autotune-certified/2": ("date", "engine_version", "backend", "shape",
+                                 "deviation", "tolerance", "machine", "oracle",
+                                 "built"),
+}
 _DTYPES = ("fp16", "bf16", "fp32", "fp64", "int8", "int16", "int32", "int64", "bool")
-_PROOF_FIELDS = ("date", "engine_version", "backend", "shape", "deviation", "tolerance", "machine", "oracle")
+#: `built` says the kernel actually COMPILED on the device during the
+#: certifying run. It is required because the screen cannot answer it: a CPU
+#: fallback computes correctly, so its deviation against the fp64 oracle is
+#: excellent — an entry certified on one would record a configuration chosen
+#: for a path that never runs, and nothing in the proof would say so.
+_PROOF_FIELDS = ("date", "engine_version", "backend", "shape", "deviation",
+                 "tolerance", "machine", "oracle", "built")
 
 _LOADED: Dict[Tuple[str, str, str, str], Optional[Dict[str, Dict]]] = {}   # (vendor, profile, kernel, dtype) -> entries
 _REFUSED: Dict[str, str] = {}                                                # file -> reason (said once)
@@ -150,8 +174,9 @@ def validate(doc: Any, path: Path, tuner=None) -> List[str]:
     ABOVE the tolerance, that the key parses and (with the tuner) has the
     kernel's arity and the file's dtype, that the date parses."""
     problems: List[str] = []
-    if not isinstance(doc, dict) or doc.get("format") != FORMAT:
-        return [f"format is not {FORMAT!r}"]
+    fmt = doc.get("format") if isinstance(doc, dict) else None
+    if fmt not in _FORMATS:
+        return [f"format is not one of {list(_FORMATS)!r}"]
     vendor, profile = path.parent.parent.name, path.parent.name
     stem_kernel, stem_dtype = path.stem.rsplit(".", 1) if "." in path.stem else (path.stem, "")
     if doc.get("vendor") != vendor or doc.get("profile") != profile:
@@ -187,7 +212,7 @@ def validate(doc: Any, path: Path, tuner=None) -> List[str]:
         if not isinstance(proof, dict):
             problems.append(f"{where}: no proof")
             continue
-        missing = [f for f in _PROOF_FIELDS if f not in proof]
+        missing = [f for f in _REQUIRED[fmt] if f not in proof]
         if missing:
             problems.append(f"{where}: proof without {', '.join(missing)}")
             continue

@@ -21,6 +21,7 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import os
+import warnings
 import platform
 import socket
 import time
@@ -493,10 +494,27 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None)
     _out_dt = C.output_dtype(tuner, key)
     _nbx = {"fp16": NBXDtype.float16, "bf16": NBXDtype.bfloat16, "fp32": NBXDtype.float32}.get(_out_dt)
     tuner.run = certifying_run
+    fell_back = []
     try:
         if _nbx is not None:
             W.set_compute_dtype(_nbx)
-        call()
+        # Did the kernel actually BUILD on the device, or did the backend fail
+        # to compile it and fall back to the CPU?
+        #
+        # The screen cannot answer that. A CPU fallback COMPUTES CORRECTLY, so
+        # its deviation against the fp64 oracle is excellent — 1e-6 like any
+        # sound path — and an entry certified on it would record a
+        # configuration chosen for a path that never runs. Measured
+        # 2026-09-11: 30 of 30 entries do build, but the proof did not say so,
+        # and a reader six months from now could not redo the check.
+        #
+        # What is measured and not written does not exist.
+        with warnings.catch_warnings(record=True) as _caught:
+            warnings.simplefilter("always")
+            call()
+            fell_back = [str(w.message).splitlines()[0][:120] for w in _caught
+                         if "fall back to CPU" in str(w.message)
+                         or "Metal compilation failed" in str(w.message)]
     finally:
         W.set_compute_dtype(_prev_dt)
         tuner.run = saved_run
@@ -508,7 +526,11 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None)
              "deviation": state["deviation"], "tolerance": tolerance, "oracle": state.get("oracle", ORACLE), "machine": _machine(),
              "best_ms": state["best_ms"], "second_ms": state["second_ms"], "candidates": state["candidates"],
              "accepted": state["accepted"], "benched": state["benched"], "could_not_run": len(state["unrun"]),
-             "seconds": {"oracle": state.get("t_oracle"), "runs": state.get("t_runs"), "bench": state.get("t_bench")}}
+             "seconds": {"oracle": state.get("t_oracle"), "runs": state.get("t_runs"), "bench": state.get("t_bench")},
+             "built": {"gpu": not fell_back,
+                       "how": "no backend compilation fallback was raised during "
+                              "the certifying run",
+                       "fallback": fell_back or None}}
     return {"config": state["config"], "proof": proof, "excluded": state["excluded"],
             "could_not_run": state["unrun"], "timings": state["timings"]}
 
