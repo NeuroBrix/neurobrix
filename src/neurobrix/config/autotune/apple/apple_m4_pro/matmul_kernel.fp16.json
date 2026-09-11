@@ -1,0 +1,64 @@
+{
+ "format": "nbx-autotune-certified/1",
+ "vendor": "apple",
+ "profile": "apple_m4_pro",
+ "kernel": "neurobrix.kernels.ops.matmul.matmul_kernel",
+ "dtype": "fp16",
+ "entries": {
+  "(67, 65, 33, False, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_M": 32,
+     "BLOCK_N": 64,
+     "BLOCK_K": 32,
+     "GROUP_M": 8
+    },
+    "num_warps": 2,
+    "num_stages": 5,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T07:39:53+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.7.0",
+     "name": "metal"
+    },
+    "shape": [
+     67,
+     65,
+     33,
+     false,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0002679425476751954,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "MacBook-Pro.local",
+     "platform": "macOS-26.6.2-arm64-arm-64bit",
+     "python": "3.12.0",
+     "hardware_profile": "auto-apple-m4-pro-18g",
+     "has_native_bf16": true,
+     "target": "metal-apple-m4-pro"
+    },
+    "best_ms": 0.04003107997479739,
+    "second_ms": 0.04023673117255709,
+    "candidates": 10,
+    "accepted": 10,
+    "benched": 10,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.0,
+     "runs": 0.106,
+     "bench": 16.952
+    }
+   },
+   "excluded": []
+  }
+ }
+}

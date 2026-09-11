@@ -5,7 +5,62 @@
  "kernel": "neurobrix.kernels.ops.matmul.matmul_kernel",
  "dtype": "fp32",
  "entries": {
-  "(19, 2048, 2048, False, False, 'fp32', 'fp32', 'fp32')": {
+  "(18, 2048, 2048, False, False, 'fp32', 'fp32', 'fp32')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_M": 32,
+     "BLOCK_N": 64,
+     "BLOCK_K": 32,
+     "GROUP_M": 8
+    },
+    "num_warps": 2,
+    "num_stages": 4,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T07:40:08+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.7.0",
+     "name": "metal"
+    },
+    "shape": [
+     18,
+     2048,
+     2048,
+     false,
+     false,
+     "fp32",
+     "fp32",
+     "fp32"
+    ],
+    "deviation": 1.872476097587992e-06,
+    "tolerance": 0.0001,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "MacBook-Pro.local",
+     "platform": "macOS-26.6.2-arm64-arm-64bit",
+     "python": "3.12.0",
+     "hardware_profile": "auto-apple-m4-pro-18g",
+     "has_native_bf16": true,
+     "target": "metal-apple-m4-pro"
+    },
+    "best_ms": 0.04019802524993461,
+    "second_ms": 0.0406756307725068,
+    "candidates": 10,
+    "accepted": 10,
+    "benched": 6,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.003,
+     "runs": 0.019,
+     "bench": 14.825
+    }
+   },
+   "excluded": []
+  },
+  "(18, 256, 2048, False, False, 'fp32', 'fp32', 'fp32')": {
    "config": {
     "kwargs": {
      "BLOCK_M": 64,
@@ -19,7 +74,62 @@
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-11T02:34:53+00:00",
+    "date": "2026-09-11T07:40:25+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.7.0",
+     "name": "metal"
+    },
+    "shape": [
+     18,
+     256,
+     2048,
+     false,
+     false,
+     "fp32",
+     "fp32",
+     "fp32"
+    ],
+    "deviation": 2.039401087376107e-06,
+    "tolerance": 0.0001,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "MacBook-Pro.local",
+     "platform": "macOS-26.6.2-arm64-arm-64bit",
+     "python": "3.12.0",
+     "hardware_profile": "auto-apple-m4-pro-18g",
+     "has_native_bf16": true,
+     "target": "metal-apple-m4-pro"
+    },
+    "best_ms": 0.04065332051977412,
+    "second_ms": 0.04134793293307063,
+    "candidates": 10,
+    "accepted": 10,
+    "benched": 8,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.0,
+     "runs": 0.007,
+     "bench": 17.567
+    }
+   },
+   "excluded": []
+  },
+  "(19, 2048, 2048, False, False, 'fp32', 'fp32', 'fp32')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_M": 64,
+     "BLOCK_N": 64,
+     "BLOCK_K": 32,
+     "GROUP_M": 8
+    },
+    "num_warps": 4,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T07:39:18+00:00",
     "engine_version": "0.5.3",
     "backend": {
      "triton": "3.7.0",
@@ -46,16 +156,16 @@
      "has_native_bf16": true,
      "target": "metal-apple-m4-pro"
     },
-    "best_ms": 0.044959721723127934,
-    "second_ms": 0.04587572135764573,
+    "best_ms": 0.04006817884807721,
+    "second_ms": 0.04047900649793615,
     "candidates": 10,
     "accepted": 10,
     "benched": 9,
     "could_not_run": 0,
     "seconds": {
-     "oracle": 0.005,
-     "runs": 0.23,
-     "bench": 22.811
+     "oracle": 0.004,
+     "runs": 0.226,
+     "bench": 22.313
     }
    },
    "excluded": []
@@ -63,18 +173,18 @@
   "(19, 256, 2048, False, False, 'fp32', 'fp32', 'fp32')": {
    "config": {
     "kwargs": {
-     "BLOCK_M": 64,
+     "BLOCK_M": 32,
      "BLOCK_N": 64,
      "BLOCK_K": 32,
      "GROUP_M": 8
     },
-    "num_warps": 4,
-    "num_stages": 2,
+    "num_warps": 2,
+    "num_stages": 4,
     "num_ctas": 1,
     "maxnreg": null
    },
    "proof": {
-    "date": "2026-09-11T02:35:14+00:00",
+    "date": "2026-09-11T07:39:36+00:00",
     "engine_version": "0.5.3",
     "backend": {
      "triton": "3.7.0",
@@ -101,16 +211,16 @@
      "has_native_bf16": true,
      "target": "metal-apple-m4-pro"
     },
-    "best_ms": 0.04210847258894936,
-    "second_ms": 0.042634111698647115,
+    "best_ms": 0.03999712290777557,
+    "second_ms": 0.04038235630586689,
     "candidates": 10,
     "accepted": 10,
-    "benched": 9,
+    "benched": 8,
     "could_not_run": 0,
     "seconds": {
      "oracle": 0.0,
      "runs": 0.007,
-     "bench": 20.723
+     "bench": 17.393
     }
    },
    "excluded": []
