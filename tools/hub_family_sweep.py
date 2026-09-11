@@ -95,10 +95,44 @@ def read_model_facts(path: Path) -> dict:
     return facts
 
 
+#: Where the shapes the campaign discovered are kept, across the clearings.
+#: Set by `main` to the campaign's own output directory.
+CENSUS_KEEP: Path | None = None
+
+
 def clear_caches() -> None:
+    """Clear the three caches so each arm is measured COLD.
+
+    The autotune config store is one of the three, and it is also the census
+    the certified directory is built from (`autotune_certify.census` reads it
+    by default). Clearing it before every arm is right for the measurement and
+    destroys the material for the certification — measured 2026-09-11, a
+    four-model campaign left a census of ZERO shapes where the shapes had
+    passed through it one arm at a time.
+
+    So it is KEPT ASIDE before being cleared, merged into one file per
+    campaign. The measurement stays cold — the store the engine reads is
+    genuinely empty at every launch — and the shapes the catalogue demanded
+    survive the campaign that demanded them. Certifying shapes nobody asked
+    for is the alternative, and it is the wrong one.
+    """
+    rc = Path.home() / ".neurobrix" / "replay_cache"
+    if CENSUS_KEEP is not None and rc.exists():
+        for f in rc.glob("autotune_configs_*.json"):
+            keep = CENSUS_KEEP / f.name
+            merged = {}
+            for src in (keep, f):
+                if src.exists():
+                    try:
+                        doc = json.loads(src.read_text())
+                    except (OSError, ValueError):
+                        continue
+                    merged.update(doc.get("entries", doc) if isinstance(doc, dict) else {})
+            if merged:
+                keep.parent.mkdir(parents=True, exist_ok=True)
+                keep.write_text(json.dumps({"entries": merged}, indent=1))
     for p in CACHES:
         shutil.rmtree(p, ignore_errors=True)
-    rc = Path.home() / ".neurobrix" / "replay_cache"
     if rc.exists():
         for f in rc.glob("autotune_configs_*.json"):
             f.unlink()
@@ -304,6 +338,8 @@ def main() -> int:
     arms = tuple(args.arm) if args.arm else ARMS
 
     args.out.mkdir(parents=True, exist_ok=True)
+    global CENSUS_KEEP
+    CENSUS_KEEP = args.out          # the shapes survive the clearings
     sys.path.insert(0, str(REPO / "src"))
 
     wanted = set(args.only.split(",")) if args.only else None
