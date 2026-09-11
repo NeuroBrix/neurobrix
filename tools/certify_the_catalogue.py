@@ -189,13 +189,36 @@ def _rig_busy() -> int:
                          capture_output=True, text=True)
     procs = len([l for l in out.stdout.splitlines() if l.strip()])
     if procs:
+        _rig_busy.drivers = []
         return procs
 
-    ps = subprocess.run(["ps", "-eo", "pid,cmd"], capture_output=True, text=True).stdout
-    me = str(os.getpid())
-    drivers = [l for l in ps.splitlines()
-               if any(d in l for d in _DRIVERS) and not l.strip().startswith(me)
-               and "--plan" not in l]
+    # Exclude MY OWN process GROUP, not my own pid. The first version compared
+    # against `os.getpid()` and refused itself on 2026-09-11: the shell wrapper
+    # that launches this tool carries the same script name on its command line
+    # and has a different pid. An instrument that cannot recognise itself is the
+    # same family as one that cannot recognise an absence.
+    # Exclude MY OWN SESSION, not my pid and not my process group. Two versions
+    # of this check refused their own run on 2026-09-11: the first compared
+    # against `os.getpid()` and was defeated by the shell wrapper carrying the
+    # same script name; the second compared against the process GROUP and was
+    # defeated by a launcher that puts the wrapper in another group. The session
+    # is the widest thing that is still unambiguously "this run".
+    try:
+        mine = os.getsid(0)
+    except OSError:                                   # pragma: no cover
+        mine = -1
+    ps = subprocess.run(["ps", "-eo", "sid,pid,cmd"], capture_output=True, text=True).stdout
+    drivers = []
+    for line in ps.splitlines()[1:]:
+        parts = line.split(None, 2)
+        if len(parts) < 3:
+            continue
+        sid, _pid, cmd = parts
+        if sid.isdigit() and int(sid) == mine:
+            continue
+        if any(d in cmd for d in _DRIVERS) and "--plan" not in cmd:
+            drivers.append(cmd)
+    _rig_busy.drivers = drivers          # so the refusal can SAY what it saw
     return len(drivers)
 
 
@@ -256,8 +279,15 @@ def main() -> int:
 
     busy = _rig_busy()
     if busy != 0:
-        print(f"\nREFUSED: {busy} compute process(es) hold the rig "
-              f"({'nvidia-smi absent' if busy < 0 else 'a measurement is in flight'}).",
+        seen = getattr(_rig_busy, "drivers", [])
+        what = ("nvidia-smi is absent, so the rig cannot be established free"
+                if busy < 0 else
+                (f"{busy} driver process(es) alive, about to take a card"
+                 if seen else f"{busy} compute process(es) on a card"))
+        print(f"\nREFUSED: {what}.", file=sys.stderr)
+        for cmd in seen[:3]:
+            print(f"    {cmd[:150]}", file=sys.stderr)
+        print("    A refusal that does not say what it saw cannot be acted on.",
               file=sys.stderr)
         return 1
 
@@ -292,11 +322,34 @@ def main() -> int:
             continue
 
         log = out / f"{r['container']}.log"
-        req = request_args(r["container"], r["family"], ["--triton"])
+        # The FAMILY comes from the container, never from the hub listing. The
+        # hub's CATEGORY is a shelf label — it carries `CODE`, and the engine
+        # has no `code` family, so composing a request from it raised and took
+        # the whole pass down after three models on 2026-09-11. The container
+        # declares what it is; that is the authority.
+        family = r["family"]
+        try:
+            manifest = json.loads((CACHE / r["container"] / "manifest.json").read_text())
+            family = manifest.get("family") or family
+        except (OSError, ValueError):
+            pass
+        try:
+            req = request_args(r["container"], family, ["--triton"])
+        except Exception as exc:
+            # A request that cannot be composed is a NAMED skip, never a crash
+            # that ends the pass: forty-three models must not be lost because
+            # the forty-fourth has no stimulus.
+            print(f"SKIP {r['hub']:<52} no request for family {family!r} "
+                  f"({type(exc).__name__})")
+            record.append({**{k: r[k] for k in ("hub", "gb")}, "family": family,
+                           "container": r["container"], "state": "no request",
+                           "reason": f"{type(exc).__name__}: {exc}"})
+            continue
         cmd = [str(PY), "-c", "import sys; from neurobrix.cli import main; sys.exit(main())",
                "run", "--model", r["container"], *req]
         env = {**os.environ, "PYTHONPATH": str(args.src),
                "NBX_AUTOTUNE_CERTIFIED": "off"}
+        record_family = family
         t0 = time.time()
         rc, wall = run(cmd, env, log, args.timeout)
         left -= wall
@@ -306,7 +359,7 @@ def main() -> int:
         print(f"{'MET ' if rc == 0 else 'FAIL'} {r['hub']:<52} "
               f"{wall:>7.0f} s  swept {swept:>4}  screened-out {excluded:>3}  "
               f"{left:>7.0f} s left")
-        record.append({**{k: r[k] for k in ("hub", "family", "gb")},
+        record.append({**{k: r[k] for k in ("hub", "gb")}, "family": record_family,
                        "container": r["container"], "state": "met" if rc == 0 else "failed",
                        "rc": rc, "wall_s": wall, "swept": swept,
                        "screened_out": excluded, "src_sha": sha, "log": log.name})
