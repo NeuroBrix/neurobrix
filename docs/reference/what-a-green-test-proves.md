@@ -168,10 +168,20 @@ does on its own:
 * `CogVideoX-2b` — three repetitions per arm, three shas, in BOTH arms. The
   record carries `nondeterministic: ["A", "B"]` and the video comparison agrees
   at 43.6 dB. A byte gate cannot adjudicate a model that differs from itself.
-* `Kokoro-82M` — printed `DIFFERENT` by a one-run-per-arm tree gate against
-  `7de1560`, a commit touching exactly one file, `core/prism/solver.py`. Two
-  runs of the SAME tree then produced two shas. The change could not have moved
-  it, and did not.
+* `Kokoro-82M` — printed `DIFFERENT` by a one-run-per-arm tree gate. Two runs of
+  the same tree then produced two shas, so the gate had compared a stable arm
+  against an UNSTABLE one and reported it as a change. Instrumented afterwards
+  (`NBX_OP_FINGERPRINT`, full hash), the source is exact: of 4,072 ops, the
+  first to differ is **`aten.rand::0`, shape `[1, 9]`** — an RNG draw. Every op
+  before it is identical.
+
+  And the follow-through matters more than the example. The instability is on
+  the BRANCH tree only: on the trunk the same model gives one wav and 4,072
+  identical fingerprints, twice. So the two arms did genuinely differ — and the
+  one-run gate still could not say why, because "the change moved the output"
+  and "one arm cannot hold still" produce the same DIFFERENT. Naming a single
+  commit from that record would have been wrong twice over: the arm compared was
+  a 30-commit branch tip, 239 commits behind the trunk.
 
 **The rule.** Before attributing a difference to a change, run ONE SIDE TWICE.
 If the side differs from itself, the gate has not measured the change and the
