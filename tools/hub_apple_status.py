@@ -125,6 +125,31 @@ def render(models: dict, sizes: dict, certified: dict) -> str:
         "ligne chacun, aucune case vide. Une case « non mesuré » porte le "
         "chiffre qui l'explique : c'est un résultat, pas un trou.",
         "",
+        "## Le dénominateur, parce que deux tableaux qui ne comptent pas la "
+        "même population ne se posent pas côte à côte",
+        "",
+        f"Ce tableau compte **{len(known)} artefacts** : l'union de ceux qui "
+        "portent un enregistrement de campagne E et de ceux que le registre "
+        "des différés chiffre. C'est la population **mesurable depuis ce "
+        "poste**, pas le catalogue du hub.",
+        "",
+        "Le tableau de l'autre machine compte **47 modèles**, qui est le "
+        "**catalogue du hub**. Les deux chiffres sont justes et ne désignent "
+        "pas la même chose. La correspondance connue : quatre des artefacts "
+        "comptés ici sont des **variantes ou sauvegardes** d'un modèle du "
+        "catalogue (`-int4g128`, `-ffnonly`, `.pre-G-backup`), qu'un "
+        "catalogue compte une fois et qu'un montage porte séparément.",
+        "",
+        "**Le bon dénominateur dépend de la question.** Pour « que fait le "
+        "hub sur Apple », c'est le catalogue : 47. Pour « qu'a-t-on mesuré "
+        "et que reste-t-il », c'est cette liste, parce qu'une variante "
+        "quantifiée se mesure et se refuse séparément de son modèle de base.",
+        "",
+        "**Non vérifié d'ici :** le catalogue n'a pas pu être relu — "
+        "`neurobrix hub` échoue sur la vérification du certificat de "
+        "`neurobrix.es` depuis ce poste. Le 47 est donc repris tel que "
+        "l'autre machine le rapporte, et non confirmé.",
+        "",
         "**La colonne « mesuré le » décide de la lecture.** Les verdicts "
         "viennent de campagnes de dates différentes, sur des arbres "
         "différents : une ligne du 9 septembre ne dit rien de l'arbre "
