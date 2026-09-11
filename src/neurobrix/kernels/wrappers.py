@@ -3362,7 +3362,11 @@ def index_select_wrapper(x, dim: int, index) :
             from .ops.index_select import index_select_mid_kernel
             BLOCK = 1024
             _set_device(x)
-            index_select_mid_kernel[(triton.cdiv(total, BLOCK),)](x, out, outer, N, inner, index, index_len, BLOCK=BLOCK)
+            index_select_mid_kernel[(triton.cdiv(total, BLOCK),)](
+                x, out, outer, N, inner, index, index_len,
+                device_fault_buffer(x._device_idx),
+                FAULT_CODE=device_fault_code_cached(INDEX_SELECT_OOB),
+                BLOCK=BLOCK)
         return out
     x = x.contiguous()
     N = inp_shape[dim]

@@ -76,14 +76,27 @@ def index_select_kernel(
 
 @triton.jit(debug=True)
 def index_select_mid_kernel(
-    inp, out, outer, N, inner, index, index_len,
+    inp, out, outer, N, inner, index, index_len, fault_ptr,
+    FAULT_CODE: tl.constexpr,
     BLOCK: tl.constexpr,
 ):
     """Gather along a MIDDLE axis of a contiguous input read as (outer, N, inner): the output
     (outer, index_len, inner) is written in its final layout, so the wrapper needs neither the
     movedim copy before the gather nor the permute copy after it (the copy lever, 2026-09-07:
     88 strided copies a decode token on TinyLlama for 44 gathers). Same values as the
-    last-axis kernel — a gather moves bytes, it computes nothing. The same out-of-range trap."""
+    last-axis kernel — a gather moves bytes, it computes nothing. The same out-of-range trap.
+
+    That trap needs BOTH channels, and this kernel arrived carrying only one.
+    `tl.device_assert` is honoured on CUDA and ROCm and elided on Metal, which
+    computes its predicate and discards it — so on Apple this path gathered an
+    out-of-range index in silence while its own docstring promised a trap. It
+    was not caught by the merge (no conflict: the two works touched different
+    lines) and not by a count (164 against 150 reads like noise). The failure
+    register named it: `test_out_of_range_index_is_refused_by_name[index_select]`
+    appeared in the NEW column the first time this path was exercised.
+
+    A guard written in good faith that does not cover the path added beside it
+    is the same class as a guard that never fires."""
     pid = tl.program_id(axis=0)
     e = pid * BLOCK + tl.arange(0, BLOCK)
     total = outer * index_len * inner
@@ -97,6 +110,12 @@ def index_select_mid_kernel(
     idx = tl.where(idx < 0, idx + N, idx)
     valid = (idx >= 0) & (idx < N)
     tl.device_assert(valid | (~mask), "index_select: index out of range")
+    if FAULT_CODE != 0:
+        # Lanes past `total` loaded `other=0` and are in range by construction;
+        # they must not report. Reduced to one scalar so the store is a single
+        # conditional word rather than a vector.
+        if tl.max(tl.where(mask & (valid == 0), 1, 0)) != 0:
+            tl.store(fault_ptr, FAULT_CODE)
     src = o * (N * inner) + idx * inner + r
     v = tl.load(inp + src, mask=mask & valid, other=0.0)
     tl.store(out + e, v, mask=mask & valid)
