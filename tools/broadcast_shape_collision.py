@@ -115,17 +115,63 @@ _BCAST = re.compile(
     r"tt\.broadcast\s+\S+\s*:\s*tensor<([0-9x]+)x[a-z0-9]+>\s*->\s*tensor<([0-9x]+)x[a-z0-9]+>")
 
 
+def _expanded_axes(src: str, dst: str) -> tuple:
+    """Which axes this broadcast expands. `1x2x1 -> 1x2x4` expands axis 2."""
+    a, b = src.split("x"), dst.split("x")
+    if len(a) != len(b):
+        return ("rank", src, dst)          # a rank change: not comparable
+    return tuple(i for i, (x, y) in enumerate(zip(a, b)) if x != y)
+
+
 def collisions_in(ttir: str) -> list[tuple[str, list[str]]]:
-    """(source shape, [result shapes]) for every source broadcast to more than
-    one distinct target in one kernel — the exact trigger."""
-    by_src: dict[str, set] = defaultdict(set)
+    """(source shape, [result shapes]) for two broadcasts of ONE source shape
+    that expand DIFFERENT axes — the trigger, not merely the resemblance.
+
+    Keying on "same source, different target" alone is far too loose, and the
+    first census run proved it: TinyLlama's decode path reported three carriers
+    whose pairs were `32x1 -> 32x32` with `32x1 -> 32x64`. Both expand axis 1,
+    whose source extent is 1, so the index contribution is zero in both and a
+    shared expression is harmless. Reporting those as carriers would have been
+    a false non-zero on the path that matters most — worse than reporting
+    nothing, because it would have been acted on.
+
+    What made the upstream case collide is that `1x2x1` was expanded along
+    axis 2 for one target (`1x2x4`) and along axis 0 for the other (`4x2x1`):
+    two different index expressions are owed, and one was emitted.
+    """
+    by_src: dict[str, dict] = defaultdict(dict)
     for src, dst in _BCAST.findall(ttir):
-        by_src[src].add(dst)
-    return [(src, sorted(dsts)) for src, dsts in sorted(by_src.items())
-            if len(dsts) > 1]
+        by_src[src][dst] = _expanded_axes(src, dst)
+    out = []
+    for src, dsts in sorted(by_src.items()):
+        if len(set(dsts.values())) > 1:
+            out.append((src, sorted(dsts)))
+    return out
+
+
+def _speaker_for(model: str) -> str:
+    """The voice this artefact requires, or "" — first in sorted order, which
+    is the enumeration the engine itself does."""
+    cache = Path.home() / ".neurobrix" / "cache" / model
+    voices = cache / "modules" / "voices"
+    if not voices.is_dir():
+        return ""
+    try:
+        if json.loads((cache / "runtime" / "defaults.json").read_text()).get("voice"):
+            return ""
+    except (OSError, ValueError):
+        pass
+    available = sorted(p.stem for p in voices.glob("*.pt"))
+    return available[0] if available else ""
 
 
 def census(model: str, arm: str, out: Path | None) -> int:
+    # BOTH bindings. `triton/compiler/__init__.py` does `from .compiler import
+    # compile`, so `triton.compiler.compile` is a SEPARATE name bound at import
+    # — and it is the one the engine's launcher imports. Patching only the
+    # module the function lives in wrapped nothing, and the first run of this
+    # tool reported a census over an empty set.
+    import triton.compiler as tc
     import triton.compiler.compiler as tcc
 
     seen: dict[str, dict] = {}
@@ -148,9 +194,19 @@ def census(model: str, arm: str, out: Path | None) -> int:
         return compiled
 
     tcc.compile = wrapped
+    tc.compile = wrapped
     try:
         from neurobrix.cli import main as cli_main
-        argv = ["neurobrix", "run", model, "--prompt", "a red apple on a wooden table"]
+        argv = ["neurobrix", "run", "--model", model,
+                "--prompt", "a red apple on a wooden table", "--max-tokens", "8"]
+        # An artefact that ships voices and declares no default is refused
+        # before a single kernel compiles -- Kokoro-82M's census reached zero
+        # compilations for that reason, and the refusal above said so instead
+        # of reporting a zero. The voice is READ FROM THE ARTEFACT, the same
+        # enumeration the engine does, never written here.
+        voice = _speaker_for(model)
+        if voice:
+            argv += ["--speaker", voice]
         if arm == "triton":
             argv.append("--triton")
         sys.argv = argv
@@ -160,9 +216,20 @@ def census(model: str, arm: str, out: Path | None) -> int:
             pass
     finally:
         tcc.compile = real
+        tc.compile = real
 
     carriers = {k: v for k, v in seen.items() if v["collisions"]}
     print()
+    if not seen:
+        # A census that compiled nothing is not a count of zero. Reporting
+        # "0 carry the collision" here would be a vacuous guard: the sentence
+        # is true and says nothing about the question, because the question
+        # was never put. It has to refuse.
+        print(f"NOTHING WAS COMPILED by {model} ({arm}): the run reached no "
+              f"Triton compilation at all, so this says nothing about the "
+              f"collision. Check that the run started — a census over an empty "
+              f"set is not a result.")
+        return 2
     print(f"kernels compiled by {model} ({arm}) : {len(seen)}")
     print(f"carrying the collision shape        : {len(carriers)}")
     for name, row in sorted(carriers.items()):
