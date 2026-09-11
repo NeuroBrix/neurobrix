@@ -165,6 +165,45 @@ own numbered entry below and strike it from this group.
 * **closed by** the snapshot adapter `_oracle_keeps` plus the provider hook `set_screen_oracle`, with a test that drives `screen_configs` itself rather than the predicate, and pins both failure modes the vote cannot see — a majority wrong in the same way, and a unanimous wrong space — plus the control that with no provider the default path is bit-for-bit the behaviour shipped since 2026-09-07.
 * **the distinction worth keeping** the predicate was not defective. It was correct, tested, and unreachable. **A helper whose every test passes can still have no seam**, and the class this register catalogues includes the instrument that exists but is not connected — not only the one that speaks falsely.
 
+### 18 — a door that refused a correct invocation
+
+* **date** 2026-09-11 · **machine** Dell · **site** `tools/precision_zoo_campaign.py`, `frozen_src_refusal` called unconditionally
+* **what it could not say** that `--trees label=path,label=path` names a frozen worktree PER ARM. The door knew exactly one way of naming a frozen tree and turned away the invocation that satisfies its own rule by construction.
+* **why it belongs here** it is the mirror of the class rather than an exception to it: an instrument that cannot recognise the state it is checking for. The damage is not a wrong green, it is that the next person adds `--src` beside `--trees` to get past it — and a rule survives as a formality while the habit it was built for dies.
+* **closed by** `d5b64d6` — `frozen_trees_refusal`, same three checks per arm, naming the ARM in its refusal · **injection** an arm pointed into the live repo, and an unlabelled entry.
+
+### 19 — a gate that printed a table with no rows and was called finished
+
+* **date** 2026-09-11 · **machine** Dell · **site** the byte matrix of `01_budget_unified_gate.sh`
+* **what it could not say** anything: invoked with no `--models`, the campaign filtered on `--family`, whose default is `None`, and selected zero models. It printed column headers, zero rows, and the script echoed `gate termine`.
+* **how it surfaced** reading the output for a number and finding a header.
+* **closed by** re-running over a NAMED five-family sample, with the claim it can support written beside it — `7de1560` touches one source file, so a model whose plan does not change is inert by construction.
+* **the sharp end** this is the gate that was supposed to produce the `42/42` a delivered report had claimed without measuring. It would have reproduced the same empty claim with a different provenance.
+
+### 20 — `_rig_busy` measured a moment, not the rig
+
+* **date** 2026-09-11 · **machine** Dell · **site** `tools/certify_the_catalogue.py`, `_rig_busy`
+* **what it could not say** that a campaign was in flight. A campaign BETWEEN two of its runs holds no compute process; `nvidia-smi` returned an empty list and the check said "free" while a gate held GPU0 five seconds either side.
+* **how it surfaced** the tool answered 0 and the very next command showed a process on the card.
+* **closed by** `08fd48c` — free means no compute process AND no driver alive that is about to start one; a `--plan` invocation does not count itself.
+* **the precedent it repeated** 2026-09-10, a second instance launched onto a live measurement declared dead from a buffered log. The rule was "check the PID, never a log's size". This check obeyed the letter and missed the gap between two runs.
+
+---
+
+## The shape all three of 18-20 share
+
+They are in the INSTRUMENTS, never in the engine — a door, a gate's scope, a
+readiness check. The other machine reports the same distribution on its side.
+
+The reason is structural and worth stating once: **an instrument has no suite
+behind it.** A kernel has tests; a test has a gate; a gate has nothing. So
+nothing forces an instrument to distinguish *"I looked and found nothing"* from
+*"there was nothing to look at"*, and both come out as the same silence.
+
+That is where the next one is, on both machines. Ask of every instrument: what
+does it print when it was given nothing to measure? If the answer is the same
+thing it prints on success, it is already an entry here and nobody has noticed.
+
 ---
 
 ## The Mac's entries
@@ -180,7 +219,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-Seventeen entries, of which five are placeholders and twelve carry a site. Two
+Twenty entries, of which five are placeholders and fifteen carry a site. Two
 machines, two weeks of concentrated looking. Every one of them produced silence
 or a green rather than an error, and **not one was found by a test** — they were
 found by users, by contradictions between two numbers, by reading generated
