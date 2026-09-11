@@ -1383,6 +1383,36 @@ def frozen_src_refusal(src, repo_root):
     return None
 
 
+def frozen_trees_refusal(trees, repo_root):
+    """Why this `--trees` may not be measured, or None if it may.
+
+    `--trees label=path,label=path` names a frozen worktree PER ARM, which is
+    the premise `--src` exists to guarantee — so a tree gate satisfies the rule
+    by construction and must not be refused for lacking `--src`.
+
+    It was refused, on 2026-09-11, at the door I wrote myself the day before:
+    the door knew exactly one way of naming a frozen tree. A door that refuses a
+    correct invocation is a different defect from one that admits a wrong one,
+    and it is still a defect — the cost is that the next person reaches for
+    `--src` beside `--trees` to get past it, which is the shape of every bypass
+    this discipline is meant to prevent.
+
+    Each path gets the SAME three checks as `--src`: it exists, it is not inside
+    the live repository, and its worktree carries the ignored pointers.
+    """
+    if not trees:
+        return "no --trees"
+    for spec in str(trees).split(","):
+        if "=" not in spec:
+            return (f"--trees entry {spec!r} is not `label=path/to/src`: an arm "
+                    f"without a label cannot be named in the verdict")
+        label, path = spec.split("=", 1)
+        why = frozen_src_refusal(path, repo_root)
+        if why:
+            return f"arm {label!r}: {why}"
+    return None
+
+
 def vacuous_lever_reason(record: dict):
     """Why this cell measured nothing, or None if it measured.
 
@@ -1648,7 +1678,9 @@ def main():
     # The door. A campaign measures whatever --src points at, and without it the
     # editable install means it measures the LIVE repository. Refused here,
     # before a second of card is spent — see frozen_src_refusal.
-    _frozen = frozen_src_refusal(args.src, Path(__file__).resolve().parent.parent)
+    _root = Path(__file__).resolve().parent.parent
+    _frozen = (frozen_trees_refusal(args.trees, _root) if args.trees
+               else frozen_src_refusal(args.src, _root))
     if _frozen:
         ap.error(f"this campaign would not measure a frozen tree — {_frozen}")
 
