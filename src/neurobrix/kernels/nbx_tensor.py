@@ -419,6 +419,50 @@ def torch_device_str(device_idx: int) -> str:
     return f"{name}:{device_idx}"
 
 
+#: Whether torch offers a device-SELECTION call for this backend. CUDA and
+#: ROCm number their devices and require one to be current before a launch.
+#: Apple's torch build exposes no `torch.mps.set_device` at all, because MPS is
+#: a single device (`torch.mps.device_count()` is 1) — so there is nothing to
+#: select and nothing to be current.
+#:
+#: This is a capability, not a vendor test — adding a backend is adding a row.
+_TORCH_HAS_DEVICE_SELECTION = {"cuda": True, "hip": True, "metal": False}
+
+
+def set_torch_device(device) -> None:
+    """Make `device` current for torch, where that means anything.
+
+    Takes an index or a torch device, as `torch.cuda.set_device` does.
+
+    Was `torch.cuda.set_device(idx)`, written on the compiled engine's
+    multi-device path. On Apple that raises
+    `AttributeError: module 'torch._C' has no attribute '_cuda_setDevice'` —
+    the same shape as the `f"cuda:{idx}"` that `torch_device_str` replaced: the
+    engine's internal token for device memory handed to torch, which resolves
+    it against the build it was compiled with.
+
+    Measured 2026-09-11 on `CogVideoX-2b`: the compiled arm died in 14.7 s at
+    `compiled_sequence.py:4136`, and no model measured before it had ever taken
+    the multi-device path, so the line had never been reached on this machine.
+
+    Doing nothing on a single-device backend is not a fallback: there is no
+    selection to make, and a backend that HAS one and is missing from the table
+    is refused rather than guessed.
+    """
+    backend = _detect_gpu_backend()
+    selects = _TORCH_HAS_DEVICE_SELECTION.get(backend)
+    if selects is None:
+        raise RuntimeError(
+            f"ZERO FALLBACK: backend {backend!r} does not say whether torch "
+            f"selects a device on it "
+            f"({sorted(_TORCH_HAS_DEVICE_SELECTION)}). Adding a backend is "
+            f"adding a row, not guessing.")
+    if not selects:
+        return
+    import torch
+    torch.cuda.set_device(device)
+
+
 def nbx_to_torch(tensor: 'NBXTensor'):
     """Convert NBXTensor to torch.Tensor via D2D copy.
 
