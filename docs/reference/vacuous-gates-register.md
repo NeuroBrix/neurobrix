@@ -1,5 +1,12 @@
 # Register of vacuous gates — instrumentation that lies by construction
 
+> **A helper whose every test passes can still have no seam.**
+>
+> Entry 17, and the whole class fits in it. `configs_agreeing_with_oracle`
+> shipped one day with six green tests — correct, tested, and unreachable. The
+> first call from the real data raised `TypeError`. Nothing in the suite could
+> have said so, because nothing in the suite was the caller.
+
 **A class whose failure mode is silence is invisible to the suite that contains
 it. So this register is not bookkeeping — it is the only instrument the class
 admits.**
