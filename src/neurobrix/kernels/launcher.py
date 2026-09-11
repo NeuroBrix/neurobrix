@@ -1221,6 +1221,13 @@ def screen_configs(tuner, configs, key, meta=None):
     # exactly where we have never looked — outside `nvidia/volta`, where the
     # configuration space itself differs by target.
     oracle = None
+    if _SCREEN_ORACLE is None:
+        # A mechanism that is complete and switched off is the most expensive
+        # form of a vacuous guard: it costs the price of writing it and returns
+        # nothing. The only thing worse is one that is silent about being off.
+        from neurobrix.kernels.screen_oracle import announce_no_oracle
+        announce_no_oracle(kernel_name, key,
+                           why="no oracle provider is installed at all")
     if _SCREEN_ORACLE is not None:
         try:
             oracle = _SCREEN_ORACLE(tuner, key, buffers)
@@ -1364,6 +1371,20 @@ def install(force: Optional[bool] = None) -> bool:
         prune_configs._nbx_screened = True
         prune_configs._nbx_upstream = _upstream_prune
         Autotuner.prune_configs = prune_configs
+
+    # The screen consults an fp64 oracle by default. A CERTIFIED key never
+    # reaches the screen, so this costs nothing where a certification exists;
+    # it is paid only on an uncertified key, once for the key and not once per
+    # candidate. `NBX_SCREEN_ORACLE=off` keeps the bare consensus for the
+    # differential arm.
+    if os.environ.get("NBX_SCREEN_ORACLE", "on").lower() != "off":
+        try:
+            from neurobrix.kernels.screen_oracle import install as _install_oracle
+            _install_oracle()
+        except Exception as exc:                       # never block a launch
+            print(f"[AUTOTUNE_ORACLE] the oracle provider could not be "
+                  f"installed ({type(exc).__name__}: {exc}); the screen runs "
+                  f"on the consensus alone", flush=True)
 
     _installed = True
     return True
