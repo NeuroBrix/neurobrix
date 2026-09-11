@@ -101,6 +101,23 @@ INVALIDATION_MARKERS = ("INVALIDATED.md", "PERTURBATION_NOTE.md", "STALE.md")
 #: is that no cell lies.
 ALIASES = {
     "qwen3-30b-a3b-thinking": "qwen3-30b-a3b-thinking-2507",
+    "wan2.1-vace-1.3b": "wan2.1-vace-1.3b-diffusers",
+    "wan2.1-t2v-1.3b": "wan2.1-t2v-1.3b-diffusers",
+    "wan2.1-i2v-14b-480p": "wan2.1-i2v-14b-480p-diffusers",
+    "wan2.2-i2v-a14b": "wan2.2-i2v-a14b-diffusers",
+    "sana-1600m-4kpx-bf16": "sana_1600m_4kpx_bf16",
+    "sana-video-2b-720p": "sana-video_2b_720p_diffusers",
+    "whisper-v3-turbo": "whisper-large-v3-turbo",
+    "voxtral-mini-3b": "voxtral-mini-3b-2507",
+}
+
+#: A cell that RAN and FAILED is not the same thing as a model nobody tried, and
+#: collapsing the two into "not measured" erases the attempt — along with the
+#: defect it found. Each failure here names the debt that carries its diagnosis.
+FAILED_CELLS = {
+    "Wan2.1-VACE-1.3B-diffusers": "D-WAN-VACE-BROADCAST-AT-DIV",
+    "Wan2.1-T2V-1.3B-Diffusers": "D-WAN-T2V-OOM-AT-5D-PAD",
+    "mochi-1-preview": "D-MOCHI-CUDA-700-AT-MM",
 }
 
 
@@ -128,7 +145,12 @@ def _campaign_cells(campaigns: Path) -> dict:
         except (OSError, ValueError):
             continue
         a, b = d.get("A") or {}, d.get("B") or {}
+        model = d.get("model", result.parent.name)
         if a.get("rc") != 0 or b.get("rc") != 0:
+            # It was attempted and it failed. Kept, with its debt named.
+            out[model] = {"failed": True,
+                          "debt": FAILED_CELLS.get(model),
+                          "campaign": result.parent.parent.parent.name}
             continue
         reps = lambda arm: [r["exec_s"] for r in (arm.get("reps") or [])
                             if r.get("rc") == 0 and isinstance(r.get("exec_s"), (int, float))]
@@ -138,11 +160,13 @@ def _campaign_cells(campaigns: Path) -> dict:
         keys = b.get("swept")
         gain = (bm / am) if (am and bm and keys) else None
         ch = d.get("choices") or {}
+        _ = model
         # The lists in `choices` are SAMPLES, capped at twenty; the `*_count`
         # fields carry the truth. Reading `len(list)` reported 20 near-ties
         # where the run had found 139 — a cell that lies, in the document whose
         # rule is that no cell lies. Count fields win, always.
-        out[d.get("model", result.parent.name)] = {
+        out[model] = {
+            "failed": False,
             "keys": ch.get("keys", keys),
             "served": a.get("certified_served"),
             "certified": ch.get("certified"),
@@ -195,13 +219,15 @@ def main() -> int:
 
     def cell_for(row):
         slug = row["slug"].lower()
+        row["container"] = next((n for n in cells
+                                 if n.lower() in (slug, ALIASES.get(slug, ""))), None)
         return by_name.get(slug) or by_name.get(ALIASES.get(slug, ""))
 
     ranked = []
     for row in hub:
         c = cell_for(row)
         row["cell"] = c
-        row["known_cost"] = c["cost_s"] if c else None
+        row["known_cost"] = c["cost_s"] if (c and not c.get("failed")) else None
         ranked.append(row)
     ranked.sort(key=lambda r: (r["known_cost"] is None, r["known_cost"] or 0, r["gb"]))
 
@@ -217,15 +243,26 @@ def main() -> int:
                  f"{len(per_file)} kernel/dtype files:\n")
     for name, n in sorted(per_file.items(), key=lambda kv: -kv[1]):
         lines.append(f"* `{name}` — {n:,}")
-    measured = [r for r in ranked if r["cell"]]
-    lines += ["", f"**{len(measured)} of {len(ranked)} models have been measured against it.** "
-                  f"The other {len(ranked) - len(measured)} carry `not measured` in every "
-                  f"column that would otherwise be a guess.", ""]
+    measured = [r for r in ranked if r["cell"] and not r["cell"].get("failed")]
+    failed = [r for r in ranked if r["cell"] and r["cell"].get("failed")]
+    lines += ["", f"**{len(measured)} of {len(ranked)} models have been measured "
+                  f"against it.** {len(failed)} were attempted and FAILED — each "
+                  f"row names the debt that carries its diagnosis, because a cell "
+                  f"that ran and crashed is not the same thing as a model nobody "
+                  f"tried. The remaining "
+                  f"{len(ranked) - len(measured) - len(failed)} carry `not "
+                  f"measured` in every column that would otherwise be a guess.", ""]
 
     lines += ["| # | model | family | GB | keys | certified | differ | near-tie | CONTRADICTED | screened out | gain | known cost |",
               "|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for i, r in enumerate(ranked, 1):
         c = r["cell"]
+        if c and c.get("failed"):
+            debt = c.get("debt")
+            note = f"**failed** — `{debt}`" if debt else "**failed**"
+            lines.append(f"| {i} | `{r['hub']}` | {r['family']} | {r['gb']:.1f} | "
+                         + " | ".join([note] + ["—"] * 7) + " |")
+            continue
         if c:
             keys = str(c["keys"]) if c["keys"] is not None else "?"
             served = str(c["served"]) if c["served"] is not None else "?"
@@ -238,6 +275,17 @@ def main() -> int:
             out = (f"{c['excluded']}" if c["excluded"] is not None else "?")
             cost = f"{c['cost_s']:.0f} s (measured, {c['campaign']})"
         else:
+            # A model with a known blocker from an EARLIER flight says so here
+            # too: "not measured" is true but incomplete when the reason it was
+            # not measured is already written down.
+            blocker = next((d for name, d in FAILED_CELLS.items()
+                            if name.lower() == r["slug"].lower()
+                            or name.lower() == ALIASES.get(r["slug"].lower(), "")), None)
+            if blocker:
+                lines.append(f"| {i} | `{r['hub']}` | {r['family']} | {r['gb']:.1f} | "
+                             + " | ".join([f"**blocked** — `{blocker}`"] + ["—"] * 7)
+                             + " |")
+                continue
             keys = served = certified = differ = near = contra = out = gain = "not measured"
             cost = "not measured"
         lines.append(f"| {i} | `{r['hub']}` | {r['family']} | {r['gb']:.1f} | {keys} | "
