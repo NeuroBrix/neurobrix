@@ -599,6 +599,72 @@
    },
    "excluded": []
   },
+  "(1, 1024, 1, 38, 1536, 1, 32, 1, 7, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 32,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 32
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:32:18+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     1024,
+     1,
+     38,
+     1536,
+     1,
+     32,
+     1,
+     7,
+     1,
+     1,
+     0,
+     0,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0002776185658311547,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.8149546657999357,
+    "second_ms": 0.9172358101322537,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 11,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 1.455,
+     "runs": 0.425,
+     "bench": 0.753
+    }
+   },
+   "excluded": []
+  },
   "(1, 1024, 1, 418, 1536, 1, 412, 1, 7, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
@@ -661,6 +727,72 @@
      "oracle": 1.036,
      "runs": 0.752,
      "bench": 0.351
+    }
+   },
+   "excluded": []
+  },
+  "(1, 1024, 1, 70, 1536, 1, 64, 1, 7, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 32,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:32:58+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     1024,
+     1,
+     70,
+     1536,
+     1,
+     64,
+     1,
+     7,
+     1,
+     1,
+     0,
+     0,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0002462678170545532,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.929036184435799,
+    "second_ms": 0.9706521005165286,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 11,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 2.871,
+     "runs": 0.293,
+     "bench": 0.747
     }
    },
    "excluded": []
@@ -991,6 +1123,600 @@
      "oracle": 0.466,
      "runs": 0.134,
      "bench": 0.903
+    }
+   },
+   "excluded": []
+  },
+  "(1, 128, 1, 1040, 128, 1, 1040, 1, 11, 1, 1, 0, 15, 1, 3, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:34:18+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     128,
+     1,
+     1040,
+     128,
+     1,
+     1040,
+     1,
+     11,
+     1,
+     1,
+     0,
+     15,
+     1,
+     3,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.00026558952409025003,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.18059377710300464,
+    "second_ms": 0.19923005952979578,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 11,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.246,
+     "runs": 0.082,
+     "bench": 1.148
+    }
+   },
+   "excluded": []
+  },
+  "(1, 128, 1, 1040, 128, 1, 1040, 1, 11, 1, 1, 0, 25, 1, 5, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:34:20+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     128,
+     1,
+     1040,
+     128,
+     1,
+     1040,
+     1,
+     11,
+     1,
+     1,
+     0,
+     25,
+     1,
+     5,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0002813188895737604,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.18167530157423895,
+    "second_ms": 0.19861462448883538,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 11,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.245,
+     "runs": 0.082,
+     "bench": 1.154
+    }
+   },
+   "excluded": []
+  },
+  "(1, 128, 1, 1040, 128, 1, 1040, 1, 11, 1, 1, 0, 5, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:34:17+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     128,
+     1,
+     1040,
+     128,
+     1,
+     1040,
+     1,
+     11,
+     1,
+     1,
+     0,
+     5,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.00028452930676781173,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.18117783437354848,
+    "second_ms": 0.1988171357945137,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 11,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.246,
+     "runs": 0.083,
+     "bench": 1.148
+    }
+   },
+   "excluded": []
+  },
+  "(1, 128, 1, 1040, 128, 1, 1040, 1, 3, 1, 1, 0, 1, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:34:10+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     128,
+     1,
+     1040,
+     128,
+     1,
+     1040,
+     1,
+     3,
+     1,
+     1,
+     0,
+     1,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0002828784023489895,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.05664675155619405,
+    "second_ms": 0.06279810974653646,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 11,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.051,
+     "runs": 0.045,
+     "bench": 2.448
+    }
+   },
+   "excluded": []
+  },
+  "(1, 128, 1, 1040, 128, 1, 1040, 1, 3, 1, 1, 0, 3, 1, 3, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:34:12+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     128,
+     1,
+     1040,
+     128,
+     1,
+     1040,
+     1,
+     3,
+     1,
+     1,
+     0,
+     3,
+     1,
+     3,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0002582896106653834,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.05599863842420333,
+    "second_ms": 0.06287646381294026,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 11,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.051,
+     "runs": 0.045,
+     "bench": 2.481
+    }
+   },
+   "excluded": []
+  },
+  "(1, 128, 1, 1040, 128, 1, 1040, 1, 3, 1, 1, 0, 5, 1, 5, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:34:15+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     128,
+     1,
+     1040,
+     128,
+     1,
+     1040,
+     1,
+     3,
+     1,
+     1,
+     0,
+     5,
+     1,
+     5,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.00029040712085297066,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.05833185935596458,
+    "second_ms": 0.062464056907770286,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 11,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.054,
+     "runs": 0.046,
+     "bench": 2.489
+    }
+   },
+   "excluded": []
+  },
+  "(1, 128, 1, 1040, 128, 1, 1040, 1, 7, 1, 1, 0, 15, 1, 5, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:34:07+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     128,
+     1,
+     1040,
+     128,
+     1,
+     1040,
+     1,
+     7,
+     1,
+     1,
+     0,
+     15,
+     1,
+     5,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0003508273667454175,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.11765678456876681,
+    "second_ms": 0.12981854179830454,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 11,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.119,
+     "runs": 0.064,
+     "bench": 1.492
+    }
+   },
+   "excluded": []
+  },
+  "(1, 128, 1, 1040, 128, 1, 1040, 1, 7, 1, 1, 0, 3, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:34:04+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     128,
+     1,
+     1040,
+     128,
+     1,
+     1040,
+     1,
+     7,
+     1,
+     1,
+     0,
+     3,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0003870026522591011,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.11732501316680966,
+    "second_ms": 0.1293888846197144,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 11,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.118,
+     "runs": 0.064,
+     "bench": 1.494
+    }
+   },
+   "excluded": []
+  },
+  "(1, 128, 1, 1040, 128, 1, 1040, 1, 7, 1, 1, 0, 9, 1, 3, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:34:06+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     128,
+     1,
+     1040,
+     128,
+     1,
+     1040,
+     1,
+     7,
+     1,
+     1,
+     0,
+     9,
+     1,
+     3,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.00034403803818297145,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.11750774890989871,
+    "second_ms": 0.12986991272921547,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 11,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.118,
+     "runs": 0.063,
+     "bench": 1.492
     }
    },
    "excluded": []
@@ -4424,6 +5150,204 @@
    },
    "excluded": []
   },
+  "(1, 18, 1, 3121, 128, 1, 1040, 1, 6, 1, 3, 0, 1, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:34:02+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     18,
+     1,
+     3121,
+     128,
+     1,
+     1040,
+     1,
+     6,
+     1,
+     3,
+     0,
+     1,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0002541725808223934,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.04037509416757471,
+    "second_ms": 0.04058290837066514,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 17,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.013,
+     "runs": 0.173,
+     "bench": 3.073
+    }
+   },
+   "excluded": []
+  },
+  "(1, 18, 1, 3121, 256, 1, 208, 1, 30, 1, 15, 0, 7, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 32,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 32
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:33:49+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     18,
+     1,
+     3121,
+     256,
+     1,
+     208,
+     1,
+     30,
+     1,
+     15,
+     0,
+     7,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.00023204170464416243,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.10743796596951906,
+    "second_ms": 0.13014421429510084,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 14,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.026,
+     "runs": 0.172,
+     "bench": 1.672
+    }
+   },
+   "excluded": []
+  },
+  "(1, 18, 1, 3121, 64, 1, 3121, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:34:20+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     18,
+     1,
+     3121,
+     64,
+     1,
+     3121,
+     1,
+     1,
+     1,
+     1,
+     0,
+     0,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0002583118619225481,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.02316357565660425,
+    "second_ms": 0.02458090752440567,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 2,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.002,
+     "runs": 0.152,
+     "bench": 0.486
+    }
+   },
+   "excluded": []
+  },
   "(1, 180, 1, 1, 6, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
@@ -5081,6 +6005,270 @@
    },
    "excluded": []
   },
+  "(1, 192, 1, 16384, 192, 1, 16384, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 64,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 4,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:33:13+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     192,
+     1,
+     16384,
+     192,
+     1,
+     16384,
+     1,
+     1,
+     1,
+     1,
+     0,
+     0,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.00033242253074269987,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.264327627933578,
+    "second_ms": 0.27639429510890184,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 12,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.123,
+     "runs": 0.987,
+     "bench": 1.041
+    }
+   },
+   "excluded": []
+  },
+  "(1, 192, 1, 16390, 192, 1, 16384, 1, 7, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 64,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 4,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:33:11+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     192,
+     1,
+     16390,
+     192,
+     1,
+     16384,
+     1,
+     7,
+     1,
+     1,
+     0,
+     0,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.00033654722500881115,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-1 cols 0-50; batch 0 rows 0-1 cols 8167-8217; batch 0 rows 0-1 cols 16334-16384) of 1x1x16384",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 1.7466647245667197,
+    "second_ms": 1.8392990543728782,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 8,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.082,
+     "runs": 0.63,
+     "bench": 0.557
+    }
+   },
+   "excluded": []
+  },
+  "(1, 192, 1, 16402, 192, 1, 16384, 1, 7, 1, 1, 0, 0, 1, 3, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 64,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 4,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:33:14+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     192,
+     1,
+     16402,
+     192,
+     1,
+     16384,
+     1,
+     7,
+     1,
+     1,
+     0,
+     0,
+     1,
+     3,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0003467372829754731,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-1 cols 0-50; batch 0 rows 0-1 cols 8167-8217; batch 0 rows 0-1 cols 16334-16384) of 1x1x16384",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 1.7468508861281655,
+    "second_ms": 1.8401767639886766,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 8,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.082,
+     "runs": 0.632,
+     "bench": 0.551
+    }
+   },
+   "excluded": []
+  },
+  "(1, 192, 1, 16438, 192, 1, 16384, 1, 7, 1, 1, 0, 0, 1, 9, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 64,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 4,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:33:16+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     192,
+     1,
+     16438,
+     192,
+     1,
+     16384,
+     1,
+     7,
+     1,
+     1,
+     0,
+     0,
+     1,
+     9,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0003736018814489597,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-1 cols 0-50; batch 0 rows 0-1 cols 8167-8217; batch 0 rows 0-1 cols 16334-16384) of 1x1x16384",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 1.7467578216032549,
+    "second_ms": 1.840760384287153,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 8,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.082,
+     "runs": 0.635,
+     "bench": 0.553
+    }
+   },
+   "excluded": []
+  },
   "(1, 192, 1, 58368, 192, 1, 58368, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
@@ -5341,6 +6529,270 @@
      "oracle": 0.081,
      "runs": 2.415,
      "bench": 0.585
+    }
+   },
+   "excluded": []
+  },
+  "(1, 192, 1, 8192, 192, 1, 8192, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 64,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 4,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:32:39+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     192,
+     1,
+     8192,
+     192,
+     1,
+     8192,
+     1,
+     1,
+     1,
+     1,
+     0,
+     0,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0003639755594166908,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.16211639934529862,
+    "second_ms": 0.16458302126403598,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 12,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.042,
+     "runs": 0.471,
+     "bench": 1.353
+    }
+   },
+   "excluded": []
+  },
+  "(1, 192, 1, 8198, 192, 1, 8192, 1, 7, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 64,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 4,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:32:37+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     192,
+     1,
+     8198,
+     192,
+     1,
+     8192,
+     1,
+     7,
+     1,
+     1,
+     0,
+     0,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.00035352267672823274,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-1 cols 0-50; batch 0 rows 0-1 cols 4071-4121; batch 0 rows 0-1 cols 8142-8192) of 1x1x8192",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 1.0528934098578788,
+    "second_ms": 1.1000888976785872,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 10,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.082,
+     "runs": 0.298,
+     "bench": 0.669
+    }
+   },
+   "excluded": []
+  },
+  "(1, 192, 1, 8210, 192, 1, 8192, 1, 7, 1, 1, 0, 0, 1, 3, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 64,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 4,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:32:40+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     192,
+     1,
+     8210,
+     192,
+     1,
+     8192,
+     1,
+     7,
+     1,
+     1,
+     0,
+     0,
+     1,
+     3,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0003688330685499954,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-1 cols 0-50; batch 0 rows 0-1 cols 4071-4121; batch 0 rows 0-1 cols 8142-8192) of 1x1x8192",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 1.0531978381646645,
+    "second_ms": 1.100003570318222,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 10,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.082,
+     "runs": 0.298,
+     "bench": 0.67
+    }
+   },
+   "excluded": []
+  },
+  "(1, 192, 1, 8246, 192, 1, 8192, 1, 7, 1, 1, 0, 0, 1, 9, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 64,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 4,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:32:41+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     192,
+     1,
+     8246,
+     192,
+     1,
+     8192,
+     1,
+     7,
+     1,
+     1,
+     0,
+     0,
+     1,
+     9,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0003428491773007307,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-1 cols 0-50; batch 0 rows 0-1 cols 4071-4121; batch 0 rows 0-1 cols 8142-8192) of 1x1x8192",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 1.0528380613069277,
+    "second_ms": 1.1010560161537595,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 10,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.083,
+     "runs": 0.298,
+     "bench": 0.67
     }
    },
    "excluded": []
@@ -6793,6 +8245,600 @@
      "oracle": 0.138,
      "runs": 0.475,
      "bench": 0.363
+    }
+   },
+   "excluded": []
+  },
+  "(1, 256, 1, 208, 256, 1, 208, 1, 11, 1, 1, 0, 15, 1, 3, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 32
+    },
+    "num_warps": 4,
+    "num_stages": 3,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:33:57+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     256,
+     1,
+     208,
+     256,
+     1,
+     208,
+     1,
+     11,
+     1,
+     1,
+     0,
+     15,
+     1,
+     3,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0003347839901898224,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.3956428787112236,
+    "second_ms": 0.4822554222072463,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 2,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.389,
+     "runs": 0.23,
+     "bench": 0.168
+    }
+   },
+   "excluded": []
+  },
+  "(1, 256, 1, 208, 256, 1, 208, 1, 11, 1, 1, 0, 25, 1, 5, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 32,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 32
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:33:59+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     256,
+     1,
+     208,
+     256,
+     1,
+     208,
+     1,
+     11,
+     1,
+     1,
+     0,
+     25,
+     1,
+     5,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.00038784694876353016,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.3447553695816743,
+    "second_ms": 0.37001809561364,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 10,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.386,
+     "runs": 0.231,
+     "bench": 0.833
+    }
+   },
+   "excluded": []
+  },
+  "(1, 256, 1, 208, 256, 1, 208, 1, 11, 1, 1, 0, 5, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 32,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:33:56+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     256,
+     1,
+     208,
+     256,
+     1,
+     208,
+     1,
+     11,
+     1,
+     1,
+     0,
+     5,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.00040400324480271976,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.3759556937103088,
+    "second_ms": 0.48003122210502625,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 2,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.387,
+     "runs": 0.221,
+     "bench": 0.169
+    }
+   },
+   "excluded": []
+  },
+  "(1, 256, 1, 208, 256, 1, 208, 1, 3, 1, 1, 0, 1, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 32,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 32
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:33:53+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     256,
+     1,
+     208,
+     256,
+     1,
+     208,
+     1,
+     3,
+     1,
+     1,
+     0,
+     1,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.00042368542327468373,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.08484102459226409,
+    "second_ms": 0.10332749639662149,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 11,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.043,
+     "runs": 0.166,
+     "bench": 1.761
+    }
+   },
+   "excluded": []
+  },
+  "(1, 256, 1, 208, 256, 1, 208, 1, 3, 1, 1, 0, 3, 1, 3, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 32,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 32
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:33:55+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     256,
+     1,
+     208,
+     256,
+     1,
+     208,
+     1,
+     3,
+     1,
+     1,
+     0,
+     3,
+     1,
+     3,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0003907605775853074,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.08498533519384918,
+    "second_ms": 0.10445595682837576,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 11,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.045,
+     "runs": 0.188,
+     "bench": 1.688
+    }
+   },
+   "excluded": []
+  },
+  "(1, 256, 1, 208, 256, 1, 208, 1, 3, 1, 1, 0, 5, 1, 5, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 32
+    },
+    "num_warps": 4,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:33:56+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     256,
+     1,
+     208,
+     256,
+     1,
+     208,
+     1,
+     3,
+     1,
+     1,
+     0,
+     5,
+     1,
+     5,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.00036735777844824745,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.11350795515309806,
+    "second_ms": 0.1316473368426849,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 2,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.042,
+     "runs": 0.156,
+     "bench": 0.321
+    }
+   },
+   "excluded": []
+  },
+  "(1, 256, 1, 208, 256, 1, 208, 1, 7, 1, 1, 0, 15, 1, 5, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 32,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:33:51+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     256,
+     1,
+     208,
+     256,
+     1,
+     208,
+     1,
+     7,
+     1,
+     1,
+     0,
+     15,
+     1,
+     5,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.00026987398447957014,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.2488642009736607,
+    "second_ms": 0.29196918452227555,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 2,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.203,
+     "runs": 0.183,
+     "bench": 0.204
+    }
+   },
+   "excluded": []
+  },
+  "(1, 256, 1, 208, 256, 1, 208, 1, 7, 1, 1, 0, 3, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 32,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 32
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:33:50+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     256,
+     1,
+     208,
+     256,
+     1,
+     208,
+     1,
+     7,
+     1,
+     1,
+     0,
+     3,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0004704366408276354,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.2010378407293491,
+    "second_ms": 0.29391811700428233,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 2,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.201,
+     "runs": 0.298,
+     "bench": 0.207
+    }
+   },
+   "excluded": []
+  },
+  "(1, 256, 1, 208, 256, 1, 208, 1, 7, 1, 1, 0, 9, 1, 3, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 32
+    },
+    "num_warps": 4,
+    "num_stages": 3,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:33:50+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     256,
+     1,
+     208,
+     256,
+     1,
+     208,
+     1,
+     7,
+     1,
+     1,
+     0,
+     9,
+     1,
+     3,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0002580794435109892,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.25033559386111515,
+    "second_ms": 0.29277253573510187,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 2,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.204,
+     "runs": 0.166,
+     "bench": 0.204
     }
    },
    "excluded": []
@@ -9959,6 +12005,270 @@
    },
    "excluded": []
   },
+  "(1, 384, 1, 2048, 384, 1, 2048, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 64,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 4,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:32:33+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     384,
+     1,
+     2048,
+     384,
+     1,
+     2048,
+     1,
+     1,
+     1,
+     1,
+     0,
+     0,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.00037052366488082855,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.16502186649789413,
+    "second_ms": 0.18956624774355865,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 12,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.012,
+     "runs": 0.235,
+     "bench": 1.299
+    }
+   },
+   "excluded": []
+  },
+  "(1, 384, 1, 2054, 384, 1, 2048, 1, 7, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 64,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 4,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:32:32+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     384,
+     1,
+     2054,
+     384,
+     1,
+     2048,
+     1,
+     7,
+     1,
+     1,
+     0,
+     0,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.00038188735371841884,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-1 cols 0-25; batch 0 rows 0-1 cols 1011-1036; batch 0 rows 0-1 cols 2023-2048) of 1x1x2048",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 1.218659100993987,
+    "second_ms": 1.2285207148754236,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 8,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.166,
+     "runs": 0.272,
+     "bench": 0.539
+    }
+   },
+   "excluded": []
+  },
+  "(1, 384, 1, 2066, 384, 1, 2048, 1, 7, 1, 1, 0, 0, 1, 3, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 64,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 4,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:32:35+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     384,
+     1,
+     2066,
+     384,
+     1,
+     2048,
+     1,
+     7,
+     1,
+     1,
+     0,
+     0,
+     1,
+     3,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0004247475271030385,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-1 cols 0-25; batch 0 rows 0-1 cols 1011-1036; batch 0 rows 0-1 cols 2023-2048) of 1x1x2048",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 1.2271040044724941,
+    "second_ms": 1.2927834718458113,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 11,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.169,
+     "runs": 0.273,
+     "bench": 0.742
+    }
+   },
+   "excluded": []
+  },
+  "(1, 384, 1, 2102, 384, 1, 2048, 1, 7, 1, 1, 0, 0, 1, 9, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:32:36+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     384,
+     1,
+     2102,
+     384,
+     1,
+     2048,
+     1,
+     7,
+     1,
+     1,
+     0,
+     0,
+     1,
+     9,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.000245346085177468,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-1 cols 0-25; batch 0 rows 0-1 cols 1011-1036; batch 0 rows 0-1 cols 2023-2048) of 1x1x2048",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 1.2249522353663589,
+    "second_ms": 1.2472319975495338,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 11,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.167,
+     "runs": 0.272,
+     "bench": 0.742
+    }
+   },
+   "excluded": []
+  },
   "(1, 384, 1, 23808, 384, 1, 23808, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
@@ -10487,6 +12797,270 @@
    },
    "excluded": []
   },
+  "(1, 384, 1, 4096, 384, 1, 4096, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 64,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 4,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:33:06+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     384,
+     1,
+     4096,
+     384,
+     1,
+     4096,
+     1,
+     1,
+     1,
+     1,
+     0,
+     0,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0002557159334428937,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.30153686088203585,
+    "second_ms": 0.3138477410520277,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 12,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.028,
+     "runs": 0.514,
+     "bench": 1.04
+    }
+   },
+   "excluded": []
+  },
+  "(1, 384, 1, 4102, 384, 1, 4096, 1, 7, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 64,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 4,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:33:05+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     384,
+     1,
+     4102,
+     384,
+     1,
+     4096,
+     1,
+     7,
+     1,
+     1,
+     0,
+     0,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.00024642951381320855,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-1 cols 0-25; batch 0 rows 0-1 cols 2035-2060; batch 0 rows 0-1 cols 4071-4096) of 1x1x4096",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 2.086804138986688,
+    "second_ms": 2.1813475290934243,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 11,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.168,
+     "runs": 0.494,
+     "bench": 0.775
+    }
+   },
+   "excluded": []
+  },
+  "(1, 384, 1, 4114, 384, 1, 4096, 1, 7, 1, 1, 0, 0, 1, 3, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 64,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 4,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:33:08+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     384,
+     1,
+     4114,
+     384,
+     1,
+     4096,
+     1,
+     7,
+     1,
+     1,
+     0,
+     0,
+     1,
+     3,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.000459352252915866,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-1 cols 0-25; batch 0 rows 0-1 cols 2035-2060; batch 0 rows 0-1 cols 4071-4096) of 1x1x4096",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 2.0852951125094763,
+    "second_ms": 2.178901301489936,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 11,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.167,
+     "runs": 0.494,
+     "bench": 0.773
+    }
+   },
+   "excluded": []
+  },
+  "(1, 384, 1, 4150, 384, 1, 4096, 1, 7, 1, 1, 0, 0, 1, 9, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 64,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 4,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:33:10+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     384,
+     1,
+     4150,
+     384,
+     1,
+     4096,
+     1,
+     7,
+     1,
+     1,
+     0,
+     0,
+     1,
+     9,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0002681256722128749,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-1 cols 0-25; batch 0 rows 0-1 cols 2035-2060; batch 0 rows 0-1 cols 4071-4096) of 1x1x4096",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 2.085941854276155,
+    "second_ms": 2.179982211854723,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 11,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.168,
+     "runs": 0.494,
+     "bench": 0.783
+    }
+   },
+   "excluded": []
+  },
   "(1, 4, 128, 128, 4, 128, 128, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
@@ -10941,6 +13515,138 @@
      "oracle": 0.115,
      "runs": 0.06,
      "bench": 1.312
+    }
+   },
+   "excluded": []
+  },
+  "(1, 512, 1, 175, 512, 1, 173, 1, 3, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:33:25+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     512,
+     1,
+     175,
+     512,
+     1,
+     173,
+     1,
+     3,
+     1,
+     1,
+     0,
+     0,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.00028860879749564904,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.19587938523349854,
+    "second_ms": 0.2065355779309022,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 11,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.152,
+     "runs": 0.196,
+     "bench": 1.211
+    }
+   },
+   "excluded": []
+  },
+  "(1, 512, 1, 176, 512, 1, 173, 1, 4, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:33:24+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     512,
+     1,
+     176,
+     512,
+     1,
+     173,
+     1,
+     4,
+     1,
+     1,
+     0,
+     0,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.00042897872264354797,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.2559933594000415,
+    "second_ms": 0.2691517806783014,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 11,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.238,
+     "runs": 0.219,
+     "bench": 1.062
     }
    },
    "excluded": []
@@ -11605,6 +14311,72 @@
    },
    "excluded": []
   },
+  "(1, 512, 1, 26, 512, 1, 26, 1, 3, 1, 1, 0, 1, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 32,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 32
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:33:45+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     512,
+     1,
+     26,
+     512,
+     1,
+     26,
+     1,
+     3,
+     1,
+     1,
+     0,
+     1,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.000327078036882649,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.15008311855435819,
+    "second_ms": 0.15870412329370662,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 11,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.023,
+     "runs": 0.054,
+     "bench": 1.272
+    }
+   },
+   "excluded": []
+  },
   "(1, 512, 1, 266, 256, 1, 266, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
@@ -11733,6 +14505,72 @@
      "oracle": 0.113,
      "runs": 0.058,
      "bench": 1.317
+    }
+   },
+   "excluded": []
+  },
+  "(1, 512, 1, 350, 512, 1, 346, 1, 5, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 64,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 4,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:33:27+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     512,
+     1,
+     350,
+     512,
+     1,
+     346,
+     1,
+     5,
+     1,
+     1,
+     0,
+     0,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.00040148699077679145,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.40750028238152014,
+    "second_ms": 0.4228251893469628,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 11,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.695,
+     "runs": 0.268,
+     "bench": 0.871
     }
    },
    "excluded": []
@@ -14900,6 +17738,666 @@
    },
    "excluded": []
   },
+  "(1, 64, 1, 3121, 18, 1, 3121, 1, 7, 1, 1, 0, 3, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:34:34+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     64,
+     1,
+     3121,
+     18,
+     1,
+     3121,
+     1,
+     7,
+     1,
+     1,
+     0,
+     3,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.00024781885873076794,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.06507789526919001,
+    "second_ms": 0.06838536977024215,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 2,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.023,
+     "runs": 0.171,
+     "bench": 0.412
+    }
+   },
+   "excluded": []
+  },
+  "(1, 64, 1, 3121, 64, 1, 3121, 1, 11, 1, 1, 0, 15, 1, 3, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:34:22+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     64,
+     1,
+     3121,
+     64,
+     1,
+     3121,
+     1,
+     11,
+     1,
+     1,
+     0,
+     15,
+     1,
+     3,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.00039962077513557714,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.12790327485439912,
+    "second_ms": 0.17851592654531653,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 2,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.129,
+     "runs": 0.316,
+     "bench": 0.263
+    }
+   },
+   "excluded": []
+  },
+  "(1, 64, 1, 3121, 64, 1, 3121, 1, 11, 1, 1, 0, 25, 1, 5, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:34:23+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     64,
+     1,
+     3121,
+     64,
+     1,
+     3121,
+     1,
+     11,
+     1,
+     1,
+     0,
+     25,
+     1,
+     5,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0003967076868300567,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.1276962131510178,
+    "second_ms": 0.15217898298805657,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 2,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.129,
+     "runs": 0.305,
+     "bench": 0.296
+    }
+   },
+   "excluded": []
+  },
+  "(1, 64, 1, 3121, 64, 1, 3121, 1, 11, 1, 1, 0, 5, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:34:21+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     64,
+     1,
+     3121,
+     64,
+     1,
+     3121,
+     1,
+     11,
+     1,
+     1,
+     0,
+     5,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0003784803875198625,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.12915773072571896,
+    "second_ms": 0.14522447820697257,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 2,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.133,
+     "runs": 0.207,
+     "bench": 0.281
+    }
+   },
+   "excluded": []
+  },
+  "(1, 64, 1, 3121, 64, 1, 3121, 1, 3, 1, 1, 0, 1, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 64,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 4,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:34:25+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     64,
+     1,
+     3121,
+     64,
+     1,
+     3121,
+     1,
+     3,
+     1,
+     1,
+     0,
+     1,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.00036097351314914503,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.0431984456964274,
+    "second_ms": 0.04381452168825377,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 11,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.036,
+     "runs": 0.055,
+     "bench": 2.637
+    }
+   },
+   "excluded": []
+  },
+  "(1, 64, 1, 3121, 64, 1, 3121, 1, 3, 1, 1, 0, 3, 1, 3, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 64,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 4,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:34:27+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     64,
+     1,
+     3121,
+     64,
+     1,
+     3121,
+     1,
+     3,
+     1,
+     1,
+     0,
+     3,
+     1,
+     3,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.00039989473824089927,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.043180090296154834,
+    "second_ms": 0.04486047906324894,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 8,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.035,
+     "runs": 0.188,
+     "bench": 1.865
+    }
+   },
+   "excluded": []
+  },
+  "(1, 64, 1, 3121, 64, 1, 3121, 1, 3, 1, 1, 0, 5, 1, 5, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 64,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 4,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:34:28+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     64,
+     1,
+     3121,
+     64,
+     1,
+     3121,
+     1,
+     3,
+     1,
+     1,
+     0,
+     5,
+     1,
+     5,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0003948105305168287,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.04347007022989399,
+    "second_ms": 0.05864345921966229,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 2,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.037,
+     "runs": 0.183,
+     "bench": 0.35
+    }
+   },
+   "excluded": []
+  },
+  "(1, 64, 1, 3121, 64, 1, 3121, 1, 7, 1, 1, 0, 15, 1, 5, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 64,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 4,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:34:33+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     64,
+     1,
+     3121,
+     64,
+     1,
+     3121,
+     1,
+     7,
+     1,
+     1,
+     0,
+     15,
+     1,
+     5,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0003198954973814046,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.07995733252859541,
+    "second_ms": 0.11696732683802943,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 2,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.082,
+     "runs": 0.194,
+     "bench": 0.316
+    }
+   },
+   "excluded": []
+  },
+  "(1, 64, 1, 3121, 64, 1, 3121, 1, 7, 1, 1, 0, 3, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 64,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 4,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:34:30+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     64,
+     1,
+     3121,
+     64,
+     1,
+     3121,
+     1,
+     7,
+     1,
+     1,
+     0,
+     3,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0003676606243045967,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.08132722418559225,
+    "second_ms": 0.08721410263104727,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 11,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.082,
+     "runs": 0.067,
+     "bench": 1.945
+    }
+   },
+   "excluded": []
+  },
+  "(1, 64, 1, 3121, 64, 1, 3121, 1, 7, 1, 1, 0, 9, 1, 3, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 64,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 4,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:34:32+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     64,
+     1,
+     3121,
+     64,
+     1,
+     3121,
+     1,
+     7,
+     1,
+     1,
+     0,
+     9,
+     1,
+     3,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0002451555864262993,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.07990481976706248,
+    "second_ms": 0.08722611059106375,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 10,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.082,
+     "runs": 0.189,
+     "bench": 1.715
+    }
+   },
+   "excluded": []
+  },
   "(1, 64, 1, 7, 2048, 1, 1, 1, 7, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
@@ -16015,6 +19513,204 @@
    },
    "excluded": []
   },
+  "(1, 768, 1, 256, 768, 1, 256, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:32:23+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     768,
+     1,
+     256,
+     768,
+     1,
+     256,
+     1,
+     1,
+     1,
+     1,
+     0,
+     0,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0003503497726961233,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.1278681983501211,
+    "second_ms": 0.15453013349324465,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 2,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.005,
+     "runs": 0.171,
+     "bench": 0.286
+    }
+   },
+   "excluded": []
+  },
+  "(1, 768, 1, 262, 768, 1, 256, 1, 7, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:32:22+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     768,
+     1,
+     262,
+     768,
+     1,
+     256,
+     1,
+     7,
+     1,
+     1,
+     0,
+     0,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0002714418877873141,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.8777500443988376,
+    "second_ms": 0.9180517224378364,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 11,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 2.865,
+     "runs": 0.263,
+     "bench": 0.746
+    }
+   },
+   "excluded": []
+  },
+  "(1, 768, 1, 274, 768, 1, 256, 1, 7, 1, 1, 0, 0, 1, 3, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:32:27+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     768,
+     1,
+     274,
+     768,
+     1,
+     256,
+     1,
+     7,
+     1,
+     1,
+     0,
+     0,
+     1,
+     3,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.00027007597346792974,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.8787740442487929,
+    "second_ms": 0.9174571162046388,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 11,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 2.869,
+     "runs": 0.384,
+     "bench": 0.743
+    }
+   },
+   "excluded": []
+  },
   "(1, 768, 1, 2976, 768, 1, 2976, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
@@ -16275,6 +19971,72 @@
      "oracle": 0.732,
      "runs": 1.395,
      "bench": 0.655
+    }
+   },
+   "excluded": []
+  },
+  "(1, 768, 1, 310, 768, 1, 256, 1, 7, 1, 1, 0, 0, 1, 9, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:32:31+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     768,
+     1,
+     310,
+     768,
+     1,
+     256,
+     1,
+     7,
+     1,
+     1,
+     0,
+     0,
+     1,
+     9,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0002784035887466732,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.8794339577356974,
+    "second_ms": 0.9182184213815734,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 11,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 2.858,
+     "runs": 0.388,
+     "bench": 0.744
     }
    },
    "excluded": []
@@ -16543,6 +20305,270 @@
    },
    "excluded": []
   },
+  "(1, 768, 1, 512, 768, 1, 512, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:33:01+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     768,
+     1,
+     512,
+     768,
+     1,
+     512,
+     1,
+     1,
+     1,
+     1,
+     0,
+     0,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0003574498641162452,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.17036523099069473,
+    "second_ms": 0.20603216563661894,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 12,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.008,
+     "runs": 0.144,
+     "bench": 1.28
+    }
+   },
+   "excluded": []
+  },
+  "(1, 768, 1, 518, 768, 1, 512, 1, 7, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:32:59+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     768,
+     1,
+     518,
+     768,
+     1,
+     512,
+     1,
+     7,
+     1,
+     1,
+     0,
+     0,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0003616195818892594,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-1 cols 0-12; batch 0 rows 0-1 cols 250-262; batch 0 rows 0-1 cols 500-512) of 1x1x512",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 1.1580235291929806,
+    "second_ms": 1.4001005760260992,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 6,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.438,
+     "runs": 0.327,
+     "bench": 0.401
+    }
+   },
+   "excluded": []
+  },
+  "(1, 768, 1, 530, 768, 1, 512, 1, 7, 1, 1, 0, 0, 1, 3, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:33:02+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     768,
+     1,
+     530,
+     768,
+     1,
+     512,
+     1,
+     7,
+     1,
+     1,
+     0,
+     0,
+     1,
+     3,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0003648690792268259,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-1 cols 0-12; batch 0 rows 0-1 cols 250-262; batch 0 rows 0-1 cols 500-512) of 1x1x512",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 1.1581138828221489,
+    "second_ms": 1.401307429586138,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 6,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.435,
+     "runs": 0.328,
+     "bench": 0.401
+    }
+   },
+   "excluded": []
+  },
+  "(1, 768, 1, 566, 768, 1, 512, 1, 7, 1, 1, 0, 0, 1, 9, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:33:03+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     768,
+     1,
+     566,
+     768,
+     1,
+     512,
+     1,
+     7,
+     1,
+     1,
+     0,
+     0,
+     1,
+     9,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.000352511859958602,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-1 cols 0-12; batch 0 rows 0-1 cols 250-262; batch 0 rows 0-1 cols 500-512) of 1x1x512",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 1.1562766958685482,
+    "second_ms": 1.402879991701671,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 6,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.44,
+     "runs": 0.328,
+     "bench": 0.397
+    }
+   },
+   "excluded": []
+  },
   "(1, 8, 1, 103, 1024, 1, 103, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
@@ -16671,6 +20697,72 @@
      "oracle": 0.001,
      "runs": 0.024,
      "bench": 2.925
+    }
+   },
+   "excluded": []
+  },
+  "(1, 8, 1, 16, 1024, 1, 16, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 32,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:32:54+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     8,
+     1,
+     16,
+     1024,
+     1,
+     16,
+     1,
+     1,
+     1,
+     1,
+     0,
+     0,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0002626366808475063,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.017074086735175447,
+    "second_ms": 0.017105043766813773,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 6,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.0,
+     "runs": 0.133,
+     "bench": 1.369
     }
    },
    "excluded": []
@@ -16869,6 +20961,72 @@
      "oracle": 0.0,
      "runs": 0.014,
      "bench": 3.281
+    }
+   },
+   "excluded": []
+  },
+  "(1, 8, 1, 8, 1024, 1, 8, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 32,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 32
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:32:15+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     8,
+     1,
+     8,
+     1024,
+     1,
+     8,
+     1,
+     1,
+     1,
+     1,
+     0,
+     0,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0002878080912683746,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.017078323126631136,
+    "second_ms": 0.018587054809303553,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 11,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.001,
+     "runs": 0.291,
+     "bench": 2.655
     }
    },
    "excluded": []
@@ -17399,6 +21557,138 @@
    },
    "excluded": []
   },
+  "(1, 80, 1, 26, 512, 1, 26, 1, 3, 1, 1, 0, 1, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 32,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 32
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:33:44+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     80,
+     1,
+     26,
+     512,
+     1,
+     26,
+     1,
+     3,
+     1,
+     1,
+     0,
+     1,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0003166371859743008,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.036115844721917985,
+    "second_ms": 0.05012032603781645,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 2,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.003,
+     "runs": 0.236,
+     "bench": 0.369
+    }
+   },
+   "excluded": []
+  },
+  "(1, 80, 1, 26, 512, 1, 26, 1, 7, 1, 1, 0, 3, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 32,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:33:47+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     80,
+     1,
+     26,
+     512,
+     1,
+     26,
+     1,
+     7,
+     1,
+     1,
+     0,
+     3,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.00029794362072839685,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.06120997155760077,
+    "second_ms": 0.0695803226711594,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 9,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.016,
+     "runs": 0.163,
+     "bench": 1.64
+    }
+   },
+   "excluded": []
+  },
   "(1, 80, 1, 3000, 1280, 1, 3000, 1, 3, 1, 1, 0, 1, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
@@ -17791,6 +22081,336 @@
      "oracle": 0.02,
      "runs": 1.687,
      "bench": 0.383
+    }
+   },
+   "excluded": []
+  },
+  "(1, 96, 1, 16384, 96, 1, 16384, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:32:46+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     96,
+     1,
+     16384,
+     96,
+     1,
+     16384,
+     1,
+     1,
+     1,
+     1,
+     0,
+     0,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.00025305782495214446,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.08624803493420283,
+    "second_ms": 0.10710365214160464,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 12,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.018,
+     "runs": 0.462,
+     "bench": 1.847
+    }
+   },
+   "excluded": []
+  },
+  "(1, 96, 1, 16390, 1, 1, 16384, 1, 7, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:32:52+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     96,
+     1,
+     16390,
+     1,
+     1,
+     16384,
+     1,
+     7,
+     1,
+     1,
+     0,
+     0,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0003059137990340933,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.19032069659175505,
+    "second_ms": 0.282631313587938,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 12,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.008,
+     "runs": 0.206,
+     "bench": 1.085
+    }
+   },
+   "excluded": []
+  },
+  "(1, 96, 1, 16390, 96, 1, 16384, 1, 7, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:32:44+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     96,
+     1,
+     16390,
+     96,
+     1,
+     16384,
+     1,
+     7,
+     1,
+     1,
+     0,
+     0,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0003762229245476195,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.555743544874057,
+    "second_ms": 0.6918287705956844,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 11,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 1.051,
+     "runs": 0.577,
+     "bench": 0.769
+    }
+   },
+   "excluded": []
+  },
+  "(1, 96, 1, 16402, 96, 1, 16384, 1, 7, 1, 1, 0, 0, 1, 3, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:32:49+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     96,
+     1,
+     16402,
+     96,
+     1,
+     16384,
+     1,
+     7,
+     1,
+     1,
+     0,
+     0,
+     1,
+     3,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0003661153595855772,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.5555272110750977,
+    "second_ms": 0.6926551555332384,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 11,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 1.045,
+     "runs": 0.577,
+     "bench": 0.769
+    }
+   },
+   "excluded": []
+  },
+  "(1, 96, 1, 16438, 96, 1, 16384, 1, 7, 1, 1, 0, 0, 1, 9, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:32:51+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     96,
+     1,
+     16438,
+     96,
+     1,
+     16384,
+     1,
+     7,
+     1,
+     1,
+     0,
+     0,
+     1,
+     9,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0003515135593179651,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.5552531833380041,
+    "second_ms": 0.6932659640646818,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 10,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 1.051,
+     "runs": 0.584,
+     "bench": 0.701
     }
    },
    "excluded": []
@@ -18455,6 +23075,336 @@
    },
    "excluded": []
   },
+  "(1, 96, 1, 32768, 96, 1, 32768, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:33:19+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     96,
+     1,
+     32768,
+     96,
+     1,
+     32768,
+     1,
+     1,
+     1,
+     1,
+     0,
+     0,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.00032636988860917964,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.14868326753043057,
+    "second_ms": 0.1858946407600394,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 12,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.121,
+     "runs": 0.95,
+     "bench": 1.31
+    }
+   },
+   "excluded": []
+  },
+  "(1, 96, 1, 32774, 1, 1, 32768, 1, 7, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:33:22+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     96,
+     1,
+     32774,
+     1,
+     1,
+     32768,
+     1,
+     7,
+     1,
+     1,
+     0,
+     0,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.00039473545819820253,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.36286577858306746,
+    "second_ms": 0.5733806378599526,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 9,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.021,
+     "runs": 0.24,
+     "bench": 0.684
+    }
+   },
+   "excluded": []
+  },
+  "(1, 96, 1, 32774, 96, 1, 32768, 1, 7, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:33:17+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     96,
+     1,
+     32774,
+     96,
+     1,
+     32768,
+     1,
+     7,
+     1,
+     1,
+     0,
+     0,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.00039734789483562367,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-1 cols 0-101; batch 0 rows 0-1 cols 16333-16434; batch 0 rows 0-1 cols 32667-32768) of 1x1x32768",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.9255293039388435,
+    "second_ms": 1.2010899312568433,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 6,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.019,
+     "runs": 0.413,
+     "bench": 0.408
+    }
+   },
+   "excluded": []
+  },
+  "(1, 96, 1, 32786, 96, 1, 32768, 1, 7, 1, 1, 0, 0, 1, 3, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:33:20+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     96,
+     1,
+     32786,
+     96,
+     1,
+     32768,
+     1,
+     7,
+     1,
+     1,
+     0,
+     0,
+     1,
+     3,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0003464119195030981,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-1 cols 0-101; batch 0 rows 0-1 cols 16333-16434; batch 0 rows 0-1 cols 32667-32768) of 1x1x32768",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.9252327595438276,
+    "second_ms": 1.2005313923864653,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 6,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.019,
+     "runs": 0.414,
+     "bench": 0.403
+    }
+   },
+   "excluded": []
+  },
+  "(1, 96, 1, 32822, 96, 1, 32768, 1, 7, 1, 1, 0, 0, 1, 9, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:33:21+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     1,
+     96,
+     1,
+     32822,
+     96,
+     1,
+     32768,
+     1,
+     7,
+     1,
+     1,
+     0,
+     0,
+     1,
+     9,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0003724405087259418,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-1 cols 0-101; batch 0 rows 0-1 cols 16333-16434; batch 0 rows 0-1 cols 32667-32768) of 1x1x32768",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.9261960913968641,
+    "second_ms": 1.2018346605878887,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 6,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.02,
+     "runs": 0.414,
+     "bench": 0.409
+    }
+   },
+   "excluded": []
+  },
   "(1, 96, 448, 448, 32, 448, 448, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
@@ -18785,6 +23735,138 @@
    },
    "excluded": []
   },
+  "(14, 12, 60, 106, 768, 60, 106, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:35:25+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     14,
+     12,
+     60,
+     106,
+     768,
+     60,
+     106,
+     1,
+     1,
+     1,
+     1,
+     0,
+     0,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.00037935765930232593,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.6167840017005801,
+    "second_ms": 0.6402182305445436,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 10,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 1.138,
+     "runs": 34.451,
+     "bench": 0.694
+    }
+   },
+   "excluded": []
+  },
+  "(14, 768, 62, 108, 768, 60, 106, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 64,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 4,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:36:46+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     14,
+     768,
+     62,
+     108,
+     768,
+     60,
+     106,
+     3,
+     3,
+     1,
+     1,
+     0,
+     0,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0002864889837704715,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-11 cols 0-11; batch 7 rows 24-35 cols 47-58; batch 13 rows 49-60 cols 95-106) of 14x60x106",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 187.45855712890625,
+    "second_ms": 194.88153076171875,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 8,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 7.243,
+     "runs": 52.101,
+     "bench": 19.815
+    }
+   },
+   "excluded": []
+  },
   "(2, 12, 60, 106, 768, 60, 106, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
@@ -19043,6 +24125,204 @@
      "oracle": 30.874,
      "runs": 16.643,
      "bench": 36.112
+    }
+   },
+   "excluded": []
+  },
+  "(2, 256, 1, 340, 256, 1, 340, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:33:37+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     2,
+     256,
+     1,
+     340,
+     256,
+     1,
+     340,
+     1,
+     1,
+     1,
+     1,
+     0,
+     0,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0003295378691229096,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.055040321638885656,
+    "second_ms": 0.05869120583311345,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 12,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.003,
+     "runs": 0.058,
+     "bench": 2.786
+    }
+   },
+   "excluded": []
+  },
+  "(2, 256, 1, 340, 80, 1, 340, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 32,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 32
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:33:43+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     2,
+     256,
+     1,
+     340,
+     80,
+     1,
+     340,
+     1,
+     1,
+     1,
+     1,
+     0,
+     0,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.00035222123032362085,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.035620900700450875,
+    "second_ms": 0.039797686471426785,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 12,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.002,
+     "runs": 0.026,
+     "bench": 2.924
+    }
+   },
+   "excluded": []
+  },
+  "(2, 256, 1, 342, 256, 1, 340, 1, 3, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:33:31+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     2,
+     256,
+     1,
+     342,
+     256,
+     1,
+     340,
+     1,
+     3,
+     1,
+     1,
+     0,
+     0,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0003367948941556176,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.1325902205167545,
+    "second_ms": 0.1349369915677052,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 11,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.14,
+     "runs": 0.07,
+     "bench": 1.46
     }
    },
    "excluded": []
@@ -19639,6 +24919,138 @@
    },
    "excluded": []
   },
+  "(2, 320, 1, 340, 256, 1, 340, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:33:34+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     2,
+     320,
+     1,
+     340,
+     256,
+     1,
+     340,
+     1,
+     1,
+     1,
+     1,
+     0,
+     0,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.000297558794484869,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.06430757903733227,
+    "second_ms": 0.06945885210551998,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 16,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.005,
+     "runs": 0.161,
+     "bench": 2.813
+    }
+   },
+   "excluded": []
+  },
+  "(2, 320, 1, 342, 256, 1, 340, 1, 3, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 64,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 4,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:33:29+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     2,
+     320,
+     1,
+     342,
+     256,
+     1,
+     340,
+     1,
+     3,
+     1,
+     1,
+     0,
+     0,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.00028567315531433774,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.16010841512680055,
+    "second_ms": 0.16379193188028132,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 11,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.172,
+     "runs": 0.239,
+     "bench": 1.299
+    }
+   },
+   "excluded": []
+  },
   "(2, 320, 1, 432, 256, 1, 432, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
@@ -19964,6 +25376,138 @@
      "oracle": 0.454,
      "runs": 4.824,
      "bench": 1.978
+    }
+   },
+   "excluded": []
+  },
+  "(2, 512, 1, 340, 256, 1, 340, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 32,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 2,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:33:40+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     2,
+     512,
+     1,
+     340,
+     256,
+     1,
+     340,
+     1,
+     1,
+     1,
+     1,
+     0,
+     0,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.00023490359807206692,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.09512338996520771,
+    "second_ms": 0.09922182462113793,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 12,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.004,
+     "runs": 0.066,
+     "bench": 2.037
+    }
+   },
+   "excluded": []
+  },
+  "(2, 512, 1, 342, 256, 1, 340, 1, 3, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 64,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 4,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:33:38+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     2,
+     512,
+     1,
+     342,
+     256,
+     1,
+     340,
+     1,
+     3,
+     1,
+     1,
+     0,
+     0,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.00028266946107874136,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 0.2502356543217176,
+    "second_ms": 0.2550358448129196,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 11,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 0.279,
+     "runs": 0.099,
+     "bench": 1.049
     }
    },
    "excluded": []
@@ -20627,6 +26171,72 @@
    },
    "excluded": []
   },
+  "(28, 12, 60, 106, 3072, 30, 53, 2, 2, 2, 2, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 64,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 4,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:34:49+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     28,
+     12,
+     60,
+     106,
+     3072,
+     30,
+     53,
+     2,
+     2,
+     2,
+     2,
+     0,
+     0,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0002994554235806894,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-30 cols 0-53; batch 14 rows 0-30 cols 0-53; batch 27 rows 0-30 cols 0-53) of 28x30x53",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 3.758694386482239,
+    "second_ms": 3.8014976501464846,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 5,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 1.908,
+     "runs": 13.08,
+     "bench": 0.486
+    }
+   },
+   "excluded": []
+  },
   "(3, 16, 64, 64, 16, 64, 64, 1, 1, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
    "config": {
     "kwargs": {
@@ -20953,6 +26563,72 @@
      "oracle": 3.373,
      "runs": 10.942,
      "bench": 0.798
+    }
+   },
+   "excluded": []
+  },
+  "(42, 512, 122, 214, 512, 120, 212, 3, 3, 1, 1, 0, 0, 1, 1, 1, False, 'fp16', 'fp16', 'fp16')": {
+   "config": {
+    "kwargs": {
+     "BLOCK_SIZE_BHW": 64,
+     "BLOCK_SIZE_OUTF": 64,
+     "BLOCK_SIZE_INF": 16
+    },
+    "num_warps": 4,
+    "num_stages": 2,
+    "num_ctas": 1,
+    "maxnreg": null
+   },
+   "proof": {
+    "date": "2026-09-11T10:43:59+00:00",
+    "engine_version": "0.5.3",
+    "backend": {
+     "triton": "3.6.0",
+     "name": "cuda"
+    },
+    "shape": [
+     42,
+     512,
+     122,
+     214,
+     512,
+     120,
+     212,
+     3,
+     3,
+     1,
+     1,
+     0,
+     0,
+     1,
+     1,
+     1,
+     false,
+     "fp16",
+     "fp16",
+     "fp16"
+    ],
+    "deviation": 0.0003308821733474989,
+    "tolerance": 0.02,
+    "oracle": "fp64: the op in float64 (numpy), the reference bank's definition on 3 window(s) of the output (batch 0 rows 0-16 cols 0-16; batch 21 rows 52-68 cols 98-114; batch 41 rows 104-120 cols 196-212) of 42x120x212",
+    "machine": {
+     "hostname": "metatron",
+     "platform": "Linux-5.15.0-191-generic-x86_64-with-glibc2.35",
+     "python": "3.10.12",
+     "hardware_profile": "auto-4xv100-16gb-96.0g",
+     "has_native_bf16": false,
+     "target": "cuda-70"
+    },
+    "best_ms": 993.7889404296875,
+    "second_ms": 1035.483154296875,
+    "candidates": 18,
+    "accepted": 18,
+    "benched": 10,
+    "could_not_run": 0,
+    "seconds": {
+     "oracle": 4.489,
+     "runs": 281.695,
+     "bench": 136.554
     }
    },
    "excluded": []
