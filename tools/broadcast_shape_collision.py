@@ -44,6 +44,9 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from ir_census import compile_census, refuse_if_empty        # noqa: E402
+
 KERNELS = Path(__file__).resolve().parents[1] / "src" / "neurobrix" / "kernels"
 
 #: Every way a Triton body can produce a broadcast. `broadcast_to` is the
@@ -149,92 +152,27 @@ def collisions_in(ttir: str) -> list[tuple[str, list[str]]]:
     return out
 
 
-def _speaker_for(model: str) -> str:
-    """The voice this artefact requires, or "" — first in sorted order, which
-    is the enumeration the engine itself does."""
-    cache = Path.home() / ".neurobrix" / "cache" / model
-    voices = cache / "modules" / "voices"
-    if not voices.is_dir():
-        return ""
-    try:
-        if json.loads((cache / "runtime" / "defaults.json").read_text()).get("voice"):
-            return ""
-    except (OSError, ValueError):
-        pass
-    available = sorted(p.stem for p in voices.glob("*.pt"))
-    return available[0] if available else ""
-
-
 def census(model: str, arm: str, out: Path | None) -> int:
-    # BOTH bindings. `triton/compiler/__init__.py` does `from .compiler import
-    # compile`, so `triton.compiler.compile` is a SEPARATE name bound at import
-    # — and it is the one the engine's launcher imports. Patching only the
-    # module the function lives in wrapped nothing, and the first run of this
-    # tool reported a census over an empty set.
-    import triton.compiler as tc
-    import triton.compiler.compiler as tcc
+    """The wrapper is `ir_census.compile_census`; only the predicate is ours.
 
-    seen: dict[str, dict] = {}
-    real = tcc.compile
-
-    def wrapped(src, target=None, options=None):
-        compiled = real(src, target=target, options=options)
-        try:
-            name = getattr(getattr(src, "fn", None), "__name__", None) or str(src)
-            ttir = compiled.asm.get("ttir", "")
-            found = collisions_in(ttir)
-            row = seen.setdefault(name, {"compilations": 0, "collisions": []})
-            row["compilations"] += 1
-            for src_shape, dsts in found:
-                entry = {"source": src_shape, "targets": dsts}
-                if entry not in row["collisions"]:
-                    row["collisions"].append(entry)
-        except Exception as exc:                       # never break a run
-            print(f"[census] inspection failed: {exc}", file=sys.stderr)
-        return compiled
-
-    tcc.compile = wrapped
-    tc.compile = wrapped
-    try:
-        from neurobrix.cli import main as cli_main
-        argv = ["neurobrix", "run", "--model", model,
-                "--prompt", "a red apple on a wooden table", "--max-tokens", "8"]
-        # An artefact that ships voices and declares no default is refused
-        # before a single kernel compiles -- Kokoro-82M's census reached zero
-        # compilations for that reason, and the refusal above said so instead
-        # of reporting a zero. The voice is READ FROM THE ARTEFACT, the same
-        # enumeration the engine does, never written here.
-        voice = _speaker_for(model)
-        if voice:
-            argv += ["--speaker", voice]
-        if arm == "triton":
-            argv.append("--triton")
-        sys.argv = argv
-        try:
-            cli_main()
-        except SystemExit:
-            pass
-    finally:
-        tcc.compile = real
-        tc.compile = real
-
-    carriers = {k: v for k, v in seen.items() if v["collisions"]}
+    It was a copy of the same forty lines until the `other` census needed them
+    a second time. Widening the brick rather than adding one means the
+    "patch BOTH compiler bindings" lesson and the "a run that compiled nothing
+    is not a count of zero" refusal are now written once and inherited here,
+    instead of being re-derived — and re-forgotten — per tool.
+    """
+    seen = compile_census(model, arm, lambda ttir: [
+        {"source": src, "targets": dsts} for src, dsts in collisions_in(ttir)])
+    rc = refuse_if_empty(seen, model, arm, "the collision")
+    if rc is not None:
+        return rc
+    carriers = {k: v for k, v in seen.items() if v["findings"]}
     print()
-    if not seen:
-        # A census that compiled nothing is not a count of zero. Reporting
-        # "0 carry the collision" here would be a vacuous guard: the sentence
-        # is true and says nothing about the question, because the question
-        # was never put. It has to refuse.
-        print(f"NOTHING WAS COMPILED by {model} ({arm}): the run reached no "
-              f"Triton compilation at all, so this says nothing about the "
-              f"collision. Check that the run started — a census over an empty "
-              f"set is not a result.")
-        return 2
     print(f"kernels compiled by {model} ({arm}) : {len(seen)}")
     print(f"carrying the collision shape        : {len(carriers)}")
     for name, row in sorted(carriers.items()):
         print(f"  {name}  ({row['compilations']} compilation(s))")
-        for c in row["collisions"]:
+        for c in row["findings"]:
             print(f"      source {c['source']} -> {', '.join(c['targets'])}")
     if out:
         out.write_text(json.dumps(
