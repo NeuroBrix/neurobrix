@@ -38,6 +38,8 @@ ATELIER = Path.home() / "Workspace" / "nbx-atelier" / "campagnes"
 def _records() -> list[Path]:
     out = list((REPO / "validation_outputs").glob("hub_E_*/records.json"))
     out += list(ATELIER.glob("*/records.json"))
+    # A campaign that runs one model per call writes one level deeper.
+    out += list(ATELIER.glob("*/*/records.json"))
     return sorted(out)
 
 
@@ -61,13 +63,28 @@ def _certified_counts() -> dict:
     if root.is_dir():
         for profile in sorted(root.glob("*/*")):
             if profile.is_dir():
-                counts[f"{profile.parent.name}/{profile.name}"] = len(
-                    list(profile.glob("*.json")))
+                # SHAPES, not files: one file holds every shape of one kernel
+                # and dtype, so counting files understates by an unknown
+                # factor and reads like a smaller result than it is.
+                shapes = 0
+                for f in profile.glob("*.json"):
+                    try:
+                        shapes += len(json.loads(f.read_text()).get("entries", {}))
+                    except (OSError, ValueError):
+                        continue
+                counts[f"{profile.parent.name}/{profile.name}"] = shapes
     return counts
 
 
+#: Every shape a refusal takes in this engine. A cause that IS named and that
+#: this pattern misses prints as "aucune cause nommée", which is a small lie in
+#: the one column that must not tell any: the cascade's own refusal names its
+#: arithmetic and looks like none of the others.
 _REFUSAL = re.compile(r"(Refusing[^\n]{0,200}|ZERO FALLBACK:[^\n]{0,200}|"
-                      r"Failed at [^\s:]+[^\n]{0,160})")
+                      r"Failed at [^\s:]+[^\n]{0,160}|"
+                      r"largest component: [^\n]{0,80}|"
+                      r"AttributeError: [^\n]{0,120}|"
+                      r"Total required: [^\n]{0,60})")
 
 
 def _cause(run: dict) -> str:
@@ -108,8 +125,14 @@ def render(models: dict, sizes: dict, certified: dict) -> str:
         "ligne chacun, aucune case vide. Une case « non mesuré » porte le "
         "chiffre qui l'explique : c'est un résultat, pas un trou.",
         "",
-        "| modèle | état | cause / chiffre | entrées certifiées |",
-        "|---|---|---|---|",
+        "**La colonne « mesuré le » décide de la lecture.** Les verdicts "
+        "viennent de campagnes de dates différentes, sur des arbres "
+        "différents : une ligne du 9 septembre ne dit rien de l'arbre "
+        "d'aujourd'hui. Sans cette colonne le tableau serait faux tout en "
+        "étant exact.",
+        "",
+        "| modèle | état | cause / chiffre | mesuré le | entrées cert. |",
+        "|---|---|---|---|---|",
     ]
     tally = {"tourne": 0, "refuse": 0, "non mesuré": 0}
     for name in known:
@@ -135,13 +158,14 @@ def render(models: dict, sizes: dict, certified: dict) -> str:
                       + (f", plus gros composant {biggest:.0f} Mo" if biggest else "")
                       ) if gb else ((row or {}).get("reason") or "aucune donnée de taille")
         tally[state] += 1
-        lines.append(f"| `{name}` | {state} | {detail} | {cert} |")
+        when = max((d for d, _ in (row or {}).get("seen", [])), default="—")
+        lines.append(f"| `{name}` | {state} | {detail} | {when} | {cert} |")
     lines += ["", "## Compte", "",
               f"* **tourne** : {tally['tourne']}",
               f"* **refuse** : {tally['refuse']}",
               f"* **non mesuré** : {tally['non mesuré']}", ""]
     if certified:
-        lines += ["## Entrées certifiées par profil", ""]
+        lines += ["## Entrées certifiées par profil (formes, pas fichiers)", ""]
         for prof, n in sorted(certified.items()):
             lines.append(f"* `{prof}` : **{n}**")
     else:
