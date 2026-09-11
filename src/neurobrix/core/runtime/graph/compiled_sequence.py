@@ -4132,8 +4132,12 @@ class CompiledSequence:
         entirely (no branch cost beyond the None check) when None.
         """
         import torch
+        from neurobrix.kernels.nbx_tensor import set_torch_device
         _current_device_idx = self.device.index if self.device.index is not None else 0
-        torch.cuda.set_device(_current_device_idx)
+        # Routed by declared capability, like `torch_device_str`: on a
+        # single-device backend there is no selection to make, and asking
+        # torch for one it was not built with raises.
+        set_torch_device(_current_device_idx)
         for op_idx, op in enumerate(self._ops):
             if pre_op_callback is not None:
                 pre_op_callback(op_idx, op)
@@ -4158,8 +4162,12 @@ class CompiledSequence:
             # ── FAST PATH: No device transfer needed (99%+ of ops) ──
             if not op.needs_transfer:
                 # Still need to set CUDA device context for ops that allocate
-                if op.device is not None and op.device.type == "cuda" and op.device.index != _current_device_idx:
-                    torch.cuda.set_device(op.device)
+                # `type == "cuda"` was a vendor test guarding a vendor call.
+                # Both go: the index is what matters, and whether selecting it
+                # means anything is the backend's declared capability.
+                if op.device is not None and op.device.index is not None \
+                        and op.device.index != _current_device_idx:
+                    set_torch_device(op.device)
                     _current_device_idx = op.device.index
                     # Triton mode: also set CUDA runtime device (Triton uses runtime, not PyTorch)
                 try:
@@ -4257,8 +4265,9 @@ class CompiledSequence:
                                 new_kwargs[k] = v
                         kwargs = new_kwargs
 
-                if target is not None and target.type == "cuda" and target.index != _current_device_idx:
-                    torch.cuda.set_device(target)
+                if target is not None and target.index is not None \
+                        and target.index != _current_device_idx:
+                    set_torch_device(target)
                     _current_device_idx = target.index
 
                 try:
