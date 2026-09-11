@@ -48,17 +48,19 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
+import os
 import shutil
 import subprocess
 import sys
+import time
 import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "tools"))
 CACHE = Path(os.environ.get("NEUROBRIX_CACHE", Path.home() / ".neurobrix" / "cache"))
+PY = os.environ.get("NBX_PYTHON", "/home/mlops/ml/venv/bin/python")
 
 #: hub slug (lowercased) -> local container directory. ONLY where the two names
 #: genuinely differ. Each line is a decision someone made by reading both names,
@@ -166,13 +168,35 @@ def _plan(args) -> list[dict]:
     return rows
 
 
+#: A campaign BETWEEN two runs holds no compute process. Asking nvidia-smi at
+#: that instant returns an empty list and "the rig is free" is then a statement
+#: about a moment, not about the rig. That is how a second instance was launched
+#: onto a live measurement on 2026-09-10, from a log that looked idle — and this
+#: check repeated the mistake in another form on 2026-09-11, returning 0 while a
+#: gate held GPU0 five seconds later.
+#:
+#: So the rig is free when BOTH are true: no compute process, and no driver
+#: alive that is about to start one.
+_DRIVERS = ("precision_zoo_campaign.py", "flightrec.py", "certify_the_catalogue.py",
+            "autotune_certify")
+
+
 def _rig_busy() -> int:
     smi = shutil.which("nvidia-smi")
     if smi is None:
         return -1
     out = subprocess.run([smi, "--query-compute-apps=pid", "--format=csv,noheader"],
                          capture_output=True, text=True)
-    return len([l for l in out.stdout.splitlines() if l.strip()])
+    procs = len([l for l in out.stdout.splitlines() if l.strip()])
+    if procs:
+        return procs
+
+    ps = subprocess.run(["ps", "-eo", "pid,cmd"], capture_output=True, text=True).stdout
+    me = str(os.getpid())
+    drivers = [l for l in ps.splitlines()
+               if any(d in l for d in _DRIVERS) and not l.strip().startswith(me)
+               and "--plan" not in l]
+    return len(drivers)
 
 
 def main() -> int:
@@ -184,6 +208,12 @@ def main() -> int:
     ap.add_argument("--profile", default="volta")
     ap.add_argument("--budget", type=int, default=28800, help="seconds of rig time available")
     ap.add_argument("--out", type=Path, default=None)
+    ap.add_argument("--src", default=None,
+                    help="a frozen worktree's src — required to run, for the same "
+                         "reason every campaign needs one")
+    ap.add_argument("--timeout", type=int, default=5400,
+                    help="seconds a single MEET run may take before it is killed "
+                         "with its whole process group")
     args = ap.parse_args()
 
     rows = _plan(args)
@@ -230,10 +260,70 @@ def main() -> int:
               f"({'nvidia-smi absent' if busy < 0 else 'a measurement is in flight'}).",
               file=sys.stderr)
         return 1
-    print("\nThe MEET phase is not implemented as an unattended runner yet: it "
-          "takes the cards, and the cards are the owner's. Run --plan, read the "
-          "order, then drive the phases explicitly.", file=sys.stderr)
-    return 2
+
+    from precision_zoo_campaign import frozen_src_refusal, request_args, run
+
+    why = frozen_src_refusal(args.src, REPO)
+    if why:
+        print(f"\nREFUSED: the MEET phase runs the ENGINE, and a shape key "
+              f"depends on the engine version — a new constexpr in an autotune "
+              f"key unserves the whole directory. So it measures a frozen tree "
+              f"like every other campaign: {why}", file=sys.stderr)
+        return 1
+
+    out = args.out or (REPO / "validation_outputs" /
+                       f"catalogue_meet_{time.strftime('%Y%m%d_%H%M')}")
+    out.mkdir(parents=True, exist_ok=True)
+    sha = subprocess.run(["git", "-C", str(REPO), "rev-parse", "--short", "HEAD"],
+                         capture_output=True, text=True).stdout.strip()
+
+    record, left = [], args.budget
+    for r in rows:
+        if not r["container"]:
+            record.append({**{k: r[k] for k in ("hub", "family", "gb", "why")},
+                           "state": "not runnable"})
+            continue
+        if r["known_s"] and r["known_s"] > left:
+            print(f"REFUSED AT THE DOOR  {r['hub']}: known cost "
+                  f"{r['known_s']:.0f} s exceeds the {left:.0f} s left")
+            record.append({**{k: r[k] for k in ("hub", "family", "gb")},
+                           "state": "refused at the door",
+                           "known_s": r["known_s"], "left_s": left})
+            continue
+
+        log = out / f"{r['container']}.log"
+        req = request_args(r["container"], r["family"], ["--triton"])
+        cmd = [str(PY), "-c", "import sys; from neurobrix.cli import main; sys.exit(main())",
+               "run", "--model", r["container"], *req]
+        env = {**os.environ, "PYTHONPATH": str(args.src),
+               "NBX_AUTOTUNE_CERTIFIED": "off"}
+        t0 = time.time()
+        rc, wall = run(cmd, env, log, args.timeout)
+        left -= wall
+        text = log.read_text(errors="replace")
+        swept = len(re.findall(r"no certified setting for", text))
+        excluded = len(re.findall(r"\[AUTOTUNE_SCREEN\] .*config excluded", text))
+        print(f"{'MET ' if rc == 0 else 'FAIL'} {r['hub']:<52} "
+              f"{wall:>7.0f} s  swept {swept:>4}  screened-out {excluded:>3}  "
+              f"{left:>7.0f} s left")
+        record.append({**{k: r[k] for k in ("hub", "family", "gb")},
+                       "container": r["container"], "state": "met" if rc == 0 else "failed",
+                       "rc": rc, "wall_s": wall, "swept": swept,
+                       "screened_out": excluded, "src_sha": sha, "log": log.name})
+        if left <= 0:
+            print("Budget exhausted; the rest is untouched and reads `not measured`.")
+            break
+
+    (out / "meet.json").write_text(json.dumps(record, indent=1))
+    met = [x for x in record if x.get("state") == "met"]
+    print(f"\nMEET: {len(met)} of {len(rows)} models met their shapes. "
+          f"Record: {out / 'meet.json'}")
+    print("Next: `neurobrix autotune certify --profile "
+          f"{args.profile} --only-missing`, then `autotune check`, then the "
+          f"catalogue report. The census is the machine's replay cache and it "
+          f"ACCUMULATES — it already held 6,277 keys against 5,628 certified "
+          f"entries before this phase ran.")
+    return 0
 
 
 if __name__ == "__main__":
