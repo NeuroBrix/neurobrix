@@ -94,3 +94,46 @@ def test_a_worktree_missing_the_ignored_pointers_is_refused(tmp_path):
 def test_a_src_that_does_not_exist_is_refused(tmp_path):
     m = _tool()
     assert m.frozen_src_refusal(tmp_path / "nowhere" / "src", REPO) is not None
+
+
+def test_a_tree_gate_names_a_frozen_worktree_per_arm_and_is_admitted(tmp_path):
+    """`--trees` satisfies the rule by construction and must not be refused.
+
+    It WAS refused on 2026-09-11, by the door written the day before: the door
+    knew exactly one way of naming a frozen tree. The cost of a door that
+    refuses correct usage is that the next person adds `--src` beside `--trees`
+    to get past it — which is the shape of every bypass this rule prevents.
+    """
+    from precision_zoo_campaign import frozen_trees_refusal
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    arms = []
+    for label in ("before", "after"):
+        w = tmp_path / f"wt_{label}"
+        (w / "src").mkdir(parents=True)
+        for ptr in (".nbx_registry", "forge"):
+            (w / ptr).write_text("")
+        arms.append(f"{label}={w / 'src'}")
+    assert frozen_trees_refusal(",".join(arms), repo) is None
+
+
+def test_a_tree_gate_pointing_into_the_live_repo_is_refused_by_arm(tmp_path):
+    """Seen failing: the refusal must name WHICH arm, or it cannot be acted on."""
+    from precision_zoo_campaign import frozen_trees_refusal
+
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    good = tmp_path / "wt_ok"
+    (good / "src").mkdir(parents=True)
+    for ptr in (".nbx_registry", "forge"):
+        (good / ptr).write_text("")
+
+    why = frozen_trees_refusal(f"before={repo / 'src'},after={good / 'src'}", repo)
+    assert why and "before" in why and "inside the live repository" in why
+
+
+def test_a_tree_arm_without_a_label_is_refused(tmp_path):
+    from precision_zoo_campaign import frozen_trees_refusal
+    assert "cannot be named in the verdict" in (
+        frozen_trees_refusal("/some/path", tmp_path) or "")
