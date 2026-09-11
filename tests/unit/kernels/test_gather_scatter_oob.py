@@ -139,6 +139,59 @@ def test_a_registered_fault_keeps_its_code():
 
 
 # ---------------------------------------------------------------------------
+# The host side, where the channel is disarmed
+# ---------------------------------------------------------------------------
+
+def test_a_disarmed_channel_allocates_nothing(monkeypatch):
+    """On a backend that honours the assert, the fault buffer must not exist.
+
+    It is never freed by contract — a frozen replay plan records its raw
+    pointer — so allocating it where the kernel can never write to it is a
+    PERMANENT allocation for a dead path. Reported from the other machine on
+    2026-09-11, whose CUDA proof also says the guard itself holds: three
+    kernels refuse an out-of-range index by name, six outputs identical,
+    +0.13% wall.
+    """
+    monkeypatch.setattr(nt, "_detect_gpu_backend", lambda: "cuda")
+    nt.device_fault_code_cached.cache_clear()
+    before = dict(nt._FAULT_BUFFERS)
+
+    spare = object()
+    ptr, code = nt.fault_channel("some: contract", spare)
+
+    assert code == 0, "CUDA honours the assert; the channel must be disarmed"
+    assert ptr is spare, "a disarmed channel must hand back the tensor it was given"
+    assert nt._FAULT_BUFFERS == before, (
+        "a disarmed channel allocated a buffer the kernel can never write to, "
+        "and nothing frees it")
+
+
+def test_an_armed_channel_uses_the_shared_buffer(monkeypatch):
+    monkeypatch.setattr(nt, "_detect_gpu_backend", lambda: "metal")
+    nt.device_fault_code_cached.cache_clear()
+
+    class _Spare:
+        _device_idx = 0
+
+    ptr, code = nt.fault_channel("another: contract", _Spare())
+    assert code != 0
+    assert ptr is nt.device_fault_buffer(0), "the armed path must share one buffer"
+
+
+def test_no_wrapper_reaches_past_the_brick():
+    """Four launch sites; none may allocate the buffer for itself."""
+    import inspect
+    from neurobrix.kernels import wrappers as W
+    src = inspect.getsource(W)
+    assert src.count("fault_channel(") >= 4
+    assert "device_fault_buffer(" not in src.replace(
+        "from .nbx_tensor import device_fault_buffer, device_fault_code_cached, "
+        "fault_channel", ""), (
+        "a wrapper allocates the fault buffer directly instead of asking the "
+        "brick whether the channel is armed")
+
+
+# ---------------------------------------------------------------------------
 # Behaviour — the real wrappers, on the device
 # ---------------------------------------------------------------------------
 

@@ -14,7 +14,7 @@ import triton
 
 from .nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, _broadcast_shapes, _set_device, dtype_size
 from .nbx_tensor import DeviceOOMError
-from .nbx_tensor import device_fault_buffer, device_fault_code_cached
+from .nbx_tensor import device_fault_buffer, device_fault_code_cached, fault_channel
 from .nbx_tensor import _upload_int64_array as _nbx_upload_int64, _MAX_NDIM as _NBX_MAX_NDIM, _saturating_cast as _nbx_saturating_cast
 from .ops._configs import sdpa_block_ceiling as _sdpa_block_ceiling
 from .ops._configs import largest_tile_within_smem as _largest_tile_within_smem
@@ -2916,8 +2916,7 @@ def embedding(weight, indices, padding_idx=-1, **kwargs) :
     # weight.shape[0] = the id bound the kernel traps on (OOB parity with torch).
     embedding_kernel[M,](
         output, indices, weight, weight.shape[0],
-        device_fault_buffer(weight._device_idx),
-        device_fault_code_cached(EMBEDDING_OOB),
+        *fault_channel(EMBEDDING_OOB, output),
         N, BLOCK_SIZE)
     return output
 
@@ -3364,8 +3363,7 @@ def index_select_wrapper(x, dim: int, index) :
             _set_device(x)
             index_select_mid_kernel[(triton.cdiv(total, BLOCK),)](
                 x, out, outer, N, inner, index, index_len,
-                device_fault_buffer(x._device_idx),
-                FAULT_CODE=device_fault_code_cached(INDEX_SELECT_OOB),
+                *fault_channel(INDEX_SELECT_OOB, out),
                 BLOCK=BLOCK)
         return out
     x = x.contiguous()
@@ -3388,8 +3386,7 @@ def index_select_wrapper(x, dim: int, index) :
     _set_device(x)
     index_select_kernel[grid](
         x, out, M, N, index, index_len,
-        device_fault_buffer(x._device_idx),
-        device_fault_code_cached(INDEX_SELECT_OOB),
+        *fault_channel(INDEX_SELECT_OOB, out),
         BLOCK_M, BLOCK_N)
     if _sentinel:
         import numpy as _np
@@ -5681,8 +5678,7 @@ def index_put_wrapper(x, indices, values, accumulate: bool = False):
     index_put_kernel[_1d_grid(N)](
         out, idx, vbuf,
         T, N, out.shape[0],  # R: the row bound the kernel traps on (OOB parity with torch)
-        device_fault_buffer(out._device_idx),
-        FAULT_CODE=device_fault_code_cached(INDEX_PUT_OOB),
+        *fault_channel(INDEX_PUT_OOB, out),
         VAL_SCALAR=val_scalar,
         ACCUMULATE=bool(accumulate),
         BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS,
