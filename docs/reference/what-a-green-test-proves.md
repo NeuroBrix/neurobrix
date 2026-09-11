@@ -157,6 +157,33 @@ where nothing was checked.
 
 ---
 
+## A difference is not yet an attribution
+
+A byte gate says two outputs differ. It does not say the change caused it, and
+the distance between those two sentences is one more run.
+
+Twice on 2026-09-11 a `DIFFERENT` verdict accused a change of what the model
+does on its own:
+
+* `CogVideoX-2b` — three repetitions per arm, three shas, in BOTH arms. The
+  record carries `nondeterministic: ["A", "B"]` and the video comparison agrees
+  at 43.6 dB. A byte gate cannot adjudicate a model that differs from itself.
+* `Kokoro-82M` — printed `DIFFERENT` by a one-run-per-arm tree gate against
+  `7de1560`, a commit touching exactly one file, `core/prism/solver.py`. Two
+  runs of the SAME tree then produced two shas. The change could not have moved
+  it, and did not.
+
+**The rule.** Before attributing a difference to a change, run ONE SIDE TWICE.
+If the side differs from itself, the gate has not measured the change and the
+verdict says so rather than naming a culprit.
+
+Repetitions make this visible for free — with three runs per arm the record
+shows self-difference and the tool marks it. At one run per arm nothing in the
+record can separate the two cases, so the verdict now carries
+`UNADJUDICATED` and names the run that would settle it. A verdict that cannot
+say which question it answered is worse than no verdict, because it reads as an
+answer to the interesting one.
+
 ## A trap that makes the wrong instrument look green
 
 Third reason to test **structure** rather than **diagnostics**, and the nastiest

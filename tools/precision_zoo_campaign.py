@@ -1104,6 +1104,20 @@ def verdict(r: dict) -> str:
             if bd:
                 mb = bd.get("psnr_db", bd.get("snr_db", bd.get("psnr_mean_db")))
                 tail += "; before the fix vs the oracle: " + ("IDENTICAL" if bd.get("identical") else (("PASS" if bd.get("pass") else "DIFFERENT") + (f" ({mb})" if mb is not None else "")))
+        # A DIFFERENCE IS NOT YET AN ATTRIBUTION. With one run per arm there is
+        # no repetition, so nothing here separates "the change moved the output"
+        # from "this model differs from itself". Both have now been met on the
+        # same day: CogVideoX-2b carries `nondeterministic: ["A", "B"]` at
+        # --paired 3, and Kokoro-82M produced two shas from two runs of the SAME
+        # tree on 2026-09-11 — after a --paired 1 gate had already printed
+        # DIFFERENT against a Prism-only commit that could not have moved it.
+        #
+        # The verdict says which question it answered. Running one side twice is
+        # what turns it into an attribution, and it costs one run.
+        if int(r.get("paired") or 1) < 2:
+            return ("DIFFERENT (" + ", ".join(diff) + "; UNADJUDICATED — one run "
+                    "per arm cannot separate the change from the model's own "
+                    "nondeterminism: run one side twice)" + tail)
         return "DIFFERENT (" + ", ".join(diff) + ")" + tail
     if r.get("lever", "").startswith("env:"):
         g = r.get("gate") or {}
