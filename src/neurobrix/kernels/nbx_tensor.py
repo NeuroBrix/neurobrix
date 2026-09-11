@@ -349,6 +349,32 @@ def device_fault_code_cached(message: str) -> int:
     return device_fault_code(message)
 
 
+def fault_channel(message: str, spare: 'NBXTensor') -> tuple:
+    """`(pointer_argument, FAULT_CODE)` for a kernel that carries the channel.
+
+    Where the backend HONOURS `tl.device_assert`, the code is 0 and the
+    generated kernel contains no fault store at all — proven on the emitted
+    code, not assumed: with FAULT_CODE=0 the body carries neither the store nor
+    the reduction that feeds it. The pointer is then a bound-but-unread
+    argument, so `spare` — a tensor the call already owns — is handed over and
+    NOTHING IS ALLOCATED.
+
+    That matters because the fault buffer is never freed by contract (a frozen
+    replay plan records its raw pointer), so allocating it on a backend that
+    can never write to it is a permanent allocation for a dead path. Reported
+    from the other machine 2026-09-11, whose CUDA proof also says the guard
+    itself holds: three kernels refuse an out-of-range index by name, six
+    outputs identical, +0.13% wall.
+
+    `spare` is never dereferenced through this argument on that path; passing
+    the output tensor is therefore safe and costs nothing.
+    """
+    code = device_fault_code_cached(message)
+    if code == 0:
+        return spare, 0
+    return device_fault_buffer(spare._device_idx), code
+
+
 def device_fault_buffer(device_idx: int) -> 'NBXTensor':
     """This device's zeroed one-word status buffer.
 
