@@ -61,3 +61,29 @@ def test_a_plan_run_does_not_count_itself_as_a_driver(monkeypatch):
     ps = " 999 /venv/bin/python tools/certify_the_catalogue.py --plan\n"
     monkeypatch.setattr(subprocess, "run", _fake_run("", ps))
     assert C._rig_busy() == 0
+
+
+def test_the_tool_does_not_refuse_itself(monkeypatch):
+    """It did, on 2026-09-11. The first version excluded `os.getpid()`, but the
+    shell wrapper that launches the tool carries the same script name on its
+    command line under a different pid — so the run refused itself at the door
+    and the MEET phase never started. Exclusion is by process GROUP."""
+    import os
+    mine = os.getsid(0)
+    ps = ("  SID   PID CMD\n"
+          f"{mine:>5} {os.getpid():>5} /venv/bin/python tools/certify_the_catalogue.py --src ...\n"
+          f"{mine:>5} {os.getpid() + 1:>5} bash -c ... tools/certify_the_catalogue.py --src ...\n")
+    monkeypatch.setattr(subprocess, "run", _fake_run("", ps))
+    assert C._rig_busy() == 0, (
+        "the tool counted its own wrapper as a driver holding the rig")
+
+
+def test_another_session_running_the_same_tool_still_counts(monkeypatch):
+    """The control: self-exclusion must not blind it to a SECOND instance."""
+    import os
+    mine = os.getsid(0)
+    ps = ("  SID   PID CMD\n"
+          f"{mine:>5} {os.getpid():>5} /venv/bin/python tools/certify_the_catalogue.py --src ...\n"
+          f"{mine + 12345:>5} {os.getpid() + 999:>5} /venv/bin/python tools/certify_the_catalogue.py --src ...\n")
+    monkeypatch.setattr(subprocess, "run", _fake_run("", ps))
+    assert C._rig_busy() == 1

@@ -204,6 +204,22 @@ That is where the next one is, on both machines. Ask of every instrument: what
 does it print when it was given nothing to measure? If the answer is the same
 thing it prints on success, it is already an entry here and nobody has noticed.
 
+### 21 — a readiness check that refused its own run
+
+* **date** 2026-09-11 · **machine** Dell · **site** `tools/certify_the_catalogue.py`, `_rig_busy`
+* **what it could not say** that the driver it had found was ITSELF. Entry 20 taught it to see a driver between two runs; it then counted its own launcher, which carries the same script name on its command line. The MEET phase refused to start three times before the pass ran.
+* **how it surfaced** calling `_rig_busy()` directly returned 0 while the same tool, launched, refused with "1 compute process(es)".
+* **closed by** exclusion of the whole **session** (`os.getsid(0)`) rather than the pid (defeated by the shell wrapper) or the process group (defeated by a launcher that puts the wrapper in another group). The session is the widest thing still unambiguously "this run". The control test pins the other direction: a SECOND instance in another session still counts.
+* **and the refusal now says what it saw** — the driver's command line, up to three of them, with the line *"a refusal that does not say what it saw cannot be acted on"*. That is entry 18's lesson applied to entry 20's fix: the first two attempts printed a number and no subject, and the number was wrong.
+
+### 22 — the pass died on the forty-fourth model and lost the forty-three
+
+* **date** 2026-09-11 · **machine** Dell · **site** `tools/certify_the_catalogue.py`, the MEET loop
+* **what it could not say** anything about the models it had already met: an exception composing one model's request ended the whole pass, and `meet.json` was never written.
+* **the cause underneath** the family came from the HUB LISTING, whose category column reads `CODE`, and the engine has no `code` family. A shelf label was used where the container's own declaration was the authority.
+* **closed by** reading `family` from the container's `manifest.json`, and by making a request that cannot be composed a **named skip** rather than a crash. Forty-three models must not be lost because the forty-fourth has no stimulus.
+* **why it is in this register** the run exited 1 and printed a traceback, so it was not silent — but the ARTEFACT was: no record, no partial result, nothing to read afterwards. An instrument that produces nothing when interrupted has the same failure mode as one that produces a green: there is nothing to disagree with.
+
 ---
 
 ## The Mac's entries
@@ -219,7 +235,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-Twenty entries, of which five are placeholders and fifteen carry a site. Two
+22 entries, of which five are placeholders and 17 carry a site. Two
 machines, two weeks of concentrated looking. Every one of them produced silence
 or a green rather than an error, and **not one was found by a test** — they were
 found by users, by contradictions between two numbers, by reading generated
