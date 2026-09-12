@@ -359,6 +359,20 @@ thing it prints on success, it is already an entry here and nobody has noticed.
 
 ---
 
+### 31 — two decisions, each correct alone, wrong together
+
+* **date** 2026-09-12 · **machine** Dell · **site** `forge/tracer/worker.py`, two branches ~800 lines apart
+* **the form, and it is the hardest of this register to prevent** every other entry has something to correct: a check that checks nothing, a name that lies, a green over a run that did not happen. **Here both decisions are right.** There is no one to correct and no line to call wrong — only a COMBINATION to forbid, and nothing in the code says the two are related.
+* **decision one, and it is load-bearing** the single-frame I2V encoder is traced at `T=1`, deliberately, with its reason stated where it is done: *"the vendor causal frame-chunk loop unrolls per trace chunk (3 chunks at T=9 broke replay at T=1); T=1 trace == T=1 runtime, single chunk, exact."* Raising it breaks replay. The comment even ends *"H/W stay symbolic"* — its author did not expect T to be.
+* **decision two, and it is reasonable** a pixel-space video input `[B, 3, T, H, W]` gets an explicit per-dim role declaration, because *"the naming convention has no rule for the positional 'args' input, so T/H/W froze at the trace values."* Declaring the layout is exactly right; it was added to FIX a freezing defect.
+* **what they do together** a **constant axis receives a symbol, at the value where every rule agrees.** `k*s == s+(k-1) == s**n == s` at 1, so the causal pad's `s + 2` was recorded as `3*s`; seven resnet blocks compounded it to `2187*s - 2184`, still exactly 3 at the only point the trace check looks at; and the engine asked for **944 GB of activations for a component whose weights are 822 MB**.
+* **why no review catches it** the two branches are eight hundred lines apart, each carries a correct justification, and neither mentions the other. A reviewer reading either one agrees with it. There is no diff in which they appear together, and the defect exists only in their conjunction.
+* **closed by** naming the conjunction where one of the halves already stands: the role declaration now asks whether the axis is constant, and gives it a role OUTSIDE the symbolizing set when it is. Measured on the live container, `2187 -> 1` references and `aten.cat::6` returning to the `literal 3` it always was, with `batch`/`height`/`width` keeping their own names.
+* **and the near-miss that is worth as much** the first attempt used `dynamic_dims_spec`, which symbolizes the chosen dims — and, **by its own documented contract, renames every one of them `seq_len`** ("a variable SEQUENCE axis"). All three surviving symbols came back as `seq_len`, and since the engine's `build_symbol_map` binds BY NAME, a height would have bound to a sequence length at runtime. **A worse defect than the one being fixed, shipped as its fix.** It was caught by re-reading the differential's own numbers instead of its verdict line — the discipline that failed seven other times the same day and held here.
+* **the rule** when a value is chosen for one reason and interpreted for another, the two places must name each other. A justification that is complete in itself is exactly the one that will not mention the constraint living elsewhere.
+
+---
+
 ## The Mac's entries
 
 Entries 13 and 14 are the Mac's, transcribed from `f769f2e` because they are
@@ -372,7 +386,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-30 entries, of which five are placeholders and 25 carry a site. Two
+31 entries, of which five are placeholders and 26 carry a site. Two
 machines, two weeks of concentrated looking. Every one of them produced silence
 or a green rather than an error, and **not one was found by a test** — they were
 found by users, by contradictions between two numbers, by reading generated
