@@ -557,3 +557,42 @@ did not report on a state the change had never reached.
 The reference may be a commit (`("git", repo, pathspec)`), another artefact
 (`("file", path)`), or a raw timestamp with a label. A witness with no reference
 point is refused at the CLI: that is a timestamp, not a verification.
+
+### 37 — a build that packaged a video model without its backbone, and said COMPLETE
+
+`forge build` produced a 5.45 GB CogVideoX-5b-I2V container against a 21.6 GB
+hub artifact and exited 0. The snapshot's `transformer/` held `config.json` and a
+103 KB weights index and nothing else — its 11 GB had been purged on 2026-09-07
+under R38 — so the backbone was copied as a generic MODULE rather than a
+component.
+
+Everything the build printed was true. `BUILD COMPLETE`, `Graphs: 3/2 copied from
+cache`, and a container write audit that listed every removed transformer shard
+by name. The one line that carried the verdict read `Components: vae,
+text_encoder`, in the middle of a successful-looking summary, and the chain that
+called it checked `NBX.exists()` — an existence test, which is the weaker half of
+entry 30's lesson applied to an artefact of the wrong size instead of the right
+one.
+
+The upload of that container onto the working hub slug had already started. It
+was caught by comparing 6.3 GB against the 21.6 GB the hub listing showed — by
+eye, which is not a gate. Nothing was lost on the hub: `replace` uploads to a
+distinct key and repoints only after checksum verification, and the upload was
+stopped at 0% of 6.73 GB. The complete LOCAL container was lost, because
+`--overwrite` had already replaced it before anything could object.
+
+**Two placements, and only one of them is a door.** The first version of the
+refusal ran after the build and reported over the wreckage. It now runs at entry,
+on the snapshot, before the builder is called.
+
+**The predicate is the cause, not the symptom.** Comparing the topology's
+declared components against the manifest flagged `vae_encoder`, a registry alias
+built from `vae`'s weights and deliberately absent from the manifest of every
+healthy video container. A door that fires on a correct build is uninstalled
+within the week. The shipped test is: a directory holding a `*.index.json` and no
+weight file declares weights it does not have.
+
+**The rule**: when a build degrades a component instead of failing on it, the
+degradation is the defect. A pipeline stage may not silently change WHAT it is
+producing — and the summary line that records the change is not a warning, it is
+an artefact-integrity claim that nothing checked.

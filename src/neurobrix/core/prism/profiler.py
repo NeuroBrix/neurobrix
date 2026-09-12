@@ -273,6 +273,18 @@ class ActivationProfile:
     # Each entry: (op_uid, op_type, output_bytes, workspace_bytes,
     #              input_tids_for_fusion_detection)
     overflow_ops: List = None  # type: ignore  # Optional[List[Tuple[...]]]
+    #: WHICH REQUEST THIS NUMBER IS ABOUT. "request" when a caller supplied an
+    #: InputConfig; "trace" when none was given and the profile was bound to the
+    #: extents the container was actually traced at. A peak in gigabytes reads
+    #: like a property of the model; it is a property of a request, and until
+    #: 2026-09-12 a caller who passed nothing silently got a 1024x1024 batch-2
+    #: image request applied to whatever graph it held -- a video component's
+    #: time axis bound to a spatial extent included.
+    binding: str = "request"
+    #: The symbol map the simulation actually used. Recorded so a surprising
+    #: number can be attributed without re-deriving it, which is how the
+    #: 944 GB estimate stayed unexplained for two days.
+    symbol_map: Optional[Dict[str, int]] = None
 
     @property
     def peak_mb(self) -> float:
@@ -285,7 +297,8 @@ class ActivationProfile:
     def __repr__(self) -> str:
         ov = len(self.overflow_ops) if self.overflow_ops else 0
         return (
-            f"ActivationProfile(peak={self.peak_gb:.2f}GB at step {self.peak_step}/{self.total_ops}, "
+            f"ActivationProfile[{self.binding}-bound](peak={self.peak_gb:.2f}GB "
+            f"at step {self.peak_step}/{self.total_ops}, "
             f"op={self.peak_op_uid}, tensors_at_peak={self.tensor_count_at_peak}, "
             f"overflow_ops={ov})"
         )
@@ -473,6 +486,92 @@ class ActivationProfiler:
                 symbol_map[sid] = trace
         return symbol_map
 
+    def trace_symbol_map(self) -> Dict[str, int]:
+        """{symbol id: the extent this graph was TRACED at}.
+
+        The only configuration a container is known to have witnessed. It is the
+        honest default for a profile nobody parameterised, and it is the baseline
+        a request-bound profile should be compared against: a request 4x the
+        trace should cost about 4x, and when it does not, the difference is the
+        finding.
+
+        REFUSES a graph that declares symbols without trace values rather than
+        returning a partial map: a symbol missing from the map falls back to a
+        positional guess downstream, which is the failure this exists to remove.
+        """
+        syms = (self.dag.get("symbolic_context") or {}).get("symbols") or {}
+        out, missing = {}, []
+        for sid, info in syms.items():
+            if not isinstance(info, dict):
+                continue
+            trace = info.get("trace_value")
+            if isinstance(trace, int):
+                out[sid] = trace
+            else:
+                missing.append(f"{sid} '{info.get('name')}'")
+        if missing:
+            raise ValueError(
+                "REFUSED: this graph declares symbols with no trace value "
+                f"({', '.join(missing)}). A partial symbol map is completed by a "
+                "positional guess downstream, and a guess is what this call "
+                "exists to avoid. Pass an explicit InputConfig.")
+        return out
+
+    def growth_anomaly(self, input_config: InputConfig,
+                       slack: float = 2.0) -> Dict[str, Any]:
+        """Does this component's cost grow faster than its extents justify?
+
+        A compounded symbolic rule is invisible at the trace point by
+        construction -- that is what makes it a rule defect rather than an
+        ordinary bug -- but it is LOUD one step away from it. CogVideoX-5b-I2V's
+        causal temporal pad recorded `3*s` where the truth was `s + 2`; seven
+        resnet blocks compounded it to `2187*s - 2184`, exact at the traced
+        s = 1. Profiled at 49 frames (latent extent 13, so 13x the trace on one
+        axis) the peak went from 0.09 GB to 210.26 GB -- a factor of **2237**,
+        which is the compound's own coefficient wearing a unit.
+
+        So the instrument is a ratio, and it needs no knowledge of the rule:
+
+            measured = peak(request) / peak(trace)
+            expected = product over symbols of (request extent / trace extent)
+
+        `expected` is the LINEAR growth the extents justify. Real components
+        exceed it -- attention is quadratic in its sequence axis -- so the bound
+        is `slack * expected**2`, which admits any quadratic op and still
+        separates a compound by two orders of magnitude: at 13x linear the bound
+        is 338 and the defect measured 2237. Bound written here before it was
+        applied to anything but the case that motivated it.
+
+        Returns the numbers whatever the verdict: a ratio is only useful beside
+        the two peaks it came from.
+        """
+        trace_profile = self.estimate_peak_memory()
+        request_profile = self.estimate_peak_memory(input_config)
+        trace_map = trace_profile.symbol_map or {}
+        request_map = request_profile.symbol_map or {}
+
+        expected = 1.0
+        per_axis = {}
+        for sid, traced in trace_map.items():
+            asked = request_map.get(sid)
+            if not isinstance(asked, int) or not traced:
+                continue
+            per_axis[sid] = asked / traced
+            expected *= max(asked / traced, 1.0)
+
+        measured = request_profile.peak_bytes / max(trace_profile.peak_bytes, 1)
+        bound = slack * expected ** 2
+        return {
+            "measured_ratio": measured,
+            "expected_linear": expected,
+            "bound": bound,
+            "exceeds": measured > bound,
+            "per_axis": per_axis,
+            "trace_gb": trace_profile.peak_gb,
+            "request_gb": request_profile.peak_gb,
+            "peak_op_uid": request_profile.peak_op_uid,
+        }
+
     def estimate_peak_memory(
         self,
         input_config: Optional[InputConfig] = None,
@@ -506,16 +605,28 @@ class ActivationProfiler:
         Returns:
             ActivationProfile with peak memory info
         """
+        # NO CONFIG MEANS THE TRACE, NOT A 1024x1024 BATCH-2 IMAGE REQUEST.
+        # `InputConfig()`'s defaults are a request the container never received,
+        # and binding them through the positional base put a video component's
+        # time axis on a spatial extent with nothing in the output saying so.
+        # The extents the graph was traced at are the one configuration it is
+        # known to have witnessed, so that is what an unparameterised profile
+        # reports -- and the profile says which of the two it is.
+        binding = "request"
         if input_config is None:
-            input_config = InputConfig()
+            input_config = InputConfig()          # for dtype only
+            binding = "trace"
 
         if dtype_bytes is None:
             dtype_bytes = get_dtype_bytes_per_element(input_config.dtype)
 
-        # Build symbol map for shape resolution (positional base + this
-        # graph's name-driven symbol overrides — video time/height/width).
-        symbol_map = self.build_symbol_map(
-            input_config, placement_floor=placement_floor)
+        if binding == "trace":
+            symbol_map = self.trace_symbol_map()
+        else:
+            # Build symbol map for shape resolution (positional base + this
+            # graph's name-driven symbol overrides — video time/height/width).
+            symbol_map = self.build_symbol_map(
+                input_config, placement_floor=placement_floor)
 
         # Initialize tracking
         peak_bytes = 0
@@ -685,6 +796,8 @@ class ActivationProfiler:
             total_ops=len(self.execution_order),
             final_live_bytes=current_bytes,
             overflow_ops=overflow_ops,
+            binding=binding,
+            symbol_map=dict(symbol_map),
         )
 
     def _resolve_shape(
