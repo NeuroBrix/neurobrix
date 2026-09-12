@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- A request that supplies a conditioning image now sets the output resolution from that
+  image. Two decisions were being taken separately about one quantity: the image
+  processor keeps the source image's own size when a request names no resolution, while
+  the resolution cascade independently derived one from the extents the model was traced
+  at. A video model handed its own 448x448 image then ran its pipeline at 144x208 and
+  failed where the two met. The order is now explicit — an explicit height and width win,
+  then the container's own declared defaults, then the conditioning image, then the traced
+  extents, then the family constant: what the request says outranks what the build says,
+  and a stimulus chosen at trace time is the last thing that should decide what a user
+  gets.
 - Activation profiles state which request they describe. A peak in gigabytes reads like a
   property of a model and is a property of a request, so every profile now carries the
   binding it was computed under and the symbol values it used, and says so in its own
