@@ -386,7 +386,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-42 entries, of which five are placeholders and 37 carry a site. Two
+43 entries, of which five are placeholders and 38 carry a site. Two
 machines, two weeks of concentrated looking. Every one of them produced silence
 or a green rather than an error.
 
@@ -794,3 +794,30 @@ its own name. The refusal was right either way — *bypassing an interception is
 deciding alone that it is benign* — and the remedy was not to wait it out but to
 stop taking the road it watches: the rack now publishes through its own
 network (`docs/reference/workshop-layout.md`).
+
+### 43 — a MAC prefix read as a machine
+
+Diagnosing `SlowDownWrite` from the object store, the ARP table was read for
+three addresses: the store (`bc:24:11:…`), the hub (`bc:24:11:…`) and the
+export host (`b8:59:9f:…`). Two shared a prefix and the third did not, and that
+became a topology in the report: *"three distinct machines — the store and the
+hub are two VMs, the NAS is a separate Mellanox box."*
+
+`b8:59:9f` is Mellanox's OUI. It identifies the maker of a network card. The card
+is the hypervisor's own 100 Gbps link; the "separate box" was the same host the
+two VMs run on, and all three sit on one ZFS pool — which is the fact the whole
+diagnosis needed and the inference pointed away from. The owner established it on
+the host. The conclusion drawn from the wrong topology (*"the store's trouble
+is not the export's"*) was the opposite of true: they are the same spindles.
+
+**The shape**: a number whose subject was never established, again. A MAC prefix
+answers *who made this interface*; it was read as *what machine is this*, and
+the answer to the cheap question was true. It is the same substitution as an
+`ast.parse` read as *will this run* (entry 41) and a size read as *is this
+complete* (entry 30).
+
+**The rule**: an identity comes from the thing's own declaration — the host's
+pool layout, the VM's config, a `hostname` — never from a property that merely
+correlates with it. Where the declaration is on a machine you cannot read,
+the cell says *not established*, and the report carries the topology as a
+question rather than as a finding.
