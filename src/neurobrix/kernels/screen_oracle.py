@@ -159,7 +159,15 @@ def provider(tuner, key, buffers) -> Optional[List[bytes]]:
                                f"the live arguments")
         return None
     try:
+        import time as _time
+        _t0 = _time.perf_counter()
         reference = fn(named)
+        # The oracle's own CPU wall time is the one number measured for this
+        # key BEFORE any candidate runs, so it is the bootstrap base for the
+        # first candidate's time budget: a GPU configuration slower than the
+        # single-threaded float64 CPU computation of the same mathematics is
+        # not a configuration, whatever else it is.
+        record_oracle_ms(key, (_time.perf_counter() - _t0) * 1e3)
     except Exception:                                  # noqa: BLE001
         reference = None
     if reference is None:
@@ -220,6 +228,21 @@ def provider(tuner, key, buffers) -> Optional[List[bytes]]:
                 return None
             out.append(raw)
     return out
+
+
+#: Oracle CPU wall time by key text, for the sweep's time budget. In-process,
+#: like `_SCREEN_CACHE`: the budget protects a sweep that runs in this very
+#: process, so persisting these would only let a stale machine state speak.
+_ORACLE_MS: dict = {}
+
+
+def record_oracle_ms(key, ms: float) -> None:
+    _ORACLE_MS[str(key)] = float(ms)
+
+
+def oracle_ms_of(key):
+    """The oracle's measured CPU time for this key, or None if it never ran."""
+    return _ORACLE_MS.get(str(key))
 
 
 def announce_no_oracle(kernel_name: str, key, why: str = "no oracle is registered "

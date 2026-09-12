@@ -99,6 +99,104 @@ def all_refused(timings: Dict) -> bool:
                for v in values)
 
 
+# ── the per-candidate time budget ──────────────────────────────────────────
+#
+# A third species of candidate, measured 2026-09-12 on a bf16 matmul sweep at
+# M=1500: neither refused nor wrong, but PATHOLOGICALLY SLOW -- one launch of
+# 2.5 minutes, which the five-launch estimate multiplied past twelve. Neither
+# the refusal exclusion above nor the oracle sees it; only a campaign-level
+# timeout reaped it, killing the whole run without naming the candidate.
+#
+# The budget is DERIVED, never a constant:
+#   * first candidate of a sweep: R0 x the fp64 oracle's own CPU time for the
+#     key it just computed (the one number measured before any candidate) --
+#     a GPU configuration slower than the CPU float64 of the same mathematics
+#     is not a configuration;
+#   * later candidates: R x the fastest single-launch time completed so far
+#     in the same sweep (the winner sets the scale).
+#
+# The ratios themselves come from measurement, and until they are measured
+# they are None and the watchdog is DISARMED -- it must never guess. When the
+# measurement lands, its numbers are written beside the values.
+_BUDGET_RATIOS = {"first_vs_oracle_cpu": None, "later_vs_best": None}
+
+#: The most recent oracle CPU time, in ms. The screen computes the oracle for
+#: a key immediately before Triton benches that key's candidates, and sweeps
+#: are serialised in-process, so "most recent" IS this sweep's key. That
+#: serialisation is an assumption this module states rather than hides; a
+#: parallel sweep would need the key joined explicitly.
+_SWEEP: dict = {"best_ms": None, "budget_ms": None, "token": None}
+
+
+def begin_sweep() -> None:
+    """Reset the per-sweep state. Called when a new key's bench begins."""
+    _SWEEP["best_ms"] = None
+    _SWEEP["budget_ms"] = None
+
+
+def current_budget_ms():
+    """The budget the bench should enforce for the CURRENT candidate, or None.
+
+    Read by the launcher's `do_bench` when its caller passed none: Triton's
+    `_bench -> self.do_bench(kernel_call, quantiles=...)` chain is not ours to
+    re-sign, so the wrapper publishes here and the bench consults it. Explicit
+    coupling, documented at both ends.
+    """
+    return _SWEEP.get("budget_ms")
+
+
+def _compute_budget():
+    later = _BUDGET_RATIOS["later_vs_best"]
+    first = _BUDGET_RATIOS["first_vs_oracle_cpu"]
+    if _SWEEP["best_ms"] is not None:
+        return None if later is None else later * _SWEEP["best_ms"]
+    if first is None:
+        return None
+    try:
+        from neurobrix.kernels.screen_oracle import _ORACLE_MS
+        if _ORACLE_MS:
+            return first * next(reversed(_ORACLE_MS.values()))
+    except Exception:                                  # noqa: BLE001
+        pass
+    return None
+
+
+def note_candidate_time(single_launch_ms: float) -> None:
+    """Feed a completed candidate's probe time back into the sweep state."""
+    best = _SWEEP.get("best_ms")
+    if best is None or single_launch_ms < best:
+        _SWEEP["best_ms"] = float(single_launch_ms)
+
+
+def exclude_slow_candidates(bench, say=None):
+    """Wrap a per-config benchmark so an over-budget candidate scores `inf`.
+
+    Same shape as `exclude_refused_configs`, same two rules: only the
+    dedicated exception is caught -- everything else propagates -- and the
+    exclusion is SAID with both of its numbers, because a candidate scored
+    out for time without its time is a silent narrowing.
+    """
+    def _say(line):
+        (say or (lambda l: print(l, flush=True)))(line)
+
+    def _run(*args, **kwargs):
+        from neurobrix.kernels.launcher import CandidateOverTimeBudget
+
+        _SWEEP["budget_ms"] = _compute_budget()
+        try:
+            out = bench(*args, **kwargs)
+        except CandidateOverTimeBudget as exc:
+            _say(f"[AUTOTUNE_SLOW] a candidate took {exc.took_ms:.1f} ms for "
+                 f"ONE launch against a budget of {exc.budget_ms:.1f} ms "
+                 f"derived from this sweep's own measurements; excluded from "
+                 f"the sweep, which continues")
+            return list(_INF)
+        finally:
+            _SWEEP["budget_ms"] = None
+        return out
+    return _run
+
+
 def install() -> bool:
     """Wrap `Autotuner._bench` so a refused config is excluded, once.
 
@@ -115,8 +213,23 @@ def install() -> bool:
     original = Autotuner._bench
 
     def _bench(self, *args, config=None, **kwargs):
-        return exclude_refused_configs(
-            lambda: original(self, *args, config=config, **kwargs))()
+        # A sweep boundary is a change of (tuner, live-arg key): Triton
+        # benches one key's candidates consecutively, so the first _bench of
+        # a new pair is the first candidate of a new sweep. Detected HERE
+        # because nothing upstream of _bench is ours to hook -- and without
+        # this call, `begin_sweep` would be machinery with no caller, the
+        # register's own vacuous form.
+        try:
+            from neurobrix.triton import autotune_cache as _atc
+            self.nargs = dict(zip(self.arg_names, args))
+            _token = (id(self), str(_atc.key_of(self, args, kwargs)))
+        except Exception:                              # noqa: BLE001
+            _token = (id(self), None)
+        if _SWEEP.get("token") != _token:
+            begin_sweep()
+            _SWEEP["token"] = _token
+        return exclude_slow_candidates(exclude_refused_configs(
+            lambda: original(self, *args, config=config, **kwargs)))()
 
     _bench._nbx_excludes_refusals = True
     Autotuner._bench = _bench
