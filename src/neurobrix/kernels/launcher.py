@@ -1131,6 +1131,29 @@ def _largest_agreement(results, buffers):
     return max(clusters, key=len)
 
 
+def bench_would_swap(total_bytes: int):
+    """(True, available_mb) when timing candidates would measure the swap.
+
+    The comparison is constant-free: when the live arguments ALONE exceed what
+    the machine has available, paging during the sweep is certain, and every
+    number produced is a number about the swap. `available_mb` comes from
+    `core.host_memory` -- our own authority for this quantity, never
+    `Pages free` -- and is read live, never cached: pressure is a state of the
+    moment, not of the process.
+
+    An unreadable platform (available_mb None) gates nothing and says nothing
+    here: `memory_state` already names why it could not read.
+    """
+    try:
+        from neurobrix.core.host_memory import memory_state
+        avail_mb = memory_state().available_mb
+    except Exception:                                  # noqa: BLE001
+        return False, None
+    if avail_mb is None:
+        return False, None
+    return total_bytes > avail_mb * 2 ** 20, avail_mb
+
+
 def screen_configs(tuner, configs, key, meta=None):
     """Run every candidate once and keep the ones that agree with each other.
 
@@ -1185,6 +1208,26 @@ def screen_configs(tuner, configs, key, meta=None):
               f"{getattr(tuner.base_fn, '__name__', tuner)}: arguments total "
               f"{total} bytes, over the profile's screening budget "
               f"{int(budget)}; not screened at key {key}", flush=True)
+        # Beyond the SCREEN budget the compare is skipped -- but Triton would
+        # still time every candidate on these arguments. When they alone
+        # exceed the machine's available memory, that sweep measures the swap:
+        # observed live, a baddbmm key carrying 5.9 GB of arguments against
+        # 4.5 GB available. So the sweep is cut to the single first-declared
+        # config, the choice is SAID, and it is marked unmeasured so capture()
+        # never persists it -- recorded, it would outlive the pressure that
+        # forced it and keep deciding on days it knows nothing about.
+        _swaps, _avail_mb = bench_would_swap(total)
+        if _swaps:
+            print(f"[AUTOTUNE_BENCH] "
+                  f"{getattr(tuner.base_fn, '__name__', tuner)}: arguments "
+                  f"total {total} bytes against {_avail_mb} MB available -- "
+                  f"timing candidates would measure the swap, not the "
+                  f"kernels. Taking the first declared config WITHOUT "
+                  f"measurement; the choice will not be persisted.",
+                  flush=True)
+            from neurobrix.triton import autotune_cache as _atc
+            _atc.mark_unmeasured(tuner, key)
+            return configs[:1]
         return configs
 
     before = _snapshot(buffers)

@@ -170,6 +170,23 @@ def screen_exclusions() -> Dict[str, Dict]:
         return {}
 
 
+#: Keys whose config was chosen WITHOUT measurement -- e.g. the bench was
+#: skipped because its arguments alone exceed the machine's available memory,
+#: so timing candidates would have measured the swap and not the kernels. A
+#: choice made without measurement must never be recorded as if measured:
+#: persisted, it would outlive the pressure that forced it and keep deciding
+#: on machines and days it knows nothing about.
+_UNMEASURED: set = set()
+
+
+def mark_unmeasured(at, key) -> None:
+    _UNMEASURED.add((id(at), tuple(key) if isinstance(key, (list, tuple)) else key))
+
+
+def is_unmeasured(at, key) -> bool:
+    return (id(at), tuple(key) if isinstance(key, (list, tuple)) else key) in _UNMEASURED
+
+
 def capture() -> int:
     """Merge every selected config into the artifact. Returns the
     number of NEW entries written (0 = artifact already covers this
@@ -178,12 +195,19 @@ def capture() -> int:
     if path is None:
         return 0
     entries: Dict[str, Dict] = {}
+    skipped_unmeasured = 0
     for qual, at in _autotuners():
         for key, cfg in getattr(at, "cache", {}).items():
+            if is_unmeasured(at, key):
+                skipped_unmeasured += 1
+                continue
             rec = _config_to_dict(cfg)
             if (id(at), key) in _TIMINGS:
                 rec["timing"] = _TIMINGS[(id(at), key)]
             entries[f"{qual}::{key!r}"] = rec
+    if skipped_unmeasured:
+        print(f"[AUTOTUNE_CACHE] {skipped_unmeasured} choice(s) made without "
+              f"measurement were NOT persisted", flush=True)
     if not entries:
         return 0
     try:
