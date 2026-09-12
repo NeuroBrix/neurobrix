@@ -141,7 +141,6 @@ def provider(tuner, key, buffers) -> Optional[List[bytes]]:
     after the kernel is its content unchanged; only the output has an oracle.
     Returning the oracle for all of them compares an input to an output.
     """
-    import ctypes
 
     name = getattr(getattr(tuner, "base_fn", None), "__name__", "") or ""
     entry = ORACLES.get(name)
@@ -167,6 +166,27 @@ def provider(tuner, key, buffers) -> Optional[List[bytes]]:
         announce_no_oracle(name, key, why="its operands could not be read here")
         return None
 
+    # Every live tensor by its address, so an INPUT is read through the copy
+    # path like everything else. The line this replaces read the device
+    # pointer with `ctypes.string_at` and justified it as "an input,
+    # unchanged" -- an assumption this repository's own measurement destroyed
+    # the same day: the bf16 operand of eighteen refusals was the BIAS, an
+    # input produced by a conversion kernel earlier in the graph. An input can
+    # be exactly as stale as an output, and "unchanged" says nothing about
+    # WHEN it was written.
+    #
+    # The size failure mode does not even need that argument: `string_at`
+    # hands its length to `PyBytes_FromStringAndSize` as a C int, so any
+    # buffer of 2 GiB or more returns "Negative size" whoever wrote it --
+    # confirmed live here at 2 GiB + 1 -- and a matmul input passes 2 GiB
+    # without difficulty on the shapes that matter.
+    by_addr = {}
+    for _v in named.values():
+        try:
+            by_addr[int(_v.data_ptr())] = _v
+        except Exception:                              # noqa: BLE001
+            continue
+
     out: List[bytes] = []
     for addr, nbytes, dtype_name in buffers:
         if int(addr) == out_addr:                      # the output, BY ADDRESS
@@ -180,7 +200,25 @@ def provider(tuner, key, buffers) -> Optional[List[bytes]]:
                 return None
             out.append(want.tobytes())
         else:
-            out.append(ctypes.string_at(int(addr), int(nbytes)))   # an input, unchanged
+            # An input, unchanged -- read through the tensor's own copy to the
+            # host, which crosses the barrier a raw pointer read does not.
+            src = by_addr.get(int(addr))
+            if src is None:
+                announce_no_oracle(
+                    name, key,
+                    why=f"an input buffer at {addr:#x} is not among the live "
+                        f"arguments, so it can only be read by raw pointer, "
+                        f"which crosses no barrier and caps at 2 GiB")
+                return None
+            host = src.to_cpu() if getattr(src, "_device", "cpu") != "cpu" else src
+            raw = np.ascontiguousarray(host.numpy()).tobytes()
+            if len(raw) != int(nbytes):
+                announce_no_oracle(
+                    name, key,
+                    why=f"the input at {addr:#x} copies to {len(raw)} bytes "
+                        f"and the buffer is {nbytes}")
+                return None
+            out.append(raw)
     return out
 
 

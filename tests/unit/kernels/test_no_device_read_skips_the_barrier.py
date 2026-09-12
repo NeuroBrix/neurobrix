@@ -121,3 +121,72 @@ def test_the_property_is_not_stated_about_a_dtype():
     assert len(_dtypes()) >= 2, (
         "a single dtype under test states a property about that dtype, not "
         "about the path; the defect has the shape of a path")
+
+
+# ── the invariant over the WHOLE module, not over the line that was repaired ─
+
+
+def _raw_reads(path: Path):
+    """Calls that read memory by raw address, found in CODE and not in prose.
+
+    By AST, because a text search counts the comments this repository writes
+    ABOUT the defect -- three of the four occurrences of `string_at` in
+    `screen_oracle.py` are explanations of why it is gone, and a grep-based
+    guard would have reported the file as still broken forever, or been
+    loosened until it reported nothing.
+    """
+    import ast
+
+    tree = ast.parse(path.read_text())
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        name = ast.unparse(node.func)
+        if name.endswith("string_at") or name.endswith("memmove") or \
+                name.endswith("from_address"):
+            found.append((node.lineno, ast.unparse(node)[:70]))
+    return found
+
+
+def test_no_raw_device_read_survives_anywhere_in_the_oracle():
+    """The repair is judged on the file, not on the line that was found.
+
+    A first pass removed the bf16 read and left a second one nine lines from
+    the end of the same function, justified as "an input, unchanged" -- an
+    assumption this file's own measurement had destroyed the same day, since
+    the bf16 operand of the eighteen refusals WAS an input, produced by a
+    conversion kernel. A removal that is real at ninety percent leaves the next
+    anomaly with the same two candidate causes.
+    """
+    import neurobrix.kernels.screen_oracle as mod
+
+    found = _raw_reads(Path(mod.__file__))
+    assert not found, (
+        "raw address reads still in the oracle:\n  "
+        + "\n  ".join(f"line {n}: {src}" for n, src in found)
+        + "\n\nEvery read of device memory goes through the tensor's copy to "
+          "the host, which crosses the barrier a raw pointer does not, and "
+          "which has no 2 GiB ceiling.")
+
+
+def test_the_guard_can_still_see_one():
+    """Both directions: a module that HAS a raw read must be reported.
+
+    Without this the assertion above is satisfied by a finder that finds
+    nothing, which is what a guard reporting zero must be shown not to be.
+    """
+    import tempfile
+
+    with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
+        f.write("import ctypes\n"
+                "# ctypes.string_at in a comment must NOT count\n"
+                "def f(a, n):\n"
+                "    return ctypes.string_at(int(a), int(n))\n")
+        tmp = Path(f.name)
+    try:
+        found = _raw_reads(tmp)
+        assert len(found) == 1, f"expected exactly the call, got {found}"
+        assert found[0][0] == 4, "the comment must not be counted"
+    finally:
+        tmp.unlink()
