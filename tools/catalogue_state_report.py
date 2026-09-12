@@ -68,7 +68,10 @@ OVERLAY = {
                  "container dated 2026-06-30",
         note="The runtime repair is not enough for this one: the container predates "
              "the builder that writes component shapes, so the output size cannot be "
-             "read from it whatever the runtime does. Snapshot re-downloading.",
+             "read from it whatever the runtime does. Snapshot re-downloaded "
+             "2026-09-12 16:38 (64.43 GB, the build door's predicate satisfied); "
+             "the rebuild is queued behind the CogVideoX upload, staged on the root "
+             "filesystem rather than the export.",
         line="measured"),
     "Wan2.2-I2V-A14B": dict(
         now="DIAGNOSED, rebuild required — and a second line",
@@ -212,8 +215,18 @@ def main() -> int:
         axes = blind.get(container, [])
         blind_cell = "; ".join(axes[:2]) + (f" (+{len(axes)-2})" if len(axes) > 2 else "") \
             if axes else "none found at the input"
+        # A `swept` of 0 on a row that FAILED is not coverage. It counts the
+        # shapes the run reached, and a run that died in five seconds reached
+        # none. Reading it as "the certified directory served everything" is the
+        # difference between a measure and an artefact of the failure, and the
+        # first version of the reading guide made exactly that claim.
+        incomplete = r.get("state") != "met"
         swept = r.get("swept")
+        if swept is not None and incomplete:
+            swept = f"{swept}†"
         screened = r.get("screened_out")
+        if screened is not None and incomplete:
+            screened = f"{screened}†"
         print(f"| `{r['hub']}` | {r.get('family', '?')} | {r.get('gb', 0):.1f} | "
               f"{run} | {swept if swept is not None else 'n/m'} | "
               f"{screened if screened is not None else 'n/m'} | {cost} | "
@@ -227,10 +240,14 @@ def main() -> int:
 
     print("## How to read the columns\n")
     print("**swept** — shape keys this model had to sweep AT RUNTIME because the")
-    print("certified directory did not hold them. `0` is the good number and it is")
-    print("the per-model measure of certified coverage: a model that sweeps nothing")
-    print("is served entirely from the directory. `n/m` is a model that was never")
-    print("run, which is not the same as one that swept nothing.\n")
+    print("certified directory did not hold them. On a row that MET, `0` is the")
+    print("per-model measure of certified coverage: it was served entirely from the")
+    print("directory. `n/m` is a model that was never run.\n")
+    print("**† marks a row whose run did not complete**, and it changes what the two")
+    print("columns mean there. They count what the run REACHED, and a run that died")
+    print("in five seconds reached nothing — so a `0†` is not coverage, it is the")
+    print("shape of the failure. Reading it as coverage would credit the directory")
+    print("for work no one asked it to do.\n")
     print("**screened** — candidate configurations the correctness screen excluded")
     print("before timing. Zero across the whole catalogue, on 998 keys.\n")
     print("**certified cost** — from the paired certified-directory campaign, which")
