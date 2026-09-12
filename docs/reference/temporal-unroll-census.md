@@ -138,8 +138,19 @@ here as much as the rows: before today there was no way to move a sequence axis
 off a colliding value at all, so none of these 33 could be adjudicated by
 anything.
 
-**The spatial axes are not yet reachable.** 18 of the 33 are `height`/`width` at
-128, 64 or 32 — the VAE family — and the spatial stimulus is written at three
-separate sites in the tracer rather than read from one. Moving it needs that
-consolidation first, which is a change to the tracer and not to this instrument.
-Recorded as not measured, with what it would take.
+**The spatial axes are now reachable, and the note that said otherwise was
+wrong.** 18 of the 33 are `height`/`width` at 128, 64 or 32 — the VAE family. An
+earlier version of this paragraph said the spatial stimulus is written at three
+sites "rather than read from one" and that consolidating them came first. Reading
+the three sites showed they are not copies: `(10,12)`, `(18,26)` and `(14,22)`
+each carry their own de-collision analysis for their own component class — the
+RoPE grid's token axes where T and H had collapsed into one symbol, a T-derived
+product chain, a set of subset products that must miss every common channel
+count. Each was paid for by a frozen graph, and one value would have deleted
+three pieces of reasoning.
+
+What was missing was not consolidation but an OVERRIDE reaching all three:
+`forge trace --trace-spatial H,W`, the same shape as `--trace-time` and
+`--trace-seq-len`. It refuses equal extents, because equal dims give `s_h == s_w`
+at trace and the runtime freezes both axes when two symbols share a value — which
+is why no square stimulus appears in any of the three sites either.
