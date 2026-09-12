@@ -117,3 +117,37 @@ And the retry policy learned the one failure it must never retry: a certificate
 that does not verify carries no HTTP response, so it read as transient and would
 have been re-offered three times. It now stops at once, recognised through four
 layers of wrapping.
+
+## One pool carries everything, and that is why three writers knelt it
+
+**Established 2026-09-12, on the host, by the owner.** There is no separate
+storage box. `192.168.100.1` is the hypervisor's own 100 Gbps link (a Mellanox
+card — the OUI `b8:59:9f` is the card's maker, not a machine). Everything this
+rack writes sits on **one ZFS pool, `data`**: the `hf_snapshots` and `models`
+exports, **and the zvols of every VM**, including the object store at
+`10.0.0.36` and the hub at `10.0.0.39`. The pool is rotational, at 74% capacity
+and 40% fragmentation.
+
+So a snapshot download, a container build and a container upload are not three
+jobs on three devices. They are three write streams on one pool that is also
+serving the VMs' own I/O — and `SlowDownWrite` from the store is MinIO missing
+its write deadline because its virtual disk sits on the same spindles as the
+export being written next to it. The host is healthy: pools without errors, no
+scrub, 198 GB free, `nfsd` idle. Nothing to restart.
+
+**The rule, and it is strict**: never a download, a build and an upload at the
+same time. One pool writer at a time. The serial queue is that rule as a script,
+and `tools/export_quiet.py` — which reads bytes off the export rather than
+asking `df` or the load average — is the right sensor, because a rotational pool
+under three writers stops serving bulk I/O while its metadata still answers.
+
+**The durable repair is not on this machine**: move the store's and the hub's
+disks to `nvme_pool`, which sits at 48% and carries nothing. Proposed to the
+owner the same evening.
+
+**What NOT to infer from a MAC address.** The wrong topology — a separate NAS
+box, the store on another machine — came from reading three MAC prefixes as
+three machines. A prefix identifies the maker of a network card. It says
+nothing about what is behind the card, and it said nothing here: two of the
+three were VMs on the host and the third was the host's own link. Register
+entry 43.
