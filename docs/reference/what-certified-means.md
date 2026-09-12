@@ -177,3 +177,33 @@ ONE clock, cold, against a frozen tree. A machine whose replay cache is already
 warm pays a different price, and a card whose shapes were never certified pays all
 of it. The table with its full per-model rows and its caveats lives with the
 campaign, not here.
+
+## And the saving that is not time: a timeout becomes a verdict
+
+Measured on the 2026-09-11 catalogue pass, and it is the reason this page's cost
+section exists at all.
+
+Nine of forty-seven rows were recorded as failures. **Three of them were runs the
+harness killed at its own clock**, all three at exactly 2700.3 s. Of the 148
+minutes the nine "failures" consumed, **135 went to those three, and bought
+nothing** — no output, no diagnosis, no verdict. The six real defects cost **13
+minutes between them**, and every one of them failed in under ninety seconds.
+
+**The engine says no quickly. It is the clock that is expensive.**
+
+And one of the three closes the loop back onto this page. `Allegro` spent its
+entire forty-five minutes **sweeping uncertified shapes at runtime** and never
+reached denoise step 1 — its last log line is an `addmm` sweep at M=158 400.
+That is precisely the expenditure a certified entry removes: served without a
+sweep, without a screen and without an oracle.
+
+So the directory's value is not only that a certified run is faster. It is that
+**an uncertified run can spend its whole budget before reaching the thing being
+tested, and come back with a timeout where a verdict was expected.** Certifying
+the shapes a model meets does not shave time off an answer; it converts a
+non-answer into one.
+
+That is also why the sweep-cost table above must never be read as a speed
+feature. The ratio it reports is the fraction of a run's budget that goes to
+finding kernels rather than to running the model — and when that fraction
+reaches 1, the run returns nothing at all.
