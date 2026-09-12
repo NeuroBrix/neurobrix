@@ -14,6 +14,7 @@ import triton
 
 from .nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, _broadcast_shapes, _set_device, dtype_size
 from .nbx_tensor import DeviceOOMError
+from .nbx_tensor import fa_min_tile as _fa_min_tile
 from .nbx_tensor import device_fault_buffer, device_fault_code_cached, fault_channel
 from .nbx_tensor import _upload_int64_array as _nbx_upload_int64, _MAX_NDIM as _NBX_MAX_NDIM, _saturating_cast as _nbx_saturating_cast
 from .ops._configs import sdpa_block_ceiling as _sdpa_block_ceiling
@@ -8440,8 +8441,13 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     # Reduce BLOCK_M for large headdim to stay within shared memory limits.
     # V100 has 96KB shared memory. With headdim=256: 128×256×2×3 = 192KB > 96KB.
     BLOCK_HEADDIM = max(triton.next_power_of_2(headdim), 16)
+    # The floor is a BACKEND CAPABILITY, not 16. A backend whose generic
+    # attention lowering mis-computes below 32 refuses the kernel, and a
+    # refusal wastes the whole model where a padded tile only wastes half a Q
+    # tile at seqlen_q=1. On cuda and hip this reads 16 and nothing moves.
+    _fa_floor = _fa_min_tile()
     if seqlen_q <= 16:
-        BLOCK_M = 16
+        BLOCK_M = max(16, _fa_floor)
         BLOCK_N = 64 if BLOCK_HEADDIM < 128 else (64 if BLOCK_HEADDIM < 256 else 32)
     elif BLOCK_HEADDIM >= 512:
         # PixArt VAE on V100. (32,32) for h=512 needs 131KB SMEM > 96KB
@@ -8630,8 +8636,10 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
             _prep, _ = _nbx_launcher.prepare(_inner, _probe_args, _kw)
             return int(_prep.shared)
 
+        # The shrink stops at the backend's floor, not at 16: a candidate the
+        # backend refuses is not a candidate.
         _cands, _m = [(BLOCK_M, BLOCK_N)], BLOCK_M
-        while _m > 16:
+        while _m > max(16, _fa_min_tile()):
             _m //= 2
             _cands.append((_m, BLOCK_N))
         try:

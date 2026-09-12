@@ -265,7 +265,25 @@ def test_the_output_agrees_with_the_fp64_oracle(blocks):
     """
     tol = _profile_tolerance("bf16")
     x32, w32 = _inputs()
-    got, msgs = _run_pinned(x32, w32, blocks)
+    try:
+        got, msgs = _run_pinned(x32, w32, blocks)
+    except Exception as exc:
+        # A config the backend REFUSES is not a config that computes wrong,
+        # and the two must not be scored together. A refusal costs that config
+        # and nothing else -- the autotune sweep excludes it and takes the
+        # next -- so the property under test is "no config computes wrong",
+        # never "every config is servable".
+        #
+        # It is not passed over in silence either: the reason is asserted to
+        # be a refusal and not a crash, so a kernel that dies here cannot wear
+        # a refusal's clothes.
+        from triton_msl.errors import MetalNonRecoverableError
+
+        assert isinstance(exc, MetalNonRecoverableError), (
+            f"config {blocks} failed with something that is not a refusal: "
+            f"{type(exc).__name__}: {exc}")
+        pytest.skip(f"config {blocks} is refused at codegen, not servable: "
+                    f"{str(exc).splitlines()[0][:120]}")
 
     fell_back = [m for m in msgs if "fall back" in m or "codegen failed" in m]
     assert not fell_back, (
@@ -357,3 +375,29 @@ def test_the_oracle_is_not_trivially_satisfiable():
         f"changing one weight moved the oracle by {dev:.3e}, within the "
         f"tolerance {tol:.3e} the verdict uses. The comparison would accept a "
         f"kernel that is wrong by at least that much.")
+
+
+def test_at_least_one_servable_config_computes_correctly():
+    """A suite of skips is not a result.
+
+    Every config refusing would leave the verdict above green with nothing
+    measured -- the shape of failure this file exists to prevent one level up.
+    So the kernel must have at least one config that both runs and agrees.
+    """
+    tol = _profile_tolerance("bf16")
+    x32, w32 = _inputs()
+    want = _oracle_fp64(x32, w32)
+    servable = []
+    for blocks in _servable_configs():
+        try:
+            got, msgs = _run_pinned(x32, w32, blocks)
+        except Exception:
+            continue
+        if any("fall back" in m or "codegen failed" in m for m in msgs):
+            continue
+        if _deviation(got, want) <= tol:
+            servable.append(blocks)
+    assert servable, (
+        "no config both ran and agreed with the oracle. Every config refusing "
+        "reads as a green suite of skips and means the kernel has no path.")
+    print(f"servable configs agreeing with the oracle: {servable}")
