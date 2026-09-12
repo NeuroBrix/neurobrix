@@ -128,3 +128,52 @@ being too strict; with it, they are four real defects.
   reference per key, which costs a card; the certification runner is its first
   client. Until a provider is installed on a target, that target still runs on
   a consensus, and this page still describes it as it is.
+
+---
+
+## What the directory BUYS, and the law that predicts it (measured 2026-09-12)
+
+The preceding sections are about correctness. This one is about cost, and it is
+here because the two get confused: the directory's reason to exist is the proof,
+but people ask what it saves, and the honest answer has a shape worth stating.
+
+**The saving is not a function of the sweeping machinery. It is a function of how
+many distinct kernel shapes a request meets per second of the time it runs.**
+
+Measured over eleven paired cells — cold, three repetitions, one lever
+(`NBX_AUTOTUNE_CERTIFIED` on/off), a frozen tree, every card at 1290/877 MHz.
+Sorted by sweep-cost over base-time, the distribution is **bimodal with an empty
+interval**:
+
+| regime | cells | cost/base | sweep cost |
+|---|---:|---|---|
+| sweep-dominated | 5 | 4.32× – 14.38× | 127 s – 2 924 s |
+| sweep-negligible | 6 | 0.01× – 1.30× | 26 s – 403 s |
+
+**Nothing falls between 1.30× and 4.32×.** A median over the eleven reads 1.14×
+and describes no model in the upper group, understating every one of them by an
+order of magnitude — so this page reports the two regimes and their boundary, and
+never a median. A distribution with a hole in it does not have a middle.
+
+**Neither obvious explanation survives the data.** The key count has members on
+both sides (37 keys at 4.32×, 33 keys at 0.73×). So does the base time (35 s at
+1.30×, 3 468 s at 0.01×). Their **ratio** does not: distinct shapes met per second
+of base run is 1.26–2.78 in the upper regime and 0.00–0.25 in the lower — the same
+partition, with the same empty gap. And the **per-shape sweep cost is flat across
+both regimes**, about 3–12 s a shape, which is what rules the machinery out: the
+sweep costs the same everywhere; what differs is how many sweeps a request buys
+per second it runs.
+
+So the rule predicts before measuring:
+
+> **A short run meeting many distinct shapes pays the sweep many times over. A
+> long run meeting a few dozen pays it once and amortises it.**
+
+Multimodal and MoE text models sit in the first regime; diffusion and video in the
+second. A model's family is a weak proxy; its shape density is the thing.
+
+**Scope, and it binds every number above.** These are measurements of ONE rack, at
+ONE clock, cold, against a frozen tree. A machine whose replay cache is already
+warm pays a different price, and a card whose shapes were never certified pays all
+of it. The table with its full per-model rows and its caveats lives with the
+campaign, not here.
