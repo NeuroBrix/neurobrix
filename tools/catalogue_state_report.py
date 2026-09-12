@@ -65,10 +65,13 @@ OVERLAY = {
              "0.02 GB. 389 -> 265 ops.",
         line="measured"),
     "Open-Sora-v2": dict(
-        now="DIAGNOSED, rebuild required",
+        now="DIAGNOSED — rebuild refused at entry, re-trace queued first",
         evidence="the shipped topology.json carries shapes=NONE for transformer and "
                  "vae while .cache/graphs holds them (vae: z [1,16,9,14,22]); "
-                 "container dated 2026-06-30",
+                 "container dated 2026-06-30; the 22:10 rebuild was refused in 5 s: "
+                 "\"component 'scheduler' has no cached graph.json -- topology/"
+                 "graph-cache desync\" (its trace cache is also from 2026-06-30); "
+                 "snapshot present (64.43 GB, build door satisfied)",
         note="The runtime repair is not enough for this one: the container predates "
              "the builder that writes component shapes, so the output size cannot be "
              "read from it whatever the runtime does. Snapshot re-downloaded "
