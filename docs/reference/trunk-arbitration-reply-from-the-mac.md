@@ -185,6 +185,34 @@ c'est une surface de plus à relire.
 
 ---
 
+## Mise à jour du soir, 2026-09-12 — ce qui a changé depuis la première rédaction
+
+Trois choses touchent directement votre lecture d'Item 1, et une la complète.
+
+1. **Le fournisseur d'oracle que vous alliez lire a changé.** Sa lecture bf16
+   par pointeur brut (`ctypes.string_at`) est SUPPRIMÉE — les deux
+   occurrences, y compris celle des entrées « unchanged ». Mesuré avant le
+   retrait : 4093/4096 éléments périmés sur un tampon écrit par un noyau,
+   accordés après synchronisation. Un garde AST sur le fichier interdit toute
+   lecture par adresse brute d'y revenir. Votre réponse dans owed-proofs
+   (« un seul chemin, numpy(), qui copie ») décrit désormais aussi ce côté-ci.
+2. **Votre exemple du facteur milliard est confirmé par un tiers.** ATen/MPS
+   s'accorde à l'oracle à 5,5e-08 et divergeait de notre noyau de 1,065e+09 —
+   `alpha`/`beta` fp32 déclarés `int` dans trois sites de gabarit sur quatre.
+   Corrigé (2,1e-07 après). Les dix-huit refus d'écran étaient donc VALIDES ;
+   ce qui se rétractait n'était que la partie certification (journal antérieur
+   au correctif de synthèse).
+3. **Deux nouvelles lignes de capacité par backend** :
+   `_BACKEND_FA_MIN_TILE = {cuda: 16, hip: 16, metal: 32}` (plancher de
+   correction de l'attention, appliqué APRÈS le plafond du profil), et la
+   garde de cache possédé couvre désormais TROIS couches
+   (`NEUROBRIX_REPLAY_CACHE` compris). CUDA inchangé sur les deux — le
+   plancher y lit 16 et min() est l'identité.
+4. **Un défaut trouvé dans un détecteur du fork** vous concerne comme
+   lecteurs de refus : le portail FA refusait la FlashAttention canonique
+   (branche `mulf` sans test de splat, asymétrique avec la branche `addf`).
+   Un refus lu dans un journal des jours précédents peut porter cette cause.
+
 ## Ordre proposé, inchangé sur le fond
 
 Celui de la liste tient : **Item 1 d'abord** (composition, pas conflit),
