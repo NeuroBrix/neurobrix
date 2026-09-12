@@ -670,3 +670,47 @@ regression.
 `memory.total` per card before choosing, and prefer no pinning at all so the
 placement engine sees what it was written to see. A failure from a pinned run is
 a fact about the pinning until an unpinned run says otherwise.
+
+### 40 — a door that caught the extreme case and passed the partial one
+
+The starved-snapshot door landed the same morning (entry 37) tested a component
+directory for "an index and NO weight file at all". `CogVideoX-5b-I2V`'s text
+encoder holds `model-00001-of-00002.safetensors` and not
+`model-00002-of-00002.safetensors` — both casualties of the same 2026-09-07
+purge that took the transformer. The directory has a weight file. The door passed
+it.
+
+The build then wrote a 17.32 GB container carrying **half a text encoder**,
+reported `BUILD COMPLETE`, and its upload onto the working hub slug ran for five
+minutes.
+
+What caught it was not a gate. It was a component-by-component size comparison
+against the installed container, run by hand because 17.32 GB did not match the
+21.6 GB the hub listing showed:
+
+| component | installed | new archive | delta |
+|---|---:|---:|---:|
+| text_encoder | 8.87 GB | 4.66 GB | **−4.22 GB** |
+| transformer | 11.05 GB | 11.05 GB | 0 |
+| vae | 0.81 GB | 0.81 GB | 0 |
+
+A halving in exactly one component, with the others byte-identical, is a missing
+shard and not a dtype change — and the shard count was one `index.json` away.
+
+**The sharper predicate needed no new information.** The index NAMES its shards.
+It now reads `weight_map` and refuses on any declared file that is absent,
+naming it: *"text_encoder/ model.safetensors.index.json -> 1 of 2 shard(s)
+absent: model-00002-of-00002.safetensors"*.
+
+**The rule, and it is the second time today**: a predicate written for the case
+that motivated it will catch that case. Ask what the ALMOST-right input looks
+like — the directory with some of its weights, the container with most of its
+components, the graph with one axis still blind — because that is the input that
+gets past and the one that is expensive. The extreme case announces itself; the
+partial case is indistinguishable from success until something compares it
+against what it should have been.
+
+**And the comparison that caught it belongs in the tool, not in a person.** The
+previous artefact — the installed container, the hub's size, the last build — is
+a declaration of what this thing should contain, and every one of those three was
+available to the code that wrote the container.
