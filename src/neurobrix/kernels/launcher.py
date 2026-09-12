@@ -1386,6 +1386,23 @@ def install(force: Optional[bool] = None) -> bool:
                   f"installed ({type(exc).__name__}: {exc}); the screen runs "
                   f"on the consensus alone", flush=True)
 
+    # A backend refusal for ONE candidate config costs that config, not the
+    # run. Triton's `_bench` already scores `OutOfResources` and friends `inf`
+    # and carries on; `MetalNonRecoverableError` descends from `RuntimeError`,
+    # so nothing catches it and it ends the sweep. Measured 2026-09-12: five
+    # of six blocked models died inside the sweep on one refused config while
+    # `conv2d_forward_kernel` declares eighteen, eleven of them servable.
+    try:
+        from neurobrix.kernels.autotune_refusals import install as _install_refusals
+        if not _install_refusals():
+            print("[AUTOTUNE_REFUSED] the autotuner is not importable; a "
+                  "refused config will end the sweep instead of being "
+                  "excluded", flush=True)
+    except Exception as exc:                           # never block a launch
+        print(f"[AUTOTUNE_REFUSED] the refusal policy could not be installed "
+              f"({type(exc).__name__}: {exc}); a refused config will end the "
+              f"sweep", flush=True)
+
     _installed = True
     return True
 
