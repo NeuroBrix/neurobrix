@@ -102,3 +102,44 @@ Instruments: `tools/temporal_unroll_census.py` (static survey, and it refuses to
 give a verdict from one point), `nbx/campaigns/prepared/unroll_measure.py` (the
 two-stimulus fit), `tools/unroll_census_report.py` (renders this table from the
 measurement file, so a number cannot be retyped wrong).
+
+---
+
+## Companion: the weight-extent collisions, 2026-09-12
+
+The same catalogue carries a second blindness of the same shape. 33 axes are
+traced at a value that is ALSO a parameter extent of their own component, where a
+dim bound to the wrong quantity reproduces the trace exactly — the collision at 1
+with a different coincidence.
+
+**The instrument is a second trace at a value the weights do not carry**, and the
+first version of it compared a tree with itself and printed a verdict. Asked for
+`Flex.1-alpha/text_encoder` at 71 instead of 77, it got a graph still recording
+`trace_value=77`, compared 466 identical dims with themselves, and concluded *"the
+axis is BOUND to the symbol"*. It now REFUSES when the recorded value has not
+moved.
+
+**And the refusal is a better answer than the verdict it replaced.** When the
+stimulus cannot move the axis, the model FIXES it — a position table, a fixed
+tokenizer length, an architectural hidden dimension — so the axis cannot vary at
+runtime either, and its equality with a parameter extent is structural rather
+than a blind spot. Nothing to act on, and nothing claimed about a binding.
+
+| component | axis | at | asked | result |
+|---|---|---:|---:|---|
+| `Flex.1-alpha/text_encoder` | `seq_len` | 77 | 71 | **fixed by the model** — value did not move |
+| `Flex.1-alpha/transformer` | `seq_len` | 4096 | 4091 | **fixed by the model** — value did not move |
+| `Ming-Lite-Omni-1.5/image_vae` | `seq_len` | 3 | 7 | not measured — a single-component trace does not reach this component on a multimodal container |
+| `MiniCPM-o-4_5/flow_dit` | `seq_len` | 3 | 7 | not measured — same |
+
+The instrument (`nbx/campaigns/prepared/weight_extent_differential.py`) and the
+stimulus override it needed (`forge trace --trace-seq-len`) are the deliverable
+here as much as the rows: before today there was no way to move a sequence axis
+off a colliding value at all, so none of these 33 could be adjudicated by
+anything.
+
+**The spatial axes are not yet reachable.** 18 of the 33 are `height`/`width` at
+128, 64 or 32 — the VAE family — and the spatial stimulus is written at three
+separate sites in the tracer rather than read from one. Moving it needs that
+consolidation first, which is a change to the tracer and not to this instrument.
+Recorded as not measured, with what it would take.
