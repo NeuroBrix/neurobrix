@@ -1600,6 +1600,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run")
+    import rig_clock as _rc
+    _rc.add_argument(r)
     r.add_argument("--family")
     r.add_argument("--models")
     r.add_argument("--gpu", default=None, help="one pinned card, or a comma list of cards (e.g. 2,3) Prism may spread over; "
@@ -1697,6 +1699,18 @@ def main():
                else frozen_src_refusal(args.src, _root))
     if _frozen:
         ap.error(f"this campaign would not measure a frozen tree — {_frozen}")
+
+    # The second door, same class and same moment: a campaign measures at the
+    # protocol clock or it does not measure. Application clocks are lost at every
+    # reboot and this rack's two SKUs return to DIFFERENT factory defaults, so an
+    # outage can leave half the rig at the protocol value by coincidence. Every
+    # card is read — sampling one that already agrees is how this goes unseen.
+    from rig_clock import OffProtocol, require_protocol_clock
+    try:
+        require_protocol_clock(
+            allow_off_protocol=getattr(args, "allow_off_protocol_clock", False))
+    except OffProtocol as exc:
+        ap.error(str(exc))
 
     held = held_by_retrace(Path(args.hold_from)) if args.hold_from else set()
     for m in models:

@@ -220,6 +220,16 @@ thing it prints on success, it is already an entry here and nobody has noticed.
 * **closed by** reading `family` from the container's `manifest.json`, and by making a request that cannot be composed a **named skip** rather than a crash. Forty-three models must not be lost because the forty-fourth has no stimulus.
 * **why it is in this register** the run exited 1 and printed a traceback, so it was not silent — but the ARTEFACT was: no record, no partial result, nothing to read afterwards. An instrument that produces nothing when interrupted has the same failure mode as one that produces a green: there is nothing to disagree with.
 
+### 23 — the clock protocol had no check, and the natural one would have been green forever
+
+* **date** 2026-09-12 · **machine** Dell · **site** the measurement protocol itself; closed in `tools/rig_clock.py` + `tools/rig_protocol.json`
+* **what it could not say** that the rig was not at the protocol clock. Application clocks do not survive a reboot, this rack lost mains twice in nine minutes on 2026-09-11, and it came back with cards 0 and 1 at **1312 MHz** and cards 2 and 3 at **1290 MHz** — each pair at its OWN factory default. The protocol value is 1290. No harness read the clocks at entry; the value was typed by hand on a `--lock-clock` flag, or forgotten.
+* **why it belongs here rather than in a bug list** the trap is in the SHAPE a check would naturally take. 1290 is the factory default of this rack's 32 GB cards, so a check sampling card 2 or card 3 reads the protocol value on a rig that is half wrong — and would have gone green on every run since the machine was built, having never once fired. The two SKUs advertise byte-identical supported-clock lists, so no capability query reveals the disagreement either. Only reading every card does.
+* **how it surfaced** not by a test. The owner read `nvidia-smi` across all four cards while reviewing a post-outage state report that had checked git integrity, remotes, worktrees, GPU occupancy and disk — and not the clocks.
+* **closed by** a door rather than a census: `require_protocol_clock()` reads **every** card the driver reports, refuses unless all agree with the authority in `rig_protocol.json`, names each diverging card with its own value alongside the conforming ones, and prints the exact restore command. Reading zero cards is itself a refusal. There is no built-in fallback value — a missing authority refuses, because a harness that invents the number stops citing the protocol. One deliberate opening, `--allow-off-protocol-clock`, which says so in the run's own output. Wired into `precision_zoo_campaign.py` and `certify_the_catalogue.py` beside the frozen-tree refusal, at the same moment and in the same class.
+* **seen failing** twice, on a real card: card 1 set back to its 1312 default, the brick refused and exited 1 naming it; then the campaign refused end-to-end for a job pinned to card **2** — a card that was itself at protocol, which is the point. The unit suite injects the exact 09-11 reading, and was itself watched turning red under a deliberate one-card sampler planted in the brick.
+* **what is NOT established, and cannot be** whether the 971 shapes certified on 2026-09-11 were measured on protocol. The certification benches on the default CUDA device — card 0, one of the two that sit at 1312 by factory default — and its proof recorded hostname, platform and hardware profile but **not the clock**, so the conditions are unrecoverable from the record. The choices themselves are internally consistent (every candidate for one shape is timed on one card at one frequency, so the ranking holds); it is the `best_ms` values whose regime is unknown. Closed forward only: `autotune_certify._machine()` now writes `clocks_mhz` into every proof, read once per run and memoised — `_machine()` is called once per certified key, and a driver query per key is the anti-pattern this project has already paid for.
+
 ---
 
 ## The Mac's entries
@@ -235,7 +245,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-22 entries, of which five are placeholders and 17 carry a site. Two
+23 entries, of which five are placeholders and 18 carry a site. Two
 machines, two weeks of concentrated looking. Every one of them produced silence
 or a green rather than an error, and **not one was found by a test** — they were
 found by users, by contradictions between two numbers, by reading generated

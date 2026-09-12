@@ -234,6 +234,8 @@ def main() -> int:
     ap.add_argument("--src", default=None,
                     help="a frozen worktree's src — required to run, for the same "
                          "reason every campaign needs one")
+    import rig_clock as _rc
+    _rc.add_argument(ap)
     ap.add_argument("--timeout", type=int, default=5400,
                     help="seconds a single MEET run may take before it is killed "
                          "with its whole process group")
@@ -289,6 +291,19 @@ def main() -> int:
             print(f"    {cmd[:150]}", file=sys.stderr)
         print("    A refusal that does not say what it saw cannot be acted on.",
               file=sys.stderr)
+        return 1
+
+    # The rig runs at the protocol clock or it does not measure. Application
+    # clocks do not survive a reboot and this rack's two SKUs return to DIFFERENT
+    # factory defaults, so after an outage half of it can sit at the protocol
+    # value by coincidence — which is how the 2026-09-11 certification ran across
+    # cards at 1312 and cards at 1290. The refusal reads every card.
+    from rig_clock import OffProtocol, require_protocol_clock
+    try:
+        require_protocol_clock(
+            allow_off_protocol=getattr(args, "allow_off_protocol_clock", False))
+    except OffProtocol as exc:
+        print(f"\n{exc}", file=sys.stderr)
         return 1
 
     from precision_zoo_campaign import frozen_src_refusal, request_args, run
