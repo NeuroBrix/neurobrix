@@ -108,10 +108,13 @@ call, on the Mac's agent's commit, and the Dell has not touched it.
 
 Nothing here blocks it **on correctness**: the guard is intact and the output is
 byte-identical. What is not yet true is the **claim the commit makes about
-itself**. Two items, neither needing a card: gate the buffer on a non-zero code,
-and repair the Dell's cell-3 excerpt. The merge is the owner's decision, taken
-knowing the second channel costs one unfreed `int32` per device on a backend that
-never arms it.
+itself**, and it is now down to ONE item, which needs no card: **gate the buffer
+on a non-zero fault code.** The PTX comparison that was owed has been repaired and
+returned above, and it came back better than the claim.
+
+The merge is the owner's decision, taken knowing that the second channel costs one
+unfreed `int32` per device on a backend whose generated code does not reference it
+at all.
 
 Full cell-by-cell record, on the Dell:
 `validation_outputs/…` → `nbx/campaigns/prepared/cuda_fault_channel_20260912_1219/VERDICT.md`.
