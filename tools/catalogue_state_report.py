@@ -32,6 +32,19 @@ from pathlib import Path
 REPO = Path("/home/mlops/NeuroBrix_System")
 MEET = REPO / "validation_outputs/catalogue_meet_20260911/meet.json"
 TABLE = Path("/home/mlops/nbx/campaigns/prepared/CAMPAIGN_TABLE.md")
+#: Paired certified-directory campaigns read DIRECTLY from their cells, after the
+#: hand-kept table above. Each entry is a directory holding `proof*/<model>/
+#: result.json` as `precision_zoo_campaign.py run --env-ab NBX_AUTOTUNE_CERTIFIED=off
+#: --paired N --cold-arms` writes them; the row is derived by the same
+#: `campaign_table._row` that built the table, so the two sources cannot drift in
+#: arithmetic. Listed, never globbed: a campaign voided by its own INVALIDATED.md
+#: must be removed here by hand, with the reason in the commit.
+CAMPAIGNS = [
+    # 2026-09-12 night: one model per card, four cards in parallel, other cards
+    # busy — the record of every cell says so (its flightrec note), and the
+    # numbers are comparable among themselves, not with a cell that had the rig.
+    Path("/home/mlops/nbx/campaigns/2026_09_12_night_catalogue"),
+]
 PY_BIN = "/home/mlops/ml/venv/bin/python"
 
 #: What changed after the 2026-09-11 pass, each with the artefact that proves it.
@@ -141,8 +154,42 @@ def campaign_cells() -> dict:
         # is the one with its key counts, and overwriting it with the repeat
         # replaced "8/9 keys" with an em dash.
         out.setdefault(name, dict(cost_s=cost, ratio=ratio, keys=cells[6],
-                                  certified=cells[7]))
+                                  certified=cells[7], bytes=cells[8] if len(cells) > 8 else "?"))
         m = None
+    for camp in CAMPAIGNS:
+        for name, row in campaign_dir_cells(camp).items():
+            out.setdefault(name, row)
+    return out
+
+
+def campaign_dir_cells(camp: Path) -> dict:
+    """{container: cell} straight from a campaign's result.json files.
+
+    A cell whose lever did not move (no keys swept AND nothing served) carries no
+    ratio in `campaign_table._row`, and here it is NOT a measurement of the
+    directory: the row says `lever did not move` rather than a cost of zero.
+    A cell whose arm failed (rc != 0) is reported as failed, with the arm named.
+    """
+    sys.path.insert(0, str(REPO / "tools"))
+    from campaign_table import _row  # the table's own arithmetic, reused
+    out = {}
+    for result in sorted(camp.glob("proof*/*/result.json")):
+        try:
+            cell = json.loads(result.read_text())
+        except (OSError, ValueError):
+            continue
+        r = _row(cell)
+        rc_a, rc_b = r["rc"]
+        if rc_a not in (0, None) or rc_b not in (0, None):
+            out[r["model"]] = dict(cost_s=None, ratio=None, keys=r["keys"], certified=r["served"],
+                                   bytes=r["bytes"], failed=f"arm A rc={rc_a}, arm B rc={rc_b}")
+            continue
+        if r["ratio"] is None:
+            out[r["model"]] = dict(cost_s=None, ratio=None, keys=r["keys"], certified=r["served"],
+                                   bytes=r["bytes"], failed="lever did not move")
+            continue
+        out[r["model"]] = dict(cost_s=r["sweep"], ratio=f"{r['ratio']:.2f}", keys=r["keys"],
+                               certified=r["served"], bytes=r["bytes"], base_s=r["a_med"])
     return out
 
 
@@ -252,8 +299,14 @@ def main() -> int:
                    "not runnable": "not runnable — catalogue decision"}.get(
                        r.get("state", "?"), r.get("state", "?"))
             line = "measured" if wall is not None else "not measured"
-        cost = (f"{cell['cost_s']:.0f} s, {cell['ratio']}x, {cell['certified']}/"
-                f"{cell['keys']} keys" if cell else "not measured")
+        if not cell:
+            cost = "not measured"
+        elif cell.get("failed"):
+            cost = f"paired cell {cell['failed']} — no cost"
+        else:
+            base = f", base {cell['base_s']:.0f} s" if cell.get("base_s") else ""
+            cost = (f"{cell['cost_s']:.0f} s, {cell['ratio']}x, {cell['certified']}/"
+                    f"{cell['keys']} keys{base}, bytes {cell.get('bytes', '?')}")
         axes = blind.get(container, [])
         blind_cell = "; ".join(axes[:2]) + (f" (+{len(axes)-2})" if len(axes) > 2 else "") \
             if axes else "none found at the input"
@@ -292,7 +345,15 @@ def main() -> int:
     print("for work no one asked it to do.\n")
     print("**screened** — candidate configurations the correctness screen excluded")
     print("before timing. Zero across the whole catalogue, on 998 keys.\n")
-    print("**certified cost** — from the paired certified-directory campaign, which")
+    print("**certified cost** — from the paired certified-directory campaigns: the")
+    print("hand-kept table of 2026-09-11, then every campaign listed in `CAMPAIGNS`")
+    print("read straight from its cells through the table's own arithmetic. A night")
+    print("cell also carries its base time (arm A median) and its byte gate — `same`,")
+    print("`N dB`, `DIFFER`, `nondet both` or `did not run`; a cell whose arm failed")
+    print("or whose lever did not move says so and carries no cost. The 2026-09-12")
+    print("night ran one model per card with the other cards busy: its numbers are")
+    print("comparable among themselves, not with a cell that had the rig alone.")
+    print("The rest of the paragraph describes the 2026-09-11 table, which")
     print("covers eleven cells and not the catalogue. The ratio is what runtime")
     print("sweeping costs relative to a served run, on this rack, at the shapes these")
     print("requests meet. It is not a throughput figure and it says nothing about")
