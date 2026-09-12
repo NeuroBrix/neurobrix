@@ -16,8 +16,22 @@ NEUROBRIX_HOME = Path.home() / ".neurobrix"
 STORE_DIR = NEUROBRIX_HOME / "store"    # Downloaded .nbx files
 CACHE_DIR = NEUROBRIX_HOME / "cache"    # Extracted models (runtime)
 
-# Registry
-REGISTRY_URL = "https://neurobrix.es"
+# Registry.
+#
+# The public name is the default because this is the public engine and a user
+# anywhere in the world reaches the hub through it. A machine that sits on the
+# hub's own network sets NEUROBRIX_REGISTRY to the internal entry point and
+# never goes out to the internet to come back to a box three metres away.
+#
+# That is not a convenience. On 2026-09-12 the public name was unreachable from
+# the hub's own rack for an evening: `neurobrix.es` sits behind Cloudflare, and
+# Spanish operators apply a court order (Juzgado de lo Mercantil no 6 de
+# Barcelona, 18 Dec 2024, in force through the 2026/27 season) to Cloudflare's
+# shared addresses during football matches. The name resolved to a blocking
+# device presenting a self-signed certificate, and every publish from this rack
+# failed on certificate verification -- correctly. It returns every weekend.
+import os as _os
+REGISTRY_URL = _os.environ.get("NEUROBRIX_REGISTRY") or "https://neurobrix.es"
 
 
 def find_model(model_name: str) -> Path:

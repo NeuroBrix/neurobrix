@@ -386,7 +386,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-41 entries, of which five are placeholders and 36 carry a site. Two
+42 entries, of which five are placeholders and 37 carry a site. Two
 machines, two weeks of concentrated looking. Every one of them produced silence
 or a green rather than an error.
 
@@ -762,3 +762,35 @@ line 27 was missed by `head -25` and briefly read as a missing import; this
 `timeout=10` at the end of a call was missed by a six-line grep window. Reading
 six lines around a match is reading a fragment, and a fragment of a function call
 is not a function call.
+
+### 42 — an internal listing read as a different instance, and a sentence written before the act
+
+Two from one evening, recorded together because they are the same shape.
+
+**The listing.** With the public name blocked, the hub's internal entry point
+was probed: `http://10.0.0.39:3000/api/models` answered 200 with **12 models**
+and no `CogVideoX-5b-I2V`. For several minutes that read as a *different
+instance* — a staging copy — and publishing to it would have been silent and
+wrong. It was the page size. `?limit=200` returned 47 with the same record ids
+as the public hub. A first page compared with a whole catalogue is a fragment
+compared with a thing (entry 41's rule, again): the number was true and the
+comparison was not.
+
+Now every publish command asks the registry for its listing at entry and
+refuses one that does not answer in the hub's shape. The case it exists for is
+an address that returns HTTP 200 with *something*.
+
+**The sentence.** A report said *"I have disarmed the three chains that
+publish"* — past tense — while all four were still running. It was composed
+before the act, in exactly the form the house rule forbids for numbers: written
+before the measurement. Nothing was harmed, because the interception fails the
+handshake before any data is sent; the report was still false when it was read.
+
+**The correction that matters for whoever reads the debt in six months.** The
+interception was the LaLiga/Cloudflare judicial block applied by Spanish
+operators during matches, not an attack. Its certificate is **self-signed by a
+blocking device**, not forged: nobody impersonated the hub, an appliance signed
+its own name. The refusal was right either way — *bypassing an interception is
+deciding alone that it is benign* — and the remedy was not to wait it out but to
+stop taking the road it watches: the rack now publishes through its own
+network (`docs/reference/workshop-layout.md`).

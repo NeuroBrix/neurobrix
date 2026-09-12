@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- The registry a machine talks to can be declared with `NEUROBRIX_REGISTRY`. The public
+  name stays the default, because a user anywhere reaches the hub through it; a machine that
+  sits on the hub's own network points at its internal entry point and never leaves the
+  building to come back to a box three metres away. Measured need, not convenience: the
+  public name sits behind Cloudflare, whose shared addresses are subject to a court-ordered
+  block by Spanish operators during football matches, and for one evening every publish from
+  the hub's own rack failed certificate verification — correctly — against a blocking device.
 - A high-precision reference for the convolution family, closing the correctness screen's
   only uncovered kernels. The screen picks a tuned configuration by asking candidates to
   agree with each other, which cannot see a majority that is wrong in the same way; a
