@@ -558,6 +558,20 @@ The reference may be a commit (`("git", repo, pathspec)`), another artefact
 (`("file", path)`), or a raw timestamp with a label. A witness with no reference
 point is refused at the CLI: that is a timestamp, not a verification.
 
+**What its conservatism costs, measured the same day.** The rule dates a change by
+the last commit touching the referenced file, so an UNRELATED edit to that file
+makes every earlier artefact stale. It happened within the hour: a commit that
+only extended a CLI flag's reach touched `tracer/worker.py`, and the witness then
+refused a graph traced twenty-four minutes earlier. The graph was re-traced — and
+came back with the SAME sha, `7216b9fb1478`, bit for bit.
+
+That is the right trade and the reason is R27/R28: because traces are
+bit-reproducible, a false alarm costs sixteen seconds and returns a proof that the
+change was inert. A rule that refused to refuse until it could tell relevant edits
+from irrelevant ones would need to model what every change touches, which is the
+reasoning it exists to replace. **A conservative refusal whose false positives are
+cheap to clear is better than a precise one that has to be right.**
+
 ### 37 — a build that packaged a video model without its backbone, and said COMPLETE
 
 `forge build` produced a 5.45 GB CogVideoX-5b-I2V container against a 21.6 GB
