@@ -324,6 +324,20 @@ thing it prints on success, it is already an entry here and nobody has noticed.
 
 ---
 
+### 30 — an artefact of the right size is not a success
+
+* **date** 2026-09-12 · **machine** Dell · **site** my own reading of the Allegro-TI2V rebuild chain
+* **what happened** the chain built the container, verified the corrected topology inside it, and then **`forge replace` was refused by argparse in under a second** for a missing positional argument. I looked at `models/video/Allegro-TI2V/model.nbx.building`, saw 26.1 GB — the right size, the right name, the right minute — concluded "it is at the rename", and reported the chain as in flight. It had already failed. **The flight recorder held the word `failed` the whole time and I never read it.**
+* **the cost** two hours in which the queue was believed to be advancing and was not. The owner found it from OUTSIDE, by querying the hub and seeing a date of 6 September against a local artefact of 14:06 — which is a good catch and also the wrong place to have to catch it from.
+* **the form** a file of the expected size is evidence that a process WROTE, not that it SUCCEEDED. Size, name and timestamp are all downstream of the work; the exit code is the only witness that reports on the whole of it. **The witness that adjudicates is the exit code, never the trace left on disk.**
+* **its cousin, and the reason this is a form and not an anecdote** the other machine wrote the same shape from the other end: a 10 MB PNG whose file size, dimensions and name were all correct, and 99.7 % of whose pixels were 0 or 255. A plausible artefact is the most expensive kind of silence, because it satisfies every cheap check.
+* **why the instrument was already there** `tools/flightrec.py` exists precisely to make an interrupted job legible, writes `failed` into a record before anything else, and the session hook prints it. It was armed, it was correct, and it was not consulted. **Having the instrument and looking elsewhere is a distinct failure from not having it**, and the remedy is not another instrument.
+* **closed by** the rule, not a tool: a chained step reports on the STEP'S exit status, and a chain that ends anywhere but its last line is reported as failed until its exit code says otherwise. On this machine the exit code is one command away at every point — `flightrec status`, the `|| { echo FAILED; exit 1; }` the chain already carries, and the record itself.
+* **the third of a family in one day** a snapshot path read from a truncated usage line, backticks executed inside an unquoted heredoc, and a positional argument never seen because the same `grep` filtered it out. All three are *a composition I did not re-read*, and all three were caught by something refusing correctly — argparse twice, the builder once (*"a component with no weights is a build failure, never a container to ship"*). The refusals worked. The reading did not.
+* **and the fourth arrived while this entry was being committed**, which is the most useful thing in it. The commit carrying this text used `git commit -m "…"` with DOUBLE quotes, so the shell expanded the backticks and parentheses inside the message body — `command not found`, `syntax error near unexpected token '('`, and git then read fragments of the prose as pathspecs. **I had already diagnosed this exact mechanism earlier the same day and written that the fix was `<<'MSG'` with quotes, and then did not use it.** Knowing a rule and applying it are different acts, and the gap between them is not closed by knowing the rule harder. **A commit message is a file, and it goes in through a quoted heredoc — never through an argument the shell reads.**
+
+---
+
 ## The Mac's entries
 
 Entries 13 and 14 are the Mac's, transcribed from `f769f2e` because they are
@@ -337,7 +351,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-29 entries, of which five are placeholders and 24 carry a site. Two
+30 entries, of which five are placeholders and 25 carry a site. Two
 machines, two weeks of concentrated looking. Every one of them produced silence
 or a green rather than an error, and **not one was found by a test** — they were
 found by users, by contradictions between two numbers, by reading generated
