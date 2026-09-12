@@ -151,3 +151,26 @@ three machines. A prefix identifies the maker of a network card. It says
 nothing about what is behind the card, and it said nothing here: two of the
 three were VMs on the host and the third was the host's own link. Register
 entry 43.
+
+### When the store says `SlowDownWrite` on every write
+
+Read `http://10.0.0.36:9000/minio/health/cluster` before anything else. `/live`
+and `/ready` answer 200 while the process is alive; **`/cluster` answers 503 when
+MinIO has marked its drive as hung**, and from then on every write returns
+`SlowDownWrite: Resource requested is unwritable` until the drive recovers or the
+service restarts. Measured 2026-09-12: the network was 10 GbE to the store and
+200 GbE to the pool with 0.45 ms RTT, `eno1` was emitting 7 kB/s, and the upload
+crawled at 398 kB/s — the link was never the bottleneck, the store was refusing.
+
+The store is **VM 230 `storage-MNIO`** on the hypervisor `optimus`
+(`192.168.100.1` on the private link), disk `vm-storage:vm-230-disk-1`, 4 TB.
+The hub is **VM 101 `NeuroBrix`**. When the guest is wedged in I/O its SSH port
+gives no banner and `qm guest cmd 230 ping` does not answer; a `qm stop` then
+needs SIGKILL and a `qm start` right after can fail with *"timeout waiting on
+systemd"* while the old scope tears down. On the night this was learned the
+owner rebooted the host, which brought everything back at once: exports
+serving 424 MB/s O_DIRECT, `/cluster` 200, the hub reporting 47.
+
+The order of checks that would have saved an hour: `/minio/health/cluster`
+first, then `ethtool`/RTT, then the pool from the host. A 503 there is the
+diagnosis; everything else is confirmation.
