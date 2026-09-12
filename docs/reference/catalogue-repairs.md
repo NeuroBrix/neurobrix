@@ -116,3 +116,18 @@ graph. The container will resolve its output size and remain incapable of an
 encoder frame count it was not unrolled for — `DETTE.md`, `D-TEMPORAL-UNROLL`.
 Delivering line one without line two would be delivering the fix for the error
 we found and hiding the one underneath.
+
+---
+
+## 4 — `hpcai-tech/Open-Sora-v2` · 2026-09-12 — DIAGNOSED, re-trace queued
+
+| step | evidence |
+|---|---|
+| cause | shipped `topology.json` (container dated 2026-06-30) carries `shapes=NONE` for `transformer` and `vae` while `.cache/graphs` holds them (`vae: z [1,16,9,14,22]`); the output resolution cannot be read from the container whatever the runtime does |
+| snapshot | purged under R38; re-downloaded **16:38**, 64.43 GB in 862 s, build door satisfied |
+| rebuild | **refused at entry, 22:10:27, in 5 s**: *"component 'scheduler' has no cached graph.json — topology/graph-cache desync"*. Its graph cache dates from 2026-06-30 like the container; the custom (non-diffusers) pipeline's synthetic topology lists a `scheduler` the cache never held. Nothing was written. |
+| re-trace | **queued first in the serial follower chain**, behind the export door, then the staged conversion (`--rebuild --stage-root`, root filesystem, 42 GB against 54 free) with the regression gate before the upload |
+| re-upload · install · proof by run | owed |
+
+Not listed as delivered. The line in `catalogue-state.md` stays DIAGNOSED until the
+proof by run says otherwise.
