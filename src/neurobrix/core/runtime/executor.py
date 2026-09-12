@@ -1388,6 +1388,18 @@ class RuntimeExecutor:
         height = merged_defaults.get("height")
         width = merged_defaults.get("width")
 
+        # Reaching here with no height/width is NOT a missing fallback: the
+        # resolution cascade above has already asked `_container_output_size`
+        # and been told None. `latent_height` is then underived and any flow
+        # that resolves it dies on "Key 'latent_height' not found in
+        # runtime/defaults.json" — Open-Sora-v2 and Allegro-TI2V, 2026-09-11.
+        #
+        # Neither container can answer: their topology carries no transformer
+        # latent extent, so there is nothing to multiply by the VAE scale. That
+        # is a BUILD-side gap, and it is not repaired here — a family constant
+        # was the last resort and was removed for cause (video 512², colour
+        # bands on every arm, 2026-09-05), and inventing a resolution at runtime
+        # would compensate a build limit, which this engine does not do.
         if height is None or width is None:
             return merged_defaults
 
@@ -1437,10 +1449,24 @@ class RuntimeExecutor:
         return None
 
     def _get_vae_scale_factor(self, comp_configs: Dict[str, Any]) -> Optional[int]:
-        """Determine VAE spatial compression factor."""
+        """Determine VAE spatial compression factor.
+
+        The container's own declaration first, in both the names it uses. Video
+        containers carry `spatial_compression_ratio` where image ones carry
+        `vae_scale_factor` — the same quantity under two vendor spellings — and
+        reading only the second sent Open-Sora-v2 (which declares
+        `spatial_compression_ratio: 8` and nothing else) past its own answer and
+        into the guess below. The same shape as the `latent_frames` defect above:
+        the container held the value and the code did not look.
+        """
         manifest_scale = self.pkg.manifest.get("vae_scale_factor")
         if manifest_scale is not None:
             return int(manifest_scale)
+
+        for key in ("vae_scale_factor", "spatial_compression_ratio"):
+            declared = self.pkg.defaults.get(key)
+            if declared:
+                return int(declared)
 
         transformer_data = comp_configs.get("transformer", {})
         transformer_attrs = transformer_data.get("attributes", {})
