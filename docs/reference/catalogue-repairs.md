@@ -72,3 +72,17 @@ months later is not "was it diagnosed" — the register and the verdicts hold
 that. It is **which containers people are actually being served**, and whether
 the fix reached them. That is one table, and it has to be written at the moment
 the upload lands or it is written from memory.
+
+---
+
+## 2 — `THUDM/CogVideoX-5b-I2V` · 2026-09-12
+
+| step | evidence |
+|---|---|
+| cause | The I2V encoder's causal temporal pad recorded `2187·s − 2184` against a truth of `s + 2`, exact at the traced `s = 1` where every rule coincides. Seven resnet blocks compounded it; Prism asked 944 GB of activations for a component whose weights are 822 MB. Fixed at the source: a genuinely constant axis carries no symbol (an I2V encoder conditions on one image), Forge `96fc046`. |
+| re-trace | 2026-09-12 15:22 and again 15:52 after an inert tracer edit — **same sha `7216b9fb1478`, bit for bit** (R27/R28). 389 → 265 ops, symbols `batch/height/width`, no temporal symbol. Profiled at 49 frames: 210.26 GB before, 0.02 GB after. |
+| rebuild | 16:00, 21.5 GB (23 126 413 914 bytes). Two earlier builds were refused before publication: one without its backbone (5.45 GB, snapshot purged), one with half a text encoder (17.32 GB, one shard of two) — both now refused at entry by the index-aware build door. |
+| re-upload | **22:09:39 UTC**, `forge replace` through the internal entry point `http://10.0.0.39:3000` (the public name was court-blocked), 2498 s at the 10 MB/s cap with zero `SlowDownWrite` after the host reboot. Hub record: `fileSize 23126413914`, `updatedAt 2026-09-12T22:09:39.879Z`. Three earlier uploads failed: 0 % (backbone-less), 5 min (half an encoder), 81 % (504 with no backoff), then a fourth stalled on a store whose drive MinIO had marked hung. |
+| install | 22:10:26 UTC, `forge local --overwrite` — staged, verified against the archive, then repointed. The installed `vae_encoder/graph.json` holds 265 ops and no temporal symbol. |
+| regression gate | passed component by component before the upload: text_encoder 1.000×, transformer 1.000×, vae 1.000×, vae_encoder 0.982× (the corrected graph). |
+| proof by run | **owed** — armed in the serial follower chain (`prove_by_run.py`, 9 frames, refuses a container installed before 21:28 UTC). Listed as **delivered, unproven** until it returns. |

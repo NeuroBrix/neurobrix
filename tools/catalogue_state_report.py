@@ -50,10 +50,13 @@ OVERLAY = {
              "declared 88 asking 25.27 GiB in one allocation (DETTE D2).",
         line="measured"),
     "CogVideoX-5b-I2V": dict(
-        now="CORRECTED at the source, conversion in flight",
-        evidence=".cache/graphs/CogVideoX-5b-I2V/vae_encoder/graph.json "
-                 "(sha 7216b9fb1478, 265 ops, no temporal symbol); container 21.5 GB "
-                 "passing the regression gate component by component",
+        now="CONVERTED — corrected at the source, published, installed; proof by run owed",
+        evidence="hub record THUDM/CogVideoX-5b-I2V fileSize 23126413914, updatedAt "
+                 "2026-09-12T22:09:39Z (replace through the internal entry point, "
+                 "2498 s); installed manifest 22:10:26 UTC; the installed "
+                 "vae_encoder/graph.json holds 265 ops with symbols batch/height/width "
+                 "and NO temporal symbol; regression gate passed component by component "
+                 "(vae_encoder 0.82 -> 0.80 GB, every other component 1.000x)",
         note="Its causal temporal pad recorded 2187*s - 2184 against a truth of s + 2, "
              "exact at the traced s=1. Profiled at 49 frames the peak was 210.26 GB "
              "against 0.09 GB at the trace, a factor of 2237 which is the compound's "
