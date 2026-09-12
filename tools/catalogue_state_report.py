@@ -173,12 +173,23 @@ def campaign_dir_cells(camp: Path) -> dict:
     sys.path.insert(0, str(REPO / "tools"))
     from campaign_table import _row  # the table's own arithmetic, reused
     out = {}
+    # A cell that shared its card with another compute process is listed by hand
+    # in PERTURBED.json with the evidence; it renders as perturbed and carries no
+    # cost. A file nobody wrote means nobody claimed a perturbation.
+    try:
+        perturbed = json.loads((camp / "PERTURBED.json").read_text())
+    except (OSError, ValueError):
+        perturbed = {}
     for result in sorted(camp.glob("proof*/*/result.json")):
         try:
             cell = json.loads(result.read_text())
         except (OSError, ValueError):
             continue
         r = _row(cell)
+        if r["model"] in perturbed and not str(r["model"]).startswith("_"):
+            out[r["model"]] = dict(cost_s=None, ratio=None, keys=r["keys"], certified=r["served"],
+                                   bytes=r["bytes"], failed=f"PERTURBED ({perturbed[r['model']]})")
+            continue
         rc_a, rc_b = r["rc"]
         if rc_a not in (0, None) or rc_b not in (0, None):
             out[r["model"]] = dict(cost_s=None, ratio=None, keys=r["keys"], certified=r["served"],
