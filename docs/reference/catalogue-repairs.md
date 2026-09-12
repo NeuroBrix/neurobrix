@@ -85,7 +85,7 @@ the upload lands or it is written from memory.
 | re-upload | **22:09:39 UTC**, `forge replace` through the internal entry point `http://10.0.0.39:3000` (the public name was court-blocked), 2498 s at the 10 MB/s cap with zero `SlowDownWrite` after the host reboot. Hub record: `fileSize 23126413914`, `updatedAt 2026-09-12T22:09:39.879Z`. Three earlier uploads failed: 0 % (backbone-less), 5 min (half an encoder), 81 % (504 with no backoff), then a fourth stalled on a store whose drive MinIO had marked hung. |
 | install | 22:10:26 UTC, `forge local --overwrite` — staged, verified against the archive, then repointed. The installed `vae_encoder/graph.json` holds 265 ops and no temporal symbol. |
 | regression gate | passed component by component before the upload: text_encoder 1.000×, transformer 1.000×, vae 1.000×, vae_encoder 0.982× (the corrected graph). |
-| proof by run | **owed** — armed in the serial follower chain (`prove_by_run.py`, 9 frames, refuses a container installed before 21:28 UTC). Listed as **delivered, unproven** until it returns. |
+| proof by run | **2026-09-12 22:45 — PASSED.** 9 frames at 448×448 from the container installed at 22:10:26 (refused any earlier install): `rc=0`, range 9–253, mean absolute inter-frame difference 3.34 — a video, not a file. Run unpinned on the rack while the Wan2.2 upload continued at 30–37 MB/s with zero `SlowDownWrite`. |
 
 ---
 
