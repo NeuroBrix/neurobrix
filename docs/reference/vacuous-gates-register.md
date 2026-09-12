@@ -245,6 +245,19 @@ thing it prints on success, it is already an entry here and nobody has noticed.
 
 ---
 
+### 25 — the plan printed a cost, and nothing compared it to the clock
+
+* **date** 2026-09-12 · **machine** Dell · **site** `tools/certify_the_catalogue.py` (the MEET runner) + `tools/precision_zoo_campaign.py:cell_cost_estimate`
+* **what it could not say** that a run was doomed before it started. The planner reads each model's recorded cost, prints it, and decrements it from the campaign budget. The runner then kills every run at `--timeout`. **Nothing compared the two numbers.** On 2026-09-11 the plan accepted `Wan2.1-T2V-1.3B` at 6 962 s and the runner killed it at 2 700 s; `Allegro`, on the same clock, went the same way. Two kills, ninety minutes of rig, and not one shape collected between them.
+* **why the green read as an answer** the plan's output is a table of costs that all fit the budget, which reads as "this campaign is affordable". It was — against the budget. Against the clock each run would actually be given, two of its rows were arithmetically impossible, and the table never mentioned the clock.
+* **and the number itself was mis-founded, twice** it was the SUM of a paired A/B cell's two arms, while the MEET phase — in its own docstring — is "ONE run per model, not a paired A/B": every model with a record was charged about double. And the two arms it was summed from had both exited `rc=1`. The function correctly treats a *killed* arm (`rc < 0`) as a lower bound, but counted a *failed* arm as a measurement — so the figure that read as "what this model costs" was the cost of failing.
+* **closed by** `cell_cost_estimate(..., arms=1)` prices one run rather than a cell; only arms that ENDED answer, a kill being a floor and not a cost; a non-zero arm is still counted but its basis now says in words that this is the cost of failing, not of finishing. And a second door, `timeout_refusal()`, refuses at entry any run whose own recorded cost exceeds the clock it is about to be given, naming both numbers and the `--timeout` that would let it run. The refusal strictly dominates the kill: today's behaviour spends the whole timeout to reach the same outcome and loses the timeout too — a killed run produces nothing, so nothing is lost by refusing. Nothing is guessed: a model with no record still runs, as the budget guard already promised.
+* **the second defect, found inside the fix, and the one worth keeping** the first version read the WIDEST arm for both questions, justified in a comment that said *"a guard that under-states a known cost is the one that lets a doomed run start"*. That sentence was written before the measurement. Run against the real records it refused `Qwen3-VL-30B` — recorded arms 211 s and 3 135 s — on a 2 700 s clock, for a model that had **met in 365 s the previous day**. Reserving and doom-testing are two questions and take two statistics: the widest arm for *how much must I reserve*, the narrowest for *is this doomed*, because a model that has finished once under the clock is not doomed by it whatever a slower arm did. The table that settles it, MEET actual against the cells: Qwen3-VL 365 s (arms 211 / 3 135), DeepSeek-Coder-V2 140 s (93 / 1 430), Qwen3-Omni 257 s (98 / 1 294), CogVideoX-2b 614 s (548 / 951) — every MEET run lands near the NARROWEST arm and never near the widest, because by then the replay cache is warm.
+* **how it surfaced** the first version was green on sixteen tests before it was ever pointed at a real record. It was the confrontation with the 2026-09-10 cells that produced the false refusal, in the same hour and in the same shape as the defect being fixed — **a plan accepted on a number nobody had confronted with the real thing.**
+* **seen failing** three injections, each red on its own test: pricing `arms=1` as the cell sum again (2 red), silencing the failed-arm note (1 red), and a `timeout_refusal` that never refuses (1 red). The final form is pinned against the live 2026-09-11 records: one refusal (`Wan2.1-T2V-1.3B`, the 45 minutes that bought nothing) and zero false refusals across the eight models that met.
+
+---
+
 ## The Mac's entries
 
 Entries 13 and 14 are the Mac's, transcribed from `f769f2e` because they are
@@ -258,7 +271,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-24 entries, of which five are placeholders and 19 carry a site. Two
+25 entries, of which five are placeholders and 20 carry a site. Two
 machines, two weeks of concentrated looking. Every one of them produced silence
 or a green rather than an error, and **not one was found by a test** — they were
 found by users, by contradictions between two numbers, by reading generated

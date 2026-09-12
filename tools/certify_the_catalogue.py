@@ -137,7 +137,22 @@ def _local(slug: str) -> tuple[str | None, str]:
 
 
 def _known_costs(campaigns: Path) -> dict:
-    """Recorded cost per model, from campaigns nobody voided."""
+    """Recorded cost per model, from campaigns nobody voided.
+
+    Priced at `arms=1`, because MEET runs each model ONCE. The recorded cells it
+    reads are paired A/B campaigns, and their default price is the SUM of both
+    arms — charging that to a one-run phase over-counts every model with a record
+    by about a factor of two, and the budget then refuses models it could afford.
+
+    TWO numbers per model, because two guards ask two questions:
+
+      known_s   the WIDEST arm — what to RESERVE against the remaining budget.
+      floor_s   the NARROWEST — what the doom test reads, since a model that has
+                already finished once under the clock is not doomed by it.
+
+    Reading the widest for both would refuse `Qwen3-VL-30B` against a 2700 s
+    clock on the strength of a 3135 s sweeping arm, when it met in 365 s.
+    """
     from precision_zoo_campaign import cell_cost_estimate  # reuse the brick
     void = {d.name for d in campaigns.glob("*/")
             if any((d / m).exists() for m in ("INVALIDATED.md", "PERTURBATION_NOTE.md"))}
@@ -145,12 +160,44 @@ def _known_costs(campaigns: Path) -> dict:
     for result in campaigns.glob("*/proof/*/result.json"):
         if result.parent.parent.parent.name in void:
             continue
-        est = cell_cost_estimate(result.parent, timeout=28800)
+        est = cell_cost_estimate(result.parent, timeout=28800, arms=1)
+        low = cell_cost_estimate(result.parent, timeout=28800, arms=1, narrowest=True)
         if est:
             model = result.parent.name
-            if model not in out or est[0] > out[model][0]:
-                out[model] = est
+            row = {"known_s": est[0], "basis": est[1],
+                   "floor_s": low[0] if low else est[0],
+                   "floor_basis": low[1] if low else est[1]}
+            if model not in out or row["known_s"] > out[model]["known_s"]:
+                out[model] = row
     return out
+
+
+def timeout_refusal(known_s, timeout: int, basis=None):
+    """Why this run may not start, or None — its own cost against its own clock.
+
+    The LEDGER and the KILL TIMER are two numbers about the same model, and until
+    2026-09-12 nothing compared them. On 2026-09-11 the plan accepted
+    `Wan2.1-T2V-1.3B` at its recorded cost and the runner killed it at `--timeout`
+    anyway; `Allegro`, a recorded eight-hour model, went the same way. Two kills,
+    ninety minutes of rig, and not one shape collected between them.
+
+    A run whose OWN accepted cost exceeds the time it will be given is doomed
+    before it starts, so the refusal strictly dominates the kill: today's
+    behaviour spends the entire timeout to arrive at the same outcome, and loses
+    the timeout as well. No information is lost by refusing — a killed run
+    produces none.
+
+    Nothing is guessed. A model with no recorded cost returns None and runs,
+    exactly as the budget guard already promises: the job is to stop a KNOWN
+    cost, never to invent one.
+    """
+    if not known_s or float(known_s) <= float(timeout):
+        return None
+    need = int(float(known_s)) + 1
+    return (f"its own recorded cost {float(known_s):.0f} s exceeds the {timeout} s "
+            f"it would be given — it would be killed at the wall having produced "
+            f"nothing. Run it with --timeout {need} or more."
+            + (f" Basis: {basis}" if basis else ""))
 
 
 def _plan(args) -> list[dict]:
@@ -159,8 +206,9 @@ def _plan(args) -> list[dict]:
     for r in rows:
         container, why = _local(r["slug"])
         r["container"], r["why"] = container, why
-        est = costs.get(container or "", None)
-        r["known_s"], r["basis"] = (est[0], est[1]) if est else (None, None)
+        est = costs.get(container or "") or {}
+        r["known_s"], r["basis"] = est.get("known_s"), est.get("basis")
+        r["floor_s"], r["floor_basis"] = est.get("floor_s"), est.get("floor_basis")
     rows.sort(key=lambda r: (r["container"] is None,          # runnable first
                              r["known_s"] is None,            # known cost first
                              r["known_s"] or 0,
@@ -334,6 +382,20 @@ def main() -> int:
             record.append({**{k: r[k] for k in ("hub", "family", "gb")},
                            "state": "refused at the door",
                            "known_s": r["known_s"], "left_s": left})
+            continue
+        # The FLOOR, not the reservation: refusing on the widest arm would refuse
+        # Qwen3-VL (a 3135 s sweeping arm, 211 s on the other) for a model that
+        # met in 365 s. A run is doomed only when EVERY arm that ended took longer
+        # than the clock it is about to be given.
+        why_timeout = timeout_refusal(r["floor_s"], args.timeout, r["floor_basis"])
+        if why_timeout:
+            print(f"REFUSED AT THE DOOR  {r['hub']}: {why_timeout}")
+            record.append({**{k: r[k] for k in ("hub", "family", "gb")},
+                           "container": r["container"],
+                           "state": "refused at the door",
+                           "why": "known cost exceeds the run timeout",
+                           "known_s": r["known_s"], "floor_s": r["floor_s"],
+                           "timeout_s": args.timeout, "basis": r["floor_basis"]})
             continue
 
         log = out / f"{r['container']}.log"

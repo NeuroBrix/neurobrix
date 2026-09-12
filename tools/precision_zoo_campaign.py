@@ -1479,8 +1479,43 @@ def vacuous_lever_reason(record: dict):
                f"own cache)" if (record.get("paired") or 1) > 1 else ""))
 
 
-def cell_cost_estimate(model_out: Path, timeout: int):
-    """(seconds, basis) this cell is expected to cost, or None if unmeasured.
+def cell_cost_estimate(model_out: Path, timeout: int, arms=None, narrowest=False):
+    """(seconds, basis) this work is expected to cost, or None if unmeasured.
+
+    `arms` says HOW MANY RUNS the caller is about to pay for. The default, None,
+    prices a whole paired CELL — every arm in `ARM_LABELS` — which is what a
+    precision campaign runs. A caller that runs the model ONCE passes `arms=1`
+    and is priced for one run.
+
+    That distinction is not cosmetic. The MEET phase of the catalogue is, in its
+    own words, "ONE run per model, not a paired A/B", and it was pricing its runs
+    with the cell default: every model with a recorded cell was charged to the
+    campaign budget at about twice what it was going to spend, so the budget
+    refused models it could in fact have afforded.
+
+    `narrowest` chooses WHICH arm answers, and the two settings answer two
+    different questions:
+
+      widest (default)   "how much must I RESERVE?" — do not under-reserve.
+      narrowest          "is this run DOOMED by its clock?" — a model that has
+                         already finished once under the clock is not doomed,
+                         whatever a slower arm did.
+
+    The measurement that separates them, from the 2026-09-11 MEET against the
+    2026-09-10 cells (arm A certified-on, arm B certified-off and sweeping):
+
+        Qwen3-VL-30B        A 211 s   B 3135 s   MEET  365 s
+        DeepSeek-Coder-V2   A  93 s   B 1430 s   MEET  140 s
+        Qwen3-Omni-30B      A  98 s   B 1294 s   MEET  257 s
+        CogVideoX-2b        A 548 s   B  951 s   MEET  614 s
+
+    A MEET run lands near the NARROWEST arm every time and never near the widest,
+    because by then the machine's replay cache is warm. Priced on the widest,
+    Qwen3-VL would be refused against a 2700 s clock — a model that met in 365 s.
+    That false refusal is why the doom test reads the narrowest.
+
+    Only arms that ENDED answer either question. A killed arm never reached its
+    own end, so its wall is a floor, not a cost.
 
     Read from the cell's own previous record — the only honest source. A model
     nobody has run has no estimate and must NOT be refused: the guard's job is
@@ -1499,7 +1534,7 @@ def cell_cost_estimate(model_out: Path, timeout: int):
         record = json.loads(p.read_text())
     except (OSError, ValueError):
         return None
-    walls, killed = [], []
+    walls, ended, killed, failed = [], [], [], []
     for label in ARM_LABELS:
         arm = record.get(label)
         if not isinstance(arm, dict):
@@ -1509,20 +1544,47 @@ def cell_cost_estimate(model_out: Path, timeout: int):
             continue
         walls.append(float(w))
         try:
-            if int(arm.get("rc", 0)) < 0:
-                killed.append(label)
+            rc = int(arm.get("rc", 0))
         except (TypeError, ValueError):
-            pass
+            ended.append(float(w))
+            continue
+        if rc < 0:
+            killed.append(label)          # a kill is a lower bound, not a wall
+        else:
+            ended.append(float(w))        # reached its own end, well or badly
+            if rc > 0:
+                failed.append(label)
     if not walls:
         return None
-    if killed:
-        est = float(timeout) * max(len(walls), len(ARM_LABELS))
-        return est, (f"arm(s) {', '.join(killed)} were killed at the wall "
-                     f"({max(walls):.0f} s, timeout {timeout} s) — the cost is a "
-                     f"lower bound, at least {est:.0f} s for the arms")
-    est = sum(walls)
-    return est, (f"{len(walls)} measured arm(s), "
-                 f"{', '.join(f'{w:.0f} s' for w in walls)} — {est:.0f} s")
+    # An arm that EXITED NON-ZERO measured the cost of failing, not the cost of
+    # succeeding. Its wall is real time really spent, so it still bounds a budget
+    # — but a reader must never take it for the price of a finished run. On
+    # 2026-09-11 a MEET planner accepted 6 962 s for Wan2.1-T2V-1.3B, summed from
+    # two arms that had both exited rc=1, and the number read as a measurement.
+    note = (f"; arm(s) {', '.join(failed)} EXITED NON-ZERO — this is the cost of "
+            f"failing, not of finishing" if failed else "")
+    n = len(ARM_LABELS) if arms is None else int(arms)
+    pick, word = ((min, "narrowest") if narrowest else (max, "widest"))
+    if arms is None:
+        if killed:
+            est = float(timeout) * max(len(walls), n)
+            return est, (f"arm(s) {', '.join(killed)} were killed at the wall "
+                         f"({max(walls):.0f} s, timeout {timeout} s) — the cost is "
+                         f"a lower bound, at least {est:.0f} s for the arms{note}")
+        est = sum(walls)
+        return est, (f"{len(walls)} measured arm(s), "
+                     f"{', '.join(f'{w:.0f} s' for w in walls)} — {est:.0f} s{note}")
+    # Per run. One run does the work of ONE arm, so the cell's SUM over-counts it.
+    # An arm that was KILLED never reached its own end, so its wall is a floor and
+    # not a cost; only the arms that ended can answer "how long does this take".
+    if not ended:
+        est = float(timeout) * n
+        return est, (f"every arm was killed at the wall ({max(walls):.0f} s, "
+                     f"timeout {timeout} s) — the cost is a lower bound, at "
+                     f"least {est:.0f} s for {n} run(s){note}")
+    est = pick(ended) * n
+    return est, (f"{n} run(s) at the {word} of {len(ended)} arm(s) that ended, "
+                 f"{', '.join(f'{w:.0f} s' for w in ended)} — {est:.0f} s{note}")
 
 
 def budget_refusal(model_out: Path, budget_s, timeout: int):
