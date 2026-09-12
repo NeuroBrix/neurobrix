@@ -23,6 +23,7 @@ import json
 import os
 import platform
 import socket
+import subprocess
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -295,7 +296,61 @@ def _machine() -> Dict[str, Any]:
                 info[name] = fn()
     except Exception:
         pass
+    info["clocks_mhz"] = _clocks_mhz()
     return info
+
+
+def _clocks_mhz():
+    """The application clock of every card, or None when it cannot be read.
+
+    A certification picks a configuration BY TIMING candidates, so the frequency
+    the cards ran at is a condition of the result exactly as the platform and the
+    hardware profile already recorded here are. Without it a proof cannot say
+    what regime produced its `best_ms`, and the question becomes unanswerable the
+    moment the machine reboots — which is how the 2026-09-11 entries came to
+    carry timings whose clock is unrecoverable.
+
+    It records what it read and never asserts a protocol: whether a reading is
+    the right one is the workshop's question (`tools/rig_clock.py`), not the
+    engine's. `None` means the reading failed and is written as such, because a
+    field quietly absent is indistinguishable from a machine that had no clocks.
+
+    READ ONCE for the whole run, not once per shape. `_machine()` is called for
+    every certified key — 7,137 of them in this directory — and a driver query
+    per key is the anti-pattern this project has already paid for once. So this
+    is the reading at the run's START, and it says nothing about whether the
+    clock HELD: holding is the sampler's job (`ClockWatch` in bench_row.py),
+    which watches `clocks.sm` throughout and marks an excursion. Entry condition
+    here, ongoing condition there; neither substitutes for the other.
+    """
+    if _clocks_mhz.cached is not _UNREAD:
+        return _clocks_mhz.cached
+    _clocks_mhz.cached = _read_clocks_mhz()
+    return _clocks_mhz.cached
+
+
+_UNREAD = object()
+
+
+def _read_clocks_mhz():
+    try:
+        r = subprocess.run(
+            ["nvidia-smi", "--query-gpu=index,clocks.applications.graphics",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=20)
+        if r.returncode != 0:
+            return None
+        out = {}
+        for line in r.stdout.splitlines():
+            if line.strip():
+                idx, mhz = [c.strip() for c in line.split(",")]
+                out[idx] = int(mhz)
+        return out or None
+    except Exception:
+        return None
+
+
+_clocks_mhz.cached = _UNREAD
 
 
 def _backend() -> Dict[str, Any]:

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Autotune certification records the clock. A certification picks a configuration by timing
+  candidates, so the frequency the cards ran at is a condition of the result exactly as the
+  platform and hardware profile already recorded were. Every proof now carries the
+  application clock of each card, read once per run. Without it a proof cannot say what
+  regime produced its timings, and the question becomes unanswerable the moment the machine
+  reboots.
+
 ### Fixed
 - An import that cannot fit on the disk refuses before it starts, saying how much it needs
   and how much there is. The peak is about twice the model — the archive is unpacked before
