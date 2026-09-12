@@ -61,13 +61,22 @@ import subprocess
 import numpy as np
 import pytest
 
+# A rig-less checkout must still collect and run the CPU half -- but the guard
+# covers the PACKAGE, not the names. A catch-all around a name list turns the
+# absence of the function under test into the same skip as the absence of the
+# machine, and a skip is invisible in a count: five red tests became five skips
+# in another file this way, on the day the rule against it was written.
 _IMPORTED = False
-try:  # a rig-less checkout must still collect and run the CPU half
-    from neurobrix.kernels import wrappers as w
-    from neurobrix.kernels.nbx_tensor import NBXTensor, nbx_to_torch
+try:  # pragma: no cover - import-time only
+    import neurobrix.kernels.wrappers as w
     _IMPORTED = True
-except Exception:  # pragma: no cover - import-time only
+except Exception:
     w = None
+
+if _IMPORTED:
+    # Imported OUTSIDE the guard: if one of these names is gone, that is a
+    # failure about this repository and must read as one.
+    from neurobrix.kernels.nbx_tensor import NBXTensor, nbx_to_torch
 
 
 def _rig_reason() -> str:
