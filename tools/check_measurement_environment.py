@@ -329,7 +329,92 @@ def check_branch_is_recoverable(path: Path) -> list[str]:
             f"exists in exactly one place."]
 
 
+#: Every layer of this stack caches compiled artefacts keyed by a hash of the
+#: source. `~/.triton/cache` holds triton's, `~/.cache/triton_msl` holds the
+#: MSL stash. A measurement that CHANGES CODE and does not own its cache reads
+#: the old artefact and reports on it.
+_CACHE_VARS = ("TRITON_CACHE_DIR", "TRITON_MSL_CACHE_DIR")
+
+#: The shared defaults. Pointing a measurement at these is the same as not
+#: setting them.
+_SHARED_DEFAULTS = (
+    Path.home() / ".triton" / "cache",
+    Path.home() / ".cache" / "triton_msl",
+)
+
+
+def owned_cache_problems(env=None) -> list[str]:
+    """Why this process does not own its compilation cache, or [].
+
+    Six times in one day a measurement returned a zero that was the cache
+    answering: a census over kernels already stashed, a probe whose arm never
+    reached the lowerer, four tests that began reporting no lowerer at all.
+    Each time the remedy was the same discipline, and each time the discipline
+    was remembered one measurement too late.
+
+    So it stops being a discipline. A harness that compiles and does not own
+    its cache REFUSES TO START, the way a campaign refuses without a frozen
+    tree: put the thing in a state where it cannot do the harm, rather than
+    measure afterwards that it did not.
+    """
+    env = os.environ if env is None else env
+    problems = []
+    for var in _CACHE_VARS:
+        raw = env.get(var)
+        if not raw:
+            problems.append(
+                f"{var} is not set, so compilation reads the shared cache and "
+                f"a change to the code will not be seen")
+            continue
+        here = Path(raw).expanduser()
+        if any(here == d or d in here.parents for d in _SHARED_DEFAULTS):
+            problems.append(
+                f"{var}={raw} is inside the shared default cache; a private "
+                f"path under it is still the shared cache's contents")
+    return problems
+
+
+def owned_cache_env(root) -> dict:
+    """The environment a harness must set to own its cache, rooted at `root`.
+
+    Returned rather than applied: the caller decides whether it is setting up
+    a subprocess or its own process, and a helper that silently mutated the
+    environment would be one more thing that works without being seen to.
+    """
+    root = Path(root)
+    return {"TRITON_CACHE_DIR": str(root / "triton"),
+            "TRITON_MSL_CACHE_DIR": str(root / "triton_msl")}
+
+
+def enforce_owned_cache(what="this measurement") -> None:
+    """Raise unless the caller owns its compilation cache."""
+    problems = owned_cache_problems()
+    if not problems:
+        return
+    raise RuntimeError(
+        f"{what} compiles and does not own its compilation cache:\n  - "
+        + "\n  - ".join(problems)
+        + "\n\nSet both to a directory this run created, e.g.\n"
+          "    tools/check_measurement_environment.py --cache-env /tmp/run42\n"
+          "or, in Python:\n"
+          "    os.environ.update(owned_cache_env(tmp_dir))\n"
+          "A measurement that reads a stale artefact does not produce a "
+          "weaker number, it produces a wrong one.")
+
+
 def main() -> int:
+    # `--cache-env DIR` prints the two exports a harness needs to own its
+    # cache. It exists because `enforce_owned_cache` names it as the remedy,
+    # and a refusal that points at a flag which does not exist is its own
+    # vacuous form.
+    if len(sys.argv) >= 3 and sys.argv[1] == "--cache-env":
+        root = Path(sys.argv[2]).expanduser()
+        root.mkdir(parents=True, exist_ok=True)
+        for var, value in owned_cache_env(root).items():
+            Path(value).mkdir(parents=True, exist_ok=True)
+            print(f"export {var}={value}")
+        return 0
+
     # Two classes, and the line between them is the same one this repo draws
     # everywhere else: REFUSE where the measurement would be wrong, SAY IT
     # LOUDLY where it would not.

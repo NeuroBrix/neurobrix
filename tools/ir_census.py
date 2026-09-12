@@ -51,6 +51,12 @@ def compile_census(model: str, arm: str, inspect, extra_argv=None) -> dict:
     # — and it is the one the engine's launcher imports. Patching only the
     # module the function lives in wraps nothing, and the first run of the
     # broadcast census reported a census over an empty set for exactly that.
+    # A census compiles. It therefore owns its cache or it does not run: a
+    # stashed kernel makes the compiler return without reaching the code the
+    # census is about, and the census then counts zero and says so.
+    from check_measurement_environment import enforce_owned_cache
+    enforce_owned_cache("an IR census")
+
     import triton.compiler as tc
     import triton.compiler.compiler as tcc
 
