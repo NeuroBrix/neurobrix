@@ -25,6 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   says so in the run's own output.
 
 ### Fixed
+- `autotune certify` no longer reports a failure for a census key the engine cannot ask
+  for. The shape census accumulates across engine versions, so a key recorded before a
+  wrapper changed how it computes its autotune key can never be presented again; refusing
+  it is the correct outcome, not a fault. Such keys are now counted and named separately
+  as unreachable, said in clear at the end of the run, and kept out of the exit code — a
+  status that reported a break on every run of a healthy directory would stop being read.
 - The VAE spatial scale is read from the container under both the names containers use
   for it. Image containers declare `vae_scale_factor` and video ones
   `spatial_compression_ratio` — the same quantity, two vendor spellings — and only the

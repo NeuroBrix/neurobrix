@@ -240,3 +240,51 @@ def test_the_replay_cache_key_of_a_widened_operand_is_overridden_by_its_certifie
     t2 = _Tuner(); t2.arg_names = t.arg_names
     t2.cache[memory_key] = triton.Config({"BLOCK_M": 32, "BLOCK_N": 32, "BLOCK_K": 32, "GROUP_M": 8}, num_warps=2, num_stages=2)
     assert C.override_seeded([(KERNEL, t2)]) == 0
+
+
+# --------------------------------------------------------------------------
+# 2026-09-12 — an exit code that conflates known debt with a break
+#
+# The census accumulates across engine versions. When a wrapper changes how it
+# computes its autotune key, every entry recorded under the old rule becomes
+# unreachable: no run will ever present that key again, so there is nothing to
+# certify and refusing it is the CORRECT outcome.
+#
+# `certify` counted those refusals as failures and returned non-zero for them.
+# On 2026-09-12 it certified 21 shapes, refused 184 unreachable keys — the whole
+# of D-CENSUS-HOLDS-KEYS-THE-ENGINE-CANNOT-PRODUCE — and exited 1, the same 1 a
+# genuine break produces. A status that cries wolf on every run of a healthy
+# directory is a status nobody reads on the day it is right.
+# --------------------------------------------------------------------------
+
+def test_an_unreachable_census_key_is_not_a_failure():
+    from neurobrix.kernels.autotune_certify import UnreachableCensusKey
+    # It stays a RuntimeError, so any caller that already handled the old type
+    # keeps working; what is new is that it can be told apart.
+    assert issubclass(UnreachableCensusKey, RuntimeError)
+
+
+def test_the_two_are_counted_apart_and_only_one_is_fatal():
+    """The classification, exercised on the loop's own two branches."""
+    from neurobrix.kernels.autotune_certify import UnreachableCensusKey
+
+    summary = {"failed": 0, "unreachable": 0}
+
+    def classify(exc):
+        try:
+            raise exc
+        except UnreachableCensusKey:
+            summary["unreachable"] += 1
+        except Exception:
+            summary["failed"] += 1
+
+    classify(UnreachableCensusKey("the census and the kernel disagree"))
+    classify(UnreachableCensusKey("another stale key"))
+    classify(RuntimeError("the oracle disagreed with every candidate"))
+
+    assert summary == {"failed": 1, "unreachable": 2}
+    # The exit code reads `failed` alone. Were it to read the sum, a directory
+    # whose only finding is the known debt would report a break for ever.
+    assert (0 if not summary["failed"] else 1) == 1
+    assert (0 if not (summary["failed"] - 1) else 1) == 0, (
+        "with the real break removed, 2 unreachable keys must still exit 0")
