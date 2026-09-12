@@ -125,3 +125,41 @@ failing on it — the other half of this repository's discipline, and the reason
 `cell 6` of the fault-channel proof runs the fault rather than forbidding it.
 
 Doors for what must not happen. Injections for what must.
+
+## Writing and repointing are two acts, and the check goes between them
+
+A door refuses at entry. There is a second shape that saved this project on
+2026-09-12 and that had never been named: **when an act replaces something that
+works, write the replacement somewhere else, verify it, and only then repoint.**
+
+An incomplete container — a video model built without its backbone because the
+snapshot's weights had been purged — was being uploaded onto a working hub slug.
+The hub was not harmed, and not because anyone checked in time. `replace` writes
+to a distinct storage key, verifies the checksum, and repoints the record only
+after; a mismatch rolls the upload back and leaves the previous artifact serving.
+The upload was stopped at 0% of 6.73 GB and there was nothing to undo.
+
+The same command's LOCAL half had the opposite shape. `forge local --overwrite`
+removed the installed container and then extracted into the same path, so the
+complete local container was gone before anything could object — and an
+extraction that stops midway (a truncated archive, an NFS stall, a mains cut on a
+rack with no UPS) leaves a partial installation in the canonical path. A partial
+installation looks installed.
+
+**What protected us was not the care of whoever ran the command. It was that the
+write and the repoint were two acts with a check between them.** That is a
+property of the design, available on every run, to everyone, including the person
+who is tired. Care is not.
+
+How to recognise the missing form: look for `rmtree`, truncate, or an in-place
+overwrite of a path that something else reads by name. The three questions are —
+what is readable at that path while the write is in progress; what is readable if
+the write stops halfway; and what compares the new thing against the OLD thing's
+declaration rather than against itself. A tree compared with itself agrees with
+itself.
+
+Shipped as `forge.verify_extraction` plus a staging tree and an atomic rename.
+Seen both ways before it was trusted: a clean install repointed and left no
+staging tree, and an archive whose manifest declared a component the archive did
+not contain was refused with the live installation unchanged — same mtime, same
+components.

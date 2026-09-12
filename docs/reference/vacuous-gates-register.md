@@ -596,3 +596,63 @@ weight file declares weights it does not have.
 degradation is the defect. A pipeline stage may not silently change WHAT it is
 producing — and the summary line that records the change is not a warning, it is
 an artefact-integrity claim that nothing checked.
+
+### 38 — a census predicate that was a tautology at the value it was applied at
+
+Asked how many catalogue components unroll a temporal loop, the first instrument
+scored each graph by how many of its module groups repeat a number of times `r`
+explained by the chunk count `k`: `r % k == 0 or r % k == k-1`. It reported
+**seven components at a perfect 1.00** across five containers.
+
+Every one of them had `k = 2`. At `k = 2` the predicate reads
+`r % 2 in {0, 1}` — **every integer passes**. The score was 1.00 by construction
+and said nothing about those graphs.
+
+The tell was in the same table and was legible before the verdict: the ONE
+component with two trace points and a fitted slope — `Wan2.1-VACE/vae_encoder`,
+517 ops per chunk, the case the whole question came from — scored **0.79 and fell
+below the threshold**. An instrument that ranks the proven case beneath seven it
+invented is not mis-tuned, it is measuring something else.
+
+Read on the two fitted points, the real signature is far sharper and needs both
+of them: between k=5 and k=7 the twelve module groups move as `27k-40`, `19k-26`,
+`16k-17`, `13k`, `13k-12`, `7k`, `4k`, `3k-1`, `2k`, `2k-2`, `k`, and one
+constant. **Eleven of twelve affine in k.** A divisibility test on one graph
+passes `2/k` of integers by chance and cannot separate "r copies because k
+chunks" from "r copies because the architecture has r of them".
+
+**The rule**: state the null before the score. A predicate that accepts a known
+fraction of random inputs must be reported against that fraction, and one whose
+null reaches 1.0 at the values actually present in the data has no power there
+and must REFUSE rather than return a number. The replacement measures two trace
+points from the same tracer and fits the slope; its positive and negative
+controls sit on the same model — encoder 517 ops per chunk, decoder flat at 384.
+
+### 39 — a heterogeneous rack, and a card chosen without reading its size
+
+Twice within ten minutes, on a rig whose four cards are two 16 GB V100s and two
+32 GB V100s:
+
+* `Allegro-TI2V` was run pinned to `CUDA_VISIBLE_DEVICES=0` and died at
+  `aten.convolution::0` asking 9 GB with 11.4 GB already live. Card 0 is a 16 GB
+  card and the container is 19 GB.
+* The unroll measurement campaign was pinned to card 1 — the other 16 GB card —
+  and reported `no graph` on trace after trace. On card 3 the same command
+  succeeded in fifteen seconds.
+
+Neither is a memory bug and neither says anything about the artefacts under test.
+Both were about to be written down as one: the first as "the re-uploaded Allegro
+container does not run", the second as "these components cannot be traced".
+
+**And the pinning itself was the error, not just the choice of card.** Prism's
+job is placement across the rack; `CUDA_VISIBLE_DEVICES=0` removes the rack and
+then reports that the model does not fit. The retry on `"2,3"` was worse — it
+remapped the ordinals and produced a sticky `cudaErrorIllegalAddress`, which is
+the class the memory already records: anything resolving a real device index
+fails under pinning, so an unpinned run comes BEFORE calling a failure a
+regression.
+
+**The rule**: on a heterogeneous rack, a card index is not a resource. Read
+`memory.total` per card before choosing, and prefer no pinning at all so the
+placement engine sees what it was written to see. A failure from a pinned run is
+a fact about the pinning until an unpinned run says otherwise.
