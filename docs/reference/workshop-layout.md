@@ -76,3 +76,44 @@ engine cache. The NAS is not.
 
 It is inert on any machine that has no `nbx/` root, so it does not fire on a
 laptop or in CI — it holds the discipline exactly where the discipline applies.
+
+## The hub is on this network, and a publish never leaves it
+
+**Established 2026-09-12.** `neurobrix.es` sits behind Cloudflare, and Spanish
+operators apply a court order — Juzgado de lo Mercantil nº 6 de Barcelona,
+18 December 2024, in force through the 2026/27 season — to Cloudflare's shared
+addresses during football matches. Thousands of legitimate sites fall with it
+every weekend. On a Saturday evening the name resolved from this rack to a
+blocking device presenting a self-signed certificate (`CN=core1.netops.test`,
+`O=Widgits Pty Ltd`, valid to 2124), and every publish failed certificate
+verification — correctly — while the hub's real addresses, three metres away,
+served `CN=neurobrix.es`.
+
+The refusal was right and stays: **bypassing an interception is deciding alone
+that it is benign.** The tool could not know the interceptor was a court. What it
+also could not do is keep taking the road the court watches.
+
+- **The rack declares its own entry point** in `nbx/env.sh`, sourced by
+  `~/.profile` (not only `~/.bashrc`, which returns before the end for a
+  non-interactive shell) and by every chain: `NEUROBRIX_REGISTRY=http://10.0.0.39:3000`.
+  Both the engine (`neurobrix hub`, `neurobrix import`) and the build toolchain
+  read it; the public name is what remains when nothing is declared, because a
+  user anywhere else reaches the hub through it.
+- **It was verified to be the same instance, not assumed**: the internal listing
+  returns the same record ids as the public one and 47 models at `?limit=200`.
+  The first read of it returned 12 — the page size — and was taken for a
+  different instance for several minutes. So every publish command now asks the
+  registry for its listing at entry and refuses one that does not answer in the
+  hub's shape: the case that catches is an address answering HTTP 200 with
+  *something*.
+- **The object store was already internal** (`10.0.0.36:9000`): the API hands
+  out presigned URLs on the LAN. Only the API calls were leaving the building.
+- **Stated, not hidden: the internal entry point is plain HTTP on port 3000.**
+  The admin token travels in clear between `10.0.0.40` and `10.0.0.39` on this
+  LAN. The owner chose this path knowing it. A certificate on the internal
+  listener would remove the caveat and nothing here would need to change.
+
+And the retry policy learned the one failure it must never retry: a certificate
+that does not verify carries no HTTP response, so it read as transient and would
+have been re-offered three times. It now stops at once, recognised through four
+layers of wrapping.
