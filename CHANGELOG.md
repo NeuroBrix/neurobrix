@@ -25,6 +25,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   says so in the run's own output.
 
 ### Fixed
+- The VAE spatial scale is read from the container under both the names containers use
+  for it. Image containers declare `vae_scale_factor` and video ones
+  `spatial_compression_ratio` — the same quantity, two vendor spellings — and only the
+  first was read, so a container declaring the second fell through to a derivation that
+  infers the scale from the channel count. The inferred value agrees for every currently
+  published container, so no output changes; what it removes is the path by which a
+  container declaring a scale of 16 or 32 would have been mis-scaled with nothing saying so.
 - An import that cannot fit on the disk refuses before it starts, saying how much it needs
   and how much there is. The peak is about twice the model — the archive is unpacked before
   it is deleted — and asking not to keep the archive does not lower it.
