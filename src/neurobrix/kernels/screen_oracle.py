@@ -50,13 +50,33 @@ def _to_f64(t) -> Optional[np.ndarray]:
     """A live operand as float64, or None when it cannot be read here."""
     try:
         from neurobrix.kernels.nbx_tensor import NBXDtype
+        # ONE path to host memory, for every dtype. The bf16 case used to read
+        # the device pointer directly with `ctypes.string_at`, which crosses NO
+        # BARRIER -- so a buffer a kernel had just written was read before the
+        # write landed. Measured 2026-09-12 on a kernel-written buffer: 4093 of
+        # 4096 elements differed from the copy path, and agreed after an
+        # explicit synchronisation.
+        #
+        # That produced the symptom it is easiest to misread: every candidate
+        # compared against the same stale bytes, so the fp64 oracle contradicted
+        # all ten and the screen refused the whole space. A reference read at
+        # the wrong moment contradicts every correct answer exactly as loudly
+        # as a wrong one. Eighteen recorded refusals rested on it.
+        #
+        # The defect had the shape of a PATH, not of a dtype: bf16 was merely
+        # the only traffic on it. So the raw path is gone rather than repaired,
+        # and a dtype routed here later cannot inherit it. Removing it also
+        # removes the second failure mode `string_at` carries -- it hands its
+        # size to `PyBytes_FromStringAndSize` as a C int, so any buffer of
+        # 2 GiB or more returns "Negative size", confirmed live on this machine.
+        host = t.to_cpu() if getattr(t, "_device", "cpu") != "cpu" else t
         if getattr(t, "_dtype", None) == NBXDtype.bfloat16:
-            # numpy has no bf16; the bits are the top half of an fp32.
-            import ctypes
-            raw = ctypes.string_at(int(t.data_ptr()), int(t._nbytes))
-            bits = np.frombuffer(raw, dtype=np.uint16).astype(np.uint32) << np.uint32(16)
-            return bits.view(np.float32).reshape(tuple(t.shape)).astype(np.float64)
-        return np.asarray(t.numpy(), dtype=np.float64)
+            # numpy has no bf16; the bits are the top half of an fp32 and
+            # travel in a uint16 container.
+            bits = np.asarray(host.numpy()).view(np.uint16).astype(np.uint32)
+            return ((bits << np.uint32(16)).view(np.float32)
+                    .reshape(tuple(t.shape)).astype(np.float64))
+        return np.asarray(host.numpy(), dtype=np.float64)
     except Exception:                                  # noqa: BLE001
         return None
 
