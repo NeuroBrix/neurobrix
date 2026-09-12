@@ -57,6 +57,25 @@ OUT_C, KH, KW = 64, 3, 3
 STRIDE, PAD = 1, 1
 OUT_H = (IN_H + 2 * PAD - KH) // STRIDE + 1
 OUT_W = (IN_W + 2 * PAD - KW) // STRIDE + 1
+#: Every config `conv2d_forward_kernel` declares whose dimensions are all at
+#: 64 or below -- the ones the generic dot path does not refuse, and therefore
+#: the ones the tuner can now actually choose since a refused config stopped
+#: ending the sweep. Six of the eight put a tile wider than the threadgroup
+#: through the cooperative staged path.
+#:
+#: Validating ONE of them and calling the path correct is the mistake this
+#: file exists to prevent, one level up: the fix opened degrees of freedom and
+#: each is a shape a model can land on. Read from the kernel's own config list
+#: so a config added there cannot stay unmeasured.
+def _servable_configs():
+    import re
+    src = Path(__import__("neurobrix.kernels.ops.conv2d", fromlist=["x"]).__file__).read_text()
+    found = re.findall(
+        r"BLOCK_SIZE_BHW':\s*(\d+),\s*'BLOCK_SIZE_OUTF':\s*(\d+),\s*'BLOCK_SIZE_INF':\s*(\d+)",
+        src)
+    return sorted({tuple(int(x) for x in c) for c in found if max(int(x) for x in c) <= 64})
+
+
 BLOCK_BHW, BLOCK_OUTF, BLOCK_INF = 32, 64, 32
 
 _NESTING_REFUSAL = "per-element wrap loop is emitted OUTSIDE that loop"
@@ -131,7 +150,7 @@ def _oracle_fp64(x32, w32):
     return out
 
 
-def _run_pinned(x32, w32):
+def _run_pinned(x32, w32, blocks=None):
     """Launch the real kernel with the config that gives the refused tile.
 
     `conv2d_forward_kernel` is autotuned; `.fn` is the jit function underneath,
@@ -153,11 +172,11 @@ def _run_pinned(x32, w32):
         bits = f32_to_bf16_bits(np.ascontiguousarray(arr))
         return NBXTensor.from_numpy(bits, dtype=NBXDtype.bfloat16)
 
+    bhw, outf, inf = blocks or (BLOCK_BHW, BLOCK_OUTF, BLOCK_INF)
     x, w = _bf16(x32), _bf16(w32)
     out = NBXTensor.empty((N, OUT_C, OUT_H, OUT_W), device=x.device,
                           dtype=NBXDtype.bfloat16)
-    grid = (triton.cdiv(N * OUT_H * OUT_W, BLOCK_BHW),
-            triton.cdiv(OUT_C, BLOCK_OUTF), 1)
+    grid = (triton.cdiv(N * OUT_H * OUT_W, bhw), triton.cdiv(OUT_C, outf), 1)
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         conv2d_forward_kernel.fn[grid](
@@ -169,8 +188,7 @@ def _run_pinned(x32, w32):
             padding_height=PAD, padding_width=PAD,
             dilation_height=1, dilation_width=1,
             groups=1, fp16=False,
-            BLOCK_SIZE_BHW=BLOCK_BHW, BLOCK_SIZE_OUTF=BLOCK_OUTF,
-            BLOCK_SIZE_INF=BLOCK_INF,
+            BLOCK_SIZE_BHW=bhw, BLOCK_SIZE_OUTF=outf, BLOCK_SIZE_INF=inf,
         )
         from neurobrix.kernels.nbx_tensor import DeviceAllocator
         DeviceAllocator.sync_device()
@@ -235,10 +253,19 @@ def test_this_shape_takes_the_staged_dot_path():
         "covered by one, and its absence means the tile is not the wide one")
 
 
-def test_the_output_agrees_with_the_fp64_oracle():
+@pytest.mark.parametrize("blocks", _servable_configs(),
+                         ids=lambda b: "x".join(str(v) for v in b))
+def test_the_output_agrees_with_the_fp64_oracle(blocks):
+    """Every config the tuner can now choose, judged by its numbers.
+
+    Parametrised rather than pinned to one, because the config-exclusion fix
+    is what made the other seven reachable: before it, a sweep died on the
+    first refused config and the tuner never got to them. A fix that opens
+    choices owes a verdict on each choice.
+    """
     tol = _profile_tolerance("bf16")
     x32, w32 = _inputs()
-    got, msgs = _run_pinned(x32, w32)
+    got, msgs = _run_pinned(x32, w32, blocks)
 
     fell_back = [m for m in msgs if "fall back" in m or "codegen failed" in m]
     assert not fell_back, (
@@ -249,7 +276,8 @@ def test_the_output_agrees_with_the_fp64_oracle():
     dev = _deviation(got, want)
     assert dev <= tol, (
         f"max relative deviation {dev:.3e} exceeds the profile's bf16 "
-        f"tolerance {tol:.3e}. The kernel compiles and computes the wrong "
+        f"tolerance {tol:.3e} at config {blocks}. The kernel compiles and "
+        f"computes the wrong "
         f"thing, which is the outcome this file exists to make impossible to "
         f"mistake for success.")
 
