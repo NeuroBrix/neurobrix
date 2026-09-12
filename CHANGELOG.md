@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Activation profiles state which request they describe. A peak in gigabytes reads like a
+  property of a model and is a property of a request, so every profile now carries the
+  binding it was computed under and the symbol values it used, and says so in its own
+  printed form. Asked for a profile without a request, the estimator binds to the extents
+  the model was traced at — the one configuration it is known to have been exercised at —
+  instead of silently applying a 1024x1024 batch-2 image request to a video model, where the
+  time axis took a spatial extent and every activation was mis-sized with nothing in the
+  output saying so.
+- A growth check that finds a shape rule which is right only where it was checked. Comparing
+  a model's cost at a request against its cost at the extents it was traced at gives a ratio,
+  and comparing that ratio against the one the extents justify separates a sound model from
+  one whose shape arithmetic compounds. On the video encoder that motivated it the cost grew
+  2237-fold for a request 13 times larger on one axis, against a tolerated bound of 338;
+  corrected, the same request costs a third of the traced configuration. The bound admits an
+  operation that grows with the square of its input, so a legitimate attention layer does not
+  trip it.
 - Autotune certification records the clock. A certification picks a configuration by timing
   candidates, so the frequency the cards ran at is a condition of the result exactly as the
   platform and hardware profile already recorded were. Every proof now carries the
