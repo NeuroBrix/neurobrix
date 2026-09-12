@@ -232,6 +232,19 @@ thing it prints on success, it is already an entry here and nobody has noticed.
 
 ---
 
+### 24 — the door was placed on the harnesses beside the command, not on the command
+
+* **date** 2026-09-12 · **machine** Dell · **site** `neurobrix autotune certify` — `src/neurobrix/kernels/autotune_certify.py:certify()`
+* **what it could not say** that the rig was off the protocol clock. Entry 23 closed that the day before — and closed it on `precision_zoo_campaign.py` and `certify_the_catalogue.py`, the two `tools/` harnesses that were in view at the time. The engine's OWN certification, which the autotune doctrine names as the only way to fill the certified directory, kept no entry condition at all. It had just been taught to RECORD the clocks into every proof, which is what made the gap easy to miss: the field was there, so the subject looked handled.
+* **why it would have stayed green forever** nothing about the command would ever have complained. It writes a directory of timings, each proof carrying a clock reading that no code compares to anything, and the run reports `N shape(s) certified` whatever the frequency was. The 09-11 entries are exactly that artefact: internally consistent, and of an unrecoverable regime.
+* **the shape, which is the general lesson** a defect gets closed at the sites the closer was LOOKING at. Two harnesses were open on the screen; the shipped command was one import away and stayed open. Recording a condition is not checking it, and a door on the paths beside an entry point is not a door on the entry point. **When closing a class, enumerate its call sites from the code rather than from the session** — the grep that found this took one line and ran after the fix had already been committed and pushed.
+* **how it surfaced** not by a test, and not by the tests written for entry 23, which all passed. By grepping for the door's call sites before *using* the command — the certification of the remaining shapes was the next task in the queue, and it would have run through an open door.
+* **closed by** the refusal moved INTO `certify()` rather than into the CLI wrapper, so it holds for every caller and not only for the one that types the documented command, and placed before the profile is even resolved, so it cannot spend what it exists to protect. The protocol is DISCOVERED, never shipped — an env pointer, then the workshop's `tools/rig_protocol.json` in a source checkout, then the machine's dotfile — because a protocol is a property of a rack and an installed NeuroBrix carries no rack's decision. There is no built-in value: a named authority that does not read is a refusal, since an engine that invents the number stops citing the protocol. A machine declaring no protocol is not refused but is TOLD so in the run's own output, a silence there being indistinguishable from a door that held.
+* **and the asymmetry it exposed** the engine's clock reader returned only the graphics clock while the workshop's door checks graphics AND memory, which `nvidia-smi -ac` sets together. Two doors for one protocol that disagree are a false green waiting for its occasion, so the reader was widened to both and a test now runs BOTH doors against the same injected readings and fails if their verdicts differ. They stay separate implementations deliberately — a campaign measures a frozen `--src`, so the workshop's door must not depend on whichever engine tree is under measurement — and they read the same authority file, so only the logic could drift.
+* **seen failing** on a real card and in the suite. Card 1 set back to its 1312 default: the documented command refused, exit 1, naming card 1 with its value beside the three at protocol, before anything was timed and with nothing written; then the same invocation with `--allow-off-protocol-clock` proceeded and said so. In the suite, a one-card sampler planted in the brick turned 5 of 12 red, and a graphics-only comparison turned 2 red — including the cross-door agreement test, which named the disagreement it exists for (`engine passed, workshop refused`).
+
+---
+
 ## The Mac's entries
 
 Entries 13 and 14 are the Mac's, transcribed from `f769f2e` because they are
@@ -245,7 +258,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-23 entries, of which five are placeholders and 18 carry a site. Two
+24 entries, of which five are placeholders and 19 carry a site. Two
 machines, two weeks of concentrated looking. Every one of them produced silence
 or a green rather than an error, and **not one was found by a test** — they were
 found by users, by contradictions between two numbers, by reading generated

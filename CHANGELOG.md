@@ -14,6 +14,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   application clock of each card, read once per run. Without it a proof cannot say what
   regime produced its timings, and the question becomes unanswerable the moment the machine
   reboots.
+- Autotune certification refuses to start off the measurement clock. A certification is a
+  measurement, so it takes a measurement's entry condition: if the machine declares a clock
+  protocol and any card diverges from it, the run refuses at entry, names every diverging
+  card with its own value beside the conforming ones, and prints the command that restores
+  them. It reads every card, because a heterogeneous rack returns to per-model factory
+  defaults after a reboot and half of it can sit at the protocol value by coincidence. The
+  protocol is discovered from the machine, never shipped, and a machine that declares none
+  is told so rather than passing quietly. `--allow-off-protocol-clock` measures anyway and
+  says so in the run's own output.
 
 ### Fixed
 - An import that cannot fit on the disk refuses before it starts, saying how much it needs
