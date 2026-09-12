@@ -276,6 +276,27 @@ _BACKEND_TRAPS_ON_DEVICE_ASSERT = {"cuda": True, "hip": True, "metal": False}
 _BACKEND_MEMORY_IS_HOST_READABLE = {"cuda": False, "hip": False, "metal": True}
 
 
+# The smallest `tl.dot` tile dimension a backend's attention lowering handles
+# CORRECTLY. On cuda/hip the floor is the TensorCore minimum, 16, and a decode
+# step at seqlen_q=1 uses it. Metal's generic attention lowering silently
+# mis-computes below 32 -- rows past the first become garbage, for any
+# head_dim -- and refuses rather than emit it; its tiled template does take a
+# smaller tile, but only for a kernel its detector resolves completely at
+# head_dim 64, which is not every kernel.
+#
+# Sixteen wastes half a Q tile at seqlen_q=1. A refusal wastes the model.
+#
+# This is a capability, not a vendor test — adding a backend is adding a row.
+_BACKEND_FA_MIN_TILE = {"cuda": 16, "hip": 16, "metal": 32}
+
+
+def fa_min_tile() -> int:
+    """The smallest attention tile dimension this backend computes correctly."""
+    return _backend_capability(
+        _BACKEND_FA_MIN_TILE, "_BACKEND_FA_MIN_TILE",
+        "the smallest attention tile dimension it computes correctly")
+
+
 def _backend_capability(table, name: str, what: str) -> bool:
     """One row of one capability table, or a refusal naming both."""
     backend = _detect_gpu_backend()
