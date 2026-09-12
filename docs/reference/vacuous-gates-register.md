@@ -258,6 +258,20 @@ thing it prints on success, it is already an entry here and nobody has noticed.
 
 ---
 
+### 26 — an invariant that holds, and is wrong
+
+* **date** 2026-09-12 · **machine** Dell · **site** `src/neurobrix/core/prism/profiler.py:_resolve_shape`, the TRUST GATE
+* **the form, which is new to this register** the four gates above it are gates that check NOTHING. This one checks something, the check passes, and the thing it certifies is false. It is the more dangerous shape, for the same reason the clock field was: **a vacuous gate leaves no trace, and this one leaves a reassuring one.**
+* **what it certifies** a tensor's symbolic dimension may be evaluated at runtime only if its own expression tree reproduces the concrete dim witnessed at trace. The gate was written against a real defect — image graphs carrying mis-associated product expressions, one Sana `_unsafe_view` dim whose expression traced at 8.4e14 against a concrete dim of 1 — and against corrupted integer annotations (98 component graphs of the zoo carrying another tensor's extent in an output slot; Kokoro's decoder conv put its input length, 15361, in the batch slot and was sized at 19.2 GB).
+* **what it cannot see, by construction** the gate compares the expression against a **recorded number**, not against what the expression MEANS. An expression whose every node's `trace` reproduces its children's reproduces the traced dim exactly — and passes — while naming a symbol that has nothing to do with the axis it describes. **The corruption is in the identity of the symbol, and arithmetic self-consistency is blind to identity.** The class it was built for is the one where the annotation DISAGREES with the trace; the class where it AGREES and is still wrong was invisible to it from the first line.
+* **the instance** `CogVideoX-5b-I2V/vae_encoder`, tensor `aten.slice::36::out_0`, traced `[1, 128, 3, 112, 176]`. Its temporal dim, traced **3**, is a chain of additions over `s1` — the SPATIAL latent-height symbol — and resolves to **129 036**. Its H, traced 112, resolves to **90**, which is `latent_w`: the name of another dimension. Its W, traced 176, resolves to **5 400**, which is `latent_h × latent_w`: a product. Every one of those expressions is self-consistent at trace, so every one passes the gate.
+* **what it cost** Prism evaluated them faithfully and asked for **898 238 MB of activations for a component whose weights are 822 MB** — 944 GB for one component against a 93 GB rack — and refused the model before it ran, advising the operator to obtain more host RAM. The estimator was not wrong. It was reading a corrupted annotation that had been certified as sound.
+* **why it was read as an estimator defect for a day** because the number is absurd and the estimator is where absurd numbers come out. The discriminator was to profile the graph at its OWN trace binding, where the peak is 40–55 MB: the estimator reproduces the trace exactly, so the fault is upstream of it. **An instrument that reproduces its calibration is not the thing that is broken.**
+* **the discriminator that must replace consistency** plausibility, not self-consistency — a dim resolving to 129 036 for an ordinary request, an H resolving to the value of another axis, a W resolving to a product. None of these is detectable by asking an expression to agree with itself.
+* **where the fix is born** at build time, not here. A channel count is a weight property and must never carry a symbol; a temporal axis must not be expressed over a spatial one. Compensating in the estimator would make the runtime paper over a build-side limit, which this engine does not do.
+
+---
+
 ## The Mac's entries
 
 Entries 13 and 14 are the Mac's, transcribed from `f769f2e` because they are
@@ -271,7 +285,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-25 entries, of which five are placeholders and 20 carry a site. Two
+26 entries, of which five are placeholders and 21 carry a site. Two
 machines, two weeks of concentrated looking. Every one of them produced silence
 or a green rather than an error, and **not one was found by a test** — they were
 found by users, by contradictions between two numbers, by reading generated
