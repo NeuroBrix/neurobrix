@@ -1412,7 +1412,7 @@ def install(force: Optional[bool] = None) -> bool:
 # runtime handle — Triton's own asks torch for its timing and its buffers.
 # ---------------------------------------------------------------------------
 
-def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_mode="mean", **_):
+def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_mode="mean", budget_ms=None, **_):
     """Same contract as `triton.testing.do_bench` (milliseconds; quantiles or
     a mean/min/max), with the L2 flush and the timing done through the
     engine's runtime (`DeviceAllocator`: events on the legacy stream)."""
@@ -1422,7 +1422,34 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
     DeviceAllocator.stream_synchronize(0)
     # an L2-sized scratch flushed before every timed call, as upstream does
     flush = NBXTensor.empty((256 * 1024 * 1024 // 4,), dtype=NBXDtype.float32, device="cuda")
-    t_est = _time_ms(fn, 5)
+    # ONE probing launch before the four that finish the estimate. The
+    # estimate used to be five blind launches -- so a pathologically slow
+    # candidate (2.5 min a launch was measured on a bf16 matmul sweep) cost
+    # five launches, >12 minutes, before any number existed. After a single
+    # launch its time IS known, and a candidate whose one launch exceeds the
+    # budget cannot win the sweep anyway; benching it further buys nothing.
+    #
+    # For a candidate under budget the arithmetic is unchanged: one launch
+    # plus four launches, and t_est is the mean of the five -- the same
+    # estimator, split across two event pairs instead of one.
+    if budget_ms is None:
+        # Triton's `_bench -> self.do_bench(kernel_call, quantiles=...)` chain
+        # is not ours to re-sign, so the sweep wrapper PUBLISHES the budget and
+        # this end consults it -- explicit coupling, documented at both ends.
+        try:
+            from neurobrix.kernels.autotune_refusals import current_budget_ms
+            budget_ms = current_budget_ms()
+        except Exception:                              # noqa: BLE001
+            budget_ms = None
+    t_probe = _time_ms(fn, 1)
+    if budget_ms is not None and t_probe > budget_ms:
+        raise CandidateOverTimeBudget(t_probe, budget_ms)
+    try:
+        from neurobrix.kernels.autotune_refusals import note_candidate_time
+        note_candidate_time(t_probe)
+    except Exception:                                  # noqa: BLE001
+        pass
+    t_est = (t_probe + 4.0 * _time_ms(fn, 4)) / 5.0
     n_warmup = max(1, int(warmup / max(t_est, 1e-3)))
     n_repeat = max(1, int(rep / max(t_est, 1e-3)))
     for _i in range(n_warmup):
@@ -1435,6 +1462,21 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
     if quantiles is not None:
         return [float(q) for q in np.quantile(times, quantiles)]
     return float(getattr(np, return_mode)(times)) if return_mode in ("mean", "min", "max", "median") else float(times.mean())
+
+
+class CandidateOverTimeBudget(Exception):
+    """One autotune candidate exceeded the sweep's measured time budget.
+
+    Carries the two numbers so the exclusion can be ANNOUNCED with them: a
+    candidate scored out for time without its time is a silent narrowing.
+    """
+
+    def __init__(self, took_ms: float, budget_ms: float):
+        self.took_ms = float(took_ms)
+        self.budget_ms = float(budget_ms)
+        super().__init__(
+            f"one launch took {took_ms:.1f} ms against a budget of "
+            f"{budget_ms:.1f} ms derived from this sweep's own measurements")
 
 
 def _time_ms(fn, n: int) -> float:
