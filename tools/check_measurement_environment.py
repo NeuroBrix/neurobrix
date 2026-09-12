@@ -333,13 +333,22 @@ def check_branch_is_recoverable(path: Path) -> list[str]:
 #: source. `~/.triton/cache` holds triton's, `~/.cache/triton_msl` holds the
 #: MSL stash. A measurement that CHANGES CODE and does not own its cache reads
 #: the old artefact and reports on it.
-_CACHE_VARS = ("TRITON_CACHE_DIR", "TRITON_MSL_CACHE_DIR")
+#: THREE layers, not two. The first version of this guard listed the two
+#: compilation caches and missed the REPLAY cache, which answers for the
+#: autotune screen itself: a measurement taken after repairing the oracle
+#: replayed a refusal recorded before it, printed no `AUTOTUNE_SCREEN` line at
+#: all, and read exactly like a repair that had not worked. A guard over some
+#: of the caches is a guard over none of them, because the one it misses is
+#: the one that answers.
+_CACHE_VARS = ("TRITON_CACHE_DIR", "TRITON_MSL_CACHE_DIR",
+               "NEUROBRIX_REPLAY_CACHE")
 
 #: The shared defaults. Pointing a measurement at these is the same as not
 #: setting them.
 _SHARED_DEFAULTS = (
     Path.home() / ".triton" / "cache",
     Path.home() / ".cache" / "triton_msl",
+    Path.home() / ".neurobrix" / "replay_cache",
 )
 
 
@@ -383,7 +392,8 @@ def owned_cache_env(root) -> dict:
     """
     root = Path(root)
     return {"TRITON_CACHE_DIR": str(root / "triton"),
-            "TRITON_MSL_CACHE_DIR": str(root / "triton_msl")}
+            "TRITON_MSL_CACHE_DIR": str(root / "triton_msl"),
+            "NEUROBRIX_REPLAY_CACHE": str(root / "replay")}
 
 
 def enforce_owned_cache(what="this measurement") -> None:
