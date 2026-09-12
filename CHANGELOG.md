@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- A high-precision reference for the convolution family, closing the correctness screen's
+  only uncovered kernels. The screen picks a tuned configuration by asking candidates to
+  agree with each other, which cannot see a majority that is wrong in the same way; a
+  reference removes the question. Measured on this machine, the convolutions were the last
+  11.5% of tuned shapes deciding by vote alone. The reference is plain float64 arithmetic
+  sharing no implementation with what it checks, and it agrees with an independent
+  convolution to machine precision across nine geometries — strides, asymmetric padding,
+  dilation, grouped and depthwise, 1x1 and even kernels. Where it cannot read an operand
+  or the declared shapes contradict the arrays, it stays silent rather than answering.
 - A kernel configuration chosen without a correctness reference now says so, wherever it
   is recorded. The engine still runs and the tuner still ranks by speed; what it can no
   longer do is produce a record that reads like a validation. "This configuration was
