@@ -163,3 +163,36 @@ Seen both ways before it was trusted: a clean install repointed and left no
 staging tree, and an archive whose manifest declared a component the archive did
 not contain was refused with the live installation unchanged — same mtime, same
 components.
+
+
+## A wait condition that lists process names expires the day you write a tool
+
+A timed bench must run on a quiet host — this project has measured what happens
+otherwise, and the bench's own script says so. On 2026-09-12 one started anyway,
+in the middle of an NFS export that had not completed a 100 MB read in fifteen
+minutes, and began timing five paired couples whose every weight comes from that
+export.
+
+Its wait condition was three process names. The queue that had replaced those
+jobs was a new script with a new name, so the condition looked at a machine with
+none of its three and concluded quiet.
+
+**Enumerating what must not be running is a guess about the future.** It is right
+until someone writes a tool, and it fails SILENTLY and in the direction that
+costs: it starts work rather than blocking it, and the work it starts produces
+numbers that look like every other number.
+
+Two forms that do not expire:
+
+* **Wait for the thing you actually depend on to say it is done** — the queue's
+  own end marker, not the absence of its parts.
+* **Measure the condition instead of inferring it.** `tools/export_quiet.py`
+  reads bytes off the export and refuses under a floor. Not `df`, which answers
+  from cached metadata while bulk I/O is dead, and not the load average, which
+  is a decaying mean that stayed above 30 for ten minutes after every cause had
+  been killed. Both of those were consulted on the day and both said the machine
+  was fine.
+
+The general form: **a precondition stated as a list is a precondition that only
+its author can maintain.** State it as a measurement of the thing itself, or as a
+signal the producer emits, and it survives the next tool.
