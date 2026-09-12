@@ -50,6 +50,24 @@ def _dtypes():
     return [getattr(NBXDtype, n) for n in wanted if hasattr(NBXDtype, n)]
 
 
+def _copy_path(t):
+    """The reference: the tensor's own copy to the host, as float64.
+
+    bf16 has no numpy dtype, so its bits travel in a uint16 container and are
+    widened here the way the certifier widens them -- NOT by asking numpy to
+    coerce a container it does not understand, which is what a first version
+    of this did and what made the bf16 case fail inside the test rather than
+    inside the property.
+    """
+    from neurobrix.kernels.nbx_tensor import NBXDtype
+    from neurobrix.kernels.autotune_certify import bf16_bits_to_f32
+
+    host = t.to_cpu()
+    if t.nbx_dtype == NBXDtype.bfloat16:
+        return bf16_bits_to_f32(host.numpy().view(np.uint16)).astype(np.float64)
+    return np.asarray(host.numpy(), dtype=np.float64)
+
+
 def _kernel_written(dtype, n=4096):
     """A device buffer a KERNEL wrote, not the host.
 
@@ -65,7 +83,7 @@ def _kernel_written(dtype, n=4096):
     return host.to(dtype)
 
 
-@pytest.mark.parametrize("dtype", _dtypes(), ids=lambda d: str(d).split(".")[-1])
+@pytest.mark.parametrize("dtype", _dtypes(), ids=lambda d: getattr(d, "name", str(d)))
 def test_the_oracle_reads_what_the_copy_path_reads(dtype):
     """The differential, for every dtype and not for the one that broke.
 
@@ -81,7 +99,7 @@ def test_the_oracle_reads_what_the_copy_path_reads(dtype):
         f"the oracle cannot read a {dtype} operand at all; every comparison "
         f"involving one is then decided by something other than its value")
 
-    by_copy = np.asarray(t.to_cpu().numpy(), dtype=np.float64).ravel()
+    by_copy = _copy_path(t).ravel()
     got = np.asarray(by_oracle, dtype=np.float64).ravel()
     assert got.shape == by_copy.shape, (
         f"the two paths disagree on shape: {got.shape} vs {by_copy.shape}")
