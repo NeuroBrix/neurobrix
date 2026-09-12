@@ -118,7 +118,7 @@ that does not verify carries no HTTP response, so it read as transient and would
 have been re-offered three times. It now stops at once, recognised through four
 layers of wrapping.
 
-## One pool carries everything, and that is why three writers knelt it
+## One pool carries everything — and the rule that was inferred from it, withdrawn
 
 **Established 2026-09-12, on the host, by the owner.** There is no separate
 storage box. `192.168.100.1` is the hypervisor's own 100 Gbps link (a Mellanox
@@ -126,20 +126,44 @@ card — the OUI `b8:59:9f` is the card's maker, not a machine). Everything this
 rack writes sits on **one ZFS pool, `data`**: the `hf_snapshots` and `models`
 exports, **and the zvols of every VM**, including the object store at
 `10.0.0.36` and the hub at `10.0.0.39`. The pool is rotational, at 74% capacity
-and 40% fragmentation.
+and 40% fragmentation. That topology is a fact and it stays.
 
-So a snapshot download, a container build and a container upload are not three
-jobs on three devices. They are three write streams on one pool that is also
-serving the VMs' own I/O — and `SlowDownWrite` from the store is MinIO missing
-its write deadline because its virtual disk sits on the same spindles as the
-export being written next to it. The host is healthy: pools without errors, no
-scrub, 198 GB free, `nfsd` idle. Nothing to restart.
+**The rule "one pool writer at a time" is WITHDRAWN (owner, 2026-09-12 22:49),
+with its reason, so that it does not come back under another name.** It was
+inferred from a single incident whose cause was confounded. It was born two
+hours after a double mains cut, on a MinIO that had marked its own drive as
+hung (`/minio/health/cluster` answering 503) and was refusing three writes in
+four; during the incident the host's I/O was near zero and the load was
+falling — the pool was not saturated, the store was stuck in the state it had
+put itself in. The owner's host reboot cleared it instantly (9.78 MB/s and zero
+refusals on the first probe after). That is a wedged state, not a capacity
+limit. And the fact that weighs most: **this machine had run three or four
+simultaneous copies for months without an incident.** An inference made in a
+panic does not hold against months of practice. Both sides got it wrong — the
+one who wrote the rule and the one who endorsed it — and it is exactly the
+shape the vacuous-gates register describes: a cause placed on one point where
+two different rules produced the same symptom. Register entry 44.
 
-**The rule, and it is strict**: never a download, a build and an upload at the
-same time. One pool writer at a time. The serial queue is that rule as a script,
-and `tools/export_quiet.py` — which reads bytes off the export rather than
-asking `df` or the load average — is the right sensor, because a rotational pool
-under three writers stops serving bulk I/O while its metadata still answers.
+**What stays, because it was measured separately**: `SlowDownWrite` had already
+fired on 2026-09-07, on a burst at 548 MB/s. That was an instantaneous-rate
+problem, not a concurrency problem, and adaptive pacing settled it — uploads
+start at **40 MB/s** and halve when the store asks; the store keeps the last
+word. Do not raise the start without a measurement.
+
+**What replaces the rule is not another rule; it is the sensor.**
+`tools/export_quiet.py` reads bytes off the export — never `df`, never the load
+average — and refuses to launch a heavy write while the export serves under
+40 MB/s. If the pool is well, everything runs in parallel as it always did;
+if it degrades, the sensor sees it and the work waits. A measurement in place
+of a policy.
+
+**And the corrected rule for the cards, which the wrong one had idled**: pool
+writes are gated by the sensor; **the cards never stop while there is
+certification or bench work to do.** A disk stream in the background and four
+cards certifying in front is this machine's normal state. Applying the pool
+rule to the GPUs left four V100s at zero for hours behind a 118 GB upload —
+certification reads the local cache, writes a few kilobytes of JSON, and never
+touches the pool.
 
 **The durable repair is not on this machine**: move the store's and the hub's
 disks to `nvme_pool`, which sits at 48% and carries nothing. Proposed to the
@@ -175,21 +199,19 @@ The order of checks that would have saved an hour: `/minio/health/cluster`
 first, then `ethtool`/RTT, then the pool from the host. A 503 there is the
 diagnosis; everything else is confirmation.
 
-### Measured the same night: one reader beside the writer costs the store nothing
+### Measured the same night: one GPU reader beside the upload cost the store nothing
 
-The rule above was applied at first as "nothing heavy at all while an upload
-runs", and the GPUs sat idle behind a 53-minute upload. Then it was tested with
-the instrument at hand — the upload's own rate, sampled every minute — by running
-one GPU proof (CogVideoX-5b-I2V, a 21.5 GB container read from the cache once,
-then compute) beside the Wan2.2 upload:
+While the withdrawn rule was still in force it was applied as "nothing heavy at
+all while an upload runs", and the GPUs sat idle behind a 53-minute upload. Then
+it was tested with the instrument at hand — the upload's own rate, sampled every
+minute — by running one GPU proof (CogVideoX-5b-I2V, a 21.5 GB container read
+from the cache once, then compute) beside the Wan2.2 upload:
 
 | minute | upload | `SlowDownWrite` | GPU 2 |
 |---:|---:|---:|---|
 | +1 | 36.7 MB/s | 0 | 92 %, 21.2 GB (loading) |
 | +2 | 30.5 MB/s | 0 | 100 %, 23.1 GB (computing) |
 
-A dip of six MB/s during the load, no refusal, and the proof returned PROVEN. So
-the rule is about **writers**: a download, a build and an upload are three write
-streams on one rotational pool, and that is what stalled it. A single reader
-beside one writer is the rack's ordinary day. Keep the writers serial; do not
-leave the cards idle for a read.
+A dip of six MB/s during the load, no refusal, and the proof returned PROVEN.
+The measurement stands; the conclusion drawn from it that night ("keep the
+writers serial") was the withdrawn rule restated, and it is not kept.

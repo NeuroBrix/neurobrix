@@ -386,7 +386,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-43 entries, of which five are placeholders and 38 carry a site. Two
+44 entries, of which five are placeholders and 39 carry a site. Two
 machines, two weeks of concentrated looking. Every one of them produced silence
 or a green rather than an error.
 
@@ -821,3 +821,40 @@ pool layout, the VM's config, a `hostname` — never from a property that merely
 correlates with it. Where the declaration is on a machine you cannot read,
 the cell says *not established*, and the report carries the topology as a
 question rather than as a finding.
+
+### 44 — a rule inferred from one incident whose cause was confounded
+
+*2026-09-12, this machine.* After a double mains cut, the object store began
+refusing three writes in four with `SlowDownWrite`, and a 118 GB upload crawled
+at 398 kB/s. The diagnosis reached the pool: one rotational ZFS pool carries the
+exports and every VM's disk, and a download, a build and an upload were running
+at once. A rule was written the same hour — *"never a download, a build and an
+upload at the same time; one pool writer at a time"* — turned into a serial
+queue, endorsed by the supervisor, and then applied to everything heavy,
+including the GPUs: four V100s sat at zero for hours behind the upload.
+
+The rule was refuted on three facts, two of which were already in the report
+that wrote it. (1) During the incident the host's I/O was near zero and the load
+was falling: the pool was not saturated. (2) The store's `/minio/health/cluster`
+answered 503 — it had marked its own drive as hung, and stayed in that state
+until the owner rebooted the host, after which the first probe read 9.78 MB/s
+and zero refusals. A wedged state, not a capacity limit. (3) The owner's
+history: this machine had run three or four simultaneous copies for months
+without an incident. An inference made in a panic does not hold against months
+of practice.
+
+**The shape**: a cause placed on a single point where two different rules
+produced the same symptom. "Three writers on one pool" and "a store that has
+marked its drive hung" both present as *every write is slow*; only one was
+tested, by the serial queue "resolving" an incident that the reboot had
+resolved an hour earlier. The queue was the vacuous gate: green because the
+harmful state was already gone, read as proof that it had removed it.
+
+**The rule**: a rule inferred from one incident is a hypothesis until a second
+instance or a controlled measurement confirms it, and it is written as one. The
+concurrency policy is withdrawn entirely; what remains is a **sensor** —
+`tools/export_quiet.py` reads bytes off the export and refuses a heavy write
+under 40 MB/s — and the one measured fact from a separate incident (2026-09-07:
+`SlowDownWrite` on a 548 MB/s burst, settled by adaptive pacing from 40 MB/s).
+A measurement in place of a policy. The withdrawal carries its reason so that
+the rule does not return in six months under another name.
