@@ -52,8 +52,22 @@ def test_a_path_inside_the_shared_cache_is_refused():
     problems = owned_cache_problems({
         "TRITON_CACHE_DIR": str(shared),
         "TRITON_MSL_CACHE_DIR": str(Path.home() / ".cache" / "triton_msl"),
+        "NEUROBRIX_REPLAY_CACHE": str(Path.home() / ".neurobrix" / "replay_cache"),
     })
-    assert len(problems) == 2, f"expected both refused, got {problems}"
+    assert len(problems) == 3, f"expected all three refused, got {problems}"
+
+
+def test_the_replay_cache_is_one_of_the_layers():
+    """The layer the first version of this guard missed, and it is the one
+    that answers for the screen.
+
+    A measurement taken after repairing the oracle replayed a refusal recorded
+    before it, printed no `AUTOTUNE_SCREEN` line at all, and read exactly like
+    a repair that had not worked. A guard over some of the caches is a guard
+    over none, because the one it misses is the one that answers.
+    """
+    assert "NEUROBRIX_REPLAY_CACHE" in _CACHE_VARS
+    assert "NEUROBRIX_REPLAY_CACHE" in owned_cache_env(Path("/tmp/x"))
 
 
 def test_the_refusal_names_the_remedy_and_the_remedy_exists():
