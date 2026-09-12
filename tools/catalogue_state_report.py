@@ -152,8 +152,26 @@ def census(tool: str, *args) -> str:
         return ""
 
 
-def blind_axes() -> dict:
-    """{container: [reasons]} — where a defect would be invisible, per model."""
+CENSUS_CACHE = REPO / "validation_outputs" / "catalogue_state_census.json"
+
+
+def blind_axes(from_cache: bool = False) -> dict:
+    """{container: [reasons]} — where a defect would be invisible, per model.
+
+    The census reads 182 graphs off the NFS export. When the export is carrying
+    one heavy stream (an upload, a build) that read is a second one, and the
+    rule is one at a time. So the last census is kept on the root filesystem
+    and `--from-cache` renders from it, STAMPING ITS TIME in the document: a
+    census read from cache is a census as of then, and the document says so.
+    """
+    import time as _t
+    if from_cache:
+        if not CENSUS_CACHE.exists():
+            raise SystemExit(f"REFUSED: --from-cache but {CENSUS_CACHE} does not "
+                             f"exist. A document rendered from no census is not one.")
+        cached = json.loads(CENSUS_CACHE.read_text())
+        blind_axes.stamp = cached.get("taken_utc", "?")
+        return cached["blind"]
     raw = census("symbol_collision_census.py", "--json")
     out = {}
     try:
@@ -166,19 +184,33 @@ def blind_axes() -> dict:
             for cls, _why in e["flags"]:
                 out.setdefault(model, []).append(
                     f"{comp.split('/',1)[1]} `{e['name']}`@{e['trace']} ({cls})")
+    stamp = _t.strftime("%Y-%m-%d %H:%M UTC", _t.gmtime())
+    CENSUS_CACHE.parent.mkdir(parents=True, exist_ok=True)
+    CENSUS_CACHE.write_text(json.dumps({"taken_utc": stamp, "blind": out}, indent=1))
+    blind_axes.stamp = stamp
     return out
 
 
 def main() -> int:
+    import argparse
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--from-cache", action="store_true",
+                    help="render from the last census kept on the root filesystem "
+                         "(its time is stamped in the document)")
+    args = ap.parse_args()
     rows = meet_rows()
     cells = campaign_cells()
-    blind = blind_axes()
+    blind = blind_axes(from_cache=args.from_cache)
 
     print("# The catalogue, one line per model — 2026-09-12\n")
     print("**47 entries on the registry.** Every cell is read from an artefact on this")
     print("machine, and every cell says how it was obtained. A cell that says *not")
     print("measured* is not an omission: a blank and a zero read the same, and only one")
     print("of them is honest.\n")
+    print(f"The *where a defect would be invisible* column is the census taken "
+          f"**{getattr(blind_axes, 'stamp', '?')}**"
+          + (" (rendered from its cache: the export was carrying one stream, and "
+             "the rule is one at a time)" if args.from_cache else "") + ".\n")
     print("The run column is the catalogue pass of **2026-09-11** at engine `4c119b5`")
     print("unless a later line overrides it, in which case the override names the")
     print("artefact that proves it. The pass's own record is never edited — it stays")
