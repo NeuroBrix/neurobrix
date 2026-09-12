@@ -432,8 +432,28 @@ class RuntimeExecutor:
         # is the last resort only (video family: 512² rendered colour bands on
         # every arm of the calibration campaign, 2026-09-05).
         if "height" not in self.pkg.defaults or "width" not in self.pkg.defaults:
-            derived = self._container_output_size(
-                {name: data for name, data in self.pkg.components.items()})
+            # WHEN A REQUEST SUPPLIES A CONDITIONING IMAGE, THE IMAGE SETS THE
+            # RESOLUTION. It is the most specific thing the request says, and the
+            # alternative was measured on 2026-09-12: the image processor keeps
+            # the source image's own size when no --height/--width is given (its
+            # own comment says so), while this cascade independently derived the
+            # resolution from the TRACED latent. Allegro-TI2V then met its own
+            # 448x448 conditioning image at a pipeline running 144x208 and died
+            # on "Expected size 18 but got size 56" — the traced latent extent
+            # against the image's. Two decisions taken separately about one
+            # quantity.
+            #
+            # Order, and it is the whole answer: an explicit --height/--width
+            # wins (the `inputs` loop below applies after this), then the
+            # container's own declared defaults (this branch does not run at
+            # all when it declares them), then the conditioning image, then the
+            # traced latent, then the family constant. A request-side fact
+            # outranks a build-side one; a stimulus chosen at trace time is the
+            # last thing that should decide what a user gets.
+            derived = self._conditioning_image_size(inputs)
+            if derived is None:
+                derived = self._container_output_size(
+                    {name: data for name, data in self.pkg.components.items()})
             if derived is not None:
                 merged_defaults["height"], merged_defaults["width"] = derived
 
@@ -1425,6 +1445,35 @@ class RuntimeExecutor:
 
         logger.debug(f"Dynamic latent dims: {height}x{width} / {vae_scale_factor} = {latent_height}x{latent_width}")
         return merged_defaults
+
+    def _conditioning_image_size(self, inputs: Dict[str, Any]) -> Optional[tuple]:
+        """(height, width) of the conditioning image this request supplies.
+
+        Read from the ARRAY the image processor actually produced, never from the
+        file on disk: the processor applies the build's declared preprocessing,
+        so the file's size and the size that enters the graph are not the same
+        question. The spatial extents are the last two axes of an image or video
+        tensor, which holds for [C,H,W], [C,T,H,W] and [B,C,T,H,W] alike.
+
+        Silent when the request supplies no image, when the array is not spatial,
+        or when its extents are not positive integers — silence here falls
+        through to the container, which is the correct next authority.
+        """
+        image = inputs.get("global.image")
+        if image is None:
+            return None
+        shape = getattr(image, "shape", None)
+        if shape is None or len(shape) < 2:
+            return None
+        height, width = shape[-2], shape[-1]
+        if not (isinstance(height, int) and isinstance(width, int)):
+            try:
+                height, width = int(height), int(width)
+            except (TypeError, ValueError):
+                return None
+        if height <= 0 or width <= 0:
+            return None
+        return height, width
 
     def _container_output_size(self, comp_configs: Dict[str, Any]) -> Optional[tuple]:
         """(height, width) in pixels from the container: the last two extents
