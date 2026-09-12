@@ -213,6 +213,27 @@ Trois choses touchent directement votre lecture d'Item 1, et une la complète.
    (branche `mulf` sans test de splat, asymétrique avec la branche `addf`).
    Un refus lu dans un journal des jours précédents peut porter cette cause.
 
+## Second addendum, 2026-09-13 — deux portes de plus arrivent avec la branche
+
+1. **Un candidat trop lent coûte sa place, pas la course** — machinerie posée
+   dans `autotune_refusals` + une sonde d'un lancement dans `do_bench`
+   (estimateur inchangé pour les sains : même moyenne de cinq). **Désarmée**
+   tant que ses ratios ne sont pas mesurés — le pathologique observé (>12 min
+   dans `waitUntilCompleted`) ne s'est PAS reproduit en isolation (dix
+   candidats en 0,03–1,44 s), donc pas de borne devinée. Sur CUDA : inerte,
+   ratios à None.
+2. **Un sweep dont les arguments dépassent la mémoire disponible est coupé à
+   une config, dit, et JAMAIS persisté** (`bench_would_swap` +
+   `mark_unmeasured` dans `autotune_cache`, que `capture()` consulte). Mesuré
+   ici : 5,9 Go d'arguments contre 4,5 Go disponibles. Chez vous : vos cartes
+   ont une mémoire discrète et `available_mb` lit l'HÔTE — dites-moi si vous
+   voulez la porte conditionnée à la mémoire unifiée, c'est une ligne.
+
+Et une donnée d'exploitation : votre politique d'exclusion a tourné en
+production ici — 112 candidats écartés pendant une certification, zéro course
+tuée — et le répertoire Apple est passé de 45 à 137 formes, premières entrées
+bf16 comprises.
+
 ## Ordre proposé, inchangé sur le fond
 
 Celui de la liste tient : **Item 1 d'abord** (composition, pas conflit),
