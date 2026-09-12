@@ -306,6 +306,20 @@ thing it prints on success, it is already an entry here and nobody has noticed.
 
 ---
 
+### 29 — a rule checked only at the trace point is blind to every error that cancels there
+
+* **date** 2026-09-12 · **machine** Dell · **site** `forge/tracer/symbolic/rules.py`, the `cat` and convolution rules; visible in `CogVideoX-5b-I2V/vae_encoder`
+* **the general form, and it is why none of our gates could catch it** a symbolic rule is validated by ONE comparison: does the expression it produces reproduce the extent witnessed at trace? That comparison is made at a single point of the symbol's domain — the trace value. **Any error that happens to vanish at that point is invisible to it, permanently, by construction.** Not because the check is weak, but because a check at one point cannot separate two functions that agree at that point.
+* **the instance** the causal temporal pad concatenates three slices of the SAME tensor to turn 1 frame into 3. The rule sums its inputs' symbolic dims — correct in general — and records `3·s1`. **The truth is `s1 + 2`**: two of the three inputs are fixed-size padding, not independent extents. At trace `s1 = 1`, and `3·1 = 1+2 = 3`. The two functions agree at exactly one point of the domain, and that is the only point anyone looks at.
+* **what turned an error into a catastrophe** the causal convolution that follows brings the concrete extent back to 1 while KEEPING the 3-reference expression — its temporal reduction is never applied, so the error does not settle. Each of the seven resnet blocks triples it again: `3 → 9 → 27 → 81 → 243 → 729 → 2 187`. The recorded function is `f(t) = 2187·t − 2184`, and `f(1) = 3` still. **A factor-3 error compounds to a factor-2187 one while remaining exactly correct at the point of validation.**
+* **what it cost** Prism evaluates it faithfully and asks for **944 GB of activations for a component whose weights are 822 MB**, refuses the model, and advises the operator to obtain more host RAM. Every downstream instrument inherited the absurdity and none could contradict it, because the annotation passes the only test there is.
+* **why no gate of ours could have caught it** the shape resolver's TRUST GATE (register 26) asks precisely this question and nothing else: does the expression reproduce its traced dim? It does. The symbol-consistency check passes (one trace value per symbol, 182 graphs of 182). The shape-preserving-op check passes (0 violations in 182 graphs). **Four independent structural invariants, all satisfied, all evaluated at the same single point.**
+* **the remedy, in form** a rule must be checked at a point where the error CANNOT cancel — which for a symbolic rule means **at least one binding other than the trace**. A test whose stimulus has `s = 1` will be green for the very reason that blinded the gate. Where a second binding is not available, the rule's structure must be asserted directly (a causal pad is `s + k` and the `k` is a literal), not inferred from an agreement of values.
+* **and the corollary for tests** this generalises the shape rule already in `what-a-green-test-proves.md` — *a test proves nothing at a shape that makes all its branches equivalent*. Here it is sharper: **`1` is the value at which multiplication and addition stop being distinguishable**, and a frugal trace tends to produce exactly that value on the axis being symbolized. The most economical stimulus is the one that hides the most rules.
+* **filed** `D-CAUSAL-PAD-SYMBOL-COMPOUNDS` in `DETTE.md`, with the blast radius measured (2 187 references for the offender, 5 for the next across every 5-D component of 56 containers) and the remedy named as a tracer chantier requiring a re-trace of one container.
+
+---
+
 ## The Mac's entries
 
 Entries 13 and 14 are the Mac's, transcribed from `f769f2e` because they are
@@ -319,7 +333,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-28 entries, of which five are placeholders and 23 carry a site. Two
+29 entries, of which five are placeholders and 24 carry a site. Two
 machines, two weeks of concentrated looking. Every one of them produced silence
 or a green rather than an error, and **not one was found by a test** — they were
 found by users, by contradictions between two numbers, by reading generated

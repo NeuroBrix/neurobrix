@@ -25,6 +25,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   says so in the run's own output.
 
 ### Fixed
+- The output resolution is read from the container wherever the container declares it.
+  Deriving it from a traced latent input refused two containers that state everything
+  needed: one because its flow is named `static_graph` rather than `iterative_process`,
+  though the shape test in front of which that gate sat is the narrower discriminator; the
+  other because its backbone consumes a flattened latent while its VAE declares the same
+  latent in full. Both now resolve, and containers without a spatial latent — text, audio,
+  vision-language — still resolve to nothing.
 - The activation profiler's positional symbol map no longer answers to a name that reads
   like the real one. `InputConfig.to_symbol_map()` returned a GUESS — batch, latent height,
   latent width by position — which is wrong for any container that declares what its

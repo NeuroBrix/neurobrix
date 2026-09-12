@@ -1428,19 +1428,44 @@ class RuntimeExecutor:
 
     def _container_output_size(self, comp_configs: Dict[str, Any]) -> Optional[tuple]:
         """(height, width) in pixels from the container: the last two extents
-        of the diffusion backbone's traced latent input times the VAE scale.
-        None for a graph without a spatial latent (text, audio) or a
-        container whose VAE scale cannot be determined."""
-        flow_type = self.pkg.topology.get("flow", {}).get("type", "")
-        if flow_type != "iterative_process":
-            return None
+        of a traced LATENT input times the VAE scale.
+
+        Two things the container already declares were not being read, and two
+        video models died for it on 2026-09-11 (`Key 'latent_height' not found`):
+
+        * **the flow type was a second gate, and it refused a legitimate case.**
+          The real discriminator is the SHAPE test below — rank 4 or 5 with two
+          integer trailing extents — which no text or audio component satisfies
+          (an LLM's `hidden_states` is rank 3). The flow check sat in front of it
+          and refused `Wan2.2-I2V-A14B`, whose flow is `static_graph` and whose
+          backbone carries `hidden_states [1, 36, 5, 10, 12]`. It is gone; the
+          shape test is what decides, and it is narrower.
+        * **the VAE was not consulted.** `Open-Sora-v2`'s backbone takes a
+          FLATTENED latent (`img [1, 60, 64]`, rank 3) and cannot answer — but
+          its VAE declares `z [1, 16, 9, 14, 22]`, which IS the latent, in the
+          same container. Reading it is reading the container, not inventing
+          anything: a decoder's input extents are latent extents by definition.
+
+        Returns None for a container that declares no spatial latent anywhere, or
+        whose VAE scale cannot be determined. It never guesses a resolution — a
+        family constant was the last resort here and was removed for cause
+        (video 512², colour bands on every arm, 2026-09-05).
+        """
         scale = self._get_vae_scale_factor(comp_configs)
         if not scale:
             return None
         components = self.pkg.topology.get("components", {}) or {}
-        for name in ("transformer", "unet", "dit"):
+        # The backbone first: its latent is the one the request scales.
+        # The VAE second: its input is the same latent, and it answers when a
+        # backbone consumes a flattened one.
+        for name, keys in (("transformer", ("hidden_states", "sample", "latents", "x", "latent_model_input")),
+                           ("unet", ("hidden_states", "sample", "latents", "x", "latent_model_input")),
+                           ("dit", ("hidden_states", "sample", "latents", "x", "latent_model_input")),
+                           ("transformer_2", ("hidden_states", "sample", "latents", "x", "latent_model_input")),
+                           ("vae", ("z", "latents", "sample", "hidden_states")),
+                           ("vae_decoder", ("z", "latents", "sample", "hidden_states"))):
             shapes = (components.get(name) or {}).get("shapes") or {}
-            for key in ("hidden_states", "sample", "latents", "x", "latent_model_input"):
+            for key in keys:
                 shape = shapes.get(key)
                 if isinstance(shape, (list, tuple)) and len(shape) in (4, 5) and all(isinstance(v, int) for v in shape[-2:]):
                     h, w = int(shape[-2]), int(shape[-1])
