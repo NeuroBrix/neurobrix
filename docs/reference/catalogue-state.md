@@ -20,44 +20,44 @@ As the pass left it: **37 met**, **9 failed**, **1 not runnable**. 6 rows carry 
 | `mistralai/Voxtral-Mini-3B` | audio_llm | 8.7 | met in 121 s | 28 | 0 | not measured | none found at the input | measured |
 | `nvidia/Canary-Qwen-2.5B` | audio_llm | 4.8 | met in 118 s | 29 | 0 | not measured | none found at the input | measured |
 | `NVlabs/Sana-1600M-4Kpx-BF16` | image | 12.1 | met in 460 s | 2 | 0 | not measured | vae `height`@128 (weight-extent); vae `width`@128 (weight-extent) | measured |
-| `NVlabs/Sana-1600M-MultiLing` | image | 12.1 | met in 90 s | 8 | 0 | not measured | transformer `height`@32 (weight-extent); transformer `width`@32 (weight-extent) (+2) | measured |
+| `NVlabs/Sana-1600M-MultiLing` | image | 12.1 | met in 90 s | 8 | 0 | paired cell PERTURBED (card 2 also carried the conv2d certification (pid 433862, up to 18 GB) from 22:55 to 23:13:38; the cell ran 23:02-23:2x — re-run alone owed) — no cost | transformer `height`@32 (weight-extent); transformer `width`@32 (weight-extent) (+2) | measured |
 | `PixArt/PixArt-Sigma-XL-1024` | image | 20.3 | met in 154 s | 8 | 0 | not measured | vae `height`@128 (weight-extent); vae `width`@128 (weight-extent) | measured |
 | `PixArt/PixArt-XL-1024` | image | 20.4 | met in 128 s | 4 | 0 | not measured | transformer `seq_len`@120 (weight-extent); transformer `seq_len`@120 (weight-extent) (+2) | measured |
 | `ostris/Flex.1-alpha` | image | 24.5 | met in 317 s | 15 | 0 | not measured | text_encoder `seq_len`@77 (weight-extent); transformer `seq_len`@4096 (weight-extent) (+2) | measured |
 | `Qwen/Qwen3-30B-A3B-Thinking` | llm | 57.1 | met in 154 s | 0 | 0 | 56 s, 0.51x, 7/8 keys, bytes passed | none found at the input | measured |
 | `Qwen/Qwen3-Coder-30B-A3B-Instruct` | llm | 57.1 | met in 173 s | 1 | 0 | 54 s, 0.47x, 7/8 keys, bytes passed | none found at the input | measured |
-| `Qwen/Qwen3-Coder-30B-A3B-Instruct-int4g128-ffnonly` | llm | 17.2 | met in 116 s | 0 | 0 | not measured | none found at the input | measured |
-| `TinyLlama/TinyLlama-1.1B-Chat` | llm | 2.1 | met in 25 s | 3 | 0 | not measured | none found at the input | measured |
+| `Qwen/Qwen3-Coder-30B-A3B-Instruct-int4g128-ffnonly` | llm | 17.2 | met in 116 s | 0 | 0 | 46 s, 1.43x, 8/8 keys, base 107 s, bytes same | none found at the input | measured |
+| `TinyLlama/TinyLlama-1.1B-Chat` | llm | 2.1 | met in 25 s | 3 | 0 | 33 s, 4.18x, 6/6 keys, base 10 s, bytes same | none found at the input | measured |
 | `deepseek-ai/DeepSeek-MoE-16B-Chat` | llm | 30.6 | met in 39 s | 0 | 0 | 46 s, 1.3x, 8/9 keys, bytes passed | none found at the input | measured |
 | `deepseek-ai/deepseek-coder-v2-lite-instruct` | llm | 30.7 | met in 140 s | 5 | 0 | 1337 s, 14.38x, 131/137 keys, bytes passed | none found at the input | measured |
-| `deepseek-ai/janus-pro-7b` | multimodal | 13.8 | met in 100 s | 3 | 0 | not measured | gen_embed `seq_len`@1 (arithmetic) | measured |
+| `deepseek-ai/janus-pro-7b` | multimodal | 13.8 | met in 100 s | 3 | 0 | 193 s, 3.31x, 25/25 keys, base 84 s, bytes same | gen_embed `seq_len`@1 (arithmetic) | measured |
 | `inclusionai/ming-lite-omni-1.5` | multimodal | 53.0 | met in 175 s | 8 | 0 | 1072 s, 9.82x, 195/203 keys, bytes passed | image_vae `seq_len`@3 (weight-extent) | measured |
 | `openbmb/minicpm-o-4_5` | multimodal | 19.7 | met in 301 s | 81 | 0 | not measured | flow_dit `seq_len`@3 (weight-extent) | measured |
 | `qwen/qwen3-omni-30b-a3b-instruct` | multimodal | 65.9 | met in 257 s | 36 | 0 | 1196 s, 12.23x, 183/219 keys, bytes passed | talker.code_predictor.model.codec_embedding `seq_len`@1 (arithmetic) | measured |
 | `qwen/qwen3-vl-30b-a3b-thinking` | multimodal | 57.9 | met in 365 s | 36 | 0 | 2924 s, 13.87x, 515/585 keys, bytes passed | none found at the input | measured |
 | `nvidia/Parakeet-TDT-1.1B` | stt | 4.1 | met in 32 s | 4 | 0 | not measured | joint `seq_len`@1024 (weight-extent) | measured |
-| `openai/Whisper-Large-V2` | stt | 5.8 | met in 23 s | 0 | 0 | not measured | none found at the input | measured |
-| `openai/Whisper-V3-Turbo` | stt | 1.5 | met in 22 s | 5 | 0 | not measured | none found at the input | measured |
+| `openai/Whisper-Large-V2` | stt | 5.8 | met in 23 s | 0 | 0 | 35 s, 3.23x, 10/10 keys, base 16 s, bytes same | none found at the input | measured |
+| `openai/Whisper-V3-Turbo` | stt | 1.5 | met in 22 s | 5 | 0 | 35 s, 7.62x, 10/10 keys, base 5 s, bytes same | none found at the input | measured |
 | `canopylabs/Orpheus-3B` | tts | 14.2 | not runnable — catalogue decision | n/m | n/m | not measured | none found at the input | not measured |
 | `fishaudio/OpenAudio-S1-Mini` | tts | 4.0 | met in 1045 s | 238 | 0 | not measured | codec.decoder `seq_len`@1 (arithmetic) | measured |
 | `hexgrad/Kokoro-82M` | tts | 0.4 | met in 55 s | 6 | 0 | not measured | none found at the input | measured |
 | `microsoft/VibeVoice-1.5B` | tts | 5.1 | met in 154 s | 15 | 0 | not measured | none found at the input | measured |
 | `resemble-ai/Chatterbox` | tts | 2.1 | met in 73 s | 0 | 0 | not measured | none found at the input | measured |
-| `JingyunLiang/SwinIR-Classical-x2` | upscaler | 0.1 | met in 7 s | 0 | 0 | not measured | none found at the input | measured |
-| `JingyunLiang/SwinIR-Classical-x4` | upscaler | 0.1 | met in 9 s | 0 | 0 | not measured | none found at the input | measured |
-| `XPixelGroup/HAT-L-x4` | upscaler | 0.2 | met in 16 s | 0 | 0 | not measured | none found at the input | measured |
-| `XPixelGroup/HAT-S-x4` | upscaler | 0.1 | met in 10 s | 0 | 0 | not measured | none found at the input | measured |
-| `caidas/Swin2SR-Classical-x2` | upscaler | 0.1 | met in 8 s | 0 | 0 | not measured | none found at the input | measured |
+| `JingyunLiang/SwinIR-Classical-x2` | upscaler | 0.1 | met in 7 s | 0 | 0 | 37 s, 8.86x, 11/11 keys, base 5 s, bytes same | none found at the input | measured |
+| `JingyunLiang/SwinIR-Classical-x4` | upscaler | 0.1 | met in 9 s | 0 | 0 | 51 s, 11.80x, 12/12 keys, base 5 s, bytes same | none found at the input | measured |
+| `XPixelGroup/HAT-L-x4` | upscaler | 0.2 | met in 16 s | 0 | 0 | 87 s, 7.23x, 18/18 keys, base 14 s, bytes same | none found at the input | measured |
+| `XPixelGroup/HAT-S-x4` | upscaler | 0.1 | met in 10 s | 0 | 0 | 83 s, 14.14x, 18/18 keys, base 6 s, bytes same | none found at the input | measured |
+| `caidas/Swin2SR-Classical-x2` | upscaler | 0.1 | met in 8 s | 0 | 0 | 222 s, 42.82x, 16/16 keys, base 5 s, bytes same | none found at the input | measured |
 | `caidas/Swin2SR-Classical-x4` | upscaler | 0.1 | met in 44 s | 4 | 0 | not measured | none found at the input | measured |
-| `caidas/Swin2SR-RealWorld-x4` | upscaler | 0.1 | met in 8 s | 0 | 0 | not measured | none found at the input | measured |
-| `xinntao/Real-ESRGAN-x4` | upscaler | 0.1 | met in 6 s | 0 | 0 | not measured | none found at the input | measured |
+| `caidas/Swin2SR-RealWorld-x4` | upscaler | 0.1 | met in 8 s | 0 | 0 | 492 s, 80.69x, 17/17 keys, base 6 s, bytes same | none found at the input | measured |
+| `xinntao/Real-ESRGAN-x4` | upscaler | 0.1 | met in 6 s | 0 | 0 | 455 s, 135.49x, 10/10 keys, base 3 s, bytes same | none found at the input | measured |
 | `Efficient-Large-Model/SANA-Video-2B-720p` | video | 17.1 | met in 675 s | 25 | 0 | not measured | transformer `time`@3 (weight-extent) | measured |
 | `THUDM/CogVideoX-2b` | video | 13.2 | met in 614 s | 5 | 0 | 403 s, 0.73x, 26/33 keys, bytes **ran, FAILED** | none found at the input | measured |
 | `THUDM/CogVideoX-5b-I2V` | video | 21.6 | **RUNS — corrected at the source, published, installed, PROVEN by run** | 0† | 0† | not measured | none found at the input | measured |
 | `Wan-AI/Wan2.1-I2V-14B-480P` | video | 84.4 | **INFERRED same debt as Wan2.1-VACE** | 3† | 0† | not measured | none found at the input | inferred |
 | `Wan-AI/Wan2.1-T2V-1.3B` | video | 27.0 | FAILED rc=-9 — killed at 2700 s | 11† | 0† | 26 s, 0.01x, 6/36 keys, bytes **not run** | none found at the input | measured |
 | `Wan-AI/Wan2.1-VACE-1.3B` | video | 18.2 | **NAMED DEBT — not corrected, and no stimulus corrects it** | 0† | 0† | 127 s, 4.32x, 34/37 keys, bytes **not run** | none found at the input | measured |
-| `Wan-AI/Wan2.2-I2V-A14B` | video | 118.1 | **REBUILT (118.07 GB, gate 1.000x), upload in flight — and a second line** | 0† | 0† | not measured | none found at the input | measured (topology) / inferred (unroll) |
+| `Wan-AI/Wan2.2-I2V-A14B` | video | 118.1 | **REBUILT, gated 1.000x, PUBLISHED, INSTALLED — proof by run owed — and a second line** | 0† | 0† | not measured | none found at the input | measured (topology) / inferred (unroll) |
 | `genmo/Mochi-1-preview` | video | 38.2 | FAILED rc=-9 — killed at 2700 s | 0† | 0† | not measured | transformer `seq_len`@256 (weight-extent); transformer `seq_len`@256 (weight-extent) | measured |
 | `hpcai-tech/Open-Sora-v2` | video | 42.5 | **DIAGNOSED — rebuild refused at entry, re-trace queued first** | 0† | 0† | not measured | text_encoder_2 `seq_len`@77 (weight-extent) | measured |
 | `rhymes-ai/Allegro` | video | 23.6 | FAILED rc=-9 — killed at 2701 s | 12† | 0† | not measured | none found at the input | measured |
@@ -96,11 +96,11 @@ Its VAE encoder unrolls its temporal chunk loop: 517 ops per chunk, measured at 
 
 *Evidence:* validation_outputs/wan_class_e_20260912/VERDICT.md; docs/reference/temporal-unroll-census.md  ·  *line:* measured
 
-### `Wan2.2-I2V-A14B` — REBUILT (118.07 GB, gate 1.000x), upload in flight — and a second line
+### `Wan2.2-I2V-A14B` — REBUILT, gated 1.000x, PUBLISHED, INSTALLED — proof by run owed — and a second line
 
 TWO lines, not one. The rebuild resolves its output size. Its VAE ENCODER stays unrolled over the temporal axis, which no rebuild changes — DETTE D-TEMPORAL-UNROLL. Delivering the first without saying the second would be delivering a fix for the error we found and hiding the one underneath.
 
-*Evidence:* rebuild 22:11-22:22 (676 s, 118.07 GB, only writer on the pool); regression gate 1.000x on all five components; upload through the internal entry point from 22:22:46 at 37 MB/s, zero SlowDownWrite; cached encoder carries the unroll signature (inferred line)  ·  *line:* measured (topology) / inferred (unroll)
+*Evidence:* rebuild 22:11-22:22 (676 s, 118.07 GB); regression gate 1.000x on all five components; upload through the internal entry point 22:22:46 -> rc=0 after 5144 s (126.77 GB, ~24.6 MB/s mean, zero SlowDownWrite), hub updatedAt 23:48:30Z; install 23:48:30 -> rc=0 after 312 s, five components in the cache; the proof needs the whole rig and runs after the bench queues drain; cached encoder carries the unroll signature (inferred line)  ·  *line:* measured (topology) / inferred (unroll)
 
 ## How to read the columns
 
