@@ -1359,6 +1359,48 @@ ARM_LABELS = ("A", "B")
 FROZEN_POINTERS = (".nbx_registry", "forge")
 
 
+FLIGHTREC_OPT = "--allow-unrecorded"
+
+
+def flightrec_refusal(allow_unrecorded: bool = False):
+    """Why this campaign may not start, or None — it must be under the recorder.
+
+    This rack has no UPS and loses mains: twice in nine minutes on 2026-09-11,
+    and the doctrine calls that a known reality rather than an accident. The
+    flight recorder writes an fsync'ed record BEFORE the child starts, so a run
+    the power cuts leaves a record whose boot_id no longer matches — mechanical
+    proof of an outage mid-run — and the session hook prints the resume block.
+
+    The 2026-09-11 MEET pass ran WITHOUT it. The cut left no in_flight record,
+    therefore no resume block, therefore nothing that said what had been lost;
+    the campaign was reconstructed by hand from its own logs the next day. That
+    is a door to place, not a habit to acquire: remembering to wrap the command
+    is exactly the discipline a power cut is under no obligation to respect.
+
+    The recorder marks its child's environment, so a campaign can tell. One
+    deliberate opening, which the run then states in its own output.
+    """
+    if os.environ.get("NBX_FLIGHTREC"):
+        return None
+    if allow_unrecorded:
+        return None
+    return ("this campaign is not under the flight recorder, and this machine has "
+            "no UPS. A power cut would leave no record, no resume block, and "
+            "nothing saying what was lost — which is what happened to the "
+            "2026-09-11 MEET pass.\n\n  Run it as:\n"
+            "      python3 tools/flightrec.py run --label '<what this measures>' "
+            "--gpu <n> -- <the command>\n\n"
+            f"  To run it unrecorded deliberately, pass {FLIGHTREC_OPT}.")
+
+
+def add_flightrec_argument(parser) -> None:
+    """The one deliberate opening, spelled the same way everywhere."""
+    parser.add_argument(
+        FLIGHTREC_OPT, action="store_true",
+        help="run outside the flight recorder (a power cut then leaves no record "
+             "and no resume block)")
+
+
 def frozen_src_refusal(src, repo_root):
     """Why this `--src` may not be measured, or None if it may.
 

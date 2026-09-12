@@ -284,6 +284,8 @@ def main() -> int:
                          "reason every campaign needs one")
     import rig_clock as _rc
     _rc.add_argument(ap)
+    from precision_zoo_campaign import add_flightrec_argument
+    add_flightrec_argument(ap)
     ap.add_argument("--timeout", type=int, default=5400,
                     help="seconds a single MEET run may take before it is killed "
                          "with its whole process group")
@@ -352,6 +354,15 @@ def main() -> int:
             allow_off_protocol=getattr(args, "allow_off_protocol_clock", False))
     except OffProtocol as exc:
         print(f"\n{exc}", file=sys.stderr)
+        return 1
+
+    # And under the recorder, for the same reason the clocks are read: the
+    # harmful state recurs on a schedule nobody controls. The 2026-09-11 pass
+    # ran unrecorded and the 19:22 mains loss left no resume block.
+    from precision_zoo_campaign import flightrec_refusal
+    why = flightrec_refusal(getattr(args, "allow_unrecorded", False))
+    if why:
+        print(f"\nREFUSED: {why}", file=sys.stderr)
         return 1
 
     from precision_zoo_campaign import frozen_src_refusal, request_args, run

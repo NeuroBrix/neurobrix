@@ -329,6 +329,24 @@ def _clocks_mhz():
     return _clocks_mhz.cached
 
 
+class UnreachableCensusKey(RuntimeError):
+    """The census holds a key the engine can no longer ask for.
+
+    NOT a failure of the certification, and the distinction is the whole point of
+    the class. The census accumulates across engine versions; when a wrapper
+    changes how it computes its autotune key, every entry recorded under the old
+    rule becomes unreachable — no run will ever present that key again, so there
+    is nothing to certify and refusing is correct.
+
+    It is separated from a real break because an exit code that conflates the two
+    stops being read. On 2026-09-12 the certification refused 184 such keys, all
+    of them the known debt D-CENSUS-HOLDS-KEYS-THE-ENGINE-CANNOT-PRODUCE, and
+    exited 1 — the same 1 a genuine break would produce. A status that says
+    "something is wrong" on every run of a directory that is in fact healthy will
+    be ignored, and the day it tells the truth nobody will listen.
+    """
+
+
 _UNREAD = object()
 
 
@@ -527,8 +545,9 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None)
         tuner.nargs = dict(zip(tuner.arg_names, args))
         seen = atc.key_of(tuner, args, kwargs)
         if tuple(seen) != tuple(key):
-            raise RuntimeError(f"the wrapper computed key {seen!r} for inputs synthesized from {key!r}: the census "
-                               f"and the kernel disagree — nothing certified for this key")
+            raise UnreachableCensusKey(
+                f"the wrapper computed key {seen!r} for inputs synthesized from {key!r}: the census "
+                f"and the kernel disagree — nothing certified for this key")
         oracle = oracle_box.get("v")
         t_or = time.time()
         if oracle is None:                              # the key matched: now the fp64 oracle is worth computing
@@ -720,7 +739,8 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
         shapes = {q: ks for q, ks in shapes.items() if q in want or C.kernel_short(q) in want}
     rng = np.random.default_rng(seed)
     summary: Dict[str, Any] = {"vendor": vendor, "profile": profile, "directory": str(root), "kernels": {},
-                               "certified": 0, "skipped": 0, "failed": 0, "excluded_configs": 0, "started": time.time()}
+                               "certified": 0, "skipped": 0, "failed": 0, "unreachable": 0,
+                               "excluded_configs": 0, "started": time.time()}
     done = 0
     attempts = 0                                  # `limit` bounds the shapes TRIED, failures included
     for qual, keys in shapes.items():
@@ -744,6 +764,12 @@ def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[st
             try:
                 tol = _tolerance(vendor, profile, dtype)
                 entry = certify_key(qual, tuner, key, tol, rng)
+            except UnreachableCensusKey as exc:
+                # Known debt, not a break: no run will ever present this key
+                # again. Counted apart so the exit code can still mean something.
+                summary["unreachable"] += 1
+                log(f"[certify] {C.kernel_short(qual)} {dtype} {C.describe_key(tuner, key)}: UNREACHABLE — {exc}")
+                continue
             except Exception as exc:
                 summary["failed"] += 1
                 log(f"[certify] {C.kernel_short(qual)} {dtype} {C.describe_key(tuner, key)}: FAILED — {exc}")

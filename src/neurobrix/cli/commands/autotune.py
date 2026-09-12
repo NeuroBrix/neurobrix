@@ -42,8 +42,20 @@ def cmd_autotune(args) -> int:
             if problems:
                 bad += 1
                 print(f"GATE: {path}: {problems[0]}")
+        unreachable = summary.get("unreachable", 0)
         print(f"[certify] {summary['certified']} shape(s) certified, {summary['excluded_configs']} config(s) excluded, "
-              f"{summary['failed']} failed; directory gate: {'every file re-reads' if not bad else f'{bad} file(s) refused'}")
+              f"{summary['failed']} failed, {unreachable} unreachable; "
+              f"directory gate: {'every file re-reads' if not bad else f'{bad} file(s) refused'}")
+        if unreachable:
+            # Said in clear, and NOT folded into the exit code. The census
+            # accumulates across engine versions and a key recorded under an
+            # older rule can never be presented again, so refusing it is the
+            # correct outcome, not a fault. Conflating the two made this command
+            # exit 1 on every run of a healthy directory — a status that cries
+            # wolf is a status nobody reads on the day it is right.
+            print(f"[certify] {unreachable} census key(s) are unreachable to this engine — the debt "
+                  f"D-CENSUS-HOLDS-KEYS-THE-ENGINE-CANNOT-PRODUCE, not a failure. Each is named above "
+                  f"with both keys, and nothing was certified for it.")
         return 0 if not bad and not summary["failed"] else 1
     if action == "check":
         root = Path(args.dir) if getattr(args, "dir", None) else C.directory()
