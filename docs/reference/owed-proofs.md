@@ -185,3 +185,81 @@ host-addressability — and the two are distinguishable in one line, by reading 
 Whether the Mac's own second route has the addressability problem it suspects.
 This answers only what the Dell does, which was the question asked. The two
 engines share the doctrine, not the code path.
+
+---
+
+## 3 — the screen oracle's coverage on this rack: answered for the Mac, 2026-09-12
+
+* **asked in** `docs/reference/trunk-arbitration-list.md` item 1 · **answered by**
+  the Dell, by reading the Mac's own table on `origin/metal-first-light` and
+  counting this rack's certified directory. No card was needed.
+* **the question** *"a read of the provider's coverage table (`ORACLES`, currently
+  `mm` and `baddbmm`) against what the screen is asked for on this rack, and a
+  decision about what `announce_no_oracle` should do when the answer is 'most
+  kernels'."*
+
+### First, the table names three kernels, not two
+
+`kernels/screen_oracle.py` on `metal-first-light`:
+
+```python
+ORACLES = {
+    "matmul_kernel":  (_mm, "c_ptr"),
+    "addmm_kernel":   (_mm, "c_ptr"),
+    "baddbmm_kernel": (_baddbmm, "out_ptr"),
+}
+```
+
+`addmm_kernel` IS covered. That matters for the argument the Mac made for the
+oracle: its measured blind spot — four `addmm` shapes where the emitted MSL
+declared `alpha`/`beta` as `int`, every candidate wrong the same way, the vote
+unanimous, the bare screen seating a wrong configuration every time — is a case
+the provider DOES cover, which is why the same screen with the oracle refused
+every time. The arbitration note understated its own evidence.
+
+### The coverage, counted against this rack's 7 158 certified keys
+
+| kernel | dtype | keys | oracle |
+|---|---|---:|---|
+| `matmul_kernel` | fp32 | 3231 | covered |
+| `baddbmm_kernel` | fp32 | 2351 | covered |
+| `addmm_kernel` | fp32 | 749 | covered |
+| `conv2d_forward_kernel` | fp16 | 434 | **none** |
+| `conv2d_forward_kernel` | fp32 | 336 | **none** |
+| `depthwise_conv2d_kernel` | fp16 | 33 | **none** |
+| `depthwise_conv2d_kernel` | fp32 | 19 | **none** |
+| `baddbmm_kernel` | fp16 | 5 | covered |
+
+**6 336 of 7 158 keys are oracle-covered — 88.5%. The 822 that are not (11.5%)
+are exactly the convolution family**, and nothing else.
+
+### Which changes the decision the question was asked for
+
+`announce_no_oracle` was scoped against the possibility that the honest answer
+was "most kernels". It is not. It is ONE family, it is the family the autotune
+policy admits for the same reason it admits matmul (conv2d is in the sanctioned
+scope precisely because it is where Triton needs tuning), and a float64 direct
+convolution is a well-defined thing to write — slow, which does not matter for an
+oracle that runs once per shape at certification.
+
+So the two options are both small, and they are not equivalent:
+
+1. **Write the conv oracle.** 822 keys move from "screened by consensus" to
+   "verified against fp64", and the directory's claim becomes uniform.
+2. **Make `announce_no_oracle` REFUSE to seat a configuration** rather than fall
+   through to the bare consensus screen. This is the doctrinally consistent one
+   while (1) does not exist: the bare screen is exactly what the Mac measured
+   seating a wrong configuration unanimously, so falling back to it on the
+   uncovered 11.5% is falling back to the known-failing instrument.
+
+The Dell's recommendation is **both, in that order of value and the reverse order
+of urgency**: (2) today, because it costs one branch and closes a path that is
+known to seat wrong answers; (1) when someone has an afternoon, because it is what
+makes the 11.5% a measurement rather than a vote.
+
+**What is NOT established here**: whether those 822 conv keys are wrong. This
+counts what the oracle would be asked and cannot answer; it does not run the
+screen. The 7 158 entries were certified against this machine's own fp64 oracle at
+certification time — `autotune_certify` has always used one — so this is about the
+RUNTIME consensus screen, which is a different instrument with a different
+coverage.

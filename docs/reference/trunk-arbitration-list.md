@@ -46,10 +46,21 @@ This was the item feared most, and the reading dissolves it.
   cover, and `install()` — whose body is `L.set_screen_oracle(provider)`.
 
 **They compose exactly.** The Mac wrote the thing the trunk's seam was cut for.
-No arbitration is needed on the mechanism; what is needed is a read of the
-provider's coverage table (`ORACLES`, currently `mm` and `baddbmm`) against what
-the screen is asked for on this rack, and a decision about what
-`announce_no_oracle` should do when the answer is "most kernels".
+No arbitration is needed on the mechanism.
+
+**ANSWERED 2026-09-12, and it moves the decision** — `docs/reference/owed-proofs.md`
+item 3. The table names THREE kernels, not two (`matmul_kernel`, `addmm_kernel`,
+`baddbmm_kernel`), so the Mac's own `addmm` blind-spot case is one the provider
+covers. Counted against this rack's 7 158 certified keys: **6 336 covered (88.5%),
+822 not (11.5%), and the uncovered set is exactly the convolution family** —
+`conv2d_forward_kernel` 770 and `depthwise_conv2d_kernel` 52.
+
+The answer is therefore not "most kernels" but one family, which makes
+`announce_no_oracle` a smaller decision than it looked: make it REFUSE to seat a
+configuration rather than fall through to the bare consensus screen, since the
+bare screen is the instrument the Mac measured seating a wrong configuration
+unanimously. A float64 direct convolution then moves those 822 keys from a vote to
+a measurement.
 
 **Why it matters beyond tidiness**: the Mac's own measurement says the consensus
 screen has a blind spot it cannot see — on four `addmm` shapes, the emitted MSL
