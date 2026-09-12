@@ -386,7 +386,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-40 entries, of which five are placeholders and 35 carry a site. Two
+41 entries, of which five are placeholders and 36 carry a site. Two
 machines, two weeks of concentrated looking. Every one of them produced silence
 or a green rather than an error.
 
@@ -724,3 +724,41 @@ against what it should have been.
 previous artefact — the installed container, the hub's size, the last build — is
 a declaration of what this thing should contain, and every one of those three was
 available to the code that wrote the container.
+
+### 41 — `ast.parse` said "parse ok" on a file Python refuses to run
+
+A timeout was added to two hub requests in `forge/forge.py`. Both calls already
+carried a `timeout=10` further down, past the end of the six-line window the edit
+had been read in, so the result was a duplicate keyword argument.
+
+The check run before landing it was:
+
+```python
+python -c "import ast; ast.parse(open('forge.py').read()); print('parse ok')"
+```
+
+It printed **parse ok**. Duplicate keyword arguments are rejected when the AST is
+COMPILED, not when it is parsed — `ast.parse` builds the tree and stops, and the
+duplicate-name check lives in the symbol table pass that `compile()` runs after
+it. So the instrument answered a narrower question than the one it was asked, and
+its answer was true.
+
+`forge.py` was unrunnable for twelve minutes. The Open-Sora conversion chain
+started in that window, called `forge build`, and reported a `SyntaxError` in its
+own log — where it reads as a build failure of the model rather than as a broken
+tool.
+
+**The rule**: a syntax check is `compile(source, name, "exec")`, never
+`ast.parse`. More generally — when an instrument and the thing it stands for are
+two different phases of the same pipeline, the instrument is only as good as the
+phase it runs. Asking "does this parse" and reading it as "will this run" is the
+same substitution as asking "is this file the right size" and reading it as "is
+this file complete" (entry 30), and it fails for the same reason: the cheap
+question was answered honestly.
+
+Second observation, recorded because it recurred twice in an hour: **both defects
+came from an edit window too small to see the whole call.** A `time` import at
+line 27 was missed by `head -25` and briefly read as a missing import; this
+`timeout=10` at the end of a call was missed by a six-line grep window. Reading
+six lines around a match is reading a fragment, and a fragment of a function call
+is not a function call.
