@@ -86,3 +86,33 @@ the upload lands or it is written from memory.
 | install | 22:10:26 UTC, `forge local --overwrite` — staged, verified against the archive, then repointed. The installed `vae_encoder/graph.json` holds 265 ops and no temporal symbol. |
 | regression gate | passed component by component before the upload: text_encoder 1.000×, transformer 1.000×, vae 1.000×, vae_encoder 0.982× (the corrected graph). |
 | proof by run | **owed** — armed in the serial follower chain (`prove_by_run.py`, 9 frames, refuses a container installed before 21:28 UTC). Listed as **delivered, unproven** until it returns. |
+
+---
+
+## 3 — `Wan-AI/Wan2.2-I2V-A14B` · 2026-09-12 — TWO LINES, on purpose
+
+**Line one, the repair.** The shipped `topology.json` (container dated 2026-07-03)
+carried `shapes=NONE` for `transformer`, `transformer_2` and `vae`, so the output
+resolution could never be read from it whatever the runtime did. The builder has
+written component shapes since (Allegro-TI2V, built the same day, carries them),
+so the fix is a rebuild — which needed the snapshot back (118 GB, re-downloaded
+in two passes, the second resuming 99.56 GB).
+
+| step | evidence |
+|---|---|
+| cause | shipped topology without component shapes; container predates the builder that writes them |
+| re-trace | not required for this line — the graphs in `.cache/graphs` carry the shapes; the build reads them |
+| rebuild | **22:11:30 → 22:22:46**, 676 s, **118.07 GB**, written directly on the pool as the only writer at ~400 MB/s (119 GB cannot stage on a 53 GB root filesystem — said before the build, not discovered at 90 %) |
+| regression gate | **1.000×** on every component: text_encoder 10.59 GB, transformer 53.25, transformer_2 53.25, vae 0.47, vae_encoder 0.48 |
+| re-upload | **in flight** from 22:22:46 through the internal entry point, 40 MB/s start, 37.1 MB/s measured, zero `SlowDownWrite` — the store keeps the last word and has not used it |
+| install | owed (follows the upload in the serial queue) |
+| proof by run | owed — armed in the follower chain, 9 frames, refuses a container installed before 21:28 UTC |
+
+**Line two, the debt this repair does not touch.** Its VAE **encoder is unrolled
+over the temporal axis** (`docs/reference/temporal-unroll-census.md`, INFERRED
+from the measured anchor `Wan2.1-VACE`: identical chunk-loop module groups
+`{2:1, 3:9, 6:12, 8:22, 12:1, 21:22}` at k=3). A rebuild does not change a
+graph. The container will resolve its output size and remain incapable of an
+encoder frame count it was not unrolled for — `DETTE.md`, `D-TEMPORAL-UNROLL`.
+Delivering line one without line two would be delivering the fix for the error
+we found and hiding the one underneath.
