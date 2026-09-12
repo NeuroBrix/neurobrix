@@ -174,3 +174,22 @@ serving 424 MB/s O_DIRECT, `/cluster` 200, the hub reporting 47.
 The order of checks that would have saved an hour: `/minio/health/cluster`
 first, then `ethtool`/RTT, then the pool from the host. A 503 there is the
 diagnosis; everything else is confirmation.
+
+### Measured the same night: one reader beside the writer costs the store nothing
+
+The rule above was applied at first as "nothing heavy at all while an upload
+runs", and the GPUs sat idle behind a 53-minute upload. Then it was tested with
+the instrument at hand — the upload's own rate, sampled every minute — by running
+one GPU proof (CogVideoX-5b-I2V, a 21.5 GB container read from the cache once,
+then compute) beside the Wan2.2 upload:
+
+| minute | upload | `SlowDownWrite` | GPU 2 |
+|---:|---:|---:|---|
+| +1 | 36.7 MB/s | 0 | 92 %, 21.2 GB (loading) |
+| +2 | 30.5 MB/s | 0 | 100 %, 23.1 GB (computing) |
+
+A dip of six MB/s during the load, no refusal, and the proof returned PROVEN. So
+the rule is about **writers**: a download, a build and an upload are three write
+streams on one rotational pool, and that is what stalled it. A single reader
+beside one writer is the rack's ordinary day. Keep the writers serial; do not
+leave the cards idle for a read.
