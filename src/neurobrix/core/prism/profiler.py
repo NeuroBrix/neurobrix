@@ -36,14 +36,19 @@ class InputConfig:
     num_frames: Optional[int] = None
     temporal_compression: int = 4
 
-    def to_symbol_map(self) -> Dict[str, int]:
-        """
-        Convert to symbol mapping for shape resolution.
+    def positional_symbol_map(self) -> Dict[str, int]:
+        """The POSITIONAL base, which GUESSES what each symbol id means.
 
-        Common symbol patterns in TensorDAG:
-        - s0: batch_size
-        - s1, s2: spatial dimensions (height/vae_scale, width/vae_scale for latent space)
-        - seq_len: sequence length for LLMs
+        It assumes the image legacy — `s0` batch, `s1` latent height, `s2`
+        latent width — and that assumption is wrong for every graph that says
+        otherwise. A video graph declares `s1: time`; bound positionally, the
+        time axis takes a spatial extent and every activation is mis-sized.
+
+        **This is a base, not an answer. Call `ActivationProfiler.build_symbol_map`,
+        which lays the graph's own declared names over this.** The name carries
+        the hypothesis now because a docstring did not carry it: the warning
+        below was already written here in August, in the function nobody called,
+        and it did not reach the caller who called this one.
         """
         height = self.height
         width = self.width
@@ -73,6 +78,36 @@ class InputConfig:
         }
 
         return symbol_map
+
+    def to_symbol_map(self):
+        """REFUSED. The name promised an answer and delivered a guess.
+
+        This used to return the positional base, and four instruments were built
+        on it in one day (2026-09-12) because the name reads like "the symbol
+        map". Each bound `s1` to a latent height on containers that DECLARE
+        `s1: time`, and each produced a confident, wrong census — one of which
+        was reported upstream as an established fact before the instrument was
+        confronted with a measurement taken another way.
+
+        The same trap had already been paid for on 2026-08-10, and the warning
+        was written in `build_symbol_map`'s own docstring: Qwen3-Omni's mel-frame
+        axis, named `seq_len`, bound to the global text config instead of its
+        441-frame trace; the estimate collapsed and block_scatter packed a 16 GB
+        card to 15.77 GiB with no headroom. **A note in the function you did not
+        call cannot reach you.** So this is a refusal and not a note.
+
+        Callers wanting the graph's real map:
+            ActivationProfiler(dag).build_symbol_map(input_config)
+        Callers genuinely wanting the positional guess, knowing it is one:
+            input_config.positional_symbol_map()
+        """
+        raise AttributeError(
+            "InputConfig.to_symbol_map is refused: it returned a POSITIONAL "
+            "GUESS (s1=latent_h, s2=latent_w) under a name that reads like an "
+            "answer, and a graph declaring `s1: time` was silently mis-bound by "
+            "it. Use ActivationProfiler(dag).build_symbol_map(input_config) for "
+            "the graph's own declared names, or "
+            "InputConfig.positional_symbol_map() if the guess is what you want.")
 
 
 # ---------------------------------------------------------------------------
@@ -360,7 +395,7 @@ class ActivationProfiler:
         contract evolution, filed separately; the floor removes the
         under-trace class without inventing data.
 
-        The positional convention in InputConfig.to_symbol_map (s1=latent_h,
+        The positional convention in InputConfig.positional_symbol_map (s1=latent_h,
         s2=latent_w) is the image legacy. Graphs that carry a
         `symbolic_context.symbols` table with NAMED symbols (video: s1=time,
         s2=height, s3=width; image: height/width; LLM: seq_len) get each
@@ -371,7 +406,7 @@ class ActivationProfiler:
         named values coincide with the positional ones, so the override is
         value-identical there.
         """
-        symbol_map = input_config.to_symbol_map()
+        symbol_map = input_config.positional_symbol_map()
         syms = (self.dag.get("symbolic_context") or {}).get("symbols") or {}
         if not isinstance(syms, dict) or not syms:
             return symbol_map

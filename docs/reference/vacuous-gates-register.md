@@ -292,6 +292,20 @@ thing it prints on success, it is already an entry here and nobody has noticed.
 
 ---
 
+### 28 — a refutation made with a broken instrument is not a refutation
+
+* **date** 2026-09-12 · **machine** Dell · **site** `InputConfig.to_symbol_map`, and four instruments built on it in one day
+* **what happened** the owner prescribed an identity check on symbolic dimensions — verify that the symbol a dimension names belongs to the axis it claims to describe. I answered that it **cannot be built in the runtime**, and I answered it with a measurement: four exact structural invariants, all four satisfied by the corrupted annotations, and the conclusion that *the runtime has no independent source for what axis a dimension describes — the graph's only statement about that IS the annotation under test.* The owner accepted it. **It was false.** Every graph carries `symbolic_context.symbols` with `{name, trace_value, source}` per symbol — `s1: {"name": "time", "source": "input::args::dim_2"}` — and the tracer has written it from the beginning. The independent source exists and is complete.
+* **why the measurement did not show it** because it was taken through `InputConfig.to_symbol_map()`, the POSITIONAL base (`s0` batch, `s1` latent height, `s2` latent width). Bound that way, a video container's `time` axis takes a spatial extent, the resolved shapes explode, and the explosion reads as corruption. The same instrument produced a census of "22 components across 12 containers, every video container in the zoo"; redone through `build_symbol_map`, which lays the declared names over that base, the true count is **one container, one component, one dimension**.
+* **why this is worse than an ordinary wrong answer, and is its own entry** a false ASSERTION invites checking. A false REFUTATION closes the question: it says *there is nothing here*, and nobody looks again. This one closed a line of work that was correct, and it closed it with the authority of a measurement — four invariants, exact, reproducible, and all of them measured through the same broken lens. **The cost of a refutation is the enquiry it ends, and that cost is paid silently.**
+* **the signal that was there and was not read** one number never moved. Prism's own estimate — 944 GB for the offending component — was computed with the CORRECT map from the first minute and stayed put across every instrument I built, while all of mine moved. **A measurement that holds still while yours move is not agreement; it is the control.** Neither of us read it as one.
+* **and the knowledge was already in the file** `build_symbol_map`'s docstring documents the 2026-08-10 root case in full: Qwen3-Omni's mel-frame axis, named `seq_len`, bound to the global text config instead of its 441-frame trace, the estimate collapsing, `block_scatter` packing a 16 GB card to 15.77 GiB with no headroom. It is written at the exact place it needed to be read — **inside the function that was not called.** A note cannot reach the caller who calls the other one, and this same note had already failed once.
+* **closed by a refusal, not a note** `to_symbol_map` now RAISES, naming what it used to return and both ways forward; the positional base survives as `positional_symbol_map`, whose name carries its own hypothesis; `build_symbol_map` is the single caller. Measured first: the whole repository contained **exactly one** call site, `build_symbol_map` itself — every other caller was a throwaway script of mine, which is precisely the population a rename would not have reached and a refusal does.
+* **seen failing** restoring the old behaviour (`to_symbol_map` returning the base again) turns the refusal test red; the declared-vs-positional test shows the two maps a factor of 12 apart on the same axis of the same graph.
+* **the rule** a census is not a result until its instrument has been confronted with a measurement taken another way. And a refutation is an assertion with a longer shadow: it deserves MORE corroboration than the claim it kills, not less.
+
+---
+
 ## The Mac's entries
 
 Entries 13 and 14 are the Mac's, transcribed from `f769f2e` because they are
@@ -305,7 +319,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-27 entries, of which five are placeholders and 22 carry a site. Two
+28 entries, of which five are placeholders and 23 carry a site. Two
 machines, two weeks of concentrated looking. Every one of them produced silence
 or a green rather than an error, and **not one was found by a test** — they were
 found by users, by contradictions between two numbers, by reading generated

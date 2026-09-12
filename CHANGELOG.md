@@ -25,6 +25,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   says so in the run's own output.
 
 ### Fixed
+- The activation profiler's positional symbol map no longer answers to a name that reads
+  like the real one. `InputConfig.to_symbol_map()` returned a GUESS — batch, latent height,
+  latent width by position — which is wrong for any container that declares what its
+  symbols mean, and a video container declaring a time axis was silently bound to a spatial
+  extent. It is now `positional_symbol_map()`, the old name refuses and says where to go,
+  and `build_symbol_map()` — which lays the container's declared names over that base — is
+  the single caller. No estimate changes: the engine already used the correct path.
 - `autotune certify` no longer reports a failure for a census key the engine cannot ask
   for. The shape census accumulates across engine versions, so a key recorded before a
   wrapper changed how it computes its autotune key can never be presented again; refusing
