@@ -75,3 +75,52 @@ def test_the_wrapper_reads_the_table_rather_than_a_literal():
     assert "fa_min_tile" in src or "_BACKEND_FA_MIN_TILE" in src, (
         "the attention wrapper must consult the capability, not carry its own "
         "literal floor")
+
+
+def test_the_floor_survives_the_profile_ceiling():
+    """The ceiling clamps, the floor holds, and the floor wins.
+
+    Measured 2026-09-12 on whisper, seventh round: the wrapper's floor raised
+    BLOCK_M to 32, then `sdpa_block_ceiling` read the Apple profile's
+    `block_m: 16` decode row and clamped it back down -- min(32, 16) = 16 --
+    which the backend then refused. The ceiling is a RESOURCE bound written
+    for a template path this kernel does not reach; the floor is a
+    CORRECTNESS bound. Below the floor there is nothing to run, so the floor
+    is applied after every clamp, and a profile row below it is a conflict to
+    announce, not to obey.
+
+    Reproduced through the real wrapper at (seqlen_q=1, seqlen_k=1,
+    headdim=64) -- the exact degenerate shape whisper's first SDPA probe
+    call carries -- in seconds, after three model rounds of half an hour
+    each had only shown the refusal's text.
+    """
+    import sys
+
+    if sys.platform != "darwin":
+        pytest.skip("the Metal floor is what conflicts with the profile row")
+    import numpy as np
+    from neurobrix.kernels import wrappers as W
+    from neurobrix.kernels.nbx_tensor import NBXTensor
+
+    rng = np.random.default_rng(20260912)
+    B, H, D = 1, 20, 64
+    q = NBXTensor.from_numpy((rng.standard_normal((B, H, 1, D)) * 0.1).astype(np.float32))
+    k = NBXTensor.from_numpy((rng.standard_normal((B, H, 1, D)) * 0.1).astype(np.float32))
+    v = NBXTensor.from_numpy((rng.standard_normal((B, H, 1, D)) * 0.1).astype(np.float32))
+    out = W.scaled_dot_product_attention_wrapper(q, k, v)   # must not refuse
+    got = np.asarray(out.to_cpu().numpy(), dtype=np.float64)
+
+    torch = pytest.importorskip("torch")
+    dev = "mps" if torch.backends.mps.is_available() else "cpu"
+
+    def _t(x):
+        return torch.from_numpy(
+            np.asarray(x.to_cpu().numpy(), dtype=np.float32)).to(dev)
+
+    want = torch.nn.functional.scaled_dot_product_attention(
+        _t(q), _t(k), _t(v)).to("cpu").numpy().astype(np.float64)
+    scale = float(np.abs(want).max()) or 1.0
+    dev_max = float(np.abs(got - want).max() / scale)
+    assert dev_max <= 1e-3, (
+        f"the degenerate decode shape differs from ATen by {dev_max:.3e}: "
+        f"surviving the clamp is worthless if the survivor computes wrong")
