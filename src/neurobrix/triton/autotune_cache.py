@@ -177,12 +177,33 @@ def capture() -> int:
     path = _artifact_path()
     if path is None:
         return 0
+    # THE RECORD CARRIES WHAT IT IS. A configuration the screen seated without
+    # an oracle is the fastest among candidates nothing verified, and until the
+    # owner's ruling of 2026-09-12 it was written here exactly like one an fp64
+    # oracle had adjudicated. The engine still runs and the screen still ranks
+    # by speed; what it may no longer do is produce a record that reads as a
+    # validation. The certified directory is a different path entirely
+    # (`config/autotune/`, filled only by `neurobrix autotune certify`), so
+    # nothing here can reach it — this is the mention where it IS recorded.
+    try:
+        from neurobrix.kernels.launcher import unscreened as _unscreened
+        unverified = {(u.kernel, repr(u.key)): u.reason for u in _unscreened()}
+    except Exception:                       # never turn a record into a failure
+        unverified = {}
+
     entries: Dict[str, Dict] = {}
     for qual, at in _autotuners():
+        short = qual.rsplit(".", 1)[-1]
         for key, cfg in getattr(at, "cache", {}).items():
             rec = _config_to_dict(cfg)
             if (id(at), key) in _TIMINGS:
                 rec["timing"] = _TIMINGS[(id(at), key)]
+            reason = unverified.get((short, repr(key)))
+            if reason is not None:
+                rec["screened"] = False
+                rec["unscreened_reason"] = reason
+                rec["provenance"] = ("fastest among candidates nothing "
+                                     "verified — NOT a validated setting")
             entries[f"{qual}::{key!r}"] = rec
     if not entries:
         return 0

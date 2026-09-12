@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- A kernel configuration chosen without a correctness reference now says so, wherever it
+  is recorded. The engine still runs and the tuner still ranks by speed; what it can no
+  longer do is produce a record that reads like a validation. "This configuration was
+  validated" and "this configuration was the fastest among candidates nobody verified" are
+  different statements, and until now they were written the same way. An unverified choice
+  announces itself, carries its reason in the machine's local cache, and cannot reach the
+  certified directory, which is a separate path filled only by the certification command
+  and its own high-precision reference.
 - A request that supplies a conditioning image now sets the output resolution from that
   image. Two decisions were being taken separately about one quantity: the image
   processor keeps the source image's own size when a request names no resolution, while

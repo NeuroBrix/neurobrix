@@ -386,11 +386,21 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-31 entries, of which five are placeholders and 26 carry a site. Two
+40 entries, of which five are placeholders and 35 carry a site. Two
 machines, two weeks of concentrated looking. Every one of them produced silence
-or a green rather than an error, and **not one was found by a test** — they were
-found by users, by contradictions between two numbers, by reading generated
-code, and twice by another instrument built for something else.
+or a green rather than an error.
+
+**"Not one was found by a test" was true until 2026-09-12 and is no longer.**
+They are still overwhelmingly found by users, by contradictions between two
+numbers, by reading generated code, and by another instrument built for
+something else — entry 40 was a component-by-component size comparison run by
+hand because 17.32 GB did not match the 21.6 GB a listing showed. But entry 38
+was found by its own instrument's output table, where the one case with a fitted
+slope sat BELOW seven the predicate had invented, and the sentence you are
+reading was corrected because the test that counts this register caught the nine
+entries added without updating it. A test can find one of these. It has to be a
+test of the thing's OWN consistency — a count against its entries, a proven case
+against its ranking — rather than a test of the code the instrument watches.
 
 That is the argument for the register: a class this large, whose members are
 invisible to the suite by definition, is only tractable if its instances are

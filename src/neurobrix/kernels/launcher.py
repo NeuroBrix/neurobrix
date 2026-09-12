@@ -861,7 +861,22 @@ class ScreenedOut(NamedTuple):
     tolerance: float
 
 
+class Unscreened(NamedTuple):
+    """One key where a configuration was seated WITHOUT an oracle.
+
+    Not a failure and not a refusal: the engine must run. It is a PROVENANCE.
+    "This configuration was validated" and "this configuration was the fastest
+    among candidates nobody verified" are different statements, and until this
+    record existed they were written the same way and read the same way.
+    """
+    kernel: str
+    key: tuple
+    candidates: int
+    reason: str
+
+
 _SCREENED: List[ScreenedOut] = []
+_UNSCREENED: List[Unscreened] = []
 _SCREEN_CACHE: Dict[int, set] = {}      # id(tuner) -> keys already screened
 
 
@@ -870,9 +885,46 @@ def screened_out() -> List[ScreenedOut]:
     return list(_SCREENED)
 
 
+def unscreened() -> List[Unscreened]:
+    """Every key whose seated configuration no oracle adjudicated.
+
+    Read this wherever a chosen configuration is RECORDED, so the record
+    carries what it is. The certified directory is filled only by
+    `neurobrix autotune certify`, which runs its own fp64 oracle over every
+    candidate; nothing on this path may ever reach it.
+    """
+    return list(_UNSCREENED)
+
+
 def clear_screened() -> None:
     _SCREENED.clear()
+    _UNSCREENED.clear()
     _SCREEN_CACHE.clear()
+
+
+def _no_oracle_reason(oracle) -> str:
+    """Why no oracle adjudicated this key — the provider, or its answer."""
+    if _SCREEN_ORACLE is None:
+        return "no oracle provider is installed"
+    if oracle is None:
+        return ("the oracle provider covers no oracle for this kernel "
+                "(see docs/reference/owed-proofs.md item 3: on this rack the "
+                "uncovered set is the convolution family, 822 of 7158 keys)")
+    return "the oracle produced no reference"
+
+
+def _seat_unscreened(kernel: str, key, configs, candidates: int, reason: str):
+    """Return the configs, having said plainly that nothing verified them.
+
+    The bare screen may still rank by speed — the engine never refuses to run.
+    What it may no longer do is produce a line that reads as a validation.
+    """
+    _UNSCREENED.append(Unscreened(kernel, key, candidates, reason))
+    print(f"[AUTOTUNE_UNSCREENED] {kernel} at key {key}: {reason}. The "
+          f"configuration seated here is the FASTEST AMONG {candidates} "
+          f"CANDIDATES THAT NOTHING VERIFIED — it is not a validated setting "
+          f"and it is never written to the certified directory.", flush=True)
+    return configs
 
 
 def _screen_rtol(dtype_name: str):
@@ -1135,18 +1187,21 @@ def screen_configs(tuner, configs, key, meta=None):
         return configs
     seen.add(key)
 
+    kernel_name = getattr(tuner.base_fn, "__name__", str(tuner))
     named = dict(tuner.nargs or {})
     if not named:
-        return configs
+        return _seat_unscreened(kernel_name, key, configs, len(configs),
+                                "the tuner carries no named arguments, so the "
+                                "screen has nothing to compare")
     args = [named[name] for name in tuner.arg_names if name in named]
     buffers = _writable_buffers(args)
     if buffers is None:
-        print(f"[AUTOTUNE_SCREEN] "
-              f"{getattr(tuner.base_fn, '__name__', tuner)}: a strided view "
-              f"among the arguments; not screened at key {key}", flush=True)
-        return configs
+        return _seat_unscreened(kernel_name, key, configs, len(configs),
+                                "a strided view among the arguments, which the "
+                                "screen cannot snapshot")
     if not buffers:
-        return configs
+        return _seat_unscreened(kernel_name, key, configs, len(configs),
+                                "no writable buffer to compare")
 
     from neurobrix.kernels.ops._configs import active_vendor_profile
 
@@ -1158,15 +1213,13 @@ def screen_configs(tuner, configs, key, meta=None):
             "tuning step may cost")
     total = sum(nbytes for _a, nbytes, _d in buffers)
     if total > int(budget):
-        print(f"[AUTOTUNE_SCREEN] "
-              f"{getattr(tuner.base_fn, '__name__', tuner)}: arguments total "
-              f"{total} bytes, over the profile's screening budget "
-              f"{int(budget)}; not screened at key {key}", flush=True)
-        return configs
+        return _seat_unscreened(
+            kernel_name, key, configs, len(configs),
+            f"arguments total {total} bytes, over the profile's screening "
+            f"budget {int(budget)}")
 
     before = _snapshot(buffers)
     meta = dict(meta or {})
-    kernel_name = getattr(tuner.base_fn, "__name__", str(tuner))
 
     # -- run each candidate once, from the same starting state --------------
     results, unrun = [], []
@@ -1188,7 +1241,9 @@ def screen_configs(tuner, configs, key, meta=None):
               f"{len(configs)} configs could not be run for screening at key "
               f"{key}; they go to the timer unchecked", flush=True)
     if len(results) < 2:
-        return configs
+        return _seat_unscreened(kernel_name, key, configs, len(results),
+                                "fewer than two candidates ran, so there is "
+                                "nothing to compare them against")
 
     # -- an oracle, where one exists, OVERRULES the vote --------------------
     #
@@ -1235,7 +1290,11 @@ def screen_configs(tuner, configs, key, meta=None):
     clusters = _cluster(results, agree)
 
     if len(clusters) == 1:
-        return [c for c, _ in results] + unrun
+        return _seat_unscreened(
+            kernel_name, key, [c for c, _ in results] + unrun, len(results),
+            _no_oracle_reason(oracle)
+            + ", and the candidates were unanimous — which is one of the two "
+              "failure modes consensus cannot see")
 
     clusters.sort(key=len, reverse=True)
     if len(clusters[0]) == len(clusters[1]):
@@ -1270,7 +1329,12 @@ def screen_configs(tuner, configs, key, meta=None):
               flush=True)
     _record_screen_exclusions(dropped)
 
-    return [c for c, _ in clusters[0]] + unrun
+    return _seat_unscreened(
+        kernel_name, key, [c for c, _ in clusters[0]] + unrun, len(results),
+        _no_oracle_reason(oracle)
+        + f", and the winner is a {len(clusters[0])}-config majority — which "
+          f"is the other failure mode consensus cannot see, a majority wrong "
+          f"in the same way")
 
 
 def _record_screen_exclusions(dropped) -> None:
