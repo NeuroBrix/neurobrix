@@ -80,9 +80,11 @@ OVERLAY = {
              "filesystem rather than the export.",
         line="measured"),
     "Wan2.2-I2V-A14B": dict(
-        now="DIAGNOSED, rebuild required — and a second line",
-        evidence="shipped topology.json shapes=NONE (container dated 2026-07-03); "
-                 "cached encoder carries the unroll signature",
+        now="REBUILT (118.07 GB, gate 1.000x), upload in flight — and a second line",
+        evidence="rebuild 22:11-22:22 (676 s, 118.07 GB, only writer on the pool); "
+                 "regression gate 1.000x on all five components; upload through the "
+                 "internal entry point from 22:22:46 at 37 MB/s, zero SlowDownWrite; "
+                 "cached encoder carries the unroll signature (inferred line)",
         note="TWO lines, not one. The rebuild resolves its output size. Its VAE "
              "ENCODER stays unrolled over the temporal axis, which no rebuild "
              "changes — DETTE D-TEMPORAL-UNROLL. Delivering the first without "
