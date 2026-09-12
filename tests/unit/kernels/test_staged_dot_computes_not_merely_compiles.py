@@ -88,6 +88,23 @@ def _profile_tolerance(dtype: str) -> float:
     return tol
 
 
+def _deviation(got, want) -> float:
+    """The deviation the certification gate itself computes.
+
+    Imported rather than written here. The first version of this test scored
+    `max |got - want| / max(|want|, 1e-6)` per element and reported 222 against
+    a tolerance of 0.04 for a kernel whose correlation with the oracle was
+    0.9999959: a relative error taken element-wise explodes wherever the oracle
+    passes through zero, which a convolution's output does constantly. A
+    verdict is only as good as its metric, and inventing a second metric beside
+    the one the engine trusts is how a correct kernel gets rejected -- or a
+    wrong one accepted, since the same floor can hide a real error too.
+    """
+    from neurobrix.kernels.autotune_certify import oracle_deviation
+
+    return oracle_deviation(np.asarray(got), np.asarray(want))
+
+
 def _inputs(seed=20260912):
     rng = np.random.default_rng(seed)
     x = rng.standard_normal((N, IN_C, IN_H, IN_W), dtype=np.float32)
@@ -155,45 +172,69 @@ def _run_pinned(x32, w32):
             BLOCK_SIZE_BHW=BLOCK_BHW, BLOCK_SIZE_OUTF=BLOCK_OUTF,
             BLOCK_SIZE_INF=BLOCK_INF,
         )
-        from neurobrix.kernels.nbx_tensor import sync_device
-        sync_device()
+        from neurobrix.kernels.nbx_tensor import DeviceAllocator
+        DeviceAllocator.sync_device()
     got = bf16_bits_to_f32(out.numpy().view(np.uint16)).reshape(
         (N, OUT_C, OUT_H, OUT_W))
     return got.astype(np.float64), [str(c.message) for c in caught]
 
 
+def _emitted_msl(fn):
+    """The MSL this run actually emitted, captured at the emitter.
+
+    Read from the emitter rather than from a warning: once the path works
+    there are no warnings, and a control that keys on a refusal's text stops
+    controlling anything the moment the refusal is fixed -- which is exactly
+    when it is needed most.
+    """
+    import triton_msl.codegen.msl_emitter as EM
+
+    seen = []
+    original = EM.emit_msl
+
+    def spy(mod, metadata, options):
+        out = original(mod, metadata, options)
+        seen.append(out)
+        return out
+
+    # Only the emitter module is touched. Importing the backend module here
+    # re-runs triton's subclass discovery over a half-initialised module and
+    # it finds zero backends -- an import that breaks what it observes.
+    EM.emit_msl = spy
+    try:
+        fn()
+    finally:
+        EM.emit_msl = original
+    return seen
+
+
 def test_this_shape_takes_the_staged_dot_path():
-    """The template control, and the only test here that passes today.
+    """The template control, and the reason the verdict below means anything.
 
-    Without it the test below is about whatever path this shape happens to
-    take. Three synthetic kernels written for this refusal all compiled through
-    a template the real kernel never reaches, and every assertion on them was
-    correct about the wrong object.
+    Three synthetic kernels written for this refusal all compiled cleanly
+    through a template the real kernel never reaches, and every assertion on
+    them was correct about the wrong object. So the shape must be shown to
+    take the cooperative staged path, not merely to produce numbers.
 
-    It is written to survive the fix: before, the path announces itself with
-    the nesting refusal; after, with a cooperative fill in the emitted MSL.
-    Either way the shape is on the staged path, which is what it must prove.
+    It reads the emitted MSL, which works on both sides of the fix: the
+    cooperative fill loop and the barrier before the dot are what that path
+    emits, and no other path emits them.
     """
     x32, w32 = _inputs()
-    try:
-        _, msgs = _run_pinned(x32, w32)
-    except Exception as exc:                    # a hard refusal is an answer
-        msgs = [str(exc)]
-    blob = "\n".join(msgs)
-    on_the_path = (_NESTING_REFUSAL in blob) or ("_sa" in blob)
-    if not on_the_path:
-        from triton.compiler.compiler import compile as tcompile   # noqa: F401
-        pytest.fail(
-            "this shape did not announce the staged-dot path. It may have "
-            "been taken by a template the real kernel never reaches, in which "
-            "case the oracle test below measures a different object. Messages "
-            f"seen: {blob[:400] or '(none)'}")
+    msls = _emitted_msl(lambda: _run_pinned(x32, w32))
+    if not msls:
+        pytest.fail("no MSL was emitted at all; this measured nothing")
+    blob = "\n".join(msls)
+    staged = ("_sa" in blob) and ("threadgroup_barrier" in blob)
+    assert staged, (
+        "the emitted MSL carries no cooperative staged fill. This shape was "
+        "taken by some other path, so the oracle verdict below is about a "
+        "different object than the one fifteen models are blocked on.")
+    assert "_loop_e" in blob, (
+        "no per-element wrap loop: a tile wider than the threadgroup must be "
+        "covered by one, and its absence means the tile is not the wide one")
 
 
-@pytest.mark.xfail(strict=True, reason="the staged-dot nesting is not served: "
-                   "the kernel refuses and falls back, so nothing computes on "
-                   "the Triton path. Remove this marker when the output "
-                   "agrees with the oracle -- not when it compiles.")
 def test_the_output_agrees_with_the_fp64_oracle():
     tol = _profile_tolerance("bf16")
     x32, w32 = _inputs()
@@ -205,8 +246,7 @@ def test_the_output_agrees_with_the_fp64_oracle():
         f"produced by the code under test: {fell_back[0][:200]}")
 
     want = _oracle_fp64(x32, w32)
-    scale = np.maximum(np.abs(want), 1e-6)
-    dev = float(np.max(np.abs(got - want) / scale))
+    dev = _deviation(got, want)
     assert dev <= tol, (
         f"max relative deviation {dev:.3e} exceeds the profile's bf16 "
         f"tolerance {tol:.3e}. The kernel compiles and computes the wrong "
@@ -284,9 +324,7 @@ def test_the_oracle_is_not_trivially_satisfiable():
     want = _oracle_fp64(x32, w32)
     w_bad = w32.copy()
     w_bad[0, 0, 0, 0] += 1.0
-    other = _oracle_fp64(x32, w_bad)
-    scale = np.maximum(np.abs(want), 1e-6)
-    dev = float(np.max(np.abs(other - want) / scale))
+    dev = _deviation(_oracle_fp64(x32, w_bad), want)
     assert dev > tol, (
         f"changing one weight moved the oracle by {dev:.3e}, within the "
         f"tolerance {tol:.3e} the verdict uses. The comparison would accept a "
