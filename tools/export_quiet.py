@@ -89,29 +89,48 @@ def _probe_file(root: Path) -> Path | None:
 
 
 def throughput_mb_s(path: Path, megabytes: int = PROBE_MB,
-                    timeout: int = 90) -> float:
-    """Bulk read rate, or 0.0 when the read does not finish in `timeout`.
+                    timeout: int = 90) -> tuple:
+    """(MB/s, how it was read). 0.0 when the read does not finish in `timeout`.
 
-    Reads with O_DIRECT where the platform allows it so the client's page cache
-    cannot answer a question about the server.
+    TWO WAYS THE CLIENT CAN ANSWER FOR THE SERVER, and both were live risks.
+
+    O_DIRECT bypasses the page cache, which is the whole point — but an export
+    may refuse it, and a check that silently falls back then measures the
+    client's memory. The measured symptom: 601 MB/s over NFS, which is not a
+    number this link produces for a cold read.
+
+    So when O_DIRECT is unavailable the read moves to a RANDOM OFFSET deep in the
+    file, which the cache is unlikely to hold, AND the result is labelled
+    `cached-read possible` so a caller can refuse to treat it as certification.
+    A measurement that cannot say how it was taken is a number, not a
+    measurement.
     """
+    size = path.stat().st_size
     t0 = time.time()
     try:
         subprocess.run(["dd", f"if={path}", "of=/dev/null", "bs=1M",
                         f"count={megabytes}", "iflag=direct"],
                        capture_output=True, timeout=timeout, check=True)
+        elapsed = time.time() - t0
+        return ((megabytes / elapsed) if elapsed > 0 else 0.0), "O_DIRECT"
     except subprocess.TimeoutExpired:
-        return 0.0
+        return 0.0, "O_DIRECT (timed out)"
     except subprocess.CalledProcessError:
-        # Some exports refuse O_DIRECT; fall back rather than call it a stall.
-        try:
-            subprocess.run(["dd", f"if={path}", "of=/dev/null", "bs=1M",
-                            f"count={megabytes}"],
-                           capture_output=True, timeout=timeout, check=True)
-        except (subprocess.TimeoutExpired, subprocess.CalledProcessError):
-            return 0.0
+        pass
+
+    # No O_DIRECT: read from a deep offset instead, and say so.
+    skip = max(0, (size // 2**20) - megabytes - 1)
+    skip = int(skip * 0.5) + int(time.time()) % max(1, int(skip * 0.4) or 1)
+    t0 = time.time()
+    try:
+        subprocess.run(["dd", f"if={path}", "of=/dev/null", "bs=1M",
+                        f"count={megabytes}", f"skip={skip}"],
+                       capture_output=True, timeout=timeout, check=True)
+    except (subprocess.TimeoutExpired, subprocess.CalledProcessError):
+        return 0.0, "buffered at offset (timed out)"
     elapsed = time.time() - t0
-    return (megabytes / elapsed) if elapsed > 0 else 0.0
+    return ((megabytes / elapsed) if elapsed > 0 else 0.0), \
+        f"buffered at offset {skip} MiB — cached-read possible"
 
 
 def refuse_busy_export(root, floor: float = FLOOR_MB_S,
@@ -124,9 +143,9 @@ def refuse_busy_export(root, floor: float = FLOOR_MB_S,
         print(f"   [export] no file of {PROBE_MB} MB or more under {root}; "
               f"bulk throughput NOT measured")
         return -1.0
-    rate = throughput_mb_s(probe)
+    rate, how = throughput_mb_s(probe)
     print(f"   [export] {rate:.1f} MB/s reading {probe.name} "
-          f"(floor {floor:.0f} MB/s)")
+          f"(floor {floor:.0f} MB/s, {how})")
     if rate < floor and not allow:
         raise ExportBusy(
             f"EXPORT BUSY: {root} serves {rate:.1f} MB/s, under the {floor:.0f} "
