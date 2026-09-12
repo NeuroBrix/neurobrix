@@ -211,6 +211,9 @@ For more information: https://neurobrix.es
     certify_p.add_argument('--kernels', default=None, help='only these kernels (short or qualified names, comma-separated)')
     certify_p.add_argument('--limit', type=int, default=None, help='stop after this many shapes')
     certify_p.add_argument('--only-missing', action='store_true', help='skip shapes the directory already certifies')
+    certify_p.add_argument('--allow-off-protocol-clock', action='store_true',
+                           help='certify even though a card is off this machine\'s protocol clock (the run says so, '
+                                'and its timings are not comparable with on-protocol ones)')
     check_p = autotune_sub.add_parser('check', help='the directory gate, file by file')
     check_p.add_argument('--dir', default=None)
     autotune_sub.add_parser('status', help='the profile in force and what the directory holds for it')

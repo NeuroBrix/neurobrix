@@ -333,24 +333,161 @@ _UNREAD = object()
 
 
 def _read_clocks_mhz():
+    """Both application clocks of every card.
+
+    Both, because `nvidia-smi -ac <mem>,<gfx>` sets both and a protocol names
+    both. A reader that returns only the graphics clock lets a rig satisfy this
+    door while failing the workshop's (`tools/rig_clock.py`), and two doors that
+    disagree about the same protocol are a false green waiting for its occasion.
+
+    Every card, because `nvidia-smi` speaks real indices and ignores
+    CUDA_VISIBLE_DEVICES: a card at the wrong frequency beside a measurement is
+    a fact about the rig whether or not this job was pinned away from it.
+    """
     try:
         r = subprocess.run(
-            ["nvidia-smi", "--query-gpu=index,clocks.applications.graphics",
-             "--format=csv,noheader,nounits"],
+            ["nvidia-smi", "--query-gpu=index,clocks.applications.graphics,"
+             "clocks.applications.memory", "--format=csv,noheader,nounits"],
             capture_output=True, text=True, timeout=20)
         if r.returncode != 0:
             return None
         out = {}
         for line in r.stdout.splitlines():
             if line.strip():
-                idx, mhz = [c.strip() for c in line.split(",")]
-                out[idx] = int(mhz)
+                idx, gfx, mem = [c.strip() for c in line.split(",")]
+                out[idx] = {"graphics": int(gfx), "memory": int(mem)}
         return out or None
     except Exception:
         return None
 
 
 _clocks_mhz.cached = _UNREAD
+
+_PROTOCOL_ENV = "NEUROBRIX_RIG_PROTOCOL"
+OFF_PROTOCOL_OPT = "--allow-off-protocol-clock"
+
+
+def _protocol_file() -> Optional[Path]:
+    """The machine's declared measurement protocol, or None when it declares none.
+
+    A protocol is a property of the MACHINE, not of the engine: it records what
+    frequency this particular rack decided its numbers are taken at, and an
+    installed NeuroBrix carries no such decision. So it is DISCOVERED and never
+    shipped, and there is no built-in value to fall back on — an engine that
+    invents the number stops citing the protocol, and the divergence between the
+    two is silent by construction.
+
+    Order: an explicit env pointer, then the workshop's own file in a source
+    checkout, then the machine's dotfile. The checkout case is what closes this
+    door on the rig that needs it without anyone having to remember a variable.
+    """
+    env = os.environ.get(_PROTOCOL_ENV)
+    if env:
+        return Path(env)                      # named, so a missing one refuses below
+    for parent in Path(__file__).resolve().parents:
+        cand = parent / "tools" / "rig_protocol.json"
+        if cand.is_file():
+            return cand
+    cand = Path.home() / ".neurobrix" / "rig_protocol.json"
+    return cand if cand.is_file() else None
+
+
+def rig_protocol_refusal(allow_off_protocol: bool = False, say=print) -> None:
+    """Refuse to certify unless EVERY card sits at the machine's protocol clock.
+
+    WHY A CERTIFICATION TAKES A CAMPAIGN'S ENTRY CONDITION
+    -----------------------------------------------------
+    Certification picks a configuration BY TIMING candidates. That makes it a
+    measurement exactly as a benchmark row is one, and its `best_ms` values carry
+    a regime whether or not anyone recorded which. On 2026-09-11 this machine lost
+    mains twice in nine minutes, came back at 1312/1312/1290/1290 — each SKU at
+    its OWN factory default — and a certification ran across all four cards with
+    no harness reading the clocks at entry.
+
+    WHY A DOOR AND NOT A CENSUS
+    ---------------------------
+    Application clocks do not survive a reboot, so the harmful state recurs on a
+    schedule nobody controls. A census says the clocks were right this time; a
+    refusal at entry says a number produced behind it was produced on protocol,
+    which is a claim about every future run.
+
+    WHY IT NAMES EVERY DIVERGING CARD
+    ---------------------------------
+    The rack is heterogeneous: 16 GB V100s default to 1312 MHz, 32 GB ones to
+    1290, and the protocol value is 1290. After a reboot half the rig is already
+    at the protocol value by pure manufacturer coincidence. A check that samples
+    one card goes green on a rig that is half wrong, and one that samples card 2
+    or 3 here goes green ALWAYS. Both SKUs advertise byte-identical supported-clock
+    lists, so no capability query reveals the disagreement — only the reading does.
+
+    A machine that declares NO protocol is not refused: there is nothing for it to
+    diverge from, and the proof still records the clocks it read. But it is told
+    so in the run's own output, because a silence here would be indistinguishable
+    from a door that held.
+    """
+    path = _protocol_file()
+    if path is None:
+        say("[certify] this machine declares no measurement protocol "
+            f"(no {_PROTOCOL_ENV}, no tools/rig_protocol.json, no "
+            f"~/.neurobrix/rig_protocol.json) — the clocks are RECORDED in every "
+            f"proof but checked against nothing.")
+        return
+
+    try:
+        clock = json.loads(Path(path).read_text(encoding="utf-8"))["clock"]
+        want_gfx = int(clock["application_graphics_mhz"])
+        want_mem = int(clock["application_memory_mhz"])
+    except Exception as exc:
+        raise RuntimeError(
+            f"cannot read the clock protocol from {path} ({exc}). The protocol "
+            f"value is not optional and has no default: restore the file rather "
+            f"than certifying without it.")
+
+    cards = _clocks_mhz()
+    if cards is None:
+        raise RuntimeError(
+            "cannot read the rig's clocks, and this machine declares a protocol "
+            f"({want_gfx}/{want_mem} MHz) to hold them to. A certification whose "
+            "conditions cannot be read is not a measurement.")
+    if not cards:
+        raise RuntimeError(
+            "the driver reported ZERO cards. This check examined nothing, and a "
+            "check that examined nothing must not be read as one that found "
+            "nothing wrong.")
+
+    off = {i: c for i, c in cards.items()
+           if c["graphics"] != want_gfx or c["memory"] != want_mem}
+    if not off:
+        say(f"[certify] {len(cards)} card(s) read, all at the protocol clock "
+            f"{want_gfx}/{want_mem} MHz ({path})")
+        return
+
+    lines = [f"the rig is NOT at the protocol clock: {len(off)} of {len(cards)} "
+             f"card(s) diverge (protocol {want_gfx}/{want_mem} MHz, from {path})"]
+    for i in sorted(cards, key=lambda s: int(s)):
+        c = cards[i]
+        lines.append(f"    card {i}  {c['graphics']}/{c['memory']} MHz"
+                     + ("" if i in off else "  (at protocol)"))
+    lines.append("")
+    lines.append("  Application clocks do not survive a reboot and each SKU returns "
+                 "to its OWN factory default, so half a heterogeneous rack can sit "
+                 "at the protocol value by coincidence.")
+    lines.append("")
+    lines.append("  Restore every card, then re-run:")
+    lines.append("      for i in " + " ".join(sorted(cards, key=lambda s: int(s)))
+                 + f"; do sudo nvidia-smi -i $i -ac {want_mem},{want_gfx}; done")
+
+    if allow_off_protocol:
+        for line in ["WARNING, " + lines[0]] + lines[1:]:
+            say("[certify] " + line)
+        say(f"[certify] proceeding anyway on {OFF_PROTOCOL_OPT}: every timing "
+            f"produced by this run was taken off protocol and may not be compared "
+            f"with one that was not.")
+        return
+
+    raise RuntimeError("\n".join(lines) +
+                       f"\n\n  To certify off protocol deliberately, pass "
+                       f"{OFF_PROTOCOL_OPT} — the run then says so in its own output.")
 
 
 def _backend() -> Dict[str, Any]:
@@ -554,11 +691,16 @@ def _read_file(path: Path) -> Dict[str, Dict]:
 
 def certify(profile: str, vendor: Optional[str] = None, census_path: Optional[str] = None,
             out: Optional[str] = None, kernels: Optional[List[str]] = None, limit: Optional[int] = None,
-            only_missing: bool = False, seed: int = 20260907, log=None) -> Dict[str, Any]:
+            only_missing: bool = False, seed: int = 20260907, log=None,
+            allow_off_protocol: bool = False) -> Dict[str, Any]:
     """Certify every census shape for `profile` on this machine; write the files."""
     if log is None:
         def log(*a):                      # a run of hours, read while it runs: never buffered
             print(*a, flush=True)
+    # The entry condition, before anything is timed. It lives HERE and not in the
+    # CLI because this is the narrowest point: the door then holds for every
+    # caller, not only for the one that types the documented command.
+    rig_protocol_refusal(allow_off_protocol=allow_off_protocol, say=log)
     active = C.active_profile()
     if active is None:
         raise RuntimeError("no vendor profile is in force on this machine (the launcher resolved none)")
