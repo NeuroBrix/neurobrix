@@ -95,11 +95,14 @@ OVERLAY = {
              "filesystem rather than the export.",
         line="measured"),
     "Wan2.2-I2V-A14B": dict(
-        now="REBUILT (118.07 GB, gate 1.000x), upload in flight — and a second line",
-        evidence="rebuild 22:11-22:22 (676 s, 118.07 GB, only writer on the pool); "
-                 "regression gate 1.000x on all five components; upload through the "
-                 "internal entry point from 22:22:46 at 37 MB/s, zero SlowDownWrite; "
-                 "cached encoder carries the unroll signature (inferred line)",
+        now="REBUILT, gated 1.000x, PUBLISHED, INSTALLED — proof by run owed — and a second line",
+        evidence="rebuild 22:11-22:22 (676 s, 118.07 GB); regression gate 1.000x on all "
+                 "five components; upload through the internal entry point 22:22:46 -> "
+                 "rc=0 after 5144 s (126.77 GB, ~24.6 MB/s mean, zero SlowDownWrite), hub "
+                 "updatedAt 23:48:30Z; install 23:48:30 -> rc=0 after 312 s, five "
+                 "components in the cache; the proof needs the whole rig and runs after "
+                 "the bench queues drain; cached encoder carries the unroll signature "
+                 "(inferred line)",
         note="TWO lines, not one. The rebuild resolves its output size. Its VAE "
              "ENCODER stays unrolled over the temporal axis, which no rebuild "
              "changes — DETTE D-TEMPORAL-UNROLL. Delivering the first without "
