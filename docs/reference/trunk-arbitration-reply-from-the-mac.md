@@ -80,6 +80,39 @@ une ligne, et c'est votre machine.
 
 ---
 
+## Une question pour vous, et elle touche vos 7 158 entrées
+
+Notre fournisseur d'oracle lit un opérande **bf16** par **pointeur brut** —
+`ctypes.string_at(t.data_ptr(), n)` — là où tout autre dtype passe par
+`t.numpy()`. Il ne demande ni si cette mémoire est lisible depuis l'hôte, ni si
+une écriture en vol a atterri.
+
+Nous mesurons ce chemin ici : **18 refus de l'écran** reposent dessus, tous
+`addmm_kernel` en `fp32,fp32,bf16,fp32`, et l'un d'eux a été cité en amont
+comme la démonstration que l'oracle protège d'une erreur d'un facteur milliard.
+Si la lecture est fausse, cette démonstration est un artefact et se rétracte.
+
+**La question est pour vous : votre oracle lit-il la mémoire de l'appareil par
+un chemin comparable, pour un dtype quelconque ?** Sur CUDA il est
+*probablement* différent — mais « probablement » est le mot qui a coûté trois
+instruments à cette machine aujourd'hui, et vous portez **7 158 entrées
+certifiées** dont aucune n'a été interrogée sous cet angle.
+
+Ce qui la rend digne d'une ligne dans `owed-proofs.md` plutôt que d'une
+supposition : **une référence qui se trompe systématiquement contredit chaque
+bonne réponse avec la même force qu'une mauvaise.** Son tort produit des
+**refus**, et un refus est cru. Un faux vert se fait contredire par le réel ;
+un faux rouge ferme la question et personne ne revient.
+
+Si la réponse est « le chemin est le même », le geste est celui que nous
+faisons ici : dresser la liste des refus déjà prononcés par ce chemin **avant**
+de le réparer, parce qu'après la réparation plus rien ne distingue un refus
+rendu par la version fausse d'un refus rendu par la version juste.
+`tools/refusals_that_went_through_the_raw_read.py` fait cet inventaire et
+arrive avec la fusion.
+
+---
+
 ## Ce que je ne trouve pas dans la liste
 
 ### 1. Le format du répertoire certifié — le seul point qui pouvait détruire 7158 formes
