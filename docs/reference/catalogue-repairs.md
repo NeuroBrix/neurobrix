@@ -104,9 +104,9 @@ in two passes, the second resuming 99.56 GB).
 | re-trace | not required for this line — the graphs in `.cache/graphs` carry the shapes; the build reads them |
 | rebuild | **22:11:30 → 22:22:46**, 676 s, **118.07 GB**, written directly on the pool as the only writer at ~400 MB/s (119 GB cannot stage on a 53 GB root filesystem — said before the build, not discovered at 90 %) |
 | regression gate | **1.000×** on every component: text_encoder 10.59 GB, transformer 53.25, transformer_2 53.25, vae 0.47, vae_encoder 0.48 |
-| re-upload | **in flight** from 22:22:46 through the internal entry point, 40 MB/s start, 37.1 MB/s measured, zero `SlowDownWrite` — the store keeps the last word and has not used it |
-| install | owed (follows the upload in the serial queue) |
-| proof by run | owed — armed in the follower chain, 9 frames, refuses a container installed before 21:28 UTC |
+| re-upload | **22:22:46 → rc=0 after 5144 s** through the internal entry point (`replace`, same slug `Wan-AI/Wan2.2-I2V-A14B`): 126.77 GB, ≈24.6 MB/s mean under adaptive pacing from 40 MB/s (30–37 MB/s in the first hour, 26 in the last), **zero `SlowDownWrite`** in the per-minute samples. The hub record reads `updatedAt 2026-09-12T23:48:30Z`, `PUBLIC` |
+| install | **23:48:30 → rc=0 after 312 s**: 100 files, 118.07 GB extracted, five components present in the cache (`text_encoder`, `transformer`, `transformer_2`, `vae`, `vae_encoder`), manifest written 23:53:42 |
+| proof by run | owed — 9 frames, refuses a container installed before 21:28 UTC; it needs the whole rig (two 53 GB transformers) and runs in the night queue's phase B, after the four bench queues drain |
 
 **Line two, the debt this repair does not touch.** Its VAE **encoder is unrolled
 over the temporal axis** (`docs/reference/temporal-unroll-census.md`, INFERRED
