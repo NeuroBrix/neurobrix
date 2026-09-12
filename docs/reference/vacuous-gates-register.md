@@ -395,3 +395,165 @@ code, and twice by another instrument built for something else.
 That is the argument for the register: a class this large, whose members are
 invisible to the suite by definition, is only tractable if its instances are
 written down where the next person will look.
+
+### 32 — a door placed at two of the three save sites, on a path the work does not take
+
+`forge trace --component vae_encoder` exited 0 and printed `Saved: ... (3305 ops)`
+on a graph the depth-collision door refuses when run against the same file by
+hand. The door had been wired at the two `graph.json` save sites found by
+grepping for the R19 prune call in `tracer/orchestrator.py`. The video trace
+takes neither of them: it runs in the `trace-worker` SUBPROCESS and saves at
+`tracer/worker.py`, the third site.
+
+`tracer/patterns/dead_subgraph.py` says **"the three graph.json save sites"** in
+its own docstring, as placement guidance for exactly this kind of pass. That
+docstring was read while placing the door, quoted in the commit that placed it,
+and two sites were wired.
+
+What makes it this class and not an ordinary miss: the trace **passed**. A gate
+at a call site the work does not take is green for the reason that blinds it, and
+its green was read as "25 clears the graph" for the twenty minutes before the
+file was checked by hand.
+
+Seen failing: with the third site wired, the same command refuses and names the
+symbol, its trace value and the candidate.
+
+**The rule that generalises**: when a pass must run at every exit of a stage,
+count the exits from the code, not from the search that found the first ones —
+and a docstring that names the number is an assertion to CHECK, not a note to
+nod at.
+
+### 33 — a flag accepted upstream, dropped downstream by `parse_known_args`
+
+`--trace-time 33` was declared on `forge trace`, declared on `trace-worker`, and
+propagated into the worker command line by the orchestrator. `run_worker()`
+re-parses `sys.argv` with its own parser and ends with `parse_known_args()`, so
+the option was discarded without a word and the worker traced at its seed of 25.
+
+The failure did not look like a dropped flag. The door then recommended 33 on
+every iteration, and the fixed-point driver reported eight steps of `25 -> 33 ->
+33 -> 33 ...`. Read as data it says "this axis does not converge"; the truth was
+"this axis was never moved". Two minutes of GPU and a wrong conclusion about the
+model.
+
+**The rule**: `parse_known_args` converts an unknown option into silence. Any
+option that crosses a process boundary is declared on BOTH sides or it does not
+exist — and an option accepted at the top and discarded at the bottom is a silent
+bypass wearing the name of a decision, which is precisely what
+`docs/reference/proving-by-doors.md` forbids when it says the opening must be
+named and never silent.
+
+### 34 — a census that re-counted the class it had excluded four hours earlier
+
+`tools/symbol_collision_census.py` excludes the batch axis by NAME, with a
+comment explaining that a batch symbol at 1 is a deliberate project decision and
+that listing it buries the actionable axes — of 293 flagged axes it was 58.
+
+`tools/depth_collision_census.py`, written the same day to supersede it at depth,
+did not carry the exclusion. It reported **117,426 dims at extent 1** and a list
+of "surprises" headed by LLM and audio components. Every one of them was a batch
+axis at 1 on every tensor of a large graph. The instrument's own predecessor
+contained the fix, in a comment written to prevent this exact reading.
+
+It also produced a false negative in the other direction: attributing to `time`
+every dim owned by another symbol turned a residue into a claimed "172-deep
+structural plateau, no stimulus escapes them", which was written into
+`forge/tracer/worker.py` as the justification for a stimulus value. With the
+three-way split (this symbol / another symbol / no symbol at all) the structural
+count across all 182 local graphs is **zero**.
+
+**The rule**: a deliberate exclusion is part of the measurement's definition, not
+a detail of one implementation. When an instrument is superseded, the exclusions
+are the first thing ported and the first thing tested — otherwise the successor
+is a regression wearing a larger number.
+
+`tools/depth_collision_census.py` was WITHDRAWN rather than repaired: repairing it
+would have produced a second copy of `tools/stimulus_from_depth.py`, which does
+the same reading with the three-way split and answers with an actionable value
+per symbol instead of a total. It never reached a commit that claimed its
+numbers; the numbers it produced are recorded here so the retraction outlives the
+file.
+
+### 35 — an instrument that answered with a number obtained by the extrapolation it exists to distrust
+
+The depth-collision door refuses a graph and names "re-trace with `time` at 25".
+That value is computed by evaluating the graph's recorded expressions at a point
+OTHER than the one that produced them — which is the exact operation the door
+exists because nobody can trust.
+
+Where it is simply invalid: when the traced program unrolls a loop whose trip
+count depends on the symbol. The Wan VAE encoder emits 1448 ops at T=9, 2271 at
+17, 3305 at 25, ~100-130 ops per frame, and every module group is exactly linear
+in the chunk count `(T-1)//4+1` — 3 chunks to 5 chunks moves the four groups
+8 -> 14, 21 -> 35, 6 -> 10, 3 -> 5, fitting `3k-1, 7k, 2k, k`. Each re-trace
+re-unrolls, and the blind count stayed at **135 through T=17, 25, 33 and 41**
+while the recommendation walked 25 -> 33 -> 41.
+
+The refusal was right every time. The number beside it was an invitation to keep
+paying for traces.
+
+**The remedy shipped**: the value is now printed as a CANDIDATE that says what it
+is, the authority is the loop that re-traces
+(`nbx/campaigns/prepared/stimulus_fixed_point.py`), and a blind count that does
+not FALL between two iterations is reported as a plateau — measured, not assumed.
+
+**The rule**: an instrument may refuse without knowing the remedy. When it offers
+one, the offer carries the same burden of proof as the refusal, and "I evaluated
+my model outside the range where it was fitted" does not meet it.
+
+### 36 — the statistic, across eight instruments in one day
+
+Of the eight instruments that carried a claim on 2026-09-12, **every one that was
+seen saying NO told the truth; the ones never seen refusing did not.**
+
+Seen refusing, and correct:
+1. the clock door — named the two diverging cards before any campaign started
+2. the timeout refusal — refused a run whose own recorded cost exceeded its clock
+3. the flight-recorder refusal — refused an unrecorded long GPU run
+4. `to_symbol_map`'s refusal — the one call site it had was the right one
+5. the artefact witness — refused the stale cached graph on its first production run
+
+Never seen refusing, and wrong:
+6. the depth-collision door at two of three save sites (entry 32) — passed a graph
+   it refuses by hand
+7. the differential script that printed `before max 2187, after max 1` and
+   concluded NO CHANGE — it diffed by common tid across a 389 -> 265 op rewrite
+8. the build-progress reading — a `model.nbx.building` at 26.1 GB reported as a
+   chain in flight while the recorder said `failed` (entry 30)
+
+The asymmetry is not luck and it is not about care. An instrument is exercised by
+the act of refusing: you cannot watch it say no without learning what it read. An
+instrument that only ever agrees is never exercised at all, and its agreement is
+the same shape whether it is correct or absent.
+
+**Operational consequence**: the cost of a gate is not its code, it is the
+injection that turns it red. Landing a gate without one buys a green whose
+provenance is unknown — and the register now has thirty-six entries saying what
+that costs.
+
+## The executable form of entry 30's rule
+
+Entry 30 ended in a sentence: *a verification names the artefact it read, and
+refuses if that artefact predates the change it verifies.* A sentence in a
+register is read by whoever is already suspicious, and both instances of entry 30
+happened to someone who was not.
+
+`tools/artefact_witness.py` is that sentence as a refusal:
+
+```python
+from artefact_witness import witness, StaleArtefact
+w = witness(cached_graph, ("git", forge_repo, "tracer/symbolic/depth_gate.py"))
+print(w.line)   # names path, size, sha12, write time, and the reference commit
+```
+
+It prints the artefact's identity whether it passes or fails, and raises
+`StaleArtefact` when the file is older than the commit that made the change. Seen
+both ways before it was trusted: it passed the re-traced Wan encoder written at
+15:05:51 against a commit at 14:48:40, refused the CogVideoX encoder written on
+2026-06-25 against the same commit, and then refused a stale cached graph on its
+first production run inside the class-E chain — which is the only reason that run
+did not report on a state the change had never reached.
+
+The reference may be a commit (`("git", repo, pathspec)`), another artefact
+(`("file", path)`), or a raw timestamp with a label. A witness with no reference
+point is refused at the CLI: that is a timestamp, not a verification.
