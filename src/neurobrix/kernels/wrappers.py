@@ -40,6 +40,27 @@ from .launcher import install as _install_launcher
 _install_launcher()
 
 
+_FLOOR_CONFLICTS_SAID = set()
+
+
+def _announce_floor_over_ceiling(clamped, taken, floor) -> None:
+    """Say, once per (clamped, floor) pair, that a profile row lost to the floor.
+
+    Once per pair and not per call: attention wrappers run thousands of times
+    a decode, and a line repeated thousands of times is a line the next
+    reader has learned to skip — the same rule as the autotune exclusions.
+    """
+    token = (clamped, floor)
+    if token in _FLOOR_CONFLICTS_SAID:
+        return
+    _FLOOR_CONFLICTS_SAID.add(token)
+    print(f"[SDPA_TILE] the profile ceiling proposed {clamped} but this "
+          f"backend's attention lowering refuses tile dimensions under "
+          f"{floor}; using {taken}. The profile row promises a tile the "
+          f"backend will not lower — the row should be raised or scoped to "
+          f"the template path that measured it.", flush=True)
+
+
 def _autotune_headroom_guard(launch):
     """Wrap an autotuned kernel launch (`kernel[grid]`) against the ONE
     device allocation the engine does not own: the Triton autotuner's
@@ -7837,7 +7858,10 @@ def _decode_attn_vec(q, k, v, bias, softmax_scale,
     groups = nheads // nheads_k
     BHq = batch * nheads
     D_v = v.shape[3]
-    BLOCK_D = max(triton.next_power_of_2(max(headdim, D_v)), 16)
+    # The floor is the backend capability, not 16: a dot tile dimension the
+    # attention lowering refuses is not a tile this path can use. Inert on
+    # cuda and hip, where it reads 16.
+    BLOCK_D = max(triton.next_power_of_2(max(headdim, D_v)), _fa_min_tile())
     # Defaults = the judged config (locked pinned protocol, 2026-08-23:
     # seg 256 / BN 32 / 4 warps won the row at all three contexts).
     BLOCK_N = int(_os_dv.environ.get("NBX_DV_BLOCK_N", "32"))
@@ -7907,7 +7931,7 @@ def _decode_attn_vec(q, k, v, bias, softmax_scale,
         opart.stride(0), opart.stride(1), D_v,
         mpart.stride(0), mpart.stride(1),
         out.stride(0), out.stride(1),
-        SPLIT=split, GROUPS=1, BLOCK_G=16,
+        SPLIT=split, GROUPS=1, BLOCK_G=max(16, _fa_min_tile()),
         BLOCK_D=BLOCK_D, D=D_v,
         num_warps=4)
     return out.reshape(batch, nheads, 1, D_v)
@@ -7932,8 +7956,13 @@ def _flash_decode(q, k, v, bias, softmax_scale,
                                    flash_decode_reduce_kernel)
     groups = nheads // nheads_k
     BH = batch * nheads_k
-    BLOCK_G = max(triton.next_power_of_2(groups), 16)
-    BLOCK_D = max(triton.next_power_of_2(headdim), 16)
+    # Same capability as the prefill path: a decode step at one query row
+    # still forms a `tl.dot` whose tile dimension must be one the backend
+    # computes correctly. `seqlen_q=1, headdim=64` reached the refusal here
+    # after the prefill floor was already raised -- the small dimension was
+    # BLOCK_G, not BLOCK_M, and the refusal names neither.
+    BLOCK_G = max(triton.next_power_of_2(groups), _fa_min_tile())
+    BLOCK_D = max(triton.next_power_of_2(headdim), _fa_min_tile())
     # K and V tiles are [BLOCK_N, BLOCK_D] fp16, double-buffered by the
     # pipeliner: BLOCK_N * BLOCK_D * 2 B * ~4 buffers must fit Volta's
     # 96 KB. At BLOCK_D<=128, BLOCK_N=128 uses ~
@@ -8507,6 +8536,22 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
         BLOCK_M = min(BLOCK_M, int(_ceil_m))
     if _ceil_n:
         BLOCK_N = min(BLOCK_N, int(_ceil_n))
+    # The ceiling clamps, the floor holds — and the floor is applied LAST.
+    #
+    # The ceiling is a RESOURCE bound read from the profile; the floor is a
+    # CORRECTNESS bound read from the backend, below which the attention
+    # lowering refuses (or, worse, would mis-compute). min(32, 16) = 16 is
+    # exactly what happened on whisper's decode probe: the wrapper's floor
+    # raised BLOCK_M to 32 and the Apple profile's `block_m: 16` decode row
+    # clamped it straight back down into the refusal. Below the floor there
+    # is nothing to run, so a profile row under it is a CONFLICT — obeyed
+    # nowhere, and said once, because a profile that promises a tile the
+    # backend refuses should be heard about and fixed, not silently outrun.
+    if BLOCK_M < _fa_floor or BLOCK_N < _fa_floor:
+        _clamped = (BLOCK_M, BLOCK_N)
+        BLOCK_M = max(BLOCK_M, _fa_floor)
+        BLOCK_N = max(BLOCK_N, _fa_floor)
+        _announce_floor_over_ceiling(_clamped, (BLOCK_M, BLOCK_N), _fa_floor)
 
     # Output allocation. seqlen_q_rounded must align with actual BLOCK_M.
     o = NBXTensor.empty_like(q)
