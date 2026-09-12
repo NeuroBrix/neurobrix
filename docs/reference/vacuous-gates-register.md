@@ -334,6 +334,27 @@ thing it prints on success, it is already an entry here and nobody has noticed.
 * **why the instrument was already there** `tools/flightrec.py` exists precisely to make an interrupted job legible, writes `failed` into a record before anything else, and the session hook prints it. It was armed, it was correct, and it was not consulted. **Having the instrument and looking elsewhere is a distinct failure from not having it**, and the remedy is not another instrument.
 * **closed by** the rule, not a tool: a chained step reports on the STEP'S exit status, and a chain that ends anywhere but its last line is reported as failed until its exit code says otherwise. On this machine the exit code is one command away at every point — `flightrec status`, the `|| { echo FAILED; exit 1; }` the chain already carries, and the record itself.
 * **the third of a family in one day** a snapshot path read from a truncated usage line, backticks executed inside an unquoted heredoc, and a positional argument never seen because the same `grep` filtered it out. All three are *a composition I did not re-read*, and all three were caught by something refusing correctly — argparse twice, the builder once (*"a component with no weights is a build failure, never a container to ship"*). The refusals worked. The reading did not.
+* **five in one day, and the fifth names the remedy.** After the four below came a
+  request built by `request_args` — the single source of truth — then **joined into a
+  shell string and re-split on spaces**, so the multi-word prompt became separate
+  arguments and argparse refused: `unrecognized arguments: red apple rolling slowly
+  across a wooden table`. **A list of arguments passed through a shell string stops
+  being a list.**
+
+  All five are one class: *a composition whose quoting I did not think through*. A
+  truncated usage line; backticks expanded in an unquoted heredoc; a positional
+  filtered out by my own grep; a `-m` message the shell read as code; an argument
+  list flattened to a string. **The remedy is not better quoting — four of the five
+  happened AFTER I had diagnosed the mechanism and written down the fix.** It is to
+  stop generating shell from nested heredocs at all: the launcher is written in
+  Python, where an argument list stays a list and `subprocess` takes it without a
+  shell. A rule you must remember at every call site is a rule you will not apply;
+  a shape that has no quoting to get wrong needs no remembering.
+
+  And the whole family was caught by something refusing correctly — argparse three
+  times, the builder once (*"a component with no weights is a build failure, never a
+  container to ship"*), bash once. **The refusals worked every time. The reading
+  did not.**
 * **and the fourth arrived while this entry was being committed**, which is the most useful thing in it. The commit carrying this text used `git commit -m "…"` with DOUBLE quotes, so the shell expanded the backticks and parentheses inside the message body — `command not found`, `syntax error near unexpected token '('`, and git then read fragments of the prose as pathspecs. **I had already diagnosed this exact mechanism earlier the same day and written that the fix was `<<'MSG'` with quotes, and then did not use it.** Knowing a rule and applying it are different acts, and the gap between them is not closed by knowing the rule harder. **A commit message is a file, and it goes in through a quoted heredoc — never through an argument the shell reads.**
 
 ---
