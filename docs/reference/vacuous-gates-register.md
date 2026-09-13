@@ -386,7 +386,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-47 entries, of which five are placeholders and 42 carry a site. Two
+48 entries, of which five are placeholders and 43 carry a site. Two
 machines, two weeks of concentrated looking. Every one of them produced silence
 or a green rather than an error.
 
@@ -927,3 +927,25 @@ the shape key Triton stores the choice under, and the screen now de-duplicates
 by it. And the converse record: a seat the screen DID adjudicate is now
 written `screened: true` with its adjudicator's name, so a silent entry can no
 longer be read as a verified one.
+
+### 48 — a load filter applied in the graph's key space to the loader's keys
+
+`consumed_weight_names()` (2026-09-09) hands the triton loader the set of
+parameter names some op in the graph reads, so that a MoE build does not load
+the experts its trace never routed to — a 38 % saving, measured. It speaks the
+GRAPH's names. The loader filters the INDEX's keys by exact membership, and the
+two spaces are joined only after loading, by `_reconcile_weight_keys`'s unique
+suffix rule. Every key whose two names agree passed; the one whose names differ
+by a prefix — `token_embed.weight` in the index, `encoder.token_embed.weight`
+in the graph — was skipped before the reconcile could see it, and its first
+consumer met `None`. Found on 2026-09-13 by Wan2.2-I2V-A14B's proof by run:
+compiled rendered nine frames, triton died at `aten.embedding::0`, and
+triton-sequential named the operand.
+
+**The shape**: entry 45's, one layer down — a fact stated in one key space and
+tested in another, with a count that agreed (242 consumed, 242 in the index)
+and hid the one name that did not. **The rule**: a filter is applied in the key
+space of the thing it filters; the consumed set is expanded into the loader's
+space with the reconcile's own rule (`consumed_in_loader_space`) before the
+loader sees it, single-part suffixes decide nothing, and the direction of doubt
+is to load. The gate: the same proof, on the same container, in triton.
