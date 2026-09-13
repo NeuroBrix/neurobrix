@@ -21,6 +21,41 @@ from typing import Dict, List, Tuple
 import pytest
 
 
+def speaker_the_artefact_requires(model: str) -> str:
+    """The voice to ask for, or "" where the artefact needs none.
+
+    Same shape as the harness's `vlm` case, and the same verdict: the engine
+    is right and the harness was calling it wrong. An artefact that ships many
+    voicepacks and declares no `voice` in `runtime/defaults.json` is refused —
+    "ZERO FALLBACK: this artefact ships 54 voices and declares none as its
+    default" — because picking one by a literal used to happen on every run
+    without a word, and asking for one voice and getting another is a wrong
+    answer.
+
+    READ FROM THE ARTEFACT, not written here: the first in sorted order, which
+    is the same enumeration the engine does. A name in this file would be a
+    second literal doing exactly what the refusal exists to forbid, and it
+    would rot the day a voicepack is renamed.
+
+    Lives in conftest because two harnesses need it — the CLI cells and the
+    warm-serve rows — and a second copy is a second thing to keep true.
+    """
+    if not model:
+        return ""
+    voices = CACHE_ROOT / model / "modules" / "voices"
+    if not voices.is_dir():
+        return ""
+    try:
+        declared = json.loads(
+            (CACHE_ROOT / model / "runtime" / "defaults.json").read_text()).get("voice")
+    except (OSError, ValueError):
+        declared = None
+    if declared:
+        return ""
+    available = sorted(p.stem for p in voices.glob("*.pt"))
+    return available[0] if available else ""
+
+
 CACHE_ROOT = Path(os.path.expanduser("~/.neurobrix/cache"))
 
 
@@ -388,3 +423,53 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if "slow" in item.keywords:
             item.add_marker(skip_slow)
+
+
+# ---------------------------------------------------------------------------
+# The harness cleans up after itself
+# ---------------------------------------------------------------------------
+#
+# `_run_out_path` and `_upscale_out_path` write cell outputs to
+# /tmp/regression_*, deliberately, so a run never leaves `output_<model>.<ext>`
+# in the repo root. They unlink BEFORE each run and not after, so every cell
+# that ran left its file behind — 2026-09-10 ended with a stray
+# `regression_run_Kokoro-82M_native.wav` that had to be removed by hand. A
+# campaign that does not clean is not finished.
+#
+# Only what THIS session created is removed: anything already there when it
+# started is somebody else's and is left alone.
+#
+# The one exception is a failure. A cell that failed is worth instructing, and
+# instructing it means looking at what it produced — a black PNG, a truncated
+# wav. Deleting the artefact of a red cell would be tidying away the evidence,
+# so on any failure the files stay and the session says where.
+
+_FAILED_CELLS: list = []
+
+
+@pytest.hookimpl(tryfirst=True, hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    report = (yield).get_result()
+    if report.when == "call" and report.failed:
+        _FAILED_CELLS.append(report.nodeid)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _harness_cleans_its_outputs():
+    scratch = Path("/tmp")
+    before = set(scratch.glob("regression_*"))
+    yield
+    made = sorted(set(scratch.glob("regression_*")) - before)
+    if not made:
+        return
+    if _FAILED_CELLS:
+        print(f"\n[harness] {len(made)} output(s) kept for the "
+              f"{len(_FAILED_CELLS)} failed cell(s), under {scratch}:")
+        for path in made:
+            print(f"  {path}")
+        return
+    for path in made:
+        try:
+            path.unlink()
+        except OSError:
+            pass

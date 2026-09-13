@@ -37,7 +37,13 @@ def _entry(deviation=1.0e-5, tolerance=1.0e-4, **over):
          "proof": {"date": "2026-09-07T00:00:00+00:00", "engine_version": "0.5.3",
                    "backend": {"name": "cuda", "version": "triton 3.6.0"}, "shape": list(KEY),
                    "deviation": deviation, "tolerance": tolerance, "oracle": "fp64",
-                   "machine": {"hostname": "test", "device": "V100"}},
+                   "machine": {"hostname": "test", "device": "V100"},
+                   # Required from format /2: the screen cannot say whether the
+                   # kernel BUILT — a CPU fallback computes correctly, so its
+                   # deviation against the oracle is excellent and an entry
+                   # certified on one records a config for a path that never
+                   # runs.
+                   "built": {"gpu": True, "how": "test fixture", "fallback": None}},
          "excluded": [{"config": {"kwargs": {"BLOCK_M": 128, "BLOCK_N": 128, "BLOCK_K": 64, "GROUP_M": 8},
                                   "num_warps": 8, "num_stages": 3}, "deviation": 0.5, "tolerance": tolerance}]}
     e.update(over)

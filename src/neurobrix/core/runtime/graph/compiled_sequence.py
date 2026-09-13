@@ -3810,7 +3810,16 @@ class CompiledSequence:
                                if self._shape_resolver is not None else None)
                         try:
                             _ra = op.args_resolver(arena)
-                            _ras = [(tuple(a.shape) if hasattr(a, "shape") else a)
+                            # Shape AND dtype. A shape-only context cannot
+                            # diagnose a dispatch failure, which is what
+                            # "Undefined type <T>" is: torch has no kernel for
+                            # that op at that scalar type, and the type is the
+                            # whole question. Measured 2026-09-09 on
+                            # Kokoro-82M, `aten.mul::218` -> "Undefined type
+                            # BComplex32", where the shapes said nothing.
+                            _ras = [((tuple(a.shape), str(a.dtype))
+                                     if hasattr(a, "shape") and hasattr(a, "dtype")
+                                     else (tuple(a.shape) if hasattr(a, "shape") else a))
                                     for a in _ra]
                         except Exception as _e_ra:
                             _ras = f"<resolver raised {_e_ra}>"
@@ -4123,8 +4132,12 @@ class CompiledSequence:
         entirely (no branch cost beyond the None check) when None.
         """
         import torch
+        from neurobrix.kernels.nbx_tensor import set_torch_device
         _current_device_idx = self.device.index if self.device.index is not None else 0
-        torch.cuda.set_device(_current_device_idx)
+        # Routed by declared capability, like `torch_device_str`: on a
+        # single-device backend there is no selection to make, and asking
+        # torch for one it was not built with raises.
+        set_torch_device(_current_device_idx)
         for op_idx, op in enumerate(self._ops):
             if pre_op_callback is not None:
                 pre_op_callback(op_idx, op)
@@ -4149,8 +4162,12 @@ class CompiledSequence:
             # ── FAST PATH: No device transfer needed (99%+ of ops) ──
             if not op.needs_transfer:
                 # Still need to set CUDA device context for ops that allocate
-                if op.device is not None and op.device.type == "cuda" and op.device.index != _current_device_idx:
-                    torch.cuda.set_device(op.device)
+                # `type == "cuda"` was a vendor test guarding a vendor call.
+                # Both go: the index is what matters, and whether selecting it
+                # means anything is the backend's declared capability.
+                if op.device is not None and op.device.index is not None \
+                        and op.device.index != _current_device_idx:
+                    set_torch_device(op.device)
                     _current_device_idx = op.device.index
                     # Triton mode: also set CUDA runtime device (Triton uses runtime, not PyTorch)
                 try:
@@ -4248,8 +4265,9 @@ class CompiledSequence:
                                 new_kwargs[k] = v
                         kwargs = new_kwargs
 
-                if target is not None and target.type == "cuda" and target.index != _current_device_idx:
-                    torch.cuda.set_device(target)
+                if target is not None and target.index is not None \
+                        and target.index != _current_device_idx:
+                    set_torch_device(target)
                     _current_device_idx = target.index
 
                 try:

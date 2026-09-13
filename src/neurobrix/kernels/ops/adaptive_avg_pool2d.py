@@ -3,8 +3,27 @@
 For each output element (n, c, oh, ow), the kernel computes the input
 window boundaries using the standard PyTorch adaptive pooling formula:
     start_h = floor(oh * IH / OH)
-    end_h   = floor((oh + 1) * IH / OH)
+    end_h   = ceil((oh + 1) * IH / OH)
 and averages all input elements in [start_h, end_h) x [start_w, end_w).
+
+The end index is a CEILING. It was a floor here, which is the same value
+whenever the output size divides the input size and a smaller window
+whenever it does not — so every exactly-dividing shape agreed and every
+ragged one was quietly averaging too few elements. Measured against torch
+2026-09-09 by one-hot probing which input rows reach each output row:
+IH=7,OH=3 gives torch [(0,3),(2,5),(4,7)] and the floor form
+[(0,2),(2,4),(4,7)].
+
+The window loop was also fixed at 8x8, on a comment that the adaptive
+window is "typically 1-3 pixels each dim". That is false for any pooling
+that downsamples by more than 8, and global average pooling is the common
+case: a 16x16 plane to 1x1 has a 16x16 window, of which the kernel summed
+the first 8x8 and divided by 64. Measured: 0.1807 returned where the plane
+mean is 0.0019. The bound is now derived from the shape.
+
+BOTH defects are in this kernel, not in any backend, so both were wrong on
+EVERY vendor. This changes NVIDIA's numbers, and is meant to: keeping them
+would be keeping the bug.
 """
 
 import triton
@@ -42,11 +61,11 @@ def adaptive_avg_pool2d_kernel(
 
     # Adaptive pooling window bounds (PyTorch formula)
     # start = floor(out_idx * in_size / out_size)
-    # end   = floor((out_idx + 1) * in_size / out_size)
+    # end   = CEIL((out_idx + 1) * in_size / out_size)
     h_start = (oh * IH) // OH
-    h_end = ((oh + 1) * IH) // OH
+    h_end = ((oh + 1) * IH + OH - 1) // OH
     w_start = (ow * IW) // OW
-    w_end = ((ow + 1) * IW) // OW
+    w_end = ((ow + 1) * IW + OW - 1) // OW
 
     # Base pointer for this (n, c) plane
     base = n * stride_n + c * stride_c
@@ -56,10 +75,15 @@ def adaptive_avg_pool2d_kernel(
     acc = tl.zeros([BLOCK_SIZE], dtype=tl.float32)
     count = tl.zeros([BLOCK_SIZE], dtype=tl.float32)
 
-    # Max adaptive window is small (typically 1-3 pixels each dim)
-    # Unrolled loop with masking for variable window sizes
-    for dh in range(0, 8):
-        for dw in range(0, 8):
+    # The widest window this shape can produce, derived rather than assumed.
+    # end - start <= ceil((i+1)*IN/OUT) - floor(i*IN/OUT) < IN/OUT + 2, so
+    # floor(IN/OUT) + 2 bounds it for every i. The old fixed 8 silently
+    # truncated any window wider than that — every global average pool over
+    # a plane larger than 8x8 summed a corner and divided by its own count.
+    KH = IH // OH + 2
+    KW = IW // OW + 2
+    for dh in range(0, KH):
+        for dw in range(0, KW):
             h_idx = h_start + dh
             w_idx = w_start + dw
             in_bounds = (h_idx < h_end) & (w_idx < w_end)

@@ -40,7 +40,20 @@ class SingleGPUStrategy(ExecutionStrategy):
         # Loading mode from Prism plan (DATA-DRIVEN)
         # "eager" = load all weights upfront and keep in memory
         self._eager = context.loading_mode == "eager"
+        # Eagerness is PER COMPONENT, not global. `single_gpu_lifecycle` is
+        # accepted on a budget of `persistent weights + one transient at a
+        # time`, and Prism ships the classification on the plan. A transient
+        # is released after it has run even in eager mode; without that, the
+        # budget the plan was accepted under is not the one it runs under, and
+        # the strategy over-plans by exactly the transients it promised to
+        # swap. Empty for every other strategy, so their behaviour is
+        # unchanged.
+        self._transient: frozenset = getattr(context, "transient_components", frozenset()) or frozenset()
         self._loaded_components: Set[str] = set()
+
+    def _keeps(self, component_name: str) -> bool:
+        """True when this component stays resident once loaded."""
+        return self._eager and component_name not in self._transient
 
         pass
 
@@ -69,7 +82,7 @@ class SingleGPUStrategy(ExecutionStrategy):
         # In eager mode, track what's loaded to avoid redundant loads
         if component_name not in self._loaded_components:
             self.load_weights(component_name)
-            if self._eager:
+            if self._keeps(component_name):
                 self._loaded_components.add(component_name)
 
         # Prepare inputs (ensure on correct device)
@@ -85,12 +98,15 @@ class SingleGPUStrategy(ExecutionStrategy):
         """
         Unload weights for component.
 
-        In eager mode, skip unloading (keep weights in memory).
+        In eager mode, skip unloading (keep weights in memory) — EXCEPT for a
+        component Prism classified transient, which the lifecycle budget
+        assumes is released after use.
         In lazy mode, delegate to base class to actually unload.
         """
-        if self._eager:
-            # Skip unload in eager mode
+        if self._keeps(component_name):
+            # Persistent under an eager plan: keep it
             return
+        self._loaded_components.discard(component_name)
 
         # Lazy mode: actually unload
         super().unload_weights(component_name)
@@ -126,13 +142,13 @@ class SingleGPUStrategy(ExecutionStrategy):
         """
         Unload all components except the specified one.
 
-        In eager mode, skip unloading (weights stay in memory).
+        In eager mode, persistent components stay in memory; transients are
+        still released, because that is what the lifecycle budget promised.
         In lazy mode, ensures memory is available for the next component.
         """
-        if self._eager:
-            # Skip unload in eager mode
-            return
-
         for comp_name in self.context.component_executors:
-            if comp_name != keep_component:
-                self.unload_weights(comp_name)
+            if comp_name == keep_component:
+                continue
+            if self._keeps(comp_name):
+                continue
+            self.unload_weights(comp_name)

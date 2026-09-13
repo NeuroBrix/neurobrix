@@ -14,6 +14,8 @@ import triton
 
 from .nbx_tensor import NBXTensor, NBXDtype, DeviceAllocator, _broadcast_shapes, _set_device, dtype_size
 from .nbx_tensor import DeviceOOMError
+from .nbx_tensor import fa_min_tile as _fa_min_tile
+from .nbx_tensor import device_fault_buffer, device_fault_code_cached, fault_channel
 from .nbx_tensor import _upload_int64_array as _nbx_upload_int64, _MAX_NDIM as _NBX_MAX_NDIM, _saturating_cast as _nbx_saturating_cast
 from .ops._configs import sdpa_block_ceiling as _sdpa_block_ceiling
 from .ops._configs import largest_tile_within_smem as _largest_tile_within_smem
@@ -36,6 +38,27 @@ from . import launcher as _nbx_launcher
 from .launcher import install as _install_launcher
 
 _install_launcher()
+
+
+_FLOOR_CONFLICTS_SAID = set()
+
+
+def _announce_floor_over_ceiling(clamped, taken, floor) -> None:
+    """Say, once per (clamped, floor) pair, that a profile row lost to the floor.
+
+    Once per pair and not per call: attention wrappers run thousands of times
+    a decode, and a line repeated thousands of times is a line the next
+    reader has learned to skip — the same rule as the autotune exclusions.
+    """
+    token = (clamped, floor)
+    if token in _FLOOR_CONFLICTS_SAID:
+        return
+    _FLOOR_CONFLICTS_SAID.add(token)
+    print(f"[SDPA_TILE] the profile ceiling proposed {clamped} but this "
+          f"backend's attention lowering refuses tile dimensions under "
+          f"{floor}; using {taken}. The profile row promises a tile the "
+          f"backend will not lower — the row should be raised or scoped to "
+          f"the template path that measured it.", flush=True)
 
 
 def _autotune_headroom_guard(launch):
@@ -146,7 +169,7 @@ from .ops.dtype_convert import bf16_to_fp16_kernel
 
 # === Embedding ===
 
-from .ops.embedding import embedding_kernel
+from .ops.embedding import embedding_kernel, EMBEDDING_OOB
 
 # === Reductions ===
 
@@ -165,7 +188,7 @@ from .ops.softplus import softplus_forward_kernel
 from .ops.dropout import dropout_inference_kernel
 from .ops.upsample_nearest2d import upsample_nearest2d_kernel
 from .ops.groupnorm import group_norm_forward_kernel
-from .ops.index_select import index_select_kernel
+from .ops.index_select import index_select_kernel, INDEX_SELECT_OOB
 from .ops.triu import triu_kernel, triu_batch_kernel
 from .ops.tril import tril_kernel, tril_batch_kernel
 from .ops.argmax import argmax_kernel_1, argmax_kernel_2, argmax_kernel_inner
@@ -224,7 +247,7 @@ from .ops.nllloss import nll_loss_forward_kernel
 from .ops.std import std_map_kernel, std_reduce_kernel, std_dim_kernel
 from .ops.var import var_kernel_1, var_kernel_2, var_welford_kernel
 from .ops.index_add import index_add_gather_kernel
-from .ops.index_put_op import index_put_kernel
+from .ops.index_put_op import index_put_kernel, INDEX_PUT_OOB
 from .ops.sort_op import radix_sort_histogram_kernel, radix_sort_sweep_kernel
 
 # === Phase 5: RoPE, spatial, RNG, remaining ===
@@ -1828,6 +1851,59 @@ _GEMV_VEC_TILE = {"block_n": 8, "block_k": 256, "num_warps": 4}
 _ARGMAX_TILE = (4096, 4)
 
 
+# The 2-D reduction tile (min / max / prod / std / var / norm / all / any over
+# a dim). The adopted 8 x 1024 with 4 warps; `block_sizes.reduction_2d` in the
+# hardware profile overrides it.
+_REDUCTION_2D_TILE = (8, 1024, 4)
+
+
+def _reduction_2d_tile() -> tuple:
+    """`(BLOCK_M, BLOCK_N, num_warps)` for the row-wise reductions, from
+    `block_sizes.reduction_2d` in config/vendors/<vendor>/<arch>.yml.
+
+    `min` and `max` over a dim return a value AND its index, so their reduce
+    carries a pair. A backend may need the whole tile to fit its threadgroup
+    to aggregate one — the same property that governs `argmax` — and the
+    threadgroup is `num_warps * 32`, which is why the warp count belongs to
+    the tile. Absent key / no profile -> the adopted values.
+    """
+    bm, bn, warps = _REDUCTION_2D_TILE
+    try:
+        from .ops._configs import active_vendor_profile
+        cfg = (active_vendor_profile().get("block_sizes", {}) or {}).get("reduction_2d")
+        if isinstance(cfg, dict):
+            bm = int(cfg.get("block_m") or bm)
+            bn = int(cfg.get("block_n") or bn)
+            warps = int(cfg.get("num_warps") or warps)
+    except Exception:
+        pass
+    return bm, bn, warps
+
+
+# The argmin-over-a-dim tile. Its kernel takes BLOCK_M rows and a BLOCK_N
+# column cap; the adopted 4 x 4096 with 4 warps.
+_ARGMIN_TILE = (4, 4096, 4)
+
+
+def _argmin_tile() -> tuple:
+    """`(BLOCK_M, BLOCK_N cap, num_warps)` from `block_sizes.argmin`.
+
+    Companion to `_argmax_tile`; argmin's kernel carries a row block as well
+    as a column cap, so it has its own entry rather than sharing one.
+    """
+    bm, bn, warps = _ARGMIN_TILE
+    try:
+        from .ops._configs import active_vendor_profile
+        cfg = (active_vendor_profile().get("block_sizes", {}) or {}).get("argmin")
+        if isinstance(cfg, dict):
+            bm = int(cfg.get("block_m") or bm)
+            bn = int(cfg.get("tile_n") or bn)
+            warps = int(cfg.get("num_warps") or warps)
+    except Exception:
+        pass
+    return bm, bn, warps
+
+
 def _argmax_tile() -> tuple:
     """`(TILE_N cap, num_warps)` for the row-wise argmax, from
     `block_sizes.argmax` in config/vendors/<vendor>/<arch>.yml.
@@ -2860,7 +2936,10 @@ def embedding(weight, indices, padding_idx=-1, **kwargs) :
     output = NBXTensor.empty((*indices.shape, N), dtype=weight.nbx_dtype if hasattr(weight, 'nbx_dtype') else weight.dtype, device=dev)
     _set_device(weight)
     # weight.shape[0] = the id bound the kernel traps on (OOB parity with torch).
-    embedding_kernel[M,](output, indices, weight, weight.shape[0], N, BLOCK_SIZE)
+    embedding_kernel[M,](
+        output, indices, weight, weight.shape[0],
+        *fault_channel(EMBEDDING_OOB, output),
+        N, BLOCK_SIZE)
     return output
 
 
@@ -3304,7 +3383,10 @@ def index_select_wrapper(x, dim: int, index) :
             from .ops.index_select import index_select_mid_kernel
             BLOCK = 1024
             _set_device(x)
-            index_select_mid_kernel[(triton.cdiv(total, BLOCK),)](x, out, outer, N, inner, index, index_len, BLOCK=BLOCK)
+            index_select_mid_kernel[(triton.cdiv(total, BLOCK),)](
+                x, out, outer, N, inner, index, index_len,
+                *fault_channel(INDEX_SELECT_OOB, out),
+                BLOCK=BLOCK)
         return out
     x = x.contiguous()
     N = inp_shape[dim]
@@ -3324,7 +3406,10 @@ def index_select_wrapper(x, dim: int, index) :
     BLOCK_N = min(64, triton.next_power_of_2(index_len))
     grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(index_len, BLOCK_N))
     _set_device(x)
-    index_select_kernel[grid](x, out, M, N, index, index_len, BLOCK_M, BLOCK_N)
+    index_select_kernel[grid](
+        x, out, M, N, index, index_len,
+        *fault_channel(INDEX_SELECT_OOB, out),
+        BLOCK_M, BLOCK_N)
     if _sentinel:
         import numpy as _np
         _o = out.numpy()
@@ -3466,11 +3551,13 @@ def argmin_wrapper(x, dim=None, keepdim=False) :
         if not keepdim:
             out_index = out_index.squeeze(dim)
 
-        BLOCK_N = min(4096, triton.next_power_of_2(N))
-        BLOCK_M = 4
+        _amin_bm, _amin_cap, _amin_warps = _argmin_tile()
+        BLOCK_N = min(_amin_cap, triton.next_power_of_2(N))
+        BLOCK_M = _amin_bm
         grid = (triton.cdiv(M, BLOCK_M), K)
         _set_device(x)
-        argmin_kernel[grid](x, out_index, M, N, K, BLOCK_M, BLOCK_N)
+        argmin_kernel[grid](x, out_index, M, N, K, BLOCK_M, BLOCK_N,
+                            num_warps=_amin_warps)
         return out_index
 
 
@@ -4333,10 +4420,11 @@ def all_wrapper(x, dim=None, keepdim=False) :
         x_perm = x.movedim(dim, -1).contiguous().reshape(M, N)
         out = NBXTensor.empty(M, dtype=NBXDtype.bool_, device=x.device)
         BLOCK_N = min(4096, triton.next_power_of_2(N))
-        grid = (triton.cdiv(M, _RED_BM),)
+        _red_bm, _red_bn, _red_warps = _reduction_2d_tile()
+        grid = (triton.cdiv(M, _red_bm),)
         _set_device(x_perm)
-        all_kernel_dim[grid](x_perm, out, M, N, BLOCK_M=_RED_BM, BLOCK_N=BLOCK_N,
-                             num_warps=4)
+        all_kernel_dim[grid](x_perm, out, M, N, BLOCK_M=_red_bm, BLOCK_N=BLOCK_N,
+                             num_warps=_red_warps)
         shape[dim] = 1
         result = out.view(shape)
         if not keepdim:
@@ -4368,10 +4456,11 @@ def any_wrapper(x, dim=None, keepdim=False) :
         x_perm = x.movedim(dim, -1).contiguous().reshape(M, N)
         out = NBXTensor.empty(M, dtype=NBXDtype.bool_, device=x.device)
         BLOCK_N = min(4096, triton.next_power_of_2(N))
-        grid = (triton.cdiv(M, _RED_BM),)
+        _red_bm, _red_bn, _red_warps = _reduction_2d_tile()
+        grid = (triton.cdiv(M, _red_bm),)
         _set_device(x_perm)
-        any_kernel_dim[grid](x_perm, out, M, N, BLOCK_M=_RED_BM, BLOCK_N=BLOCK_N,
-                             num_warps=4)
+        any_kernel_dim[grid](x_perm, out, M, N, BLOCK_M=_red_bm, BLOCK_N=BLOCK_N,
+                             num_warps=_red_warps)
         shape[dim] = 1
         result = out.view(shape)
         if not keepdim:
@@ -4731,11 +4820,12 @@ def prod_wrapper(x, dim=None, keepdim=False) :
         M = x.numel() // N
         x_perm = x.movedim(dim, -1).contiguous().reshape(M, N)
         out = NBXTensor.empty(M, dtype=x.dtype, device=x.device)
-        grid = (triton.cdiv(M, _RED_BM),)
+        _red_bm, _red_bn, _red_warps = _reduction_2d_tile()
+        grid = (triton.cdiv(M, _red_bm),)
         _set_device(x_perm)
         prod_kernel[grid](x_perm, out, M, N,
-                          BLOCK_M=_RED_BM, BLOCK_N=_RED_BN,
-                          num_warps=4)
+                          BLOCK_M=_red_bm, BLOCK_N=_red_bn,
+                          num_warps=_red_warps)
         shape[dim] = 1
         result = out.view(shape)
         if not keepdim:
@@ -4771,15 +4861,16 @@ def min_wrapper(x, dim=None, keepdim=False):
         x_perm = x.movedim(dim, -1).contiguous().reshape(M, N)
         out = NBXTensor.empty(M, dtype=x.dtype, device=x.device)
         out_index = NBXTensor.empty(M, dtype=NBXDtype.int64, device=x.device)
-        grid = (triton.cdiv(M, _RED_BM),)
+        _red_bm, _red_bn, _red_warps = _reduction_2d_tile()
+        grid = (triton.cdiv(M, _red_bm),)
         _set_device(x_perm)
         # The kernel writes the value AND its index (ATen's min.dim returns
         # both); the wrapper passed four arguments to a five-argument kernel
         # — a latent defect on a path no model of the zoo exercised, found by
         # the kernel reference bank (2026-09-05).
         min_kernel[grid](x_perm, out, out_index, M, N,
-                         BLOCK_M=_RED_BM, BLOCK_N=_RED_BN,
-                         num_warps=4)
+                         BLOCK_M=_red_bm, BLOCK_N=_red_bn,
+                         num_warps=_red_warps)
         shape[dim] = 1
         values = out.view(shape)
         indices = out_index.view(shape)
@@ -4813,15 +4904,16 @@ def max_wrapper(x, dim=None, keepdim=False):
         x_perm = x.movedim(dim, -1).contiguous().reshape(M, N)
         out = NBXTensor.empty(M, dtype=x.dtype, device=x.device)
         out_index = NBXTensor.empty(M, dtype=NBXDtype.int64, device=x.device)
-        grid = (triton.cdiv(M, _RED_BM),)
+        _red_bm, _red_bn, _red_warps = _reduction_2d_tile()
+        grid = (triton.cdiv(M, _red_bm),)
         _set_device(x_perm)
         # The kernel writes the value AND its index (ATen's max.dim returns
         # both); the wrapper passed four arguments to a five-argument kernel
         # — a latent defect on a path no model of the zoo exercised, found by
         # the kernel reference bank (2026-09-05).
         max_kernel[grid](x_perm, out, out_index, M, N,
-                         BLOCK_M=_RED_BM, BLOCK_N=_RED_BN,
-                         num_warps=4)
+                         BLOCK_M=_red_bm, BLOCK_N=_red_bn,
+                         num_warps=_red_warps)
         shape[dim] = 1
         values = out.view(shape)
         indices = out_index.view(shape)
@@ -5608,6 +5700,7 @@ def index_put_wrapper(x, indices, values, accumulate: bool = False):
     index_put_kernel[_1d_grid(N)](
         out, idx, vbuf,
         T, N, out.shape[0],  # R: the row bound the kernel traps on (OOB parity with torch)
+        *fault_channel(INDEX_PUT_OOB, out),
         VAL_SCALAR=val_scalar,
         ACCUMULATE=bool(accumulate),
         BLOCK_SIZE=_EW_BLOCK, num_warps=_EW_WARPS,
@@ -7378,6 +7471,16 @@ def _arch_param(section: str, key: str, default):
         return default
 
 
+def _arch_dispatch_param(key: str, default):
+    """One `dispatch.<key>` value for the executing hardware profile.
+
+    The launch path's own knobs live here — how many command buffers a queue
+    may hold in flight, and anything else about how work reaches the device.
+    They belong to the device, so they are read from its profile rather than
+    written into the driver."""
+    return _arch_param("dispatch", key, default)
+
+
 def _arch_memory_param(key: str, default):
     """One `memory.<key>` value for the executing hardware profile.
     Thin alias of `_arch_param("memory", ...)`, kept because the memory
@@ -7755,7 +7858,10 @@ def _decode_attn_vec(q, k, v, bias, softmax_scale,
     groups = nheads // nheads_k
     BHq = batch * nheads
     D_v = v.shape[3]
-    BLOCK_D = max(triton.next_power_of_2(max(headdim, D_v)), 16)
+    # The floor is the backend capability, not 16: a dot tile dimension the
+    # attention lowering refuses is not a tile this path can use. Inert on
+    # cuda and hip, where it reads 16.
+    BLOCK_D = max(triton.next_power_of_2(max(headdim, D_v)), _fa_min_tile())
     # Defaults = the judged config (locked pinned protocol, 2026-08-23:
     # seg 256 / BN 32 / 4 warps won the row at all three contexts).
     BLOCK_N = int(_os_dv.environ.get("NBX_DV_BLOCK_N", "32"))
@@ -7825,7 +7931,7 @@ def _decode_attn_vec(q, k, v, bias, softmax_scale,
         opart.stride(0), opart.stride(1), D_v,
         mpart.stride(0), mpart.stride(1),
         out.stride(0), out.stride(1),
-        SPLIT=split, GROUPS=1, BLOCK_G=16,
+        SPLIT=split, GROUPS=1, BLOCK_G=max(16, _fa_min_tile()),
         BLOCK_D=BLOCK_D, D=D_v,
         num_warps=4)
     return out.reshape(batch, nheads, 1, D_v)
@@ -7850,8 +7956,13 @@ def _flash_decode(q, k, v, bias, softmax_scale,
                                    flash_decode_reduce_kernel)
     groups = nheads // nheads_k
     BH = batch * nheads_k
-    BLOCK_G = max(triton.next_power_of_2(groups), 16)
-    BLOCK_D = max(triton.next_power_of_2(headdim), 16)
+    # Same capability as the prefill path: a decode step at one query row
+    # still forms a `tl.dot` whose tile dimension must be one the backend
+    # computes correctly. `seqlen_q=1, headdim=64` reached the refusal here
+    # after the prefill floor was already raised -- the small dimension was
+    # BLOCK_G, not BLOCK_M, and the refusal names neither.
+    BLOCK_G = max(triton.next_power_of_2(groups), _fa_min_tile())
+    BLOCK_D = max(triton.next_power_of_2(headdim), _fa_min_tile())
     # K and V tiles are [BLOCK_N, BLOCK_D] fp16, double-buffered by the
     # pipeliner: BLOCK_N * BLOCK_D * 2 B * ~4 buffers must fit Volta's
     # 96 KB. At BLOCK_D<=128, BLOCK_N=128 uses ~
@@ -8359,8 +8470,13 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
     # Reduce BLOCK_M for large headdim to stay within shared memory limits.
     # V100 has 96KB shared memory. With headdim=256: 128×256×2×3 = 192KB > 96KB.
     BLOCK_HEADDIM = max(triton.next_power_of_2(headdim), 16)
+    # The floor is a BACKEND CAPABILITY, not 16. A backend whose generic
+    # attention lowering mis-computes below 32 refuses the kernel, and a
+    # refusal wastes the whole model where a padded tile only wastes half a Q
+    # tile at seqlen_q=1. On cuda and hip this reads 16 and nothing moves.
+    _fa_floor = _fa_min_tile()
     if seqlen_q <= 16:
-        BLOCK_M = 16
+        BLOCK_M = max(16, _fa_floor)
         BLOCK_N = 64 if BLOCK_HEADDIM < 128 else (64 if BLOCK_HEADDIM < 256 else 32)
     elif BLOCK_HEADDIM >= 512:
         # PixArt VAE on V100. (32,32) for h=512 needs 131KB SMEM > 96KB
@@ -8420,6 +8536,22 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
         BLOCK_M = min(BLOCK_M, int(_ceil_m))
     if _ceil_n:
         BLOCK_N = min(BLOCK_N, int(_ceil_n))
+    # The ceiling clamps, the floor holds — and the floor is applied LAST.
+    #
+    # The ceiling is a RESOURCE bound read from the profile; the floor is a
+    # CORRECTNESS bound read from the backend, below which the attention
+    # lowering refuses (or, worse, would mis-compute). min(32, 16) = 16 is
+    # exactly what happened on whisper's decode probe: the wrapper's floor
+    # raised BLOCK_M to 32 and the Apple profile's `block_m: 16` decode row
+    # clamped it straight back down into the refusal. Below the floor there
+    # is nothing to run, so a profile row under it is a CONFLICT — obeyed
+    # nowhere, and said once, because a profile that promises a tile the
+    # backend refuses should be heard about and fixed, not silently outrun.
+    if BLOCK_M < _fa_floor or BLOCK_N < _fa_floor:
+        _clamped = (BLOCK_M, BLOCK_N)
+        BLOCK_M = max(BLOCK_M, _fa_floor)
+        BLOCK_N = max(BLOCK_N, _fa_floor)
+        _announce_floor_over_ceiling(_clamped, (BLOCK_M, BLOCK_N), _fa_floor)
 
     # Output allocation. seqlen_q_rounded must align with actual BLOCK_M.
     o = NBXTensor.empty_like(q)
@@ -8549,8 +8681,10 @@ def scaled_dot_product_attention_wrapper(q, k, v, attn_mask=None,
             _prep, _ = _nbx_launcher.prepare(_inner, _probe_args, _kw)
             return int(_prep.shared)
 
+        # The shrink stops at the backend's floor, not at 16: a candidate the
+        # backend refuses is not a candidate.
         _cands, _m = [(BLOCK_M, BLOCK_N)], BLOCK_M
-        while _m > 16:
+        while _m > max(16, _fa_min_tile()):
             _m //= 2
             _cands.append((_m, BLOCK_N))
         try:

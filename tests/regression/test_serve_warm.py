@@ -77,6 +77,17 @@ def _synthetic_input(tmp_path: Path) -> Path:
 AUDIO_REF = REPO / "benchmarks" / "assets" / "jfk_11s.wav"
 IMAGE_REF = REPO / "benchmarks" / "assets" / "apple_448.png"
 
+def _speaker_kwargs(model: str) -> dict:
+    """`{"speaker": <voice>}` where the artefact needs one, `{}` otherwise.
+
+    Relative import: `tests/` has no __init__.py, so `tests.regression.…` is
+    not importable; `tests/regression/` is a package, so a sibling import is.
+    """
+    from .conftest import speaker_the_artefact_requires
+    voice = speaker_the_artefact_requires(model)
+    return {"speaker": voice} if voice else {}
+
+
 FAMILY_ROWS = [
     pytest.param(
         "TinyLlama-1.1B-Chat-v1.0",
@@ -88,7 +99,12 @@ FAMILY_ROWS = [
         "text", id="stt"),
     pytest.param(
         "Kokoro-82M",
-        {"prompt": "Hello world."},
+        # The voice is asked of the ARTEFACT, not written here. This one ships
+        # 54 voicepacks and declares no `voice` in runtime/defaults.json, so
+        # the engine refuses rather than picking one by a literal — which is
+        # what it used to do on every run, silently. A name written in this
+        # file would be that same literal, one layer up.
+        {"prompt": "Hello world.", **_speaker_kwargs("Kokoro-82M")},
         "media:wav", id="tts"),
     pytest.param(
         "Voxtral-Mini-3B-2507",

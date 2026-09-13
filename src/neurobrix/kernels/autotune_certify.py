@@ -21,6 +21,7 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import os
+import warnings
 import platform
 import socket
 import subprocess
@@ -93,9 +94,69 @@ def census(path: Optional[str] = None) -> Dict[str, List[tuple]]:
 _NP = {"fp16": np.float16, "bf16": np.float32, "fp32": np.float32, "fp64": np.float64}
 
 
+class _Synth(np.ndarray):
+    """An array that remembers the NBX dtype its values belong to.
+
+    numpy has no bfloat16, and that single fact locked the whole Apple
+    certification: `_NP` mapped `"bf16"` to `np.float32`, so a census key
+    saying bf16 got an fp32 tensor, the wrapper recomputed an fp32 key, and
+    the two could not match. Every shape with a bf16 input failed by
+    construction — and Apple models are massively bf16.
+
+    The refusal was right and must not be relaxed: an entry written under a
+    key the runtime will never recompute is an entry nobody finds. What was
+    needed was to be able to recompute the key.
+
+    bf16 is nothing but the top sixteen bits of an fp32, so its values are
+    carried EXACTLY in an fp32 array and this tag says what the kernel must
+    receive. The oracle then reads the same values and is exact rather than
+    merely close: a bf16 value is exactly representable in fp32 and in fp64.
+    No dependency is added — measured 2026-09-11, the integer conversion
+    below agrees with `torch.bfloat16` on 200 013 values with ZERO
+    divergence, exact halves, subnormals, infinities, NaN and the fp32
+    maximum included.
+    """
+
+    def __new__(cls, arr, nbx_dtype):
+        obj = np.asarray(arr).view(cls)
+        obj._nbx_dtype = nbx_dtype
+        return obj
+
+    def __array_finalize__(self, obj):
+        if obj is not None:
+            self._nbx_dtype = getattr(obj, "_nbx_dtype", None)
+
+
+def f32_to_bf16_bits(a: np.ndarray) -> np.ndarray:
+    """The top sixteen bits, rounded to nearest with ties to even.
+
+    `+0x7FFF` alone rounds an exact half down; `((u >> 16) & 1)` adds one ulp
+    when the kept bit is odd, which is exactly ties-to-even. A NaN whose
+    mantissa lives only in the discarded bits would become an infinity, so it
+    is forced to a quiet NaN.
+    """
+    a = np.ascontiguousarray(a, dtype=np.float32)
+    u = a.view(np.uint32)
+    bias = np.uint32(0x7FFF) + ((u >> np.uint32(16)) & np.uint32(1))
+    bits = ((u + bias) >> np.uint32(16)).astype(np.uint16)
+    bits[np.isnan(a)] = np.uint16(0x7FC0)
+    return bits
+
+
+def bf16_bits_to_f32(bits: np.ndarray) -> np.ndarray:
+    """The exact value those bits represent, as fp32."""
+    return (np.ascontiguousarray(bits, dtype=np.uint16).astype(np.uint32)
+            << np.uint32(16)).view(np.float32)
+
+
 def _arr(rng, shape, dtype_name, scale=0.1):
     a = (rng.standard_normal(shape) * scale)
-    return a.astype(_NP.get(dtype_name, np.float32))
+    if dtype_name == "bf16":
+        # The VALUES are made exactly representable in bf16, so the oracle
+        # reading this array reads what the kernel will receive.
+        exact = bf16_bits_to_f32(f32_to_bf16_bits(a.astype(np.float32)))
+        return _Synth(exact.reshape(np.shape(a)), "bf16")
+    return _Synth(a.astype(_NP.get(dtype_name, np.float32)), dtype_name)
 
 
 def _conv_out_hw(h, wd, kh, kw, stride, padding, dilation):
@@ -206,11 +267,22 @@ def synthesize(qual: str, tuner, key: tuple, rng) -> Optional[Tuple[Callable[[],
     be the census's — an oracle for a mismatched key is minutes wasted), and
     the name of the kernel argument that is the output. None when this
     kernel has no synthesizer here."""
-    from neurobrix.kernels.nbx_tensor import NBXTensor
+    from neurobrix.kernels.nbx_tensor import NBXTensor, NBXDtype
     from neurobrix.kernels import wrappers as W
     dts = C.key_dtypes(key)
     short = C.kernel_short(qual)
-    to = lambda a: NBXTensor.from_numpy(np.ascontiguousarray(a))   # noqa: E731
+    def to(a):
+        """The NBXTensor the kernel must receive, with the dtype the key names.
+
+        A bf16 array travels in a uint16 container, which `from_numpy`'s
+        `dtype` argument exists for — it names the NBX dtype the BITS already
+        are. Passing the fp32 carrier instead is what made every bf16 shape
+        uncertifiable.
+        """
+        if getattr(a, "_nbx_dtype", None) == "bf16":
+            bits = f32_to_bf16_bits(np.ascontiguousarray(np.asarray(a)))
+            return NBXTensor.from_numpy(bits, dtype=NBXDtype.bfloat16)
+        return NBXTensor.from_numpy(np.ascontiguousarray(np.asarray(a)))
     if short in ("matmul_kernel", "addmm_kernel"):
         M, N, K = int(key[0]), int(key[1]), int(key[2])
         a = _arr(rng, (M, K), dts[0] if dts else "fp16")
@@ -633,10 +705,27 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None)
     _out_dt = C.output_dtype(tuner, key)
     _nbx = {"fp16": NBXDtype.float16, "bf16": NBXDtype.bfloat16, "fp32": NBXDtype.float32}.get(_out_dt)
     tuner.run = certifying_run
+    fell_back = []
     try:
         if _nbx is not None:
             W.set_compute_dtype(_nbx)
-        call()
+        # Did the kernel actually BUILD on the device, or did the backend fail
+        # to compile it and fall back to the CPU?
+        #
+        # The screen cannot answer that. A CPU fallback COMPUTES CORRECTLY, so
+        # its deviation against the fp64 oracle is excellent — 1e-6 like any
+        # sound path — and an entry certified on it would record a
+        # configuration chosen for a path that never runs. Measured
+        # 2026-09-11: 30 of 30 entries do build, but the proof did not say so,
+        # and a reader six months from now could not redo the check.
+        #
+        # What is measured and not written does not exist.
+        with warnings.catch_warnings(record=True) as _caught:
+            warnings.simplefilter("always")
+            call()
+            fell_back = [str(w.message).splitlines()[0][:120] for w in _caught
+                         if "fall back to CPU" in str(w.message)
+                         or "Metal compilation failed" in str(w.message)]
     finally:
         W.set_compute_dtype(_prev_dt)
         tuner.run = saved_run
@@ -648,7 +737,11 @@ def certify_key(qual: str, tuner, key: tuple, tolerance: float, rng, bench=None)
              "deviation": state["deviation"], "tolerance": tolerance, "oracle": state.get("oracle", ORACLE), "machine": _machine(),
              "best_ms": state["best_ms"], "second_ms": state["second_ms"], "candidates": state["candidates"],
              "accepted": state["accepted"], "benched": state["benched"], "could_not_run": len(state["unrun"]),
-             "seconds": {"oracle": state.get("t_oracle"), "runs": state.get("t_runs"), "bench": state.get("t_bench")}}
+             "seconds": {"oracle": state.get("t_oracle"), "runs": state.get("t_runs"), "bench": state.get("t_bench")},
+             "built": {"gpu": not fell_back,
+                       "how": "no backend compilation fallback was raised during "
+                              "the certifying run",
+                       "fallback": fell_back or None}}
     return {"config": state["config"], "proof": proof, "excluded": state["excluded"],
             "could_not_run": state["unrun"], "timings": state["timings"]}
 

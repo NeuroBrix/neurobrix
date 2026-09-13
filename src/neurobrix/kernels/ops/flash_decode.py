@@ -70,6 +70,16 @@ def flash_decode_split_kernel(
     q = tl.load(q_ptr + pid_h * stride_qh + offs_g[:, None] * stride_qg
                 + offs_d[None, :],
                 mask=mask_g[:, None] & mask_d[None, :], other=0.0)
+    # Scale Q BEFORE the dot, not its result.
+    #
+    # `(alpha * q) @ kT` and `alpha * (q @ kT)` are the same product and NOT
+    # the same rounding. The Metal backend refuses the second form inside the
+    # attention loop -- it drops or mis-applies a fused op on a `tt.dot`
+    # RESULT, so it declines rather than emit silently wrong scores -- and
+    # names this one as supported. `flash_attention` already did it; this
+    # kernel did not, and it is where whisper stopped once the addmm blocker
+    # in front of it was cleared.
+    q = (q * sm_scale).to(q.dtype)
 
     seg_start = pid_s * seg_len
     seg_end = tl.minimum(seg_start + seg_len, T_k)
@@ -87,7 +97,7 @@ def flash_decode_split_kernel(
                          mask=mask_n[:, None] & mask_d[None, :], other=0.0)
         # scores [BLOCK_G, BLOCK_N] in fp32
         s = tl.dot(q, tl.trans(k_tile))
-        s = s.to(tl.float32) * sm_scale
+        s = s.to(tl.float32)            # Q already carries sm_scale
         if HAS_BIAS:
             b = tl.load(bias_ptr + offs_n, mask=mask_n, other=0.0)
             s = s + b[None, :].to(tl.float32)

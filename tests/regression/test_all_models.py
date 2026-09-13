@@ -169,7 +169,8 @@ def _mode_for_gen_type(gen_type: str) -> str:
     return tail if tail in ("image", "text") else "image"
 
 
-def _cli_inputs_for(family: str, flow: str, gen_type: str) -> List[str]:
+def _cli_inputs_for(family: str, flow: str, gen_type: str,
+                    model: str = "") -> List[str]:
     """Build the model-specific CLI inputs based on (family, flow, gen_type).
 
     NOTE: family=upscaler does NOT pass through here — it uses the
@@ -220,7 +221,21 @@ def _cli_inputs_for(family: str, flow: str, gen_type: str) -> List[str]:
     # the model, not the prompt subject), but consistency is harmless.
     if family in ("image", "video"):
         return ["--prompt", IMAGE_PROMPT]
-    return ["--prompt", "Hello world"]
+    return ["--prompt", "Hello world"] + _speaker_if_the_artefact_needs_one(model)
+
+
+def _speaker_if_the_artefact_needs_one(model: str) -> List[str]:
+    """`--speaker <voice>` where the artefact ships voices and declares none.
+
+    The choice itself lives in conftest — the warm-serve rows need the same
+    answer, and a second copy is a second thing to keep true.
+    """
+    # Relative: `tests/` has no __init__.py, so `tests.regression.…` is not
+    # importable — the same ModuleNotFoundError another test file already
+    # carries. `tests/regression/` IS a package, so a sibling import is.
+    from .conftest import speaker_the_artefact_requires
+    voice = speaker_the_artefact_requires(model)
+    return ["--speaker", voice] if voice else []
 
 
 def _runtime_python() -> str:
@@ -349,7 +364,7 @@ def _run_neurobrix(model: str, mode: str, family: str, flow: str,
             if out_path.exists():
                 out_path.unlink()
             cmd.extend(["--output", str(out_path)])
-        cmd.extend(_cli_inputs_for(family, flow, gen_type))
+        cmd.extend(_cli_inputs_for(family, flow, gen_type, model))
         if mode == "triton":
             cmd.append("--triton")
 

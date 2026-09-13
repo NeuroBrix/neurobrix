@@ -20,7 +20,7 @@ import math
 import re
 import struct
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Set
 
 import numpy as np
 
@@ -95,8 +95,22 @@ def load_component_weights(
     shard_map: Optional[Dict[str, str]] = None,
     upcast_fp16_to_fp32: bool = False,
     per_device_vram_budget: Optional[Dict[int, int]] = None,
+    only: Optional[Set[str]] = None,
 ) -> Dict[str, NBXTensor]:
-    """Load all weights for a component as NBXTensor. Zero torch.
+    """Load weights for a component as NBXTensor. Zero torch.
+
+    `only` restricts the load to the named weights. It is the capability two
+    separate things need and neither had:
+
+      * a parameter that NO op in the graph consumes is never read during
+        execution, so loading it is pure cost. DeepSeek-Coder-V2-Lite carries
+        11781 MB of such weights — MoE experts the trace never routed to — out
+        of 30638 MB, 38% of the component.
+      * streaming a component at layer granularity means holding one segment's
+        weights at a time, which is this same call with a smaller set.
+
+    None means every weight in the shards, which is what every caller did
+    before and still does unless it says otherwise.
 
     Uses ComponentArena: one cudaMalloc per device, sub-allocate inside.
     Zero fragmentation vs 18866 individual cudaMalloc calls.
@@ -191,6 +205,8 @@ def load_component_weights(
         for key, info in header.items():
             if key == '__metadata__':
                 continue
+            if only is not None and key not in only:
+                continue        # not asked for: not sized, not loaded
             # Zero3 whole-component CPU offload: block weights (those
             # matching _BLOCK_RE) go to pinned host memory; non-block
             # weights (embeddings, norms, lm_head) stay GPU-resident.
@@ -257,7 +273,7 @@ def load_component_weights(
             shard_path, header, data_offset,
             weights, device_idx, compute_dtype,
             weight_device, arenas, cpu_weights,
-            upcast_effective=upcast_effective)
+            upcast_effective=upcast_effective, only=only)
 
     # Store arenas on the dict so they stay alive (prevent GC of GPU memory)
     weights['_arenas'] = arenas  # type: ignore
@@ -449,6 +465,7 @@ def _load_shard_into_arenas(
     arenas: Dict[int, ComponentArena],
     cpu_weights: set,
     upcast_effective: bool = False,
+    only: Optional[Set[str]] = None,
 ) -> None:
     """Load tensors from one shard, sub-allocating from arenas.
 
@@ -469,6 +486,8 @@ def _load_shard_into_arenas(
         for key, info in header.items():
             if key == '__metadata__':
                 continue
+            if only is not None and key not in only:
+                continue        # sized out above; skip the read too
 
             sf_dtype = info["dtype"]
             shape = tuple(info["shape"])

@@ -23,6 +23,8 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any, Tuple, TYPE_CHECKING
 
 from neurobrix.core.prism.structure import AllocationStrategy, DeviceSpec, PrismProfile
+from neurobrix.core.prism.structure import names_accelerator
+from neurobrix.core.host_memory import MemoryState, memory_state
 from neurobrix.core.prism.profiler import ActivationProfiler, InputConfig
 from neurobrix.core.prism.memory_estimator import compute_dtype_factor, get_dtype_bytes_per_element
 from neurobrix.core.config import get_prism_defaults, get_dtype_bytes
@@ -36,7 +38,107 @@ if TYPE_CHECKING:
 # DATACLASSES
 # =============================================================================
 
+def _consumed_weight_bytes(comp, dtype_mult: float):
+    """Bytes of the weights this component's graph actually reads, or None.
+
+    Two sources, both already in hand at plan time: the graph names which
+    parameters ops consume, and `weights_index.json` gives each one's size.
+    Neither is re-read from disk here -- the container carries them.
+
+    None means the question could not be answered from what is present, and
+    the caller then sizes by the file, which over-estimates. Under-estimating
+    would plan a model into a budget it does not fit, so the asymmetry is
+    deliberate.
+    """
+    graph = getattr(comp, "graph", None)
+    index = getattr(comp, "weights_index", None) or getattr(comp, "weight_index", None)
+    if not isinstance(graph, dict):
+        return None
+    tensors = graph.get("tensors")
+    ops = graph.get("ops")
+    order = graph.get("execution_order")
+    if not isinstance(tensors, dict) or not isinstance(ops, dict) or not order:
+        return None
+
+    total = 0
+    seen = set()
+    sizes = None
+    if isinstance(index, dict):
+        sizes = index.get("tensors") if isinstance(index.get("tensors"), dict) else None
+
+    for op_uid in order:
+        op = ops.get(op_uid) or {}
+        for tid in (op.get("input_tensor_ids") or []):
+            t = tensors.get(tid)
+            if t is None or not t.get("is_parameter"):
+                continue
+            name = t.get("weight_name") or tid
+            if name in seen:
+                continue
+            seen.add(name)
+            if sizes is not None and name in sizes:
+                total += int(sizes[name].get("size_bytes", 0))
+            else:
+                # No index entry: compute from the graph's own shape/dtype.
+                n = 1
+                shape = t.get("shape") or []
+                for d in shape:
+                    if not isinstance(d, int) or d < 0:
+                        return None          # symbolic: cannot size honestly
+                    n *= d
+                width = _DTYPE_WIDTH.get(str(t.get("dtype", "")).lower())
+                if width is None:
+                    return None
+                total += n * width
+    if not seen:
+        return None
+    return int(total * dtype_mult)
+
+
+_DTYPE_WIDTH = {
+    "float64": 8, "float32": 4, "bfloat16": 2, "float16": 2,
+    "int64": 8, "int32": 4, "int16": 2, "int8": 1, "uint8": 1, "bool": 1,
+    "float8_e4m3fn": 1, "float8_e5m2": 1,
+}
+
+
+def _device_is_unified(device_string: str, profile) -> bool:
+    """Does this allocation target share ONE memory pool with the host?
+
+    Decides whether a `zero3:` offload frees device memory. On a discrete
+    card host RAM and device memory are disjoint and zero3's premise holds:
+    the weights leave the device. On a unified device they are the same
+    bytes, "offload" moves nothing, and counting only activations tells the
+    solver a plan fits when it does not.
+
+    Measured 2026-09-09, DeepSeek-Coder-V2-Lite-Instruct on a 24576 MB
+    unified device: Prism scored `lazy_sequential` "the only viable
+    strategy" with its `model` component on zero3 at 31259.5 MB — 27% over
+    the budget it had just read. The run then planned 32104 MB; the eager
+    arm was SIGKILLed by the OS and the Triton arm's allocator refused at
+    the budget, reporting a 5.5 MB pinned allocation failure that was really
+    a full working set.
+
+    Vendor-agnostic by construction: it asks the DEVICE whether its memory
+    is unified, so an APU on `hip:0` and an integrated `xpu:0` are answered
+    by the same code with no line added.
+    """
+    if not isinstance(device_string, str) or profile is None:
+        return False
+    # "zero3:mps:0" -> "mps:0" -> index 0
+    tail = device_string.split(":", 1)[1] if device_string.startswith("zero3:") else device_string
+    try:
+        index = int(tail.rsplit(":", 1)[1])
+    except (IndexError, ValueError):
+        return False
+    for dev in getattr(profile, "devices", None) or []:
+        if dev.index == index:
+            return dev.has_unified_memory
+    return False
+
+
 @dataclass
+
 class ComponentAllocation:
     """Allocation plan for a single component."""
     name: str
@@ -137,6 +239,13 @@ class DeviceState:
     used_mb: float = 0.0
     components: List[str] = field(default_factory=list)
     spec: Optional[DeviceSpec] = None
+    #: What the DEVICE recommends, before the machine's real availability is
+    #: taken into account. Kept beside `capacity_mb` rather than replacing it,
+    #: because a refusal that names only one of the two teaches nothing.
+    recommended_mb: float = 0.0
+    #: The machine as it was when this plan was made. None where the plan was
+    #: built without reading it (a discrete card, or an unreadable platform).
+    host_memory: Optional["MemoryState"] = None
 
     @property
     def free_mb(self) -> float:
@@ -203,6 +312,21 @@ class ExecutionPlan:
     rejected: List[Tuple[str, float, str]] = field(default_factory=list)
     kv_cache_plan: Optional[KVCachePlan] = None
     cpu_ram_mb: int = 0  # CPU RAM budget for offload strategies
+    # Components the lifecycle strategy classified as TRANSIENT (used once per
+    # request) rather than persistent (re-entered every step). Empty for every
+    # other strategy. `single_gpu_lifecycle` is accepted on a budget of
+    # `persistent weights + one transient at a time`, and that budget is only
+    # true if the executor actually releases a transient after it has run --
+    # so the classification has to travel with the plan instead of dying in
+    # the solver, which is where it used to stop.
+    transient_components: List[str] = field(default_factory=list)
+    # component -> [[first_op_uid, last_op_uid], ...], the segments the
+    # LAYER-STREAMING rung was budgeted against. Carried rather than
+    # recomputed: the executor's dag may have been transformed since Prism
+    # read it (MoE fusion rewrites which tensors an op reads), and a segment
+    # boundary recomputed on a different graph is not the boundary the budget
+    # was accepted under.
+    layer_stream_plan: Dict[str, List[List[str]]] = field(default_factory=dict)
     # Op-level tiling — per-component plan emitted when a single op's
     # output+workspace exceeds the assigned GPU's safe VRAM budget. Picked
     # up by RuntimeExecutor to wire op_uid interceptors on the component's
@@ -598,6 +722,9 @@ class PrismSolver:
             # CPU-only profile: skip the entire GPU cascade and jump
             # straight to cpu_execution.
             strategies = [
+                # Below every rung that keeps a component whole, above the
+                # host ones. It wins by score (50), never by a gate.
+                ("layer_streaming", self._try_layer_streaming),
                 ("cpu_execution", self._try_cpu_execution),
                 ("cpu_streaming", self._try_cpu_streaming),
             ]
@@ -610,6 +737,9 @@ class PrismSolver:
                 ("single_gpu_lifecycle", self._try_single_gpu_lifecycle),
                 ("lazy_sequential", self._try_lazy_sequential),
                 ("zero3", self._try_zero3),
+                # Below every rung that keeps a component whole, above the
+                # host ones. It wins by score (50), never by a gate.
+                ("layer_streaming", self._try_layer_streaming),
                 ("cpu_execution", self._try_cpu_execution),
                 ("cpu_streaming", self._try_cpu_streaming),
             ]
@@ -624,6 +754,9 @@ class PrismSolver:
                 ("component_placement_lazy", self._try_component_placement_lazy),
                 ("lazy_sequential", self._try_lazy_sequential),
                 ("zero3", self._try_zero3),
+                # Below every rung that keeps a component whole, above the
+                # host ones. It wins by score (50), never by a gate.
+                ("layer_streaming", self._try_layer_streaming),
                 ("cpu_execution", self._try_cpu_execution),
                 ("cpu_streaming", self._try_cpu_streaming),
             ]
@@ -761,8 +894,26 @@ class PrismSolver:
                     total_capacity = sum(int(d.capacity_mb * 1024 * 1024) for d in strat_devices)
 
                 if strat_name == "zero3":
-                    total_allocated = sum(m.activation_bytes + m.overhead_bytes
-                                         for m in component_memory.values())
+                    # Weights leave the device only where the host is a
+                    # DIFFERENT pool. On a unified device "offload to pinned
+                    # host memory" moves the bytes to the same memory they
+                    # already occupy — Metal's malloc_host hands back a shared
+                    # buffer and charges it to the same working set — so the
+                    # weights stay counted.
+                    #
+                    # This branch short-circuits the per-component loop below,
+                    # which is where the same rule was first written and where
+                    # it was therefore never reached for zero3. Measured:
+                    # TinyLlama at a 1000 MB budget was accepted for zero3
+                    # with 262.8 MB counted of 2385.7 MB resident.
+                    _unified = any(
+                        d.spec.has_unified_memory for d in strat_devices)
+                    if _unified:
+                        total_allocated = sum(m.total_bytes
+                                              for m in component_memory.values())
+                    else:
+                        total_allocated = sum(m.activation_bytes + m.overhead_bytes
+                                              for m in component_memory.values())
                 elif strat_name == "single_gpu_lifecycle":
                     persistent, transient = self._classify_lifecycle(container)
                     # Persistent: all weights resident + peak activation
@@ -804,9 +955,22 @@ class PrismSolver:
                     for _comp_name, _m in component_memory.items():
                         _alloc = strat_allocs.get(_comp_name)
                         _dev = _alloc[0] if isinstance(_alloc, tuple) else _alloc
-                        if isinstance(_dev, str) and _dev.startswith("zero3:"):
+                        _part = (getattr(self, "_layer_stream_partitions", {}) or {}).get(_comp_name) \
+                            if strat_name == "layer_streaming" else None
+                        if _part is not None:
+                            # It holds ONE segment at a time. The number the
+                            # partitioner announced is the number the executor
+                            # holds, which is the whole point of this rung.
+                            total_allocated += _part.peak_resident_bytes
+                        elif (isinstance(_dev, str) and _dev.startswith("zero3:")
+                                and not _device_is_unified(_dev, profile)):
                             total_allocated += _m.activation_bytes + _m.overhead_bytes
                         else:
+                            # Weights count. On a UNIFIED device this is the
+                            # zero3 branch too: "offload to host pinned
+                            # memory" moves the bytes to the same pool they
+                            # already occupy, so it frees nothing and the
+                            # budget must still see them.
                             total_allocated += _m.total_bytes
 
                 # Remove KV cache double-count (already in LM activation_bytes)
@@ -829,8 +993,8 @@ class PrismSolver:
 
         if allocations is None:
             raise RuntimeError(
-                "ZERO FALLBACK: No strategy can fit model + KV cache on available hardware.\n"
-                "Consider using a GPU with more VRAM or a multi-GPU setup."
+                "ZERO FALLBACK: No strategy can fit model + KV cache on "
+                "available hardware.\n" + self._memory_verdict(devices)
             )
 
         devices = chosen_devices
@@ -848,12 +1012,30 @@ class PrismSolver:
         # in _place_component) — keep only entries whose final allocation
         # actually landed on a GPU (drop any stale flag from a rejected
         # strategy attempt where the component ended up elsewhere).
+        if chosen_strategy == AllocationStrategy.SINGLE_GPU_LIFECYCLE.value:
+            plan.transient_components = list(getattr(self, "_lifecycle_transient", []) or [])
+
+        if chosen_strategy == "layer_streaming":
+            # Only when this rung WON. `_layer_stream_partitions` is left
+            # behind by every attempt, including rejected ones, and carrying a
+            # rejected attempt's boundaries into another strategy's plan would
+            # hand the executor segments nothing agreed to.
+            _parts = getattr(self, "_layer_stream_partitions", None) or {}
+            plan.layer_stream_plan = {
+                name: [[seg.first_op, seg.last_op] for seg in part.segments]
+                for name, part in _parts.items()}
+            if not plan.layer_stream_plan:
+                raise RuntimeError(
+                    "layer_streaming was chosen and carries no segments: the "
+                    "plan and the rung disagree, which the executor cannot "
+                    "resolve. Refusing rather than running an unplanned cut.")
+
         _ct = getattr(self, "_component_tiling", {}) or {}
         if _ct:
             plan.component_tiling = {
                 cn: spec for cn, spec in _ct.items()
                 if cn in plan.components
-                and str(plan.components[cn].device).startswith("cuda")
+                and not str(plan.components[cn].device).startswith("cpu")
             }
 
         # Step 7b: Op-level tiling — detect upsample→conv fusion pairs whose
@@ -1514,8 +1696,25 @@ class PrismSolver:
                 comp.name, target_dtype_str)
             dtype_mult = compute_dtype_factor(source_dtype, comp_dtype_str)
 
-            # Weight memory
-            weight_bytes = sum(int(s * dtype_mult) for s in shard_sizes.get(comp.name, {}).values())
+            # Weight memory. Sized by what the ENGINE LOADS, which is the
+            # weights this graph consumes — not by the bytes on disk.
+            #
+            # `get_shard_sizes()` reports file sizes, and a shard holds every
+            # parameter the export wrote, including any no op reads. The
+            # engine skips those (GraphExecutor.consumed_weight_names): on
+            # DeepSeek-Coder-V2-Lite that is 11781 MB of 30638, MoE experts
+            # the trace never routed to. Sizing by the file made Prism plan
+            # against 30638 MB while execution needed 18857 — the announced
+            # budget and the executed one differing by 62%, in the direction
+            # that REFUSES a model which fits.
+            #
+            # Falls back to the file bytes when the graph cannot answer,
+            # which over-estimates rather than under-estimates: the safe
+            # direction, and it is the previous behaviour exactly.
+            weight_bytes = _consumed_weight_bytes(comp, dtype_mult)
+            if weight_bytes is None:
+                weight_bytes = sum(int(s * dtype_mult)
+                                   for s in shard_sizes.get(comp.name, {}).values())
 
             # Activation memory
             activation_bytes = 0
@@ -1844,15 +2043,53 @@ class PrismSolver:
     # =========================================================================
 
     def _prepare_devices(self, profile: PrismProfile) -> List[DeviceState]:
-        """Prepare GPUs sorted by capacity DESC."""
-        devices = [
-            DeviceState(
+        """Prepare GPUs sorted by capacity DESC.
+
+        `dev.memory_mb` is what the hardware RECOMMENDS, and on a unified
+        device that is not a measure of what is AVAILABLE: this M4 Pro reports
+        18 186 MB and does not lower it by one byte while another process
+        holds a third of the machine. A plan sized against the recommendation
+        is accepted and then killed by the system mid-execution — measured
+        2026-09-10, an artefact of 12 298 MB accepted at `single_gpu` and
+        killed at step 3 of 20 with 10 099 MB actually free, when its largest
+        component (6 120 MB) would have fitted a lower rung comfortably.
+
+        So the machine is measured HERE, at the one place capacity is born,
+        and the cascade descends on the true number by itself — that is the
+        whole repair. The refusal that fires when no rung fits is the last
+        resort, not the mechanism.
+
+        Only where device memory comes out of host RAM: on a discrete card the
+        two pools are disjoint and host pressure constrains nothing.
+        `has_unified_memory` is the profile's own answer, already written.
+        """
+        host = memory_state()
+        devices = []
+        for dev in profile.devices:
+            recommended = dev.memory_mb * self.safety_margin
+            capacity = recommended
+            if dev.has_unified_memory and host.measured:
+                capacity = min(recommended, host.available_mb * self.safety_margin)
+                if capacity < recommended:
+                    logging.getLogger(__name__).warning(
+                        "%s: unified memory — planning against %.0f MB actually "
+                        "free, not the %.0f MB this device recommends (%s)",
+                        dev.get_device_string(), capacity, recommended,
+                        host.describe())
+            elif dev.has_unified_memory and not host.measured:
+                logging.getLogger(__name__).warning(
+                    "%s: unified memory, but the machine's real availability "
+                    "could not be measured (%s) — planning against the "
+                    "device's recommendation alone, which is what gets a "
+                    "render killed mid-execution when the machine is busy",
+                    dev.get_device_string(), host.source)
+            devices.append(DeviceState(
                 device_string=dev.get_device_string(),
-                capacity_mb=dev.memory_mb * self.safety_margin,
+                capacity_mb=capacity,
                 spec=dev,
-            )
-            for dev in profile.devices
-        ]
+                recommended_mb=recommended,
+                host_memory=host,
+            ))
         devices.sort(key=lambda d: (-d.capacity_mb, d.device_string))
         return devices
 
@@ -1865,6 +2102,8 @@ class PrismSolver:
                 used_mb=0.0,
                 components=[],
                 spec=d.spec,
+                recommended_mb=d.recommended_mb,
+                host_memory=d.host_memory,
             )
             for d in devices
         ]
@@ -1894,10 +2133,25 @@ class PrismSolver:
             max_activation_mb = max((m.activation_mb for _, m in sorted_comps), default=0)
             total_required = total_weights_mb + max_activation_mb
         else:
-            # Cold mode: only one component in VRAM at a time
-            peaks = [(n, m.weight_mb + m.activation_mb) for n, m in sorted_comps]
-            _, max_peak = max(peaks, key=lambda x: x[1])
-            total_required = max_peak
+            # Cold mode. The budget has to be the one this strategy is
+            # EXECUTED under, not the most generous one available.
+            # SingleGPUStrategy is eager (AllocationStrategy.SINGLE_GPU is in
+            # _EAGER_STRATEGIES): `execute_component` adds each component to
+            # `self._loaded_components` and never unloads it, so once every
+            # component has run they are all resident. Budgeting the largest
+            # component alone accepted plans that then hold the SUM -- on a
+            # 24 GB device an image pipeline was accepted on a 16663 MB peak
+            # and executes at 28380 MB, an OOM the planner had declared safe.
+            #
+            # Weights are what stay; only one component's ACTIVATION is live
+            # at a time, since components run one after another. So the budget
+            # is sum(weights) + max(activation) -- the same shape as hot mode.
+            # Where the sum fits, nothing changes; where it does not,
+            # single_gpu now declines and the cascade falls through to
+            # lazy_sequential, which budgets a peak AND executes lazily.
+            total_weights_mb = sum(m.weight_mb for _, m in sorted_comps)
+            max_activation_mb = max((m.activation_mb for _, m in sorted_comps), default=0)
+            total_required = total_weights_mb + max_activation_mb
 
         needs_kv = getattr(self, '_needs_kv_cache', False)
         overhead_pct = 0.0 if needs_kv else 0.05
@@ -2005,6 +2259,9 @@ class PrismSolver:
 
         largest = devices[0]
         persistent, transient = self._classify_lifecycle(container)
+        # Kept for the plan: the budget below is only honest if the executor
+        # is told which components it may release.
+        self._lifecycle_transient = sorted(transient)
 
         persistent_mb = sum(
             comp_mem[n].weight_mb + comp_mem[n].activation_mb
@@ -3261,6 +3518,11 @@ class PrismSolver:
             # disk. Scored below everything so it is only ever chosen when
             # nothing else fits — but it is ALWAYS there, so Prism guarantees
             # execution instead of refusing (P-PRISM-NEVER-REFUSE).
+            # Below every strategy that keeps a component whole, above the
+            # host ones. That ordering IS the inertia: on a card where
+            # single_gpu or zero3 is viable, this loses by 950 or 50 points
+            # and is never chosen. It is not gated on a vendor or a size.
+            "layer_streaming": 50,
             "cpu_streaming": 5,
         }
         score = float(BASE_SCORES.get(strategy_name, 500))
@@ -3275,7 +3537,12 @@ class PrismSolver:
                     break
             for d in dev_str.split(","):
                 d = d.strip()
-                if d.startswith("cuda:") or d.startswith("hip:") or d.startswith("xpu:"):
+                # Was cuda:/hip:/xpu: — omitting mps:, so n_devices counted
+                # 0 on Apple. LATENT rather than live: the penalty below is
+                # gated on `n_devices > 1`, which is false either way on a
+                # single-device machine. Corrected so it stays true of a
+                # multi-device backend that is not one of those three.
+                if names_accelerator(d):
                     device_strings.add(d)
 
         n_devices = len(device_strings)
@@ -3503,6 +3770,139 @@ class PrismSolver:
         # for "no GPU used". We preserve that signal.
         fresh = self._fresh_devices(devices)
         return allocations, fresh
+
+    def _try_layer_streaming(
+        self, sorted_comps, comp_mem, devices, shard_sizes, profile, container
+    ) -> Optional[Tuple[Dict, List[DeviceState]]]:
+        """Stream a component at LAYER granularity, on the accelerator.
+
+        The rung below every rung that keeps a component whole. `lazy_sequential`
+        drops the requirement from sum(components) to max(component);
+        `cpu_streaming` does the same on the host. Neither helps a model that is
+        ONE component larger than the budget, and that is not a corner case:
+        DeepSeek-Coder-V2-Lite is a single `model` component of 17777 MB of
+        live weights.
+
+        Here the component itself comes apart. `LayerPartitioner` cuts it where
+        its DATAFLOW comes apart — activations produced before a point and read
+        after it — and each segment holds only the weights its own ops read.
+        The requirement drops from max(component) to max(segment) + activations.
+
+        INERT BY CONSTRUCTION on a machine that does not need it. This rung is
+        scored below every strategy that keeps components whole, so whenever
+        one of those is viable it wins and this is never chosen. It is not
+        gated on a vendor, a device count or a memory size — it simply loses.
+
+        Viable when every component either fits whole, or partitions into
+        segments that fit. When one does not, this returns None and the
+        cascade's refusal stands, with the partitioner's own arithmetic
+        available to say why.
+        """
+        from neurobrix.core.prism.layer_partition import LayerPartitioner
+
+        if not devices:
+            return None
+        target = devices[0]
+        # The device's CAPACITY, which is what the other rungs are measured
+        # against and what the memory check will compare this plan to. Using
+        # the nominal memory_mb would announce a budget 5% larger than the one
+        # the plan is then judged by.
+        budget_bytes = int(float(getattr(target, "capacity_mb", 0)) * 1024 * 1024)
+        if budget_bytes <= 0:
+            return None
+
+        graphs = {}
+        try:
+            for comp in (container.get_neural_components() or []):
+                g = getattr(comp, "graph", None)
+                if isinstance(g, dict):
+                    graphs[comp.name] = g
+        except Exception:
+            return None
+        if not graphs:
+            return None
+
+        sizes_by_comp = self._weight_sizes_by_component(container)
+
+        allocations: Dict[str, Tuple[str, Dict[str, str]]] = {}
+        partitions = {}
+        dev_str = target.spec.get_device_string()
+
+        # A streamed component does not get the whole device: every component
+        # that stays WHOLE is resident beside it. Partitioning against the
+        # full budget announced a peak that could not be held — measured,
+        # TinyLlama at 1000 MB: a 992.5 MB segment plus a 264.1 MB lm_head
+        # against 950 MB of capacity. Same defect as sizing segments without
+        # reserving the activations, one level up.
+        streamed = {name for name, mem in sorted_comps
+                    if mem.total_bytes > budget_bytes}
+        resident_beside = sum(mem.total_bytes for name, mem in sorted_comps
+                              if name not in streamed)
+        segment_budget = budget_bytes - resident_beside
+        if segment_budget <= 0:
+            return None
+
+        for comp_name, mem in sorted_comps:
+            if comp_name not in streamed:
+                allocations[comp_name] = (dev_str, {})
+                continue
+            graph = graphs.get(comp_name)
+            if graph is None:
+                return None            # cannot cut what we cannot read
+            part = LayerPartitioner(
+                graph, sizes_by_comp.get(comp_name)).partition(segment_budget)
+            if not part.fits or len(part.segments) < 2:
+                # Either genuinely impossible, or one segment — in which case
+                # a rung above this one already serves it and this must not
+                # take the plan.
+                return None
+            partitions[comp_name] = part
+            # The device string stays a plain device. A `layer_stream:` prefix
+            # was tried and is wrong: several places parse an allocation by
+            # splitting on ":" and taking the index, so a three-part string
+            # reached `int('mps')`. What marks a component as streamed is the
+            # PLAN carrying segments for it, which is the same fact and needs
+            # no parser anywhere to learn a new shape.
+            allocations[comp_name] = (dev_str, {})
+
+        if not partitions:
+            return None                # nothing needed cutting: not our plan
+
+        # What each streamed component actually holds, recorded so the
+        # accounting sees the same number the executor will.
+        self._layer_stream_partitions = partitions
+        return allocations, devices
+
+    def _weight_sizes_by_component(self, container) -> Dict[str, Dict[str, int]]:
+        """Per-component {weight_name: stored bytes} from the weights index.
+
+        The index records what is STORED, which is what a load costs. Missing
+        or unreadable means the partitioner sizes from the graph's own
+        shape/dtype instead, which it already knows how to do.
+        """
+        out: Dict[str, Dict[str, int]] = {}
+        base = getattr(container, "cache_path", None)
+        if base is None:
+            return out
+        import json as _json
+        from pathlib import Path as _P
+        comp_dir = _P(base) / "components"
+        if not comp_dir.is_dir():
+            return out
+        for entry in comp_dir.iterdir():
+            index = entry / "weights_index.json"
+            if not index.is_file():
+                continue
+            try:
+                data = _json.loads(index.read_text())
+            except Exception:
+                continue
+            tensors = data.get("tensors")
+            if isinstance(tensors, dict):
+                out[entry.name] = {
+                    k: int(v.get("size_bytes", 0))
+                    for k, v in tensors.items() if isinstance(v, dict)}
+        return out
 
     def _try_cpu_streaming(
         self, sorted_comps, comp_mem, devices, shard_sizes, profile, container
@@ -4018,6 +4418,27 @@ class PrismSolver:
     # =========================================================================
     # UTILITIES
     # =========================================================================
+
+    def _memory_verdict(self, devices: List[DeviceState]) -> str:
+        """The three numbers a refusal must name: what the device recommends,
+        what the machine has free, what the plan asked for.
+
+        A refusal that names none of them teaches nothing — and being killed
+        at step 3 of 20 in silence is worse than any of them.
+        """
+        lines = []
+        for d in devices:
+            if d.recommended_mb and d.capacity_mb < d.recommended_mb:
+                lines.append(
+                    f"  {d.device_string}: {d.recommended_mb:.0f} MB recommended "
+                    f"by the device, {d.capacity_mb:.0f} MB actually usable "
+                    f"right now")
+            else:
+                lines.append(f"  {d.device_string}: {d.capacity_mb:.0f} MB")
+            host = d.host_memory
+            if host is not None:
+                lines.append(f"    {host.describe()}")
+        return "\n".join(lines) if lines else "  no device was prepared"
 
     def _empty_plan(self, profile: PrismProfile) -> ExecutionPlan:
         return ExecutionPlan({}, "float32", 0.0, "empty", {}, "lazy")
