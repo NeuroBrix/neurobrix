@@ -833,6 +833,28 @@ def _choices_ab(d: Path, src: Path) -> dict:
             "differ_uncertified": uncertified[:20], "differ_uncertified_count": len(uncertified)}
 
 
+def refuse_reused_replay(replay_dir, allow=None):
+    """A cold arm's replay directory must be EMPTY at the arm's start.
+
+    2026-09-13 13:28: a cell re-run into an --out directory that already held
+    a previous run's `B_replay_r*` caches REPLAYED that run's sweep as its own
+    control arm — arm B swept 0 keys, the cell read 0.85x, and it overwrote the
+    clean measurement taken 49 minutes earlier in the same directory. The
+    isolation this directory exists for (per repetition, per arm) is void when
+    the directory is inherited. Refused at entry, with the path, unless
+    `NBX_ALLOW_REUSED_REPLAY=1` says so on purpose.
+    """
+    import os as _os
+    if allow is None:
+        allow = _os.environ.get("NBX_ALLOW_REUSED_REPLAY") == "1"
+    rd = Path(replay_dir)
+    if rd.exists() and any(rd.glob("*.json")) and not allow:
+        raise SystemExit(
+            f"REFUSED: {rd} already holds a replay artifact from an earlier run; a cold "
+            f"arm that starts on it replays that run's sweep as its own control. Use a "
+            f"fresh --out directory, or NBX_ALLOW_REUSED_REPLAY=1 to say this is deliberate.")
+
+
 def env_ab(model: str, gpu, out: Path, extra: list, timeout: int, env_b: dict, lever: str, cold: bool = False, src: Path = None,
            oracle_on_diff: bool = False, paired: int = 1) -> dict:
     """An engine lever behind an environment switch, measured on one model:
@@ -877,7 +899,9 @@ def env_ab(model: str, gpu, out: Path, extra: list, timeout: int, env_b: dict, l
                 # This never touches the machine's own cache
                 # (~/.neurobrix/replay_cache): the arm is given a directory of
                 # its own, so nothing is set aside and nothing is destroyed.
-                env = {**env, "NEUROBRIX_REPLAY_CACHE": str(d / f"{arm}_replay_r{rep}")}
+                _rd = d / f"{arm}_replay_r{rep}"
+                refuse_reused_replay(_rd)
+                env = {**env, "NEUROBRIX_REPLAY_CACHE": str(_rd)}
             if src is not None:                          # the request runs the given tree's package
                 env = {**env, "PYTHONPATH": str(Path(src).resolve())}
                 cmd = [PY, "-c", "import sys; from neurobrix.cli import main; sys.exit(main())", "run", "--model", model]
