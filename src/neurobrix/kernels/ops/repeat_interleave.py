@@ -31,7 +31,14 @@ def repeat_interleave_tensor_kernel(
     pid = tl.program_id(0)
     mask = pid < size
     cumsum = tl.load(cumsum_ptr + pid, mask, other=0)
-    repeats = tl.load(repeats_ptr + pid, mask, other=0)
+    # The loop bound below must be 32-bit: the Metal induction lowering does
+    # not terminate on a 64-bit `scf.for` bound (it refuses rather than hang).
+    # `repeats` arrives i64 by torch default. The cast is safe -- a per-element
+    # repeat count of 2**31 would need an 8 GB output for ONE element, which
+    # the allocator refuses long before this loop -- and numerically inert on
+    # CUDA: same iterations, narrower type. Addressing stays wide: `out_offset`
+    # promotes back through `cumsum`.
+    repeats = tl.load(repeats_ptr + pid, mask, other=0).to(tl.int32)
     out_offset = cumsum - repeats
 
     base_ptr = out_ptr + out_offset
