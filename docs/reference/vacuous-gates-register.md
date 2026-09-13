@@ -386,7 +386,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-48 entries, of which five are placeholders and 43 carry a site. Two
+49 entries, of which five are placeholders and 44 carry a site. Two
 machines, two weeks of concentrated looking. Every one of them produced silence
 or a green rather than an error.
 
@@ -949,3 +949,24 @@ space of the thing it filters; the consumed set is expanded into the loader's
 space with the reconcile's own rule (`consumed_in_loader_space`) before the
 loader sees it, single-part suffixes decide nothing, and the direction of doubt
 is to load. The gate: the same proof, on the same container, in triton.
+
+### 49 — a control arm that inherited the directory its isolation depended on
+
+The paired campaign gives every arm of every repetition its own replay
+directory, so a control arm sweeps instead of reading back what an earlier arm
+wrote (entry 36's lesson, 2026-09-11). The directory is named from the output
+path, and a second run into the same `--out` found the first run's
+`B_replay_r0..2` already there: its control arm read every key back, swept
+nothing, and the cell reported 0.85× — a "gain" of the directory measured
+against a control that had done no work. It overwrote a clean 3.20× cell taken
+forty-nine minutes earlier, and the document rendered the new number until the
+count `keys 48/0` was read.
+
+**The shape**: an isolation that holds by construction on a fresh path and by
+nothing at all on an inherited one — the same defect as a scratch cache the
+previous run left warm. **The rule**: the thing an isolation depends on is
+checked at entry, not assumed from the name; a cold arm now refuses a replay
+directory that already holds an artifact, names the path, and the deliberate
+opening is `NBX_ALLOW_REUSED_REPLAY=1`. The overwritten cell is marked in the
+campaign's `PERTURBED.json` with the clean numbers quoted from the run log,
+and the document says the record measured nothing.
