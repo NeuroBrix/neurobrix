@@ -139,6 +139,8 @@ than a blind spot. Nothing to act on, and nothing claimed about a binding.
 | `Flex.1-alpha/transformer` | `seq_len` | 4096 | 4091 | **fixed by the model** — value did not move |
 | `Ming-Lite-Omni-1.5/image_vae` | `seq_len` | 3 | 7 | not measured — a single-component trace does not reach this component on a multimodal container |
 | `MiniCPM-o-4_5/flow_dit` | `seq_len` | 3 | 7 | not measured — same |
+| `openaudio-s1-mini/codec.decoder` | `seq_len` | 1 | 7 | not measured — nested component (`codec.decoder`), unreachable by a single-component trace (2026-09-13, card 0: Phase B targeted 0 components) |
+| `Qwen3-Omni-30B-A3B-Instruct/talker.code_predictor.model.codec_embedding` | `seq_len` | 1 | 7 | not measured — same, nested |
 
 The instrument (`nbx/campaigns/prepared/weight_extent_differential.py`) and the
 stimulus override it needed (`forge trace --trace-seq-len`) are the deliverable
