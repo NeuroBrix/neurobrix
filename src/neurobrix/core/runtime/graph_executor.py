@@ -1585,7 +1585,8 @@ class GraphExecutor:
           consumes: the token embedding of a language model whose graph
           takes `inputs_embeds`, the head it projects logits with, a norm,
           an RNNT decoder's LSTM leaves. Every non-block key is loaded,
-          whatever the graph says. What the filter saves (MoE experts the
+          whatever the graph says (blunt on purpose: a layer-streaming
+          segment reloads the embedding and head with every segment). What the filter saves (MoE experts the
           trace never routed to) lives inside blocks; what the flows read
           today carries no block segment — OBSERVED on the flows in the
           tree on 2026-09-13, not guaranteed by any gate: a flow that read
@@ -1624,6 +1625,27 @@ class GraphExecutor:
                 wanted.add(wk)
         return wanted
 
+    @staticmethod
+    def binding_of_the_loaded(consumed, index_keys, graph_params, encodes=None):
+        """The binding the post-load reconcile must apply: name → loaded key,
+        computed over the WHOLE index before the load. Recomputed over the
+        filtered dict it would fail pass 0's coverage test (the unconsumed
+        block params are gone on purpose) and fall to the suffix heuristics
+        that mis-bind repeated layers — review of 2026-09-13. Keys the filter
+        keeps but no pass binds stay under their own name."""
+        encodes = encodes or {}
+        probe = {wk: encodes.get(wk, wk) for wk in index_keys}
+        probed = list(dict.fromkeys(probe.values()))
+        binding = GraphExecutor.bind_weight_keys(set(graph_params), probed) \
+            or {k: k for k in probed}
+        wanted = GraphExecutor.consumed_in_loader_space(consumed, index_keys, graph_params, encodes)
+        loaded = {probe[wk] for wk in wanted}
+        out = {name: wk for name, wk in binding.items() if wk in loaded}
+        for wk in loaded:
+            if wk not in out.values():
+                out[wk] = wk
+        return out
+
     def _consumed_in_loader_space(self, consumed, nbx_path, component):
         if consumed is None:
             return None
@@ -1634,11 +1656,17 @@ class GraphExecutor:
             with open(index) as f:
                 tensors = _json.load(f).get("tensors") or {}
         except (OSError, ValueError):
-            return consumed          # no index to read: the loader's own filter stands
+            # No index to read (an archive path, or a container without one):
+            # the graph's names cannot be joined to the loader's, and handing
+            # the graph-space set to a loader that filters by exact membership
+            # is the Wan2.2 failure again. Load everything — the safe direction.
+            self._pending_weight_binding = None
+            return None
         encodes = {k: v["encodes"] for k, v in tensors.items()
                    if isinstance(v, dict) and v.get("encodes")}
-        return self.consumed_in_loader_space(
-            consumed, list(tensors.keys()), self._graph_param_names(), encodes)
+        keys = list(tensors.keys()); params = self._graph_param_names()
+        self._pending_weight_binding = self.binding_of_the_loaded(consumed, keys, params, encodes)
+        return self.consumed_in_loader_space(consumed, keys, params, encodes)
 
     def _graph_param_names(self) -> set:
         """Every parameter and buffer the graph names — the set the
@@ -1739,13 +1767,23 @@ class GraphExecutor:
         # a host placement, the plan's dtype on a card — so the engine's
         # compute dtype and its operands never disagree (see the function).
         torch_dtype = self._placement_torch_dtype()
+        # Load what the plan budgeted: the weights the graph or the flow reads,
+        # in the loader's key space — the same set, by the same function, as
+        # the triton path below. Prism sizes a component on this set, and a
+        # loader that read every key ran the plan under another memory model
+        # (2026-09-13, four native MoE cells: planned 5-19 GB, loaded 30-57).
+        _only = self._consumed_in_loader_space(
+            self.consumed_weight_names(), nbx_path, component)
         with WeightLoader(nbx_path) as loader:
             if shard_map:
                 self._weights = loader.load_component_with_shard_map(
-                    component, shard_map, torch_dtype)
+                    component, shard_map, torch_dtype, only=_only)
             else:
                 self._weights = loader.load_component(
-                    component, self.device, torch_dtype)
+                    component, self.device, torch_dtype, only=_only)
+        if _only is not None:
+            print(f"   [Compiled] '{component}': loading {len(_only)} weights "
+                  f"the graph or the flow reads", flush=True)
 
     def _load_weights_triton(self, nbx_path, component, shard_map):
         """Load weights as NBXTensor (triton mode). Zero torch."""
@@ -1920,6 +1958,20 @@ class GraphExecutor:
         would have bound).
         """
         if not self._dag or not self._weights:
+            return
+        pending = getattr(self, "_pending_weight_binding", None)
+        if pending:
+            # The load was filtered: apply the binding computed over the whole
+            # index before it (see binding_of_the_loaded). A key the binding
+            # does not name (a constant bound from the graph, a computed
+            # buffer) keeps its own name.
+            self._pending_weight_binding = None
+            new = {name: self._weights[wk] for name, wk in pending.items()
+                   if wk in self._weights}
+            for wk, t in self._weights.items():
+                if wk not in pending.values() and wk not in new:
+                    new[wk] = t
+            self._weights = new
             return
         graph_params = self._graph_param_names()
         weight_keys = list(self._weights.keys())

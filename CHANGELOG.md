@@ -83,6 +83,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reads the token embedding and the head by name, and an int4 build stores one weight as
   three. Every weight outside a block is loaded again, an encoded weight is loaded through
   the name its index says it encodes, and the saving on unrouted MoE experts stays.
+- Compiled (default-engine) runs of mixture-of-experts models — Qwen3-Omni, Qwen3-VL,
+  Qwen3-Coder 30B, DeepSeek-Coder-V2-Lite — were placed on one card sized for the weights
+  the graph reads, then loaded every weight in the container onto it and died out of
+  memory. The compiled loader now loads the set the placement is sized on, as the Triton
+  loader already did, and the placement counts the same set; the unrouted experts stay on disk.
 - On a machine with no visible GPU (or `CUDA_VISIBLE_DEVICES=""`) `neurobrix upscale` and
   `neurobrix run` planned a GPU from a profile detected earlier on the same machine and died
   with "No CUDA GPUs are available". An empty visible set is now its own environment with its
