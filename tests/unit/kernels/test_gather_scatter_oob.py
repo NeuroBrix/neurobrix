@@ -122,7 +122,12 @@ def test_every_backend_says_whether_it_honours_a_device_assert():
         "a backend without a row would be guessed at, not asked")
 
 
-def test_an_unknown_backend_is_refused_not_guessed():
+def test_an_unknown_backend_is_refused_not_guessed(monkeypatch):
+    # Written on a Metal machine, where a table with only a `cuda` row has no
+    # row for the live backend; on a CUDA machine that table answers. The
+    # refusal under test is "no row for THIS backend", so the live backend is
+    # made one the table cannot have (merge of 2026-09-13, semantic conflict).
+    monkeypatch.setattr(nt, "_detect_gpu_backend", lambda: "no-such-backend")
     with pytest.raises(RuntimeError, match="ZERO FALLBACK"):
         nt._backend_capability({"cuda": True}, "_T", "whether it does the thing")
 
@@ -167,7 +172,11 @@ def test_a_disarmed_channel_allocates_nothing(monkeypatch):
 
 
 def test_an_armed_channel_uses_the_shared_buffer(monkeypatch):
-    monkeypatch.setattr(nt, "_detect_gpu_backend", lambda: "metal")
+    # Arm the channel by its CAPABILITY, not by pretending the backend is Metal:
+    # the buffer is a real device allocation, and on a CUDA machine a swapped
+    # backend table hands the CUDA runtime Metal's entry-point names — an
+    # AttributeError alone, a segfault inside the full suite (2026-09-13).
+    monkeypatch.setattr(nt, "backend_traps_on_device_assert", lambda: False)
     nt.device_fault_code_cached.cache_clear()
 
     class _Spare:
