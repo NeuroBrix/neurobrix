@@ -67,8 +67,22 @@ card whose settings nobody has certified, is a **plausible mechanism** for that.
 
 **It is not proved and must not be reported as proved.** It has not been
 reproduced; that hardware is not here. What is established is the structural
-gap — the screen consults no oracle — and that the gap is widest exactly where
+gap — the screen consulted no oracle — and that the gap is widest exactly where
 that report comes from. Anyone writing about it says both halves or neither.
+
+**What changed on 2026-09-13, and what did not.** The live screen now consults
+a float64 reference — the GEMM class from the other machine's provider, the
+convolution family from this one's — and a configuration the reference
+contradicts is refused before it is timed, whatever the vote says (a wrong
+majority is printed as a FINDING). That is the production wiring against the
+mechanism above: a wrong kernel can no longer be seated by a unanimous vote on
+a key the oracle reaches. Two limits stay measured and written: the screen
+looks only at keys whose arguments fit the profile's `autotune_screen_max_bytes`
+(on Volta 32 MiB — nine of ten `real-esrgan-x4` conv keys are over it and are
+seated UNSCREENED, announced and recorded so), and the sm_86 report itself is
+still unreproduced, because that hardware is still not here. The cell that
+would close it is a greedy decode on an sm_86 card with the screen on, tokens
+compared against compiled mode; it is owed to whoever has the card.
 
 ## The two numbers that prove it, measured on the same day
 
