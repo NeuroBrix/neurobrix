@@ -88,3 +88,28 @@ def test_the_cli_refuses_with_the_producer_named(tmp_path):
                         "--timeout", "10"], capture_output=True, text=True)
     assert r.returncode == 3
     assert "REFUSED" in r.stderr and str(p.pid) in r.stderr and "last write" in r.stderr
+
+
+def test_a_marker_already_in_the_record_is_not_this_waits_marker(tmp_path):
+    """Seen on 2026-09-13 22:30: a waiter for `mochi rc=` returned 0 at once on the
+    afternoon's perturbed run's line, written hours before the run it watched.
+    Injection = the default (any line, the only behaviour before the fix) →
+    returns 0 on the stale line; `from_now=True` ignores it and waits for a NEW
+    line. The default stays "any line": a waiter armed after its producer
+    already wrote the marker must see it (it would otherwise refuse a finished
+    job), so a record that accumulates markers is watched with `--from-now`."""
+    rec = tmp_path / "RUN.md"
+    rec.write_text("   mochi rc=1 16:05:00; sanitizer: 2 lines\n########## mochi again 21:26:07\n")
+    p = _producer()
+    try:
+        assert WF.wait_for(str(rec), r"mochi rc=", p.pid, poll=0.05, timeout=2) == 0, "any line: the stale line is accepted (what happened at 22:30)"
+        assert WF.wait_for(str(rec), r"mochi rc=", p.pid, poll=0.05, timeout=0.5, from_now=True) == 5, "from now: the stale line does not count, the wait goes on"
+        import threading
+        def later():
+            time.sleep(0.3)
+            with open(rec, "a") as f:
+                f.write("   mochi rc=124 23:26:07; sanitizer: 0 lines\n")
+        threading.Thread(target=later, daemon=True).start()
+        assert WF.wait_for(str(rec), r"mochi rc=", p.pid, poll=0.05, timeout=5, from_now=True) == 0
+    finally:
+        p.kill(); p.wait()

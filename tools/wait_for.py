@@ -61,12 +61,27 @@ def producer_name(pid: int) -> str:
         return f"pid {pid}"
 
 
-def marker_present(path: str, pattern: "re.Pattern[str]") -> bool:
+def marker_present(path: str, pattern: "re.Pattern[str]", skip_lines: int = 0) -> bool:
+    """True when a line at or after `skip_lines` matches. A marker that was
+    already in the record before the wait began is not this wait's marker: on
+    2026-09-13 a waiter for `mochi rc=` returned at once on the afternoon's
+    perturbed run's line, hours before the run it watched had ended."""
     try:
         with open(path, errors="replace") as f:
-            return any(pattern.search(line) for line in f)
+            for i, line in enumerate(f):
+                if i >= skip_lines and pattern.search(line):
+                    return True
+            return False
     except FileNotFoundError:
         return False
+
+
+def line_count(path: str) -> int:
+    try:
+        with open(path, errors="replace") as f:
+            return sum(1 for _ in f)
+    except FileNotFoundError:
+        return 0
 
 
 def last_sign_of_life(path: str) -> str:
@@ -78,18 +93,23 @@ def last_sign_of_life(path: str) -> str:
 
 def wait_for(path: str, marker: str, producer_pid: Optional[int], poll: float = 30.0,
              heartbeat: Optional[str] = None, stale_after: Optional[float] = None,
-             timeout: Optional[float] = None, out=sys.stderr) -> int:
+             timeout: Optional[float] = None, out=sys.stderr, from_now: bool = False) -> int:
     """0 = marker seen; 3 = producer gone without it; 4 = heartbeat stale;
-    5 = timeout (only when one is given — a chain has none)."""
+    5 = timeout (only when one is given — a chain has none). `from_now`: only a
+    line appended after this call counts — for a record that accumulates the
+    same marker run after run (a campaign's RUN.md), where a line already there
+    belongs to an earlier run. Off by default: a waiter armed AFTER its producer
+    wrote the marker must still see it, or it would refuse a finished job."""
     pattern = re.compile(marker)
+    skip = line_count(path) if from_now else 0
     name = producer_name(producer_pid) if producer_pid else "(no producer given)"
     t0 = time.monotonic()
     while True:
-        if marker_present(path, pattern):
+        if marker_present(path, pattern, skip):
             return 0
         if producer_pid is not None and not producer_alive(producer_pid):
             # One more read: the producer may have written the marker as its last act.
-            if marker_present(path, pattern):
+            if marker_present(path, pattern, skip):
                 return 0
             print(f"[wait_for] REFUSED: producer {producer_pid} ({name}) is gone and "
                   f"'{marker}' is not in {path}; last write to the file {last_sign_of_life(path)}. "
@@ -121,9 +141,13 @@ def main(argv=None) -> int:
     p.add_argument("--heartbeat", default=None, help="a file the producer touches; stale = hung")
     p.add_argument("--stale-after", type=float, default=None, help="seconds before a heartbeat is stale")
     p.add_argument("--timeout", type=float, default=None, help="a bound, for a test; a chain has none")
+    p.add_argument("--from-now", action="store_true",
+                   help="count only a marker line appended after the wait begins (a record that "
+                        "accumulates the same marker run after run); default: any line")
     a = p.parse_args(argv)
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
-    return wait_for(a.file, a.marker, a.producer_pid, a.poll, a.heartbeat, a.stale_after, a.timeout)
+    return wait_for(a.file, a.marker, a.producer_pid, a.poll, a.heartbeat, a.stale_after, a.timeout,
+                    from_now=a.from_now)
 
 
 if __name__ == "__main__":
