@@ -50,6 +50,34 @@ PY_BIN = "/home/mlops/ml/venv/bin/python"
 #: What changed after the 2026-09-11 pass, each with the artefact that proves it.
 #: A line here OVERRIDES the pass's verdict and says why; nothing is edited into
 #: the pass's own record, which stays what it was on the day it ran.
+#: Axes the differential ADJUDICATED after the census flagged them. Keyed by
+#: local container, then by the census's own axis string; the note is appended
+#: to the cell, and a flagged axis with no note stays flagged. An adjudication
+#: transfers to another container only when the graphs are byte-identical
+#: (md5 of the component's graph.json) — said in the note, never assumed.
+ADJUDICATED_AXES = {
+    "PixArt-Sigma-XL-1024": {
+        "vae `height`@128 (weight-extent)": "bound — spatial differential 2026-09-13 on PixArt-Sigma-XL-2-1024-MS, whose vae graph.json is byte-identical to this container's",
+        "vae `width`@128 (weight-extent)": "bound — same run, same identical graph",
+    },
+    "PixArt-Sigma-XL-2-1024-MS": {
+        "vae `height`@128 (weight-extent)": "bound — spatial differential 2026-09-13 (14,22 vs 31,47: 0 dims followed the extent)",
+        "vae `width`@128 (weight-extent)": "bound — same run",
+    },
+    "PixArt-XL-2-1024-MS": {
+        "vae `height`@128 (weight-extent)": "bound — spatial differential 2026-09-13 (14,22 vs 31,47: 0 dims followed the extent)",
+        "vae `width`@128 (weight-extent)": "bound — same run",
+    },
+    "PixArt-XL-1024": {
+        "vae `height`@128 (weight-extent)": "the current tracer binds this axis (differential 2026-09-13 on PixArt-XL-2-1024-MS); this container's graph (built 2026-08-26) is a different trace and stays flagged until re-traced",
+        "vae `width`@128 (weight-extent)": "same",
+    },
+    "Flex.1-alpha": {
+        "text_encoder `seq_len`@77 (weight-extent)": "bound — differential 2026-09-12 (77 vs 71: 0 dims moved)",
+        "transformer `seq_len`@4096 (weight-extent)": "fixed by the model — the stimulus did not move (differential 2026-09-12)",
+    },
+}
+
 OVERLAY = {
     "Allegro-TI2V": dict(
         now="RUNS — repaired and delivered",
@@ -348,7 +376,9 @@ def main() -> int:
             cost = (f"{cell['cost_s']:.0f} s, {cell['ratio']}x, {cell['certified']}/"
                     f"{cell['keys']} keys{base}, bytes {cell.get('bytes', '?')}")
         axes = blind.get(container, [])
-        blind_cell = "; ".join(axes[:2]) + (f" (+{len(axes)-2})" if len(axes) > 2 else "") \
+        notes = ADJUDICATED_AXES.get(container, {})
+        shown = [a + (f" → {notes[a]}" if a in notes else "") for a in axes[:2]]
+        blind_cell = "; ".join(shown) + (f" (+{len(axes)-2})" if len(axes) > 2 else "") \
             if axes else "none found at the input"
         # A `swept` of 0 on a row that FAILED is not coverage. It counts the
         # shapes the run reached, and a run that died in five seconds reached
