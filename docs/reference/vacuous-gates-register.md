@@ -1080,3 +1080,67 @@ commit.) Gate:
 `tests/unit/runtime/test_a_declared_fusion_loads_what_it_now_reads.py`,
 seen red before the fix; the proof by run is the Ming triton cell.
 
+
+### 55 — a waiter that watches the result and never the producer
+
+A follow-on chain polled the campaign record for the line `== rejeu 2
+termine` before taking the rig. The producer of that line — the rerun-2
+chain — was killed by PID at 17:12 on 2026-09-13, a few seconds AFTER its
+pytest had finished and written its complete output, and before the chain's
+own closing echo. The waiter kept polling for a line no process would ever
+write: four V100s idle from 17:12 to 21:25, found by the session that
+resumed after a connection cut. The record itself was complete (8 failed, 1
+passed, in `suite_rerun2.log`); only the marker was missing.
+
+**The shape**: a waiter whose only test is "is the result here yet?" cannot
+distinguish *not yet* from *never*. It has no liveness on what it waits for,
+so a producer that dies after succeeding — or before starting — starves it
+silently and for ever. Entry 4-of-the-chain-rules ("a DONE marker is written
+only on success") is right and does not cover this: the job succeeded, the
+marker-writer was what died. **The rule**: a waiter checks that what it waits
+for is still producing, not only that the result is absent — it holds the
+producer's PID (or a heartbeat the producer refreshes) and turns into a
+refusal, with the producer's name and last sign of life, the moment the
+producer is gone without its marker. Gate: `tools/wait_for.py` (shared
+brick, seen refusing on an injected kill of the producer), and every chain
+armed from this entry on waits through it rather than through a bare
+`until grep -q` (the chain already running at 21:26 keeps its bare loops;
+the first user of the brick is the post-certification waiter of the same
+night). Written 21:25 by the resumed session; the brick and its injection
+land with the commit that carries this entry.
+
+### 56 — a directory keyed by a profile two memory classes share
+
+The certified autotune directory is keyed by `(vendor, profile, kernel,
+dtype, shape)`, and the profile is the vendor profile FILE in force —
+`nvidia/volta.yml`, one file for this rack's two V100 SKUs (16 GB cards 0
+and 1, 32 GB cards 2 and 3). The lookup read nothing about the executing
+card (`kernels/autotune_certified.py:lookup`, before this entry), so an
+entry proven on one memory class was served as-is to the other. The proof
+recorded only `machine.hardware_profile`, a name that says the memory for a
+pinned card (`auto-v100-16gb-16g`) and, for a rig-wide run, the SUM and the
+first card's model (`auto-4xv100-16gb-96.0g`) — the card that ran is
+unknown there. Counted on the 7 191 entries at 21:45: 5 644 proven on a
+16 GB card, 17 on a 32 GB card, 1 530 on the rig with the card unknown.
+
+**The shape**: an instrument whose key omits an axis on which its claim is
+made, so two different claims read as one entry and the record cannot say
+which was proven. **The rule**: a proof says which card's memory it was made
+on (`proof.machine.device = {ordinal, visible_devices, name, memory_mb}`, read
+from the card the certifier's inputs were placed on — the ordinal is the CUDA
+ordinal in the visible set, the visible set is written beside it, and the
+memory is what the class reads), an entry carries one certification
+per memory class (`variants` by `<N>g`), the lookup receives the executing
+card's class (its tensor's device, read in the Prism profile) and serves only
+what covers it; an unknown class — the proof's or the card's — is served
+nothing and said in clear (`certified for 16 GB, this card is 32 GB, not
+served`). Legacy proofs are read by their profile name where it is a single
+card and stay `?` where it is the rig: those 1 530 serve no card until
+re-proven. Gate:
+`tests/unit/kernels/test_an_entry_serves_only_the_memory_class_it_covered.py`
+(12 tests, seen red before the code existed). The measurement this entry
+does NOT contain: whether a config proven on 16 GB differs from one proven
+on 32 GB for the same shape — same GV100 die, same locked clock, only the
+HBM differs; expected identical, to be measured on a 32 GB card when one is
+free, and the coverage certified regardless because the rule is coverage,
+not expectation.
