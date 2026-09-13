@@ -53,6 +53,17 @@ recorded because a repair that closes one error and hides the next is not closed
    `NBXTensor.from_numpy`, which is the first CHECKED call after the poisoning
    site and not the fault. One 25 GiB allocation in a 5D VAE is `DETTE.md` D2
    territory, not a defect of this repair.
+   **Decided 2026-09-13 10:32, card 2, three runs at 88 frames:** a cuDNN
+   workspace cap of 8192 MB, then 2048 MB, then `TORCH_CUDNN_V8_API_ENABLED=1`
+   — all three ask the same 25.27 GiB, and all three print PyTorch's own
+   reason first: *"cuDNN cannot be used for large non-batch-splittable
+   convolutions if the V8 API is not enabled or before cuDNN version 9.3+"*
+   (installed: cuDNN 9.1.0 under torch 2.5.1). The allocation is the native
+   3-D convolution fallback's buffer, which the spatial tiling engine does not
+   cut and Prism's estimator does not model (11.7 GB planned per tile,
+   26.55 GiB held at the failing op). Remedies: cuDNN ≥ 9.3 (an install), or a
+   per-tile bound that keeps every 3-D conv splittable below it. Until one
+   lands, 88 is a declared limit here and 80 renders.
 
 Three attempts preceded the passing one and none of them said anything about the
 container: pinned to a 16 GB card, pinned to `"2,3"` which remapped the ordinals,

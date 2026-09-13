@@ -68,7 +68,7 @@ As the pass left it: **37 met**, **9 failed**, **1 not runnable**. 6 rows carry 
 
 ### `Allegro-TI2V` — RUNS — repaired and delivered
 
-Two defects, both fixed at the source: the output size was never read from the container when the backbone's latent is flattened or the flow is named something else, and the conditioning image did not set the resolution. Bounded above: renders to 80 frames, fails at its own declared 88 asking 25.27 GiB in one allocation (DETTE D2).
+Two defects, both fixed at the source: the output size was never read from the container when the backbone's latent is flattened or the flow is named something else, and the conditioning image did not set the resolution. Bounded above: renders to 80 frames, fails at its own declared 88 asking 25.27 GiB in one allocation — decided 2026-09-13: PyTorch's native 3-D conv fallback buffer, taken because cuDNN 9.1 refuses a large non-batch-splittable convolution (needs >= 9.3); a workspace cap and the V8 flag change nothing. 88 is a declared limit on this stack until cuDNN >= 9.3 or a per-tile conv bound lands (DETTE D2).
 
 *Evidence:* validation_outputs/allegro_image_sets_resolution_20260912/out.mp4 (8 frames at 448x448, rc=0, inter-frame diff 23.3); hub replaced 15:13:48; docs/reference/catalogue-repairs.md entry 1  ·  *line:* measured
 
