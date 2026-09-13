@@ -128,10 +128,69 @@ _BUDGET_RATIOS = {"first_vs_oracle_cpu": None, "later_vs_best": None}
 _SWEEP: dict = {"best_ms": None, "budget_ms": None, "token": None}
 
 
+def _key_for_cache(at, args, kwargs):
+    """The key exactly as `Autotuner.run` files it in `at.cache`, so the
+    unmeasured mark lands on the same identity `capture()` will walk."""
+    try:
+        from neurobrix.triton import autotune_cache as atc
+        return tuple(atc.key_of(at, args, kwargs))
+    except Exception:                                  # noqa: BLE001
+        return None
+
+
 def begin_sweep() -> None:
     """Reset the per-sweep state. Called when a new key's bench begins."""
     _SWEEP["best_ms"] = None
     _SWEEP["budget_ms"] = None
+    _SWEEP["swap0_mb"] = None
+    _SWEEP["swap_said"] = False
+
+
+def note_sweep_swap_baseline() -> None:
+    """Snapshot swap usage at the sweep's start, from our own authority."""
+    try:
+        from neurobrix.core.host_memory import memory_state
+        _SWEEP["swap0_mb"] = memory_state().swap_used_mb
+    except Exception:                                  # noqa: BLE001
+        _SWEEP["swap0_mb"] = None
+
+
+def sweep_grew_the_swap() -> int:
+    """MB of swap growth since the sweep's baseline, 0 when unknown or quiet.
+
+    The threshold is ZERO -- the identity, not a tuned constant -- because the
+    costs are asymmetric: a false mark (a daemon moved the swap) only skips
+    persistence and the key re-sweeps another day, while a missed mark
+    persists a choice timed against the swap, which keeps deciding on machines
+    and days it knows nothing about. Reproduced 2026-09-13: a 5.9 GB sweep
+    passed the pre-gate at 6.5 GB available, saturated the machine, and the
+    FOLLOWING key crawled in `waitUntilCompleted` with swap at 7621/8192 MB --
+    the round-9 shape, whose own arguments were 11 MB and innocent.
+    """
+    base = _SWEEP.get("swap0_mb")
+    if base is None:
+        return 0
+    try:
+        from neurobrix.core.host_memory import memory_state
+        now = memory_state().swap_used_mb
+    except Exception:                                  # noqa: BLE001
+        return 0
+    if now is None:
+        return 0
+    return max(0, int(now) - int(base))
+
+
+def mark_sweep_unmeasured(at, key, grew_mb: int, say=None) -> None:
+    """Mark this sweep's choice as timed against the swap, and SAY it once."""
+    from neurobrix.triton import autotune_cache as atc
+
+    atc.mark_unmeasured(at, key)
+    if not _SWEEP.get("swap_said"):
+        _SWEEP["swap_said"] = True
+        line = (f"[AUTOTUNE_SWAP] the swap grew by {grew_mb} MB during this "
+                f"sweep: its timings measured the swap, not the kernels. The "
+                f"choice stands for this run and will NOT be persisted.")
+        (say or (lambda l: print(l, flush=True)))(line)
 
 
 def current_budget_ms():
@@ -228,8 +287,13 @@ def install() -> bool:
         if _SWEEP.get("token") != _token:
             begin_sweep()
             _SWEEP["token"] = _token
-        return exclude_slow_candidates(exclude_refused_configs(
+            note_sweep_swap_baseline()
+        _out = exclude_slow_candidates(exclude_refused_configs(
             lambda: original(self, *args, config=config, **kwargs)))()
+        _grew = sweep_grew_the_swap()
+        if _grew:
+            mark_sweep_unmeasured(self, _key_for_cache(self, args, kwargs), _grew)
+        return _out
 
     _bench._nbx_excludes_refusals = True
     Autotuner._bench = _bench
