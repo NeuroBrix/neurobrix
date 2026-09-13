@@ -428,6 +428,15 @@ def cmd_run(args):
     for comp_name, alloc in execution_plan.components.items():
         print(f"   {comp_name} → {alloc.device}")
 
+    if getattr(args, "explain_plan", False):
+        # The plan, and nothing after it: no weights load, no card is touched
+        # beyond what the hardware profile read. What is printed is the plan
+        # object the runtime would have received.
+        from neurobrix.core.prism.solver import explain_plan
+        print("\n[plan] --explain-plan: the placement decision, read from the plan the runtime would receive\n")
+        print(explain_plan(execution_plan))
+        return 0
+
     # 3. Load RuntimePackage
     print("\n[3/4] Loading runtime...")
     loader = NBXRuntimeLoader()

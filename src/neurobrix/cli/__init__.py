@@ -33,6 +33,8 @@ def _add_run_arguments(p):
     """The request arguments shared by `run` and `calibrate` (one list, one help)."""
     p.add_argument('--model', default=None, help='Model name (auto-detected from running daemon if omitted)')
     p.add_argument('--hardware', default=None, help='Hardware profile ID (e.g., "v100-32g"). Auto-detected if omitted.')
+    p.add_argument('--explain-plan', action='store_true', dest='explain_plan',
+                   help='Print the placement plan — the strategy, why it won and what it beat, every component with its device and memory — then exit without loading anything')
     p.add_argument('--prompt', default=None, help='Text prompt for generation')
     p.add_argument('--audio', default=None, help='Input audio file path (for speech-to-text models)')
     p.add_argument('--steps', type=int, default=None, help='Number of inference steps')

@@ -196,6 +196,11 @@ class ExecutionPlan:
     # that decides without saying so is indistinguishable from one that
     # decides badly, so the reason travels with the plan and is printed.
     selection_reason: str = ""
+    # Every strategy that fitted, best first, as (name, score) — and the ones
+    # the KV-cache check then refused, as (name, score, why). `--explain-plan`
+    # prints them; a plan that names only its winner cannot be audited.
+    candidates: List[Tuple[str, float]] = field(default_factory=list)
+    rejected: List[Tuple[str, float, str]] = field(default_factory=list)
     kv_cache_plan: Optional[KVCachePlan] = None
     cpu_ram_mb: int = 0  # CPU RAM budget for offload strategies
     # Op-level tiling — per-component plan emitted when a single op's
@@ -713,6 +718,8 @@ class PrismSolver:
 
         # Sort candidates by score descending
         ranked = sorted(candidates, key=lambda x: -x[0])
+        self._candidates = [(name, float(score)) for score, name, _, _ in ranked]
+        self._rejected = []
 
         # Strategies ranked by score
 
@@ -807,8 +814,9 @@ class PrismSolver:
                 remaining = max(total_capacity - total_allocated, 0)
                 try:
                     kv_plan = self._compute_kv_cache_plan(container, target_dtype, remaining)
-                except RuntimeError:
-                    # Strategy rejected: KV cache doesn't fit
+                except RuntimeError as exc:
+                    # Strategy rejected: KV cache doesn't fit — said in the plan
+                    self._rejected.append((strat_name, float(score), f"KV cache does not fit: {exc}"))
                     continue
                 kv_cache_plan = kv_plan
 
@@ -4002,6 +4010,8 @@ class PrismSolver:
             component_memory=comp_mem,
             loading_mode=loading_mode,
             selection_reason=getattr(self, "_selection_reason", ""),
+            candidates=list(getattr(self, "_candidates", [])),
+            rejected=list(getattr(self, "_rejected", [])),
             cpu_ram_mb=profile.cpu.ram_mb if profile.cpu else 0,
         )
 
@@ -4094,3 +4104,42 @@ class PrismImportPlanner:
 def solve(container: "NBXContainer", profile: PrismProfile, input_config: Optional[InputConfig] = None) -> ExecutionPlan:
     """Convenience wrapper for PrismSolver.solve()"""
     return PrismSolver().solve(container, profile, input_config)
+
+
+def explain_plan(plan: "ExecutionPlan") -> str:
+    """The placement plan as a user reads it: what was chosen, why, what it beat,
+    what was refused, and where every component lands with its memory.
+
+    Asked for by an external evaluator (2026-09-12): a strategy name alone does
+    not say whether the engine decided well. Everything here is read from the
+    plan — nothing is recomputed, so what is printed is what will run.
+    """
+    lines = [f"strategy        {plan.strategy}   (loading: {plan.loading_mode}, dtype: {plan.target_dtype})"]
+    lines.append(f"why             {plan.selection_reason or 'no reason recorded — the solver did not score this plan'}")
+    if plan.candidates:
+        lines.append("candidates      " + "  ".join(f"{n}={sc:.0f}" for n, sc in plan.candidates)
+                     + "   (every strategy that fitted, best first, by estimated throughput)")
+    else:
+        lines.append("candidates      none recorded")
+    for name, sc, why in plan.rejected:
+        lines.append(f"refused         {name} (scored {sc:.0f}): {why}")
+    lines.append(f"planned memory  {plan.total_memory_mb:.0f} MB on the cards"
+                 + (f", {plan.cpu_ram_mb} MB of host RAM budget" if plan.cpu_ram_mb else ""))
+    for name, alloc in plan.components.items():
+        mem = plan.component_memory.get(name)
+        where = ", ".join(alloc.devices) if getattr(alloc, "devices", None) else str(alloc.device)
+        detail = ""
+        if mem is not None:
+            detail = (f"  weights {mem.weight_bytes / 2**20:.0f} MB + activations {mem.activation_bytes / 2**20:.0f} MB"
+                      f" + overhead {mem.overhead_bytes / 2**20:.0f} MB"
+                      + (f"  (peak at {mem.peak_op_uid})" if mem.peak_op_uid else "")
+                      + ("" if mem.activation_profiled else "  [activations estimated, not profiled]"))
+        shard = "  sharded" if getattr(alloc, "sharded", False) else ""
+        lines.append(f"  {name:<20} -> {where}{shard}{detail}")
+    if plan.kv_cache_plan is not None:
+        kv = plan.kv_cache_plan
+        lines.append(f"kv cache        up to {kv.max_cache_len} tokens, {kv.memory_bytes / 2**20:.0f} MB, {kv.dtype}")
+    if plan.runtime_op_tiling:
+        lines.append("op-level tiling " + ", ".join(sorted(plan.runtime_op_tiling)))
+    return "\n".join(lines)
+

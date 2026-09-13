@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `neurobrix run --explain-plan` prints the placement decision and exits without loading anything: the strategy, why it won and every strategy it beat with their scores, the ones refused (and why), each component's device and memory split, the KV-cache budget.
 - The registry a machine talks to can be declared with `NEUROBRIX_REGISTRY`. The public
   name stays the default, because a user anywhere reaches the hub through it; a machine that
   sits on the hub's own network points at its internal entry point and never leaves the
