@@ -313,6 +313,39 @@ def coverage_cell(cov) -> str:
     return f"16 GB {c16}/{t} · 32 GB {c32}/{t}" + (f" ({'; '.join(extra)})" if extra else "")
 
 
+# ---------------------------------------------------------------------------
+# the debts named beside the line they hold — the A rows of
+# docs/reference/debts-triage.md (a debt that blocks a catalogue line), keyed by
+# container. A line with none says "none named"; a debt named here and not in
+# DETTE.md is a defect of this table.
+# ---------------------------------------------------------------------------
+DEBTS_BY_CONTAINER = {
+    "Qwen3-VL-30B-A3B-Thinking": ["D-DEEPSTACK-ZERO-EXTENT", "D-QWEN3VL-MOE-RUNS-EVERY-EXPERT-ON-EVERY-TOKEN",
+                                  "D-DECLARED-MOE-AS-EXECUTED-VIEW"],
+    "Qwen3-Omni-30B-A3B-Instruct": ["D-DEEPSTACK-ZERO-EXTENT", "D-DECLARED-MOE-AS-EXECUTED-VIEW"],
+    "Ming-Lite-Omni-1.5": ["D-DECLARED-MOE-AS-EXECUTED-VIEW"],
+    "mochi-1-preview": ["D-MOCHI-CUDA-700-AT-MM"],
+    "Wan2.1-VACE-1.3B-diffusers": ["D-TEMPORAL-UNROLL", "D-WAN-VACE-BROADCAST-AT-DIV",
+                                   "D-NEGATIVE-ALLOCATION-SIZE-WAN-VACE", "D-WAN-VACE-FRAME-TOKENS-FROZEN"],
+    "Wan2.1-I2V-14B-480P-Diffusers": ["D-TEMPORAL-UNROLL (inferred)"],
+    "Wan2.2-I2V-A14B-Diffusers": ["D-TEMPORAL-UNROLL", "D-PRISM-WAN22-TRITON-ONE-CARD"],
+    "Wan2.1-T2V-1.3B-Diffusers": ["D-WAN-T2V-OOM-AT-5D-PAD", "D-WAN-T2V-VAE-ACTIVATION-12GB"],
+    "Allegro-TI2V": ["D2 (88 frames: declared limit until cuDNN >= 9.3)", "D-ALLEGRO-TI2V-FRAME-TOKENS-FROZEN"],
+    "Allegro": ["D-ALLEGRO-TRITON-31H-PER-ARM", "D-VIDEO-CAMPAIGN-STIMULUS"],
+    "Sana_1600M_4Kpx_BF16": ["D-PRISM-SANA4K-COMPILED-16GB"],
+    "GLM-4.1V-9B-Thinking": ["D-PRISM-2x16-PIPELINE-OVERFILL"],
+    "deepseek-moe-16b-chat": ["D-DSMOE-XENGINE-SHA", "D-TRACE-DEEPSEEK-MOE-ILLEGAL-ACCESS"],
+    "granite-speech-3.3-8b": ["D-AUDIO-LLM-GRANITE-HOST-PLACEMENT"],
+    "Kokoro-82M": ["D-CPU-COMPLEX-HALF-EXP", "D-KOKORO-DECODER-PINNED-HOST-READ"],
+}
+DEBTS_BY_SLUG = {"Orpheus-3B": ["D-ORPHEUS-FT-VENDOR-CODEC", "D-ORPHEUS-SEED-NOT-PINNED"]}
+
+
+def debts_cell(container, slug) -> str:
+    names = DEBTS_BY_CONTAINER.get(container or "", []) + DEBTS_BY_SLUG.get(slug, [])
+    return ", ".join(f"`{n}`" for n in names) if names else "none named"
+
+
 def per_shape_sweep_cost() -> dict:
     """{family: [row, ...]} for every campaign cell that measured a sweep."""
     sys.path.insert(0, str(REPO / "tools"))
@@ -466,8 +499,8 @@ def main() -> int:
           f"and every one of the nine failures was a VIDEO model.\n")
 
     print("| model | family | GB | on this rack | swept | screened | certified cost | "
-          "certified for this card's memory | where a defect would be invisible | line |")
-    print("|---|---|---:|---|---:|---:|---|---|---|---|")
+          "certified for this card's memory | where a defect would be invisible | debts named | line |")
+    print("|---|---|---:|---|---:|---:|---|---|---|---|---|")
     n_rows = n_cost = 0
     for r in sorted(rows, key=lambda r: (r["family"], r["hub"])):
         slug = r["hub"].split("/")[-1]
@@ -527,7 +560,7 @@ def main() -> int:
         print(f"| `{r['hub']}` | {r.get('family', '?')} | {r.get('gb', 0):.1f} | "
               f"{run} | {swept if swept is not None else 'n/m'} | "
               f"{screened if screened is not None else 'n/m'} | {cost} | "
-              f"{coverage} | {blind_cell} | {line} |")
+              f"{coverage} | {blind_cell} | {debts_cell(container, slug)} | {line} |")
         n_rows += 1
         if not cost.startswith("not measured"):
             n_cost += 1
@@ -539,6 +572,10 @@ def main() -> int:
         print(f"*Evidence:* {ov['evidence']}  ·  *line:* {ov['line']}\n")
 
     print("## How to read the columns\n")
+    print("**debts named** — the entries of `DETTE.md` that hold this line (the A rows of")
+    print("`docs/reference/debts-triage.md`), so a reader of the line sees what it waits on")
+    print("without opening the debt file. A line that runs and measures may still name one:")
+    print("a debt that bounds it (frames, a card class) rather than blocks it.\n")
     print("**certified for this card's memory** — of the shapes this model's catalogue")
     print("run met (its own log, directory off), how many the directory certifies for a")
     print("16 GB card and how many for a 32 GB card, read on the day this document was")
