@@ -70,7 +70,10 @@ def test_clearing_forgets_both_registers():
 
 def test_the_reason_names_the_provider_state():
     """Three distinguishable causes, because the remedy differs for each."""
-    assert "no oracle provider is installed" in launcher._no_oracle_reason(None)
+    # Since the merge of 2026-09-13 a provider is always installed; `None` from it
+    # means "no oracle for this kernel", and the reason names what IS covered.
+    reason = launcher._no_oracle_reason(None)
+    assert ("no oracle provider is installed" in reason) or ("covers no oracle for this kernel" in reason)
     launcher.set_screen_oracle(lambda *a: None)
     try:
         assert "covers no oracle" in launcher._no_oracle_reason(None)
@@ -85,3 +88,77 @@ def test_the_certified_directory_is_a_different_path_entirely():
     from neurobrix.triton import autotune_cache
     assert "replay_cache" in autotune_cache._DIR
     assert "config/autotune" not in autotune_cache._DIR
+
+
+def test_the_seat_is_recorded_under_the_key_the_choice_is_stored_under():
+    """2026-09-13, production demonstration: three announcements, zero records
+    stamped. The screen keyed its seats by the constexpr kwargs; Triton stores
+    the choice under the shape key. This pins the replica of Triton's key."""
+    import types
+    from neurobrix.kernels.launcher import autotune_shape_key
+
+    class T:                                    # a tensor-like: only its dtype matters here
+        def __init__(self, dt): self.dtype = dt
+    tuner = types.SimpleNamespace(arg_names=["a", "b", "c", "M", "N", "K"], keys=["M", "N", "K"],
+                                  nargs={"a": T("fp16"), "b": T("fp16"), "c": T("fp32"), "M": 64, "N": 128, "K": 32})
+    assert autotune_shape_key(tuner, {"BLOCK_M": 64}) == (64, 128, 32, "fp16", "fp16", "fp32"), (
+        "the keys' values, then every argument's dtype, in argument order — Triton's own construction")
+    # a constexpr kwarg that is also an arg name is part of the key only if it is in `keys`
+    assert autotune_shape_key(tuner, {"M": 65}) == (65, 128, 32, "fp16", "fp16", "fp32")
+
+
+def test_the_provider_sees_the_launch_kwargs_not_only_the_positional_arguments():
+    """The convolution oracle needs kernel_height & co., which are constexpr
+    launch kwargs absent from `tuner.nargs`. 2026-09-13: every live conv key
+    was refused with the oracle's own suite green."""
+    import types
+    from neurobrix.kernels import launcher, screen_oracle as S
+
+    seen = {}
+
+    def four(tuner, key, buffers, meta):
+        seen["meta"] = dict(meta or {}); return None
+
+    def three(tuner, key, buffers):
+        seen["three"] = True; return None
+
+    launcher._call_screen_oracle(four, None, ("k",), [], {"kernel_height": 3})
+    launcher._call_screen_oracle(three, None, ("k",), [], {"kernel_height": 3})
+    assert seen == {"meta": {"kernel_height": 3}, "three": True}
+
+    # and the real provider merges them: a conv key whose constexprs come only
+    # through meta reaches the reference (which then refuses on the fake
+    # operands — the point is that it got past the KeyError)
+    calls = []
+    orig = S.ORACLES["conv2d_forward_kernel"]
+    S.ORACLES["conv2d_forward_kernel"] = ((lambda named: calls.append(sorted(named)) or None), orig[1])
+    try:
+        tuner = types.SimpleNamespace(base_fn=types.SimpleNamespace(__name__="conv2d_forward_kernel"),
+                                      nargs={"input_pointer": types.SimpleNamespace(data_ptr=lambda: 1),
+                                             "output_pointer": types.SimpleNamespace(data_ptr=lambda: 2)})
+        S.provider(tuner, ("k",), [], {"kernel_height": 3, "groups": 1})
+    finally:
+        S.ORACLES["conv2d_forward_kernel"] = orig
+    assert calls and "kernel_height" in calls[0] and "input_pointer" in calls[0]
+
+
+def test_a_screened_seat_is_recorded_as_screened_with_its_adjudicator(tmp_path, monkeypatch):
+    """The converse of the unscreened stamp: a silent entry must not read as
+    verified by default. 2026-09-13: ten conv keys screened by the fp64 oracle
+    left records indistinguishable from unscreened ones."""
+    from neurobrix.kernels import launcher
+    from neurobrix.triton import autotune_cache as atc
+    launcher._ADJUDICATED.clear()
+    launcher._ADJUDICATED[("matmul_kernel", repr((64, 64, 32)))] = "fp64 oracle"
+    assert launcher.adjudicated() == {("matmul_kernel", "(64, 64, 32)"): "fp64 oracle"}
+    launcher._ADJUDICATED.clear()
+
+
+def test_the_screen_deduplicates_by_the_shape_key_not_the_constexpr_key():
+    """Ten conv shapes share one constexpr tuple; keyed by it the screen ran on
+    the first and silently skipped nine (2026-09-13, real-esrgan-x4 live)."""
+    import inspect
+    from neurobrix.kernels import launcher
+    src = inspect.getsource(launcher.screen_configs)
+    assert "if _rk in seen:" in src and "seen.add(_rk)" in src
+    assert "if key in seen:" not in src

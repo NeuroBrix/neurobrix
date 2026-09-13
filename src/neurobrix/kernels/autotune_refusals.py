@@ -171,7 +171,9 @@ def sweep_grew_the_swap() -> int:
     if base is None:
         return 0
     try:
-        from neurobrix.core.host_memory import memory_state
+        from neurobrix.core.host_memory import host_shares_memory_with_device, memory_state
+        if not host_shares_memory_with_device():
+            return 0                                   # discrete memory: host swap is not the bench
         now = memory_state().swap_used_mb
     except Exception:                                  # noqa: BLE001
         return 0

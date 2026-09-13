@@ -263,3 +263,29 @@ screen. The 7 158 entries were certified against this machine's own fp64 oracle 
 certification time — `autotune_certify` has always used one — so this is about the
 RUNTIME consensus screen, which is a different instrument with a different
 coverage.
+
+### Addendum 2026-09-13 — the convolution oracle is in the live screen, and the budget is now the boundary
+
+The oracle written for this gap (`kernels/oracles/conv2d_fp64.py`) was never
+joined to the live provider's table (register entry 46), and once joined it
+never saw its constexpr arguments (they are launch kwargs, not positional
+arguments — same entry); and the screen itself looked at one shape in ten
+(register entry 47). All three were found by running the family live on card 0
+(`real-esrgan-x4`, ten conv2d sweeps, isolated replay cache), not by the suite,
+which was green throughout.
+
+With the three repaired, what the live screen does on those ten keys is now
+measured, and it is the profile's byte budget that decides: **one key (3→64
+channels at 448², ≈26 MB of arguments) is adjudicated by the fp64 oracle and
+recorded `screened: true`; nine (38 MB to 822 MB of arguments) are over the
+profile's screening budget of 33 554 432 bytes and are announced UNSCREENED,
+recorded `screened: false` with that reason.** The output image is byte-identical
+across the four sweeps (pre- and post-repair), which is what a screen that
+changes provenance and not choice should show.
+
+So on this rack the convolution family's LIVE coverage is a function of the
+budget, not of the oracle any more. Raising `autotune_screen_max_bytes` in the
+Volta profile would extend it at the price of an fp64 numpy convolution per
+candidate over hundreds of megabytes — a measurement to make before moving the
+number, not a number to move. Certification has no such budget and covers the
+family entirely (every conv entry in the directory carries the fp64 proof).

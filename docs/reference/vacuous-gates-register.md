@@ -386,7 +386,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-44 entries, of which five are placeholders and 39 carry a site. Two
+47 entries, of which five are placeholders and 42 carry a site. Two
 machines, two weeks of concentrated looking. Every one of them produced silence
 or a green rather than an error.
 
@@ -858,3 +858,72 @@ under 40 MB/s — and the one measured fact from a separate incident (2026-09-07
 `SlowDownWrite` on a 548 MB/s burst, settled by adaptive pacing from 40 MB/s).
 A measurement in place of a policy. The withdrawal carries its reason so that
 the rule does not return in six months under another name.
+
+### 45 — a mention recorded under a key nobody stores
+
+The ruling of 2026-09-12 says an unscreened seat *carries the mention where it
+is recorded*. The launcher recorded each seat under the screen's own
+de-duplication key — the constexpr kwargs of the launch — while Triton stores
+the chosen configuration, and the replay cache writes it, under the autotuner's
+SHAPE key (the `keys` arguments' values, then every argument's dtype). The
+stamping in `capture()` matched `(kernel, repr(key))` across the two spaces and
+never matched anything. Found by the production demonstration on 2026-09-13,
+which is the only reason it was found: **three announcements, zero records
+stamped**, the certified directory untouched — and a unit suite green around
+it, because every unit test handed both sides the same key.
+
+**The shape**: the weight dict's two key spaces (feedback of 2026-09-08), again
+— a fact recorded in one key space and read back in another, with nothing to
+say the spaces differ. **The rule**: a record and its reader share ONE key,
+computed by ONE function; here `autotune_shape_key` rebuilds Triton's key from
+the live arguments and every seat is recorded under it. The demonstration is
+the gate: `unscreened_in_production.py` reads *demonstrated* only when an
+announcement, a stamped record and an untouched directory all hold together.
+
+### 46 — an oracle delivered, tested, and never joined to the provider it was written for
+
+`kernels/oracles/conv2d_fp64.py` landed on 2026-09-12 with its own `ORACLES`
+table and nineteen tests against torch at 1e-12, its docstring naming the
+screen's uncovered 11.5 % as the reason it exists. The live screen's provider
+(`kernels/screen_oracle.py`, merged from the other machine the next night) has
+its own `ORACLES` table — GEMM only — and reads no other. Every convolution key
+kept being announced *"no oracle for this kernel"* while the reason text said
+the convolution family was the uncovered set and the oracle module said it was
+the cover. Found by a test that failed on the merge for a different reason,
+then by reading both tables side by side.
+
+**The shape**: entry 17's — a helper whose every test passes can still have no
+seam. **The rule**: an oracle is delivered when the provider CALLS it, and the
+proof is a live screen line adjudicating a key of that family, not the module's
+own suite. The two tables are now one at import (`ORACLES.update(...)`), and
+the reason text names what is covered rather than what is not.
+
+And the live proof found the second half the same hour: joined, the provider
+was CALLED on every conv key and still returned None — it built its operand
+dictionary from `tuner.nargs`, the POSITIONAL arguments, while `kernel_height`,
+`stride_*`, `padding_*`, `groups` and `fp16` are constexpr launch KWARGS and
+live in `meta`. A `KeyError` caught as "no reference", on every key, with the
+provider's own three GEMM oracles unaffected because they need no constexpr.
+The provider now takes the launch kwargs (`_call_screen_oracle` passes them to
+a provider whose signature accepts them), and the test hands it a conv key
+whose constexprs come only through `meta`.
+
+### 47 — a screen de-duplicated by a key that ten shapes share
+
+The correctness screen runs at `prune_configs`, once per autotune key, and kept
+a `seen` set so a launch is never screened twice. The set was keyed by the
+screen's own key — the constexpr kwargs of the launch. `real-esrgan-x4` meets
+ten `conv2d_forward_kernel` shapes with one and the same constexpr tuple
+(3×3, stride 1, padding 1, groups 1, `fp16=False`): the screen ran on the first
+and returned the other nine unscreened without a line, and the run's log read
+*"screening at key …"* exactly once for ten sweeps. Found on 2026-09-13 by
+counting announcements against sweeps in a live log — one against ten — after
+entries 45 and 46 had put the shape key and the oracle in front of the screen.
+
+**The shape**: entry 45's, one step earlier — the same wrong key, used this
+time not to record but to decide whether to look at all. **The rule**: a
+de-duplication key is the identity of the thing de-duplicated; here that is
+the shape key Triton stores the choice under, and the screen now de-duplicates
+by it. And the converse record: a seat the screen DID adjudicate is now
+written `screened: true` with its adjudicator's name, so a silent entry can no
+longer be read as a verified one.
