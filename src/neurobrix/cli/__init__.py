@@ -80,6 +80,10 @@ def _add_run_arguments(p):
                                  'fusion, TritonSequentialDispatcher). Equivalent of '
                                  '--sequential but for the Triton backend. Useful for '
                                  'debugging individual Triton kernels.')
+    p.add_argument('--explain-plan', action='store_true', dest='explain_plan',
+                   help='Print the Prism plan Hocine asked for: which memory '
+                        'strategy was chosen and WHY, its transient components '
+                        'and heaviest components, then continue the run.')
     p.add_argument('--max-tokens', type=int, default=None, dest='max_tokens',
                             help='Maximum number of tokens to generate (LLM only)')
 
