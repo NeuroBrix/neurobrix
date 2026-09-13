@@ -88,7 +88,11 @@ OVERLAY = {
              "from the container when the backbone's latent is flattened or the flow "
              "is named something else, and the conditioning image did not set the "
              "resolution. Bounded above: renders to 80 frames, fails at its own "
-             "declared 88 asking 25.27 GiB in one allocation (DETTE D2).",
+             "declared 88 asking 25.27 GiB in one allocation — decided 2026-09-13: "
+             "PyTorch's native 3-D conv fallback buffer, taken because cuDNN 9.1 "
+             "refuses a large non-batch-splittable convolution (needs >= 9.3); a "
+             "workspace cap and the V8 flag change nothing. 88 is a declared limit "
+             "on this stack until cuDNN >= 9.3 or a per-tile conv bound lands (DETTE D2).",
         line="measured"),
     "CogVideoX-5b-I2V": dict(
         now="RUNS — corrected at the source, published, installed, PROVEN by run",
