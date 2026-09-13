@@ -75,6 +75,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   says so in the run's own output.
 
 ### Fixed
+- `neurobrix import` resumes an interrupted download instead of losing it: bytes go to a `.part` file beside the destination, a re-run continues from where the stream broke (HTTP Range), and the final `.nbx` name appears only once the announced size is reached.
 - The output resolution is read from the container wherever the container declares it.
   Deriving it from a traced latent input refused two containers that state everything
   needed: one because its flow is named `static_graph` rather than `iterative_process`,
