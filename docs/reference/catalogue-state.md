@@ -23,7 +23,7 @@ As the pass left it: **37 met**, **9 failed**, **1 not runnable**. 6 rows carry 
 | `NVlabs/Sana-1600M-MultiLing` | image | 12.1 | met in 90 s | 8 | 0 | paired cell PERTURBED (card 2 also carried the conv2d certification (pid 433862, up to 18 GB) from 22:55 to 23:13:38; the cell ran 23:02-23:2x — re-run alone owed) — no cost | transformer `height`@32 (weight-extent); transformer `width`@32 (weight-extent) (+2) | measured |
 | `PixArt/PixArt-Sigma-XL-1024` | image | 20.3 | met in 154 s | 8 | 0 | 2471 s, 20.90x, 36/36 keys, base 124 s, bytes same | vae `height`@128 (weight-extent); vae `width`@128 (weight-extent) | measured |
 | `PixArt/PixArt-XL-1024` | image | 20.4 | met in 128 s | 4 | 0 | 2476 s, 21.26x, 36/36 keys, base 122 s, bytes same | transformer `seq_len`@120 (weight-extent); transformer `seq_len`@120 (weight-extent) (+2) | measured |
-| `ostris/Flex.1-alpha` | image | 24.5 | met in 317 s | 15 | 0 | not measured | text_encoder `seq_len`@77 (weight-extent); transformer `seq_len`@4096 (weight-extent) (+2) | measured |
+| `ostris/Flex.1-alpha` | image | 24.5 | met in 317 s | 15 | 0 | 2501 s, 9.24x, 42/42 keys, base 303 s, bytes same | text_encoder `seq_len`@77 (weight-extent); transformer `seq_len`@4096 (weight-extent) (+2) | measured |
 | `Qwen/Qwen3-30B-A3B-Thinking` | llm | 57.1 | met in 154 s | 0 | 0 | 56 s, 0.51x, 7/8 keys, bytes passed | none found at the input | measured |
 | `Qwen/Qwen3-Coder-30B-A3B-Instruct` | llm | 57.1 | met in 173 s | 1 | 0 | 54 s, 0.47x, 7/8 keys, bytes passed | none found at the input | measured |
 | `Qwen/Qwen3-Coder-30B-A3B-Instruct-int4g128-ffnonly` | llm | 17.2 | met in 116 s | 0 | 0 | 46 s, 1.43x, 8/8 keys, base 107 s, bytes same | none found at the input | measured |
@@ -32,7 +32,7 @@ As the pass left it: **37 met**, **9 failed**, **1 not runnable**. 6 rows carry 
 | `deepseek-ai/deepseek-coder-v2-lite-instruct` | llm | 30.7 | met in 140 s | 5 | 0 | 1337 s, 14.38x, 131/137 keys, bytes passed | none found at the input | measured |
 | `deepseek-ai/janus-pro-7b` | multimodal | 13.8 | met in 100 s | 3 | 0 | 193 s, 3.31x, 25/25 keys, base 84 s, bytes same | gen_embed `seq_len`@1 (arithmetic) | measured |
 | `inclusionai/ming-lite-omni-1.5` | multimodal | 53.0 | met in 175 s | 8 | 0 | 1072 s, 9.82x, 195/203 keys, bytes passed | image_vae `seq_len`@3 (weight-extent) | measured |
-| `openbmb/minicpm-o-4_5` | multimodal | 19.7 | met in 301 s | 81 | 0 | not measured | flow_dit `seq_len`@3 (weight-extent) | measured |
+| `openbmb/minicpm-o-4_5` | multimodal | 19.7 | met in 301 s | 81 | 0 | 1624 s, 26.98x, 286/287 keys, base 63 s, bytes same | flow_dit `seq_len`@3 (weight-extent) | measured |
 | `qwen/qwen3-omni-30b-a3b-instruct` | multimodal | 65.9 | met in 257 s | 36 | 0 | 1196 s, 12.23x, 183/219 keys, bytes passed | talker.code_predictor.model.codec_embedding `seq_len`@1 (arithmetic) | measured |
 | `qwen/qwen3-vl-30b-a3b-thinking` | multimodal | 57.9 | met in 365 s | 36 | 0 | 2924 s, 13.87x, 515/585 keys, bytes passed | none found at the input | measured |
 | `nvidia/Parakeet-TDT-1.1B` | stt | 4.1 | met in 32 s | 4 | 0 | 78 s, 8.04x, 17/17 keys, base 11 s, bytes same | joint `seq_len`@1024 (weight-extent) | measured |
@@ -41,8 +41,8 @@ As the pass left it: **37 met**, **9 failed**, **1 not runnable**. 6 rows carry 
 | `canopylabs/Orpheus-3B` | tts | 14.2 | not runnable — catalogue decision | n/m | n/m | not measured | none found at the input | not measured |
 | `fishaudio/OpenAudio-S1-Mini` | tts | 4.0 | met in 1045 s | 238 | 0 | not measured | codec.decoder `seq_len`@1 (arithmetic) | measured |
 | `hexgrad/Kokoro-82M` | tts | 0.4 | met in 55 s | 6 | 0 | 303 s, 50.72x, 54/54 keys, base 6 s, bytes same | none found at the input | measured |
-| `microsoft/VibeVoice-1.5B` | tts | 5.1 | met in 154 s | 15 | 0 | not measured | none found at the input | measured |
-| `resemble-ai/Chatterbox` | tts | 2.1 | met in 73 s | 0 | 0 | not measured | none found at the input | measured |
+| `microsoft/VibeVoice-1.5B` | tts | 5.1 | met in 154 s | 15 | 0 | 245 s, 8.28x, 38/38 keys, base 34 s, bytes same | none found at the input | measured |
+| `resemble-ai/Chatterbox` | tts | 2.1 | met in 73 s | 0 | 0 | paired cell arm A rc=0, arm B rc=-9 — no cost | none found at the input | measured |
 | `JingyunLiang/SwinIR-Classical-x2` | upscaler | 0.1 | met in 7 s | 0 | 0 | 37 s, 8.86x, 11/11 keys, base 5 s, bytes same | none found at the input | measured |
 | `JingyunLiang/SwinIR-Classical-x4` | upscaler | 0.1 | met in 9 s | 0 | 0 | 51 s, 11.80x, 12/12 keys, base 5 s, bytes same | none found at the input | measured |
 | `XPixelGroup/HAT-L-x4` | upscaler | 0.2 | met in 16 s | 0 | 0 | 87 s, 7.23x, 18/18 keys, base 14 s, bytes same | none found at the input | measured |
@@ -100,7 +100,7 @@ Its VAE encoder unrolls its temporal chunk loop: 517 ops per chunk, measured at 
 
 TWO lines, not one. The rebuild resolves its output size. Its VAE ENCODER stays unrolled over the temporal axis, which no rebuild changes — DETTE D-TEMPORAL-UNROLL. Delivering the first without saying the second would be delivering a fix for the error we found and hiding the one underneath.
 
-*Evidence:* rebuild 22:11-22:22 (676 s, 118.07 GB); regression gate 1.000x on all five components; upload through the internal entry point 22:22:46 -> rc=0 after 5144 s (126.77 GB, ~24.6 MB/s mean, zero SlowDownWrite), hub updatedAt 23:48:30Z; install 23:48:30 -> rc=0 after 312 s, five components in the cache; the proof needs the whole rig and runs after the bench queues drain; cached encoder carries the unroll signature (inferred line)  ·  *line:* measured (topology) / inferred (unroll)
+*Evidence:* rebuild 22:11-22:22 (676 s, 118.07 GB); regression gate 1.000x on all five components; upload through the internal entry point 22:22:46 -> rc=0 after 5144 s (126.77 GB, ~24.6 MB/s mean, zero SlowDownWrite), hub updatedAt 23:48:30Z; install 23:48:30 -> rc=0 after 312 s, five components in the cache; the proof needs the whole rig and runs after the bench queues drain; VAE encoder UNROLLED, MEASURED 2026-09-13 04:44 on card 0: 1237 ops at T=9, 3305 at T=25 -> 517 ops per chunk (second line)  ·  *line:* measured (topology) / inferred (unroll)
 
 ## How to read the columns
 
@@ -138,11 +138,11 @@ per family, from the cells above with both arms at rc=0 and not perturbed):**
 | family | cells | s per shape (min – max) | keys per cell (min – max) |
 |---|---:|---|---|
 | audio_llm | 1 | 5 – 5 | 251 – 251 |
-| image | 2 | 69 – 69 | 36 – 36 |
+| image | 3 | 60 – 69 | 36 – 42 |
 | llm | 2 | 6 – 6 | 6 – 8 |
-| multimodal | 1 | 8 – 8 | 25 – 25 |
+| multimodal | 2 | 6 – 8 | 25 – 287 |
 | stt | 3 | 3 – 5 | 10 – 17 |
-| tts | 1 | 6 – 6 | 54 – 54 |
+| tts | 2 | 6 – 6 | 38 – 54 |
 | upscaler | 8 | 3 – 45 | 10 – 18 |
 
 The 2026-09-11 table quoted 3–12 s a shape on GEMM-class keys. Tonight the

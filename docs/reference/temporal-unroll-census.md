@@ -59,10 +59,18 @@ Positive and negative control sit on the same model: `Wan2.1-VACE`'s encoder at
 are the two non-Wan encoders — the asymmetry that started this investigation is
 real for the Wan VAE and is NOT a property of video components in general.
 
-## Inferred — 2 components, and what the inference rests on
+## Measured since — `Wan2.2-I2V-A14B/vae_encoder`, 2026-09-13 04:44
 
-`Wan2.1-I2V-14B-480P-Diffusers` and `Wan2.2-I2V-A14B-Diffusers` have no local
-snapshot (purged under R38), so no second trace point exists for them. Their
+Its snapshot came back on 2026-09-12 and the two-point measurement ran on card 0
+with the same tracer as the anchor: **1237 ops at T=9 (k=3), 3305 ops at T=25
+(k=7) — 517 ops per chunk, UNROLLED.** The inference below held for it; the line
+now reads MEASURED, and only `Wan2.1-I2V-14B-480P` remains inferred.
+
+## Inferred — 1 component left, and what the inference rests on
+
+`Wan2.1-I2V-14B-480P-Diffusers` has no local snapshot (purged under R38), so no
+second trace point exists for it. `Wan2.2-I2V-A14B` was in this table until its
+measurement above confirmed the inference exactly. Their
 cached encoder graphs carry the measured anchor's chunk-loop module groups
 **identically**, on both the repetition counts and the number of modules at each:
 
@@ -70,7 +78,7 @@ cached encoder graphs carry the measured anchor's chunk-loop module groups
 |---|---|---|
 | `Wan2.1-VACE/vae_encoder` (**measured anchor**) | `{2:1, 3:9, 6:12, 8:22, 12:1, 21:22}` | — |
 | `Wan2.1-I2V-14B-480P/vae_encoder` | `{2:1, 3:9, 6:12, 8:22, 12:1, 21:22}` | yes |
-| `Wan2.2-I2V-A14B/vae_encoder` | `{2:1, 3:9, 6:12, 8:22, 12:1, 21:22}` | yes |
+| `Wan2.2-I2V-A14B/vae_encoder` | `{2:1, 3:9, 6:12, 8:22, 12:1, 21:22}` | yes — and MEASURED 2026-09-13 (517 ops/chunk) |
 
 Those counts are `7k, 4k, 3k-1, 2k, k` and one constant at k=3 — the anchor's own
 loop. **The claim is narrow on purpose**: it is not that the graphs look alike.
@@ -92,7 +100,7 @@ inferred line and a measured line do not read the same.
 
 ## What it means
 
-Three models carry the limit, and the third is inferred rather than measured. The
+Three models carry the limit; two are measured (VACE, Wan2.2) and one is inferred. The
 debt is `D-TEMPORAL-UNROLL` in `DETTE.md`; the two remedies are there and neither
 is a number. What this census changes is the scope sentence: **it is not the
 video family**, and it is not a property of encoders in general — it is the Wan
