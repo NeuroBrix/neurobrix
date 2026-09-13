@@ -165,6 +165,27 @@ def campaign_cells() -> dict:
     return out
 
 
+def per_shape_sweep_cost() -> dict:
+    """{family: [row, ...]} for every campaign cell that measured a sweep."""
+    sys.path.insert(0, str(REPO / "tools"))
+    from campaign_table import _row
+    out: dict = {}
+    for camp in CAMPAIGNS:
+        try:
+            perturbed = json.loads((camp / "PERTURBED.json").read_text())
+        except (OSError, ValueError):
+            perturbed = {}
+        for result in sorted(camp.glob("proof*/*/result.json")):
+            try:
+                r = _row(json.loads(result.read_text()))
+            except (OSError, ValueError):
+                continue
+            if r["model"] in perturbed or r["rc"] != (0, 0) or not r["keys"] or not r["sweep"]:
+                continue
+            out.setdefault(r["family"], []).append(r)
+    return out
+
+
 def campaign_dir_cells(camp: Path) -> dict:
     """{container: cell} straight from a campaign's result.json files.
 
@@ -372,6 +393,28 @@ def main() -> int:
     print("sweeping costs relative to a served run, on this rack, at the shapes these")
     print("requests meet. It is not a throughput figure and it says nothing about")
     print("other hardware.\n")
+    per_shape = per_shape_sweep_cost()
+    if per_shape:
+        print("**What a sweep costs per shape, measured tonight (sweep cost / keys swept,")
+        print("per family, from the cells above with both arms at rc=0 and not perturbed):**")
+        print()
+        print("| family | cells | s per shape (min – max) | keys per cell (min – max) |")
+        print("|---|---:|---|---|")
+        for fam, rows in sorted(per_shape.items()):
+            per = [r["sweep"] / r["keys"] for r in rows]
+            keys = [r["keys"] for r in rows]
+            print(f"| {fam} | {len(rows)} | {min(per):.0f} – {max(per):.0f} | {min(keys)} – {max(keys)} |")
+        print()
+        allrows = [r for rows in per_shape.values() for r in rows]
+        top = max(allrows, key=lambda r: r["sweep"] / r["keys"])
+        low = min(allrows, key=lambda r: r["sweep"] / r["keys"])
+        print(f"The 2026-09-11 table quoted 3–12 s a shape on GEMM-class keys. Tonight the")
+        print(f"spread runs from {low['sweep']/low['keys']:.0f} s a shape (`{low['model']}`) to")
+        print(f"{top['sweep']/top['keys']:.0f} s (`{top['model']}`, conv2d shapes at 448² screened")
+        print(f"against the fp64 oracle) — so a {top['a_med']:.0f} s run of the latter pays")
+        print(f"{top['sweep']:.0f} s of sweep. The per-shape cost is a property of the kernel")
+        print("class and the shape, not a constant; the law (shapes met per second of")
+        print("served run) holds with that coefficient per cell, not a single one.\n")
     print("**where a defect would be invisible** — axes traced at a value where two")
     print("distinct rules give the same number, so the trace-point check cannot tell")
     print("them apart. This is NOT a defect list. An axis here needs its rule asserted")
