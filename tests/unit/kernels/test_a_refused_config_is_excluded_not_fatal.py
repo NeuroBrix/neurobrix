@@ -82,7 +82,7 @@ def test_the_policy_module_exists_and_is_installed_by_the_launcher():
 
 def test_a_refused_config_scores_infinite_and_the_sweep_survives():
     R = _policy()
-    from triton_msl.errors import MetalNonRecoverableError
+    MetalNonRecoverableError = pytest.importorskip("triton_msl.errors", reason="the Metal Triton binder is not installed here").MetalNonRecoverableError
 
     calls = []
 
@@ -116,7 +116,7 @@ def test_a_refusal_that_is_not_about_this_config_still_propagates():
 
 def test_the_exclusion_is_announced_once_per_reason():
     R = _policy()
-    from triton_msl.errors import MetalNonRecoverableError
+    MetalNonRecoverableError = pytest.importorskip("triton_msl.errors", reason="the Metal Triton binder is not installed here").MetalNonRecoverableError
 
     said = []
     guarded = R.exclude_refused_configs(

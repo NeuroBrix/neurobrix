@@ -53,9 +53,13 @@ def test_metal_asks_for_thirty_two():
         "the generic attention lowering mis-computes below 32 and says so")
 
 
-def test_a_backend_without_a_row_refuses():
-    """The row is the answer; its absence is a refusal, never a default."""
+def test_a_backend_without_a_row_refuses(monkeypatch):
+    """The row is the answer; its absence is a refusal, never a default.
+    The live backend is made one no table can have: on a CUDA machine a table
+    with a cuda row answers (merge of 2026-09-13, semantic conflict)."""
+    from neurobrix.kernels import nbx_tensor as nt
     from neurobrix.kernels.nbx_tensor import _backend_capability
+    monkeypatch.setattr(nt, "_detect_gpu_backend", lambda: "no-such-backend")
 
     with pytest.raises(RuntimeError) as exc:
         _backend_capability({"cuda": 16}, "_TEST_TABLE", "its FA tile floor")
