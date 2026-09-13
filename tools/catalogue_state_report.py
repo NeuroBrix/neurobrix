@@ -124,17 +124,19 @@ OVERLAY = {
              "0.02 GB. 389 -> 265 ops.",
         line="measured"),
     "Open-Sora-v2": dict(
-        now="RE-TRACED, REBUILT, PUBLISHED, INSTALLED — proof by run owed",
+        now="RE-TRACED, REBUILT, PUBLISHED, INSTALLED, PROVEN BY RUN (triton, 9 frames, 2026-09-13 15:33)",
         evidence="re-trace on the fifth attempt of 2026-09-13 (12:50, unpinned): transformer 5089 ops, "
                  "vae 237 (June: 11 017 — an unrolled trace; the new graph is FLAT in T, 237 ops "
                  "at T=9 and T=25, measured on card 0), text encoders 1594/490; rebuild 682 s on the "
                  "export; regression gate 1.000x on three components, vae 0.959x opened with "
                  "--allow-shrink on a measurement (248 tensors identical, the graph shrank); "
                  "upload 13:08:54 -> rc=0 after 1922 s, hub updatedAt 13:40:55Z; install 13:40:56 "
-                 "-> rc=0 after 123 s, 53 files, 42.47 GB; docs/reference/catalogue-repairs.md entry 4",
+                 "-> rc=0 after 123 s, 53 files, 42.47 GB; proof by run 15:33: 9 frames at 112x176, "
+                 "range 0-202, inter-frame difference 18.6, rc=0 after 648 s, unpinned; "
+                 "docs/reference/catalogue-repairs.md entry 4",
         note="The snapshot's arrangement (model_index.json, component dirs, safetensors T5 "
              "shards beside the vendor's .bin) is rebuilt from declarations and documented beside "
-             "the weights; the proof by run (9 frames) runs once the engine suite leaves the rig.",
+             "the weights. The June container's 11 017-op VAE was an unrolled trace; the new one is flat in T.",
         line="measured"),
     "Wan2.2-I2V-A14B": dict(
         now="RUNS — compiled PROVEN by run at the default guidance; triton renders at cfg 1.0, does not fit one 32 GB card at batched CFG (Prism finding) — and a second line",

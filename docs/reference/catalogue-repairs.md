@@ -130,7 +130,7 @@ we found and hiding the one underneath.
 
 ---
 
-## 4 — `hpcai-tech/Open-Sora-v2` · 2026-09-12 — DIAGNOSED, re-trace queued
+## 4 — `hpcai-tech/Open-Sora-v2` · 2026-09-12 — RE-TRACED, REBUILT, PUBLISHED, PROVEN BY RUN (2026-09-13)
 
 | step | evidence |
 |---|---|
@@ -143,7 +143,6 @@ we found and hiding the one underneath.
 | regression gate (2) | text_encoder 1.000×, text_encoder_2 1.000×, transformer 1.000×, **vae 0.959× — refused, then opened with `--allow-shrink` on a measurement**: the VAE's weights index is identical (248 tensors, same bytes each, bfloat16 both); what shrank is the graph, 11 017 → 237 ops (19.5 → 6.5 MB of JSON). Whether the short graph decodes is the proof by run's question, not the gate's. **Measured 13:11 on card 0 (`unroll_measure.py`, two stimuli): 237 ops at T=9 and 237 at T=25 — the new VAE graph is flat in the chunk count, i.e. symbolic in T, where the June graph (11 017 ops) was an unrolled trace. The shrink is the repair.** |
 | re-upload (2) | **13:08:54 → rc=0 after 1922 s** through the internal entry point (`replace`, same slug `hpcai-tech/Open-Sora-v2`, adaptive pacing from 40 MB/s, ≈22 MB/s mean); hub record `updatedAt 2026-09-13T13:40:55.693Z PUBLIC` |
 | install (2) | **13:40:56 → rc=0 after 123 s**: 53 files, 42.47 GB, four components |
-| proof by run (2) | owed — 9 frames, runs in the final chain once the engine suite leaves the rig; the container's own default is 51 frames at 100 steps and the proof is the bounded request every other repair used |
+| proof by run (2) | **2026-09-13 15:33 — PASSED, triton.** 9 frames at 112×176 from the container installed at 13:42:58 (the chain refused any earlier install): `rc=0` after 648 s, range 0–202, mean absolute inter-frame difference 18.6, `--seed 42 --steps 4`, unpinned on the rig (VMM pool across the visible cards). The container's own default is 51 frames at 100 steps; the proof is the bounded request every other repair used |
 
-Not listed as delivered. The line in `catalogue-state.md` stays DIAGNOSED until the
-proof by run says otherwise.
+Delivered: the line in `catalogue-state.md` reads PROVEN, on the proof above.
