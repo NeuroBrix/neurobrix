@@ -51,6 +51,11 @@ REPO = Path(__file__).resolve().parents[1]
 RECORD_DOC = REPO / "docs/reference/census-retirements.md"
 LINE = re.compile(r"\[certify\] (\S+) \S+ .*UNREACHABLE — the wrapper computed key (\(.*?\)) "
                   r"for inputs synthesized from (\(.*?\)):")
+#: `--retire-failed`: a key whose inputs cannot even be SYNTHESISED (2026-09-13:
+#: two conv2d keys with in_feat_dim=0, "cannot reshape array") is not a shape the
+#: engine meets; the certifier names it FAILED with the describe_key text, and
+#: the census key is recovered by matching that description against the census.
+FAILED_LINE = re.compile(r"\[certify\] (\S+) \S+ (.*?): FAILED — (.*)$")
 
 
 def unreachable_from_logs(paths) -> dict:
@@ -61,6 +66,38 @@ def unreachable_from_logs(paths) -> dict:
             m = LINE.search(line)
             if m:
                 out[(m.group(1), m.group(3))] = m.group(2)
+    return out
+
+
+def failed_from_logs(paths, census: dict) -> dict:
+    """{(kernel_short, census_key_text): failure} for FAILED keys, recovered by
+    describing every census key of that kernel and matching the certifier's text."""
+    sys.path.insert(0, str(REPO / "src"))
+    from neurobrix.kernels import autotune_certified as C
+    from neurobrix.triton import autotune_cache as atc
+    tuners = {q.split(".")[-1]: t for q, t in atc._autotuners()}
+    out = {}
+    wanted = []
+    for p in paths:
+        for line in Path(p).read_text(errors="replace").splitlines():
+            m = FAILED_LINE.search(line)
+            if m:
+                wanted.append((m.group(1), m.group(2).strip(), m.group(3).strip()))
+    if not wanted:
+        return out
+    for ident in census:
+        if "::" not in ident:
+            continue
+        qual, ktext = ident.split("::", 1)
+        short = qual.split(".")[-1]
+        tuner = tuners.get(short)
+        key = C.parse_key(ktext)
+        if tuner is None or key is None:
+            continue
+        desc = C.describe_key(tuner, key)
+        for k, d, why in wanted:
+            if k == short and d == desc:
+                out[(short, ktext)] = why
     return out
 
 
@@ -97,6 +134,8 @@ def main() -> int:
                     help="where the reversible JSON of retired entries goes (default: beside the census)")
     ap.add_argument("--record-doc", type=Path, default=RECORD_DOC)
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--retire-failed", action="store_true",
+                    help="also retire keys the certifier named FAILED (inputs that cannot be synthesised)")
     args = ap.parse_args()
 
     if args.census is None:
@@ -108,13 +147,15 @@ def main() -> int:
         print(f"REFUSED: no census at {census_path}", file=sys.stderr)
         return 1
     named = unreachable_from_logs(args.from_log)
+    doc = json.loads(census_path.read_text())
+    wrapped = isinstance(doc, dict) and "entries" in doc and isinstance(doc["entries"], dict)
+    census = doc["entries"] if wrapped else doc
+    if args.retire_failed:
+        named.update(failed_from_logs(args.from_log, census))
     if not named:
         print("REFUSED: the logs name no UNREACHABLE key — nothing to retire, nothing written.",
               file=sys.stderr)
         return 1
-    doc = json.loads(census_path.read_text())
-    wrapped = isinstance(doc, dict) and "entries" in doc and isinstance(doc["entries"], dict)
-    census = doc["entries"] if wrapped else doc
     kept, retired = retire(census, named)
     per_kernel: dict = {}
     for ident in retired:
@@ -146,7 +187,8 @@ def main() -> int:
     when = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime())
     para = (f"\n## {when} — {len(retired)} keys retired, engine `{_engine_sha()}`\n\n"
             f"Named UNREACHABLE by `neurobrix autotune certify` (the wrapper computed a "
-            f"different key for inputs synthesised from the census key) in: "
+            f"different key for inputs synthesised from the census key)"
+            + (" or FAILED (inputs that cannot be synthesised)" if args.retire_failed else "") + " in: "
             + ", ".join(f"`{Path(p).name}`" for p in args.from_log) + ".\n\n"
             "| kernel | retired |\n|---|---:|\n"
             + "".join(f"| `{k}` | {n} |\n" for k, n in sorted(per_kernel.items()))
