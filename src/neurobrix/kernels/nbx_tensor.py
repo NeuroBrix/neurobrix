@@ -297,6 +297,25 @@ def fa_min_tile() -> int:
         "the smallest attention tile dimension it computes correctly")
 
 
+# The largest 2-D reduction tile (product of block dims) a backend's lowering
+# stages correctly. The generic Metal lowering stages one element per thread,
+# so a tile above the 1024-thread threadgroup has lanes with nothing to hold
+# their part -- it refuses rather than reduce part of the tile. cuda/hip lower
+# a 2-D reduce differently and take the tile the reduction kernels were tuned
+# for (BLOCK_M*BLOCK_N = 8192); their entry is that tuned size so min() is the
+# identity and nothing moves there.
+#
+# A capability, not a vendor test -- adding a backend is adding a row.
+_BACKEND_REDUCE_TILE_MAX = {"cuda": 1 << 20, "hip": 1 << 20, "metal": 1024}
+
+
+def reduce_tile_max() -> int:
+    """The largest 2-D reduction tile this backend stages correctly."""
+    return _backend_capability(
+        _BACKEND_REDUCE_TILE_MAX, "_BACKEND_REDUCE_TILE_MAX",
+        "the largest 2-D reduction tile it stages correctly")
+
+
 def _backend_capability(table, name: str, what: str) -> bool:
     """One row of one capability table, or a refusal naming both."""
     backend = _detect_gpu_backend()
