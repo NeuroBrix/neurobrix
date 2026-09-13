@@ -48,6 +48,20 @@ class StrategyContext:
     # Note: "persistent" is an alias for "eager" for backward compatibility
     loading_mode: str = "lazy"
 
+    # Components Prism classified as TRANSIENT — used once per request rather
+    # than re-entered every step. Empty for every strategy but the lifecycle
+    # one, whose acceptance budget is `persistent weights + one transient at a
+    # time`. An eager strategy releases these after use and keeps the rest;
+    # without this list "eager" means "release nothing", and the budget the
+    # plan was accepted under is not the budget it runs under.
+    transient_components: frozenset = frozenset()
+
+    # component -> [[first_op_uid, last_op_uid], ...] for a component Prism
+    # decided to stream at layer granularity. Empty for every other plan.
+    # These are the segments the budget was ACCEPTED under, so the strategy
+    # executes them rather than deriving its own and hoping they match.
+    layer_segments: Dict[str, Any] = field(default_factory=dict)
+
     # Execution mode: "compiled" | "triton" | "triton_sequential". Drives
     # get_strategy()'s pytorch-vs-triton dispatch so the triton branch can
     # run NBXTensor-native strategies (zero torch) while compiled keeps the
@@ -95,6 +109,9 @@ class StrategyContext:
         return len(self.get_all_devices()) > 1
 
 
+_ACCELERATOR_PREFIXES = frozenset({"cuda", "hip", "xpu", "mps", "tt"})
+
+
 class ExecutionStrategy(ABC):
     """
     Abstract base class for execution strategies.
@@ -109,6 +126,22 @@ class ExecutionStrategy(ABC):
     - Model-specific logic (ZERO SEMANTIC)
     - Input/output binding (that's variable resolver's job)
     """
+
+    #: Does this strategy decide FOR ITSELF where its weights live at each
+    #: moment — pinning them, streaming them, releasing them — rather than
+    #: letting the runtime load a component once and leave it resident?
+    #:
+    #: The runtime asks this to know whether a component must be driven
+    #: through `execute_component` and offered `install_for_executor`. It
+    #: used to ask "is this zero3", which is a NAME, and a name cannot be
+    #: extended: the second strategy to manage its own residency had no way
+    #: to say so. This is the same shape of question as the vendor prefixes
+    #: this engine stopped hard-coding — ask the thing, not its label.
+    #:
+    #: False by default: a strategy that does not say it manages residency
+    #: is loaded and left resident, which is what every strategy but zero3
+    #: did before this existed.
+    manages_weight_residency: bool = False
 
     def __init__(self, context: StrategyContext, strategy_name: str):
         """
@@ -183,6 +216,39 @@ class ExecutionStrategy(ABC):
         """
         pass
 
+    # Attribute names under which a runtime package may carry its artefact
+    # path. Measured 2026-09-09: the executor's package carries `root_path`,
+    # NBXContainer carries `cache_path`, and `nbx_path` — the ONLY name five
+    # strategies used to read — exists on neither.
+    _ARTIFACT_PATH_ATTRS = ('nbx_path', 'root_path', 'cache_path', 'path')
+
+    def resolve_artifact_path(self, component_name: str) -> str:
+        """Artefact path for `component_name`, or raise saying why not.
+
+        This is the single place a strategy asks where the weights live.
+        It never returns None: a strategy that cannot find the artefact
+        cannot load the weights, and a component with no weights is not a
+        lighter component, it is a wrong answer.
+        """
+        package = getattr(self.context, 'runtime_package', None)
+        if package is None:
+            raise RuntimeError(
+                f"ZERO FALLBACK: '{component_name}' needs its weights loaded "
+                f"but the strategy context ({type(self.context).__name__}) "
+                f"carries no runtime package to load them from. Loading "
+                f"nothing is not a way to continue.")
+
+        for attr in self._ARTIFACT_PATH_ATTRS:
+            value = getattr(package, attr, None)
+            if value:
+                return str(value)
+
+        raise RuntimeError(
+            f"ZERO FALLBACK: '{component_name}' needs its weights loaded but "
+            f"the runtime package ({type(package).__name__}) names no artefact "
+            f"path — tried {', '.join(self._ARTIFACT_PATH_ATTRS)}. It carries "
+            f"{sorted(a for a in dir(package) if 'path' in a.lower())}.")
+
     def load_weights(self, component_name: str) -> None:
         """Load weights for component (lazy loading)."""
         executor = self.context.component_executors.get(component_name)
@@ -191,17 +257,34 @@ class ExecutionStrategy(ABC):
                 f"ZERO FALLBACK: No executor for component '{component_name}'"
             )
 
-        # Check if weights already loaded (by checking if _weights dict is populated)
+        # Already loaded — the runtime usually gets there first
+        # (`_ensure_weights_loaded`), and re-loading would be waste, not a
+        # correction. This is the ONLY case where doing nothing is right.
         weights_loaded = hasattr(executor, '_weights') and bool(executor._weights)
-        if not weights_loaded:
-            device = self.context.get_device(component_name)
-            # GraphExecutor.load_weights requires nbx_path and component parameters
-            # These should be available from context.runtime_package
-            if hasattr(self.context, 'runtime_package') and self.context.runtime_package:
-                nbx_path = getattr(self.context.runtime_package, 'nbx_path', None)
-                if nbx_path:
-                    executor.load_weights(nbx_path, component_name)
-                    self.context._active_component = component_name
+        if weights_loaded:
+            return
+
+        # THREE SILENT SKIPS USED TO LIVE HERE, nested:
+        #
+        #     if hasattr(self.context, 'runtime_package') and ...:
+        #         nbx_path = getattr(..., 'nbx_path', None)
+        #         if nbx_path:
+        #             executor.load_weights(...)
+        #
+        # and the middle one read a name that exists on NOTHING. Measured
+        # 2026-09-09: the executor's package carries `root_path`, the
+        # container carries `cache_path`, and `nbx_path` is absent from both.
+        # So this method loaded nothing, ever, and said nothing about it —
+        # six strategies call it.
+        #
+        # It happened to be harmless only because the runtime loads the
+        # weights first, which is luck, not design: the one situation this
+        # method exists for — weights NOT loaded — was also the one it
+        # silently declined to handle.
+        nbx_path = self.resolve_artifact_path(component_name)
+
+        executor.load_weights(nbx_path, component_name)
+        self.context._active_component = component_name
 
     def unload_weights(self, component_name: str) -> None:
         """Unload weights for component (memory cleanup)."""
@@ -249,15 +332,26 @@ class ExecutionStrategy(ABC):
         # kernels.nbx_tensor from a core/strategies path that may run
         # before triton kernels are loaded.
         if hasattr(tensor, 'to_cuda') and hasattr(tensor, '_device'):
-            # Triton path — zero torch. Parse "cuda:N" → int device_idx.
-            if target_device.startswith("cuda:"):
-                dev_idx = int(target_device.split(":", 1)[1])
-            elif target_device == "cuda":
-                dev_idx = 0
-            else:
+            # Triton path — zero torch. Parse "<prefix>:N" → int device_idx.
+            # `to_cuda` is the GENERIC accelerator move in this layer, not an
+            # NVIDIA one. Matching only "cuda:" sent every hip:/mps:/xpu:
+            # target into the else branch below and moved the tensor to the
+            # HOST — asked for a GPU, it delivered CPU, silently and in the
+            # wrong direction.
+            prefix, _, _idx = str(target_device).partition(":")
+            if prefix in _ACCELERATOR_PREFIXES:
+                dev_idx = int(_idx) if _idx.isdigit() else 0
+            elif prefix == "cpu":
                 # CPU target — use NBXTensor.to_cpu for zero3-style
                 # evictions (if ever called from strategy code).
                 return tensor.to_cpu()
+            else:
+                # An unrecognised device is not a CPU request. Falling back to
+                # to_cpu() here is what made the bug above silent.
+                raise ValueError(
+                    f"transfer_tensor: {target_device!r} names neither the host "
+                    f"nor a known accelerator "
+                    f"({', '.join(sorted(_ACCELERATOR_PREFIXES))})")
             return tensor.to_cuda(dev_idx)
 
         if is_torch_tensor(tensor):

@@ -233,17 +233,327 @@ def nbx_dtype_to_torch(d: NBXDtype):
     return _MAP[d]
 
 
+# How each detected backend is named to TORCH. The engine's internal token
+# for device memory is the string "cuda" on every backend (see
+# `device_label`), and that token is deliberate — but it is not a name to
+# hand to torch, which resolves it against the build it was compiled with.
+# Torch's ROCm build also answers to "cuda"; only Apple differs.
+_TORCH_DEVICE_BY_BACKEND = {"cuda": "cuda", "hip": "cuda", "metal": "mps"}
+
+# Whether a torch tensor's `data_ptr()` is a pointer OUR allocator may write
+# into. On CUDA and ROCm both allocators sit on the same driver heap, so a
+# device-to-device copy straight into the torch tensor is valid and is what
+# this bridge has always done. On Metal, torch owns its own MTLBuffers and
+# ours are not those: writing there is not slow, it is a SIGSEGV (measured
+# 2026-09-10, rc=139 at the first `nbx_to_torch` on this machine).
+#
+# This is a capability, not a vendor test — adding a backend is adding a row.
+_TORCH_SHARES_DEVICE_HEAP = {"cuda": True, "hip": True, "metal": False}
+
+# Whether the backend HONOURS a device-side assert the author explicitly kept
+# with `@triton.jit(debug=True)`. This is not a question about debug builds:
+# `tl.device_assert` reaches the IR at all ONLY when `options.debug` is true
+# (triton/language/semantic.py: `if not self.builder.options.debug: return`),
+# so a `tt.assert` in the IR is by construction one the author demanded.
+#
+# CUDA and ROCm halt the thread at the assert and the next sync raises. The
+# Metal backend COMPUTES the predicate and then discards it — measured
+# 2026-09-10: with debug=True the generated MSL carries `mask_5 = idx < 2`
+# and never reads it. The guard is paid for in registers and not delivered,
+# so a kernel whose only bounds check is that assert performs the very access
+# the assert was there to prevent (`index_put` wrote 8 floats past the end of
+# a 24-float tensor; `embedding` read past the end of the weight).
+#
+# This is a capability, not a vendor test — adding a backend is adding a row.
+_BACKEND_TRAPS_ON_DEVICE_ASSERT = {"cuda": True, "hip": True, "metal": False}
+
+# Whether this backend's device memory is directly readable at its own
+# `data_ptr()` from the host. The fault channel below reads its status word
+# that way — after a flush that has already happened, so no copy and no
+# recursion through `memcpy`. Unified memory says yes; a discrete heap does
+# not, and must add its row (and a copy path) before the channel is armed
+# on it.
+_BACKEND_MEMORY_IS_HOST_READABLE = {"cuda": False, "hip": False, "metal": True}
+
+
+# The smallest `tl.dot` tile dimension a backend's attention lowering handles
+# CORRECTLY. On cuda/hip the floor is the TensorCore minimum, 16, and a decode
+# step at seqlen_q=1 uses it. Metal's generic attention lowering silently
+# mis-computes below 32 -- rows past the first become garbage, for any
+# head_dim -- and refuses rather than emit it; its tiled template does take a
+# smaller tile, but only for a kernel its detector resolves completely at
+# head_dim 64, which is not every kernel.
+#
+# Sixteen wastes half a Q tile at seqlen_q=1. A refusal wastes the model.
+#
+# This is a capability, not a vendor test — adding a backend is adding a row.
+_BACKEND_FA_MIN_TILE = {"cuda": 16, "hip": 16, "metal": 32}
+
+
+def fa_min_tile() -> int:
+    """The smallest attention tile dimension this backend computes correctly."""
+    return _backend_capability(
+        _BACKEND_FA_MIN_TILE, "_BACKEND_FA_MIN_TILE",
+        "the smallest attention tile dimension it computes correctly")
+
+
+def _backend_capability(table, name: str, what: str) -> bool:
+    """One row of one capability table, or a refusal naming both."""
+    backend = _detect_gpu_backend()
+    value = table.get(backend)
+    if value is None:
+        raise RuntimeError(
+            f"ZERO FALLBACK: backend {backend!r} does not say {what} "
+            f"({name}, rows: {sorted(table)}). Adding a backend is adding a "
+            f"row, not guessing.")
+    return value
+
+
+def backend_traps_on_device_assert() -> bool:
+    """True where `tl.device_assert` actually stops the kernel."""
+    return _backend_capability(
+        _BACKEND_TRAPS_ON_DEVICE_ASSERT, "_BACKEND_TRAPS_ON_DEVICE_ASSERT",
+        "whether it honours a device-side assert")
+
+
+# ============================================================================
+# DEVICE-SIDE FAULT CHANNEL
+# ============================================================================
+#
+# The portable half of `tl.device_assert`, for backends that do not honour
+# it. A kernel that detects a broken contract stores its fault code into a
+# one-word status buffer; the code is a `tl.constexpr`, so on a backend that
+# DOES trap the wrapper passes 0 and not one instruction is emitted (the
+# CUDA path is unchanged down to the generated PTX bar one unused kernel
+# parameter).
+#
+# Why a device-side word rather than checking the indices on the host:
+# measured 2026-09-10 on this machine, a host readback of the index tensor
+# costs +0.24 ms (1 id) to +0.29 ms (512 ids) per call against an embedding
+# launch of 0.017–0.020 ms — 13x to 17x the op it guards, and flat in the
+# number of indices because the cost is the `flush()` a D2H copy performs,
+# not the data. That is the same trap the D2D measurement of 2026-09-07
+# found (1,086 host-ordered copies in an 8-token decode: 0.007 s -> 4.08 s).
+# The status word costs one conditional store on the failing path and a
+# 4-byte read at a sync that was already happening.
+#
+# It is READ where the host observes device results — after `sync_device()`
+# and after a copy to the host — which is the sticky-error contract
+# `sync_device` already documents: the fault is at or before that point.
+_FAULT_MESSAGES: list = []
+_FAULT_BUFFERS: dict = {}
+_FAULT_LOCK = threading.Lock()
+
+
+def register_device_fault(message: str) -> int:
+    """Reserve a fault code for `message`. Called at import by the kernel
+    that raises it, so codes are stable within a process and never zero
+    (zero is 'clean', and it is what a disarmed kernel is compiled with)."""
+    with _FAULT_LOCK:
+        if message not in _FAULT_MESSAGES:
+            _FAULT_MESSAGES.append(message)
+        return _FAULT_MESSAGES.index(message) + 1
+
+
+def device_fault_code(message: str, *, armed: bool = None) -> int:
+    """The code a kernel should be compiled with: its own where the backend
+    needs the channel, 0 where the backend traps by itself."""
+    if armed is None:
+        armed = not backend_traps_on_device_assert()
+    return register_device_fault(message) if armed else 0
+
+
+@functools.lru_cache(maxsize=None)
+def device_fault_code_cached(message: str) -> int:
+    """`device_fault_code` memoised per message — it runs at every launch of
+    an armed kernel, and the answer cannot change within a process."""
+    return device_fault_code(message)
+
+
+def fault_channel(message: str, spare: 'NBXTensor') -> tuple:
+    """`(pointer_argument, FAULT_CODE)` for a kernel that carries the channel.
+
+    Where the backend HONOURS `tl.device_assert`, the code is 0 and the
+    generated kernel contains no fault store at all — proven on the emitted
+    code, not assumed: with FAULT_CODE=0 the body carries neither the store nor
+    the reduction that feeds it. The pointer is then a bound-but-unread
+    argument, so `spare` — a tensor the call already owns — is handed over and
+    NOTHING IS ALLOCATED.
+
+    That matters because the fault buffer is never freed by contract (a frozen
+    replay plan records its raw pointer), so allocating it on a backend that
+    can never write to it is a permanent allocation for a dead path. Reported
+    from the other machine 2026-09-11, whose CUDA proof also says the guard
+    itself holds: three kernels refuse an out-of-range index by name, six
+    outputs identical, +0.13% wall.
+
+    `spare` is never dereferenced through this argument on that path; passing
+    the output tensor is therefore safe and costs nothing.
+    """
+    code = device_fault_code_cached(message)
+    if code == 0:
+        return spare, 0
+    return device_fault_buffer(spare._device_idx), code
+
+
+def device_fault_buffer(device_idx: int) -> 'NBXTensor':
+    """This device's zeroed one-word status buffer.
+
+    Handed to the kernel as a TENSOR, not as a raw address: the launcher
+    binds a tensor as a pointer argument, and a bare int arrives as an
+    int64 scalar that `tl.store` refuses.
+
+    Never freed: a kernel launch records this raw pointer, and a frozen
+    replay plan may hold it long after the call that produced it — the same
+    reason `_INT64_ARRAY_CACHE` is never evicted.
+    """
+    buf = _FAULT_BUFFERS.get(device_idx)          # hot path: no lock
+    if buf is None:
+        with _FAULT_LOCK:
+            buf = _FAULT_BUFFERS.get(device_idx)
+            if buf is None:
+                buf = NBXTensor.zeros((1,), NBXDtype.int32, f"cuda:{device_idx}")
+                _FAULT_BUFFERS[device_idx] = buf
+    return buf
+
+
+def check_device_faults() -> None:
+    """Raise if any kernel reported a broken contract since the last check.
+
+    Reads the status word straight at its own address: this runs only after
+    a flush (a completed sync, or a copy that flushed), and only on a
+    backend whose device memory the host can read directly. The word is
+    cleared as it is read, so one violation raises once.
+    """
+    if not _FAULT_BUFFERS:
+        return
+    if not _backend_capability(
+            _BACKEND_MEMORY_IS_HOST_READABLE, "_BACKEND_MEMORY_IS_HOST_READABLE",
+            "whether the host can read its device memory directly"):
+        return
+    for device_idx, buf in list(_FAULT_BUFFERS.items()):
+        word = ctypes.c_int32.from_address(buf.data_ptr())
+        code = word.value
+        if code:
+            word.value = 0
+            message = (_FAULT_MESSAGES[code - 1]
+                       if 1 <= code <= len(_FAULT_MESSAGES)
+                       else f"unregistered fault code {code}")
+            raise RuntimeError(
+                f"device-side contract violated on device {device_idx}: "
+                f"{message}. The kernel reported it through the fault "
+                f"channel because this backend does not honour "
+                f"`tl.device_assert`; the fault is at or before this point.")
+
+
+
+def torch_device_str(device_idx: int) -> str:
+    """The torch device string for the backend this process actually detected.
+
+    Was `f"cuda:{idx}"`, written at the one place where the internal token
+    crosses into torch. On Apple that asked torch for a CUDA device and got
+    `AssertionError: Torch not compiled with CUDA enabled` — which is why
+    every oracle test in tests/unit/kernels (161 of them, 13 files) failed
+    here without ever comparing a number.
+    """
+    backend = _detect_gpu_backend()
+    name = _TORCH_DEVICE_BY_BACKEND.get(backend)
+    if name is None:
+        raise RuntimeError(
+            f"ZERO FALLBACK: backend {backend!r} has no torch device name in "
+            f"_TORCH_DEVICE_BY_BACKEND ({sorted(_TORCH_DEVICE_BY_BACKEND)}). "
+            f"Adding a backend is adding a row, not guessing a name.")
+    return f"{name}:{device_idx}"
+
+
+#: Whether torch offers a device-SELECTION call for this backend. CUDA and
+#: ROCm number their devices and require one to be current before a launch.
+#: Apple's torch build exposes no `torch.mps.set_device` at all, because MPS is
+#: a single device (`torch.mps.device_count()` is 1) — so there is nothing to
+#: select and nothing to be current.
+#:
+#: This is a capability, not a vendor test — adding a backend is adding a row.
+_TORCH_HAS_DEVICE_SELECTION = {"cuda": True, "hip": True, "metal": False}
+
+
+def set_torch_device(device) -> None:
+    """Make `device` current for torch, where that means anything.
+
+    Takes an index or a torch device, as `torch.cuda.set_device` does.
+
+    Was `torch.cuda.set_device(idx)`, written on the compiled engine's
+    multi-device path. On Apple that raises
+    `AttributeError: module 'torch._C' has no attribute '_cuda_setDevice'` —
+    the same shape as the `f"cuda:{idx}"` that `torch_device_str` replaced: the
+    engine's internal token for device memory handed to torch, which resolves
+    it against the build it was compiled with.
+
+    Measured 2026-09-11 on `CogVideoX-2b`: the compiled arm died in 14.7 s at
+    `compiled_sequence.py:4136`, and no model measured before it had ever taken
+    the multi-device path, so the line had never been reached on this machine.
+
+    Doing nothing on a single-device backend is not a fallback: there is no
+    selection to make, and a backend that HAS one and is missing from the table
+    is refused rather than guessed.
+    """
+    backend = _detect_gpu_backend()
+    selects = _TORCH_HAS_DEVICE_SELECTION.get(backend)
+    if selects is None:
+        raise RuntimeError(
+            f"ZERO FALLBACK: backend {backend!r} does not say whether torch "
+            f"selects a device on it "
+            f"({sorted(_TORCH_HAS_DEVICE_SELECTION)}). Adding a backend is "
+            f"adding a row, not guessing.")
+    if not selects:
+        return
+    import torch
+    torch.cuda.set_device(device)
+
+
 def nbx_to_torch(tensor: 'NBXTensor'):
     """Convert NBXTensor to torch.Tensor via D2D copy.
 
     Used at the boundary between triton execution and torch-based pipeline.
     """
     import torch
-    t = torch.empty(tensor.shape, dtype=nbx_dtype_to_torch(tensor._dtype),
-                    device=f"cuda:{tensor._device_idx}")
-    if tensor._nbytes > 0:
-        DeviceAllocator.memcpy(t.data_ptr(), tensor.data_ptr(), tensor._nbytes)
-    return t
+    backend = _detect_gpu_backend()
+    device = torch_device_str(tensor._device_idx)
+    shares_heap = _TORCH_SHARES_DEVICE_HEAP.get(backend)
+    if shares_heap is None:
+        raise RuntimeError(
+            f"ZERO FALLBACK: backend {backend!r} does not say whether torch "
+            f"shares its device heap "
+            f"({sorted(_TORCH_SHARES_DEVICE_HEAP)}). Copying into a foreign "
+            f"allocator's pointer on a guess is how this crashed.")
+
+    if shares_heap:
+        t = torch.empty(tensor.shape, dtype=nbx_dtype_to_torch(tensor._dtype),
+                        device=device)
+        if tensor._nbytes > 0:
+            DeviceAllocator.memcpy(t.data_ptr(), tensor.data_ptr(),
+                                   tensor._nbytes)
+        return t
+
+    # Separate heaps: the values travel through the host. On unified memory
+    # that is a RAM copy, not a bus transfer.
+    #
+    # Through RAW BYTES, not through `.numpy()`: numpy has no bfloat16, so
+    # `_DTYPE_TYPESTR` maps it to '<V2' (opaque 2-byte void) and a bf16
+    # tensor would arrive as something torch cannot take — on the dtype most
+    # of the hub runs in. `torch.frombuffer` knows bfloat16, so the bytes
+    # are typed once, correctly, by the same table that named the device.
+    import ctypes
+    torch_dtype = nbx_dtype_to_torch(tensor._dtype)
+    if tensor._nbytes == 0:
+        return torch.empty(tuple(tensor.shape), dtype=torch_dtype,
+                           device=device)
+    host = tensor.contiguous()
+    if host._device != 'cpu':
+        host = host.to_cpu()
+    raw = bytearray(ctypes.string_at(host.data_ptr(),
+                                     host.numel() * dtype_size(host._dtype)))
+    flat = torch.frombuffer(raw, dtype=torch_dtype)
+    return flat.reshape(tuple(tensor.shape)).to(device=device)
 
 
 # ============================================================================
@@ -1270,6 +1580,11 @@ class DeviceAllocator:
                     f"deviceSynchronize failed rc={_rc} on current device "
                     f"{DeviceAllocator.get_device()} — sticky async error "
                     f"surfaced at this sync; the fault is at or before it.")
+        # The portable half of the same contract: a backend that does not
+        # honour `tl.device_assert` reports through the fault channel, and
+        # this is where it is observed. The sync above has retired the work
+        # that would have written it.
+        check_device_faults()
 
     # ------------------------------------------------------------------
     # Async stream + event primitives (zero torch).
@@ -1992,6 +2307,60 @@ def _upload_int64_array(values, device_idx: int) -> 'NBXTensor':
     return buf
 
 
+def _upload_index_array(values, device_idx: int, max_offset: int) -> 'NBXTensor':
+    """The same, in the NARROWEST integer that holds every index the kernel
+    will compute from it.
+
+    The element type of this buffer decides the width of the whole index
+    computation downstream: `tl.load(shape_ptr + dim)` takes its dtype from
+    the pointer, and Triton then promotes the flat offset, every `%`, every
+    `//` and every stride multiply to match. At int64 that is a 64-bit
+    integer division and modulo per dimension per element, on hardware —
+    Apple's — that has no integer-division instruction at any width and
+    emulates both.
+
+    Measured 2026-09-08 on an M4 Pro, `strided_copy_kernel` over a
+    (2048, 5632) bf16 transpose, the same kernel and the same launch, only
+    the metadata's width changed:
+
+        int64 metadata   3.794 ms    12.2 GB/s
+        int32 metadata   1.411 ms    32.7 GB/s
+        a contiguous copy of the same bytes    0.384 ms   120.3 GB/s
+
+    `max_offset` is the largest linear offset the kernel can form from these
+    values — `sum((shape[i] - 1) * stride[i])` at the call site. int32 is
+    used only when that bound and every value fit in it, so the narrower
+    buffer computes the SAME offsets rather than nearly the same ones; a
+    tensor large enough to overflow keeps int64 and keeps today's behaviour.
+    Numerically inert on CUDA by the same argument, where it is also the
+    cheaper arithmetic.
+    """
+    key = (tuple(int(v) for v in values), int(device_idx), "narrow")
+    hit = _INT64_ARRAY_CACHE.get(key)
+    if hit is not None:
+        return hit
+
+    import numpy as _np
+    _I32_MAX = 2 ** 31 - 1
+    fits = (abs(int(max_offset)) <= _I32_MAX
+            and all(abs(int(v)) <= _I32_MAX for v in values))
+    arr = _np.asarray(values, dtype=_np.int32 if fits else _np.int64)
+    DeviceAllocator.set_device(device_idx)
+    buf = NBXTensor.from_numpy(arr)
+    _INT64_ARRAY_CACHE[key] = buf
+    return buf
+
+
+def _max_linear_offset(shape, strides) -> int:
+    """The largest offset `strided_copy_kernel` can address from this shape
+    and these strides — what the index arithmetic must be wide enough for."""
+    total = 0
+    for extent, stride in zip(shape, strides):
+        if extent > 0:
+            total += (int(extent) - 1) * abs(int(stride))
+    return total
+
+
 # PyTorch's hard limit on tensor rank. Beyond this we refuse to launch
 # rather than silently truncate. See torch/_C/_TensorBase.pyi:
 #   PyTorch stores ndim in an int64 but actual ops are bounded by
@@ -2057,8 +2426,9 @@ def _strided_copy(src: 'NBXTensor', dst: 'NBXTensor'):
         )
     n = src._numel
 
-    shape_buf = _upload_int64_array(src._shape, src._device_idx)
-    stride_buf = _upload_int64_array(src._strides, src._device_idx)
+    _bound = _max_linear_offset(src._shape, src._strides)
+    shape_buf = _upload_index_array(src._shape, src._device_idx, _bound)
+    stride_buf = _upload_index_array(src._strides, src._device_idx, _bound)
 
     BLOCK = 1024
     grid = (triton.cdiv(n, BLOCK),)
@@ -2092,8 +2462,9 @@ def _strided_scatter(src: 'NBXTensor', dst: 'NBXTensor'):
         )
     n = src._numel
 
-    shape_buf = _upload_int64_array(dst._shape, dst._device_idx)
-    stride_buf = _upload_int64_array(dst._strides, dst._device_idx)
+    _bound = _max_linear_offset(dst._shape, dst._strides)
+    shape_buf = _upload_index_array(dst._shape, dst._device_idx, _bound)
+    stride_buf = _upload_index_array(dst._strides, dst._device_idx, _bound)
 
     BLOCK = 1024
     grid = (triton.cdiv(n, BLOCK),)
@@ -2745,6 +3116,12 @@ class NBXTensor:
             kind = 2 if self._device == 'cuda' else 0
             DeviceAllocator.memcpy(dst.data_ptr(), self.data_ptr(),
                                    self._nbytes, kind=kind)
+            # A device result crossing to the host is an observation, and a
+            # D2H copy has already flushed. Checking here rather than only at
+            # `sync_device` matters because a decode never calls that: it
+            # reads its logits, and this is that read.
+            if kind == 2:
+                check_device_faults()
         return dst
 
     def numpy(self):

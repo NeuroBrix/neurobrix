@@ -181,7 +181,21 @@ class Driver:
     def load(self, binary: bytes, name: str, shared: int):  # pragma: no cover - interface
         raise NotImplementedError
 
-    def launch(self, function, grid, block, shared: int, stream: int, params) -> None:  # pragma: no cover
+    def launch(self, function, grid, block, shared: int, stream: int, params,
+               names=None) -> None:  # pragma: no cover
+        raise NotImplementedError
+
+    def block_for(self, metadata):
+        """Threads per block, from the compiled metadata.
+
+        `num_warps * warp_size` on CUDA. Not universal: triton-msl documents
+        that its C++ path can overwrite `metadata.block_size` with a value
+        meant for a different launch shape, so the Metal driver reads the
+        emitted kernel's own size instead of computing one.
+        """
+        return (32 * int(metadata.num_warps), 1, 1)
+
+    def target(self):  # pragma: no cover - interface
         raise NotImplementedError
 
     def block_for(self, metadata):
@@ -317,7 +331,8 @@ class CudaDriver(Driver):
             self._check(self.lib.cuFuncSetAttribute(function, self.CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, ctypes.c_int(shared)), "cuFuncSetAttribute")
         return function
 
-    def launch(self, function, grid, block, shared: int, stream: int, params) -> None:
+    def launch(self, function, grid, block, shared: int, stream: int, params,
+               names=None) -> None:
         # Two refusals BEFORE anything reaches the device (the launcher
         # contract's ownership rules, checked by `verify_driver_contract`):
         # the argument list must be exactly what the cubin declares, and
@@ -814,14 +829,22 @@ def launch(kernel, grid, *args, **kwargs):
     if callable(grid):
         grid = grid(bound_args)
     grid = tuple(int(g) for g in grid) + (1,) * (3 - len(grid))
-    params = [_pack_param(ty, bound_args[name]) for name, ty in prep.signature.items() if ty != "constexpr"]
+    runtime = [(name, ty) for name, ty in prep.signature.items()
+               if ty != "constexpr"]
+    params = [_pack_param(ty, bound_args[name]) for name, ty in runtime]
+    # The parameter NAMES, in the same order. A backend whose artifact
+    # declares its arguments by name — and may declare only the ones the
+    # compiled kernel kept — binds by name rather than by position, which is
+    # the only mapping that stays correct when the two lists differ in length.
+    names = [name for name, _ty in runtime]
     drv = active_driver()
     if drv.wants_scratch_params:
         params.append(("ptr", 0))    # global scratch (Triton ≥ 3.6 ABI)
         params.append(("ptr", 0))    # profile scratch
     if _RECORDER is not None:
         _RECORDER(prep, grid, params)
-    drv.launch(prep.function, grid, prep.block, prep.shared, _stream(), params)
+    drv.launch(prep.function, grid, prep.block, prep.shared, _stream(), params,
+               names=names)
 
 
 def _stream() -> int:
@@ -1160,6 +1183,29 @@ def _largest_agreement(results, buffers):
     return max(clusters, key=len)
 
 
+def bench_would_swap(total_bytes: int):
+    """(True, available_mb) when timing candidates would measure the swap.
+
+    The comparison is constant-free: when the live arguments ALONE exceed what
+    the machine has available, paging during the sweep is certain, and every
+    number produced is a number about the swap. `available_mb` comes from
+    `core.host_memory` -- our own authority for this quantity, never
+    `Pages free` -- and is read live, never cached: pressure is a state of the
+    moment, not of the process.
+
+    An unreadable platform (available_mb None) gates nothing and says nothing
+    here: `memory_state` already names why it could not read.
+    """
+    try:
+        from neurobrix.core.host_memory import memory_state
+        avail_mb = memory_state().available_mb
+    except Exception:                                  # noqa: BLE001
+        return False, None
+    if avail_mb is None:
+        return False, None
+    return total_bytes > avail_mb * 2 ** 20, avail_mb
+
+
 def screen_configs(tuner, configs, key, meta=None):
     """Run every candidate once and keep the ones that agree with each other.
 
@@ -1213,6 +1259,32 @@ def screen_configs(tuner, configs, key, meta=None):
             "tuning step may cost")
     total = sum(nbytes for _a, nbytes, _d in buffers)
     if total > int(budget):
+        # Two doors meet here and both stay. Beyond the SCREEN budget the compare
+        # is skipped (the Dell's ruling of 2026-09-12: the seat is announced as
+        # UNSCREENED, never written to the certified directory). And Triton
+        # would still time every candidate on these arguments; when they alone
+        # exceed the machine's available memory the sweep measures the swap
+        # (the Mac, 2026-09-13: a baddbmm key carrying 5.9 GB of arguments
+        # against 4.5 GB available), so the sweep is cut to the single
+        # first-declared config, the cut is SAID, and the choice is marked
+        # unmeasured so capture() never persists it — recorded, it would
+        # outlive the pressure that forced it.
+        _swaps, _avail_mb = bench_would_swap(total)
+        if _swaps:
+            print(f"[AUTOTUNE_BENCH] "
+                  f"{getattr(tuner.base_fn, '__name__', tuner)}: arguments "
+                  f"total {total} bytes against {_avail_mb} MB available -- "
+                  f"timing candidates would measure the swap, not the "
+                  f"kernels. Taking the first declared config WITHOUT "
+                  f"measurement; the choice will not be persisted.",
+                  flush=True)
+            from neurobrix.triton import autotune_cache as _atc
+            _atc.mark_unmeasured(tuner, key)
+            return _seat_unscreened(
+                kernel_name, key, configs[:1], 1,
+                f"arguments total {total} bytes, over the profile's screening "
+                f"budget {int(budget)} and over the {_avail_mb} MB available: "
+                f"the sweep was cut to the first declared config, unmeasured")
         return _seat_unscreened(
             kernel_name, key, configs, len(configs),
             f"arguments total {total} bytes, over the profile's screening "
@@ -1253,6 +1325,13 @@ def screen_configs(tuner, configs, key, meta=None):
     # exactly where we have never looked — outside `nvidia/volta`, where the
     # configuration space itself differs by target.
     oracle = None
+    if _SCREEN_ORACLE is None:
+        # A mechanism that is complete and switched off is the most expensive
+        # form of a vacuous guard: it costs the price of writing it and returns
+        # nothing. The only thing worse is one that is silent about being off.
+        from neurobrix.kernels.screen_oracle import announce_no_oracle
+        announce_no_oracle(kernel_name, key,
+                           why="no oracle provider is installed at all")
     if _SCREEN_ORACLE is not None:
         try:
             oracle = _SCREEN_ORACLE(tuner, key, buffers)
@@ -1406,6 +1485,37 @@ def install(force: Optional[bool] = None) -> bool:
         prune_configs._nbx_upstream = _upstream_prune
         Autotuner.prune_configs = prune_configs
 
+    # The screen consults an fp64 oracle by default. A CERTIFIED key never
+    # reaches the screen, so this costs nothing where a certification exists;
+    # it is paid only on an uncertified key, once for the key and not once per
+    # candidate. `NBX_SCREEN_ORACLE=off` keeps the bare consensus for the
+    # differential arm.
+    if os.environ.get("NBX_SCREEN_ORACLE", "on").lower() != "off":
+        try:
+            from neurobrix.kernels.screen_oracle import install as _install_oracle
+            _install_oracle()
+        except Exception as exc:                       # never block a launch
+            print(f"[AUTOTUNE_ORACLE] the oracle provider could not be "
+                  f"installed ({type(exc).__name__}: {exc}); the screen runs "
+                  f"on the consensus alone", flush=True)
+
+    # A backend refusal for ONE candidate config costs that config, not the
+    # run. Triton's `_bench` already scores `OutOfResources` and friends `inf`
+    # and carries on; `MetalNonRecoverableError` descends from `RuntimeError`,
+    # so nothing catches it and it ends the sweep. Measured 2026-09-12: five
+    # of six blocked models died inside the sweep on one refused config while
+    # `conv2d_forward_kernel` declares eighteen, eleven of them servable.
+    try:
+        from neurobrix.kernels.autotune_refusals import install as _install_refusals
+        if not _install_refusals():
+            print("[AUTOTUNE_REFUSED] the autotuner is not importable; a "
+                  "refused config will end the sweep instead of being "
+                  "excluded", flush=True)
+    except Exception as exc:                           # never block a launch
+        print(f"[AUTOTUNE_REFUSED] the refusal policy could not be installed "
+              f"({type(exc).__name__}: {exc}); a refused config will end the "
+              f"sweep", flush=True)
+
     _installed = True
     return True
 
@@ -1415,7 +1525,7 @@ def install(force: Optional[bool] = None) -> bool:
 # runtime handle — Triton's own asks torch for its timing and its buffers.
 # ---------------------------------------------------------------------------
 
-def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_mode="mean", **_):
+def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_mode="mean", budget_ms=None, **_):
     """Same contract as `triton.testing.do_bench` (milliseconds; quantiles or
     a mean/min/max), with the L2 flush and the timing done through the
     engine's runtime (`DeviceAllocator`: events on the legacy stream)."""
@@ -1425,7 +1535,34 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
     DeviceAllocator.stream_synchronize(0)
     # an L2-sized scratch flushed before every timed call, as upstream does
     flush = NBXTensor.empty((256 * 1024 * 1024 // 4,), dtype=NBXDtype.float32, device="cuda")
-    t_est = _time_ms(fn, 5)
+    # ONE probing launch before the four that finish the estimate. The
+    # estimate used to be five blind launches -- so a pathologically slow
+    # candidate (2.5 min a launch was measured on a bf16 matmul sweep) cost
+    # five launches, >12 minutes, before any number existed. After a single
+    # launch its time IS known, and a candidate whose one launch exceeds the
+    # budget cannot win the sweep anyway; benching it further buys nothing.
+    #
+    # For a candidate under budget the arithmetic is unchanged: one launch
+    # plus four launches, and t_est is the mean of the five -- the same
+    # estimator, split across two event pairs instead of one.
+    if budget_ms is None:
+        # Triton's `_bench -> self.do_bench(kernel_call, quantiles=...)` chain
+        # is not ours to re-sign, so the sweep wrapper PUBLISHES the budget and
+        # this end consults it -- explicit coupling, documented at both ends.
+        try:
+            from neurobrix.kernels.autotune_refusals import current_budget_ms
+            budget_ms = current_budget_ms()
+        except Exception:                              # noqa: BLE001
+            budget_ms = None
+    t_probe = _time_ms(fn, 1)
+    if budget_ms is not None and t_probe > budget_ms:
+        raise CandidateOverTimeBudget(t_probe, budget_ms)
+    try:
+        from neurobrix.kernels.autotune_refusals import note_candidate_time
+        note_candidate_time(t_probe)
+    except Exception:                                  # noqa: BLE001
+        pass
+    t_est = (t_probe + 4.0 * _time_ms(fn, 4)) / 5.0
     n_warmup = max(1, int(warmup / max(t_est, 1e-3)))
     n_repeat = max(1, int(rep / max(t_est, 1e-3)))
     for _i in range(n_warmup):
@@ -1438,6 +1575,21 @@ def do_bench(fn, warmup=25, rep=100, grad_to_none=None, quantiles=None, return_m
     if quantiles is not None:
         return [float(q) for q in np.quantile(times, quantiles)]
     return float(getattr(np, return_mode)(times)) if return_mode in ("mean", "min", "max", "median") else float(times.mean())
+
+
+class CandidateOverTimeBudget(Exception):
+    """One autotune candidate exceeded the sweep's measured time budget.
+
+    Carries the two numbers so the exclusion can be ANNOUNCED with them: a
+    candidate scored out for time without its time is a silent narrowing.
+    """
+
+    def __init__(self, took_ms: float, budget_ms: float):
+        self.took_ms = float(took_ms)
+        self.budget_ms = float(budget_ms)
+        super().__init__(
+            f"one launch took {took_ms:.1f} ms against a budget of "
+            f"{budget_ms:.1f} ms derived from this sweep's own measurements")
 
 
 def _time_ms(fn, n: int) -> float:

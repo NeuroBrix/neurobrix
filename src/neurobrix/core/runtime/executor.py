@@ -37,6 +37,9 @@ from neurobrix.core.runtime.tensor_compat import is_tensor as _is_tensor, is_tor
 
 
 
+from neurobrix.core.prism.structure import names_accelerator as _names_accelerator
+
+
 class RuntimeExecutor:
     """
     NeuroBrix Runtime Executor - Orchestrator Only
@@ -1051,6 +1054,10 @@ class RuntimeExecutor:
             topology=self.pkg.topology,
             runtime_package=self.pkg,
             loading_mode=loading_mode,
+            transient_components=frozenset(
+                getattr(self.plan, "transient_components", None) or ()),
+            layer_segments=dict(
+                getattr(self.plan, "layer_stream_plan", None) or {}),
             mode=self.mode,
         )
 
@@ -1128,7 +1135,7 @@ class RuntimeExecutor:
             if self._is_tp_component(comp_name):
                 assert self.strategy is not None, "strategy must be initialized for TP components"
                 output = self.strategy.execute_component(comp_name, phase, comp_inputs)
-            elif self._is_zero3_component(comp_name) and self.strategy is not None:
+            elif self._component_manages_own_residency(comp_name) and self.strategy is not None:
                 # Zero3 components: delegate to strategy for pinned memory + GPU transfer
                 output = self.strategy.execute_component(comp_name, phase, comp_inputs)
             elif self._is_hybrid_strategy() and self.strategy is not None:
@@ -1166,16 +1173,40 @@ class RuntimeExecutor:
 
         return False
 
-    def _is_zero3_component(self, comp_name: str) -> bool:
-        """Check if component has zero3 strategy (plan-level or per-component)."""
-        # Plan-level zero3
-        if self._strategy_name == "zero3":
+    def _component_manages_own_residency(self, comp_name: str) -> bool:
+        """Does the strategy responsible for this component manage where its
+        own weights live?
+
+        This used to be `_is_zero3_component`, and it asked a NAME. A name
+        cannot be extended: the second strategy to manage its own residency —
+        layer streaming, which holds one segment at a time — had no way to say
+        so, and the runtime would have loaded its whole component while the
+        plan promised one segment. That is the same shape of defect as a
+        vendor prefix hard-coded into a device test.
+
+        So the question is put to the strategy. Plan-level: the live strategy
+        object declares it. Per-component: the allocation names a
+        sub-strategy — `lazy_sequential` mapping one component to `zero3` —
+        and the name is a KEY into the registry, never a test; what is read is
+        that class's own declaration.
+
+        Byte-identical for zero3, which is the whole point of the change being
+        safe: `Zero3Strategy.manages_weight_residency` is True and nothing
+        else declared it before layer streaming did, so every component that
+        answered True before answers True now, and no other answers change.
+        """
+        strategy = getattr(self, "strategy", None)
+        if strategy is not None and getattr(
+                strategy, "manages_weight_residency", False):
             return True
-        # Per-component zero3 (within lazy_sequential)
         if hasattr(self.plan, 'components'):
             alloc = self.plan.components.get(comp_name)
             if alloc:
-                return getattr(alloc, 'strategy', '') == 'zero3'
+                sub = getattr(alloc, 'strategy', '') or ''
+                if sub:
+                    from neurobrix.core.strategies import (
+                        strategy_manages_weight_residency)
+                    return strategy_manages_weight_residency(sub)
         return False
 
     def _is_hybrid_strategy(self) -> bool:
@@ -1208,7 +1239,13 @@ class RuntimeExecutor:
                 dev = getattr(alloc, 'device', '')
                 if dev == 'cpu' or dev.startswith('cpu'):
                     seen_cpu = True
-                elif dev.startswith(('cuda', 'hip', 'xpu')):
+                elif _names_accelerator(dev):
+                    # Was ('cuda', 'hip', 'xpu') — omitting mps, so on Apple
+                    # seen_gpu never became true and a plan mixing cpu and GPU
+                    # components was not detected as hybrid. The explicit
+                    # transfers this gates were then skipped, which is the
+                    # silent kind of wrong: a host-resident producer output
+                    # crossing a graph-executor boundary with no `.to()`.
                     seen_gpu = True
             if seen_cpu and seen_gpu:
                 return True
@@ -1235,14 +1272,24 @@ class RuntimeExecutor:
         """Lazily load weights for a component if not already loaded."""
         executor = self.executors.get(comp_name)
         if executor is None:
-            return
+            raise RuntimeError(
+                f"ZERO FALLBACK: asked to load weights for component "
+                f"'{comp_name}', which has no executor. Known components: "
+                f"{sorted(self.executors)}. Returning here used to let the "
+                f"run continue without the component it just asked for.")
 
         if getattr(executor, '_weights_loaded', False):
             return
 
         params = getattr(executor, '_weight_loading_params', None)
         if params is None:
-            return
+            raise RuntimeError(
+                f"ZERO FALLBACK: '{comp_name}' has no weights loaded and its "
+                f"executor ({type(executor).__name__}) carries no loading "
+                f"params. Every executor built by RuntimeFactory gets them "
+                f"(factory.py); one that has none was built off that path and "
+                f"nobody will load its weights. Running it would compute with "
+                f"whatever is in memory.")
 
         nbx_path = params["nbx_path"]
         component = params["component"]
@@ -1261,7 +1308,7 @@ class RuntimeExecutor:
         # LLM prefill) still funnel through here for weight loading, so
         # this is the natural install point. Other strategies ignore —
         # the method is zero3-specific by design.
-        if self._is_zero3_component(comp_name) and self.strategy is not None:
+        if self._component_manages_own_residency(comp_name) and self.strategy is not None:
             install_fn = getattr(self.strategy, 'install_for_executor', None)
             if install_fn is not None:
                 install_fn(comp_name, executor)

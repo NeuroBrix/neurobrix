@@ -39,9 +39,42 @@ _STRATEGY_CLASSES = {
     "BlockScatterStrategy": ".block_scatter",
     "WeightShardingStrategy": ".weight_sharding",
     "LazySequentialStrategy": ".lazy_sequential",
+    "LayerStreamingStrategy": ".layer_streaming",
     "Zero3Strategy": ".zero3",
     "CPUExecutionStrategy": ".cpu_execution",
 }
+
+
+#: Which strategies decide for themselves where their weights live.
+#:
+#: This is a DECLARATION, read without importing anything. Resolving the
+#: class to read `manages_weight_residency` off it imports the ATen strategy
+#: module — which a `--triton` run must never do (R33), and which this file's
+#: own header says three lines up. Measured 2026-09-09: doing exactly that
+#: broke every triton run with "Torch not compiled with CUDA enabled".
+#:
+#: The classes still declare the attribute, and
+#: `test_the_table_and_the_classes_agree` fails if the two ever drift, so
+#: this table cannot silently fall out of step with the strategies it names.
+_MANAGES_WEIGHT_RESIDENCY = frozenset({
+    "zero3",            # weights on pinned host memory, streamed for compute
+    "layer_streaming",  # one segment of one component resident at a time
+})
+
+
+def strategy_manages_weight_residency(strategy_name: str) -> bool:
+    """Does the named strategy decide for itself where its weights live?
+
+    The runtime needs this for a component whose sub-strategy is named in the
+    plan rather than being the plan's own strategy — `lazy_sequential` mapping
+    one component to `zero3`, for instance. The NAME is used as a key into the
+    registry, never as a test: what is read is the class's own declaration.
+
+    Unknown names answer False rather than raising: the runtime asks this of
+    every component, including ones whose allocation carries no sub-strategy
+    at all, and an unknown name there means "nothing special", not an error.
+    """
+    return strategy_name in _MANAGES_WEIGHT_RESIDENCY
 
 
 def _strategy_class(class_name: str):
@@ -121,6 +154,17 @@ STRATEGY_REGISTRY = _LazyRegistry({
     # it was selected. Caught by the CPU-only battery cell added in the same
     # session, on the full-zoo gate.
     "cpu_streaming": "CPUExecutionStrategy",
+
+    # === Layer streaming (below every rung that keeps a component whole) ===
+    # One segment of ONE component resident at a time. Reached only when
+    # nothing above it is viable — it wins by scoring 50, never by a test on a
+    # vendor, a device count or a memory size.
+    #
+    # It declares `manages_weight_residency`, which is how the runtime now
+    # knows to drive it through `execute_component` and to offer it
+    # `install_for_executor`. That question used to be "is this zero3", a
+    # name, which is why this entry waited.
+    "layer_streaming": "LayerStreamingStrategy",
 })
 
 
@@ -155,6 +199,7 @@ def get_strategy(strategy_name: str, context: StrategyContext) -> ExecutionStrat
 
 
 __all__ = [
+    "strategy_manages_weight_residency",
     "ExecutionStrategy",
     "StrategyContext",
     "SingleGPUStrategy",
@@ -164,6 +209,7 @@ __all__ = [
     "BlockScatterStrategy",
     "WeightShardingStrategy",
     "LazySequentialStrategy",
+    "LayerStreamingStrategy",
     "Zero3Strategy",
     "CPUExecutionStrategy",
     "get_strategy",
