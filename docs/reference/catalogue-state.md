@@ -18,11 +18,11 @@ As the pass left it: **37 met**, **9 failed**, **1 not runnable**. 6 rows carry 
 |---|---|---:|---|---:|---:|---|---|---|
 | `ibm-granite/Granite-Speech-3.3-8B` | audio_llm | 16.1 | met in 468 s | 117 | 0 | not measured | none found at the input | measured |
 | `mistralai/Voxtral-Mini-3B` | audio_llm | 8.7 | met in 121 s | 28 | 0 | not measured | none found at the input | measured |
-| `nvidia/Canary-Qwen-2.5B` | audio_llm | 4.8 | met in 118 s | 29 | 0 | not measured | none found at the input | measured |
+| `nvidia/Canary-Qwen-2.5B` | audio_llm | 4.8 | met in 118 s | 29 | 0 | 1212 s, 54.55x, 251/251 keys, base 23 s, bytes same | none found at the input | measured |
 | `NVlabs/Sana-1600M-4Kpx-BF16` | image | 12.1 | met in 460 s | 2 | 0 | not measured | vae `height`@128 (weight-extent); vae `width`@128 (weight-extent) | measured |
 | `NVlabs/Sana-1600M-MultiLing` | image | 12.1 | met in 90 s | 8 | 0 | paired cell PERTURBED (card 2 also carried the conv2d certification (pid 433862, up to 18 GB) from 22:55 to 23:13:38; the cell ran 23:02-23:2x — re-run alone owed) — no cost | transformer `height`@32 (weight-extent); transformer `width`@32 (weight-extent) (+2) | measured |
-| `PixArt/PixArt-Sigma-XL-1024` | image | 20.3 | met in 154 s | 8 | 0 | not measured | vae `height`@128 (weight-extent); vae `width`@128 (weight-extent) | measured |
-| `PixArt/PixArt-XL-1024` | image | 20.4 | met in 128 s | 4 | 0 | not measured | transformer `seq_len`@120 (weight-extent); transformer `seq_len`@120 (weight-extent) (+2) | measured |
+| `PixArt/PixArt-Sigma-XL-1024` | image | 20.3 | met in 154 s | 8 | 0 | 2471 s, 20.90x, 36/36 keys, base 124 s, bytes same | vae `height`@128 (weight-extent); vae `width`@128 (weight-extent) | measured |
+| `PixArt/PixArt-XL-1024` | image | 20.4 | met in 128 s | 4 | 0 | 2476 s, 21.26x, 36/36 keys, base 122 s, bytes same | transformer `seq_len`@120 (weight-extent); transformer `seq_len`@120 (weight-extent) (+2) | measured |
 | `ostris/Flex.1-alpha` | image | 24.5 | met in 317 s | 15 | 0 | not measured | text_encoder `seq_len`@77 (weight-extent); transformer `seq_len`@4096 (weight-extent) (+2) | measured |
 | `Qwen/Qwen3-30B-A3B-Thinking` | llm | 57.1 | met in 154 s | 0 | 0 | 56 s, 0.51x, 7/8 keys, bytes passed | none found at the input | measured |
 | `Qwen/Qwen3-Coder-30B-A3B-Instruct` | llm | 57.1 | met in 173 s | 1 | 0 | 54 s, 0.47x, 7/8 keys, bytes passed | none found at the input | measured |
@@ -35,7 +35,7 @@ As the pass left it: **37 met**, **9 failed**, **1 not runnable**. 6 rows carry 
 | `openbmb/minicpm-o-4_5` | multimodal | 19.7 | met in 301 s | 81 | 0 | not measured | flow_dit `seq_len`@3 (weight-extent) | measured |
 | `qwen/qwen3-omni-30b-a3b-instruct` | multimodal | 65.9 | met in 257 s | 36 | 0 | 1196 s, 12.23x, 183/219 keys, bytes passed | talker.code_predictor.model.codec_embedding `seq_len`@1 (arithmetic) | measured |
 | `qwen/qwen3-vl-30b-a3b-thinking` | multimodal | 57.9 | met in 365 s | 36 | 0 | 2924 s, 13.87x, 515/585 keys, bytes passed | none found at the input | measured |
-| `nvidia/Parakeet-TDT-1.1B` | stt | 4.1 | met in 32 s | 4 | 0 | not measured | joint `seq_len`@1024 (weight-extent) | measured |
+| `nvidia/Parakeet-TDT-1.1B` | stt | 4.1 | met in 32 s | 4 | 0 | 78 s, 8.04x, 17/17 keys, base 11 s, bytes same | joint `seq_len`@1024 (weight-extent) | measured |
 | `openai/Whisper-Large-V2` | stt | 5.8 | met in 23 s | 0 | 0 | 35 s, 3.23x, 10/10 keys, base 16 s, bytes same | none found at the input | measured |
 | `openai/Whisper-V3-Turbo` | stt | 1.5 | met in 22 s | 5 | 0 | 35 s, 7.62x, 10/10 keys, base 5 s, bytes same | none found at the input | measured |
 | `canopylabs/Orpheus-3B` | tts | 14.2 | not runnable — catalogue decision | n/m | n/m | not measured | none found at the input | not measured |
@@ -137,17 +137,19 @@ per family, from the cells above with both arms at rc=0 and not perturbed):**
 
 | family | cells | s per shape (min – max) | keys per cell (min – max) |
 |---|---:|---|---|
+| audio_llm | 1 | 5 – 5 | 251 – 251 |
+| image | 2 | 69 – 69 | 36 – 36 |
 | llm | 2 | 6 – 6 | 6 – 8 |
 | multimodal | 1 | 8 – 8 | 25 – 25 |
-| stt | 2 | 3 – 4 | 10 – 10 |
+| stt | 3 | 3 – 5 | 10 – 17 |
 | tts | 1 | 6 – 6 | 54 – 54 |
 | upscaler | 8 | 3 – 45 | 10 – 18 |
 
 The 2026-09-11 table quoted 3–12 s a shape on GEMM-class keys. Tonight the
 spread runs from 3 s a shape (`swinir-classical-x2`) to
-45 s (`real-esrgan-x4`, conv2d shapes at 448² screened
-against the fp64 oracle) — so a 3 s run of the latter pays
-455 s of sweep. The per-shape cost is a property of the kernel
+69 s (`PixArt-XL-1024`, conv2d shapes at 448² screened
+against the fp64 oracle) — so a 122 s run of the latter pays
+2476 s of sweep. The per-shape cost is a property of the kernel
 class and the shape, not a constant; the law (shapes met per second of
 served run) holds with that coefficient per cell, not a single one.
 
