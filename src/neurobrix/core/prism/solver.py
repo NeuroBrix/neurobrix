@@ -4141,5 +4141,10 @@ def explain_plan(plan: "ExecutionPlan") -> str:
         lines.append(f"kv cache        up to {kv.max_cache_len} tokens, {kv.memory_bytes / 2**20:.0f} MB, {kv.dtype}")
     if plan.runtime_op_tiling:
         lines.append("op-level tiling " + ", ".join(sorted(plan.runtime_op_tiling)))
+    for name, spec in (plan.component_tiling or {}).items():
+        short = {k: v for k, v in spec.items() if not isinstance(v, (dict, list))} if isinstance(spec, dict) else spec
+        lines.append(f"component tiling {name}: {short}")
+    if not plan.runtime_op_tiling and not plan.component_tiling:
+        lines.append("tiling          none planned")
     return "\n".join(lines)
 
