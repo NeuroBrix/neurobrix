@@ -25,10 +25,10 @@ is not counted.
 |---|---:|
 | A — blocks a catalogue line | 19 |
 | B — blocks a certification | 5 |
-| C — declared limit or another chantier's | 61 |
+| C — declared limit or another chantier's | 62 |
 | closed (recorded in DETTE.md) | 13 |
 | headings that are not debts | 8 |
-| **named in DETTE.md** | **113 headings** (of which 98 open debts) |
+| **named in DETTE.md** | **113 headings** (of which 99 open debts, one filed 09-13 after the sort) |
 
 ## A — blocks a line of the catalogue (19), in the order of what they convert
 
@@ -108,7 +108,9 @@ D-NVIDIA-PROFILE-GAP-TURING-ADA · D-CPU-PLACED-COMPUTE-HALF-COVERAGE ·
 D-COMPLEX-CONSTANT-PROMOTES-TO-COMPLEXHALF · D-GATHER-SCATTER-OOB-SILENT
 (the kernels trap since 09-02 23:15).
 
-**Instruments, tests, workshop:** D-THIRTY-THREE-RED-UNIT-TESTS (21 on
+**Instruments, tests, workshop:** D-EVICTED-SEED-LOST-ON-KEY-OF-FAILURE (filed 09-13
+from the review of the memory-class door: a seed evicted at load is not put back when the
+launch site cannot compute the key; and two unlocked writers of a directory file) · D-THIRTY-THREE-RED-UNIT-TESTS (21 on
 09-13, classified; rerun from a frozen tree pending) · D-TEST-PINNED-ORDINAL ·
 D-OBSERVABILITY-BLIND-SITES-ACROSS-FAMILIES · D-RENDER-RESUME-NOT-BIT-IDENTICAL
 · D-TSEQ-ORPHEUS-STEP110 · D-AUTODETECT-VISIBLE-MASK · D-CUDA-DEVICE-ORDER-UNPINNED
