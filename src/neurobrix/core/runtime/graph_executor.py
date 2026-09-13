@@ -1567,6 +1567,46 @@ class GraphExecutor:
             return None
         return consumed
 
+    @staticmethod
+    def consumed_in_loader_space(consumed, index_keys):
+        """The loader keys that the graph's consumed names reach, by the same
+        unique-suffix rule `_reconcile_weight_keys` applies after loading:
+        a loader key is wanted when it is a consumed name itself, or when one
+        of its dotted suffixes is a dotted suffix of a consumed name."""
+        if consumed is None:
+            return None
+        suffixes = set()
+        for name in consumed:
+            parts = name.split('.')
+            for i in range(len(parts)):
+                suffixes.add('.'.join(parts[i:]))
+        # A one-part suffix (`weight`, `bias`) is shared by nearly every
+        # parameter and decides nothing — the reconcile treats such suffixes
+        # as ambiguous. A suffix of two or more dotted parts is what joins the
+        # two spaces; where it is ambiguous the safe direction is to load.
+        wanted = set()
+        for wk in index_keys:
+            if wk in consumed:
+                wanted.add(wk)
+                continue
+            parts = wk.split('.')
+            if any('.'.join(parts[i:]) in suffixes for i in range(len(parts) - 1)):
+                wanted.add(wk)
+        return wanted
+
+    def _consumed_in_loader_space(self, consumed, nbx_path, component):
+        if consumed is None:
+            return None
+        import json as _json
+        import os as _os
+        index = _os.path.join(str(nbx_path), "components", component, "weights_index.json")
+        try:
+            with open(index) as f:
+                keys = list((_json.load(f).get("tensors") or {}).keys())
+        except (OSError, ValueError):
+            return consumed          # no index to read: the loader's own filter stands
+        return self.consumed_in_loader_space(consumed, keys)
+
     def load_weights(
         self,
         nbx_path: str,
@@ -1699,6 +1739,16 @@ class GraphExecutor:
         # parameter no op consumes cannot be reached by execution, and on an
         # MoE build the untraced experts are a third of the component.
         _only = self.consumed_weight_names()
+        # THE TWO KEY SPACES. `consumed_weight_names` speaks the GRAPH's names
+        # (`encoder.token_embed.weight`); the loader filters the INDEX's keys
+        # (`token_embed.weight`) and reconciles the two only after loading, by
+        # unique suffix. Filtered by exact membership before that reconcile,
+        # the one weight whose two names differ by a prefix was never loaded
+        # and its first consumer met None — Wan2.2's text encoder at
+        # aten.embedding::0, 2026-09-13, on a container whose compiled run
+        # rendered. So the set is expanded into the loader's space here with
+        # the reconcile's own rule before the loader sees it.
+        _only = self._consumed_in_loader_space(_only, nbx_path, component)
         self._weights = load_component_weights(
             nbx_path, component, device_idx, compute_dtype,
             shard_map=shard_map, only=_only)
