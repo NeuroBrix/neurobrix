@@ -68,6 +68,103 @@ def disk_refusal(needed_bytes, free_bytes):
 
 # The mode an extracted container carries, whoever imported it.
 CONTAINER_FILE_MODE = 0o644
+
+
+class IncompleteDownload(RuntimeError):
+    """The stream ended before the announced size — kept as a partial, never renamed."""
+
+
+def partial_path(dest):
+    """Where an unfinished download lives: beside its destination, named so that
+    nothing reads it as a container (`.nbx` is what `import` extracts)."""
+    from pathlib import Path
+    dest = Path(dest)
+    return dest.with_name(dest.name + ".part")
+
+
+def download_resumable(url, dest, total_hint=0, desc="", get=None, progress=None, chunk_size=1 << 20):
+    """Download `url` to `dest`, resuming a partial left by an earlier attempt.
+
+    D-IMPORT-RESUMABLE-DOWNLOAD (2026-09-13). A 127 GB container took 86 minutes to
+    move on this rack's own network, and an import that died at 98 % lost all of
+    it: the stream was written straight to its final name and unlinked on any
+    error. Now:
+
+      * bytes go to `<dest>.part`; the final name appears only when the size the
+        server announced has been reached (or, when it announced none, when the
+        stream ended cleanly) — so a file named `.nbx` is never a fragment;
+      * a `.part` found at entry is resumed with `Range: bytes=<have>-`; a server
+        that answers 206 with a matching `Content-Range` gets appended to, one
+        that answers 200 (no range support) is read from zero and the partial
+        replaced — never appended to, which would splice two streams;
+      * a stream that ends short of the announced size raises
+        IncompleteDownload and KEEPS the partial, so the next run resumes;
+      * a partial larger than the announced size is not trusted: it is dropped
+        and the download restarts (a stale partial from another version of the
+        file cannot be told from a good one by its length).
+
+    `get` and `progress` are injected so the brick is testable against a local
+    server and quiet in tests; the import command passes `requests.get` and
+    `tqdm`. Returns the final size in bytes.
+    """
+    import os
+    from pathlib import Path
+    if get is None:
+        import requests
+        get = requests.get
+    dest = Path(dest)
+    part = partial_path(dest)
+    have = part.stat().st_size if part.exists() else 0
+    headers = {"Range": f"bytes={have}-"} if have else {}
+    resp = get(url, stream=True, timeout=30, headers=headers)
+    resp.raise_for_status()
+    total = 0
+    mode = "wb"
+    if have and resp.status_code == 206:
+        content_range = resp.headers.get("Content-Range", "")
+        # bytes <start>-<end>/<total>; the start must be exactly what we have
+        try:
+            spec = content_range.split(" ", 1)[1]
+            start = int(spec.split("-", 1)[0])
+            total = int(spec.rsplit("/", 1)[1]) if "/" in spec and not spec.endswith("*") else 0
+        except (IndexError, ValueError):
+            start, total = -1, 0
+        if start != have:
+            raise IncompleteDownload(f"server resumed at byte {start}, partial holds {have}")
+        mode = "ab"
+    else:
+        # 200 — the server ignored the range (or there was none): start over.
+        have = 0
+        total = int(resp.headers.get("content-length", 0) or 0) or int(total_hint or 0)
+    if total and have > total:
+        have, mode = 0, "wb"
+    bar = progress(total=total or None, initial=have, unit="B", unit_scale=True, unit_divisor=1024,
+                   desc=desc) if progress else None
+    written = have
+    try:
+        with open(part, mode) as f:
+            for chunk in resp.iter_content(chunk_size=chunk_size):
+                if not chunk:
+                    continue
+                f.write(chunk)
+                written += len(chunk)
+                if bar:
+                    bar.update(len(chunk))
+    except Exception as exc:
+        # Whatever broke the stream (a reset, a chunked-encoding tear, a timeout)
+        # is one fact to the caller: the bytes so far are on disk and the next
+        # run resumes. The original is chained for the log.
+        raise IncompleteDownload(f"stream broke at {written} bytes: {exc}") from exc
+    finally:
+        if bar:
+            bar.close()
+    if total and written < total:
+        raise IncompleteDownload(f"stream ended at {written} of {total} bytes")
+    if total and written > total:
+        part.unlink()
+        raise IncompleteDownload(f"stream delivered {written} bytes for an announced {total}: not a resume")
+    os.replace(part, dest)
+    return dest.stat().st_size
 CONTAINER_DIR_MODE = 0o755
 
 
@@ -292,33 +389,19 @@ def cmd_import(args):
     store_path = STORE_DIR / file_name
 
     try:
-        resp = requests.get(download_url, stream=True, timeout=30)
-        resp.raise_for_status()
-
-        total = int(resp.headers.get("content-length", 0)) or file_size
-        with open(store_path, "wb") as f, tqdm(
-            total=total,
-            unit="B",
-            unit_scale=True,
-            unit_divisor=1024,
-            desc=file_name,
-        ) as pbar:
-            for chunk in resp.iter_content(chunk_size=8192):
-                f.write(chunk)
-                pbar.update(len(chunk))
-
-        actual_size = store_path.stat().st_size
+        actual_size = download_resumable(download_url, store_path, total_hint=file_size,
+                                         desc=file_name, get=requests.get, progress=tqdm)
         print(f"   Saved: {store_path} ({format_size(actual_size)})")
 
     except requests.HTTPError as e:
         print(f"ERROR: Download failed: {e}")
-        if store_path.exists():
-            store_path.unlink()
         sys.exit(1)
-    except requests.ConnectionError:
-        print("ERROR: Connection lost during download.")
-        if store_path.exists():
-            store_path.unlink()
+    except (requests.ConnectionError, requests.Timeout, IncompleteDownload) as e:
+        part = partial_path(store_path)
+        have = part.stat().st_size if part.exists() else 0
+        print(f"ERROR: Connection lost during download ({e}).")
+        print(f"   {format_size(have)} are kept in {part}; re-run the same command to resume "
+              f"from there.")
         sys.exit(1)
 
     # 4. Extract to cache/
