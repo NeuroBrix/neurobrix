@@ -134,3 +134,41 @@ def test_every_consumed_name_binds_after_the_filtered_load():
         folded = list(dict.fromkeys(encodes.get(k, k) for k in loaded))
         b = bind(graph_params, folded) or {k: k for k in folded}
         assert consumed <= set(b.keys()), (consumed, b)
+
+
+def _executor_with(graph_params, tmp_path, index_keys, consumed):
+    import json
+    ex = GraphExecutor.__new__(GraphExecutor)
+    tensors = {f"param::{n}": {"is_parameter": True, "weight_name": n} for n in graph_params}
+    ops = {"op0": {"input_tensor_ids": [f"param::{n}" for n in consumed]}}
+    ex._dag = {"tensors": tensors, "ops": ops, "execution_order": ["op0"]}
+    comp = tmp_path / "components" / "c"; comp.mkdir(parents=True)
+    (comp / "weights_index.json").write_text(json.dumps({"tensors": {k: {} for k in index_keys}}))
+    return ex
+
+
+def test_the_post_load_reconcile_applies_the_pre_load_binding(tmp_path):
+    # Review, 2026-09-13: recomputed over the FILTERED dict, pass 0's coverage
+    # test fails (the unconsumed block params are gone on purpose) and the
+    # reconcile falls to the suffix heuristics. The binding computed over the
+    # whole index before the load is what the reconcile applies.
+    consumed = {"encoder.block.0.attn.key.weight"}
+    graph_params = consumed | {"encoder.block.1.attn.key.weight", "encoder.token_embed.weight"}
+    index = ["token_embed.weight", "block.0.attn.key.weight", "block.1.attn.key.weight"]
+    ex = _executor_with(graph_params, tmp_path, index, consumed)
+    wanted = ex._consumed_in_loader_space(ex.consumed_weight_names(), tmp_path, "c")
+    assert wanted == {"token_embed.weight", "block.0.attn.key.weight"}, wanted
+    ex._weights = {k: object() for k in wanted}          # what the loader returns
+    loaded = dict(ex._weights)
+    ex._reconcile_weight_keys()
+    assert set(ex._weights) == {"encoder.token_embed.weight", "encoder.block.0.attn.key.weight"}, set(ex._weights)
+    assert ex._weights["encoder.block.0.attn.key.weight"] is loaded["block.0.attn.key.weight"]
+    assert getattr(ex, "_pending_weight_binding", None) is None, "applied once"
+
+
+def test_an_unreadable_index_loads_everything(tmp_path):
+    # The graph-space set handed to a loader that filters index keys by exact
+    # membership is the Wan2.2 failure; without an index the answer is None.
+    ex = GraphExecutor.__new__(GraphExecutor)
+    ex._dag = {"tensors": {}, "ops": {}, "execution_order": []}
+    assert ex._consumed_in_loader_space({"a.weight"}, tmp_path, "absent") is None

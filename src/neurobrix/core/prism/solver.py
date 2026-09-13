@@ -92,6 +92,18 @@ def _consumed_weight_bytes(comp, dtype_mult: float):
                 total += n * width
     if not seen:
         return None
+    # What the engines LOAD is the consumed set plus every non-block weight
+    # (the token embedding, the head, the norms a flow reads by name outside
+    # the graph — GraphExecutor.consumed_in_loader_space). Budget the same
+    # set, or the plan under-estimates in the direction the docstring calls
+    # unsafe (review of 2026-09-13).
+    if sizes is not None:
+        from neurobrix.triton.weight_loader import _BLOCK_RE   # torch-free
+        for name, meta in sizes.items():
+            if name in seen or _BLOCK_RE.search(name):
+                continue
+            seen.add(name)
+            total += int((meta or {}).get("size_bytes", 0))
     return int(total * dtype_mult)
 
 
@@ -1701,7 +1713,10 @@ class PrismSolver:
             #
             # `get_shard_sizes()` reports file sizes, and a shard holds every
             # parameter the export wrote, including any no op reads. The
-            # engine skips those (GraphExecutor.consumed_weight_names): on
+            # engines skip those — both of them since 2026-09-13; until then
+            # only the triton loader did, and a plan sized here was executed
+            # under another memory model by the compiled one
+            # (GraphExecutor.consumed_weight_names): on
             # DeepSeek-Coder-V2-Lite that is 11781 MB of 30638, MoE experts
             # the trace never routed to. Sizing by the file made Prism plan
             # against 30638 MB while execution needed 18857 — the announced

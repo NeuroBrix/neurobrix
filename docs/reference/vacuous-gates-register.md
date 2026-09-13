@@ -386,7 +386,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-52 entries, of which five are placeholders and 47 carry a site. Two
+53 entries, of which five are placeholders and 48 carry a site. Two
 machines, two weeks of concentrated looking. Every one of them produced silence
 or a green rather than an error.
 
@@ -1035,4 +1035,23 @@ one. **The rule**: a campaign that selects nothing refuses at entry and names th
 flags that select; and the gate script names its families. Gate:
 `tests/unit/tools/test_campaign_refuses_an_empty_selection.py`, seen red on the
 old selection; the matrix re-armed per family behind the suite re-run.
+
+### 53 — "the engine skips those", written for two engines, true of one
+
+Prism sizes a component by the weights its graph consumes, and the solver's
+comment (2026-09-09) said *the engine skips those* — the unrouted MoE experts,
+11.8 GB of 30.6 on DeepSeek-Coder-V2-Lite. The triton loader did skip them.
+The compiled loader read every key of every shard, so the plan that placed
+Qwen3-Omni's thinker at 5.2 GB on one 32 GB card was executed by a loader
+that put 57 GB there. Four native cells of the suite died that way on a
+quiet rig from a frozen tree, and the 15:20 run had hidden them behind a
+foreign process's memory ("environment, not engine").
+
+**The shape**: an equivalence between the two engines stated in prose beside
+the code of one of them, with no gate on the other (R30's silent asymmetry,
+in a loader rather than a kernel). **The rule**: the compiled loader takes
+the same `only=` set, computed by the same function, and a test reads a
+shard through it. Gate:
+`tests/unit/core/test_compiled_loader_loads_what_the_plan_budgeted.py`,
+seen red on the old reader; the proof by run is the four native cells.
 
