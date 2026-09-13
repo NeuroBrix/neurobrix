@@ -16,44 +16,44 @@ As the pass left it: **37 met**, **9 failed**, **1 not runnable**. 6 rows carry 
 
 | model | family | GB | on this rack | swept | screened | certified cost | where a defect would be invisible | line |
 |---|---|---:|---|---:|---:|---|---|---|
-| `ibm-granite/Granite-Speech-3.3-8B` | audio_llm | 16.1 | met in 468 s | 117 | 0 | 1353 s, 20.37x, 264/264 keys, base 70 s, bytes same | none found at the input | measured |
-| `mistralai/Voxtral-Mini-3B` | audio_llm | 8.7 | met in 121 s | 28 | 0 | 1172 s, 31.23x, 254/254 keys, base 39 s, bytes same | none found at the input | measured |
-| `nvidia/Canary-Qwen-2.5B` | audio_llm | 4.8 | met in 118 s | 29 | 0 | 1212 s, 54.55x, 251/251 keys, base 23 s, bytes same | none found at the input | measured |
-| `NVlabs/Sana-1600M-4Kpx-BF16` | image | 12.1 | met in 460 s | 2 | 0 | 2082 s, 5.52x, 59/59 keys, base 460 s, bytes same | vae `height`@128 (weight-extent); vae `width`@128 (weight-extent) | measured |
+| `ibm-granite/Granite-Speech-3.3-8B` | audio_llm | 16.1 | met in 468 s | 117 | 0 | 1353 s, 20.37x, 264/264 keys, base 70 s, bytes same; 67 certified choice(s) contradicted by the runtime sweep (139 near-ties within the timer's noise) — a finding, keys in the campaign record | none found at the input | measured |
+| `mistralai/Voxtral-Mini-3B` | audio_llm | 8.7 | met in 121 s | 28 | 0 | 1172 s, 31.23x, 254/254 keys, base 39 s, bytes same; 46 certified choice(s) contradicted by the runtime sweep (186 near-ties within the timer's noise) — a finding, keys in the campaign record | none found at the input | measured |
+| `nvidia/Canary-Qwen-2.5B` | audio_llm | 4.8 | met in 118 s | 29 | 0 | 1212 s, 54.55x, 251/251 keys, base 23 s, bytes same; 42 certified choice(s) contradicted by the runtime sweep (185 near-ties within the timer's noise) — a finding, keys in the campaign record | none found at the input | measured |
+| `NVlabs/Sana-1600M-4Kpx-BF16` | image | 12.1 | met in 460 s | 2 | 0 | 2082 s, 5.52x, 59/59 keys, base 460 s, bytes same; 2 certified choice(s) contradicted by the runtime sweep (22 near-ties within the timer's noise) — a finding, keys in the campaign record | vae `height`@128 (weight-extent); vae `width`@128 (weight-extent) | measured |
 | `NVlabs/Sana-1600M-MultiLing` | image | 12.1 | met in 90 s | 8 | 0 | 329 s, 7.22x, 58/58 keys, base 53 s, bytes same | transformer `height`@32 (weight-extent); transformer `width`@32 (weight-extent) (+2) | measured |
 | `PixArt/PixArt-Sigma-XL-1024` | image | 20.3 | met in 154 s | 8 | 0 | 2471 s, 20.90x, 36/36 keys, base 124 s, bytes same | vae `height`@128 (weight-extent) → bound — spatial differential 2026-09-13 on PixArt-Sigma-XL-2-1024-MS, whose vae graph.json is byte-identical to this container's; vae `width`@128 (weight-extent) → bound — same run, same identical graph | measured |
-| `PixArt/PixArt-XL-1024` | image | 20.4 | met in 128 s | 4 | 0 | 2476 s, 21.26x, 36/36 keys, base 122 s, bytes same | transformer `seq_len`@120 (weight-extent); transformer `seq_len`@120 (weight-extent) (+2) | measured |
+| `PixArt/PixArt-XL-1024` | image | 20.4 | met in 128 s | 4 | 0 | 2476 s, 21.26x, 36/36 keys, base 122 s, bytes same; 1 certified choice(s) contradicted by the runtime sweep (16 near-ties within the timer's noise) — a finding, keys in the campaign record | transformer `seq_len`@120 (weight-extent); transformer `seq_len`@120 (weight-extent) (+2) | measured |
 | `ostris/Flex.1-alpha` | image | 24.5 | met in 317 s | 15 | 0 | 2501 s, 9.24x, 42/42 keys, base 303 s, bytes same | text_encoder `seq_len`@77 (weight-extent) → bound — differential 2026-09-12 (77 vs 71: 0 dims moved); transformer `seq_len`@4096 (weight-extent) → fixed by the model — the stimulus did not move (differential 2026-09-12) (+2) | measured |
 | `Qwen/Qwen3-30B-A3B-Thinking` | llm | 57.1 | met in 154 s | 0 | 0 | 56 s, 0.51x, 7/8 keys, bytes passed | none found at the input | measured |
 | `Qwen/Qwen3-Coder-30B-A3B-Instruct` | llm | 57.1 | met in 173 s | 1 | 0 | 54 s, 0.47x, 7/8 keys, bytes passed | none found at the input | measured |
-| `Qwen/Qwen3-Coder-30B-A3B-Instruct-int4g128-ffnonly` | llm | 17.2 | met in 116 s | 0 | 0 | 46 s, 1.43x, 8/8 keys, base 107 s, bytes same | none found at the input | measured |
-| `TinyLlama/TinyLlama-1.1B-Chat` | llm | 2.1 | met in 25 s | 3 | 0 | 33 s, 4.18x, 6/6 keys, base 10 s, bytes same | none found at the input | measured |
+| `Qwen/Qwen3-Coder-30B-A3B-Instruct-int4g128-ffnonly` | llm | 17.2 | met in 116 s | 0 | 0 | 46 s, 1.43x, 8/8 keys, base 107 s, bytes same; 1 certified choice(s) contradicted by the runtime sweep (4 near-ties within the timer's noise) — a finding, keys in the campaign record | none found at the input | measured |
+| `TinyLlama/TinyLlama-1.1B-Chat` | llm | 2.1 | met in 25 s | 3 | 0 | 33 s, 4.18x, 6/6 keys, base 10 s, bytes same; 1 certified choice(s) contradicted by the runtime sweep (3 near-ties within the timer's noise) — a finding, keys in the campaign record | none found at the input | measured |
 | `deepseek-ai/DeepSeek-MoE-16B-Chat` | llm | 30.6 | met in 39 s | 0 | 0 | 46 s, 1.3x, 8/9 keys, bytes passed | none found at the input | measured |
 | `deepseek-ai/deepseek-coder-v2-lite-instruct` | llm | 30.7 | met in 140 s | 5 | 0 | 1337 s, 14.38x, 131/137 keys, bytes passed | none found at the input | measured |
 | `deepseek-ai/janus-pro-7b` | multimodal | 13.8 | met in 100 s | 3 | 0 | 193 s, 3.31x, 25/25 keys, base 84 s, bytes same | gen_embed `seq_len`@1 (arithmetic) | measured |
 | `inclusionai/ming-lite-omni-1.5` | multimodal | 53.0 | met in 175 s | 8 | 0 | 1072 s, 9.82x, 195/203 keys, bytes passed | image_vae `seq_len`@3 (weight-extent) | measured |
-| `openbmb/minicpm-o-4_5` | multimodal | 19.7 | met in 301 s | 81 | 0 | 1624 s, 26.98x, 286/287 keys, base 63 s, bytes same | flow_dit `seq_len`@3 (weight-extent) | measured |
+| `openbmb/minicpm-o-4_5` | multimodal | 19.7 | met in 301 s | 81 | 0 | 1624 s, 26.98x, 286/287 keys, base 63 s, bytes same; 13 certified choice(s) contradicted by the runtime sweep (224 near-ties within the timer's noise) — a finding, keys in the campaign record | flow_dit `seq_len`@3 (weight-extent) | measured |
 | `qwen/qwen3-omni-30b-a3b-instruct` | multimodal | 65.9 | met in 257 s | 36 | 0 | 1196 s, 12.23x, 183/219 keys, bytes passed | talker.code_predictor.model.codec_embedding `seq_len`@1 (arithmetic) | measured |
 | `qwen/qwen3-vl-30b-a3b-thinking` | multimodal | 57.9 | met in 365 s | 36 | 0 | 2924 s, 13.87x, 515/585 keys, bytes passed | none found at the input | measured |
 | `nvidia/Parakeet-TDT-1.1B` | stt | 4.1 | met in 32 s | 4 | 0 | 78 s, 8.04x, 17/17 keys, base 11 s, bytes same | joint `seq_len`@1024 (weight-extent) | measured |
-| `openai/Whisper-Large-V2` | stt | 5.8 | met in 23 s | 0 | 0 | 35 s, 3.23x, 10/10 keys, base 16 s, bytes same | none found at the input | measured |
+| `openai/Whisper-Large-V2` | stt | 5.8 | met in 23 s | 0 | 0 | 35 s, 3.23x, 10/10 keys, base 16 s, bytes same; 1 certified choice(s) contradicted by the runtime sweep (7 near-ties within the timer's noise) — a finding, keys in the campaign record | none found at the input | measured |
 | `openai/Whisper-V3-Turbo` | stt | 1.5 | met in 22 s | 5 | 0 | 35 s, 7.62x, 10/10 keys, base 5 s, bytes same | none found at the input | measured |
 | `canopylabs/Orpheus-3B` | tts | 14.2 | not runnable — catalogue decision | n/m | n/m | not measured | none found at the input | not measured |
 | `fishaudio/OpenAudio-S1-Mini` | tts | 4.0 | met in 1045 s | 238 | 0 | paired cell arm A rc=0, arm B rc=-9 — no cost | codec.decoder `seq_len`@1 (arithmetic) | measured |
-| `hexgrad/Kokoro-82M` | tts | 0.4 | met in 55 s | 6 | 0 | 303 s, 50.72x, 54/54 keys, base 6 s, bytes same | none found at the input | measured |
-| `microsoft/VibeVoice-1.5B` | tts | 5.1 | met in 154 s | 15 | 0 | 245 s, 8.28x, 38/38 keys, base 34 s, bytes same | none found at the input | measured |
+| `hexgrad/Kokoro-82M` | tts | 0.4 | met in 55 s | 6 | 0 | 303 s, 50.72x, 54/54 keys, base 6 s, bytes same; 3 certified choice(s) contradicted by the runtime sweep (7 near-ties within the timer's noise) — a finding, keys in the campaign record | none found at the input | measured |
+| `microsoft/VibeVoice-1.5B` | tts | 5.1 | met in 154 s | 15 | 0 | 245 s, 8.28x, 38/38 keys, base 34 s, bytes same; 1 certified choice(s) contradicted by the runtime sweep (21 near-ties within the timer's noise) — a finding, keys in the campaign record | none found at the input | measured |
 | `resemble-ai/Chatterbox` | tts | 2.1 | met in 73 s | 0 | 0 | paired cell arm A rc=0, arm B rc=-9 — no cost | none found at the input | measured |
 | `JingyunLiang/SwinIR-Classical-x2` | upscaler | 0.1 | met in 7 s | 0 | 0 | 37 s, 8.86x, 11/11 keys, base 5 s, bytes same | none found at the input | measured |
 | `JingyunLiang/SwinIR-Classical-x4` | upscaler | 0.1 | met in 9 s | 0 | 0 | 51 s, 11.80x, 12/12 keys, base 5 s, bytes same | none found at the input | measured |
-| `XPixelGroup/HAT-L-x4` | upscaler | 0.2 | met in 16 s | 0 | 0 | 87 s, 7.23x, 18/18 keys, base 14 s, bytes same | none found at the input | measured |
-| `XPixelGroup/HAT-S-x4` | upscaler | 0.1 | met in 10 s | 0 | 0 | 83 s, 14.14x, 18/18 keys, base 6 s, bytes same | none found at the input | measured |
+| `XPixelGroup/HAT-L-x4` | upscaler | 0.2 | met in 16 s | 0 | 0 | 87 s, 7.23x, 18/18 keys, base 14 s, bytes same; 3 certified choice(s) contradicted by the runtime sweep (7 near-ties within the timer's noise) — a finding, keys in the campaign record | none found at the input | measured |
+| `XPixelGroup/HAT-S-x4` | upscaler | 0.1 | met in 10 s | 0 | 0 | 83 s, 14.14x, 18/18 keys, base 6 s, bytes same; 1 certified choice(s) contradicted by the runtime sweep (7 near-ties within the timer's noise) — a finding, keys in the campaign record | none found at the input | measured |
 | `caidas/Swin2SR-Classical-x2` | upscaler | 0.1 | met in 8 s | 0 | 0 | 222 s, 42.82x, 16/16 keys, base 5 s, bytes same | none found at the input | measured |
 | `caidas/Swin2SR-Classical-x4` | upscaler | 0.1 | met in 44 s | 4 | 0 | 438 s, 79.44x, 17/17 keys, base 6 s, bytes same | none found at the input | measured |
 | `caidas/Swin2SR-RealWorld-x4` | upscaler | 0.1 | met in 8 s | 0 | 0 | 492 s, 80.69x, 17/17 keys, base 6 s, bytes same | none found at the input | measured |
 | `xinntao/Real-ESRGAN-x4` | upscaler | 0.1 | met in 6 s | 0 | 0 | 455 s, 135.49x, 10/10 keys, base 3 s, bytes same | none found at the input | measured |
 | `Efficient-Large-Model/SANA-Video-2B-720p` | video | 17.1 | **met (catalogue pass) — paired cell CUT 2026-09-13 11:27, no certified cost** | 25 | 0 | not measured | transformer `time`@3 (weight-extent) | measured |
 | `THUDM/CogVideoX-2b` | video | 13.2 | met in 614 s | 5 | 0 | 403 s, 0.73x, 26/33 keys, bytes **ran, FAILED** | none found at the input | measured |
-| `THUDM/CogVideoX-5b-I2V` | video | 21.6 | **RUNS — corrected at the source, published, installed, PROVEN by run** | 0† | 0† | 227 s, 3.20x, 48/50 keys, base 103 s, bytes same | none found at the input | measured |
+| `THUDM/CogVideoX-5b-I2V` | video | 21.6 | **RUNS — corrected at the source, published, installed, PROVEN by run** | 0† | 0† | 227 s, 3.20x, 48/50 keys, base 103 s, bytes same; 3 certified choice(s) contradicted by the runtime sweep (18 near-ties within the timer's noise) — a finding, keys in the campaign record | none found at the input | measured |
 | `Wan-AI/Wan2.1-I2V-14B-480P` | video | 84.4 | **INFERRED same debt as Wan2.1-VACE** | 3† | 0† | not measured | none found at the input | inferred |
 | `Wan-AI/Wan2.1-T2V-1.3B` | video | 27.0 | FAILED rc=-9 — killed at 2700 s | 11† | 0† | 26 s, 0.01x, 6/36 keys, bytes **not run** | none found at the input | measured |
 | `Wan-AI/Wan2.1-VACE-1.3B` | video | 18.2 | **NAMED DEBT — not corrected, and no stimulus corrects it** | 0† | 0† | 127 s, 4.32x, 34/37 keys, bytes **not run** | none found at the input | measured |
@@ -62,7 +62,7 @@ As the pass left it: **37 met**, **9 failed**, **1 not runnable**. 6 rows carry 
 | `hpcai-tech/Open-Sora-v2` | video | 42.5 | **DIAGNOSED — rebuild refused at entry, re-trace queued first** | 0† | 0† | not measured | text_encoder_2 `seq_len`@77 (weight-extent) | measured |
 | `rhymes-ai/Allegro` | video | 23.6 | FAILED rc=-9 — killed at 2701 s | 12† | 0† | not measured | none found at the input | measured |
 | `rhymes-ai/Allegro-TI2V` | video | 24.3 | **RUNS — repaired and delivered** | 27† | 0† | not measured | none found at the input | measured |
-| `zai-org/GLM-4.1V-9B-Thinking` | vlm | 19.2 | met in 913 s | 259 | 0 | 2367 s, 21.14x, 523/523 keys, base 117 s, bytes same | none found at the input | measured |
+| `zai-org/GLM-4.1V-9B-Thinking` | vlm | 19.2 | met in 913 s | 259 | 0 | 2367 s, 21.14x, 523/523 keys, base 117 s, bytes same; 56 certified choice(s) contradicted by the runtime sweep (423 near-ties within the timer's noise) — a finding, keys in the campaign record | none found at the input | measured |
 
 ## The lines that carry a later verdict
 
