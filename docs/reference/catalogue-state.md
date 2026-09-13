@@ -39,7 +39,7 @@ As the pass left it: **37 met**, **9 failed**, **1 not runnable**. 6 rows carry 
 | `openai/Whisper-Large-V2` | stt | 5.8 | met in 23 s | 0 | 0 | 35 s, 3.23x, 10/10 keys, base 16 s, bytes same | none found at the input | measured |
 | `openai/Whisper-V3-Turbo` | stt | 1.5 | met in 22 s | 5 | 0 | 35 s, 7.62x, 10/10 keys, base 5 s, bytes same | none found at the input | measured |
 | `canopylabs/Orpheus-3B` | tts | 14.2 | not runnable — catalogue decision | n/m | n/m | not measured | none found at the input | not measured |
-| `fishaudio/OpenAudio-S1-Mini` | tts | 4.0 | met in 1045 s | 238 | 0 | not measured | codec.decoder `seq_len`@1 (arithmetic) | measured |
+| `fishaudio/OpenAudio-S1-Mini` | tts | 4.0 | met in 1045 s | 238 | 0 | paired cell arm A rc=0, arm B rc=-9 — no cost | codec.decoder `seq_len`@1 (arithmetic) | measured |
 | `hexgrad/Kokoro-82M` | tts | 0.4 | met in 55 s | 6 | 0 | 303 s, 50.72x, 54/54 keys, base 6 s, bytes same | none found at the input | measured |
 | `microsoft/VibeVoice-1.5B` | tts | 5.1 | met in 154 s | 15 | 0 | 245 s, 8.28x, 38/38 keys, base 34 s, bytes same | none found at the input | measured |
 | `resemble-ai/Chatterbox` | tts | 2.1 | met in 73 s | 0 | 0 | paired cell arm A rc=0, arm B rc=-9 — no cost | none found at the input | measured |
