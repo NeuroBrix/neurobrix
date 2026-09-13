@@ -203,10 +203,11 @@ def capture() -> int:
     # (`config/autotune/`, filled only by `neurobrix autotune certify`), so
     # nothing here can reach it — this is the mention where it IS recorded.
     try:
-        from neurobrix.kernels.launcher import unscreened as _unscreened
+        from neurobrix.kernels.launcher import adjudicated as _adjudicated, unscreened as _unscreened
         unverified = {(u.kernel, repr(u.key)): u.reason for u in _unscreened()}
+        verified = _adjudicated()
     except Exception:                       # never turn a record into a failure
-        unverified = {}
+        unverified, verified = {}, {}
 
     entries: Dict[str, Dict] = {}
     skipped_unmeasured = 0
@@ -219,6 +220,10 @@ def capture() -> int:
             rec = _config_to_dict(cfg)
             if (id(at), key) in _TIMINGS:
                 rec["timing"] = _TIMINGS[(id(at), key)]
+            adjudicator = verified.get((short, repr(key)))
+            if adjudicator is not None:
+                rec["screened"] = True
+                rec["screened_by"] = adjudicator
             reason = unverified.get((short, repr(key)))
             if reason is not None:
                 rec["screened"] = False
