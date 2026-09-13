@@ -53,7 +53,7 @@ As the pass left it: **37 met**, **9 failed**, **1 not runnable**. 6 rows carry 
 | `xinntao/Real-ESRGAN-x4` | upscaler | 0.1 | met in 6 s | 0 | 0 | 455 s, 135.49x, 10/10 keys, base 3 s, bytes same | none found at the input | measured |
 | `Efficient-Large-Model/SANA-Video-2B-720p` | video | 17.1 | **met (catalogue pass) — paired cell CUT 2026-09-13 11:27, no certified cost** | 25 | 0 | not measured | transformer `time`@3 (weight-extent) | measured |
 | `THUDM/CogVideoX-2b` | video | 13.2 | met in 614 s | 5 | 0 | 403 s, 0.73x, 26/33 keys, bytes **ran, FAILED** | none found at the input | measured |
-| `THUDM/CogVideoX-5b-I2V` | video | 21.6 | **RUNS — corrected at the source, published, installed, PROVEN by run** | 0† | 0† | not measured | none found at the input | measured |
+| `THUDM/CogVideoX-5b-I2V` | video | 21.6 | **RUNS — corrected at the source, published, installed, PROVEN by run** | 0† | 0† | 227 s, 3.20x, 48/50 keys, base 103 s, bytes same | none found at the input | measured |
 | `Wan-AI/Wan2.1-I2V-14B-480P` | video | 84.4 | **INFERRED same debt as Wan2.1-VACE** | 3† | 0† | not measured | none found at the input | inferred |
 | `Wan-AI/Wan2.1-T2V-1.3B` | video | 27.0 | FAILED rc=-9 — killed at 2700 s | 11† | 0† | 26 s, 0.01x, 6/36 keys, bytes **not run** | none found at the input | measured |
 | `Wan-AI/Wan2.1-VACE-1.3B` | video | 18.2 | **NAMED DEBT — not corrected, and no stimulus corrects it** | 0† | 0† | 127 s, 4.32x, 34/37 keys, bytes **not run** | none found at the input | measured |
@@ -150,6 +150,7 @@ per family, from the cells above with both arms at rc=0 and not perturbed):**
 | stt | 3 | 3 – 5 | 10 – 17 |
 | tts | 2 | 6 – 6 | 38 – 54 |
 | upscaler | 8 | 3 – 45 | 10 – 18 |
+| video | 1 | 5 – 5 | 50 – 50 |
 | vlm | 1 | 5 – 5 | 523 – 523 |
 
 The 2026-09-11 table quoted 3–12 s a shape on GEMM-class keys. Tonight the
