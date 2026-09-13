@@ -446,18 +446,25 @@ _MM_GROUP = 8                              # matmul GROUP_M
 _RED_BM, _RED_BN = 8, 1024                 # reduction kernels (prod, min, max, std, var, norm, all, any)
 
 
-def _reduction_tile(M):
-    """(grid, block_m, block_n) for a full-row 2-D reduction, tile clamped to
-    what this backend stages correctly (Metal 1024, cuda/hip far higher, so
-    inert there). A 2-D axis reduce stages BLOCK_M*BLOCK_N one element per
-    thread; above the cap the lowering refuses (l2_norm on swin2SR: 8192 >
-    1024). Shrinking BLOCK_N adds loop iterations and changes no result. One
-    helper for std/var/norm -- a twin copy is a fix that lands in only one.
+def _clamp_reduce_tile(bm, bn):
+    """(block_m, block_n) clamped so a 2-D reduce tile fits the backend's cap.
+
+    A 2-D axis reduce stages BLOCK_M*BLOCK_N one element per thread; above the
+    cap (Metal 1024, cuda/hip far higher, so inert there) the lowering refuses
+    -- l2_norm on swin2SR at 8192, weight_norm on Kokoro at 16384. Shrinking
+    BLOCK_N adds loop iterations and changes no result; BLOCK_M is kept because
+    a caller may use it for its grid. THE clamp, one place: std/var/norm and
+    weight_norm all call it, a twin copy being a fix that lands in only one.
     """
-    bm, bn = _RED_BM, _RED_BN
     cap = _reduce_tile_max()
     if bm * bn > cap:
         bn = max(1, cap // bm)
+    return bm, bn
+
+
+def _reduction_tile(M):
+    """(grid, block_m, block_n) for a full-row reduction gridded on M."""
+    bm, bn = _clamp_reduce_tile(_RED_BM, _RED_BN)
     return (triton.cdiv(M, bm),), bm, bn
 _MV_BN, _MV_BM = 64, 256                  # mv / addmv  (BLOCK_N rows, BLOCK_M reduction tile)
                                           # the default; `block_sizes.mv` in the
@@ -6562,18 +6569,20 @@ def weight_norm_interface_wrapper(
     if dim == 0:
         M = v.shape[0]
         N = math.prod(v.shape[1:])
-        grid = (triton.cdiv(M, _WNORM_BM),)
+        _wbm, _wbn = _clamp_reduce_tile(_WNORM_BM, _WNORM_BN)
+        grid = (triton.cdiv(M, _wbm),)
         _set_device(output)
         weight_norm_kernel_first[grid](output, norm, v, g, M, N, eps,
-                                       BLOCK_M=_WNORM_BM, BLOCK_N=_WNORM_BN,
+                                       BLOCK_M=_wbm, BLOCK_N=_wbn,
                                        num_warps=4)
     elif dim == v.ndim - 1:
         M = math.prod(v.shape[:-1])
         N = v.shape[dim]
-        grid = (triton.cdiv(N, _WNORM_BN),)
+        _wbm, _wbn = _clamp_reduce_tile(_WNORM_BM, _WNORM_BN)
+        grid = (triton.cdiv(N, _wbn),)
         _set_device(output)
         weight_norm_kernel_last[grid](output, norm, v, g, M, N, eps,
-                                      BLOCK_M=_WNORM_BM, BLOCK_N=_WNORM_BN,
+                                      BLOCK_M=_wbm, BLOCK_N=_wbn,
                                       num_warps=4)
     else:
         raise ValueError(f"weight_norm only supports dim=0 or dim={v.ndim - 1}, got {dim}")
