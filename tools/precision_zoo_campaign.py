@@ -1441,6 +1441,27 @@ def add_flightrec_argument(parser) -> None:
              "and no resume block)")
 
 
+def empty_selection_refusal(models, models_arg, family):
+    """Why a campaign that selected no model may not start, or None.
+
+    2026-09-13: the budget-unified gate's byte matrix passed neither `--models`
+    nor `--family`; the default selection (cached models of `--family`) was
+    empty; the tool printed an empty table and the gate read green. A gate
+    whose success is the absence of a bad row cannot tell an empty selection
+    from a clean one, so the empty one is refused at the door, with the flags
+    that select named (vacuous-gates register entry 52)."""
+    if models:
+        return None
+    if models_arg:
+        return f"REFUSED: --models {models_arg!r} names no model"
+    if family:
+        return (f"REFUSED: no cached model of family {family!r} — name the models "
+                f"with --models, or a family that has some with --family")
+    return ("REFUSED: nothing selected — the campaign runs the models named with "
+            "--models, or every cached model of the family named with --family; "
+            "without either it would measure nothing and print an empty table")
+
+
 def frozen_src_refusal(src, repo_root):
     """Why this `--src` may not be measured, or None if it may.
 
@@ -1830,6 +1851,10 @@ def main():
     else:
         models = sorted(m.name for m in CACHE.iterdir() if (m / "manifest.json").exists()
                         and family_of(m.name) == args.family)
+    _why = empty_selection_refusal(models, args.models, args.family)
+    if _why:
+        print(_why, flush=True)
+        return 2
     import shlex
     extra = shlex.split(args.extra) if args.extra else []      # quotes honoured: --extra '--prompt "a red fox"'
     if not args.machine and args.gpu is None:

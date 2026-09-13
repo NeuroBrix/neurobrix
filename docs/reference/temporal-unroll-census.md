@@ -137,7 +137,7 @@ than a blind spot. Nothing to act on, and nothing claimed about a binding.
 | component | axis | at | asked | result |
 |---|---|---:|---:|---|
 | `Flex.1-alpha/text_encoder` | `seq_len` | 77 | 71 | **fixed by the model** — value did not move |
-| `Flex.1-alpha/transformer` | `seq_len` | 4096 | 4091 | **fixed by the model** — value did not move |
+| `Flex.1-alpha/transformer` | `seq_len` | 4096 | 4091 | **UNADJUDICATED** — the value did not move on 2026-09-12 and again on 2026-09-13 16:05 because the override has no seam on a transformer traced inside a pipeline (it has one on an image VAE/DiT traced alone); the earlier reading "fixed by the model" took the instrument's silence for a fact. Instrument defect, owed |
 | `Ming-Lite-Omni-1.5/image_vae` | `seq_len` | 3 | 7 | not measured — a single-component trace does not reach this component on a multimodal container |
 | `MiniCPM-o-4_5/flow_dit` | `seq_len` | 3 | 7 | not measured — same |
 | `openaudio-s1-mini/codec.decoder` | `seq_len` | 1 | 7 | not measured — nested component (`codec.decoder`), unreachable by a single-component trace (2026-09-13, card 0: Phase B targeted 0 components) |

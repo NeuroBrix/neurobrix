@@ -386,7 +386,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-51 entries, of which five are placeholders and 46 carry a site. Two
+52 entries, of which five are placeholders and 47 carry a site. Two
 machines, two weeks of concentrated looking. Every one of them produced silence
 or a green rather than an error.
 
@@ -1018,4 +1018,21 @@ environment of its own, tagged `cpu`, with its own detected profile; None is
 reserved for the exception. Gate:
 `tests/unit/prism/test_an_empty_visible_set_is_a_cpu_host.py`, seen red on
 the old code; the proof by run is the same cell.
+
+### 52 — a green over zero cells
+
+The budget-unified gate's second phase — the byte matrix over every model whose
+strategy does NOT change, the safety net under the five pinned pairs — called the
+campaign with `--machine` and neither `--models` nor `--family`. The tool's default
+selection keeps the cached models whose family equals `--family`; unset, that is
+no model at all. It printed the table's header, an empty body, and the script
+printed `gate termine`. RUN.md read as a gate that had found nothing to differ.
+Found by asking why a "matrix over the rig" had taken zero seconds.
+
+**The shape**: a selection that can be empty, and a gate whose success is the
+absence of a bad row — so an empty selection is indistinguishable from a clean
+one. **The rule**: a campaign that selects nothing refuses at entry and names the
+flags that select; and the gate script names its families. Gate:
+`tests/unit/tools/test_campaign_refuses_an_empty_selection.py`, seen red on the
+old selection; the matrix re-armed per family behind the suite re-run.
 
