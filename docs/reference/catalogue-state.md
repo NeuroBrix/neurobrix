@@ -16,11 +16,11 @@ As the pass left it: **37 met**, **9 failed**, **1 not runnable**. 6 rows carry 
 
 | model | family | GB | on this rack | swept | screened | certified cost | where a defect would be invisible | line |
 |---|---|---:|---|---:|---:|---|---|---|
-| `ibm-granite/Granite-Speech-3.3-8B` | audio_llm | 16.1 | met in 468 s | 117 | 0 | not measured | none found at the input | measured |
+| `ibm-granite/Granite-Speech-3.3-8B` | audio_llm | 16.1 | met in 468 s | 117 | 0 | 1353 s, 20.37x, 264/264 keys, base 70 s, bytes same | none found at the input | measured |
 | `mistralai/Voxtral-Mini-3B` | audio_llm | 8.7 | met in 121 s | 28 | 0 | not measured | none found at the input | measured |
 | `nvidia/Canary-Qwen-2.5B` | audio_llm | 4.8 | met in 118 s | 29 | 0 | 1212 s, 54.55x, 251/251 keys, base 23 s, bytes same | none found at the input | measured |
 | `NVlabs/Sana-1600M-4Kpx-BF16` | image | 12.1 | met in 460 s | 2 | 0 | not measured | vae `height`@128 (weight-extent); vae `width`@128 (weight-extent) | measured |
-| `NVlabs/Sana-1600M-MultiLing` | image | 12.1 | met in 90 s | 8 | 0 | paired cell PERTURBED (card 2 also carried the conv2d certification (pid 433862, up to 18 GB) from 22:55 to 23:13:38; the cell ran 23:02-23:2x — re-run alone owed) — no cost | transformer `height`@32 (weight-extent); transformer `width`@32 (weight-extent) (+2) | measured |
+| `NVlabs/Sana-1600M-MultiLing` | image | 12.1 | met in 90 s | 8 | 0 | 329 s, 7.22x, 58/58 keys, base 53 s, bytes same | transformer `height`@32 (weight-extent); transformer `width`@32 (weight-extent) (+2) | measured |
 | `PixArt/PixArt-Sigma-XL-1024` | image | 20.3 | met in 154 s | 8 | 0 | 2471 s, 20.90x, 36/36 keys, base 124 s, bytes same | vae `height`@128 (weight-extent); vae `width`@128 (weight-extent) | measured |
 | `PixArt/PixArt-XL-1024` | image | 20.4 | met in 128 s | 4 | 0 | 2476 s, 21.26x, 36/36 keys, base 122 s, bytes same | transformer `seq_len`@120 (weight-extent); transformer `seq_len`@120 (weight-extent) (+2) | measured |
 | `ostris/Flex.1-alpha` | image | 24.5 | met in 317 s | 15 | 0 | 2501 s, 9.24x, 42/42 keys, base 303 s, bytes same | text_encoder `seq_len`@77 (weight-extent); transformer `seq_len`@4096 (weight-extent) (+2) | measured |
@@ -137,8 +137,8 @@ per family, from the cells above with both arms at rc=0 and not perturbed):**
 
 | family | cells | s per shape (min – max) | keys per cell (min – max) |
 |---|---:|---|---|
-| audio_llm | 1 | 5 – 5 | 251 – 251 |
-| image | 3 | 60 – 69 | 36 – 42 |
+| audio_llm | 2 | 5 – 5 | 251 – 264 |
+| image | 4 | 6 – 69 | 36 – 58 |
 | llm | 2 | 6 – 6 | 6 – 8 |
 | multimodal | 2 | 6 – 8 | 25 – 287 |
 | stt | 3 | 3 – 5 | 10 – 17 |
