@@ -88,6 +88,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the graph reads, then loaded every weight in the container onto it and died out of
   memory. The compiled loader now loads the set the placement is sized on, as the Triton
   loader already did, and the placement counts the same set; the unrouted experts stay on disk.
+- A mixture-of-experts language model packaged under a non-LLM family (Ming-Lite-Omni,
+  Qwen3-Omni, Qwen3-VL) had its experts fused only when the run reached the model, after
+  its weights were loaded from the unfused graph, so the experts the trace never routed to
+  were missing and the first MoE block met a null weight under `--triton`. The fusion now
+  loads the weights it adds, in both engines, and the placement is sized on the fused graph.
 - On a machine with no visible GPU (or `CUDA_VISIBLE_DEVICES=""`) `neurobrix upscale` and
   `neurobrix run` planned a GPU from a profile detected earlier on the same machine and died
   with "No CUDA GPUs are available". An empty visible set is now its own environment with its

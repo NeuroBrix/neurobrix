@@ -1726,7 +1726,8 @@ class PrismSolver:
             # Falls back to the file bytes when the graph cannot answer,
             # which over-estimates rather than under-estimates: the safe
             # direction, and it is the previous behaviour exactly.
-            weight_bytes = _consumed_weight_bytes(comp, dtype_mult)
+            weight_bytes = _consumed_weight_bytes(
+                self._graph_as_executed(comp, container), dtype_mult)
             if weight_bytes is None:
                 weight_bytes = sum(int(s * dtype_mult)
                                    for s in shard_sizes.get(comp.name, {}).values())
@@ -1886,6 +1887,44 @@ class PrismSolver:
             return None
         with open(p) as f:
             return json.load(f)
+
+    def _graph_as_executed(self, comp, container):
+        """The component as the engines will run it: with the declared-MoE
+        fusion applied to a ROUTED component (one holding a topk router)
+        when the package declares num_experts > 1 — the flows apply the
+        same pass at execute and the executor then loads what it adds.
+        Sized on the un-fused graph, a MoE LM under a non-llm family
+        budgeted only the experts the trace routed to while the fused
+        kernel reads them all — Qwen3-Omni's thinker at 5.2 GB planned,
+        57 GB executed (2026-09-13). Weight bytes only: the activation
+        profile and the layer partition still read the container's graph
+        (noted in the ledger). The copy is fused, never the container's
+        graph."""
+        graph = getattr(comp, "graph", None)
+        if not isinstance(graph, dict):
+            return comp
+        lm = self._read_lm_config(container) or {}
+        n = lm.get("num_experts")
+        if n is None or int(n) <= 1:
+            return comp
+        ops = (graph.get("ops") or {}).values()
+        if any(op.get("op_type") == "custom::moe_fused" for op in ops):
+            return comp
+        if not any(op.get("op_type") == "aten::topk" for op in ops):
+            return comp          # no router: the pass would be a no-op, spare the copy
+        import copy as _copy
+        from types import SimpleNamespace
+        from neurobrix.core.runtime.graph.moe_fusion import detect_and_fuse_moe
+        # norm_topk_prob does not change which weights the fused op reads;
+        # the sizing passes the declared value when present and the pass's
+        # default otherwise (the flows refuse a missing one at execute).
+        fused = detect_and_fuse_moe(_copy.deepcopy(graph), "declared",
+                                    norm_topk_prob=bool(lm.get("norm_topk_prob", True)),
+                                    declared=True)
+        return SimpleNamespace(
+            graph=fused,
+            weights_index=getattr(comp, "weights_index", None) or getattr(comp, "weight_index", None),
+            name=getattr(comp, "name", None))
 
     def _read_lm_config(self, container) -> Optional[Dict]:
         """Read lm_config from defaults.json. Returns None if not LLM."""
