@@ -40,7 +40,7 @@ As the pass left it: **37 met**, **9 failed**, **1 not runnable**. 6 rows carry 
 | `openai/Whisper-V3-Turbo` | stt | 1.5 | met in 22 s | 5 | 0 | 35 s, 7.62x, 10/10 keys, base 5 s, bytes same | none found at the input | measured |
 | `canopylabs/Orpheus-3B` | tts | 14.2 | not runnable — catalogue decision | n/m | n/m | not measured | none found at the input | not measured |
 | `fishaudio/OpenAudio-S1-Mini` | tts | 4.0 | met in 1045 s | 238 | 0 | not measured | codec.decoder `seq_len`@1 (arithmetic) | measured |
-| `hexgrad/Kokoro-82M` | tts | 0.4 | met in 55 s | 6 | 0 | not measured | none found at the input | measured |
+| `hexgrad/Kokoro-82M` | tts | 0.4 | met in 55 s | 6 | 0 | 303 s, 50.72x, 54/54 keys, base 6 s, bytes same | none found at the input | measured |
 | `microsoft/VibeVoice-1.5B` | tts | 5.1 | met in 154 s | 15 | 0 | not measured | none found at the input | measured |
 | `resemble-ai/Chatterbox` | tts | 2.1 | met in 73 s | 0 | 0 | not measured | none found at the input | measured |
 | `JingyunLiang/SwinIR-Classical-x2` | upscaler | 0.1 | met in 7 s | 0 | 0 | 37 s, 8.86x, 11/11 keys, base 5 s, bytes same | none found at the input | measured |
@@ -48,7 +48,7 @@ As the pass left it: **37 met**, **9 failed**, **1 not runnable**. 6 rows carry 
 | `XPixelGroup/HAT-L-x4` | upscaler | 0.2 | met in 16 s | 0 | 0 | 87 s, 7.23x, 18/18 keys, base 14 s, bytes same | none found at the input | measured |
 | `XPixelGroup/HAT-S-x4` | upscaler | 0.1 | met in 10 s | 0 | 0 | 83 s, 14.14x, 18/18 keys, base 6 s, bytes same | none found at the input | measured |
 | `caidas/Swin2SR-Classical-x2` | upscaler | 0.1 | met in 8 s | 0 | 0 | 222 s, 42.82x, 16/16 keys, base 5 s, bytes same | none found at the input | measured |
-| `caidas/Swin2SR-Classical-x4` | upscaler | 0.1 | met in 44 s | 4 | 0 | not measured | none found at the input | measured |
+| `caidas/Swin2SR-Classical-x4` | upscaler | 0.1 | met in 44 s | 4 | 0 | 438 s, 79.44x, 17/17 keys, base 6 s, bytes same | none found at the input | measured |
 | `caidas/Swin2SR-RealWorld-x4` | upscaler | 0.1 | met in 8 s | 0 | 0 | 492 s, 80.69x, 17/17 keys, base 6 s, bytes same | none found at the input | measured |
 | `xinntao/Real-ESRGAN-x4` | upscaler | 0.1 | met in 6 s | 0 | 0 | 455 s, 135.49x, 10/10 keys, base 3 s, bytes same | none found at the input | measured |
 | `Efficient-Large-Model/SANA-Video-2B-720p` | video | 17.1 | met in 675 s | 25 | 0 | not measured | transformer `time`@3 (weight-extent) | measured |
@@ -131,6 +131,25 @@ covers eleven cells and not the catalogue. The ratio is what runtime
 sweeping costs relative to a served run, on this rack, at the shapes these
 requests meet. It is not a throughput figure and it says nothing about
 other hardware.
+
+**What a sweep costs per shape, measured tonight (sweep cost / keys swept,
+per family, from the cells above with both arms at rc=0 and not perturbed):**
+
+| family | cells | s per shape (min – max) | keys per cell (min – max) |
+|---|---:|---|---|
+| llm | 2 | 6 – 6 | 6 – 8 |
+| multimodal | 1 | 8 – 8 | 25 – 25 |
+| stt | 2 | 3 – 4 | 10 – 10 |
+| tts | 1 | 6 – 6 | 54 – 54 |
+| upscaler | 8 | 3 – 45 | 10 – 18 |
+
+The 2026-09-11 table quoted 3–12 s a shape on GEMM-class keys. Tonight the
+spread runs from 3 s a shape (`swinir-classical-x2`) to
+45 s (`real-esrgan-x4`, conv2d shapes at 448² screened
+against the fp64 oracle) — so a 3 s run of the latter pays
+455 s of sweep. The per-shape cost is a property of the kernel
+class and the shape, not a constant; the law (shapes met per second of
+served run) holds with that coefficient per cell, not a single one.
 
 **where a defect would be invisible** — axes traced at a value where two
 distinct rules give the same number, so the trace-point check cannot tell
