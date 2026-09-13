@@ -272,8 +272,11 @@ def campaign_dir_cells(camp: Path) -> dict:
             out[r["model"]] = dict(cost_s=None, ratio=None, keys=r["keys"], certified=r["served"],
                                    bytes=r["bytes"], failed="lever did not move")
             continue
+        choices = cell.get("choices") or {}
         out[r["model"]] = dict(cost_s=r["sweep"], ratio=f"{r['ratio']:.2f}", keys=r["keys"],
-                               certified=r["served"], bytes=r["bytes"], base_s=r["a_med"])
+                               certified=r["served"], bytes=r["bytes"], base_s=r["a_med"],
+                               contradictions=int(choices.get("contradicted_count") or 0),
+                               near_ties=int(choices.get("near_tie_count") or 0))
     return out
 
 
@@ -391,6 +394,13 @@ def main() -> int:
             base = f", base {cell['base_s']:.0f} s" if cell.get("base_s") else ""
             cost = (f"{cell['cost_s']:.0f} s, {cell['ratio']}x, {cell['certified']}/"
                     f"{cell['keys']} keys{base}, bytes {cell.get('bytes', '?')}")
+            # A runtime sweep that contradicts a certified choice is a reported
+            # finding, never a silence (autotune doctrine). The campaign counts
+            # them per cell and names the keys in its own record.
+            if cell.get("contradictions"):
+                cost += (f"; {cell['contradictions']} certified choice(s) contradicted by the "
+                         f"runtime sweep ({cell.get('near_ties', 0)} near-ties within the timer's "
+                         f"noise) — a finding, keys in the campaign record")
         axes = blind.get(container, [])
         notes = ADJUDICATED_AXES.get(container, {})
         shown = [a + (f" → {notes[a]}" if a in notes else "") for a in axes[:2]]
