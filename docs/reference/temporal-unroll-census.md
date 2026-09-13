@@ -96,7 +96,8 @@ inferred line and a measured line do not read the same.
 |---|---|
 | `Allegro/vae_encoder`, `CogVideoX-2b/vae_encoder`, `Wan2.1-T2V/vae_encoder` | the model has no such component |
 | `SANA-Video_2B_720p/vae` | at T=25 the synthesised latent carries 64 channels where the weights want 128 (`expected input[1, 64, 27, 16, 24] to have 128 channels`). The latent WIDTH depends on the temporal stimulus, which is its own question and not this one. Reproducible; T=9 traces fine. |
-| `Open-Sora-v2`, `mochi-1-preview` | snapshots purged; no second point available |
+| `mochi-1-preview` | snapshot purged; no second point available |
+| `Open-Sora-v2/vae` | **measured 2026-09-13 13:11, card 0: 237 ops at T=9 and at T=25 — flat, not unrolled** (the June container's VAE graph carried 11 017 ops: an unrolled trace, replaced by the fifth re-trace of 2026-09-13) |
 
 ## What it means
 
