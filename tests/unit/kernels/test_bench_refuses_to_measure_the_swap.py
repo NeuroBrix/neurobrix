@@ -77,3 +77,89 @@ def test_an_unmeasured_choice_is_never_persisted():
     assert "is_unmeasured(at, key)" in src.split("def capture")[1], (
         "capture() must consult the registry; a registry nothing consults is "
         "the vacuous form")
+
+
+# ── the post-hoc half: a sweep that GREW the swap measured the swap ────────
+#
+# The pre-gate above catches the certain case (arguments alone exceed
+# available). Reproduced 2026-09-13, it is not enough: a 5.9 GB sweep PASSED
+# at 6.5 GB available, its buffers saturated the machine, and the FOLLOWING
+# work crawled -- stack sampled in waitUntilCompleted, swap at 7621/8192 MB.
+# Round 9's hang had the same shape: its own arguments were 11 MB and the
+# pressure was inherited from earlier keys.
+#
+# The threshold is ZERO, and zero is the identity and not a tuned constant.
+# The costs are asymmetric: a false mark (background daemon moved the swap)
+# only skips persistence and the key re-sweeps another day; a missed mark
+# persists a choice timed against the swap, which then keeps deciding on
+# machines and days it knows nothing about.
+
+
+def test_a_sweep_that_grew_the_swap_is_marked_unmeasured(monkeypatch):
+    from neurobrix.kernels import autotune_refusals as R
+    import neurobrix.core.host_memory as hm
+
+    swap = {"used": 4000}
+
+    class _M:
+        available_mb = 9000
+        total_mb = 24576
+        source = "test"
+
+        @property
+        def swap_used_mb(self):
+            return swap["used"]
+
+    monkeypatch.setattr(hm, "memory_state", lambda: _M())
+    said = []
+
+    class _At:
+        pass
+
+    at = _At()
+    R.begin_sweep()
+    R.note_sweep_swap_baseline()
+    swap["used"] = 4500                    # the sweep grew the swap
+    grew = R.sweep_grew_the_swap()
+    assert grew == 500
+    R.mark_sweep_unmeasured(at, ("k", 1), grew, say=said.append)
+    from neurobrix.triton import autotune_cache as atc
+
+    assert atc.is_unmeasured(at, ("k", 1)) is True
+    assert len(said) == 1 and "500" in said[0], (
+        f"the mark is SAID with its delta; got {said!r}")
+
+
+def test_a_quiet_sweep_is_not_marked(monkeypatch):
+    """Both directions: zero growth marks nothing, or every sweep on a busy
+    machine would starve the persistent cache for no reason."""
+    from neurobrix.kernels import autotune_refusals as R
+    import neurobrix.core.host_memory as hm
+
+    class _M:
+        available_mb = 9000
+        total_mb = 24576
+        source = "test"
+        swap_used_mb = 4000
+
+    monkeypatch.setattr(hm, "memory_state", lambda: _M())
+    R.begin_sweep()
+    R.note_sweep_swap_baseline()
+    assert R.sweep_grew_the_swap() == 0
+
+
+def test_an_unreadable_swap_marks_nothing(monkeypatch):
+    from neurobrix.kernels import autotune_refusals as R
+    import neurobrix.core.host_memory as hm
+
+    class _M:
+        available_mb = None
+        total_mb = None
+        source = "unreadable"
+        swap_used_mb = None
+
+    monkeypatch.setattr(hm, "memory_state", lambda: _M())
+    R.begin_sweep()
+    R.note_sweep_swap_baseline()
+    assert R.sweep_grew_the_swap() == 0, (
+        "an unreadable platform must not turn into a policy of its own")
