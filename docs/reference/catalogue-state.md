@@ -62,7 +62,7 @@ As the pass left it: **37 met**, **9 failed**, **1 not runnable**. 6 rows carry 
 | `hpcai-tech/Open-Sora-v2` | video | 42.5 | **DIAGNOSED — rebuild refused at entry, re-trace queued first** | 0† | 0† | not measured | text_encoder_2 `seq_len`@77 (weight-extent) | measured |
 | `rhymes-ai/Allegro` | video | 23.6 | FAILED rc=-9 — killed at 2701 s | 12† | 0† | not measured | none found at the input | measured |
 | `rhymes-ai/Allegro-TI2V` | video | 24.3 | **RUNS — repaired and delivered** | 27† | 0† | not measured | none found at the input | measured |
-| `zai-org/GLM-4.1V-9B-Thinking` | vlm | 19.2 | met in 913 s | 259 | 0 | not measured | none found at the input | measured |
+| `zai-org/GLM-4.1V-9B-Thinking` | vlm | 19.2 | met in 913 s | 259 | 0 | 2367 s, 21.14x, 523/523 keys, base 117 s, bytes same | none found at the input | measured |
 
 ## The lines that carry a later verdict
 
@@ -144,6 +144,7 @@ per family, from the cells above with both arms at rc=0 and not perturbed):**
 | stt | 3 | 3 – 5 | 10 – 17 |
 | tts | 2 | 6 – 6 | 38 – 54 |
 | upscaler | 8 | 3 – 45 | 10 – 18 |
+| vlm | 1 | 5 – 5 | 523 – 523 |
 
 The 2026-09-11 table quoted 3–12 s a shape on GEMM-class keys. Tonight the
 spread runs from 3 s a shape (`swinir-classical-x2`) to
