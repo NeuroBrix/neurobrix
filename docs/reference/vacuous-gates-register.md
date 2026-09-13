@@ -386,7 +386,7 @@ rather than a plausible reconstruction.
 
 ## What the count is worth
 
-49 entries, of which five are placeholders and 44 carry a site. Two
+51 entries, of which five are placeholders and 46 carry a site. Two
 machines, two weeks of concentrated looking. Every one of them produced silence
 or a green rather than an error.
 
@@ -970,3 +970,52 @@ directory that already holds an artifact, names the path, and the deliberate
 opening is `NBX_ALLOW_REUSED_REPLAY=1`. The overwritten cell is marked in the
 campaign's `PERTURBED.json` with the clean numbers quoted from the run log,
 and the document says the record measured nothing.
+
+### 50 — a filter that knew one of the two readers
+
+The triton weight loader takes `only=`, the set of weights the graph consumes,
+and skips the rest — the saving is real (11.8 GB of unrouted experts on a
+30 GB MoE component). Entry 48 fixed its key space. The full suite on that
+tree then failed ten triton cells with the same two sentences: *"requires
+embed_tokens weight"* on four VLMs, two audio-LLMs, a TTS backbone and a warm
+serve, and `'NoneType' object has no attribute 'nbx_dtype'` at `aten.mm::0` on
+both int4 builds. The graph is not the only reader of the weight dict. A
+language model whose graph takes `inputs_embeds` never consumes its token
+embedding — the flow handler reads it by name to build the context and the
+tied logits — and an int4 build stores a consumed `X.weight` as three keys the
+graph never names. Both were loaded before the filter existed; both went
+missing the day it arrived, and the 04:28 suite the same night already showed
+them under the noise of thirty-seven failures.
+
+**The shape**: a premise stated as a law — *"a parameter no op consumes cannot
+be reached by execution"* — true of the replay loop and false of the handler
+around it. The join between the two key spaces was also a second rule written
+beside the reconcile's rule, and the two disagreed on ambiguous suffixes.
+**The rule**: ONE function binds loader keys to graph names
+(`GraphExecutor.bind_weight_keys`, the reconcile's own three passes), the
+filter is computed from it, every non-block key is loaded whatever the graph
+says (what the flows read is never inside a block; what the filter saves is
+never outside one), and a storage triplet is wanted through its stem. Gate:
+`tests/unit/runtime/test_consumed_weights_reach_the_loader_key_space.py`,
+seen red three of five on the old code; the regression cells are the proof by
+run.
+
+### 51 — an empty set read as no answer
+
+`neurobrix upscale` under `CUDA_VISIBLE_DEVICES=""` — the cell the regression
+suite runs to stand for a machine without a graphics card — died with *"No
+CUDA GPUs are available"* at the first constant. The per-environment profile
+tag (2026-09-05) returns None when detection fails, and it returned None when
+detection SUCCEEDED and found nothing; the caller serves the shared
+`default.yml` for None, which on this rack describes four V100s, and Prism
+planned `cuda:0` for a process that could see no card. The cell had passed on
+2026-09-03 and was red from the day the tag landed.
+
+**The shape**: two different facts — *I could not look* and *I looked and
+there is nothing* — collapsed into one value, and the fallback written for the
+first applied to the second. **The rule**: an empty visible set is an
+environment of its own, tagged `cpu`, with its own detected profile; None is
+reserved for the exception. Gate:
+`tests/unit/prism/test_an_empty_visible_set_is_a_cpu_host.py`, seen red on
+the old code; the proof by run is the same cell.
+

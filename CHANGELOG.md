@@ -76,6 +76,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   says so in the run's own output.
 
 ### Fixed
+- `--triton` runs of vision-language, audio-language and text-to-speech models, of int4
+  builds, and warm serving of the same, failed at weight load with "requires embed_tokens
+  weight" or a missing weight at the first matrix multiply. The loader had started loading
+  only the weights the graph reads, and the graph is not the only reader: the flow handler
+  reads the token embedding and the head by name, and an int4 build stores one weight as
+  three. Every weight outside a block is loaded again, an encoded weight is loaded through
+  the name its index says it encodes, and the saving on unrouted MoE experts stays.
+- On a machine with no visible GPU (or `CUDA_VISIBLE_DEVICES=""`) `neurobrix upscale` and
+  `neurobrix run` planned a GPU from a profile detected earlier on the same machine and died
+  with "No CUDA GPUs are available". An empty visible set is now its own environment with its
+  own CPU profile, and never rewrites the shared one.
 - The autotune correctness screen now looks at every shape (it de-duplicated by the launch's constexpr arguments, so ten convolution shapes sharing them were screened once), records what adjudicated a seat (`screened: true` with the oracle's name) as well as what did not, and the convolution family's float64 reference is consulted by the live screen. The swap doors reason about host memory only on unified-memory devices.
 - `neurobrix import` resumes an interrupted download instead of losing it: bytes go to a `.part` file beside the destination, a re-run continues from where the stream broke (HTTP Range), and the final `.nbx` name appears only once the announced size is reached.
 - The output resolution is read from the container wherever the container declares it.
