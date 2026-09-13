@@ -51,7 +51,7 @@ As the pass left it: **37 met**, **9 failed**, **1 not runnable**. 6 rows carry 
 | `caidas/Swin2SR-Classical-x4` | upscaler | 0.1 | met in 44 s | 4 | 0 | 438 s, 79.44x, 17/17 keys, base 6 s, bytes same | none found at the input | measured |
 | `caidas/Swin2SR-RealWorld-x4` | upscaler | 0.1 | met in 8 s | 0 | 0 | 492 s, 80.69x, 17/17 keys, base 6 s, bytes same | none found at the input | measured |
 | `xinntao/Real-ESRGAN-x4` | upscaler | 0.1 | met in 6 s | 0 | 0 | 455 s, 135.49x, 10/10 keys, base 3 s, bytes same | none found at the input | measured |
-| `Efficient-Large-Model/SANA-Video-2B-720p` | video | 17.1 | met in 675 s | 25 | 0 | not measured | transformer `time`@3 (weight-extent) | measured |
+| `Efficient-Large-Model/SANA-Video-2B-720p` | video | 17.1 | **met (catalogue pass) — paired cell CUT 2026-09-13 11:27, no certified cost** | 25 | 0 | not measured | transformer `time`@3 (weight-extent) | measured |
 | `THUDM/CogVideoX-2b` | video | 13.2 | met in 614 s | 5 | 0 | 403 s, 0.73x, 26/33 keys, bytes **ran, FAILED** | none found at the input | measured |
 | `THUDM/CogVideoX-5b-I2V` | video | 21.6 | **RUNS — corrected at the source, published, installed, PROVEN by run** | 0† | 0† | not measured | none found at the input | measured |
 | `Wan-AI/Wan2.1-I2V-14B-480P` | video | 84.4 | **INFERRED same debt as Wan2.1-VACE** | 3† | 0† | not measured | none found at the input | inferred |
@@ -83,6 +83,12 @@ Its causal temporal pad recorded 2187*s - 2184 against a truth of s + 2, exact a
 The runtime repair is not enough for this one: the container predates the builder that writes component shapes, so the output size cannot be read from it whatever the runtime does. Snapshot re-downloaded 2026-09-12 16:38 (64.43 GB, the build door's predicate satisfied); the rebuild is queued behind the CogVideoX upload, staged on the root filesystem rather than the export.
 
 *Evidence:* the shipped topology.json carries shapes=NONE for transformer and vae while .cache/graphs holds them (vae: z [1,16,9,14,22]); container dated 2026-06-30; the 22:10 rebuild was refused in 5 s: "component 'scheduler' has no cached graph.json -- topology/graph-cache desync" (its trace cache is also from 2026-06-30); snapshot present (64.43 GB, build door satisfied)  ·  *line:* measured
+
+### `SANA-Video_2B_720p_diffusers` — met (catalogue pass) — paired cell CUT 2026-09-13 11:27, no certified cost
+
+A sweep of video conv keys at 720p costs minutes a key; the 90-minute run timeout that fits every other family cuts this one (and chatterbox's and openaudio's 674/693-key sweeps). Re-measuring needs a per-cell timeout sized by keys — a decision, not tonight's.
+
+*Evidence:* night bench card 3: arm A rc=0; arm B (sweeping, 25 video conv keys at 720p) killed at the campaign's 5400 s run timeout on repetition 0 and cut by hand at 53 min into repetition 1 — 19 keys swept in 45 min, a sweep this cell cannot finish under that clock; the cell was stopped so the night's queue (proofs, Open-Sora, budget gate) could take the rig  ·  *line:* measured
 
 ### `Wan2.1-I2V-14B-480P` — INFERRED same debt as Wan2.1-VACE
 

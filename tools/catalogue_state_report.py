@@ -79,6 +79,18 @@ ADJUDICATED_AXES = {
 }
 
 OVERLAY = {
+    "SANA-Video_2B_720p_diffusers": dict(
+        now="met (catalogue pass) — paired cell CUT 2026-09-13 11:27, no certified cost",
+        evidence="night bench card 3: arm A rc=0; arm B (sweeping, 25 video conv keys at 720p) "
+                 "killed at the campaign's 5400 s run timeout on repetition 0 and cut by hand at "
+                 "53 min into repetition 1 — 19 keys swept in 45 min, a sweep this cell cannot "
+                 "finish under that clock; the cell was stopped so the night's queue (proofs, "
+                 "Open-Sora, budget gate) could take the rig",
+        note="A sweep of video conv keys at 720p costs minutes a key; the 90-minute run "
+             "timeout that fits every other family cuts this one (and chatterbox's and "
+             "openaudio's 674/693-key sweeps). Re-measuring needs a per-cell timeout sized "
+             "by keys — a decision, not tonight's.",
+        line="measured"),
     "Allegro-TI2V": dict(
         now="RUNS — repaired and delivered",
         evidence="validation_outputs/allegro_image_sets_resolution_20260912/out.mp4 "
