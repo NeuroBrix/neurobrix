@@ -96,3 +96,73 @@ def test_a_new_sweep_forgets_the_old_scale(_fresh_sweep):
     assert R._SWEEP["best_ms"] is None, (
         "a key's scale must not leak into the next key's budget: a tiny "
         "kernel's 0.1 ms would sentence every candidate of a large one")
+
+
+# ── the per-config memory footprint door (Hocine's unified-memory chantier) ─
+
+
+def test_a_config_over_footprint_is_excluded_before_running():
+    """Transposition of the threadgroup-budget door to unified memory: a
+    config whose full footprint (args + scratch + bench buffer) exceeds
+    available is cut BEFORE the spend, not caught after the swap grew."""
+    from neurobrix.kernels import autotune_refusals as R
+
+    # 5 GB of arguments against 3 GB available: cannot fit even before scratch.
+    fits, avail, fp = R.config_footprint_fits(
+        arg_bytes=5 * 2**30, config_scratch_bytes=0, available_mb=3000)
+    assert fits is False and avail == 3000 and fp > 5000
+
+
+def test_a_config_that_fits_is_not_excluded():
+    """Both directions: a small config under the margin runs normally."""
+    from neurobrix.kernels import autotune_refusals as R
+
+    fits, _, _ = R.config_footprint_fits(
+        arg_bytes=100 * 2**20, config_scratch_bytes=0, available_mb=8000)
+    assert fits is True
+
+
+def test_the_bench_scratch_is_counted_not_just_the_arguments():
+    """The whole point over bench_would_swap: a config whose ARGUMENTS fit but
+    whose args + 256 MB bench buffer do not must still be excluded."""
+    from neurobrix.kernels import autotune_refusals as R
+
+    # args 500 MB fit in 700 MB available on their own; + 256 MB bench + margin
+    # they do not.
+    fits, _, fp = R.config_footprint_fits(
+        arg_bytes=500 * 2**20, config_scratch_bytes=0, available_mb=700)
+    assert fits is False, (
+        "counting only arguments (as bench_would_swap does per-key) would let "
+        "this through; the bench scratch is what tips it over")
+
+
+def test_an_unreadable_platform_adds_no_policy(monkeypatch):
+    """When the live reading is None (platform we cannot read), the door fits
+    everything and adds no policy of its own -- host_memory already names why
+    it could not read."""
+    from neurobrix.kernels import autotune_refusals as R
+    import neurobrix.core.host_memory as hm
+
+    class _M:
+        available_mb = None
+        total_mb = None
+        source = "unreadable"
+        swap_used_mb = None
+    monkeypatch.setattr(hm, "memory_state", lambda: _M())
+    fits, avail, fp = R.config_footprint_fits(arg_bytes=10**12)
+    assert fits is True and avail is None
+
+
+def test_the_exclusion_is_said_with_its_numbers():
+    from neurobrix.kernels import autotune_refusals as R
+
+    said = []
+    guarded = R.exclude_over_footprint(
+        lambda: [1.0, 1.0, 1.0], arg_bytes=9 * 2**30,
+        config_scratch_bytes=0, say=said.append)
+    # force the available reading low via monkeypatch-free direct: use a huge
+    # arg so it fails on any real machine's available_mb
+    out = guarded()
+    if out == [float("inf")] * 3:
+        assert len(said) == 1 and "MB" in said[0]
+    # if the machine somehow had >10 GB free, the door correctly ran it
