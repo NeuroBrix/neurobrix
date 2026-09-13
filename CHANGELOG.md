@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- A certified kernel setting is served only to cards of the memory class it was proven on.
+  The proof now records the certifying card (index, name, memory); an entry can carry one
+  certification per memory class; a card of another class sweeps at runtime and the log says
+  why (`certified for 16 GB, this card is 32 GB, not served`). `neurobrix autotune certify
+  --only-missing` asks per memory class, and refuses at entry a card the hardware profile
+  does not describe.
+- `neurobrix autotune check --restamp` repairs a directory file whose format claim its
+  entries do not satisfy, entries untouched — a file's stamp now follows its entries when
+  it is written.
 - `neurobrix run --explain-plan` prints the placement decision and exits without loading anything: the strategy, why it won and every strategy it beat with their scores, the ones refused (and why), each component's device and memory split, the KV-cache budget.
 - The registry a machine talks to can be declared with `NEUROBRIX_REGISTRY`. The public
   name stays the default, because a user anywhere reaches the hub through it; a machine that

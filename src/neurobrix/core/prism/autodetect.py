@@ -313,11 +313,11 @@ def detect_hardware() -> Dict[str, Any]:
     # --- Profile ID ---
     if devices:
         model_short = _shorten_gpu_name(devices[0].get("model", "gpu"))
+        from neurobrix.core.prism.structure import single_card_profile_id, rig_profile_id
         if num_gpus == 1:
-            mem_gb = round(devices[0]["memory_mb"] / 1024)
-            profile_id = f"auto-{model_short}-{mem_gb}g"
+            profile_id = single_card_profile_id(model_short, devices[0]["memory_mb"])
         else:
-            profile_id = f"auto-{num_gpus}x{model_short}-{total_vram_gb}g"
+            profile_id = rig_profile_id(num_gpus, model_short, total_vram_gb)
     else:
         cpu_short = _shorten_cpu_name(cpu.get("model", "cpu"))
         profile_id = f"auto-{cpu_short}-cpu-{int(ram_gb)}g"

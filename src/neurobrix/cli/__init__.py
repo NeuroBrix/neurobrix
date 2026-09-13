@@ -218,6 +218,8 @@ For more information: https://neurobrix.es
                                 'and its timings are not comparable with on-protocol ones)')
     check_p = autotune_sub.add_parser('check', help='the directory gate, file by file')
     check_p.add_argument('--dir', default=None)
+    check_p.add_argument('--restamp', action='store_true',
+                         help='repair a file whose format claim its entries do not satisfy (entries untouched)')
     autotune_sub.add_parser('status', help='the profile in force and what the directory holds for it')
 
     drift_parser = subparsers.add_parser(
