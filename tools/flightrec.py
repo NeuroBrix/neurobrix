@@ -265,9 +265,16 @@ def cmd_run(args) -> int:
     tee = None
     if args.log:
         Path(args.log).parent.mkdir(parents=True, exist_ok=True)
+        # The child is TOLD it is recorded. A campaign cannot otherwise know,
+        # and on 2026-09-11 the MEET pass ran without the recorder: the 19:22
+        # mains loss left no in_flight record and therefore no resume block, on
+        # a machine whose own doctrine calls power cuts a known reality. The
+        # campaigns refuse to start without this variable, so the habit is a
+        # door (see `flightrec_refusal` in precision_zoo_campaign.py).
+        _env = {**os.environ, "NBX_FLIGHTREC": rec_id}
         child = subprocess.Popen(args.cmd, stdout=subprocess.PIPE,
                                  stderr=subprocess.STDOUT, bufsize=1,
-                                 text=True, errors="replace")
+                                 text=True, errors="replace", env=_env)
 
         def _tee(stream, dest):
             with open(dest, "a", buffering=1, errors="replace") as fh:
@@ -281,7 +288,7 @@ def cmd_run(args) -> int:
                                daemon=True)
         tee.start()
     else:
-        child = subprocess.Popen(args.cmd)
+        child = subprocess.Popen(args.cmd, env={**os.environ, "NBX_FLIGHTREC": rec_id})
     killed = []
 
     def forward(signum, _frame):

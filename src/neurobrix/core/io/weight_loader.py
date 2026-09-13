@@ -24,6 +24,7 @@ import zipfile
 import warnings
 from typing import Dict, List, Optional, Any, Tuple
 from pathlib import Path
+from typing import Set
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import torch
 
@@ -108,6 +109,12 @@ class WeightLoader:
         # Cache system for fast loading
         self.use_cache = use_cache and HAS_CACHE
         self._cache_path: Optional[Path] = None
+        # The keys to load, or None for every key in the shards. Set by the
+        # public load methods' `only=`; the same capability the triton loader
+        # has, so the plan (sized on the weights the graph consumes) and the
+        # load agree in BOTH engines (2026-09-13: four native MoE cells died
+        # loading 30-57 GB onto a card planned at 5-19 GB).
+        self._only: Optional[Set[str]] = None
 
         if self.use_cache:
             # Extract NBX to cache (fast if already cached)
@@ -366,9 +373,11 @@ class WeightLoader:
         component_name: str,
         device: str,
         dtype: Optional[torch.dtype] = None,
+        only: Optional[Set[str]] = None,
     ) -> Dict[str, torch.Tensor]:
         """
-        Load all weights for a component to a single device.
+        Load the weights of a component to a single device — every weight in
+        the shards, or, with `only`, exactly the named keys.
 
         ARCHITECTURE:
         - Weights stored as fp32 (preserves precision)
@@ -386,6 +395,7 @@ class WeightLoader:
         Raises:
             RuntimeError: If no weight files found
         """
+        self._only = only
         if not self._zip:
             self.open()
 
@@ -621,9 +631,10 @@ class WeightLoader:
         component_name: str,
         shard_map: Dict[str, str],
         dtype: Optional[torch.dtype] = None,
+        only: Optional[Set[str]] = None,
     ) -> Dict[str, torch.Tensor]:
         """
-        Load weights respecting Prism shard_map.
+        Load weights respecting Prism shard_map (`only`: exactly these keys).
 
         CRITICAL: Loads ONLY files present in shard_map (standard mode).
         PipelineExecutor passes partial shard_maps (one stage at a time).
@@ -650,6 +661,7 @@ class WeightLoader:
             RuntimeError: If shard_map is empty
             FileNotFoundError: If any shard file not found in container
         """
+        self._only = only
         if not self._zip:
             self.open()
 
@@ -879,7 +891,18 @@ class WeightLoader:
             raise ImportError("safetensors library is required")
 
         # Step 1: CPU load via mmap (single large read)
-        weights = safetensors_load_file(file_path, device="cpu")
+        only = getattr(self, "_only", None)
+        if only is None:
+            weights = safetensors_load_file(file_path, device="cpu")
+        else:
+            # Read the wanted keys and nothing else: a key the plan did not
+            # budget is never materialised, on the host or on the card.
+            from safetensors import safe_open
+            weights = {}
+            with safe_open(file_path, framework="pt", device="cpu") as f:
+                for k in f.keys():
+                    if k in only:
+                        weights[k] = f.get_tensor(k)
 
         # Step 2: CPU dtype conversion (AVX/SSE, fast for bf16→fp16)
         if dtype is not None:
@@ -973,6 +996,9 @@ class WeightLoader:
         """
         # Step 1: Load to CPU
         weights = torch.load(file_path, map_location="cpu", weights_only=True)
+        only = getattr(self, "_only", None)
+        if only is not None:
+            weights = {k: v for k, v in weights.items() if k in only}
 
         # Step 2: Convert dtype on CPU (fast - uses AVX/SSE vectorization)
         if dtype is not None:

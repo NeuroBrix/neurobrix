@@ -92,6 +92,18 @@ def _consumed_weight_bytes(comp, dtype_mult: float):
                 total += n * width
     if not seen:
         return None
+    # What the engines LOAD is the consumed set plus every non-block weight
+    # (the token embedding, the head, the norms a flow reads by name outside
+    # the graph — GraphExecutor.consumed_in_loader_space). Budget the same
+    # set, or the plan under-estimates in the direction the docstring calls
+    # unsafe (review of 2026-09-13).
+    if sizes is not None:
+        from neurobrix.triton.weight_loader import _BLOCK_RE   # torch-free
+        for name, meta in sizes.items():
+            if name in seen or _BLOCK_RE.search(name):
+                continue
+            seen.add(name)
+            total += int((meta or {}).get("size_bytes", 0))
     return int(total * dtype_mult)
 
 
@@ -305,6 +317,11 @@ class ExecutionPlan:
     # that decides without saying so is indistinguishable from one that
     # decides badly, so the reason travels with the plan and is printed.
     selection_reason: str = ""
+    # Every strategy that fitted, best first, as (name, score) — and the ones
+    # the KV-cache check then refused, as (name, score, why). `--explain-plan`
+    # prints them; a plan that names only its winner cannot be audited.
+    candidates: List[Tuple[str, float]] = field(default_factory=list)
+    rejected: List[Tuple[str, float, str]] = field(default_factory=list)
     kv_cache_plan: Optional[KVCachePlan] = None
     cpu_ram_mb: int = 0  # CPU RAM budget for offload strategies
     # Components the lifecycle strategy classified as TRANSIENT (used once per
@@ -877,6 +894,8 @@ class PrismSolver:
 
         # Sort candidates by score descending
         ranked = sorted(candidates, key=lambda x: -x[0])
+        self._candidates = [(name, float(score)) for score, name, _, _ in ranked]
+        self._rejected = []
 
         # Strategies ranked by score
 
@@ -1002,8 +1021,9 @@ class PrismSolver:
                 remaining = max(total_capacity - total_allocated, 0)
                 try:
                     kv_plan = self._compute_kv_cache_plan(container, target_dtype, remaining)
-                except RuntimeError:
-                    # Strategy rejected: KV cache doesn't fit
+                except RuntimeError as exc:
+                    # Strategy rejected: KV cache doesn't fit — said in the plan
+                    self._rejected.append((strat_name, float(score), f"KV cache does not fit: {exc}"))
                     continue
                 kv_cache_plan = kv_plan
 
@@ -1724,7 +1744,10 @@ class PrismSolver:
             #
             # `get_shard_sizes()` reports file sizes, and a shard holds every
             # parameter the export wrote, including any no op reads. The
-            # engine skips those (GraphExecutor.consumed_weight_names): on
+            # engines skip those — both of them since 2026-09-13; until then
+            # only the triton loader did, and a plan sized here was executed
+            # under another memory model by the compiled one
+            # (GraphExecutor.consumed_weight_names): on
             # DeepSeek-Coder-V2-Lite that is 11781 MB of 30638, MoE experts
             # the trace never routed to. Sizing by the file made Prism plan
             # against 30638 MB while execution needed 18857 — the announced
@@ -1734,7 +1757,8 @@ class PrismSolver:
             # Falls back to the file bytes when the graph cannot answer,
             # which over-estimates rather than under-estimates: the safe
             # direction, and it is the previous behaviour exactly.
-            weight_bytes = _consumed_weight_bytes(comp, dtype_mult)
+            weight_bytes = _consumed_weight_bytes(
+                self._graph_as_executed(comp, container), dtype_mult)
             if weight_bytes is None:
                 weight_bytes = sum(int(s * dtype_mult)
                                    for s in shard_sizes.get(comp.name, {}).values())
@@ -1894,6 +1918,44 @@ class PrismSolver:
             return None
         with open(p) as f:
             return json.load(f)
+
+    def _graph_as_executed(self, comp, container):
+        """The component as the engines will run it: with the declared-MoE
+        fusion applied to a ROUTED component (one holding a topk router)
+        when the package declares num_experts > 1 — the flows apply the
+        same pass at execute and the executor then loads what it adds.
+        Sized on the un-fused graph, a MoE LM under a non-llm family
+        budgeted only the experts the trace routed to while the fused
+        kernel reads them all — Qwen3-Omni's thinker at 5.2 GB planned,
+        57 GB executed (2026-09-13). Weight bytes only: the activation
+        profile and the layer partition still read the container's graph
+        (noted in the ledger). The copy is fused, never the container's
+        graph."""
+        graph = getattr(comp, "graph", None)
+        if not isinstance(graph, dict):
+            return comp
+        lm = self._read_lm_config(container) or {}
+        n = lm.get("num_experts")
+        if n is None or int(n) <= 1:
+            return comp
+        ops = (graph.get("ops") or {}).values()
+        if any(op.get("op_type") == "custom::moe_fused" for op in ops):
+            return comp
+        if not any(op.get("op_type") == "aten::topk" for op in ops):
+            return comp          # no router: the pass would be a no-op, spare the copy
+        import copy as _copy
+        from types import SimpleNamespace
+        from neurobrix.core.runtime.graph.moe_fusion import detect_and_fuse_moe
+        # norm_topk_prob does not change which weights the fused op reads;
+        # the sizing passes the declared value when present and the pass's
+        # default otherwise (the flows refuse a missing one at execute).
+        fused = detect_and_fuse_moe(_copy.deepcopy(graph), "declared",
+                                    norm_topk_prob=bool(lm.get("norm_topk_prob", True)),
+                                    declared=True)
+        return SimpleNamespace(
+            graph=fused,
+            weights_index=getattr(comp, "weights_index", None) or getattr(comp, "weight_index", None),
+            name=getattr(comp, "name", None))
 
     def _read_lm_config(self, container) -> Optional[Dict]:
         """Read lm_config from defaults.json. Returns None if not LLM."""
@@ -4433,6 +4495,8 @@ class PrismSolver:
             component_memory=comp_mem,
             loading_mode=loading_mode,
             selection_reason=getattr(self, "_selection_reason", ""),
+            candidates=list(getattr(self, "_candidates", [])),
+            rejected=list(getattr(self, "_rejected", [])),
             cpu_ram_mb=profile.cpu.ram_mb if profile.cpu else 0,
         )
 
@@ -4546,3 +4610,47 @@ class PrismImportPlanner:
 def solve(container: "NBXContainer", profile: PrismProfile, input_config: Optional[InputConfig] = None) -> ExecutionPlan:
     """Convenience wrapper for PrismSolver.solve()"""
     return PrismSolver().solve(container, profile, input_config)
+
+
+def explain_plan(plan: "ExecutionPlan") -> str:
+    """The placement plan as a user reads it: what was chosen, why, what it beat,
+    what was refused, and where every component lands with its memory.
+
+    Asked for by an external evaluator (2026-09-12): a strategy name alone does
+    not say whether the engine decided well. Everything here is read from the
+    plan — nothing is recomputed, so what is printed is what will run.
+    """
+    lines = [f"strategy        {plan.strategy}   (loading: {plan.loading_mode}, dtype: {plan.target_dtype})"]
+    lines.append(f"why             {plan.selection_reason or 'no reason recorded — the solver did not score this plan'}")
+    if plan.candidates:
+        lines.append("candidates      " + "  ".join(f"{n}={sc:.0f}" for n, sc in plan.candidates)
+                     + "   (every strategy that fitted, best first, by estimated throughput)")
+    else:
+        lines.append("candidates      none recorded")
+    for name, sc, why in plan.rejected:
+        lines.append(f"refused         {name} (scored {sc:.0f}): {why}")
+    lines.append(f"planned memory  {plan.total_memory_mb:.0f} MB on the cards"
+                 + (f", {plan.cpu_ram_mb} MB of host RAM budget" if plan.cpu_ram_mb else ""))
+    for name, alloc in plan.components.items():
+        mem = plan.component_memory.get(name)
+        where = ", ".join(alloc.devices) if getattr(alloc, "devices", None) else str(alloc.device)
+        detail = ""
+        if mem is not None:
+            detail = (f"  weights {mem.weight_bytes / 2**20:.0f} MB + activations {mem.activation_bytes / 2**20:.0f} MB"
+                      f" + overhead {mem.overhead_bytes / 2**20:.0f} MB"
+                      + (f"  (peak at {mem.peak_op_uid})" if mem.peak_op_uid else "")
+                      + ("" if mem.activation_profiled else "  [activations estimated, not profiled]"))
+        shard = "  sharded" if getattr(alloc, "sharded", False) else ""
+        lines.append(f"  {name:<20} -> {where}{shard}{detail}")
+    if plan.kv_cache_plan is not None:
+        kv = plan.kv_cache_plan
+        lines.append(f"kv cache        up to {kv.max_cache_len} tokens, {kv.memory_bytes / 2**20:.0f} MB, {kv.dtype}")
+    if plan.runtime_op_tiling:
+        lines.append("op-level tiling " + ", ".join(sorted(plan.runtime_op_tiling)))
+    for name, spec in (plan.component_tiling or {}).items():
+        short = {k: v for k, v in spec.items() if not isinstance(v, (dict, list))} if isinstance(spec, dict) else spec
+        lines.append(f"component tiling {name}: {short}")
+    if not plan.runtime_op_tiling and not plan.component_tiling:
+        lines.append("tiling          none planned")
+    return "\n".join(lines)
+

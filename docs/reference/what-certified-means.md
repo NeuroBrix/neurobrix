@@ -67,8 +67,58 @@ card whose settings nobody has certified, is a **plausible mechanism** for that.
 
 **It is not proved and must not be reported as proved.** It has not been
 reproduced; that hardware is not here. What is established is the structural
-gap — the screen consults no oracle — and that the gap is widest exactly where
+gap — the screen consulted no oracle — and that the gap is widest exactly where
 that report comes from. Anyone writing about it says both halves or neither.
+
+**What changed on 2026-09-13, and what did not.** The live screen now consults
+a float64 reference — the GEMM class from the other machine's provider, the
+convolution family from this one's — and a configuration the reference
+contradicts is refused before it is timed, whatever the vote says (a wrong
+majority is printed as a FINDING). That is the production wiring against the
+mechanism above: a wrong kernel can no longer be seated by a unanimous vote on
+a key the oracle reaches. Two limits stay measured and written: the screen
+looks only at keys whose arguments fit the profile's `autotune_screen_max_bytes`
+(on Volta 32 MiB — nine of ten `real-esrgan-x4` conv keys are over it and are
+seated UNSCREENED, announced and recorded so), and the sm_86 report itself is
+still unreproduced, because that hardware is still not here. The cell that
+would close it is a greedy decode on an sm_86 card with the screen on, tokens
+compared against compiled mode; it is owed to whoever has the card.
+
+## The two numbers that prove it, measured on the same day
+
+This was doctrine before it was evidence. On 2026-09-11 it became evidence, and
+the two halves came from two machines at once.
+
+**On `nvidia/volta`, the oracle refused nothing.** A certification pass ran every
+candidate on every uncertified shape against the fp64 oracle: **535 shapes, 17
+candidates each, 0 configurations excluded.** The consensus vote and the oracle
+never once disagreed. On the one target this project has certified, the screen
+was right every time.
+
+**On Metal, the oracle refused four shapes out of four.** The same instrument,
+the same tolerance, on `addmm` — every one of them wrong, and wrong by a factor
+of about **one billion**, from a defect upstream of the kernel.
+
+    nvidia/volta    0 of 535 shapes refused by the oracle
+    metal           4 of 4 shapes refused by the oracle
+
+Put side by side, those two lines are the whole argument of this page, and they
+say exactly what it says: **the gap is widest where nobody has looked.** Volta is
+the target with a certified directory, and there the vote had nothing to catch.
+Metal is a target being brought up, and there the vote would have seated an
+answer wrong by nine orders of magnitude — silently, because a vote consults no
+oracle and unanimity passes everything.
+
+**Nobody can argue the oracle is a luxury after this.** It cost 56 minutes on
+Volta and found nothing; on Metal it was the only thing standing between a
+bring-up and a number that is not merely imprecise but meaningless. An
+instrument that finds nothing on a healthy target and everything on a sick one
+is not overhead. It is the definition of a working instrument.
+
+And it settles which of the two results is the surprising one. Zero exclusions
+on Volta is not a non-event to be mentioned in passing — it is the control that
+makes the Metal four legible. Without it, four refusals could be the oracle
+being too strict; with it, they are four real defects.
 
 ## Consequences that follow immediately
 
@@ -92,3 +142,82 @@ that report comes from. Anyone writing about it says both halves or neither.
   reference per key, which costs a card; the certification runner is its first
   client. Until a provider is installed on a target, that target still runs on
   a consensus, and this page still describes it as it is.
+
+---
+
+## What the directory BUYS, and the law that predicts it (measured 2026-09-12)
+
+The preceding sections are about correctness. This one is about cost, and it is
+here because the two get confused: the directory's reason to exist is the proof,
+but people ask what it saves, and the honest answer has a shape worth stating.
+
+**The saving is not a function of the sweeping machinery. It is a function of how
+many distinct kernel shapes a request meets per second of the time it runs.**
+
+Measured over eleven paired cells — cold, three repetitions, one lever
+(`NBX_AUTOTUNE_CERTIFIED` on/off), a frozen tree, every card at 1290/877 MHz.
+Sorted by sweep-cost over base-time, the distribution is **bimodal with an empty
+interval**:
+
+| regime | cells | cost/base | sweep cost |
+|---|---:|---|---|
+| sweep-dominated | 5 | 4.32× – 14.38× | 127 s – 2 924 s |
+| sweep-negligible | 6 | 0.01× – 1.30× | 26 s – 403 s |
+
+**Nothing falls between 1.30× and 4.32×.** A median over the eleven reads 1.14×
+and describes no model in the upper group, understating every one of them by an
+order of magnitude — so this page reports the two regimes and their boundary, and
+never a median. A distribution with a hole in it does not have a middle.
+
+**Neither obvious explanation survives the data.** The key count has members on
+both sides (37 keys at 4.32×, 33 keys at 0.73×). So does the base time (35 s at
+1.30×, 3 468 s at 0.01×). Their **ratio** does not: distinct shapes met per second
+of base run is 1.26–2.78 in the upper regime and 0.00–0.25 in the lower — the same
+partition, with the same empty gap. And the **per-shape sweep cost is flat across
+both regimes**, about 3–12 s a shape, which is what rules the machinery out: the
+sweep costs the same everywhere; what differs is how many sweeps a request buys
+per second it runs.
+
+So the rule predicts before measuring:
+
+> **A short run meeting many distinct shapes pays the sweep many times over. A
+> long run meeting a few dozen pays it once and amortises it.**
+
+Multimodal and MoE text models sit in the first regime; diffusion and video in the
+second. A model's family is a weak proxy; its shape density is the thing.
+
+**Scope, and it binds every number above.** These are measurements of ONE rack, at
+ONE clock, cold, against a frozen tree. A machine whose replay cache is already
+warm pays a different price, and a card whose shapes were never certified pays all
+of it. The table with its full per-model rows and its caveats lives with the
+campaign, not here.
+
+## And the saving that is not time: a timeout becomes a verdict
+
+Measured on the 2026-09-11 catalogue pass, and it is the reason this page's cost
+section exists at all.
+
+Nine of forty-seven rows were recorded as failures. **Three of them were runs the
+harness killed at its own clock**, all three at exactly 2700.3 s. Of the 148
+minutes the nine "failures" consumed, **135 went to those three, and bought
+nothing** — no output, no diagnosis, no verdict. The six real defects cost **13
+minutes between them**, and every one of them failed in under ninety seconds.
+
+**The engine says no quickly. It is the clock that is expensive.**
+
+And one of the three closes the loop back onto this page. `Allegro` spent its
+entire forty-five minutes **sweeping uncertified shapes at runtime** and never
+reached denoise step 1 — its last log line is an `addmm` sweep at M=158 400.
+That is precisely the expenditure a certified entry removes: served without a
+sweep, without a screen and without an oracle.
+
+So the directory's value is not only that a certified run is faster. It is that
+**an uncertified run can spend its whole budget before reaching the thing being
+tested, and come back with a timeout where a verdict was expected.** Certifying
+the shapes a model meets does not shave time off an answer; it converts a
+non-answer into one.
+
+That is also why the sweep-cost table above must never be read as a speed
+feature. The ratio it reports is the fraction of a run's budget that goes to
+finding kernels rather than to running the model — and when that fraction
+reaches 1, the run returns nothing at all.

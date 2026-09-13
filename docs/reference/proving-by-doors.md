@@ -125,3 +125,74 @@ failing on it — the other half of this repository's discipline, and the reason
 `cell 6` of the fault-channel proof runs the fault rather than forbidding it.
 
 Doors for what must not happen. Injections for what must.
+
+## Writing and repointing are two acts, and the check goes between them
+
+A door refuses at entry. There is a second shape that saved this project on
+2026-09-12 and that had never been named: **when an act replaces something that
+works, write the replacement somewhere else, verify it, and only then repoint.**
+
+An incomplete container — a video model built without its backbone because the
+snapshot's weights had been purged — was being uploaded onto a working hub slug.
+The hub was not harmed, and not because anyone checked in time. `replace` writes
+to a distinct storage key, verifies the checksum, and repoints the record only
+after; a mismatch rolls the upload back and leaves the previous artifact serving.
+The upload was stopped at 0% of 6.73 GB and there was nothing to undo.
+
+The same command's LOCAL half had the opposite shape. `forge local --overwrite`
+removed the installed container and then extracted into the same path, so the
+complete local container was gone before anything could object — and an
+extraction that stops midway (a truncated archive, an NFS stall, a mains cut on a
+rack with no UPS) leaves a partial installation in the canonical path. A partial
+installation looks installed.
+
+**What protected us was not the care of whoever ran the command. It was that the
+write and the repoint were two acts with a check between them.** That is a
+property of the design, available on every run, to everyone, including the person
+who is tired. Care is not.
+
+How to recognise the missing form: look for `rmtree`, truncate, or an in-place
+overwrite of a path that something else reads by name. The three questions are —
+what is readable at that path while the write is in progress; what is readable if
+the write stops halfway; and what compares the new thing against the OLD thing's
+declaration rather than against itself. A tree compared with itself agrees with
+itself.
+
+Shipped as `forge.verify_extraction` plus a staging tree and an atomic rename.
+Seen both ways before it was trusted: a clean install repointed and left no
+staging tree, and an archive whose manifest declared a component the archive did
+not contain was refused with the live installation unchanged — same mtime, same
+components.
+
+
+## A wait condition that lists process names expires the day you write a tool
+
+A timed bench must run on a quiet host — this project has measured what happens
+otherwise, and the bench's own script says so. On 2026-09-12 one started anyway,
+in the middle of an NFS export that had not completed a 100 MB read in fifteen
+minutes, and began timing five paired couples whose every weight comes from that
+export.
+
+Its wait condition was three process names. The queue that had replaced those
+jobs was a new script with a new name, so the condition looked at a machine with
+none of its three and concluded quiet.
+
+**Enumerating what must not be running is a guess about the future.** It is right
+until someone writes a tool, and it fails SILENTLY and in the direction that
+costs: it starts work rather than blocking it, and the work it starts produces
+numbers that look like every other number.
+
+Two forms that do not expire:
+
+* **Wait for the thing you actually depend on to say it is done** — the queue's
+  own end marker, not the absence of its parts.
+* **Measure the condition instead of inferring it.** `tools/export_quiet.py`
+  reads bytes off the export and refuses under a floor. Not `df`, which answers
+  from cached metadata while bulk I/O is dead, and not the load average, which
+  is a decaying mean that stayed above 30 for ten minutes after every cause had
+  been killed. Both of those were consulted on the day and both said the machine
+  was fine.
+
+The general form: **a precondition stated as a list is a precondition that only
+its author can maintain.** State it as a measurement of the thing itself, or as a
+signal the producer emits, and it survives the next tool.

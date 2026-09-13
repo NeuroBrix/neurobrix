@@ -7,7 +7,125 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `neurobrix run --explain-plan` prints the placement decision and exits without loading anything: the strategy, why it won and every strategy it beat with their scores, the ones refused (and why), each component's device and memory split, the KV-cache budget.
+- The registry a machine talks to can be declared with `NEUROBRIX_REGISTRY`. The public
+  name stays the default, because a user anywhere reaches the hub through it; a machine that
+  sits on the hub's own network points at its internal entry point and never leaves the
+  building to come back to a box three metres away. Measured need, not convenience: the
+  public name sits behind Cloudflare, whose shared addresses are subject to a court-ordered
+  block by Spanish operators during football matches, and for one evening every publish from
+  the hub's own rack failed certificate verification — correctly — against a blocking device.
+- A high-precision reference for the convolution family, closing the correctness screen's
+  only uncovered kernels. The screen picks a tuned configuration by asking candidates to
+  agree with each other, which cannot see a majority that is wrong in the same way; a
+  reference removes the question. Measured on this machine, the convolutions were the last
+  11.5% of tuned shapes deciding by vote alone. The reference is plain float64 arithmetic
+  sharing no implementation with what it checks, and it agrees with an independent
+  convolution to machine precision across nine geometries — strides, asymmetric padding,
+  dilation, grouped and depthwise, 1x1 and even kernels. Where it cannot read an operand
+  or the declared shapes contradict the arrays, it stays silent rather than answering.
+- A kernel configuration chosen without a correctness reference now says so, wherever it
+  is recorded. The engine still runs and the tuner still ranks by speed; what it can no
+  longer do is produce a record that reads like a validation. "This configuration was
+  validated" and "this configuration was the fastest among candidates nobody verified" are
+  different statements, and until now they were written the same way. An unverified choice
+  announces itself, carries its reason in the machine's local cache, and cannot reach the
+  certified directory, which is a separate path filled only by the certification command
+  and its own high-precision reference.
+- A request that supplies a conditioning image now sets the output resolution from that
+  image. Two decisions were being taken separately about one quantity: the image
+  processor keeps the source image's own size when a request names no resolution, while
+  the resolution cascade independently derived one from the extents the model was traced
+  at. A video model handed its own 448x448 image then ran its pipeline at 144x208 and
+  failed where the two met. The order is now explicit — an explicit height and width win,
+  then the container's own declared defaults, then the conditioning image, then the traced
+  extents, then the family constant: what the request says outranks what the build says,
+  and a stimulus chosen at trace time is the last thing that should decide what a user
+  gets.
+- Activation profiles state which request they describe. A peak in gigabytes reads like a
+  property of a model and is a property of a request, so every profile now carries the
+  binding it was computed under and the symbol values it used, and says so in its own
+  printed form. Asked for a profile without a request, the estimator binds to the extents
+  the model was traced at — the one configuration it is known to have been exercised at —
+  instead of silently applying a 1024x1024 batch-2 image request to a video model, where the
+  time axis took a spatial extent and every activation was mis-sized with nothing in the
+  output saying so.
+- A growth check that finds a shape rule which is right only where it was checked. Comparing
+  a model's cost at a request against its cost at the extents it was traced at gives a ratio,
+  and comparing that ratio against the one the extents justify separates a sound model from
+  one whose shape arithmetic compounds. On the video encoder that motivated it the cost grew
+  2237-fold for a request 13 times larger on one axis, against a tolerated bound of 338;
+  corrected, the same request costs a third of the traced configuration. The bound admits an
+  operation that grows with the square of its input, so a legitimate attention layer does not
+  trip it.
+- Autotune certification records the clock. A certification picks a configuration by timing
+  candidates, so the frequency the cards ran at is a condition of the result exactly as the
+  platform and hardware profile already recorded were. Every proof now carries the
+  application clock of each card, read once per run. Without it a proof cannot say what
+  regime produced its timings, and the question becomes unanswerable the moment the machine
+  reboots.
+- Autotune certification refuses to start off the measurement clock. A certification is a
+  measurement, so it takes a measurement's entry condition: if the machine declares a clock
+  protocol and any card diverges from it, the run refuses at entry, names every diverging
+  card with its own value beside the conforming ones, and prints the command that restores
+  them. It reads every card, because a heterogeneous rack returns to per-model factory
+  defaults after a reboot and half of it can sit at the protocol value by coincidence. The
+  protocol is discovered from the machine, never shipped, and a machine that declares none
+  is told so rather than passing quietly. `--allow-off-protocol-clock` measures anyway and
+  says so in the run's own output.
+
 ### Fixed
+- `--triton` runs of vision-language, audio-language and text-to-speech models, of int4
+  builds, and warm serving of the same, failed at weight load with "requires embed_tokens
+  weight" or a missing weight at the first matrix multiply. The loader had started loading
+  only the weights the graph reads, and the graph is not the only reader: the flow handler
+  reads the token embedding and the head by name, and an int4 build stores one weight as
+  three. Every weight outside a block is loaded again, an encoded weight is loaded through
+  the name its index says it encodes, and the saving on unrouted MoE experts stays.
+- Compiled (default-engine) runs of mixture-of-experts models — Qwen3-Omni, Qwen3-VL,
+  Qwen3-Coder 30B, DeepSeek-Coder-V2-Lite — were placed on one card sized for the weights
+  the graph reads, then loaded every weight in the container onto it and died out of
+  memory. The compiled loader now loads the set the placement is sized on, as the Triton
+  loader already did, and the placement counts the same set; the unrouted experts stay on disk.
+- A mixture-of-experts language model packaged under a non-LLM family (Ming-Lite-Omni,
+  Qwen3-Omni, Qwen3-VL) had its experts fused only when the run reached the model, after
+  its weights were loaded from the unfused graph, so the experts the trace never routed to
+  were missing and the first MoE block met a null weight under `--triton`. The fusion now
+  loads the weights it adds, in both engines, and the placement is sized on the fused graph.
+- On a machine with no visible GPU (or `CUDA_VISIBLE_DEVICES=""`) `neurobrix upscale` and
+  `neurobrix run` planned a GPU from a profile detected earlier on the same machine and died
+  with "No CUDA GPUs are available". An empty visible set is now its own environment with its
+  own CPU profile, and never rewrites the shared one.
+- The autotune correctness screen now looks at every shape (it de-duplicated by the launch's constexpr arguments, so ten convolution shapes sharing them were screened once), records what adjudicated a seat (`screened: true` with the oracle's name) as well as what did not, and the convolution family's float64 reference is consulted by the live screen. The swap doors reason about host memory only on unified-memory devices.
+- `neurobrix import` resumes an interrupted download instead of losing it: bytes go to a `.part` file beside the destination, a re-run continues from where the stream broke (HTTP Range), and the final `.nbx` name appears only once the announced size is reached.
+- The output resolution is read from the container wherever the container declares it.
+  Deriving it from a traced latent input refused two containers that state everything
+  needed: one because its flow is named `static_graph` rather than `iterative_process`,
+  though the shape test in front of which that gate sat is the narrower discriminator; the
+  other because its backbone consumes a flattened latent while its VAE declares the same
+  latent in full. Both now resolve, and containers without a spatial latent — text, audio,
+  vision-language — still resolve to nothing.
+- The activation profiler's positional symbol map no longer answers to a name that reads
+  like the real one. `InputConfig.to_symbol_map()` returned a GUESS — batch, latent height,
+  latent width by position — which is wrong for any container that declares what its
+  symbols mean, and a video container declaring a time axis was silently bound to a spatial
+  extent. It is now `positional_symbol_map()`, the old name refuses and says where to go,
+  and `build_symbol_map()` — which lays the container's declared names over that base — is
+  the single caller. No estimate changes: the engine already used the correct path.
+- `autotune certify` no longer reports a failure for a census key the engine cannot ask
+  for. The shape census accumulates across engine versions, so a key recorded before a
+  wrapper changed how it computes its autotune key can never be presented again; refusing
+  it is the correct outcome, not a fault. Such keys are now counted and named separately
+  as unreachable, said in clear at the end of the run, and kept out of the exit code — a
+  status that reported a break on every run of a healthy directory would stop being read.
+- The VAE spatial scale is read from the container under both the names containers use
+  for it. Image containers declare `vae_scale_factor` and video ones
+  `spatial_compression_ratio` — the same quantity, two vendor spellings — and only the
+  first was read, so a container declaring the second fell through to a derivation that
+  infers the scale from the channel count. The inferred value agrees for every currently
+  published container, so no output changes; what it removes is the path by which a
+  container declaring a scale of 16 or 32 would have been mis-scaled with nothing saying so.
 - An import that cannot fit on the disk refuses before it starts, saying how much it needs
   and how much there is. The peak is about twice the model — the archive is unpacked before
   it is deleted — and asking not to keep the archive does not lower it.

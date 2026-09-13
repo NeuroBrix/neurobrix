@@ -129,11 +129,23 @@ def _baddbmm(named: Dict[str, Any]) -> Optional[np.ndarray]:
 ORACLES = {
     "matmul_kernel": (_mm, "c_ptr"),
     "addmm_kernel": (_mm, "c_ptr"),
-    "baddbmm_kernel": (_baddbmm, "out_ptr"),
-}
+    "baddbmm_kernel": (_baddbmm, "out_ptr"),}
+
+# The convolution family — the 11.5 % the table above did not cover (owed-proofs
+# item 3: 822 of 7 158 keys on this rack). Its reference lives in its own module
+# with its own tests against torch at 1e-12; until 2026-09-13 that module's
+# table was never joined to THIS one, so the live screen kept announcing "no
+# oracle for this kernel" on every conv key while the docstring next door said
+# the family was covered. Register entry 46.
+from neurobrix.kernels.oracles import conv2d_fp64 as _conv  # noqa: E402
+
+ORACLES.update({
+    name: ((lambda named, _fn=fn: _fn(named, _to_f64)), out_name)
+    for name, (fn, out_name) in _conv.ORACLES.items()
+})
 
 
-def provider(tuner, key, buffers) -> Optional[List[bytes]]:
+def provider(tuner, key, buffers, meta=None) -> Optional[List[bytes]]:
     """The correct contents of every screened buffer, or None.
 
     The screen snapshots EVERY writable buffer, not just the output — four of
@@ -148,7 +160,9 @@ def provider(tuner, key, buffers) -> Optional[List[bytes]]:
         announce_no_oracle(name or str(tuner), key)
         return None
     fn, out_name = entry
-    named = dict(getattr(tuner, "nargs", None) or {})
+    # Positional arguments from the autotuner, constexpr arguments from the
+    # launch kwargs: an oracle that needs `kernel_height` finds it only here.
+    named = {**dict(getattr(tuner, "nargs", None) or {}), **dict(meta or {})}
     if not named:
         return None
     out_tensor = named.get(out_name)

@@ -56,12 +56,23 @@ def test_unified_is_read_from_the_device_not_the_brand():
     assert said_no.has_unified_memory is False
 
 
-def test_the_live_profile_is_unified_and_a_discrete_one_is_not():
-    """The two real profiles, so this cannot pass on constructed specs alone."""
-    apple = load_profile("default")
-    assert apple.devices[0].has_unified_memory is True, (
-        "this machine's profile must read as unified; if it does not, the "
-        "zero3 accounting is back to freeing memory it cannot free")
+def test_the_live_profile_answers_from_its_own_device_and_a_discrete_one_is_not():
+    """The two real profiles, so this cannot pass on constructed specs alone.
+
+    Written first as "this machine's profile must read as unified", which was
+    true on the Mac that wrote it and false on the Dell that merged it — a test
+    that asserts what one machine is, run on another, is the semantic conflict
+    no git conflict signals (2026-09-13). So the live profile is asked what ITS
+    device declares, and the assertion is that the predicate agrees with the
+    device — on either kind of machine.
+    """
+    live = load_profile("default")
+    dev = live.devices[0]
+    assert dev.has_unified_memory == _device_is_unified(f"zero3:x:{dev.index}", live), (
+        "the budget's predicate must read the same answer as the device itself"
+    )
+    if getattr(dev, "unified_memory", None) is not None:
+        assert dev.has_unified_memory is bool(dev.unified_memory)
 
     a100 = load_profile("a100-80g")
     assert a100.devices[0].has_unified_memory is False
@@ -74,13 +85,14 @@ def test_zero3_offload_frees_memory_only_on_a_discrete_device():
     accounting is byte-unchanged by this, because the branch it guards is
     only ever taken where the device says it shares memory with the host.
     """
-    apple = load_profile("default")
+    unified = load_profile("default")
+    unified.devices[0].unified_memory = True          # a unified device, whatever this machine is
     a100 = load_profile("a100-80g")
 
-    assert _device_is_unified("zero3:mps:0", apple) is True
+    assert _device_is_unified("zero3:mps:0", unified) is True
     assert _device_is_unified("zero3:cuda:0", a100) is False
 
     # A device index the profile does not have is not a licence to guess.
     assert _device_is_unified("zero3:cuda:7", a100) is False
-    assert _device_is_unified("not a device", apple) is False
+    assert _device_is_unified("not a device", unified) is False
     assert _device_is_unified("zero3:mps:0", None) is False

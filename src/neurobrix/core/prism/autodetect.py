@@ -180,7 +180,12 @@ def _visible_set_tag() -> Optional[str]:
         return None
     models = [str(d.get("model")) for d in devices]
     if not models:
-        return None
+        # An EMPTY visible set is an environment of its own — a GPU-less
+        # host, or `CUDA_VISIBLE_DEVICES=""` — not a detection failure.
+        # Read as None it served the shared default.yml, which on a rack
+        # names the cards this process cannot see (2026-09-13, `upscale`
+        # planned cuda:0 under an empty set and died at the first constant).
+        return "cpu"
     import hashlib
     return hashlib.sha1("|".join(models).encode()).hexdigest()[:8]
 
@@ -215,7 +220,9 @@ def get_or_create_default_profile() -> str:
     is a property of the ENVIRONMENT (`CUDA_VISIBLE_DEVICES`), not of the
     machine, and concurrent processes pinned to different cards must each
     read their own. `default.yml` is refreshed alongside as the human-facing
-    latest detection. Detection unavailable → the shared `default.yml`.
+    latest detection of the MACHINE — except by a process that sees no card
+    (tag `cpu`), which describes its own environment and reads or creates
+    `default-cpu.yml` only. Detection unavailable → the shared `default.yml`.
 
     Returns:
         The hardware_id string (usable with load_profile(id)).
@@ -237,7 +244,14 @@ def get_or_create_default_profile() -> str:
     print("   [Auto-detect] No --hardware specified, detecting system hardware...")
     profile_data = detect_hardware()
     _write_profile_atomically(path, profile_data)
-    _write_profile_atomically(DEFAULT_PROFILE_PATH, profile_data)
+    if tag != "cpu":
+        # The shared default.yml is the machine's latest detection. A
+        # process that sees no card describes its own environment, not
+        # the machine: written here it turned a four-card rack into a CPU
+        # host for every reader of the shared file (2026-09-13, the
+        # GPU-less regression cell, then two unit tests reading
+        # `devices[0]` of an empty list).
+        _write_profile_atomically(DEFAULT_PROFILE_PATH, profile_data)
     print(f"   [Auto-detect] Created profile: {path}")
     return hardware_id
 

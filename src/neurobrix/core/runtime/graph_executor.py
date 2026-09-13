@@ -402,6 +402,12 @@ class GraphExecutor:
                 norm_topk_prob=norm_topk_prob,
                 declared=True,
             )
+            # A rewrite that adds readers loads what it now reads. The
+            # weights were chosen from the un-fused graph, in which no op
+            # consumes the experts the trace never routed to; the fused
+            # kernel reads them all (2026-09-13, Ming-Lite-Omni triton:
+            # `moe_fused::block.0` met None — register 54).
+            self._load_what_the_rewrite_added()
 
         # Patch fused op attributes in the DAG (fusion already ran with default=True)
         #
@@ -415,6 +421,33 @@ class GraphExecutor:
             for _uid, op in self._dag.get("ops", {}).items():
                 if op.get("op_type") == "custom::moe_fused":
                     op.setdefault("attributes", {})["norm_topk_prob"] = norm_topk_prob
+
+    def _load_what_the_rewrite_added(self) -> None:
+        """After a DAG rewrite that adds consumers (the declared MoE fusion),
+        load the weights the graph now reads and did not before, through the
+        engine's own loader with the same filter. Nothing to do before the
+        first load (the load then reads the rewritten graph) or when the load
+        was unfiltered."""
+        args = getattr(self, "_load_args", None)
+        weights = getattr(self, "_weights", None)
+        if not args or not weights:
+            return
+        wanted = self._consumed_in_loader_space(
+            self.consumed_weight_names(), args["nbx_path"], args["component"])
+        if wanted is None:
+            return
+        missing = set(wanted) - set(weights.keys())
+        if not missing:
+            return
+        if self.mode in ("triton", "triton_sequential"):
+            self._load_weights_triton(args["nbx_path"], args["component"],
+                                      args["shard_map"], only=missing)
+        else:
+            self._load_weights_native(args["nbx_path"], args["component"],
+                                      args["shard_map"], only=missing)
+        print(f"   [{'Triton' if self.mode.startswith('triton') else 'Compiled'}] "
+              f"'{args['component']}': {len(missing)} more weights loaded — the "
+              f"declared MoE fusion reads them", flush=True)
 
     def set_runtime_resolution(self, height: int, width: int) -> None:
         """
@@ -1519,9 +1552,11 @@ class GraphExecutor:
     def consumed_weight_names(self) -> Optional[set]:
         """The weight names some op in THIS graph actually reads.
 
-        A parameter that no op consumes cannot be read during execution — the
-        engine replays `execution_order` and nothing else — so loading it is
-        pure cost. Measured 2026-09-09 on DeepSeek-Coder-V2-Lite: 2169 of
+        A BLOCK parameter that no op consumes cannot be read during execution
+        — the engine replays `execution_order` and nothing else — so loading
+        it is pure cost. (A non-block one can: the flow handler reads the
+        token embedding, the head and the norms by name, outside the graph;
+        `consumed_in_loader_space` keeps those whatever this set says.) Measured 2026-09-09 on DeepSeek-Coder-V2-Lite: 2169 of
         5371 parameters have no consumer, **11781 MB of 30638**, 38% of the
         component. They are MoE experts the trace never routed to; the graph
         holds a `mm` per expert it did route to, and none for the rest.
@@ -1567,6 +1602,116 @@ class GraphExecutor:
             return None
         return consumed
 
+    @staticmethod
+    def consumed_in_loader_space(consumed, index_keys, graph_params, encodes=None):
+        """The loader keys to load for a graph that consumes `consumed`.
+
+        Three readers of the weight dict, three rules, all in the LOADER's
+        key space (the index's names, not the graph's):
+
+        * the graph — a loader key is wanted when the reconciliation the
+          executor runs after loading (`bind_weight_keys`, the same
+          function) binds it to a consumed name. `graph_params` is every
+          parameter the graph names, consumed or not, because the
+          reconcile's unique-suffix index is built over all of them;
+        * the flow handler — it reads by name what the graph never
+          consumes: the token embedding of a language model whose graph
+          takes `inputs_embeds`, the head it projects logits with, a norm,
+          an RNNT decoder's LSTM leaves. Every non-block key is loaded,
+          whatever the graph says (blunt on purpose: a layer-streaming
+          segment reloads the embedding and head with every segment). What the filter saves (MoE experts the
+          trace never routed to) lives inside blocks; what the flows read
+          today carries no block segment — OBSERVED on the flows in the
+          tree on 2026-09-13, not guaranteed by any gate: a flow that read
+          a block weight by name outside the graph would meet None at its
+          first read, loudly (ten triton cells of the suite that day:
+          "requires embed_tokens weight");
+        * the storage encoding — a consumed `X.weight` an int4 build stores
+          as a triplet of keys the graph never names. The index says which
+          dense name each encoded key `encodes`; `encodes` maps loader key
+          to that name and the triplet is wanted through it (same day,
+          `aten.mm::0` met None on the int4 builds).
+
+        The reconcile after the load runs the same function over the
+        loaded subset, in loader order. The property the tests pin is that
+        every consumed name binds after the filtered load on the fixtures
+        they carry; it is not proven for every index shape. Where the
+        binding is ambiguous the safe direction is to load."""
+        if consumed is None:
+            return None
+        from neurobrix.triton.weight_loader import _BLOCK_RE   # torch-free
+        encodes = encodes or {}
+        probe = {wk: encodes.get(wk, wk) for wk in index_keys}
+        probed = list(dict.fromkeys(probe.values()))          # index order, once
+        binding = GraphExecutor.bind_weight_keys(set(graph_params), probed)
+        if binding is None:
+            # Every probed key is already a graph name, or no pass bound
+            # anything: the reconcile leaves the dict alone, the binding is
+            # the identity.
+            binding = {k: k for k in probed}
+        consumed_keys = {wk for name, wk in binding.items() if name in consumed}
+        wanted = set()
+        for wk in index_keys:
+            if not _BLOCK_RE.search(wk):
+                wanted.add(wk)
+            elif probe[wk] in consumed_keys:
+                wanted.add(wk)
+        return wanted
+
+    @staticmethod
+    def binding_of_the_loaded(consumed, index_keys, graph_params, encodes=None):
+        """The binding the post-load reconcile must apply: name → loaded key,
+        computed over the WHOLE index before the load. Recomputed over the
+        filtered dict it would fail pass 0's coverage test (the unconsumed
+        block params are gone on purpose) and fall to the suffix heuristics
+        that mis-bind repeated layers — review of 2026-09-13. Keys the filter
+        keeps but no pass binds stay under their own name."""
+        encodes = encodes or {}
+        probe = {wk: encodes.get(wk, wk) for wk in index_keys}
+        probed = list(dict.fromkeys(probe.values()))
+        binding = GraphExecutor.bind_weight_keys(set(graph_params), probed) \
+            or {k: k for k in probed}
+        wanted = GraphExecutor.consumed_in_loader_space(consumed, index_keys, graph_params, encodes)
+        loaded = {probe[wk] for wk in wanted}
+        out = {name: wk for name, wk in binding.items() if wk in loaded}
+        for wk in loaded:
+            if wk not in out.values():
+                out[wk] = wk
+        return out
+
+    def _consumed_in_loader_space(self, consumed, nbx_path, component):
+        if consumed is None:
+            return None
+        import json as _json
+        import os as _os
+        index = _os.path.join(str(nbx_path), "components", component, "weights_index.json")
+        try:
+            with open(index) as f:
+                tensors = _json.load(f).get("tensors") or {}
+        except (OSError, ValueError):
+            # No index to read (an archive path, or a container without one):
+            # the graph's names cannot be joined to the loader's, and handing
+            # the graph-space set to a loader that filters by exact membership
+            # is the Wan2.2 failure again. Load everything — the safe direction.
+            self._pending_weight_binding = None
+            return None
+        encodes = {k: v["encodes"] for k, v in tensors.items()
+                   if isinstance(v, dict) and v.get("encodes")}
+        keys = list(tensors.keys()); params = self._graph_param_names()
+        self._pending_weight_binding = self.binding_of_the_loaded(consumed, keys, params, encodes)
+        return self.consumed_in_loader_space(consumed, keys, params, encodes)
+
+    def _graph_param_names(self) -> set:
+        """Every parameter and buffer the graph names — the set the
+        reconciliation binds loader keys against."""
+        names = set()
+        for tid in (self._dag or {}).get("tensors", {}):
+            if tid.startswith("param::"):
+                names.add(tid[7:])
+            elif tid.startswith("buffer::"):
+                names.add(tid[8:])
+        return names
+
     def load_weights(
         self,
         nbx_path: str,
@@ -1589,6 +1734,8 @@ class GraphExecutor:
             print(f"[WEIGHTS_LOAD] component={component} mode={self.mode}",
                   flush=True)
             _tb_wl.print_stack()
+        self._load_args = {"nbx_path": nbx_path, "component": component,
+                           "shard_map": shard_map}
         if self.mode in ("triton", "triton_sequential"):
             self._load_weights_triton(nbx_path, component, shard_map)
         else:
@@ -1630,7 +1777,7 @@ class GraphExecutor:
         # the whole component a second time.
         self._weights_loaded = True
 
-    def _load_weights_native(self, nbx_path, component, shard_map):
+    def _load_weights_native(self, nbx_path, component, shard_map, only=None):
         """Load weights as torch.Tensor (native mode)."""
         # Capability gate (unsupported-path doctrine): encoded-weight
         # builds execute on the Triton engine only — the native path
@@ -1655,15 +1802,29 @@ class GraphExecutor:
         # a host placement, the plan's dtype on a card — so the engine's
         # compute dtype and its operands never disagree (see the function).
         torch_dtype = self._placement_torch_dtype()
+        # Load what the plan budgeted: the weights the graph or the flow reads,
+        # in the loader's key space — the same set, by the same function, as
+        # the triton path below. Prism sizes a component on this set, and a
+        # loader that read every key ran the plan under another memory model
+        # (2026-09-13, four native MoE cells: planned 5-19 GB, loaded 30-57).
+        _only = only if only is not None else self._consumed_in_loader_space(
+            self.consumed_weight_names(), nbx_path, component)
         with WeightLoader(nbx_path) as loader:
             if shard_map:
-                self._weights = loader.load_component_with_shard_map(
-                    component, shard_map, torch_dtype)
+                loaded = loader.load_component_with_shard_map(
+                    component, shard_map, torch_dtype, only=_only)
             else:
-                self._weights = loader.load_component(
-                    component, self.device, torch_dtype)
+                loaded = loader.load_component(
+                    component, self.device, torch_dtype, only=_only)
+        if only is not None:
+            self._weights.update(loaded)          # a rewrite added readers
+        else:
+            self._weights = loaded
+        if _only is not None:
+            print(f"   [Compiled] '{component}': loading {len(_only)} weights "
+                  f"the graph or the flow reads", flush=True)
 
-    def _load_weights_triton(self, nbx_path, component, shard_map):
+    def _load_weights_triton(self, nbx_path, component, shard_map, only=None):
         """Load weights as NBXTensor (triton mode). Zero torch."""
         from neurobrix.triton.weight_loader import load_component_weights
         from neurobrix.kernels.nbx_tensor import parse_dtype, DeviceAllocator
@@ -1699,12 +1860,27 @@ class GraphExecutor:
         # parameter no op consumes cannot be reached by execution, and on an
         # MoE build the untraced experts are a third of the component.
         _only = self.consumed_weight_names()
-        self._weights = load_component_weights(
+        # THE TWO KEY SPACES. `consumed_weight_names` speaks the GRAPH's names
+        # (`encoder.token_embed.weight`); the loader filters the INDEX's keys
+        # (`token_embed.weight`) and reconciles the two only after loading, by
+        # unique suffix. Filtered by exact membership before that reconcile,
+        # the one weight whose two names differ by a prefix was never loaded
+        # and its first consumer met None — Wan2.2's text encoder at
+        # aten.embedding::0, 2026-09-13, on a container whose compiled run
+        # rendered. So the set is expanded into the loader's space here with
+        # the reconcile's own rule before the loader sees it.
+        _only = only if only is not None else \
+            self._consumed_in_loader_space(_only, nbx_path, component)
+        loaded = load_component_weights(
             nbx_path, component, device_idx, compute_dtype,
             shard_map=shard_map, only=_only)
+        if only is not None:
+            self._weights.update(loaded)          # a rewrite added readers
+        else:
+            self._weights = loaded
         if _only is not None:
             print(f"   [Triton] '{component}': loading {len(_only)} weights "
-                  f"the graph consumes", flush=True)
+                  f"the graph or the flow reads", flush=True)
 
         # Weight-storage encoding: fold qweight/scales/qmins triplets
         # into QuantizedTensor handles under the graph keys (compute
@@ -1819,46 +1995,75 @@ class GraphExecutor:
         This method remaps self._weights keys to match graph param:: IDs.
         Called once per component load — zero overhead during execution.
 
-        Two-pass strategy:
-        1. Unique suffix matching (handles most keys)
-        2. Prefix transformation (handles ambiguous suffixes in multimodal models)
+        The binding itself is `bind_weight_keys`, a pure function of the two
+        key sets, so the consumed-weight filter can apply the SAME rule
+        before the load (register entries 48 and 50: a filter that joined
+        the two key spaces by a rule of its own dropped what the reconcile
+        would have bound).
         """
         if not self._dag or not self._weights:
             return
-
-        tensors = self._dag.get("tensors", {})
-        graph_params = set()
-        for tid in tensors:
-            if tid.startswith("param::"):
-                graph_params.add(tid[7:])
-            elif tid.startswith("buffer::"):
-                graph_params.add(tid[8:])
-
-        weight_keys = set(self._weights.keys())
-
-        # Fast path: all keys match directly — no reconciliation needed
-        if weight_keys <= graph_params:
+        pending = getattr(self, "_pending_weight_binding", None)
+        if pending:
+            # The load was filtered: apply the binding computed over the whole
+            # index before it (see binding_of_the_loaded). A key the binding
+            # does not name (a constant bound from the graph, a computed
+            # buffer) keeps its own name.
+            self._pending_weight_binding = None
+            new = {name: self._weights[wk] for name, wk in pending.items()
+                   if wk in self._weights}
+            for wk, t in self._weights.items():
+                if wk not in pending.values() and wk not in new:
+                    new[wk] = t
+            self._weights = new
             return
+        graph_params = self._graph_param_names()
+        weight_keys = list(self._weights.keys())
+        binding = self.bind_weight_keys(graph_params, weight_keys)
+        if binding is None:
+            return
+        self._weights = {name: self._weights[wk] for name, wk in binding.items()}
 
-        # Pass 0: EXACT direct + prefix-strip binding. Every graph param is bound
-        # to the weight key that EXACTLY equals it (direct), or to the unique
-        # weight key whose trailing dotted-suffix exactly equals it (prefix
-        # strip — e.g. graph `decoder.X` vs weight `model.acoustic_tok.decoder.X`).
-        # Exact match cannot mis-assign the way the ambiguous-suffix index below
-        # can: for a component with many structurally-repeated layers (VibeVoice
+    @staticmethod
+    def bind_weight_keys(graph_params, weight_keys):
+        """Map every name the weight dict will hold to the loader key that
+        fills it, by the reconciliation's three passes. One loader key may
+        fill several names (pass 0: the exact match of one graph name and
+        the prefix-strip match of another). None means the dict is left as
+        it is: every key is already a graph name, or no pass bound anything.
+
+        Pass 0: exact match, else the unique loader key whose trailing dotted
+        suffix equals the graph name (prefix strip) — accepted only when it
+        covers EVERY graph param, and then loader keys bound to no graph
+        name are DROPPED. Otherwise pass 1: a loader key one of whose
+        suffixes is a suffix unique among the graph params; pass 2: prefix
+        transformations for the ambiguous rest (A.B.rest → B.A.rest,
+        model.A.rest, model.wk, strip A); a key neither pass binds keeps its
+        own name. Keys are walked in the order given (the loader's), and a
+        later key bound to the same name wins — the old body walked a set,
+        so the winner of such a collision is now stable, and may differ
+        from what a given old run picked."""
+        graph_params = set(graph_params)
+        weight_keys = list(weight_keys)
+        key_set = set(weight_keys)
+        if key_set <= graph_params:
+            return None
+
+        # Pass 0: EXACT direct + prefix-strip binding. Exact match cannot
+        # mis-assign the way the ambiguous-suffix index below can: for a
+        # component with many structurally-repeated layers (VibeVoice
         # acoustic/semantic tokenizers — upsample_layers.{i}.0.conv.conv.weight
         # collide on the trailing suffix), the legacy suffix index drops them as
         # ambiguous and the Pass-2 prefix heuristic mis-binds conv::0 to a convtr
-        # weight. We also tolerate EXTRA weight keys (the acoustic tokenizer ships
-        # encoder weights unused by the decode-only graph) — they're simply not
-        # bound. Accept Pass 0 only when it covers EVERY graph param; otherwise
-        # fall through to the legacy suffix passes (zero behavior change).
+        # weight. Extra weight keys are tolerated (the acoustic tokenizer ships
+        # encoder weights unused by the decode-only graph) — they are simply not
+        # bound. Accepted only when it covers EVERY graph param; otherwise fall
+        # through to the legacy suffix passes.
         gp_to_wk: dict = {}
         for gp in graph_params:
-            if gp in self._weights:
+            if gp in key_set:
                 gp_to_wk[gp] = gp
         if set(gp_to_wk.keys()) < graph_params:
-            # Some graph params not exact-present — try unique prefix-strip.
             suffix_index: dict = {}
             suffix_dupe: set = set()
             for wk in weight_keys:
@@ -1878,8 +2083,7 @@ class GraphExecutor:
                 if gp in suffix_index:
                     gp_to_wk[gp] = suffix_index[gp]
         if set(gp_to_wk.keys()) >= graph_params:
-            self._weights = {gp: self._weights[wk] for gp, wk in gp_to_wk.items()}
-            return
+            return dict(gp_to_wk)
 
         # Build suffix index from graph params (unique suffixes only)
         suffix_to_param: dict = {}
@@ -1896,15 +2100,14 @@ class GraphExecutor:
                 else:
                     suffix_to_param[suffix] = param
 
-        # Pass 1: Match by unique suffix
-        remapped: dict = {}
+        # Pass 1: Match by unique suffix — `binding` is name → loader key
+        binding: dict = {}
         unmatched_keys: list = []
         reconciled = 0
         for wk in weight_keys:
             if wk in graph_params:
-                remapped[wk] = self._weights[wk]
+                binding[wk] = wk
                 continue
-
             parts = wk.split('.')
             matched_param = None
             for i in range(len(parts)):
@@ -1912,9 +2115,8 @@ class GraphExecutor:
                 if suffix in suffix_to_param:
                     matched_param = suffix_to_param[suffix]
                     break
-
             if matched_param:
-                remapped[matched_param] = self._weights[wk]
+                binding[matched_param] = wk
                 reconciled += 1
             else:
                 unmatched_keys.append(wk)
@@ -1922,7 +2124,7 @@ class GraphExecutor:
         # Pass 2: Prefix transformations for ambiguous suffixes
         # Handles multimodal models where sub-models share block structure
         if unmatched_keys:
-            remaining_params = graph_params - set(remapped.keys())
+            remaining_params = graph_params - set(binding.keys())
             for wk in unmatched_keys:
                 parts = wk.split('.')
                 candidates = []
@@ -1946,7 +2148,7 @@ class GraphExecutor:
                         candidates.append(stripped)
 
                 if len(candidates) == 1:
-                    remapped[candidates[0]] = self._weights[wk]
+                    binding[candidates[0]] = wk
                     remaining_params.discard(candidates[0])
                     reconciled += 1
                 elif len(candidates) > 1:
@@ -1954,14 +2156,15 @@ class GraphExecutor:
                     best = max(candidates, key=lambda c: sum(
                         1 for s in c.split('.') if s in parts
                     ))
-                    remapped[best] = self._weights[wk]
+                    binding[best] = wk
                     remaining_params.discard(best)
                     reconciled += 1
                 else:
-                    remapped[wk] = self._weights[wk]
+                    binding[wk] = wk
 
-        if reconciled > 0:
-            self._weights = remapped
+        if reconciled == 0:
+            return None
+        return binding
 
     def _load_constants_from_graph(self) -> None:
         """

@@ -435,8 +435,28 @@ class RuntimeExecutor:
         # is the last resort only (video family: 512² rendered colour bands on
         # every arm of the calibration campaign, 2026-09-05).
         if "height" not in self.pkg.defaults or "width" not in self.pkg.defaults:
-            derived = self._container_output_size(
-                {name: data for name, data in self.pkg.components.items()})
+            # WHEN A REQUEST SUPPLIES A CONDITIONING IMAGE, THE IMAGE SETS THE
+            # RESOLUTION. It is the most specific thing the request says, and the
+            # alternative was measured on 2026-09-12: the image processor keeps
+            # the source image's own size when no --height/--width is given (its
+            # own comment says so), while this cascade independently derived the
+            # resolution from the TRACED latent. Allegro-TI2V then met its own
+            # 448x448 conditioning image at a pipeline running 144x208 and died
+            # on "Expected size 18 but got size 56" — the traced latent extent
+            # against the image's. Two decisions taken separately about one
+            # quantity.
+            #
+            # Order, and it is the whole answer: an explicit --height/--width
+            # wins (the `inputs` loop below applies after this), then the
+            # container's own declared defaults (this branch does not run at
+            # all when it declares them), then the conditioning image, then the
+            # traced latent, then the family constant. A request-side fact
+            # outranks a build-side one; a stimulus chosen at trace time is the
+            # last thing that should decide what a user gets.
+            derived = self._conditioning_image_size(inputs)
+            if derived is None:
+                derived = self._container_output_size(
+                    {name: data for name, data in self.pkg.components.items()})
             if derived is not None:
                 merged_defaults["height"], merged_defaults["width"] = derived
 
@@ -1435,6 +1455,18 @@ class RuntimeExecutor:
         height = merged_defaults.get("height")
         width = merged_defaults.get("width")
 
+        # Reaching here with no height/width is NOT a missing fallback: the
+        # resolution cascade above has already asked `_container_output_size`
+        # and been told None. `latent_height` is then underived and any flow
+        # that resolves it dies on "Key 'latent_height' not found in
+        # runtime/defaults.json" — Open-Sora-v2 and Allegro-TI2V, 2026-09-11.
+        #
+        # Neither container can answer: their topology carries no transformer
+        # latent extent, so there is nothing to multiply by the VAE scale. That
+        # is a BUILD-side gap, and it is not repaired here — a family constant
+        # was the last resort and was removed for cause (video 512², colour
+        # bands on every arm, 2026-09-05), and inventing a resolution at runtime
+        # would compensate a build limit, which this engine does not do.
         if height is None or width is None:
             return merged_defaults
 
@@ -1461,21 +1493,75 @@ class RuntimeExecutor:
         logger.debug(f"Dynamic latent dims: {height}x{width} / {vae_scale_factor} = {latent_height}x{latent_width}")
         return merged_defaults
 
+    def _conditioning_image_size(self, inputs: Dict[str, Any]) -> Optional[tuple]:
+        """(height, width) of the conditioning image this request supplies.
+
+        Read from the ARRAY the image processor actually produced, never from the
+        file on disk: the processor applies the build's declared preprocessing,
+        so the file's size and the size that enters the graph are not the same
+        question. The spatial extents are the last two axes of an image or video
+        tensor, which holds for [C,H,W], [C,T,H,W] and [B,C,T,H,W] alike.
+
+        Silent when the request supplies no image, when the array is not spatial,
+        or when its extents are not positive integers — silence here falls
+        through to the container, which is the correct next authority.
+        """
+        image = inputs.get("global.image")
+        if image is None:
+            return None
+        shape = getattr(image, "shape", None)
+        if shape is None or len(shape) < 2:
+            return None
+        height, width = shape[-2], shape[-1]
+        if not (isinstance(height, int) and isinstance(width, int)):
+            try:
+                height, width = int(height), int(width)
+            except (TypeError, ValueError):
+                return None
+        if height <= 0 or width <= 0:
+            return None
+        return height, width
+
     def _container_output_size(self, comp_configs: Dict[str, Any]) -> Optional[tuple]:
         """(height, width) in pixels from the container: the last two extents
-        of the diffusion backbone's traced latent input times the VAE scale.
-        None for a graph without a spatial latent (text, audio) or a
-        container whose VAE scale cannot be determined."""
-        flow_type = self.pkg.topology.get("flow", {}).get("type", "")
-        if flow_type != "iterative_process":
-            return None
+        of a traced LATENT input times the VAE scale.
+
+        Two things the container already declares were not being read, and two
+        video models died for it on 2026-09-11 (`Key 'latent_height' not found`):
+
+        * **the flow type was a second gate, and it refused a legitimate case.**
+          The real discriminator is the SHAPE test below — rank 4 or 5 with two
+          integer trailing extents — which no text or audio component satisfies
+          (an LLM's `hidden_states` is rank 3). The flow check sat in front of it
+          and refused `Wan2.2-I2V-A14B`, whose flow is `static_graph` and whose
+          backbone carries `hidden_states [1, 36, 5, 10, 12]`. It is gone; the
+          shape test is what decides, and it is narrower.
+        * **the VAE was not consulted.** `Open-Sora-v2`'s backbone takes a
+          FLATTENED latent (`img [1, 60, 64]`, rank 3) and cannot answer — but
+          its VAE declares `z [1, 16, 9, 14, 22]`, which IS the latent, in the
+          same container. Reading it is reading the container, not inventing
+          anything: a decoder's input extents are latent extents by definition.
+
+        Returns None for a container that declares no spatial latent anywhere, or
+        whose VAE scale cannot be determined. It never guesses a resolution — a
+        family constant was the last resort here and was removed for cause
+        (video 512², colour bands on every arm, 2026-09-05).
+        """
         scale = self._get_vae_scale_factor(comp_configs)
         if not scale:
             return None
         components = self.pkg.topology.get("components", {}) or {}
-        for name in ("transformer", "unet", "dit"):
+        # The backbone first: its latent is the one the request scales.
+        # The VAE second: its input is the same latent, and it answers when a
+        # backbone consumes a flattened one.
+        for name, keys in (("transformer", ("hidden_states", "sample", "latents", "x", "latent_model_input")),
+                           ("unet", ("hidden_states", "sample", "latents", "x", "latent_model_input")),
+                           ("dit", ("hidden_states", "sample", "latents", "x", "latent_model_input")),
+                           ("transformer_2", ("hidden_states", "sample", "latents", "x", "latent_model_input")),
+                           ("vae", ("z", "latents", "sample", "hidden_states")),
+                           ("vae_decoder", ("z", "latents", "sample", "hidden_states"))):
             shapes = (components.get(name) or {}).get("shapes") or {}
-            for key in ("hidden_states", "sample", "latents", "x", "latent_model_input"):
+            for key in keys:
                 shape = shapes.get(key)
                 if isinstance(shape, (list, tuple)) and len(shape) in (4, 5) and all(isinstance(v, int) for v in shape[-2:]):
                     h, w = int(shape[-2]), int(shape[-1])
@@ -1484,10 +1570,24 @@ class RuntimeExecutor:
         return None
 
     def _get_vae_scale_factor(self, comp_configs: Dict[str, Any]) -> Optional[int]:
-        """Determine VAE spatial compression factor."""
+        """Determine VAE spatial compression factor.
+
+        The container's own declaration first, in both the names it uses. Video
+        containers carry `spatial_compression_ratio` where image ones carry
+        `vae_scale_factor` — the same quantity under two vendor spellings — and
+        reading only the second sent Open-Sora-v2 (which declares
+        `spatial_compression_ratio: 8` and nothing else) past its own answer and
+        into the guess below. The same shape as the `latent_frames` defect above:
+        the container held the value and the code did not look.
+        """
         manifest_scale = self.pkg.manifest.get("vae_scale_factor")
         if manifest_scale is not None:
             return int(manifest_scale)
+
+        for key in ("vae_scale_factor", "spatial_compression_ratio"):
+            declared = self.pkg.defaults.get(key)
+            if declared:
+                return int(declared)
 
         transformer_data = comp_configs.get("transformer", {})
         transformer_attrs = transformer_data.get("attributes", {})
