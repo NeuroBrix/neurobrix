@@ -59,7 +59,7 @@ As the pass left it: **37 met**, **9 failed**, **1 not runnable**. 6 rows carry 
 | `Wan-AI/Wan2.1-VACE-1.3B` | video | 18.2 | **NAMED DEBT — not corrected, and no stimulus corrects it** | 0† | 0† | 127 s, 4.32x, 34/37 keys, bytes **not run** | none found at the input | measured |
 | `Wan-AI/Wan2.2-I2V-A14B` | video | 118.1 | **RUNS — compiled PROVEN by run at the default guidance; triton renders at cfg 1.0, does not fit one 32 GB card at batched CFG (Prism finding) — and a second line** | 0† | 0† | not measured | none found at the input | measured (topology) / inferred (unroll) |
 | `genmo/Mochi-1-preview` | video | 38.2 | FAILED rc=-9 — killed at 2700 s | 0† | 0† | not measured | transformer `seq_len`@256 (weight-extent); transformer `seq_len`@256 (weight-extent) | measured |
-| `hpcai-tech/Open-Sora-v2` | video | 42.5 | **DIAGNOSED — rebuild refused at entry, re-trace queued first** | 0† | 0† | not measured | text_encoder_2 `seq_len`@77 (weight-extent) | measured |
+| `hpcai-tech/Open-Sora-v2` | video | 42.5 | **RE-TRACED, REBUILT, PUBLISHED, INSTALLED — proof by run owed** | 0† | 0† | not measured | text_encoder_2 `seq_len`@77 (weight-extent) | measured |
 | `rhymes-ai/Allegro` | video | 23.6 | FAILED rc=-9 — killed at 2701 s | 12† | 0† | not measured | none found at the input | measured |
 | `rhymes-ai/Allegro-TI2V` | video | 24.3 | **RUNS — repaired and delivered** | 27† | 0† | not measured | none found at the input | measured |
 | `zai-org/GLM-4.1V-9B-Thinking` | vlm | 19.2 | met in 913 s | 259 | 0 | 2367 s, 21.14x, 523/523 keys, base 117 s, bytes same; 56 certified choice(s) contradicted by the runtime sweep (423 near-ties within the timer's noise) — a finding, keys in the campaign record | none found at the input | measured |
@@ -78,11 +78,11 @@ Its causal temporal pad recorded 2187*s - 2184 against a truth of s + 2, exact a
 
 *Evidence:* hub record THUDM/CogVideoX-5b-I2V fileSize 23126413914, updatedAt 2026-09-12T22:09:39Z (replace through the internal entry point, 2498 s); installed manifest 22:10:26 UTC; the installed vae_encoder/graph.json holds 265 ops with symbols batch/height/width and NO temporal symbol; regression gate passed component by component (vae_encoder 0.82 -> 0.80 GB, every other component 1.000x); proof by run 22:45 UTC: 9 frames at 448x448, range 9-253, inter-frame diff 3.34 (validation_outputs/proof_by_run_CogVideoX-5b-I2V_20260912_2242/VERDICT.json)  ·  *line:* measured
 
-### `Open-Sora-v2` — DIAGNOSED — rebuild refused at entry, re-trace queued first
+### `Open-Sora-v2` — RE-TRACED, REBUILT, PUBLISHED, INSTALLED — proof by run owed
 
-The runtime repair is not enough for this one: the container predates the builder that writes component shapes, so the output size cannot be read from it whatever the runtime does. Snapshot re-downloaded 2026-09-12 16:38 (64.43 GB, the build door's predicate satisfied); the rebuild is queued behind the CogVideoX upload, staged on the root filesystem rather than the export.
+The snapshot's arrangement (model_index.json, component dirs, safetensors T5 shards beside the vendor's .bin) is rebuilt from declarations and documented beside the weights; the proof by run (9 frames) runs once the engine suite leaves the rig.
 
-*Evidence:* the shipped topology.json carries shapes=NONE for transformer and vae while .cache/graphs holds them (vae: z [1,16,9,14,22]); container dated 2026-06-30; the 22:10 rebuild was refused in 5 s: "component 'scheduler' has no cached graph.json -- topology/graph-cache desync" (its trace cache is also from 2026-06-30); snapshot present (64.43 GB, build door satisfied)  ·  *line:* measured
+*Evidence:* re-trace on the fifth attempt of 2026-09-13 (12:50, unpinned): transformer 5089 ops, vae 237 (June: 11 017 — an unrolled trace; the new graph is FLAT in T, 237 ops at T=9 and T=25, measured on card 0), text encoders 1594/490; rebuild 682 s on the export; regression gate 1.000x on three components, vae 0.959x opened with --allow-shrink on a measurement (248 tensors identical, the graph shrank); upload 13:08:54 -> rc=0 after 1922 s, hub updatedAt 13:40:55Z; install 13:40:56 -> rc=0 after 123 s, 53 files, 42.47 GB; docs/reference/catalogue-repairs.md entry 4  ·  *line:* measured
 
 ### `SANA-Video_2B_720p_diffusers` — met (catalogue pass) — paired cell CUT 2026-09-13 11:27, no certified cost
 

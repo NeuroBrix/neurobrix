@@ -124,19 +124,17 @@ OVERLAY = {
              "0.02 GB. 389 -> 265 ops.",
         line="measured"),
     "Open-Sora-v2": dict(
-        now="DIAGNOSED — rebuild refused at entry, re-trace queued first",
-        evidence="the shipped topology.json carries shapes=NONE for transformer and "
-                 "vae while .cache/graphs holds them (vae: z [1,16,9,14,22]); "
-                 "container dated 2026-06-30; the 22:10 rebuild was refused in 5 s: "
-                 "\"component 'scheduler' has no cached graph.json -- topology/"
-                 "graph-cache desync\" (its trace cache is also from 2026-06-30); "
-                 "snapshot present (64.43 GB, build door satisfied)",
-        note="The runtime repair is not enough for this one: the container predates "
-             "the builder that writes component shapes, so the output size cannot be "
-             "read from it whatever the runtime does. Snapshot re-downloaded "
-             "2026-09-12 16:38 (64.43 GB, the build door's predicate satisfied); "
-             "the rebuild is queued behind the CogVideoX upload, staged on the root "
-             "filesystem rather than the export.",
+        now="RE-TRACED, REBUILT, PUBLISHED, INSTALLED — proof by run owed",
+        evidence="re-trace on the fifth attempt of 2026-09-13 (12:50, unpinned): transformer 5089 ops, "
+                 "vae 237 (June: 11 017 — an unrolled trace; the new graph is FLAT in T, 237 ops "
+                 "at T=9 and T=25, measured on card 0), text encoders 1594/490; rebuild 682 s on the "
+                 "export; regression gate 1.000x on three components, vae 0.959x opened with "
+                 "--allow-shrink on a measurement (248 tensors identical, the graph shrank); "
+                 "upload 13:08:54 -> rc=0 after 1922 s, hub updatedAt 13:40:55Z; install 13:40:56 "
+                 "-> rc=0 after 123 s, 53 files, 42.47 GB; docs/reference/catalogue-repairs.md entry 4",
+        note="The snapshot's arrangement (model_index.json, component dirs, safetensors T5 "
+             "shards beside the vendor's .bin) is rebuilt from declarations and documented beside "
+             "the weights; the proof by run (9 frames) runs once the engine suite leaves the rig.",
         line="measured"),
     "Wan2.2-I2V-A14B": dict(
         now="RUNS — compiled PROVEN by run at the default guidance; triton renders at cfg 1.0, does not fit one 32 GB card at batched CFG (Prism finding) — and a second line",
